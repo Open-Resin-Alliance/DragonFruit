@@ -58,6 +58,7 @@ import {
 } from '@/components/controls/ArrangePanel';
 import { DuplicatePanel, type DuplicateLayoutMode } from '../components/controls/DuplicatePanel';
 import { VisualSettingsPanel } from '@/components/controls/VisualSettingsPanel';
+import { contactEndpointsFor, countSupportCollections, getSupportTypeDescriptor, MODEL_ID_COLLECTION_KEYS, SUPPORT_COLLECTION_KEYS, SUPPORT_TYPES, updateSupportEntity, type SupportCollectionKey } from '@/supports/supportTypeRegistry';
 import { LayerSlider } from '@/components/controls/LayerSlider';
 import { PrintingLayerGpuPreview } from '@/components/controls/PrintingLayerGpuPreview';
 import { SupportSidebar } from '@/supports/Settings/SupportSidebar';
@@ -190,7 +191,6 @@ import {
   getHomeSupportCollectionsSnapshot,
   getHomeKickstandCollectionsSnapshot,
   type HomeSupportCollectionsSnapshot,
-  type HomeKickstandCollectionsSnapshot,
 } from '@/features/supports/supportSnapshotHelpers';
 import {
   EXPORT_THUMBNAIL_RENDER_OPTIONS_STORAGE_KEY,
@@ -324,13 +324,11 @@ import {
   getSavedUvToolsSettings,
   resolveUvToolsExecutablePath,
 } from '@/components/settings/uvToolsPreferences';
-import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot, toggleSegmentCurve, transformSupportsForModel, updateTrunk, updateBranch, updateTwig, updateStick, updateKnot } from '@/supports/state';
-import {
-  getKickstandSnapshot,
-  subscribeToKickstandStore,
-} from '@/supports/SupportTypes/Kickstand/kickstandStore';
+import { subscribe as subscribeSupportState, findShaftOwnerOfSegment, getSnapshot as getSupportSnapshot, getModelIdForSupportEntityId, getSupportEntity, toggleSegmentCurve, transformSupportsForModel, updateKnot } from '@/supports/state';
 import { bracePlacementStore } from '@/supports/SupportTypes/Brace/bracePlacementState';
-import { splitShaft, splitBranchShaft, splitTwigShaft, splitStickShaft } from '@/supports/SupportPrimitives/Joint/jointUtils';
+import { splitSupportShaft } from '@/supports/SupportPrimitives/Joint/jointUtils';
+import { resolveSegmentEndpoints } from '@/supports/SupportPrimitives/Knot/segmentEndpoints';
+import { knotFields } from '@/supports/interaction/shared/selection/selectedIdsByType';
 import type { KnotSplitRemap } from '@/supports/SupportPrimitives/Knot/knotUtils';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '@/supports/history/supportEditHistory';
 
@@ -353,17 +351,16 @@ import { getRaftSettings, subscribeToRaftStore } from '@/supports/Rafts/Crenelat
 import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
 import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/computeRaftOuterBoundary';
 import type { SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
-import { getTrunkSegmentEndpoints, getBranchSegmentEndpoints } from '@/supports/SupportPrimitives/Knot/knotUtils';
 import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
 import { getBezierPointAtT } from '@/supports/Curves/BezierUtils';
-import { getSupportsForModel } from '@/supports/PlacementLogic/SupportModelLinker';
+import { getSupportsForModel, modelIdOfParentShaft } from '@/supports/PlacementLogic/SupportModelLinker';
 import { buildProjectedCrossSectionZRange } from '@/features/slicing/rasterLayerZipExport';
 import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
 
 import { type MeshShaderType } from '@/features/shaders/mesh';
 import type { ModelTransform, TransformMode } from '@/hooks/useModelTransform';
-import type { SupportMode } from '@/supports/types';
+import type { Segment, SupportMode } from '@/supports/types';
 import { VoxlSizeLimitError } from '@/features/scene/voxl';
 import {
   useSceneAutosave,
@@ -377,7 +374,6 @@ import { SceneAutosaveRecoveryModal } from '@/components/scene/SceneAutosaveReco
 import { MeshRepairReportModal } from '@/components/scene/MeshRepairReportModal';
 import { MeshRepairConfirmModal } from '@/components/scene/MeshRepairConfirmModal';
 import { ManifoldWarningModal } from '@/components/modals/ManifoldWarningModal';
-
 
 import { IslandScanWorkflowCard } from '@/volumeAnalysis/IslandScan/workflow/IslandScanWorkflowCard';
 import { IslandVolumesHierarchyCard } from '@/volumeAnalysis/IslandVolumes/components/IslandVolumesHierarchyCard';
@@ -824,14 +820,11 @@ export default function Home() {
     description?: string;
     supportBefore?: ReturnType<typeof getSupportSnapshot>;
     supportAfter?: ReturnType<typeof getSupportSnapshot>;
-    kickstandBefore?: ReturnType<typeof getKickstandSnapshot>;
-    kickstandAfter?: ReturnType<typeof getKickstandSnapshot>;
   } | null>(null);
   const pendingSelectionPositionHistoryRef = React.useRef<{
     targetIdsKey: string;
     beforeTransforms: Array<{ id: string; transform: ModelTransform }>;
     supportBefore: ReturnType<typeof getSupportSnapshot>;
-    kickstandBefore: ReturnType<typeof getKickstandSnapshot>;
   } | null>(null);
   const transformHistoryCommitRequestedRef = React.useRef(false);
   const transformHistoryCommitNonceRef = React.useRef(0);
@@ -1118,7 +1111,6 @@ export default function Home() {
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = React.useState(false);
   const [isSliceMetricsDebugOpen, setIsSliceMetricsDebugOpen] = React.useState(false);
 
-
   const [isHistoryDebugOpen, setIsHistoryDebugOpen] = React.useState(false);
   const [supportsInfoModelId, setSupportsInfoModelId] = React.useState<string | null>(null);
   const [isTransformDebugOverlayOpen, setIsTransformDebugOverlayOpen] = React.useState(false);
@@ -1203,7 +1195,6 @@ export default function Home() {
     printingLayerPreviewUrls,
     deps: printingPreviewDepsRef,
   });
-
 
   const defaultHolePunchState = React.useMemo<HolePunchPanelState>(() => ({
     radiusMm: 2.0,
@@ -1564,7 +1555,6 @@ export default function Home() {
     : 'Processing 1 model';
   const [modifierApplyOverlayElapsedSec, setModifierApplyOverlayElapsedSec] = React.useState(0);
 
-
   const modifierApplyOverlayContent = React.useMemo(() => {
     if (isApplyingHollowing && pendingHolePunchAutoApplyModelId) {
       return {
@@ -1616,7 +1606,6 @@ export default function Home() {
       ],
     };
   }, [finalizingOverlayContent, isApplyingBlockersHollowing, isApplyingHolePunch, isApplyingHollowing, pendingHolePunchAutoApplyModelId]);
-
 
   React.useEffect(() => {
     if (!showModifierApplyBlockingOverlay) {
@@ -1673,7 +1662,7 @@ export default function Home() {
     trackSupportCollectionsInHome ? getHomeSupportCollectionsSnapshot : getEmptySupportSnapshot,
   );
   const kickstandStateSnapshot = React.useSyncExternalStore(
-    subscribeToKickstandStore,
+    subscribeSupportState,
     trackSupportCollectionsInHome ? getHomeKickstandCollectionsSnapshot : getEmptyKickstandSnapshot,
     trackSupportCollectionsInHome ? getHomeKickstandCollectionsSnapshot : getEmptyKickstandSnapshot,
   );
@@ -1886,50 +1875,6 @@ export default function Home() {
     };
   }, []);
 
-  const activeSupportEntityCounts = React.useMemo(() => {
-    const modelId = scene.activeModelId;
-    if (!modelId) {
-      return {
-        trunks: 0,
-        branches: 0,
-        leaves: 0,
-        twigs: 0,
-        sticks: 0,
-        braces: 0,
-        roots: 0,
-        knots: 0,
-        kickstands: 0,
-      };
-    }
-
-    const trunks = Object.values(supportStateSnapshot.trunks).filter((item) => item.modelId === modelId).length;
-    const branches = Object.values(supportStateSnapshot.branches).filter((item) => item.modelId === modelId).length;
-    const leaves = Object.values(supportStateSnapshot.leaves).filter((item) => item.modelId === modelId).length;
-    const twigs = Object.values(supportStateSnapshot.twigs).filter((item) => item.modelId === modelId).length;
-    const sticks = Object.values(supportStateSnapshot.sticks).filter((item) => item.modelId === modelId).length;
-    const braces = Object.values(supportStateSnapshot.braces).filter((item) => item.modelId === modelId).length;
-    const roots = Object.values(supportStateSnapshot.roots).filter((item) => item.modelId === modelId).length;
-    const knots = Object.values(supportStateSnapshot.knots).filter((item) => {
-      const parent = item.parentShaftId;
-      const trunk = supportStateSnapshot.trunks[parent];
-      if (trunk) return trunk.modelId === modelId;
-      const branch = supportStateSnapshot.branches[parent];
-      if (branch) return branch.modelId === modelId;
-      const twig = supportStateSnapshot.twigs[parent];
-      if (twig) return twig.modelId === modelId;
-      const stick = supportStateSnapshot.sticks[parent];
-      if (stick) return stick.modelId === modelId;
-      if (parent.startsWith('braceSegment:')) {
-        const braceId = parent.slice('braceSegment:'.length);
-        return supportStateSnapshot.braces[braceId]?.modelId === modelId;
-      }
-      return false;
-    }).length;
-    const kickstands = Object.values(kickstandStateSnapshot.kickstands).filter((item) => item.modelId === modelId).length;
-
-    return { trunks, branches, leaves, twigs, sticks, braces, roots, knots, kickstands };
-  }, [kickstandStateSnapshot.kickstands, scene.activeModelId, supportStateSnapshot.braces, supportStateSnapshot.branches, supportStateSnapshot.knots, supportStateSnapshot.leaves, supportStateSnapshot.roots, supportStateSnapshot.sticks, supportStateSnapshot.trunks, supportStateSnapshot.twigs]);
-
   const transformDebugStats = React.useMemo(() => {
     const activeModel = scene.models.find((m) => m.id === scene.activeModelId) ?? null;
     const storeTransform = activeModel?.transform ?? null;
@@ -2021,19 +1966,9 @@ export default function Home() {
         lastPushApplied: historyDebug.lastPushApplied,
         lastAt: historyDebug.lastAt,
       },
-      supportCounts: {
-        trunks: countRecordEntries(supportStateSnapshot.trunks),
-        branches: countRecordEntries(supportStateSnapshot.branches),
-        leaves: countRecordEntries(supportStateSnapshot.leaves),
-        twigs: countRecordEntries(supportStateSnapshot.twigs),
-        sticks: countRecordEntries(supportStateSnapshot.sticks),
-        braces: countRecordEntries(supportStateSnapshot.braces),
-        roots: countRecordEntries(supportStateSnapshot.roots),
-        knots: countRecordEntries(supportStateSnapshot.knots),
-        kickstands: countRecordEntries(kickstandStateSnapshot.kickstands),
-      },
+      supportCounts: countSupportCollections(supportStateSnapshot),
     };
-  }, [kickstandStateSnapshot.kickstands, scene.activeModelId, scene.models, supportDragGroupRef, supportStateSnapshot.braces, supportStateSnapshot.branches, supportStateSnapshot.knots, supportStateSnapshot.leaves, supportStateSnapshot.roots, supportStateSnapshot.sticks, supportStateSnapshot.trunks, supportStateSnapshot.twigs, transformDebugTick, transformMgr.transform]);
+  }, [scene.activeModelId, scene.models, supportDragGroupRef, supportStateSnapshot, transformDebugTick, transformMgr.transform]);
 
   const supportDebugStats = React.useMemo(() => {
     const snapTarget = bracePlacementSnapshot.snapTarget;
@@ -2060,6 +1995,8 @@ export default function Home() {
         externalHoverModelId?: string | null;
         effectiveHoverModelId?: string | null;
         sceneHoveredSupportId?: string | null;
+        hoveredSupportModelId?: string | null;
+        hoveredSupportOwnedByActiveModel?: boolean | null;
         marqueeHoveredSupportId?: string | null;
         rawHoveredCategory?: string | null;
         rawHoveredId?: string | null;
@@ -2104,6 +2041,15 @@ export default function Home() {
       externalHoverModelId: supportRendererDebug?.externalHoverModelId ?? null,
       effectiveHoverModelId: supportRendererDebug?.effectiveHoverModelId ?? null,
       sceneHoveredSupportId: supportRendererDebug?.sceneHoveredSupportId ?? null,
+      // Ownership of the hovered support: which model it is bound to, and
+      // whether that is the model currently active. This is the association the
+      // import bridge establishes (payload modelId -> every support's modelId);
+      // nothing else in the UI surfaces it.
+      hoveredSupportModelId: getModelIdForSupportEntityId(supportRendererDebug?.sceneHoveredSupportId),
+      hoveredSupportOwnedByActiveModel: (() => {
+        const owner = getModelIdForSupportEntityId(supportRendererDebug?.sceneHoveredSupportId);
+        return owner ? owner === scene.activeModelId : null;
+      })(),
       marqueeHoveredSupportId: supportRendererDebug?.marqueeHoveredSupportId ?? null,
       rawHoveredCategory: supportRendererDebug?.rawHoveredCategory ?? null,
       rawHoveredId: supportRendererDebug?.rawHoveredId ?? null,
@@ -2116,22 +2062,13 @@ export default function Home() {
   // stub in support mode (trackSupportCollectionsInHome), so counting from it
   // would silently report zero exactly where orient needs the truth. In
   // prepare mode the stub mirrors the store, so existing callers are unaffected.
+  // Summed over every modelId-bearing collection: a hand-written list left
+  // anchors uncounted, so a model carrying only anchors skipped the warning.
   const getSupportPrimitiveCountForModel = React.useCallback((modelId: string | null | undefined) => {
     if (!modelId) return 0;
 
     const supportIds = getSupportsForModel(getSupportSnapshot(), modelId);
-    const kickstandCount = Object.values(getKickstandSnapshot().kickstands)
-      .filter((kickstand) => kickstand.modelId === modelId)
-      .length;
-
-    return supportIds.roots.length
-      + supportIds.trunks.length
-      + supportIds.branches.length
-      + supportIds.braces.length
-      + supportIds.leaves.length
-      + supportIds.twigs.length
-      + supportIds.sticks.length
-      + kickstandCount;
+    return MODEL_ID_COLLECTION_KEYS.reduce((total, key) => total + supportIds[key].length, 0);
   }, []);
 
   const requestDestructiveTransformSupportDeletion = React.useCallback((operationLabel: string) => {
@@ -2204,7 +2141,6 @@ export default function Home() {
     setPendingDestructiveTransform(null);
   }, []);
 
-
   React.useLayoutEffect(() => {
     const element = modelStatsCardContainerRef.current;
     if (!element) {
@@ -2255,24 +2191,12 @@ export default function Home() {
     return supportMenuSelection.isBraceSelected;
   }, [scene.mode, supportMenuSelection.isBraceSelected, supportMenuSelection.selectedCategory, supportMenuSelection.selectedId]);
 
+  // The same lookup the add-joint handler runs, so the menu item is offered
+  // exactly when the action would succeed.
   const supportContextMenuSegmentOwner = React.useMemo(() => {
     const segmentId = editorContextMenuSupportTarget?.segmentId;
-    if (!segmentId) return null;
-
-    const trunk = Object.values(supportMenuSnapshot.trunks).find((item) => item.segments.some((segment) => segment.id === segmentId));
-    if (trunk) return { kind: 'trunk' as const, id: trunk.id };
-
-    const branch = Object.values(supportMenuSnapshot.branches).find((item) => item.segments.some((segment) => segment.id === segmentId));
-    if (branch) return { kind: 'branch' as const, id: branch.id };
-
-    const twig = Object.values(supportMenuSnapshot.twigs).find((item) => item.segments.some((segment) => segment.id === segmentId));
-    if (twig) return { kind: 'twig' as const, id: twig.id };
-
-    const stick = Object.values(supportMenuSnapshot.sticks).find((item) => item.segments.some((segment) => segment.id === segmentId));
-    if (stick) return { kind: 'stick' as const, id: stick.id };
-
-    return null;
-  }, [editorContextMenuSupportTarget?.segmentId, supportMenuSnapshot.branches, supportMenuSnapshot.sticks, supportMenuSnapshot.trunks, supportMenuSnapshot.twigs]);
+    return segmentId ? findShaftOwnerOfSegment(segmentId) : null;
+  }, [editorContextMenuSupportTarget?.segmentId, supportMenuSnapshot]);
 
   const supportsCanAddJoint = React.useMemo(() => {
     if (scene.mode !== 'support') return false;
@@ -2351,7 +2275,6 @@ export default function Home() {
   }, [clearPrintingLayerPreviewUrls]);
 
 
-
   const handlePrintingLayerPreviewGenerated = React.useCallback((payload: {
     layerIndex: number;
     totalLayers: number;
@@ -2406,7 +2329,6 @@ export default function Home() {
     slicedArtifactProfileFingerprintRef.current = null;
     setPrintingReadyPlateId(null);
   }, [clearPrintingLayerPreviewUrls]);
-
 
   React.useEffect(() => {
     if (scene.mode !== 'printing') return;
@@ -3022,7 +2944,7 @@ export default function Home() {
         topDiameterByRootId.set(trunk.rootId, firstDiameter);
       }
     }
-    for (const kickstand of Object.values(kickstandStateSnapshot.kickstands)) {
+    for (const kickstand of Object.values(supportStateSnapshot.kickstands)) {
       const firstDiameter = kickstand.profile.terminalStartDiameterMm
         || kickstand.segments[0]?.diameter
         || kickstand.profile.bodyDiameterMm;
@@ -3049,78 +2971,47 @@ export default function Home() {
       supportMl += mm3ToMl(diskMm3 + coneMm3 + capSphereMm3);
     };
 
+    // One pass: kickstand roots are a view of state.roots, so walking both
+    // counted every kickstand root twice.
     for (const root of Object.values(supportStateSnapshot.roots)) {
       addRootVolume(root);
     }
-    for (const root of Object.values(kickstandStateSnapshot.roots)) {
-      addRootVolume(root);
-    }
 
-    for (const trunk of Object.values(supportStateSnapshot.trunks)) {
-      if (!visibleModelIds.has(trunk.modelId)) continue;
-      const root = supportStateSnapshot.roots[trunk.rootId];
-      for (let i = 0; i < trunk.segments.length; i += 1) {
-        const seg = trunk.segments[i];
-        const endpoints = getTrunkSegmentEndpoints(trunk, seg, i, root);
-        if (!endpoints) continue;
-        supportMl += segmentVolumeMl(seg, endpoints.start, endpoints.end);
+    // Every shafted type, by its declared segments and contacts. Written out
+    // per type this covered six of the eight and left anchors uncounted.
+    for (const descriptor of SUPPORT_TYPES) {
+      if (!descriptor.hasSegments && descriptor.contactFields.length === 0) continue;
+      // A brace spans two knots along a curve instead of carrying segments; it
+      // is summed on its own below.
+      if (descriptor.id === 'brace') continue;
+
+      const collection = supportStateSnapshot[descriptor.location.key as SupportCollectionKey] as unknown as Record<string, {
+        id: string; modelId: string; segments?: Segment[]; rootId?: string; parentKnotId?: string; hostKnotId?: string;
+      }>;
+
+      for (const entity of Object.values(collection ?? {})) {
+        if (!visibleModelIds.has(entity.modelId)) continue;
+
+        const hosts = {
+          root: descriptor.ownsRoot ? supportStateSnapshot.roots[entity.rootId ?? ''] : undefined,
+          hostKnot: supportStateSnapshot.knots[entity.parentKnotId ?? entity.hostKnotId ?? ''],
+        };
+
+        const segments = entity.segments ?? [];
+        for (let i = 0; i < segments.length; i += 1) {
+          const endpoints = resolveSegmentEndpoints(descriptor.id, entity as never, segments[i], i, hosts);
+          if (!endpoints) continue;
+          supportMl += segmentVolumeMl(segments[i], endpoints.start, endpoints.end);
+        }
+
+        for (const { kind, field } of contactEndpointsFor(descriptor.id)) {
+          const contact = (entity as unknown as Record<string, unknown>)[field];
+          if (!contact) continue;
+          supportMl += kind === 'disk'
+            ? contactDiskVolumeMl(contact as Parameters<typeof contactDiskVolumeMl>[0])
+            : contactConeVolumeMl(contact as Parameters<typeof contactConeVolumeMl>[0]);
+        }
       }
-      if (trunk.contactCone) {
-        supportMl += contactConeVolumeMl(trunk.contactCone);
-      }
-    }
-
-    for (const branch of Object.values(supportStateSnapshot.branches)) {
-      if (!visibleModelIds.has(branch.modelId)) continue;
-      const parentKnot = supportStateSnapshot.knots[branch.parentKnotId];
-      for (let i = 0; i < branch.segments.length; i += 1) {
-        const seg = branch.segments[i];
-        const endpoints = getBranchSegmentEndpoints(branch, seg, i, parentKnot);
-        if (!endpoints) continue;
-        supportMl += segmentVolumeMl(seg, endpoints.start, endpoints.end);
-      }
-      if (branch.contactCone) {
-        supportMl += contactConeVolumeMl(branch.contactCone);
-      }
-    }
-
-    for (const leaf of Object.values(supportStateSnapshot.leaves)) {
-      if (!visibleModelIds.has(leaf.modelId)) continue;
-      if (leaf.contactCone) {
-        supportMl += contactConeVolumeMl(leaf.contactCone);
-      }
-    }
-
-    for (const twig of Object.values(supportStateSnapshot.twigs)) {
-      if (!visibleModelIds.has(twig.modelId)) continue;
-
-      for (let i = 0; i < twig.segments.length; i += 1) {
-        const seg = twig.segments[i];
-        const start = i === 0
-          ? (seg.bottomJoint?.pos ?? twig.contactDiskA.pos)
-          : (twig.segments[i - 1].topJoint?.pos ?? seg.bottomJoint?.pos ?? twig.contactDiskA.pos);
-        const end = seg.topJoint?.pos ?? twig.contactDiskB.pos;
-        supportMl += segmentVolumeMl(seg, start, end);
-      }
-
-      supportMl += contactDiskVolumeMl(twig.contactDiskA);
-      supportMl += contactDiskVolumeMl(twig.contactDiskB);
-    }
-
-    for (const stick of Object.values(supportStateSnapshot.sticks)) {
-      if (!visibleModelIds.has(stick.modelId)) continue;
-
-      for (let i = 0; i < stick.segments.length; i += 1) {
-        const seg = stick.segments[i];
-        const start = i === 0
-          ? (seg.bottomJoint?.pos ?? stick.contactConeA.pos)
-          : (stick.segments[i - 1].topJoint?.pos ?? seg.bottomJoint?.pos ?? stick.contactConeA.pos);
-        const end = seg.topJoint?.pos ?? stick.contactConeB.pos;
-        supportMl += segmentVolumeMl(seg, start, end);
-      }
-
-      supportMl += contactConeVolumeMl(stick.contactConeA);
-      supportMl += contactConeVolumeMl(stick.contactConeB);
     }
 
     for (const brace of Object.values(supportStateSnapshot.braces)) {
@@ -3133,28 +3024,6 @@ export default function Home() {
         ? sampleBezierLengthMm(startKnot.pos, brace.curve.controlPoint1, brace.curve.controlPoint2, endKnot.pos, brace.curve.resolution ?? 16)
         : distanceMm(startKnot.pos, endKnot.pos);
       supportMl += mm3ToMl(cylinderVolumeMm3(Math.max(0.001, brace.profile.diameter / 2), length));
-    }
-
-    for (const kickstand of Object.values(kickstandStateSnapshot.kickstands)) {
-      if (!visibleModelIds.has(kickstand.modelId)) continue;
-
-      for (let i = 0; i < kickstand.segments.length; i += 1) {
-        const seg = kickstand.segments[i];
-        const root = kickstandStateSnapshot.roots[kickstand.rootId];
-        const hostKnot = kickstandStateSnapshot.knots[kickstand.hostKnotId];
-        const rootTopPos = root
-          ? {
-              x: root.transform.pos.x,
-              y: root.transform.pos.y,
-              z: root.transform.pos.z + Math.max(0, root.diskHeight) + Math.max(0, root.coneHeight),
-            }
-          : null;
-        const start = i === 0
-          ? (seg.bottomJoint?.pos ?? rootTopPos ?? { x: 0, y: 0, z: 0 })
-          : (kickstand.segments[i - 1].topJoint?.pos ?? seg.bottomJoint?.pos ?? rootTopPos ?? { x: 0, y: 0, z: 0 });
-        const end = seg.topJoint?.pos ?? hostKnot?.pos ?? start;
-        supportMl += segmentVolumeMl(seg, start, end);
-      }
     }
 
     let raftMl = 0;
@@ -3209,17 +3078,7 @@ export default function Home() {
     computeRaftOuterBoundary,
     raftSettingsSnapshot,
     scene.models,
-    kickstandStateSnapshot.knots,
-    kickstandStateSnapshot.roots,
-    kickstandStateSnapshot.kickstands,
-    supportStateSnapshot.braces,
-    supportStateSnapshot.branches,
-    supportStateSnapshot.knots,
-    supportStateSnapshot.leaves,
-    supportStateSnapshot.roots,
-    supportStateSnapshot.sticks,
-    supportStateSnapshot.trunks,
-    supportStateSnapshot.twigs,
+    supportStateSnapshot,
   ]);
 
   React.useEffect(() => {
@@ -3717,7 +3576,6 @@ export default function Home() {
   }, [profileState.printerProfiles]);
 
 
-
   React.useEffect(() => {
     if (allReachabilityProbeTargets.length === 0) return;
 
@@ -3995,8 +3853,6 @@ export default function Home() {
 
 
 
-
-
   const selectedPrinterStateTextNormalized = React.useMemo(() => {
     return String(selectedPrinterMonitorSnapshot?.stateText ?? '').trim().toLowerCase();
   }, [selectedPrinterMonitorSnapshot?.stateText]);
@@ -4069,8 +3925,6 @@ export default function Home() {
 
 
 
-
-
   // Best-effort background cleanup of stale DragonFruit temp artifacts from prior runs.
   React.useEffect(() => {
     void cleanupStalePrintTempArtifacts(3 * 24 * 60 * 60)
@@ -4127,7 +3981,6 @@ export default function Home() {
     };
   }, []);
 
-
   React.useEffect(() => {
     if (!activePrinterProfile || !activeNetworkUiAdapter) {
       setPrintingTargetDeviceId(null);
@@ -4169,7 +4022,6 @@ export default function Home() {
     }
   }, [activeNetworkUiAdapter, activePrinterProfile, printableConnectedPrinterFleet, printerReachabilityByDeviceId, printingTargetDeviceId]);
 
-
   React.useEffect(() => {
     if (!printingUploadDialogOpen || printingUploadDialogStage !== 'processing' || printingDeviceProcessingStartedAtMs == null) {
       setPrintingDeviceProcessingElapsedSec(0);
@@ -4202,20 +4054,9 @@ export default function Home() {
 
 
 
-
-
-
-
-
-
-
-
   // Flush webcam polling/circuit-breaker state on monitor close.
 
-
   // Manage printer monitor webcam lifecycle: disable when monitor closes.
-
-
 
 
 
@@ -4886,7 +4727,6 @@ export default function Home() {
     };
   }, [isDesktopRuntime]);
 
-
   const performSendToPrinter = React.useCallback(async (targetDevice: PrinterNetworkDevice, selectedMaterialIdOverride?: string) => {
     if (!printingArtifact || !activePrinterProfile) return;
     if (!activeNetworkUiAdapter) return;
@@ -5207,7 +5047,6 @@ export default function Home() {
     }
   }, [activeNetworkUiAdapter?.pluginId, printingSendBusy]);
 
-
   const handlePrintNow = React.useCallback(async () => {
     if (!activePrinterProfile || !printingTargetDevice) return;
     if (!printingMonitoringAdapter.pluginId || !printingMonitoringAdapter.operations?.start) return;
@@ -5257,10 +5096,6 @@ export default function Home() {
       setPrintingPrintNowBusy(false);
     }
   }, [activePrinterProfile, openPrintingMonitorForTargetDevice, printingMonitoringAdapter.operations, printingMonitoringAdapter.pluginId, printingReadyPlateId, printingTargetDevice]);
-
-
-
-
 
 
 
@@ -5431,13 +5266,7 @@ export default function Home() {
     supportSnapshot.hoveredId = null;
     supportSnapshot.hoveredCategory = 'none';
 
-    const kickstandSnapshot = structuredClone(getKickstandSnapshot());
-    kickstandSnapshot.selectedId = null;
-
-    return {
-      support: supportSnapshot,
-      kickstand: kickstandSnapshot,
-    };
+    return { support: supportSnapshot };
   }, []);
 
   const invalidatePendingTransformHistory = React.useCallback((options?: { clearRotateCommit?: boolean }) => {
@@ -5546,14 +5375,10 @@ export default function Home() {
             }
     );
 
-    const supportHistoryOptions = (
-      pending.supportBefore
-      && pending.kickstandBefore
-    )
+    const supportHistoryOptions = pending.supportBefore
       ? {
           includeSupportState: true,
           supportBefore: pending.supportBefore,
-          kickstandBefore: pending.kickstandBefore,
         }
       : undefined;
 
@@ -5669,7 +5494,6 @@ export default function Home() {
       }
     };
   }, [invalidatePendingTransformHistory]);
-
 
 
   const handleNewDeviceDetected = React.useCallback((deviceId: string) => {
@@ -5934,109 +5758,32 @@ export default function Home() {
         const splitTargetPoint = target.point;
         const beforeSnapshot = captureSupportEditSnapshot();
 
-        const trunk = Object.values(state.trunks).find((item) => item.segments.some((segment) => segment.id === segmentId));
-        if (trunk) {
-          const segmentIndex = trunk.segments.findIndex((segment) => segment.id === segmentId);
-          if (segmentIndex >= 0) {
-            const segment = trunk.segments[segmentIndex];
-            const root = state.roots[trunk.rootId];
-            let start = segment.bottomJoint?.pos;
-            if (!start) {
-              if (segmentIndex === 0 && root) {
-                start = {
-                  x: root.transform.pos.x,
-                  y: root.transform.pos.y,
-                  z: root.transform.pos.z + root.diskHeight + root.coneHeight,
-                };
-              } else {
-                start = trunk.segments[segmentIndex - 1]?.topJoint?.pos;
-              }
-            }
+        const owner = findShaftOwnerOfSegment(segmentId);
+        const entity = owner ? getSupportEntity(owner.typeId, owner.id) as { segments: Segment[] } | null : null;
+        if (owner && entity) {
+          const segmentIndex = entity.segments.findIndex((segment) => segment.id === segmentId);
+          const segment = entity.segments[segmentIndex];
+          if (segment) {
+            const descriptor = getSupportTypeDescriptor(owner.typeId);
+            const hosts = {
+              root: descriptor.ownsRoot ? state.roots[(entity as { rootId?: string }).rootId ?? ''] : undefined,
+              hostKnot: descriptor.lower.kind === 'knot'
+                ? state.knots[(entity as { parentKnotId?: string }).parentKnotId ?? '']
+                : undefined,
+            };
+            const endpoints = resolveSegmentEndpoints(owner.typeId, entity, segment, segmentIndex, hosts);
 
-            const end = segment.topJoint?.pos
-              ?? (trunk.contactCone ? getFinalSocketPosition(trunk.contactCone) : null)
-              ?? (start ? { x: start.x, y: start.y, z: start.z + 10 } : null);
-
-            if (start && end) {
+            if (endpoints) {
+              const { start, end } = endpoints;
               const projected = segment.type === 'bezier'
                 ? projectBezierSplitPoint(start, segment.controlPoint1, segment.controlPoint2, end, splitTargetPoint)
                 : projectSplitPoint(start, end, splitTargetPoint);
-              const { trunk: updated, knotRemaps } = splitShaft(trunk, segmentId, projected.point, projected.t, root, state.knots);
+              const { entity: updated, knotRemaps } = splitSupportShaft(
+                owner.typeId, entity, segmentId, projected.point, projected.t, hosts, state.knots,
+              );
               applyJointSplitKnotRemaps(knotRemaps);
-              updateTrunk(updated);
-              pushSupportEditHistory('Create trunk joint', beforeSnapshot, captureSupportEditSnapshot());
-            }
-          }
-          break;
-        }
-
-        const branch = Object.values(state.branches).find((item) => item.segments.some((segment) => segment.id === segmentId));
-        if (branch) {
-          const segmentIndex = branch.segments.findIndex((segment) => segment.id === segmentId);
-          if (segmentIndex >= 0) {
-            const segment = branch.segments[segmentIndex];
-            const parentKnot = state.knots[branch.parentKnotId];
-            const start = segmentIndex === 0
-              ? (parentKnot?.pos ?? segment.bottomJoint?.pos ?? null)
-              : (branch.segments[segmentIndex - 1]?.topJoint?.pos ?? segment.bottomJoint?.pos ?? null);
-            const end = segment.topJoint?.pos
-              ?? (branch.contactCone ? getFinalSocketPosition(branch.contactCone) : null)
-              ?? (start ? { x: start.x, y: start.y, z: start.z + 5 } : null);
-
-            if (start && end) {
-              const projected = segment.type === 'bezier'
-                ? projectBezierSplitPoint(start, segment.controlPoint1, segment.controlPoint2, end, splitTargetPoint)
-                : projectSplitPoint(start, end, splitTargetPoint);
-              const { branch: updated, knotRemaps } = splitBranchShaft(branch, segmentId, projected.point, projected.t, parentKnot, state.knots);
-              applyJointSplitKnotRemaps(knotRemaps);
-              updateBranch(updated);
-              pushSupportEditHistory('Create branch joint', beforeSnapshot, captureSupportEditSnapshot());
-            }
-          }
-          break;
-        }
-
-        const twig = Object.values(state.twigs).find((item) => item.segments.some((segment) => segment.id === segmentId));
-        if (twig) {
-          const segmentIndex = twig.segments.findIndex((segment) => segment.id === segmentId);
-          if (segmentIndex >= 0) {
-            const segment = twig.segments[segmentIndex];
-            const start = segmentIndex === 0
-              ? (segment.bottomJoint?.pos ?? null)
-              : (twig.segments[segmentIndex - 1]?.topJoint?.pos ?? segment.bottomJoint?.pos ?? null);
-            const end = segment.topJoint?.pos ?? (start ? { x: start.x, y: start.y, z: start.z + 5 } : null);
-
-            if (start && end) {
-              const projected = segment.type === 'bezier'
-                ? projectBezierSplitPoint(start, segment.controlPoint1, segment.controlPoint2, end, splitTargetPoint)
-                : projectSplitPoint(start, end, splitTargetPoint);
-              const { twig: updated, knotRemaps } = splitTwigShaft(twig, segmentId, projected.point, projected.t, state.knots);
-              applyJointSplitKnotRemaps(knotRemaps);
-              updateTwig(updated);
-              pushSupportEditHistory('Create twig joint', beforeSnapshot, captureSupportEditSnapshot());
-            }
-          }
-          break;
-        }
-
-        const stick = Object.values(state.sticks).find((item) => item.segments.some((segment) => segment.id === segmentId));
-        if (stick) {
-          const segmentIndex = stick.segments.findIndex((segment) => segment.id === segmentId);
-          if (segmentIndex >= 0) {
-            const segment = stick.segments[segmentIndex];
-            const start = segmentIndex === 0
-              ? (segment.bottomJoint?.pos ?? null)
-              : (stick.segments[segmentIndex - 1]?.topJoint?.pos ?? segment.bottomJoint?.pos ?? null);
-            const end = segment.topJoint?.pos ?? (start ? { x: start.x, y: start.y, z: start.z + 5 } : null);
-
-            if (start && end) {
-              const projected = segment.type === 'bezier'
-                ? projectBezierSplitPoint(start, segment.controlPoint1, segment.controlPoint2, end, splitTargetPoint)
-                : projectSplitPoint(start, end, splitTargetPoint);
-              const { stick: updated, knotRemaps } = splitStickShaft(stick, segmentId, projected.point, projected.t, state.knots);
-              applyJointSplitKnotRemaps(knotRemaps);
-              updateStick(updated);
-              pushSupportEditHistory('Create stick joint', beforeSnapshot, captureSupportEditSnapshot());
+              updateSupportEntity(owner.typeId, updated);
+              pushSupportEditHistory(`Create ${descriptor.singular} joint`, beforeSnapshot, captureSupportEditSnapshot());
             }
           }
         }
@@ -6304,8 +6051,6 @@ export default function Home() {
 
 
 
-
-
   const formatDebugVec3 = React.useCallback((v: THREE.Vector3 | null | undefined) => {
     if (!v) return 'n/a';
     const f = (n: number) => (Number.isFinite(n) ? n.toFixed(3) : 'NaN');
@@ -6549,7 +6294,6 @@ export default function Home() {
             },
             description: pending?.description,
             supportBefore: beforeSupportSnapshot.support,
-            kickstandBefore: beforeSupportSnapshot.kickstand,
           };
         } else {
           pending.after = {
@@ -6566,7 +6310,6 @@ export default function Home() {
         const pendingAfter = pendingTransformHistoryRef.current;
         if (pendingAfter && pendingAfter.modelId === scene.activeModelId) {
           pendingAfter.supportAfter = afterSupportSnapshot.support;
-          pendingAfter.kickstandAfter = afterSupportSnapshot.kickstand;
         }
 
         if (isDirectTransformPath) {
@@ -6626,30 +6369,11 @@ export default function Home() {
     return false;
   }, []);
 
+  // Every collection, so a scene holding only anchors is not reported empty.
   const hasSupportOrRaftGeometry = React.useMemo(() => {
-    return (
-      raftSettingsSnapshot.bottomMode !== 'off'
-      || hasAnyEntries(supportStateSnapshot.roots)
-      || hasAnyEntries(supportStateSnapshot.trunks)
-      || hasAnyEntries(supportStateSnapshot.branches)
-      || hasAnyEntries(supportStateSnapshot.leaves)
-      || hasAnyEntries(supportStateSnapshot.twigs)
-      || hasAnyEntries(supportStateSnapshot.sticks)
-      || hasAnyEntries(supportStateSnapshot.braces)
-      || hasAnyEntries(kickstandStateSnapshot.kickstands)
-    );
-  }, [
-    hasAnyEntries,
-    kickstandStateSnapshot.kickstands,
-    raftSettingsSnapshot.bottomMode,
-    supportStateSnapshot.braces,
-    supportStateSnapshot.branches,
-    supportStateSnapshot.leaves,
-    supportStateSnapshot.roots,
-    supportStateSnapshot.sticks,
-    supportStateSnapshot.trunks,
-    supportStateSnapshot.twigs,
-  ]);
+    if (raftSettingsSnapshot.bottomMode !== 'off') return true;
+    return SUPPORT_COLLECTION_KEYS.some((key) => hasAnyEntries(supportStateSnapshot[key]));
+  }, [hasAnyEntries, raftSettingsSnapshot.bottomMode, supportStateSnapshot]);
 
   // For non-printing workflows, avoid expensive world-triangle projection work by default.
   // Keep layer floor at 0 when support/raft geometry exists so layer-1 alignment is correct.
@@ -6741,27 +6465,17 @@ export default function Home() {
       visibleSignature,
       `support-refresh:${supportRenderRefreshNonce}`,
       `raft-mode:${raftSettingsSnapshot.bottomMode}`,
-      `roots:${countRecordEntries(supportStateSnapshot.roots)}`,
-      `trunks:${countRecordEntries(supportStateSnapshot.trunks)}`,
-      `branches:${countRecordEntries(supportStateSnapshot.branches)}`,
-      `leaves:${countRecordEntries(supportStateSnapshot.leaves)}`,
-      `twigs:${countRecordEntries(supportStateSnapshot.twigs)}`,
-      `sticks:${countRecordEntries(supportStateSnapshot.sticks)}`,
-      `braces:${countRecordEntries(supportStateSnapshot.braces)}`,
-      `kickstands:${countRecordEntries(kickstandStateSnapshot.kickstands)}`,
+      // One entry per collection, so a change the key does not mention cannot
+      // leave a stale projected-Z range cached.
+      ...SUPPORT_COLLECTION_KEYS.map(
+        (key) => `${key}:${countRecordEntries(supportStateSnapshot[key])}`,
+      ),
     ].join('||');
   }, [
-    kickstandStateSnapshot.kickstands,
     raftSettingsSnapshot.bottomMode,
     scene.models,
     supportRenderRefreshNonce,
-    supportStateSnapshot.braces,
-    supportStateSnapshot.branches,
-    supportStateSnapshot.leaves,
-    supportStateSnapshot.roots,
-    supportStateSnapshot.sticks,
-    supportStateSnapshot.trunks,
-    supportStateSnapshot.twigs,
+    supportStateSnapshot,
   ]);
 
   useEffect(() => {
@@ -7185,25 +6899,19 @@ export default function Home() {
         }
       };
 
-      for (const t of Object.values(snap.trunks)) {
-        if (t.contactCone) addPos(t.contactCone.pos, t.modelId);
-      }
-      for (const b of Object.values(snap.branches)) {
-        if (b.contactCone) addPos(b.contactCone.pos, b.modelId);
-      }
-      for (const l of Object.values(snap.leaves)) {
-        if (l.contactCone) addPos(l.contactCone.pos, l.modelId);
-      }
-      for (const a of Object.values(snap.anchors)) {
-        if (a.contactCone) addPos(a.contactCone.pos, a.modelId);
-      }
-      for (const tw of Object.values(snap.twigs)) {
-        if (tw.contactDiskA) addPos(tw.contactDiskA.pos, tw.modelId);
-        if (tw.contactDiskB) addPos(tw.contactDiskB.pos, tw.modelId);
-      }
-      for (const st of Object.values(snap.sticks)) {
-        if (st.contactConeA) addPos(st.contactConeA.pos, st.modelId);
-        if (st.contactConeB) addPos(st.contactConeB.pos, st.modelId);
+      // Every declared contact, in registry order.
+      for (const descriptor of SUPPORT_TYPES) {
+        const contacts = contactEndpointsFor(descriptor.id);
+        if (contacts.length === 0) continue;
+
+        const collection = snap[descriptor.location.key as SupportCollectionKey] as unknown as
+          Record<string, { modelId?: string }>;
+        for (const entity of Object.values(collection ?? {})) {
+          for (const { field } of contacts) {
+            const contact = (entity as unknown as Record<string, { pos?: { x: number; y: number; z: number } }>)[field];
+            if (contact?.pos) addPos(contact.pos, entity.modelId);
+          }
+        }
       }
 
       setSupportTips(prevTips => {
@@ -7433,21 +7141,23 @@ export default function Home() {
       bounds.expandByPoint(new THREE.Vector3(pos.x + radius, pos.y + radius, pos.z + radius));
     };
 
+    // Which model each knot belongs to, from the `hostedBy knots` edges every
+    // type declares. A brace lands under both its ends because it declares two.
     const knotModelById = new Map<string, string>();
+    for (const descriptor of SUPPORT_TYPES) {
+      const fields = knotFields(descriptor);
+      if (fields.length === 0) continue;
 
-    for (const branch of Object.values(supportStateSnapshot.branches)) {
-      if (branch.modelId) knotModelById.set(branch.parentKnotId, branch.modelId);
-    }
-    for (const leaf of Object.values(supportStateSnapshot.leaves)) {
-      if (leaf.modelId) knotModelById.set(leaf.parentKnotId, leaf.modelId);
-    }
-    for (const brace of Object.values(supportStateSnapshot.braces)) {
-      if (!brace.modelId) continue;
-      knotModelById.set(brace.startKnotId, brace.modelId);
-      knotModelById.set(brace.endKnotId, brace.modelId);
-    }
-    for (const kickstand of Object.values(kickstandStateSnapshot.kickstands)) {
-      if (kickstand.modelId) knotModelById.set(kickstand.hostKnotId, kickstand.modelId);
+      const collection = supportStateSnapshot[descriptor.location.key as SupportCollectionKey] as unknown as
+        Record<string, Record<string, unknown>>;
+      for (const entity of Object.values(collection ?? {})) {
+        const modelId = entity.modelId as string | undefined;
+        if (!modelId) continue;
+        for (const field of fields) {
+          const knotId = entity[field];
+          if (typeof knotId === 'string') knotModelById.set(knotId, modelId);
+        }
+      }
     }
 
     for (const root of Object.values(supportStateSnapshot.roots)) {
@@ -7503,88 +7213,36 @@ export default function Home() {
       }
     }
 
-    for (const trunk of Object.values(supportStateSnapshot.trunks)) {
-      const modelId = trunk.modelId;
-      if (!modelId) continue;
-      for (const seg of trunk.segments) {
-        expand(modelId, seg.topJoint?.pos, Math.max(0.001, (seg.topJoint?.diameter ?? seg.diameter) / 2));
-        expand(modelId, seg.bottomJoint?.pos, Math.max(0.001, (seg.bottomJoint?.diameter ?? seg.diameter) / 2));
-      }
-      if (trunk.contactCone) {
-        expand(modelId, trunk.contactCone.pos, Math.max(0.001, trunk.contactCone.profile.contactDiameterMm / 2));
-      }
-    }
+    // Every type's joints and declared contacts. Written out per type this
+    // covered six of the eight, so an anchor never grew the bounds.
+    for (const descriptor of SUPPORT_TYPES) {
+      const collection = supportStateSnapshot[descriptor.location.key as SupportCollectionKey] as unknown as
+        Record<string, { modelId?: string; segments?: Segment[] }>;
 
-    for (const branch of Object.values(supportStateSnapshot.branches)) {
-      const modelId = branch.modelId;
-      if (!modelId) continue;
-      for (const seg of branch.segments) {
-        expand(modelId, seg.topJoint?.pos, Math.max(0.001, (seg.topJoint?.diameter ?? seg.diameter) / 2));
-        expand(modelId, seg.bottomJoint?.pos, Math.max(0.001, (seg.bottomJoint?.diameter ?? seg.diameter) / 2));
-      }
-      if (branch.contactCone) {
-        expand(modelId, branch.contactCone.pos, Math.max(0.001, branch.contactCone.profile.contactDiameterMm / 2));
-      }
-    }
+      for (const entity of Object.values(collection ?? {})) {
+        const modelId = entity.modelId;
+        if (!modelId) continue;
 
-    for (const leaf of Object.values(supportStateSnapshot.leaves)) {
-      if (!leaf.modelId || !leaf.contactCone) continue;
-      expand(leaf.modelId, leaf.contactCone.pos, Math.max(0.001, leaf.contactCone.profile.contactDiameterMm / 2));
-    }
+        for (const seg of entity.segments ?? []) {
+          expand(modelId, seg.topJoint?.pos, Math.max(0.001, (seg.topJoint?.diameter ?? seg.diameter) / 2));
+          expand(modelId, seg.bottomJoint?.pos, Math.max(0.001, (seg.bottomJoint?.diameter ?? seg.diameter) / 2));
+        }
 
-    for (const twig of Object.values(supportStateSnapshot.twigs)) {
-      const modelId = twig.modelId;
-      if (!modelId) continue;
-      for (const seg of twig.segments) {
-        expand(modelId, seg.topJoint?.pos, Math.max(0.001, (seg.topJoint?.diameter ?? seg.diameter) / 2));
-        expand(modelId, seg.bottomJoint?.pos, Math.max(0.001, (seg.bottomJoint?.diameter ?? seg.diameter) / 2));
-      }
-      expand(modelId, twig.contactDiskA.pos, Math.max(0.001, twig.contactDiskA.contactDiameterMm / 2));
-      expand(modelId, twig.contactDiskB.pos, Math.max(0.001, twig.contactDiskB.contactDiameterMm / 2));
-    }
-
-    for (const stick of Object.values(supportStateSnapshot.sticks)) {
-      const modelId = stick.modelId;
-      if (!modelId) continue;
-      for (const seg of stick.segments) {
-        expand(modelId, seg.topJoint?.pos, Math.max(0.001, (seg.topJoint?.diameter ?? seg.diameter) / 2));
-        expand(modelId, seg.bottomJoint?.pos, Math.max(0.001, (seg.bottomJoint?.diameter ?? seg.diameter) / 2));
-      }
-      expand(modelId, stick.contactConeA.pos, Math.max(0.001, stick.contactConeA.profile.contactDiameterMm / 2));
-      expand(modelId, stick.contactConeB.pos, Math.max(0.001, stick.contactConeB.profile.contactDiameterMm / 2));
-    }
-
-    for (const kickstand of Object.values(kickstandStateSnapshot.kickstands)) {
-      const modelId = kickstand.modelId;
-      if (!modelId) continue;
-      for (const seg of kickstand.segments) {
-        expand(modelId, seg.topJoint?.pos, Math.max(0.001, (seg.topJoint?.diameter ?? seg.diameter) / 2));
-        expand(modelId, seg.bottomJoint?.pos, Math.max(0.001, (seg.bottomJoint?.diameter ?? seg.diameter) / 2));
-      }
-    }
-
-    for (const knot of Object.values(supportStateSnapshot.knots)) {
-      const parent = knot.parentShaftId;
-      let modelId = knotModelById.get(knot.id) ?? null;
-      if (!modelId) {
-        const trunk = supportStateSnapshot.trunks[parent];
-        const branch = supportStateSnapshot.branches[parent];
-        const twig = supportStateSnapshot.twigs[parent];
-        const stick = supportStateSnapshot.sticks[parent];
-        if (trunk?.modelId) modelId = trunk.modelId;
-        else if (branch?.modelId) modelId = branch.modelId;
-        else if (twig?.modelId) modelId = twig.modelId;
-        else if (stick?.modelId) modelId = stick.modelId;
-        else if (parent.startsWith('braceSegment:')) {
-          const braceId = parent.slice('braceSegment:'.length);
-          modelId = supportStateSnapshot.braces[braceId]?.modelId ?? null;
+        for (const { kind, field } of contactEndpointsFor(descriptor.id)) {
+          const contact = (entity as unknown as Record<string, unknown>)[field];
+          if (!contact) continue;
+          // A disk carries its contact diameter directly; a cone in its profile.
+          const c = contact as { pos: { x: number; y: number; z: number }; contactDiameterMm?: number; profile?: { contactDiameterMm?: number } };
+          const diameter = kind === 'disk' ? c.contactDiameterMm : c.profile?.contactDiameterMm;
+          expand(modelId, c.pos, Math.max(0.001, (diameter ?? 0.002) / 2));
         }
       }
-      expand(modelId, knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2));
     }
 
-    for (const knot of Object.values(kickstandStateSnapshot.knots)) {
-      const modelId = knotModelById.get(knot.id) ?? null;
+    // A knot with no hosting entity falls back to the shaft it sits on.
+    for (const knot of Object.values(supportStateSnapshot.knots)) {
+      const modelId = knotModelById.get(knot.id)
+        ?? modelIdOfParentShaft(supportStateSnapshot, knot.parentShaftId);
       expand(modelId, knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2));
     }
 
@@ -7592,16 +7250,7 @@ export default function Home() {
   }, [
     scene.mode,
     transformMgr.transformMode,
-    supportStateSnapshot.braces,
-    supportStateSnapshot.branches,
-    supportStateSnapshot.knots,
-    supportStateSnapshot.leaves,
-    supportStateSnapshot.roots,
-    supportStateSnapshot.sticks,
-    supportStateSnapshot.trunks,
-    supportStateSnapshot.twigs,
-    kickstandStateSnapshot.knots,
-    kickstandStateSnapshot.kickstands,
+    supportStateSnapshot,
     raftSettingsSnapshot,
   ]);
 
@@ -8511,7 +8160,6 @@ export default function Home() {
         },
         description: pendingRotateGizmoCommitRef.current.description,
         supportBefore: pendingTransformHistoryRef.current?.supportBefore,
-        kickstandBefore: pendingTransformHistoryRef.current?.kickstandBefore,
       };
       pendingRotateGizmoCommitRef.current = null;
     }
@@ -8580,7 +8228,6 @@ export default function Home() {
 
       const afterSupportSnapshot = captureTransformSupportSnapshot();
       pendingTransformHistoryRef.current.supportAfter = afterSupportSnapshot.support;
-      pendingTransformHistoryRef.current.kickstandAfter = afterSupportSnapshot.kickstand;
     }
 
     const skipCommitToken = skipNextTransformEndCommitRef.current;
@@ -8663,7 +8310,6 @@ export default function Home() {
         },
         description: `transform:${payload.operation} ${targetModelName}`,
         supportBefore: beforeSupportSnapshot.support,
-        kickstandBefore: beforeSupportSnapshot.kickstand,
       };
     }
 
@@ -8760,8 +8406,6 @@ export default function Home() {
         includeSupportState: true,
         supportBefore: pending.supportBefore,
         supportAfter: afterSupportSnapshot.support,
-        kickstandBefore: pending.kickstandBefore,
-        kickstandAfter: afterSupportSnapshot.kickstand,
       },
     );
   }, [captureTransformSupportSnapshot, scene]);
@@ -8819,7 +8463,6 @@ export default function Home() {
           },
         })),
         supportBefore: beforeSupportSnapshot.support,
-        kickstandBefore: beforeSupportSnapshot.kickstand,
       };
     }
 
@@ -8951,7 +8594,6 @@ export default function Home() {
         },
         description: `transform:${operation} ${targetModelName}`,
         supportBefore: captureTransformSupportSnapshot().support,
-        kickstandBefore: captureTransformSupportSnapshot().kickstand,
       };
     }
 
@@ -8984,7 +8626,6 @@ export default function Home() {
           : undefined,
         description: `transform:${operation} ${targetModelName}`,
         supportBefore: beforeSupportSnapshot.support,
-        kickstandBefore: beforeSupportSnapshot.kickstand,
       };
       return;
     }
@@ -9110,7 +8751,6 @@ export default function Home() {
       window.removeEventListener('model-deselected', clearSelectAll as EventListener);
     };
   }, [isSelectAllModelsActive]);
-
 
   const saveAsActive = useActionActive('GLOBAL', 'SAVE_AS');
   const wasSaveAsActive = React.useRef(false);
@@ -9372,7 +9012,6 @@ export default function Home() {
     scene.view3dSettings.safetyMarginMm,
     transformMgr.transformMode,
   ]);
-
 
   const handlePlaceOnFaceAnimationStart = React.useCallback(() => {
     ensurePendingTransformHistoryForActiveModel('rotate');
@@ -9668,7 +9307,6 @@ export default function Home() {
       },
     });
   }, [defaultHollowingState, hollowingState, pendingBlockerResetState, persistActiveModelModifiers, scene.activeModel]);
-
 
 
   const handleTransformToolbarHover = React.useCallback((mode: TransformMode | null) => {
@@ -10389,7 +10027,6 @@ export default function Home() {
           displayActiveModelId: displayActiveModelId,
           transformDebugStats: transformDebugStats,
           supportDebugStats: supportDebugStats,
-          activeSupportEntityCounts: activeSupportEntityCounts,
           formatDebugVec3: formatDebugVec3,
           formatDebugVec3Like: formatDebugVec3Like,
           formatDebugNumber: formatDebugNumber,
@@ -10581,11 +10218,7 @@ export default function Home() {
             onSupportHover={supports.onModelHover}
             onActiveModelChange={handleSceneModelSelection}
             onMarqueeSelectionChange={handleSceneMarqueeSelection}
-            trunkPlacementPreview={supports.trunkPlacementV2.previewData}
-            branchPlacementPreview={supports.branchPlacement.previewData}
-            leafPlacementPreview={supports.leafPlacement.previewData}
-            bracePlacementPreview={supports.bracePreview}
-            kickstandPlacementPreview={supports.kickstandPreview}
+            placementPreviews={supports.placementPreviews}
             blockSupportPlacement={supports.isPlacementHardDisabled}
             isBranchPlacementActive={supports.branchPlacement.isActive}
             isLeafPlacementActive={supports.leafPlacement.isActive}
@@ -11136,7 +10769,6 @@ export default function Home() {
         isOpen={showManifoldWarning}
         onAcknowledge={() => setShowManifoldWarning(false)}
       />
-
 
 
       <MeshRepairModals

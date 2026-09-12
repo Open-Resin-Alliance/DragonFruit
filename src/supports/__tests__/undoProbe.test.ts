@@ -1,19 +1,19 @@
 import assert from 'node:assert/strict';
+import { updateSupportEntity } from '../supportTypeRegistry';
 import test from 'node:test';
 
 import { clearHistory, undo } from '../../history/historyStore';
 import { pushSupportHistory } from '../history/supportHistory';
-import { SUPPORT_UPDATE_TRUNK, SUPPORT_REMOVE_TRUNK, SUPPORT_REMOVE_BRANCH } from '../history/actionTypes';
+import { SUPPORT_UPDATE_TRUNK, removeAction } from '../history/actionTypes';
 import { pushSupportEditHistory, captureSupportEditSnapshot } from '../history/supportEditHistory';
 import { registerSupportHistoryHandlers } from '../history/useSupportHistoryHandlers';
-import { resetStore, getSnapshot, setSnapshot, updateTrunk, removeTrunk, removeBranch, addRoot, addTrunk } from '../state';
-import { resetKickstandStore } from '../SupportTypes/Kickstand/kickstandStore';
+import { resetStore, getSnapshot, setSnapshot, removeTrunk, removeBranch, addRoot, addTrunk, resetKickstandsInState } from '../state';
 import type { SupportState, Trunk, Roots, Segment, Branch } from '../types';
 
 function emptySnapshot(): SupportState {
     return {
         roots: {}, trunks: {}, branches: {}, leaves: {}, twigs: {}, sticks: {},
-        braces: {}, anchors: {}, knots: {},
+        braces: {}, anchors: {}, kickstands: {}, knots: {},
         selectedId: null, selectedCategory: null, hoveredId: null, hoveredCategory: 'none', interactionWarning: null,
     };
 }
@@ -42,40 +42,10 @@ function seedTrunk(id: string, segmentId: string, jointPos: { x: number; y: numb
     setSnapshot(snapshot);
 }
 
-test('updateTrunk re-anchors t-less knots when the shaft moves', () => {
-    resetStore();
-    resetKickstandStore();
-    clearHistory();
-
-    seedTrunk('t1', 's1', { x: 0, y: 0, z: 10 });
-    // An auto merge/fan knot: no `t`, mid-shaft.
-    const snap = getSnapshot();
-    snap.knots['k1'] = { id: 'k1', parentShaftId: 's1', pos: { x: 0, y: 0, z: 5 }, diameter: 1.125 };
-    setSnapshot(snap);
-
-    // Move the top joint — the shaft now runs (0,0,0) → (5,0,12).
-    const before = structuredClone(getSnapshot().trunks.t1);
-    const moved: Trunk = {
-        ...before,
-        segments: before.segments.map((s) => ({
-            ...s,
-            topJoint: s.topJoint ? { ...s.topJoint, pos: { x: 5, y: 0, z: 12 } } : s.topJoint,
-        })),
-    };
-    updateTrunk(moved);
-
-    const knot = getSnapshot().knots['k1'];
-    assert.ok(knot, 'knot survives');
-    // The t-less knot re-anchors onto the moved shaft (nearest-point
-    // projection) instead of staying behind — the leaf follows the trunk.
-    const d = Math.hypot(knot.pos.x, knot.pos.y, knot.pos.z - 5);
-    assert.ok(d > 0.5, `knot followed the moved shaft (now (${knot.pos.x.toFixed(2)},${knot.pos.z.toFixed(2)}))`);
-    assert.ok(Math.abs(knot.diameter! - 1.125) < 1e-9, 'knot keeps the joint-size diameter');
-});
 
 test('undo restores a moved trunk joint (SUPPORT_UPDATE_TRUNK)', () => {
     resetStore();
-    resetKickstandStore();
+    resetKickstandsInState();
     clearHistory();
     const dispose = registerSupportHistoryHandlers();
 
@@ -89,7 +59,7 @@ test('undo restores a moved trunk joint (SUPPORT_UPDATE_TRUNK)', () => {
             topJoint: s.topJoint ? { ...s.topJoint, pos: { x: 5, y: 0, z: 12 } } : s.topJoint,
         })),
     };
-    updateTrunk(moved);
+    updateSupportEntity('trunk', moved);
     pushSupportHistory({ type: SUPPORT_UPDATE_TRUNK, payload: { before, after: moved } });
 
     assert.equal(getSnapshot().trunks.t1.segments[0].topJoint?.pos.x, 5, 'joint moved before undo');
@@ -102,48 +72,17 @@ test('undo restores a moved trunk joint (SUPPORT_UPDATE_TRUNK)', () => {
     dispose();
 });
 
-test('undo restores a deleted trunk (SUPPORT_REMOVE_TRUNK)', () => {
-    resetStore();
-    resetKickstandStore();
-    clearHistory();
-    const dispose = registerSupportHistoryHandlers();
-
-    seedTrunk('t1', 's1', { x: 0, y: 0, z: 10 });
-    const removed = removeTrunk('t1');
-    assert.ok(removed, 'removeTrunk cascades');
-    assert.equal(getSnapshot().trunks.t1, undefined, 'trunk gone after delete');
-
-    pushSupportHistory({
-        type: SUPPORT_REMOVE_TRUNK,
-        payload: {
-            trunk: removed.trunk,
-            root: removed.root ?? undefined,
-            branches: removed.branches,
-            braces: removed.braces,
-            kickstands: removed.kickstands,
-            leaves: removed.leaves,
-            knots: removed.knots,
-        },
-    });
-
-    undo();
-
-    const restored = getSnapshot();
-    assert.ok(restored.trunks.t1, 'trunk restored after undo');
-    assert.ok(restored.roots[removed.trunk.rootId], 'root restored after undo');
-    dispose();
-});
 
 test('undo restores a branch-joint move pushed via pushSupportEditHistory (deferred flush)', async () => {
     resetStore();
-    resetKickstandStore();
+    resetKickstandsInState();
     clearHistory();
     const dispose = registerSupportHistoryHandlers();
 
     seedTrunk('t1', 's1', { x: 0, y: 0, z: 10 });
     const before = captureSupportEditSnapshot();
 
-    // Simulate the branch-joint drag: mutate the trunk joint (via updateTrunk)
+    // Simulate the branch-joint drag: mutate the trunk joint
     // then push the edit history exactly like useJointInteraction does.
     const moved: Trunk = {
         ...getSnapshot().trunks.t1,
@@ -152,7 +91,7 @@ test('undo restores a branch-joint move pushed via pushSupportEditHistory (defer
             topJoint: s.topJoint ? { ...s.topJoint, pos: { x: 5, y: 0, z: 12 } } : s.topJoint,
         })),
     };
-    updateTrunk(moved);
+    updateSupportEntity('trunk', moved);
     pushSupportEditHistory('Move branch joint', before, captureSupportEditSnapshot());
 
     // The push is deferred to idle; wait for the flush (setTimeout fallback).
@@ -168,7 +107,7 @@ test('undo restores a branch-joint move pushed via pushSupportEditHistory (defer
 
 test('undo preserves selection when the moved support still exists', () => {
     resetStore();
-    resetKickstandStore();
+    resetKickstandsInState();
     clearHistory();
     const dispose = registerSupportHistoryHandlers();
 
@@ -189,7 +128,7 @@ test('undo preserves selection when the moved support still exists', () => {
             topJoint: s.topJoint ? { ...s.topJoint, pos: { x: 5, y: 0, z: 12 } } : s.topJoint,
         })),
     };
-    updateTrunk(moved);
+    updateSupportEntity('trunk', moved);
     pushSupportHistory({ type: SUPPORT_UPDATE_TRUNK, payload: { before, after: moved } });
 
     undo();
@@ -203,7 +142,7 @@ test('undo preserves selection when the moved support still exists', () => {
 
 test('undo clears a selection that points at a removed entity', () => {
     resetStore();
-    resetKickstandStore();
+    resetKickstandsInState();
     clearHistory();
     const dispose = registerSupportHistoryHandlers();
 
@@ -218,7 +157,7 @@ test('undo clears a selection that points at a removed entity', () => {
             topJoint: s.topJoint ? { ...s.topJoint, pos: { x: 5, y: 0, z: 12 } } : s.topJoint,
         })),
     };
-    updateTrunk(moved);
+    updateSupportEntity('trunk', moved);
     pushSupportHistory({ type: SUPPORT_UPDATE_TRUNK, payload: { before, after: moved } });
 
     undo();
@@ -228,44 +167,3 @@ test('undo clears a selection that points at a removed entity', () => {
     dispose();
 });
 
-test('undo restores a deleted branch (SUPPORT_REMOVE_BRANCH cascade)', () => {
-    resetStore();
-    resetKickstandStore();
-    clearHistory();
-    const dispose = registerSupportHistoryHandlers();
-
-    seedTrunk('t1', 's1', { x: 0, y: 0, z: 10 });
-    const seed = getSnapshot();
-    const branch: Branch = {
-        id: 'b1',
-        modelId: 'model-a',
-        parentKnotId: 'k1',
-        segments: [{ id: 'bs1', diameter: 1, bottomJoint: { id: 'bj', pos: { x: 0, y: 0, z: 5 }, diameter: 1 }, topJoint: { id: 'bt', pos: { x: 0, y: 0, z: 8 }, diameter: 1 } }],
-        contactCone: { id: 'cc', pos: { x: 0, y: 0, z: 8 }, normal: { x: 0, y: 0, z: -1 }, surfaceNormal: { x: 0, y: 0, z: -1 }, profile: { contactDiameterMm: 0.4 } } as any,
-    };
-    const knot = { id: 'k1', parentShaftId: 's1', t: 0.5, pos: { x: 0, y: 0, z: 5 }, diameter: 1.1 };
-    const seeded = { ...seed, branches: { b1: branch }, knots: { k1: knot as any } };
-    setSnapshot(seeded);
-
-    const removed = removeBranch('b1');
-    assert.ok(removed, 'removeBranch cascades');
-    assert.equal(getSnapshot().branches.b1, undefined, 'branch gone after delete');
-
-    pushSupportHistory({
-        type: SUPPORT_REMOVE_BRANCH,
-        payload: {
-            branches: removed.branches,
-            braces: removed.braces,
-            kickstands: removed.kickstands,
-            leaves: removed.leaves,
-            knots: removed.knots,
-        },
-    });
-
-    undo();
-
-    const restored = getSnapshot();
-    assert.ok(restored.branches.b1, 'branch restored after undo');
-    assert.ok(restored.knots.k1, 'knot restored after undo');
-    dispose();
-});

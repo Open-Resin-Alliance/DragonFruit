@@ -1,5 +1,6 @@
 import { computeSupportRenderLookup, type SupportRenderLookupInput, type SupportRenderLookupSnapshot } from './supportRenderLookupMath';
 import type { RecordDelta, SupportRenderLookupWorkerRequestMessage, SupportRenderLookupWorkerResponseMessage } from './supportRenderLookup.worker.shared';
+import { createEmptySupportCollections, SUPPORT_COLLECTION_KEYS } from '../supportTypeRegistry';
 
 type MutableRecord<T> = Record<string, T>;
 
@@ -16,20 +17,7 @@ const EMPTY_LOOKUP: SupportRenderLookupSnapshot = {
 };
 
 const cachedInput: SupportRenderLookupInput = {
-  state: {
-    roots: {},
-    trunks: {},
-    branches: {},
-    leaves: {},
-    twigs: {},
-    sticks: {},
-    braces: {},
-    knots: {},
-  },
-  kickstandState: {
-    kickstands: {},
-    knots: {},
-  },
+  state: createEmptySupportCollections(),
   activePreviewSupport: null,
 };
 
@@ -51,20 +39,12 @@ function applyInputDelta(msg: SupportRenderLookupWorkerRequestMessage) {
 
   const stateDelta = delta.state;
   if (stateDelta) {
-    applyRecordDelta(cachedInput.state.roots, stateDelta.roots);
-    applyRecordDelta(cachedInput.state.trunks, stateDelta.trunks);
-    applyRecordDelta(cachedInput.state.branches, stateDelta.branches);
-    applyRecordDelta(cachedInput.state.leaves, stateDelta.leaves);
-    applyRecordDelta(cachedInput.state.twigs, stateDelta.twigs);
-    applyRecordDelta(cachedInput.state.sticks, stateDelta.sticks);
-    applyRecordDelta(cachedInput.state.braces, stateDelta.braces);
-    applyRecordDelta(cachedInput.state.knots, stateDelta.knots);
-  }
-
-  const kickstandDelta = delta.kickstandState;
-  if (kickstandDelta) {
-    applyRecordDelta(cachedInput.kickstandState.kickstands, kickstandDelta.kickstands);
-    applyRecordDelta(cachedInput.kickstandState.knots, kickstandDelta.knots);
+    for (const key of SUPPORT_COLLECTION_KEYS) {
+      applyRecordDelta(
+        cachedInput.state[key] as MutableRecord<unknown>,
+        stateDelta[key] as RecordDelta<unknown> | undefined,
+      );
+    }
   }
 
   if (delta.activePreviewSupportChanged) {

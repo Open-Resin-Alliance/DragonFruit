@@ -1,20 +1,21 @@
+import { useShaftSegments } from '../useShaftSegments';
+import { updateSupportEntity } from '../../supportTypeRegistry';
+import { useContactDiskDragSession } from '../useContactDiskDragSession';
 import React, { useMemo } from 'react';
 import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
-import { ContactDisk, Twig } from '../../types';
+import { ContactDisk, Twig, type Segment } from '../../types';
 import { JointRenderer } from '../../SupportPrimitives/Joint/JointRenderer';
 import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
 import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
 import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import { ContactDiskRenderer } from '../../SupportPrimitives/ContactDisk/ContactDiskRenderer';
-import { isPrimaryPointerPress, startContactDiskDragSession, type ContactDiskDragHit, type ContactDiskDragSession } from '../../SupportPrimitives/ContactDisk/contactDiskDragController';
-import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/contactDiskUtils';
+import { isPrimaryPointerPress, type ContactDiskDragHit } from '../../SupportPrimitives/ContactDisk/contactDiskDragController';
 import { handleSupportClick } from '../../interaction/clickHandlers';
 import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
 import { useHighlight } from '../../interaction/useHighlight';
 import { usePartDragUpdate } from '../../interaction/partDragPreview';
-import { getSnapshot, updateTwig, updateKnot, updateLeaf } from '../../state';
-import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
+import { getSnapshot, updateKnot, updateLeaf } from '../../state';
 import { twigDiskJointStandoff } from './twigJointStandoff';
 import { clearTwigDragPreview, computeTwigDragAttachmentUpdates, emitTwigDragPreview } from './twigDragPreview';
 
@@ -51,22 +52,12 @@ export const TwigRenderer = React.memo(function TwigRenderer({
   const highDetailPrimitiveSegments = 24;
   const lowDetailPrimitiveSegments = 8;
   const useLowDetailPrimitives = !isSelected && !propHovered;
-  const dragSessionRef = React.useRef<ContactDiskDragSession | null>(null);
-  const liveDragTwigRef = React.useRef<Twig | null>(null);
-  const beforeHistoryRef = React.useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
-  const [, setDragTick] = React.useState(0);
 
-  const previewTwig = usePartDragUpdate<Twig>('twig', baseTwig.id);
+  // The entity names its own type; the store stamps it on every write.
+  const typeId = baseTwig.typeId ?? 'twig';
+  const previewTwig = usePartDragUpdate<Twig>(typeId, baseTwig.id);
   const twig = previewTwig ?? baseTwig;
 
-  React.useEffect(() => {
-    return () => {
-      dragSessionRef.current?.stop();
-      dragSessionRef.current = null;
-      liveDragTwigRef.current = null;
-      beforeHistoryRef.current = null;
-    };
-  }, []);
 
   const { pickRef, visuals, isPickingHovered } = useHighlight({
     id: twig.id,
@@ -84,15 +75,6 @@ export const TwigRenderer = React.memo(function TwigRenderer({
     if (!isPickingHovered) return;
     handleSupportClick(e, twig.id, !!isInteractable);
   };
-
-  const getDiskTipCenter = React.useCallback((disk: ContactDisk) => {
-    const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile);
-    return {
-      x: disk.pos.x + disk.surfaceNormal.x * thickness,
-      y: disk.pos.y + disk.surfaceNormal.y * thickness,
-      z: disk.pos.z + disk.surfaceNormal.z * thickness,
-    };
-  }, []);
 
   const recomputeTwigForMovedDisk = React.useCallback((
     sourceTwig: Twig,
@@ -202,83 +184,51 @@ export const TwigRenderer = React.memo(function TwigRenderer({
     };
   }, []);
 
+  const activeDiskRef = React.useRef<'contactDiskA' | 'contactDiskB' | null>(null);
+
+  /** Attached knots and the leaves on them, for a twig's new geometry. */
+  const attachmentUpdatesFor = React.useCallback((nextTwig: Twig) => {
+    const snap = getSnapshot();
+    const segmentIdSet = new Set<string>(nextTwig.segments.map((seg: Segment) => seg.id));
+    const attachedKnots = Object.values(snap.knots).filter((k) => segmentIdSet.has(k.parentShaftId));
+    const leavesByParentKnotId = new Map<string, typeof snap.leaves[string][]>();
+    for (const leaf of Object.values(snap.leaves)) {
+      const list = leavesByParentKnotId.get(leaf.parentKnotId);
+      if (list) list.push(leaf);
+      else leavesByParentKnotId.set(leaf.parentKnotId, [leaf]);
+    }
+    return computeTwigDragAttachmentUpdates(nextTwig, attachedKnots, leavesByParentKnotId);
+  }, []);
+
+  const tipDrag = useContactDiskDragSession<Twig>(typeId, {
+    onHit: ({ point, surfaceNormal }: ContactDiskDragHit) => {
+      const diskKey = activeDiskRef.current;
+      const latestTwig = diskKey ? getSnapshot().twigs[twig.id] : null;
+      if (!diskKey || !latestTwig) return null;
+
+      const nextTwig = recomputeTwigForMovedDisk(latestTwig, diskKey, point, surfaceNormal);
+      const { knotsById, leavesById } = attachmentUpdatesFor(nextTwig);
+      // Broadcast so SupportRenderer moves the attached knots and leaves too.
+      emitTwigDragPreview({ twigId: nextTwig.id, twig: nextTwig, knotsById, leavesById });
+      return nextTwig;
+    },
+    onCommit: (nextTwig) => {
+      updateSupportEntity('twig', nextTwig);
+      const { knotsById, leavesById } = attachmentUpdatesFor(nextTwig);
+      for (const knot of Object.values(knotsById)) updateKnot(knot);
+      for (const leaf of Object.values(leavesById)) updateLeaf(leaf);
+    },
+    onSettled: () => clearTwigDragPreview(),
+  });
+
   const startDiskDrag = React.useCallback((diskKey: 'contactDiskA' | 'contactDiskB', initialEvent?: any) => {
     if (!isSelected) return;
 
-    beforeHistoryRef.current = captureSupportEditSnapshot();
-    dragSessionRef.current?.stop();
-
-    dragSessionRef.current = startContactDiskDragSession({
-      camera,
-      domElement: gl.domElement,
-      scene,
-      initialEvent,
+    activeDiskRef.current = diskKey;
+    tipDrag.start({
+      event: initialEvent, camera, domElement: gl.domElement, scene,
       modelId: twig.modelId,
       placementSurface: (diskKey === 'contactDiskA' ? twig.contactDiskA : twig.contactDiskB).placementSurface,
-      onHit: ({ point, surfaceNormal }: ContactDiskDragHit) => {
-        const snap = getSnapshot();
-        const latestTwig = snap.twigs[twig.id];
-        if (!latestTwig) return;
-        const nextTwig = recomputeTwigForMovedDisk(latestTwig, diskKey, point, surfaceNormal);
-        liveDragTwigRef.current = nextTwig;
-
-        // Find attached knots / leaves and emit a preview so SupportRenderer
-        // can show them following the twig's new geometry in real time.
-        const segmentIdSet = new Set<string>(nextTwig.segments.map(s => s.id));
-        const attachedKnots = Object.values(snap.knots).filter(k => segmentIdSet.has(k.parentShaftId));
-        const leavesByParentKnotId = new Map<string, typeof snap.leaves[string][]>();
-        for (const leaf of Object.values(snap.leaves)) {
-          const list = leavesByParentKnotId.get(leaf.parentKnotId);
-          if (list) list.push(leaf);
-          else leavesByParentKnotId.set(leaf.parentKnotId, [leaf]);
-        }
-        const { knotsById, leavesById } = computeTwigDragAttachmentUpdates(
-          nextTwig,
-          attachedKnots,
-          leavesByParentKnotId,
-        );
-        emitTwigDragPreview({
-          twigId: nextTwig.id,
-          twig: nextTwig,
-          knotsById,
-          leavesById,
-        });
-
-        setDragTick((tick) => tick + 1);
-      },
-      onEnd: () => {
-        if (liveDragTwigRef.current) {
-          const nextTwig = liveDragTwigRef.current;
-          updateTwig(nextTwig);
-
-          // Persist attached knot/leaf updates so the on-screen preview
-          // becomes the committed state.
-          const snap = getSnapshot();
-          const segmentIdSet = new Set<string>(nextTwig.segments.map(s => s.id));
-          const attachedKnots = Object.values(snap.knots).filter(k => segmentIdSet.has(k.parentShaftId));
-          const leavesByParentKnotId = new Map<string, typeof snap.leaves[string][]>();
-          for (const leaf of Object.values(snap.leaves)) {
-            const list = leavesByParentKnotId.get(leaf.parentKnotId);
-            if (list) list.push(leaf);
-            else leavesByParentKnotId.set(leaf.parentKnotId, [leaf]);
-          }
-          const { knotsById, leavesById } = computeTwigDragAttachmentUpdates(
-            nextTwig,
-            attachedKnots,
-            leavesByParentKnotId,
-          );
-          for (const knot of Object.values(knotsById)) updateKnot(knot);
-          for (const leaf of Object.values(leavesById)) updateLeaf(leaf);
-
-          if (beforeHistoryRef.current) {
-            pushSupportEditHistory('Move twig tip', beforeHistoryRef.current, captureSupportEditSnapshot());
-          }
-        }
-        clearTwigDragPreview();
-        liveDragTwigRef.current = null;
-        dragSessionRef.current = null;
-        beforeHistoryRef.current = null;
-      },
     });
   }, [camera, gl.domElement, isSelected, recomputeTwigForMovedDisk, scene, twig.id, twig.modelId]);
 
@@ -295,11 +245,10 @@ export const TwigRenderer = React.memo(function TwigRenderer({
   }, [isSelected, startDiskDrag]);
 
   const handleContactDiskHudPointerUp = React.useCallback(() => {
-    dragSessionRef.current?.stop();
-    dragSessionRef.current = null;
-  }, []);
+    tipDrag.stop();
+  }, [tipDrag]);
 
-  const effectiveTwig = liveDragTwigRef.current ?? twig;
+  const effectiveTwig = tipDrag.preview ?? twig;
 
   const shafts: React.ReactNode[] = [];
   const batchedStraightShafts: InstancedShaft[] = [];
@@ -339,30 +288,12 @@ export const TwigRenderer = React.memo(function TwigRenderer({
   const isDiskASelected = selectedId === effectiveTwig.contactDiskA.id;
   const isDiskBSelected = selectedId === effectiveTwig.contactDiskB.id;
 
-  effectiveTwig.segments.forEach((seg) => {
-    let startPoint: THREE.Vector3;
-    let endPoint: THREE.Vector3;
-    // Shaft tapers between the two contact disks. Joints bulge slightly at
-    // each end (their own diameter, sized from the disks in twigBuilder).
-    const diameterStart = effectiveTwig.contactDiskA.contactDiameterMm;
-    const diameterEnd = effectiveTwig.contactDiskB.contactDiameterMm;
+  const twigShaftSegments = useShaftSegments(typeId, effectiveTwig, {});
 
-    if (seg.bottomJoint) {
-      startPoint = new THREE.Vector3(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z);
-    } else {
-      const diskATipCenter = getDiskTipCenter(effectiveTwig.contactDiskA);
-      startPoint = new THREE.Vector3(diskATipCenter.x, diskATipCenter.y, diskATipCenter.z);
-    }
-
-    if (seg.topJoint) {
-      endPoint = new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z);
-    } else {
-      const diskBTipCenter = getDiskTipCenter(effectiveTwig.contactDiskB);
-      endPoint = new THREE.Vector3(diskBTipCenter.x, diskBTipCenter.y, diskBTipCenter.z);
-    }
-
-    const startPosVec = { x: startPoint.x, y: startPoint.y, z: startPoint.z };
-    const endPosVec = { x: endPoint.x, y: endPoint.y, z: endPoint.z };
+  twigShaftSegments.forEach(({ segment: seg, start: startPosVec, end: endPosVec, startVec: startPoint, endVec: endPoint, ...taper }) => {
+    // Twig declares a taper on every segment, so these are always present.
+    const diameterStart = taper.diameterStart ?? effectiveTwig.contactDiskA.contactDiameterMm;
+    const diameterEnd = taper.diameterEnd ?? effectiveTwig.contactDiskB.contactDiameterMm;
 
     const isSegSelected = selectedId === seg.id;
 

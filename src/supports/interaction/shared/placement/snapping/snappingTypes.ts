@@ -18,7 +18,3 @@ export const EMPTY_RESOLVED_SNAP_STATE: ResolvedSnapState = {
     metadata: null,
 };
 
-export interface SnapTargetRegistration {
-    id: string;
-    metadata?: Record<string, unknown>;
-}

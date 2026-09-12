@@ -1,7 +1,10 @@
+import { useContactDiskDragSession } from '../useContactDiskDragSession';
+import { updateSupportEntity } from '../../supportTypeRegistry';
 import React, { useSyncExternalStore } from 'react';
 import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
-import { Trunk, Roots } from '../../types';
+import { Trunk, Roots, type Vec3 } from '../../types';
+import type { ContactCone } from '../../SupportPrimitives/ContactCone/types';
 import { JointRenderer } from '../../SupportPrimitives/Joint/JointRenderer';
 import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
 import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
@@ -9,14 +12,13 @@ import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import { RootsRenderer } from '../../SupportPrimitives/Roots/RootsRenderer';
 import { ContactConeRenderer, getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
 import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
-import { isPrimaryPointerPress, startContactDiskDragSession, type ContactDiskDragHit, type ContactDiskDragSession } from '../../SupportPrimitives/ContactDisk/contactDiskDragController';
+import { isPrimaryPointerPress, type ContactDiskDragHit } from '../../SupportPrimitives/ContactDisk/contactDiskDragController';
 import { handleSupportClick } from '../../interaction/clickHandlers';
 import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
 import { useHighlight } from '../../interaction/useHighlight';
 import { usePartDragUpdate } from '../../interaction/partDragPreview';
-import { getSnapshot, updateTrunk } from '../../state';
+import { getSnapshot } from '../../state';
 import { subscribeToSettings, getSettingsSnapshot } from '../../Settings/state';
-import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 
 interface TrunkRendererProps {
     trunk: Trunk;
@@ -43,21 +45,11 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk: baseTrun
     const highDetailPrimitiveSegments = 24;
     const lowDetailPrimitiveSegments = 8;
     const useLowDetailPrimitives = !isSelected && !propHovered;
-    const previewTrunk = usePartDragUpdate<Trunk>('trunk', baseTrunk.id);
+    // The entity names its own type; the store stamps it on every write.
+    const typeId = baseTrunk.typeId ?? 'trunk';
+    const previewTrunk = usePartDragUpdate<Trunk>(typeId, baseTrunk.id);
     const trunk = previewTrunk ?? baseTrunk;
-    const dragSessionRef = React.useRef<ContactDiskDragSession | null>(null);
-    const liveDragConeRef = React.useRef<import('../../SupportPrimitives/ContactCone/types').ContactCone | null>(null);
-    const beforeHistoryRef = React.useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
-    const [, setDragTick] = React.useState(0);
 
-    React.useEffect(() => {
-        return () => {
-            dragSessionRef.current?.stop();
-            dragSessionRef.current = null;
-            liveDragConeRef.current = null;
-            beforeHistoryRef.current = null;
-        };
-    }, []);
 
     // Use universal highlight hook
     const { pickRef, visuals, isPickingHovered } = useHighlight({
@@ -84,46 +76,37 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk: baseTrun
         handleSupportClick(e, trunk.id, !!isInteractable);
     };
 
+    const tipDrag = useContactDiskDragSession<ContactCone>(typeId, {
+        onHit: ({ point, surfaceNormal, mesh }: ContactDiskDragHit) => {
+            const latest = getSnapshot().trunks[trunk.id];
+            if (!latest?.contactCone) return null;
+            return recomputeContactConeForMovedDisk(
+                latest.contactCone, point, surfaceNormal, socketAnchorRef.current, mesh,
+            );
+        },
+        onCommit: (cone) => {
+            const latest = getSnapshot().trunks[trunk.id];
+            if (latest) updateSupportEntity('trunk', { ...latest, contactCone: cone });
+        },
+    });
+
+    const socketAnchorRef = React.useRef<Vec3 | undefined>(undefined);
+
     const handleContactDiskHudPointerDown = React.useCallback((e: any) => {
         if (!isSelected || !trunk.contactCone) return;
         if (!isPrimaryPointerPress(e)) return;
 
-        const socketAnchor = getFinalSocketPosition(trunk.contactCone);
-        beforeHistoryRef.current = captureSupportEditSnapshot();
-
-        dragSessionRef.current?.stop();
-        dragSessionRef.current = startContactDiskDragSession({
-            camera,
-            domElement: gl.domElement,
-            scene,
-            initialEvent: e,
+        socketAnchorRef.current = getFinalSocketPosition(trunk.contactCone);
+        tipDrag.start({
+            event: e, camera, domElement: gl.domElement, scene,
             modelId: trunk.modelId,
             placementSurface: trunk.contactCone?.placementSurface,
-            onHit: ({ point, surfaceNormal, mesh }: ContactDiskDragHit) => {
-                const latest = getSnapshot().trunks[trunk.id];
-                if (!latest?.contactCone) return;
-                liveDragConeRef.current = recomputeContactConeForMovedDisk(latest.contactCone, point, surfaceNormal, socketAnchor, mesh);
-                setDragTick(t => t + 1);
-            },
-            onEnd: () => {
-                if (liveDragConeRef.current) {
-                    const latest = getSnapshot().trunks[trunk.id];
-                    if (latest) updateTrunk({ ...latest, contactCone: liveDragConeRef.current });
-                    if (beforeHistoryRef.current) {
-                        pushSupportEditHistory('Move trunk tip', beforeHistoryRef.current, captureSupportEditSnapshot());
-                    }
-                }
-                liveDragConeRef.current = null;
-                dragSessionRef.current = null;
-                beforeHistoryRef.current = null;
-            },
         });
-    }, [camera, gl.domElement, isSelected, scene, trunk.id, trunk.contactCone, trunk.modelId]);
+    }, [camera, gl.domElement, isSelected, scene, tipDrag, trunk.contactCone, trunk.modelId]);
 
     const handleContactDiskHudPointerUp = React.useCallback(() => {
-        dragSessionRef.current?.stop();
-        dragSessionRef.current = null;
-    }, []);
+        tipDrag.stop();
+    }, [tipDrag]);
     // --- Roots parameters for segment start calculation ---
     const basePos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, root.transform.pos.z);
     // Matches RootsRenderer logic
@@ -257,7 +240,7 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk: baseTrun
     });
 
     // --- Render Contact Cone ---
-    const effectiveCone = liveDragConeRef.current ?? effectiveTrunk.contactCone;
+    const effectiveCone = tipDrag.preview ?? effectiveTrunk.contactCone;
     let coneRender = null;
     if (effectiveCone && !deferContactConesToSceneBatch) {
         const isConeSelected = !!effectiveCone.id && selectedId === effectiveCone.id;

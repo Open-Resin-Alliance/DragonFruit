@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { getTrunkSegmentEndpoints } from '../SupportPrimitives/Knot/knotUtils';
+import { resolveSegmentEndpoints } from '../SupportPrimitives/Knot/segmentEndpoints';
 import { setRaftSettings } from '../Rafts/Crenelated/RaftState';
 
 test('Trunk segment endpoints Z-position matches root geometry with solid raft', () => {
@@ -40,7 +40,7 @@ test('Trunk segment endpoints Z-position matches root geometry with solid raft',
 
     const segment = trunk.segments[0];
 
-    const endpoints = getTrunkSegmentEndpoints(trunk as any, segment as any, 0, root as any);
+    const endpoints = resolveSegmentEndpoints('trunk', trunk as any, segment as any, 0, { root: root as any });
     assert.ok(endpoints, 'Endpoints should be generated');
 
     // Expected root top Z = diskHeight (1.0) + coneHeight (1.5) = 2.5.

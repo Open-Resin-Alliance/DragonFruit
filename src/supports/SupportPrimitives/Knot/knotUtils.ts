@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { Branch, Knot, Roots, Segment, Trunk, Vec3 } from '../../types';
-import { getFinalSocketPosition } from '../ContactCone';
+import { Knot, Segment, Vec3 } from '../../types';
+import type { SupportTypeId } from '../../supportTypeRegistry';
 import { getBezierPointAtT } from '../../Curves/BezierUtils';
 
 export function projectOntoSegment(
@@ -18,95 +18,6 @@ export function projectOntoSegment(
     return {
         point: { x: pointOnSegment.x, y: pointOnSegment.y, z: pointOnSegment.z },
         t: Math.min(1, Math.max(0, t)),
-    };
-}
-
-export function getTrunkSegmentEndpoints(
-    trunk: Trunk,
-    segment: Segment,
-    segmentIndex: number,
-    root: Roots | undefined
-): { start: Vec3; end: Vec3 } | null {
-    if (!root) return null;
-
-    const basePos = new THREE.Vector3(
-        root.transform.pos.x,
-        root.transform.pos.y,
-        root.transform.pos.z
-    );
-
-    const diskHeight = Number.isFinite(root.diskHeight as number) ? (root.diskHeight as number) : 0;
-    const coneHeight = Number.isFinite(root.coneHeight as number)
-        ? (root.coneHeight as number)
-        : Number.isFinite((root as any).height as number)
-            ? ((root as any).height as number)
-            : 0;
-    const rootTopZ = diskHeight + coneHeight;
-
-    let startVec: THREE.Vector3;
-    if (segment.bottomJoint) {
-        startVec = new THREE.Vector3(segment.bottomJoint.pos.x, segment.bottomJoint.pos.y, segment.bottomJoint.pos.z);
-    } else if (segmentIndex === 0) {
-        startVec = basePos.clone().add(new THREE.Vector3(0, 0, rootTopZ));
-    } else {
-        const prev = trunk.segments[segmentIndex - 1];
-        if (prev.topJoint) {
-            startVec = new THREE.Vector3(prev.topJoint.pos.x, prev.topJoint.pos.y, prev.topJoint.pos.z);
-        } else {
-            // fallback to base if missing joint
-            startVec = basePos.clone().add(new THREE.Vector3(0, 0, rootTopZ));
-        }
-    }
-
-    let endVec: THREE.Vector3;
-    if (segment.topJoint) {
-        endVec = new THREE.Vector3(segment.topJoint.pos.x, segment.topJoint.pos.y, segment.topJoint.pos.z);
-    } else if (trunk.contactCone) {
-        const socketPos = getFinalSocketPosition(trunk.contactCone);
-        endVec = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
-    } else {
-        endVec = startVec.clone().add(new THREE.Vector3(0, 0, 10));
-    }
-
-    return {
-        start: { x: startVec.x, y: startVec.y, z: startVec.z },
-        end: { x: endVec.x, y: endVec.y, z: endVec.z },
-    };
-}
-
-export function getBranchSegmentEndpoints(
-    branch: Branch,
-    segment: Segment,
-    segmentIndex: number,
-    parentKnot: Knot | undefined
-): { start: Vec3; end: Vec3 } | null {
-    if (!parentKnot) return null;
-
-    let startVec: THREE.Vector3;
-    if (segmentIndex === 0) {
-        startVec = new THREE.Vector3(parentKnot.pos.x, parentKnot.pos.y, parentKnot.pos.z);
-    } else {
-        const prev = branch.segments[segmentIndex - 1];
-        if (prev.topJoint) {
-            startVec = new THREE.Vector3(prev.topJoint.pos.x, prev.topJoint.pos.y, prev.topJoint.pos.z);
-        } else {
-            startVec = new THREE.Vector3(parentKnot.pos.x, parentKnot.pos.y, parentKnot.pos.z);
-        }
-    }
-
-    let endVec: THREE.Vector3;
-    if (segment.topJoint) {
-        endVec = new THREE.Vector3(segment.topJoint.pos.x, segment.topJoint.pos.y, segment.topJoint.pos.z);
-    } else if (branch.contactCone) {
-        const socketPos = getFinalSocketPosition(branch.contactCone);
-        endVec = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
-    } else {
-        endVec = startVec.clone().add(new THREE.Vector3(0, 0, 10));
-    }
-
-    return {
-        start: { x: startVec.x, y: startVec.y, z: startVec.z },
-        end: { x: endVec.x, y: endVec.y, z: endVec.z },
     };
 }
 
@@ -229,3 +140,19 @@ export function calculateKnotPositionOnSegmentFromT(
 
     return calculateKnotPositionFromT(start, end, clampedT);
 }
+
+/**
+ * What a knot rides: a support type's shaft, or a leaf's contact cone. The cone
+ * is a primitive rather than a type, so it is named alongside the type ids.
+ */
+export type KnotHostType = SupportTypeId | 'leafCone';
+
+/**
+ * History label for moving a knot. The type id is already the singular noun, so
+ * a ninth type reads correctly without being listed here.
+ */
+export function knotMoveDescription(host: KnotHostType | null | undefined): string {
+    if (!host) return 'Move support knot';
+    return host === 'leafCone' ? 'Move tip knot' : `Move ${host} knot`;
+}
+

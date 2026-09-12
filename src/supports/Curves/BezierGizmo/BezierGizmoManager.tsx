@@ -1,27 +1,25 @@
 import React, { useSyncExternalStore, useCallback, useMemo, useState, useRef, useEffect } from 'react';
 import * as THREE from 'three';
-import { subscribe, getSnapshot, updateTrunk, updateBranch, updateTwig, updateStick, updateBrace, getTrunkById, getBranchById } from '../../state';
+import { subscribe, getSnapshot, getSupportEntity } from '../../state';
 import { Trunk, Branch, Twig, Stick, Brace, Segment, BezierSegment, Joint } from '../../types';
-import { updateKickstand, useKickstandStoreState } from '../../SupportTypes/Kickstand/kickstandStore';
-import type { Kickstand as KickstandEntity } from '../../SupportTypes/Kickstand/types';
 import { BezierHandle } from './BezierHandle';
 import { calculateControlPoint } from './utils';
 import { useCurveInteractionState, curveInteractionStore } from '../../Curves/curveInteractionState';
 import { pushSupportHistory } from '@/supports/history/supportHistory';
 import { SUPPORT_UPDATE_TRUNK } from '../../history/actionTypes';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
+import { resolveShaftAnchor } from '../../SupportPrimitives/Knot/segmentEndpoints';
+import type { ContactCone } from '../../SupportPrimitives/ContactCone/types';
 import { getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
 import { clearSupportDragPreview, emitSupportDragPreview } from '../../SupportPrimitives/Joint/jointDragRuntime';
 import { clearTwigDragPreview, computeTwigDragAttachmentUpdates, emitTwigDragPreview } from '../../SupportTypes/Twig/twigDragPreview';
+import { getSupportTypeDescriptor, parsePrefixedSegmentId, SUPPORT_TYPES, updateSupportEntity, type SupportTypeId } from '../../supportTypeRegistry';
 
 interface HandleContext {
     id: string; // Unique ID for key
-    trunk?: Trunk;
-    branch?: Branch;
-    twig?: Twig;
-    stick?: Stick;
-    brace?: Brace;
-    kickstand?: KickstandEntity;
+    /** The support this handle reshapes, and which type it is. */
+    entity?: { id: string; segments?: Segment[] };
+    typeId?: SupportTypeId;
     joint: Joint;
     incomingSegment?: Segment; // Segment ending at this joint (from below)
     incomingIndex: number;
@@ -33,22 +31,14 @@ interface HandleContext {
 export function BezierGizmoManager() {
     const MIN_CONTROL_POINT_DELTA_SQ = 1e-10;
     const state = useSyncExternalStore(subscribe, getSnapshot);
-    const kickstandState = useKickstandStoreState();
     const selectedId = state.selectedId;
     const selectedCategory = state.selectedCategory;
     useCurveInteractionState();
     const initialTrunkRef = useRef<Trunk | null>(null);
-    const initialBranchRef = useRef<Branch | null>(null);
-    const initialTwigRef = useRef<Twig | null>(null);
-    const initialStickRef = useRef<Stick | null>(null);
-    const initialBraceRef = useRef<Brace | null>(null);
-    const initialKickstandRef = useRef<KickstandEntity | null>(null);
     const initialEditSnapshotRef = useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
-    const liveTrunkPreviewRef = useRef<Trunk | null>(null);
-    const liveBranchPreviewRef = useRef<Branch | null>(null);
-    const liveTwigPreviewRef = useRef<Twig | null>(null);
-    const liveStickPreviewRef = useRef<Stick | null>(null);
-    const liveKickstandPreviewRef = useRef<KickstandEntity | null>(null);
+
+    /** One preview, for whichever support is being reshaped. */
+    const livePreviewRef = useRef<{ typeId: SupportTypeId; support: { id: string } } | null>(null);
 
     const setBezierGizmoInteractionFlags = useCallback((isDragging: boolean, postGuardMs = 180) => {
         if (typeof window === 'undefined') return;
@@ -66,27 +56,14 @@ export function BezierGizmoManager() {
     }, []);
 
     const clearLiveSupportPreviews = useCallback(() => {
-        if (liveTrunkPreviewRef.current) {
-            clearSupportDragPreview('trunk', liveTrunkPreviewRef.current.id);
-            liveTrunkPreviewRef.current = null;
-        }
-        if (liveBranchPreviewRef.current) {
-            clearSupportDragPreview('branch', liveBranchPreviewRef.current.id);
-            liveBranchPreviewRef.current = null;
-        }
-        if (liveTwigPreviewRef.current) {
-            clearSupportDragPreview('twig', liveTwigPreviewRef.current.id);
+        const live = livePreviewRef.current;
+        if (!live) return;
+
+        clearSupportDragPreview(live.typeId, live.support.id);
+        if (getSupportTypeDescriptor(live.typeId).broadcastsAttachmentsWhileDragging) {
             clearTwigDragPreview();
-            liveTwigPreviewRef.current = null;
         }
-        if (liveStickPreviewRef.current) {
-            clearSupportDragPreview('stick', liveStickPreviewRef.current.id);
-            liveStickPreviewRef.current = null;
-        }
-        if (liveKickstandPreviewRef.current) {
-            clearSupportDragPreview('kickstand', liveKickstandPreviewRef.current.id);
-            liveKickstandPreviewRef.current = null;
-        }
+        livePreviewRef.current = null;
     }, []);
 
     useEffect(() => {
@@ -111,365 +88,120 @@ export function BezierGizmoManager() {
             }
         };
 
-        for (const trunk of Object.values(state.trunks)) {
-            const segments = trunk.segments;
-            for (let i = 0; i < segments.length; i++) {
-                const seg = segments[i];
+        // Every shafted type builds the same handles. Both differences are
+        // declared: where a first segment's missing bottom joint comes from
+        // (the lower endpoint), and the context id prefix, which is a React key.
+        for (const descriptor of SUPPORT_TYPES) {
+            if (!descriptor.hasSegments) continue;
 
-                if (seg.topJoint?.id) {
-                    pushContext(jointContextsById, seg.topJoint.id, {
-                        id: `joint-${seg.topJoint.id}-incoming`,
-                        trunk,
-                        joint: seg.topJoint,
-                        incomingSegment: seg,
-                        incomingIndex: i,
-                        outgoingSegment: segments[i + 1],
-                        outgoingIndex: i + 1,
-                        activeHandle: 'incoming',
-                    });
+            const prefix = descriptor.bezierContextIdPrefix;
+            const collection = state[descriptor.location.key] as unknown as
+                Record<string, { id: string; segments: Segment[]; rootId?: string; parentKnotId?: string; contactCone?: ContactCone }>;
 
-                    pushContext(jointContextsById, seg.topJoint.id, {
-                        id: `joint-${seg.topJoint.id}-outgoing`,
-                        trunk,
-                        joint: seg.topJoint,
-                        incomingSegment: seg,
-                        incomingIndex: i,
-                        outgoingSegment: segments[i + 1],
-                        outgoingIndex: i + 1,
-                        activeHandle: 'outgoing',
-                    });
-                }
+            for (const entity of Object.values(collection ?? {})) {
+                const segments = entity.segments ?? [];
 
-                if (seg.bottomJoint?.id && i === 0) {
-                    pushContext(jointContextsById, seg.bottomJoint.id, {
-                        id: `joint-${seg.bottomJoint.id}-outgoing`,
-                        trunk,
-                        joint: seg.bottomJoint,
-                        incomingSegment: undefined,
-                        incomingIndex: -1,
-                        outgoingSegment: seg,
-                        outgoingIndex: i,
-                        activeHandle: 'outgoing',
-                    });
-                }
+                for (let i = 0; i < segments.length; i++) {
+                    const seg = segments[i];
 
-                if (seg.type !== 'bezier') continue;
-
-                let bottomJoint = seg.bottomJoint;
-                if (!bottomJoint) {
-                    if (i > 0) {
-                        bottomJoint = segments[i - 1].topJoint;
-                    } else {
-                        const root = state.roots[trunk.rootId];
-                        if (root) {
-                            const rPos = root.transform.pos;
-                            const diskHeight = 0.5;
-                            const coneHeight = root.coneHeight || 1.5;
-                            bottomJoint = {
-                                id: root.id,
-                                pos: {
-                                    x: rPos.x,
-                                    y: rPos.y,
-                                    z: rPos.z + diskHeight + coneHeight,
-                                },
-                                diameter: root.diameter,
-                            };
+                    if (seg.topJoint?.id) {
+                        for (const activeHandle of ['incoming', 'outgoing'] as const) {
+                            pushContext(jointContextsById, seg.topJoint.id, {
+                                id: `${prefix}joint-${seg.topJoint.id}-${activeHandle}`,
+                                entity,
+                                typeId: descriptor.id,
+                                joint: seg.topJoint,
+                                incomingSegment: seg,
+                                incomingIndex: i,
+                                outgoingSegment: segments[i + 1],
+                                outgoingIndex: i + 1,
+                                activeHandle,
+                            });
                         }
                     }
-                }
 
-                if (bottomJoint) {
-                    pushContext(segmentContextsById, seg.id, {
-                        id: `seg-${seg.id}-bottom`,
-                        trunk,
-                        joint: bottomJoint,
-                        incomingSegment: segments[i - 1],
-                        incomingIndex: i - 1,
-                        outgoingSegment: seg,
-                        outgoingIndex: i,
-                        activeHandle: 'outgoing',
-                    });
-                }
+                    if (seg.bottomJoint?.id && i === 0) {
+                        pushContext(jointContextsById, seg.bottomJoint.id, {
+                            id: `${prefix}joint-${seg.bottomJoint.id}-outgoing`,
+                            entity,
+                            typeId: descriptor.id,
+                            joint: seg.bottomJoint,
+                            incomingSegment: undefined,
+                            incomingIndex: -1,
+                            outgoingSegment: seg,
+                            outgoingIndex: i,
+                            activeHandle: 'outgoing',
+                        });
+                    }
 
-                if (seg.topJoint) {
-                    pushContext(segmentContextsById, seg.id, {
-                        id: `seg-${seg.id}-top`,
-                        trunk,
-                        joint: seg.topJoint,
-                        incomingSegment: seg,
-                        incomingIndex: i,
-                        outgoingSegment: segments[i + 1],
-                        outgoingIndex: i + 1,
-                        activeHandle: 'incoming',
-                    });
-                } else if (trunk.contactCone) {
-                    const socketPos = getFinalSocketPosition(trunk.contactCone);
-                    const syntheticJoint: Joint = {
-                        id: trunk.contactCone.socketJointId || 'cone-socket',
-                        pos: { x: socketPos.x, y: socketPos.y, z: socketPos.z },
-                        diameter: trunk.contactCone.profile?.bodyDiameterMm ?? seg.diameter,
-                    };
+                    if (seg.type !== 'bezier') continue;
 
-                    pushContext(segmentContextsById, seg.id, {
-                        id: `seg-${seg.id}-top-cone`,
-                        trunk,
-                        joint: syntheticJoint,
-                        incomingSegment: seg,
-                        incomingIndex: i,
-                        outgoingSegment: undefined,
-                        outgoingIndex: i + 1,
-                        activeHandle: 'incoming',
-                    });
-                }
-            }
-        }
-
-        for (const branch of Object.values(state.branches)) {
-            const segments = branch.segments;
-            for (let i = 0; i < segments.length; i++) {
-                const seg = segments[i];
-
-                if (seg.topJoint?.id) {
-                    pushContext(jointContextsById, seg.topJoint.id, {
-                        id: `branch-joint-${seg.topJoint.id}-incoming`,
-                        branch,
-                        joint: seg.topJoint,
-                        incomingSegment: seg,
-                        incomingIndex: i,
-                        outgoingSegment: segments[i + 1],
-                        outgoingIndex: i + 1,
-                        activeHandle: 'incoming',
-                    });
-
-                    pushContext(jointContextsById, seg.topJoint.id, {
-                        id: `branch-joint-${seg.topJoint.id}-outgoing`,
-                        branch,
-                        joint: seg.topJoint,
-                        incomingSegment: seg,
-                        incomingIndex: i,
-                        outgoingSegment: segments[i + 1],
-                        outgoingIndex: i + 1,
-                        activeHandle: 'outgoing',
-                    });
-                }
-
-                if (seg.bottomJoint?.id && i === 0) {
-                    pushContext(jointContextsById, seg.bottomJoint.id, {
-                        id: `branch-joint-${seg.bottomJoint.id}-outgoing`,
-                        branch,
-                        joint: seg.bottomJoint,
-                        incomingSegment: undefined,
-                        incomingIndex: -1,
-                        outgoingSegment: seg,
-                        outgoingIndex: i,
-                        activeHandle: 'outgoing',
-                    });
-                }
-
-                if (seg.type !== 'bezier') continue;
-
-                let bottomJoint = seg.bottomJoint;
-                if (!bottomJoint) {
-                    if (i > 0) {
-                        bottomJoint = segments[i - 1].topJoint;
-                    } else {
-                        const parentKnot = state.knots[branch.parentKnotId];
-                        if (parentKnot) {
-                            bottomJoint = {
-                                id: parentKnot.id,
-                                pos: parentKnot.pos,
-                                diameter: 1.5,
-                            };
+                    // A first segment with no bottom joint starts at whatever the
+                    // type declares as its lower endpoint.
+                    let bottomJoint = seg.bottomJoint;
+                    if (!bottomJoint) {
+                        if (i > 0) {
+                            bottomJoint = segments[i - 1].topJoint;
+                        } else {
+                            const root = descriptor.ownsRoot ? state.roots[entity.rootId ?? ''] : undefined;
+                            const hostKnot = descriptor.lower.kind === 'knot'
+                                ? state.knots[entity.parentKnotId ?? '']
+                                : undefined;
+                            const anchor = resolveShaftAnchor(descriptor.id, { root, hostKnot });
+                            if (anchor) {
+                                bottomJoint = {
+                                    id: root?.id ?? hostKnot?.id ?? `${entity.id}-anchor`,
+                                    pos: anchor,
+                                    diameter: root?.diameter ?? hostKnot?.diameter ?? seg.diameter,
+                                };
+                            }
                         }
                     }
-                }
 
-                if (bottomJoint) {
-                    pushContext(segmentContextsById, seg.id, {
-                        id: `branch-seg-${seg.id}-bottom`,
-                        branch,
-                        joint: bottomJoint,
-                        incomingSegment: segments[i - 1],
-                        incomingIndex: i - 1,
-                        outgoingSegment: seg,
-                        outgoingIndex: i,
-                        activeHandle: 'outgoing',
-                    });
-                }
+                    if (bottomJoint) {
+                        pushContext(segmentContextsById, seg.id, {
+                            id: `seg-${seg.id}-bottom`,
+                            entity,
+                            typeId: descriptor.id,
+                            joint: bottomJoint,
+                            incomingSegment: segments[i - 1],
+                            incomingIndex: i - 1,
+                            outgoingSegment: seg,
+                            outgoingIndex: i,
+                            activeHandle: 'outgoing',
+                        });
+                    }
 
-                if (seg.topJoint) {
-                    pushContext(segmentContextsById, seg.id, {
-                        id: `branch-seg-${seg.id}-top`,
-                        branch,
-                        joint: seg.topJoint,
-                        incomingSegment: seg,
-                        incomingIndex: i,
-                        outgoingSegment: segments[i + 1],
-                        outgoingIndex: i + 1,
-                        activeHandle: 'incoming',
-                    });
-                } else if (branch.contactCone) {
-                    const socketPos = getFinalSocketPosition(branch.contactCone);
-                    const syntheticJoint: Joint = {
-                        id: branch.contactCone.socketJointId || 'cone-socket',
-                        pos: { x: socketPos.x, y: socketPos.y, z: socketPos.z },
-                        diameter: branch.contactCone.profile?.bodyDiameterMm ?? seg.diameter,
-                    };
-
-                    pushContext(segmentContextsById, seg.id, {
-                        id: `branch-seg-${seg.id}-top-cone`,
-                        branch,
-                        joint: syntheticJoint,
-                        incomingSegment: seg,
-                        incomingIndex: i,
-                        outgoingSegment: undefined,
-                        outgoingIndex: i + 1,
-                        activeHandle: 'incoming',
-                    });
-                }
-            }
-        }
-
-        for (const twig of Object.values(state.twigs)) {
-            const segments = twig.segments;
-            for (let i = 0; i < segments.length; i++) {
-                const seg = segments[i];
-
-                if (seg.topJoint?.id) {
-                    pushContext(jointContextsById, seg.topJoint.id, {
-                        id: `twig-joint-${seg.topJoint.id}-incoming`,
-                        twig,
-                        joint: seg.topJoint,
-                        incomingSegment: seg,
-                        incomingIndex: i,
-                        outgoingSegment: segments[i + 1],
-                        outgoingIndex: i + 1,
-                        activeHandle: 'incoming',
-                    });
-
-                    pushContext(jointContextsById, seg.topJoint.id, {
-                        id: `twig-joint-${seg.topJoint.id}-outgoing`,
-                        twig,
-                        joint: seg.topJoint,
-                        incomingSegment: seg,
-                        incomingIndex: i,
-                        outgoingSegment: segments[i + 1],
-                        outgoingIndex: i + 1,
-                        activeHandle: 'outgoing',
-                    });
-                }
-
-                if (seg.bottomJoint?.id && i === 0) {
-                    pushContext(jointContextsById, seg.bottomJoint.id, {
-                        id: `twig-joint-${seg.bottomJoint.id}-outgoing`,
-                        twig,
-                        joint: seg.bottomJoint,
-                        incomingSegment: undefined,
-                        incomingIndex: -1,
-                        outgoingSegment: seg,
-                        outgoingIndex: i,
-                        activeHandle: 'outgoing',
-                    });
-                }
-
-                if (seg.type !== 'bezier') continue;
-
-                if (seg.bottomJoint) {
-                    pushContext(segmentContextsById, seg.id, {
-                        id: `twig-seg-${seg.id}-bottom`,
-                        twig,
-                        joint: seg.bottomJoint,
-                        incomingSegment: segments[i - 1],
-                        incomingIndex: i - 1,
-                        outgoingSegment: seg,
-                        outgoingIndex: i,
-                        activeHandle: 'outgoing',
-                    });
-                }
-
-                if (seg.topJoint) {
-                    pushContext(segmentContextsById, seg.id, {
-                        id: `twig-seg-${seg.id}-top`,
-                        twig,
-                        joint: seg.topJoint,
-                        incomingSegment: seg,
-                        incomingIndex: i,
-                        outgoingSegment: segments[i + 1],
-                        outgoingIndex: i + 1,
-                        activeHandle: 'incoming',
-                    });
-                }
-            }
-        }
-
-        for (const stick of Object.values(state.sticks)) {
-            const segments = stick.segments;
-            for (let i = 0; i < segments.length; i++) {
-                const seg = segments[i];
-
-                if (seg.topJoint?.id) {
-                    pushContext(jointContextsById, seg.topJoint.id, {
-                        id: `stick-joint-${seg.topJoint.id}-incoming`,
-                        stick,
-                        joint: seg.topJoint,
-                        incomingSegment: seg,
-                        incomingIndex: i,
-                        outgoingSegment: segments[i + 1],
-                        outgoingIndex: i + 1,
-                        activeHandle: 'incoming',
-                    });
-
-                    pushContext(jointContextsById, seg.topJoint.id, {
-                        id: `stick-joint-${seg.topJoint.id}-outgoing`,
-                        stick,
-                        joint: seg.topJoint,
-                        incomingSegment: seg,
-                        incomingIndex: i,
-                        outgoingSegment: segments[i + 1],
-                        outgoingIndex: i + 1,
-                        activeHandle: 'outgoing',
-                    });
-                }
-
-                if (seg.bottomJoint?.id && i === 0) {
-                    pushContext(jointContextsById, seg.bottomJoint.id, {
-                        id: `stick-joint-${seg.bottomJoint.id}-outgoing`,
-                        stick,
-                        joint: seg.bottomJoint,
-                        incomingSegment: undefined,
-                        incomingIndex: -1,
-                        outgoingSegment: seg,
-                        outgoingIndex: i,
-                        activeHandle: 'outgoing',
-                    });
-                }
-
-                if (seg.type !== 'bezier') continue;
-
-                if (seg.bottomJoint) {
-                    pushContext(segmentContextsById, seg.id, {
-                        id: `stick-seg-${seg.id}-bottom`,
-                        stick,
-                        joint: seg.bottomJoint,
-                        incomingSegment: segments[i - 1],
-                        incomingIndex: i - 1,
-                        outgoingSegment: seg,
-                        outgoingIndex: i,
-                        activeHandle: 'outgoing',
-                    });
-                }
-
-                if (seg.topJoint) {
-                    pushContext(segmentContextsById, seg.id, {
-                        id: `stick-seg-${seg.id}-top`,
-                        stick,
-                        joint: seg.topJoint,
-                        incomingSegment: seg,
-                        incomingIndex: i,
-                        outgoingSegment: segments[i + 1],
-                        outgoingIndex: i + 1,
-                        activeHandle: 'incoming',
-                    });
+                    if (seg.topJoint) {
+                        pushContext(segmentContextsById, seg.id, {
+                            id: `seg-${seg.id}-top`,
+                            entity,
+                            typeId: descriptor.id,
+                            joint: seg.topJoint,
+                            incomingSegment: seg,
+                            incomingIndex: i,
+                            outgoingSegment: segments[i + 1],
+                            outgoingIndex: i + 1,
+                            activeHandle: 'incoming',
+                        });
+                    } else if (entity.contactCone) {
+                        const socketPos = getFinalSocketPosition(entity.contactCone);
+                        pushContext(segmentContextsById, seg.id, {
+                            id: `seg-${seg.id}-top-cone`,
+                            entity,
+                            typeId: descriptor.id,
+                            joint: {
+                                id: entity.contactCone.socketJointId || 'cone-socket',
+                                pos: { x: socketPos.x, y: socketPos.y, z: socketPos.z },
+                                diameter: entity.contactCone.profile?.bodyDiameterMm ?? seg.diameter,
+                            },
+                            incomingSegment: seg,
+                            incomingIndex: i,
+                            outgoingSegment: undefined,
+                            outgoingIndex: i + 1,
+                            activeHandle: 'incoming',
+                        });
+                    }
                 }
             }
         }
@@ -485,7 +217,8 @@ export function BezierGizmoManager() {
 
             pushContext(braceContextsById, brace.id, {
                 id: `brace-${brace.id}-start-outgoing`,
-                brace,
+                entity: brace,
+                typeId: 'brace',
                 joint: startJoint,
                 incomingSegment: undefined,
                 incomingIndex: -1,
@@ -496,7 +229,8 @@ export function BezierGizmoManager() {
 
             pushContext(braceContextsById, brace.id, {
                 id: `brace-${brace.id}-end-incoming`,
-                brace,
+                entity: brace,
+                typeId: 'brace',
                 joint: endJoint,
                 incomingSegment: undefined,
                 incomingIndex: 0,
@@ -506,9 +240,9 @@ export function BezierGizmoManager() {
             });
         }
 
-        for (const kickstand of Object.values(kickstandState.kickstands)) {
+        for (const kickstand of Object.values(state.kickstands)) {
             const segments = kickstand.segments;
-            const hostKnot = kickstandState.knots[kickstand.hostKnotId];
+            const hostKnot = state.knots[kickstand.hostKnotId];
 
             for (let i = 0; i < segments.length; i++) {
                 const seg = segments[i];
@@ -516,7 +250,8 @@ export function BezierGizmoManager() {
                 if (seg.topJoint?.id) {
                     pushContext(jointContextsById, seg.topJoint.id, {
                         id: `kickstand-joint-${seg.topJoint.id}-incoming`,
-                        kickstand,
+                        entity: kickstand,
+                        typeId: 'kickstand',
                         joint: seg.topJoint,
                         incomingSegment: seg,
                         incomingIndex: i,
@@ -527,7 +262,8 @@ export function BezierGizmoManager() {
 
                     pushContext(jointContextsById, seg.topJoint.id, {
                         id: `kickstand-joint-${seg.topJoint.id}-outgoing`,
-                        kickstand,
+                        entity: kickstand,
+                        typeId: 'kickstand',
                         joint: seg.topJoint,
                         incomingSegment: seg,
                         incomingIndex: i,
@@ -540,7 +276,8 @@ export function BezierGizmoManager() {
                 if (seg.bottomJoint?.id && i === 0) {
                     pushContext(jointContextsById, seg.bottomJoint.id, {
                         id: `kickstand-joint-${seg.bottomJoint.id}-outgoing`,
-                        kickstand,
+                        entity: kickstand,
+                        typeId: 'kickstand',
                         joint: seg.bottomJoint,
                         incomingSegment: undefined,
                         incomingIndex: -1,
@@ -555,7 +292,8 @@ export function BezierGizmoManager() {
                 if (seg.bottomJoint) {
                     pushContext(segmentContextsById, seg.id, {
                         id: `kickstand-seg-${seg.id}-bottom`,
-                        kickstand,
+                        entity: kickstand,
+                        typeId: 'kickstand',
                         joint: seg.bottomJoint,
                         incomingSegment: segments[i - 1],
                         incomingIndex: i - 1,
@@ -568,7 +306,8 @@ export function BezierGizmoManager() {
                 if (seg.topJoint) {
                     pushContext(segmentContextsById, seg.id, {
                         id: `kickstand-seg-${seg.id}-top`,
-                        kickstand,
+                        entity: kickstand,
+                        typeId: 'kickstand',
                         joint: seg.topJoint,
                         incomingSegment: seg,
                         incomingIndex: i,
@@ -585,7 +324,8 @@ export function BezierGizmoManager() {
 
                     pushContext(segmentContextsById, seg.id, {
                         id: `kickstand-seg-${seg.id}-top-host`,
-                        kickstand,
+                        entity: kickstand,
+                        typeId: 'kickstand',
                         joint: syntheticJoint,
                         incomingSegment: seg,
                         incomingIndex: i,
@@ -602,17 +342,7 @@ export function BezierGizmoManager() {
             segmentContextsById,
             braceContextsById,
         };
-    }, [
-        state.trunks,
-        state.roots,
-        state.branches,
-        state.twigs,
-        state.sticks,
-        state.braces,
-        state.knots,
-        kickstandState.kickstands,
-        kickstandState.knots,
-    ]);
+    }, [state]);
 
     const contexts = useMemo(() => {
         if (!selectedId) return [] as HandleContext[];
@@ -621,22 +351,19 @@ export function BezierGizmoManager() {
             return gizmoContextIndex.jointContextsById.get(selectedId) ?? [];
         }
 
+        // A prefixed segment id names its owning entity, whatever the category
+        // says -- the category can lag a selection change.
+        const prefixed = parsePrefixedSegmentId(selectedId);
+        if (prefixed) {
+            return gizmoContextIndex.braceContextsById.get(prefixed.entityId) ?? [];
+        }
+
         if (selectedCategory === 'segment') {
-            if (selectedId.startsWith('braceSegment:')) {
-                const braceId = selectedId.slice('braceSegment:'.length);
-                return gizmoContextIndex.braceContextsById.get(braceId) ?? [];
-            }
             return gizmoContextIndex.segmentContextsById.get(selectedId) ?? [];
         }
 
         if (selectedCategory === 'brace') {
             return gizmoContextIndex.braceContextsById.get(selectedId) ?? [];
-        }
-
-        // Defensive fallback when category has not yet synchronized.
-        if (selectedId.startsWith('braceSegment:')) {
-            const braceId = selectedId.slice('braceSegment:'.length);
-            return gizmoContextIndex.braceContextsById.get(braceId) ?? [];
         }
 
         return [] as HandleContext[];
@@ -651,21 +378,11 @@ export function BezierGizmoManager() {
         curveInteractionStore.setIsDraggingHandle(true);
         setBezierGizmoInteractionFlags(true);
         // Snapshot for history
-        if (ctx.trunk) {
-            initialTrunkRef.current = JSON.parse(JSON.stringify(ctx.trunk));
-        } else if (ctx.branch) {
-            initialBranchRef.current = JSON.parse(JSON.stringify(ctx.branch));
-        } else if (ctx.twig) {
-            initialTwigRef.current = JSON.parse(JSON.stringify(ctx.twig));
-        } else if (ctx.stick) {
-            initialStickRef.current = JSON.parse(JSON.stringify(ctx.stick));
-        } else if (ctx.brace) {
-            initialBraceRef.current = JSON.parse(JSON.stringify(ctx.brace));
-        } else if (ctx.kickstand) {
-            initialKickstandRef.current = JSON.parse(JSON.stringify(ctx.kickstand));
-        }
-
-        if (ctx.branch || ctx.twig || ctx.stick || ctx.brace || ctx.kickstand) {
+        // Trunks keep their own before/after history entry; every other type is
+        // covered by the whole-store edit snapshot below.
+        if (ctx.typeId && getSupportTypeDescriptor(ctx.typeId).ownsEditHistoryEntry) {
+            initialTrunkRef.current = JSON.parse(JSON.stringify(ctx.entity));
+        } else if (ctx.typeId) {
             initialEditSnapshotRef.current = captureSupportEditSnapshot();
         }
     };
@@ -676,74 +393,66 @@ export function BezierGizmoManager() {
         // Prevent canvas click (deselect)
         (window as any).__gizmoDragEndedThisFrame = true;
 
-        // Push history for trunks
-        if (initialTrunkRef.current && ctx.trunk) {
-            const latestTrunk = liveTrunkPreviewRef.current ?? getTrunkById(ctx.trunk.id);
+        // A type recording its own before/after entry. The action's payload type
+        // is per-action, so this stays typed rather than dispatched.
+        if (initialTrunkRef.current && ctx.entity && ctx.typeId === 'trunk') {
+            const latestTrunk = (livePreviewRef.current?.support as Trunk | undefined)
+                ?? getSupportEntity('trunk', ctx.entity.id) as Trunk | null;
             if (latestTrunk) {
                 // Final exact reconciliation after drag-time fast-path updates.
-                updateTrunk(latestTrunk);
+                updateSupportEntity('trunk', latestTrunk);
                 pushSupportHistory({
                     type: SUPPORT_UPDATE_TRUNK,
-                    description: 'Edit trunk curve',
+                    description: `Edit ${getSupportTypeDescriptor('trunk').singular} curve`,
                     payload: {
                         before: initialTrunkRef.current,
                         after: JSON.parse(JSON.stringify(latestTrunk)),
                     },
                 });
             }
-            clearSupportDragPreview('trunk', ctx.trunk.id);
-            liveTrunkPreviewRef.current = null;
+            clearSupportDragPreview('trunk', ctx.entity.id);
+            livePreviewRef.current = null;
             initialTrunkRef.current = null;
         }
 
-        if (initialEditSnapshotRef.current) {
-            if (ctx.branch) {
-                const latestBranch = liveBranchPreviewRef.current ?? getBranchById(ctx.branch.id);
-                if (latestBranch) {
-                    // Final exact reconciliation after drag-time fast-path updates.
-                    updateBranch(latestBranch);
-                }
-                clearSupportDragPreview('branch', ctx.branch.id);
-                liveBranchPreviewRef.current = null;
-                pushSupportEditHistory('Edit branch curve', initialEditSnapshotRef.current, captureSupportEditSnapshot());
-            } else if (ctx.twig) {
-                if (liveTwigPreviewRef.current) {
-                    updateTwig(liveTwigPreviewRef.current);
-                }
-                clearSupportDragPreview('twig', ctx.twig.id);
-                clearTwigDragPreview();
-                liveTwigPreviewRef.current = null;
-                pushSupportEditHistory('Edit twig curve', initialEditSnapshotRef.current, captureSupportEditSnapshot());
-            } else if (ctx.stick) {
-                if (liveStickPreviewRef.current) {
-                    updateStick(liveStickPreviewRef.current);
-                }
-                clearSupportDragPreview('stick', ctx.stick.id);
-                liveStickPreviewRef.current = null;
-                pushSupportEditHistory('Edit stick curve', initialEditSnapshotRef.current, captureSupportEditSnapshot());
-            } else if (ctx.brace) {
-                pushSupportEditHistory('Edit brace curve', initialEditSnapshotRef.current, captureSupportEditSnapshot());
-            } else if (ctx.kickstand) {
-                if (liveKickstandPreviewRef.current) {
-                    updateKickstand(liveKickstandPreviewRef.current);
-                }
-                clearSupportDragPreview('kickstand', ctx.kickstand.id);
-                liveKickstandPreviewRef.current = null;
-                pushSupportEditHistory('Edit kickstand curve', initialEditSnapshotRef.current, captureSupportEditSnapshot());
+        // One path for every type that does not record its own history: commit the
+        // preview, clear it, record one entry. A type that writes its own entry
+        // above would otherwise get two.
+        if (initialEditSnapshotRef.current && ctx.typeId
+            && !getSupportTypeDescriptor(ctx.typeId).ownsEditHistoryEntry) {
+            const typeId = ctx.typeId;
+            const descriptor = getSupportTypeDescriptor(typeId);
+            const draggedId = ctx.entity?.id;
+            const preview = livePreviewRef.current?.typeId === typeId
+                ? livePreviewRef.current.support
+                : null;
+
+            if (preview) {
+                updateSupportEntity(typeId, preview);
+            } else if (typeId === 'branch' && draggedId) {
+                // Branches reconcile from the store when no preview was produced.
+                const latestBranch = getSupportEntity('branch', draggedId) as Branch | null;
+                if (latestBranch) updateSupportEntity('branch', latestBranch);
             }
+
+            if (draggedId) clearSupportDragPreview(typeId, draggedId);
+            if (descriptor.broadcastsAttachmentsWhileDragging) clearTwigDragPreview();
+            livePreviewRef.current = null;
+
+            pushSupportEditHistory(
+                `Edit ${descriptor.singular} curve`,
+                initialEditSnapshotRef.current,
+                captureSupportEditSnapshot(),
+            );
             initialEditSnapshotRef.current = null;
         }
 
-        initialBranchRef.current = null;
-        initialTwigRef.current = null;
-        initialStickRef.current = null;
-        initialBraceRef.current = null;
-        initialKickstandRef.current = null;
         clearLiveSupportPreviews();
     };
 
     const handleDrag = (ctx: HandleContext, newPos: THREE.Vector3) => {
-        const { trunk, branch, twig, stick, brace, kickstand, joint, incomingIndex, outgoingIndex, activeHandle } = ctx;
+        const { entity, typeId, joint, incomingIndex, outgoingIndex, activeHandle } = ctx;
+        const descriptor = typeId ? getSupportTypeDescriptor(typeId) : null;
         const jointPos = new THREE.Vector3(joint.pos.x, joint.pos.y, joint.pos.z);
 
         const controlPointUnchanged = (
@@ -757,8 +466,9 @@ export function BezierGizmoManager() {
             return (dx * dx + dy * dy + dz * dz) <= MIN_CONTROL_POINT_DELTA_SQ;
         };
 
-        if (brace) {
-            if (!brace.curve || brace.curve.type !== 'bezier') return;
+        if (typeId === 'brace') {
+            const brace = entity as unknown as Brace | undefined;
+            if (!brace?.curve || brace.curve.type !== 'bezier') return;
             const newBrace = JSON.parse(JSON.stringify(brace)) as Brace;
 
             const curve = newBrace.curve;
@@ -779,12 +489,12 @@ export function BezierGizmoManager() {
                 curve.controlPoint2 = { x: newPos.x, y: newPos.y, z: newPos.z };
             }
 
-            updateBrace(newBrace);
+            updateSupportEntity('brace', newBrace);
             return;
         }
 
-        // Get the parent (trunk/branch/twig/stick) and its segments
-        const parent = trunk || branch || twig || stick || kickstand;
+        // Every shafted type reshapes the same way; brace returned above.
+        const parent = entity;
         if (!parent) return;
 
         // Clone to mutate
@@ -849,23 +559,16 @@ export function BezierGizmoManager() {
              }
         }
 
-        // Update the appropriate store
-        if (trunk) {
-            const previewTrunk = newParent as Trunk;
-            liveTrunkPreviewRef.current = previewTrunk;
-            emitSupportDragPreview('trunk', previewTrunk.id, previewTrunk);
-        } else if (branch) {
-            const previewBranch = newParent as Branch;
-            liveBranchPreviewRef.current = previewBranch;
-            emitSupportDragPreview('branch', previewBranch.id, previewBranch);
-        } else if (twig) {
-            const previewTwig = newParent as Twig;
-            liveTwigPreviewRef.current = previewTwig;
-            emitSupportDragPreview('twig', previewTwig.id, previewTwig);
+        if (!typeId || !descriptor) return;
 
-            // Live attachment follow: emit a TwigDragPreviewSnapshot so attached
-            // knots / leaves track the curve as it's reshaped, instead of
-            // jumping to the new curve only on drag release.
+        const preview = newParent as { id: string; segments: Segment[] };
+        livePreviewRef.current = { typeId, support: preview };
+        emitSupportDragPreview(typeId, preview.id, preview);
+
+        // Knots ride this shaft and leaves hang off those, so they follow the
+        // curve live rather than jumping to it on release.
+        if (descriptor.broadcastsAttachmentsWhileDragging) {
+            const previewTwig = newParent as Twig;
             const snap = getSnapshot();
             const segmentIdSet = new Set<string>(previewTwig.segments.map(s => s.id));
             const attachedKnots = Object.values(snap.knots).filter(k => segmentIdSet.has(k.parentShaftId));
@@ -886,14 +589,6 @@ export function BezierGizmoManager() {
                 knotsById,
                 leavesById,
             });
-        } else if (stick) {
-            const previewStick = newParent as Stick;
-            liveStickPreviewRef.current = previewStick;
-            emitSupportDragPreview('stick', previewStick.id, previewStick);
-        } else if (kickstand) {
-            const previewKickstand = newParent as KickstandEntity;
-            liveKickstandPreviewRef.current = previewKickstand;
-            emitSupportDragPreview('kickstand', previewKickstand.id, previewKickstand);
         }
     };
 
@@ -903,10 +598,14 @@ export function BezierGizmoManager() {
             {contexts.map(ctx => {
                 const jointPos = new THREE.Vector3(ctx.joint.pos.x, ctx.joint.pos.y, ctx.joint.pos.z);
                 let cpPos: THREE.Vector3 | null = null;
+                // A type with no segments carries its curve on the entity.
+                const entityCurve = ctx.typeId === 'brace'
+                    ? (ctx.entity as unknown as Brace | undefined)?.curve
+                    : undefined;
 
                 if (ctx.activeHandle === 'outgoing') {
-                    if (ctx.brace?.curve?.type === 'bezier') {
-                        cpPos = new THREE.Vector3(ctx.brace.curve.controlPoint1.x, ctx.brace.curve.controlPoint1.y, ctx.brace.curve.controlPoint1.z);
+                    if (entityCurve?.type === 'bezier') {
+                        cpPos = new THREE.Vector3(entityCurve.controlPoint1.x, entityCurve.controlPoint1.y, entityCurve.controlPoint1.z);
                     } else if (ctx.outgoingSegment?.type === 'bezier') {
                         const seg = ctx.outgoingSegment as BezierSegment;
                         if (seg.controlPoint1) {
@@ -917,8 +616,8 @@ export function BezierGizmoManager() {
                         }
                     }
                 } else {
-                    if (ctx.brace?.curve?.type === 'bezier') {
-                        cpPos = new THREE.Vector3(ctx.brace.curve.controlPoint2.x, ctx.brace.curve.controlPoint2.y, ctx.brace.curve.controlPoint2.z);
+                    if (entityCurve?.type === 'bezier') {
+                        cpPos = new THREE.Vector3(entityCurve.controlPoint2.x, entityCurve.controlPoint2.y, entityCurve.controlPoint2.z);
                     } else if (ctx.incomingSegment?.type === 'bezier') {
                         const seg = ctx.incomingSegment as BezierSegment;
                         if (seg.controlPoint2) {

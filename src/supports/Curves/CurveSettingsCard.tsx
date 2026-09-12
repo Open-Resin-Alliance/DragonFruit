@@ -2,7 +2,8 @@ import React, { useSyncExternalStore } from 'react';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import type { SupportState } from '../types';
-import { subscribe, getSnapshot, updateTrunk } from '../state';
+import { subscribe, getSnapshot } from '../state';
+import { updateSupportEntity } from '../supportTypeRegistry';
 import { updateCurveTension, removeCurveAtJoint, updateSegmentTension, removeSegmentCurve, updateSegmentBias } from './curveUtils';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../history/supportEditHistory';
 import { Button } from '@/components/atoms';
@@ -111,7 +112,7 @@ export function CurveSettingsCard({ embedded = false }: { embedded?: boolean }) 
             } else {
                 newTrunk = updateCurveTension(selectedTrunk, selectedId!, val, root);
             }
-            updateTrunk(newTrunk);
+            updateSupportEntity('trunk', newTrunk);
             pushSupportEditHistory('Adjust curve tension', before, captureSupportEditSnapshot());
         }
     };
@@ -135,7 +136,7 @@ export function CurveSettingsCard({ embedded = false }: { embedded?: boolean }) 
                     }
                 }
             }
-            updateTrunk(newTrunk);
+            updateSupportEntity('trunk', newTrunk);
             pushSupportEditHistory('Adjust curve bias', before, captureSupportEditSnapshot());
         }
     };
@@ -149,7 +150,7 @@ export function CurveSettingsCard({ embedded = false }: { embedded?: boolean }) 
             } else {
                 newTrunk = removeCurveAtJoint(selectedTrunk, selectedId!);
             }
-            updateTrunk(newTrunk);
+            updateSupportEntity('trunk', newTrunk);
             pushSupportEditHistory('Remove curve', before, captureSupportEditSnapshot());
         }
     };

@@ -1,4 +1,8 @@
-import type { Branch, Brace, Knot, Leaf, Roots, Segment, SupportEntity, Vec3 } from '../../types';
+import type { Kickstand, Knot, Roots, Vec3 } from '../../types';
+
+// Declared with the other support types; re-exported so this module stays the
+// import site for everything kickstand-shaped.
+export type { Kickstand };
 
 export type KickstandHostKind = 'trunk' | 'branch';
 
@@ -18,19 +22,6 @@ export interface KickstandPlacementLayout {
     minTerminalClearanceMm: number;
 }
 
-export interface Kickstand extends SupportEntity {
-    rootId: string;
-    hostKnotId: string;
-    hostSegmentId: string;
-    hostMinT: number;
-    autoBracingGenerated?: boolean;
-    segments: Segment[];
-    profile: {
-        bodyDiameterMm: number;
-        terminalStartDiameterMm: number;
-        terminalEndDiameterMm: number;
-    };
-}
 
 export interface KickstandBuildInput {
     modelId: string;
@@ -43,15 +34,6 @@ export interface KickstandBuildResult {
     root: Roots;
     hostKnot: Knot;
     kickstand: Kickstand;
-}
-
-export interface KickstandRemoveResult {
-    build: KickstandBuildResult;
-    branches: Branch[];
-    braces: Brace[];
-    kickstands: KickstandBuildResult[];
-    leaves: Leaf[];
-    knots: Knot[];
 }
 
 export interface KickstandState {

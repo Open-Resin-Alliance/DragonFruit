@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom';
 import type { Branch, Knot, Roots, Trunk } from '../types';
 import { computeJointDragPreviewKnots, type JointDragPreviewCandidateKnots, type JointDragPreviewContext, type JointDragPreviewKind, type JointDragPreviewPayload, type JointDragPreviewSnapshot } from './jointDragPreviewMath';
 import type { PartDragPreviewPayload } from './partDragPreview';
+import { isJointDragPreviewType } from '../supportTypeRegistry';
 import { subscribeSupportInteractionReset } from './supportInteractionReset';
 import { getSupportWorkerRuntimeCapabilities } from './supportWorkerCapabilities';
 import { isSupportWorkerSafetyModeEnabled } from './supportWorkerSafetyMode';
@@ -232,9 +233,8 @@ export function useActiveJointDragPreview() {
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
 
-    const isJointPreviewKind = (kind: string): kind is JointDragPreviewKind => {
-      return kind === 'trunk' || kind === 'branch' || kind === 'kickstand';
-    };
+    const isJointPreviewKind = (kind: string): kind is JointDragPreviewKind =>
+      isJointDragPreviewType(kind);
 
     const handlePreview = (event: Event) => {
       const detail = (event as CustomEvent<JointDragPreviewPayload<unknown>>).detail;

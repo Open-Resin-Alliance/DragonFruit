@@ -1,21 +1,21 @@
+import { useContactDiskDragSession } from '../useContactDiskDragSession';
+import { updateSupportEntity } from '../../supportTypeRegistry';
+import { renderShaftSegment } from '../renderShaftSegment';
+import { useShaftSegments } from '../useShaftSegments';
 import React, { useMemo } from 'react';
 import { useThree } from '@react-three/fiber';
-import * as THREE from 'three';
-import { Stick } from '../../types';
+import { Stick, type Vec3 } from '../../types';
 import { JointRenderer } from '../../SupportPrimitives/Joint/JointRenderer';
-import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
 import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
-import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import { ContactConeRenderer, getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
 import type { ContactCone } from '../../SupportPrimitives/ContactCone/types';
 import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
-import { isPrimaryPointerPress, startContactDiskDragSession, type ContactDiskDragHit, type ContactDiskDragSession } from '../../SupportPrimitives/ContactDisk/contactDiskDragController';
+import { isPrimaryPointerPress, type ContactDiskDragHit } from '../../SupportPrimitives/ContactDisk/contactDiskDragController';
 import { handleSupportClick } from '../../interaction/clickHandlers';
 import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
 import { useHighlight } from '../../interaction/useHighlight';
 import { usePartDragUpdate } from '../../interaction/partDragPreview';
-import { getSnapshot, updateStick } from '../../state';
-import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
+import { getSnapshot } from '../../state';
 
 interface StickRendererProps {
   stick: Stick;
@@ -50,28 +50,16 @@ export const StickRenderer = React.memo(function StickRenderer({
   selectedColor = '#80fffd',
   onContactDiskHudHoverChange,
 }: StickRendererProps) {
-  const previewStick = usePartDragUpdate<Stick>('stick', baseStick.id);
+  // The entity names its own type; the store stamps it on every write.
+  const typeId = baseStick.typeId ?? 'stick';
+  const previewStick = usePartDragUpdate<Stick>(typeId, baseStick.id);
   const stick = previewStick ?? baseStick;
   
   const { camera, scene, gl } = useThree();
   const highDetailPrimitiveSegments = 24;
   const lowDetailPrimitiveSegments = 8;
   const useLowDetailPrimitives = !isSelected && !propHovered;
-  const dragSessionRef = React.useRef<ContactDiskDragSession | null>(null);
-  const liveDragConeARef = React.useRef<ContactCone | null>(null);
-  const liveDragConeBRef = React.useRef<ContactCone | null>(null);
-  const beforeHistoryRef = React.useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
-  const [, setDragTick] = React.useState(0);
 
-  React.useEffect(() => {
-    return () => {
-      dragSessionRef.current?.stop();
-      dragSessionRef.current = null;
-      liveDragConeARef.current = null;
-      liveDragConeBRef.current = null;
-      beforeHistoryRef.current = null;
-    };
-  }, []);
 
   const { pickRef, visuals } = useHighlight({
     id: stick.id,
@@ -89,51 +77,34 @@ export const StickRenderer = React.memo(function StickRenderer({
     handleSupportClick(e, stick.id, !!isInteractable);
   };
 
+  const activeConeRef = React.useRef<{ key: 'contactConeA' | 'contactConeB'; anchor: Vec3 } | null>(null);
+
+  const tipDrag = useContactDiskDragSession<{ key: 'contactConeA' | 'contactConeB'; cone: ContactCone }>(typeId, {
+    onHit: ({ point, surfaceNormal, mesh }: ContactDiskDragHit) => {
+      const active = activeConeRef.current;
+      const latestStick = active ? getSnapshot().sticks[stick.id] : null;
+      const latestCone = latestStick?.[active!.key] as ContactCone | undefined;
+      if (!active || !latestCone) return null;
+      return {
+        key: active.key,
+        cone: recomputeContactConeForMovedDisk(latestCone, point, surfaceNormal, active.anchor, mesh),
+      };
+    },
+    onCommit: ({ key, cone }) => {
+      const latestStick = getSnapshot().sticks[stick.id];
+      if (latestStick) updateSupportEntity('stick', { ...latestStick, [key]: cone });
+    },
+  });
+
   const startConeDrag = React.useCallback((coneKey: 'contactConeA' | 'contactConeB', initialEvent?: any) => {
     const cone = stick[coneKey];
     if (!cone) return;
-    const socketAnchor = getFinalSocketPosition(cone);
+    activeConeRef.current = { key: coneKey, anchor: getFinalSocketPosition(cone) };
 
-    beforeHistoryRef.current = captureSupportEditSnapshot();
-
-    dragSessionRef.current?.stop();
-    dragSessionRef.current = startContactDiskDragSession({
-      camera,
-      domElement: gl.domElement,
-      scene,
-      initialEvent,
+    tipDrag.start({
+      event: initialEvent, camera, domElement: gl.domElement, scene,
       modelId: stick.modelId,
       placementSurface: cone.placementSurface,
-      onHit: ({ point, surfaceNormal, mesh }: ContactDiskDragHit) => {
-        const latestStick = getSnapshot().sticks[stick.id];
-        const latestCone = latestStick?.[coneKey] as ContactCone | undefined;
-        if (!latestStick || !latestCone) return;
-        const newCone = recomputeContactConeForMovedDisk(latestCone, point, surfaceNormal, socketAnchor, mesh);
-        if (coneKey === 'contactConeA') liveDragConeARef.current = newCone;
-        else liveDragConeBRef.current = newCone;
-        setDragTick(t => t + 1);
-      },
-      onEnd: () => {
-        const dragA = liveDragConeARef.current;
-        const dragB = liveDragConeBRef.current;
-        if (dragA || dragB) {
-          const latestStick = getSnapshot().sticks[stick.id];
-          if (latestStick) {
-            updateStick({
-              ...latestStick,
-              ...(dragA ? { contactConeA: dragA } : {}),
-              ...(dragB ? { contactConeB: dragB } : {}),
-            });
-            if (beforeHistoryRef.current) {
-              pushSupportEditHistory('Move stick tip', beforeHistoryRef.current, captureSupportEditSnapshot());
-            }
-          }
-        }
-        liveDragConeARef.current = null;
-        liveDragConeBRef.current = null;
-        dragSessionRef.current = null;
-        beforeHistoryRef.current = null;
-      },
     });
   }, [camera, gl.domElement, scene, stick.id, stick.contactConeA, stick.contactConeB, stick.modelId]);
 
@@ -150,9 +121,8 @@ export const StickRenderer = React.memo(function StickRenderer({
   }, [isSelected, startConeDrag, stick.contactConeB]);
 
   const handleContactDiskHudPointerUp = React.useCallback(() => {
-    dragSessionRef.current?.stop();
-    dragSessionRef.current = null;
-  }, []);
+    tipDrag.stop();
+  }, [tipDrag]);
   const shafts: React.ReactNode[] = [];
   const batchedStraightShafts: InstancedShaft[] = [];
 
@@ -165,83 +135,28 @@ export const StickRenderer = React.memo(function StickRenderer({
     return Array.from(map.values());
   }, [stick.segments]);
 
-  stick.segments.forEach((seg) => {
-    let startPoint: THREE.Vector3;
-    let endPoint: THREE.Vector3;
+  const shaftSegments = useShaftSegments(typeId, stick, {});
 
-    if (seg.bottomJoint) {
-      startPoint = new THREE.Vector3(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z);
-    } else {
-      const socket = getFinalSocketPosition(stick.contactConeA);
-      startPoint = new THREE.Vector3(socket.x, socket.y, socket.z);
-    }
-
-    if (seg.topJoint) {
-      endPoint = new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z);
-    } else {
-      const socket = getFinalSocketPosition(stick.contactConeB);
-      endPoint = new THREE.Vector3(socket.x, socket.y, socket.z);
-    }
-
-    const startPosVec = { x: startPoint.x, y: startPoint.y, z: startPoint.z };
-    const endPosVec = { x: endPoint.x, y: endPoint.y, z: endPoint.z };
+  shaftSegments.forEach((shaft) => {
+    const seg = shaft.segment;
 
     const isSegSelected = selectedId === seg.id;
 
-    const canBatchShaft = !isSelected && !deferStraightShaftsToSceneBatch && seg.type !== 'bezier';
-
-    if (canBatchShaft) {
-      batchedStraightShafts.push({
-        id: seg.id,
-        start: startPosVec,
-        end: endPosVec,
-        diameter: seg.diameter,
-      });
-    } else if (seg.type === 'bezier') {
-      const bezierColor = isSelected ? '#ff00ff' : visuals.color;
-      shafts.push(
-        <BezierRenderer
-          key={`shaft-${seg.id}`}
-          id={seg.id}
-          start={startPosVec}
-          end={endPosVec}
-          control1={seg.controlPoint1}
-          control2={seg.controlPoint2}
-          diameter={seg.diameter}
-          resolution={seg.resolution}
-          color={bezierColor}
-          emissive={visuals.emissive}
-          emissiveIntensity={visuals.emissiveIntensity}
-          selectedColor={visuals.selectedColor}
-          isParentSelected={isSelected}
-          isInteractable={isInteractable}
-          isSelected={isSegSelected}
-          onClick={() => selectPrimitiveById(seg.id)}
-        />
-      );
-    } else if (!deferStraightShaftsToSceneBatch || isSelected) {
-      shafts.push(
-        <ShaftRenderer
-          key={`shaft-${seg.id}`}
-          id={seg.id}
-          start={startPosVec}
-          end={endPosVec}
-          diameter={seg.diameter}
-          color={visuals.color}
-          emissive={visuals.emissive}
-          emissiveIntensity={visuals.emissiveIntensity}
-          selectedColor={visuals.selectedColor}
-          isParentSelected={isSelected}
-          isInteractable={isInteractable}
-          isSelected={isSegSelected}
-          onClick={() => selectPrimitiveById(seg.id)}
-        />
-      );
-    }
+    const node = renderShaftSegment({
+      shaft,
+      visuals,
+      isSelected: !!isSelected,
+      isSegmentSelected: isSegSelected,
+      isInteractable,
+      deferStraightShaftsToSceneBatch,
+      onSelect: selectPrimitiveById,
+      batch: batchedStraightShafts,
+    });
+    if (node) shafts.push(node);
   });
 
-  const effectiveConeA = liveDragConeARef.current ?? stick.contactConeA;
-  const effectiveConeB = liveDragConeBRef.current ?? stick.contactConeB;
+  const effectiveConeA = (tipDrag.preview?.key === 'contactConeA' ? tipDrag.preview.cone : null) ?? stick.contactConeA;
+  const effectiveConeB = (tipDrag.preview?.key === 'contactConeB' ? tipDrag.preview.cone : null) ?? stick.contactConeB;
   const isConeASelected = !!effectiveConeA.id && selectedId === effectiveConeA.id;
   const isConeBSelected = !!effectiveConeB.id && selectedId === effectiveConeB.id;
 

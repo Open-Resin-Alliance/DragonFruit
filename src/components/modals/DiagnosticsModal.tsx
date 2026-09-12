@@ -5,7 +5,9 @@ import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { X } from 'lucide-react';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { getSnapshot as getSupportSnapshot } from '@/supports/state';
-import { getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
+import { countSupportCollections, implicitSegmentCount, SUPPORT_COLLECTION_KEYS, SUPPORT_TYPES } from '@/supports/supportTypeRegistry';
+import type { SupportCollectionKey } from '@/supports/supportTypeRegistry';
+import type { Segment } from '@/supports/types';
 import { getPickingDiagnosticsSnapshot } from '@/components/picking/pickingDiagnostics';
 import {
   DIAGNOSTICS_BENCHMARK_PROGRESS_EVENT,
@@ -40,16 +42,12 @@ type RuntimeStats = {
   supportStats: SupportDiagnosticsStats;
 };
 
-type SupportDiagnosticsStats = {
-  roots: number;
-  trunks: number;
-  branches: number;
-  leaves: number;
-  twigs: number;
-  sticks: number;
-  braces: number;
-  kickstands: number;
-  knots: number;
+/**
+ * Per-collection counts come from the registry, so a type added later is
+ * reported without being listed here. Anchors were missing from the
+ * hand-written list and always read zero.
+ */
+type SupportDiagnosticsStats = Record<SupportCollectionKey, number> & {
   segmentCount: number;
   jointCount: number;
   estimatedRenderablePrimitives: number;
@@ -64,15 +62,7 @@ type SupportDiagnosticsStats = {
 };
 
 const EMPTY_SUPPORT_STATS: SupportDiagnosticsStats = {
-  roots: 0,
-  trunks: 0,
-  branches: 0,
-  leaves: 0,
-  twigs: 0,
-  sticks: 0,
-  braces: 0,
-  kickstands: 0,
-  knots: 0,
+  ...(Object.fromEntries(SUPPORT_COLLECTION_KEYS.map((key) => [key, 0])) as Record<SupportCollectionKey, number>),
   segmentCount: 0,
   jointCount: 0,
   estimatedRenderablePrimitives: 0,
@@ -120,37 +110,28 @@ function formatFps(value: number | null | undefined, digits = 1): string {
 
 function computeSupportDiagnostics(): SupportDiagnosticsStats {
   const supportState = getSupportSnapshot();
-  const kickstandState = getKickstandSnapshot();
   const picking = getPickingDiagnosticsSnapshot();
 
-  const trunks = Object.values(supportState.trunks);
-  const branches = Object.values(supportState.branches);
-  const twigs = Object.values(supportState.twigs);
-  const sticks = Object.values(supportState.sticks);
-  const braces = Object.values(supportState.braces);
-  const kickstands = Object.values(kickstandState.kickstands);
-
-  const segmentCount =
-    trunks.reduce((sum, trunk) => sum + trunk.segments.length, 0)
-    + branches.reduce((sum, branch) => sum + branch.segments.length, 0)
-    + twigs.reduce((sum, twig) => sum + twig.segments.length, 0)
-    + sticks.reduce((sum, stick) => sum + stick.segments.length, 0)
-    + kickstands.reduce((sum, kickstand) => sum + kickstand.segments.length, 0)
-    + braces.length;
-
+  // Every type's segments and joints. A brace has no segments but draws one
+  // shaft, so it counts as one each.
   const uniqueJointIds = new Set<string>();
-  const collectSegmentJoints = (segments: Array<{ topJoint?: { id: string } | null; bottomJoint?: { id: string } | null }>) => {
-    for (const segment of segments) {
-      if (segment.topJoint?.id) uniqueJointIds.add(segment.topJoint.id);
-      if (segment.bottomJoint?.id) uniqueJointIds.add(segment.bottomJoint.id);
-    }
-  };
+  let segmentCount = 0;
 
-  trunks.forEach((trunk) => collectSegmentJoints(trunk.segments));
-  branches.forEach((branch) => collectSegmentJoints(branch.segments));
-  twigs.forEach((twig) => collectSegmentJoints(twig.segments));
-  sticks.forEach((stick) => collectSegmentJoints(stick.segments));
-  kickstands.forEach((kickstand) => collectSegmentJoints(kickstand.segments));
+  for (const descriptor of SUPPORT_TYPES) {
+    const collection = supportState[descriptor.location.key] as unknown as Record<string, { segments?: Segment[] }>;
+
+    for (const entity of Object.values(collection ?? {})) {
+      if (!descriptor.hasSegments) {
+        segmentCount += implicitSegmentCount(descriptor);
+        continue;
+      }
+      for (const segment of entity.segments ?? []) {
+        segmentCount += 1;
+        if (segment.topJoint?.id) uniqueJointIds.add(segment.topJoint.id);
+        if (segment.bottomJoint?.id) uniqueJointIds.add(segment.bottomJoint.id);
+      }
+    }
+  }
 
   const estimatedRenderablePrimitives =
     segmentCount
@@ -168,15 +149,7 @@ function computeSupportDiagnostics(): SupportDiagnosticsStats {
     + picking.registrationsByCategory.raft;
 
   return {
-    roots: Object.keys(supportState.roots).length,
-    trunks: trunks.length,
-    branches: branches.length,
-    leaves: Object.keys(supportState.leaves).length,
-    twigs: twigs.length,
-    sticks: sticks.length,
-    braces: braces.length,
-    kickstands: kickstands.length,
-    knots: Object.keys(supportState.knots).length,
+    ...(countSupportCollections(supportState) as Record<SupportCollectionKey, number>),
     segmentCount,
     jointCount: uniqueJointIds.size,
     estimatedRenderablePrimitives,
@@ -666,15 +639,9 @@ export function DiagnosticsModal({
             <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
               <div className="text-[12px] font-semibold mb-2" style={{ color: 'var(--text-strong)' }}>Support Stats</div>
               <div className="space-y-1 text-[12px]" style={{ color: 'var(--text-muted)' }}>
-                <div>Trunks: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.trunks.toLocaleString()}</span></div>
-                <div>Branches: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.branches.toLocaleString()}</span></div>
-                <div>Leaves: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.leaves.toLocaleString()}</span></div>
-                <div>Twigs: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.twigs.toLocaleString()}</span></div>
-                <div>Sticks: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.sticks.toLocaleString()}</span></div>
-                <div>Braces: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.braces.toLocaleString()}</span></div>
-                <div>Kickstands: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.kickstands.toLocaleString()}</span></div>
-                <div>Roots: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.roots.toLocaleString()}</span></div>
-                <div>Knots: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.knots.toLocaleString()}</span></div>
+                {SUPPORT_COLLECTION_KEYS.map((key) => (
+                  <div key={key}>{key.charAt(0).toUpperCase()}{key.slice(1)}: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats[key].toLocaleString()}</span></div>
+                ))}
                 <div>Segments: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.segmentCount.toLocaleString()}</span></div>
                 <div>Joints: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.jointCount.toLocaleString()}</span></div>
                 <div>Estimated Render Primitives: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.estimatedRenderablePrimitives.toLocaleString()}</span></div>

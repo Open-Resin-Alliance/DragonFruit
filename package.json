@@ -39,6 +39,7 @@
     "pretauri:bundle:windows": "npm run sync:version",
     "pretauri:dev": "npm run sync:version",
     "pretest": "npm run generate:plugin-registry && npm run generate:builtin-simple-plugins",
+    "scan:support-types": "tsx scripts/scan-support-type-references.ts",
     "sync:contributors": "node scripts/sync-contributors.mjs",
     "sync:sponsors": "node scripts/sync-sponsors.mjs",
     "sync:version": "node scripts/sync-app-version.mjs",

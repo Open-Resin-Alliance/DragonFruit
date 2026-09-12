@@ -9,7 +9,6 @@ import { type BakedChunk, meshChunkStore } from '@/features/scene/voxl/meshChunk
 import { buildScopedSupportExportDocument, buildScopedSupportGeometryGroup } from '@/features/export/logic/supportExportReconstruction';
 import { allocateMeshStagePath, exportMeshFile, pickSavePathWithNativeDialog, writeChunkedToNativePath, writeFileAtomicToNativePath, writeFileAtomicStreamedToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { info as logInfo } from '@tauri-apps/plugin-log';
-import { getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { getSnapshot } from '@/supports/state';
 import { getRaftSettings, getRaftSettingsForModel } from '@/supports/Rafts/Crenelated/RaftState';
 import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
@@ -958,8 +957,7 @@ export class ExportManager {
     if (options.includeSupports) {
       if (hasScopedModelFilter) {
         const supportSnapshot = getSnapshot();
-        const kickstandSnapshot = getKickstandSnapshot();
-        const scopedSupports = buildScopedSupportGeometryGroup(supportSnapshot, kickstandSnapshot, scopedModelIds);
+        const scopedSupports = buildScopedSupportGeometryGroup(supportSnapshot, scopedModelIds);
         if (scopedSupports.children.length > 0) {
           exportObjects.push(scopedSupports);
         }
@@ -974,27 +972,11 @@ export class ExportManager {
       const globalRaftSettings = getRaftSettings();
       if (globalRaftSettings.bottomMode !== 'off') {
         const supportState = getSnapshot();
-        const kickstandState = getKickstandSnapshot();
         const allRoots = Object.values(supportState.roots);
-        const allKickstandRoots = Object.values(kickstandState.roots);
 
         // Group roots by modelId so each model gets a separate raft
         const rootsByModel = new Map<string, typeof allRoots>();
         for (const root of allRoots) {
-          const rootModelId = root.modelId ?? null;
-          if (hasScopedModelFilter) {
-            if (!rootModelId || !scopedModelIds.has(rootModelId)) {
-              continue;
-            }
-          }
-
-          const mid = rootModelId ?? '__orphan__';
-          let arr = rootsByModel.get(mid);
-          if (!arr) { arr = []; rootsByModel.set(mid, arr); }
-          arr.push(root);
-        }
-
-        for (const root of allKickstandRoots) {
           const rootModelId = root.modelId ?? null;
           if (hasScopedModelFilter) {
             if (!rootModelId || !scopedModelIds.has(rootModelId)) {
@@ -1190,7 +1172,6 @@ export class ExportManager {
     await this.yieldToBrowserFrame();
 
     const supportSnapshot = getSnapshot();
-    const kickstandSnapshot = getKickstandSnapshot();
 
     const scopedModelIds = new Set((sceneContext?.models ?? []).map((model) => model.id));
     const hasScopedModelFilter = scopedModelIds.size > 0;
@@ -1198,13 +1179,11 @@ export class ExportManager {
     const supports = hasScopedModelFilter
       ? buildScopedSupportExportDocument(
           supportSnapshot,
-          kickstandSnapshot,
           scopedModelIds,
           'dragonfruit-voxl-export',
         )
       : buildSupportExportFromStores(
           supportSnapshot,
-          kickstandSnapshot,
           'dragonfruit-voxl-export',
         );
 
@@ -1387,7 +1366,6 @@ export class ExportManager {
     const supportsCacheKey = chunkCache
       ? [
           snapshotToken(supportSnapshot),
-          snapshotToken(kickstandSnapshot),
           options.includeSupports ? 'S1' : 'S0',
           hasScopedModelFilter ? [...scopedModelIds].sort().join(',') : '*',
         ].join('|')

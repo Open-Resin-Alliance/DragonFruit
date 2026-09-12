@@ -1,19 +1,30 @@
 import type { SnapTarget } from '../../../SnappingManager';
-import type { SupportState, Vec3, Brace, Knot } from '../../../../types';
+import type { Segment, SupportState, Vec3, Brace, Knot } from '../../../../types';
+import { getPlacementSurface, SUPPORT_TYPES, type SupportCollectionKey, type SupportTypeId } from '../../../../supportTypeRegistry';
 import { getFinalSocketPosition } from '../../../../SupportPrimitives/ContactCone';
 import type { ContactCone } from '../../../../SupportPrimitives/ContactCone/types';
 import { calculateDiskThickness } from '../../../../SupportPrimitives/ContactDisk/contactDiskUtils';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../../../constants';
-import type { KickstandState } from '../../../../SupportTypes/Kickstand/types';
 
 type PlacementSurface = 'interior' | 'exterior';
 
+/** Which types can be snapped to. A new type joins by being in SUPPORT_TYPES. */
+export const ALL_SNAP_TYPES: readonly SupportTypeId[] = SUPPORT_TYPES.map((d) => d.id);
+
+
+/** Types with a real shaft to drop a joint on. */
+export const SHAFTED_SNAP_TYPES: readonly SupportTypeId[] = SUPPORT_TYPES
+    .filter((descriptor) => descriptor.hasSegments)
+    .map((descriptor) => descriptor.id);
+
+/** Default when a caller names no types: those with their own snap pass. */
+const DEFAULT_SNAP_TYPES: readonly SupportTypeId[] = SUPPORT_TYPES
+    .filter((descriptor) => descriptor.hasDedicatedSnapPass)
+    .map((descriptor) => descriptor.id);
+
+
 interface BuildSupportPathSnapTargetsOptions {
-    includeTrunks?: boolean;
-    includeBranches?: boolean;
-    includeBraces?: boolean;
-    includeTwigs?: boolean;
-    includeSticks?: boolean;
+    snapTypes?: readonly SupportTypeId[];
     placementSurface?: PlacementSurface;
     excludeSegmentIds?: ReadonlySet<string>;
 }
@@ -87,18 +98,19 @@ export function resolveBracePathDiameterAtT(brace: Brace, knotById: Record<strin
 }
 
 export function buildSupportPathSnapTargets(
-    supportState: Pick<SupportState, 'trunks' | 'branches' | 'braces' | 'twigs' | 'sticks' | 'roots' | 'knots'>,
+    supportState: Pick<SupportState, SupportCollectionKey>,
     options: BuildSupportPathSnapTargetsOptions = {}
 ): SnapTarget[] {
     const {
-        includeTrunks = true,
-        includeBranches = true,
-        includeBraces = true,
-        includeTwigs = false,
-        includeSticks = false,
+        snapTypes = DEFAULT_SNAP_TYPES,
         placementSurface,
         excludeSegmentIds,
     } = options;
+
+    const snap = new Set(snapTypes);
+    const includeTrunks = snap.has('trunk');
+    const includeBranches = snap.has('branch');
+    const includeBraces = snap.has('brace');
 
     const targets: SnapTarget[] = [];
     const rootMap = new Map(Object.values(supportState.roots).map((root) => [root.id, root]));
@@ -214,35 +226,19 @@ export function buildSupportPathSnapTargets(
         }
     }
 
-    if (includeTwigs) {
-        for (const twig of Object.values(supportState.twigs)) {
-            const twigPlacementSurface = twig.contactDiskA?.placementSurface ?? twig.contactDiskB?.placementSurface;
-            if (!matchesPlacementSurfaceFilter(twigPlacementSurface, placementSurface)) continue;
-            for (const segment of twig.segments) {
-                if (shouldExclude(segment.id, excludeSegmentIds)) continue;
-                if (!segment.bottomJoint || !segment.topJoint) continue;
+    // Every shafted type without a dedicated pass above. Twigs and sticks snap
+    // identically -- both are two-contact shafts whose placement surface comes
+    // from either end -- so one loop serves them and any future type like them.
+    const shaftedSnapTypes = SUPPORT_TYPES.filter(
+        (descriptor) => descriptor.hasSegments && !descriptor.hasDedicatedSnapPass,
+    );
 
-                targets.push({
-                    id: segment.id,
-                    type: 'path',
-                    pathSegment: {
-                        start: cloneVec3(segment.bottomJoint.pos),
-                        end: cloneVec3(segment.topJoint.pos),
-                        radius: segment.diameter / 2,
-                        bezier: segment.type === 'bezier'
-                            ? { control1: segment.controlPoint1, control2: segment.controlPoint2 }
-                            : undefined,
-                    },
-                });
-            }
-        }
-    }
-
-    if (includeSticks) {
-        for (const stick of Object.values(supportState.sticks)) {
-            const stickPlacementSurface = stick.contactConeA?.placementSurface ?? stick.contactConeB?.placementSurface;
-            if (!matchesPlacementSurfaceFilter(stickPlacementSurface, placementSurface)) continue;
-            for (const segment of stick.segments) {
+    for (const descriptor of shaftedSnapTypes) {
+        if (!snap.has(descriptor.id)) continue;
+        const record = supportState[descriptor.location.key as SupportCollectionKey] as Record<string, { segments: Segment[] }>;
+        for (const entity of Object.values(record)) {
+            if (!matchesPlacementSurfaceFilter(getPlacementSurface(descriptor, entity), placementSurface)) continue;
+            for (const segment of entity.segments) {
                 if (shouldExclude(segment.id, excludeSegmentIds)) continue;
                 if (!segment.bottomJoint || !segment.topJoint) continue;
 
@@ -276,7 +272,7 @@ export function buildPrimarySnapTargetIndex(targets: readonly SnapTarget[]): Map
 }
 
 export function buildKickstandPathSnapTargets(
-    kickstandState: Pick<KickstandState, 'kickstands' | 'roots' | 'knots'>,
+    kickstandState: Pick<SupportState, 'kickstands' | 'roots' | 'knots'>,
     options: BuildKickstandPathSnapTargetsOptions = {}
 ): SnapTarget[] {
     const { excludeSegmentIds } = options;

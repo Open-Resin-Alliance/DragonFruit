@@ -52,6 +52,30 @@ backup/legacy keys, sanitize-on-read, `setState → sanitize → persist → not
 and active-material sidecar keys. Minimal examples: `printerReachabilityStore.ts`,
 `src/volumeAnalysis/Islands/hoverStore.ts`.
 
+## The support store
+
+`src/supports/state.ts` is the largest module store here and departs from the
+shape above in four ways:
+
+- **Short names.** Plain `subscribe` / `getSnapshot` / `setSnapshot`. Importers
+  alias it (`subscribe as subscribeSupportState`); check for an existing alias
+  before adding an import.
+- **No server snapshot.** Consumers pass `getSnapshot` twice or omit the third
+  argument. Safe only because the support scene is client-only — do not copy
+  into a store that renders on the server.
+- **Batched notification.** `beginSupportStateBatch()` / `endSupportStateBatch()`
+  bracket bulk edits so listeners fire once. Use them for any loop touching many
+  entities.
+- **Collections come from the registry.** Derive "every collection" from
+  `SUPPORT_COLLECTION_KEYS`, `MODEL_ID_COLLECTION_KEYS` or
+  `SHAFTED_COLLECTION_KEYS` rather than writing the names out. See
+  [Support System](support-system.md).
+
+Kickstands live on `SupportState` like every other type: read
+`state.kickstands` directly. For the roots or knots one type owns, ask
+`getOwnedPrimitives(typeId, collection)`, which reads that type's declared
+edges rather than filtering by hand.
+
 ## Preferences module pattern
 
 Settings that persist to `localStorage` use a fixed contract, repeated in ~13

@@ -168,6 +168,29 @@ Backward compatibility (accepted tradeoff): because the header does not bump and
 types may be ignored, older V2/V2.1 readers still open a V2.2 file — baked geometry loads from
 `MESH`, and they silently drop only the hollow/hole re-editability snapshots.
 
+### V2.3 semantic revision (current)
+
+V2.3 is a semantic revision of the V2 binary container; like V2.1 and V2.2 it does **not** change
+the binary header major version (`version` stays `2`, or `3` when identical-geometry dedup also
+fired).
+
+V2.3 adds an optional `typeId` to every entity in the supports payload, recording the support
+type explicitly rather than leaving it implicit in the array the entity sits in.
+
+Requirements:
+
+- Writers stamp `typeId` on every entity they write.
+- Readers must accept a payload without it, deriving each entity's type from the array it
+  appears in. `typeId` is never required to interpret a file.
+
+Detection (no version number is written for the semantic revision): an entity carrying `typeId`
+is V2.3; a payload without it is read exactly as before. The revision is additive, so the
+semantic revision a reader reports for a V2 file stays `2.2`, or `2.1` when the file carries
+inline modifier snapshots; `typeId` is not part of that detection.
+
+Backward compatibility: the field is optional and unknown JSON keys are ignored, so a V2.3 file
+opens in a V2/V2.1/V2.2 reader with no loss beyond the explicit type stamp.
+
 ## Supports and extensions
 
 Supports payloads are DragonFruitImportFormat-compatible. Common arrays include:
@@ -177,6 +200,9 @@ Supports payloads are DragonFruitImportFormat-compatible. Common arrays include:
 Optional arrays:
 
 - `twigs`, `sticks`, `kickstands`
+
+Every entity may carry an optional `typeId` naming its support type (V2.3). A payload without
+it is read exactly as before, with each entity's type derived from the array it appears in.
 
 Extensions location:
 

@@ -1,15 +1,15 @@
+import { useContactDiskDragSession } from '../useContactDiskDragSession';
 import React, { useMemo } from 'react';
 import { useThree } from '@react-three/fiber';
-import type { Anchor, Roots } from '../../types';
+import type { Anchor, Roots, Vec3 } from '../../types';
 import type { ContactCone } from '../../SupportPrimitives/ContactCone/types';
 import { RootsRenderer } from '../../SupportPrimitives/Roots/RootsRenderer';
 import { ContactConeRenderer, getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
 import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
-import { isPrimaryPointerPress, startContactDiskDragSession, type ContactDiskDragHit, type ContactDiskDragSession } from '../../SupportPrimitives/ContactDisk/contactDiskDragController';
+import { isPrimaryPointerPress, type ContactDiskDragHit } from '../../SupportPrimitives/ContactDisk/contactDiskDragController';
 import { handleSupportClick } from '../../interaction/clickHandlers';
 import { useHighlight } from '../../interaction/useHighlight';
 import { getSnapshot, updateAnchor } from '../../state';
-import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 
 interface AnchorRendererProps {
     anchor: Anchor;
@@ -37,19 +37,7 @@ export const AnchorRenderer = React.memo(function AnchorRenderer({
     onContactDiskHudHoverChange,
 }: AnchorRendererProps) {
     const { camera, scene, gl } = useThree();
-    const dragSessionRef = React.useRef<ContactDiskDragSession | null>(null);
-    const liveDragConeRef = React.useRef<ContactCone | null>(null);
-    const beforeHistoryRef = React.useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
-    const [, setDragTick] = React.useState(0);
 
-    React.useEffect(() => {
-        return () => {
-            dragSessionRef.current?.stop();
-            dragSessionRef.current = null;
-            liveDragConeRef.current = null;
-            beforeHistoryRef.current = null;
-        };
-    }, []);
 
     const { pickRef, visuals, isPickingHovered } = useHighlight({
         id: anchor.id,
@@ -75,49 +63,41 @@ export const AnchorRenderer = React.memo(function AnchorRenderer({
         handleSupportClick(e, anchor.id, !!isInteractable);
     };
 
+    const socketAnchorRef = React.useRef<Vec3 | undefined>(undefined);
+    const typeId = anchor.typeId ?? 'anchor';
+
+    const tipDrag = useContactDiskDragSession<ContactCone>(typeId, {
+        onHit: ({ point, surfaceNormal, mesh }: ContactDiskDragHit) => {
+            const latest = getSnapshot().anchors[anchor.id];
+            if (!latest?.contactCone) return null;
+            return recomputeContactConeForMovedDisk(
+                latest.contactCone, point, surfaceNormal, socketAnchorRef.current, mesh,
+            );
+        },
+        onCommit: (cone) => {
+            const latest = getSnapshot().anchors[anchor.id];
+            if (latest) updateAnchor({ ...latest, contactCone: cone });
+        },
+    });
+
     const handleContactDiskHudPointerDown = React.useCallback((e: any) => {
         if (!isSelected || !anchor.contactCone) return;
         if (!isPrimaryPointerPress(e)) return;
 
-        const socketAnchor = getFinalSocketPosition(anchor.contactCone);
-        beforeHistoryRef.current = captureSupportEditSnapshot();
-
-        dragSessionRef.current?.stop();
-        dragSessionRef.current = startContactDiskDragSession({
-            camera,
-            domElement: gl.domElement,
-            scene,
-            initialEvent: e,
+        socketAnchorRef.current = getFinalSocketPosition(anchor.contactCone);
+        tipDrag.start({
+            event: e, camera, domElement: gl.domElement, scene,
             modelId: anchor.modelId,
             placementSurface: anchor.contactCone?.placementSurface,
-            onHit: ({ point, surfaceNormal, mesh }: ContactDiskDragHit) => {
-                const latest = getSnapshot().anchors[anchor.id];
-                if (!latest?.contactCone) return;
-                liveDragConeRef.current = recomputeContactConeForMovedDisk(latest.contactCone, point, surfaceNormal, socketAnchor, mesh);
-                setDragTick(t => t + 1);
-            },
-            onEnd: () => {
-                if (liveDragConeRef.current) {
-                    const latest = getSnapshot().anchors[anchor.id];
-                    if (latest) updateAnchor({ ...latest, contactCone: liveDragConeRef.current });
-                    if (beforeHistoryRef.current) {
-                        pushSupportEditHistory('Move anchor tip', beforeHistoryRef.current, captureSupportEditSnapshot());
-                    }
-                }
-                liveDragConeRef.current = null;
-                dragSessionRef.current = null;
-                beforeHistoryRef.current = null;
-            },
         });
-    }, [camera, gl.domElement, isSelected, scene, anchor.id, anchor.contactCone, anchor.modelId]);
+    }, [anchor.contactCone, anchor.modelId, camera, gl.domElement, isSelected, scene, tipDrag]);
 
     const handleContactDiskHudPointerUp = React.useCallback(() => {
-        dragSessionRef.current?.stop();
-        dragSessionRef.current = null;
-    }, []);
+        tipDrag.stop();
+    }, [tipDrag]);
 
     // Render contact cone
-    const effectiveCone = liveDragConeRef.current ?? anchor.contactCone;
+    const effectiveCone = tipDrag.preview ?? anchor.contactCone;
     let coneRender = null;
     if (effectiveCone && !deferContactConesToSceneBatch) {
         const isConeSelected = !!effectiveCone.id && selectedId === effectiveCone.id;

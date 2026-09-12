@@ -1,12 +1,13 @@
 import type { Branch, Joint, Knot, Roots, SupportState, Trunk, Vec3 } from '../../../types';
-import { addBranch, addKnot, addLeaf, addRoot, addTrunk, getSnapshot, removeBranch, removeLeaf, removeTrunk, updateBranch, updateKnot, updateTrunk } from '../../../state';
+import { updateSupportEntity } from '../../../supportTypeRegistry';
+import { cloneSupportState, addBranch, addKnot, addLeaf, addRoot, addTrunk, getSnapshot, removeBranch, removeLeaf, removeTrunk, updateKnot } from '../../../state';
 import { pushSupportHistory } from '@/supports/history/supportHistory';
 import { SUPPORT_REPLACE_TRUNK } from '../../../history/actionTypes';
 import type { SupportReplaceTrunkPayload } from '../../../history/actionTypes';
 import { buildTrunkData } from '../trunkBuilder';
 import { buildBranchData } from '../../Branch/branchBuilder';
 import { buildLeafData } from '../../Leaf/leafBuilder';
-import { getTrunkSegmentEndpoints } from '../../../SupportPrimitives/Knot/knotUtils';
+import { resolveSegmentEndpoints } from '../../../SupportPrimitives/Knot/segmentEndpoints';
 import { getFinalSocketPosition } from '../../../SupportPrimitives/ContactCone/contactConeUtils';
 import { getSettingsSnapshot } from '../../../Settings/state';
 import { getJointDiameter } from '../../../constants';
@@ -271,7 +272,7 @@ function createAttachmentKnotOnTrunk(args: {
     // Iterate segments from top to bottom.
     for (let segIndex = trunk.segments.length - 1; segIndex >= 0; segIndex--) {
         const seg = trunk.segments[segIndex];
-        const endpoints = getTrunkSegmentEndpoints(trunk, seg, segIndex, root);
+        const endpoints = resolveSegmentEndpoints('trunk', trunk, seg, segIndex, { root });
         if (!seg || !endpoints) continue;
 
         const approxLen = Math.max(
@@ -320,7 +321,7 @@ export function applyTrunkReplacement(
     opts?: { skipHistory?: boolean },
 ): boolean {
     const snapshot = getSnapshot();
-    const before = structuredClone(historyBefore ?? snapshot);
+    const before = cloneSupportState(historyBefore ?? snapshot);
     const trunk = snapshot.trunks[plan.trunkToRemoveId];
     if (!trunk) return false;
 
@@ -479,7 +480,7 @@ export function applyTrunkReplacement(
 
         addKnot(newParentKnot);
         const updated = adjustBranchForNewParentKnot(existingBranch, newParentKnot);
-        updateBranch(updated);
+        updateSupportEntity('branch', updated);
     }
 
     // Rehost all connected leaves by recreating the leaf + its parent knot (no leaf update function).
@@ -539,10 +540,10 @@ export function applyTrunkReplacement(
         for (const u of applied.knotUpdates) {
             updateKnot(u.after);
         }
-        updateTrunk(applied.trunk);
+        updateSupportEntity('trunk', applied.trunk);
     }
 
-    const after = structuredClone(getSnapshot());
+    const after = cloneSupportState(getSnapshot());
 
     if (!opts?.skipHistory) {
         const payload: SupportReplaceTrunkPayload = {

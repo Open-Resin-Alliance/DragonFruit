@@ -82,9 +82,21 @@ const LENGTH_AWARE_UPPER_SPAN_TIGHTEN_DEGREES_PER_MM = 3;
 export const SHORT_SPAN_DETOUR_MAX_LENGTH_MM = 3;
 export const SHORT_SPAN_DETOUR_MAX_ANGLE_FROM_VERTICAL_DEG = 60;
 
+/**
+ * The angle a segment of this length is allowed to sit at, from vertical.
+ *
+ * Long spans tighten, because a long slanted shaft sags and shears. That
+ * tightening exists to keep spans upright, not to forbid the angle the app
+ * itself configures for routed trunks: a caller that knows that angle passes it
+ * as `floorMaxAngleFromVerticalDeg`, and the result is never stricter than it.
+ * Without the floor a span over ~8mm is capped well below the configured angle,
+ * which is what pushed the router into satisfying a lateral offset with a short
+ * horizontal step instead of a straight diagonal.
+ */
 export function getLengthAwareMaxAngleFromVerticalDeg(
     segmentLengthMm: number,
-    baseMaxAngleFromVerticalDeg: number
+    baseMaxAngleFromVerticalDeg: number,
+    floorMaxAngleFromVerticalDeg: number = LENGTH_AWARE_UPPER_SPAN_MIN_MAX_ANGLE_FROM_VERTICAL_DEG,
 ): number {
     const shortSpanMaxAngle = Math.max(
         baseMaxAngleFromVerticalDeg,
@@ -105,7 +117,7 @@ export function getLengthAwareMaxAngleFromVerticalDeg(
     const excessLength = segmentLengthMm - LENGTH_AWARE_UPPER_SPAN_TIGHTEN_START_MM;
     const tightened = baseMaxAngleFromVerticalDeg - excessLength * LENGTH_AWARE_UPPER_SPAN_TIGHTEN_DEGREES_PER_MM;
     return Math.max(
-        LENGTH_AWARE_UPPER_SPAN_MIN_MAX_ANGLE_FROM_VERTICAL_DEG,
+        floorMaxAngleFromVerticalDeg,
         Math.min(baseMaxAngleFromVerticalDeg, tightened),
     );
 }
@@ -113,10 +125,15 @@ export function getLengthAwareMaxAngleFromVerticalDeg(
 export function segmentSatisfiesLengthAwareMaxAngleFromVertical(
     start: Vec3,
     end: Vec3,
-    baseMaxAngleFromVerticalDeg: number
+    baseMaxAngleFromVerticalDeg: number,
+    floorMaxAngleFromVerticalDeg?: number,
 ): boolean {
     const segmentLengthMm = distance3D(start, end);
-    const allowedMaxAngle = getLengthAwareMaxAngleFromVerticalDeg(segmentLengthMm, baseMaxAngleFromVerticalDeg);
+    const allowedMaxAngle = getLengthAwareMaxAngleFromVerticalDeg(
+        segmentLengthMm,
+        baseMaxAngleFromVerticalDeg,
+        floorMaxAngleFromVerticalDeg,
+    );
     return segmentSatisfiesMaxAngleFromVertical(start, end, allowedMaxAngle);
 }
 

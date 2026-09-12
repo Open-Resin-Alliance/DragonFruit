@@ -1,5 +1,18 @@
 import type { Vec3, SupportState } from '../types';
-import type { KickstandState } from '../SupportTypes/Kickstand/types';
+import type { SupportTypeId } from '../supportTypeRegistry';
+
+/**
+ * Auto-placement reports cover a subset of the support types, not all of them.
+ * `Extract` keeps each subset narrow while tying the names to the registry, so
+ * a renamed or misspelled type fails to compile here.
+ */
+export type PlacedKind = Extract<SupportTypeId, 'trunk' | 'anchor' | 'leaf' | 'branch' | 'stick' | 'twig'>;
+type AttachmentKind = Extract<SupportTypeId, 'leaf' | 'branch'>;
+type CavityFallbackKind = Extract<SupportTypeId, 'stick' | 'twig'>;
+type OrphanKind = Extract<SupportTypeId, 'leaf' | 'branch' | 'trunk'>;
+
+/** What one candidate resolved to: a placed support type, or no placement. */
+export type PlacementOutcomeKind = SupportTypeId | 'reject';
 
 /** A single support placement candidate derived from island/minima detection. */
 export interface CandidatePoint {
@@ -37,10 +50,20 @@ export type RejectReason =
     | 'already_supported'
     | 'exception';
 
+/**
+ * The ledger's own type set, as values. `satisfies` ties it to `PlacedKind`, so
+ * adding a name here that is not a support type fails to compile.
+ */
+export const LEDGER_KINDS = ['trunk', 'anchor', 'leaf', 'branch', 'stick', 'twig'] as const satisfies readonly PlacedKind[];
+
+export function isLedgerKind(kind: PlacementOutcomeKind): kind is PlacedKind {
+    return (LEDGER_KINDS as readonly string[]).includes(kind);
+}
+
 /** Per-placed-entity entry in the Forest Report ledger. */
 export interface ForestLedgerEntry {
     displayId: string;
-    kind: 'trunk' | 'anchor' | 'leaf' | 'branch' | 'stick' | 'twig';
+    kind: PlacedKind;
     entityId: string;
     areaMm2: number;
     zHeight: number;
@@ -55,7 +78,7 @@ export interface ForestTree {
     hostZ: number;
     shaftDiameterMm: number;
     sizingNote: string;
-    members: Array<{ id: string; kind: 'leaf' | 'branch'; spanMm: number; angleDeg: number }>;
+    members: Array<{ id: string; kind: AttachmentKind; spanMm: number; angleDeg: number }>;
 }
 
 /** Input-side metrics from the island/overhang scan for the Forest Report. */
@@ -117,14 +140,14 @@ export interface ForestReport {
          *  model-to-model instead (cavity stick/twig). Tip position = where
          *  the bridge starts; each entry is a candidate for elimination by
          *  better routing. */
-        cavityFallbacks: Array<{ id: string; kind: 'stick' | 'twig'; tip: { x: number; y: number; z: number }; fanRefusal?: string }>;
+        cavityFallbacks: Array<{ id: string; kind: CavityFallbackKind; tip: { x: number; y: number; z: number }; fanRefusal?: string }>;
     };
 }
 
 /** One orphaned leaf/branch — host knot missing, drifted, or path now crosses a thickened shaft. */
 export interface OrphanInfo {
     id: string;
-    kind: 'leaf' | 'branch' | 'trunk';
+    kind: OrphanKind;
     reason: 'missingKnot' | 'missingHost' | 'missingSegment' | 'drift' | 'cross' | 'blocked' | 'trunkBlocked';
     hostId?: string;
     knotId?: string;
@@ -195,7 +218,7 @@ export interface PlacementDiagnostics {
     /** Candidates whose trunk could not reach the plate and were bridged
      *  model-to-model instead (cavity stick/twig). Tip = where the bridge
      *  starts; each entry is a candidate for elimination by better routing. */
-    cavityFallbacks: Array<{ id: string; kind: 'stick' | 'twig'; tip: { x: number; y: number; z: number }; fanRefusal?: string }>;
+    cavityFallbacks: Array<{ id: string; kind: CavityFallbackKind; tip: { x: number; y: number; z: number }; fanRefusal?: string }>;
 }
 
 /** Physics-based sizing debug data. */
@@ -260,12 +283,8 @@ export interface AutoPlaceResult {
 export interface AutoSupportPlan {
     /** Support state committed before the run (for the undo payload). */
     before: SupportState;
-    /** Kickstand state committed before the run. */
-    kickstandBefore: KickstandState;
-    /** Final braced support state. */
+    /** Final braced support state, kickstands included. */
     support: SupportState;
-    /** Final kickstand state (bracing strips/regenerates auto kickstands). */
-    kickstand: KickstandState;
     /** Placement + coverage analytics. */
     analytics: AutoPlaceAnalytics;
     /** Counts/status — what the panel reports. */

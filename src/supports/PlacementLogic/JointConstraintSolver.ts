@@ -1,5 +1,5 @@
 import { Trunk, Branch, Vec3, Roots, Knot } from '../types';
-import { getKnotById, getBranches } from '../state';
+import { getKnotById, getSupportEntities } from '../state';
 import { clampShaftAngle } from './ShaftAngleConstraint';
 import { getFinalSocketPosition } from '../SupportPrimitives/ContactCone/contactConeUtils';
 import * as THREE from 'three';
@@ -125,7 +125,7 @@ export function solveKnotConstraint(
     ignoredBranchIds?: string[]
 ): Vec3 {
     let clampedPos = { ...candidatePos };
-    const branches = getBranches();
+    const branches = getSupportEntities<Branch>('branch');
 
     // Find all branches attached to this knot
     const attachedBranches = branches.filter(b => b.parentKnotId === knot.id);

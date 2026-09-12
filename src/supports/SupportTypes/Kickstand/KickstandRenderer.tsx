@@ -1,3 +1,5 @@
+import { renderShaftSegment } from '../renderShaftSegment';
+import { useShaftSegments } from '../useShaftSegments';
 import React from 'react';
 import * as THREE from 'three';
 import type { ThreeEvent } from '@react-three/fiber';
@@ -8,9 +10,7 @@ import { handleSupportClick } from '../../interaction/clickHandlers';
 import { JointRenderer } from '../../SupportPrimitives/Joint/JointRenderer';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
 import { RootsRenderer } from '../../SupportPrimitives/Roots/RootsRenderer';
-import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
 import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
-import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import { usePartDragUpdate } from '../../interaction/partDragPreview';
 import type { Kickstand } from './types';
 
@@ -51,7 +51,9 @@ export const KickstandRenderer = React.memo(function KickstandRenderer({
     hoverColor,
     selectedColor = '#80fffd',
 }: KickstandRendererProps) {
-    const previewKickstand = usePartDragUpdate<Kickstand>('kickstand', baseKickstand.id);
+    // The entity names its own type; the store stamps it on every write.
+    const typeId = baseKickstand.typeId ?? 'kickstand';
+    const previewKickstand = usePartDragUpdate<Kickstand>(typeId, baseKickstand.id);
     const kickstand = previewKickstand ?? baseKickstand;
 
     const highDetailPrimitiveSegments = 24;
@@ -74,85 +76,28 @@ export const KickstandRenderer = React.memo(function KickstandRenderer({
         handleSupportClick(e, kickstand.id, !!isInteractable);
     };
 
-    const basePos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, root.transform.pos.z);
-    const startZ = root.diskHeight + root.coneHeight;
-
-    let currentStart = basePos.clone().add(new THREE.Vector3(0, 0, startZ));
-
     const shafts: React.ReactNode[] = [];
     const batchedStraightShafts: InstancedShaft[] = [];
     const joints: React.ReactNode[] = [];
 
-    kickstand.segments.forEach((segment, index) => {
-        const isLast = index === kickstand.segments.length - 1;
+    const shaftSegments = useShaftSegments(typeId, kickstand, { root, hostKnot });
 
-        const endPoint = segment.topJoint
-            ? new THREE.Vector3(segment.topJoint.pos.x, segment.topJoint.pos.y, segment.topJoint.pos.z)
-            : new THREE.Vector3(hostKnot.pos.x, hostKnot.pos.y, hostKnot.pos.z);
-
-        const start = { x: currentStart.x, y: currentStart.y, z: currentStart.z };
-        const end = { x: endPoint.x, y: endPoint.y, z: endPoint.z };
-
+    shaftSegments.forEach((shaft) => {
+        const segment = shaft.segment;
+        const index = shaft.index;
         const segmentSelected = selectedId === segment.id;
 
-        const diameterStart = isLast ? kickstand.profile.terminalStartDiameterMm : undefined;
-        const diameterEnd = isLast ? kickstand.profile.terminalEndDiameterMm : undefined;
-        const isUniformDiameter = (diameterStart == null && diameterEnd == null)
-            || (diameterStart != null && diameterEnd != null && Math.abs(diameterStart - diameterEnd) < 1e-6);
-        const canBatchShaft = !isSelected && !deferStraightShaftsToSceneBatch && segment.type !== 'bezier' && isUniformDiameter;
-
-        if (canBatchShaft) {
-            batchedStraightShafts.push({
-                id: segment.id,
-                start,
-                end,
-                diameter: segment.diameter,
-            });
-        } else if (segment.type === 'bezier') {
-            const bezierColor = isSelected ? '#ff00ff' : visuals.color;
-            shafts.push(
-                <BezierRenderer
-                    key={`shaft-${segment.id}`}
-                    id={segment.id}
-                    start={start}
-                    end={end}
-                    control1={segment.controlPoint1}
-                    control2={segment.controlPoint2}
-                    diameter={segment.diameter}
-                    diameterStart={diameterStart}
-                    diameterEnd={diameterEnd}
-                    resolution={segment.resolution}
-                    color={bezierColor}
-                    emissive={visuals.emissive}
-                    emissiveIntensity={visuals.emissiveIntensity}
-                    selectedColor={visuals.selectedColor}
-                    isParentSelected={isSelected}
-                    isInteractable={isInteractable}
-                    isSelected={segmentSelected}
-                    onClick={() => selectPrimitiveById(segment.id)}
-                />,
-            );
-        } else if (!deferStraightShaftsToSceneBatch || isSelected) {
-            shafts.push(
-                <ShaftRenderer
-                    key={`shaft-${segment.id}`}
-                    id={segment.id}
-                    start={start}
-                    end={end}
-                    diameter={segment.diameter}
-                    diameterStart={diameterStart}
-                    diameterEnd={diameterEnd}
-                    color={visuals.color}
-                    emissive={visuals.emissive}
-                    emissiveIntensity={visuals.emissiveIntensity}
-                    selectedColor={visuals.selectedColor}
-                    isParentSelected={isSelected}
-                    isInteractable={isInteractable}
-                    isSelected={segmentSelected}
-                    onClick={() => selectPrimitiveById(segment.id)}
-                />,
-            );
-        }
+        const node = renderShaftSegment({
+          shaft,
+          visuals,
+          isSelected: !!isSelected,
+          isSegmentSelected: segmentSelected,
+          isInteractable,
+          deferStraightShaftsToSceneBatch,
+          onSelect: selectPrimitiveById,
+          batch: batchedStraightShafts,
+        });
+        if (node) shafts.push(node);
 
         if (isSelected && segment.topJoint) {
             joints.push(
@@ -184,7 +129,6 @@ export const KickstandRenderer = React.memo(function KickstandRenderer({
             );
         }
 
-        currentStart = endPoint;
     });
 
     const shaftDiameter = kickstand.segments[0]?.diameter ?? kickstand.profile.bodyDiameterMm;

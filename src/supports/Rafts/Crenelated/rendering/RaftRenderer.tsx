@@ -4,7 +4,6 @@ import React from 'react';
 import * as THREE from 'three';
 import { useSyncExternalStore } from 'react';
 import { subscribe, getSnapshot } from '@/supports/state';
-import { getKickstandSnapshot, subscribeToKickstandStore } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { getRaftSettings, subscribeToRaftStore } from '../RaftState';
 import { computeFootprint } from '../geometry/computeFootprint';
 import { generateChamferedBase } from '../geometry/generateChamferedBase';
@@ -54,7 +53,6 @@ export default function RaftRenderer({
   onModelPointerSelect,
 }: RaftRendererProps) {
   const supportState = useSyncExternalStore(subscribe, getSnapshot);
-  const kickstandState = useSyncExternalStore(subscribeToKickstandStore, getKickstandSnapshot, getKickstandSnapshot);
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
   const [immediateModelHoverId, setImmediateModelHoverId] = React.useState<string | null>(null);
   const [immediatePrepareActiveModelId, setImmediatePrepareActiveModelId] = React.useState<string | null>(null);
@@ -152,7 +150,6 @@ export default function RaftRenderer({
     const rootsByModel = collectRaftBaseCirclesByModel({
       roots: Object.values(supportState.roots),
       anchors: Object.values(supportState.anchors),
-      kickstandRoots: Object.values(kickstandState.roots),
     }, {
       modelFilterId,
       excludeModelId,
@@ -208,7 +205,7 @@ export default function RaftRenderer({
     }
 
     return meshes;
-  }, [excludeModelId, excludedModelIdSet, modelFilterId, supportState, kickstandState.roots, raft.bottomMode, raft.wallEnabled, raft.thickness, raft.chamferAngle, raft.wallHeight, raft.wallThickness, raft.crenulationGapWidth, raft.crenulationSpacing, raftOpacity, raftTransparent, ghostRenderOrder, clippingPlanes]);
+  }, [excludeModelId, excludedModelIdSet, modelFilterId, supportState, raft.bottomMode, raft.wallEnabled, raft.thickness, raft.chamferAngle, raft.wallHeight, raft.wallThickness, raft.crenulationGapWidth, raft.crenulationSpacing, raftOpacity, raftTransparent, ghostRenderOrder, clippingPlanes]);
 
   const handleClick = React.useCallback((e: any) => {
     if (passive) return;

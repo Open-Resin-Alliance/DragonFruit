@@ -23,7 +23,7 @@ export function GridPreview({
     anatomyOverrides
 }: GridPreviewProps) {
     const gridPreviewSupports = React.useMemo(() => {
-        return buildGridPreviewSupports({ settings, liveConfig, activeKind });
+        return buildGridPreviewSupports({ settings, liveConfig });
     }, [activeKind, settings.grid.spacingMm, liveConfig, settings.tip]);
 
     const spacing = settings.grid.spacingMm;

@@ -26,26 +26,55 @@ Compiler leaves untouched.
 
 **Temporary until:** Lingui moves to a Babel macro ordered before React Compiler.
 
-## Desired: make the support system registry-driven
+## In progress: make the support system registry-driven
 
-Adding a support type today means threading it through ~15 hand-wired
-integration points — `types.ts`, `state.ts`, `SupportRenderer.tsx`, history
-action types + handlers, the interaction manager's category/delete resolution,
-and export reconstruction (see `dev/support-type-extension.md` for the full
-walkthrough). The system is **not registry-driven**, and that spread is the
-friction.
+`src/supports/supportTypeRegistry.ts` **exists** and is load-bearing: one
+descriptor per type, and every "for each support type / collection" walk derives
+from it. `SupportState`'s collections, the modelId and shafted walks, root
+ownership, the updater and knot-diameter slots, and several behaviour decisions
+that used to be hardcoded type names now come from there.
 
-**Goal:** replace the manual threading with a single per-type registration
-descriptor that bundles everything a type contributes — id/category, entity
-type + `SupportState` field, renderer (+ batch strategy), builder, history
-add/remove handlers, delete/category resolution, and export group — and have
-the renderer, interaction manager, history, and export derive their behavior
-from that registry instead of a hand-written block per type.
+**Adoption is partway.** Measured by `npm run scan:support-types`: **7,052
+hand-written type references across 147 files**, down from 12,164. History
+handlers, registration slots, the support primitives, the clipboard, geometry
+export and most of `state.ts` are converted; auto-placement (769) and
+`SupportRenderer.tsx` (663) remain the two largest holdouts. Adding a type is
+therefore still partly manual — see `dev/support-type-extension.md`, which marks
+each step.
 
-Do not attempt this refactor as part of adding a new support type — adding a
-type should keep using the current hand-wired path until the registry exists.
-The registry is a separate, deliberate refactor that should land with its own
-migration and no behavior change.
+**Remaining goal:** move the rest of the per-type threading behind the registry,
+so the renderer, interaction manager and export derive their behaviour rather
+than enumerating types. Deliberately out of scope for the registry itself:
+renderers, builders and placement logic. It describes what a type IS, not how it
+draws — putting behaviour in it turns a mechanical refactor into a rewrite.
+
+**Do not do this refactor while adding a support type.** Still true, and still
+the point: converting a hand-wired path and adding a new type at once means a
+behaviour change and a migration land in the same diff, and neither can be
+reviewed or bisected cleanly. Add the type through the current hand-wired path,
+then convert separately. Registry work should land on its own with no behaviour
+change.
+
+**The rule that matters.** When code needs type-specific behaviour, derive it
+from the registry or declare it as a descriptor property. Never subtract
+(`.filter(id => id !== 'trunk')`): a new type silently joins or skips the set,
+which is the exact failure the registry exists to prevent.
+
+Known remaining hand-written lists worth converting:
+
+- (none outstanding here; see `support-registry-findings.md` for the open items)
+
+### Bugs found while converting
+
+Converting each hand-written type list turned up defects where the list
+disagreed with the registry. They are recorded in
+[`support-registry-findings.md`](support-registry-findings.md) -- 89 findings,
+27 still open -- rather than here, because they are per-site detail rather than
+rules to follow.
+
+The rule they add up to is the one above: derive, never subtract. Two were
+invisible to the whole suite AND all 22 goldens, so passing tests are not
+evidence a flag is covered -- see AGENTS.md trap 4.
 
 ## Desired: route every native call through the IPC bridge
 

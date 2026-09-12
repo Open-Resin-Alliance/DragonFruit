@@ -1,23 +1,24 @@
 import { useCallback, useState, useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import { addAnchor, addBranch, addKnot, addLeaf, addRoot, addStick, addTrunk, addTwig, getSnapshot, setSnapshot, updateKnot, updateTrunk } from '../../state';
+import { cloneSupportState, addAnchor, addBranch, addKnot, addLeaf, addRoot, addSupportEntityWithHistory, addTrunk, getSnapshot, setSnapshot, updateKnot } from '../../state';
 import { pushSupportHistory } from '@/supports/history/supportHistory';
-import { SUPPORT_ADD_ANCHOR, SUPPORT_ADD_BRANCH, SUPPORT_ADD_LEAF, SUPPORT_ADD_STICK, SUPPORT_ADD_TRUNK, SUPPORT_ADD_TWIG } from '../../history/actionTypes';
+import { addAction } from '../../history/actionTypes';
 import { useInteractionStatus } from '../../interaction/useInteractionStatus';
 import { buildTrunkData } from './trunkBuilder';
 import { applyTrunkReplacement, computeAndApplyTrunkDiameterProfile, planTrunkReplacement } from './TrunkReplacement';
-import type { SupportData } from '../../rendering/SupportBuilder';
-import type { Anchor, Branch, ContactDisk, Leaf, LimitationCode, Stick, Twig, WarningCode } from '../../types';
+import { supportDataForEntity, type SupportData } from '../../rendering/SupportBuilder';
+import { markPlacementSurface, markSupportDataPlacementSurface, type PlacementSurface } from '../../PlacementLogic/placementSurface';
+import type { Anchor, Branch, ContactDisk, Leaf, LimitationCode, Segment, Stick, Twig, WarningCode } from '../../types';
 import type { ContactCone } from '../../SupportPrimitives/ContactCone/types';
 import { calculateSmoothedNormal } from '../../PlacementLogic/PlacementUtils';
 import { getSettings } from '../../Settings/state';
 import { decideGridPlacement } from '../../PlacementLogic/Grid';
-import { ANCHOR_HEIGHT_THRESHOLD_MM } from '../../autoSupport/constants';
+import { buildContactBridge, selectTypeForPlacement, type SupportTypeId, updateSupportEntity } from '../../supportTypeRegistry';
+import { shaftVerticalCos } from '../Stick/stickVerticality';
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
 import { isContactDiskHudInteractionActive, shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { perfMark, perfMeasureWithSpike, perfEndFrame } from '../../PlacementLogic/Pathfinding/pathfindingPerf';
-import { buildStick } from '../Stick/stickBuilder';
-import { buildTwig } from '../Twig/twigBuilder';
+
 import { isShaftBlocked } from '../../PlacementLogic/CollisionAvoidance';
 import { checkShortBridgeCollision } from '../../PlacementLogic/CollisionUtils';
 import { useActionActive } from '@/hotkeys/hotkeyStore';
@@ -33,107 +34,37 @@ const CAVITY_PREVIEW_CACHE_POS_EPSILON_MM = 1.0;
 const CAVITY_PREVIEW_CACHE_NORMAL_DOT_MIN = 0.99;
 const CAVITY_PREVIEW_CACHE_MISS_MAX_AGE_MS = 220;
 
-type PlacementSurface = 'interior' | 'exterior';
-
 function getPlacementSurfaceFromHit(hit: THREE.Intersection | null): PlacementSurface | undefined {
     return hit?.object?.userData?.supportPlacementSurface === 'interior' ? 'interior' : undefined;
-}
-
-function markContactConePlacementSurface<T extends ContactCone | undefined>(cone: T, surface?: PlacementSurface): T {
-    if (!cone || !surface) return cone;
-    return {
-        ...cone,
-        placementSurface: surface,
-    } as T;
-}
-
-function markContactDiskPlacementSurface<T extends ContactDisk | undefined>(disk: T, surface?: PlacementSurface): T {
-    if (!disk || !surface) return disk;
-    return {
-        ...disk,
-        placementSurface: surface,
-    } as T;
-}
-
-function markSupportDataPlacementSurface(data: SupportData, surface?: PlacementSurface): SupportData {
-    if (!surface) return data;
-    return {
-        ...data,
-        contactCone: markContactConePlacementSurface(data.contactCone, surface),
-        contactCones: data.contactCones?.map((cone) => markContactConePlacementSurface(cone, surface)),
-        contactDisks: data.contactDisks?.map((disk) => markContactDiskPlacementSurface(disk, surface)),
-    };
 }
 
 function markTrunkBuildPlacementSurface<T extends ReturnType<typeof buildTrunkData>>(build: T, surface?: PlacementSurface): T {
     if (!surface) return build;
     return {
         ...build,
-        trunk: {
-            ...build.trunk,
-            contactCone: markContactConePlacementSurface(build.trunk.contactCone, surface),
-        },
+        trunk: markPlacementSurface('trunk', build.trunk, surface),
         supportData: markSupportDataPlacementSurface(build.supportData, surface),
     } as T;
 }
 
-function markBranchPlacementSurface(branch: Branch, surface?: PlacementSurface): Branch {
-    if (!surface) return branch;
-    return {
-        ...branch,
-        contactCone: markContactConePlacementSurface(branch.contactCone, surface),
-    };
-}
-
-function markLeafPlacementSurface(leaf: Leaf, surface?: PlacementSurface): Leaf {
-    if (!surface) return leaf;
-    return {
-        ...leaf,
-        contactCone: markContactConePlacementSurface(leaf.contactCone, surface),
-    };
-}
-
-function markAnchorPlacementSurface(anchor: Anchor, surface?: PlacementSurface): Anchor {
-    if (!surface) return anchor;
-    return {
-        ...anchor,
-        contactCone: markContactConePlacementSurface(anchor.contactCone, surface),
-    };
-}
-
-function markStickPlacementSurface(stick: Stick, surface?: PlacementSurface): Stick {
-    if (!surface) return stick;
-    return {
-        ...stick,
-        contactConeA: markContactConePlacementSurface(stick.contactConeA, surface),
-        contactConeB: markContactConePlacementSurface(stick.contactConeB, surface),
-    };
-}
-
-function markTwigPlacementSurface(twig: Twig, surface?: PlacementSurface): Twig {
-    if (!surface) return twig;
-    return {
-        ...twig,
-        contactDiskA: markContactDiskPlacementSurface(twig.contactDiskA, surface),
-        contactDiskB: markContactDiskPlacementSurface(twig.contactDiskB, surface),
-    };
-}
+/** A bridge always has a shaft; which contacts hang off it is declared. */
+type BridgingEntity = { id: string; segments: Segment[] };
 
 /**
  * When A* stagnates (tip is inside a closed cavity), attempt to find the
- * cavity floor by raycasting straight down.  Returns a buildStick result +
- * a SupportData preview object, or null if no lower surface is found.
+ * cavity floor by raycasting straight down and bridge the two contacts.
+ *
+ * Which type bridges them is the registry's call, by contact span -- the
+ * result carries whichever it chose, plus a SupportData preview. Null when
+ * no lower surface is found, or the bridge is not worth placing.
  */
-export function buildCavityStick(
+export function buildCavityBridge(
     tipPos: { x: number; y: number; z: number },
     tipNormal: { x: number; y: number; z: number },
     modelId: string,
     mesh: THREE.Mesh,
     sizing?: { tipContactDiameterMm: number; shaftDiameterMm: number },
-): (
-    | { kind: 'stick'; supportData: SupportData; stick: ReturnType<typeof buildStick>['stick'] }
-    | { kind: 'twig'; supportData: SupportData; twig: ReturnType<typeof buildTwig>['twig'] }
-) | null {
+): { kind: SupportTypeId; supportData: SupportData; entity: BridgingEntity } | null {
     // Offset origin slightly inward along tip normal so we don't self-hit the
     // surface we just clicked.
     const OFFSET_MM = 0.5;
@@ -228,96 +159,55 @@ export function buildCavityStick(
     const dy = tipPos.y - bPos.y;
     const dz = tipPos.z - bPos.z;
     const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-    const kind: 'twig' | 'stick' = dist > cutoff ? 'stick' : 'twig';
+    const kind = selectTypeForPlacement('contactSpan', dist);
+    if (kind === null) return null;
 
     if (kind === 'stick' && reachedSideways && dist > cutoff) return null;
 
-    if (kind === 'twig') {
-        const { twig } = buildTwig({ modelId, aPos: tipPos, aNormal: tipNormal, bPos, bNormal, tipContactDiameterMm: sizing?.tipContactDiameterMm });
-        // Ensure the twig shaft does not pierce the model. Matches the trunk
-        // post-cull clearance (radius + 0.15mm) and catches the "sticks that
-        // shoot right through geometry" seen in auto supports.
-        {
-            // Ray-based, like buildTwig: the SDF reads the thin gap a twig
-            // spans as material, so a signed-distance gate would refuse it.
-            const seg = twig.segments[0];
-            const start = seg?.bottomJoint?.pos ?? bPos;
-            const end = seg?.topJoint?.pos ?? tipPos;
-            const radius = (seg?.diameter ?? 1) / 2 + 0.15;
-            if (checkShortBridgeCollision(start, end, radius, mesh).hit) return null;
-        }
-        // Twigs are short bridges, not lateral props: the visible shaft
-        // (socket to socket — a sidewall landing's standoff is what shoves a
-        // grazing twig sideways) must stay somewhat vertical, like sticks. A
-        // twig much past 45° hangs its island off a whisker that cannot carry
-        // peel, and it renders as the near-horizontal struts in the preview.
-        // Looser than the 20° stick gate because a 1–2 mm strut tolerates cant
-        // a 12 mm column cannot; pointed tips propped off a nearby wall with a
-        // real drop underneath still pass.
-        if (shaftVerticalCos(twig) < Math.cos((CAVITY_TWIG_MAX_SHAFT_ANGLE_DEG * Math.PI) / 180)) {
-            return null;
-        }
-        const supportData: SupportData = {
-            id: twig.id,
-            segments: twig.segments,
-            contactDisks: [twig.contactDiskA, twig.contactDiskB],
-        };
-        return { kind, twig, supportData };
-    }
+    const built = buildContactBridge(kind, {
+        modelId,
+        aPos: tipPos,
+        aNormal: tipNormal,
+        bPos,
+        bNormal,
+        shaftDiameterMm: sizing?.shaftDiameterMm,
+        tipContactDiameterMm: sizing?.tipContactDiameterMm,
+    });
+    if (!built) return null;
+    const entity = built.entity as BridgingEntity;
 
-    const { stick } = buildStick({ modelId, aPos: tipPos, aNormal: tipNormal, bPos, bNormal, shaftDiameterMm: sizing?.shaftDiameterMm, tipContactDiameterMm: sizing?.tipContactDiameterMm });
-
-    // Sticks are only useful as vertical bridges; a shaft that cants off
-    // vertical (standoffs + sloped surfaces shoving the sockets sideways)
-    // is a crammed stick. Reject it — the caller's trunk fallback applies.
-    if (shaftVerticalCos(stick) < Math.cos((CAVITY_STICK_MAX_SHAFT_ANGLE_DEG * Math.PI) / 180)) {
+    // Twigs are short bridges, not lateral props: the visible shaft
+    // (socket to socket — a sidewall landing's standoff is what shoves a
+    // grazing twig sideways) must stay somewhat vertical, like sticks. A
+    // twig much past 45° hangs its island off a whisker that cannot carry
+    // peel, and it renders as the near-horizontal struts in the preview.
+    // Looser than the 20° stick gate — which the stick's registered builder
+    // enforces — because a 1–2 mm strut tolerates cant a 12 mm column cannot;
+    // pointed tips propped off a nearby wall with a real drop underneath
+    // still pass.
+    if (kind === 'twig' && shaftVerticalCos(entity) < Math.cos((CAVITY_TWIG_MAX_SHAFT_ANGLE_DEG * Math.PI) / 180)) {
         return null;
     }
 
-    // SDF/raycast: stick shaft must not pierce the model. This is the
-    // missing check that let auto supports place sticks straight through
-    // the Puck's chest. Uses the same shaft clearance as trunks.
-    {
-        const seg = stick.segments[0];
-        const start = seg?.bottomJoint?.pos ?? bPos;
-        const end = seg?.topJoint?.pos ?? tipPos;
-        const radius = (seg?.diameter ?? sizing?.shaftDiameterMm ?? 1) / 2 + 0.15;
-        if (isShaftBlocked(start, end, radius, mesh)) return null;
-    }
+    // The shaft must not pierce the model. Matches the trunk post-cull
+    // clearance (radius + 0.15mm) and catches the bridges that shot straight
+    // through geometry in auto supports.
+    const seg = entity.segments[0];
+    const start = seg?.bottomJoint?.pos ?? bPos;
+    const end = seg?.topJoint?.pos ?? tipPos;
+    const radius = (seg?.diameter ?? sizing?.shaftDiameterMm ?? 1) / 2 + 0.15;
+    // Ray-based for a twig, like buildTwig: the SDF reads the thin gap a twig
+    // spans as material, so a signed-distance gate would refuse it.
+    const blocked = kind === 'twig'
+        ? checkShortBridgeCollision(start, end, radius, mesh).hit
+        : isShaftBlocked(start, end, radius, mesh);
+    if (blocked) return null;
 
-    const supportData: SupportData = {
-        id: stick.id,
-        segments: stick.segments,
-        contactCones: [stick.contactConeA, stick.contactConeB],
-    };
-
-    return { kind: 'stick', stick, supportData };
+    return { kind, entity, supportData: supportDataForEntity(kind, entity) };
 }
 
-type CavityStickBuildResult = NonNullable<ReturnType<typeof buildCavityStick>>;
+type CavityBridgeBuildResult = NonNullable<ReturnType<typeof buildCavityBridge>>;
 
-/**
- * |cos| of a cavity bridge's deviation from vertical, 1 = perfectly vertical.
- * The visible shaft runs between its two socket joints — the surface-normal
- * standoffs can shove those sideways on sloped surfaces, which is exactly the
- * "crammed diagonal stick" look to avoid.
- */
-export function shaftVerticalCos(bridge: { segments: { bottomJoint?: { pos: { x: number; y: number; z: number } } | null; topJoint?: { pos: { x: number; y: number; z: number } } | null }[] }): number {
-    const seg = bridge.segments[0];
-    const a = seg?.bottomJoint?.pos;
-    const b = seg?.topJoint?.pos;
-    if (!a || !b) return 1;
-    const vx = b.x - a.x;
-    const vy = b.y - a.y;
-    const vz = b.z - a.z;
-    const len = Math.hypot(vx, vy, vz);
-    if (len < 1e-6) return 1;
-    return Math.abs(vz) / len;
-}
-
-// A cavity stick bridges straight down; a shaft that cants more than this
-// from vertical is a wedged stick, not a bridge (calibration knob).
-export const CAVITY_STICK_MAX_SHAFT_ANGLE_DEG = 20;
 // A cavity twig bridges down, not sideways: a shaft canted much past this
 // from vertical is a lateral whisker to a sidewall, not a bridge. Looser than
 // the 20° stick gate — measured thin-gap and floor twigs build at ≤17°,
@@ -348,7 +238,7 @@ export function useTrunkPlacementV2() {
         point: THREE.Vector3;
         normal: THREE.Vector3;
         atMs: number;
-        result: CavityStickBuildResult | null;
+        result: CavityBridgeBuildResult | null;
     } | null>(null);
     const lastProcessedHoverRef = useRef<{
         objectUuid: string;
@@ -373,22 +263,22 @@ export function useTrunkPlacementV2() {
         addRoot(markedBuild.root);
         addTrunk(markedBuild.trunk);
         pushSupportHistory({
-            type: SUPPORT_ADD_TRUNK,
+            type: addAction('trunk'),
             payload: {
                 trunk: markedBuild.trunk,
-                root: markedBuild.root,
+                roots: [markedBuild.root],
             },
         });
         clearSupportSelection();
     }, []);
 
-    const resolveCavityStickPreview = useCallback((
+    const resolveCavityBridgePreview = useCallback((
         hit: THREE.Intersection,
         tipPos: { x: number; y: number; z: number },
         tipNormal: { x: number; y: number; z: number },
         modelId: string,
         mesh: THREE.Mesh,
-    ): CavityStickBuildResult | null => {
+    ): CavityBridgeBuildResult | null => {
         const now = performance.now();
         const cached = cavityPreviewCacheRef.current;
         if (cached && cached.objectUuid === hit.object.uuid && cached.modelId === modelId && cached.result === null) {
@@ -403,7 +293,7 @@ export function useTrunkPlacementV2() {
             }
         }
 
-        const computed = buildCavityStick(tipPos, tipNormal, modelId, mesh);
+        const computed = buildCavityBridge(tipPos, tipNormal, modelId, mesh);
 
         // Cache only misses; successful stick previews should track pointer motion
         // continuously and must not reuse stale geometry.
@@ -522,15 +412,15 @@ export function useTrunkPlacementV2() {
         // IMPORTANT: ANGLE_TOO_STEEP (shallow angle / upward face) is a hard
         // surface rejection that prevents ALL support types — do NOT fall back
         // to a stick or twig for this error.
-        const cavityStickEligible = result.stagnated || result.exhaustedBudget
+        const cavityBridgeEligible = result.stagnated || result.exhaustedBudget
             || (result.error && result.error !== 'ANGLE_TOO_STEEP');
-        if (cavityStickEligible) {
+        if (cavityBridgeEligible) {
             if (mesh) {
                 perfMark('hover:cavity-stick');
-                const cavityStick = resolveCavityStickPreview(hit, tipPos, tipNormal, modelId, mesh);
+                const cavityBridge = resolveCavityBridgePreview(hit, tipPos, tipNormal, modelId, mesh);
                 perfMeasureWithSpike('hover:cavity-stick', 'branch:cavity-stick');
-                if (cavityStick) {
-                    setPreviewData(cavityStick.supportData);
+                if (cavityBridge) {
+                    setPreviewData(cavityBridge.supportData);
                     setPreviewError(null);
                     setPreviewWarning(null);
                     perfEndFrame();
@@ -554,7 +444,9 @@ export function useTrunkPlacementV2() {
         // exception: decideGridPlacement owns the anchor decision in BOTH
         // modes (its validation also previews the rejection ghost), so they
         // must not take this early out.
-        if (!isGridMode && tipPos.z >= ANCHOR_HEIGHT_THRESHOLD_MM) {
+        // Only a tip the anchor rule claims takes the grid path.
+        const isNearPlateTip = selectTypeForPlacement('tipHeight', tipPos.z) === 'anchor';
+        if (!isGridMode && !isNearPlateTip) {
             setPreviewData(result.supportData);
             setPreviewError(forcePlaceOverrideRef.current ? null : (result.error || null));
             setPreviewWarning(result.warning || null);
@@ -630,10 +522,10 @@ export function useTrunkPlacementV2() {
         // reject
         if (decision.kind === 'reject' && decision.reason === 'COLLISION_WITH_MODEL' && mesh) {
             perfMark('hover:cavity-stick');
-            const cavityStick = resolveCavityStickPreview(hit, tipPos, tipNormal, modelId, mesh);
+            const cavityBridge = resolveCavityBridgePreview(hit, tipPos, tipNormal, modelId, mesh);
             perfMeasureWithSpike('hover:cavity-stick', 'branch:cavity-stick');
-            if (cavityStick) {
-                setPreviewData(cavityStick.supportData);
+            if (cavityBridge) {
+                setPreviewData(cavityBridge.supportData);
                 setPreviewError(null);
                 setPreviewWarning(null);
                 perfEndFrame();
@@ -673,7 +565,7 @@ export function useTrunkPlacementV2() {
         );
         setPreviewWarning((prev) => (prev === null ? prev : null));
         perfEndFrame();
-    }, [HOVER_MIN_INTERVAL_MS, HOVER_NORMAL_DOT_MIN, HOVER_POS_EPSILON_MM, clearPreview, isPlacementHardDisabled, resolveCavityStickPreview]);
+    }, [HOVER_MIN_INTERVAL_MS, HOVER_NORMAL_DOT_MIN, HOVER_POS_EPSILON_MM, clearPreview, isPlacementHardDisabled, resolveCavityBridgePreview]);
 
     useEffect(() => {
         forcePlaceOverrideRef.current = forcePlaceActive;
@@ -724,27 +616,18 @@ export function useTrunkPlacementV2() {
         // IMPORTANT: ANGLE_TOO_STEEP (shallow angle / upward face) is a hard
         // surface rejection that prevents ALL support types — do NOT fall back
         // to a stick or twig for this error.
-        const cavityStickEligible = result.stagnated || result.exhaustedBudget
+        const cavityBridgeEligible = result.stagnated || result.exhaustedBudget
             || (result.error && result.error !== 'ANGLE_TOO_STEEP');
-        if (cavityStickEligible) {
+        if (cavityBridgeEligible) {
             if (mesh) {
-                const cavityStick = buildCavityStick(tipPos, tipNormal, modelId, mesh);
-                if (cavityStick) {
-                    if (cavityStick.kind === 'twig') {
-                        const twig = markTwigPlacementSurface(cavityStick.twig, placementSurface);
-                        addTwig(twig);
-                        pushSupportHistory({
-                            type: SUPPORT_ADD_TWIG,
-                            payload: { twig },
-                        });
-                    } else {
-                        const stick = markStickPlacementSurface(cavityStick.stick, placementSurface);
-                        addStick(stick);
-                        pushSupportHistory({
-                            type: SUPPORT_ADD_STICK,
-                            payload: { stick },
-                        });
-                    }
+                const cavityBridge = buildCavityBridge(tipPos, tipNormal, modelId, mesh);
+                if (cavityBridge) {
+                    // The registry chose the type; committing it needs no
+                    // second choice here.
+                    addSupportEntityWithHistory(
+                        cavityBridge.kind,
+                        markPlacementSurface(cavityBridge.kind, cavityBridge.entity, placementSurface),
+                    );
                     clearSupportSelection();
                     return;
                 }
@@ -790,10 +673,10 @@ export function useTrunkPlacementV2() {
         });
 
         if (decision.kind === 'place_anchor') {
-            const anchor = markAnchorPlacementSurface(decision.anchor, placementSurface);
+            const anchor = markPlacementSurface('anchor', decision.anchor, placementSurface);
             addAnchor(anchor);
             pushSupportHistory({
-                type: SUPPORT_ADD_ANCHOR,
+                type: addAction('anchor'),
                 payload: { anchor },
             });
             clearSupportSelection();
@@ -801,7 +684,7 @@ export function useTrunkPlacementV2() {
         }
 
         if (decision.kind === 'place_branch') {
-            const branch = markBranchPlacementSurface(decision.branch, placementSurface);
+            const branch = markPlacementSurface('branch', decision.branch, placementSurface);
             addKnot(decision.knot);
             addBranch(branch);
 
@@ -816,13 +699,13 @@ export function useTrunkPlacementV2() {
                         updateKnot(u.after);
                     }
 
-                    updateTrunk(applied.trunk);
+                    updateSupportEntity('trunk', applied.trunk);
                     return { before: hostTrunk, after: applied.trunk, knotUpdates: applied.knotUpdates };
                 })()
                 : null;
 
             pushSupportHistory({
-                type: SUPPORT_ADD_BRANCH,
+                type: addAction('branch'),
                 payload: {
                     branch,
                     knot: decision.knot,
@@ -835,12 +718,12 @@ export function useTrunkPlacementV2() {
         }
 
         if (decision.kind === 'place_leaf') {
-            const leaf = markLeafPlacementSurface(decision.leaf, placementSurface);
+            const leaf = markPlacementSurface('leaf', decision.leaf, placementSurface);
             addKnot(decision.knot);
             addLeaf(leaf);
 
             pushSupportHistory({
-                type: SUPPORT_ADD_LEAF,
+                type: addAction('leaf'),
                 payload: {
                     leaf,
                     knot: decision.knot,
@@ -851,8 +734,8 @@ export function useTrunkPlacementV2() {
         }
 
         if (decision.kind === 'replace_trunk') {
-            const before = structuredClone(getSnapshot());
-            const promoteBranch = markBranchPlacementSurface(decision.promoteBranch, placementSurface);
+            const before = cloneSupportState(getSnapshot());
+            const promoteBranch = markPlacementSurface('branch', decision.promoteBranch, placementSurface);
             const trunkBuild = markTrunkBuildPlacementSurface(decision.trunkBuild, placementSurface);
 
             // Materialize the promoted branch (and its knot) into state so the planner can reference it.
@@ -891,23 +774,14 @@ export function useTrunkPlacementV2() {
 
         if (decision.kind === 'reject') {
             if (decision.reason === 'COLLISION_WITH_MODEL' && mesh) {
-                const cavityStick = buildCavityStick(tipPos, tipNormal, modelId, mesh);
-                if (cavityStick) {
-                    if (cavityStick.kind === 'twig') {
-                        const twig = markTwigPlacementSurface(cavityStick.twig, placementSurface);
-                        addTwig(twig);
-                        pushSupportHistory({
-                            type: SUPPORT_ADD_TWIG,
-                            payload: { twig },
-                        });
-                    } else {
-                        const stick = markStickPlacementSurface(cavityStick.stick, placementSurface);
-                        addStick(stick);
-                        pushSupportHistory({
-                            type: SUPPORT_ADD_STICK,
-                            payload: { stick },
-                        });
-                    }
+                const cavityBridge = buildCavityBridge(tipPos, tipNormal, modelId, mesh);
+                if (cavityBridge) {
+                    // The registry chose the type; committing it needs no
+                    // second choice here.
+                    addSupportEntityWithHistory(
+                        cavityBridge.kind,
+                        markPlacementSurface(cavityBridge.kind, cavityBridge.entity, placementSurface),
+                    );
                     clearSupportSelection();
                     return;
                 }

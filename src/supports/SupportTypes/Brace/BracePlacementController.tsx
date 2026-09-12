@@ -6,10 +6,10 @@ import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { subscribe, getSnapshot, addKnot, addBrace } from '../../state';
 import { pushSupportHistory } from '@/supports/history/supportHistory';
 import type { SnapTarget } from '../../interaction/SnappingManager';
-import type { Brace, Knot, Vec3 } from '../../types';
-import { SUPPORT_ADD_BRACE } from '../../history/actionTypes';
+import type { Brace, Knot, Segment, Vec3 } from '../../types';
+import { SUPPORT_TYPES } from '../../supportTypeRegistry';
+import { addAction } from '../../history/actionTypes';
 import { getSettings, getAutoBracingSettings } from '../../Settings/state';
-import { useKickstandStoreState } from '../Kickstand/kickstandStore';
 import { bracePlacementStore, useBracePlacementState } from './bracePlacementState';
 import { branchPlacementStore } from '../Branch/branchPlacementState';
 import { v4 as uuidv4 } from 'uuid';
@@ -21,7 +21,7 @@ import {
     buildLeafConeSnapMeta,
     buildPrimarySnapTargetIndex,
     buildSnapTargetCandidateIndex,
-    buildSupportPathSnapTargets,
+    ALL_SNAP_TYPES, buildSupportPathSnapTargets,
     resolveBracePathDiameterAtT,
 } from '../../interaction/shared/placement/snapping/supportPathTargets';
 import { getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByModifierState } from '../../interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
@@ -63,7 +63,6 @@ interface LeafHoverDetail {
 export function BracePlacementController() {
     const { altActive, stage, start } = useBracePlacementState();
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
-    const kickstandState = useKickstandStoreState();
     const { getHotkey } = useHotkeyConfig();
     const branchFamilyBinding = getHotkey('SUPPORTS', 'BRANCH_PLACEMENT');
 
@@ -74,99 +73,70 @@ export function BracePlacementController() {
     const lastPreviewSignatureRef = useRef<string | null>(null);
 
     const segmentMeta = useMemo(() => {
+        // Every type's shaft, by what the registry declares: a shafted type
+        // contributes each segment, a prefixed one its own id under that
+        // prefix.
         const map = new Map<string, { modelId: string; supportKey: string; isBezier: boolean }>();
-        for (const trunk of Object.values(supportState.trunks)) {
-            for (const seg of trunk.segments) {
-                map.set(seg.id, {
-                    modelId: trunk.modelId,
-                    supportKey: `trunk:${trunk.id}`,
-                    isBezier: seg.type === 'bezier',
-                });
+
+        for (const descriptor of SUPPORT_TYPES) {
+            const collection = supportState[descriptor.location.key] as unknown as Record<string, {
+                id: string; modelId: string; segments?: Segment[]; curve?: { type?: string };
+            }>;
+
+            for (const entity of Object.values(collection ?? {})) {
+                const supportKey = `${descriptor.id}:${entity.id}`;
+
+                if (descriptor.segmentSelectionPrefix) {
+                    map.set(`${descriptor.segmentSelectionPrefix}${entity.id}`, {
+                        modelId: entity.modelId,
+                        supportKey,
+                        isBezier: entity.curve?.type === 'bezier',
+                    });
+                    continue;
+                }
+
+                for (const seg of entity.segments ?? []) {
+                    map.set(seg.id, {
+                        modelId: entity.modelId,
+                        supportKey,
+                        isBezier: seg.type === 'bezier',
+                    });
+                }
             }
-        }
-        for (const branch of Object.values(supportState.branches)) {
-            for (const seg of branch.segments) {
-                map.set(seg.id, {
-                    modelId: branch.modelId,
-                    supportKey: `branch:${branch.id}`,
-                    isBezier: seg.type === 'bezier',
-                });
-            }
-        }
-
-        for (const kickstand of Object.values(kickstandState.kickstands)) {
-            for (const seg of kickstand.segments) {
-                map.set(seg.id, {
-                    modelId: kickstand.modelId,
-                    supportKey: `kickstand:${kickstand.id}`,
-                    isBezier: seg.type === 'bezier',
-                });
-            }
-        }
-
-         for (const twig of Object.values(supportState.twigs)) {
-             for (const seg of twig.segments) {
-                 map.set(seg.id, {
-                     modelId: twig.modelId,
-                     supportKey: `twig:${twig.id}`,
-                     isBezier: seg.type === 'bezier',
-                 });
-             }
-         }
-
-         for (const stick of Object.values(supportState.sticks)) {
-             for (const seg of stick.segments) {
-                 map.set(seg.id, {
-                     modelId: stick.modelId,
-                     supportKey: `stick:${stick.id}`,
-                     isBezier: seg.type === 'bezier',
-                 });
-             }
-         }
-
-        for (const brace of Object.values(supportState.braces)) {
-            map.set(`braceSegment:${brace.id}`, {
-                modelId: brace.modelId,
-                supportKey: `brace:${brace.id}`,
-                isBezier: brace.curve?.type === 'bezier',
-            });
         }
         return map;
-    }, [supportState.trunks, supportState.branches, supportState.twigs, supportState.sticks, supportState.braces, kickstandState.kickstands]);
+    }, [supportState]);
 
     const leafMeta = useMemo(() => {
         return buildLeafConeSnapMeta(supportState.leaves);
     }, [supportState.leaves]);
 
     const segmentPlacementSurfaceById = useMemo(() => {
+        // Which surface a shaft's contact sits on, for every type that has
+        // contacts, taking the first that declares one.
         const map = new Map<string, 'interior' | 'exterior' | undefined>();
-        for (const trunk of Object.values(supportState.trunks)) {
-            for (const seg of trunk.segments) {
-                map.set(seg.id, trunk.contactCone?.placementSurface);
+
+        for (const descriptor of SUPPORT_TYPES) {
+            const collection = supportState[descriptor.location.key] as unknown as Record<string, {
+                id: string; segments?: Segment[]; placementSurface?: 'interior' | 'exterior';
+            }>;
+
+            for (const entity of Object.values(collection ?? {})) {
+                const fields = entity as unknown as Record<string, { placementSurface?: 'interior' | 'exterior' } | undefined>;
+                const fromContact = descriptor.contactFields
+                    .map((field) => fields[field]?.placementSurface)
+                    .find((surface) => surface !== undefined);
+
+                if (descriptor.segmentSelectionPrefix) {
+                    map.set(`${descriptor.segmentSelectionPrefix}${entity.id}`, entity.placementSurface);
+                    continue;
+                }
+
+                for (const seg of entity.segments ?? []) map.set(seg.id, fromContact);
             }
-        }
-        for (const branch of Object.values(supportState.branches)) {
-            for (const seg of branch.segments) {
-                map.set(seg.id, branch.contactCone?.placementSurface);
-            }
-        }
-        for (const twig of Object.values(supportState.twigs)) {
-            const placementSurface = twig.contactDiskA?.placementSurface ?? twig.contactDiskB?.placementSurface;
-            for (const seg of twig.segments) {
-                map.set(seg.id, placementSurface);
-            }
-        }
-        for (const stick of Object.values(supportState.sticks)) {
-            const placementSurface = stick.contactConeA?.placementSurface ?? stick.contactConeB?.placementSurface;
-            for (const seg of stick.segments) {
-                map.set(seg.id, placementSurface);
-            }
-        }
-        for (const brace of Object.values(supportState.braces)) {
-            map.set(`braceSegment:${brace.id}`, brace.placementSurface);
         }
         return map;
-    }, [supportState.trunks, supportState.branches, supportState.twigs, supportState.sticks, supportState.braces]);
+    }, [supportState]);
 
     const leafPlacementSurfaceById = useMemo(() => {
         const map = new Map<string, 'interior' | 'exterior' | undefined>();
@@ -271,16 +241,12 @@ export function BracePlacementController() {
         }
 
         const targets: SnapTarget[] = buildSupportPathSnapTargets(supportState, {
-            includeTrunks: true,
-            includeBranches: true,
-            includeBraces: true,
-            includeTwigs: true,
-            includeSticks: true,
+            snapTypes: ALL_SNAP_TYPES,
             placementSurface: activePlacementSurface,
             excludeSegmentIds: excludedSegmentIds,
         });
 
-        targets.push(...buildKickstandPathSnapTargets(kickstandState, { excludeSegmentIds: excludedSegmentIds }));
+        targets.push(...buildKickstandPathSnapTargets(supportState, { excludeSegmentIds: excludedSegmentIds }));
         targets.push(...buildLeafConePathSnapTargets(leafMeta, { placementSurface: activePlacementSurface }));
 
         return targets;
@@ -289,12 +255,7 @@ export function BracePlacementController() {
         stage,
         start,
         activePlacementSurface,
-        supportState.trunks,
-        supportState.branches,
-        supportState.braces,
-        supportState.twigs,
-        supportState.sticks,
-        kickstandState.kickstands,
+        supportState,
         leafMeta,
     ]);
 
@@ -931,7 +892,7 @@ export function BracePlacementController() {
                 addBrace(brace);
 
                 pushSupportHistory({
-                    type: SUPPORT_ADD_BRACE,
+                    type: addAction('brace'),
                     payload: {
                         brace,
                         startKnot,
@@ -1005,7 +966,7 @@ export function BracePlacementController() {
             addBrace(brace);
 
             pushSupportHistory({
-                type: SUPPORT_ADD_BRACE,
+                type: addAction('brace'),
                 payload: {
                     brace,
                     startKnot,
@@ -1113,7 +1074,7 @@ export function BracePlacementController() {
                 addBrace(brace);
 
                 pushSupportHistory({
-                    type: SUPPORT_ADD_BRACE,
+                    type: addAction('brace'),
                     payload: {
                         brace,
                         startKnot,
@@ -1181,7 +1142,7 @@ export function BracePlacementController() {
             addBrace(brace);
 
             pushSupportHistory({
-                type: SUPPORT_ADD_BRACE,
+                type: addAction('brace'),
                 payload: {
                     brace,
                     startKnot,

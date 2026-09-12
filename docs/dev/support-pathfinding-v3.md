@@ -56,6 +56,10 @@ The main solver path is executed in this order:
 8. **Post-search simplification and straightening**
    - remove unnecessary joints
    - optionally attempt zero-joint or one-joint reductions
+   - reshape a surviving short horizontal step into a diagonal: drop the fold
+     joint, move the base under the joint above it, or swing that joint over
+     the base column, taking the first candidate that clears and passes the
+     angle gates. Rejections are reported in the debug log
 
 9. **Final validation**
    - ensure each chain segment is collision-free
@@ -126,7 +130,21 @@ $$
 
 If both are true, the support is returned with no routing joints.
 
-## Cone rescue math
+### Segment angle gates
+
+A segment's allowance is length-aware: up to 3 mm a segment may sit at the routing
+detour angle (60° from vertical), from 3 to 5 mm it tapers back to the configured
+angle, and longer spans tighten further at 3° per mm.
+
+That tightening is floored at the angle the app configures for routed trunks
+(`90 - grid.minRoutedTrunkAngleDeg`), so a span is never capped below the user's own
+limit. It used to floor at a fixed 15°, which capped any span over ~8 mm well below
+the configured angle; the router then had no legal diagonal to take a lateral offset
+with and satisfied it instead with a short ≤3 mm step (a "fold": a horizontal jog
+followed by a vertical drop). The first segment below the socket adds the socket-elbow
+allowance on top of this.
+
+### Cone rescue math
 
 The cone rescue system tries to keep the tip shape short and near-normal while still finding a usable socket.
 

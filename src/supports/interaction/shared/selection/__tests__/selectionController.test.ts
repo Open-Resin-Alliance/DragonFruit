@@ -52,6 +52,7 @@ function seedTrunks(...ids: string[]) {
         sticks: {},
         braces: {},
         anchors: {},
+        kickstands: {},
         knots: {},
         selectedId: null,
         hoveredId: null,

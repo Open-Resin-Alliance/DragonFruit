@@ -21,9 +21,9 @@ import { buildAnchorData } from '../../SupportTypes/Anchor/anchorBuilder';
 import { buildLeafData } from '../../SupportTypes/Leaf/leafBuilder';
 import { perfMark, perfMeasureWithSpike } from '../Pathfinding/pathfindingPerf';
 import {
-    ANCHOR_HEIGHT_THRESHOLD_MM,
     MAX_AUTO_LEAF_SPAN_MM,
 } from '../../autoSupport/constants';
+import { selectTypeForPlacement } from '../../supportTypeRegistry';
 
 /**
  * Matches `validateAndCullOrphans`' post-thickening trunk check
@@ -496,8 +496,9 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
         trunkGridMap.set(trunkKey, { trunkId: trunk.id, trunk, root });
     }
 
-    // Near-plate contacts get a minimal anchor support instead of trunk/branch
-    if (tipPos.z < ANCHOR_HEIGHT_THRESHOLD_MM) {
+    // Which type a tip height calls for is declared; anchor claims the
+    // near-plate band, trunk everything above it.
+    if (selectTypeForPlacement('tipHeight', tipPos.z) === 'anchor') {
         const { anchor, supportData } = buildAnchorData({ tipPos, tipNormal, modelId, mesh });
         // The cone body spans contact disk → socket and must never dip below
         // the root joint: a tip lower than the root (or an over-long cone on a

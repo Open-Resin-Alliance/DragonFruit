@@ -2,7 +2,6 @@ import React from 'react';
 import * as THREE from 'three';
 import { SupportBuilder } from '@/supports/rendering/SupportBuilder';
 import { ANATOMY_CONFIG } from '../../AnatomyPreviewConfig';
-import type { SupportKind } from '../../../supportKindState';
 import { applyInitialPattern } from '@/supports/autoBracing/initialPattern';
 import { applyRepeatingPattern } from '@/supports/autoBracing/repeatingPattern';
 import { runZigZagChain } from '@/supports/autoBracing/zigzagChain';
@@ -11,7 +10,6 @@ import type { AutoBracingPattern } from '@/supports/autoBracing/settings';
 
 interface BracePreviewProps {
     settings: any;
-    activeKind: SupportKind;
     previewState: any;
 }
 
@@ -110,11 +108,8 @@ function buildTrunkData(
  */
 export function BracePreview({
     settings,
-    activeKind,
     previewState,
 }: BracePreviewProps) {
-    if (activeKind !== 'stick') return null;
-
     const autoBracing = settings.autoBracing ?? {};
     const braceDiameter = autoBracing.braceDiameterMm ?? 0.7;
     const initialPattern: string = autoBracing.initialPattern ?? 'singleDiagonal';

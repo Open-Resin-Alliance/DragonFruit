@@ -1,9 +1,14 @@
 import React from 'react';
 import { flushSync } from 'react-dom';
+import type { SupportTypeId } from '../supportTypeRegistry';
 
 const EVENT_NAME = 'dragonfruit-part-drag-update';
 
-export type PartDragPreviewKind = 'trunk' | 'branch' | 'twig' | 'stick' | 'kickstand';
+/**
+ * Any support type can have a drag preview. This was a five-name union that
+ * omitted anchors, so an anchor drag had no way to name its own preview.
+ */
+export type PartDragPreviewKind = SupportTypeId;
 
 export interface PartDragPreviewPayload<TSupport = unknown> {
   kind: PartDragPreviewKind;

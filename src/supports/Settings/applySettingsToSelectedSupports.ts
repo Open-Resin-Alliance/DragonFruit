@@ -7,6 +7,7 @@ import {
     resolveEditableSupportTarget,
     type EditableSupportTarget,
 } from '@/supports/state';
+import { EDITABLE_SUPPORT_TYPES } from '@/supports/supportTypeRegistry';
 import type { SupportSettings } from './types';
 
 export function applySettingsToSelectedSupports(settings: SupportSettings): void {
@@ -21,16 +22,15 @@ export function applySettingsToSelectedSupports(settings: SupportSettings): void
     beginSupportStateBatch();
     try {
         for (const id of idsToApply) {
-            let target: EditableSupportTarget | null = null;
-            if (snapshot.trunks[id]) {
-                target = { kind: 'trunk', id };
-            } else if (snapshot.branches[id]) {
-                target = { kind: 'branch', id };
-            } else if (snapshot.leaves[id]) {
-                target = { kind: 'leaf', id };
-            } else {
-                target = resolveEditableSupportTarget(id, snapshot.selectedCategory ?? undefined);
-            }
+            // A selected id may be an editable entity directly. The resolver
+            // only takes that path when the snapshot's category matches, which
+            // it cannot for every id in a multi-selection.
+            const direct = EDITABLE_SUPPORT_TYPES.find(
+                (descriptor) => (snapshot[descriptor.location.key] as Record<string, unknown>)[id],
+            );
+            const target: EditableSupportTarget | null = direct
+                ? { kind: direct.id, id }
+                : resolveEditableSupportTarget(id, snapshot.selectedCategory ?? undefined);
             if (target) {
                 applySettingsToSupportTarget(target, settings);
             }

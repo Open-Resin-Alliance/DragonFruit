@@ -5,6 +5,8 @@ import type { SliceExportArtifact, SliceExportResult } from '@/features/slicing/
 import type { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
 import type { useSlicingManager } from '@/features/slicing/useSlicingManager';
 import type { useTransformManager } from '@/features/transform/useTransformManager';
+import { SupportInspectorPanel } from '@/supports/SupportInspectorPanel';
+import { Card, CardHeader } from '@/components/atoms/Card';
 
 type DebugStamp = { perfMs: number; epochMs: number };
 type Vec3Like = { x: number; y: number; z: number };
@@ -53,17 +55,7 @@ type TransformDebugStats = {
     lastPushApplied: boolean | null;
     lastAt: DebugStamp | null;
   };
-  supportCounts: {
-    trunks: number;
-    branches: number;
-    leaves: number;
-    twigs: number;
-    sticks: number;
-    braces: number;
-    roots: number;
-    knots: number;
-    kickstands: number;
-  };
+  supportCounts: Record<string, number>;
 };
 
 type SupportDebugStats = {
@@ -93,6 +85,10 @@ type SupportDebugStats = {
   externalHoverModelId: string | null;
   effectiveHoverModelId: string | null;
   sceneHoveredSupportId: string | null;
+  /** modelId of the hovered support -- the model<->support link the import bridge establishes. */
+  hoveredSupportModelId: string | null;
+  /** Whether that owner is the active model; null when nothing resolvable is hovered. */
+  hoveredSupportOwnedByActiveModel: boolean | null;
   marqueeHoveredSupportId: string | null;
   rawHoveredCategory: string | null;
   rawHoveredId: string | null;
@@ -100,18 +96,9 @@ type SupportDebugStats = {
   hoveredIdForVisual: string | null;
 };
 
-type SupportEntityCounts = {
-  trunks: number;
-  branches: number;
-  leaves: number;
-  twigs: number;
-  sticks: number;
-  braces: number;
-  roots: number;
-  knots: number;
-  kickstands: number;
-};
+/** One count per collection, derived so a new support type is counted too. */
 
+/** Debug rows: the support types in registry order, then the primitives. */
 export type SharedPanelStackProps = {
   scene: ReturnType<typeof useSceneCollectionManager>;
   slicing: ReturnType<typeof useSlicingManager>;
@@ -129,7 +116,6 @@ export type SharedPanelStackProps = {
   displayActiveModelId: string | null;
   transformDebugStats: TransformDebugStats;
   supportDebugStats: SupportDebugStats;
-  activeSupportEntityCounts: SupportEntityCounts;
 
   formatDebugVec3: (v: THREE.Vector3 | null | undefined) => string;
   formatDebugVec3Like: (v: Vec3Like | null | undefined) => string;
@@ -171,7 +157,6 @@ export function SharedPanelStack({
   displayActiveModelId,
   transformDebugStats,
   supportDebugStats,
-  activeSupportEntityCounts,
   formatDebugVec3,
   formatDebugVec3Like,
   formatDebugNumber,
@@ -219,29 +204,29 @@ export function SharedPanelStack({
       )}
 
       {isTransformDebugOverlayOpen && (
-        <div
+        <Card
           key="transform-debug-overlay"
-          className="rounded-lg border p-2.5 font-mono text-[10px] leading-tight shadow-xl"
-          style={{
-            borderColor: 'var(--border-subtle)',
-            color: 'var(--text-strong)',
-            background: 'color-mix(in srgb, var(--surface-0), black 14%)',
-            fontSize: '10px',
-          }}
+          className="font-mono text-[10px] leading-tight"
+          style={{ color: 'var(--text-strong)', fontSize: '10px' }}
         >
-          <div className="mb-2 flex items-center justify-between">
-            <div className="text-xs font-semibold" style={{ fontFamily: 'var(--font-geist-mono)' }}>
-              {scene.mode === 'printing' ? 'Printing Debug Overlay' : scene.mode === 'support' ? 'Support Debug Overlay' : 'Transform Debug Overlay'}
-            </div>
-            <button
-              type="button"
-              className="rounded border px-2 py-0.5 text-[10px]"
-              style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
-              onClick={() => setIsTransformDebugOverlayOpen(false)}
-            >
-              Close
-            </button>
-          </div>
+          <CardHeader
+            left={(
+              <h3 className="text-xs font-semibold" style={{ fontFamily: 'var(--font-geist-mono)' }}>
+                {scene.mode === 'printing' ? 'Printing Debug Overlay' : scene.mode === 'support' ? 'Support Debug Overlay' : 'Transform Debug Overlay'}
+              </h3>
+            )}
+            right={(
+              <button
+                type="button"
+                className="rounded border px-2 py-0.5 text-[10px]"
+                style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
+                onClick={() => setIsTransformDebugOverlayOpen(false)}
+              >
+                Close
+              </button>
+            )}
+          />
+          <div className="px-2.5 pb-2.5">
 
           {scene.mode === 'printing' ? (
             <div className="grid grid-cols-2 gap-x-3 gap-y-1">
@@ -339,6 +324,12 @@ export function SharedPanelStack({
               <div>External hover model: {supportDebugStats.externalHoverModelId ?? 'none'}</div>
               <div>Effective hover model: {supportDebugStats.effectiveHoverModelId ?? 'none'}</div>
               <div>Scene hovered support: {supportDebugStats.sceneHoveredSupportId ?? 'none'}</div>
+              <div>
+                {'Hovered support owner: '}
+                {supportDebugStats.hoveredSupportModelId ?? 'none'}
+                {supportDebugStats.hoveredSupportOwnedByActiveModel === true ? ' (active model)' : null}
+                {supportDebugStats.hoveredSupportOwnedByActiveModel === false ? ' (OTHER MODEL)' : null}
+              </div>
               <div>Marquee hovered support: {supportDebugStats.marqueeHoveredSupportId ?? 'none'}</div>
               <div>Raw hovered category/id: {supportDebugStats.rawHoveredCategory ?? 'none'} / {supportDebugStats.rawHoveredId ?? 'none'}</div>
               <div>Visual hovered category/id: {supportDebugStats.hoveredCategoryForVisual ?? 'none'} / {supportDebugStats.hoveredIdForVisual ?? 'none'}</div>
@@ -374,20 +365,13 @@ export function SharedPanelStack({
             </>
           )}
 
-          <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
-            <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-              Support Counts (all / active model)
-            </div>
-            <div>Trunks: {transformDebugStats.supportCounts.trunks} / {activeSupportEntityCounts.trunks}</div>
-            <div>Branches: {transformDebugStats.supportCounts.branches} / {activeSupportEntityCounts.branches}</div>
-            <div>Leaves: {transformDebugStats.supportCounts.leaves} / {activeSupportEntityCounts.leaves}</div>
-            <div>Twigs: {transformDebugStats.supportCounts.twigs} / {activeSupportEntityCounts.twigs}</div>
-            <div>Sticks: {transformDebugStats.supportCounts.sticks} / {activeSupportEntityCounts.sticks}</div>
-            <div>Braces: {transformDebugStats.supportCounts.braces} / {activeSupportEntityCounts.braces}</div>
-            <div>Roots: {transformDebugStats.supportCounts.roots} / {activeSupportEntityCounts.roots}</div>
-            <div>Knots: {transformDebugStats.supportCounts.knots} / {activeSupportEntityCounts.knots}</div>
-            <div>Kickstands: {transformDebugStats.supportCounts.kickstands} / {activeSupportEntityCounts.kickstands}</div>
-          </div>
+          {/* Selection, connections and counts, read from the support store.
+              The page snapshot these used to come from is deliberately empty
+              in support mode, so every count read zero exactly here. */}
+          <SupportInspectorPanel
+            activeModelId={scene.activeModelId ?? null}
+            hoveredSupportId={supportDebugStats.hoveredIdForVisual ?? null}
+          />
 
           {scene.mode !== 'support' && scene.mode !== 'printing' && (
             <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
@@ -447,7 +431,8 @@ export function SharedPanelStack({
           <div className="mt-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
             Toggle: Ctrl+Shift+X
           </div>
-        </div>
+          </div>
+        </Card>
       )}
     </>
   );

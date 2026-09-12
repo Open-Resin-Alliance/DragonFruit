@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
+import { resetKickstandsInState } from '@/supports/state';
 import test from 'node:test';
 
 import { buildAutoBracedSnapshot } from '../autoBracing/autoBrace';
 import { createDefaultAutoBracingSettings } from '../autoBracing/settings';
-import { resetKickstandStore } from '../SupportTypes/Kickstand/kickstandStore';
 import type { Roots, SupportState, Trunk } from '../types';
 
 function createRoot(id: string, modelId: string, x: number, y = 0): Roots {
@@ -49,6 +49,7 @@ function createEmptySnapshot(): SupportState {
         sticks: {},
         braces: {},
         anchors: {},
+        kickstands: {},
         knots: {},
         selectedId: null,
         selectedCategory: null,
@@ -90,12 +91,15 @@ test('buildAutoBracedSnapshot replaces old braces and generates braces with vali
         diameter: 1.1,
     };
 
+    // Marked as auto-bracing's own: a run replaces what it generated. An
+    // unmarked brace is hand-placed and is now kept, which this test predates.
     snapshot.braces['brace-old'] = {
         id: 'brace-old',
         modelId,
         startKnotId: 'k-old-a',
         endKnotId: 'k-old-b',
         profile: { diameter: 0.9 },
+        generatedBy: 'autoBracing',
     };
 
     const settings = createDefaultAutoBracingSettings();
@@ -251,7 +255,7 @@ test('dense grid forests brace trunks together instead of spawning kickstands', 
     // A 10×10 tall trunk grid at 2.24 mm spacing (the auto-grid shape).
     // Voronoi cells can isolate single trunks; bracing must pair model-wide
     // so every trunk finds a second brace axis — zero kickstands, braces on.
-    resetKickstandStore();
+    resetKickstandsInState();
     const snapshot = createEmptySnapshot();
     const spacing = 2.24;
     for (let r = 0; r < 10; r++) {
@@ -267,7 +271,20 @@ test('dense grid forests brace trunks together instead of spawning kickstands', 
     const result = buildAutoBracedSnapshot(snapshot, createDefaultAutoBracingSettings());
 
     assert.ok(result.generatedBraceCount > 0, 'the grid gets braced');
-    assert.equal(Object.keys(result.kickstand.kickstands).length, 0,
+    assert.equal(Object.keys(result.snapshot.kickstands).length, 0,
         'every grid trunk finds two brace axes — no kickstands needed');
 });
+
+/** Three trunks in a row: the minimum auto-bracing will act on. */
+function buildLadder() {
+    const snapshot = createEmptySnapshot();
+    const modelId = 'model-a';
+    for (const [i, id] of ['a', 'b', 'c'].entries()) {
+        const root = createRoot(`root-${id}`, modelId, i * 2);
+        const trunk = createTrunk(`trunk-${id}`, modelId, root.id, `seg-${id}`, i * 2, 0, 10);
+        snapshot.roots[root.id] = root;
+        snapshot.trunks[trunk.id] = trunk;
+    }
+    return { snapshot, modelId };
+}
 

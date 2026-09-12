@@ -1,15 +1,16 @@
 import { useState, useEffect, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
-import { subscribe, getSnapshot, updateTrunk, updateBranch, updateTwig, updateStick, updateKnot } from '../../state';
-import { splitShaft, splitBranchShaft, splitTwigShaft, splitStickShaft } from './jointUtils';
+import { subscribe, getSnapshot, findShaftOwnerOfSegment, getSupportEntity, updateKnot } from '../../state';
+import { splitSupportShaft } from './jointUtils';
+import { getSupportTypeDescriptor, updateSupportEntity, type SupportEdge } from '../../supportTypeRegistry';
 import type { KnotSplitRemap } from '../Knot/knotUtils';
 import { SnapTarget } from '../../interaction/SnappingManager';
-import { Vec3 } from '../../types';
+import { Segment, Vec3 } from '../../types';
 import { useJointCreationState } from './jointCreationState';
 import { getJointDiameter } from '../../constants';
 import { usePlacementSnappingSession } from '../../interaction/shared/placement/snapping/usePlacementSnappingSession';
-import { buildPrimarySnapTargetIndex, buildSupportPathSnapTargets } from '../../interaction/shared/placement/snapping/supportPathTargets';
+import { buildPrimarySnapTargetIndex, SHAFTED_SNAP_TYPES, buildSupportPathSnapTargets } from '../../interaction/shared/placement/snapping/supportPathTargets';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 
 /**
@@ -41,13 +42,7 @@ export function useJointCreation() {
     
     // Pre-calculate all snap targets (memoized) - includes trunks/branches/twigs/sticks
     const allTargets = useMemo(() => {
-        return buildSupportPathSnapTargets(supportState, {
-            includeTrunks: true,
-            includeBranches: true,
-            includeBraces: false,
-            includeTwigs: true,
-            includeSticks: true,
-        });
+        return buildSupportPathSnapTargets(supportState, { snapTypes: SHAFTED_SNAP_TYPES });
     }, [supportState]);
 
     const targetById = useMemo(() => {
@@ -91,35 +86,12 @@ export function useJointCreation() {
                  normal: { x: normal.x, y: normal.y, z: normal.z }
              });
              
-             // Resolve which parent (trunk/branch/twig/stick) owns this segment.
-             // We keep the existing target shape by storing the parent id in `trunkId`.
+             // Which support owns this segment, across every shafted type.
+             // The target shape keeps the owner's id in `trunkId`.
              const segmentId = result.targetId;
              if (segmentId) {
-                 const trunks = Object.values(supportState.trunks);
-                 const trunk = trunks.find(t => t.segments.some(s => s.id === segmentId));
-                 if (trunk) {
-                     setTarget({ trunkId: trunk.id, segmentId, t: result.t });
-                 } else {
-                     const branches = Object.values(supportState.branches);
-                     const branch = branches.find(b => b.segments.some(s => s.id === segmentId));
-                     if (branch) {
-                         setTarget({ trunkId: branch.id, segmentId, t: result.t });
-                     } else {
-                         const twigs = Object.values(supportState.twigs);
-                         const twig = twigs.find(tg => tg.segments.some(s => s.id === segmentId));
-                         if (twig) {
-                             setTarget({ trunkId: twig.id, segmentId, t: result.t });
-                         } else {
-                             const sticks = Object.values(supportState.sticks);
-                             const stick = sticks.find(st => st.segments.some(s => s.id === segmentId));
-                             if (stick) {
-                                 setTarget({ trunkId: stick.id, segmentId, t: result.t });
-                             } else {
-                                 setTarget(null);
-                             }
-                         }
-                     }
-                 }
+                 const owner = findShaftOwnerOfSegment(segmentId);
+                 setTarget(owner ? { trunkId: owner.id, segmentId, t: result.t } : null);
              }
         } else {
             if (preview !== null) setPreview(null);
@@ -137,63 +109,34 @@ export function useJointCreation() {
                 const beforeSnapshot = captureSupportEditSnapshot();
                 const state = getSnapshot();
                 
-                // Try to find in trunks first
-                const trunks = Object.values(state.trunks);
-                const trunk = trunks.find(t => t.id === target.trunkId);
-                if (trunk) {
-                    const root = state.roots[trunk.rootId];
-                    const { trunk: newTrunk, knotRemaps } = splitShaft(trunk, target.segmentId, preview.pos, target.t, root, state.knots);
-                    applyKnotSplitRemaps(knotRemaps);
-                    updateTrunk(newTrunk);
-                    pushSupportEditHistory('Create trunk joint', beforeSnapshot, captureSupportEditSnapshot());
-                    console.log('[V2] Joint created on trunk:', trunk.id);
-                    
-                    e.stopPropagation(); 
-                    e.preventDefault();
-                    return;
-                }
+                // Which support owns the target segment, then split it.
+                const owner = findShaftOwnerOfSegment(target.segmentId);
+                const entity = owner ? getSupportEntity(owner.typeId, owner.id) : null;
+                if (owner && entity) {
+                    const descriptor = getSupportTypeDescriptor(owner.typeId);
+                    const linked = entity as { rootId?: string; parentKnotId?: string; hostKnotId?: string };
+                    const knotField = descriptor.edges.find(
+                        (edge: SupportEdge) => edge.to === 'knots' && edge.ownership === 'hostedBy',
+                    )?.field as keyof typeof linked | undefined;
 
-                // If not a trunk, try branches
-                const branches = Object.values(state.branches);
-                const branch = branches.find(b => b.id === target.trunkId);
-                if (branch) {
-                    const knots = Object.values(state.knots);
-                    const parentKnot = knots.find(k => k.id === branch.parentKnotId);
-                    const { branch: newBranch, knotRemaps } = splitBranchShaft(branch, target.segmentId, preview.pos, target.t, parentKnot, state.knots);
-                    applyKnotSplitRemaps(knotRemaps);
-                    updateBranch(newBranch);
-                    pushSupportEditHistory('Create branch joint', beforeSnapshot, captureSupportEditSnapshot());
-                    console.log('[V2] Joint created on branch:', branch.id);
-                    
-                    e.stopPropagation(); 
-                    e.preventDefault();
-                    return;
-                }
+                    const { entity: split, knotRemaps } = splitSupportShaft(
+                        owner.typeId,
+                        entity as { segments: Segment[] },
+                        target.segmentId,
+                        preview.pos,
+                        target.t,
+                        {
+                            root: linked.rootId ? state.roots[linked.rootId] : undefined,
+                            hostKnot: knotField && typeof linked[knotField] === 'string'
+                                ? state.knots[linked[knotField] as string]
+                                : undefined,
+                        },
+                        state.knots,
+                    );
 
-                // If not a branch, try twigs
-                const twigs = Object.values(state.twigs);
-                const twig = twigs.find(tg => tg.id === target.trunkId);
-                if (twig) {
-                    const { twig: newTwig, knotRemaps } = splitTwigShaft(twig, target.segmentId, preview.pos, target.t, state.knots);
                     applyKnotSplitRemaps(knotRemaps);
-                    updateTwig(newTwig);
-                    pushSupportEditHistory('Create twig joint', beforeSnapshot, captureSupportEditSnapshot());
-                    console.log('[V2] Joint created on twig:', twig.id);
-
-                    e.stopPropagation();
-                    e.preventDefault();
-                    return;
-                }
-
-                // If not a twig, try sticks
-                const sticks = Object.values(state.sticks);
-                const stick = sticks.find(st => st.id === target.trunkId);
-                if (stick) {
-                    const { stick: newStick, knotRemaps } = splitStickShaft(stick, target.segmentId, preview.pos, target.t, state.knots);
-                    applyKnotSplitRemaps(knotRemaps);
-                    updateStick(newStick);
-                    pushSupportEditHistory('Create stick joint', beforeSnapshot, captureSupportEditSnapshot());
-                    console.log('[V2] Joint created on stick:', stick.id);
+                    updateSupportEntity(owner.typeId, split);
+                    pushSupportEditHistory(`Create ${owner.typeId} joint`, beforeSnapshot, captureSupportEditSnapshot());
 
                     e.stopPropagation();
                     e.preventDefault();

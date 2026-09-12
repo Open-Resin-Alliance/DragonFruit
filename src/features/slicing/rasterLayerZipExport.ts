@@ -8,7 +8,7 @@ import {
   type PngCompressionStrategy,
 } from '@/components/settings/performancePreferences';
 import { getSnapshot as getSupportSnapshot } from '@/supports/state';
-import { getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
+import { SUPPORT_TYPES } from '@/supports/supportTypeRegistry';
 import { getRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
 import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
 import { generateChamferedBase } from '@/supports/Rafts/Crenelated/geometry/generateChamferedBase';
@@ -17,11 +17,11 @@ import { generateCrenelatedWallManual } from '@/supports/Rafts/Crenelated/geomet
 import { generateUnionedLineRaftMesh } from '@/supports/Rafts/Crenelated/geometry/generateUnionedLineRaftMesh';
 import { generateChamferedBeam } from '@/supports/Rafts/Crenelated/geometry/generateChamferedBeam';
 import { buildLineRaftEdgePairs } from '@/supports/Rafts/Crenelated/geometry/buildLineRaftEdgePairs';
-import type { ContactDisk } from '@/supports/types';
+import type { ContactDisk, Segment, SupportState, Vec3 } from '@/supports/types';
 import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness, getDiskCenter, getDiskRotation } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
 import { getBezierPointAtT } from '@/supports/Curves/BezierUtils';
-import { getTrunkSegmentEndpoints, getBranchSegmentEndpoints } from '@/supports/SupportPrimitives/Knot/knotUtils';
+import { resolveSegmentEndpoints } from '@/supports/SupportPrimitives/Knot/segmentEndpoints';
 import { resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { JOINT_DIAMETER_OFFSET_MM } from '@/supports/constants';
@@ -663,15 +663,6 @@ function appendJointSphere(
   geom.dispose();
 }
 
-function getDiskTipCenter(disk: ContactDisk): THREE.Vector3 {
-  const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile);
-  return new THREE.Vector3(
-    disk.pos.x + disk.surfaceNormal.x * thickness,
-    disk.pos.y + disk.surfaceNormal.y * thickness,
-    disk.pos.z + disk.surfaceNormal.z * thickness,
-  );
-}
-
 type SupportSliceTessellation = {
   shaftRadialSegments: number;
   bezierRadialSegments: number;
@@ -681,21 +672,30 @@ type SupportSliceTessellation = {
   jointRadialSegments: number;
 };
 
-function resolveSupportSliceTessellation(
+/** Exported for `local-only/slice-goldens/`; not part of the public surface. */
+export function resolveSupportSliceTessellation(
   supportState: ReturnType<typeof getSupportSnapshot>,
-  kickstandState: ReturnType<typeof getKickstandSnapshot>,
+  kickstandState: SupportState,
 ): SupportSliceTessellation {
+  // How much geometry the scene will emit, which decides the detail level.
   let segmentCount = 0;
-  for (const trunk of Object.values(supportState.trunks)) segmentCount += trunk.segments.length;
-  for (const branch of Object.values(supportState.branches)) segmentCount += branch.segments.length;
-  for (const twig of Object.values(supportState.twigs)) segmentCount += twig.segments.length;
-  for (const stick of Object.values(supportState.sticks)) segmentCount += stick.segments.length;
-  for (const kickstand of Object.values(kickstandState.kickstands)) segmentCount += kickstand.segments.length;
+  let shaftlessCount = 0;
+
+  for (const descriptor of SUPPORT_TYPES) {
+    const collection = supportState[descriptor.location.key] as unknown as Record<string, { segments?: unknown[] }>;
+    const entities = Object.values(collection ?? {});
+
+    if (!descriptor.hasSegments) {
+      // A leaf or brace is one primitive rather than a chain of them.
+      shaftlessCount += entities.length;
+      continue;
+    }
+    for (const entity of entities) segmentCount += entity.segments?.length ?? 0;
+  }
 
   const primitiveCount = segmentCount
     + Object.keys(supportState.roots).length
-    + Object.keys(supportState.leaves).length
-    + Object.keys(supportState.braces).length;
+    + shaftlessCount;
 
   if (segmentCount >= 20_000 || primitiveCount >= 24_000) {
     return {
@@ -849,7 +849,8 @@ function appendContactDiskPrimitive(
 }
 
 
-function buildSupportAndRaftWorldTriangles(
+/** Exported for `local-only/slice-goldens/`; not part of the public surface. */
+export function buildSupportAndRaftWorldTriangles(
   visibleModelIds: Set<string>,
   collector?: TriangleFloatCollector,
 ): WorldTriangle[] {
@@ -857,12 +858,11 @@ function buildSupportAndRaftWorldTriangles(
 
   const out: WorldTriangle[] = [];
   const supportState = getSupportSnapshot();
-  const kickstandState = getKickstandSnapshot();
   const sink: TriangleSink = collector ?? out;
   const raftSettings = getRaftSettings();
   const hasSolidBottom = raftSettings.bottomMode === 'solid';
   const raftThickness = raftSettings.thickness;
-  const tessellation = resolveSupportSliceTessellation(supportState, kickstandState);
+  const tessellation = resolveSupportSliceTessellation(supportState, supportState);
   const segmentTessellation = {
     shaftRadialSegments: tessellation.shaftRadialSegments,
     bezierRadialSegments: tessellation.bezierRadialSegments,
@@ -891,7 +891,7 @@ function buildSupportAndRaftWorldTriangles(
     }
   }
 
-  for (const kickstand of Object.values(kickstandState.kickstands)) {
+  for (const kickstand of Object.values(supportState.kickstands)) {
     if (!visibleModelIds.has(kickstand.modelId)) continue;
     visibleRootIds.add(kickstand.rootId);
     if (!rootModelKeyById.has(kickstand.rootId)) {
@@ -906,7 +906,7 @@ function buildSupportAndRaftWorldTriangles(
       rootTopRadiusByRootId.set(trunk.rootId, Math.max(0.05, firstDiameter! * 0.5));
     }
   }
-  for (const kickstand of Object.values(kickstandState.kickstands)) {
+  for (const kickstand of Object.values(supportState.kickstands)) {
     const firstDiameter = kickstand.segments[0]?.diameter;
     if (Number.isFinite(firstDiameter) && firstDiameter! > 0) {
       rootTopRadiusByRootId.set(kickstand.rootId, Math.max(0.05, firstDiameter! * 0.5));
@@ -945,272 +945,130 @@ function buildSupportAndRaftWorldTriangles(
     }
   }
 
-  for (const trunk of Object.values(supportState.trunks)) {
-    if (!visibleModelIds.has(trunk.modelId)) continue;
-    const root = supportState.roots[trunk.rootId];
-    if (!root) continue;
-
-    for (let i = 0; i < trunk.segments.length; i += 1) {
-      const seg = trunk.segments[i];
-      const endpoints = getTrunkSegmentEndpoints(trunk, seg, i, root);
-      if (!endpoints) continue;
-      appendSegmentPrimitive(
-        sink,
-        new THREE.Vector3(endpoints.start.x, endpoints.start.y, endpoints.start.z),
-        new THREE.Vector3(endpoints.end.x, endpoints.end.y, endpoints.end.z),
-        Math.max(0.05, seg.diameter),
-        seg as any,
-        segmentTessellation,
-      );
-
-      if (seg.bottomJoint && !seenJointIds.has(seg.bottomJoint.id)) {
-        seenJointIds.add(seg.bottomJoint.id);
-        appendJointSphere(
-          sink,
-          seg.bottomJoint.pos,
-          Math.max(0.001, seg.bottomJoint.diameter - JOINT_BLEND_MM),
-          tessellation.jointRadialSegments,
-        );
-      }
-      if (seg.topJoint && !seenJointIds.has(seg.topJoint.id)) {
-        seenJointIds.add(seg.topJoint.id);
-        appendJointSphere(
-          sink,
-          seg.topJoint.pos,
-          Math.max(0.001, seg.topJoint.diameter - JOINT_BLEND_MM),
-          tessellation.jointRadialSegments,
-        );
-      }
-    }
-
-    if (trunk.contactCone) {
-      appendContactConePrimitive(sink, trunk.contactCone as any, tessellation.contactConeRadialSegments, tipPenetrationMm);
-    }
-  }
-
-  for (const branch of Object.values(supportState.branches)) {
-    const modelId = branch.modelId;
-    if (!modelId || !visibleModelIds.has(modelId)) continue;
-    const parentKnot = supportState.knots[branch.parentKnotId];
-    if (!parentKnot) continue;
-
-    for (let i = 0; i < branch.segments.length; i += 1) {
-      const seg = branch.segments[i];
-      const endpoints = getBranchSegmentEndpoints(branch, seg, i, parentKnot);
-      if (!endpoints) continue;
-      appendSegmentPrimitive(
-        sink,
-        new THREE.Vector3(endpoints.start.x, endpoints.start.y, endpoints.start.z),
-        new THREE.Vector3(endpoints.end.x, endpoints.end.y, endpoints.end.z),
-        Math.max(0.05, seg.diameter),
-        seg as any,
-        segmentTessellation,
-      );
-
-      if (seg.bottomJoint && !seenJointIds.has(seg.bottomJoint.id)) {
-        seenJointIds.add(seg.bottomJoint.id);
-        appendJointSphere(
-          sink,
-          seg.bottomJoint.pos,
-          Math.max(0.001, seg.bottomJoint.diameter - JOINT_BLEND_MM),
-          tessellation.jointRadialSegments,
-        );
-      }
-      if (seg.topJoint && !seenJointIds.has(seg.topJoint.id)) {
-        seenJointIds.add(seg.topJoint.id);
-        appendJointSphere(
-          sink,
-          seg.topJoint.pos,
-          Math.max(0.001, seg.topJoint.diameter - JOINT_BLEND_MM),
-          tessellation.jointRadialSegments,
-        );
-      }
-    }
-
-    if (branch.contactCone) {
-      appendContactConePrimitive(sink, branch.contactCone as any, tessellation.contactConeRadialSegments, tipPenetrationMm);
-    }
-  }
-
-  for (const twig of Object.values(supportState.twigs)) {
-    if (!visibleModelIds.has(twig.modelId)) continue;
-    for (const seg of twig.segments) {
-      const start = seg.bottomJoint
-        ? new THREE.Vector3(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z)
-        : getDiskTipCenter(twig.contactDiskA);
-      const end = seg.topJoint
-        ? new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z)
-        : getDiskTipCenter(twig.contactDiskB);
-      appendSegmentPrimitive(sink, start, end, Math.max(0.05, seg.diameter), seg as any, segmentTessellation);
-
-      if (seg.bottomJoint && !seenJointIds.has(seg.bottomJoint.id)) {
-        seenJointIds.add(seg.bottomJoint.id);
-        appendJointSphere(
-          sink,
-          seg.bottomJoint.pos,
-          Math.max(0.001, seg.bottomJoint.diameter - JOINT_BLEND_MM),
-          tessellation.jointRadialSegments,
-        );
-      }
-      if (seg.topJoint && !seenJointIds.has(seg.topJoint.id)) {
-        seenJointIds.add(seg.topJoint.id);
-        appendJointSphere(
-          sink,
-          seg.topJoint.pos,
-          Math.max(0.001, seg.topJoint.diameter - JOINT_BLEND_MM),
-          tessellation.jointRadialSegments,
-        );
-      }
-    }
-    appendContactDiskPrimitive(sink, twig.contactDiskA, tessellation.contactConeRadialSegments, tipPenetrationMm);
-    appendContactDiskPrimitive(sink, twig.contactDiskB, tessellation.contactConeRadialSegments, tipPenetrationMm);
-  }
-
-  for (const stick of Object.values(supportState.sticks)) {
-    if (!visibleModelIds.has(stick.modelId)) continue;
-    for (const seg of stick.segments) {
-      const start = seg.bottomJoint
-        ? new THREE.Vector3(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z)
-        : new THREE.Vector3(...Object.values(getFinalSocketPosition(stick.contactConeA)) as [number, number, number]);
-      const end = seg.topJoint
-        ? new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z)
-        : new THREE.Vector3(...Object.values(getFinalSocketPosition(stick.contactConeB)) as [number, number, number]);
-      appendSegmentPrimitive(sink, start, end, Math.max(0.05, seg.diameter), seg as any, segmentTessellation);
-
-      if (seg.bottomJoint && !seenJointIds.has(seg.bottomJoint.id)) {
-        seenJointIds.add(seg.bottomJoint.id);
-        appendJointSphere(
-          sink,
-          seg.bottomJoint.pos,
-          Math.max(0.001, seg.bottomJoint.diameter - JOINT_BLEND_MM),
-          tessellation.jointRadialSegments,
-        );
-      }
-      if (seg.topJoint && !seenJointIds.has(seg.topJoint.id)) {
-        seenJointIds.add(seg.topJoint.id);
-        appendJointSphere(
-          sink,
-          seg.topJoint.pos,
-          Math.max(0.001, seg.topJoint.diameter - JOINT_BLEND_MM),
-          tessellation.jointRadialSegments,
-        );
-      }
-    }
-
-    appendContactConePrimitive(sink, stick.contactConeA as any, tessellation.contactConeRadialSegments, tipPenetrationMm);
-    appendContactConePrimitive(sink, stick.contactConeB as any, tessellation.contactConeRadialSegments, tipPenetrationMm);
-  }
-
-  for (const brace of Object.values(supportState.braces)) {
-    const modelId = brace.modelId;
-    if (!modelId || !visibleModelIds.has(modelId)) continue;
-    const startKnot = supportState.knots[brace.startKnotId];
-    const endKnot = supportState.knots[brace.endKnotId];
-    if (!startKnot || !endKnot) continue;
-    // Mirror renderer: derive visual diameter from host knot diameters, not raw profile.diameter.
-    const profileDiameter = Math.max(0.001, brace.profile?.diameter ?? 1);
-    const startHostDia = Math.max(0.05, (startKnot.diameter ?? (profileDiameter + 0.1)) - 0.1);
-    const endHostDia = Math.max(0.05, (endKnot.diameter ?? (profileDiameter + 0.1)) - 0.1);
-    const braceDiameter = (startHostDia + endHostDia) * 0.5;
-    appendSegmentPrimitive(
-      sink,
-      new THREE.Vector3(startKnot.pos.x, startKnot.pos.y, startKnot.pos.z),
-      new THREE.Vector3(endKnot.pos.x, endKnot.pos.y, endKnot.pos.z),
-      braceDiameter,
-      brace.curve as any,
-      segmentTessellation,
-    );
-  }
-
-  for (const leaf of Object.values(supportState.leaves)) {
-    const modelId = leaf.modelId;
-    if (!modelId || !visibleModelIds.has(modelId)) continue;
-    appendContactConePrimitive(sink, leaf.contactCone as any, tessellation.contactConeRadialSegments, tipPenetrationMm);
-  }
-
-  // Anchors carry their own root (they never appear in supportState.roots),
-  // so without this walk they vanish from every slice. Mirror AnchorRenderer:
-  // root frustum + joint sphere + contact cone.
-  for (const anchor of Object.values(supportState.anchors)) {
-    if (!visibleModelIds.has(anchor.modelId)) continue;
-
-    const baseRadius = Math.max(0.05, anchor.rootBaseDiameter * 0.5);
-    const topRadius = Math.max(0.05, anchor.rootTopDiameter * 0.5);
-    const base = new THREE.Vector3(anchor.rootPos.x, anchor.rootPos.y, anchor.rootPos.z);
-    const top = base.clone().add(new THREE.Vector3(0, 0, Math.max(0.01, anchor.rootHeight)));
-    const rootGeom = createFrustumGeometryBetween(base, top, baseRadius, topRadius, tessellation.rootRadialSegments);
-    if (rootGeom) {
-      appendGeometryTriangles(sink, rootGeom);
-      rootGeom.dispose();
-    }
-
+  /**
+   * Every support's root, shaft, joints and contacts, in registry order.
+   *
+   * One loop rather than several because `seenJointIds` deduplicates joint
+   * spheres across all types: a joint shared between a kickstand and the trunk
+   * it braces is emitted by whichever type reaches it first, so the iteration
+   * order is part of the output.
+   */
+  const emitJoint = (joint: { id: string; pos: Vec3; diameter: number } | undefined | null) => {
+    if (!joint || seenJointIds.has(joint.id)) return;
+    seenJointIds.add(joint.id);
     appendJointSphere(
       sink,
-      anchor.joint.pos,
-      Math.max(0.001, anchor.joint.diameter - JOINT_BLEND_MM),
+      joint.pos,
+      Math.max(0.001, joint.diameter - JOINT_BLEND_MM),
       tessellation.jointRadialSegments,
     );
-    appendContactConePrimitive(sink, anchor.contactCone, tessellation.contactConeRadialSegments, tipPenetrationMm);
-  }
+  };
 
-  for (const kickstand of Object.values(kickstandState.kickstands)) {
-    const modelId = kickstand.modelId;
-    if (!modelId || !visibleModelIds.has(modelId)) continue;
-    const root = kickstandState.roots[kickstand.rootId];
-    const hostKnot = kickstandState.knots[kickstand.hostKnotId];
-    if (!root || !hostKnot) continue;
+  for (const descriptor of SUPPORT_TYPES) {
+    const collection = supportState[descriptor.location.key] as unknown as Record<string, Record<string, unknown>>;
 
-    let currentStart = new THREE.Vector3(
-      root.transform.pos.x,
-      root.transform.pos.y,
-      root.transform.pos.z + root.diskHeight + root.coneHeight,
-    );
+    for (const entity of Object.values(collection ?? {})) {
+      const modelId = entity.modelId as string | undefined;
+      if (!modelId || !visibleModelIds.has(modelId)) continue;
 
-    for (const seg of kickstand.segments) {
-      const endPoint = seg.topJoint
-        ? new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z)
-        : new THREE.Vector3(hostKnot.pos.x, hostKnot.pos.y, hostKnot.pos.z);
-      appendSegmentPrimitive(sink, currentStart, endPoint, Math.max(0.05, seg.diameter), seg as any, segmentTessellation);
+      // The hosts an endpoint kind needs. A type declaring neither still
+      // resolves, because its segments carry both their own joints.
+      const root = descriptor.ownsRoot
+        ? supportState.roots[entity.rootId as string] ?? null
+        : null;
+      // Which field names the knot is declared by the edges, not assumed:
+      // trunks have none, branches use parentKnotId, kickstands hostKnotId,
+      // braces startKnotId and endKnotId.
+      const knotEdges = descriptor.edges.filter((edge) => edge.to === 'knots');
+      const knotAt = (position: number) => {
+        const edge = knotEdges[position];
+        return edge ? supportState.knots[entity[edge.field] as string] ?? null : null;
+      };
+      const hostKnot = knotAt(0);
 
-      if (seg.bottomJoint && !seenJointIds.has(seg.bottomJoint.id)) {
-        seenJointIds.add(seg.bottomJoint.id);
-        appendJointSphere(
+      // A type that owns a plate root or hangs from a knot cannot be placed
+      // without it; each old per-type loop skipped on this same condition.
+      if (descriptor.lower.kind === 'plateRoot' && !root) continue;
+      if (descriptor.lower.kind === 'knot' && !hostKnot) continue;
+
+      // An inline root belongs to the entity rather than to supportState.roots,
+      // so the shared root walk above never sees it.
+      if (descriptor.lower.kind === 'inlineRoot') {
+        const base = new THREE.Vector3(
+          (entity.rootPos as Vec3).x,
+          (entity.rootPos as Vec3).y,
+          (entity.rootPos as Vec3).z,
+        );
+        const top = base.clone().add(new THREE.Vector3(0, 0, Math.max(0.01, entity.rootHeight as number)));
+        const rootGeom = createFrustumGeometryBetween(
+          base,
+          top,
+          Math.max(0.05, (entity.rootBaseDiameter as number) * 0.5),
+          Math.max(0.05, (entity.rootTopDiameter as number) * 0.5),
+          tessellation.rootRadialSegments,
+        );
+        if (rootGeom) {
+          appendGeometryTriangles(sink, rootGeom);
+          rootGeom.dispose();
+        }
+        emitJoint(entity.joint as Parameters<typeof emitJoint>[0]);
+      }
+
+      const segments = (entity.segments as Segment[] | undefined) ?? [];
+      segments.forEach((seg, index) => {
+        const endpoints = resolveSegmentEndpoints(descriptor.id, entity as never, seg, index, { root, hostKnot });
+        if (!endpoints) return;
+
+        appendSegmentPrimitive(
           sink,
-          seg.bottomJoint.pos,
-          Math.max(0.001, seg.bottomJoint.diameter - JOINT_BLEND_MM),
-          tessellation.jointRadialSegments,
+          new THREE.Vector3(endpoints.start.x, endpoints.start.y, endpoints.start.z),
+          new THREE.Vector3(endpoints.end.x, endpoints.end.y, endpoints.end.z),
+          Math.max(0.05, seg.diameter),
+          seg as any,
+          segmentTessellation,
+        );
+
+        emitJoint(seg.bottomJoint);
+        emitJoint(seg.topJoint);
+      });
+
+      // A brace spans its two knots instead of carrying a shaft. Its diameter
+      // mirrors the renderer: derived from the host knots, not profile.diameter.
+      if (descriptor.lower.kind === 'knot' && descriptor.upper.kind === 'knot' && !descriptor.hasSegments) {
+        const endKnot = knotAt(1);
+        if (!hostKnot || !endKnot) continue;
+        const profileDiameter = Math.max(0.001, (entity.profile as { diameter?: number } | undefined)?.diameter ?? 1);
+        const startHostDia = Math.max(0.05, (hostKnot.diameter ?? (profileDiameter + 0.1)) - 0.1);
+        const endHostDia = Math.max(0.05, (endKnot.diameter ?? (profileDiameter + 0.1)) - 0.1);
+        appendSegmentPrimitive(
+          sink,
+          new THREE.Vector3(hostKnot.pos.x, hostKnot.pos.y, hostKnot.pos.z),
+          new THREE.Vector3(endKnot.pos.x, endKnot.pos.y, endKnot.pos.z),
+          (startHostDia + endHostDia) * 0.5,
+          entity.curve as any,
+          segmentTessellation,
         );
       }
-      if (seg.topJoint && !seenJointIds.has(seg.topJoint.id)) {
-        seenJointIds.add(seg.topJoint.id);
-        appendJointSphere(
-          sink,
-          seg.topJoint.pos,
-          Math.max(0.001, seg.topJoint.diameter - JOINT_BLEND_MM),
-          tessellation.jointRadialSegments,
-        );
-      }
 
-      currentStart = endPoint;
+      for (const field of descriptor.contactFields) {
+        const contact = entity[field];
+        if (!contact) continue;
+        const kind = field === descriptor.lower.field ? descriptor.lower.kind : descriptor.upper.kind;
+        if (kind === 'disk') {
+          appendContactDiskPrimitive(sink, contact as ContactDisk, tessellation.contactConeRadialSegments, tipPenetrationMm);
+        } else {
+          appendContactConePrimitive(sink, contact as any, tessellation.contactConeRadialSegments, tipPenetrationMm);
+        }
+      }
     }
   }
+
 
   // raftSettings already resolved at top of function; reuse it.
   const raft = raftSettings;
   if (raft.bottomMode !== 'off') {
     const rootsByModel = new Map<string, Array<{ x: number; y: number; r: number }>>();
     for (const root of Object.values(supportState.roots)) {
-      const rootVisibleByModel = visibleModelIds.has(root.modelId);
-      const rootVisibleByLink = visibleRootIds.has(root.id);
-      if (!rootVisibleByModel && !rootVisibleByLink) continue;
-
-      const modelKey = rootModelKeyById.get(root.id) ?? root.modelId ?? `__root_${root.id}`;
-      const arr = rootsByModel.get(modelKey) ?? [];
-      arr.push({ x: root.transform.pos.x, y: root.transform.pos.y, r: root.diameter * 0.5 });
-      rootsByModel.set(modelKey, arr);
-    }
-
-    for (const root of Object.values(kickstandState.roots)) {
       const rootVisibleByModel = visibleModelIds.has(root.modelId);
       const rootVisibleByLink = visibleRootIds.has(root.id);
       if (!rootVisibleByModel && !rootVisibleByLink) continue;

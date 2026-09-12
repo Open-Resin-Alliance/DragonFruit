@@ -7,8 +7,7 @@ import { RaftProxyMeshLayer } from '@/supports/RaftProxyMeshLayer';
 import RaftRenderer from '@/supports/Rafts/Crenelated/rendering/RaftRenderer';
 import LineRaftRenderer from '@/supports/Rafts/Crenelated/rendering/LineRaftRenderer';
 import { getSettings, subscribeToSettings } from '@/supports/Settings/state';
-import type { SupportData } from '@/supports/rendering';
-import type { BracePreviewData } from '@/supports/SupportTypes/Brace/bracePlacementState';
+import type { SupportPlacementPreviews } from '@/supports/rendering';
 export type ModelAttachedSupportLayerProps = {
   mode?: SupportMode;
   modelFilterId?: string | null;
@@ -46,11 +45,8 @@ export type ModelAttachedSupportLayerProps = {
   outOfBoundsMin?: THREE.Vector3 | null;
   outOfBoundsMax?: THREE.Vector3 | null;
   outOfBoundsStripeColor?: string;
-  trunkPlacementPreview?: SupportData | null;
-  branchPlacementPreview?: SupportData | null;
-  leafPlacementPreview?: SupportData | null;
-  bracePlacementPreview?: BracePreviewData | null;
-  kickstandPlacementPreview?: SupportData | null;
+  /** Live placement previews, keyed by type. Forwarded, never read here. */
+  placementPreviews?: SupportPlacementPreviews;
   /** When true, only show supports whose contact points touch the cavity mesh. */
   interiorView?: boolean;
   /** Cavity mesh geometry keyed by modelId, used for interior support filtering. */
@@ -98,11 +94,7 @@ export function ModelAttachedSupportLayer({
   outOfBoundsMin,
   outOfBoundsMax,
   outOfBoundsStripeColor,
-  trunkPlacementPreview = null,
-  branchPlacementPreview = null,
-  leafPlacementPreview = null,
-  bracePlacementPreview = null,
-  kickstandPlacementPreview = null,
+  placementPreviews,
   interiorView = false,
   cavityGeometryByModelId,
   modelWorldInverseById,
@@ -231,11 +223,7 @@ export function ModelAttachedSupportLayer({
             ghostOpacity={ghostOpacity}
             ghostRenderOrder={ghostRenderOrder}
             passive={passive}
-            trunkPlacementPreview={trunkPlacementPreview}
-            branchPlacementPreview={branchPlacementPreview}
-            leafPlacementPreview={leafPlacementPreview}
-            bracePlacementPreview={bracePlacementPreview}
-            kickstandPlacementPreview={kickstandPlacementPreview}
+            placementPreviews={placementPreviews}
             interiorView={interiorView}
             cavityGeometryByModelId={cavityGeometryByModelId}
             modelWorldInverseById={modelWorldInverseById}

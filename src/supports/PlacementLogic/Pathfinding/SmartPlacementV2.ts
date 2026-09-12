@@ -46,6 +46,7 @@ import {
     segmentAngleFromVerticalDeg,
     segmentSatisfiesLengthAwareMaxAngleFromVertical,
     segmentSatisfiesMaxAngleFromVertical,
+    SHORT_SPAN_DETOUR_MAX_LENGTH_MM,
 } from '../smartPlacementSearchUtils';
 
 // ---------- Types ----------
@@ -1928,6 +1929,27 @@ export function calculateSmartPlacementV2(
             + ROUTED_DETOUR_ANGLE_SLACK_DEG
             + (debugAutoTuneProfile?.maxSegmentAngleBonusDeg ?? 0),
     );
+    // The length-aware tightening keeps long spans upright, but it must not be
+    // stricter than the angle the app configures for routed trunks: capping a
+    // span over ~8mm well below that angle is what left the router moving
+    // laterally with a short horizontal step (a "fold") instead of a straight
+    // diagonal. Every gate that shapes the final chain floors at the configured
+    // angle, so a diagonal inside the user's own limit is always available.
+    const configuredRoutedAngleFromVerticalDeg = Math.max(15, 90 - minRoutedTrunkAngleDeg);
+    // One gate for the chain's own segments. The first segment may take the
+    // socket-elbow allowance (a short steep strut right under the tip is the
+    // shape slicers emit); every other segment uses the length-aware rule,
+    // floored at the configured angle so a straight diagonal is always usable.
+    const segmentSatisfiesChainAngle = (a: Vec3, b: Vec3, isFirstSegment: boolean): boolean => (
+        isFirstSegment
+            ? firstSegmentSatisfiesSocketElbowMaxAngle(a, b, maxSegmentAngleFromVerticalDeg)
+            : segmentSatisfiesLengthAwareMaxAngleFromVertical(
+                a,
+                b,
+                maxSegmentAngleFromVerticalDeg,
+                configuredRoutedAngleFromVerticalDeg,
+            )
+    );
     const minRoutingZSpanMm = MIN_ROUTING_Z_SPAN_MM * (debugAutoTuneProfile?.minRoutingZSpanScale ?? 1);
     // ROUTING_ANGLE_FROM_VERTICAL_DEG: tight A* budget (60°) — the pathfinder
     // should only take small lateral steps to clear local obstructions, not
@@ -2788,6 +2810,7 @@ export function calculateSmartPlacementV2(
                 clearance,
                 maxSegmentAngleFromVerticalDeg,
                 segmentBlockedBetween,
+                configuredRoutedAngleFromVerticalDeg,
             );
 
             // Zero-joint sweep: try a straight line to the current base, below
@@ -2813,7 +2836,7 @@ export function calculateSmartPlacementV2(
                     if (!segmentSatisfiesMaxAngleFromVertical(socketPos, _crt, ROUTING_ANGLE_FROM_VERTICAL_DEG)) return false;
                     if (rootsDiskBlockedAt(sc.x, sc.y)) return false;
                     if (segmentBlockedBetween(socketPos, _crt)) return false;
-                    if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(socketPos, _crt, maxSegmentAngleFromVerticalDeg)) return false;
+                    if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(socketPos, _crt, maxSegmentAngleFromVerticalDeg, configuredRoutedAngleFromVerticalDeg)) return false;
                     if (!_currentChainIsBetterThan([], _crt)) return false;
                     const _dxy0 = distanceXY(socketPos, _crt);
                     if (_dxy0 < _bestZeroDxy) {
@@ -2948,7 +2971,7 @@ export function calculateSmartPlacementV2(
                         if (_j.z >= socketPos.z - 0.001 || _j.z <= rootTopZ + 0.001) { _skipAngle++; continue; }
 
                         // Cheap angle gate before expensive SDF (seg1).
-                        if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(socketPos, _j, maxSegmentAngleFromVerticalDeg)) { _skipAngle++; continue; }
+                        if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(socketPos, _j, maxSegmentAngleFromVerticalDeg, configuredRoutedAngleFromVerticalDeg)) { _skipAngle++; continue; }
 
                         // socket → joint: evaluated once per joint, not once per base×joint.
                         if (segmentBlockedBetween(socketPos, _j)) { _skipSeg1++; continue; }
@@ -2958,7 +2981,7 @@ export function calculateSmartPlacementV2(
                             const _crt = _vb.crt;
 
                             // Cheap angle gate before expensive SDF (seg2).
-                            if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(_j, _crt, maxSegmentAngleFromVerticalDeg)) { _skipAngle++; continue; }
+                            if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(_j, _crt, maxSegmentAngleFromVerticalDeg, configuredRoutedAngleFromVerticalDeg)) { _skipAngle++; continue; }
 
                             // joint → rootTop
                             if (segmentBlockedBetween(_j, _crt)) { _skipSeg2++; continue; }
@@ -3040,7 +3063,7 @@ export function calculateSmartPlacementV2(
                             if (!_rootsFitAt(_pb.x, _pb.y)) continue;
                             const _pcrt: Vec3 = { x: _pb.x, y: _pb.y, z: rootTopZ };
                             if (segmentBlockedBetween(_jFixed, _pcrt)) continue;
-                            if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(_jFixed, _pcrt, maxSegmentAngleFromVerticalDeg)) continue;
+                            if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(_jFixed, _pcrt, maxSegmentAngleFromVerticalDeg, configuredRoutedAngleFromVerticalDeg)) continue;
                             const _pdxy = distanceXY({ x: _pb.x, y: _pb.y, z: 0 }, { x: _jFixed.x, y: _jFixed.y, z: 0 });
                             if (_pdxy < _bestPullDxy) {
                                 _bestPullDxy = _pdxy;
@@ -3123,10 +3146,10 @@ export function calculateSmartPlacementV2(
                                     // IMPORTANT: for fixed XY, lowering z2 increases vertical
                                     // drop on seg1b, so an angle failure at a higher z2 can
                                     // become valid at a lower z2. Keep scanning downward.
-                                    if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(_j1u, _j2c, maxSegmentAngleFromVerticalDeg)) continue;
+                                    if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(_j1u, _j2c, maxSegmentAngleFromVerticalDeg, configuredRoutedAngleFromVerticalDeg)) continue;
                                     // seg2: j2 → base (straight down)
                                     if (segmentBlockedBetween(_j2c, _crt2)) continue;
-                                    if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(_j2c, _crt2, maxSegmentAngleFromVerticalDeg)) break;
+                                    if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(_j2c, _crt2, maxSegmentAngleFromVerticalDeg, configuredRoutedAngleFromVerticalDeg)) break;
                                     const _dxy2 = distanceXY({ x: _j2xy.x, y: _j2xy.y, z: 0 }, { x: _j1u.x, y: _j1u.y, z: 0 });
                                     if (!_bestTJ || _dxy2 < _bestTJ.dxy || (_dxy2 === _bestTJ.dxy && _z2 > _bestTJ.j2.z)) {
                                         _bestTJ = { j2: _j2c, baseXY: { x: _j2xy.x, y: _j2xy.y }, dxy: _dxy2 };
@@ -3182,11 +3205,11 @@ export function calculateSmartPlacementV2(
                             const _jTry: Vec3 = { x: _jx, y: _jy, z: _zTry };
                             // socket → deepened joint
                             if (segmentBlockedBetween(socketPos, _jTry)) continue;
-                            if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(socketPos, _jTry, maxSegmentAngleFromVerticalDeg)) continue;
+                            if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(socketPos, _jTry, maxSegmentAngleFromVerticalDeg, configuredRoutedAngleFromVerticalDeg)) continue;
                             // deepened joint → rootTop
                             const _crtJ: Vec3 = { x: _jx, y: _jy, z: rootTopZ };
                             if (!rootsDiskBlockedAt(_jx, _jy) && !segmentBlockedBetween(_jTry, _crtJ)
-                                && segmentSatisfiesLengthAwareMaxAngleFromVertical(_jTry, _crtJ, maxSegmentAngleFromVerticalDeg)) {
+                                && segmentSatisfiesLengthAwareMaxAngleFromVertical(_jTry, _crtJ, maxSegmentAngleFromVerticalDeg, configuredRoutedAngleFromVerticalDeg)) {
                                 _bestZ = _zTry;
                                 // Update base XY too so seg2 stays straight-down
                                 _finalBase = {
@@ -3221,7 +3244,7 @@ export function calculateSmartPlacementV2(
                         ? _finalJoints[_finalJoints.length - 2]
                         : socketPos;
                     const _tdirect = _finalBase.rootTopTarget;
-                    if (segmentSatisfiesLengthAwareMaxAngleFromVertical(_tprev, _tdirect, maxSegmentAngleFromVerticalDeg)) {
+                    if (segmentSatisfiesLengthAwareMaxAngleFromVertical(_tprev, _tdirect, maxSegmentAngleFromVerticalDeg, configuredRoutedAngleFromVerticalDeg)) {
                         let _tcan = !segmentBlockedBetween(_tprev, _tdirect);
                         if (!_tcan) {
                             _tcan = !sdf.segmentBlocked(
@@ -3263,7 +3286,7 @@ export function calculateSmartPlacementV2(
             const _allSegs = [socketPos, ..._finalJoints, _finalRootTop];
             let _angleOk = true;
             for (let _si = 0; _si < _allSegs.length - 1; _si++) {
-                if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(_allSegs[_si], _allSegs[_si + 1], maxSegmentAngleFromVerticalDeg)) {
+                if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(_allSegs[_si], _allSegs[_si + 1], maxSegmentAngleFromVerticalDeg, configuredRoutedAngleFromVerticalDeg)) {
                     _angleOk = false; break;
                 }
             }
@@ -3540,6 +3563,7 @@ export function calculateSmartPlacementV2(
         clearance,
         maxSegmentAngleFromVerticalDeg,
         segmentBlockedBetween,
+        configuredRoutedAngleFromVerticalDeg,
     );
 
     // 7b. Path straightening — eliminate zigzag by finding a base position
@@ -3617,7 +3641,7 @@ export function calculateSmartPlacementV2(
 
             // Final angle gate: enforce length-aware tightened constraint before commit
             // so we never return a geometrically invalid support.
-            if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(socketPos, candRootTop, maxSegmentAngleFromVerticalDeg)) continue;
+            if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(socketPos, candRootTop, maxSegmentAngleFromVerticalDeg, configuredRoutedAngleFromVerticalDeg)) continue;
             if (!currentChainIsBetterThan([], candRootTop)) continue;
 
             // Winner — zero joints, straight support
@@ -3658,7 +3682,7 @@ export function calculateSmartPlacementV2(
                 if (!seg1Ok) continue;
 
                 const seg2Ok = !segmentBlockedBetween(oc.joint, candRootTop)
-                    && segmentSatisfiesLengthAwareMaxAngleFromVertical(oc.joint, candRootTop, maxSegmentAngleFromVerticalDeg);
+                    && segmentSatisfiesLengthAwareMaxAngleFromVertical(oc.joint, candRootTop, maxSegmentAngleFromVerticalDeg, configuredRoutedAngleFromVerticalDeg);
                 if (!seg2Ok) continue;
                 if (!currentChainIsBetterThan([oc.joint], candRootTop)) continue;
 
@@ -3679,7 +3703,7 @@ export function calculateSmartPlacementV2(
                             // seg2: deepened joint → rootTop
                             const _crt: Vec3 = { x: oc.baseXY.x, y: oc.baseXY.y, z: rootTopZ };
                             if (segmentBlockedBetween(_jTry, _crt)) continue;
-                            if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(_jTry, _crt, maxSegmentAngleFromVerticalDeg)) continue;
+                            if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(_jTry, _crt, maxSegmentAngleFromVerticalDeg, configuredRoutedAngleFromVerticalDeg)) continue;
                             _deepened.z = _zTry;
                         }
                         if (_deepened.z < _fineJoint.z) {
@@ -3723,7 +3747,7 @@ export function calculateSmartPlacementV2(
                     // seg2: deepened joint → rootTop
                     const _crtJ: Vec3 = { x: _jx, y: _jy, z: rootTopZ };
                     if (!rootsDiskBlockedAt(_jx, _jy) && !segmentBlockedBetween(_jTry, _crtJ)
-                        && segmentSatisfiesLengthAwareMaxAngleFromVertical(_jTry, _crtJ, maxSegmentAngleFromVerticalDeg)) {
+                        && segmentSatisfiesLengthAwareMaxAngleFromVertical(_jTry, _crtJ, maxSegmentAngleFromVerticalDeg, configuredRoutedAngleFromVerticalDeg)) {
                         _bestZ = _zTry;
                         finalBase = {
                             basePos: { x: _jx, y: _jy, z: 0 },
@@ -3757,7 +3781,7 @@ export function calculateSmartPlacementV2(
                 ? finalJoints[finalJoints.length - 2]
                 : socketPos;
             const _directTarget = finalBase.rootTopTarget;
-            if (segmentSatisfiesLengthAwareMaxAngleFromVertical(_prevPt, _directTarget, maxSegmentAngleFromVerticalDeg)) {
+            if (segmentSatisfiesLengthAwareMaxAngleFromVertical(_prevPt, _directTarget, maxSegmentAngleFromVerticalDeg, configuredRoutedAngleFromVerticalDeg)) {
                 // Remove only when the direct chord clears at FULL clearance.
                 // A relaxed retry (the previous 0.4x fallback) could drop the
                 // waypoint that keeps the chord clear of nearby geometry; the
@@ -3766,6 +3790,74 @@ export function calculateSmartPlacementV2(
                 if (!segmentBlockedBetween(_prevPt, _directTarget)) {
                     finalJoints = finalJoints.slice(0, -1);
                 }
+            }
+        }
+    }
+
+    // 7d. Fold cleanup: a short, near-horizontal segment between two longer ones
+    //    reads as a kink in the preview and carries almost nothing. It usually
+    //    exists because the descent line and the committed base column were
+    //    chosen independently: the route reaches a joint, then jogs sideways to
+    //    sit over the base. Try the reshapes that keep the chain's endpoints and
+    //    joint Z profile, and take the first whose segments clear at FULL
+    //    clearance and pass the same angle gates the final chain is validated
+    //    with (8b). Everything tried and rejected is reported in the debug log,
+    //    so a fold that survives the pass says what kept it.
+    const foldReport: string[] = [];
+    {
+        const chainRejection = (points: Vec3[]): string | null => {
+            for (let i = 0; i < points.length - 1; i++) {
+                const a = points[i]!;
+                const b = points[i + 1]!;
+                if (raycastSegmentBlockedBetween(a, b)) return `segment ${i} is blocked`;
+                const angleOk = segmentSatisfiesChainAngle(a, b, i === 0);
+                if (!angleOk) {
+                    return `segment ${i} sits at ${segmentAngleFromVerticalDeg(a, b).toFixed(0)}°, over its gate`;
+                }
+            }
+            return null;
+        };
+
+        const plan = planFoldReshape(finalJoints, {
+            baseXY: { x: finalBase.basePos.x, y: finalBase.basePos.y },
+            rootTopTarget: finalBase.rootTopTarget,
+        });
+
+        if (plan) {
+            const foldJoint = finalJoints[plan.foldEndIndex]!;
+            const upper = finalJoints[plan.foldEndIndex - 1]!;
+            foldReport.push(
+                `fold at joint ${plan.foldEndIndex} `
+                + `(${foldJoint.x.toFixed(2)},${foldJoint.y.toFixed(2)},${foldJoint.z.toFixed(2)}): `
+                + `${distance3D(upper, foldJoint).toFixed(2)}mm from the joint above at `
+                + `${segmentAngleFromVerticalDeg(upper, foldJoint).toFixed(0)}° from vertical`,
+            );
+
+            for (const candidate of plan.candidates) {
+                if (candidate.moveBase && rootsDiskBlockedAt(candidate.rootTop.x, candidate.rootTop.y)) {
+                    foldReport.push(`  ${candidate.name}: roots disk blocked`);
+                    continue;
+                }
+                const rejection = chainRejection([socketPos, ...candidate.joints, candidate.rootTop]);
+                if (rejection) {
+                    foldReport.push(`  ${candidate.name}: ${rejection}`);
+                    continue;
+                }
+
+                finalJoints = candidate.joints;
+                if (candidate.moveBase) {
+                    finalBase = {
+                        basePos: { x: candidate.rootTop.x, y: candidate.rootTop.y, z: 0 },
+                        rootTopTarget: candidate.rootTop,
+                        snapDistance: distanceXY(
+                            { x: candidate.rootTop.x, y: candidate.rootTop.y, z: 0 },
+                            unsnappedBottomPos,
+                        ),
+                        nodeKey: null,
+                    };
+                }
+                foldReport.push(`  ${candidate.name}: taken`);
+                break;
             }
         }
     }
@@ -3831,10 +3923,8 @@ export function calculateSmartPlacementV2(
 
         // The first segment below the socket may use the short steep
         // socket-elbow allowance; the rest of the chain uses the regular
-        // length-aware rule.
-        const segmentAngleOk = i === 0
-            ? firstSegmentSatisfiesSocketElbowMaxAngle(a, b, maxSegmentAngleFromVerticalDeg)
-            : segmentSatisfiesLengthAwareMaxAngleFromVertical(a, b, maxSegmentAngleFromVerticalDeg);
+        // length-aware rule, floored at the configured routed-trunk angle.
+        const segmentAngleOk = segmentSatisfiesChainAngle(a, b, i === 0);
         if (!segmentAngleOk) {
             const straightRescueFallback = buildStraightRescueFallback();
             if (straightRescueFallback) {
@@ -3900,7 +3990,8 @@ export function calculateSmartPlacementV2(
             `  simplifiedJoints: [${simplifiedJoints.map(p=>`(${p.x.toFixed(1)},${p.y.toFixed(1)},${p.z.toFixed(1)})`).join(' ')}]\n` +
             `  finalJoints: [${finalJoints.map(p=>`(${p.x.toFixed(1)},${p.y.toFixed(1)},${p.z.toFixed(1)})`).join(' ')}]\n` +
             `  base/rootTop: (${finalBase.basePos.x.toFixed(2)},${finalBase.basePos.y.toFixed(2)}) rootTopZ=${finalBase.rootTopTarget.z.toFixed(2)}\n` +
-            segmentLog.join('\n'),
+            segmentLog.join('\n') +
+            (foldReport.length ? `\n  fold cleanup:\n    ${foldReport.join('\n    ')}\n` : ''),
         );
     }
 
@@ -3932,6 +4023,76 @@ export function calculateSmartPlacementV2(
 
 // ---------- SDF-based joint simplification ----------
 
+/** How steep an interior segment has to be before it reads as a fold. */
+const FOLD_MIN_ANGLE_FROM_VERTICAL_DEG = 45;
+
+/**
+ * A "fold": a short, near-horizontal interior segment, the kink a route grows
+ * when the descent line and the committed base column were chosen
+ * independently. It carries almost nothing and reads as a mistake in the
+ * preview, so the placement tries to reshape it away.
+ *
+ * Returns the fold's end joint index and the reshapes to try, in the order
+ * they are worth trying. Which of them is *acceptable* is decided by the
+ * caller, which holds the clearance and angle gates.
+ */
+export interface FoldReshapeCandidate {
+    /** For the debug log, so a fold that survives says what was tried. */
+    name: string;
+    joints: Vec3[];
+    rootTop: Vec3;
+    /** True when the candidate moves the committed base, not just the joints. */
+    moveBase: boolean;
+}
+
+export interface FoldReshapePlan {
+    /** Index in `joints` of the joint the fold segment ends at. */
+    foldEndIndex: number;
+    candidates: FoldReshapeCandidate[];
+}
+
+export function planFoldReshape(
+    joints: Vec3[],
+    base: { baseXY: { x: number; y: number }; rootTopTarget: Vec3 },
+): FoldReshapePlan | null {
+    // Only interior segments qualify. The first segment has the socket-elbow
+    // allowance on purpose: a short steep strut right under the tip is the
+    // shape mainstream slicers emit, not a fold.
+    const foldEndIndex = joints.findIndex((joint, i) => i >= 1
+        && distance3D(joints[i - 1]!, joint) <= SHORT_SPAN_DETOUR_MAX_LENGTH_MM
+        && segmentAngleFromVerticalDeg(joints[i - 1]!, joint) >= FOLD_MIN_ANGLE_FROM_VERTICAL_DEG);
+    if (foldEndIndex < 1) return null;
+
+    const upper = joints[foldEndIndex - 1]!;
+    const baseRootTop = base.rootTopTarget;
+
+    return {
+        foldEndIndex,
+        candidates: [
+            {
+                name: 'drop the fold joint',
+                joints: joints.filter((_, idx) => idx !== foldEndIndex),
+                rootTop: baseRootTop,
+                moveBase: false,
+            },
+            {
+                name: `base under the joint above the fold (${upper.x.toFixed(2)},${upper.y.toFixed(2)})`,
+                joints: joints.slice(0, foldEndIndex),
+                rootTop: { x: upper.x, y: upper.y, z: baseRootTop.z },
+                moveBase: true,
+            },
+            {
+                name: 'swing that joint over the base column',
+                joints: joints.map((joint, idx) => (idx === foldEndIndex - 1
+                    ? { x: base.baseXY.x, y: base.baseXY.y, z: joint.z }
+                    : joint)),
+                rootTop: baseRootTop,
+                moveBase: false,
+            },
+        ],
+    };
+}
+
 /**
  * Removes unnecessary joints from the route using SDF collision checks.
  *
@@ -3960,6 +4121,7 @@ export function simplifyJointsSDF(
     clearance: number,
     maxAngleFromVerticalDeg: number,
     segmentBlockedBetween?: SegmentBlockedBetween,
+    floorMaxAngleFromVerticalDeg?: number,
 ): Vec3[] {
     if (routeJoints.length === 0) return routeJoints;
 
@@ -3993,7 +4155,7 @@ export function simplifyJointsSDF(
             }
 
             // Check angle constraint on the direct segment
-            if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(prev, next, maxAngleFromVerticalDeg)) {
+            if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(prev, next, maxAngleFromVerticalDeg, floorMaxAngleFromVerticalDeg)) {
                 continue; // Can't remove — angle too steep
             }
 
@@ -4036,7 +4198,7 @@ export function simplifyJointsSDF(
                     continue;
                 }
 
-                if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(start, end, maxAngleFromVerticalDeg)) {
+                if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(start, end, maxAngleFromVerticalDeg, floorMaxAngleFromVerticalDeg)) {
                     continue;
                 }
 

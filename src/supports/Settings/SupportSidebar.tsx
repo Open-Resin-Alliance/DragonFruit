@@ -51,9 +51,13 @@ import { shouldRunAutoBracingHotkey } from '../autoBracing/autoBracingHotkey';
 import { useActionActive } from '@/hotkeys/hotkeyStore';
 import { setAnatomyPreviewActiveSettingKey, subscribeToAnatomyPreviewState, getAnatomyPreviewState } from './AnatomyPreview/previewState';
 import {
+    DEFAULT_SUPPORT_KIND,
     getSupportKindSnapshot,
+    isSupportKind,
+    kindHas,
     setActiveSupportKind,
     subscribeToSupportKindState,
+    tabKindFor,
 } from './supportKindState';
 import {
     getRaftSettings,
@@ -94,13 +98,6 @@ const KIND_META: Record<SupportKind, { label: string; icon: typeof Pickaxe }> = 
 const OVERFLOW_COMPACT_KIND_SET = new Set<SupportKind>(['trunk', 'raft', 'grid', 'stick', 'auto']);
 const POPUP_PREVIEW_KIND_SET = new Set<SupportKind>(['trunk']);
 
-function normalizeTabKind(kind: SupportKind): SupportKind {
-    if (kind === 'branch' || kind === 'leaf' || kind === 'twig') {
-        return 'trunk';
-    }
-    return kind;
-}
-
 function hasMeaningfulSupportEditChange(
     before: SupportEditHistorySnapshot,
     after: SupportEditHistorySnapshot,
@@ -120,20 +117,9 @@ function hasMeaningfulSupportEditChange(
         hoveredCategory: 'none' as const,
     };
 
-    if (JSON.stringify(beforeSupport) !== JSON.stringify(afterSupport)) {
-        return true;
-    }
-
-    const beforeKickstand = {
-        ...before.kickstand,
-        selectedId: null,
-    };
-    const afterKickstand = {
-        ...after.kickstand,
-        selectedId: null,
-    };
-
-    return JSON.stringify(beforeKickstand) !== JSON.stringify(afterKickstand);
+    // Kickstands, their roots and their knots all live on SupportState, so
+    // this comparison covers them.
+    return JSON.stringify(beforeSupport) !== JSON.stringify(afterSupport);
 }
 
 function formatSupportKindLabel(kind: EditableSupportTarget['kind']): string {
@@ -197,7 +183,7 @@ export function SupportSidebar() {
     const supportKindState = React.useSyncExternalStore(subscribeToSupportKindState, getSupportKindSnapshot, getSupportKindSnapshot);
     const activeKind = supportKindState.kind;
     const useAdaptiveIconCompactDisplay = isAdaptiveConeAngle && activeKind === 'trunk';
-    const tabKind = normalizeTabKind(activeKind);
+    const tabKind = tabKindFor(activeKind);
     const activeKindMeta = KIND_META[activeKind];
     const raftSettings = React.useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
     const supportState = React.useSyncExternalStore(subscribeToSupportState, getSupportSnapshot, getSupportSnapshot);
@@ -206,9 +192,18 @@ export function SupportSidebar() {
     const curveSelection = getCurveSettingsSelection(supportState);
     const showCurvePage = curveSelection !== null;
     const selectedCategory = supportState.selectedCategory ?? undefined;
-    const editableTarget = React.useMemo(
+    // Keyed on what it resolves from, not on the whole snapshot: the target is
+    // a fresh object each call, so re-running it on every store write gives an
+    // effect that depends on it a new value every time.
+    const resolvedTarget = React.useMemo(
         () => resolveEditableSupportTarget(supportState.selectedId, selectedCategory),
-        [supportState, selectedCategory],
+        [supportState.selectedId, selectedCategory],
+    );
+    const editableTargetKey = resolvedTarget ? `${resolvedTarget.kind}:${resolvedTarget.id}` : null;
+    const editableTarget = React.useMemo(
+        () => resolvedTarget,
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- identity follows the key
+        [editableTargetKey],
     );
     const selectedSupportSettings = React.useMemo(() => {
         if (!editableTarget) return null;
@@ -437,8 +432,8 @@ export function SupportSidebar() {
             globalSettingsBeforeSupportEditRef.current = null;
         }
 
-        if (leavingSupportEdit && activeKind !== 'trunk') {
-            setActiveSupportKind('trunk');
+        if (leavingSupportEdit && activeKind !== DEFAULT_SUPPORT_KIND) {
+            setActiveSupportKind(DEFAULT_SUPPORT_KIND);
         }
     }, [editableTarget, commitPendingSettingsSession]);
 
@@ -494,7 +489,9 @@ export function SupportSidebar() {
             });
         }
 
-        if (selectionChanged && activeKind !== editableTarget.kind) {
+        // Not every editable type has a sidebar tool, so only follow the
+        // selection when one exists.
+        if (selectionChanged && activeKind !== editableTarget.kind && isSupportKind(editableTarget.kind)) {
             setActiveSupportKind(editableTarget.kind);
         }
 
@@ -843,7 +840,7 @@ export function SupportSidebar() {
                 </div>
             </div>
 
-            {(activeKind === 'trunk' || activeKind === 'branch' || activeKind === 'leaf') && (
+            {kindHas(activeKind, 'hasContactCone') && (
                 <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('tip.lengthMm')}>
                     <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title={_(msg`Contact Cone Length`)}>{_(msg`Contact Cone Length`)}</div>
                     <div className="relative">
@@ -859,7 +856,7 @@ export function SupportSidebar() {
                 </div>
             )}
 
-            {(activeKind === 'trunk' || activeKind === 'branch' || activeKind === 'leaf') && (
+            {kindHas(activeKind, 'hasContactCone') && (
                 <div className="space-y-1 min-w-0" {...fieldFocusProps('tip.coneAngleMode', () => setAnatomyPreviewActiveSettingKey('tip.coneAngleMode'), (e) => {
                     const next = e.relatedTarget as Node | null;
                     if (next && e.currentTarget.contains(next)) return;
@@ -917,7 +914,7 @@ export function SupportSidebar() {
                 </div>
             )}
 
-            {(activeKind === 'trunk' || activeKind === 'branch') && (
+            {kindHas(activeKind, 'hasShaft') && (
                 <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('shaft.diameterMm')}>
                     <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title={_(msg`Trunk Diameter`)}>{_(msg`Trunk Diameter`)}</div>
                     <div className="relative">
@@ -933,7 +930,7 @@ export function SupportSidebar() {
                 </div>
             )}
 
-            {activeKind === 'trunk' && (
+            {kindHas(activeKind, 'hasPlateRoot') && (
                 <>
                     <div className="h-px" style={{ background: 'var(--border-subtle)' }} />
 
@@ -1134,7 +1131,7 @@ export function SupportSidebar() {
         </div>
     );
 
-    const supportGeometryFields = shouldUseCompactTrunkLayout && activeKind === 'trunk'
+    const supportGeometryFields = shouldUseCompactTrunkLayout
         ? supportGeometryFieldsCompactTrunk
         : supportGeometryFieldsDefault;
 

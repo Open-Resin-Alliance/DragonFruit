@@ -83,13 +83,13 @@ r3f.useFrame = () => {};
 // Now import the controller and stores
 import { KickstandPlacementController } from '../SupportTypes/Kickstand/KickstandPlacementController';
 import { kickstandPlacementStore } from '../SupportTypes/Kickstand/kickstandPlacementState';
-import { getKickstandSnapshot, resetKickstandStore } from '../SupportTypes/Kickstand/kickstandStore';
-import { getSnapshot, resetStore } from '../state';
+import { readKickstands } from './helpers/kickstandFixture';
+import { getSnapshot, resetStore, resetKickstandsInState} from '../state';
 
 test('Kickstand click-commit tests', async (t) => {
   await t.test('succeeds on click-commit with valid preview', () => {
     resetStore();
-    resetKickstandStore();
+    resetKickstandsInState();
     kickstandPlacementStore.reset();
 
     // Render the controller to register event listeners
@@ -166,11 +166,11 @@ test('Kickstand click-commit tests', async (t) => {
     };
     window.dispatchEvent(clickEvent as any);
 
-    // Verify kickstand is added to kickstandStore and supportStore
-    const kickstandSnapshot = getKickstandSnapshot();
+    // Verify the kickstand and its primitives reach the store
+    const kickstandSnapshot = readKickstands();
     assert.ok(kickstandSnapshot.kickstands['kickstand-test-id'], 'Expected kickstand to be added');
-    assert.ok(kickstandSnapshot.roots['root-test-id'], 'Expected root to be added to kickstandStore');
-    assert.ok(kickstandSnapshot.knots['knot-test-id'], 'Expected knot to be added to kickstandStore');
+    assert.ok(kickstandSnapshot.roots['root-test-id'], 'Expected the root to be added');
+    assert.ok(kickstandSnapshot.knots['knot-test-id'], 'Expected the knot to be added');
 
     const supportSnapshot = getSnapshot();
     assert.ok(supportSnapshot.roots['root-test-id'], 'Expected root to be added to supportStore');
@@ -179,7 +179,7 @@ test('Kickstand click-commit tests', async (t) => {
 
   await t.test('aborts and does not commit on occupied preview (TOO_CLOSE_TO_EXISTING error)', () => {
     resetStore();
-    resetKickstandStore();
+    resetKickstandsInState();
     kickstandPlacementStore.reset();
 
     // Render the controller to register event listeners
@@ -258,13 +258,13 @@ test('Kickstand click-commit tests', async (t) => {
     window.dispatchEvent(clickEvent as any);
 
     // Verify kickstand was NOT added
-    const kickstandSnapshot = getKickstandSnapshot();
+    const kickstandSnapshot = readKickstands();
     assert.equal(kickstandSnapshot.kickstands['kickstand-test-id-2'], undefined, 'Expected kickstand NOT to be added');
   });
 
   await t.test('falls back to finding nearest unoccupied grid cell when target cell is occupied', () => {
     resetStore();
-    resetKickstandStore();
+    resetKickstandsInState();
     kickstandPlacementStore.reset();
 
     // Enable grid and set spacing to 2mm
@@ -388,7 +388,7 @@ test('Kickstand click-commit tests', async (t) => {
     window.dispatchEvent(clickEvent as any);
 
     // Verify kickstand was added
-    const kickstandSnapshot = getKickstandSnapshot();
+    const kickstandSnapshot = readKickstands();
     const kickstandIds = Object.keys(kickstandSnapshot.kickstands);
     assert.equal(kickstandIds.length, 1, 'Expected exactly one kickstand to be added');
     const addedKickstand = kickstandSnapshot.kickstands[kickstandIds[0]];

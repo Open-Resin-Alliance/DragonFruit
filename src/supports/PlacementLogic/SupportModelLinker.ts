@@ -1,93 +1,33 @@
-import type { SupportState } from '../types';
-import { setSnapshot } from '../state';
-import { getKickstandSnapshot, setKickstandSnapshot } from '../SupportTypes/Kickstand/kickstandStore';
-
-type SupportCollectionsState = Pick<
-    SupportState,
-    'roots' | 'trunks' | 'branches' | 'braces' | 'leaves' | 'twigs' | 'sticks'
->;
+import type { Segment, SupportState } from '../types';
+import { getSnapshot, setSnapshot } from '../state';
+import { getSupportTypeDescriptor, MODEL_ID_COLLECTION_KEYS, parseKnotHostId, SUPPORT_TYPES, type SupportCollectionKey } from '../supportTypeRegistry';
 
 /**
- * SupportModelLinker
- * 
- * This module handles the relationship between Supports and 3D Models.
- * It ensures that:
- * 1. We can efficiently query supports belonging to a specific model.
- * 2. We can clean up all supports when a model is deleted.
- * 
- * It isolates this logic from the global state store to keep things modular.
- */
+  * The relationship between supports and models: query a model's supports, and
+  * remove them when it is deleted. Both walks read MODEL_ID_COLLECTION_KEYS.
+  */
 
-interface ModelSupportIds {
-    roots: string[];
-    trunks: string[];
-    branches: string[];
-    braces: string[];
-    leaves: string[];
-    twigs: string[];
-    sticks: string[];
+/** Ids of a model's supports, one array per modelId-bearing collection. */
+export type ModelSupportIds = Record<SupportCollectionKey, string[]>;
+
+function emptyModelSupportIds(): ModelSupportIds {
+    const result = {} as ModelSupportIds;
+    for (const key of MODEL_ID_COLLECTION_KEYS) result[key] = [];
+    return result;
 }
 
-/**
- * Finds all support entity IDs associated with a given model ID.
- */
-export function getSupportsForModel(state: SupportCollectionsState, modelId: string): ModelSupportIds {
-    const result: ModelSupportIds = {
-        roots: [],
-        trunks: [],
-        branches: [],
-        braces: [],
-        leaves: [],
-        twigs: [],
-        sticks: [],
-    };
+/** Finds all support entity ids associated with a given model id. */
+export function getSupportsForModel(
+    state: Pick<SupportState, SupportCollectionKey>,
+    modelId: string,
+): ModelSupportIds {
+    const result = emptyModelSupportIds();
 
-    // Scan Roots
-    for (const [id, root] of Object.entries(state.roots)) {
-        if (root.modelId === modelId) {
-            result.roots.push(id);
-        }
-    }
-
-    // Scan Trunks
-    for (const [id, trunk] of Object.entries(state.trunks)) {
-        if (trunk.modelId === modelId) {
-            result.trunks.push(id);
-        }
-    }
-
-    // Scan Branches
-    for (const [id, branch] of Object.entries(state.branches)) {
-        if (branch.modelId === modelId) {
-            result.branches.push(id);
-        }
-    }
-
-    // Scan Braces
-    for (const [id, brace] of Object.entries(state.braces)) {
-        if (brace.modelId === modelId) {
-            result.braces.push(id);
-        }
-    }
-
-    // Scan Leaves
-    for (const [id, leaf] of Object.entries(state.leaves)) {
-        if (leaf.modelId === modelId) {
-            result.leaves.push(id);
-        }
-    }
-
-    // Scan Twigs
-    for (const [id, twig] of Object.entries(state.twigs)) {
-        if (twig.modelId === modelId) {
-            result.twigs.push(id);
-        }
-    }
-
-    // Scan Sticks
-    for (const [id, stick] of Object.entries(state.sticks)) {
-        if (stick.modelId === modelId) {
-            result.sticks.push(id);
+    for (const key of MODEL_ID_COLLECTION_KEYS) {
+        const record = state[key] as Record<string, { modelId?: string }> | undefined;
+        if (!record) continue;
+        for (const [id, entity] of Object.entries(record)) {
+            if (entity.modelId === modelId) result[key].push(id);
         }
     }
 
@@ -95,78 +35,109 @@ export function getSupportsForModel(state: SupportCollectionsState, modelId: str
 }
 
 /**
- * Orchestrates the deletion of all supports for a specific model.
- * 
- * NOTE: This calls mutations in the store directly. 
- * Ideally, this should generate a payload for a single atomic "REMOVE_MODEL_SUPPORTS" action,
- * but for now, we will iterate and call existing remove functions to reuse their cleanup logic (like clearing selection).
- * 
- * @returns Number of support entities removed.
+ * Which model a knot's parent shaft belongs to.
+ *
+ * `parentShaftId` names a SEGMENT on a shafted type -- that is what every knot
+ * on a real shaft carries. A type with no segments hangs its knots off a
+ * synthetic id built from its declared `segmentSelectionPrefix` instead, and
+ * that names the entity.
+ */
+export function modelIdOfParentShaft(
+    state: Pick<SupportState, SupportCollectionKey>,
+    parentShaftId: string,
+): string | null {
+    for (const descriptor of SUPPORT_TYPES) {
+        const record = state[descriptor.location.key as SupportCollectionKey] as
+            Record<string, { modelId?: string; segments?: Segment[] }> | undefined;
+        if (!record) continue;
+
+        // A declared prefix means the id that follows names the entity.
+        const prefix = descriptor.segmentSelectionPrefix;
+        if (prefix && parentShaftId.startsWith(prefix)) {
+            const modelId = record[parentShaftId.slice(prefix.length)]?.modelId;
+            if (modelId) return modelId;
+            continue;
+        }
+
+        // Otherwise it names one of the entity's segments. The bare entity id
+        // is accepted too: older snapshots and previews use it.
+        const direct = record[parentShaftId]?.modelId;
+        if (direct) return direct;
+
+        if (!descriptor.hasSegments) continue;
+        for (const entity of Object.values(record)) {
+            if (!entity.segments?.some((segment) => segment.id === parentShaftId)) continue;
+            return entity.modelId ?? null;
+        }
+    }
+    return null;
+}
+
+/** Segment ids owned by the entities being removed, for cascading knot removal. */
+function collectRemovedSegmentIds(
+    state: Pick<SupportState, SupportCollectionKey>,
+    removing: ModelSupportIds,
+): Set<string> {
+    const segmentIds = new Set<string>();
+
+    for (const key of MODEL_ID_COLLECTION_KEYS) {
+        const record = state[key] as Record<string, { segments?: Segment[] }> | undefined;
+        if (!record) continue;
+        for (const id of removing[key]) {
+            for (const segment of record[id]?.segments ?? []) segmentIds.add(segment.id);
+        }
+    }
+
+    // A type with no `segments` hangs its knots off a synthetic shaft id, built
+    // from the prefix it declares.
+    for (const descriptor of SUPPORT_TYPES) {
+        const prefix = descriptor.segmentSelectionPrefix;
+        if (!prefix) continue;
+        for (const id of removing[descriptor.location.key as SupportCollectionKey] ?? []) {
+            segmentIds.add(`${prefix}${id}`);
+        }
+    }
+
+    return segmentIds;
+}
+
+/**
+ * Removes every support belonging to `modelId`.
+ *
+ * @returns entities removed, excluding roots -- they cascade from shaft removals
+ * rather than counting as removals themselves.
  */
 export function deleteSupportsForModel(state: SupportState, modelId: string): number {
-    const ids = getSupportsForModel(state, modelId);
+    const removing = getSupportsForModel(state, modelId);
 
-    const kickstandSnapshot = getKickstandSnapshot();
-    const kickstandIdsToRemove = Object.values(kickstandSnapshot.kickstands)
-        .filter((kickstand) => kickstand.modelId === modelId)
-        .map((kickstand) => kickstand.id);
+    const hasAnything = MODEL_ID_COLLECTION_KEYS.some((key) => removing[key].length > 0);
+    if (!hasAnything) return 0;
 
-    const hasMainSupportEntities = ids.roots.length > 0
-        || ids.trunks.length > 0
-        || ids.branches.length > 0
-        || ids.braces.length > 0
-        || ids.leaves.length > 0
-        || ids.twigs.length > 0
-        || ids.sticks.length > 0;
+    const removingSets = {} as Record<SupportCollectionKey, Set<string>>;
+    for (const key of MODEL_ID_COLLECTION_KEYS) removingSets[key] = new Set(removing[key]);
 
-    if (!hasMainSupportEntities && kickstandIdsToRemove.length === 0) {
-        return 0;
-    }
+    const segmentsToRemove = collectRemovedSegmentIds(state, removing);
 
-    const rootsToRemove = new Set(ids.roots);
-    const trunksToRemove = new Set(ids.trunks);
-    const branchesToRemove = new Set(ids.branches);
-    const bracesToRemove = new Set(ids.braces);
-    const leavesToRemove = new Set(ids.leaves);
-    const twigsToRemove = new Set(ids.twigs);
-    const sticksToRemove = new Set(ids.sticks);
-
-    const segmentsToRemove = new Set<string>();
-    for (const trunkId of trunksToRemove) {
-        const trunk = state.trunks[trunkId];
-        if (!trunk) continue;
-        for (const segment of trunk.segments) segmentsToRemove.add(segment.id);
-    }
-    for (const branchId of branchesToRemove) {
-        const branch = state.branches[branchId];
-        if (!branch) continue;
-        for (const segment of branch.segments) segmentsToRemove.add(segment.id);
-    }
-    for (const twigId of twigsToRemove) {
-        const twig = state.twigs[twigId];
-        if (!twig) continue;
-        for (const segment of twig.segments) segmentsToRemove.add(segment.id);
-    }
-    for (const stickId of sticksToRemove) {
-        const stick = state.sticks[stickId];
-        if (!stick) continue;
-        for (const segment of stick.segments) segmentsToRemove.add(segment.id);
-    }
-    for (const braceId of bracesToRemove) {
-        const brace = state.braces[braceId];
-        if (!brace) continue;
-        segmentsToRemove.add(`braceSegment:${brace.id}`);
-    }
-
+    // A kickstand owns its root and host knot, so both go with it.
     const knotsToRemove = new Set<string>();
+    for (const kickstandId of removing.kickstands) {
+        const kickstand = state.kickstands[kickstandId];
+        if (!kickstand) continue;
+        removingSets.roots.add(kickstand.rootId);
+        knotsToRemove.add(kickstand.hostKnotId);
+    }
+
     for (const [knotId, knot] of Object.entries(state.knots)) {
         const parentShaftId = knot.parentShaftId;
         const removeByShaft = segmentsToRemove.has(parentShaftId);
-        const removeByLeafCone = parentShaftId.startsWith('leafCone:')
-            && leavesToRemove.has(parentShaftId.slice('leafCone:'.length));
-        const removeByBraceSegment = parentShaftId.startsWith('braceSegment:')
-            && bracesToRemove.has(parentShaftId.slice('braceSegment:'.length));
-        if (removeByShaft || removeByLeafCone || removeByBraceSegment) {
+        // A knot riding a pseudo-shaft goes when its host does. Derived, so a
+        // third pseudo-shaft type is covered without another `||`.
+        const host = parseKnotHostId(parentShaftId);
+        const hostCollection = host
+            ? removingSets[getSupportTypeDescriptor(host.typeId).location.key]
+            : undefined;
+        const removeByHost = !!host && !!hostCollection?.has(host.entityId);
+        if (removeByShaft || removeByHost) {
             knotsToRemove.add(knotId);
         }
     }
@@ -182,52 +153,27 @@ export function deleteSupportsForModel(state: SupportState, modelId: string): nu
 
     const nextState: SupportState = {
         ...state,
-        roots: filterRecord(state.roots, (id) => rootsToRemove.has(id)),
-        trunks: filterRecord(state.trunks, (id) => trunksToRemove.has(id)),
-        branches: filterRecord(state.branches, (id) => branchesToRemove.has(id)),
-        leaves: filterRecord(state.leaves, (id) => leavesToRemove.has(id)),
-        twigs: filterRecord(state.twigs, (id) => twigsToRemove.has(id)),
-        sticks: filterRecord(state.sticks, (id) => sticksToRemove.has(id)),
-        braces: filterRecord(state.braces, (id) => bracesToRemove.has(id)),
         knots: filterRecord(state.knots, (id) => knotsToRemove.has(id)),
         selectedId: null,
         selectedCategory: null,
         hoveredId: null,
     };
 
-    setSnapshot(nextState);
-
-    if (kickstandIdsToRemove.length > 0) {
-        const kickstandIdsSet = new Set(kickstandIdsToRemove);
-        const kickstandRootIdsToRemove = new Set<string>();
-        const kickstandKnotIdsToRemove = new Set<string>();
-
-        for (const kickstandId of kickstandIdsToRemove) {
-            const kickstand = kickstandSnapshot.kickstands[kickstandId];
-            if (!kickstand) continue;
-            kickstandRootIdsToRemove.add(kickstand.rootId);
-            kickstandKnotIdsToRemove.add(kickstand.hostKnotId);
-        }
-
-        setKickstandSnapshot({
-            kickstands: filterRecord(kickstandSnapshot.kickstands, (id) => kickstandIdsSet.has(id)),
-            roots: filterRecord(kickstandSnapshot.roots, (id) => kickstandRootIdsToRemove.has(id)),
-            knots: filterRecord(kickstandSnapshot.knots, (id) => kickstandKnotIdsToRemove.has(id)),
-            selectedId: null,
-        });
+    for (const key of MODEL_ID_COLLECTION_KEYS) {
+        (nextState as unknown as Record<string, unknown>)[key] = filterRecord(
+            state[key] as Record<string, unknown>,
+            (id) => removingSets[key].has(id),
+        );
     }
 
-    let removedCount = ids.trunks.length
-        + ids.branches.length
-        + ids.braces.length
-        + ids.leaves.length
-        + ids.twigs.length
-        + ids.sticks.length;
+    setSnapshot(nextState);
 
-    removedCount += kickstandIdsToRemove.length;
-
-    // Keep count semantics close to historical behavior, where root removals were
-    // typically cascaded from shaft removals (not counted as explicit removals).
+    let removedCount = 0;
+    for (const key of MODEL_ID_COLLECTION_KEYS) {
+        if (key === 'roots') continue;
+        removedCount += removing[key].length;
+    }
 
     return removedCount;
 }
+

@@ -3,7 +3,7 @@ import test from 'node:test';
 import * as THREE from 'three';
 
 import { getSnapshot, loadFromImportFormat, resetStore, transformAllSupportsForSingleModel, transformSupportsForModel } from '../state';
-import { getKickstandSnapshot } from '../SupportTypes/Kickstand/kickstandStore';
+import { readKickstands } from './helpers/kickstandFixture';
 import type { DragonfruitImportFormat } from '../types';
 
 function makeBaseData(): DragonfruitImportFormat {
@@ -132,7 +132,7 @@ test('transformSupportsForModel keeps support roots grounded during pure Z trans
   transformSupportsForModel('model-1', before, after);
 
   const snapshot = getSnapshot();
-  const kickstandSnapshot = getKickstandSnapshot();
+  const kickstandSnapshot = readKickstands();
 
   assert.equal(snapshot.roots['root-1']?.transform.pos.z, 0, 'Main support root should remain grounded on Z translation');
   assert.equal(snapshot.trunks['trunk-1']?.segments[0]?.topJoint?.pos.z, 15, 'Trunk top should follow model Z translation');

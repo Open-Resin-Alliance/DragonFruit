@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import { createPlacementStore } from '../../interaction/shared/placement/placementStore';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import type { Vec3 } from '../../types';
 import type { KickstandBuildResult, KickstandHostKind } from './types';
@@ -28,12 +29,7 @@ const initialState: KickstandPlacementState = {
     previewBuild: null,
 };
 
-let state: KickstandPlacementState = { ...initialState };
-const listeners = new Set<() => void>();
-
-function notify() {
-    listeners.forEach((listener) => listener());
-}
+const store = createPlacementStore(initialState);
 
 function vecEq(a: Vec3, b: Vec3): boolean {
     return a.x === b.x && a.y === b.y && a.z === b.z;
@@ -56,68 +52,45 @@ function targetEq(a: KickstandPlacementTarget | null, b: KickstandPlacementTarge
 }
 
 export const kickstandPlacementStore = {
-    subscribe(listener: () => void) {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-    },
-
-    getSnapshot(): KickstandPlacementState {
-        return state;
-    },
+    subscribe: store.subscribe,
+    getSnapshot: store.getSnapshot,
 
     setHotkeyActive(active: boolean) {
+        const state = store.read();
         if (state.hotkeyActive === active && (active || (!state.snapTarget && !state.previewData && !state.previewBuild))) {
             return;
         }
 
         if (!active) {
-            state = {
-                ...state,
-                hotkeyActive: false,
-                snapTarget: null,
-                previewData: null,
-                previewBuild: null,
-            };
-            notify();
+            store.write({ ...state, hotkeyActive: false, snapTarget: null, previewData: null, previewBuild: null });
             return;
         }
 
-        state = {
-            ...state,
-            hotkeyActive: true,
-        };
-        notify();
+        store.write({ ...state, hotkeyActive: true });
     },
 
     setPreview(target: KickstandPlacementTarget, build: KickstandBuildResult, previewData: SupportData) {
+        const state = store.read();
         if (targetEq(state.snapTarget, target)) return;
 
-        state = {
-            ...state,
-            snapTarget: target,
-            previewBuild: build,
-            previewData,
-        };
-        notify();
+        store.write({ ...state, snapTarget: target, previewBuild: build, previewData });
     },
 
     clearPreview() {
+        const state = store.read();
         if (!state.snapTarget && !state.previewBuild && !state.previewData) return;
-        state = {
+        store.write({
             ...state,
             snapTarget: null,
             previewBuild: null,
             previewData: null,
-        };
-        notify();
+        });
     },
 
+    // Not store.reset(): the hotkey survives a placement, so releasing a
+    // preview must not also release the mode.
     reset() {
-        state = {
-            ...initialState,
-            hotkeyActive: state.hotkeyActive,
-        };
-        notify();
+        store.write({ ...initialState, hotkeyActive: store.read().hotkeyActive });
     },
 };
 

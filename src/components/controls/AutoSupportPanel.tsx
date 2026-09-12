@@ -14,7 +14,7 @@ import { DETAIL_PRESET, STRUCTURE_PRESET, ANCHOR_PRESET } from '@/supports/Setti
 import type { SizingDebugInfo, AutoSupportSettings, ForestReport } from '@/supports/autoSupport';
 import { getSettings, updateAutoSupportSettings, subscribeToSettings, updateDebugSimpleSupportRender } from '@/supports/Settings/state';
 import { getSnapshot, setSnapshot } from '@/supports/state';
-import { getKickstandSnapshot, setKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
+import { SUPPORT_COLLECTION_KEYS, SUPPORT_TYPES, type SupportCollectionKey } from '@/supports/supportTypeRegistry';
 import type { Knot } from '@/supports/types';
 /** Set to true while auto-support is busy (scanning or placing).
  *  Page-level overlay reads this to show the "Generating Supports"
@@ -214,18 +214,14 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, onBefore
     if (!activeModelId) return;
     if (replace) {
       const snap = getSnapshot();
-      const next = {
-        ...snap,
-        trunks: { ...snap.trunks },
-        roots: { ...snap.roots },
-        branches: { ...snap.branches },
-        leaves: { ...snap.leaves },
-        anchors: { ...snap.anchors },
-        braces: { ...snap.braces },
-        knots: { ...snap.knots },
-        twigs: { ...snap.twigs },
-        sticks: { ...snap.sticks },
-      };
+      // Every collection copied, from the registry: a hand-written list left
+      // kickstands aliasing the live snapshot, so deleting from it mutated state.
+      const next = { ...snap };
+      for (const key of SUPPORT_COLLECTION_KEYS as readonly SupportCollectionKey[]) {
+        (next as unknown as Record<string, Record<string, unknown>>)[key] = {
+          ...(snap[key] as unknown as Record<string, unknown>),
+        };
+      }
       for (const id of Object.keys(snap.trunks)) {
         if (snap.trunks[id].modelId === activeModelId) {
           delete next.trunks[id];
@@ -267,16 +263,27 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, onBefore
       // Rebuild knots: keep those referenced by surviving entities (other
       // models' trunks/branches/braces/leaf cones) or by the kickstand store;
       // drop orphans left by this model's deleted supports.
+      //
+      // Every shaft still standing, across every type that has one.
       const survivingSegmentIds = new Set<string>();
-      for (const t of Object.values(next.trunks)) {
-        for (const s of t.segments) survivingSegmentIds.add(s.id);
+      for (const descriptor of SUPPORT_TYPES) {
+        const collection = next[descriptor.location.key] as unknown as Record<string, { id: string; segments?: { id: string }[] }>;
+        for (const entity of Object.values(collection ?? {})) {
+          // This model's own supports are being replaced, so their shafts do
+          // not survive -- `next` still holds the ones removed above only for
+          // collections cleaned later in this function.
+          if ((entity as { modelId?: string }).modelId === activeModelId) continue;
+          if (descriptor.segmentSelectionPrefix) {
+            survivingSegmentIds.add(`${descriptor.segmentSelectionPrefix}${entity.id}`);
+            continue;
+          }
+          for (const s of entity.segments ?? []) survivingSegmentIds.add(s.id);
+        }
       }
-      for (const b of Object.values(next.branches)) {
-        for (const s of b.segments) survivingSegmentIds.add(s.id);
-      }
-      for (const brace of Object.values(next.braces)) {
-        survivingSegmentIds.add(`braceSegment:${brace.id}`);
-      }
+      // A leaf's cone is addressable as a shaft too, but the prefix is not on
+      // the descriptor: leaf has no segments, so declaring it there changes how
+      // six other consumers treat leaves. Kept explicit until that is a
+      // deliberate change of its own.
       for (const l of Object.values(next.leaves)) {
         survivingSegmentIds.add(`leafCone:${l.id}`);
       }
@@ -284,36 +291,16 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, onBefore
       // kickstand store. They used to leak into the next run: stale roots
       // occupied grid nodes and their axes fed the axis-mixing, which
       // flipped a regenerated kickstand between the two sides of its axis.
-      {
-        const ks = getKickstandSnapshot();
-        const removedIds = new Set<string>();
-        for (const k of Object.values(ks.kickstands)) {
-          if (k.modelId === activeModelId) removedIds.add(k.id);
-        }
-        if (removedIds.size > 0) {
-          const kickstands: typeof ks.kickstands = {};
-          const roots: typeof ks.roots = {};
-          const knots: typeof ks.knots = {};
-          for (const [id, k] of Object.entries(ks.kickstands)) {
-            if (removedIds.has(id)) continue;
-            kickstands[id] = k;
-            const root = ks.roots[k.rootId];
-            if (root) roots[root.id] = root;
-            const knot = ks.knots[k.hostKnotId];
-            if (knot) knots[knot.id] = knot;
-          }
-          setKickstandSnapshot({
-            ...ks,
-            kickstands,
-            roots,
-            knots,
-            selectedId: ks.selectedId && !removedIds.has(ks.selectedId) ? ks.selectedId : null,
-          });
-        }
+      for (const kickstand of Object.values(next.kickstands)) {
+        if (kickstand.modelId !== activeModelId) continue;
+        // Delete the root and host knot too: writing back a filtered set left
+        // them behind, and stale roots occupy grid nodes on the next run.
+        delete next.kickstands[kickstand.id];
+        delete next.roots[kickstand.rootId];
+        delete next.knots[kickstand.hostKnotId];
       }
       const kickstandKnotIds = new Set<string>();
-      const kickstandSnap = getKickstandSnapshot();
-      for (const k of Object.values(kickstandSnap.kickstands)) {
+      for (const k of Object.values(next.kickstands)) {
         kickstandKnotIds.add(k.hostKnotId);
         for (const s of k.segments) survivingSegmentIds.add(s.id);
       }

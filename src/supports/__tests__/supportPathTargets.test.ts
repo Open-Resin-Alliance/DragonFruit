@@ -7,17 +7,10 @@ import {
 } from '../interaction/shared/placement/snapping/supportPathTargets';
 import { getFinalSocketPosition } from '../SupportPrimitives/ContactCone/contactConeUtils';
 import type { SupportState } from '../types';
+import { createEmptySupportCollections, type SupportCollectionKey } from '../supportTypeRegistry';
 
-function makeBaseState(): Pick<SupportState, 'trunks' | 'branches' | 'braces' | 'twigs' | 'sticks' | 'roots' | 'knots'> {
-    return {
-        trunks: {},
-        branches: {},
-        braces: {},
-        twigs: {},
-        sticks: {},
-        roots: {},
-        knots: {},
-    };
+function makeBaseState(): Pick<SupportState, SupportCollectionKey> {
+    return createEmptySupportCollections();
 }
 
 test('buildSupportPathSnapTargets uses the final trunk cone socket for the terminal shaft endpoint', () => {
@@ -60,7 +53,7 @@ test('buildSupportPathSnapTargets uses the final trunk cone socket for the termi
         },
     } as SupportState['trunks'][string];
 
-    const targets = buildSupportPathSnapTargets(state, { includeTrunks: true, includeBranches: false });
+    const targets = buildSupportPathSnapTargets(state, { snapTypes: ['trunk'] });
     const target = targets.find((entry) => entry.id === 'trunk-seg-1');
     assert.ok(target?.pathSegment);
 
@@ -104,7 +97,7 @@ test('buildSupportPathSnapTargets uses the final branch cone socket for the term
         },
     } as SupportState['branches'][string];
 
-    const targets = buildSupportPathSnapTargets(state, { includeTrunks: false, includeBranches: true });
+    const targets = buildSupportPathSnapTargets(state, { snapTypes: ['branch'] });
     const target = targets.find((entry) => entry.id === 'branch-seg-1');
     assert.ok(target?.pathSegment);
 
@@ -179,15 +172,13 @@ test('buildSupportPathSnapTargets filters interior targets by placement surface 
     } as SupportState['trunks'][string];
 
     const interiorTargets = buildSupportPathSnapTargets(state, {
-        includeTrunks: true,
-        includeBranches: false,
+        snapTypes: ['trunk'],
         placementSurface: 'interior',
     });
     assert.deepEqual(interiorTargets.map((target) => target.id), ['seg-interior']);
 
     const exteriorTargets = buildSupportPathSnapTargets(state, {
-        includeTrunks: true,
-        includeBranches: false,
+        snapTypes: ['trunk'],
         placementSurface: 'exterior',
     });
     assert.deepEqual(exteriorTargets.map((target) => target.id), ['seg-legacy-exterior']);

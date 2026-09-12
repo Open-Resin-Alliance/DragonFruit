@@ -12,32 +12,27 @@ import { buildLeafData } from './leafBuilder';
 import { getSettings } from '../../Settings/state';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import { resolveTwigDiameterAtSegmentT, twigJointDiameterForLocalDiameter } from '../Twig/twigTaper';
-import { SUPPORT_ADD_LEAF } from '../../history/actionTypes';
+import { addAction } from '../../history/actionTypes';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { v4 as uuidv4 } from 'uuid';
 import { isContactDiskHudInteractionActive, shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
 import { canResolveSupportPlacementBindingFromModifierState, getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByModifierState } from '../../interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
 import { usePlacementSnappingSession } from '../../interaction/shared/placement/snapping/usePlacementSnappingSession';
-import { buildKickstandPathSnapTargets, buildPrimarySnapTargetIndex, buildSupportPathSnapTargets } from '../../interaction/shared/placement/snapping/supportPathTargets';
-import { useKickstandStoreState } from '../Kickstand/kickstandStore';
+import { buildKickstandPathSnapTargets, buildPrimarySnapTargetIndex, ALL_SNAP_TYPES, buildSupportPathSnapTargets } from '../../interaction/shared/placement/snapping/supportPathTargets';
+import { getSupportTypeDescriptor, type SupportCollectionKey } from '../../supportTypeRegistry';
 import { projectPointToSnapTargetPath, projectRayToSnapTargetPath, selectNearestPathTarget } from '../../interaction/shared/placement/snapping/pathProjection';
 import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
 import { previewVecKey, previewNormalKey, quantizePreviewValue } from '../shared/previewSignature';
 import { getClipBounds } from '@/components/scene/SceneCanvas/clipBoundsStore';
 import { findClosestMeshToPoint, calculateSmoothedNormal } from '../../PlacementLogic/PlacementUtils';
+import { markPlacementSurface } from '../../PlacementLogic/placementSurface';
 
 interface ShaftHoverDetail {
     segmentId?: string | null;
     point?: Vec3 | null;
 }
 
-type PlacementSurface = 'interior' | 'exterior';
-
-function markContactPlacementSurface<T extends { placementSurface?: PlacementSurface } | undefined>(contact: T, surface?: PlacementSurface): T {
-    if (!contact || !surface) return contact;
-    return { ...contact, placementSurface: surface } as T;
-}
 
 // Pooled scratch objects — reused each frame to avoid per-frame GC pressure.
 const _buildPlate = new THREE.Plane();
@@ -51,7 +46,6 @@ interface LeafPlacementControllerProps {
 export function LeafPlacementController({ activeModelId }: LeafPlacementControllerProps = {}) {
     const { isActive, stage, tipPosition, surfaceNormal, modelId, placementSurface, sproutParentingLockHeld } = useLeafPlacementState();
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
-    const kickstandState = useKickstandStoreState();
     const { getHotkey } = useHotkeyConfig();
     const leafBinding = getHotkey('SUPPORTS', 'LEAF_PLACEMENT');
 
@@ -83,25 +77,16 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
 
         return [
             ...buildSupportPathSnapTargets(supportState, {
-                includeTrunks: true,
-                includeBranches: true,
-                includeBraces: true,
-                includeTwigs: true,
-                includeSticks: true,
+                snapTypes: ALL_SNAP_TYPES,
                 placementSurface,
             }),
-            ...buildKickstandPathSnapTargets(kickstandState),
+            ...buildKickstandPathSnapTargets(supportState),
         ];
     }, [
         stage,
         sproutParentingLockHeld,
         placementSurface,
-        supportState.trunks,
-        supportState.branches,
-        supportState.braces,
-        supportState.twigs,
-        supportState.sticks,
-        kickstandState.kickstands,
+        supportState,
     ]);
 
     const targetById = useMemo(() => {
@@ -565,46 +550,26 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                     let minJointDist = Infinity;
                     let isBottom = false;
 
-                    for (const trunk of Object.values(supportState.trunks)) {
-                        for (const seg of trunk.segments) {
-                            if (seg.bottomJoint) {
-                                const dist = getDistance(clickPos, seg.bottomJoint.pos);
-                                if (dist < minJointDist) {
+                    /**
+                     * @deprecated Belongs in the registry as a declared flag,
+                     * pending a decision on which types may host a sprout.
+                     */
+                    const leafSproutHosts = ['trunk', 'branch'] as const;
+
+                    for (const typeId of leafSproutHosts) {
+                        const key = getSupportTypeDescriptor(typeId).location.key as SupportCollectionKey;
+                        const collection = supportState[key] as unknown as Record<string, { segments?: Segment[] }>;
+
+                        for (const entity of Object.values(collection ?? {})) {
+                            for (const seg of entity.segments ?? []) {
+                                for (const [joint, bottom] of [[seg.bottomJoint, true], [seg.topJoint, false]] as const) {
+                                    if (!joint) continue;
+                                    const dist = getDistance(clickPos, joint.pos);
+                                    if (dist >= minJointDist) continue;
                                     minJointDist = dist;
-                                    closestJoint = seg.bottomJoint;
+                                    closestJoint = joint;
                                     closestJointSeg = seg;
-                                    isBottom = true;
-                                }
-                            }
-                            if (seg.topJoint) {
-                                const dist = getDistance(clickPos, seg.topJoint.pos);
-                                if (dist < minJointDist) {
-                                    minJointDist = dist;
-                                    closestJoint = seg.topJoint;
-                                    closestJointSeg = seg;
-                                    isBottom = false;
-                                }
-                            }
-                        }
-                    }
-                    for (const branch of Object.values(supportState.branches)) {
-                        for (const seg of branch.segments) {
-                            if (seg.bottomJoint) {
-                                const dist = getDistance(clickPos, seg.bottomJoint.pos);
-                                if (dist < minJointDist) {
-                                    minJointDist = dist;
-                                    closestJoint = seg.bottomJoint;
-                                    closestJointSeg = seg;
-                                    isBottom = true;
-                                }
-                            }
-                            if (seg.topJoint) {
-                                const dist = getDistance(clickPos, seg.topJoint.pos);
-                                if (dist < minJointDist) {
-                                    minJointDist = dist;
-                                    closestJoint = seg.topJoint;
-                                    closestJointSeg = seg;
-                                    isBottom = false;
+                                    isBottom = bottom;
                                 }
                             }
                         }
@@ -682,12 +647,7 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                     hostDiameterMm,
                     mesh: resolveTipMesh(tipPosition),
                 });
-                const markedLeaf = placementSurface
-                    ? {
-                        ...leaf,
-                        contactCone: markContactPlacementSurface(leaf.contactCone, placementSurface),
-                    }
-                    : leaf;
+                const markedLeaf = markPlacementSurface('leaf', leaf, placementSurface);
 
                 addLeaf(markedLeaf);
 
@@ -701,7 +661,7 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                 leafPlacementStore.setJunctionHub(newParentKnotId, true);
 
                 pushSupportHistory({
-                    type: SUPPORT_ADD_LEAF,
+                    type: addAction('leaf'),
                     payload: {
                         leaf: markedLeaf,
                         knot: snap.junctionHubIsNew ? parentKnot : undefined,
@@ -758,18 +718,13 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                     hostDiameterMm,
                     mesh: resolveTipMesh(tipPosition),
                 });
-                const markedLeaf = placementSurface
-                    ? {
-                        ...leaf,
-                        contactCone: markContactPlacementSurface(leaf.contactCone, placementSurface),
-                    }
-                    : leaf;
+                const markedLeaf = markPlacementSurface('leaf', leaf, placementSurface);
 
                 addKnot(parentKnot);
                 addLeaf(markedLeaf);
 
                 pushSupportHistory({
-                    type: SUPPORT_ADD_LEAF,
+                    type: addAction('leaf'),
                     payload: {
                         leaf: markedLeaf,
                         knot: parentKnot,

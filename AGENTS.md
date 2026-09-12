@@ -130,6 +130,7 @@ the question.
 | `docs/dev/`, `docs/reference/` | Contracts, invariants, frameworks | yes |
 | `docs/adr/` | Decisions and the reasoning behind them | yes |
 | `docs/internal/` | Working inboxes, agent instructions, research | **no** |
+| `src/**/AGENTS.md` | Directory-scoped notes. Gitignored — local working aids, may not exist | no |
 
 `docs/internal/` is excluded from the MkDocs build (`exclude_docs`) but is
 versioned and reviewed like everything else — see `docs/internal/README.md`.

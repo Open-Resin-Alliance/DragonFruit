@@ -5,8 +5,7 @@ import * as THREE from 'three';
 import { clearHistory } from '../../history/historyStore';
 import { runAutoPlace } from '../autoSupport/autoPlace';
 import { setModelMesh } from '../autoSupport/meshStore';
-import { resetStore, getSnapshot } from '../state';
-import { resetKickstandStore } from '../SupportTypes/Kickstand/kickstandStore';
+import { resetStore, getSnapshot, resetKickstandsInState } from '../state';
 import { initializeBVH, accelerateGeometry } from '@/utils/bvh';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
 
@@ -39,7 +38,7 @@ function makeIsland(id: string, x: number, y: number, z: number): DetectedIsland
  */
 test('merged members survive the orphan pass on a host rooted away from the origin', () => {
     resetStore();
-    resetKickstandStore();
+    resetKickstandsInState();
     clearHistory();
 
     // Flat underside at z = 5 — low enough that the auto-placed trunk is a

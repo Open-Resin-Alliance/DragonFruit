@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { resolveSupportPlacementRouting } from '../interaction/shared/placement/hotkeys/supportPlacementRouting';
+import { resolveSupportPlacementRouting, routeModelPlacementHit } from '../interaction/shared/placement/hotkeys/supportPlacementRouting';
+import { MODEL_SURFACE_GESTURE_BY_TYPE, MODEL_SURFACE_GESTURE_TYPES, SUPPORT_TYPES } from '../supportTypeRegistry';
 import type { SupportPlacementHotkeyBindings, SupportPlacementModifierState, SupportPlacementRoutingState } from '../interaction/shared/placement/hotkeys/supportPlacementHotkeyTypes';
 
 const defaultBindings: SupportPlacementHotkeyBindings = {
@@ -57,4 +58,12 @@ test('resolveSupportPlacementRouting behaviour', () => {
     assert.equal(resKickstand.blocksDefaultSupportPlacement, true);
     assert.equal(resKickstand.owner, 'kickstand');
     assert.equal(resKickstand.supportClickOwner, 'kickstand');
+});
+
+
+test('the derived owner list covers exactly the flagged types', () => {
+    assert.deepEqual(
+        [...MODEL_SURFACE_GESTURE_TYPES].sort(),
+        SUPPORT_TYPES.filter((d) => d.claimsModelSurfaceGestures).map((d) => d.id).sort(),
+    );
 });

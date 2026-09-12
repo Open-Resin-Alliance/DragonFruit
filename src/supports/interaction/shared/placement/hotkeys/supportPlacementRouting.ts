@@ -3,10 +3,12 @@ import {
 } from './supportPlacementHotkeyResolver';
 import type {
     ResolvedSupportPlacementOwner,
+    SupportModelPlacementOwner,
     SupportPlacementHotkeyBindings,
     SupportPlacementModifierState,
     SupportPlacementRoutingState,
 } from './supportPlacementHotkeyTypes';
+import type { ModelSurfaceGestureTypeId } from '../../../../supportTypeRegistry';
 
 export interface SupportPlacementRoutingInput {
     bindings: SupportPlacementHotkeyBindings;
@@ -125,3 +127,22 @@ export function resolveSupportPlacementRouting(
         intent,
     };
 }
+
+/**
+ * Which model-face placement receives a gesture, and which are cleared.
+ *
+ * The manager holds the hooks and cannot be exercised in tests, so the decision
+ * lives here as a plain function over the owner the router named.
+ */
+export function routeModelPlacementHit<THit>(
+    owners: readonly ModelSurfaceGestureTypeId[],
+    owner: SupportModelPlacementOwner,
+    hit: THit | null,
+): Record<ModelSurfaceGestureTypeId, THit | null> {
+    const routed = {} as Record<ModelSurfaceGestureTypeId, THit | null>;
+    for (const id of owners) {
+        routed[id] = id === owner ? hit : null;
+    }
+    return routed;
+}
+

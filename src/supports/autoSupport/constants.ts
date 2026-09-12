@@ -1,24 +1,7 @@
-/**
- * Shared auto-support placement constants — single source of truth for the
- * radii and spans that previously existed in several inconsistent copies
- * (autoPlace.ts locals, gridPlacement.ts locals, the removed
- * AUTO_SUPPORT_HARD_RULES).
- */
+/** Shared auto-support placement constants: the radii and spans placement reads. */
 
 /** Near-plate tips (< this Z, mm) get a minimal anchor support instead of a trunk. */
 export const ANCHOR_HEIGHT_THRESHOLD_MM = 5.0;
-
-/** Minimum spacing between anchor supports (mm) — denser than this hammers
- *  the first layer and creates blocked pillars. Larger than the generic
- *  1.0–1.2 mm floors; anchors are load-bearing but need breathing room. */
-export const ANCHOR_MIN_SPACING_MM = 1.8;
-
-/** Minimum XY extent for an anchor region to be densified (mm). Tiny slivers
- *  (e.g. 20×1–2 mm rings around a cylinder) hammer the first layer with
- *  100s of pillars but are not load-bearing feet. Both width and height must
- *  exceed this, and area must exceed ANCHOR_MIN_AREA_MM2. */
-export const ANCHOR_MIN_XY_MM = 4.0;
-export const ANCHOR_MIN_AREA_MM2 = 12.0;
 
 /** Max span (mm) for a leaf cone attached to a host knot (grid path). */
 export const MAX_AUTO_LEAF_SPAN_MM = 2.5;
@@ -73,6 +56,13 @@ export function influenceRadiusMm(diffZMm: number): number {
  *  never dedup each other (staircase shelves keep their own supports),
  *  mirroring Prusa's removing_delta. */
 export const SUPPORT_RESTSTACK_DELTA_MM = 5.0;
+/**
+ * Longest cavity bridge auto-placement will keep.
+ *
+ * Currently inert -- the span it is compared against measures ~0. See the
+ * note at the comparison in `autoPlace.ts`.
+ */
+export const MAX_CAVITY_BRIDGE_MM = 12;
 
 /** Distance (mm) within which an existing support tip counts a candidate as already supported. */
 export const ALREADY_SUPPORTED_RADIUS_MM = 3.0;

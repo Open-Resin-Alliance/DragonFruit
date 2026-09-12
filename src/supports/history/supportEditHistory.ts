@@ -1,18 +1,13 @@
 import { pushSupportHistory } from '@/supports/history/supportHistory';
 import { SUPPORT_EDIT_REPLACE } from './actionTypes';
 import { getSnapshot, type SupportState } from '../state';
-import { getKickstandSnapshot, type KickstandState } from '../SupportTypes/Kickstand/kickstandStore';
 
 export interface SupportEditHistorySnapshot {
   support: SupportState;
-  kickstand: KickstandState;
 }
 
 export function captureSupportEditSnapshot(): SupportEditHistorySnapshot {
-  return {
-    support: getSnapshot(),
-    kickstand: getKickstandSnapshot(),
-  };
+  return { support: getSnapshot() };
 }
 
 type SupportEditHistoryJob = {
@@ -33,12 +28,6 @@ function sanitizeSupportSnapshot(snapshot: SupportState): SupportState {
   return cloned;
 }
 
-function sanitizeKickstandSnapshot(snapshot: KickstandState): KickstandState {
-  const cloned = structuredClone(snapshot);
-  cloned.selectedId = null;
-  return cloned;
-}
-
 function flushPendingJobs() {
   flushScheduled = false;
 
@@ -50,8 +39,6 @@ function flushPendingJobs() {
       payload: {
         before: sanitizeSupportSnapshot(job.before.support),
         after: sanitizeSupportSnapshot(job.after.support),
-        kickstandBefore: sanitizeKickstandSnapshot(job.before.kickstand),
-        kickstandAfter: sanitizeKickstandSnapshot(job.after.kickstand),
       },
     });
   }

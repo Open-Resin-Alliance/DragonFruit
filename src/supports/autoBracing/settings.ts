@@ -11,6 +11,11 @@ export interface AutoBracingSettings {
     maxBraceLengthMm: number;
     debugSectionColorsEnabled: boolean;
     debugVoronoiSeedsEnabled: boolean;
+    /**
+     * Remove existing bracing before generating. Only braces and kickstands
+     * this tool generated are removed; `generatedBy` distinguishes them.
+     */
+    removeExistingBracing: boolean;
 }
 
 type NumericConstraint = {
@@ -121,6 +126,7 @@ export function createDefaultAutoBracingSettings(): AutoBracingSettings {
         maxBraceLengthMm: AUTO_BRACING_CONSTRAINTS.maxBraceLengthMm.defaultValue,
         debugSectionColorsEnabled: false,
         debugVoronoiSeedsEnabled: false,
+        removeExistingBracing: true,
     };
 }
 
@@ -139,6 +145,7 @@ export function normalizeAutoBracingSettings(input?: Partial<AutoBracingSettings
         maxBraceLengthMm: clampNumeric(source.maxBraceLengthMm, AUTO_BRACING_CONSTRAINTS.maxBraceLengthMm),
         debugSectionColorsEnabled: normalizeBoolean(source.debugSectionColorsEnabled, defaults.debugSectionColorsEnabled),
         debugVoronoiSeedsEnabled: normalizeBoolean(source.debugVoronoiSeedsEnabled, defaults.debugVoronoiSeedsEnabled),
+        removeExistingBracing: normalizeBoolean(source.removeExistingBracing, defaults.removeExistingBracing),
     };
 }
 

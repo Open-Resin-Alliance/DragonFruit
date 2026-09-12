@@ -3,16 +3,13 @@ import { buildTrunkData } from '@/supports/SupportTypes/Trunk/trunkBuilder';
 import { resolveConeAxisPolicy } from '@/supports/PlacementLogic/ConeAxisPolicy';
 import type { SupportTipProfile } from '@/supports/SupportPrimitives/ContactCone/types';
 import { calculateDiskThickness } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
-import type { SupportKind } from '../../../supportKindState';
 
 interface GridPreviewProps {
     settings: any;
     liveConfig: any;
-    activeKind: SupportKind;
 }
 
-export function buildGridPreviewSupports({ settings, liveConfig, activeKind }: GridPreviewProps) {
-    if (activeKind !== 'grid') return null;
+export function buildGridPreviewSupports({ settings, liveConfig }: GridPreviewProps) {
 
     const supports: any[] = [];
     const spacing = settings.grid.spacingMm; // Use direct setting

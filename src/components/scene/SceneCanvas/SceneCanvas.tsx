@@ -34,12 +34,13 @@ import type { SelectionHighlightMode } from '@/components/selection';
 import type { IslandMarker } from '@/volumeAnalysis/IslandScan/islandOverlayLogic';
 import type { ScanResults } from '@/volumeAnalysis/IslandScan/ScanOrchestrator';
 import type { TransformMode, ModelTransform } from '@/hooks/useModelTransform';
-import type { Segment, SupportMode } from '@/supports/types';
+import type { LimitationCode, Segment, SupportMode, WarningCode } from '@/supports/types';
+import { getSupportTypeDescriptor, previewTypesByPriority, SUPPORT_TYPES, type SupportTypeId } from '@/supports/supportTypeRegistry';
+import { EMPTY_PLACEMENT_PREVIEWS, type SupportPlacementPreviews } from '@/supports/rendering';
 import type { ContactCone } from '@/supports/SupportPrimitives/ContactCone/types';
 import type { SupportData } from '@/supports/rendering';
 import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot } from '@/supports/state';
 import { getModelIdForSupportEntityId } from '@/supports/state';
-import { subscribeToKickstandStore, getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import FootprintBorderRenderer from '@/supports/Rafts/Crenelated/rendering/FootprintBorderRenderer';
 import SliceSatBoundingMeshRenderer from '@/supports/Rafts/Crenelated/rendering/SliceSatBoundingMeshRenderer';
 import { getRaftSettings, subscribeToRaftStore } from '@/supports/Rafts/Crenelated/RaftState';
@@ -50,10 +51,7 @@ import { JointPlacementPreview } from '@/supports/SupportPrimitives/Joint/JointP
 import { useJointCreationState } from '@/supports/SupportPrimitives/Joint/jointCreationState';
 import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone/contactConeUtils';
 import { isContactDiskHudInteractionActive } from '@/supports/SupportPrimitives/ContactDisk/contactDiskHudInteraction';
-import { BranchPlacementController } from '@/supports/SupportTypes/Branch/BranchPlacementController';
-import { LeafPlacementController } from '@/supports/SupportTypes/Leaf/LeafPlacementController';
-import { BracePlacementController } from '@/supports/SupportTypes/Brace/BracePlacementController';
-import { KickstandPlacementController } from '@/supports/SupportTypes/Kickstand/KickstandPlacementController';
+import { PLACEMENT_CONTROLLERS, PLACEMENT_CONTROLLER_TYPES } from '@/supports/placementControllers';
 import { clearSupportSelection } from '@/supports/interaction/shared/selection/selectionController';
 import { isSupportTargetHoverCategory } from '@/supports/interaction/shared/hover/supportHoverResolver';
 import { useSceneHoveredSupportId } from '@/supports/interaction/shared/hover/sceneHoverStore';
@@ -479,11 +477,7 @@ export function SceneCanvas({
   onSupportHover,
   onActiveModelChange,
   onMarqueeSelectionChange,
-  trunkPlacementPreview,
-  branchPlacementPreview,
-  leafPlacementPreview,
-  bracePlacementPreview,
-  kickstandPlacementPreview,
+  placementPreviews = EMPTY_PLACEMENT_PREVIEWS,
   jointPlacementPreview,
   gpuPickingTest,
   selectionHighlightMode,
@@ -624,11 +618,8 @@ export function SceneCanvas({
   onSupportHover?: (hit: THREE.Intersection | null) => void;
   onActiveModelChange?: (id: string | null, options?: { selectionMode?: 'single' | 'toggle' | 'add' }) => void;
   onMarqueeSelectionChange?: (ids: string[]) => void;
-  trunkPlacementPreview?: SupportData | null;
-  branchPlacementPreview?: SupportData | null;
-  leafPlacementPreview?: SupportData | null;
-  bracePlacementPreview?: import('@/supports/SupportTypes/Brace/bracePlacementState').BracePreviewData | null;
-  kickstandPlacementPreview?: SupportData | null;
+  /** Live placement previews, keyed by type. */
+  placementPreviews?: SupportPlacementPreviews;
   jointPlacementPreview?: { pos: { x: number; y: number; z: number }; diameter: number } | null;
   gpuPickingTest?: boolean;
   selectionHighlightMode?: SelectionHighlightMode;
@@ -892,18 +883,11 @@ export function SceneCanvas({
     };
   }, []);
 
-  const kickstandStateForBounds = React.useSyncExternalStore(
-    subscribeToKickstandStore,
-    getKickstandSnapshot,
-    getKickstandSnapshot,
-  );
-
   const raftSettingsForBounds = React.useSyncExternalStore(
     subscribeToRaftStore,
     getRaftSettings,
     getRaftSettings,
   );
-
 
   const models = React.useMemo<LoadedModel[]>(() => {
     if (modelsProp.length > 0) return modelsProp;
@@ -1482,7 +1466,6 @@ export function SceneCanvas({
     };
   }, [modelPickerEnabled, onModelHoverModelChange]);
 
-
   const selectModelFromPointerHit = React.useCallback((modelId: string | null | undefined) => {
     if (mode !== 'prepare') return;
     if (!modelId || !onActiveModelChange) return;
@@ -1589,12 +1572,12 @@ export function SceneCanvas({
       modelKnotIds.add(brace.startKnotId);
       modelKnotIds.add(brace.endKnotId);
     }
-    for (const kickstand of Object.values(kickstandStateForBounds.kickstands)) {
+    for (const kickstand of Object.values(supportStateForBounds.kickstands)) {
       if (kickstand.modelId === modelId) modelKnotIds.add(kickstand.hostKnotId);
     }
 
     for (const knotId of modelKnotIds) {
-      const knot = supportStateForBounds.knots[knotId] ?? kickstandStateForBounds.knots[knotId];
+      const knot = supportStateForBounds.knots[knotId];
       if (!knot?.pos) continue;
       expandByRadius(knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2));
     }
@@ -1654,7 +1637,7 @@ export function SceneCanvas({
       expandByRadius(getFinalSocketPosition(stick.contactConeB), Math.max(0.001, stick.contactConeB.profile.bodyDiameterMm / 2));
     }
 
-    for (const kickstand of Object.values(kickstandStateForBounds.kickstands)) {
+    for (const kickstand of Object.values(supportStateForBounds.kickstands)) {
       if (kickstand.modelId !== modelId) continue;
       for (const seg of kickstand.segments) {
         if (seg.topJoint?.pos) expandByRadius(seg.topJoint.pos, Math.max(0.001, (seg.topJoint.diameter ?? seg.diameter) / 2));
@@ -1697,7 +1680,7 @@ export function SceneCanvas({
     }
 
     return hasAny ? bounds : null;
-  }, [isGizmoDragging, isGizmoRetargeting, kickstandStateForBounds, raftSettingsForBounds, supportStateForBounds]);
+  }, [isGizmoDragging, isGizmoRetargeting, raftSettingsForBounds, supportStateForBounds]);
 
   const computeModelWorldBounds = React.useCallback((
     model: LoadedModel,
@@ -1912,6 +1895,43 @@ export function SceneCanvas({
     return supportPlacementGuideZ;
   }, [blockSupportPlacement, mode, supportPlacementGuideZ]);
 
+  // Which placement mode is active. Read by the preview gate, and by the two
+  // questions that consult several live previews in a declared order.
+  const activePlacementModes: Partial<Record<SupportTypeId, boolean>> = React.useMemo(() => ({
+    branch: !!isBranchPlacementActive,
+    leaf: !!isLeafPlacementActive,
+    brace: !!isBracePlacementActive,
+    kickstand: !!isKickstandPlacementActive,
+  }), [isBranchPlacementActive, isLeafPlacementActive, isBracePlacementActive, isKickstandPlacementActive]);
+
+  // The first live preview with something to say. Suppressed wholesale while a
+  // debug overlay owns the viewport.
+  const placementLimitation = React.useMemo((): { error: LimitationCode | null; warning: WarningCode | null } => {
+    if (suppressSupportPlacementPreviewRendering || supportPathfindingDebugState.enabled) {
+      return { error: null, warning: null };
+    }
+
+    const order = previewTypesByPriority('limitationFeedback', activePlacementModes);
+    const first = <T,>(read: (preview: SupportData) => T | null | undefined): T | null => {
+      for (const typeId of order) {
+        const preview = placementPreviews[typeId] as SupportData | null | undefined;
+        const value = preview ? read(preview) : null;
+        if (value != null) return value;
+      }
+      return null;
+    };
+
+    return {
+      error: first((preview) => preview.error),
+      warning: first((preview) => preview.warning),
+    };
+  }, [
+    activePlacementModes,
+    placementPreviews,
+    suppressSupportPlacementPreviewRendering,
+    supportPathfindingDebugState.enabled,
+  ]);
+
   const supportPlacementGuideLineWidthMm = React.useMemo(() => {
     const toGuideWidthMm = (contactDiameterMm: number) => Math.max(0.01, contactDiameterMm * 0.3);
 
@@ -1933,40 +1953,22 @@ export function SceneCanvas({
       return Math.max(...diameters);
     };
 
-    const orderedPreviews: Array<SupportData | null | undefined> = [];
-
-    if (isBranchPlacementActive) orderedPreviews.push(branchPlacementPreview);
-    if (isLeafPlacementActive) orderedPreviews.push(leafPlacementPreview);
-    if (isKickstandPlacementActive) orderedPreviews.push(kickstandPlacementPreview);
-
-    orderedPreviews.push(
-      trunkPlacementPreview,
-      branchPlacementPreview,
-      leafPlacementPreview,
-      kickstandPlacementPreview,
-    );
-
-    for (const preview of orderedPreviews) {
-      const diameter = pickPreviewContactDiameterMm(preview);
+    for (const typeId of previewTypesByPriority('contactGuideWidth', activePlacementModes)) {
+      const diameter = pickPreviewContactDiameterMm(placementPreviews[typeId] as SupportData | null | undefined);
       if (diameter != null) return toGuideWidthMm(diameter);
     }
 
     return toGuideWidthMm(supportSettings.tip.contactDiameterMm || DEFAULT_TIP_CONTACT_DIAMETER_MM);
   }, [
-    branchPlacementPreview,
-    isBranchPlacementActive,
-    isKickstandPlacementActive,
-    isLeafPlacementActive,
-    kickstandPlacementPreview,
-    leafPlacementPreview,
+    activePlacementModes,
+    placementPreviews,
     supportSettings.tip.contactDiameterMm,
-    trunkPlacementPreview,
   ]);
 
   const branchHoverDotVisible = Boolean(
     branchHoverPosition
     && !branchTipPosition
-    && !branchPlacementPreview
+    && !placementPreviews.branch
     && !suppressSupportPlacementPreviewRendering
     && !supportHoverTargetActive
     && !!hoveredMeshModelId
@@ -2185,7 +2187,7 @@ export function SceneCanvas({
   }, []);
 
   React.useEffect(() => {
-    const visible = !!branchHoverPosition && !branchTipPosition && !branchPlacementPreview;
+    const visible = !!branchHoverPosition && !branchTipPosition && !placementPreviews.branch;
     if (prevBranchHoverDotVisibleRef.current === null) {
       prevBranchHoverDotVisibleRef.current = visible;
       return;
@@ -2193,10 +2195,10 @@ export function SceneCanvas({
     if (prevBranchHoverDotVisibleRef.current !== visible) {
       prevBranchHoverDotVisibleRef.current = visible;
     }
-  }, [branchHoverPosition, branchTipPosition, branchPlacementPreview]);
+  }, [branchHoverPosition, branchTipPosition, placementPreviews.branch]);
 
   React.useEffect(() => {
-    const visible = !!leafHoverPosition && !leafTipPosition && !leafPlacementPreview;
+    const visible = !!leafHoverPosition && !leafTipPosition && !placementPreviews.leaf;
     if (prevLeafHoverDotVisibleRef.current === null) {
       prevLeafHoverDotVisibleRef.current = visible;
       return;
@@ -2204,7 +2206,7 @@ export function SceneCanvas({
     if (prevLeafHoverDotVisibleRef.current !== visible) {
       prevLeafHoverDotVisibleRef.current = visible;
     }
-  }, [leafHoverPosition, leafTipPosition, leafPlacementPreview]);
+  }, [leafHoverPosition, leafTipPosition, placementPreviews.leaf]);
 
   // Computed refs for active model
   const activeGroupRef = React.useMemo(
@@ -2742,9 +2744,6 @@ export function SceneCanvas({
     for (const root of Object.values(supportStateForBounds.roots)) {
       collectRoot(root.modelId, root.transform.pos, root.diameter);
     }
-    for (const root of Object.values(kickstandStateForBounds.roots)) {
-      collectRoot(root.modelId, root.transform.pos, root.diameter);
-    }
 
     const thickness = raftSettingsForBounds.bottomMode === 'line'
       ? raftSettingsForBounds.lineHeightMm
@@ -2770,7 +2769,7 @@ export function SceneCanvas({
     }
 
     return map;
-  }, [kickstandStateForBounds.roots, raftSettingsForBounds, supportStateForBounds.roots]);
+  }, [raftSettingsForBounds, supportStateForBounds.roots]);
 
   // Every support drawn as the polyline that runs along it: root or host knot,
   // each joint in order, and the contact cone at the tip. Built once per state
@@ -2884,19 +2883,19 @@ export function SceneCanvas({
       ]);
     }
 
-    for (const kickstand of Object.values(kickstandStateForBounds.kickstands)) {
+    for (const kickstand of Object.values(supportStateForBounds.kickstands)) {
       const kickstandModelId = kickstand.modelId
-        ?? kickstandStateForBounds.roots[kickstand.rootId]?.modelId;
+        ?? supportStateForBounds.roots[kickstand.rootId]?.modelId;
       chain(kickstand.id, kickstandModelId, [
-        kickstandStateForBounds.roots[kickstand.rootId]?.transform.pos,
+        supportStateForBounds.roots[kickstand.rootId]?.transform.pos,
         ...jointPositions(kickstand.segments),
         supportStateForBounds.knots[kickstand.hostKnotId]?.pos
-          ?? kickstandStateForBounds.knots[kickstand.hostKnotId]?.pos,
+          ?? supportStateForBounds.knots[kickstand.hostKnotId]?.pos,
       ]);
     }
 
     return shapes;
-  }, [kickstandStateForBounds, supportStateForBounds]);
+  }, [supportStateForBounds]);
 
   const supportMarqueeShapesByModelId = React.useMemo(() => {
     const map = new Map<string, typeof supportMarqueeShapes>();
@@ -3346,12 +3345,6 @@ export function SceneCanvas({
       sourceSupportAnchorCount += 1;
     }
 
-    for (const root of Object.values(kickstandStateForBounds.roots)) {
-      if (root.modelId !== duplicatePreviewModel.id) continue;
-      if (!sourceSupportAnchor) sourceSupportAnchor = new THREE.Vector3();
-      sourceSupportAnchor.add(root.transform.pos);
-      sourceSupportAnchorCount += 1;
-    }
 
     if (sourceSupportAnchor && sourceSupportAnchorCount > 0) {
       sourceSupportAnchor.multiplyScalar(1 / sourceSupportAnchorCount);
@@ -3387,7 +3380,7 @@ export function SceneCanvas({
     );
 
     return targetMatrix.multiply(sourceMatrix.clone().invert());
-  }, [duplicateActivePreviewTransform, duplicatePreviewModel, kickstandStateForBounds.roots, modelById, supportStateForBounds.roots]);
+  }, [duplicateActivePreviewTransform, duplicatePreviewModel, modelById, supportStateForBounds.roots]);
 
   const duplicateSourceSupportPreviewModelId = React.useMemo(() => {
     if (!hideDuplicateSourceDuringApply) return null;
@@ -3967,9 +3960,6 @@ export function SceneCanvas({
     supportTwigsRef: supportStateForBounds.twigs,
     supportSticksRef: supportStateForBounds.sticks,
     supportBracesRef: supportStateForBounds.braces,
-    kickstandKickstandsRef: kickstandStateForBounds.kickstands,
-    kickstandRootsRef: kickstandStateForBounds.roots,
-    kickstandKnotsRef: kickstandStateForBounds.knots,
     raftBottomMode: raftSettingsForBounds.bottomMode,
     raftThickness: raftSettingsForBounds.thickness,
     raftLineHeightMm: raftSettingsForBounds.lineHeightMm,
@@ -3984,9 +3974,6 @@ export function SceneCanvas({
   }), [
     effectiveHoldSupportDragDelta,
     isGizmoDragging,
-    kickstandStateForBounds.kickstands,
-    kickstandStateForBounds.knots,
-    kickstandStateForBounds.roots,
     models,
     raftSettingsForBounds.bottomMode,
     raftSettingsForBounds.chamferAngle,
@@ -3994,14 +3981,7 @@ export function SceneCanvas({
     raftSettingsForBounds.thickness,
     raftSettingsForBounds.wallEnabled,
     raftSettingsForBounds.wallHeight,
-    supportStateForBounds.braces,
-    supportStateForBounds.branches,
-    supportStateForBounds.knots,
-    supportStateForBounds.leaves,
-    supportStateForBounds.roots,
-    supportStateForBounds.sticks,
-    supportStateForBounds.trunks,
-    supportStateForBounds.twigs,
+    supportStateForBounds,
     supportDragTransactionId,
     supportRenderRefreshNonce,
     transform,
@@ -4247,51 +4227,27 @@ export function SceneCanvas({
   const { isDraggingHandle } = useCurveInteractionState();
   const interactionWarning = useInteractionWarning();
 
-  const trunkPlacementPreviewForRenderer = (
-    trunkPlacementPreview
-    && !suppressSupportPlacementPreviewRendering
-    && !blockSupportPlacement
-    && !isDraggingHandle
-    && !isBranchPlacementActive
-    && !isLeafPlacementActive
-    && !isKickstandPlacementActive
-    && !branchPlacementPreview
-  )
-    ? trunkPlacementPreview
-    : null;
+  const gatePlacementPreview = <T,>(typeId: SupportTypeId, preview: T | null | undefined): T | null => {
+    if (!preview || isDraggingHandle || suppressSupportPlacementPreviewRendering) return null;
 
-  const branchPlacementPreviewForRenderer = (
-    branchPlacementPreview
-    && isBranchPlacementActive
-    && !isDraggingHandle
-    && !suppressSupportPlacementPreviewRendering
-  )
-    ? branchPlacementPreview
-    : null;
+    const descriptor = getSupportTypeDescriptor(typeId);
+    if (descriptor.previewRequiresOwnMode && !activePlacementModes[typeId]) return null;
 
-  const leafPlacementPreviewForRenderer = (
-    leafPlacementPreview
-    && !isDraggingHandle
-    && !suppressSupportPlacementPreviewRendering
-  )
-    ? leafPlacementPreview
-    : null;
+    if (descriptor.previewYieldsToOtherModes) {
+      if (blockSupportPlacement) return null;
+      const displaced = SUPPORT_TYPES.some((other: { id: SupportTypeId; placementModeDisplacesDefault?: boolean }) =>
+        other.id !== typeId && other.placementModeDisplacesDefault && activePlacementModes[other.id]);
+      if (displaced || placementPreviews.branch) return null;
+    }
 
-  const bracePlacementPreviewForRenderer = (
-    bracePlacementPreview
-    && !isDraggingHandle
-    && !suppressSupportPlacementPreviewRendering
-  )
-    ? bracePlacementPreview
-    : null;
+    return preview;
+  };
 
-  const kickstandPlacementPreviewForRenderer = (
-    kickstandPlacementPreview
-    && !isDraggingHandle
-    && !suppressSupportPlacementPreviewRendering
-  )
-    ? kickstandPlacementPreview
-    : null;
+  const gatedPlacementPreviews: SupportPlacementPreviews = Object.fromEntries(
+    SUPPORT_TYPES
+      .filter((descriptor) => descriptor.hasPlacementPreview)
+      .map((descriptor) => [descriptor.id, gatePlacementPreview(descriptor.id, placementPreviews[descriptor.id])]),
+  );
 
   // Listen for selection events to show/hide gizmo
   React.useEffect(() => {
@@ -6567,11 +6523,7 @@ export function SceneCanvas({
                   outOfBoundsMin={shaderOutOfBoundsBounds?.min ?? null}
                   outOfBoundsMax={shaderOutOfBoundsBounds?.max ?? null}
                   outOfBoundsStripeColor={outOfBoundsStripeColor}
-                  trunkPlacementPreview={trunkPlacementPreviewForRenderer}
-                  branchPlacementPreview={branchPlacementPreviewForRenderer}
-                  leafPlacementPreview={leafPlacementPreviewForRenderer}
-                  bracePlacementPreview={bracePlacementPreviewForRenderer}
-                  kickstandPlacementPreview={kickstandPlacementPreviewForRenderer}
+                  placementPreviews={gatedPlacementPreviews}
                   interiorView={interiorView}
                   cavityGeometryByModelId={cavityGeometryByModelId}
                   modelWorldInverseById={modelWorldInverseById}
@@ -7272,7 +7224,7 @@ export function SceneCanvas({
 
               {/* Render Branch Tip Marker - only show when NO preview is visible */}
               {/* Once preview shows, the contact cone at the tip replaces this marker */}
-              {isBranchPlacementActive && branchTipPosition && !branchPlacementPreview && !suppressSupportPlacementPreviewRendering && (
+              {isBranchPlacementActive && branchTipPosition && !placementPreviews.branch && !suppressSupportPlacementPreviewRendering && (
                 <mesh position={[branchTipPosition.x, branchTipPosition.y, branchTipPosition.z]} raycast={() => null}>
                   <sphereGeometry args={[DEFAULT_TIP_CONTACT_DIAMETER_MM / 2 * 0.5, 12, 12]} />
                   <meshStandardMaterial color="#00ff00" transparent opacity={0.7} />
@@ -7281,7 +7233,7 @@ export function SceneCanvas({
 
               {/* Render Leaf Hover Preview Dot - shows when Alt+Shift is held before first click */}
               {/* Uses tip contact diameter to match actual tip size */}
-              {leafHoverPosition && !leafTipPosition && !leafPlacementPreview && !suppressSupportPlacementPreviewRendering && (
+              {leafHoverPosition && !leafTipPosition && !placementPreviews.leaf && !suppressSupportPlacementPreviewRendering && (
                 <mesh position={[leafHoverPosition.x, leafHoverPosition.y, leafHoverPosition.z]} raycast={() => null}>
                   <sphereGeometry args={[DEFAULT_TIP_CONTACT_DIAMETER_MM / 2 * 0.5, 12, 12]} />
                   <meshStandardMaterial
@@ -7296,7 +7248,7 @@ export function SceneCanvas({
 
               {/* Render Leaf Tip Marker - only show when NO preview is visible */}
               {/* Once preview shows, the contact cone at the tip replaces this marker */}
-              {isLeafPlacementActive && leafTipPosition && !leafPlacementPreview && !suppressSupportPlacementPreviewRendering && (
+              {isLeafPlacementActive && leafTipPosition && !placementPreviews.leaf && !suppressSupportPlacementPreviewRendering && (
                 <mesh position={[leafTipPosition.x, leafTipPosition.y, leafTipPosition.z]} raycast={() => null}>
                   <sphereGeometry args={[DEFAULT_TIP_CONTACT_DIAMETER_MM / 2 * 0.5, 12, 12]} />
                   <meshStandardMaterial color="#00ff00" transparent opacity={0.7} />
@@ -7308,17 +7260,11 @@ export function SceneCanvas({
                 <JointPlacementPreview position={jointPlacementPreview.pos} diameter={jointPlacementPreview.diameter} />
               )}
 
-              {/* Branch Placement Controller - handles snapping logic */}
-              {mode === 'support' && <BranchPlacementController />}
-
-              {/* Leaf Placement Controller - handles snapping logic */}
-              {mode === 'support' && <LeafPlacementController activeModelId={activeModelId} />}
-
-              {/* Brace Placement Controller - handles snapping logic */}
-              {mode === 'support' && <BracePlacementController />}
-
-              {/* Kickstand Placement Controller - handles Ctrl-hover preview and click placement */}
-              {mode === 'support' && <KickstandPlacementController />}
+              {/* Each type's placement controller: snapping, hover preview, click placement. */}
+              {mode === 'support' && PLACEMENT_CONTROLLER_TYPES.map((typeId) => {
+                const Controller = PLACEMENT_CONTROLLERS[typeId]!;
+                return <Controller key={typeId} activeModelId={activeModelId} />;
+              })}
 
               {renderSceneOverlays?.({ raycastActiveModelFromRay })}
 
@@ -7512,23 +7458,14 @@ export function SceneCanvas({
 
       {supportHelpEnabled && (
         <SupportLimitationFeedback
-          error={suppressSupportPlacementPreviewRendering || supportPathfindingDebugState.enabled ? null : (leafPlacementPreview?.error ?? (isBranchPlacementActive ? branchPlacementPreview?.error : null) ?? trunkPlacementPreview?.error ?? null)}
-          warning={
-            suppressSupportPlacementPreviewRendering || supportPathfindingDebugState.enabled
-              ? null
-              : (
-                leafPlacementPreview?.warning ??
-                (isBranchPlacementActive ? branchPlacementPreview?.warning : null) ??
-                trunkPlacementPreview?.warning ??
-                interactionWarning ??
-                null
-              )
-          }
+          error={placementLimitation.error}
+          warning={placementLimitation.warning ?? interactionWarning ?? null}
         />
       )}
 
       {/* GPU Picking Debug Overlay - shows what's under cursor */}
       {gpuPickingTest && <PickingDebugOverlay position="top-right" />}
+
 
       {showCrossSectionCapDebugPanel && (
         <div

@@ -3,12 +3,10 @@ import { SupportBuilder } from '@/supports/rendering/SupportBuilder';
 import { ANATOMY_CONFIG } from '../../AnatomyPreviewConfig';
 import { buildRaftPreviewBaseCircles, buildRaftPreviewSupports } from './previewSupports';
 import { buildRaftPreviewMeshes, disposeRaftPreviewMeshes } from './buildRaftPreviewMeshes';
-import type { SupportKind } from '../../../supportKindState';
 
 interface RaftPreviewProps {
     settings: any;
     liveConfig: any;
-    activeKind: SupportKind;
     raftSettings: any;
     previewState: any;
     anatomyOverrides?: any; // Optional as Raft implies specific overrides often, but good to have
@@ -17,7 +15,6 @@ interface RaftPreviewProps {
 export function RaftPreview({
     settings,
     liveConfig,
-    activeKind,
     raftSettings,
     previewState,
 }: RaftPreviewProps) {
@@ -29,7 +26,6 @@ export function RaftPreview({
     const NORMAL_COLOR = ANATOMY_CONFIG.colors.normal;
 
     const raftPreviewMeshes = React.useMemo(() => {
-        if (activeKind !== 'raft') return null;
         if (raftSettings.bottomMode === 'off') return null;
 
         const focusKey = previewState.activeSettingKey;
@@ -53,7 +49,6 @@ export function RaftPreview({
             },
         });
     }, [
-        activeKind,
         previewState.activeSettingKey,
         settings.roots.diameterMm,
         raftSettings.bottomMode,
@@ -69,7 +64,6 @@ export function RaftPreview({
     ]);
 
     const raftPreviewSupports = React.useMemo(() => {
-        if (activeKind !== 'raft') return null;
         if (raftSettings.bottomMode === 'off') return null;
 
         const rRaw = settings.roots.diameterMm / 2;
@@ -79,7 +73,7 @@ export function RaftPreview({
         const spread = 4;
         const circles = buildRaftPreviewBaseCircles({ rootsDiameterMm: r * 2, spreadMm: spread });
         return buildRaftPreviewSupports({ previewHeightMm: liveConfig.previewHeightMm, circles });
-    }, [activeKind, raftSettings.bottomMode, settings.roots.diameterMm, liveConfig.previewHeightMm]);
+    }, [raftSettings.bottomMode, settings.roots.diameterMm, liveConfig.previewHeightMm]);
 
     React.useEffect(() => {
         return () => {
@@ -87,8 +81,6 @@ export function RaftPreview({
             disposeRaftPreviewMeshes(raftPreviewMeshes);
         };
     }, [raftPreviewMeshes]);
-
-    if (activeKind !== 'raft') return null;
 
     return (
         <>

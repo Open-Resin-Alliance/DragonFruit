@@ -4,12 +4,11 @@ import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { pushSupportHistory } from '@/supports/history/supportHistory';
-import { SUPPORT_ADD_KICKSTAND } from '@/supports/history/actionTypes';
-import { addKnot, addRoot, subscribe, getSnapshot } from '../../state';
+import { addAction } from '@/supports/history/actionTypes';
+import { addSupportEntity, addKnot, addRoot, subscribe, getSnapshot } from '../../state';
 import type { SnapTarget } from '../../interaction/SnappingManager';
 import { getGridSettings } from '../../Settings/state';
 import { snapToGridIndex } from '../../PlacementLogic/Grid/gridMath';
-import { addKickstand, getKickstandSnapshot } from './kickstandStore';
 import { clampKickstandHostT } from './kickstandRules';
 import { buildKickstandData, toKickstandPreviewData } from './kickstandBuilder';
 import { getKickstandPlacementOffsetMm } from './kickstandSettings';
@@ -263,7 +262,7 @@ function isGridRootOccupied(rootPos: Vec3, modelId: string, hostRootId?: string 
         }
     }
 
-    const kickstandSnapshot = getKickstandSnapshot();
+    const kickstandSnapshot = getSnapshot();
     for (const root of Object.values(kickstandSnapshot.roots)) {
         if (root.modelId !== modelId) continue;
         if (hostRootId && root.id === hostRootId) continue;
@@ -653,12 +652,14 @@ export function KickstandPlacementController() {
 
             console.log('[DEBUG Kickstand placement handleClick] Placement succeeded! Adding kickstand:', finalBuild);
 
-            addKickstand(finalBuild);
+            // Three ordinary entities: the kickstand, the root it mounts to and
+            // the knot it hangs from. No bundled adder.
             addRoot(finalBuild.root);
             addKnot(finalBuild.hostKnot);
+            addSupportEntity('kickstand', finalBuild.kickstand);
 
             pushSupportHistory({
-                type: SUPPORT_ADD_KICKSTAND,
+                type: addAction('kickstand'),
                 payload: { build: finalBuild },
             });
 

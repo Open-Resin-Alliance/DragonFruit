@@ -10,7 +10,8 @@ function getBranchContactZ(branch: Branch): number {
     return branch.contactCone?.pos.z ?? Number.NEGATIVE_INFINITY;
 }
 
-function collectConnectedToTrunk(snapshot: SupportState, trunk: Trunk): {
+/** Exported for `__tests__/trunkReplacementConnectivity.test.ts`. */
+export function collectConnectedToTrunk(snapshot: SupportState, trunk: Trunk): {
     trunkHostedKnotIds: Set<string>;
     connectedBranchIds: Set<string>;
     connectedLeafIds: Set<string>;
@@ -24,42 +25,47 @@ function collectConnectedToTrunk(snapshot: SupportState, trunk: Trunk): {
         if (trunkSegmentIds.has(knot.parentShaftId)) trunkHostedKnotIds.add(knot.id);
     }
 
-    const branchIds = new Set<string>();
-    const knotIds = new Set<string>(Array.from(trunkHostedKnotIds));
-
-    for (const b of Object.values(snapshot.branches)) {
-        if (b.parentKnotId && trunkHostedKnotIds.has(b.parentKnotId)) {
-            branchIds.add(b.id);
-        }
+    // Knots by the shaft they sit on, so growing the tree does not rescan every
+    // knot per branch per round.
+    const knotIdsByShaft = new Map<string, string[]>();
+    for (const knot of Object.values(snapshot.knots)) {
+        const list = knotIdsByShaft.get(knot.parentShaftId);
+        if (list) list.push(knot.id);
+        else knotIdsByShaft.set(knot.parentShaftId, [knot.id]);
     }
 
-    // Grow the set to include the full downstream branch tree.
-    let grew = true;
-    while (grew) {
-        grew = false;
+    const branchesByParentKnot = new Map<string, string[]>();
+    for (const branch of Object.values(snapshot.branches)) {
+        if (!branch.parentKnotId) continue;
+        const list = branchesByParentKnot.get(branch.parentKnotId);
+        if (list) list.push(branch.id);
+        else branchesByParentKnot.set(branch.parentKnotId, [branch.id]);
+    }
 
-        for (const bId of Array.from(branchIds)) {
-            const b = snapshot.branches[bId];
-            if (!b) continue;
+    // Worklist, not a `while (grew)` fixpoint: the branch tree is grown once
+    // per new knot rather than rescanned every round. See AGENTS.md, "Graph
+    // walks" -- the fixpoint cost scaled with tree DEPTH, so it stayed fast in
+    // ordinary scenes and bit on deep ones.
+    const branchIds = new Set<string>();
+    const knotIds = new Set<string>();
+    const knotQueue: string[] = Array.from(trunkHostedKnotIds);
 
-            if (b.parentKnotId) {
-                knotIds.add(b.parentKnotId);
-            }
+    while (knotQueue.length) {
+        const knotId = knotQueue.pop() as string;
+        if (knotIds.has(knotId)) continue;
+        knotIds.add(knotId);
 
-            for (const seg of b.segments) {
-                for (const knot of Object.values(snapshot.knots)) {
-                    if (knot.parentShaftId === seg.id) {
-                        knotIds.add(knot.id);
-                    }
-                }
-            }
-        }
+        for (const branchId of branchesByParentKnot.get(knotId) ?? []) {
+            if (branchIds.has(branchId)) continue;
+            branchIds.add(branchId);
 
-        for (const b of Object.values(snapshot.branches)) {
-            if (branchIds.has(b.id)) continue;
-            if (b.parentKnotId && knotIds.has(b.parentKnotId)) {
-                branchIds.add(b.id);
-                grew = true;
+            const branch = snapshot.branches[branchId];
+            if (!branch) continue;
+
+            // No need to re-queue `branch.parentKnotId`: a branch is only
+            // reached through that knot, so it is already visited.
+            for (const seg of branch.segments) {
+                for (const id of knotIdsByShaft.get(seg.id) ?? []) knotQueue.push(id);
             }
         }
     }

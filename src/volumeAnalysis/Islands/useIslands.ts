@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { detectVoxelIslands, type VoxelDetectParams } from './detect';
+import { contactEndpointsFor, SUPPORT_TYPES } from '@/supports/supportTypeRegistry';
 import {
   annotateFilterFlags,
   applyFilter,
@@ -628,37 +629,20 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
       }
     };
 
-    if (state.trunks) {
-      Object.values(state.trunks).forEach((trunk: any) => {
-        processCone(trunk.contactCone);
-      });
-    }
-    if (state.branches) {
-      Object.values(state.branches).forEach((branch: any) => {
-        processCone(branch.contactCone);
-      });
-    }
-    if (state.leaves) {
-      Object.values(state.leaves).forEach((leaf: any) => {
-        processCone(leaf.contactCone);
-      });
-    }
-    if (state.anchors) {
-      Object.values(state.anchors).forEach((anchor: any) => {
-        processCone(anchor.contactCone);
-      });
-    }
-    if (state.twigs) {
-      Object.values(state.twigs).forEach((twig: any) => {
-        processDisk(twig.contactDiskA);
-        processDisk(twig.contactDiskB);
-      });
-    }
-    if (state.sticks) {
-      Object.values(state.sticks).forEach((stick: any) => {
-        processCone(stick.contactConeA);
-        processCone(stick.contactConeB);
-      });
+    // Every declared contact, by its kind: a cone reports its profile
+    // diameter, a disk its own.
+    for (const descriptor of SUPPORT_TYPES) {
+      const collection = (state as unknown as Record<string, Record<string, unknown> | undefined>)[descriptor.location.key];
+      if (!collection) continue;
+
+      for (const entity of Object.values(collection)) {
+        const fields = entity as Record<string, unknown>;
+        for (const contact of contactEndpointsFor(descriptor.id)) {
+          const primitive = fields[contact.field];
+          if (contact.kind === 'disk') processDisk(primitive);
+          else processCone(primitive);
+        }
+      }
     }
 
     return supportTips.map((tip) => {

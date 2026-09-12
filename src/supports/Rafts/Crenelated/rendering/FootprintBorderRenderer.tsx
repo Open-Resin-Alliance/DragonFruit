@@ -4,7 +4,6 @@ import React from 'react';
 import * as THREE from 'three';
 import { useSyncExternalStore } from 'react';
 import { subscribe, getSnapshot } from '@/supports/state';
-import { getKickstandSnapshot, subscribeToKickstandStore } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { getRaftSettings, subscribeToRaftStore } from '../RaftState';
 import { computeFootprint } from '../geometry/computeFootprint';
 import { computeRaftOuterBoundary } from '../geometry/computeRaftOuterBoundary';
@@ -162,7 +161,6 @@ export default function FootprintBorderRenderer({
   color = '#3b82f6',
 }: FootprintBorderRendererProps) {
   const supportState = useSyncExternalStore(subscribe, getSnapshot);
-  const kickstandState = useSyncExternalStore(subscribeToKickstandStore, getKickstandSnapshot, getKickstandSnapshot);
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
   const [localModelFootprintHull, setLocalModelFootprintHull] = React.useState<THREE.Vector2[]>([]);
   const hullCacheKeyRef = React.useRef<string | null>(null);
@@ -171,7 +169,6 @@ export default function FootprintBorderRenderer({
     const circlesByModel = collectRaftBaseCirclesByModel({
       roots: Object.values(supportState.roots),
       anchors: Object.values(supportState.anchors),
-      kickstandRoots: Object.values(kickstandState.roots),
     }, modelId != null
       ? { modelFilterId: modelId, fallbackModelKey: RAFT_UNASSIGNED_MODEL_KEY }
       : { fallbackModelKey: RAFT_UNASSIGNED_MODEL_KEY });
@@ -187,7 +184,7 @@ export default function FootprintBorderRenderer({
 
     const raftOuterBoundary = computeRaftOuterBoundary(baseProfile, raft);
     return raftOuterBoundary && raftOuterBoundary.length >= 3 ? raftOuterBoundary : [];
-  }, [modelId, raft, supportState.anchors, supportState.roots, kickstandState.roots]);
+  }, [modelId, raft, supportState.anchors, supportState.roots]);
 
   React.useEffect(() => {
     if (!modelGeometry || !modelTransform) {

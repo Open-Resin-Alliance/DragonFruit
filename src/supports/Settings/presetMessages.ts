@@ -35,10 +35,6 @@ export function translatePresetName(preset: SupportPreset, translate: Translate)
   return descriptor ? translate(descriptor) : preset.name;
 }
 
-export function translatePresetDescription(preset: SupportPreset, translate: Translate): string {
-  const descriptor = BUILT_IN_DESCRIPTIONS[preset.id];
-  return descriptor ? translate(descriptor) : (preset.description ?? '');
-}
 
 /** Title of the overwrite confirmation, e.g. `Save Over "Detail"?`. */
 export function formatOverwritePresetTitle(presetName: string, translate: Translate): string {

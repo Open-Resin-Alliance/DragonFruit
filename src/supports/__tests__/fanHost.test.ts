@@ -7,7 +7,7 @@ import type { SupportState } from '../types';
 function emptySnapshot(): SupportState {
     return {
         roots: {}, trunks: {}, branches: {}, leaves: {}, twigs: {}, sticks: {},
-        braces: {}, anchors: {}, knots: {},
+        braces: {}, anchors: {}, kickstands: {}, knots: {},
         selectedId: null, selectedCategory: null,
         hoveredId: null, hoveredCategory: 'none', interactionWarning: null,
     };

@@ -1,4 +1,3 @@
-import type { KickstandState } from '@/supports/SupportTypes/Kickstand/types';
 import type { DragonfruitImportFormat, SupportState, Vec3 } from '@/supports/types';
 import { unzlibSync, zlibSync } from 'fflate';
 import {
@@ -220,13 +219,12 @@ function emptyVec3(): Vec3 {
 
 export function buildSupportExportFromStores(
   supportState: SupportState,
-  kickstandState: KickstandState,
   source = 'dragonfruit-voxl',
 ): DragonfruitImportFormat {
-  const kickstands = Object.values(kickstandState.kickstands)
+  const kickstands = Object.values(supportState.kickstands)
     .map((kickstand) => {
-      const root = kickstandState.roots[kickstand.rootId];
-      const hostKnot = kickstandState.knots[kickstand.hostKnotId];
+      const root = supportState.roots[kickstand.rootId];
+      const hostKnot = supportState.knots[kickstand.hostKnotId];
       if (!root || !hostKnot) return null;
       return {
         root,

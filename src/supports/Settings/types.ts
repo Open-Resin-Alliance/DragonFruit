@@ -253,3 +253,22 @@ export interface PresetCollection {
     allIds: string[];
     activePresetId: string | null;
 }
+
+/** `base` with every unset group filled in from the defaults. */
+export function mergeSettingsWithDefaults(base?: SupportSettings): SupportSettings {
+    const defaults = createDefaultSettings();
+    if (!base) return defaults;
+
+    return {
+        ...defaults,
+        ...base,
+        tip: { ...defaults.tip, ...base.tip },
+        shaft: { ...defaults.shaft, ...base.shaft },
+        roots: { ...defaults.roots, ...base.roots },
+        baseFlare: { ...defaults.baseFlare, ...base.baseFlare },
+        joint: { ...defaults.joint, ...base.joint },
+        grid: { ...defaults.grid, ...base.grid },
+        meshToMesh: { ...defaults.meshToMesh, ...base.meshToMesh },
+        autoBracing: { ...defaults.autoBracing, ...base.autoBracing },
+    };
+}

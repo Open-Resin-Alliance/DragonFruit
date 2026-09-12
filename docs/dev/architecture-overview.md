@@ -28,7 +28,7 @@ The crates under `rust/` are **standalone — there is no workspace root**. `src
 - **Something not ready for everyone** → an experiment gate ([`experiments-framework.md`](experiments-framework.md)).
 - **A new native capability** → a command in `src-tauri/`, a wrapper in the IPC bridge, and the heavy work in a crate under `rust/`.
 - **A new printer or format** → a plugin ([`plugins-complex-contributing.md`](plugins-complex-contributing.md)).
-- **A new support type** → the walkthrough in [`support-type-extension.md`](support-type-extension.md); the support system is deliberately not registry-driven yet, so this is ~15 hand-wired points.
+- **A new support type** → the walkthrough in [`support-type-extension.md`](support-type-extension.md); `supportTypeRegistry.ts` now carries what a type IS, but most wiring (rendering, export, interaction) is still hand-written, so expect to touch both.
 
 ## Conventions that actually hold
 

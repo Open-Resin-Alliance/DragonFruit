@@ -9,8 +9,7 @@ import { SUPPORT_AUTO_PLACE } from '../history/actionTypes';
 import { registerSupportHistoryHandlers } from '../history/useSupportHistoryHandlers';
 import { runAutoPlace } from '../autoSupport/autoPlace';
 import { setModelMesh } from '../autoSupport/meshStore';
-import { resetStore, getSnapshot, setSnapshot } from '../state';
-import { resetKickstandStore } from '../SupportTypes/Kickstand/kickstandStore';
+import { resetStore, getSnapshot, setSnapshot, resetKickstandsInState} from '../state';
 import { initializeBVH, accelerateGeometry } from '@/utils/bvh';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
 import { isShaftBlocked } from '../PlacementLogic/CollisionAvoidance';
@@ -38,7 +37,7 @@ function makeIsland(id: string, x: number, y: number, z: number, areaMm2: number
 
 test('runAutoPlace places standalone trunks and pushes an undoable history entry', () => {
     resetStore();
-    resetKickstandStore();
+    resetKickstandsInState();
     clearHistory();
     const disposeHandlers = registerSupportHistoryHandlers();
 
@@ -78,7 +77,7 @@ test('runAutoPlace places standalone trunks and pushes an undoable history entry
 
 test('runAutoPlace resolves the underside surface normal from the mesh', () => {
     resetStore();
-    resetKickstandStore();
+    resetKickstandsInState();
     clearHistory();
     const disposeHandlers = registerSupportHistoryHandlers();
 
@@ -111,7 +110,7 @@ test('runAutoPlace resolves the underside surface normal from the mesh', () => {
 
 test('runAutoPlace grids a large flat region at fixed density (uniform distribution)', () => {
     resetStore();
-    resetKickstandStore();
+    resetKickstandsInState();
     clearHistory();
     const disposeHandlers = registerSupportHistoryHandlers();
 
@@ -161,7 +160,7 @@ test('runAutoPlace grids a large flat region at fixed density (uniform distribut
 
 test('runAutoPlace places grid trunks on a rotated mesh via the region normal', () => {
     resetStore();
-    resetKickstandStore();
+    resetKickstandsInState();
     clearHistory();
     const disposeHandlers = registerSupportHistoryHandlers();
     initializeBVH();
@@ -222,7 +221,7 @@ test('elevated small overhang also routes with the density grid enabled', () => 
 
 function elevatedJawScenario(gridEnabled: boolean): () => void {
     resetStore();
-    resetKickstandStore();
+    resetKickstandsInState();
     clearHistory();
     const disposeHandlers = registerSupportHistoryHandlers();
     initializeBVH();
@@ -283,7 +282,7 @@ function elevatedJawScenario(gridEnabled: boolean): () => void {
 
 test('runAutoPlace gap-fills under-covered regions (coverage convergence)', () => {
     resetStore();
-    resetKickstandStore();
+    resetKickstandsInState();
     clearHistory();
     const disposeHandlers = registerSupportHistoryHandlers();
 
@@ -323,7 +322,7 @@ test('runAutoPlace gap-fills under-covered regions (coverage convergence)', () =
 
 test('runAutoPlace gives small sub-threshold regions a single pillar', () => {
     resetStore();
-    resetKickstandStore();
+    resetKickstandsInState();
     clearHistory();
     const disposeHandlers = registerSupportHistoryHandlers();
 
@@ -355,7 +354,7 @@ test('runAutoPlace gives small sub-threshold regions a single pillar', () => {
 
 test('runAutoPlace fans sub-threshold overhang candidates instead of standalone trunks', () => {
     resetStore();
-    resetKickstandStore();
+    resetKickstandsInState();
     clearHistory();
     const disposeHandlers = registerSupportHistoryHandlers();
 
@@ -406,7 +405,7 @@ test('runAutoPlace fans sub-threshold overhang candidates instead of standalone 
 
 test('runAutoPlace falls back to a standalone trunk when no fan host exists', () => {
     resetStore();
-    resetKickstandStore();
+    resetKickstandsInState();
     clearHistory();
     const disposeHandlers = registerSupportHistoryHandlers();
 
@@ -441,7 +440,7 @@ test('runAutoPlace falls back to a standalone trunk when no fan host exists', ()
 
 test('runAutoPlace dispatches by shape: planar → grid, organic → Poisson', () => {
     resetStore();
-    resetKickstandStore();
+    resetKickstandsInState();
     clearHistory();
     const disposeHandlers = registerSupportHistoryHandlers();
 
@@ -490,7 +489,7 @@ test('runAutoPlace dispatches by shape: planar → grid, organic → Poisson', (
 
 test('runAutoPlace does not duplicate a pillar on top of an existing island trunk', () => {
     resetStore();
-    resetKickstandStore();
+    resetKickstandsInState();
     clearHistory();
     const disposeHandlers = registerSupportHistoryHandlers();
 
@@ -535,7 +534,7 @@ test('runAutoPlace does not duplicate a pillar on top of an existing island trun
 
 test('runAutoPlace keeps a later-placed island trunk independent of the surrounding grid', () => {
     resetStore();
-    resetKickstandStore();
+    resetKickstandsInState();
     clearHistory();
     const disposeHandlers = registerSupportHistoryHandlers();
 
@@ -589,7 +588,7 @@ test('runAutoPlace keeps a later-placed island trunk independent of the surround
 
 test('runAutoPlace merges with a steep knot, not at the host junction', () => {
     resetStore();
-    resetKickstandStore();
+    resetKickstandsInState();
     clearHistory();
     const disposeHandlers = registerSupportHistoryHandlers();
 
@@ -633,7 +632,7 @@ test('runAutoPlace merges with a steep knot, not at the host junction', () => {
 
 test('runAutoPlace places low undersides as a standalone pillar forest', () => {
     resetStore();
-    resetKickstandStore();
+    resetKickstandsInState();
     clearHistory();
     const disposeHandlers = registerSupportHistoryHandlers();
 
@@ -684,7 +683,7 @@ test('runAutoPlace places low undersides as a standalone pillar forest', () => {
 
 test('runAutoPlace with no viable candidates returns changed=false and pushes nothing', () => {
     resetStore();
-    resetKickstandStore();
+    resetKickstandsInState();
     clearHistory();
 
     const result = runAutoPlace([], 'model-a');
@@ -730,7 +729,7 @@ test('a punched hole above a cavity ceiling does not delete its support', () => 
 
     const run = (ceilingHoleMm: number | null) => {
         resetStore();
-        resetKickstandStore();
+        resetKickstandsInState();
         clearHistory();
         const disposeHandlers = registerSupportHistoryHandlers();
         initializeBVH();
@@ -777,7 +776,7 @@ test('a punched hole above a cavity ceiling does not delete its support', () => 
  */
 test('no branch leaves its host shallower than the branch-angle rule', () => {
     resetStore();
-    resetKickstandStore();
+    resetKickstandsInState();
     clearHistory();
     const disposeHandlers = registerSupportHistoryHandlers();
 

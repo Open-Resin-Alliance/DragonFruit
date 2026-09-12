@@ -20,15 +20,29 @@ export const HOME_FOCUS_STATE: CameraFocusState = SUPPORT_HOME_FOCUS_STATE;
 export { RAFT_HOME_FOCUS_STATE };
 export { BRACE_HOME_FOCUS_STATE };
 
+/**
+ * Where the preview camera sits for each sidebar kind.
+ *
+ * `target` frames a named setting; `home` is where the camera rests when no
+ * setting is focused, for the kinds that declare one. A kind with no entry
+ * falls back to the shared support framing.
+ */
+const CAMERA_BY_KIND: Partial<Record<SupportKind, {
+    target: (key: string | null) => CameraFocusState;
+    home?: CameraFocusState;
+}>> = {
+    raft: { target: getRaftTargetFocusState },
+    grid: { target: getGridTargetFocusState },
+    stick: { target: getBraceTargetFocusState },
+    twig: { target: getTwigTargetFocusState },
+    branch: { target: getBranchTargetFocusState, home: BRANCH_HOME_FOCUS_STATE },
+    leaf: { target: getLeafTargetFocusState, home: LEAF_HOME_FOCUS_STATE },
+    trunk: { target: getSupportTargetFocusState, home: TRUNK_HOME_FOCUS_STATE },
+};
+
 export function getTargetFocusState(kind: SupportKind, key: string | null): CameraFocusState {
-    if (kind === 'raft') return getRaftTargetFocusState(key);
-    if (kind === 'grid') return getGridTargetFocusState(key);
-    if (kind === 'stick') return getBraceTargetFocusState(key);
-    if (kind === 'twig') return getTwigTargetFocusState(key);
-    if (kind === 'branch' && !key) return BRANCH_HOME_FOCUS_STATE;
-    if (kind === 'leaf' && !key) return LEAF_HOME_FOCUS_STATE;
-    if (kind === 'trunk' && !key) return TRUNK_HOME_FOCUS_STATE;
-    if (kind === 'branch') return getBranchTargetFocusState(key);
-    if (kind === 'leaf') return getLeafTargetFocusState(key);
-    return getSupportTargetFocusState(key);
+    const entry = CAMERA_BY_KIND[kind];
+    if (!entry) return getSupportTargetFocusState(key);
+    if (!key && entry.home) return entry.home;
+    return entry.target(key);
 }

@@ -5,7 +5,8 @@ import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { ChevronDown, ChevronRight, X } from 'lucide-react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { getSnapshot as getSupportSnapshot, subscribe as subscribeSupportState } from '@/supports/state';
-import { getKickstandSnapshot, subscribeToKickstandStore } from '@/supports/SupportTypes/Kickstand/kickstandStore';
+import { getSupportsForModel } from '@/supports/PlacementLogic/SupportModelLinker';
+import { getSupportTypeDescriptor, MODEL_ID_COLLECTION_KEYS, parseKnotHostId, SUPPORT_COLLECTION_KEYS, SUPPORT_STATE_TYPES, type SupportCollectionKey } from '@/supports/supportTypeRegistry';
 
 type ModelSupportsModalProps = {
   isOpen: boolean;
@@ -13,29 +14,14 @@ type ModelSupportsModalProps = {
   model: LoadedModel | null;
 };
 
-type ModelSupportGroups = {
-  roots: string[];
-  trunks: string[];
-  branches: string[];
-  leaves: string[];
-  twigs: string[];
-  sticks: string[];
-  braces: string[];
-  knots: string[];
-  kickstands: string[];
-};
+/** One id list per collection, derived so a new support type appears here too. */
+type ModelSupportGroups = Record<SupportCollectionKey, string[]>;
 
-const EMPTY_GROUPS: ModelSupportGroups = {
-  roots: [],
-  trunks: [],
-  branches: [],
-  leaves: [],
-  twigs: [],
-  sticks: [],
-  braces: [],
-  knots: [],
-  kickstands: [],
-};
+const EMPTY_GROUPS: ModelSupportGroups = (() => {
+  const empty = {} as ModelSupportGroups;
+  for (const key of SUPPORT_COLLECTION_KEYS) empty[key] = [];
+  return empty;
+})();
 
 function sortIds(ids: string[]): string[] {
   return [...ids].sort((a, b) => a.localeCompare(b));
@@ -43,7 +29,6 @@ function sortIds(ids: string[]): string[] {
 
 export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModalProps) {
   const supportSnapshot = React.useSyncExternalStore(subscribeSupportState, getSupportSnapshot, getSupportSnapshot);
-  const kickstandSnapshot = React.useSyncExternalStore(subscribeToKickstandStore, getKickstandSnapshot, getKickstandSnapshot);
   const [collapsedGroups, setCollapsedGroups] = React.useState<Record<string, boolean>>({});
 
   useEscapeToClose(isOpen, onClose);
@@ -52,14 +37,9 @@ export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModa
     const modelId = model?.id;
     if (!modelId) return EMPTY_GROUPS;
 
-    const roots = sortIds(Object.values(supportSnapshot.roots).filter((item) => item.modelId === modelId).map((item) => item.id));
-    const trunks = sortIds(Object.values(supportSnapshot.trunks).filter((item) => item.modelId === modelId).map((item) => item.id));
-    const branches = sortIds(Object.values(supportSnapshot.branches).filter((item) => item.modelId === modelId).map((item) => item.id));
-    const leaves = sortIds(Object.values(supportSnapshot.leaves).filter((item) => item.modelId === modelId).map((item) => item.id));
-    const twigs = sortIds(Object.values(supportSnapshot.twigs).filter((item) => item.modelId === modelId).map((item) => item.id));
-    const sticks = sortIds(Object.values(supportSnapshot.sticks).filter((item) => item.modelId === modelId).map((item) => item.id));
-    const braces = sortIds(Object.values(supportSnapshot.braces).filter((item) => item.modelId === modelId).map((item) => item.id));
-    const kickstands = sortIds(Object.values(kickstandSnapshot.kickstands).filter((item) => item.modelId === modelId).map((item) => item.id));
+    const byModel = getSupportsForModel(supportSnapshot, modelId);
+    const grouped = {} as ModelSupportGroups;
+    for (const key of MODEL_ID_COLLECTION_KEYS) grouped[key] = sortIds(byModel[key]);
 
     const knots = sortIds(Object.values(supportSnapshot.knots).filter((item) => {
       const parent = item.parentShaftId;
@@ -71,68 +51,46 @@ export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModa
       if (twig) return twig.modelId === modelId;
       const stick = supportSnapshot.sticks[parent];
       if (stick) return stick.modelId === modelId;
-      if (parent.startsWith('braceSegment:')) {
-        const braceId = parent.slice('braceSegment:'.length);
-        return supportSnapshot.braces[braceId]?.modelId === modelId;
+      const host = parseKnotHostId(parent);
+      if (host) {
+        const collections = supportSnapshot as unknown as Record<string, Record<string, { modelId?: string }>>;
+        const collection = collections[getSupportTypeDescriptor(host.typeId).location.key];
+        return collection?.[host.entityId]?.modelId === modelId;
       }
       return false;
     }).map((item) => item.id));
 
-    return {
-      roots,
-      trunks,
-      branches,
-      leaves,
-      twigs,
-      sticks,
-      braces,
-      knots,
-      kickstands,
-    };
-  }, [kickstandSnapshot.kickstands, model?.id, supportSnapshot.braces, supportSnapshot.branches, supportSnapshot.knots, supportSnapshot.leaves, supportSnapshot.roots, supportSnapshot.sticks, supportSnapshot.trunks, supportSnapshot.twigs]);
+    grouped.knots = knots;
+    return grouped;
+  }, [model?.id, supportSnapshot]);
 
   React.useEffect(() => {
     if (!isOpen) return;
-    setCollapsedGroups({ roots: true, trunks: true, branches: true, leaves: true, twigs: true, sticks: true, braces: true, knots: true, kickstands: true });
+    setCollapsedGroups(Object.fromEntries(SUPPORT_COLLECTION_KEYS.map((key) => [key, true])));
   }, [isOpen, model?.id]);
 
   const summaryStats = React.useMemo(() => {
-    return {
-      roots: groups.roots.length,
-      trunks: groups.trunks.length,
-      branches: groups.branches.length,
-      leaves: groups.leaves.length,
-      twigs: groups.twigs.length,
-      sticks: groups.sticks.length,
-      braces: groups.braces.length,
-      knots: groups.knots.length,
-      kickstands: groups.kickstands.length,
-    };
+    const stats = {} as Record<SupportCollectionKey, number>;
+    for (const key of SUPPORT_COLLECTION_KEYS) stats[key] = groups[key].length;
+    return stats;
   }, [groups]);
 
+  // Knots are excluded: they are attachments on a support, not supports.
   const totalSupportEntities = React.useMemo(() => {
-    return summaryStats.roots
-      + summaryStats.trunks
-      + summaryStats.branches
-      + summaryStats.leaves
-      + summaryStats.twigs
-      + summaryStats.sticks
-      + summaryStats.braces
-      + summaryStats.kickstands;
+    return MODEL_ID_COLLECTION_KEYS.reduce((sum, key) => sum + summaryStats[key], 0);
   }, [summaryStats]);
 
   const groupRows = React.useMemo(() => {
+    // Roots first, then the support types in registry order, then knots.
     return [
-      { key: 'roots', label: 'Roots', ids: groups.roots },
-      { key: 'trunks', label: 'Trunks', ids: groups.trunks },
-      { key: 'branches', label: 'Branches', ids: groups.branches },
-      { key: 'leaves', label: 'Leaves', ids: groups.leaves },
-      { key: 'twigs', label: 'Twigs', ids: groups.twigs },
-      { key: 'sticks', label: 'Sticks', ids: groups.sticks },
-      { key: 'braces', label: 'Braces', ids: groups.braces },
-      { key: 'kickstands', label: 'Kickstands', ids: groups.kickstands },
-      { key: 'knots', label: 'Knots', ids: groups.knots },
-    ] as const;
+      { key: 'roots' as SupportCollectionKey, label: 'Roots', ids: groups.roots },
+      ...SUPPORT_STATE_TYPES.map((descriptor) => ({
+        key: descriptor.location.key as SupportCollectionKey,
+        label: descriptor.label,
+        ids: groups[descriptor.location.key as SupportCollectionKey],
+      })),
+      { key: 'knots' as SupportCollectionKey, label: 'Knots', ids: groups.knots },
+    ];
   }, [groups]);
 
   const toggleGroup = React.useCallback((groupKey: string) => {
@@ -203,19 +161,9 @@ export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModa
           </div>
 
           <div className="grid grid-cols-2 gap-2">
-            {[
-              ['Roots', summaryStats.roots],
-              ['Trunks', summaryStats.trunks],
-              ['Branches', summaryStats.branches],
-              ['Leaves', summaryStats.leaves],
-              ['Twigs', summaryStats.twigs],
-              ['Sticks', summaryStats.sticks],
-              ['Braces', summaryStats.braces],
-              ['Kickstands', summaryStats.kickstands],
-              ['Knots', summaryStats.knots],
-            ].map(([label, count]) => (
+            {groupRows.map(({ key, label }) => (
               <div
-                key={label}
+                key={key}
                 className="rounded-md border px-3 py-2"
                 style={{
                   borderColor: 'var(--border-subtle)',
@@ -224,7 +172,7 @@ export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModa
               >
                 <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>{label}</div>
                 <div className="text-sm font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>
-                  {Number(count).toLocaleString()}
+                  {summaryStats[key].toLocaleString()}
                 </div>
               </div>
             ))}

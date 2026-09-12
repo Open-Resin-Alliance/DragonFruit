@@ -18,42 +18,37 @@ import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { matchesConfiguredHotkeyUp } from '@/hotkeys/hotkeyConfig';
-import { subscribe, getSnapshot, addBranch, addKnot, addTwig, addStick } from '../../state';
+import { subscribe, getSnapshot, addBranch, addKnot, addSupportEntityWithHistory } from '../../state';
+import { buildContactBridge, selectTypeForPlacement } from '../../supportTypeRegistry';
 import { pushSupportHistory } from '@/supports/history/supportHistory';
 import { getClipBounds } from '@/components/scene/SceneCanvas/clipBoundsStore';
-import { SUPPORT_ADD_BRANCH, SUPPORT_ADD_TWIG, SUPPORT_ADD_STICK } from '../../history/actionTypes';
+import { addAction } from '../../history/actionTypes';
 import { SnapTarget } from '../../interaction/SnappingManager';
-import { Vec3, Knot } from '../../types';
+import { Vec3, Knot, type LimitationCode, type Segment } from '../../types';
 import { getSettings } from '../../Settings/state';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { buildBranchData } from './branchBuilder';
 import { branchPlacementStore, useBranchPlacementState } from './branchPlacementState';
 import { calculateSmoothedNormal, findClosestMeshToPoint } from '../../PlacementLogic/PlacementUtils';
-import { buildTwig } from '../Twig/twigBuilder';
-import { buildStick } from '../Stick/stickBuilder';
-import type { SupportData } from '../../rendering/SupportBuilder';
+import { supportDataForEntity, type SupportData } from '../../rendering/SupportBuilder';
 import { v4 as uuidv4 } from 'uuid';
 import { isContactDiskHudInteractionActive, shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
 import { useImmediateModelHoverId } from '../../interaction/useInteractionStatus';
 import { isSupportTargetHoverCategory } from '../../interaction/shared/hover/supportHoverResolver';
 import { usePlacementSnappingSession } from '../../interaction/shared/placement/snapping/usePlacementSnappingSession';
-import { buildPrimarySnapTargetIndex, buildSupportPathSnapTargets } from '../../interaction/shared/placement/snapping/supportPathTargets';
+import { buildPrimarySnapTargetIndex, ALL_SNAP_TYPES, buildSupportPathSnapTargets } from '../../interaction/shared/placement/snapping/supportPathTargets';
 import { projectPointToSnapTargetPath, projectRayToSnapTargetPath, selectNearestPathTarget } from '../../interaction/shared/placement/snapping/pathProjection';
 import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
 import { previewNormalKey, previewVecKey, quantizePreviewValue } from '../shared/previewSignature';
+import { markPlacementSurface } from '../../PlacementLogic/placementSurface';
 
 interface ShaftHoverDetail {
     segmentId?: string | null;
     point?: Vec3 | null;
 }
 
-type PlacementSurface = 'interior' | 'exterior';
 
-function markContactPlacementSurface<T extends { placementSurface?: PlacementSurface } | undefined>(contact: T, surface?: PlacementSurface): T {
-    if (!contact || !surface) return contact;
-    return { ...contact, placementSurface: surface } as T;
-}
 
 // Scratch raycaster reused for clip-zone fallback raycasts (same pattern as StlMesh).
 const _branchClipFallbackRaycaster = new THREE.Raycaster();
@@ -212,14 +207,10 @@ export function BranchPlacementController() {
         if (stage !== 'awaitingBase') return [];
 
         return buildSupportPathSnapTargets(supportState, {
-            includeTrunks: true,
-            includeBranches: true,
-            includeBraces: true,
-            includeTwigs: true,
-            includeSticks: true,
+            snapTypes: ALL_SNAP_TYPES,
             placementSurface,
         });
-    }, [stage, placementSurface, supportState.trunks, supportState.branches, supportState.braces, supportState.twigs, supportState.sticks]);
+    }, [stage, placementSurface, supportState]);
 
     const targetById = useMemo(() => {
         return buildPrimarySnapTargetIndex(allTargets);
@@ -609,12 +600,12 @@ export function BranchPlacementController() {
                         const dy = tipPosition.y - bPos.y;
                         const dz = tipPosition.z - bPos.z;
                         const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-                        const cutoff = settings.meshToMesh?.stickVsTwigCutoffMm ?? 5;
-                        const kind: 'twig' | 'stick' = dist > cutoff ? 'stick' : 'twig';
+                        // contactSpan is declared only by twig and stick.
+                        const kind = (selectTypeForPlacement('contactSpan', dist) ?? 'twig') as 'twig' | 'stick';
                         meshKindRef.current = kind;
 
                         const meshLinkSignature = [
-                            kind === 'twig' ? 'branch:twig' : 'branch:stick',
+                            `branch:${kind}`,
                             modelId,
                             bModelId,
                             previewVecKey(tipPosition),
@@ -626,25 +617,19 @@ export function BranchPlacementController() {
                         if (lastPreviewSignatureRef.current !== meshLinkSignature) {
                             lastPreviewSignatureRef.current = meshLinkSignature;
 
-                             if (kind === 'twig') {
-                                 const { twig, error } = buildTwig({ modelId, aPos: tipPosition, aNormal: tipNormal, bPos, bNormal, mesh: resolveTipMesh() });
-                                 const startPos = twig.segments[0]?.bottomJoint?.pos ?? tipPosition;
+                             // The registry chose the type and knows how to
+                             // build it; the preview only relabels the result.
+                             const built = buildContactBridge(kind, {
+                                 modelId, aPos: tipPosition, aNormal: tipNormal, bPos, bNormal,
+                                 mesh: resolveTipMesh(),
+                             });
+                             if (built) {
+                                 const entity = built.entity as { id: string; segments: Segment[] };
                                  branchPlacementStore.setPreviewData({
+                                     ...supportDataForEntity(kind, entity),
                                      id: 'preview-meshlink',
-                                     startPos,
-                                     segments: twig.segments,
-                                     contactDisks: [twig.contactDiskA, twig.contactDiskB],
-                                     error,
-                                 });
-                             } else {
-                                 const { stick, error } = buildStick({ modelId, aPos: tipPosition, aNormal: tipNormal, bPos, bNormal, mesh: resolveTipMesh() });
-                                 const startPos = stick.segments[0]?.bottomJoint?.pos ?? tipPosition;
-                                 branchPlacementStore.setPreviewData({
-                                     id: 'preview-meshlink',
-                                     startPos,
-                                     segments: stick.segments,
-                                     contactCones: [stick.contactConeA, stick.contactConeB],
-                                     error,
+                                     startPos: entity.segments[0]?.bottomJoint?.pos ?? tipPosition,
+                                     error: built.error as LimitationCode | undefined,
                                  });
                              }
                         }
@@ -726,51 +711,19 @@ export function BranchPlacementController() {
                 if (!meshHover || !kind) return;
                 if (meshHover.modelId !== modelId) return;
 
-                if (kind === 'twig') {
-                    const { twig, error } = buildTwig({
-                        modelId,
-                        aPos: tipPosition,
-                        aNormal: tipNormal,
-                        bPos: meshHover.pos,
-                        bNormal: meshHover.normal,
-                        mesh: resolveTipMesh(),
-                    });
-                    if (error) return;
-                    const markedTwig = placementSurface
-                        ? {
-                            ...twig,
-                            contactDiskA: markContactPlacementSurface(twig.contactDiskA, placementSurface),
-                            contactDiskB: markContactPlacementSurface(twig.contactDiskB, placementSurface),
-                        }
-                        : twig;
-                    addTwig(markedTwig);
-                    pushSupportHistory({
-                        type: SUPPORT_ADD_TWIG,
-                        payload: { twig: markedTwig },
-                    });
-                } else {
-                    const { stick, error } = buildStick({
-                        modelId,
-                        aPos: tipPosition,
-                        aNormal: tipNormal,
-                        bPos: meshHover.pos,
-                        bNormal: meshHover.normal,
-                        mesh: resolveTipMesh(),
-                    });
-                    if (error) return;
-                    const markedStick = placementSurface
-                        ? {
-                            ...stick,
-                            contactConeA: markContactPlacementSurface(stick.contactConeA, placementSurface),
-                            contactConeB: markContactPlacementSurface(stick.contactConeB, placementSurface),
-                        }
-                        : stick;
-                    addStick(markedStick);
-                    pushSupportHistory({
-                        type: SUPPORT_ADD_STICK,
-                        payload: { stick: markedStick },
-                    });
-                }
+                const built = buildContactBridge(kind, {
+                    modelId,
+                    aPos: tipPosition,
+                    aNormal: tipNormal,
+                    bPos: meshHover.pos,
+                    bNormal: meshHover.normal,
+                    mesh: resolveTipMesh(),
+                });
+                if (!built || built.error) return;
+                addSupportEntityWithHistory(
+                    kind,
+                    markPlacementSurface(kind, built.entity, placementSurface),
+                );
 
                 branchPlacementStore.finalize();
                 meshHoverRef.current = null;
@@ -805,18 +758,13 @@ export function BranchPlacementController() {
             });
 
             console.log('[BranchPlacement] Creating branch via snap click', branch);
-            const markedBranch = placementSurface
-                ? {
-                    ...branch,
-                    contactCone: markContactPlacementSurface(branch.contactCone, placementSurface),
-                }
-                : branch;
+            const markedBranch = markPlacementSurface('branch', branch, placementSurface);
 
             addKnot(parentKnot);
             addBranch(markedBranch);
 
             pushSupportHistory({
-                type: SUPPORT_ADD_BRANCH,
+                type: addAction('branch'),
                 payload: {
                     branch: markedBranch,
                     knot: parentKnot,

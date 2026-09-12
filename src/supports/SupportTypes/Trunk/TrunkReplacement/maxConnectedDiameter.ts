@@ -1,8 +1,9 @@
 import type { Branch, Knot, Leaf, Roots, SupportState, Trunk } from '../../../types';
 import { getJointDiameter } from '../../../constants';
 import { splitShaft } from '../../../SupportPrimitives/Joint/jointUtils';
-import { getTrunkSegmentEndpoints } from '../../../SupportPrimitives/Knot/knotUtils';
+import { resolveSegmentEndpoints } from '../../../SupportPrimitives/Knot/segmentEndpoints';
 import { getSettings } from '../../../Settings/state';
+import { getSupportTypeDescriptor, SUPPORT_TYPES, type SupportTypeDescriptor, type SupportTypeId } from '../../../supportTypeRegistry';
 
 function maxNum(a: number, b: number) {
     return a > b ? a : b;
@@ -22,9 +23,48 @@ function collectSegmentDiameters(entity: { segments: { diameter: number }[] }): 
     return max;
 }
 
-function braceSegmentKey(braceId: string) {
-    return `braceSegment:${braceId}`;
+/**
+ * The diameter a support contributes to its connected graph.
+ *
+ * A shafted type reports its widest segment; a brace its profile; a leaf its
+ * contact cone.
+ */
+function memberDiameterOf(descriptor: SupportTypeDescriptor, entity: Record<string, unknown>): number {
+    if (descriptor.hasSegments) {
+        return collectSegmentDiameters(entity as unknown as { segments: { diameter: number }[] });
+    }
+
+    const profileDiameter = (entity.profile as { diameter?: number } | undefined)?.diameter;
+    if (typeof profileDiameter === 'number') return profileDiameter;
+
+    if (entity.contactCone) return getLeafDiameter(entity as unknown as Leaf);
+    return 0;
 }
+
+/** Which support a shaft id belongs to, prefix forms included. */
+function ownerOfShaft(snapshot: SupportState, shaftId: string): { typeId: SupportTypeId; id: string } | null {
+    if (!shaftId) return null;
+
+    for (const descriptor of SUPPORT_TYPES) {
+        const prefix = descriptor.segmentSelectionPrefix;
+        if (!prefix || !shaftId.startsWith(prefix)) continue;
+        const ownerId = shaftId.slice(prefix.length);
+        const collection = snapshot[descriptor.location.key] as unknown as Record<string, unknown>;
+        return collection?.[ownerId] ? { typeId: descriptor.id, id: ownerId } : null;
+    }
+
+    for (const descriptor of SUPPORT_TYPES) {
+        if (!descriptor.hasSegments) continue;
+        const collection = snapshot[descriptor.location.key] as unknown as Record<string, { id: string; segments?: { id: string }[] }>;
+        for (const entity of Object.values(collection ?? {})) {
+            if (entity.segments?.some((segment) => segment.id === shaftId)) {
+                return { typeId: descriptor.id, id: entity.id };
+            }
+        }
+    }
+    return null;
+}
+
 
 function leafConeKey(leafId: string) {
     return `leafCone:${leafId}`;
@@ -35,161 +75,79 @@ function leafConeKey(leafId: string) {
  * reachable from a given trunk.
  */
 export function computeMaxConnectedDiameterFromTrunk(snapshot: SupportState, trunkId: string): number {
-    const trunk = snapshot.trunks[trunkId];
-    if (!trunk) return 0;
+    if (!snapshot.trunks[trunkId]) return 0;
 
-    const visitedTrunks = new Set<string>();
-    const visitedBranches = new Set<string>();
-    const visitedTwigs = new Set<string>();
-    const visitedSticks = new Set<string>();
-    const visitedBraces = new Set<string>();
-    const visitedLeaves = new Set<string>();
+    // Knots by the shaft they sit on, built once. Each arm of the walk this
+    // replaces scanned every knot in the store, per entity visited.
+    const knotIdsByShaft = new Map<string, string[]>();
+    for (const knot of Object.values(snapshot.knots)) {
+        const list = knotIdsByShaft.get(knot.parentShaftId);
+        if (list) list.push(knot.id);
+        else knotIdsByShaft.set(knot.parentShaftId, [knot.id]);
+    }
+
+    // Entities by the knot they hang from, by declared `hostedBy knots` edges.
+    const entitiesByKnot = new Map<string, { typeId: SupportTypeId; id: string }[]>();
+    for (const descriptor of SUPPORT_TYPES) {
+        const knotEdges = descriptor.edges.filter((edge) => edge.to === 'knots' && edge.ownership === 'hostedBy');
+        if (knotEdges.length === 0) continue;
+
+        const collection = snapshot[descriptor.location.key] as unknown as Record<string, Record<string, unknown>>;
+        for (const entity of Object.values(collection ?? {})) {
+            for (const edge of knotEdges) {
+                const knotId = entity[edge.field];
+                if (typeof knotId !== 'string') continue;
+                const entry = { typeId: descriptor.id, id: entity.id as string };
+                const list = entitiesByKnot.get(knotId);
+                if (list) list.push(entry);
+                else entitiesByKnot.set(knotId, [entry]);
+            }
+        }
+    }
+
+    /** The shaft ids a knot can name for this entity: real segments, or a prefix. */
+    const shaftKeysOf = (descriptor: SupportTypeDescriptor, entity: Record<string, unknown>): string[] => {
+        if (descriptor.segmentSelectionPrefix) return [`${descriptor.segmentSelectionPrefix}${entity.id}`];
+        const segments = (entity.segments as { id: string }[] | undefined) ?? [];
+        return segments.map((segment) => segment.id);
+    };
+
+    const visitedSupports = new Set<string>();
     const visitedKnots = new Set<string>();
-
-    const trunkQueue: string[] = [trunkId];
-    const branchQueue: string[] = [];
-    const twigQueue: string[] = [];
-    const stickQueue: string[] = [];
-    const braceQueue: string[] = [];
-    const leafQueue: string[] = [];
+    const supportQueue: { typeId: SupportTypeId; id: string }[] = [{ typeId: 'trunk', id: trunkId }];
     const knotQueue: string[] = [];
 
     let maxDiameter = 0;
 
-    while (
-        trunkQueue.length ||
-        branchQueue.length ||
-        twigQueue.length ||
-        stickQueue.length ||
-        braceQueue.length ||
-        leafQueue.length ||
-        knotQueue.length
-    ) {
-        const take = <T>(q: T[]): T => q.pop() as T;
+    while (supportQueue.length || knotQueue.length) {
+        const next = supportQueue.pop();
+        if (next) {
+            if (visitedSupports.has(next.id)) continue;
+            visitedSupports.add(next.id);
 
-        if (trunkQueue.length) {
-            const id = take(trunkQueue);
-            if (visitedTrunks.has(id)) continue;
-            visitedTrunks.add(id);
+            const descriptor = getSupportTypeDescriptor(next.typeId);
+            const entity = (snapshot[descriptor.location.key] as unknown as Record<string, Record<string, unknown>>)[next.id];
+            if (!entity) continue;
 
-            const t = snapshot.trunks[id];
-            if (!t) continue;
+            maxDiameter = maxNum(maxDiameter, memberDiameterOf(descriptor, entity));
 
-            maxDiameter = maxNum(maxDiameter, collectSegmentDiameters(t));
-
-            const segIds = new Set(t.segments.map((s) => s.id));
-            for (const knot of Object.values(snapshot.knots)) {
-                if (segIds.has(knot.parentShaftId)) {
-                    knotQueue.push(knot.id);
-                }
+            // Knots sitting on this support's shaft, and the knots it hangs from.
+            for (const shaftKey of shaftKeysOf(descriptor, entity)) {
+                for (const knotId of knotIdsByShaft.get(shaftKey) ?? []) knotQueue.push(knotId);
             }
+            for (const edge of descriptor.edges) {
+                if (edge.to !== 'knots' || edge.ownership !== 'hostedBy') continue;
+                const knotId = entity[edge.field];
+                if (typeof knotId === 'string') knotQueue.push(knotId);
+            }
+
+            // A leaf's cone is addressed as a shaft too, so a knot can sit on it.
+            for (const knotId of knotIdsByShaft.get(leafConeKey(next.id)) ?? []) knotQueue.push(knotId);
 
             continue;
         }
 
-        if (branchQueue.length) {
-            const id = take(branchQueue);
-            if (visitedBranches.has(id)) continue;
-            visitedBranches.add(id);
-
-            const b = snapshot.branches[id];
-            if (!b) continue;
-
-            maxDiameter = maxNum(maxDiameter, collectSegmentDiameters(b));
-            knotQueue.push(b.parentKnotId);
-
-            const segIds = new Set(b.segments.map((s) => s.id));
-            for (const knot of Object.values(snapshot.knots)) {
-                if (segIds.has(knot.parentShaftId)) {
-                    knotQueue.push(knot.id);
-                }
-            }
-
-            continue;
-        }
-
-        if (twigQueue.length) {
-            const id = take(twigQueue);
-            if (visitedTwigs.has(id)) continue;
-            visitedTwigs.add(id);
-
-            const t = snapshot.twigs[id];
-            if (!t) continue;
-            maxDiameter = maxNum(maxDiameter, collectSegmentDiameters(t));
-
-            const segIds = new Set(t.segments.map((s) => s.id));
-            for (const knot of Object.values(snapshot.knots)) {
-                if (segIds.has(knot.parentShaftId)) {
-                    knotQueue.push(knot.id);
-                }
-            }
-
-            continue;
-        }
-
-        if (stickQueue.length) {
-            const id = take(stickQueue);
-            if (visitedSticks.has(id)) continue;
-            visitedSticks.add(id);
-
-            const s = snapshot.sticks[id];
-            if (!s) continue;
-            maxDiameter = maxNum(maxDiameter, collectSegmentDiameters(s));
-
-            const segIds = new Set(s.segments.map((s2) => s2.id));
-            for (const knot of Object.values(snapshot.knots)) {
-                if (segIds.has(knot.parentShaftId)) {
-                    knotQueue.push(knot.id);
-                }
-            }
-
-            continue;
-        }
-
-        if (braceQueue.length) {
-            const id = take(braceQueue);
-            if (visitedBraces.has(id)) continue;
-            visitedBraces.add(id);
-
-            const brace = snapshot.braces[id];
-            if (!brace) continue;
-
-            maxDiameter = maxNum(maxDiameter, brace.profile?.diameter ?? 0);
-            knotQueue.push(brace.startKnotId);
-            knotQueue.push(brace.endKnotId);
-
-            const segKey = braceSegmentKey(id);
-            for (const knot of Object.values(snapshot.knots)) {
-                if (knot.parentShaftId === segKey) {
-                    knotQueue.push(knot.id);
-                }
-            }
-
-            continue;
-        }
-
-        if (leafQueue.length) {
-            const id = take(leafQueue);
-            if (visitedLeaves.has(id)) continue;
-            visitedLeaves.add(id);
-
-            const leaf = snapshot.leaves[id];
-            if (!leaf) continue;
-
-            maxDiameter = maxNum(maxDiameter, getLeafDiameter(leaf));
-            knotQueue.push(leaf.parentKnotId);
-
-            const segKey = leafConeKey(id);
-            for (const knot of Object.values(snapshot.knots)) {
-                if (knot.parentShaftId === segKey) {
-                    knotQueue.push(knot.id);
-                }
-            }
-
-            continue;
-        }
-
-        const knotId = take(knotQueue);
+        const knotId = knotQueue.pop() as string;
         if (visitedKnots.has(knotId)) continue;
         visitedKnots.add(knotId);
 
@@ -200,58 +158,16 @@ export function computeMaxConnectedDiameterFromTrunk(snapshot: SupportState, tru
             maxDiameter = maxNum(maxDiameter, Math.max(0, knot.diameter - 0.1));
         }
 
-        // Attached branches/leaves
-        for (const b of Object.values(snapshot.branches)) {
-            if (b.parentKnotId === knotId) branchQueue.push(b.id);
-        }
-        for (const l of Object.values(snapshot.leaves)) {
-            if (l.parentKnotId === knotId) leafQueue.push(l.id);
-        }
+        for (const entry of entitiesByKnot.get(knotId) ?? []) supportQueue.push(entry);
 
-        // Braces connected to knot
-        for (const br of Object.values(snapshot.braces)) {
-            if (br.startKnotId === knotId || br.endKnotId === knotId) braceQueue.push(br.id);
-        }
-
-        // Segment ownership by parentShaftId (braceSegment / leafCone)
-        if (knot.parentShaftId.startsWith('braceSegment:')) {
-            const braceId = knot.parentShaftId.slice('braceSegment:'.length);
-            braceQueue.push(braceId);
-        }
-        if (knot.parentShaftId.startsWith('leafCone:')) {
-            const leafId = knot.parentShaftId.slice('leafCone:'.length);
-            leafQueue.push(leafId);
-        }
-
-        // Segment ownership for shafts
-        for (const t of Object.values(snapshot.trunks)) {
-            if (t.segments.some((s) => s.id === knot.parentShaftId)) {
-                trunkQueue.push(t.id);
-                break;
-            }
-        }
-        for (const b of Object.values(snapshot.branches)) {
-            if (b.segments.some((s) => s.id === knot.parentShaftId)) {
-                branchQueue.push(b.id);
-                break;
-            }
-        }
-        for (const t of Object.values(snapshot.twigs)) {
-            if (t.segments.some((s) => s.id === knot.parentShaftId)) {
-                twigQueue.push(t.id);
-                break;
-            }
-        }
-        for (const s of Object.values(snapshot.sticks)) {
-            if (s.segments.some((seg) => seg.id === knot.parentShaftId)) {
-                stickQueue.push(s.id);
-                break;
-            }
-        }
+        // The shaft this knot sits on is part of the same graph.
+        const owner = ownerOfShaft(snapshot, knot.parentShaftId);
+        if (owner) supportQueue.push(owner);
     }
 
     return maxDiameter;
 }
+
 
 export function applyDiameterToTrunk(trunk: Trunk, diameterMm: number): Trunk {
     if (!Number.isFinite(diameterMm) || diameterMm <= 0) return trunk;
@@ -412,7 +328,7 @@ export function computeAndApplyTrunkDiameterProfile(
         if (segIndex === -1) continue;
 
         const seg = nextTrunk.segments[segIndex];
-        const endpoints = getTrunkSegmentEndpoints(nextTrunk, seg, segIndex, root);
+        const endpoints = resolveSegmentEndpoints('trunk', nextTrunk, seg, segIndex, { root });
 
         const existingT = typeof knot.t === 'number'
             ? Math.min(1, Math.max(0, knot.t))

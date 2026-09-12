@@ -51,6 +51,7 @@ function createEmptySnapshot(): SupportState {
         sticks: {},
         braces: {},
         anchors: {},
+        kickstands: {},
         knots: {},
         selectedId: null,
         selectedCategory: null,
