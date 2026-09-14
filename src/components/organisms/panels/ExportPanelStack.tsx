@@ -17,6 +17,7 @@ export type ExportPanelStackProps = {
   setIsExporting: (exporting: boolean) => void;
 
   estimatedSlicerLayerCount: number;
+  excludedSliceModelIds: readonly string[];
   crossSectionLayerHeightMm: number;
   estimatedVolumeMlLabel: string;
   handleSliceRunStartedForPrinting: () => void;
@@ -46,6 +47,7 @@ export function ExportPanelStack({
   showOperationError,
   setIsExporting,
   estimatedSlicerLayerCount,
+  excludedSliceModelIds,
   crossSectionLayerHeightMm,
   estimatedVolumeMlLabel,
   handleSliceRunStartedForPrinting,
@@ -85,6 +87,7 @@ export function ExportPanelStack({
       <SlicingPanel
         key="export-slicing"
         models={scene.models}
+        excludedModelIds={excludedSliceModelIds}
         activeModel={scene.activeModel}
         estimatedLayerCountOverride={estimatedSlicerLayerCount}
         estimatedLayerHeightMmOverride={crossSectionLayerHeightMm}

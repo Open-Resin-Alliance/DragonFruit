@@ -124,3 +124,76 @@ test('streamed slice input excludes raw hollowing output and preserves the model
     supportModel.geometry.geometry.dispose();
   }
 });
+
+test('slice input excludes models marked outside the build volume', async () => {
+  const inside = modelFromPositions('inside', new Float32Array([
+    -2, -2, 0,
+    2, -2, 0,
+    0, 2, 1,
+  ]));
+  const outside = modelFromPositions('outside', new Float32Array([
+    12, -2, 0,
+    16, -2, 0,
+    14, 2, 15,
+  ]));
+
+  let staged = new Uint8Array(0);
+  let captured: { bytes: Uint8Array; modelCount: number; totalLayers: number } | undefined;
+  const reachedSlicer = new Error('captured filtered native slice input');
+  const invoke = async (command: string, args?: unknown): Promise<unknown> => {
+    switch (command) {
+      case 'stage_mesh_binary_set':
+        staged = new Uint8Array(args as Uint8Array);
+        return {};
+      case 'plugin:event|listen':
+        return 1;
+      case 'plugin:event|unlisten':
+        return;
+      case 'slice_solid_native_to_temp_path': {
+        const metadata = JSON.parse((args as { jobJson: string }).jobJson);
+        captured = {
+          bytes: staged.slice(),
+          modelCount: metadata.model_triangle_count,
+          totalLayers: metadata.total_layers,
+        };
+        throw reachedSlicer;
+      }
+      default:
+        throw new Error(`Unexpected native command: ${command}`);
+    }
+  };
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: {
+      dispatchEvent: () => true,
+      __TAURI_INTERNALS__: { invoke, transformCallback: () => 1 },
+      __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
+    },
+  });
+
+  try {
+    await assert.rejects(runSliceExportOrchestrator({
+      models: [inside, outside],
+      excludedModelIds: [outside.id],
+      printerProfile: {
+        id: 'bounds-printer', name: 'Bounds printer',
+        buildVolumeMm: { width: 20, depth: 20, height: 20 },
+        display: { resolutionX: 64, resolutionY: 64, outputFormat: '.ctb' },
+      } as PrinterProfile,
+      materialProfile: { id: 'bounds-material', name: 'Bounds material', layerHeightMm: 0.05 } as MaterialProfile,
+      filenameBase: 'bounds-regression',
+      outputMode: 'return',
+    }), reachedSlicer);
+
+    assert.ok(captured);
+    assert.equal(captured.modelCount, 1);
+    assert.equal(captured.totalLayers, 20);
+    assert.equal(captured.bytes.length, 18, 'only one quantized triangle reaches the native slicer');
+  } finally {
+    if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow);
+    else Reflect.deleteProperty(globalThis, 'window');
+    inside.geometry.geometry.dispose();
+    outside.geometry.geometry.dispose();
+  }
+});
