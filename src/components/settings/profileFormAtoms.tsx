@@ -20,7 +20,10 @@ import {
     getActivePrinterProfile,
     getProfileStoreSnapshot,
 } from '@/features/profiles/profileStore';
-import { getProfileLocalMaterialSettingsAdapter } from '@/features/plugins/pluginRegistry';
+import {
+    getProfileLocalMaterialSettingsAdapter,
+    type ProfileLocalMaterialSettingsAdapter,
+} from '@/features/plugins/pluginRegistry';
 import { calculateTipOffset } from '@/supports/rendering/calculateTipOffset';
 
 // ─── Shared Types ─────────────────────────────────────────────────────────────
@@ -2388,6 +2391,49 @@ export function PluginLocalMaterialSettingsSections({
     );
 }
 
+// ─── PluginLocalMaterialSettingsMetaTab ───────────────────────────────────────
+
+type PluginLocalMaterialSettingsMetaTabProps = {
+    outputFormat: string;
+    settingsMode?: string;
+    adapter: ProfileLocalMaterialSettingsAdapter | null;
+    localSettingsByOutput: LocalSettingsByOutputDraft;
+    onChange: React.Dispatch<React.SetStateAction<LocalSettingsByOutputDraft>>;
+};
+
+/**
+ * The plugin fields a format files on the profile's own Meta tab.
+ *
+ * A format that records something about the file rather than the print declares
+ * its sections and cards with `tabId: 'meta'` and places the fields there. That
+ * keeps the format's metadata beside the profile identity instead of behind a
+ * second tab that reads like the profile's own. A format that places nothing on
+ * that tab renders nothing here, so the Meta tab keeps its stock body.
+ */
+export function PluginLocalMaterialSettingsMetaTab({
+    outputFormat,
+    settingsMode,
+    adapter,
+    localSettingsByOutput,
+    onChange,
+}: PluginLocalMaterialSettingsMetaTabProps) {
+    const hasMetaFields = (adapter?.fields ?? []).some((field) => field.placement?.tabId === 'meta');
+    if (!adapter || !hasMetaFields) return null;
+
+    return (
+        <PluginLocalMaterialSettingsSections
+            outputFormat={outputFormat}
+            settingsMode={settingsMode}
+            adapter={adapter}
+            localSettingsByOutput={localSettingsByOutput}
+            onChange={onChange}
+            replacementMode
+            activeTabId="meta"
+            showTabBar={false}
+        />
+    );
+}
+
 // ─── ReplacementMaterialEditorShell ───────────────────────────────────────────
 
 type ReplacementMaterialEditorShellProps = {
@@ -2426,7 +2472,18 @@ export function ReplacementMaterialEditorShell({
 
     const renderTabBody = React.useCallback((tabId: string) => {
         if (tabId === 'meta') {
-            return <MaterialProfileIdentitySection draft={draft} onChange={onDraftChange} />;
+            return (
+                <>
+                    <MaterialProfileIdentitySection draft={draft} onChange={onDraftChange} />
+                    <PluginLocalMaterialSettingsMetaTab
+                        outputFormat={outputFormat}
+                        settingsMode={settingsMode}
+                        adapter={adapter}
+                        localSettingsByOutput={localSettingsByOutput}
+                        onChange={onLocalSettingsByOutputChange}
+                    />
+                </>
+            );
         }
 
         if (tabId === 'anti-aliasing') {

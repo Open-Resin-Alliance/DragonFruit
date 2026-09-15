@@ -34,6 +34,7 @@ import {
   LabeledToggleInput,
   MaterialProfileIdentitySection,
   MaterialProfileFormSections,
+  PluginLocalMaterialSettingsMetaTab,
   PluginLocalMaterialSettingsSections,
 } from './profileFormAtoms';
 
@@ -2624,23 +2625,35 @@ function MaterialTemplateEditor({ template, targetOptions, onChange, onDelete, h
 
       <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar pr-1">
         {activeEditorTab.kind === 'meta' ? (
-          useReplacementMetaOnly ? (
-            <MaterialProfileIdentitySection
-              draft={template.draft}
+          <>
+            {useReplacementMetaOnly ? (
+              <MaterialProfileIdentitySection
+                draft={template.draft}
+                onChange={(next) => {
+                  const resolved = typeof next === 'function' ? next(template.draft) : next;
+                  onChange({ ...template, draft: resolved });
+                }}
+              />
+            ) : (
+              <MaterialProfileFormSections
+                draft={template.draft}
+                onChange={(next) => {
+                  const resolved = typeof next === 'function' ? next(template.draft) : next;
+                  onChange({ ...template, draft: resolved });
+                }}
+              />
+            )}
+            <PluginLocalMaterialSettingsMetaTab
+              outputFormat={resolvedOutputFormat}
+              settingsMode={resolvedSettingsMode}
+              adapter={localSettingsAdapter}
+              localSettingsByOutput={template.localSettingsByOutput}
               onChange={(next) => {
-                const resolved = typeof next === 'function' ? next(template.draft) : next;
-                onChange({ ...template, draft: resolved });
+                const resolved = typeof next === 'function' ? next(template.localSettingsByOutput) : next;
+                onChange({ ...template, localSettingsByOutput: resolved });
               }}
             />
-          ) : (
-            <MaterialProfileFormSections
-              draft={template.draft}
-              onChange={(next) => {
-                const resolved = typeof next === 'function' ? next(template.draft) : next;
-                onChange({ ...template, draft: resolved });
-              }}
-            />
-          )
+          </>
         ) : (resolvedOutputFormat && localSettingsAdapter && localSettingsAdapter.fields.length > 0 && activeEditorTab.formatTabId) ? (
           <PluginLocalMaterialSettingsSections
             outputFormat={resolvedOutputFormat}
