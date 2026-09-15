@@ -256,6 +256,30 @@ export type LocalMaterialFieldSchema = {
     color?: string;
     /** Optional key to render as a two-stage paired input row with this field. */
     splitWithKey?: string;
+    /**
+     * Render the field greyed out and non-interactive without taking it out of the
+     * settings: its value merges into the job metadata like any other field, so a
+     * preset that carries one is honoured while the input itself cannot change it.
+     */
+    disabled?: boolean;
+    /**
+     * Optional key that lays this field on one full-width row together with every
+     * other field of the same card carrying it: three fields sharing a key read as a
+     * 1:1:1 row, the shape the stock material form gives scale compensation.
+     *
+     * A grouped field takes one column of the row, so `splitWithKey` still collapses
+     * a pair into the one column it renders — declare the pair inside the row, where
+     * both halves are members. A field without a key keeps the card's own grid.
+     */
+    rowKey?: string;
+    /**
+     * This field's share of its `rowKey` row, as a flex weight; 1 when omitted, so a
+     * group of equal fields needs no weights at all. Four fields weighted 3, 1, 1, 1
+     * give the first half the row and the rest a sixth each. Ignored without a
+     * `rowKey`, and read off the field that renders the column, so a `splitWithKey`
+     * pair carries its declaring field's weight rather than both halves'.
+     */
+    rowWeight?: number;
     description?: string;
     min?: number;
     max?: number;
