@@ -2233,7 +2233,7 @@ export function PluginLocalMaterialSettingsSections({
                     No custom settings are available for this tab.
                 </div>
             ) : (
-                <div className="space-y-2">
+                <div className="space-y-3">
                     {sectionGroups.map((section) => {
                         const cardGroups = new Map<string, typeof section.fields>();
                         section.fields.forEach((field) => {
@@ -2256,7 +2256,7 @@ export function PluginLocalMaterialSettingsSections({
                             .sort((a, b) => a.cardOrder - b.cardOrder || a.cardTitle.localeCompare(b.cardTitle));
 
                         return (
-                            <div key={section.sectionId} className="space-y-1.5">
+                            <div key={section.sectionId} className="space-y-3">
                                 {!replacementMode && (
                                     <div className="ui-meta font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
                                         {section.sectionTitle}
