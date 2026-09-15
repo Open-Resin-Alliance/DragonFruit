@@ -22,3 +22,7 @@
 [submodule "plugins/chitubox-import"]
 	path = plugins/chitubox-import
 	url = https://github.com/Open-Resin-Alliance/df-plugin-chitubox
+[submodule "plugins/lumen"]
+	path = plugins/lumen
+	url = https://github.com/Open-Resin-Alliance/LumenFormat.git
+	branch = main
