@@ -21,6 +21,17 @@ for working with it.
    less-specific binding that is a strict subset of a held one — e.g. `GLOBAL.REDO`
    (Ctrl+Shift+Z) suppresses `GLOBAL.UNDO` (Ctrl+Z) while Shift is held. When reading
    both, check the more specific one first.
+
+   Suppression alone is not enough for a key that was pressed as part of a
+   combination: releasing the modifier first drops the suppression and hands the
+   key to the bare binding, which is how a select-all (Ctrl+A) used to open
+   Arrange (bare A) in Prepare mode. `pressKey(key, modifiers)` therefore records a
+   **claim**: a key pressed while a modifier was held belongs to that combination
+   until it is released, and a modifier-less binding whose key is claimed never
+   matches. Bindings that own the modifier are unaffected (a bare Alt press, the
+   Shift+M twin), and the flags come from the key event (`e.ctrlKey`, `e.metaKey`,
+   `e.shiftKey`, `e.altKey`), so a modifier held while the window was unfocused is
+   accounted for too.
 7. **Escape in a modal goes through `useEscapeToClose`**: dialogs do not wire
    their own `app-hotkey-keydown` listener. `useEscapeToClose(open, onClose)`
    (`src/hotkeys/useEscapeToClose.ts`) registers the dialog while it is open;

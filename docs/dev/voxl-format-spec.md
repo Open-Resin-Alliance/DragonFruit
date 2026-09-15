@@ -9,9 +9,11 @@ VOXL is DragonFruit’s native scene container. This page captures the core cont
 | V1         | UTF-8 JSON (direct document or compressed JSON envelope) | Legacy read support required |
 | V2.0       | Binary chunk container                                   | Historical                   |
 | V2.1       | Binary chunk container                                   | Superseded by V2.2           |
-| V2.2       | Binary chunk container                                   | Current read/write target    |
+| V2.2       | Binary chunk container                                   | Superseded by V2.3           |
+| V2.3       | Binary chunk container                                   | Superseded by V2.4           |
+| V2.4       | Binary chunk container                                   | Current read/write target    |
 
-Readers must support V1 and V2.x. Writers should emit V2.2 semantics.
+Readers must support V1 and V2.x. Writers should emit V2.4 semantics.
 
 ## Core conventions
 
@@ -102,7 +104,7 @@ Unknown chunk types may be ignored.
 
 For embedded model meshes, `MODL[i]` maps to `MESH(index = i)`.
 
-### V2.1 semantic revision (current)
+### V2.1 semantic revision
 
 V2.1 is a semantic revision of the V2 binary container; it does **not** change the binary header major version.
 
@@ -121,7 +123,7 @@ Behavioral requirement:
 
 This is required so hollowing and hole-punch workflows remain re-editable after VOXL round-trips.
 
-### V2.2 semantic revision (current)
+### V2.2 semantic revision
 
 V2.2 is a semantic revision of the V2 binary container; like V2.1 it does **not** change the
 binary header major version (`version` stays `2`, or `3` when identical-geometry dedup also
@@ -168,7 +170,7 @@ Backward compatibility (accepted tradeoff): because the header does not bump and
 types may be ignored, older V2/V2.1 readers still open a V2.2 file — baked geometry loads from
 `MESH`, and they silently drop only the hollow/hole re-editability snapshots.
 
-### V2.3 semantic revision (current)
+### V2.3 semantic revision
 
 V2.3 is a semantic revision of the V2 binary container; like V2.1 and V2.2 it does **not** change
 the binary header major version (`version` stays `2`, or `3` when identical-geometry dedup also
@@ -190,6 +192,39 @@ inline modifier snapshots; `typeId` is not part of that detection.
 
 Backward compatibility: the field is optional and unknown JSON keys are ignored, so a V2.3 file
 opens in a V2/V2.1/V2.2 reader with no loss beyond the explicit type stamp.
+
+### V2.4 semantic revision (current)
+
+V2.4 is a semantic revision of the V2 binary container; like V2.1–V2.3 it does **not** change the
+binary header major version (`version` stays `2`, or `3` when identical-geometry dedup also
+fired).
+
+V2.4 adds an optional `classification` to a `MODL` entry: the native model/support classification
+that ran over the triangle order of that model's `mesh` payload. The value is the classifier's
+report — the `MeshHealthReport` shape (`src/utils/meshRepair.ts`), whose `model_triangle_count`
+is the split boundary: the first N triangles are the model body, the remainder support geometry.
+
+Requirements:
+
+- Writers stamp `classification` only when the classifier actually ran over the exact payload
+  being written. A geometry replaced after classification (a baked hollowing, hole punch, mirror,
+  or repair) carries none — the boundary would not address it — and neither does a payload whose
+  bake fell behind the live geometry.
+- The boundary is expressed in the triangle order of the **stored mesh bytes**, not of the
+  original import. Native decimation preserves section order, so a reduced preview's boundary is
+  the one the reader must use.
+- Readers that honour it must not re-run the classifier: the report is the answer for exactly
+  these triangles. They must still build the model/support section split from
+  `model_triangle_count`, since the sections are not stored separately.
+- Readers must accept a `MODL` entry without it and classify as before. `classification` is never
+  required to interpret a file, and an auto-repair pass on load supersedes it.
+
+Detection (no version number is written for the semantic revision): a `MODL` entry carrying
+`classification` is V2.4. As with V2.3 it does not participate in the reported semantic
+revision, which stays `2.2` or `2.1`.
+
+Backward compatibility: the field is optional and unknown JSON keys are ignored, so a V2.4 file
+opens in an older V2 reader with no loss beyond the classifier having to run again.
 
 ## Supports and extensions
 
@@ -226,5 +261,7 @@ Readers should enforce:
 ## Related files
 
 - `src/supports/types.ts`
+- `src/features/scene/voxl/types.ts`
+- `src/hooks/useStlGeometry.ts`
 - `docs/dev/formats.md`
 - `1_Documentation/VOXL_FORMAT_SPEC.md` (full historical revision text)

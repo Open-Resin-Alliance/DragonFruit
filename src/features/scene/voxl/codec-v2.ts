@@ -591,6 +591,7 @@ async function prepareVoxlDocumentV2(
       mesh: meshRef,
       isSupportGeometry: m.isSupportGeometry,
       linkGroupId: m.linkGroupId,
+      classification: m.classification,
     };
   });
 

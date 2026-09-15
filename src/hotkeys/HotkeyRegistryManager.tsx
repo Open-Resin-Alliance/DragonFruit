@@ -170,7 +170,12 @@ export function setupHotkeyListeners() {
             e.preventDefault();
         }
 
-        hotkeyStore.getState().pressKey(e.key);
+        hotkeyStore.getState().pressKey(e.key, {
+            ctrlKey: e.ctrlKey,
+            metaKey: e.metaKey,
+            shiftKey: e.shiftKey,
+            altKey: e.altKey,
+        });
 
         if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
             window.dispatchEvent(new CustomEvent('app-hotkey-keydown', {

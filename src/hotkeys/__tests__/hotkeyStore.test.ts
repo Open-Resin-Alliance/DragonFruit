@@ -142,6 +142,46 @@ test('Hotkey Registry: clears all active keys on window blur', () => {
     cleanup();
 });
 
+test('Ctrl+A stays Ctrl+A when Control is released before A', () => {
+    hotkeyStore.getState().clearKeys();
+    const cleanup = setupHotkeyListeners();
+    const divTarget = new (global as any).HTMLElement('DIV');
+    const keyEvent = (key: string, modifiers: Record<string, boolean> = {}) => ({
+        key,
+        target: divTarget,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        altKey: false,
+        preventDefault() {},
+        ...modifiers,
+    });
+
+    dispatchWindowEvent('keydown', keyEvent('Control', { ctrlKey: true }));
+    dispatchWindowEvent('keydown', keyEvent('a', { ctrlKey: true }));
+
+    assert.equal(isActionActiveSync('CANVAS', 'SELECT_ALL'), true, 'Ctrl+A must select all');
+    assert.equal(isActionActiveSync('CANVAS', 'TOOL_ARRANGE'), false, 'A pressed with Ctrl must not match bare A');
+
+    // Releasing Control first is what used to open Arrange.
+    dispatchWindowEvent('keyup', keyEvent('Control'));
+    assert.equal(isActionActiveSync('CANVAS', 'TOOL_ARRANGE'), false, 'releasing Ctrl must not hand A to the bare binding');
+
+    dispatchWindowEvent('keyup', keyEvent('a'));
+
+    // A bare A press afterwards still opens Arrange.
+    dispatchWindowEvent('keydown', keyEvent('a'));
+    assert.equal(isActionActiveSync('CANVAS', 'TOOL_ARRANGE'), true, 'a plain A press must still open Arrange');
+    dispatchWindowEvent('keyup', keyEvent('a'));
+
+    // Alt placement is a modifier key used on its own, so it must stay unaffected.
+    dispatchWindowEvent('keydown', keyEvent('Alt', { altKey: true }));
+    assert.equal(isActionActiveSync('SUPPORTS', 'BRANCH_PLACEMENT'), true, 'a bare Alt press must still place branches');
+    dispatchWindowEvent('keyup', keyEvent('Alt'));
+
+    cleanup();
+});
+
 // Regression: recording a shortcut in Settings used to leak the captured key into
 // the app, because this manager's capture listener runs before the recorder's and
 // had already dispatched `app-hotkey-keydown` by the time the recorder called

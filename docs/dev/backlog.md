@@ -115,3 +115,55 @@ stable IDs and resolved coordinates.
 
 **Success criteria:** less bulk geometry IPC; better support-heavy export
 performance; revision parity between frontend and twin before slicing/export.
+
+## Import post-processing: what still blocks a scene load
+
+A scene load pays these per model, synchronously, in `processGeometry`
+(`src/hooks/useStlGeometry.ts`) — measured with
+`npm run bench:import-postprocess` on a 500k-triangle non-indexed soup
+(~1.5M vertices, the shape a VOXL-embedded mesh has):
+
+| Phase                       | Cost     | Needed for                       |
+| --------------------------- | -------- | -------------------------------- |
+| `EdgesGeometry(30)` overlay | ~2139 ms | optional, default-off overlay    |
+| flattening planes           | ~98 ms   | Place on Face                    |
+| `computeVertexNormals`      | ~43 ms   | rendering                        |
+| `computeBoundingBox`        | ~13 ms   | everything                       |
+| BVH (`accelerateGeometry`)  | ~120 ms  | support placement raycasts       |
+
+The overlay geometry is the whole problem: ~93% of the phase, and three times
+larger than everything else combined. It is off by default, so it is now built
+**only when the user has the overlay enabled** — `buildModelEdgeGeometry()` is
+the single gate, called from `processGeometry` for imports (with the import
+progress UI up, so the cost is where a load's cost belongs), from
+`replaceModelGeometry` for geometry swaps, from the Split Supports path, and
+from the scene's settings effect for models that were loaded while the setting
+was off (one model per idle callback, cached on the geometry so it is built
+exactly once).
+
+Do not move this build off the import path into the overlay component: it
+measured *worse*, not better — six 500k-triangle models went from one import
+stall to 6 × ~1.9 s of post-load main-thread blocking (18 s of long tasks in a
+browser profile, versus 5.5 s), because each model's `StlMesh` re-paid it on
+mount and there is no shared cache at that layer.
+
+**What remains, in value order:**
+
+- **The overlay build itself (~1.9 s per 500k-triangle model) is unavoidable
+  main-thread work while the setting is on.** It is the only remaining
+  multi-second op in the load path; a worker (the repo already runs workers for
+  the 3MF loader) is the way to remove it, and would let the overlay be enabled
+  without any import penalty.
+- **BVH + flattening planes are still synchronous on the import path.** Both are
+  already deferrable: `finalizeModelGeometryPostProcessing` in
+  `src/features/scene/useSceneCollectionManager.ts` runs exactly these two in
+  idle callbacks for geometry swaps, and `hasPendingBackgroundGeometryWork()`
+  reports when that queue is still draining, so the UI can stay honest. Routing
+  imports through the same seam would remove ~220 ms/model and shrink the
+  "import finished" to "app responsive" gap.
+- **VOXL original-mesh sidecars are resolved on the import path.** When a VOXL
+  has no embedded `ORIG` chunk, `resolveOriginalRefSidecar` falls back to the
+  model's on-disk `sourcePath` and `readSidecarFileBytes` fetches it. For a
+  source that has moved or been re-exported (the common case after a repair
+  round-trip) that is a real network attempt per model that can only 404 — noisy
+  and awaited, though harmless (the loader falls back to the embedded preview).

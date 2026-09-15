@@ -251,7 +251,7 @@ function StlMeshComponent({
   heatmapColors?: string[];
   /** When true, overlays black edge lines on model geometry for better shape definition. */
   higherContrastModelEdges?: boolean;
-  /** Pre-computed hard-edge geometry for Higher Contrast Model Edges overlay. */
+  /** Hard-edge geometry for the overlay, built when the setting is on. */
   edgeGeometry?: THREE.EdgesGeometry | null;
   /** When true, suppresses the edge overlay (e.g. during voxel blocker editing). */
   blockerEditMode?: boolean;
@@ -403,8 +403,10 @@ function StlMeshComponent({
     return !!colorAttr && colorAttr.count > 0;
   }, [geometry]);
 
-  // Edges geometry for Higher Contrast Model Edges overlay.
-  // Pre-computed during geometry import — no render-time cost.
+  // Edges geometry for Higher Contrast Model Edges overlay. Built by the
+  // geometry's own producer when the setting is on (see buildModelEdgeGeometry)
+  // and cached on GeometryWithBounds, so every remount reuses one build — no
+  // render-time or per-mount cost here.
   const edgeLinesGeometry = edgeGeometry ?? null;
 
   // Derive edge color from the selection accent color so edges read as a dark,

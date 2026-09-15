@@ -10,6 +10,7 @@ VOXL is DragonFruit's scene container format (`.voxl`) for full project round-tr
 - Chunk types: `META`, `SCNE`, `MODL`, `MESH`, `SUPP`, `EXTD`
 - Mesh data stored as raw binary with per-chunk zlib compression
 - `mesh.mode = "embedded-chunk"` — mesh bytes in separate MESH chunk
+- `classification` per model (V2.4) — the model/support classification the mesh was saved with, so loading skips the classifier
 - **~60–65% smaller** than V1 for typical scenes
 - Faster write (no base64 encoding) and faster read (no base64 decoding)
 

@@ -51,8 +51,15 @@ import {
   importLabelVoxlScene,
 } from '@/features/scene/sceneImportMessages';
 import { registerMeshForAutoBrace, unregisterMeshForAutoBrace } from '@/supports/autoBracing/meshGeometryStore';
+import { buildModelEdgeGeometry } from '@/hooks/useStlGeometry';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import { getSavedThemeCustomColors } from '@/components/settings/themeCustomizations';
+import {
+  getSavedWorkspaceCameraSettings,
+  getWorkspaceCameraSettingsServerSnapshot,
+  getWorkspaceCameraSettingsSnapshot,
+  subscribeToWorkspaceCameraSettings,
+} from '@/components/settings/workspaceCameraPreferences';
 import {
   DEFAULT_VIEW3D_SETTINGS,
   getSavedView3DSettings,
@@ -2867,33 +2874,12 @@ export function useSceneCollectionManager() {
     const center = bbox.getCenter(new THREE.Vector3());
     const size = bbox.getSize(new THREE.Vector3());
 
-    // Recompute edge geometry for the Higher Contrast Model Edges overlay when
-    // the geometry has changed (e.g. after hole punch / hollowing).  Compute it
-    // only if the old geometry had one (i.e. the user has edge lines enabled),
-    // and skip during deferred post-processing to avoid blocking the UI.
-    // Skip for very large meshes — EdgesGeometry uses `for...in` over a hash map
-    // of unique edges and V8 throws "Too many properties to enumerate" beyond ~2M entries.
-    const hadEdgeGeometry = !!target.geometry.edgeGeometry;
-    let nextEdgeGeometry: THREE.EdgesGeometry | undefined;
-    if (hadEdgeGeometry && !options?.deferPostProcessing) {
-      const triCount = (nextBufferGeometry.getIndex()?.count ?? nextBufferGeometry.getAttribute('position')?.count ?? 0) / 3;
-      if (triCount < 800_000) {
-        try {
-          nextEdgeGeometry = new THREE.EdgesGeometry(nextBufferGeometry, 30);
-        } catch (edgeError) {
-          console.warn(
-            '[SceneCollection] Edge geometry recompute failed for large mesh',
-            edgeError,
-          );
-        }
-      } else {
-        console.warn(
-          `[SceneCollection] Skipping edge geometry recompute for large mesh (${Math.round(triCount).toLocaleString()} triangles).`,
-        );
-      }
-    } else {
-      nextEdgeGeometry = target.geometry.edgeGeometry;
-    }
+    // Rebuild the edge overlay for the swapped geometry, but only when the model
+    // had one — i.e. when the user has the overlay enabled (`buildModelEdgeGeometry`
+    // is never called otherwise, so presence is the enable signal).
+    const nextEdgeGeometry = target.geometry.edgeGeometry
+      ? buildModelEdgeGeometry(nextBufferGeometry)
+      : undefined;
 
     const nextGeometry: GeometryWithBounds = {
       geometry: nextBufferGeometry,
@@ -3203,6 +3189,60 @@ export function useSceneCollectionManager() {
     return extraIds;
   }, [pushSceneSnapshotHistory]);
 
+  /**
+   * The Higher Contrast Model Edges setting can be enabled after models are
+   * already loaded, and those models have no overlay geometry — import only
+   * builds one while the setting is on. Fill them in here, one model per idle
+   * callback: each build is ~2 s for a 500k-triangle mesh, so a batch would
+   * freeze the app, and the overlay is worth nothing until it is looked at.
+   * The result is cached on the geometry, so it is built exactly once.
+   */
+  const higherContrastModelEdges = useSyncExternalStore(
+    subscribeToWorkspaceCameraSettings,
+    getWorkspaceCameraSettingsSnapshot,
+    getWorkspaceCameraSettingsServerSnapshot,
+  ).higherContrastModelEdges;
+
+  useEffect(() => {
+    if (!higherContrastModelEdges) return;
+
+    const queue = modelsRef.current
+      .filter((model) => !model.geometry.edgeGeometry && model.geometry.geometry.getAttribute('position'))
+      .map((model) => model.id);
+    if (queue.length === 0) return;
+
+    let cancelled = false;
+    const scheduleIdle = (cb: () => void) => {
+      if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+        window.requestIdleCallback(cb, { timeout: 500 });
+      } else {
+        setTimeout(cb, 16);
+      }
+    };
+
+    const step = () => {
+      if (cancelled) return;
+      const id = queue.shift();
+      if (!id) return;
+
+      const model = modelsRef.current.find((m) => m.id === id);
+      if (model) {
+        const edges = buildModelEdgeGeometry(model.geometry.geometry);
+        if (edges) {
+          setModels((prev) => prev.map((m) => (
+            m.id === id && m.geometry === model.geometry
+              ? { ...m, geometry: { ...m.geometry, edgeGeometry: edges } }
+              : m
+          )));
+        }
+      }
+      if (queue.length > 0) scheduleIdle(step);
+    };
+
+    scheduleIdle(step);
+    return () => { cancelled = true; };
+  }, [higherContrastModelEdges, setModels]);
+
   const finalizeModelGeometryPostProcessing = useCallback((id: string) => {
     const target = modelsRef.current.find((m) => m.id === id);
     if (!target) return;
@@ -3385,7 +3425,10 @@ export function useSceneCollectionManager() {
     const source = modelsRef.current.find((m) => m.id === modelId);
     if (!source) return;
 
-    const split = splitClassifiedSupportGeometry(source, { interactive: true });
+    const split = splitClassifiedSupportGeometry(source, {
+      interactive: true,
+      computeEdgeGeometry: getSavedWorkspaceCameraSettings().higherContrastModelEdges,
+    });
     if (!split) return;
     const {
       modelGeometry: modelGeom,
@@ -5075,7 +5118,14 @@ export function useSceneCollectionManager() {
 
             const embeddedName = meshRef.fileName?.trim() || `${model.name || 'model'}.stl`;
 
+            // Baked classification (VOXL V2.4): the file carries the model/support
+            // split this mesh was saved with, so skip the classifier instead of
+            // re-deriving it. Auto-repair supersedes it — a repair pass produces
+            // its own report for the geometry it rebuilt.
+            const bakedClassification = autoRepairScenes ? undefined : model.classification;
+
             geometry = await loadMeshGeometry(bytes, embeddedName, {
+              ...(bakedClassification ? { bakedClassification } : {}),
               nativeProcessingMode: autoRepairScenes ? 'auto' : 'none',
               assumeSupportGeometry: model.isSupportGeometry,
               skipClassification: model.isSupportGeometry,

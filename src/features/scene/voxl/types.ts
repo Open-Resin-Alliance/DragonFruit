@@ -1,5 +1,6 @@
 import type { DragonfruitImportFormat } from '@/supports/types';
 import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
+import type { MeshHealthReport } from '@/utils/meshRepair';
 
 export const VOXL_MAGIC = 'VOXL' as const;
 export const VOXL_VERSION = 1 as const;
@@ -86,6 +87,13 @@ export type VoxlModelEntry = {
   meshModifiers?: ModelMeshModifiers;
   isSupportGeometry?: boolean;
   linkGroupId?: string;
+  /**
+   * Baked mesh classification (V2.4): the native classify-only report for the
+   * exact triangle order stored in this model's `mesh` payload, so a reader can
+   * restore the model/support split without re-running the classifier. Purely
+   * additive — a reader that ignores it derives the same split by classifying.
+   */
+  classification?: MeshHealthReport;
 };
 
 export type VoxlMeta = {
@@ -151,6 +159,8 @@ export type VoxlModelRuntimeLike = {
   meshModifiers?: ModelMeshModifiers;
   isSupportGeometry?: boolean;
   linkGroupId?: string;
+  /** See `VoxlModelEntry.classification` (V2.4). */
+  classification?: MeshHealthReport;
 };
 
 export type BuildVoxlDocumentInput = {
