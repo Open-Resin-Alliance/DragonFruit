@@ -1,6 +1,7 @@
 import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profileStore';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { buildSolidSliceMeshForWasm } from './rasterLayerZipExport';
+import { attachEmbeddedVoxlSceneToMetadata } from './lumenEmbeddedVoxlScene';
 import { clampSliceJobNumber } from './sliceJobLimits';
 import { resolveEffectiveDitherPolicy } from './resolveEffectiveDitherPolicy';
 import { prepareLoadedModelsForOutput } from '@/features/mesh-modifiers/prepareModelGeometry';
@@ -767,12 +768,15 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         meshEncoding: meshTransportEncoding,
         meshQuantization: meshTransportQuantization,
         outputPath: options.outputPath?.trim() || null,
-        metadataJson: mergeMetadataOverridesIntoMetadata(
-            solidMesh.metadataJson,
-            format.outputFormat,
-            options.materialProfile,
-            resolveOutputSettingsMode(format.outputFormat, options.printerProfile.display.settingsMode),
-            options.printerProfile.display.outputFormat,
+        metadataJson: await attachEmbeddedVoxlSceneToMetadata(
+            mergeMetadataOverridesIntoMetadata(
+                solidMesh.metadataJson,
+                format.outputFormat,
+                options.materialProfile,
+                resolveOutputSettingsMode(format.outputFormat, options.printerProfile.display.settingsMode),
+                options.printerProfile.display.outputFormat,
+            ),
+            visibleModels,
         ),
     };
 
