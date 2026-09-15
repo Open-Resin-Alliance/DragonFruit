@@ -7,12 +7,12 @@ import { normalizeFormatVersion, normalizeSettingsMode } from '@/features/profil
 const CORE_LUMEN_FORMAT_DEFINITION: SlicingFormatDefinition = {
   id: 'core.lumen.v1',
   outputFormat: '.lumen',
-  displayName: 'Lumen (Core Placeholder)',
+  displayName: 'LUMEN',
   ownership: 'core',
-  layerDataKind: 'png',
+  layerDataKind: 'raw-mask',
   rustModulePath: 'formats::lumen',
   wasmExportName: 'encode_lumen_container',
-  notes: 'Placeholder format definition. Rust encoder scaffold only.',
+  notes: 'Fallback used when the lumen plugin is not loaded. The plugin owns this format and encodes it from raster runs.',
 };
 
 function resolveBuiltinPluginSlicingFormat(
