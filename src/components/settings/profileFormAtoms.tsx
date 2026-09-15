@@ -2233,7 +2233,7 @@ export function PluginLocalMaterialSettingsSections({
                     No custom settings are available for this tab.
                 </div>
             ) : (
-                <div className="space-y-3">
+                <div className="space-y-2.5">
                     {sectionGroups.map((section) => {
                         const cardGroups = new Map<string, typeof section.fields>();
                         section.fields.forEach((field) => {
@@ -2256,7 +2256,7 @@ export function PluginLocalMaterialSettingsSections({
                             .sort((a, b) => a.cardOrder - b.cardOrder || a.cardTitle.localeCompare(b.cardTitle));
 
                         return (
-                            <div key={section.sectionId} className="space-y-3">
+                            <div key={section.sectionId} className="space-y-2.5">
                                 {!replacementMode && (
                                     <div className="ui-meta font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
                                         {section.sectionTitle}
@@ -2591,7 +2591,7 @@ export function ReplacementMaterialEditorShell({
             </div>
 
             <div className="relative" style={minBodyHeight ? { minHeight: `${minBodyHeight}px` } : undefined}>
-                <div className="space-y-3" data-measure-tab-body>
+                <div className="space-y-2.5" data-measure-tab-body>
                     {renderTabBody(activeTabId)}
                 </div>
 
