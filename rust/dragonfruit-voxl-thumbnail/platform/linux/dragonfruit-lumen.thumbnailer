@@ -1,3 +1,0 @@
-[Thumbnailer Entry]
-Exec=dragonfruit-voxl-thumbnailer %i %o %s
-MimeType=application/x-lumen;

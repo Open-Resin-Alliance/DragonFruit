@@ -20,14 +20,12 @@ containers. Rationale below.
 ## What the Flatpak ships instead
 
 The decision covers the *thumbnailer*, not the file types. MIME registration is
-a data-file concern the sandbox handles fine: the manifest installs
-`flatpak/dragonfruit-voxl-mime.xml` as
-`/app/share/mime/packages/org.openresinalliance.dragonfruit.xml` and
-`flatpak/dragonfruit-lumen-mime.xml` as
-`/app/share/mime/packages/org.openresinalliance.dragonfruit.lumen.xml`, so the
-scene format (`application/vnd.dragonfruit.voxl+json`, aliased to
-`application/x-voxl`) and the print format (`application/vnd.openresin.lumen`,
-aliased to `application/x-lumen`) are both known inside the sandbox. What the
+a data-file concern the sandbox handles fine: the manifest installs the generated
+`dragonfruit-mime.xml` as
+`/app/share/mime/packages/org.openresinalliance.dragonfruit.xml`, so the scene
+format (`application/vnd.dragonfruit.voxl+json`, aliased to `application/x-voxl`)
+and the print format (`application/vnd.openresin.lumen`, aliased to
+`application/x-lumen`) are both known inside the sandbox. What the
 Flatpak does **not** ship is the binary those `.thumbnailer` entries point at,
 nor the entries themselves — and without them no host file manager will run the
 extractor for either container.
@@ -89,7 +87,7 @@ in their Flatpaks).
 ## Related files
 
 - `rust/dragonfruit-voxl-thumbnail/` — source (kept; used for `.deb`/`.rpm`)
-- `flatpak/dragonfruit-voxl-mime.xml`, `flatpak/dragonfruit-lumen-mime.xml` —
+- the generated `dragonfruit-mime.xml` (`rust/dragonfruit-voxl-thumbnail/generated/`) —
   the MIME registrations the Flatpak does ship (see above)
 - `src-tauri/tauri.linux.conf.json` — `.deb` bundle config that ships the
   thumbnailer on non-Flatpak Linux installs

@@ -287,12 +287,8 @@ if (canBuildFlatpak) {
               path.join(staging, "org.openresinalliance.dragonfruit.metainfo.xml")
             );
             cpSync(
-              path.join(flatpakDir, "dragonfruit-voxl-mime.xml"),
-              path.join(staging, "dragonfruit-voxl-mime.xml")
-            );
-            cpSync(
-              path.join(flatpakDir, "dragonfruit-lumen-mime.xml"),
-              path.join(staging, "dragonfruit-lumen-mime.xml")
+              path.join(repoRoot, "rust", "dragonfruit-voxl-thumbnail", "generated", "dragonfruit-mime.xml"),
+              path.join(staging, "dragonfruit-mime.xml")
             );
 
             // Icons

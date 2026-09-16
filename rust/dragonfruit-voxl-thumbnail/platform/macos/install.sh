@@ -62,10 +62,10 @@ if [ -d "$APPEX_SRC" ]; then
         xcrun clang -x c - -target arm64-apple-macos12.0 \
         -o "$HOST_APP/Contents/MacOS/DragonFruitQLHost"
 
-    # Host app Info.plist — also exports the .voxl and .lumen UTIs so that files
-    # get org.openresinalliance.voxl / org.openresinalliance.lumen instead of the
-    # dynamic dyn.* identifier. This is required for QLSupportedContentTypes in
-    # the extension to match.
+    # Host app Info.plist — exports the same UTIs the generated extension declares,
+    # so files get a stable identifier instead of the dynamic dyn.* one. This is what
+    # QLSupportedContentTypes in the extension matches against. The block is written
+    # by the registry generator from the output file types themselves.
     cat > "$HOST_APP/Contents/Info.plist" << 'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -88,54 +88,18 @@ if [ -d "$APPEX_SRC" ]; then
     <true/>
     <key>LSMinimumSystemVersion</key>
     <string>12.0</string>
-    <key>UTExportedTypeDeclarations</key>
-    <array>
-        <dict>
-            <key>UTTypeConformsTo</key>
-            <array>
-                <string>public.data</string>
-            </array>
-            <key>UTTypeDescription</key>
-            <string>DragonFruit VOXL Scene</string>
-            <key>UTTypeIdentifier</key>
-            <string>org.openresinalliance.voxl</string>
-            <key>UTTypeTagSpecification</key>
-            <dict>
-                <key>public.filename-extension</key>
-                <array>
-                    <string>voxl</string>
-                </array>
-                <key>public.mime-type</key>
-                <array>
-                    <string>application/vnd.dragonfruit.voxl+json</string>
-                </array>
-            </dict>
-        </dict>
-        <dict>
-            <key>UTTypeConformsTo</key>
-            <array>
-                <string>public.data</string>
-            </array>
-            <key>UTTypeDescription</key>
-            <string>DragonFruit LUMEN Print</string>
-            <key>UTTypeIdentifier</key>
-            <string>org.openresinalliance.lumen</string>
-            <key>UTTypeTagSpecification</key>
-            <dict>
-                <key>public.filename-extension</key>
-                <array>
-                    <string>lumen</string>
-                </array>
-                <key>public.mime-type</key>
-                <array>
-                    <string>application/vnd.openresin.lumen</string>
-                </array>
-            </dict>
-        </dict>
-    </array>
+    <!-- GENERATED-UTIS -->
 </dict>
 </plist>
 PLIST
+
+    # The exported UTI block comes from the declarations the extension is built from
+    # (`rust/dragonfruit-voxl-thumbnail/generated/`), so a new file type reaches the
+    # host app without this script being edited.
+    awk -v block="$(cat "$CRATE_ROOT/generated/macos-exported-utis.plist")" \
+        '{ if ($0 == "    <!-- GENERATED-UTIS -->") print block; else print }' \
+        "$HOST_APP/Contents/Info.plist" > "$HOST_APP/Contents/Info.plist.spliced"
+    mv "$HOST_APP/Contents/Info.plist.spliced" "$HOST_APP/Contents/Info.plist"
 
     # Embed the extension
     cp -R "$APPEX_SRC" "$HOST_APP/Contents/PlugIns/"

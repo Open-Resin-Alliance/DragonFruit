@@ -20,33 +20,34 @@ dragonfruit-voxl-thumbnail/
 
 ## How It Works
 
-One extractor, two containers, dispatched on the first four bytes of the file: `VOXL` selects the scene reader, `LUMN` selects the print reader. Anything else is refused.
+The provider has no per-format code. Every container DragonFruit writes **declares**
+where its preview lives - `plugins/<id>/outputFileTypes.json` for a plugin, and
+`src/config/core-output-file-types.json` for the core `.voxl` scene - and
+`scripts/generate-plugin-registry.mjs` validates those declarations and compiles them
+into one table:
 
-### VOXL V2 (scenes)
+```
+generated_output_file_types.json   read by this crate's interpreter (src/locator.rs)
+generated/dragonfruit-mime.xml     the freedesktop MIME types
+generated/dragonfruit.thumbnailer  the freedesktop thumbnailer entry
+generated/VoxlThumbnailExtension-Info.plist  the QuickLook appex's plist
+generated/macos-exported-utis.plist          the UTIs the dev host app exports
+```
 
-VOXL V2 files embed a scene thumbnail as a base64-encoded PNG inside the **EXTD** (extensions) chunk under the key `ora.preview.dataBase64`. The reader:
+The declaration describes the mechanics rather than the format: the magic, an optional
+version gate, where the chunk table is and how its entries are laid out, which chunk
+types hold a preview, and how to get a PNG out of the payload - stored in the chunk, or
+base64 inside its JSON, optionally zlib-compressed, optionally ranked by a role in the
+entry flags with sealed ones skipped.
 
-1. Reads the 16-byte VOXL header + the 20-byte-per-entry chunk directory (only ~100 bytes)
-2. Seeks directly to the EXTD chunk (skips all mesh data)
-3. Decompresses if zlib-compressed
-4. Parses JSON → extracts `ora.preview.dataBase64`
-5. Base64-decodes to raw PNG
-6. Optionally resizes to the requested thumbnail dimensions
+**VOXL V2** keeps its preview in the `EXTD` chunk as a base64 PNG under
+`ora.preview.dataBase64`, zlib-compressed or not; **LUMEN v1** keeps PNG previews in
+`PREV` chunks whose role (large, small, icon) sits in the low bits of the descriptor
+flags, behind a `LEND` trailer. Both are *declarations* in the table above, and adding a
+third container means writing one JSON file.
 
-### LUMEN v1 (prints)
-
-LUMEN puts its chunk directory at the **end** of the file, after the payloads, so the reader seeks there first instead of walking the file from the front. Previews are `PREV` chunks whose payload is a PNG stored uncompressed; the preview role sits in the low four bits of the descriptor flags — `0` unspecified, `1` large (400×300), `2` small (200×125), `3` icon (≤64×64) — and bit 4 marks a sealed (encrypted) payload. The reader:
-
-1. Checks the 32-byte header: only LUMEN **v1** is read, and a future version is refused rather than misread
-2. Seeks to the chunk directory and reads it, then seeks to the chosen payload — layer data is never touched
-3. Skips sealed previews, which cannot be read without the file's key
-4. Ranks what is left — Large first, then an unspecified preview, then Small, then Icon — and takes the file order as the tie-break
-5. Returns the payload, skipping it and looking further if it is not a PNG
-6. Optionally resizes to the requested thumbnail dimensions
-
-The chunk directory is followed by an 8-byte `LEND` trailer. The reader checks that magic but does not recompute the CRC-32C, because that would mean reading the whole file.
-
-DragonFruit's own `.lumen` output carries one `PREV` with the Large role, fitted from the 1600×960 export capture into the role's 400×300 box (the encoder lives in `plugins/lumen/slicing/rust/lumen_preview.rs`), so the shell shows the same scene picture a `.voxl` file shows.
+The reader-based implementation only ever reads headers, chunk tables, and the one
+chunk that carries the image.
 
 ---
 
@@ -96,10 +97,8 @@ sudo platform/linux/install.sh
 This installs:
 
 - `/usr/local/bin/dragonfruit-voxl-thumbnailer` — CLI binary (both containers)
-- `/usr/share/mime/packages/dragonfruit-voxl.xml` — MIME type for `.voxl`
-- `/usr/share/mime/packages/dragonfruit-lumen.xml` — MIME type for `.lumen`
-- `/usr/share/thumbnailers/dragonfruit-voxl.thumbnailer` — thumbnailer entry for `.voxl`
-- `/usr/share/thumbnailers/dragonfruit-lumen.thumbnailer` — thumbnailer entry for `.lumen`
+- `/usr/share/mime/packages/dragonfruit.xml` — MIME types for every declared file type
+- `/usr/share/thumbnailers/dragonfruit.thumbnailer` — thumbnailer entry covering them
 
 `src-tauri/tauri.linux.conf.json` ships the same set in the `.deb`, with the binary at `/usr/bin/`.
 
@@ -168,7 +167,10 @@ For Tauri app distribution, embed the `.appex` in the app bundle:
 DragonFruit.app/Contents/PlugIns/VoxlThumbnailExtension.appex
 ```
 
-And add the UTI declaration to the app's `Info.plist` (see `macos-qlext/Sources/VoxlThumbnailExtension/Info.plist` for the `UTImportedTypeDeclarations` block).
+The extension's `Info.plist` and its file-type table are generated from the declarations
+(`rust/dragonfruit-voxl-thumbnail/generated/`), so the app's own `Info.plist` needs the
+same UTI declarations only when it ships separately from the extension - see
+`macos-qlext/README.md`.
 
 Uninstall:
 

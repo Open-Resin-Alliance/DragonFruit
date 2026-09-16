@@ -7,10 +7,8 @@
       "deb": {
         "files": {
           "usr/bin/dragonfruit-voxl-thumbnailer": "../rust/dragonfruit-voxl-thumbnail/target/release/dragonfruit-voxl-thumbnailer",
-          "usr/share/thumbnailers/dragonfruit-voxl.thumbnailer": "../rust/dragonfruit-voxl-thumbnail/platform/linux/dragonfruit-voxl.thumbnailer",
-          "usr/share/mime/packages/dragonfruit-voxl.xml": "../rust/dragonfruit-voxl-thumbnail/platform/linux/dragonfruit-voxl.xml",
-          "usr/share/thumbnailers/dragonfruit-lumen.thumbnailer": "../rust/dragonfruit-voxl-thumbnail/platform/linux/dragonfruit-lumen.thumbnailer",
-          "usr/share/mime/packages/dragonfruit-lumen.xml": "../rust/dragonfruit-voxl-thumbnail/platform/linux/dragonfruit-lumen.xml"
+          "usr/share/thumbnailers/dragonfruit.thumbnailer": "../rust/dragonfruit-voxl-thumbnail/generated/dragonfruit.thumbnailer",
+          "usr/share/mime/packages/dragonfruit.xml": "../rust/dragonfruit-voxl-thumbnail/generated/dragonfruit-mime.xml"
         },
         "postInstallScript": "../rust/dragonfruit-voxl-thumbnail/platform/linux/deb-postinst.sh",
         "postRemoveScript": "../rust/dragonfruit-voxl-thumbnail/platform/linux/deb-postrm.sh"

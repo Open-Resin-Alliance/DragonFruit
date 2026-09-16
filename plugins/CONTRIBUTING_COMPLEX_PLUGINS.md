@@ -183,7 +183,66 @@ Notes:
   setting asked for a scene it did not receive.
 - No host code names your plugin: the declaration is data.
 
-### 4.2) Multiple container formats per plugin (optional)
+### 4.3) Output file types and shell thumbnails (optional)
+
+A format the plugin *writes* can declare itself, which is what gives it a thumbnail in
+Explorer, Finder and the freedesktop file managers without any host code naming it.
+Add `outputFileTypes.json` beside `pluginDefinition.ts`:
+
+```json
+[
+  {
+    "fileExtension": ".example",
+    "mimeType": "application/vnd.example.print",
+    "uti": "org.openresinalliance.example",
+    "displayName": "Example Print",
+    "thumbnail": {
+      "magic": "EXMP",
+      "version": { "type": "u32", "at": 4, "equals": 1 },
+      "directory": {
+        "offset": { "type": "u64", "at": 8 },
+        "count": { "type": "u32", "at": 16 },
+        "entrySize": 32
+      },
+      "entry": {
+        "type": { "at": 0 },
+        "offset": { "type": "u64", "at": 4 },
+        "size": [{ "type": "u64", "at": 20 }, { "type": "u64", "at": 12 }],
+        "flags": { "type": "u32", "at": 28, "sealedBit": 4, "roleMask": 15, "roleOrder": [1, 0, 2, 3] }
+      },
+      "previewChunks": ["PREV"],
+      "payload": { "encoding": "png" },
+      "trailer": { "magic": "LEND", "size": 8 }
+    }
+  }
+]
+```
+
+The `thumbnail` locator is the grammar the native providers interpret - the type in
+`PluginThumbnailLocator` (`complexPluginContracts.ts`) is its schema, and
+`src/config/core-output-file-types.json` is the core `.voxl` declaration to copy from.
+In short: a magic, an optional version gate, where the chunk table is (fixed, or a
+field in the header), how its entries are laid out, which chunk types hold a preview,
+and how to get a PNG out of the payload - stored in the chunk, or base64 inside its
+JSON, optionally zlib-compressed, optionally ranked by a role in the entry flags.
+
+Notes:
+
+- **The registry generator validates the declaration** (field widths and offsets, role
+  handling, payload encoding, duplicate extensions across plugins) and compiles it into
+  the table the providers read. Run `npm run generate:plugin-registry`, which the build
+  hooks already do.
+- **It has to be data, not code.** The macOS QuickLook extension cannot spawn a process,
+  so a plugin's preview is found by interpreting this grammar in the provider - a
+  format whose preview must be *computed* rather than found (a mask rendered on the
+  fly, a vendor pixel format) cannot be described here and is not supported yet.
+- **A preview is a `PREV`-style chunk of PNG bytes.** If the format stores several,
+  list their roles in `roleOrder` and the largest is used; if a payload can be sealed,
+  name `sealedBit` and sealed previews are skipped rather than failed on.
+- The Windows class, the QuickLook plist and the Linux MIME/thumbnailer entry are all
+  generated from these declarations, so nothing else has to change to ship a new one.
+
+### 4.4) Multiple container formats per plugin (optional)
 
 If your plugin supports multiple container formats (e.g., Anycubic with both AFF and AZFF), provide:
 
@@ -225,7 +284,7 @@ pub fn create_plugin_encoder() -> Vec<Box<dyn FormatEncoder>> {
 
 The function returns multiple encoder instances, one per format. Each encoder's `output_format()` method must match at least one extension in `formats.json`.
 
-### 4.3) Required Cargo crates for slicer encoder (optional)
+### 4.5) Required Cargo crates for slicer encoder (optional)
 
 If your encoder implementation requires extra Rust crates beyond the core `dragonfruit-slicing-engine` deps, declare them in:
 
