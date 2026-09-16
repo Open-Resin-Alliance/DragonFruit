@@ -1,7 +1,7 @@
 import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profileStore';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { buildSolidSliceMeshForWasm } from './rasterLayerZipExport';
-import { attachEmbeddedVoxlSceneToMetadata } from './lumenEmbeddedVoxlScene';
+import { attachJobMetadataPayloads, getJobMetadataPayloadDeclarations } from './jobMetadataPayloads';
 import { clampSliceJobNumber } from './sliceJobLimits';
 import { resolveEffectiveDitherPolicy } from './resolveEffectiveDitherPolicy';
 import { prepareLoadedModelsForOutput } from '@/features/mesh-modifiers/prepareModelGeometry';
@@ -456,6 +456,15 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         printerProfile: options.printerProfile,
         materialProfile: options.materialProfile,
     });
+    // The profile's format is only as real as the plugin that declares it. Saying so
+    // is the whole point: the alternative - substituting another format's definition -
+    // writes bytes whose encoder does not match the file's name.
+    if (!format) {
+        throw new Error(
+            `No encoder is installed for "${options.printerProfile.display.outputFormat}". `
+            + 'Install the plugin that provides that output format, or pick another one for this printer profile.',
+        );
+    }
 
     logDebug('Export orchestrator start', {
         format: format.outputFormat,
@@ -768,7 +777,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         meshEncoding: meshTransportEncoding,
         meshQuantization: meshTransportQuantization,
         outputPath: options.outputPath?.trim() || null,
-        metadataJson: await attachEmbeddedVoxlSceneToMetadata(
+        metadataJson: await attachJobMetadataPayloads(
             mergeMetadataOverridesIntoMetadata(
                 solidMesh.metadataJson,
                 format.outputFormat,
@@ -776,7 +785,8 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
                 resolveOutputSettingsMode(format.outputFormat, options.printerProfile.display.settingsMode),
                 options.printerProfile.display.outputFormat,
             ),
-            visibleModels,
+            { models: visibleModels },
+            getJobMetadataPayloadDeclarations(),
         ),
     };
 

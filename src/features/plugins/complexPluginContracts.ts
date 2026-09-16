@@ -386,6 +386,130 @@ export type ComplexPluginCapabilities = {
 };
 
 /**
+ * Reads one integer out of the container, at a fixed offset, with a stated width.
+ * Little-endian, because both containers are.
+ */
+export type PluginBinaryField = {
+    type: 'u16' | 'u32' | 'u64';
+    at: number;
+};
+
+/**
+ * Where a format keeps its stored preview, described rather than parsed.
+ *
+ * The shell providers - Windows Explorer's `IThumbnailProvider`, the macOS QuickLook
+ * extension, the freedesktop thumbnailers - all have to answer "what does this file
+ * look like?" without the app running, and none of them may execute plugin code (the
+ * macOS appex cannot even spawn a process). So a plugin describes its container here
+ * and the providers interpret the description: the grammar below covers a chunk table
+ * whose entries point at a stored PNG, which is what both formats in the tree use and
+ * what most print containers do.
+ *
+ * A format whose preview has to be *computed* rather than found - CTB's RGB565 blobs,
+ * a mask rendered on the fly - cannot be expressed here and is not supported by the
+ * capability yet.
+ */
+export type PluginThumbnailLocator = {
+    /** The ASCII magic that identifies the container, e.g. `LUMN`. */
+    magic: string;
+    /** Optional version gate read from the header. */
+    version?: PluginBinaryField & { equals?: number; atLeast?: number };
+    /** Where the chunk table is and how its entries are laid out. */
+    directory: {
+        /** Either at a fixed offset, or at one the header states. */
+        offset: { fixed: number } | PluginBinaryField;
+        /** How many entries the table holds. */
+        count: PluginBinaryField;
+        /** Bytes per entry. */
+        entrySize: number;
+    };
+    entry: {
+        /** Four ASCII bytes naming the chunk. */
+        type: { at: number };
+        /** Absolute file offset of the payload. */
+        offset: PluginBinaryField;
+        /**
+         * Payload length as stored: the first of these fields that reads non-zero.
+         * Two are needed because LUMEN stores a compressed length that is zero for an
+         * uncompressed payload, and the uncompressed length beside it.
+         */
+        size: PluginBinaryField[];
+        /** Only an entry whose field here equals `value` is a preview (VOXL's chunk index). */
+        index?: PluginBinaryField & { value: number };
+        /**
+         * Compression code. `stored` lists the codes that mean the payload is as it
+         * was written, `zlib` the ones that mean it is a zlib stream; any other code
+         * is refused with the code named rather than guessed at.
+         */
+        compression?: PluginBinaryField & { stored?: number[]; zlib: number[] };
+        /** Flags carrying a preview role and a sealed bit, when the format has them. */
+        flags?: PluginBinaryField & {
+            /** Bit set means the payload is encrypted and cannot be read without a key. */
+            sealedBit?: number;
+            /** Bits holding the preview's role. */
+            roleMask?: number;
+            /**
+             * Role values best-first. The provider takes the first preview whose role
+             * appears here, in this order.
+             */
+            roleOrder?: number[];
+        };
+    };
+    /** Chunk types that carry a preview, e.g. `['PREV']`. */
+    previewChunks: string[];
+    /** What the payload is, and how to get a PNG out of it. */
+    payload:
+        | { encoding: 'png' }
+        | { encoding: 'json-base64'; /** Keys to walk inside the chunk's JSON. */ jsonPath: string[] };
+    /** Magic at the end of the file, when the container signs off. */
+    trailer?: { magic: string; size: number };
+};
+
+/**
+ * A file type a plugin *writes*, and how the operating system shows it.
+ *
+ * This is the shape of `plugins/<id>/outputFileTypes.json` (and of the core
+ * `src/config/core-output-file-types.json`): the declaration is data because the
+ * shell providers are native — the registry generator compiles it into the provider
+ * and into the platform registrations, so a plugin that writes a new container gets
+ * thumbnails and file-manager recognition with no host code naming it.
+ *
+ * Separate from `fileTypes`, which is what a plugin can *import*: a print format is
+ * usually written and not read back.
+ */
+export type PluginOutputFileTypeDefinition = {
+    /** File extension including the leading dot, e.g. '.lumen'. Must be lowercase. */
+    fileExtension: string;
+    /** Media type, e.g. 'application/vnd.openresin.lumen'. */
+    mimeType: string;
+    /** macOS uniform type identifier, e.g. 'org.openresinalliance.lumen'. */
+    uti: string;
+    /** Human-readable label used by the file managers. */
+    displayName: string;
+    /** How a shell provider finds this format's preview. */
+    thumbnail: PluginThumbnailLocator;
+};
+
+/**
+ * A metadata payload the host bakes into a slice job when the merged settings ask
+ * for it.
+ *
+ * Some formats need data the app owns rather than data a setting names - LUMEN's
+ * scene embed wants the editor scene serialized into the file. The plugin declares
+ * the setting that asks for a payload, where the payload lands, and what kind it is;
+ * the host knows how to bake the kinds it implements, and skips a kind it does not,
+ * so nothing in the slice path has to name a plugin.
+ */
+export type PluginJobMetadataPayloadDefinition = {
+    /** Merged-settings path (a `metadataPath`) whose `true` asks for the payload. */
+    settingPath: string;
+    /** Metadata path the base64 payload is written to. */
+    payloadPath: string;
+    /** What to bake. The host implements `voxl-scene` today. */
+    payload: 'voxl-scene';
+};
+
+/**
  * Declares a file extension that a plugin can import.
  *
  * Plugins that set `capabilities.fileType = true` must include at least one
@@ -434,4 +558,6 @@ export type ComplexPluginDefinition = {
     sceneOverlayLoader?: PluginSceneOverlayLoaderContract;
     /** File types this plugin can import. Required when `capabilities.fileType` is true. */
     fileTypes?: PluginFileTypeDefinition[];
+    /** Scene data the host bakes into a job's metadata when these settings ask for it. */
+    jobMetadataPayloads?: PluginJobMetadataPayloadDefinition[];
 };
