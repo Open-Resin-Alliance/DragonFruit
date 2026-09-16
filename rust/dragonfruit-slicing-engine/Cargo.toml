@@ -27,11 +27,6 @@ sysinfo = "0.38"
 
 md-5 = "0.10"
 
-# The LUMEN reference encoder, used by plugins/lumen. A path dependency cannot be
-# declared in a plugin's slicing/rust/requiredCrates.toml (the registry generator
-# validates those as semver), so the .lumen plugin's dependency lives here - and
-# because plugins/lumen is the LumenFormat submodule, the path is inside this
-# checkout and arrives with the plugin.
 lumen-format = { path = "../../plugins/lumen/rust/lumen" }
 [dev-dependencies]
 

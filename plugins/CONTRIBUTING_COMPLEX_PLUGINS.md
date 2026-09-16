@@ -156,6 +156,33 @@ The host reads `GENERATED_BUILTIN_COMPLEX_PLUGIN_FILE_TYPE_HANDLERS` from the ge
 
 ---
 
+### 4.2) Scene payloads in a slice job (optional)
+
+A format sometimes needs data the app owns rather than data a setting names - LUMEN's
+`embedVoxlScene` wants the editor scene serialized into the file. Declare the pair in
+`pluginDefinition.ts` and the host bakes it:
+
+```ts
+jobMetadataPayloads: [
+  {
+    settingPath: 'lumen.embedVoxlScene',   // merged-settings metadataPath; `true` asks for it
+    payloadPath: 'lumen.voxlSceneBase64',  // metadata path the base64 payload lands on
+    payload: 'voxl-scene',                 // the kind of payload; the host implements the kinds it knows
+  },
+],
+```
+
+Notes:
+
+- The host owns the kinds. `voxl-scene` is the serialized editor scene (VOXL V2 bytes,
+  base64) and is the only kind today; a kind a build does not implement is skipped, so a
+  plugin may declare something newer than the app without failing the slice.
+- The bake is best-effort: a setting that is off, no models to serialize, or a
+  serialization failure all leave the metadata unchanged rather than half-written. Your
+  encoder decides what a missing payload means for a job - LUMEN refuses one whose
+  setting asked for a scene it did not receive.
+- No host code names your plugin: the declaration is data.
+
 ### 4.2) Multiple container formats per plugin (optional)
 
 If your plugin supports multiple container formats (e.g., Anycubic with both AFF and AZFF), provide:
@@ -204,8 +231,14 @@ If your encoder implementation requires extra Rust crates beyond the core `drago
 
 - `plugins/<vendor>/slicing/rust/requiredCrates.toml`
   - Schema: TOML matching Cargo.toml `[dependencies]` and `[optional-dependencies]` sections
+  - A dependency is either a version spec (`ndarray = "0.15"`) or a path into your own
+    checkout (`my-crate = { path = "../rust/my-crate" }`), relative to the file that
+    declares it — for a crate that is not on crates.io, such as a reference encoder that
+    ships with the plugin. Path dependencies are not version-checked; the path has to
+    exist at generation time.
   - Generator validates version conflicts (strict: incompatible versions will fail the build)
-  - Generator auto-merges into `dragonfruit-slicing-engine/Cargo.toml`
+  - Generator auto-merges into `dragonfruit-slicing-engine/Cargo.toml`, rewriting a
+    declared path so it resolves from the engine crate
   - All declared crates become available to encoder code via `use ...`
 
 **Example** (`plugins/anycubic/slicing/rust/requiredCrates.toml`):
@@ -307,7 +340,9 @@ Optional but recommended:
 | `create_plugin_encoder() declares slicerEncoder=true but returns no encoders`       | Encoder function returns empty vec                                                              | Return at least one encoder instance                                                            |
 | `requiredCrates.toml exists but is not valid TOML`                                  | Malformed TOML in requiredCrates.toml                                                           | Fix TOML syntax (test with `toml-cli`)                                                          |
 | `requiredCrates.toml: crate X version conflict (plugin A: 0.5, plugin B: 0.6)`      | Two plugins declare same crate with incompatible versions                                       | Coordinate plugin versions or split into separate builds                                        |
-| `requiredCrates.toml declares crate with invalid semver`                            | Version string not valid semver (e.g., `latest`)                                                | Use explicit version constraint (e.g., `^1.0` or `0.5`)                                         |
+| `requiredCrates.toml declares crate with invalid semver`                            | Version string not valid semver (e.g., `latest`)                                                | Use explicit version constraint (e.g., `^1.0` or `0.5`), or `{ path = "…" }` for a local crate |
+| `requiredCrates.toml: crate X has an empty path`                                     | `{ path = "" }` declares nothing                                                                | Point it at the crate directory                                                                  |
+| `requiredCrates.toml: crate X is an inline table this registry understands only as { path = "..." }` | An inline table with keys the generator does not support (e.g. `features`)       | Declare a plain version spec, or move the features into the crate's own manifest                 |
 
 ---
 
