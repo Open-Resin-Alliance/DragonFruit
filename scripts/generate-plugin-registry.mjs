@@ -248,7 +248,7 @@ function describeCargoDep(spec) {
 }
 
 // Enforce strict version conflict detection across all plugins
-function enforceCargoDepConsistency(discovered) {
+async function enforceCargoDepConsistency(discovered) {
       const allCrateDeps = {};
       const crateOrigins = {};
 
@@ -260,6 +260,18 @@ function enforceCargoDepConsistency(discovered) {
 
             for (const [crate, spec] of Object.entries(allPluginDeps)) {
                   const cleanSpec = typeof spec === 'string' ? spec.trim() : spec;
+
+                  // A version is resolved by cargo; a path is resolved here, so a path
+                  // that points nowhere has to fail now rather than as a cargo error in
+                  // a build that names the engine rather than the plugin that asked.
+                  if (typeof cleanSpec === 'object') {
+                        const exists = await fs.access(cleanSpec.absolute).then(() => true).catch(() => false);
+                        if (!exists) {
+                              throw new Error(
+                                    `[plugin-registry] Plugin "${plugin.id}" requiredCrates.toml: crate "${crate}" path "${cleanSpec.path}" does not exist (resolved to "${cleanSpec.absolute}")`,
+                              );
+                        }
+                  }
 
                   if (!allCrateDeps[crate]) {
                         allCrateDeps[crate] = cleanSpec;
@@ -1119,7 +1131,7 @@ async function main() {
       // Phase 2: Cargo dependency automation
       let mergedCargoDeps = {};
       if (filteredDiscovered.some((p) => p.hasRequiredCrates)) {
-            mergedCargoDeps = enforceCargoDepConsistency(filteredDiscovered);
+            mergedCargoDeps = await enforceCargoDepConsistency(filteredDiscovered);
             const numMergedDeps = await mergePluginCratesIntoCargoToml(mergedCargoDeps);
             console.log(`[plugin-registry] Merged ${numMergedDeps} cargo crate(s) into dragonfruit-slicing-engine/Cargo.toml`);
       }
