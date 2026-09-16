@@ -241,6 +241,9 @@ Notes:
   name `sealedBit` and sealed previews are skipped rather than failed on.
 - The Windows class, the QuickLook plist and the Linux MIME/thumbnailer entry are all
   generated from these declarations, so nothing else has to change to ship a new one.
+- **The file association stays the app's.** These declarations drive the *preview* and
+  the type identifiers; which application opens a file is the app's own statement about
+  itself, and lives in its `bundle.fileAssociations` (`src-tauri/tauri.conf.json`).
 
 ### 4.4) Multiple container formats per plugin (optional)
 
