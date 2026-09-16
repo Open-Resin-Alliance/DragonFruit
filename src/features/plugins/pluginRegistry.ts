@@ -77,6 +77,8 @@ function ensureBuiltinAdaptersHydrated(): void {
     const localMaterialAdapters = definition.localMaterialSettingsByOutput ?? {};
     Object.entries(localMaterialAdapters).forEach(([outputFormat, adapter]) => {
       const normalized = normalizeOutputFormat(outputFormat);
+      // A key that is not a format declares nothing to attach settings to.
+      if (!normalized) return;
       LOCAL_MATERIAL_SETTINGS_BY_OUTPUT.set(normalized, {
         ...adapter,
         outputFormat: normalized,
@@ -86,6 +88,8 @@ function ensureBuiltinAdaptersHydrated(): void {
     const localMaterialAdaptersByMode = definition.localMaterialSettingsByOutputAndMode ?? {};
     Object.entries(localMaterialAdaptersByMode).forEach(([outputFormat, adaptersByMode]) => {
       const normalizedOutput = normalizeOutputFormat(outputFormat);
+      // Same rule as the per-output map above.
+      if (!normalizedOutput) return;
       const modeMap = LOCAL_MATERIAL_SETTINGS_BY_OUTPUT_AND_MODE.get(normalizedOutput) ?? new Map<string, ProfileLocalMaterialSettingsAdapter>();
 
       Object.entries(adaptersByMode ?? {}).forEach(([settingsMode, adapter]) => {
@@ -179,6 +183,7 @@ export function getProfileLocalMaterialSettingsAdapter(
   if (!outputFormat || typeof outputFormat !== 'string') return null;
 
   const normalizedOutput = normalizeOutputFormat(outputFormat);
+  if (!normalizedOutput) return null;
   const normalizedMode = normalizeSettingsMode(settingsMode);
 
   if (normalizedMode) {
@@ -286,7 +291,9 @@ function sanitizeProfileVersion(value: unknown): number | undefined {
 }
 
 function sanitizeOutputFormat(value: unknown): PrinterPreset['display']['outputFormat'] {
-  return normalizeOutputFormat(value);
+  // A preset without a usable format keeps an empty one rather than borrowing
+  // another plugin's: the printer picker shows it and slicing names it.
+  return normalizeOutputFormat(value) ?? '';
 }
 
 function sanitizeNetworkSupport(value: unknown): PrinterPreset['networkSupport'] {

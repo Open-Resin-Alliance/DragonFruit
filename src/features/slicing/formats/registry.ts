@@ -4,17 +4,6 @@ import { getBuiltinComplexPluginDefinitions } from '@/features/plugins/builtinCo
 import { getProfileNetworkUiAdapter } from '@/features/plugins/pluginRegistry';
 import { normalizeFormatVersion, normalizeSettingsMode } from '@/features/profiles/outputFormatUtils';
 
-const CORE_LUMEN_FORMAT_DEFINITION: SlicingFormatDefinition = {
-  id: 'core.lumen.v1',
-  outputFormat: '.lumen',
-  displayName: 'LUMEN',
-  ownership: 'core',
-  layerDataKind: 'raw-mask',
-  rustModulePath: 'formats::lumen',
-  wasmExportName: 'encode_lumen_container',
-  notes: 'Fallback used when the lumen plugin is not loaded. The plugin owns this format and encodes it from raster runs.',
-};
-
 function resolveBuiltinPluginSlicingFormat(
   outputFormat: PrinterOutputFormat,
   preferredPluginId?: string,
@@ -34,22 +23,16 @@ function resolveBuiltinPluginSlicingFormat(
   return null;
 }
 
-const CORE_FALLBACK_BY_OUTPUT_FORMAT: Partial<Record<PrinterOutputFormat, SlicingFormatDefinition>> = {
-  '.lumen': CORE_LUMEN_FORMAT_DEFINITION,
-};
-
 export function outputFormatUsesPngLayers(outputFormat: PrinterOutputFormat | string | null | undefined): boolean {
   if (!outputFormat) return true;
   const format = outputFormat as PrinterOutputFormat;
-  const definition = resolveBuiltinPluginSlicingFormat(format) ?? CORE_FALLBACK_BY_OUTPUT_FORMAT[format];
+  const definition = resolveBuiltinPluginSlicingFormat(format);
   if (!definition) return true;
   return definition.layerDataKind === 'png';
 }
 
 export function getAvailableOutputFormatOptions(): Array<{ value: PrinterOutputFormat; label: string }> {
   const formats = new Set<PrinterOutputFormat>();
-
-  formats.add('.lumen');
 
   for (const definition of getBuiltinComplexPluginDefinitions()) {
     const pluginFormats = definition.slicingFormatsByOutput ?? {};
@@ -63,30 +46,32 @@ export function getAvailableOutputFormatOptions(): Array<{ value: PrinterOutputF
   return Array.from(formats)
     .sort((a, b) => a.localeCompare(b))
     .map((format) => {
-      const def = resolveBuiltinPluginSlicingFormat(format) ?? CORE_FALLBACK_BY_OUTPUT_FORMAT[format];
+      const def = resolveBuiltinPluginSlicingFormat(format);
       return { value: format, label: def?.displayName ?? format };
     });
 }
 
-export function resolveSlicingFormatDefinition(context: ResolveSlicingFormatContext): SlicingFormatDefinition {
+/**
+ * The definition a profile's output format resolves to, or `null` when no loaded
+ * plugin claims that format.
+ *
+ * Null is a real answer and callers have to handle it: a format whose plugin is
+ * missing cannot be encoded, and substituting another format's definition would
+ * produce a file whose bytes disagree with its name. Every format DragonFruit can
+ * write is declared by the plugin that writes it - there is no core format.
+ */
+export function resolveSlicingFormatDefinition(context: ResolveSlicingFormatContext): SlicingFormatDefinition | null {
   const format = context.printerProfile.display.outputFormat;
   const preferredPluginId = getProfileNetworkUiAdapter(context.printerProfile.networkSupport)?.pluginId;
 
-  const pluginOwnedFormat = resolveBuiltinPluginSlicingFormat(format, preferredPluginId);
-  if (pluginOwnedFormat) {
-    return pluginOwnedFormat;
-  }
-
-  return CORE_FALLBACK_BY_OUTPUT_FORMAT[format] ?? CORE_LUMEN_FORMAT_DEFINITION;
+  return resolveBuiltinPluginSlicingFormat(format, preferredPluginId);
 }
 
 function resolveSlicingFormatDefinitionByOutput(
   outputFormat: PrinterOutputFormat,
   preferredPluginId?: string,
 ): SlicingFormatDefinition | null {
-  return resolveBuiltinPluginSlicingFormat(outputFormat, preferredPluginId)
-    ?? CORE_FALLBACK_BY_OUTPUT_FORMAT[outputFormat]
-    ?? null;
+  return resolveBuiltinPluginSlicingFormat(outputFormat, preferredPluginId);
 }
 
 export function getAvailableFormatVersionOptions(
