@@ -19,7 +19,7 @@ Readers must support V1 and V2.x. Writers should emit V2.4 semantics.
 
 - Extension: `.voxl`
 - Media type: `application/vnd.dragonfruit.voxl`
-- Units: millimetres (`mm`)
+- Units: millimeters (`mm`)
 - Coordinate basis: right-handed, Z-up
 - Rotation storage: Euler radians (XYZ)
 

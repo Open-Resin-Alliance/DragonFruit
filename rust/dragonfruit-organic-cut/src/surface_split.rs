@@ -13,7 +13,7 @@
 //!   faces either side of an edge get the very same crossing point, which is what
 //!   keeps the result watertight.
 //! - Inside a face, the seam is taken as the straight chord between where it came
-//!   in and where it went out. The error is bounded by one face (sub-millimetre on
+//!   in and where it went out. The error is bounded by one face (sub-millimeter on
 //!   any mesh worth cutting) and it removes a whole class of special cases.
 //! - Retriangulate only the faces the seam crosses, with the chords as constraints,
 //!   so every other triangle of the model is left exactly as it was.
@@ -314,7 +314,7 @@ impl SplitSurface {
 /// `2 × by` — which is the clearance a glued joint needs if it is not to come out
 /// fatter than the model. The offset has to be far finer than a triangle, which is
 /// why it moves the CURVE and lets the exact splitter do the rest, rather than
-/// dropping faces near the rim: at a tenth of a millimetre on a mesh whose triangles
+/// dropping faces near the rim: at a tenth of a millimeter on a mesh whose triangles
 /// are a third of one, face-level erosion cannot resolve the gap at all.
 ///
 /// Each moved point is put back onto the skin, because the walk that follows assumes
@@ -327,11 +327,11 @@ pub fn offset_seam(mesh: &IndexedMesh, seam: &[Vec3], by: f32) -> Vec<Vec3> {
     // The seam is offset point for point, WITHOUT resampling it first. Resampling
     // looks like the safe thing to do — a geodesic crossing a flat face puts no
     // points in between, and the model's base makes one run of 6 to 8 mm steps where
-    // the rest of the seam steps half a millimetre — but the points it invents go in
+    // the rest of the seam steps half a millimeter — but the points it invents go in
     // along the straight chord, and where the seam turns into a crevice that chord
     // passes THROUGH the model. Offsetting from inside the solid and dropping the
     // result on the nearest face lands it on whatever happens to be nearest: a spike,
-    // one point most of a millimetre from both its neighbours and back again, which
+    // one point most of a millimeter from both its neighbours and back again, which
     // crosses its own seam and breaks the cut into crumbs of one and three and five
     // triangles. The long steps are the walk's business, and it handles them.
     let n = seam.len();
@@ -690,7 +690,7 @@ fn snap_distance(mesh: &IndexedMesh, apart: Option<f32>) -> f32 {
 
 /// The closest two of these seams ever come to each other, or `None` for one seam.
 ///
-/// A cut with a joint clearance sends down two seams a tenth of a millimetre apart,
+/// A cut with a joint clearance sends down two seams a tenth of a millimeter apart,
 /// and that gap is then the finest thing anywhere near the cut. Both the snapping
 /// distance and the sampling step are held under it: merge across it and the seams
 /// weld together, step over it and the walk loses the trail among the slivers the
@@ -884,7 +884,7 @@ fn retriangulate(
     // crossed and a distance fixed for the whole cut. Either one alone is wrong. A
     // percentage alone is enormous on a big triangle — a model sitting on the plate
     // has a flat base of triangles centimetres across next to a skin of
-    // half-millimetre ones, and two per cent of a seven-millimetre edge is 0.14 mm,
+    // half-millimeter ones, and two per cent of a seven-millimeter edge is 0.14 mm,
     // wider than any joint clearance anyone would ask for, so two seams 0.1 mm apart
     // crossing that edge merged into ONE vertex, the strip between them pinched out,
     // and the wall was left hanging at the pinch. A distance alone is enormous on the
@@ -1453,7 +1453,7 @@ mod tests {
         assert!(above > 0 && above < split.mesh.triangles.len(), "both sides carry faces");
     }
 
-    /// Two seams a tenth of a millimetre apart on a mesh of hundred-millimetre
+    /// Two seams a tenth of a millimeter apart on a mesh of hundred-millimeter
     /// triangles — a joint clearance on the flat base a model stands on. The snapping
     /// distance used to be two per cent of the crossed edge, which is 1 mm here: both seams
     /// crossed the same edge, both were snapped to the SAME vertex, the strip between
@@ -1492,7 +1492,7 @@ mod tests {
         // the user the shaving and bins the model.
         // Not by size — on a mesh this coarse the band round the cube carries more
         // faces than the lid it separates — but by where it is: every face of the
-        // strip lies inside the tenth of a millimetre between the two seams.
+        // strip lies inside the tenth of a millimeter between the two seams.
         let strips = split.strips_between(0, 1);
         assert_eq!(strips.len(), 1, "one unbroken band round the cube: {strips:?}");
         for (fi, t) in split.mesh.triangles.iter().enumerate() {

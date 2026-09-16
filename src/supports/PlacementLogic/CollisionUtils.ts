@@ -136,7 +136,7 @@ export function checkShaftCollision(
  *
  * `checkShaftCollision` fires whiskers offset from the axis by `radius`. A
  * twig's socket sits ON the surface it touches, so for any canted twig — the
- * normal case, since it bridges two features a couple of millimetres apart —
+ * normal case, since it bridges two features a couple of millimeters apart —
  * a whisker offset towards the lower surface starts *inside* the material and
  * the exit hit reads as a collision. Every canted twig was refused this way,
  * automatically and by hand. Check the middle of the span instead: the sockets
