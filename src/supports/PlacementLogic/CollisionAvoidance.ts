@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { Vec3 } from '../types';
 import { checkShaftCollision } from './CollisionUtils';
 import { SDFCache } from './Pathfinding/SDFCache';
-import { getOrCreateSDFCache } from './Pathfinding/SmartPlacementV2';
+import { getOrCreateSDFCache } from './Pathfinding/SDFCachePool';
 const DEFAULT_FRUSTUM_SEGMENT_COUNT = 5;
 
 export interface CollisionFrustumProfile {
@@ -16,9 +16,7 @@ function getOrCreateCollisionSdf(mesh: THREE.Mesh): SDFCache | null {
     if (!geometry?.boundsTree) {
         return null;
     }
-    // Use the shared pool — if a precomputed SDF grid has been loaded
-    // (via tryLoadPrecomputedSDFForMesh), it will be injected into this
-    // cache and all lookups become O(1) hash hits.
+    // Use the shared pool so every subsystem queries the same distance field.
     const sdf = getOrCreateSDFCache(mesh);
     sdf.refreshMatrix();
     return sdf;
@@ -51,8 +49,8 @@ export function isCollisionSegmentBlocked(
  * SDF-based shaft collision check — replaces BVH whisker-ray `checkShaftCollision`.
  *
  * Uses `sdf.segmentBlocked()` with adaptive sphere tracing, which is more
- * accurate than the 9-ray bundle and benefits from the precomputed SDF grid
- * when available. Falls back to BVH raycasting if no BVH/SDF is available.
+ * accurate than the 9-ray bundle and shares its cell cache with the router.
+ * Falls back to BVH raycasting if no BVH/SDF is available.
  *
  * @param start  - Start of the shaft segment (world-space mm)
  * @param end    - End of the shaft segment (world-space mm)

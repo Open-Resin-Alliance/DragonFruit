@@ -260,8 +260,8 @@ function branchCollidesWithMesh(
         z: tipPos.z + tipNormal.z * nominalConeLengthMm,
     };
 
-    // Check the full knot→socket segment as a single shaft (SDF-based,
-    // benefits from precomputed grid). Splitting into two segments is
+    // Check the full knot→socket segment as a single shaft (SDF-based).
+    // Splitting into two segments is
     // unnecessary — the SDF's adaptive sphere tracing handles curvature.
     return isShaftBlocked(knot.pos, socketApprox, radius, mesh);
 }

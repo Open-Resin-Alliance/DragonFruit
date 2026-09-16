@@ -187,8 +187,8 @@ Two invariants that mimicry won't teach — get either wrong and undo breaks **s
 
 ## Rust crate version bumps
 
-The native crates under `rust/` (`dragonfruit-islands`, `dragonfruit-sdf`,
-`dragonfruit-mesh-core`, …) are **standalone crates** — there is no workspace
+The native crates under `rust/` (`dragonfruit-islands`, `dragonfruit-mesh-core`,
+`dragonfruit-slicing-engine`, …) are **standalone crates** — there is no workspace
 root — consumed by the Tauri shell via path dependencies in
 `src-tauri/Cargo.toml`. Because path deps always resolve, a stale `version` is
 invisible locally but breaks the lock file, caches, and any versioned consumer.

@@ -33,6 +33,7 @@
             "src/pages",
             "src/supports/Grid",
             "src/supports/PlacementLogic/Grid",
+            "src/supports/PlacementLogicV3",
             "src/supports/SupportTypes/Trunk/TrunkReplacement",
             "src/supports/autoSupport",
             "src/supports/history",

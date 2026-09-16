@@ -1,389 +1,159 @@
 # Support Pathfinding V3
 
-This page documents the support pathfinding pipeline used by `SmartPlacementV2`.
+How a support trunk gets from a contact point on the model to the build plate.
+The trunk router is `src/supports/PlacementLogicV3/SmartPlacementV3.ts`, reached
+from `trunkBuilder.buildTrunkData`.
 
-It focuses on:
+## The shape
 
-- the order in which rules run
-- what each rule is allowed to change
-- the mathematical criteria used during rescue and validation
-- how debug tuning changes the solver when enabled
+```
+contact cone ──► one diagonal ──► joint ──► straight drop to the plate
+```
 
-## Overview
+One diagonal, one joint, and a vertical load-bearing span. That is the whole
+vocabulary: the router cannot emit a multi-joint chain, so nothing downstream
+has to simplify one back down and no two code paths can disagree about what a
+valid route looks like.
 
-Support pathfinding resolves a placement from a user hover/click into a valid support chain:
+The shape is not an aesthetic choice. A support is strongest as a vertical
+pillar, so the router's only job is to find the earliest point where vertical
+becomes possible and get there in one move.
 
-1. choose a socket position near the model contact point
-2. determine whether the cone is valid or needs rescue
-3. confirm the shaft can reach the roots plane without collision
-4. search for a routed chain when the straight path fails
-5. simplify and revalidate the route
-6. snap the base to a legal committed root location
+## The search
 
-The solver is intentionally layered so cheaper checks run first and more expensive checks only run when necessary.
+`EscapeJointSearch` is the entire route search. For each candidate direction, in
+order:
 
-## The pathfinding chain
+1. Walk outward from the socket along a 45° ray, in `WALK_STEP_MM` (0.5) steps.
+2. At each step the leg increment must be clear, then the column below the point
+   must be clear down to `rootTopZ` **and** the roots volume must fit at that XY.
+3. Stop at the first point that satisfies both. That is the joint.
 
-The main solver path is executed in this order:
+The direction search is the only optimisation, and its objective is to keep the
+joint as close as possible to the socket's own column, because everything below
+the joint is vertical. `buildDirectionFan` orders the directions from the
+surface normal's outward direction, alternating either side of it, so the way
+off the surface the tip is attached to is tried first.
 
-1. **Standard placement baseline**
-   - compute the default socket and bottom position
-   - if the placement is already invalid by a non-routing rule, return immediately
+Why 45° rather than "as steep as it can get": for a given lateral offset the 45°
+point is the highest joint the lean ceiling allows (the ceiling is
+`drop >= lateral`), so it ends the diagonal soonest, starts the vertical
+earliest, and has the shortest diagonal of any legal leg to that column.
 
-2. **SDF cache refresh**
-   - refresh the per-mesh signed-distance cache matrix
-   - all subsequent collision checks reuse this cache
+The lean then escalates — 45°, then 60°, then 75° — **only** when no 45° leg
+reaches a clear column. A tip sitting just above a wide obstacle has no 45° leg
+at all (measured: one such fixture grazes the clearance by 0.01 mm), and a
+slightly shallower diagonal still ends in a single joint and a vertical drop.
 
-3. **Cone feasibility and cone rescue**
-   - test whether the nominal contact cone is clear
-   - if blocked, try cone-clear socket seeds and rescue variants
+The walk is bounded three ways: by the lateral envelope
+(`min(72, max(48, verticalSpan × 2.5))` mm), by the height available above the
+root, and by `MAX_PROBES` (900). The probe count comes back with the result, so
+callers and tests can hold a placement to a bound instead of trusting a comment.
 
-4. **Straight path checks**
-   - check direct shaft clearance
-   - check root disk fit at the base
-   - if both pass, return a straight support
+## Judging a candidate
 
-5. **Spatial fast-fail caches**
-   - if the current socket is already known to stagnate, skip A*
-   - if preview mode already exhausted budget near this position, skip A*
+`resolveBase` decides where the root lands and therefore where the vertical leg
+ends. With the grid on it snaps to the nearest legal node within
+`MAX_BASE_SEARCH_RINGS` (4): legal means the roots volume fits and the leg from
+the joint reaches it without clipping, and among legal nodes the one nearest
+directly under the joint wins, so the last leg stays as vertical as the grid
+allows. With the grid off the joint's XY is continuous and is used as is.
 
-6. **Fine A***
-   - run the 0.25 mm grid search with the fine budget
+The committed chain is then checked as a whole:
 
-7. **Wide A***
-   - if fine A* fails, retry with the 0.6 mm grid and a wider budget
+- The diagonal against its own lean plus a float-noise epsilon. It is the one
+  segment exempt from the length-aware tightening, and the exemption reaches
+  exactly as far as the angle the search chose.
+- The vertical leg (joint to root) against the length-aware rule with the
+  configured routed-trunk angle (`max(15, 90 - grid.minRoutedTrunkAngleDeg)`) as
+  its floor and the routing detour slack on top. This is the span that carries
+  the load, so it is the one held to the configured angle.
 
-8. **Post-search simplification and straightening**
-   - remove unnecessary joints
-   - optionally attempt zero-joint or one-joint reductions
-   - reshape a surviving short horizontal step into a diagonal: drop the fold
-     joint, move the base under the joint above it, or swing that joint over
-     the base column, taking the first candidate that clears and passes the
-     angle gates. Rejections are reported in the debug log
+## The socket and the cone are one decision
 
-9. **Final validation**
-   - ensure each chain segment is collision-free
-   - ensure final angles and crack-span rules still hold
+`resolveConeSocketAndAxis` resolves them together, because the builder renders
+the cone along the direction from the cone start to the socket. With a joint to
+aim at, the socket moves onto the line toward that joint, so the cone and the
+first shaft segment form one line; the move is clamped to
+`MAX_CONE_AXIS_DEVIATION_FROM_SURFACE_NORMAL_DEG` because the contact disk is
+oriented along the surface normal. With no joint the socket stands and the axis
+follows it.
 
-10. **Commit base snapping**
-    - resolve the best legal root position for the final chain
+Reporting a shaft-aligned axis while leaving the socket on the pre-routing axis
+is what the previous engine did, and the builder then silently replaced the axis
+with its own derivation. There is now one authority for the pair.
 
-## Rule ordering and priority
+## Shared geometry rules
 
-The solver is deliberately greedy about cheap rejection first.
-
-### 1. Cone rules
-
-The cone is the first major gate because if the support cannot legally touch the model, routing effort is wasted.
-
-Cone rescue may shift the socket laterally before any routing work begins.
-
-### 2. Straight path rules
-
-If the cone is valid, the solver checks whether the shaft can go straight down without clipping and whether the roots disk fits at the base.
-
-This is the cheapest fully valid outcome, so it wins immediately if it passes.
-
-### 3. Routing rules
-
-Only after straight placement fails does the solver spend budget on A* and rescue geometry.
-
-### 4. Final safety gates
-
-Even a candidate that reaches the goal still gets rechecked segment-by-segment.
-
-This prevents a route from surviving due to search heuristics alone.
-
-## Core geometry rules
+These still apply and are shared with the manual placement paths.
 
 ### Shaft clearance
 
-The solver uses a clearance value:
+The clearance passed to every collision query is
+`shaft diameter / 2 + COLLISION_AVOIDANCE_MM` (0.48).
 
-$$
-\text{clearance} = \frac{\text{shaft diameter}}{2} + \text{collision avoidance margin}
-$$
+### Roots volume
 
-This clearance is passed into segment collision checks.
-
-### Roots fit check
-
-The roots are valid at $(x, y)$ only if the swept root disk volume does not intersect the model.
-
-At a high level, the roots volume is sampled across the disk section and the cone section, and a position is rejected if any sampled point is blocked.
-
-### Straight path rule
-
-Let $S$ be the socket position and $R$ be the root-top target.
-
-The straight path is valid if:
-
-$$
-\neg \text{segmentBlocked}(S, R)
-$$
-
-and
-
-$$
-\neg \text{rootsBlocked}(R_{xy})
-$$
-
-If both are true, the support is returned with no routing joints.
+The root is a disk plus a cone. Each height slice is sampled as the circle the
+root actually occupies at that height, with the whole circle tested against the
+same 0.48 mm safety margin, plus the bounding-ball early-out the 1-Lipschitz SDF
+allows (if the slice centre is further out than the slice radius plus the
+margin, no perimeter point can be blocked).
 
 ### Segment angle gates
 
-A segment's allowance is length-aware: up to 3 mm a segment may sit at the routing
-detour angle (60° from vertical), from 3 to 5 mm it tapers back to the configured
-angle, and longer spans tighten further at 3° per mm.
-
-That tightening is floored at the angle the app configures for routed trunks
-(`90 - grid.minRoutedTrunkAngleDeg`), so a span is never capped below the user's own
-limit. It used to floor at a fixed 15°, which capped any span over ~8 mm well below
-the configured angle; the router then had no legal diagonal to take a lateral offset
-with and satisfied it instead with a short ≤3 mm step (a "fold": a horizontal jog
-followed by a vertical drop). The first segment below the socket adds the socket-elbow
-allowance on top of this.
-
-### Cone rescue math
-
-The cone rescue system tries to keep the tip shape short and near-normal while still finding a usable socket.
-
-### Cone length
-
-Let the cone start after tip thickness compensation be $C_0$ and the socket be $S$.
-
-$$
-L_{cone} = \lVert S - C_0 \rVert
-$$
-
-The added cone length is:
-
-$$
-\Delta L = \max(0, L_{cone} - L_{ref})
-$$
-
-where $L_{ref}$ is the original reference cone length.
-
-### Cone angle
-
-Let $n$ be the surface normal and $a$ be the final cone axis.
-
-The angle from surface normal is:
-
-$$
-\theta = \arccos\left(\operatorname{clamp}(a \cdot n, -1, 1)\right)
-$$
-
-converted to degrees.
-
-### Cone penalty score
-
-The cone rescue ranking uses a weighted score that prefers short, minimally distorted cones.
-
-In simplified form:
-
-$$
-J_{cone} = J_{angle} + J_{worsen} + J_{length} + J_{direction}
-$$
-
-where:
-
-$$
-J_{length} = w_1 d + w_2 d^2 + w_3 d^3
-$$
-
-with $d$ being the excess cone stretch above the reference length.
-
-The angular terms penalize both absolute shallowness and worsening relative to the nominal cone.
-
-### Stretch limit
-
-The cone is considered over-stretched if:
-
-$$
-\Delta L > L_{ref} \cdot r_{max}
-$$
-
-where $r_{max}$ is the cone stretch ratio cap.
-
-### Disk axis limit
-
-For disk tips, the final cone axis angle must also satisfy:
-
-$$
-\theta \le \theta_{max}
-$$
-
-where $\theta_{max}$ is the disk cone axis limit.
-
-## Search envelope math
-
-The routing envelope determines how far the solver is allowed to search laterally.
-
-### Envelope construction
-
-Let the vertical span be:
-
-$$
-V = \max(0, z_{socket} - z_{rootTop})
-$$
-
-The unclamped lateral limit is:
-
-$$
-L_{unclamped} = \max\left(L_{min},\; 15\,\text{spacing},\; 3V\right)
-$$
-
-The final lateral cap is:
-
-$$
-L_{max} = \min(L_{hard}, L_{unclamped})
-$$
-
-The rescue sweep radii are then generated from a fixed sweep table and clamped so they do not exceed $L_{max}$.
-
-## A* search math
-
-### Grid steps
-
-The solver uses two search grids:
-
-- **fine pass**: $0.25\,\text{mm}$
-- **wide pass**: $0.6\,\text{mm}$
-
-The wide pass is a fallback for large detours and rescue routes.
-
-### Expansion budgets
-
-The number of allowed expansions scales with grid step so the solver keeps roughly comparable search reach:
-
-$$
-E = \operatorname{round}\left(\frac{B_{2mm} \cdot 2}{s}\right)
-$$
-
-where:
-
-- $B_{2mm}$ is the base budget expressed at 2 mm step size
-- $s$ is the active grid step size
-
-### A* objective
-
-The search is still a feasibility search first and a quality search second.
-
-It prefers routes that:
-
-1. reach the root target
-2. stay collision-free
-3. avoid excessive lateral drift
-4. avoid upward motion where possible
-5. remain valid under the final angle gates
-
-## Final route validation
-
-After A* and simplification, the solver validates the final chain segment by segment.
-
-Let the final points be:
-
-$$
-[P_0, P_1, \dots, P_n]
-$$
-
-with $P_0$ the socket and $P_n$ the root-top target.
-
-For every segment $(P_i, P_{i+1})$:
-
-$$
-\neg \text{segmentBlocked}(P_i, P_{i+1})
-$$
-
-and
-
-$$
-\angle(P_i, P_{i+1}) \le \angle_{max}
-$$
-
-must hold.
-
-## Crack-span rule
-
-If the route has two or more joints, the solver checks the routing Z span:
-
-$$
-Z_{span} = z_{socket} - z_{lowestJoint}
-$$
-
-If:
-
-$$
-Z_{span} < Z_{min}
-$$
-
-the route is rejected as too crack-like.
-
-This prevents supports from being squeezed through narrow voids that are likely to be unstable or physically misleading.
-
-## Debug tuning behavior
-
-The debug tuning mode activated by `M` is intentionally separate from the baseline defaults.
-
-### Baseline defaults
-
-The current baseline already uses the tuned values for practical pathfinding.
-
-### Extra debug tuning
-
-When enabled, `M` applies an extra layer that makes the solver more forgiving:
-
-- slightly larger search envelope
-- slightly more rescue radii
-- slightly larger cone seed range
-- extra A* expansions
-- lower collision avoidance margin
-- slightly looser max segment angle
-- looser crack-span rejection
-- more permissive cone stretch and cone-axis gating
-
-This mode is for interactive exploration and tuning, not for permanently lowering production safety rules.
-
-## Blocked-path diagnostics
-
-When a path fails, the debug overlay records the main reason(s) and suggests which rule family to tune:
-
-- cone blocked
-- cone rescue failed
-- A* stagnated
-- A* hit expansion budget
-- no valid root target reached
-- base resolution failed
-- crack-span rejection
-- angle validation failure
-- segment collision in final validation
-
-These are designed to be actionable rather than just descriptive.
-
-## Practical tuning order
-
-If a model still fails, tune in this order:
-
-1. **cone rescue** first
-2. **search envelope and budgets** second
-3. **clearance and angle gates** third
-4. **crack-span rule** last
-
-That order gives the best chance of improving success without hiding real collision problems.
+A segment's allowance is length-aware: up to 3 mm a segment may sit at 60° from
+vertical, from 3 to 5 mm it tapers back to the base angle, and longer spans
+tighten further at 3° per mm, floored at the angle the app configures for routed
+trunks. The first segment below the socket additionally gets the socket-elbow
+allowance.
+
+### Cone axis policy
+
+`resolveConeAxisPolicy` (`ConeAxisPolicy.ts`, shared) derives the pre-routing
+cone axis from the surface normal and `tip.coneAngleMode`. Under the default
+`adaptive` mode the axis is rotated toward vertical and clamped to a 30°
+deviation from the normal, so at a wall or a steep shoulder it can point into
+the surface the cone is stuck to. It is a cone policy and an input to nothing
+route-related: the shaft leaves along the surface normal, and the router's
+resolved axis wins for the rendered cone.
+
+## Debug
+
+`SmartPlacementV3` is the only publisher of the pathfinding debug snapshot
+(`pathfindingDebugState.ts`), which `SupportPathfindingDebugOverlay` and the HUD
+render. It publishes the resolved socket, the chain, the base, and an outcome of
+`straight`, `routed` or `blocked` with a reason string naming what stopped it
+(`no joint reached a clear column`, `no committed base under the joint`, or the
+rejected-chain case). `passes` is empty: there is no lattice search left to
+visualise. `useTrunkPlacement` clears the snapshot when hover ends.
 
 ## Implementation references
 
-- `src/supports/PlacementLogic/Pathfinding/SmartPlacementV2.ts`
-- `src/supports/PlacementLogic/Pathfinding/pathfindingDebugState.ts`
-- `src/components/scene/SupportPathfindingDebugOverlay.tsx`
+- `src/supports/PlacementLogicV3/SmartPlacementV3.ts` — the entry point
+- `src/supports/PlacementLogicV3/EscapeJointSearch.ts` — the route search
+- `src/supports/PlacementLogic/Pathfinding/SDFCache.ts` and `SDFCachePool.ts` — the collision oracle
+- `src/supports/PlacementLogic/StandardPlacement.ts` — the socket/cone baseline the router starts from
+- `src/supports/PlacementLogic/smartPlacementSearchUtils.ts` — the angle gates
+- `src/components/scene/SupportPathfindingDebugOverlay.tsx` — the debug view
 
-## Summary
+## What was removed, and why it should not come back
 
-Support Pathfinding V3 is a layered feasibility solver:
+The trunk router used to be a chain of engines: a discrete A* over an SDF
+lattice, a potential-field integration, a deterministic gradient march, and a
+rescue candidate sweep, each with its own caches, budgets, tuning profiles and
+idea of a valid route. They disagreed often enough that the same contact could
+come back as one diagonal or as a five-joint contour hug, and the machinery to
+reconcile them (warm starts, stagnation caches, joint-minimisation passes, fold
+reshaping) cost more than the answer.
 
-- geometry first
-- routing second
-- simplification and validation last
+Rules that follow from this:
 
-The new debug tooling makes it easier to see which rule blocked a placement and whether the solver should be tuned by adjusting cone rescue, search breadth, or final safety gates.
+- **One route shape.** No multi-joint chains, no lattice searches, no
+  contour-following, no per-placement expansion budgets, no warm starts or
+  stagnation caches.
+- **One collision oracle.** Everything asks `SDFCache`; `CollisionAvoidance`
+  shares the same pool, so routing and manual placement cannot disagree about
+  the geometry.
+- **Bounded, reported cost.** Any new step needs a cap and a way to show what it
+  spent. An unbounded search is how the previous system became unpredictable.

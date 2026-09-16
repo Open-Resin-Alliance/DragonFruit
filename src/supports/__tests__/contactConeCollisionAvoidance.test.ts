@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { recomputeContactConeForMovedDisk } from '../SupportPrimitives/ContactDisk/ContactDiskInteraction';
 import type { ContactCone } from '../SupportPrimitives/ContactCone/types';
 import { initializeBVH, accelerateGeometry } from '../../utils/bvh';
-import { calculateSmartPlacementV2 } from '../PlacementLogic/Pathfinding/SmartPlacementV2';
+import { calculateSmartPlacementV3 } from '../PlacementLogicV3/SmartPlacementV3';
 import { setSettings } from '../Settings/state';
 import { createDefaultSettings } from '../Settings/types';
 
@@ -58,7 +58,7 @@ test('recomputeContactConeForMovedDisk never reduces the resolved standoff when 
     assert.ok((withAvoidance.diskLengthOverride ?? 0) >= (withoutAvoidance.diskLengthOverride ?? 0));
 });
 
-test('calculateSmartPlacementV2 detects thin feature collision using raycast preflight check', () => {
+test('SmartPlacementV3 detects a thin feature between the tip and the plate', () => {
     initializeBVH();
     const settings = createDefaultSettings();
     settings.roots.diskHeightMm = 1.0;
@@ -76,7 +76,7 @@ test('calculateSmartPlacementV2 detects thin feature collision using raycast pre
     mesh.position.set(0, 0, 5);
     mesh.updateMatrixWorld(true);
 
-    const result = calculateSmartPlacementV2({
+    const result = calculateSmartPlacementV3({
         tipPos: { x: 0, y: 0, z: 10 },
         tipNormal: { x: 0, y: 0, z: -1 },
         tipProfile: {
@@ -94,13 +94,14 @@ test('calculateSmartPlacementV2 detects thin feature collision using raycast pre
         rootsTopZ: 2,
     });
 
-    // Without hybrid raycast checks, the thin plate at z=5 would be skipped by SDF checks,
-    // causing straightClear to return true and placing a straight support (error = undefined).
-    // With our hybrid raycast check, it detects the collision and fails placement (error = 'COLLISION_WITH_MODEL').
+    // A 0.2mm plate is thinner than the SDF's 0.5mm cells, so the point is that
+    // a cell-centre distance lookup still sees it: the signed distance inside
+    // the plate is negative, so both the column and every candidate leg within
+    // the envelope are rejected rather than silently passed.
     assert.equal(result.error, 'COLLISION_WITH_MODEL');
 });
 
-test('calculateSmartPlacementV2 detects collision with back-facing/flipped surfaces using double-sided raycast', () => {
+test('SmartPlacementV3 detects a flipped, back-facing surface', () => {
     initializeBVH();
     const settings = createDefaultSettings();
     settings.roots.diskHeightMm = 1.0;
@@ -120,7 +121,7 @@ test('calculateSmartPlacementV2 detects collision with back-facing/flipped surfa
     mesh.position.set(0, 0, 5);
     mesh.updateMatrixWorld(true);
 
-    const result = calculateSmartPlacementV2({
+    const result = calculateSmartPlacementV3({
         tipPos: { x: 0, y: 0, z: 10 },
         tipNormal: { x: 0, y: 0, z: -1 },
         tipProfile: {
@@ -138,7 +139,8 @@ test('calculateSmartPlacementV2 detects collision with back-facing/flipped surfa
         rootsTopZ: 2,
     });
 
-    // A single-sided raycaster would miss this back-facing plane, leading to a successful straight support.
-    // Our double-sided raycasting modification ensures the back-face is detected, returning COLLISION_WITH_MODEL.
+    // A single-sided distance test would miss this back-facing plane. The SDF
+    // signs its distance from the nearest triangle's normal, so a segment
+    // crossing the plane is rejected whichever way the face points.
     assert.equal(result.error, 'COLLISION_WITH_MODEL');
 });
