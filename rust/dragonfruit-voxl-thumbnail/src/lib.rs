@@ -1,137 +1,85 @@
-//! Thumbnail extractor for the containers DragonFruit reads and writes.
+//! Thumbnail extraction for the containers DragonFruit reads and writes.
 //!
-//! Two formats, one entry point: [`extract_thumbnail`] and
-//! [`extract_thumbnail_from_bytes`] dispatch on the file magic.
+//! A format declares where its preview lives - `outputFileTypes.json`, compiled into
+//! [`locator`] by the registry generator - and this crate interprets that
+//! declaration. Nothing here names a container: a format gets a shell thumbnail by
+//! declaring itself, and the OS integrations (Windows COM, the macOS QuickLook
+//! extension, the freedesktop thumbnailers) all read the same table.
 //!
-//! * **VOXL V2** — the scene format. The scene thumbnail rides in the `EXTD`
-//!   chunk as `ora.preview.dataBase64` (base64 PNG), so the reader walks the
-//!   header, the chunk directory, and that one chunk; mesh data is never read.
-//! * **LUMEN v1** — the print format. Previews ride in `PREV` chunks as PNG
-//!   payloads, with the role (large/small/icon) in the descriptor flags. The
-//!   directory sits at the end of the file, so the reader seeks to it and then
-//!   to the best preview; layer data is never read.
-//!
-//! The reader-based implementation only ever reads headers, directories, and
-//! the one chunk that carries the image.
+//! The reader-based implementation only ever reads headers, chunk tables, and the
+//! one chunk that carries the image.
 
 use std::fs::File;
 use std::io::{self, BufReader, Cursor, Read, Seek, SeekFrom};
 use std::path::Path;
 
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine;
-use flate2::read::ZlibDecoder;
 use thiserror::Error;
 
-const VOXL_MAGIC: &[u8; 4] = b"VOXL";
-const VOXL_HEADER_SIZE: usize = 16;
-const VOXL_DIR_ENTRY_SIZE: usize = 20;
+pub mod locator;
 
-/// The eight-byte PNG signature: the payload shape both containers promise.
-const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
-
-/// `LUMN` — the LUMEN v1 file magic.
-const LUMEN_MAGIC: &[u8; 4] = b"LUMN";
-/// Fixed file header, per LUMEN spec §3.1.
-const LUMEN_HEADER_SIZE: u64 = 32;
-/// One chunk descriptor, per LUMEN spec §3.2.
-const LUMEN_DIR_ENTRY_SIZE: u64 = 32;
-/// `LEND` + CRC-32C, per LUMEN spec §3.3.
-const LUMEN_TRAILER_SIZE: u64 = 8;
-/// Descriptor flag bit 4: the payload is sealed and needs the file's key.
-const LUMEN_FLAG_ENCRYPTED: u32 = 1 << 4;
-/// Descriptor flag bits 0-3: the preview role.
-const LUMEN_PREVIEW_ROLE_MASK: u32 = 0x0F;
-/// Preview role values, per LUMEN spec §4.6.
-const LUMEN_ROLE_UNSPECIFIED: u32 = 0;
-const LUMEN_ROLE_LARGE: u32 = 1;
-const LUMEN_ROLE_SMALL: u32 = 2;
-const LUMEN_ROLE_ICON: u32 = 3;
+/// The eight-byte PNG signature: the payload shape every declaration promises.
+pub(crate) const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
 
 #[derive(Debug, Error)]
 pub enum ThumbnailError {
     #[error("I/O error: {0}")]
     Io(#[from] io::Error),
 
-    #[error("not a VOXL scene or LUMEN print file")]
+    #[error("no declared file type matches this file's contents")]
     UnsupportedFile,
 
-    #[error("not a VOXL V2 binary file")]
-    NotVoxlV2,
+    #[error("{0}")]
+    Malformed(String),
 
-    #[error("no EXTD chunk in file")]
-    NoExtdChunk,
-
-    #[error("unknown compression code: {0}")]
-    UnknownCompression(u16),
-
-    #[error("decompression failed: {0}")]
-    Decompression(String),
-
-    #[error("JSON parse error: {0}")]
-    Json(#[from] serde_json::Error),
-
-    #[error("base64 decode error: {0}")]
-    Base64(#[from] base64::DecodeError),
-
-    #[error("not a LUMEN v1 file")]
-    NotLumenV1,
-
-    #[error("malformed LUMEN file: {0}")]
-    MalformedLumen(String),
-
-    #[error("no thumbnail (VOXL ora.preview, or an unsealed LUMEN PREV) in file")]
+    #[error("no readable preview in this file")]
     NoThumbnail,
 
     #[error("image error: {0}")]
     Image(String),
 }
 
+/// The extensions this provider answers for, as the declarations spell them
+/// (leading dot included). The Windows shell registration reads this so the
+/// registered set cannot drift from the formats the reader knows.
+pub fn declared_file_extensions() -> Vec<&'static str> {
+    locator::output_file_types()
+        .iter()
+        .map(locator::OutputFileType::file_extension)
+        .collect()
+}
+
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Which container a file holds, decided by its first four bytes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Container {
-    Voxl,
-    Lumen,
+/// The declared file type this container starts with, if any.
+///
+/// The magic is the declaration's, so this needs no list of formats: a file is
+/// recognised by the same data that says where its preview lives.
+fn declared_type_for(head: &[u8]) -> Result<&'static locator::OutputFileType, ThumbnailError> {
+    locator::output_file_type_for(head).ok_or(ThumbnailError::UnsupportedFile)
 }
 
-fn sniff(magic: &[u8]) -> Result<Container, ThumbnailError> {
-    match magic {
-        m if m.starts_with(VOXL_MAGIC) => Ok(Container::Voxl),
-        m if m.starts_with(LUMEN_MAGIC) => Ok(Container::Lumen),
-        _ => Err(ThumbnailError::UnsupportedFile),
-    }
-}
-
-/// Extract raw PNG thumbnail bytes from a VOXL scene or LUMEN print file.
+/// Extract raw PNG thumbnail bytes from a file of any declared type.
 pub fn extract_thumbnail(path: &Path) -> Result<Vec<u8>, ThumbnailError> {
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
 
-    let mut magic = [0u8; 4];
-    reader.read_exact(&mut magic)?;
-    let container = sniff(&magic)?;
+    let mut head = [0u8; 8];
+    let read = reader.read(&mut head)?;
+    let file_type = declared_type_for(&head[..read])?;
     reader.seek(SeekFrom::Start(0))?;
 
-    match container {
-        Container::Voxl => voxl_from_reader(&mut reader),
-        Container::Lumen => lumen_from_reader(&mut reader),
-    }
+    file_type.extract(&mut reader)
 }
 
 /// Extract raw PNG thumbnail bytes from file data already in memory.
 pub fn extract_thumbnail_from_bytes(data: &[u8]) -> Result<Vec<u8>, ThumbnailError> {
-    let head = &data[..data.len().min(4)];
-    let container = sniff(head)?;
+    let head = &data[..data.len().min(8)];
+    let file_type = declared_type_for(head)?;
 
-    let mut cursor = Cursor::new(data);
-    match container {
-        Container::Voxl => voxl_from_reader(&mut cursor),
-        Container::Lumen => lumen_from_reader(&mut cursor),
-    }
+    file_type.extract(&mut Cursor::new(data))
 }
 
 /// Extract and resize the thumbnail to fit within `max_size × max_size`.
@@ -255,237 +203,29 @@ pub fn resize_png_square(png_bytes: &[u8], size: u32) -> Result<Vec<u8>, Thumbna
 }
 
 // ---------------------------------------------------------------------------
-// Core parsers — each works with any Read + Seek
-// ---------------------------------------------------------------------------
-
-/// One `PREV` descriptor worth reading: where its payload is, how long, and how
-/// well it suits a shell thumbnail.
-struct PreviewCandidate {
-    /// Preference order — lower is better.
-    rank: u8,
-    /// Directory position, so two previews of the same role stay deterministic.
-    index: u64,
-    offset: u64,
-    size: u64,
-}
-
-/// Rank a preview role for a file-browser thumbnail: the biggest image wins.
-///
-/// `None` means a reserved role, which LUMEN validation rejects rather than
-/// interprets — the descriptor is skipped, not guessed at.
-fn preview_rank(role: u32) -> Option<u8> {
-    match role {
-        LUMEN_ROLE_LARGE => Some(0),
-        // Unspecified says nothing about its size, but it is still a preview the
-        // file offered, so it beats the roles that promise to be small.
-        LUMEN_ROLE_UNSPECIFIED => Some(1),
-        LUMEN_ROLE_SMALL => Some(2),
-        LUMEN_ROLE_ICON => Some(3),
-        _ => None,
-    }
-}
-
-fn lumen_malformed(reason: impl Into<String>) -> ThumbnailError {
-    ThumbnailError::MalformedLumen(reason.into())
-}
-
-/// Read the best unsealed `PREV` PNG from a LUMEN v1 file.
-///
-/// Only the header, the chunk directory, and the preview payloads are read: the
-/// directory sits at the end of the file (spec §3), so layer data is never
-/// touched. Encrypted previews are skipped rather than failed on — a file whose
-/// previews are all sealed simply has no thumbnail to offer.
-fn lumen_from_reader<R: Read + Seek>(reader: &mut R) -> Result<Vec<u8>, ThumbnailError> {
-    let file_len = reader.seek(SeekFrom::End(0))?;
-    if file_len < LUMEN_HEADER_SIZE + LUMEN_TRAILER_SIZE {
-        return Err(lumen_malformed("the file is shorter than its header and trailer"));
-    }
-
-    // ── Header (32 bytes) ──────────────────────────────────────────────
-    reader.seek(SeekFrom::Start(0))?;
-    let mut header = [0u8; LUMEN_HEADER_SIZE as usize];
-    reader.read_exact(&mut header)?;
-
-    if &header[0..4] != LUMEN_MAGIC {
-        return Err(ThumbnailError::NotLumenV1);
-    }
-    let version = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
-    // v1 is the only layout this reader knows. A future version is refused
-    // rather than misread: the directory moves, the fields grow, and a wrong
-    // guess would surface as a wrong image instead of a missing one.
-    if version != 1 {
-        return Err(ThumbnailError::NotLumenV1);
-    }
-
-    let dir_offset = u64::from_le_bytes(header[8..16].try_into().unwrap());
-    let chunk_count = u64::from(u32::from_le_bytes(header[16..20].try_into().unwrap()));
-
-    // ── Trailer ────────────────────────────────────────────────────────
-    reader.seek(SeekFrom::Start(file_len - LUMEN_TRAILER_SIZE))?;
-    let mut trailer = [0u8; LUMEN_TRAILER_SIZE as usize];
-    reader.read_exact(&mut trailer)?;
-    if &trailer[0..4] != b"LEND" {
-        return Err(lumen_malformed("the file does not end with the LEND trailer"));
-    }
-    // The CRC-32C in the trailer is deliberately not recomputed: verifying it
-    // means reading the whole file, which is exactly what this reader exists to
-    // avoid. The bounds checks below plus the PNG signature are what stand
-    // between a corrupt file and the shell.
-
-    // ── Chunk directory ────────────────────────────────────────────────
-    let dir_len = chunk_count
-        .checked_mul(LUMEN_DIR_ENTRY_SIZE)
-        .ok_or_else(|| lumen_malformed("the directory length overflows"))?;
-    let dir_end = dir_offset
-        .checked_add(dir_len)
-        .ok_or_else(|| lumen_malformed("the directory offset overflows"))?;
-    // Compared the safe way round: `dir_end + LUMEN_TRAILER_SIZE` could itself
-    // overflow on a corrupt offset, and in a release build that wraps silently.
-    if dir_offset < LUMEN_HEADER_SIZE || dir_end > file_len - LUMEN_TRAILER_SIZE {
-        return Err(lumen_malformed("the chunk directory lies outside the file"));
-    }
-
-    reader.seek(SeekFrom::Start(dir_offset))?;
-    let mut dir = vec![0u8; dir_len as usize];
-    reader.read_exact(&mut dir)?;
-
-    let mut candidates: Vec<PreviewCandidate> = Vec::new();
-    for index in 0..chunk_count {
-        let base = (index * LUMEN_DIR_ENTRY_SIZE) as usize;
-        let entry = &dir[base..base + LUMEN_DIR_ENTRY_SIZE as usize];
-        if &entry[0..4] != b"PREV" {
-            continue;
-        }
-
-        let flags = u32::from_le_bytes(entry[28..32].try_into().unwrap());
-        if flags & LUMEN_FLAG_ENCRYPTED != 0 {
-            continue;
-        }
-        let Some(rank) = preview_rank(flags & LUMEN_PREVIEW_ROLE_MASK) else {
-            continue;
-        };
-
-        let offset = u64::from_le_bytes(entry[4..12].try_into().unwrap());
-        if offset == 0 {
-            continue; // null descriptor
-        }
-        let size_uncompressed = u64::from_le_bytes(entry[12..20].try_into().unwrap());
-        // PREV is never zstd-compressed (spec §6.3), but it may be sealed, which
-        // frames it — so a non-zero stored size is the payload's real length.
-        let size_compressed = u64::from_le_bytes(entry[20..28].try_into().unwrap());
-        let size = if size_compressed != 0 {
-            size_compressed
-        } else {
-            size_uncompressed
-        };
-        // Bounds first, and compared the safe way round: `offset + size` can
-        // overflow on a corrupt descriptor, which would wrap in a release build.
-        if size == 0 || offset > file_len || size > file_len - offset {
-            continue;
-        }
-
-        candidates.push(PreviewCandidate {
-            rank,
-            index,
-            offset,
-            size,
-        });
-    }
-
-    // Best role first, file order breaking ties, so the choice is deterministic.
-    candidates.sort_by_key(|c| (c.rank, c.index));
-
-    for candidate in candidates {
-        reader.seek(SeekFrom::Start(candidate.offset))?;
-        let mut payload = vec![0u8; candidate.size as usize];
-        reader.read_exact(&mut payload)?;
-
-        // A payload that is not a PNG is not a preview this reader can hand to
-        // the shell; keep looking in case a better-formed one is behind it.
-        if payload.starts_with(&PNG_SIGNATURE) {
-            return Ok(payload);
-        }
-    }
-
-    Err(ThumbnailError::NoThumbnail)
-}
-
-fn voxl_from_reader<R: Read + Seek>(reader: &mut R) -> Result<Vec<u8>, ThumbnailError> {
-    // ── Header (16 bytes) ──────────────────────────────────────────────
-    let mut header = [0u8; VOXL_HEADER_SIZE];
-    reader.read_exact(&mut header)?;
-
-    if &header[0..4] != VOXL_MAGIC {
-        return Err(ThumbnailError::NotVoxlV2);
-    }
-    let version = u16::from_le_bytes([header[4], header[5]]);
-    if version < 2 {
-        return Err(ThumbnailError::NotVoxlV2);
-    }
-
-    let chunk_count = u32::from_le_bytes([header[8], header[9], header[10], header[11]]) as usize;
-
-    // ── Chunk directory (chunk_count × 20 bytes) ───────────────────────
-    let mut dir = vec![0u8; chunk_count * VOXL_DIR_ENTRY_SIZE];
-    reader.read_exact(&mut dir)?;
-
-    // ── Locate EXTD[0] ────────────────────────────────────────────────
-    for i in 0..chunk_count {
-        let b = i * VOXL_DIR_ENTRY_SIZE;
-        let chunk_type = &dir[b..b + 4];
-        let index = u16::from_le_bytes([dir[b + 4], dir[b + 5]]);
-        let compression = u16::from_le_bytes([dir[b + 6], dir[b + 7]]);
-        let offset = u32::from_le_bytes([dir[b + 8], dir[b + 9], dir[b + 10], dir[b + 11]]);
-        let compressed_size =
-            u32::from_le_bytes([dir[b + 12], dir[b + 13], dir[b + 14], dir[b + 15]]);
-
-        if chunk_type != b"EXTD" || index != 0 {
-            continue;
-        }
-
-        // Seek to chunk payload
-        reader.seek(SeekFrom::Start(offset as u64))?;
-        let mut raw = vec![0u8; compressed_size as usize];
-        reader.read_exact(&mut raw)?;
-
-        // Decompress if zlib-compressed
-        let json_bytes = match compression {
-            0 => raw,
-            1 => {
-                let mut dec = ZlibDecoder::new(Cursor::new(raw));
-                let mut out = Vec::new();
-                dec.read_to_end(&mut out)
-                    .map_err(|e| ThumbnailError::Decompression(e.to_string()))?;
-                out
-            }
-            c => return Err(ThumbnailError::UnknownCompression(c)),
-        };
-
-        // Parse JSON → extract ora.preview.dataBase64
-        let val: serde_json::Value = serde_json::from_slice(&json_bytes)?;
-        let b64 = val
-            .get("ora.preview")
-            .and_then(|p| p.get("dataBase64"))
-            .and_then(|v| v.as_str())
-            .ok_or(ThumbnailError::NoThumbnail)?;
-
-        return Ok(STANDARD.decode(b64)?);
-    }
-
-    Err(ThumbnailError::NoExtdChunk)
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
 
-    /// Build a minimal VOXL V2 file containing only an EXTD chunk with the
-    /// supplied PNG bytes embedded as `ora.preview.dataBase64`.
-    fn make_test_voxl(thumbnail_png: &[u8]) -> Vec<u8> {
+    // Fixture facts: the byte layouts the declarations describe, spelled out so a
+    // test can build a file by hand.
+    const VOXL_MAGIC: &[u8; 4] = b"VOXL";
+    const VOXL_HEADER_SIZE: usize = 16;
+    const VOXL_DIR_ENTRY_SIZE: usize = 20;
+    const LUMEN_MAGIC: &[u8; 4] = b"LUMN";
+    const LUMEN_TRAILER_SIZE: usize = 8;
+    const LUMEN_SEALED: u32 = 1 << 4;
+    const LUMEN_ROLE_LARGE: u32 = 1;
+    const LUMEN_ROLE_SMALL: u32 = 2;
+
+    /// A VOXL V2 file whose EXTD chunk carries `thumbnail_png`, optionally
+    /// zlib-compressed the way a real scene stores its extensions.
+    fn make_test_voxl(thumbnail_png: &[u8], zlib_compressed: bool) -> Vec<u8> {
         let extensions = serde_json::json!({
             "ora.preview": {
                 "kind": "scene-thumbnail",
@@ -494,88 +234,41 @@ mod tests {
                 "dataBase64": STANDARD.encode(thumbnail_png)
             }
         });
-        let ext_json = serde_json::to_vec(&extensions).unwrap();
+        let json = serde_json::to_vec(&extensions).unwrap();
+        let (payload, compression) = if zlib_compressed {
+            use flate2::write::ZlibEncoder;
+            use flate2::Compression;
+            use std::io::Write;
+
+            let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+            encoder.write_all(&json).unwrap();
+            (encoder.finish().unwrap(), 1u16)
+        } else {
+            (json, 0u16)
+        };
 
         let chunk_count: u32 = 1;
         let data_offset = (VOXL_HEADER_SIZE + VOXL_DIR_ENTRY_SIZE) as u32;
-
         let mut file = Vec::new();
 
-        // Header
         file.extend_from_slice(VOXL_MAGIC);
         file.extend_from_slice(&2u16.to_le_bytes()); // version
         file.extend_from_slice(&0u16.to_le_bytes()); // flags
         file.extend_from_slice(&chunk_count.to_le_bytes());
         file.extend_from_slice(&0u32.to_le_bytes()); // reserved
 
-        // EXTD directory entry
         file.extend_from_slice(b"EXTD");
         file.extend_from_slice(&0u16.to_le_bytes()); // index
-        file.extend_from_slice(&0u16.to_le_bytes()); // compression = none
+        file.extend_from_slice(&compression.to_le_bytes());
         file.extend_from_slice(&data_offset.to_le_bytes());
-        file.extend_from_slice(&(ext_json.len() as u32).to_le_bytes()); // compressed
-        file.extend_from_slice(&(ext_json.len() as u32).to_le_bytes()); // uncompressed
+        file.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        file.extend_from_slice(&(payload.len() as u32).to_le_bytes());
 
-        // Chunk data
-        file.extend_from_slice(&ext_json);
-
+        file.extend_from_slice(&payload);
         file
     }
 
-    fn make_test_png() -> Vec<u8> {
-        use image::codecs::png::PngEncoder;
-        use image::{ImageEncoder, RgbaImage};
-
-        let img = RgbaImage::from_pixel(4, 4, image::Rgba([255, 0, 0, 255]));
-        let mut buf = Vec::new();
-        PngEncoder::new(&mut buf)
-            .write_image(img.as_raw(), 4, 4, image::ExtendedColorType::Rgba8)
-            .unwrap();
-        buf
-    }
-
-    #[test]
-    fn round_trip_extract() {
-        let png = make_test_png();
-        let voxl = make_test_voxl(&png);
-        let extracted = extract_thumbnail_from_bytes(&voxl).unwrap();
-        // Extracted bytes are valid PNG
-        assert_eq!(&extracted[0..4], &[0x89, 0x50, 0x4E, 0x47]);
-        assert_eq!(extracted, png);
-    }
-
-    #[test]
-    fn resize_preserves_png() {
-        let png = make_test_png();
-        // Image is 4×4 — requesting max 256 should return same bytes
-        let out = resize_png(&png, 256).unwrap();
-        assert_eq!(out, png);
-    }
-
-    #[test]
-    fn unknown_magic_is_refused() {
-        // Neither container: the entry point says so without guessing.
-        let err = extract_thumbnail_from_bytes(b"not a voxl file!").unwrap_err();
-        assert!(matches!(err, ThumbnailError::UnsupportedFile));
-    }
-
-    #[test]
-    fn voxl_v1_is_refused() {
-        let mut data = Vec::new();
-        data.extend_from_slice(VOXL_MAGIC);
-        data.extend_from_slice(&1u16.to_le_bytes()); // version 1
-        data.extend_from_slice(&0u16.to_le_bytes());
-        data.extend_from_slice(&0u32.to_le_bytes());
-        data.extend_from_slice(&0u32.to_le_bytes());
-
-        let err = extract_thumbnail_from_bytes(&data).unwrap_err();
-        assert!(matches!(err, ThumbnailError::NotVoxlV2));
-    }
-
-    // ── LUMEN v1 ───────────────────────────────────────────────────────────
-    // The fixture holds what the reader walks — header, preview payloads,
-    // directory, trailer — and leaves out the chunks a thumbnail never needs.
-
+    /// A LUMEN v1 file holding the given `(descriptor flags, payload)` previews.
     fn make_test_lumen(previews: &[(u32, Vec<u8>)]) -> Vec<u8> {
         let mut file = Vec::new();
 
@@ -608,15 +301,88 @@ mod tests {
         file
     }
 
-    const SEALED: u32 = LUMEN_FLAG_ENCRYPTED;
+    fn make_test_png() -> Vec<u8> {
+        use image::codecs::png::PngEncoder;
+        use image::{ImageEncoder, RgbaImage};
+
+        let img = RgbaImage::from_pixel(4, 4, image::Rgba([255, 0, 0, 255]));
+        let mut buf = Vec::new();
+        PngEncoder::new(&mut buf)
+            .write_image(img.as_raw(), 4, 4, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        buf
+    }
 
     #[test]
-    fn lumen_round_trip_extract() {
+    fn the_declared_table_describes_the_formats_the_app_writes() {
+        let declared = locator::output_file_types();
+        let extensions: Vec<&str> = declared.iter().map(locator::OutputFileType::file_extension).collect();
+
+        // Both containers in the tree are declared, and each declaration carries the
+        // identifiers the platform registrations need.
+        assert!(extensions.contains(&".voxl"), "VOXL is declared: {extensions:?}");
+        assert!(extensions.contains(&".lumen"), "LUMEN is declared: {extensions:?}");
+        assert_eq!(declared_file_extensions().len(), declared.len());
+
+        for file_type in declared {
+            assert!(file_type.mime_type().contains('/'), "{} has no media type", file_type.file_extension());
+            assert!(file_type.uti().contains('.'), "{} has no UTI", file_type.file_extension());
+            assert!(!file_type.display_name().is_empty(), "{} has no display name", file_type.file_extension());
+        }
+    }
+
+    #[test]
+    fn voxl_scene_preview_round_trips() {
+        let png = make_test_png();
+        for compressed in [false, true] {
+            let extracted = extract_thumbnail_from_bytes(&make_test_voxl(&png, compressed)).unwrap();
+            assert_eq!(extracted, png, "zlib_compressed={compressed}");
+        }
+    }
+
+    #[test]
+    fn voxl_v1_is_refused() {
+        let mut data = Vec::new();
+        data.extend_from_slice(VOXL_MAGIC);
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+
+        let err = extract_thumbnail_from_bytes(&data).unwrap_err();
+        assert!(matches!(err, ThumbnailError::Malformed(_)), "{err:?}");
+    }
+
+    #[test]
+    fn voxl_without_a_preview_chunk_has_none() {
+        let mut data = Vec::new();
+        data.extend_from_slice(VOXL_MAGIC);
+        data.extend_from_slice(&2u16.to_le_bytes());
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes()); // no chunks
+        data.extend_from_slice(&0u32.to_le_bytes());
+
+        let err = extract_thumbnail_from_bytes(&data).unwrap_err();
+        assert!(matches!(err, ThumbnailError::NoThumbnail), "{err:?}");
+    }
+
+    #[test]
+    fn voxl_unknown_compression_is_refused() {
+        let mut data = make_test_voxl(&make_test_png(), false);
+        // Compression code 7 is not a code the declaration lists.
+        data[VOXL_HEADER_SIZE + VOXL_DIR_ENTRY_SIZE - 12..VOXL_HEADER_SIZE + VOXL_DIR_ENTRY_SIZE - 10]
+            .copy_from_slice(&7u16.to_le_bytes());
+
+        let err = extract_thumbnail_from_bytes(&data).unwrap_err();
+        assert!(matches!(err, ThumbnailError::Malformed(_)), "{err:?}");
+    }
+
+    #[test]
+    fn lumen_print_preview_round_trips() {
         let png = make_test_png();
         let lumen = make_test_lumen(&[(LUMEN_ROLE_LARGE, png.clone())]);
 
-        let extracted = extract_thumbnail_from_bytes(&lumen).unwrap();
-        assert_eq!(extracted, png);
+        assert_eq!(extract_thumbnail_from_bytes(&lumen).unwrap(), png);
     }
 
     #[test]
@@ -628,11 +394,8 @@ mod tests {
         };
         let large = make_test_png();
 
-        // Small is written first: the role, not the file order, picks the winner.
-        let lumen = make_test_lumen(&[
-            (LUMEN_ROLE_SMALL, small),
-            (LUMEN_ROLE_LARGE, large.clone()),
-        ]);
+        // Small is written first: the declared role order picks the winner.
+        let lumen = make_test_lumen(&[(LUMEN_ROLE_SMALL, small), (LUMEN_ROLE_LARGE, large.clone())]);
 
         assert_eq!(extract_thumbnail_from_bytes(&lumen).unwrap(), large);
     }
@@ -640,32 +403,28 @@ mod tests {
     #[test]
     fn lumen_skips_sealed_previews() {
         let png = make_test_png();
-        // A sealed preview cannot be read without the file's key, so the small
-        // clear one is the thumbnail even though the large one is unreadable.
+        // A sealed preview cannot be read without the file's key, so the small clear
+        // one is the thumbnail even though the large one is unreadable.
         let mixed = make_test_lumen(&[
-            (LUMEN_ROLE_LARGE | SEALED, make_test_png()),
+            (LUMEN_ROLE_LARGE | LUMEN_SEALED, make_test_png()),
             (LUMEN_ROLE_SMALL, png.clone()),
         ]);
         assert_eq!(extract_thumbnail_from_bytes(&mixed).unwrap(), png);
 
-        let all_sealed = make_test_lumen(&[(LUMEN_ROLE_LARGE | SEALED, make_test_png())]);
+        let all_sealed = make_test_lumen(&[(LUMEN_ROLE_LARGE | LUMEN_SEALED, make_test_png())]);
         let err = extract_thumbnail_from_bytes(&all_sealed).unwrap_err();
-        assert!(matches!(err, ThumbnailError::NoThumbnail));
+        assert!(matches!(err, ThumbnailError::NoThumbnail), "{err:?}");
     }
 
     #[test]
-    fn lumen_skips_a_reserved_preview_role() {
+    fn lumen_skips_a_role_the_format_does_not_use_for_previews() {
         let png = make_test_png();
-        // Role 4 is reserved: the descriptor is skipped, not interpreted.
-        let with_reserved = make_test_lumen(&[
-            (4, make_test_png()),
-            (LUMEN_ROLE_LARGE, png.clone()),
-        ]);
-        assert_eq!(extract_thumbnail_from_bytes(&with_reserved).unwrap(), png);
+        let with_other_role = make_test_lumen(&[(4, make_test_png()), (LUMEN_ROLE_LARGE, png.clone())]);
+        assert_eq!(extract_thumbnail_from_bytes(&with_other_role).unwrap(), png);
 
-        let only_reserved = make_test_lumen(&[(4, make_test_png())]);
-        let err = extract_thumbnail_from_bytes(&only_reserved).unwrap_err();
-        assert!(matches!(err, ThumbnailError::NoThumbnail));
+        let only_other_role = make_test_lumen(&[(4, make_test_png())]);
+        let err = extract_thumbnail_from_bytes(&only_other_role).unwrap_err();
+        assert!(matches!(err, ThumbnailError::NoThumbnail), "{err:?}");
     }
 
     #[test]
@@ -679,7 +438,19 @@ mod tests {
 
         let only_junk = make_test_lumen(&[(LUMEN_ROLE_LARGE, b"not a png at all".to_vec())]);
         let err = extract_thumbnail_from_bytes(&only_junk).unwrap_err();
-        assert!(matches!(err, ThumbnailError::NoThumbnail));
+        assert!(matches!(err, ThumbnailError::NoThumbnail), "{err:?}");
+    }
+
+    #[test]
+    fn lumen_ignores_a_descriptor_pointing_outside_the_file() {
+        let mut lumen = make_test_lumen(&[(LUMEN_ROLE_LARGE, make_test_png())]);
+        let dir_offset = u64::from_le_bytes(lumen[8..16].try_into().unwrap()) as usize;
+        let offset_at = dir_offset + 4;
+        // A corrupt offset near the top of the range must not wrap the bounds check.
+        lumen[offset_at..offset_at + 8].copy_from_slice(&u64::MAX.to_le_bytes());
+
+        let err = extract_thumbnail_from_bytes(&lumen).unwrap_err();
+        assert!(matches!(err, ThumbnailError::NoThumbnail), "{err:?}");
     }
 
     #[test]
@@ -688,63 +459,45 @@ mod tests {
         lumen[4..8].copy_from_slice(&2u32.to_le_bytes());
 
         let err = extract_thumbnail_from_bytes(&lumen).unwrap_err();
-        assert!(matches!(err, ThumbnailError::NotLumenV1));
+        assert!(matches!(err, ThumbnailError::Malformed(_)), "{err:?}");
     }
 
     #[test]
     fn lumen_refuses_a_directory_outside_the_file() {
         let mut lumen = make_test_lumen(&[(LUMEN_ROLE_LARGE, make_test_png())]);
-        // Point the directory past the end of the file.
         let past_end = lumen.len() as u64 + 4096;
         lumen[8..16].copy_from_slice(&past_end.to_le_bytes());
 
         let err = extract_thumbnail_from_bytes(&lumen).unwrap_err();
-        assert!(matches!(err, ThumbnailError::MalformedLumen(_)));
+        assert!(matches!(err, ThumbnailError::Malformed(_)), "{err:?}");
     }
 
     #[test]
     fn lumen_refuses_a_missing_trailer() {
         let mut lumen = make_test_lumen(&[(LUMEN_ROLE_LARGE, make_test_png())]);
-        let trailer_at = lumen.len() - LUMEN_TRAILER_SIZE as usize;
+        let trailer_at = lumen.len() - LUMEN_TRAILER_SIZE;
         lumen[trailer_at..trailer_at + 4].copy_from_slice(b"XXXX");
 
         let err = extract_thumbnail_from_bytes(&lumen).unwrap_err();
-        assert!(matches!(err, ThumbnailError::MalformedLumen(_)));
+        assert!(matches!(err, ThumbnailError::Malformed(_)), "{err:?}");
     }
 
     #[test]
-    fn lumen_ignores_a_descriptor_pointing_outside_the_file() {
-        let mut lumen = make_test_lumen(&[(LUMEN_ROLE_LARGE, make_test_png())]);
-        // The single PREV descriptor starts right after the payloads, at
-        // dir_offset; its offset field is the first u64 after the 4-byte type.
-        let dir_offset = u64::from_le_bytes(lumen[8..16].try_into().unwrap()) as usize;
-        let offset_at = dir_offset + 4;
-        // A corrupt offset near the top of the range used to be able to wrap the
-        // bounds check; the reader has to skip it rather than panic or allocate.
-        lumen[offset_at..offset_at + 8].copy_from_slice(&u64::MAX.to_le_bytes());
-
-        let err = extract_thumbnail_from_bytes(&lumen).unwrap_err();
-        assert!(matches!(err, ThumbnailError::NoThumbnail));
+    fn unknown_magic_is_refused() {
+        let err = extract_thumbnail_from_bytes(b"not a scene or print file").unwrap_err();
+        assert!(matches!(err, ThumbnailError::UnsupportedFile), "{err:?}");
     }
 
     #[test]
-    fn truncated_header() {
-        // Fewer than 16 bytes → IO error (unexpected EOF)
+    fn truncated_header_is_refused() {
         let err = extract_thumbnail_from_bytes(b"VOXL").unwrap_err();
-        assert!(matches!(err, ThumbnailError::Io(_)));
+        assert!(matches!(err, ThumbnailError::Malformed(_)), "{err:?}");
     }
 
     #[test]
-    fn no_extd_chunk() {
-        // Valid header, zero chunks
-        let mut data = Vec::new();
-        data.extend_from_slice(VOXL_MAGIC);
-        data.extend_from_slice(&2u16.to_le_bytes());
-        data.extend_from_slice(&0u16.to_le_bytes());
-        data.extend_from_slice(&0u32.to_le_bytes()); // 0 chunks
-        data.extend_from_slice(&0u32.to_le_bytes());
-
-        let err = extract_thumbnail_from_bytes(&data).unwrap_err();
-        assert!(matches!(err, ThumbnailError::NoExtdChunk));
+    fn resize_preserves_png() {
+        let png = make_test_png();
+        // Image is 4×4 — requesting max 256 should return same bytes
+        assert_eq!(resize_png(&png, 256).unwrap(), png);
     }
 }

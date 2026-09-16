@@ -46,9 +46,14 @@ const CATID_THUMBNAIL_HANDLER: &str = "{E357FCCD-A995-4576-B01F-234630154E96}";
 
 const CLSID_STR: &str = "{8B4F2E3A-7C1D-4A5E-B9F0-6D2E8C3A1B5F}";
 
-/// The file types this provider is registered for, in the registry's spelling
-/// (leading dot included). Keep in step with the extractor's magic dispatch.
-const SUPPORTED_EXTENSIONS: [&str; 2] = [".voxl", ".lumen"];
+/// The file types this provider registers for, as the declarations spell them.
+///
+/// Read from the same generated table the extractor dispatches on, so the registered
+/// set cannot drift from the formats the reader knows: a plugin that declares a new
+/// container is registered for it by this DLL without a change here.
+fn supported_extensions() -> Vec<&'static str> {
+    dragonfruit_voxl_thumbnail::declared_file_extensions()
+}
 
 /// The display name the shell shows for this handler.
 const PROVIDER_NAME: &str = "DragonFruit Thumbnail Provider";
@@ -282,7 +287,7 @@ unsafe fn register() -> windows::core::Result<()> {
     // Explorer may resolve via extension, ProgID, or SystemFileAssociations
     // depending on current UserChoice / association state, so every format this
     // provider answers for is registered in both of the extension-based ones.
-    for ext in SUPPORTED_EXTENSIONS {
+    for ext in supported_extensions() {
         let shellex_ext = format!("{ext}\\ShellEx\\{}", CATID_THUMBNAIL_HANDLER);
         set_registry_value_in(hkcu_classes, &shellex_ext, None, CLSID_STR)?;
 
@@ -316,7 +321,7 @@ unsafe fn unregister() -> windows::core::Result<()> {
         let clsid_path = format!("CLSID\\{}", CLSID_STR);
         let _ = delete_registry_tree(hkcu_classes, &clsid_path);
 
-        for ext in SUPPORTED_EXTENSIONS {
+        for ext in supported_extensions() {
             let shellex_ext = format!("{ext}\\ShellEx\\{}", CATID_THUMBNAIL_HANDLER);
             let _ = delete_registry_tree(hkcu_classes, &shellex_ext);
 

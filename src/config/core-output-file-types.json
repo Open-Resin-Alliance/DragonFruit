@@ -1,0 +1,66 @@
+[
+  {
+    "fileExtension": ".voxl",
+    "mimeType": "application/vnd.dragonfruit.voxl+json",
+    "uti": "org.openresinalliance.voxl",
+    "displayName": "DragonFruit VOXL Scene",
+    "thumbnail": {
+      "magic": "VOXL",
+      "version": {
+        "type": "u16",
+        "at": 4,
+        "atLeast": 2
+      },
+      "directory": {
+        "offset": {
+          "fixed": 16
+        },
+        "count": {
+          "type": "u32",
+          "at": 8
+        },
+        "entrySize": 20
+      },
+      "entry": {
+        "type": {
+          "at": 0
+        },
+        "index": {
+          "at": 4,
+          "value": 0,
+          "type": "u16"
+        },
+        "compression": {
+          "at": 6,
+          "zlib": [
+            1
+          ],
+          "type": "u16",
+          "stored": [
+            0
+          ]
+        },
+        "offset": {
+          "type": "u32",
+          "at": 8
+        },
+        "size": [
+          {
+            "type": "u32",
+            "at": 12
+          }
+        ]
+      },
+      "previewChunks": [
+        "EXTD"
+      ],
+      "payload": {
+        "encoding": "json-base64",
+        "jsonPath": [
+          "ora.preview",
+          "dataBase64"
+        ]
+      }
+    }
+  }
+]
