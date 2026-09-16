@@ -6,7 +6,7 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleDisplayName</key>
-    <string>VOXL Thumbnail Extension</string>
+    <string>DragonFruit Thumbnail Extension</string>
     <key>CFBundleExecutable</key>
     <string>VoxlThumbnailExtension</string>
     <key>CFBundleIdentifier</key>
@@ -33,11 +33,12 @@
             <key>QLSupportedContentTypes</key>
             <array>
                 <string>org.openresinalliance.voxl</string>
+                <string>org.openresinalliance.lumen</string>
             </array>
         </dict>
     </dict>
 
-    <!-- UTI declaration for .voxl files -->
+    <!-- UTI declarations for the file types this extension answers for -->
     <key>UTImportedTypeDeclarations</key>
     <array>
         <dict>
@@ -58,6 +59,27 @@
                 <key>public.mime-type</key>
                 <array>
                     <string>application/x-voxl</string>
+                </array>
+            </dict>
+        </dict>
+        <dict>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeDescription</key>
+            <string>DragonFruit LUMEN Print</string>
+            <key>UTTypeIdentifier</key>
+            <string>org.openresinalliance.lumen</string>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>lumen</string>
+                </array>
+                <key>public.mime-type</key>
+                <array>
+                    <string>application/vnd.openresin.lumen</string>
                 </array>
             </dict>
         </dict>

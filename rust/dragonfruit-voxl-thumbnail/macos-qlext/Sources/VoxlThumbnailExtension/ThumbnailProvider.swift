@@ -4,11 +4,13 @@ import CoreGraphics
 import ImageIO
 import AppKit
 
-/// QuickLook Thumbnail Extension for DragonFruit VOXL scene files.
+/// QuickLook Thumbnail Extension for the files DragonFruit writes: VOXL scenes
+/// and LUMEN prints.
 ///
-/// Parses the VOXL V2 binary format directly — locates the EXTD chunk and
-/// extracts the embedded `ora.preview` PNG. No subprocess is spawned; this
-/// is required for App Sandbox compliance (the sandbox forbids Process()).
+/// Both formats are parsed directly — the VOXL V2 header and EXTD chunk, or the
+/// LUMEN v1 chunk directory and its PREV previews — with no subprocess, which
+/// App Sandbox compliance requires (the sandbox forbids Process()). The format is
+/// decided by the file's own magic, not by its extension.
 class ThumbnailProvider: QLThumbnailProvider {
 
     override func provideThumbnail(
@@ -198,14 +200,31 @@ class ThumbnailProvider: QLThumbnailProvider {
         return result
     }
 
-    // MARK: - VOXL V2 inline parser
+    // MARK: - Inline parsers
 
+    /// The embedded preview of whichever container this is.
     private func extractThumbnail(from data: Data) throws -> Data {
+        guard data.count >= 4 else {
+            throw makeError("file is too short to identify")
+        }
+
+        switch (data[0], data[1], data[2], data[3]) {
+        case (0x56, 0x4F, 0x58, 0x4C): // "VOXL"
+            return try voxlThumbnail(from: data)
+        case (0x4C, 0x55, 0x4D, 0x4E): // "LUMN"
+            return try lumenPreview(from: data)
+        default:
+            throw makeError("not a DragonFruit scene or print file")
+        }
+    }
+
+    // MARK: - VOXL V2
+
+    private func voxlThumbnail(from data: Data) throws -> Data {
         // ── V2 header (16 bytes) ──────────────────────────────────────
-        guard data.count >= 16,
-              data[0] == 0x56, data[1] == 0x4F,
-              data[2] == 0x58, data[3] == 0x4C  // "VOXL"
-        else { throw makeError("not a VOXL V2 file") }
+        guard data.count >= 16 else {
+            throw makeError("VOXL file is shorter than its header")
+        }
 
         let version = data.readUInt16LE(at: 4)
         guard version >= 2 else { throw makeError("VOXL version \(version) is not V2") }
@@ -264,11 +283,111 @@ class ThumbnailProvider: QLThumbnailProvider {
         throw makeError("no EXTD chunk in VOXL file")
     }
 
+    // MARK: - LUMEN v1
+
+    /// The best unsealed `PREV` preview of a LUMEN print file.
+    ///
+    /// The chunk directory sits at the END of the file, after every payload, so
+    /// this reads the header, seeks to the directory, and then reads only the
+    /// preview it picked. A sealed preview needs the file's key and is skipped
+    /// rather than failed on: such a file simply has no thumbnail to offer.
+    private func lumenPreview(from data: Data) throws -> Data {
+        let headerSize = 32
+        let entrySize = 32
+        let trailerSize = 8
+        let sealedFlag: UInt32 = 0x10
+
+        let fileLength = UInt64(data.count)
+        guard fileLength >= UInt64(headerSize + trailerSize) else {
+            throw makeError("LUMEN file is shorter than its header and trailer")
+        }
+
+        let version = data.readUInt32LE(at: 4)
+        // v1 is the only layout this parser knows; a future version is refused
+        // rather than misread.
+        guard version == 1 else { throw makeError("LUMEN version \(version) is not v1") }
+
+        // "LEND"
+        guard data[data.count - 8] == 0x4C, data[data.count - 7] == 0x45,
+              data[data.count - 6] == 0x4E, data[data.count - 5] == 0x44
+        else { throw makeError("LUMEN file does not end with the LEND trailer") }
+
+        let dirOffset = data.readUInt64LE(at: 8)
+        let chunkCount = UInt64(data.readUInt32LE(at: 16))
+        let dirBytes = chunkCount * UInt64(entrySize)
+
+        // Every bound is checked in UInt64 before anything is converted to an
+        // index, so a corrupt header cannot wrap into a valid-looking range.
+        guard dirOffset >= UInt64(headerSize),
+              dirOffset + dirBytes <= fileLength - UInt64(trailerSize)
+        else { throw makeError("LUMEN chunk directory lies outside the file") }
+
+        // Best role first, file order breaking ties.
+        var candidates: [(rank: Int, index: Int, offset: Int, size: Int)] = []
+        for index in 0..<Int(chunkCount) {
+            let base = Int(dirOffset) + index * entrySize
+            // "PREV"
+            guard data[base] == 0x50, data[base + 1] == 0x52,
+                  data[base + 2] == 0x45, data[base + 3] == 0x56
+            else { continue }
+
+            let flags = data.readUInt32LE(at: base + 28)
+            if flags & sealedFlag != 0 { continue }
+            guard let rank = previewRank(role: Int(flags & 0x0F)) else { continue }
+
+            let offset = data.readUInt64LE(at: base + 4)
+            let uncompressed = data.readUInt64LE(at: base + 12)
+            // PREV is never compressed, but a sealed one is framed: a non-zero
+            // stored size is the payload's real length.
+            let stored = data.readUInt64LE(at: base + 20)
+            let size = stored != 0 ? stored : uncompressed
+
+            guard offset > 0, size > 0,
+                  offset <= fileLength, size <= fileLength - offset
+            else { continue }
+
+            candidates.append((rank, index, Int(offset), Int(size)))
+        }
+
+        let ordered = candidates.sorted { ($0.rank, $0.index) < ($1.rank, $1.index) }
+        for candidate in ordered {
+            let payload = data.subdata(in: candidate.offset ..< candidate.offset + candidate.size)
+            // The eight-byte PNG signature: a payload that is not a PNG is not a
+            // preview Finder can show, so keep looking.
+            if payload.count >= 8,
+               payload[payload.startIndex] == 0x89,
+               payload[payload.startIndex + 1] == 0x50,
+               payload[payload.startIndex + 2] == 0x4E,
+               payload[payload.startIndex + 3] == 0x47,
+               payload[payload.startIndex + 4] == 0x0D,
+               payload[payload.startIndex + 5] == 0x0A,
+               payload[payload.startIndex + 6] == 0x1A,
+               payload[payload.startIndex + 7] == 0x0A {
+                return payload
+            }
+        }
+
+        throw makeError("no unsealed PREV preview in LUMEN file")
+    }
+
+    /// Rank a preview role for a Finder thumbnail: the biggest image wins.
+    /// `nil` is a reserved role, which LUMEN validation rejects rather than
+    /// interprets.
+    private func previewRank(role: Int) -> Int? {
+        switch role {
+        case 1: return 0  // large
+        case 0: return 1  // unspecified
+        case 2: return 2  // small
+        case 3: return 3  // icon
+        default: return nil
+        }
+    }
+
     // MARK: - Helpers
 
     private func makeError(_ message: String) -> NSError {
         NSError(
-            domain: "org.openresinalliance.dragonfruit.voxl-thumbnail",
+            domain: "org.openresinalliance.dragonfruit.thumbnail",
             code: -1,
             userInfo: [NSLocalizedDescriptionKey: message]
         )
@@ -287,5 +406,10 @@ private extension Data {
         (UInt32(self[offset + 1]) << 8)  |
         (UInt32(self[offset + 2]) << 16) |
         (UInt32(self[offset + 3]) << 24)
+    }
+
+    func readUInt64LE(at offset: Int) -> UInt64 {
+        UInt64(readUInt32LE(at: offset)) |
+        (UInt64(readUInt32LE(at: offset + 4)) << 32)
     }
 }

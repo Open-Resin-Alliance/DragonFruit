@@ -1,4 +1,4 @@
-# Unregister the VOXL thumbnail provider on Windows.
+# Unregister the DragonFruit thumbnail provider on Windows.
 #
 # Usage:
 #   .\unregister.ps1 [-DllPath <path>] [-PerUser]
@@ -45,11 +45,13 @@ if (-not $DllPath) {
 if ($DllPath -and (Test-Path $DllPath)) {
     $DllPath = (Resolve-Path $DllPath).Path
     $RegSvr32 = Join-Path $env:WINDIR 'System32\regsvr32.exe'
-    Write-Host "Unregistering VOXL thumbnail handler via regsvr32..."
+    Write-Host "Unregistering DragonFruit thumbnail handler via regsvr32..."
     Write-Host "  DLL: $DllPath"
-    & $RegSvr32 /s /u $DllPath
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "regsvr32 /u exited with code $LASTEXITCODE"
+    # See register.ps1: `&` does not wait for GUI-subsystem regsvr32, so -Wait is
+    # what makes the exit code mean anything.
+    $regResult = Start-Process -FilePath $RegSvr32 -ArgumentList @('/s', '/u', $DllPath) -Wait -PassThru
+    if ($regResult.ExitCode -ne 0) {
+        Write-Warning "regsvr32 /u exited with code $($regResult.ExitCode)"
     }
 } else {
     Write-Warning "DLL path not found; skipping regsvr32 /u and cleaning registry entries directly."
@@ -57,9 +59,11 @@ if ($DllPath -and (Test-Path $DllPath)) {
 
 # Cleanup both current and legacy registration paths.
 Remove-Item -Path "HKCU:\Software\Classes\CLSID\$CLSID" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -Path "HKCU:\Software\Classes\.voxl\ShellEx\$ThumbnailHandlerCATID" -Recurse -Force -ErrorAction SilentlyContinue
+foreach ($Extension in @('.voxl', '.lumen')) {
+    Remove-Item -Path "HKCU:\Software\Classes\$Extension\ShellEx\$ThumbnailHandlerCATID" -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path "HKCU:\Software\Classes\SystemFileAssociations\$Extension\ShellEx\$ThumbnailHandlerCATID" -Recurse -Force -ErrorAction SilentlyContinue
+}
 Remove-Item -Path "HKCU:\Software\Classes\VoxlFile\shellex\$ThumbnailHandlerCATID" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -Path "HKCU:\Software\Classes\SystemFileAssociations\.voxl\ShellEx\$ThumbnailHandlerCATID" -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path "HKCR:\CLSID\$CLSID" -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path "HKCR:\VoxlFile\shellex\$ThumbnailHandlerCATID" -Recurse -Force -ErrorAction SilentlyContinue
 

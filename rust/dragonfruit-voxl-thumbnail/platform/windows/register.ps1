@@ -1,4 +1,7 @@
-# Register the VOXL thumbnail provider on Windows.
+# Register the DragonFruit thumbnail provider on Windows.
+#
+# Answers for `.voxl` scenes and `.lumen` prints; the DLL decides which it has
+# from the file's own bytes.
 #
 # Usage:
 #   .\register.ps1 [-DllPath <path>] [-PerUser]
@@ -60,25 +63,30 @@ if (-not (Test-Path $DllPath)) {
 $DllPath = (Resolve-Path $DllPath).Path
 $RegSvr32 = Join-Path $env:WINDIR 'System32\regsvr32.exe'
 
-Write-Host "Registering VOXL thumbnail handler via regsvr32..."
+Write-Host "Registering DragonFruit thumbnail handler via regsvr32..."
 Write-Host "  DLL:  $DllPath"
 
-& $RegSvr32 /s $DllPath
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "regsvr32 failed with exit code $LASTEXITCODE"
-    exit $LASTEXITCODE
+# regsvr32 is a GUI-subsystem binary: `&` does not wait for it and leaves
+# $LASTEXITCODE unset, so the registration would run on unchecked. -Wait makes the
+# exit code real, and the sanity checks below then describe the state regsvr32 left.
+$regResult = Start-Process -FilePath $RegSvr32 -ArgumentList @('/s', $DllPath) -Wait -PassThru
+if ($regResult.ExitCode -ne 0) {
+    Write-Error "regsvr32 failed with exit code $($regResult.ExitCode)"
+    exit $regResult.ExitCode
 }
 
 # Quick sanity checks
 $inprocKey = "HKCU:\Software\Classes\CLSID\$CLSID\InProcServer32"
-$shellExKey = "HKCU:\Software\Classes\.voxl\ShellEx\$ThumbnailHandlerCATID"
 $approvedKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved'
 
 if (-not (Test-Path $inprocKey)) {
     Write-Warning "Missing registry key: $inprocKey"
 }
-if (-not (Test-Path $shellExKey)) {
-    Write-Warning "Missing registry key: $shellExKey"
+foreach ($Extension in @('.voxl', '.lumen')) {
+    $shellExKey = "HKCU:\Software\Classes\$Extension\ShellEx\$ThumbnailHandlerCATID"
+    if (-not (Test-Path $shellExKey)) {
+        Write-Warning "Missing registry key: $shellExKey"
+    }
 }
 if (-not (Get-ItemProperty -Path $approvedKey -Name $CLSID -ErrorAction SilentlyContinue)) {
     Write-Warning "Missing approved shell extension entry at: $approvedKey"
@@ -87,5 +95,5 @@ if (-not (Get-ItemProperty -Path $approvedKey -Name $CLSID -ErrorAction Silently
 Write-Host "`nRegistration complete."
 Write-Host "If thumbnails still don't appear, refresh shell caches:"
 Write-Host "  ie4uinit.exe -show"
-Write-Host "  Remove-Item `"$env:LOCALAPPDATA\Microsoft\Windows\Explorer\thumbcache_*.db`" -Force -ErrorAction SilentlyContinue"
+Write-Host '  Remove-Item "$env:LOCALAPPDATA\Microsoft\Windows\Explorer\thumbcache_*.db" -Force -ErrorAction SilentlyContinue'
 Write-Host "Then restart Explorer (or sign out/in)."

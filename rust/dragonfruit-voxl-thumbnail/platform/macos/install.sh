@@ -62,9 +62,10 @@ if [ -d "$APPEX_SRC" ]; then
         xcrun clang -x c - -target arm64-apple-macos12.0 \
         -o "$HOST_APP/Contents/MacOS/DragonFruitQLHost"
 
-    # Host app Info.plist — also exports the .voxl UTI so that files get
-    # org.openresinalliance.voxl instead of the dynamic dyn.* identifier.
-    # This is required for QLSupportedContentTypes in the extension to match.
+    # Host app Info.plist — also exports the .voxl and .lumen UTIs so that files
+    # get org.openresinalliance.voxl / org.openresinalliance.lumen instead of the
+    # dynamic dyn.* identifier. This is required for QLSupportedContentTypes in
+    # the extension to match.
     cat > "$HOST_APP/Contents/Info.plist" << 'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -110,6 +111,27 @@ if [ -d "$APPEX_SRC" ]; then
                 </array>
             </dict>
         </dict>
+        <dict>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeDescription</key>
+            <string>DragonFruit LUMEN Print</string>
+            <key>UTTypeIdentifier</key>
+            <string>org.openresinalliance.lumen</string>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>lumen</string>
+                </array>
+                <key>public.mime-type</key>
+                <array>
+                    <string>application/vnd.openresin.lumen</string>
+                </array>
+            </dict>
+        </dict>
     </array>
 </dict>
 </plist>
@@ -151,6 +173,6 @@ else
 fi
 
 echo ""
-echo "Done. Thumbnails will appear for .voxl files in Finder."
+echo "Done. Thumbnails will appear for .voxl and .lumen files in Finder."
 echo "(You may need to log out and back in, or reboot, for Finder to pick up"
 echo " the extension the first time.)"

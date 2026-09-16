@@ -20,6 +20,14 @@
         "name": "DragonFruit Scene File",
         "description": "DragonFruit scene",
         "mimeType": "application/vnd.dragonfruit.voxl+json"
+      },
+      {
+        "ext": [
+          "lumen"
+        ],
+        "name": "DragonFruit LUMEN Print",
+        "description": "DragonFruit print file",
+        "mimeType": "application/vnd.openresin.lumen"
       }
     ],
     "icon": [

@@ -1,10 +1,10 @@
-//! CLI thumbnail extractor for VOXL V2 files.
+//! CLI thumbnail extractor for VOXL scenes and LUMEN print files.
 //!
 //! Used as the backend for Linux thumbnailers and macOS QuickLook extensions.
 //!
 //! Usage:
-//!   dragonfruit-voxl-thumbnailer <input.voxl> <output.png> [size]
-//!   dragonfruit-voxl-thumbnailer --size <pixels> <input.voxl> <output.png>
+//!   dragonfruit-voxl-thumbnailer <input> <output.png> [size]
+//!   dragonfruit-voxl-thumbnailer --size <pixels> <input> <output.png>
 //!
 //! The `size` argument is the maximum dimension in pixels (default 256).
 //! It also accepts the freedesktop thumbnailer format:  %i %o %s
@@ -19,7 +19,7 @@ fn main() {
         Some(v) => v,
         None => {
             eprintln!(
-                "Usage: {} <input.voxl> <output.png> [size]\n       {} --size <px> <input.voxl> <output.png>",
+                "Usage: {} <input> <output.png> [size]\n       {} --size <px> <input> <output.png>",
                 args[0], args[0]
             );
             process::exit(2);

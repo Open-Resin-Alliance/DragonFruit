@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the VOXL thumbnail handler on Linux (GNOME / KDE / XFCE).
+# Install the VOXL / LUMEN thumbnail handler on Linux (GNOME / KDE / XFCE).
 #
 # Run from the repo root after building:
 #   cargo build --release -p dragonfruit-voxl-thumbnail
@@ -26,8 +26,14 @@ install -Dm755 "$BIN_SRC" "$INSTALL_BIN"
 echo "Installing MIME type → $MIME_DIR/dragonfruit-voxl.xml"
 install -Dm644 "$SCRIPT_DIR/dragonfruit-voxl.xml" "$MIME_DIR/dragonfruit-voxl.xml"
 
+echo "Installing MIME type → $MIME_DIR/dragonfruit-lumen.xml"
+install -Dm644 "$SCRIPT_DIR/dragonfruit-lumen.xml" "$MIME_DIR/dragonfruit-lumen.xml"
+
 echo "Installing thumbnailer → $THUMBNAILER_DIR/dragonfruit-voxl.thumbnailer"
 install -Dm644 "$SCRIPT_DIR/dragonfruit-voxl.thumbnailer" "$THUMBNAILER_DIR/dragonfruit-voxl.thumbnailer"
+
+echo "Installing thumbnailer → $THUMBNAILER_DIR/dragonfruit-lumen.thumbnailer"
+install -Dm644 "$SCRIPT_DIR/dragonfruit-lumen.thumbnailer" "$THUMBNAILER_DIR/dragonfruit-lumen.thumbnailer"
 
 echo "Updating MIME database..."
 update-mime-database /usr/share/mime 2>/dev/null || true
@@ -35,4 +41,4 @@ update-mime-database /usr/share/mime 2>/dev/null || true
 echo "Clearing thumbnail cache..."
 rm -rf "$HOME/.cache/thumbnails" 2>/dev/null || true
 
-echo "Done. VOXL thumbnails will appear after the next directory listing."
+echo "Done. VOXL and LUMEN thumbnails will appear after the next directory listing."

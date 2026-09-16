@@ -290,6 +290,10 @@ if (canBuildFlatpak) {
               path.join(flatpakDir, "dragonfruit-voxl-mime.xml"),
               path.join(staging, "dragonfruit-voxl-mime.xml")
             );
+            cpSync(
+              path.join(flatpakDir, "dragonfruit-lumen-mime.xml"),
+              path.join(staging, "dragonfruit-lumen-mime.xml")
+            );
 
             // Icons
             const iconsDir = path.join(repoRoot, "src-tauri", "icons");

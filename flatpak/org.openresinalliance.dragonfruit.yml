@@ -82,6 +82,9 @@ modules:
       # MIME type for .voxl files
       - install -Dm644 staging/dragonfruit-voxl-mime.xml /app/share/mime/packages/org.openresinalliance.dragonfruit.xml
 
+      # MIME type for .lumen files
+      - install -Dm644 staging/dragonfruit-lumen-mime.xml /app/share/mime/packages/org.openresinalliance.dragonfruit.lumen.xml
+
       # Icons — hicolor theme
       - install -Dm644 staging/icons/32x32.png   /app/share/icons/hicolor/32x32/apps/org.openresinalliance.dragonfruit.png
       - install -Dm644 staging/icons/64x64.png   /app/share/icons/hicolor/64x64/apps/org.openresinalliance.dragonfruit.png

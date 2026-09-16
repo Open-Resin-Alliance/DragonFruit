@@ -67,7 +67,14 @@ After `npx tauri build`:
 
 ## UTI / file association
 
-The extension's `Info.plist` declares a `UTImportedTypeDeclarations` entry for `.voxl` (`org.openresinalliance.dragonfruit.voxl`). **Duplicate this declaration** in the main DragonFruit `Info.plist` (via `tauri.conf.json` → `bundle.macOS.infoPlist`) so that Finder recognises the type even when the app is not the frontmost process.
+The extension's `Info.plist` imports two types and advertises both:
+
+| Format | UTI                        | Tags                     |
+| ------ | -------------------------- | ------------------------ |
+| `.voxl`| `org.openresinalliance.voxl`  | extension `voxl`, `application/x-voxl` |
+| `.lumen`| `org.openresinalliance.lumen` | extension `lumen`, `application/vnd.openresin.lumen` |
+
+One extension answers for both, so both identifiers have to be declared wherever the extension is registered: `QLSupportedContentTypes` in the appex, and — for the shipped app — a `UTExportedTypeDeclarations` entry in the main DragonFruit `Info.plist` (via `tauri.conf.json` → `bundle.macOS.infoPlist`) so that Finder recognises the types even when the app is not the frontmost process. `platform/macos/install.sh` does the same for the development host app.
 
 ## Troubleshooting
 
