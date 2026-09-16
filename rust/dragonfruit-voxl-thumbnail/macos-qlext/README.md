@@ -67,14 +67,18 @@ After `npx tauri build`:
 
 ## UTI / file association
 
-The extension's `Info.plist` imports two types and advertises both:
+The extension's `Info.plist` is **generated** from the declared output file types
+(`npm run generate:plugin-registry` writes it to
+`rust/dragonfruit-voxl-thumbnail/generated/VoxlThumbnailExtension-Info.plist`), so its
+`QLSupportedContentTypes` and `UTImportedTypeDeclarations` cover every container the app
+writes - today `org.openresinalliance.voxl` (extension `voxl`,
+`application/x-voxl`) and `org.openresinalliance.lumen` (extension `lumen`,
+`application/vnd.openresin.lumen`). `build.sh` copies it, and the same declarations as
+`outputFileTypes.json`, into the appex.
 
-| Format | UTI                        | Tags                     |
-| ------ | -------------------------- | ------------------------ |
-| `.voxl`| `org.openresinalliance.voxl`  | extension `voxl`, `application/x-voxl` |
-| `.lumen`| `org.openresinalliance.lumen` | extension `lumen`, `application/vnd.openresin.lumen` |
-
-One extension answers for both, so both identifiers have to be declared wherever the extension is registered: `QLSupportedContentTypes` in the appex, and — for the shipped app — a `UTExportedTypeDeclarations` entry in the main DragonFruit `Info.plist` (via `tauri.conf.json` → `bundle.macOS.infoPlist`) so that Finder recognises the types even when the app is not the frontmost process. `platform/macos/install.sh` does the same for the development host app.
+The host application needs the same UTI declarations exported: `install.sh` splices the
+generated `macos-exported-utis.plist` into the development host app it builds, and a
+shipped DragonFruit bundle needs them via `tauri.conf.json` → `bundle.macOS.infoPlist`.
 
 ## Troubleshooting
 

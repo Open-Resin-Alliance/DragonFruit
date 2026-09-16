@@ -65,11 +65,11 @@ lipo -create \
     -output "$MACOS_DIR/VoxlThumbnailExtension"
 rm -f "$MACOS_DIR/VoxlThumbnailExtension.arm64" "$MACOS_DIR/VoxlThumbnailExtension.x86_64"
 
-echo "Copying Info.plist..."
-cp "$SCRIPT_DIR/Sources/VoxlThumbnailExtension/Info.plist" "$CONTENTS/Info.plist"
-
-# Replace $(PRODUCT_MODULE_NAME) placeholder in Info.plist
-sed -i '' 's/$(PRODUCT_MODULE_NAME)/VoxlThumbnailExtension/g' "$CONTENTS/Info.plist"
+echo "Copying the generated Info.plist (declared UTIs) and file-type table..."
+GENERATED_DIR="$SCRIPT_DIR/../../generated"
+cp "$GENERATED_DIR/VoxlThumbnailExtension-Info.plist" "$CONTENTS/Info.plist"
+mkdir -p "$CONTENTS/Resources"
+cp "$GENERATED_DIR/../src/generated_output_file_types.json" "$CONTENTS/Resources/outputFileTypes.json"
 
 echo "Stripping extended attributes..."
 find "$APPEX" -exec xattr -c {} \; 2>/dev/null || true

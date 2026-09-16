@@ -1,4 +1,5 @@
 import QuickLookThumbnailing
+import Compression
 import Foundation
 import CoreGraphics
 import ImageIO
@@ -25,7 +26,7 @@ class ThumbnailProvider: QLThumbnailProvider {
             guard let cgSrc  = CGImageSourceCreateWithData(pngData as CFData, nil),
                   let cgImage = CGImageSourceCreateImageAtIndex(cgSrc, 0, nil)
             else {
-                handler(nil, makeError("failed to decode PNG"))
+                handler(nil, makeThumbnailError("failed to decode PNG"))
                 return
             }
 
@@ -200,198 +201,428 @@ class ThumbnailProvider: QLThumbnailProvider {
         return result
     }
 
-    // MARK: - Inline parsers
+    // MARK: - Declared file types
 
-    /// The embedded preview of whichever container this is.
-    private func extractThumbnail(from data: Data) throws -> Data {
-        guard data.count >= 4 else {
-            throw makeError("file is too short to identify")
-        }
+    /// One file type a plugin (or the core `.voxl` scene) declares, as compiled into
+    /// the providers' table by `scripts/generate-plugin-registry.mjs`.
+    private struct DeclaredFileType {
+        let fileExtension: String
+        let locator: ThumbnailLocator
 
-        switch (data[0], data[1], data[2], data[3]) {
-        case (0x56, 0x4F, 0x58, 0x4C): // "VOXL"
-            return try voxlThumbnail(from: data)
-        case (0x4C, 0x55, 0x4D, 0x4E): // "LUMN"
-            return try lumenPreview(from: data)
-        default:
-            throw makeError("not a DragonFruit scene or print file")
+        func matches(head: Data) -> Bool {
+            !locator.magic.isEmpty && head.starts(with: locator.magic)
         }
     }
 
-    // MARK: - VOXL V2
-
-    private func voxlThumbnail(from data: Data) throws -> Data {
-        // ── V2 header (16 bytes) ──────────────────────────────────────
-        guard data.count >= 16 else {
-            throw makeError("VOXL file is shorter than its header")
-        }
-
-        let version = data.readUInt16LE(at: 4)
-        guard version >= 2 else { throw makeError("VOXL version \(version) is not V2") }
-
-        let chunkCount = Int(data.readUInt32LE(at: 8))
-        let dirStart   = 16
-        let entrySize  = 20
-
-        guard data.count >= dirStart + chunkCount * entrySize else {
-            throw makeError("chunk directory out of bounds")
-        }
-
-        // ── Scan directory for EXTD[0] ────────────────────────────────
-        for i in 0..<chunkCount {
-            let b = dirStart + i * entrySize
-            // chunk type "EXTD" = 0x45 0x58 0x54 0x44
-            guard data[b] == 0x45, data[b+1] == 0x58,
-                  data[b+2] == 0x54, data[b+3] == 0x44 else { continue }
-
-            let index = data.readUInt16LE(at: b + 4)
-            guard index == 0 else { continue }
-
-            let compression = data.readUInt16LE(at: b + 6)
-            let offset      = Int(data.readUInt32LE(at: b + 8))
-            let compSize    = Int(data.readUInt32LE(at: b + 12))
-
-            guard offset + compSize <= data.count else {
-                throw makeError("EXTD chunk out of bounds")
-            }
-
-            // ── Decompress if needed ──────────────────────────────────
-            let jsonData: Data
-            switch compression {
-            case 0:
-                jsonData = data.subdata(in: offset ..< offset + compSize)
-            case 1:
-                let compressed = data.subdata(in: offset ..< offset + compSize)
-                guard let dec = try? (compressed as NSData).decompressed(using: .zlib) else {
-                    throw makeError("EXTD chunk zlib decompression failed")
-                }
-                jsonData = dec as Data
-            default:
-                throw makeError("unknown EXTD compression code: \(compression)")
-            }
-
-            // ── Parse JSON → base64 PNG ───────────────────────────────
-            guard let root    = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
-                  let preview = root["ora.preview"] as? [String: Any],
-                  let b64     = preview["dataBase64"] as? String,
-                  let png     = Data(base64Encoded: b64, options: .ignoreUnknownCharacters)
-            else { throw makeError("no ora.preview thumbnail in EXTD chunk") }
-
-            return png
-        }
-
-        throw makeError("no EXTD chunk in VOXL file")
-    }
-
-    // MARK: - LUMEN v1
-
-    /// The best unsealed `PREV` preview of a LUMEN print file.
+    /// Reads a stored preview using the declaration's own terms.
     ///
-    /// The chunk directory sits at the END of the file, after every payload, so
-    /// this reads the header, seeks to the directory, and then reads only the
-    /// preview it picked. A sealed preview needs the file's key and is skipped
-    /// rather than failed on: such a file simply has no thumbnail to offer.
-    private func lumenPreview(from data: Data) throws -> Data {
-        let headerSize = 32
-        let entrySize = 32
-        let trailerSize = 8
-        let sealedFlag: UInt32 = 0x10
+    /// Mirrors `rust/dragonfruit-voxl-thumbnail/src/locator.rs`: the grammar is small
+    /// because it has to be interpreted twice - once here, for Finder, and once in
+    /// Rust for Explorer and the freedesktop thumbnailers. Keeping the two in step is
+    /// the price of not writing one parser per format per platform.
+    private struct ThumbnailLocator {
+        struct BinaryField {
+            let width: Int
+            let at: Int
 
-        let fileLength = UInt64(data.count)
-        guard fileLength >= UInt64(headerSize + trailerSize) else {
-            throw makeError("LUMEN file is shorter than its header and trailer")
-        }
+            init?(_ json: [String: Any]?) {
+                guard let json,
+                      let type = json["type"] as? String,
+                      let at = json["at"] as? Int
+                else { return nil }
 
-        let version = data.readUInt32LE(at: 4)
-        // v1 is the only layout this parser knows; a future version is refused
-        // rather than misread.
-        guard version == 1 else { throw makeError("LUMEN version \(version) is not v1") }
+                switch type {
+                case "u16": width = 2
+                case "u32": width = 4
+                case "u64": width = 8
+                default: return nil
+                }
+                self.at = at
+            }
 
-        // "LEND"
-        guard data[data.count - 8] == 0x4C, data[data.count - 7] == 0x45,
-              data[data.count - 6] == 0x4E, data[data.count - 5] == 0x44
-        else { throw makeError("LUMEN file does not end with the LEND trailer") }
+            func read(_ bytes: Data) -> UInt64? {
+                let start = bytes.startIndex + at
+                guard at >= 0, start >= bytes.startIndex, start + width <= bytes.endIndex else { return nil }
 
-        let dirOffset = data.readUInt64LE(at: 8)
-        let chunkCount = UInt64(data.readUInt32LE(at: 16))
-        let dirBytes = chunkCount * UInt64(entrySize)
-
-        // Every bound is checked in UInt64 before anything is converted to an
-        // index, so a corrupt header cannot wrap into a valid-looking range.
-        guard dirOffset >= UInt64(headerSize),
-              dirOffset + dirBytes <= fileLength - UInt64(trailerSize)
-        else { throw makeError("LUMEN chunk directory lies outside the file") }
-
-        // Best role first, file order breaking ties.
-        var candidates: [(rank: Int, index: Int, offset: Int, size: Int)] = []
-        for index in 0..<Int(chunkCount) {
-            let base = Int(dirOffset) + index * entrySize
-            // "PREV"
-            guard data[base] == 0x50, data[base + 1] == 0x52,
-                  data[base + 2] == 0x45, data[base + 3] == 0x56
-            else { continue }
-
-            let flags = data.readUInt32LE(at: base + 28)
-            if flags & sealedFlag != 0 { continue }
-            guard let rank = previewRank(role: Int(flags & 0x0F)) else { continue }
-
-            let offset = data.readUInt64LE(at: base + 4)
-            let uncompressed = data.readUInt64LE(at: base + 12)
-            // PREV is never compressed, but a sealed one is framed: a non-zero
-            // stored size is the payload's real length.
-            let stored = data.readUInt64LE(at: base + 20)
-            let size = stored != 0 ? stored : uncompressed
-
-            guard offset > 0, size > 0,
-                  offset <= fileLength, size <= fileLength - offset
-            else { continue }
-
-            candidates.append((rank, index, Int(offset), Int(size)))
-        }
-
-        let ordered = candidates.sorted { ($0.rank, $0.index) < ($1.rank, $1.index) }
-        for candidate in ordered {
-            let payload = data.subdata(in: candidate.offset ..< candidate.offset + candidate.size)
-            // The eight-byte PNG signature: a payload that is not a PNG is not a
-            // preview Finder can show, so keep looking.
-            if payload.count >= 8,
-               payload[payload.startIndex] == 0x89,
-               payload[payload.startIndex + 1] == 0x50,
-               payload[payload.startIndex + 2] == 0x4E,
-               payload[payload.startIndex + 3] == 0x47,
-               payload[payload.startIndex + 4] == 0x0D,
-               payload[payload.startIndex + 5] == 0x0A,
-               payload[payload.startIndex + 6] == 0x1A,
-               payload[payload.startIndex + 7] == 0x0A {
-                return payload
+                var value: UInt64 = 0
+                for offset in 0..<width {
+                    value |= UInt64(bytes[start + offset]) << (8 * offset)
+                }
+                return value
             }
         }
 
-        throw makeError("no unsealed PREV preview in LUMEN file")
-    }
+        struct Flags {
+            let field: BinaryField
+            let sealedBit: UInt32?
+            let roleMask: UInt64?
+            let roleOrder: [UInt64]
+        }
 
-    /// Rank a preview role for a Finder thumbnail: the biggest image wins.
-    /// `nil` is a reserved role, which LUMEN validation rejects rather than
-    /// interprets.
-    private func previewRank(role: Int) -> Int? {
-        switch role {
-        case 1: return 0  // large
-        case 0: return 1  // unspecified
-        case 2: return 2  // small
-        case 3: return 3  // icon
-        default: return nil
+        struct Compression {
+            let field: BinaryField
+            let stored: [UInt64]
+            let zlib: [UInt64]
+        }
+
+        struct Entry {
+            let typeAt: Int
+            let offset: BinaryField
+            let sizes: [BinaryField]
+            let index: (field: BinaryField, value: UInt64)?
+            let compression: Compression?
+            let flags: Flags?
+        }
+
+        enum Payload {
+            case png
+            case jsonBase64(path: [String])
+        }
+
+        let magic: Data
+        let version: (field: BinaryField, equals: UInt64?, atLeast: UInt64?)?
+        let tableOffsetFixed: UInt64?
+        let tableOffsetField: BinaryField?
+        let tableCount: BinaryField
+        let entrySize: UInt64
+        let entry: Entry
+        let previewChunks: [Data]
+        let payload: Payload
+        let trailer: (magic: Data, size: UInt64)?
+
+        private struct Candidate {
+            let rank: UInt64
+            let order: Int
+            let offset: UInt64
+            let size: UInt64
+            let compression: UInt64?
+        }
+
+        static func parse(_ json: [String: Any]) -> ThumbnailLocator? {
+            guard let magic = (json["magic"] as? String)?.data(using: .ascii),
+                  let directory = json["directory"] as? [String: Any],
+                  let entryJSON = json["entry"] as? [String: Any],
+                  let entryType = entryJSON["type"] as? [String: Any],
+                  let typeAt = entryType["at"] as? Int,
+                  let entryOffset = BinaryField(entryJSON["offset"] as? [String: Any]),
+                  let sizesJSON = entryJSON["size"] as? [[String: Any]],
+                  let previewChunks = (json["previewChunks"] as? [String])?.compactMap({ $0.data(using: .ascii) }),
+                  let payloadJSON = json["payload"] as? [String: Any],
+                  !previewChunks.isEmpty
+            else { return nil }
+
+            let sizes = sizesJSON.compactMap { BinaryField($0) }
+            guard sizes.count == sizesJSON.count else { return nil }
+
+            let tableOffsetFieldJSON = directory["offset"] as? [String: Any]
+            let fixed = tableOffsetFieldJSON?["fixed"] as? Int
+            let offsetField = fixed == nil ? BinaryField(tableOffsetFieldJSON) : nil
+            if fixed == nil && offsetField == nil { return nil }
+
+            guard let tableCount = BinaryField(directory["count"] as? [String: Any]),
+                  let entrySize = (directory["entrySize"] as? Int).map(UInt64.init)
+            else { return nil }
+
+            var version: (BinaryField, UInt64?, UInt64?)? = nil
+            if let versionJSON = json["version"] as? [String: Any], let field = BinaryField(versionJSON) {
+                let equals = (versionJSON["equals"] as? Int).map(UInt64.init)
+                let atLeast = (versionJSON["atLeast"] as? Int).map(UInt64.init)
+                if equals == nil && atLeast == nil { return nil }
+                version = (field, equals, atLeast)
+            }
+
+            var index: (BinaryField, UInt64)? = nil
+            if let indexJSON = entryJSON["index"] as? [String: Any],
+               let field = BinaryField(indexJSON),
+               let value = (indexJSON["value"] as? Int).map(UInt64.init) {
+                index = (field, value)
+            }
+
+            var compression: Compression? = nil
+            if let compressionJSON = entryJSON["compression"] as? [String: Any],
+               let field = BinaryField(compressionJSON),
+               let zlib = (compressionJSON["zlib"] as? [Int])?.map(UInt64.init), !zlib.isEmpty {
+                compression = Compression(
+                    field: field,
+                    stored: (compressionJSON["stored"] as? [Int])?.map(UInt64.init) ?? [],
+                    zlib: zlib,
+                )
+            }
+
+            var flags: Flags? = nil
+            if let flagsJSON = entryJSON["flags"] as? [String: Any], let field = BinaryField(flagsJSON) {
+                flags = Flags(
+                    field: field,
+                    sealedBit: (flagsJSON["sealedBit"] as? Int).map(UInt32.init),
+                    roleMask: (flagsJSON["roleMask"] as? Int).map(UInt64.init),
+                    roleOrder: (flagsJSON["roleOrder"] as? [Int])?.map(UInt64.init) ?? [],
+                )
+            }
+
+            let payload: Payload
+            switch payloadJSON["encoding"] as? String {
+            case "png":
+                payload = .png
+            case "json-base64":
+                guard let path = payloadJSON["jsonPath"] as? [String], !path.isEmpty else { return nil }
+                payload = .jsonBase64(path: path)
+            default:
+                return nil
+            }
+
+            var trailer: (Data, UInt64)? = nil
+            if let trailerJSON = json["trailer"] as? [String: Any],
+               let trailerMagic = (trailerJSON["magic"] as? String)?.data(using: .ascii),
+               let size = (trailerJSON["size"] as? Int).map(UInt64.init) {
+                trailer = (trailerMagic, size)
+            }
+
+            return ThumbnailLocator(
+                magic: magic,
+                version: version,
+                tableOffsetFixed: fixed.map(UInt64.init),
+                tableOffsetField: offsetField,
+                tableCount: tableCount,
+                entrySize: entrySize,
+                entry: Entry(
+                    typeAt: typeAt,
+                    offset: entryOffset,
+                    sizes: sizes,
+                    index: index,
+                    compression: compression,
+                    flags: flags,
+                ),
+                previewChunks: previewChunks,
+                payload: payload,
+                trailer: trailer,
+            )
+        }
+
+        func extract(from data: Data) throws -> Data {
+            let fileLength = UInt64(data.count)
+
+            // ── Header ────────────────────────────────────────────────────────
+            let headerLength = min(data.count, 64)
+            let header = data.prefix(headerLength)
+            guard header.starts(with: magic) else { throw makeThumbnailError("not a declared file type") }
+
+            if let (field, equals, atLeast) = version {
+                guard let version = field.read(header) else {
+                    throw makeThumbnailError("the header is too short for its version field")
+                }
+                if let equals, version != equals {
+                    throw makeThumbnailError("version \(version) is not the declared \(equals)")
+                }
+                if let atLeast, version < atLeast {
+                    throw makeThumbnailError("version \(version) is below the declared \(atLeast)")
+                }
+            }
+
+            // ── Trailer ───────────────────────────────────────────────────────
+            if let trailer {
+                guard fileLength >= trailer.size else { throw makeThumbnailError("the file is shorter than its trailer") }
+                let start = data.count - Int(trailer.size)
+                guard data.subdata(in: start..<data.count).starts(with: trailer.magic) else {
+                    throw makeThumbnailError("the file does not end with the declared trailer")
+                }
+            }
+
+            // ── Chunk table ───────────────────────────────────────────────────
+            let tableOffset: UInt64
+            if let fixed = tableOffsetFixed {
+                tableOffset = fixed
+            } else if let field = tableOffsetField, let read = field.read(header) {
+                tableOffset = read
+            } else {
+                throw makeThumbnailError("the header is too short for the table offset")
+            }
+
+            guard let entryCount = tableCount.read(header) else {
+                throw makeThumbnailError("the header is too short for the entry count")
+            }
+            // Bounds in UInt64 before anything becomes an index, so a corrupt count
+            // cannot wrap into a valid-looking range.
+            let tableBytes = entryCount.multipliedReportingOverflow(by: entrySize)
+            let tableEnd = tableBytes.overflow ? nil : tableOffset.addingReportingOverflow(tableBytes.partialValue).partialValue
+            guard !tableBytes.overflow, let tableEnd, tableEnd <= fileLength else {
+                throw makeThumbnailError("the chunk table lies outside the file")
+            }
+
+            let tableStart = data.startIndex + Int(tableOffset)
+            let table = data.subdata(in: tableStart..<(tableStart + Int(tableBytes.partialValue)))
+
+            // ── Pick the best preview ─────────────────────────────────────────
+            var candidates: [Candidate] = []
+            for order in 0..<Int(entryCount) {
+                let base = order * Int(entrySize)
+                guard base + Int(entrySize) <= table.count else { continue }
+                let chunk = table.subdata(in: (table.startIndex + base)..<(table.startIndex + base + Int(entrySize)))
+
+                let typeStart = chunk.startIndex + entry.typeAt
+                guard entry.typeAt >= 0, typeStart + 1 <= chunk.endIndex,
+                      previewChunks.contains(where: { chunk[typeStart...].starts(with: $0) })
+                else { continue }
+
+                if let index = entry.index, index.field.read(chunk) != index.value { continue }
+
+                var rank: UInt64 = 0
+                if let flags = entry.flags {
+                    let raw = flags.field.read(chunk) ?? 0
+                    if let sealedBit = flags.sealedBit, raw & (1 << sealedBit) != 0 {
+                        continue // needs the file's key; not a preview this extension can show
+                    }
+                    if let roleMask = flags.roleMask {
+                        let role = raw & roleMask
+                        guard let position = flags.roleOrder.firstIndex(of: role) else { continue }
+                        rank = UInt64(position)
+                    }
+                }
+
+                guard let offset = entry.offset.read(chunk),
+                      let size = entry.sizes.compactMap({ $0.read(chunk) }).first(where: { $0 != 0 }),
+                      size > 0, offset <= fileLength, size <= fileLength - offset
+                else { continue }
+
+                candidates.append(Candidate(
+                    rank: rank,
+                    order: order,
+                    offset: offset,
+                    size: size,
+                    compression: entry.compression?.field.read(chunk),
+                ))
+            }
+
+            // Best role first, table order breaking ties.
+            candidates.sort { ($0.rank, $0.order) < ($1.rank, $1.order) }
+
+            for candidate in candidates {
+                let payloadStart = data.startIndex + Int(candidate.offset)
+                var payload = data.subdata(in: payloadStart..<(payloadStart + Int(candidate.size)))
+
+                if let compression = entry.compression {
+                    switch candidate.compression {
+                    case .some(let code) where compression.stored.contains(code):
+                        break
+                    case .some(let code) where compression.zlib.contains(code):
+                        payload = try inflate(payload)
+                    case .some(let code):
+                        throw makeThumbnailError("unknown compression code \(code)")
+                    case .none:
+                        break
+                    }
+                }
+
+                switch payload {
+                case .png:
+                    if isPNG(payload) { return payload }
+                case .jsonBase64(let path):
+                    if let png = pngFromJSON(payload, path: path) { return png }
+                }
+            }
+
+            throw makeThumbnailError("no readable preview in this file")
         }
     }
+
+    /// Every declared file type, read once from the table the registry generator
+    /// compiled and the appex bundles.
+    private static let declaredFileTypes: [DeclaredFileType] = {
+        guard let url = Bundle.main.url(forResource: "outputFileTypes", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let entries = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]]
+        else { return [] }
+
+        return entries.compactMap { entry in
+            guard let fileExtension = entry["fileExtension"] as? String,
+                  let thumbnail = entry["thumbnail"] as? [String: Any],
+                  let locator = ThumbnailLocator.parse(thumbnail)
+            else { return nil }
+            return DeclaredFileType(fileExtension: fileExtension, locator: locator)
+        }
+    }()
+
+    /// The embedded preview of whichever declared container this is.
+    private func extractThumbnail(from data: Data) throws -> Data {
+        let head = data.prefix(8)
+
+        guard let declared = ThumbnailProvider.declaredFileTypes.first(where: { $0.matches(head: Data(head)) }) else {
+            throw makeThumbnailError("not a file type this extension declares")
+        }
+
+        return try declared.locator.extract(from: data)
+    }
+
+
+    /// The base64 PNG at a JSON path inside a chunk payload, or `nil` when that path
+    /// is absent - an extension chunk without a preview is unhelpful, not an error.
+
+    /// A zlib stream back to bytes. The framework needs the destination size up front,
+    /// so the buffer grows until the payload fits rather than trusting a declared size.
+
 
     // MARK: - Helpers
 
-    private func makeError(_ message: String) -> NSError {
-        NSError(
-            domain: "org.openresinalliance.dragonfruit.thumbnail",
-            code: -1,
-            userInfo: [NSLocalizedDescriptionKey: message]
-        )
+}
+
+private func isPNG(_ data: Data) -> Bool {
+    data.starts(with: [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+}
+
+private func pngFromJSON(_ payload: Data, path: [String]) -> Data? {
+    guard var cursor = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any] else { return nil }
+
+    for (position, key) in path.enumerated() {
+        let value = cursor[key]
+        if position == path.count - 1 {
+            guard let encoded = value as? String, let decoded = Data(base64Encoded: encoded) else { return nil }
+            return isPNG(decoded) ? decoded : nil
+        }
+        guard let next = value as? [String: Any] else { return nil }
+        cursor = next
     }
+
+    return nil
+}
+
+private func inflate(_ payload: Data) throws -> Data {
+    var capacity = max(64 * 1024, payload.count * 4)
+    let limit = 64 * 1024 * 1024
+
+    while capacity <= limit {
+        var output = Data(count: capacity)
+        let written = output.withUnsafeMutableBytes { destination -> Int in
+            guard let destinationBase = destination.bindMemory(to: UInt8.self).baseAddress else { return 0 }
+            return payload.withUnsafeBytes { source -> Int in
+                guard let sourceBase = source.bindMemory(to: UInt8.self).baseAddress else { return 0 }
+                return compression_decode_buffer(
+                    destinationBase,
+                    destination.count,
+                    sourceBase,
+                    payload.count,
+                    nil,
+                    COMPRESSION_ZLIB,
+                )
+            }
+        }
+
+        if written > 0 && written < capacity {
+            output.removeSubrange(written..<output.count)
+            return output
+        }
+        capacity *= 2
+    }
+
+    throw makeThumbnailError("decompression failed")
+}
+
+// MARK: - Helpers
+
+private func makeThumbnailError(_ message: String) -> NSError {
+    NSError(
+        domain: "org.openresinalliance.dragonfruit.thumbnail",
+        code: -1,
+        userInfo: [NSLocalizedDescriptionKey: message]
+    )
 }
 
 // MARK: - Data byte-order helpers
