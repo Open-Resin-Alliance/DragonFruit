@@ -441,10 +441,15 @@ class ThumbnailProvider: QLThumbnailProvider {
                 throw makeThumbnailError("the header is too short for the entry count")
             }
             // Bounds in UInt64 before anything becomes an index, so a corrupt count
-            // cannot wrap into a valid-looking range.
+            // cannot wrap into a valid-looking range. Both operations are checked and
+            // the bound is compared the safe way round, which is what `locator.rs`
+            // does: an unchecked addition would leave a wrapped, small end offset that
+            // passes the bound and then traps when it becomes an index.
             let tableBytes = entryCount.multipliedReportingOverflow(by: entrySize)
-            let tableEnd = tableBytes.overflow ? nil : tableOffset.addingReportingOverflow(tableBytes.partialValue).partialValue
-            guard !tableBytes.overflow, let tableEnd, tableEnd <= fileLength else {
+            guard !tableBytes.overflow else { throw makeThumbnailError("the table length overflows") }
+            let tableSum = tableOffset.addingReportingOverflow(tableBytes.partialValue)
+            guard !tableSum.overflow else { throw makeThumbnailError("the table offset overflows") }
+            guard tableSum.partialValue <= fileLength else {
                 throw makeThumbnailError("the chunk table lies outside the file")
             }
 
@@ -497,14 +502,14 @@ class ThumbnailProvider: QLThumbnailProvider {
 
             for candidate in candidates {
                 let payloadStart = data.startIndex + Int(candidate.offset)
-                var payload = data.subdata(in: payloadStart..<(payloadStart + Int(candidate.size)))
+                var bytes = data.subdata(in: payloadStart..<(payloadStart + Int(candidate.size)))
 
                 if let compression = entry.compression {
                     switch candidate.compression {
                     case .some(let code) where compression.stored.contains(code):
                         break
                     case .some(let code) where compression.zlib.contains(code):
-                        payload = try inflate(payload)
+                        bytes = try inflate(bytes)
                     case .some(let code):
                         throw makeThumbnailError("unknown compression code \(code)")
                     case .none:
@@ -512,11 +517,14 @@ class ThumbnailProvider: QLThumbnailProvider {
                     }
                 }
 
-                switch payload {
+                // The declared payload kind decides how to read the bytes: the
+                // declaration knows whether this container stores a PNG or a
+                // document with one at a JSON path.
+                switch self.payload {
                 case .png:
-                    if isPNG(payload) { return payload }
+                    if isPNG(bytes) { return bytes }
                 case .jsonBase64(let path):
-                    if let png = pngFromJSON(payload, path: path) { return png }
+                    if let png = pngFromJSON(bytes, path: path) { return png }
                 }
             }
 
@@ -552,14 +560,6 @@ class ThumbnailProvider: QLThumbnailProvider {
         return try declared.locator.extract(from: data)
     }
 
-
-    /// The base64 PNG at a JSON path inside a chunk payload, or `nil` when that path
-    /// is absent - an extension chunk without a preview is unhelpful, not an error.
-
-    /// A zlib stream back to bytes. The framework needs the destination size up front,
-    /// so the buffer grows until the payload fits rather than trusting a declared size.
-
-
     // MARK: - Helpers
 
 }
@@ -568,6 +568,8 @@ private func isPNG(_ data: Data) -> Bool {
     data.starts(with: [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
 }
 
+/// The base64 PNG at a JSON path inside a chunk payload, or `nil` when that path
+/// is absent - an extension chunk without a preview is unhelpful, not an error.
 private func pngFromJSON(_ payload: Data, path: [String]) -> Data? {
     guard var cursor = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any] else { return nil }
 
@@ -584,6 +586,8 @@ private func pngFromJSON(_ payload: Data, path: [String]) -> Data? {
     return nil
 }
 
+/// A zlib stream back to bytes. The framework needs the destination size up front,
+/// so the buffer grows until the payload fits rather than trusting a declared size.
 private func inflate(_ payload: Data) throws -> Data {
     var capacity = max(64 * 1024, payload.count * 4)
     let limit = 64 * 1024 * 1024
