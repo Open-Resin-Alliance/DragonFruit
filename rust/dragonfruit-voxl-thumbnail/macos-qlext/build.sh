@@ -66,10 +66,13 @@ lipo -create \
 rm -f "$MACOS_DIR/VoxlThumbnailExtension.arm64" "$MACOS_DIR/VoxlThumbnailExtension.x86_64"
 
 echo "Copying the generated Info.plist (declared UTIs) and file-type table..."
-GENERATED_DIR="$SCRIPT_DIR/../../generated"
-cp "$GENERATED_DIR/VoxlThumbnailExtension-Info.plist" "$CONTENTS/Info.plist"
+# Both are written by `scripts/generate-plugin-registry.mjs` from the plugins'
+# declarations, into this crate rather than the repository root: the plist lands
+# in `generated/`, the table beside the source in `src/`.
+CRATE_DIR="$SCRIPT_DIR/.."
+cp "$CRATE_DIR/generated/VoxlThumbnailExtension-Info.plist" "$CONTENTS/Info.plist"
 mkdir -p "$CONTENTS/Resources"
-cp "$GENERATED_DIR/../src/generated_output_file_types.json" "$CONTENTS/Resources/outputFileTypes.json"
+cp "$CRATE_DIR/src/generated_output_file_types.json" "$CONTENTS/Resources/outputFileTypes.json"
 
 echo "Stripping extended attributes..."
 find "$APPEX" -exec xattr -c {} \; 2>/dev/null || true
