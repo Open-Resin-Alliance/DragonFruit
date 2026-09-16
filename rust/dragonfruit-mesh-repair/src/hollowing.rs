@@ -2612,7 +2612,7 @@ fn summarize_mesh_defects(mesh: &IndexedMesh) -> MeshDefectSummary {
 /// by more than two faces, and it never changes winding, so retrying the
 /// weld ladder against those defect classes is provably futile
 /// (2026-07-12 audit: the ladder's absolute weld range is single-digit
-/// micrometres, five orders of magnitude below voxel-scale defects).
+/// micrometers, five orders of magnitude below voxel-scale defects).
 #[cfg_attr(not(feature = "manifold"), allow(dead_code))]
 fn weld_retries_worthwhile(defects: &MeshDefectSummary) -> bool {
     defects.non_manifold_edges == 0
