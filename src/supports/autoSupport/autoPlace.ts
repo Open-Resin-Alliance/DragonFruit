@@ -867,11 +867,14 @@ function placeOneCandidate(
                             }
                         } catch {}
                     }
-                } else if (leafSpanMm > MAX_LEAF_SPAN_BEFORE_BRANCH_MM && candidate.source !== 'overhang') {
-                    // Branch: requires upward angle from knot to tip. Only ISLAND
-                    // candidates branch here — overhang fanning is leaves by rule,
-                    // so an overhang single beyond leaf reach falls through and
-                    // the consolidation pass attaches it as a leaf where possible.
+                } else if (leafSpanMm > MAX_LEAF_SPAN_BEFORE_BRANCH_MM) {
+                    // Branch: requires upward angle from knot to tip. Every origin
+                    // branches here, overhang included: a leaf is a seg-less
+                    // tapered cone, so past MAX_LEAF_SPAN_BEFORE_BRANCH_MM it is a
+                    // spindly spike standing next to its trunk rather than a
+                    // support — an 11.6mm one came out of this merge path.
+                    // `buildConsolidationBranch` has always built overhang-origin
+                    // branches, so there is nothing overhang-specific about it.
                     const hDist2 = Math.sqrt(
                         (tipPos.x - knotPos.x) ** 2 + (tipPos.y - knotPos.y) ** 2,
                     );
@@ -903,9 +906,7 @@ function placeOneCandidate(
                                 // fall through to standalone trunk
                             } else {
                                 d = draftAddPrimitive(d, 'knots', parentKnot);
-                                // Branch fallback is island-only (overhang fanning
-                                // is leaves) — the origin is always island here.
-                                branch.origin = 'island';
+                                branch.origin = candidate.source === 'overhang' ? 'overhang' : 'island';
                                 d = draftAddEntity(d, 'branch', branch);
                                 const ma = (Math.atan2(hDist2, vDist2) * 180) / Math.PI;
                                 logPlacement(
@@ -1914,11 +1915,14 @@ export function fanLeafToTrunk(
         }
 
         const resolved = resolveSurfaceNormal(target, mesh ?? undefined);
-        // Long island spans route to branches with real shafts instead of
-        // long tapered leaf cones (spindly spikes). Overhang fanning stays
-        // leaves by rule; failed branch attempts fall through to the next
-        // candidate (a shorter span may still leaf).
-        if (origin !== 'overhang' && Math.sqrt(dist2) > MAX_LEAF_SPAN_BEFORE_BRANCH_MM) {
+        // Long spans route to branches with real shafts instead of long tapered
+        // leaf cones (spindly spikes), for EVERY origin. Overhang fanning used to
+        // stay a leaf past this threshold, which is how an 11.6mm cone got built;
+        // the leaf's own rule — past ~6mm it stands next to its trunk rather than
+        // supporting it — does not care which surface the tip touches. Failed
+        // branch attempts fall through to the next candidate (a shorter span may
+        // still leaf).
+        if (Math.sqrt(dist2) > MAX_LEAF_SPAN_BEFORE_BRANCH_MM) {
             try {
                 const band = activeSizingBand();
                 const built = buildBranchData({
@@ -1946,7 +1950,7 @@ export function fanLeafToTrunk(
                         continue;
                     }
                     const next = draftAddPrimitive(draft, 'knots', parentKnot);
-                    built.branch.origin = 'island';
+                    built.branch.origin = origin === 'overhang' ? 'overhang' : 'island';
                     return {
                         ok: true,
                         kind: 'branch',

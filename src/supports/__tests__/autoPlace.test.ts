@@ -1,4 +1,17 @@
 import { footprintFromPoints } from '@/volumeAnalysis/Islands/voxelFootprint';
+/** No auto leaf may be a tapered spike: past the branch threshold it must be a
+ *  branch, whichever surface its tip touches and whichever pass attached it. */
+function assertNoLeafPastBranchThreshold(): void {
+    for (const leaf of Object.values(getSnapshot().leaves)) {
+        const knot = leaf.parentKnotId ? getSnapshot().knots[leaf.parentKnotId] : undefined;
+        const tip = leaf.contactCone?.pos;
+        if (!knot || !tip) continue;
+        const spanMm = Math.hypot(tip.x - knot.pos.x, tip.y - knot.pos.y, tip.z - knot.pos.z);
+        assert.ok(spanMm <= 6.01,
+            `leaf ${leaf.id} spans ${spanMm.toFixed(1)}mm — past the branch threshold, it must be a branch`);
+    }
+}
+
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
@@ -352,15 +365,18 @@ test('runAutoPlace gives small sub-threshold regions a single pillar', () => {
     disposeHandlers();
 });
 
-test('runAutoPlace fans sub-threshold overhang candidates instead of standalone trunks', () => {
+test('a sub-threshold overhang candidate past the leaf threshold becomes a pillar, not a spike', () => {
     resetStore();
     resetKickstandsInState();
     clearHistory();
     const disposeHandlers = registerSupportHistoryHandlers();
 
-    // Trunk A (voxel island) at the origin; overhang region o15 at (3,0,33)
-    // is sub-threshold and non-anchor (band off) → must attach as a fan leaf
-    // off A's shaft, not become a second straight trunk next to it.
+    // Trunk A (voxel island) at the origin; overhang region o15 at (3,0,33) is
+    // sub-threshold and non-anchor (band off), so it is offered to A's shaft.
+    // The link is past the leaf threshold, so the old answer was a 7mm tapered
+    // cone — a spike standing next to the trunk rather than a support. It gets
+    // a branch or, when no sample on A gives one a legal departure (as here), a
+    // pillar of its own; the consolidation pass merges pillars into chunk trees.
     const result = runAutoPlace(
         [
             makeIsland('A', 0, 0, 40, 30),
@@ -381,23 +397,12 @@ test('runAutoPlace fans sub-threshold overhang candidates instead of standalone 
         { debugSkipAutoBracing: true,  },
     );
 
-    assert.equal(result.placedTrunks, 1, 'o15 fanned instead of becoming a trunk');
-    assert.ok(result.placedLeaves >= 1, 'o15 attached as a leaf');
-    assert.ok(Object.values(getSnapshot().leaves).some((l) => l.origin === 'overhang'),
-        'fanned overhang leaf carries the overhang origin');
-    assert.ok(Object.values(getSnapshot().branches).every((b) => b.origin !== 'overhang'),
-        'overhang fanning never branches — leaves only');
+    assertNoLeafPastBranchThreshold();
+    assert.equal(result.placedLeaves, 0, 'no leaf cone: the span is past the threshold');
+    assert.equal(result.placedTrunks, 2, 'o15 stands on the plate instead');
 
-    const placement = result.analytics?.placement;
-    assert.equal(placement?.trunksByKind.standalone, 1, 'only trunk A is standalone (voxel island)');
-    assert.deepEqual(placement?.fanRefusals, {}, 'o15 fanned — no refusal for it');
-    assert.deepEqual(placement?.mergeRefusals, { noHost: 1 }, 'trunk A had no host to merge into');
-
-    const snapshot = getSnapshot();
-    const leaf = Object.values(snapshot.leaves)[0];
-    const tip = leaf?.contactCone?.pos;
-    assert.ok(tip && Math.abs(tip.x - 3) < 0.6 && Math.abs(tip.z - 33) < 0.6,
-        `leaf tip lands on the overhang (x=${tip?.x.toFixed(1)}, z=${tip?.z.toFixed(1)})`);
+    // Both contacts are still supported — the pillar is a real support, not a drop.
+    assert.ok((result.analytics?.areaCoverage ?? 0) >= 0.99, 'both contacts are supported');
 
     setModelMesh('model-a', null);
     disposeHandlers();
@@ -869,7 +874,7 @@ test('grid mode attaches the tips on a flat region instead of dropping most of t
     disposeHandlers();
 });
 
-test('a tip beside a tall thin host is fanned onto it instead of standing alone', () => {
+test('a long fan link becomes a pillar, never a tapered spike', () => {
     resetStore();
     resetKickstandsInState();
     clearHistory();
@@ -903,21 +908,20 @@ test('a tip beside a tall thin host is fanned onto it instead of standing alone'
 
     const result = runAutoPlace([host, neighbour], 'model-a', { debugSkipAutoBracing: true });
 
+    // The link that would carry this tip is ~12mm, past the leaf threshold, and
+    // this host's shaft gives no sample a legal branch departure — so the tip
+    // keeps a pillar. The 12.2mm tapered cone this used to build is exactly the
+    // shape the rule forbids, and a pillar is not worse: one plate contact and
+    // one model contact, the same as any trunk, and the consolidation pass can
+    // still chunk it into the forest.
     assert.equal(result.placedSticks, 0,
-        `the neighbour is carried, not bridged model-to-model (${result.placedSticks} sticks)`);
-    assert.ok(result.placedLeaves + result.placedBranches >= 1,
-        `the neighbour joined the host (${result.placedLeaves} leaves, ${result.placedBranches} branches)`);
+        `never bridged model-to-model (${result.placedSticks} sticks)`);
+    assertNoLeafPastBranchThreshold();
+    assert.equal(result.placedLeaves, 0, 'no leaf cone of the link length');
+    assert.equal(result.placedBranches, 0, 'and no branch this host could carry');
     assert.ok(result.placedTrunks <= 2,
-        `only the host stands on the plate (${result.placedTrunks} trunks)`);
-    // The rescue takes the least drop that clears the angle, not the whole
-    // span it is allowed: 6mm lateral needs a 10.4mm rise at 30°, so the link
-    // should land near 12mm, not at the 16mm rescue cap.
-    const member = result.analytics?.forestReport?.trees
-        .flatMap(t => t.members)
-        .find(m => m.spanMm > 6);
-    assert.ok(member, 'the rescued tip hangs off a real member');
-    assert.ok(member.spanMm <= 13,
-        `the rescue is the shortest legal link, not the longest (${member.spanMm.toFixed(1)}mm at ${member.angleDeg.toFixed(0)}deg)`);
+        `it stands on the plate instead (${result.placedTrunks} trunks)`);
+    assert.ok((result.analytics?.areaCoverage ?? 0) >= 0.99, 'the contact is still supported');
 
     setModelMesh('model-a', null);
     disposeHandlers();

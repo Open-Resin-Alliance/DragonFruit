@@ -307,9 +307,13 @@ test('fanLeafToTrunk routes long island spans to branches', () => {
     }
 });
 
-test('fanLeafToTrunk keeps long overhang spans as leaves', () => {
-    // Same geometry with overhang origin: overhang fanning stays leaves
-    // by rule, even past the branch threshold.
+test('fanLeafToTrunk branches a long overhang span too', () => {
+    // Same geometry with overhang origin. This used to stay a leaf "by rule",
+    // which is how an 11.6mm tapered cone got built and merged: a leaf is a
+    // seg-less cone, so past the branch threshold it stands next to its trunk
+    // as a spindly spike rather than supporting anything. Nothing about a
+    // downward-facing contact makes that acceptable — buildConsolidationBranch
+    // has always built overhang-origin branches.
     const draft = trunkWithShaft('host', 0, 0, 0, 19);
     const fan = fanLeafToTrunk(
         { x: 3, y: 0, z: 18 }, 'm', [sp('host', 0, 0, 12)],
@@ -318,8 +322,11 @@ test('fanLeafToTrunk keeps long overhang spans as leaves', () => {
 
     assert.equal(fan.ok, true, 'fan succeeds');
     if (fan.ok) {
-        assert.equal(fan.kind, 'leaf', 'overhang origin stays a leaf');
-        assert.equal(Object.keys(fan.draft.leaves).length, 1, 'one leaf attached');
+        assert.equal(fan.kind, 'branch', 'a 6.7mm overhang span gets a real shaft');
+        assert.equal(Object.keys(fan.draft.branches).length, 1, 'one branch attached');
+        assert.equal(Object.keys(fan.draft.leaves).length, 0, 'no leaf cone built');
+        assert.equal(Object.values(fan.draft.branches)[0].origin, 'overhang',
+            'and it carries the overhang origin, like the consolidation branches do');
     }
 });
 

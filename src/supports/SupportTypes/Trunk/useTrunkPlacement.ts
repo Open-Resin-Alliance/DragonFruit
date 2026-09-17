@@ -14,7 +14,6 @@ import { calculateSmoothedNormal } from '../../PlacementLogic/PlacementUtils';
 import { getSettings } from '../../Settings/state';
 import { decideGridPlacement } from '../../PlacementLogic/Grid';
 import { buildContactBridge, selectTypeForPlacement, type SupportTypeId, updateSupportEntity } from '../../supportTypeRegistry';
-import { shaftVerticalCos } from '../Stick/stickVerticality';
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
 import { isContactDiskHudInteractionActive, shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { perfMark, perfMeasureWithSpike, perfEndFrame } from '../../PlacementLogic/Pathfinding/pathfindingPerf';
@@ -109,8 +108,9 @@ export function buildCavityBridge(
     // directly below is missing — a punched drain hole, a gap between
     // features — the vertical ray escapes and the tip used to end up with no
     // support at all, even though the floor a couple of mm to the side is
-    // right there. Nearest radius wins; the 20° verticality gate below (and
-    // the shaft-blocked check after the build) bound how far the cant may go.
+    // right there. Nearest radius wins; the kind's own verticality gate — 20°
+    // for a stick, 45° for a twig, both enforced in the type's registered
+    // builder — and the shaft-blocked check after the build bound the cant.
     const settings = getSettings();
     const cutoff = settings.meshToMesh?.stickVsTwigCutoffMm ?? 5;
     const NEAR_RADII_MM = [0, 0.75, 1.5, 2.25] as const;
@@ -176,19 +176,6 @@ export function buildCavityBridge(
     if (!built) return null;
     const entity = built.entity as BridgingEntity;
 
-    // Twigs are short bridges, not lateral props: the visible shaft
-    // (socket to socket — a sidewall landing's standoff is what shoves a
-    // grazing twig sideways) must stay somewhat vertical, like sticks. A
-    // twig much past 45° hangs its island off a whisker that cannot carry
-    // peel, and it renders as the near-horizontal struts in the preview.
-    // Looser than the 20° stick gate — which the stick's registered builder
-    // enforces — because a 1–2 mm strut tolerates cant a 12 mm column cannot;
-    // pointed tips propped off a nearby wall with a real drop underneath
-    // still pass.
-    if (kind === 'twig' && shaftVerticalCos(entity) < Math.cos((CAVITY_TWIG_MAX_SHAFT_ANGLE_DEG * Math.PI) / 180)) {
-        return null;
-    }
-
     // The shaft must not pierce the model. Matches the trunk post-cull
     // clearance (radius + 0.15mm) and catches the bridges that shot straight
     // through geometry in auto supports.
@@ -207,13 +194,6 @@ export function buildCavityBridge(
 }
 
 type CavityBridgeBuildResult = NonNullable<ReturnType<typeof buildCavityBridge>>;
-
-// A cavity twig bridges down, not sideways: a shaft canted much past this
-// from vertical is a lateral whisker to a sidewall, not a bridge. Looser than
-// the 20° stick gate — measured thin-gap and floor twigs build at ≤17°,
-// pointed-tip props off a nearby wall with a real drop land 23–43°, the
-// grazers at 48° and up (calibration knob).
-export const CAVITY_TWIG_MAX_SHAFT_ANGLE_DEG = 45;
 
 export function useTrunkPlacementV2() {
     // Debounce tuned for human hand drift (~1-2mm) and 60fps target.

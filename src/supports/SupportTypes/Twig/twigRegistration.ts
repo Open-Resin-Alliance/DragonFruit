@@ -3,6 +3,7 @@ import { registerContactBridgeBuilder, registerKnotDiameterRule } from '../../su
 import type { Twig } from '../../types';
 import { resolveTwigDiameterAtSegmentT, twigJointDiameterForLocalDiameter } from './twigTaper';
 import { buildTwig } from './twigBuilder';
+import { isTwigShaftVerticalEnough } from './twigVerticality';
 
 // Twigs taper along their length, so a knot on one is sized from the taper
 // rather than the generic segment-diameter rule.
@@ -23,5 +24,7 @@ registerContactBridgeBuilder('twig', (request) => {
         tipContactDiameterMm: request.tipContactDiameterMm,
         mesh: request.mesh as THREE.Mesh | undefined,
     });
-    return twig ? { entity: twig, error } : null;
+    // Enforced here rather than at each caller: a twig that hangs its island off
+    // a near-horizontal whisker is not a support, whichever path built it.
+    return twig && isTwigShaftVerticalEnough(twig) ? { entity: twig, error } : null;
 });

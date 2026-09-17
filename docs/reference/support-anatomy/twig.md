@@ -23,6 +23,11 @@ A twig is a model-to-model support that uses one continuous body between two con
 
 - Twigs do not use knots.
 - Twigs do not attach to support shafts.
+- The built shaft must stand within 45° of vertical. A twig's ends are contact
+  disks, and the standoff a sloped or sidewall landing needs can push the
+  sockets far off the line between the two contacts; past that cant the member
+  is a whisker that carries no load, so it is refused rather than placed.
+  Sticks, which bridge longer spans, are held to 20°.
 
 ## Related
 
