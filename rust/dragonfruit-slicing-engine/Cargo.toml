@@ -26,5 +26,7 @@ crossbeam-channel = "0.5.15"
 sysinfo = "0.38"
 
 md-5 = "0.10"
+
+lumen-format = { path = "../../plugins/lumen/rust/lumen" }
 [dev-dependencies]
 

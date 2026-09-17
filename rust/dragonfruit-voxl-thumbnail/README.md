@@ -1,33 +1,53 @@
 # dragonfruit-voxl-thumbnail
 
-Cross-platform OS thumbnail provider for **VOXL V2** scene files.
+Cross-platform OS thumbnail provider for **VOXL V2** scene files and **LUMEN v1** print files.
 
-Extracts the embedded `ora.preview` scene thumbnail from a VOXL V2 binary file and surfaces it in the OS file browser (Windows Explorer, macOS Finder, GNOME/KDE file managers).
+Extracts the embedded `ora.preview` scene thumbnail from a VOXL V2 binary file — or the `PREV` preview from a LUMEN v1 print file — and surfaces it in the OS file browser (Windows Explorer, macOS Finder, GNOME/KDE file managers).
 
 ## Architecture
 
 ```
 dragonfruit-voxl-thumbnail/
-├── src/lib.rs              Core Rust library (VOXL V2 → PNG extraction)
+├── src/lib.rs              Core Rust library (VOXL V2 / LUMEN v1 → PNG extraction)
 ├── src/main.rs             CLI thumbnailer binary (all platforms)
 ├── windows-com/            Windows IThumbnailProvider COM DLL
 ├── macos-qlext/            macOS QuickLook Thumbnail Extension (Swift)
 └── platform/
-    ├── linux/              Freedesktop thumbnailer + MIME type
+    ├── linux/              Freedesktop thumbnailers + MIME types (both containers)
     ├── macos/              macOS install/uninstall scripts
     └── windows/            Windows registry registration scripts
 ```
 
 ## How It Works
 
-VOXL V2 files embed a scene thumbnail as a base64-encoded PNG inside the **EXTD** (extensions) chunk under the key `ora.preview.dataBase64`. The core library:
+The provider has no per-format code. Every container DragonFruit writes **declares**
+where its preview lives - `plugins/<id>/outputFileTypes.json` for a plugin, and
+`src/config/core-output-file-types.json` for the core `.voxl` scene - and
+`scripts/generate-plugin-registry.mjs` validates those declarations and compiles them
+into one table:
 
-1. Reads the 16-byte VOXL header + chunk directory (only ~100 bytes)
-2. Seeks directly to the EXTD chunk (skips all mesh data)
-3. Decompresses if zlib-compressed
-4. Parses JSON → extracts `ora.preview.dataBase64`
-5. Base64-decodes to raw PNG
-6. Optionally resizes to the requested thumbnail dimensions
+```
+generated_output_file_types.json   read by this crate's interpreter (src/locator.rs)
+generated/dragonfruit-mime.xml     the freedesktop MIME types
+generated/dragonfruit.thumbnailer  the freedesktop thumbnailer entry
+generated/VoxlThumbnailExtension-Info.plist  the QuickLook appex's plist
+generated/macos-exported-utis.plist          the UTIs the dev host app exports
+```
+
+The declaration describes the mechanics rather than the format: the magic, an optional
+version gate, where the chunk table is and how its entries are laid out, which chunk
+types hold a preview, and how to get a PNG out of the payload - stored in the chunk, or
+base64 inside its JSON, optionally zlib-compressed, optionally ranked by a role in the
+entry flags with sealed ones skipped.
+
+**VOXL V2** keeps its preview in the `EXTD` chunk as a base64 PNG under
+`ora.preview.dataBase64`, zlib-compressed or not; **LUMEN v1** keeps PNG previews in
+`PREV` chunks whose role (large, small, icon) sits in the low bits of the descriptor
+flags, behind a `LEND` trailer. Both are *declarations* in the table above, and adding a
+third container means writing one JSON file.
+
+The reader-based implementation only ever reads headers, chunk tables, and the one
+chunk that carries the image.
 
 ---
 
@@ -76,9 +96,11 @@ sudo platform/linux/install.sh
 
 This installs:
 
-- `/usr/local/bin/dragonfruit-voxl-thumbnailer` — CLI binary
-- `/usr/share/mime/packages/dragonfruit-voxl.xml` — MIME type for `.voxl`
-- `/usr/share/thumbnailers/dragonfruit-voxl.thumbnailer` — thumbnailer entry
+- `/usr/local/bin/dragonfruit-voxl-thumbnailer` — CLI binary (both containers)
+- `/usr/share/mime/packages/dragonfruit.xml` — MIME types for every declared file type
+- `/usr/share/thumbnailers/dragonfruit.thumbnailer` — thumbnailer entry covering them
+
+`src-tauri/tauri.linux.conf.json` ships the same set in the `.deb`, with the binary at `/usr/bin/`.
 
 Uninstall:
 
@@ -145,7 +167,10 @@ For Tauri app distribution, embed the `.appex` in the app bundle:
 DragonFruit.app/Contents/PlugIns/VoxlThumbnailExtension.appex
 ```
 
-And add the UTI declaration to the app's `Info.plist` (see `macos-qlext/Sources/VoxlThumbnailExtension/Info.plist` for the `UTImportedTypeDeclarations` block).
+The extension's `Info.plist` and its file-type table are generated from the declarations
+(`rust/dragonfruit-voxl-thumbnail/generated/`), so the app's own `Info.plist` needs the
+same UTI declarations only when it ships separately from the extension - see
+`macos-qlext/README.md`.
 
 Uninstall:
 
@@ -158,17 +183,19 @@ platform/macos/uninstall.sh
 ## CLI Usage
 
 ```
-dragonfruit-voxl-thumbnailer <input.voxl> <output.png> [size]
-dragonfruit-voxl-thumbnailer --size 512 input.voxl output.png
+dragonfruit-voxl-thumbnailer <input> <output.png> [size]
+dragonfruit-voxl-thumbnailer --size 512 <input> <output.png>
 ```
 
-| Argument | Description                            |
-| -------- | -------------------------------------- |
-| `input`  | Path to VOXL V2 file                   |
-| `output` | Output PNG path                        |
-| `size`   | Max dimension in pixels (default: 256) |
+| Argument | Description                                      |
+| -------- | ------------------------------------------------ |
+| `input`  | Path to a VOXL V2 scene or a LUMEN v1 print file |
+| `output` | Output PNG path                                  |
+| `size`   | Max dimension in pixels (default: 256)           |
 
 The CLI also supports the freedesktop thumbnailer calling convention (`%i %o %s`).
+
+To verify an install, run it directly on either container: it writes the same PNG the shell would show, and exits non-zero with the reason on stderr when a file carries no readable preview.
 
 ---
 
@@ -178,4 +205,4 @@ For bundled distribution, the Tauri installer can:
 
 1. **Windows** — Run `regsvr32` on the embedded COM DLL during install, and `regsvr32 /u` during uninstall via `tauri.conf.json` NSIS hooks.
 2. **macOS** — Embed the `.appex` in `Contents/PlugIns/` and declare the UTI in the app's `Info.plist`.
-3. **Linux** — Ship the `.thumbnailer` and `.xml` files in the `.deb`/`.AppImage` and run `update-mime-database` in post-install.
+3. **Linux** — Ship the `.thumbnailer` and `.xml` files for both containers in the `.deb`/`.AppImage` and run `update-mime-database` in post-install.

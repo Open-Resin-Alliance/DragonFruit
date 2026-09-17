@@ -1,4 +1,10 @@
-//! Windows COM DLL implementing `IThumbnailProvider` for `.voxl` files.
+//! Windows COM DLL implementing `IThumbnailProvider` for the files DragonFruit
+//! writes: `.voxl` scenes and `.lumen` prints.
+//!
+//! The class is registered against every extension the provider answers for, but it
+//! decides what a file is from its content — a stream arrives here without a path —
+//! so the two lists have to stay in step: an extension the extractor handles and
+//! this file does not register simply never gets asked.
 //!
 //! Build:
 //!   cargo build --release -p dragonfruit-voxl-thumbnail-com
@@ -28,14 +34,29 @@ use windows::Win32::UI::Shell::*;
 use windows_core::{IUnknown, Interface};
 
 // ── COM class identifier ──────────────────────────────────────────────────
+// The GUID is the provider's identity in the registry and must not change: an
+// upgrade re-registers the same class in place, where a new GUID would leave the
+// previous version's registration behind pointing at a file that no longer exists.
 // {8B4F2E3A-7C1D-4A5E-B9F0-6D2E8C3A1B5F}
-const CLSID_VOXL_THUMBNAIL: GUID = GUID::from_u128(0x8B4F2E3A_7C1D_4A5E_B9F0_6D2E8C3A1B5F);
+const CLSID_THUMBNAIL_PROVIDER: GUID = GUID::from_u128(0x8B4F2E3A_7C1D_4A5E_B9F0_6D2E8C3A1B5F);
 
 // Thumbnail handler shell extension category
 // {E357FCCD-A995-4576-B01F-234630154E96}
 const CATID_THUMBNAIL_HANDLER: &str = "{E357FCCD-A995-4576-B01F-234630154E96}";
 
 const CLSID_STR: &str = "{8B4F2E3A-7C1D-4A5E-B9F0-6D2E8C3A1B5F}";
+
+/// The file types this provider registers for, as the declarations spell them.
+///
+/// Read from the same generated table the extractor dispatches on, so the registered
+/// set cannot drift from the formats the reader knows: a plugin that declares a new
+/// container is registered for it by this DLL without a change here.
+fn supported_extensions() -> Vec<&'static str> {
+    dragonfruit_voxl_thumbnail::declared_file_extensions()
+}
+
+/// The display name the shell shows for this handler.
+const PROVIDER_NAME: &str = "DragonFruit Thumbnail Provider";
 
 // ── Global DLL module handle ──────────────────────────────────────────────
 static mut G_MODULE: HINSTANCE = HINSTANCE(std::ptr::null_mut());
@@ -57,11 +78,11 @@ unsafe extern "system" fn DllMain(
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[implement(IThumbnailProvider, IInitializeWithStream)]
-struct VoxlThumbnailProvider {
+struct ThumbnailProvider {
     data: RefCell<Vec<u8>>,
 }
 
-impl VoxlThumbnailProvider {
+impl ThumbnailProvider {
     fn new() -> Self {
         Self {
             data: RefCell::new(Vec::new()),
@@ -69,7 +90,7 @@ impl VoxlThumbnailProvider {
     }
 }
 
-impl IInitializeWithStream_Impl for VoxlThumbnailProvider_Impl {
+impl IInitializeWithStream_Impl for ThumbnailProvider_Impl {
     fn Initialize(&self, pstream: Option<&IStream>, _grfmode: u32) -> windows::core::Result<()> {
         let stream = pstream.ok_or(E_INVALIDARG)?;
 
@@ -95,7 +116,7 @@ impl IInitializeWithStream_Impl for VoxlThumbnailProvider_Impl {
     }
 }
 
-impl IThumbnailProvider_Impl for VoxlThumbnailProvider_Impl {
+impl IThumbnailProvider_Impl for ThumbnailProvider_Impl {
     fn GetThumbnail(
         &self,
         cx: u32,
@@ -167,9 +188,9 @@ impl IThumbnailProvider_Impl for VoxlThumbnailProvider_Impl {
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[implement(IClassFactory)]
-struct VoxlThumbnailProviderFactory;
+struct ThumbnailProviderFactory;
 
-impl IClassFactory_Impl for VoxlThumbnailProviderFactory_Impl {
+impl IClassFactory_Impl for ThumbnailProviderFactory_Impl {
     fn CreateInstance(
         &self,
         punkouter: Option<&IUnknown>,
@@ -180,7 +201,7 @@ impl IClassFactory_Impl for VoxlThumbnailProviderFactory_Impl {
             return Err(windows::core::Error::from(CLASS_E_NOAGGREGATION));
         }
 
-        let provider = VoxlThumbnailProvider::new();
+        let provider = ThumbnailProvider::new();
         let unknown: IUnknown = provider.into();
         unsafe { unknown.query(riid, ppvobject) }.ok()
     }
@@ -205,11 +226,11 @@ pub unsafe extern "system" fn DllGetClassObject(
     }
     *ppv = std::ptr::null_mut();
 
-    if *rclsid != CLSID_VOXL_THUMBNAIL {
+    if *rclsid != CLSID_THUMBNAIL_PROVIDER {
         return CLASS_E_CLASSNOTAVAILABLE;
     }
 
-    let factory = VoxlThumbnailProviderFactory;
+    let factory = ThumbnailProviderFactory;
     let unknown: IUnknown = factory.into();
     unknown.query(riid, ppv)
 }
@@ -255,12 +276,7 @@ unsafe fn register() -> windows::core::Result<()> {
 
     // HKCU\SOFTWARE\Classes\CLSID\{GUID}
     let clsid_path = format!("CLSID\\{}", CLSID_STR);
-    set_registry_value_in(
-        hkcu_classes,
-        &clsid_path,
-        None,
-        "DragonFruit VOXL Thumbnail Provider",
-    )?;
+    set_registry_value_in(hkcu_classes, &clsid_path, None, PROVIDER_NAME)?;
 
     // HKCU\SOFTWARE\Classes\CLSID\{GUID}\InProcServer32
     let inproc = format!("{}\\InProcServer32", clsid_path);
@@ -269,18 +285,23 @@ unsafe fn register() -> windows::core::Result<()> {
 
     // Register the thumbnail handler in multiple standard lookup locations.
     // Explorer may resolve via extension, ProgID, or SystemFileAssociations
-    // depending on current UserChoice / association state.
-    let shellex_ext = format!(".voxl\\ShellEx\\{}", CATID_THUMBNAIL_HANDLER);
-    set_registry_value_in(hkcu_classes, &shellex_ext, None, CLSID_STR)?;
+    // depending on current UserChoice / association state, so every format this
+    // provider answers for is registered in both of the extension-based ones.
+    for ext in supported_extensions() {
+        let shellex_ext = format!("{ext}\\ShellEx\\{}", CATID_THUMBNAIL_HANDLER);
+        set_registry_value_in(hkcu_classes, &shellex_ext, None, CLSID_STR)?;
 
+        let shellex_system = format!(
+            "SystemFileAssociations\\{ext}\\ShellEx\\{}",
+            CATID_THUMBNAIL_HANDLER
+        );
+        set_registry_value_in(hkcu_classes, &shellex_system, None, CLSID_STR)?;
+    }
+
+    // A scene carries a ProgID of its own; a print file has none, and reaches the
+    // provider through the two keys above.
     let shellex_progid = format!("VoxlFile\\shellex\\{}", CATID_THUMBNAIL_HANDLER);
     set_registry_value_in(hkcu_classes, &shellex_progid, None, CLSID_STR)?;
-
-    let shellex_system = format!(
-        "SystemFileAssociations\\.voxl\\ShellEx\\{}",
-        CATID_THUMBNAIL_HANDLER
-    );
-    set_registry_value_in(hkcu_classes, &shellex_system, None, CLSID_STR)?;
 
     // Windows 11 (and hardened Win10) requires the CLSID to appear in the
     // "Approved" extensions list, otherwise Explorer silently ignores it.
@@ -288,7 +309,7 @@ unsafe fn register() -> windows::core::Result<()> {
         HKEY_CURRENT_USER,
         "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Shell Extensions\\Approved",
         Some(CLSID_STR),
-        "DragonFruit VOXL Thumbnail Provider",
+        PROVIDER_NAME,
     )?;
 
     let _ = RegCloseKey(hkcu_classes);
@@ -300,17 +321,19 @@ unsafe fn unregister() -> windows::core::Result<()> {
         let clsid_path = format!("CLSID\\{}", CLSID_STR);
         let _ = delete_registry_tree(hkcu_classes, &clsid_path);
 
-        let shellex_ext = format!(".voxl\\ShellEx\\{}", CATID_THUMBNAIL_HANDLER);
-        let _ = delete_registry_tree(hkcu_classes, &shellex_ext);
+        for ext in supported_extensions() {
+            let shellex_ext = format!("{ext}\\ShellEx\\{}", CATID_THUMBNAIL_HANDLER);
+            let _ = delete_registry_tree(hkcu_classes, &shellex_ext);
+
+            let shellex_system = format!(
+                "SystemFileAssociations\\{ext}\\ShellEx\\{}",
+                CATID_THUMBNAIL_HANDLER
+            );
+            let _ = delete_registry_tree(hkcu_classes, &shellex_system);
+        }
 
         let shellex_progid = format!("VoxlFile\\shellex\\{}", CATID_THUMBNAIL_HANDLER);
         let _ = delete_registry_tree(hkcu_classes, &shellex_progid);
-
-        let shellex_system = format!(
-            "SystemFileAssociations\\.voxl\\ShellEx\\{}",
-            CATID_THUMBNAIL_HANDLER
-        );
-        let _ = delete_registry_tree(hkcu_classes, &shellex_system);
         let _ = RegCloseKey(hkcu_classes);
     }
 

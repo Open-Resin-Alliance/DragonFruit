@@ -156,7 +156,96 @@ The host reads `GENERATED_BUILTIN_COMPLEX_PLUGIN_FILE_TYPE_HANDLERS` from the ge
 
 ---
 
-### 4.2) Multiple container formats per plugin (optional)
+### 4.2) Scene payloads in a slice job (optional)
+
+A format sometimes needs data the app owns rather than data a setting names - LUMEN's
+`embedVoxlScene` wants the editor scene serialized into the file. Declare the pair in
+`pluginDefinition.ts` and the host bakes it:
+
+```ts
+jobMetadataPayloads: [
+  {
+    settingPath: 'lumen.embedVoxlScene',   // merged-settings metadataPath; `true` asks for it
+    payloadPath: 'lumen.voxlSceneBase64',  // metadata path the base64 payload lands on
+    payload: 'voxl-scene',                 // the kind of payload; the host implements the kinds it knows
+  },
+],
+```
+
+Notes:
+
+- The host owns the kinds. `voxl-scene` is the serialized editor scene (VOXL V2 bytes,
+  base64) and is the only kind today; a kind a build does not implement is skipped, so a
+  plugin may declare something newer than the app without failing the slice.
+- The bake is best-effort: a setting that is off, no models to serialize, or a
+  serialization failure all leave the metadata unchanged rather than half-written. Your
+  encoder decides what a missing payload means for a job - LUMEN refuses one whose
+  setting asked for a scene it did not receive.
+- No host code names your plugin: the declaration is data.
+
+### 4.3) Output file types and shell thumbnails (optional)
+
+A format the plugin *writes* can declare itself, which is what gives it a thumbnail in
+Explorer, Finder and the freedesktop file managers without any host code naming it.
+Add `outputFileTypes.json` beside `pluginDefinition.ts`:
+
+```json
+[
+  {
+    "fileExtension": ".example",
+    "mimeType": "application/vnd.example.print",
+    "uti": "org.openresinalliance.example",
+    "displayName": "Example Print",
+    "thumbnail": {
+      "magic": "EXMP",
+      "version": { "type": "u32", "at": 4, "equals": 1 },
+      "directory": {
+        "offset": { "type": "u64", "at": 8 },
+        "count": { "type": "u32", "at": 16 },
+        "entrySize": 32
+      },
+      "entry": {
+        "type": { "at": 0 },
+        "offset": { "type": "u64", "at": 4 },
+        "size": [{ "type": "u64", "at": 20 }, { "type": "u64", "at": 12 }],
+        "flags": { "type": "u32", "at": 28, "sealedBit": 4, "roleMask": 15, "roleOrder": [1, 0, 2, 3] }
+      },
+      "previewChunks": ["PREV"],
+      "payload": { "encoding": "png" },
+      "trailer": { "magic": "LEND", "size": 8 }
+    }
+  }
+]
+```
+
+The `thumbnail` locator is the grammar the native providers interpret - the type in
+`PluginThumbnailLocator` (`complexPluginContracts.ts`) is its schema, and
+`src/config/core-output-file-types.json` is the core `.voxl` declaration to copy from.
+In short: a magic, an optional version gate, where the chunk table is (fixed, or a
+field in the header), how its entries are laid out, which chunk types hold a preview,
+and how to get a PNG out of the payload - stored in the chunk, or base64 inside its
+JSON, optionally zlib-compressed, optionally ranked by a role in the entry flags.
+
+Notes:
+
+- **The registry generator validates the declaration** (field widths and offsets, role
+  handling, payload encoding, duplicate extensions across plugins) and compiles it into
+  the table the providers read. Run `npm run generate:plugin-registry`, which the build
+  hooks already do.
+- **It has to be data, not code.** The macOS QuickLook extension cannot spawn a process,
+  so a plugin's preview is found by interpreting this grammar in the provider - a
+  format whose preview must be *computed* rather than found (a mask rendered on the
+  fly, a vendor pixel format) cannot be described here and is not supported yet.
+- **A preview is a `PREV`-style chunk of PNG bytes.** If the format stores several,
+  list their roles in `roleOrder` and the largest is used; if a payload can be sealed,
+  name `sealedBit` and sealed previews are skipped rather than failed on.
+- The Windows class, the QuickLook plist and the Linux MIME/thumbnailer entry are all
+  generated from these declarations, so nothing else has to change to ship a new one.
+- **The file association stays the app's.** These declarations drive the *preview* and
+  the type identifiers; which application opens a file is the app's own statement about
+  itself, and lives in its `bundle.fileAssociations` (`src-tauri/tauri.conf.json`).
+
+### 4.4) Multiple container formats per plugin (optional)
 
 If your plugin supports multiple container formats (e.g., Anycubic with both AFF and AZFF), provide:
 
@@ -198,14 +287,20 @@ pub fn create_plugin_encoder() -> Vec<Box<dyn FormatEncoder>> {
 
 The function returns multiple encoder instances, one per format. Each encoder's `output_format()` method must match at least one extension in `formats.json`.
 
-### 4.3) Required Cargo crates for slicer encoder (optional)
+### 4.5) Required Cargo crates for slicer encoder (optional)
 
 If your encoder implementation requires extra Rust crates beyond the core `dragonfruit-slicing-engine` deps, declare them in:
 
 - `plugins/<vendor>/slicing/rust/requiredCrates.toml`
   - Schema: TOML matching Cargo.toml `[dependencies]` and `[optional-dependencies]` sections
+  - A dependency is either a version spec (`ndarray = "0.15"`) or a path into your own
+    checkout (`my-crate = { path = "../rust/my-crate" }`), relative to the file that
+    declares it — for a crate that is not on crates.io, such as a reference encoder that
+    ships with the plugin. Path dependencies are not version-checked; the path has to
+    exist at generation time.
   - Generator validates version conflicts (strict: incompatible versions will fail the build)
-  - Generator auto-merges into `dragonfruit-slicing-engine/Cargo.toml`
+  - Generator auto-merges into `dragonfruit-slicing-engine/Cargo.toml`, rewriting a
+    declared path so it resolves from the engine crate
   - All declared crates become available to encoder code via `use ...`
 
 **Example** (`plugins/anycubic/slicing/rust/requiredCrates.toml`):
@@ -307,7 +402,9 @@ Optional but recommended:
 | `create_plugin_encoder() declares slicerEncoder=true but returns no encoders`       | Encoder function returns empty vec                                                              | Return at least one encoder instance                                                            |
 | `requiredCrates.toml exists but is not valid TOML`                                  | Malformed TOML in requiredCrates.toml                                                           | Fix TOML syntax (test with `toml-cli`)                                                          |
 | `requiredCrates.toml: crate X version conflict (plugin A: 0.5, plugin B: 0.6)`      | Two plugins declare same crate with incompatible versions                                       | Coordinate plugin versions or split into separate builds                                        |
-| `requiredCrates.toml declares crate with invalid semver`                            | Version string not valid semver (e.g., `latest`)                                                | Use explicit version constraint (e.g., `^1.0` or `0.5`)                                         |
+| `requiredCrates.toml declares crate with invalid semver`                            | Version string not valid semver (e.g., `latest`)                                                | Use explicit version constraint (e.g., `^1.0` or `0.5`), or `{ path = "…" }` for a local crate |
+| `requiredCrates.toml: crate X has an empty path`                                     | `{ path = "" }` declares nothing                                                                | Point it at the crate directory                                                                  |
+| `requiredCrates.toml: crate X is an inline table this registry understands only as { path = "..." }` | An inline table with keys the generator does not support (e.g. `features`)       | Declare a plain version spec, or move the features into the crate's own manifest                 |
 
 ---
 

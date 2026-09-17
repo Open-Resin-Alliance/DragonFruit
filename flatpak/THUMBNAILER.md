@@ -4,14 +4,31 @@
 
 DragonFruit ships `dragonfruit-voxl-thumbnailer` (a small Rust binary at
 `rust/dragonfruit-voxl-thumbnail/`) that host file managers (Nautilus, Dolphin,
-Nemo, Thunar) invoke to render thumbnails of `.voxl` files. On `.deb`/`.rpm`
-installs the binary goes to `/usr/bin/` and a `.thumbnailer` file at
-`/usr/share/thumbnailers/` registers it. Should the Flatpak ship this too?
+Nemo, Thunar) invoke to render thumbnails of `.voxl` scene files and `.lumen`
+print files — one binary, both containers, dispatched on the file magic. On
+`.deb`/`.rpm` installs the binary goes to `/usr/bin/` and a `.thumbnailer` file
+per container at `/usr/share/thumbnailers/` registers it. Should the Flatpak
+ship this too?
 
 ## TL;DR — **No**
 
 Dropped from the Flatpak build in v0.1.3. Users who want file-manager
-thumbnails install the `.deb`/`.rpm` bundle instead. Rationale below.
+thumbnails install the `.deb`/`.rpm` bundle instead. The reasoning below is
+about where the binary runs, not what it parses, so it holds for both
+containers. Rationale below.
+
+## What the Flatpak ships instead
+
+The decision covers the *thumbnailer*, not the file types. MIME registration is
+a data-file concern the sandbox handles fine: the manifest installs the generated
+`dragonfruit-mime.xml` as
+`/app/share/mime/packages/org.openresinalliance.dragonfruit.xml`, so the scene
+format (`application/vnd.dragonfruit.voxl+json`, aliased to `application/x-voxl`)
+and the print format (`application/vnd.openresin.lumen`, aliased to
+`application/x-lumen`) are both known inside the sandbox. What the
+Flatpak does **not** ship is the binary those `.thumbnailer` entries point at,
+nor the entries themselves — and without them no host file manager will run the
+extractor for either container.
 
 ## Why host file managers cannot call into a Flatpak
 
@@ -52,6 +69,9 @@ Document in `flatpak/README.md` (done):
 > sandbox boundary to call a thumbnailer binary. If you want thumbnails in
 > Nautilus/Dolphin/Nemo, install the `.deb` or `.rpm` instead.
 
+The omission covers both containers: inside a Flatpak install, neither a
+`.voxl` scene nor a `.lumen` print shows a file-manager thumbnail.
+
 Re-evaluate when either:
 - xdg-desktop-portal gains a thumbnailer portal (likely years away), or
 - DragonFruit offers thumbnails via alternative means (e.g., GVfs-visible
@@ -67,5 +87,7 @@ in their Flatpaks).
 ## Related files
 
 - `rust/dragonfruit-voxl-thumbnail/` — source (kept; used for `.deb`/`.rpm`)
+- the generated `dragonfruit-mime.xml` (`rust/dragonfruit-voxl-thumbnail/generated/`) —
+  the MIME registrations the Flatpak does ship (see above)
 - `src-tauri/tauri.linux.conf.json` — `.deb` bundle config that ships the
   thumbnailer on non-Flatpak Linux installs

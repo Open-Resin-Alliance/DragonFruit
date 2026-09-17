@@ -16,7 +16,6 @@ import {
     normalizeFormatVersion,
     normalizeSettingsMode,
     normalizeWebcamRotationDeg,
-    DEFAULT_OUTPUT_FORMAT,
     DEFAULT_WEBCAM_ROTATION_DEG,
 } from '@/features/profiles/outputFormatUtils';
 
@@ -434,7 +433,8 @@ function sanitizeLocalSettingsByOutput(input: unknown): Record<string, LocalMate
     Object.entries(source).forEach(([outputFormatRaw, value]) => {
         const outputFormat = normalizeOutputFormat(outputFormatRaw);
         const sanitized = sanitizeLocalMaterialSettingsMap(value);
-        if (!sanitized) return;
+        // A key that is not a format has nothing to key settings by.
+        if (!sanitized || !outputFormat) return;
         next[outputFormat] = sanitized;
     });
 
@@ -502,6 +502,9 @@ function resolveMaterialProfileWithLocalSettings(
     if (!printerProfile) return materialProfile;
 
     const normalizedOutput = normalizeOutputFormat(printerProfile.display.outputFormat);
+    // A printer profile with no resolvable format has no plugin-owned material
+    // settings to apply, so the material stays as it is.
+    if (!normalizedOutput) return materialProfile;
     const outputWithoutDot = normalizedOutput.replace(/^\./, '');
     const adapter = getProfileLocalMaterialSettingsAdapter(
         normalizedOutput,
@@ -871,7 +874,7 @@ const BUILTIN_PRINTER_PRESETS: PrinterPreset[] = (printerPresetsData as PrinterP
     ...preset,
     display: {
         ...preset.display,
-        outputFormat: normalizeOutputFormat(preset.display?.outputFormat),
+        outputFormat: normalizeOutputFormat(preset.display?.outputFormat) ?? '',
         formatVersion: normalizeFormatVersion((preset.display as { formatVersion?: unknown } | undefined)?.formatVersion),
         settingsMode: normalizeSettingsMode((preset.display as { settingsMode?: unknown } | undefined)?.settingsMode),
         webcamRotationDeg: normalizeWebcamRotationDeg(
@@ -1136,7 +1139,9 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
                     display: {
                         resolutionX: Number(rawDisplay?.resolutionX) || fallbackDisplay?.resolutionX || 2560,
                         resolutionY: Number(rawDisplay?.resolutionY) || fallbackDisplay?.resolutionY || 1620,
-                        outputFormat: normalizeOutputFormat(rawDisplay?.outputFormat ?? fallbackDisplay?.outputFormat),
+                        outputFormat: normalizeOutputFormat(rawDisplay?.outputFormat)
+                            ?? normalizeOutputFormat(fallbackDisplay?.outputFormat)
+                            ?? '',
                         formatVersion: normalizeFormatVersion(rawDisplay?.formatVersion ?? fallbackDisplay?.formatVersion),
                         settingsMode: normalizeSettingsMode(rawDisplay?.settingsMode ?? fallbackDisplay?.settingsMode),
                         webcamRotationDeg: normalizeWebcamRotationDeg(
@@ -1617,7 +1622,7 @@ export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>)
         display: {
             resolutionX: partial?.display?.resolutionX ?? 2560,
             resolutionY: partial?.display?.resolutionY ?? 1620,
-            outputFormat: normalizeOutputFormat(partial?.display?.outputFormat),
+            outputFormat: normalizeOutputFormat(partial?.display?.outputFormat) ?? '',
             formatVersion: normalizeFormatVersion(partial?.display?.formatVersion),
             settingsMode: normalizeSettingsMode(partial?.display?.settingsMode),
             webcamRotationDeg: normalizeWebcamRotationDeg(
@@ -1741,7 +1746,7 @@ export function addPrinterProfileFromPreset(presetId: string): string {
         display: {
             resolutionX: preset.display.resolutionX,
             resolutionY: preset.display.resolutionY,
-            outputFormat: normalizeOutputFormat(preset.display.outputFormat),
+            outputFormat: normalizeOutputFormat(preset.display.outputFormat) ?? '',
             formatVersion: normalizeFormatVersion((preset.display as { formatVersion?: unknown }).formatVersion),
             settingsMode: normalizeSettingsMode((preset.display as { settingsMode?: unknown }).settingsMode),
             webcamRotationDeg: normalizeWebcamRotationDeg(
@@ -1934,7 +1939,9 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
                 ? {
                     resolutionX: Number(appliedUpdates.display.resolutionX) || profile.display.resolutionX,
                     resolutionY: Number(appliedUpdates.display.resolutionY) || profile.display.resolutionY,
-                    outputFormat: normalizeOutputFormat(appliedUpdates.display.outputFormat ?? profile.display.outputFormat),
+                    outputFormat: normalizeOutputFormat(appliedUpdates.display.outputFormat)
+                        ?? normalizeOutputFormat(profile.display.outputFormat)
+                        ?? profile.display.outputFormat,
                     formatVersion: normalizeFormatVersion(appliedUpdates.display.formatVersion ?? profile.display.formatVersion),
                     settingsMode: normalizeSettingsMode(appliedUpdates.display.settingsMode ?? profile.display.settingsMode),
                     webcamRotationDeg: normalizeWebcamRotationDeg(
@@ -2315,7 +2322,7 @@ export function importPrinterBundle(payload: unknown): string {
         display: {
             resolutionX: sourcePrinter.display?.resolutionX ?? 2560,
             resolutionY: sourcePrinter.display?.resolutionY ?? 1620,
-            outputFormat: normalizeOutputFormat(sourcePrinter.display?.outputFormat),
+            outputFormat: normalizeOutputFormat(sourcePrinter.display?.outputFormat) ?? '',
             formatVersion: normalizeFormatVersion(sourcePrinter.display?.formatVersion),
             settingsMode: normalizeSettingsMode(sourcePrinter.display?.settingsMode),
             webcamRotationDeg: normalizeWebcamRotationDeg(
@@ -2768,7 +2775,9 @@ export function applyOfficialPrinterProfileUpdate(printerProfileId: string): App
                     display: {
                         resolutionX: preset.display.resolutionX,
                         resolutionY: preset.display.resolutionY,
-                        outputFormat: normalizeOutputFormat(preset.display.outputFormat),
+                        outputFormat: normalizeOutputFormat(preset.display.outputFormat)
+                            ?? normalizeOutputFormat(item.display.outputFormat)
+                            ?? item.display.outputFormat,
                         formatVersion: normalizeFormatVersion((preset.display as { formatVersion?: unknown }).formatVersion),
                         settingsMode: normalizeSettingsMode((preset.display as { settingsMode?: unknown }).settingsMode),
                         mirrorX: normalizeMirrorFlag((preset.display as { mirrorX?: unknown }).mirrorX, false),

@@ -1970,6 +1970,13 @@ function resolveEffectiveSettings(options: RasterLayerZipExportOptions): Effecti
     printerProfile: options.printerProfile,
     materialProfile: options.materialProfile,
   });
+  // Same rule as the orchestrator: an unresolved format is an error, never another
+  // format's settings. `resolveEffectiveSettings` is reached from the same export.
+  if (!resolvedFormat) {
+    throw new Error(
+      `No encoder is installed for "${options.printerProfile.display.outputFormat}".`,
+    );
+  }
   const usesPluginOwnedEncoding = resolvedFormat.ownership === 'plugin';
   const xPackingStrategy = resolvedFormat.xPackingStrategy ?? 'none';
 

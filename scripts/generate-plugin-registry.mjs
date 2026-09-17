@@ -14,6 +14,28 @@ const tsGeneratedFileTypeHandlersPath = path.join(repoRoot, 'src', 'features', '
 const rustGeneratedPath = path.join(repoRoot, 'src-tauri', 'src', 'generated_builtin_plugins.rs');
 const rustSlicerGeneratedEncodersPath = path.join(repoRoot, 'rust', 'dragonfruit-slicing-engine', 'src', 'encoders', 'generated_plugin_encoders.rs');
 const cargoAuditPath = path.join(repoRoot, 'src-tauri', 'generated_crate_requirements.toml');
+const coreOutputFileTypesPath = path.join(repoRoot, 'src', 'config', 'core-output-file-types.json');
+// The shell thumbnail providers are native and cannot load plugin code, so the file
+// types every plugin writes are compiled into one table the providers read: the
+// Windows COM DLL and the CLI `include_str!` it, and the QuickLook extension is
+// shipped the same bytes. Regenerate with `npm run generate:plugin-registry`.
+const providerOutputFileTypesPath = path.join(
+      repoRoot,
+      'rust',
+      'dragonfruit-voxl-thumbnail',
+      'src',
+      'generated_output_file_types.json',
+);
+// The platform registrations are generated from the same declarations, so a new
+// container reaches Explorer, Finder and the freedesktop thumbnailers without any of
+// these files being edited by hand. Everything under a `generated/` directory, plus
+// `**/generated*`, is gitignored: regenerate before building.
+const generatedDir = path.join(repoRoot, 'rust', 'dragonfruit-voxl-thumbnail', 'generated');
+const linuxMimePath = path.join(generatedDir, 'dragonfruit-mime.xml');
+const linuxThumbnailerPath = path.join(generatedDir, 'dragonfruit.thumbnailer');
+const macosInfoPlistPath = path.join(generatedDir, 'VoxlThumbnailExtension-Info.plist');
+const macosExportedUtisPath = path.join(generatedDir, 'macos-exported-utis.plist');
+const slicerEngineDir = path.join(repoRoot, 'rust', 'dragonfruit-slicing-engine');
 
 function toImportAlias(pluginId) {
       return `${pluginId.replace(/[^a-zA-Z0-9]+/g, '_').replace(/^([0-9])/, '_$1')}Definition`;
@@ -140,8 +162,45 @@ function enforceFormatsJsonConsistency(pluginId, formatsMetadata) {
       }
 }
 
+// Resolve one dependency value. A plain value is a semver spec; an inline table
+// with `path` points into the plugin's own checkout, which is how a plugin whose
+// encoder needs a crate that is not on crates.io declares it. Returns either the
+// version string or `{ path, absolute }`, and throws on anything else.
+function parseDependencyValue(rawValue, key, pluginId, tomlDir) {
+      const cleanValue = rawValue.trim();
+
+      const pathTable = cleanValue.match(/^\{\s*path\s*=\s*(.+?)\s*,?\s*\}$/);
+      if (pathTable) {
+            let declared = pathTable[1].trim();
+            if ((declared.startsWith('"') && declared.endsWith('"')) ||
+                  (declared.startsWith("'") && declared.endsWith("'"))) {
+                  declared = declared.slice(1, -1);
+            }
+            if (!declared) {
+                  throw new Error(`[plugin-registry] Plugin "${pluginId}" requiredCrates.toml: crate "${key}" has an empty path`);
+            }
+            return { path: declared, absolute: path.resolve(tomlDir, declared) };
+      }
+
+      if (cleanValue.startsWith('{')) {
+            throw new Error(`[plugin-registry] Plugin "${pluginId}" requiredCrates.toml: crate "${key}" is an inline table this registry understands only as { path = "..." }`);
+      }
+
+      let versionValue = cleanValue;
+      if ((versionValue.startsWith('"') && versionValue.endsWith('"')) ||
+            (versionValue.startsWith("'") && versionValue.endsWith("'"))) {
+            versionValue = versionValue.slice(1, -1);
+      }
+
+      if (!/^(?:\^|~|>=|<=|>|<|=)?[\d.x*]+/.test(versionValue.trim())) {
+            throw new Error(`[plugin-registry] Plugin "${pluginId}" requiredCrates.toml: crate "${key}" version "${versionValue}" is not valid semver`);
+      }
+
+      return versionValue;
+}
+
 // Parse requiredCrates.toml format: simple TOML-like sections
-function parseRequiredCratesToml(tomlContent, pluginId) {
+function parseRequiredCratesToml(tomlContent, pluginId, tomlDir) {
       const result = { dependencies: {}, optionalDependencies: {}, features: {}, notes: {} };
       let currentSection = null;
 
@@ -166,20 +225,17 @@ function parseRequiredCratesToml(tomlContent, pluginId) {
             const kvMatch = trimmed.match(/^([a-zA-Z0-9_-]+)\s*=\s*(.+)$/);
             if (kvMatch && currentSection) {
                   const [, key, value] = kvMatch;
-                  let cleanValue = value.trim();
 
-                  // Handle quoted strings
+                  if (currentSection === 'dependencies' || currentSection === 'optionalDependencies') {
+                        result[currentSection][key] = parseDependencyValue(value, key, pluginId, tomlDir);
+                        continue;
+                  }
+
+                  let cleanValue = value.trim();
                   if ((cleanValue.startsWith('"') && cleanValue.endsWith('"')) ||
                         (cleanValue.startsWith("'") && cleanValue.endsWith("'"))) {
                         cleanValue = cleanValue.slice(1, -1);
                   }
-
-                  // Validate semver for dependencies
-                  if ((currentSection === 'dependencies' || currentSection === 'optionalDependencies') &&
-                        !/^(?:\^|~|>=|<=|>|<|=)?[\d.x*]+/.test(cleanValue.trim())) {
-                        throw new Error(`[plugin-registry] Plugin "${pluginId}" requiredCrates.toml: crate "${key}" version "${cleanValue}" is not valid semver`);
-                  }
-
                   result[currentSection][key] = cleanValue;
             }
       }
@@ -187,8 +243,12 @@ function parseRequiredCratesToml(tomlContent, pluginId) {
       return result;
 }
 
+function describeCargoDep(spec) {
+      return typeof spec === 'string' ? `version ${spec}` : `path ${spec.path}`;
+}
+
 // Enforce strict version conflict detection across all plugins
-function enforceCargoDepConsistency(discovered) {
+async function enforceCargoDepConsistency(discovered) {
       const allCrateDeps = {};
       const crateOrigins = {};
 
@@ -198,21 +258,48 @@ function enforceCargoDepConsistency(discovered) {
             const { dependencies = {}, optionalDependencies = {} } = plugin.requiredCratesMetadata;
             const allPluginDeps = { ...dependencies, ...optionalDependencies };
 
-            for (const [crate, versionSpec] of Object.entries(allPluginDeps)) {
-                  const cleanVersion = versionSpec.trim();
+            for (const [crate, spec] of Object.entries(allPluginDeps)) {
+                  const cleanSpec = typeof spec === 'string' ? spec.trim() : spec;
+
+                  // A version is resolved by cargo; a path is resolved here, so a path
+                  // that points nowhere has to fail now rather than as a cargo error in
+                  // a build that names the engine rather than the plugin that asked.
+                  if (typeof cleanSpec === 'object') {
+                        const exists = await fs.access(cleanSpec.absolute).then(() => true).catch(() => false);
+                        if (!exists) {
+                              throw new Error(
+                                    `[plugin-registry] Plugin "${plugin.id}" requiredCrates.toml: crate "${crate}" path "${cleanSpec.path}" does not exist (resolved to "${cleanSpec.absolute}")`,
+                              );
+                        }
+                  }
 
                   if (!allCrateDeps[crate]) {
-                        allCrateDeps[crate] = cleanVersion;
+                        allCrateDeps[crate] = cleanSpec;
                         crateOrigins[crate] = plugin.id;
-                  } else if (allCrateDeps[crate] !== cleanVersion) {
+                        continue;
+                  }
+
+                  if (typeof allCrateDeps[crate] !== typeof cleanSpec
+                        || (typeof cleanSpec === 'string' && allCrateDeps[crate] !== cleanSpec)
+                        || (typeof cleanSpec === 'object' && allCrateDeps[crate].absolute !== cleanSpec.absolute)) {
                         throw new Error(
-                              `[plugin-registry] Cargo crate conflict: "${crate}" version mismatch: plugin "${crateOrigins[crate]}" wants "${allCrateDeps[crate]}", plugin "${plugin.id}" wants "${cleanVersion}". Plugins must coordinate on compatible versions.`,
+                              `[plugin-registry] Cargo crate conflict: "${crate}" is required differently: plugin "${crateOrigins[crate]}" wants ${describeCargoDep(allCrateDeps[crate])}, plugin "${plugin.id}" wants ${describeCargoDep(cleanSpec)}. Plugins must coordinate on one source.`,
                         );
                   }
             }
       }
 
       return allCrateDeps;
+}
+
+// A dependency as the audit file spells it. The per-plugin section repeats what the
+// plugin declared; the merged section has to show the path the manifest actually
+// carries, which is relative to the engine crate.
+function formatCargoDepForAudit(spec, { asMerged = false } = {}) {
+      if (typeof spec === 'string') return `"${spec}"`;
+      if (!asMerged) return `{ path = "${spec.path}" }`;
+      const relative = path.relative(slicerEngineDir, spec.absolute).split(path.sep).join('/');
+      return `{ path = "${relative}" }`;
 }
 
 // Build cargo audit file for transparency
@@ -241,18 +328,18 @@ function buildCargoAuditFile(discovered, mergedCargoDeps) {
             }
 
             lines.push(`# ${plugin.id}`);
-            for (const [crate, version] of Object.entries(dependencies)) {
-                  lines.push(`# ${crate} = "${version}"`);
+            for (const [crate, spec] of Object.entries(dependencies)) {
+                  lines.push(`# ${crate} = ${formatCargoDepForAudit(spec)}`);
             }
-            for (const [crate, version] of Object.entries(optionalDependencies)) {
-                  lines.push(`# ${crate} (optional) = "${version}"`);
+            for (const [crate, spec] of Object.entries(optionalDependencies)) {
+                  lines.push(`# ${crate} (optional) = ${formatCargoDepForAudit(spec)}`);
             }
             lines.push('#');
       }
 
       lines.push('# Merged into dragonfruit-slicing-engine/Cargo.toml [dependencies]:');
-      for (const [crate, version] of Object.entries(mergedCargoDeps)) {
-            lines.push(`# ${crate} = "${version}"`);
+      for (const [crate, spec] of Object.entries(mergedCargoDeps)) {
+            lines.push(`# ${crate} = ${formatCargoDepForAudit(spec, { asMerged: true })}`);
       }
 
       return lines.join('\n');
@@ -273,6 +360,8 @@ async function mergePluginCratesIntoCargoToml(mergedCargoDeps) {
       const nextSectionStart = content.indexOf('\n[', depsSectionStart + 1);
       const depsSectionEnd = nextSectionStart === -1 ? content.length : nextSectionStart;
 
+      const engineDir = path.dirname(cargoTomlPath);
+
       // Parse existing deps to avoid duplicates
       const depsSection = content.substring(depsSectionStart, depsSectionEnd);
       const existingDeps = new Set();
@@ -285,10 +374,18 @@ async function mergePluginCratesIntoCargoToml(mergedCargoDeps) {
 
       // Collect new deps that don't already exist
       const newDeps = [];
-      for (const [crate, version] of Object.entries(mergedCargoDeps)) {
-            if (!existingDeps.has(crate)) {
-                  newDeps.push(`${crate} = "${version}"`);
+      for (const [crate, spec] of Object.entries(mergedCargoDeps)) {
+            if (existingDeps.has(crate)) continue;
+
+            if (typeof spec === 'string') {
+                  newDeps.push(`${crate} = "${spec}"`);
+                  continue;
             }
+
+            // A plugin-relative path is rewritten against the engine crate, which is
+            // the manifest cargo will actually read it from.
+            const relative = path.relative(engineDir, spec.absolute).split(path.sep).join('/');
+            newDeps.push(`${crate} = { path = "${relative}" }`);
       }
 
       // Append new deps if any
@@ -360,7 +457,11 @@ async function discoverPlugins() {
             if (hasRequiredCrates) {
                   try {
                         const requiredCratesContent = await fs.readFile(requiredCratesPath, 'utf8');
-                        requiredCratesMetadata = parseRequiredCratesToml(requiredCratesContent, pluginId);
+                        requiredCratesMetadata = parseRequiredCratesToml(
+                              requiredCratesContent,
+                              pluginId,
+                              path.dirname(requiredCratesPath),
+                        );
                   } catch (err) {
                         throw new Error(`[plugin-registry] Plugin "${pluginId}" requiredCrates.toml parsing failed: ${err.message}`);
                   }
@@ -673,6 +774,315 @@ ${encoderItems}
 `;
 }
 
+
+const FIELD_WIDTHS = ['u16', 'u32', 'u64'];
+
+function assertPositiveInt(value, what, pluginId) {
+      if (!Number.isInteger(value) || value < 0) {
+            throw new Error(`[plugin-registry] ${pluginId}: ${what} must be a non-negative integer`);
+      }
+}
+
+function assertBinaryField(field, what, pluginId) {
+      if (!field || typeof field !== 'object') {
+            throw new Error(`[plugin-registry] ${pluginId}: ${what} is not a field descriptor`);
+      }
+      if (!FIELD_WIDTHS.includes(field.type)) {
+            throw new Error(`[plugin-registry] ${pluginId}: ${what} has an unknown width "${field.type}"`);
+      }
+      assertPositiveInt(field.at, `${what}.at`, pluginId);
+}
+
+// The declaration is data a native reader interprets, so it is checked here rather
+// than trusted: a wrong offset would surface as a missing thumbnail on a user's
+// desktop, which is the hardest place to debug it.
+function validateThumbnailLocator(locator, extension, pluginId) {
+      const fail = (what) => {
+            throw new Error(`[plugin-registry] ${pluginId}: ${extension} thumbnail ${what}`);
+      };
+
+      if (typeof locator?.magic !== 'string' || !/^[\x20-\x7e]{1,8}$/.test(locator.magic)) {
+            fail('needs a printable ASCII magic');
+      }
+      if (locator.version) {
+            assertBinaryField(locator.version, 'version', pluginId);
+            if (locator.version.equals === undefined && locator.version.atLeast === undefined) {
+                  fail('version states neither equals nor atLeast');
+            }
+      }
+
+      const { directory, entry, previewChunks, payload } = locator;
+      if (!directory || typeof directory !== 'object') fail('has no directory');
+      const offsetIsFixed = Number.isInteger(directory.offset?.fixed);
+      if (!offsetIsFixed) assertBinaryField(directory.offset, 'directory.offset', pluginId);
+      if (offsetIsFixed) assertPositiveInt(directory.offset.fixed, 'directory.offset.fixed', pluginId);
+      assertBinaryField(directory.count, 'directory.count', pluginId);
+      assertPositiveInt(directory.entrySize, 'directory.entrySize', pluginId);
+      if (directory.entrySize === 0) fail('has a zero entry size');
+
+      if (!entry || typeof entry !== 'object') fail('has no entry layout');
+      assertPositiveInt(entry.type?.at, 'entry.type.at', pluginId);
+      assertBinaryField(entry.offset, 'entry.offset', pluginId);
+      if (!Array.isArray(entry.size) || entry.size.length === 0) fail('has no size fields');
+      entry.size.forEach((field, index) => assertBinaryField(field, `entry.size[${index}]`, pluginId));
+      if (entry.index) {
+            assertBinaryField(entry.index, 'entry.index', pluginId);
+            assertPositiveInt(entry.index.value, 'entry.index.value', pluginId);
+      }
+      if (entry.compression) {
+            assertBinaryField(entry.compression, 'entry.compression', pluginId);
+            if (!Array.isArray(entry.compression.zlib) || entry.compression.zlib.length === 0) {
+                  fail('lists no compression code as zlib');
+            }
+            if (entry.compression.stored !== undefined && !Array.isArray(entry.compression.stored)) {
+                  fail('lists its stored compression codes as something other than an array');
+            }
+      }
+      if (entry.flags) {
+            assertBinaryField(entry.flags, 'entry.flags', pluginId);
+            if (entry.flags.sealedBit !== undefined) assertPositiveInt(entry.flags.sealedBit, 'entry.flags.sealedBit', pluginId);
+            if (entry.flags.roleMask !== undefined) assertPositiveInt(entry.flags.roleMask, 'entry.flags.roleMask', pluginId);
+            if (entry.flags.roleOrder !== undefined && (!Array.isArray(entry.flags.roleOrder) || entry.flags.roleOrder.length === 0)) {
+                  fail('lists an empty role order');
+            }
+      }
+
+      if (!Array.isArray(previewChunks) || previewChunks.length === 0) fail('names no preview chunk');
+      for (const chunk of previewChunks) {
+            if (typeof chunk !== 'string' || !/^[\x20-\x7e]{1,4}$/.test(chunk)) fail('names a non-ASCII preview chunk');
+      }
+
+      if (payload?.encoding === 'png') {
+            // Nothing further to describe.
+      } else if (payload?.encoding === 'json-base64') {
+            if (!Array.isArray(payload.jsonPath) || payload.jsonPath.length === 0 || payload.jsonPath.some((key) => typeof key !== 'string' || !key)) {
+                  fail('has no JSON path to the base64 payload');
+            }
+      } else {
+            fail(`has an unknown payload encoding "${payload?.encoding}"`);
+      }
+
+      if (locator.trailer) {
+            if (typeof locator.trailer.magic !== 'string' || !/^[\x20-\x7e]{1,8}$/.test(locator.trailer.magic)) {
+                  fail('has a non-ASCII trailer magic');
+            }
+            assertPositiveInt(locator.trailer.size, 'trailer.size', pluginId);
+      }
+}
+
+function validateOutputFileType(entry, pluginId) {
+      if (typeof entry?.fileExtension !== 'string' || !/^\.[a-z0-9][a-z0-9_-]*$/.test(entry.fileExtension)) {
+            throw new Error(`[plugin-registry] ${pluginId}: "${entry?.fileExtension}" is not a lowercase file extension`);
+      }
+      for (const key of ['mimeType', 'uti', 'displayName']) {
+            if (typeof entry[key] !== 'string' || !entry[key].trim()) {
+                  throw new Error(`[plugin-registry] ${pluginId}: ${entry.fileExtension} has no ${key}`);
+            }
+      }
+      validateThumbnailLocator(entry.thumbnail, entry.fileExtension, pluginId);
+}
+
+// The output file types every plugin writes, plus the core ones, in one table for
+// the native providers. Extensions are unique: two formats claiming one extension
+// would fight over the shell registration.
+async function collectOutputFileTypes(discovered) {
+      const sources = [{ pluginId: 'core', path: coreOutputFileTypesPath }];
+      for (const plugin of discovered) {
+            const candidate = path.join(pluginsRoot, plugin.id, 'outputFileTypes.json');
+            const exists = await fs.access(candidate).then(() => true).catch(() => false);
+            if (exists) sources.push({ pluginId: plugin.id, path: candidate });
+      }
+
+      const entries = [];
+      const claimedBy = new Map();
+      for (const source of sources) {
+            let fileTypes;
+            try {
+                  fileTypes = JSON.parse(await fs.readFile(source.path, 'utf8'));
+            } catch (error) {
+                  throw new Error(`[plugin-registry] ${source.pluginId}: outputFileTypes.json is not readable JSON: ${error.message}`);
+            }
+            if (!Array.isArray(fileTypes)) {
+                  throw new Error(`[plugin-registry] ${source.pluginId}: outputFileTypes.json is not an array`);
+            }
+            for (const entry of fileTypes) {
+                  validateOutputFileType(entry, source.pluginId);
+                  const claimed = claimedBy.get(entry.fileExtension);
+                  if (claimed) {
+                        throw new Error(`[plugin-registry] ${entry.fileExtension} is declared by both "${claimed}" and "${source.pluginId}"`);
+                  }
+                  claimedBy.set(entry.fileExtension, source.pluginId);
+                  entries.push(entry);
+            }
+            if (fileTypes.length > 0) {
+                  console.log(`[plugin-registry] ${source.pluginId} declares ${fileTypes.length} output file type(s): ${fileTypes.map((entry) => entry.fileExtension).join(', ')}`);
+            }
+      }
+
+      // Core first, then plugins by id, then by extension: a stable order so the
+      // generated table only changes when a declaration does.
+      return entries.sort((a, b) => a.fileExtension.localeCompare(b.fileExtension));
+}
+
+
+/// The extension without its dot, e.g. `.lumen` becomes `lumen`.
+function withoutDot(extension) {
+      return extension.replace(/^\./, '');
+}
+
+/// The freedesktop alias for a declared type: the convention `application/x-<ext>`,
+/// which is what file managers used for these extensions before the vendor types
+/// existed, and what a user's `~/.config/mimeapps.list` may still name.
+function freedesktopAlias(entry) {
+      return `application/x-${withoutDot(entry.fileExtension)}`;
+}
+
+function buildLinuxMimeXml(entries) {
+      const types = entries
+            .map((entry) => {
+                  const alias = freedesktopAlias(entry);
+                  const aliasLine = alias === entry.mimeType ? '' : `\n    <alias type="${alias}"/>`;
+                  return `  <mime-type type="${entry.mimeType}">
+    <comment>${entry.displayName}</comment>${aliasLine}
+    <glob pattern="*${entry.fileExtension}"/>
+    <magic priority="50">
+      <match type="string" offset="0" value="${entry.thumbnail.magic}"/>
+    </magic>
+  </mime-type>`;
+            })
+            .join('\n');
+
+      return `<?xml version="1.0" encoding="utf-8"?>
+<!-- AUTO-GENERATED FILE. DO NOT EDIT. Generated by scripts/generate-plugin-registry.mjs
+     from the output file types declared by the core and by the plugins. -->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+${types}
+</mime-info>
+`;
+}
+
+function buildLinuxThumbnailer(entries) {
+      // One entry for every declared type: the freedesktop contract takes a MIME
+      // list, and the binary dispatches on the file's own magic anyway.
+      const mimeTypes = entries.map((entry) => `${entry.mimeType};`).join('');
+      return `[Thumbnailer Entry]
+# AUTO-GENERATED FILE. DO NOT EDIT. Generated by scripts/generate-plugin-registry.mjs
+Exec=dragonfruit-voxl-thumbnailer %i %o %s
+MimeType=${mimeTypes}
+`;
+}
+
+/// The appex plist, with the declared UTIs wired into the keys the QuickLook system
+/// reads. Generated so adding a container does not mean editing three arrays by hand.
+function buildMacosAppexPlist(entries) {
+      const supported = entries.map((entry) => `                <string>${entry.uti}</string>`).join('\n');
+
+      const declarations = entries
+            .map((entry) => `        <dict>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeDescription</key>
+            <string>${entry.displayName}</string>
+            <key>UTTypeIdentifier</key>
+            <string>${entry.uti}</string>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>${withoutDot(entry.fileExtension)}</string>
+                </array>
+                <key>public.mime-type</key>
+                <array>
+                    <string>${entry.mimeType}</string>
+                </array>
+            </dict>
+        </dict>`)
+            .join('\n');
+
+      return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- AUTO-GENERATED FILE. DO NOT EDIT. Generated by scripts/generate-plugin-registry.mjs -->
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleDisplayName</key>
+    <string>DragonFruit Thumbnail Extension</string>
+    <key>CFBundleExecutable</key>
+    <string>VoxlThumbnailExtension</string>
+    <key>CFBundleIdentifier</key>
+    <string>org.openresinalliance.dragonfruit.thumbnail-ext</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>VoxlThumbnailExtension</string>
+    <key>CFBundlePackageType</key>
+    <string>XPC!</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+
+    <key>NSExtension</key>
+    <dict>
+        <key>NSExtensionPointIdentifier</key>
+        <string>com.apple.quicklook.thumbnail</string>
+        <key>NSExtensionPrincipalClass</key>
+        <string>ThumbnailProvider</string>
+        <key>NSExtensionAttributes</key>
+        <dict>
+            <key>QLSupportedContentTypes</key>
+            <array>
+${supported}
+            </array>
+        </dict>
+    </dict>
+
+    <key>UTImportedTypeDeclarations</key>
+    <array>
+${declarations}
+    </array>
+</dict>
+</plist>
+`;
+}
+
+/// The host application's exported types, for the development install path: Finder
+/// maps the extension to the declared UTI only when something exports it.
+function buildMacosExportedUtisPlist(entries) {
+      const declarations = entries
+            .map((entry) => `        <dict>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeDescription</key>
+            <string>${entry.displayName}</string>
+            <key>UTTypeIdentifier</key>
+            <string>${entry.uti}</string>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>${withoutDot(entry.fileExtension)}</string>
+                </array>
+                <key>public.mime-type</key>
+                <array>
+                    <string>${entry.mimeType}</string>
+                </array>
+            </dict>
+        </dict>`)
+            .join('\n');
+
+      return `        <key>UTExportedTypeDeclarations</key>
+        <array>
+${declarations}
+        </array>`;
+}
+
 async function ensureParent(filePath) {
       await fs.mkdir(path.dirname(filePath), { recursive: true });
 }
@@ -721,13 +1131,21 @@ async function main() {
       // Phase 2: Cargo dependency automation
       let mergedCargoDeps = {};
       if (filteredDiscovered.some((p) => p.hasRequiredCrates)) {
-            mergedCargoDeps = enforceCargoDepConsistency(filteredDiscovered);
+            mergedCargoDeps = await enforceCargoDepConsistency(filteredDiscovered);
             const numMergedDeps = await mergePluginCratesIntoCargoToml(mergedCargoDeps);
             console.log(`[plugin-registry] Merged ${numMergedDeps} cargo crate(s) into dragonfruit-slicing-engine/Cargo.toml`);
       }
 
       // Generate cargo audit file for transparency
       const cargoAuditContent = buildCargoAuditFile(filteredDiscovered, mergedCargoDeps);
+
+      // Output file types for the native shell providers
+      const outputFileTypes = await collectOutputFileTypes(filteredDiscovered);
+      const outputFileTypesSource = `${JSON.stringify(outputFileTypes, null, 2)}\n`;
+      const linuxMimeSource = buildLinuxMimeXml(outputFileTypes);
+      const linuxThumbnailerSource = buildLinuxThumbnailer(outputFileTypes);
+      const macosInfoPlistSource = buildMacosAppexPlist(outputFileTypes);
+      const macosExportedUtisSource = buildMacosExportedUtisPlist(outputFileTypes);
 
       await ensureParent(tsGeneratedPath);
       await ensureParent(tsGeneratedNetworkHandlersPath);
@@ -736,6 +1154,11 @@ async function main() {
       await ensureParent(rustGeneratedPath);
       await ensureParent(rustSlicerGeneratedEncodersPath);
       await ensureParent(cargoAuditPath);
+      await ensureParent(providerOutputFileTypesPath);
+      await ensureParent(linuxMimePath);
+      await ensureParent(linuxThumbnailerPath);
+      await ensureParent(macosInfoPlistPath);
+      await ensureParent(macosExportedUtisPath);
 
       let changedFiles = 0;
       if (await writeFileIfChanged(tsGeneratedPath, tsSource)) changedFiles += 1;
@@ -745,6 +1168,11 @@ async function main() {
       if (await writeFileIfChanged(rustGeneratedPath, rustSource)) changedFiles += 1;
       if (await writeFileIfChanged(rustSlicerGeneratedEncodersPath, rustSlicerEncodersSource)) changedFiles += 1;
       if (await writeFileIfChanged(cargoAuditPath, cargoAuditContent)) changedFiles += 1;
+      if (await writeFileIfChanged(providerOutputFileTypesPath, outputFileTypesSource)) changedFiles += 1;
+      if (await writeFileIfChanged(linuxMimePath, linuxMimeSource)) changedFiles += 1;
+      if (await writeFileIfChanged(linuxThumbnailerPath, linuxThumbnailerSource)) changedFiles += 1;
+      if (await writeFileIfChanged(macosInfoPlistPath, macosInfoPlistSource)) changedFiles += 1;
+      if (await writeFileIfChanged(macosExportedUtisPath, macosExportedUtisSource)) changedFiles += 1;
 
       console.log(`[plugin-registry] Generated TS+Rust plugin registry for ${filteredDiscovered.length} plugin(s).`);
       console.log(`[plugin-registry] Updated ${changedFiles} generated file(s).`);

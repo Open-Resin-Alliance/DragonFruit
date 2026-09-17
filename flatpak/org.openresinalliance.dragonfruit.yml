@@ -79,8 +79,8 @@ modules:
       # AppStream metainfo
       - install -Dm644 staging/org.openresinalliance.dragonfruit.metainfo.xml /app/share/metainfo/org.openresinalliance.dragonfruit.metainfo.xml
 
-      # MIME type for .voxl files
-      - install -Dm644 staging/dragonfruit-voxl-mime.xml /app/share/mime/packages/org.openresinalliance.dragonfruit.xml
+      # MIME types for every file type the app declares
+      - install -Dm644 staging/dragonfruit-mime.xml /app/share/mime/packages/org.openresinalliance.dragonfruit.xml
 
       # Icons — hicolor theme
       - install -Dm644 staging/icons/32x32.png   /app/share/icons/hicolor/32x32/apps/org.openresinalliance.dragonfruit.png

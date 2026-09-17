@@ -596,7 +596,7 @@ export function OrganicCutPanel({
                   {/* Recentre. WHERE the tenon sits is set in
                       the viewport (drag the blue dot at its base), so there is
                       nothing to show until it has actually been moved. The place
-                      itself is a point in model space — a pair of millimetre
+                      itself is a point in model space — a pair of millimeter
                       readouts would be measuring it against an origin the user
                       cannot see, which is what it used to do. */}
                   {(() => {
