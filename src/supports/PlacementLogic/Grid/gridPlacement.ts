@@ -24,6 +24,11 @@ import {
     MAX_AUTO_LEAF_SPAN_MM,
 } from '../../autoSupport/constants';
 import { selectTypeForPlacement } from '../../supportTypeRegistry';
+import {
+    distance3D,
+    getLengthAwareMaxAngleFromVerticalDeg,
+    memberDepartureAngleFromVerticalDeg,
+} from '../smartPlacementSearchUtils';
 
 /**
  * Matches `validateAndCullOrphans`' post-thickening trunk check
@@ -230,18 +235,6 @@ function getTrunkSegmentEndpointsWithSettings(
     return { start, end };
 }
 
-function satisfiesMinAngleFromHorizontal(tipPos: Vec3, knotPos: Vec3, minAngleDeg: number): boolean {
-    const dx = tipPos.x - knotPos.x;
-    const dy = tipPos.y - knotPos.y;
-    const horizontal = Math.sqrt(dx * dx + dy * dy);
-    const vertical = tipPos.z - knotPos.z;
-    if (vertical <= 0) return false;
-
-    const minAngleRad = (minAngleDeg * Math.PI) / 180;
-    const requiredVertical = horizontal * Math.tan(minAngleRad);
-    return vertical >= requiredVertical;
-}
-
 function branchCollidesWithMesh(
     knot: Knot,
     tipPos: Vec3,
@@ -316,7 +309,18 @@ function tryBuildAutoLeafDecision(args: {
     };
 }
 
-function selectHighestValidAttachment(args: {
+/**
+ * Picks where a candidate attaches on a host trunk and builds that member, or
+ * returns null when the host cannot take it.
+ *
+ * The loop walks the host's segments from the top down, and each segment from
+ * its top end to its bottom, so the highest usable knot wins; reaching further
+ * down the shaft buys a steeper departure when the branch cannot legally leave
+ * the top.
+ */
+function selectAttachmentDecision(args: {
+    nodeKey: string;
+    hostTrunkId: string;
     hostTrunk: Trunk;
     hostRoot: Roots;
     tipPos: Vec3;
@@ -326,9 +330,23 @@ function selectHighestValidAttachment(args: {
     mesh?: THREE.Mesh;
     tipNormal: Vec3;
     modelId: string;
-}): Knot | null {
-    const { hostTrunk, hostRoot, tipPos, minAngleDeg, settings, attachStepMm, mesh, tipNormal, modelId } = args;
+}): GridPlacementDecision | null {
+    const {
+        nodeKey, hostTrunkId, hostTrunk, hostRoot, tipPos,
+        minAngleDeg, settings, attachStepMm, mesh, tipNormal, modelId,
+    } = args;
     const shaftDiameterMm = settings.shaft.diameterMm;
+    // A member may not leave its host shallower than the configured branch
+    // angle (60 degrees above horizontal by default, so 30 from vertical),
+    // except where the length-aware slack says otherwise: under 3mm a strut may
+    // lean to 60 degrees from vertical and is mechanically sound. That slack is
+    // what lets a host carry the tips beside it on a *flat* region, where the
+    // host stands only as tall as the region's clearance and nothing could ever
+    // leave it at a flat 30 degrees. Without it every tip but the one that
+    // placed the host was refused outright.
+    const baseMaxFromVerticalDeg = 90 - minAngleDeg;
+    const memberAllowanceFromVerticalDeg = (segmentMm: number): number =>
+        getLengthAwareMaxAngleFromVerticalDeg(segmentMm, baseMaxFromVerticalDeg, baseMaxFromVerticalDeg);
 
     // Iterate segments from top (last) to bottom (first).
     for (let segIndex = hostTrunk.segments.length - 1; segIndex >= 0; segIndex--) {
@@ -360,8 +378,13 @@ function selectHighestValidAttachment(args: {
             // Must be below tip
             if (pos.z >= tipPos.z) continue;
 
-            // Must satisfy min angle from horizontal
-            if (!satisfiesMinAngleFromHorizontal(tipPos, pos, minAngleDeg)) continue;
+            // Cheap chord gate, on knot to tip, at the same length-aware
+            // allowance the built member gets below. It is a pre-filter, not
+            // the member's angle: see the departure gate further down.
+            const spanMm = distance3D(pos, tipPos);
+            if (memberDepartureAngleFromVerticalDeg(pos, tipPos) > memberAllowanceFromVerticalDeg(spanMm)) {
+                continue;
+            }
 
             const knot: Knot = {
                 id: uuidv4(),
@@ -376,7 +399,42 @@ function selectHighestValidAttachment(args: {
                 if (collides) continue;
             }
 
-            return knot;
+            // A short span becomes a leaf, and a leaf's single segment IS the
+            // chord the gate above measured, so its departure is covered there.
+            const leafDecision = tryBuildAutoLeafDecision({
+                nodeKey,
+                hostTrunkId,
+                knot,
+                tipPos,
+                tipNormal,
+                modelId,
+                settings,
+            });
+            if (leafDecision) return leafDecision;
+
+            // A longer span becomes a branch, and a branch's departure is NOT
+            // its chord: the contact cone is clamped toward the surface normal
+            // at the tip, so the shaft can leave the host nearly level, satisfy
+            // the knot-to-tip angle, and bend into a steep cone only at the tip.
+            // Gate the built shaft where it leaves the host, and let the loop
+            // try a lower knot rather than accept a level branch.
+            perfMark('grid:branch-build');
+            const { branch, supportData } = buildBranchData({
+                tipPos,
+                tipNormal,
+                modelId,
+                parentKnot: knot,
+                mesh,
+            });
+            perfMeasureWithSpike('grid:branch-build', 'branch:build');
+            const firstJoint = branch.segments[0]?.topJoint?.pos;
+            if (firstJoint
+                && memberDepartureAngleFromVerticalDeg(pos, firstJoint)
+                    > memberAllowanceFromVerticalDeg(distance3D(pos, firstJoint))) {
+                continue;
+            }
+
+            return { kind: 'place_branch', nodeKey, hostTrunkId, knot, branch, supportData };
         }
     }
 
@@ -408,7 +466,9 @@ function findNeighborAttachment(args: {
         const neighborKey = `${gx + offset.dx},${gy + offset.dy}`;
         const neighborHost = args.trunkGridMap.get(neighborKey);
         if (neighborHost && neighborHost.trunk.segments.length > 0) {
-            const neighborKnot = selectHighestValidAttachment({
+            const neighborDecision = selectAttachmentDecision({
+                nodeKey: neighborKey,
+                hostTrunkId: neighborHost.trunkId,
                 hostTrunk: neighborHost.trunk,
                 hostRoot: neighborHost.root,
                 tipPos: args.tipPos,
@@ -419,34 +479,8 @@ function findNeighborAttachment(args: {
                 tipNormal: args.tipNormal,
                 modelId: args.modelId,
             });
-            if (neighborKnot) {
-                const { branch, supportData } = buildBranchData({
-                    tipPos: args.tipPos,
-                    tipNormal: args.tipNormal,
-                    modelId: args.modelId,
-                    parentKnot: neighborKnot,
-                    mesh: args.mesh,
-                });
-                const leafDecision = tryBuildAutoLeafDecision({
-                    nodeKey: neighborKey,
-                    hostTrunkId: neighborHost.trunkId,
-                    knot: neighborKnot,
-                    tipPos: args.tipPos,
-                    tipNormal: args.tipNormal,
-                    modelId: args.modelId,
-                    settings: args.settings,
-                });
-                if (leafDecision) {
-                    return leafDecision;
-                }
-                return {
-                    kind: 'place_branch',
-                    nodeKey: neighborKey,
-                    hostTrunkId: neighborHost.trunkId,
-                    knot: neighborKnot,
-                    branch,
-                    supportData,
-                };
+            if (neighborDecision) {
+                return neighborDecision;
             }
         }
     }
@@ -603,8 +637,10 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
     // A host trunk already occupies this grid node.
     //
     // STRATEGY: grid mode is fixed-node placement. An occupied preferred
-    // node means attach to or replace that node; do not route to nearby nodes
-    // or scan distant hosts during hover.
+    // node means attach to that node; do not route to nearby nodes or scan
+    // distant hosts during hover. A trunk already standing on the node is
+    // never replaced: a taller new contact becomes a branch on it, so the
+    // pillar keeps serving every contact it already carries.
     // ================================================================
 
     if (host.trunk.segments.length === 0) {
@@ -621,9 +657,13 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
         };
     }
 
-    // --- Step 1: Attach to the co-located host. ---
+    // Attach to the co-located host: highest usable knot that can take the
+    // member, else a neighbouring node, else refuse. The host is never removed
+    // or replaced, whatever the new contact's height.
     perfMark('grid:attach-search');
-    const selectedKnot = selectHighestValidAttachment({
+    const attachment = selectAttachmentDecision({
+        nodeKey,
+        hostTrunkId: host.trunkId,
         hostTrunk: host.trunk,
         hostRoot: host.root,
         tipPos,
@@ -635,85 +675,32 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
         modelId,
     });
     perfMeasureWithSpike('grid:attach-search', 'grid:attachment-search');
+    if (attachment) return attachment;
 
-    if (!selectedKnot) {
-        const neighborDecision = findNeighborAttachment({
-            nodeKey,
-            trunkGridMap,
-            tipPos,
-            tipNormal,
-            modelId,
-            minAngleDeg,
-            settings,
-            attachStepMm,
-            mesh,
-        });
-        if (neighborDecision) {
-            return neighborDecision;
-        }
-
-        return {
-            kind: 'reject',
-            nodeKey,
-            reason: 'NO_VALID_ATTACHMENT',
-            trunkBuild: withResolvedSnappedRoute(snappedCandidate, {
-                snappedRootPos: getResolvedSnappedRootPos(snappedCandidate.route, snappedCandidate.root.transform.pos),
-                snappedNodeKey: nodeKey,
-                snappedValidity: getDefaultSnappedValidity(snappedCandidate.route),
-                error: snappedCandidate.route.error,
-            }),
-        };
-    }
-
-    // --- Step 2: Build branch on the fixed node. ---
-    perfMark('grid:branch-build');
-    const { branch, supportData } = buildBranchData({
+    const neighborDecision = findNeighborAttachment({
+        nodeKey,
+        trunkGridMap,
         tipPos,
         tipNormal,
         modelId,
-        parentKnot: selectedKnot,
+        minAngleDeg,
+        settings,
+        attachStepMm,
         mesh,
     });
-    perfMeasureWithSpike('grid:branch-build', 'branch:build');
-
-    const hostTrunkContactZ = host.trunk.contactCone?.pos.z ?? Number.NEGATIVE_INFINITY;
-    const candidateContactZ = tipPos.z;
-    if (candidateContactZ > hostTrunkContactZ + 0.000001) {
-        return {
-            kind: 'replace_trunk',
-            nodeKey,
-            hostTrunkId: host.trunkId,
-            trunkBuild: withResolvedSnappedRoute(snappedCandidate, {
-                snappedRootPos: getResolvedSnappedRootPos(snappedCandidate.route, snappedCandidate.root.transform.pos),
-                snappedNodeKey: nodeKey,
-                snappedValidity: getResolvedSnappedValidity(snappedCandidate.route) ?? getDefaultSnappedValidity(snappedCandidate.route),
-            }),
-            promoteKnot: selectedKnot,
-            promoteBranch: branch,
-            oldTrunkKnot: null,
-            oldTrunkBranch: null,
-        };
-    }
-
-    const leafDecision = tryBuildAutoLeafDecision({
-        nodeKey,
-        hostTrunkId: host.trunkId,
-        knot: selectedKnot,
-        tipPos,
-        tipNormal,
-        modelId,
-        settings,
-    });
-    if (leafDecision) {
-        return leafDecision;
+    if (neighborDecision) {
+        return neighborDecision;
     }
 
     return {
-        kind: 'place_branch',
+        kind: 'reject',
         nodeKey,
-        hostTrunkId: host.trunkId,
-        knot: selectedKnot,
-        branch,
-        supportData,
-    };
+        reason: 'NO_VALID_ATTACHMENT',
+        trunkBuild: withResolvedSnappedRoute(snappedCandidate, {
+            snappedRootPos: getResolvedSnappedRootPos(snappedCandidate.route, snappedCandidate.root.transform.pos),
+            snappedNodeKey: nodeKey,
+            snappedValidity: getDefaultSnappedValidity(snappedCandidate.route),
+            error: snappedCandidate.route.error,
+        }),
+    }
 }

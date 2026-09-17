@@ -29,11 +29,26 @@ order:
    must be clear down to `rootTopZ` **and** the roots volume must fit at that XY.
 3. Stop at the first point that satisfies both. That is the joint.
 
-The direction search is the only optimisation, and its objective is to keep the
-joint as close as possible to the socket's own column, because everything below
-the joint is vertical. `buildDirectionFan` orders the directions from the
-surface normal's outward direction, alternating either side of it, so the way
-off the surface the tip is attached to is tried first.
+The search's objective is the lateral offset: everything below the joint is
+vertical, so the closer the joint sits to the socket's own column, the more of
+the support is a plain pillar. Every direction is therefore walked and the
+nearest column that clears wins. `buildDirectionFan` decides ties only, ordering
+the directions from the surface normal's outward direction so the way off the
+surface the tip is attached to wins when two directions cost the same. Returning
+the first direction's answer instead is what produced supports that set off one
+way and then leaned out until some column cleared, when a neighbouring direction
+had a closer column all along.
+
+**Steeper legs are not the answer to that question, and the search does not offer
+them.** A joint's column runs *down* from the joint, so a steeper leg makes it
+longer, never shorter, and getting below an obstruction means crossing it, which
+the leg gate refuses. Measured on a jaw overhang: of every (lateral, lean)
+candidate from 45° down to 5°, only the 45° ones passed both gates at any
+lateral. Grid mode agrees from the other side, walking its nodes nearest-first.
+
+The lean escalates the other way, to 60° and then 75°, only when no 45° leg
+reaches a clear column at all: a wide obstacle can leave every legal leg blocked
+while a shallower one passes over it.
 
 Why 45° rather than "as steep as it can get": for a given lateral offset the 45°
 point is the highest joint the lean ceiling allows (the ceiling is
@@ -68,6 +83,22 @@ The committed chain is then checked as a whole:
   configured routed-trunk angle (`max(15, 90 - grid.minRoutedTrunkAngleDeg)`) as
   its floor and the routing detour slack on top. This is the span that carries
   the load, so it is the one held to the configured angle.
+
+### Grid mode
+
+Grid mode runs the same search over a different candidate set. `findGridJoint` walks
+the lattice nodes nearest-first and derives the joint from the node it accepts, so the
+drop lands exactly on a node and the load-bearing leg is exactly vertical.
+
+That order matters. The free search accepts the first column that clears, which puts
+the base wherever that happens to be; letting the grid path do the same and then walk
+the base outward for a node whose roots fit is what produced a grid support leaning
+across to a distant node with no joint in it at all. So `resolveBase` searches no rings
+in grid mode either: the joint already names the node, and when that node cannot take
+the base the answer is a different joint, not a longer lean.
+
+The grid resolver downstream adopts `route.snappedNodeKey` rather than deriving its own
+node, so the node the search validated is the node that gets committed.
 
 ## The socket and the cone are one decision
 

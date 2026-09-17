@@ -1,11 +1,11 @@
 import { useCallback, useState, useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import { cloneSupportState, addAnchor, addBranch, addKnot, addLeaf, addRoot, addSupportEntityWithHistory, addTrunk, getSnapshot, setSnapshot, updateKnot } from '../../state';
+import { addAnchor, addBranch, addKnot, addLeaf, addRoot, addSupportEntityWithHistory, addTrunk, getSnapshot, updateKnot } from '../../state';
 import { pushSupportHistory } from '@/supports/history/supportHistory';
 import { addAction } from '../../history/actionTypes';
 import { useInteractionStatus } from '../../interaction/useInteractionStatus';
 import { buildTrunkData } from './trunkBuilder';
-import { applyTrunkReplacement, computeAndApplyTrunkDiameterProfile, planTrunkReplacement } from './TrunkReplacement';
+import { computeAndApplyTrunkDiameterProfile } from './TrunkReplacement';
 import { supportDataForEntity, type SupportData } from '../../rendering/SupportBuilder';
 import { markPlacementSurface, markSupportDataPlacementSurface, type PlacementSurface } from '../../PlacementLogic/placementSurface';
 import type { Anchor, Branch, ContactDisk, Leaf, LimitationCode, Segment, Stick, Twig, WarningCode } from '../../types';
@@ -394,14 +394,16 @@ export function useTrunkPlacementV2() {
         const settings = getSettings();
         const isGridMode = Boolean(settings.grid?.enabled && settings.grid.spacingMm > 0);
 
-        // Grid mode is intentionally grid-native: build a cheap straight
-        // candidate, then let the fixed-grid resolver snap/merge/reject it.
-        // Feeding the mesh here starts the flexible A* router, which is the
-        // wrong cost model for hover on a fixed lattice.
         const mesh = hit.object instanceof THREE.Mesh ? hit.object : undefined;
 
         perfMark('hover:trunk-build');
-        const result = buildTrunkData({ tipPos, tipNormal, modelId, mesh: isGridMode ? undefined : mesh, isPreview: true });
+        // Grid mode routes like every other mode. It used to build a straight
+        // candidate with no mesh, which meant a grid support could not reach
+        // anything under an overhang: the pillar was drawn straight down, the
+        // collision gate refused it, and the fixed-node resolver had nothing
+        // left to attach to. The router is cheap enough now (~20 probes) that
+        // the only reason to skip it was the old search's cost.
+        const result = buildTrunkData({ tipPos, tipNormal, modelId, mesh, isPreview: true });
         perfMeasureWithSpike('hover:trunk-build', 'trunk:build');
 
         // Fast-path for cavity hover when the trunk can't route to the build
@@ -480,14 +482,6 @@ export function useTrunkPlacementV2() {
         perfMeasureWithSpike('hover:grid-decision', 'grid:decision');
 
         if (decision.kind === 'place_trunk') {
-            setPreviewData(decision.trunkBuild.supportData);
-            setPreviewError(forcePlaceOverrideRef.current ? null : (decision.trunkBuild.error || null));
-            setPreviewWarning(decision.trunkBuild.warning || null);
-            perfEndFrame();
-            return;
-        }
-
-        if (decision.kind === 'replace_trunk') {
             setPreviewData(decision.trunkBuild.supportData);
             setPreviewError(forcePlaceOverrideRef.current ? null : (decision.trunkBuild.error || null));
             setPreviewWarning(decision.trunkBuild.warning || null);
@@ -602,12 +596,12 @@ export function useTrunkPlacementV2() {
         const placementSurface = getPlacementSurfaceFromHit(hit);
         
         const settings = getSettings();
-        const isGridMode = Boolean(settings.grid?.enabled && settings.grid.spacingMm > 0);
 
-        // In grid mode, avoid the flexible A* route search entirely. The grid
-        // resolver owns snapping and same-node merge behavior.
+        // Grid mode routes too: the router commits its base to a legal grid
+        // node when the grid is on, and the resolver below adopts that node
+        // rather than re-deriving one from a straight drop.
         const mesh = hit.object instanceof THREE.Mesh ? hit.object : undefined;
-        const result = buildTrunkData({ tipPos, tipNormal, modelId, mesh: isGridMode ? undefined : mesh });
+        const result = buildTrunkData({ tipPos, tipNormal, modelId, mesh });
 
         // When the trunk can't route to the build plate (stagnation, budget
         // exhaustion, or general collision), fall back to a cavity stick/twig
@@ -730,45 +724,6 @@ export function useTrunkPlacementV2() {
                 },
             });
             clearSupportSelection();
-            return;
-        }
-
-        if (decision.kind === 'replace_trunk') {
-            const before = cloneSupportState(getSnapshot());
-            const promoteBranch = markPlacementSurface('branch', decision.promoteBranch, placementSurface);
-            const trunkBuild = markTrunkBuildPlacementSurface(decision.trunkBuild, placementSurface);
-
-            // Materialize the promoted branch (and its knot) into state so the planner can reference it.
-            addKnot(decision.promoteKnot);
-            addBranch(promoteBranch);
-
-            const planned = planTrunkReplacement({
-                snapshot: getSnapshot(),
-                trunkIdToRemove: decision.hostTrunkId,
-                mode: 'grid_promote_candidate_to_trunk',
-                nodeKey: decision.nodeKey,
-                promoteBranchId: decision.promoteBranch.id,
-            });
-
-            const plan = planned?.plan;
-            if (!plan) {
-                setSnapshot(before);
-                return;
-            }
-
-            const planWithBuild = {
-                ...plan,
-                trunkToAdd: trunkBuild.trunk,
-                rootToAdd: trunkBuild.root,
-            };
-
-            const ok = applyTrunkReplacement(planWithBuild, before);
-            if (!ok) {
-                setSnapshot(before);
-            } else {
-                clearSupportSelection();
-            }
-
             return;
         }
 

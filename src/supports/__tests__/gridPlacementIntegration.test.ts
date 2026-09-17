@@ -5,14 +5,19 @@ import * as THREE from 'three';
 import type { TrunkPlacementResult } from '../PlacementLogic/StandardPlacement';
 import { decideGridPlacement } from '../PlacementLogic/Grid/gridPlacement';
 import { getFinalSocketPosition } from '../SupportPrimitives/ContactCone';
+import { getResolvedSnappedNodeKey } from '../SupportTypes/Trunk/trunkRouteResolution';
 import { setSettings } from '../Settings/state';
 import { createDefaultSettings } from '../Settings/types';
 import type { SupportState } from '../types';
 import {
+    buildTrunkData,
     buildTrunkDataFromPlacement,
     type TrunkBuildInput,
     type TrunkBuildResult,
 } from '../SupportTypes/Trunk/trunkBuilder';
+import { isShaftBlocked } from '../PlacementLogic/CollisionAvoidance';
+import { initializeBVH, accelerateGeometry } from '../../utils/bvh';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 const GRID_SPACING_MM = 4;
 const GRID_RING_RADIUS = 4;
@@ -197,7 +202,7 @@ test('decideGridPlacement merges into the preferred occupied node before conside
     assert.equal(decision.hostTrunkId, preferredHost.build.trunk.id);
 });
 
-test('decideGridPlacement replaces the preferred occupied node before considering nearby empty nodes when the candidate is taller', () => {
+test('decideGridPlacement merges into the occupied preferred node when the candidate is taller', () => {
     const settings = makeSettings();
     setSettings(settings);
 
@@ -226,7 +231,12 @@ test('decideGridPlacement replaces the preferred occupied node before considerin
         modelId: MODEL_ID,
     });
 
-    assert.equal(decision.kind, 'replace_trunk');
+    // A trunk already standing on the node is never replaced: the taller
+    // contact attaches to it, so the pillar keeps carrying everything it
+    // already serves instead of being torn out and rebuilt around the new tip.
+    if (decision.kind !== 'place_branch' && decision.kind !== 'place_leaf') {
+        assert.fail(`expected an attachment to the occupied node, got ${decision.kind}`);
+    }
     assert.equal(decision.nodeKey, '0,0');
     assert.equal(decision.hostTrunkId, preferredHost.build.trunk.id);
 });
@@ -279,11 +289,14 @@ test('decideGridPlacement keeps using a branch when the direct hosted span is to
     });
     addTrunkBuild(snapshot, preferredHost);
 
+    // High enough that no knot on the host can reach it inside the leaf span:
+    // the host's knots top out at its socket, so every candidate span here is
+    // longer than an auto-leaf allows.
     const candidate = buildStraightFixture({
         x: 1.9,
         y: 0,
-        tipZ: 6,
-        socketZ: 5,
+        tipZ: 16,
+        socketZ: 15,
     });
 
     const decision = decideGridPlacement({
@@ -300,7 +313,7 @@ test('decideGridPlacement keeps using a branch when the direct hosted span is to
     assert.equal(decision.hostTrunkId, preferredHost.build.trunk.id);
 });
 
-test('decideGridPlacement replaces the preferred host trunk when the candidate tip is higher', () => {
+test('decideGridPlacement still merges into the preferred node when a candidate tip is higher and neighbours are taller', () => {
     const settings = makeSettings();
     setSettings(settings);
 
@@ -330,7 +343,12 @@ test('decideGridPlacement replaces the preferred host trunk when the candidate t
         modelId: MODEL_ID,
     });
 
-    assert.equal(decision.kind, 'replace_trunk');
+    // A trunk already standing on the node is never replaced: the taller
+    // contact attaches to it, so the pillar keeps carrying everything it
+    // already serves instead of being torn out and rebuilt around the new tip.
+    if (decision.kind !== 'place_branch' && decision.kind !== 'place_leaf') {
+        assert.fail(`expected an attachment to the occupied node, got ${decision.kind}`);
+    }
     assert.equal(decision.nodeKey, '0,0');
     assert.equal(decision.hostTrunkId, preferredHost.build.trunk.id);
 });
@@ -542,4 +560,57 @@ test('decideGridPlacement places a valid anchor for an above-root near-plate tip
         Math.abs(socketZ - anchor.joint.pos.z) <= 1e-3,
         `cone socket does not land on the root joint: ${socketZ} vs ${anchor.joint.pos.z}`,
     );
+});
+
+/** Jaw chip overhanging a body slab: a straight pillar from the tip pierces the body. */
+function makeOverhangMesh(): THREE.Mesh {
+    const body = new THREE.BoxGeometry(25, 20, 10);
+    body.translate(-7.5, 0, 5);
+    const jaw = new THREE.BoxGeometry(4, 4, 2);
+    jaw.translate(3.5, 0, 17);
+    const geometry = mergeGeometries([body, jaw])!;
+    accelerateGeometry(geometry);
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial());
+    mesh.updateMatrixWorld(true);
+    return mesh;
+}
+
+test('grid mode routes a tip under an overhang instead of refusing to reach it', () => {
+    initializeBVH();
+    const settings = makeSettings();
+    setSettings(settings);
+    const mesh = makeOverhangMesh();
+    const tipPos = { x: 4, y: 0, z: 16 };
+    const tipNormal = { x: 0, y: 0, z: -1 };
+
+    // Grid mode used to build this candidate with no mesh, so the shaft went
+    // straight down from the socket, pierced the body, and the node was
+    // refused. It routes now, and the router's base is already a grid node.
+    const trunk = buildTrunkData({ tipPos, tipNormal, modelId: MODEL_ID, mesh });
+    assert.equal(trunk.error, undefined, `the tip is reachable (${trunk.error})`);
+    assert.ok(trunk.route.joints.length >= 1,
+        'the pillar has to tilt out from under the jaw, so it cannot be a straight drop');
+    assert.ok(getResolvedSnappedNodeKey(trunk.route), 'the router committed its base to a grid node');
+
+    // The committed chain clears the mesh at the same clearance the
+    // post-thickening cull uses, so nothing here is placed and then deleted.
+    const root = trunk.root;
+    for (const seg of trunk.trunk.segments) {
+        const start = seg.bottomJoint?.pos ?? root.transform.pos;
+        const end = seg.topJoint?.pos;
+        assert.ok(end, 'segment has endpoints');
+        assert.equal(isShaftBlocked(start, end, (seg.diameter ?? 1) / 2 + 0.15, mesh), false,
+            'every grid-mode segment clears the mesh');
+    }
+
+    const decision = decideGridPlacement({
+        settings,
+        snapshot: makeEmptySnapshot(),
+        candidate: trunk,
+        tipPos,
+        tipNormal,
+        modelId: MODEL_ID,
+        mesh,
+    });
+    assert.equal(decision.kind, 'place_trunk');
 });

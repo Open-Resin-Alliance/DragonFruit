@@ -819,3 +819,52 @@ test('no branch leaves its host shallower than the branch-angle rule', () => {
     setModelMesh('model-a', null);
     disposeHandlers();
 });
+
+test('grid mode attaches the tips on a flat region instead of dropping most of them', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+
+    // The same 20×20 flat underside the density-grid test uses, with the grid
+    // on. Its tips are on a ~1.5mm lattice and the grid nodes are 4mm apart, so
+    // most of them land between nodes and have to attach to the trunk standing
+    // there. The hosts are only as tall as the region's clearance, which is why
+    // the length-aware slack is what lets anything leave them.
+    const previous = getSettings();
+    const settings = createDefaultSettings();
+    settings.grid.enabled = true;
+    settings.grid.spacingMm = 4;
+    setSettings(settings);
+
+    const contactVoxels: { x: number; y: number }[] = [];
+    for (let x = -10; x <= 10; x += 0.25) {
+        for (let y = -10; y <= 10; y += 0.25) {
+            contactVoxels.push({ x, y });
+        }
+    }
+    const facet: DetectedIsland = {
+        id: 'o0',
+        source: 'overhang',
+        contact: new THREE.Vector3(0, 0, 6.5),
+        baseZ: 6.5,
+        areaMm2: 400,
+        contactVoxels: footprintFromPoints(contactVoxels),
+    };
+
+    const result = runAutoPlace([facet], 'model-a', { debugSkipAutoBracing: true });
+
+    // Before the length-aware allowance this run kept 7 attachments and refused
+    // the rest: 25 trunks standing alone on a lattice, 74% area coverage.
+    assert.ok(result.placedTrunks >= 20,
+        `the nodes carry pillars (${result.placedTrunks})`);
+    assert.ok(result.placedBranches + result.placedLeaves >= 60,
+        `the tips between nodes attach (${result.placedLeaves} leaves, ${result.placedBranches} branches)`);
+    const areaCoverage = result.analytics?.areaCoverage ?? 0;
+    assert.ok(areaCoverage >= 0.95,
+        `the region ends up covered (${(areaCoverage * 100).toFixed(0)}%)`);
+
+    setModelMesh('model-a', null);
+    setSettings(previous);
+    disposeHandlers();
+});

@@ -78,6 +78,6 @@ either case would clear the support selection set.
 
 ## Related pages
 
-- [Grid and Branching](grid-and-branching.md) — grid ownership and trunk replacement
+- [Grid and Branching](grid-and-branching.md) — grid node ownership and attachment
 - [Support Pathfinding V3](support-pathfinding-v3.md) — the routing solver
 - [Raft Geometry](raft-geometry.md) — the base derived from support roots

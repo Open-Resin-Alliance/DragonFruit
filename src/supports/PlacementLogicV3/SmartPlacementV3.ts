@@ -38,7 +38,7 @@ import { gridNodeKeyFromXY, gridSnappedXYFromKey } from '../PlacementLogic/Grid/
 import { buildNearestCandidateNodeKeys } from '../PlacementLogic/Grid/nearestCandidateNodeKeys';
 import type { SDFCache } from '../PlacementLogic/Pathfinding/SDFCache';
 import { getOrCreateSDFCache } from '../PlacementLogic/Pathfinding/SDFCachePool';
-import { buildDirectionFan, findEscapeJoint } from './EscapeJointSearch';
+import { buildDirectionFan, findEscapeJoint, findGridJoint } from './EscapeJointSearch';
 import {
     clampConeAxisDeviationFromSurfaceNormal,
     MAX_CONE_AXIS_DEVIATION_FROM_SURFACE_NORMAL_DEG,
@@ -74,8 +74,16 @@ const COLLISION_AVOIDANCE_MM = 0.48;
 const ROOTS_DISK_SAFETY_MM = COLLISION_AVOIDANCE_MM;
 /** Perimeter samples around the roots cross-section at each height slice. */
 const ROOTS_DISK_PERIMETER_SAMPLES = 16;
-// Ring search around the preferred base node when the grid is on.
+/**
+ * Ring search around the preferred base node when the grid is on. Grid mode
+ * searches no rings at all: the joint already sits on a node, and walking the
+ * base outwards to find one whose roots fit is what made a grid pillar lean
+ * across to a distant node instead of tilting at the top and dropping onto a
+ * node vertically. When the node under the joint cannot take the base, the
+ * answer is a different joint, not a longer lean.
+ */
 const MAX_BASE_SEARCH_RINGS = 4;
+const GRID_BASE_SEARCH_RINGS = 0;
 // Shortest vertical leg worth putting below a joint.
 const MIN_VERTICAL_LEG_MM = 1.0;
 /** Ceiling for the diagonal's lean, tried in order: the shape first, reach after. */
@@ -84,6 +92,12 @@ const LEAN_RAMP_FROM_VERTICAL_DEG = [45, 60, 75];
 const WALK_STEP_MM = 0.5;
 /** Directions tried, in preference order, before the router gives up. */
 const DIRECTION_COUNT = 12;
+/**
+ * How many lattice nodes the grid search may try, nearest first. The nearest
+ * node is the answer unless the model blocks it, so this only bounds the case
+ * where the tip sits in a pocket that forces the joint well outwards.
+ */
+const GRID_JOINT_NODE_BUDGET = 24;
 /**
  * The vertical leg below the joint is the load-bearing span, so it obeys the
  * configured routed-trunk angle: a segment may sit up to the configured angle
@@ -213,6 +227,8 @@ function resolveBase(args: {
     rootTopZ: number;
     spacingMm: number;
     gridEnabled: boolean;
+    /** How many node rings to search around the preferred XY. 0 = that node only. */
+    maxSearchRings: number;
     sdf: SDFCache;
     diskHeight: number;
     coneHeight: number;
@@ -225,7 +241,7 @@ function resolveBase(args: {
     const nodeKeys = args.gridEnabled
         ? buildNearestCandidateNodeKeys(
             gridNodeKeyFromXY(args.preferredXY.x, args.preferredXY.y, args.spacingMm),
-            MAX_BASE_SEARCH_RINGS,
+            args.maxSearchRings,
         )
         : ['continuous'];
 
@@ -370,6 +386,7 @@ export function calculateSmartPlacementV3(
             rootTopZ,
             spacingMm,
             gridEnabled,
+            maxSearchRings: gridEnabled ? GRID_BASE_SEARCH_RINGS : MAX_BASE_SEARCH_RINGS,
             sdf,
             diskHeight,
             coneHeight,
@@ -412,15 +429,33 @@ export function calculateSmartPlacementV3(
         (standard.coneAxis ?? input.tipNormal).y,
         0,
     );
-    const found = findEscapeJoint(sdf, socketPos, rootTopZ, {
+    const jointSearchShared = {
         clearanceMm,
-        stepMm: WALK_STEP_MM,
         maxLateralMm,
         leanRampFromVerticalDeg: LEAN_RAMP_FROM_VERTICAL_DEG,
         minVerticalLegMm: MIN_VERTICAL_LEG_MM,
-        directions: buildDirectionFan(outward.lengthSq() > 1e-6 ? { x: outward.x, y: outward.y } : null, DIRECTION_COUNT),
-        baseFitsAt: (x, y) => !rootsBlockedAt(x, y),
-    });
+        baseFitsAt: (x: number, y: number) => !rootsBlockedAt(x, y),
+    };
+    // Grid mode searches the lattice: the drop has to land on a node, so the
+    // node is chosen first and the joint derived from it. Every other mode
+    // drops at the first column that clears.
+    const found = gridEnabled
+        ? findGridJoint(sdf, socketPos, rootTopZ, {
+            ...jointSearchShared,
+            spacingMm,
+            maxNodeCount: GRID_JOINT_NODE_BUDGET,
+            // Keep leaving the way the cone points: the node nearest that
+            // direction wins over an equally close node the other way.
+            preferredDirection: outward.lengthSq() > 1e-6 ? { x: outward.x, y: outward.y } : null,
+        })
+        : findEscapeJoint(sdf, socketPos, rootTopZ, {
+            ...jointSearchShared,
+            stepMm: WALK_STEP_MM,
+            directions: buildDirectionFan(
+                outward.lengthSq() > 1e-6 ? { x: outward.x, y: outward.y } : null,
+                DIRECTION_COUNT,
+            ),
+        });
     if (!found.joint) {
         publishDebug({
             status: 'blocked',
@@ -450,6 +485,7 @@ export function calculateSmartPlacementV3(
         rootTopZ,
         spacingMm,
         gridEnabled,
+        maxSearchRings: gridEnabled ? GRID_BASE_SEARCH_RINGS : MAX_BASE_SEARCH_RINGS,
         sdf,
         diskHeight,
         coneHeight,

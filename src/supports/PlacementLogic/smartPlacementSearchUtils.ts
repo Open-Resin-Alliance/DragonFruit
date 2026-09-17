@@ -66,6 +66,27 @@ export function segmentAngleFromVerticalDeg(start: Vec3, end: Vec3): number {
     return 90 - angleFromHorizontal;
 }
 
+/**
+ * The angle a member's shaft leaves its host at, in degrees from vertical.
+ *
+ * Rise-aware, unlike {@link segmentAngleFromVerticalDeg}, which describes a
+ * *descending* chain segment and answers Infinity for anything that rises. A
+ * branch leaves its knot going up, so the trunk-chain helper cannot measure it,
+ * and a caller that reaches for it will refuse every member.
+ *
+ * This is the gate that matters for attached members. The contact cone is
+ * clamped toward the surface normal at the tip, so a member can satisfy a
+ * knot-to-tip chord gate and still leave the host nearly level, bending into a
+ * steep cone only at the tip: gate the shaft, not the chord.
+ */
+export function memberDepartureAngleFromVerticalDeg(
+    knotPos: Vec3,
+    firstJointPos: Vec3,
+): number {
+    const lateral = distanceXY(knotPos, firstJointPos);
+    return (Math.atan2(lateral, firstJointPos.z - knotPos.z) * 180) / Math.PI;
+}
+
 export function segmentSatisfiesMaxAngleFromVertical(start: Vec3, end: Vec3, maxAngleFromVerticalDeg: number): boolean {
     return segmentAngleFromVerticalDeg(start, end) <= maxAngleFromVerticalDeg;
 }

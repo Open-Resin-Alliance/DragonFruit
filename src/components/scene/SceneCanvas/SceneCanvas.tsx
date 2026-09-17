@@ -176,6 +176,7 @@ import {
 import { applyScaleFactor } from '@/components/gizmo/scale/applyScaleFactor';
 import { createWheelDeviceClassifier, type WheelDevice } from '@/components/scene/SceneCanvas/wheelDeviceClassifier';
 import { getSelectionGizmoCenter } from '@/features/scene/selectionPosition';
+import { DEFAULT_LIFT_DISTANCE_MM } from '@/features/transform/liftDefaults';
 
 const Canvas = dynamic(() => import('@react-three/fiber').then(m => m.Canvas), { ssr: false });
 
@@ -459,7 +460,7 @@ export function SceneCanvas({
   uniformScaling = true,
   localTransformSpace = false,
   autoLift = false,
-  liftDistance = 5,
+  liftDistance = DEFAULT_LIFT_DISTANCE_MM,
   autoSnapEnabled = true,
   onTransformChange,
   onTransformStart,

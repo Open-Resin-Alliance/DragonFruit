@@ -28,13 +28,13 @@ import {
 import { sizeParameters, presetForArea } from './parameterSizing';
 import type { ModelSizingContext } from './parameterSizing';
 import { getSettings } from '../Settings/state';
+import { memberDepartureAngleFromVerticalDeg } from '../PlacementLogic/smartPlacementSearchUtils';
 import { DEFAULT_GRID_MIN_BRANCH_ANGLE_DEG } from '../Settings/defaults';
 import { cloneSupportState, getSnapshot, setSnapshot } from '../state';
 import { draftAddEntity, draftAddPrimitive } from './supportDraft';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
 import { buildTrunkData } from '../SupportTypes/Trunk/trunkBuilder';
 import { buildCavityBridge } from '../SupportTypes/Trunk/useTrunkPlacement';
-import { applyTrunkReplacement, planTrunkReplacement } from '../SupportTypes/Trunk/TrunkReplacement';
 import { computeForestDiameterProfile } from '../SupportTypes/Trunk/TrunkReplacement/maxConnectedDiameter';
 import { buildBranchData } from '../SupportTypes/Branch/branchBuilder';
 import { buildLeafData } from '../SupportTypes/Leaf/leafBuilder';
@@ -84,14 +84,14 @@ function memberMaxAngleFromVerticalDeg(): number {
  * read 30° while every shaft left the host at 42°. Gate the shaft, not the
  * chord.
  */
+/** The angle this branch's shaft leaves its host at. 0 when it has no joints yet. */
 function branchDepartureAngleDeg(
     branch: Branch,
     knotPos: { x: number; y: number; z: number },
 ): number {
     const firstJoint = branch.segments[0]?.topJoint?.pos;
     if (!firstJoint) return 0;
-    const lateral = Math.hypot(firstJoint.x - knotPos.x, firstJoint.y - knotPos.y);
-    return (Math.atan2(lateral, firstJoint.z - knotPos.z) * 180) / Math.PI;
+    return memberDepartureAngleFromVerticalDeg(knotPos, firstJoint);
 }
 
 // Per-entity placement logging (Trunk/Leaf/Merge lines) is OFF by default —
@@ -1101,60 +1101,6 @@ function placeOneCandidate(
                 `Leaf ${candidate.id} → host ${decision.hostTrunkId} ` +
                 `grid ${decision.nodeKey}`);
             return { kind: 'leaf', preset, draft: d, entityId: decision.leaf.id };
-        }
-
-        case 'replace_trunk': {
-            // Same promote-to-trunk flow as manual placement: materialize the
-            // promoted branch, plan the replacement, then apply it. The old
-            // trunk's contact is preserved as a branch on the new trunk and
-            // rehostable branches/leaves are re-attached — the old trunk is
-            // never left orphaned at the node.
-            const promoteKnot = decision.promoteKnot;
-            const promoteBranch = decision.promoteBranch;
-            if (!promoteKnot || !promoteBranch) {
-                logPlacement(
-                    `Replace skip ${candidate.id}: no promoted branch from grid engine`);
-                return { kind: 'reject', rejectedReason: 'grid_reject_other', preset, draft: d };
-            }
-            d = draftAddPrimitive(d, 'knots', promoteKnot);
-            d = draftAddEntity(d, 'branch', promoteBranch);
-            const planned = planTrunkReplacement({
-                snapshot: d,
-                trunkIdToRemove: decision.hostTrunkId,
-                mode: 'grid_promote_candidate_to_trunk',
-                nodeKey: decision.nodeKey,
-                promoteBranchId: promoteBranch.id,
-            });
-            const plan = planned?.plan;
-            if (!plan) {
-                logPlacement(
-                    `Replace skip ${candidate.id}: replacement planner failed (host ${decision.hostTrunkId})`);
-                return { kind: 'reject', rejectedReason: 'grid_reject_other', preset, draft: d };
-            }
-            // The replacement machinery (cascading rehosts, diameter profiles)
-            // is store-bound and shared with manual promote — the plan phase
-            // commits the draft so far, applies the replacement, and re-reads.
-            // The run-level rollback guard + single history entry keep this
-            // atomic for the user; a later worker pass will make it pure.
-            setSnapshot(d);
-            const ok = applyTrunkReplacement(
-                { ...plan, trunkToAdd: decision.trunkBuild.trunk, rootToAdd: decision.trunkBuild.root },
-                undefined,
-                { skipHistory: true }, // the whole run is one undoable entry
-            );
-            d = ok ? getSnapshot() : d;
-            if (!ok) {
-                logPlacement(
-                    `Replace skip ${candidate.id}: applyTrunkReplacement failed (host ${decision.hostTrunkId})`);
-                return { kind: 'reject', rejectedReason: 'grid_reject_other', preset, draft: d };
-            }
-            logPlacement(
-                `Replace trunk @ ${decision.nodeKey}: ` +
-                `${candidate.id} (Z=${candidate.zHeight.toFixed(1)}) → host ${decision.hostTrunkId}`);
-            return {
-                kind: 'trunk', preset, entityId: decision.trunkBuild.trunk.id, draft: d,
-
-            };
         }
 
         case 'reject': {

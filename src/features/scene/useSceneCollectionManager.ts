@@ -981,6 +981,7 @@ import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/c
 import type { SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
 import { getImportDefaultsRaftPatch, getSavedImportDefaultsSettings } from '@/features/scene/importDefaultsPreferences';
 import { readNativeFileSize } from '@/utils/pluginNetworkBridge';
+import { DEFAULT_LIFT_DISTANCE_MM } from '@/features/transform/liftDefaults';
 
 type ImportProgressState = {
   active: boolean;
@@ -2268,7 +2269,7 @@ export function useSceneCollectionManager() {
 
     // Read auto-lift settings from storage (mirroring useTransformManager logic)
     let autoLift = false;
-    let liftDistance = 5;
+    let liftDistance = DEFAULT_LIFT_DISTANCE_MM;
     let preferredMeshColor = DEFAULT_MESH_COLOR;
     if (typeof window !== 'undefined') {
       try {

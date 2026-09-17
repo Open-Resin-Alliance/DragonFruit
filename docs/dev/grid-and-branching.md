@@ -4,9 +4,19 @@ Grid support logic ensures deterministic trunk ownership and efficient branch re
 
 ## Grid placement policy
 
-1. Resolve candidate to preferred snapped grid node.
-2. If same-node trunk exists, join that tree.
-3. Compare contact heights for trunk replacement vs new branch behavior.
+0. Build the candidate through the router, like every other mode. Grid mode used to
+   build it with no mesh, i.e. a straight pillar, which could not reach a tip under an
+   overhang at all: the pillar pierced the model, the collision gate refused the node,
+   and the tip went unsupported.
+1. Route to a node, not just to a clear column. Grid mode's search walks the lattice
+   nearest-first and derives the joint from the node it accepts, so the drop lands on
+   that node and the load-bearing leg is exactly vertical. The base never walks outward
+   to a different node: if the node under the joint cannot take the base, the answer is
+   a different joint, not a longer lean.
+2. If a trunk already stands on that node, join that tree: attach as a branch or leaf.
+3. A trunk on the node is never replaced, whatever the new contact's height. A taller
+   contact becomes a branch on the existing pillar so the pillar keeps serving every
+   contact it already carries.
 4. Search alternate nodes only when no same-node trunk ownership applies.
 
 ## Branch support contract
@@ -15,11 +25,15 @@ Grid support logic ensures deterministic trunk ownership and efficient branch re
 - Branches may chain recursively from trunk to branch to branch.
 - Branch joints must be reprojected whenever parent shaft geometry changes.
 
-## Trunk replacement contract
+## Node ownership contract
 
-- When a new candidate at the same node is higher than the current trunk contact, trunk replacement should be planned and applied as one coherent action.
-- Dependents should be rehosted before the old trunk is removed.
-- Undo and redo should treat the replacement as a single history event.
+- A grid node is owned by the trunk standing on it. A new candidate that snaps to an
+  occupied node attaches to that trunk; it never removes or rebuilds it.
+- Placement resolves to the nearest legal node when the preferred one cannot take the
+  attachment, and only then.
+- This used to be a promote path that tore the host trunk out and rebuilt the node
+  around the new contact. The code for it is gone: rehosting dependents onto a
+  replacement pillar was more ways to lose supports than the shape it bought.
 
 ## Known risk areas
 
