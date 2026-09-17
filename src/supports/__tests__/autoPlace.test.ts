@@ -868,3 +868,57 @@ test('grid mode attaches the tips on a flat region instead of dropping most of t
     setSettings(previous);
     disposeHandlers();
 });
+
+test('a tip beside a tall thin host is fanned onto it instead of standing alone', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+
+    // A thin pillar to Z=20, and a lone tip 6mm to its side sitting 2.5mm above
+    // its top. Every sample of the host is then illegally shallow (the top of
+    // the host is the closest sample, and 6mm lateral over a 2.5mm drop is 67°
+    // from vertical) while the sample deep enough to be steep is outside a 3D
+    // 8mm reach — so the tip used to stand as its own pillar, or bridge to the
+    // model as a stick and leave a second scar.
+    const facetAt = (id: string, cx: number, cy: number, z: number, half: number): DetectedIsland => {
+        const voxels: { x: number; y: number }[] = [];
+        for (let x = cx - half; x <= cx + half; x += 0.25) {
+            for (let y = cy - half; y <= cy + half; y += 0.25) {
+                voxels.push({ x, y });
+            }
+        }
+        return {
+            id,
+            source: 'overhang',
+            contact: new THREE.Vector3(cx, cy, z),
+            baseZ: z,
+            areaMm2: (half * 2) * (half * 2),
+            contactVoxels: footprintFromPoints(voxels),
+        };
+    };
+
+    const host = facetAt('host-spike', 0, 0, 20, 2);
+    const neighbour = facetAt('lone-tip', 6, 0, 22.5, 2);
+
+    const result = runAutoPlace([host, neighbour], 'model-a', { debugSkipAutoBracing: true });
+
+    assert.equal(result.placedSticks, 0,
+        `the neighbour is carried, not bridged model-to-model (${result.placedSticks} sticks)`);
+    assert.ok(result.placedLeaves + result.placedBranches >= 1,
+        `the neighbour joined the host (${result.placedLeaves} leaves, ${result.placedBranches} branches)`);
+    assert.ok(result.placedTrunks <= 2,
+        `only the host stands on the plate (${result.placedTrunks} trunks)`);
+    // The rescue takes the least drop that clears the angle, not the whole
+    // span it is allowed: 6mm lateral needs a 10.4mm rise at 30°, so the link
+    // should land near 12mm, not at the 16mm rescue cap.
+    const member = result.analytics?.forestReport?.trees
+        .flatMap(t => t.members)
+        .find(m => m.spanMm > 6);
+    assert.ok(member, 'the rescued tip hangs off a real member');
+    assert.ok(member.spanMm <= 13,
+        `the rescue is the shortest legal link, not the longest (${member.spanMm.toFixed(1)}mm at ${member.angleDeg.toFixed(0)}deg)`);
+
+    setModelMesh('model-a', null);
+    disposeHandlers();
+});

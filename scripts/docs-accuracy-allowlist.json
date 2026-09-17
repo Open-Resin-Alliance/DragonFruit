@@ -47,7 +47,8 @@
             "kickstandAfter",
             "gridAStar",
             "fieldDeterministicSolver",
-            "potentialFieldSolver"
+            "potentialFieldSolver",
+            "satisfiesMinAngleFromHorizontal"
       ],
       "paths": [
             "src/features/plugins/generatedBuiltinComplexPlugins.ts",
@@ -62,7 +63,7 @@
       "_reasons": {
             "schematic names": "registerX/subscribeX/getX* and the Gadget* family are invented stand-ins in walkthroughs (registration-seams.md, state-and-stores.md, support-type-extension.md), not real symbols.",
             "external symbols": "n_coords and n_indices are fields of the third-party LYS mesh format, cited by docs/dev/lys-mesh-extraction-spec.md. n_indices previously matched by coincidence inside pure_down_indices() in the retired dragonfruit-astar crate, which is why its removal exposed the gap; version_comparator is a tauri-plugin-updater API.",
-            "deliberately removed": "kerf_mm is named in organic-cut-surface-redesign.md precisely to record that it is gone.",
+            "deliberately removed": "kerf_mm is named in organic-cut-surface-redesign.md precisely to record that it is gone. satisfiesMinAngleFromHorizontal was the flat angle test in the grid attach path and auto-supports.md names it to record that the length-aware allowance replaced it.",
             "aspirational": "page-tsx-refactor-handoff.md is a refactor plan; its symbols name extractions not yet made. packageManager is a package.json key npm has not adopted here.",
             "generated at build time": "the paths are produced by scripts/generate-plugin-registry.mjs and are gitignored (**/generated*), so they are absent from a clean checkout.",
             "proposed, not built": "island_replay is the name ADR-0025 proposes for a capability not yet folded in; pushToast is named in notifications.md precisely to state that no such API exists.",
