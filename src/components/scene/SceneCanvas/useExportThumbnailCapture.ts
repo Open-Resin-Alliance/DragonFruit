@@ -225,7 +225,7 @@ export function useExportThumbnailCapture({
     const buildPlateHelperNodes: THREE.Object3D[] = [];
     const gridHelperNodes: THREE.Object3D[] = [];
     const fallbackModelBaseColor = meshColor ?? '#a3a3a3';
-    const captureSelectedTintStrength = THREE.MathUtils.clamp(selectedTintStrength ?? 0.75, 0, 1);
+    const captureSelectedTintStrength = THREE.MathUtils.clamp(selectedTintStrength ?? 0.70, 0, 1);
 
     const hideHelperForFit = (node: THREE.Object3D) => {
       if (!helperOriginalVisibility.has(node)) {

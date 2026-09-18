@@ -111,9 +111,11 @@ type PersistedMeshAppearance = {
 const MESH_APPEARANCE_STORAGE_KEY = 'mesh-appearance-settings';
 
 const DEFAULT_MESH_COLOR = '#a3a3a3';
-const DEFAULT_AMBIENT_INTENSITY = 0.6;
-const DEFAULT_DIRECTIONAL_INTENSITY = 0.8;
-const DEFAULT_MATERIAL_ROUGHNESS = 0.65;
+// Split so the Mesh tab's derived sliders read Lightness 1.40, Contrast 0.80
+// (contrast = directional / (ambient + directional)).
+const DEFAULT_AMBIENT_INTENSITY = 0.28;
+const DEFAULT_DIRECTIONAL_INTENSITY = 1.12;
+const DEFAULT_MATERIAL_ROUGHNESS = 0.55;
 const DEFAULT_WIREFRAME_THICKNESS_PX = 1.5;
 const DEFAULT_XRAY_OPACITY = 0.25;
 const DEFAULT_HEATMAP_MIN_ANGLE = 0;
@@ -142,7 +144,7 @@ export function getThemedDefaultHoverColor(): string {
   return DEFAULT_HOVER_COLOR;
 }
 export const DEFAULT_HOVER_TINT_STRENGTH = 0.5;
-export const DEFAULT_SELECTED_TINT_STRENGTH = 0.75;
+export const DEFAULT_SELECTED_TINT_STRENGTH = 0.70;
 const RECENT_OPENED_FILES_STORAGE_KEY = 'app-recent-opened-files';
 const RECENT_OPENED_FILES_LIMIT = 10;
 const RECENT_FILES_DB_NAME = 'dragonfruit-recent-files';

@@ -237,7 +237,7 @@ export function MeshSettingsTab({
               heatmapMaxAngle={heatmapMaxAngle}
               heatmapColors={heatmapColors}
               hoverTintStrength={0.5}
-              selectedTintStrength={0.75}
+              selectedTintStrength={0.7}
             />
           </div>
 
@@ -630,10 +630,10 @@ export function MeshSettingsTab({
                 useVertexColors={false}
                 toonSteps={5}
                 meshColor="#a3a3a3"
-                materialRoughness={0.65}
+                materialRoughness={0.55}
                 previewModel="knot"
-                ambientIntensity={0.6}
-                directionalIntensity={0.8}
+                ambientIntensity={0.28}
+                directionalIntensity={1.12}
                 xrayOpacity={0.25}
                 heatmapMinAngle={0}
                 heatmapMaxAngle={45}
