@@ -6,6 +6,7 @@ import {
     type ContactDiskDragHit,
 } from '../SupportPrimitives/ContactDisk/contactDiskDragController';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../history/supportEditHistory';
+import { setSupportPlacementGuideZ } from '@/components/scene/SceneCanvas/supportPlacementGuideStore';
 import { getSupportTypeDescriptor, type SupportTypeId } from '../supportTypeRegistry';
 
 /**
@@ -81,6 +82,10 @@ export function useContactDiskDragSession<TPreview>(
                 const next = handlersRef.current.onHit(hit);
                 if (next === null) return;
                 previewRef.current = next;
+                // The guide line follows the tip: it is the height the contact
+                // is being dragged to, and the line at that height is what tips
+                // get levelled against.
+                setSupportPlacementGuideZ(hit.point.z);
                 setTick((t) => t + 1);
             },
             onEnd: () => {
@@ -98,6 +103,7 @@ export function useContactDiskDragSession<TPreview>(
                 previewRef.current = null;
                 sessionRef.current = null;
                 beforeRef.current = null;
+                setSupportPlacementGuideZ(null);
                 setTick((t) => t + 1);
             },
         });

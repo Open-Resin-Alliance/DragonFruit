@@ -28,6 +28,7 @@ import type { SupportMode } from '@/supports/types';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { emitImmediateModelHover } from '@/supports/interaction/pointerOcclusion';
 import { MARQUEE_CANDIDATE_TINT_FACTOR } from '@/utils/marqueeCandidateTint';
+import { getSupportPlacementGuideZ } from './supportPlacementGuideStore';
 
 // Scratch raycaster reused for clip-zone fallback raycasts.
 const _clipFallbackRaycaster = new THREE.Raycaster();
@@ -215,7 +216,7 @@ function StlMeshComponent({
   outOfBoundsMin,
   outOfBoundsMax,
   outOfBoundsStripeColor,
-  supportPlacementGuidePlaneZ,
+  supportPlacementGuideEnabled,
   supportPlacementGuideColor,
   supportPlacementGuideLineWidthMm,
   supportPlacementGuideOpacity,
@@ -299,7 +300,8 @@ function StlMeshComponent({
   outOfBoundsMin?: THREE.Vector3 | null;
   outOfBoundsMax?: THREE.Vector3 | null;
   outOfBoundsStripeColor?: string;
-  supportPlacementGuidePlaneZ?: number | null;
+  /** Mounts the placement guide overlay; hover and drag enter/leave only, never per move. */
+  supportPlacementGuideEnabled?: boolean;
   supportPlacementGuideColor?: string;
   supportPlacementGuideLineWidthMm?: number;
   supportPlacementGuideOpacity?: number;
@@ -792,8 +794,6 @@ if (uDitherAmount > 0.0) {
     return material;
   }, [outOfBoundsMax, outOfBoundsMin, outOfBoundsStripeColor, showOutOfBoundsOverlay]);
 
-  const supportPlacementGuideEnabled = supportPlacementGuidePlaneZ != null && Number.isFinite(supportPlacementGuidePlaneZ);
-
   const supportPlacementGuideMaterial = React.useMemo(() => {
     const material = new THREE.ShaderMaterial({
       transparent: true,
@@ -831,25 +831,33 @@ if (uDitherAmount > 0.0) {
         uniform float uOpacity;
 
         void main() {
-          float distanceToPlane = abs(vWorldPos.z - uPlaneZ);
-          float baseHalfWidth = max(0.0005, uLineWidthMm * 0.5);
+          // How steeply the surface crosses the guide plane: 1 on a vertical
+          // wall, 0 on a face lying in the plane.
           vec3 worldNormal = normalize(vWorldNormal);
-          vec3 viewDir = normalize(cameraPosition - vWorldPos);
-          float ndotv = abs(dot(worldNormal, viewDir));
-          float grazing = 1.0 - ndotv;
-          float grazingComp = mix(1.0, 0.58, smoothstep(0.45, 0.96, grazing));
+          float slope = sqrt(max(0.0, 1.0 - worldNormal.z * worldNormal.z));
 
-          float compensatedHalfWidth = baseHalfWidth * grazingComp;
-          float aa = max(fwidth(vWorldPos.z) * 1.15, 0.0012);
+          // Distance from the plane's contour measured *along the surface*, so
+          // uLineWidthMm paints the same stripe width at any tilt. Measured in
+          // world Z alone the stripe smears to width / sin(tilt) -- a wide band
+          // on shallow faces, the whole face on one parallel to the plane.
+          float surfaceDist = abs(vWorldPos.z - uPlaneZ) / max(slope, 0.02);
+
+          float baseHalfWidth = max(0.0005, uLineWidthMm * 0.5);
+          float aa = max(fwidth(surfaceDist) * 1.15, 0.0012);
           float feather = min(
-            max(aa * 1.15, compensatedHalfWidth * 0.16),
-            max(aa * 1.1, compensatedHalfWidth * 0.55)
+            max(aa * 1.15, baseHalfWidth * 0.16),
+            max(aa * 1.1, baseHalfWidth * 0.55)
           );
 
-          float lineMask = 1.0 - smoothstep(compensatedHalfWidth - feather, compensatedHalfWidth + feather, distanceToPlane);
+          float lineMask = 1.0 - smoothstep(baseHalfWidth - feather, baseHalfWidth + feather, surfaceDist);
           if (lineMask <= 0.001) discard;
 
-          float alpha = uOpacity * lineMask;
+          // A face lying in the plane has no contour to trace, only a coincident
+          // region: keep it a faint wash rather than a stripe as wide as the face.
+          // Above ~3 degrees of tilt the stripe is real and gets full strength.
+          float slopeFade = mix(0.18, 1.0, smoothstep(0.01, 0.06, slope));
+
+          float alpha = uOpacity * lineMask * slopeFade;
           gl_FragColor = vec4(uLineColor, alpha);
         }
       `,
@@ -861,20 +869,25 @@ if (uDitherAmount > 0.0) {
   React.useEffect(() => {
     if (!supportPlacementGuideMaterial) return;
 
-    supportPlacementGuideMaterial.uniforms.uPlaneZ.value = supportPlacementGuideEnabled
-      ? Number(supportPlacementGuidePlaneZ)
-      : 0;
     supportPlacementGuideMaterial.uniforms.uLineWidthMm.value = Math.max(0.02, supportPlacementGuideLineWidthMm ?? 0.24);
     supportPlacementGuideMaterial.uniforms.uOpacity.value = THREE.MathUtils.clamp(supportPlacementGuideOpacity ?? 0.62, 0, 1);
     (supportPlacementGuideMaterial.uniforms.uLineColor.value as THREE.Color).set(supportPlacementGuideColor ?? '#baf72e');
   }, [
     supportPlacementGuideColor,
-    supportPlacementGuideEnabled,
     supportPlacementGuideLineWidthMm,
     supportPlacementGuideMaterial,
     supportPlacementGuideOpacity,
-    supportPlacementGuidePlaneZ,
   ]);
+
+  // Plane Z is read from the store every frame instead of arriving as a prop:
+  // the cursor and a tip drag move it continuously, and any update deferred to
+  // a render pass quantizes it, which steps the line by z / tan(surface tilt)
+  // on screen.
+  useFrame(() => {
+    const planeZ = getSupportPlacementGuideZ();
+    supportPlacementGuideMaterial.uniforms.uPlaneZ.value =
+      typeof planeZ === 'number' && Number.isFinite(planeZ) ? planeZ : 0;
+  });
 
   // Red/clear striped overlay flagging a non-manifold model (failed the
   // manifold_csg status check). Uses the SAME world-space stripe seed and
