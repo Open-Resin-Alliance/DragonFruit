@@ -54,6 +54,7 @@ const SEARCH = {
     clearanceMm: 0.98,
     stepMm: 0.5,
     maxLateralMm: 48,
+    leanFromVerticalDeg: 45,
     minVerticalLegMm: 1.0,
     directions: [{ x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 }],
     baseFitsAt: () => true,
@@ -65,7 +66,7 @@ test('findEscapeJoint: takes the closest column that clears, at the 45 degree sh
     const sdf = makeBoxSdf([{ min: [-3, -5, 0], max: [5, 5, 12] }]);
     const socketPos = { x: 0, y: 0, z: 20 };
 
-    const result = findEscapeJoint(sdf, socketPos, 0, { ...SEARCH, leanRampFromVerticalDeg: [45] });
+    const result = findEscapeJoint(sdf, socketPos, 0, SEARCH);
 
     assert.equal(result.outcome, 'found');
     const joint = result.joint!;
@@ -85,10 +86,12 @@ test('findEscapeJoint: takes the closest column that clears, at the 45 degree sh
         `and it is the -x side, got x=${joint.joint.x.toFixed(2)}`);
 });
 
-test('findEscapeJoint: escalates the lean only when no 45 degree leg can clear', () => {
+test('findEscapeJoint: a blocked 45 degree shape leaves the contact, it does not flatten the trunk', () => {
     // Body slab with a taller lip standing on both sides, right where every 45°
-    // ray passes: every direction is blocked at 45°, and the column below clears
-    // only past the lip, so getting out needs a shallower diagonal.
+    // ray passes: every direction is blocked at the shape's lean. The search used
+    // to tilt to 60° and then 75° from vertical to get over the lips, which put a
+    // flat member across the gap. That is a strut, not a support, so the answer
+    // is now no joint and the contact takes a pillar instead.
     const sdf = makeBoxSdf([
         { min: [-5, -100, 0], max: [5, 100, 12] },
         { min: [3, -100, 0], max: [5, 100, 15] },
@@ -96,13 +99,9 @@ test('findEscapeJoint: escalates the lean only when no 45 degree leg can clear',
     ]);
     const socketPos = { x: 0, y: 0, z: 20 };
 
-    const at45 = findEscapeJoint(sdf, socketPos, 0, { ...SEARCH, leanRampFromVerticalDeg: [45] });
-    assert.equal(at45.joint, null, 'no 45° leg gets around the lips');
-
-    const ramped = findEscapeJoint(sdf, socketPos, 0, { ...SEARCH, leanRampFromVerticalDeg: [45, 60, 75] });
-    assert.equal(ramped.outcome, 'found');
-    assert.ok(ramped.joint!.leanFromVerticalDeg > 45,
-        `escalated to ${ramped.joint!.leanFromVerticalDeg}°`);
+    const result = findEscapeJoint(sdf, socketPos, 0, SEARCH);
+    assert.equal(result.joint, null, 'no flat leg, no joint');
+    assert.equal(result.outcome, 'never-cleared');
 });
 
 test('findEscapeJoint: gives up instead of growing an unbounded search', () => {
@@ -111,7 +110,7 @@ test('findEscapeJoint: gives up instead of growing an unbounded search', () => {
 
     const result = findEscapeJoint(sdf, { x: 0, y: 0, z: 20 }, 0, {
         ...SEARCH,
-        leanRampFromVerticalDeg: [45, 60, 75, 89],
+        leanFromVerticalDeg: 45,
     });
 
     assert.equal(result.joint, null);
@@ -128,7 +127,7 @@ test('findGridJoint: keeps the escape heading the way the cone points', () => {
         clearanceMm: 0.98,
         spacingMm: 4,
         maxLateralMm: 48,
-        leanRampFromVerticalDeg: [45],
+        leanFromVerticalDeg: 45,
         minVerticalLegMm: 1.0,
         maxNodeCount: 24,
         baseFitsAt: () => true,
@@ -194,7 +193,7 @@ test('a routed trunk is one diagonal and one vertical drop, never a wandering ch
     const socket = result.socketPos!;
     const joint = result.joints![0];
     const diagonalDeg = angleFromVerticalDeg(socket, joint);
-    assert.ok(diagonalDeg <= 75.05, `diagonal stays within the lean ceiling, got ${diagonalDeg.toFixed(2)}°`);
+    assert.ok(diagonalDeg <= 45.05, `the diagonal never flattens past the shape, got ${diagonalDeg.toFixed(2)}°`);
 
     // Everything below the joint is the load-bearing span, and it is vertical:
     // the trunk's only tilt is the short escape at the tip.

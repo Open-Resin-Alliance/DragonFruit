@@ -86,8 +86,14 @@ const MAX_BASE_SEARCH_RINGS = 4;
 const GRID_BASE_SEARCH_RINGS = 0;
 // Shortest vertical leg worth putting below a joint.
 const MIN_VERTICAL_LEG_MM = 1.0;
-/** Ceiling for the diagonal's lean, tried in order: the shape first, reach after. */
-const LEAN_RAMP_FROM_VERTICAL_DEG = [45, 60, 75];
+/**
+ * Lean of the trunk diagonal, degrees from vertical. The shape is one 45°
+ * diagonal and one joint. It used to escalate to 60° and 75° when no 45° leg
+ * reached a clear column, which got over a wide obstacle just below the tip by
+ * flattening the member: those read as struts leaning off the model rather than
+ * supports, and a contact the shape cannot serve takes a pillar instead.
+ */
+const LEAN_FROM_VERTICAL_DEG = 45;
 /** Lateral step of the outward walk. One SDF probe pair per step. */
 const WALK_STEP_MM = 0.5;
 /** Directions tried, in preference order, before the router gives up. */
@@ -353,7 +359,7 @@ export function calculateSmartPlacementV3(
                 stage: 'route',
                 severity: args.status === 'blocked' ? 'warning' : 'success',
                 message: args.reason,
-                details: `${args.routerProbes} probes, lean ramp ${LEAN_RAMP_FROM_VERTICAL_DEG.join('/')}deg`,
+                details: `${args.routerProbes} probes, diagonal lean ${LEAN_FROM_VERTICAL_DEG}deg`,
             }],
             updatedAtMs: Date.now(),
             isPreview: input.isPreview,
@@ -432,7 +438,7 @@ export function calculateSmartPlacementV3(
     const jointSearchShared = {
         clearanceMm,
         maxLateralMm,
-        leanRampFromVerticalDeg: LEAN_RAMP_FROM_VERTICAL_DEG,
+        leanFromVerticalDeg: LEAN_FROM_VERTICAL_DEG,
         minVerticalLegMm: MIN_VERTICAL_LEG_MM,
         baseFitsAt: (x: number, y: number) => !rootsBlockedAt(x, y),
     };

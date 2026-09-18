@@ -39,26 +39,30 @@ the first direction's answer instead is what produced supports that set off one
 way and then leaned out until some column cleared, when a neighbouring direction
 had a closer column all along.
 
-**Steeper legs are not the answer to that question, and the search does not offer
-them.** A joint's column runs *down* from the joint, so a steeper leg makes it
-longer, never shorter, and getting below an obstruction means crossing it, which
-the leg gate refuses. Measured on a jaw overhang: of every (lateral, lean)
-candidate from 45° down to 5°, only the 45° ones passed both gates at any
+**Neither steeper nor flatter legs are the answer to that question, and the search
+offers neither.** A joint's column runs *down* from the joint, so a steeper leg
+makes it longer, never shorter, and getting below an obstruction means crossing
+it, which the leg gate refuses. Measured on a jaw overhang: of every (lateral,
+lean) candidate from 45° down to 5°, only the 45° ones passed both gates at any
 lateral. Grid mode agrees from the other side, walking its nodes nearest-first.
 
-The lean escalates the other way, to 60° and then 75°, only when no 45° leg
-reaches a clear column at all: a wide obstacle can leave every legal leg blocked
-while a shallower one passes over it.
+Flatter legs are not offered either. The lean used to escalate to 60° and then
+75° from vertical when no 45° leg reached a clear column, which got over a wide
+obstacle just below the tip by laying a flat member across the gap. Those are
+struts leaning off the model rather than supports carrying it, and they read as
+exactly that in the preview. The shape is one diagonal; a contact it cannot serve
+at that shape takes a pillar instead.
 
 Why 45° rather than "as steep as it can get": for a given lateral offset the 45°
 point is the highest joint the lean ceiling allows (the ceiling is
 `drop >= lateral`), so it ends the diagonal soonest, starts the vertical
 earliest, and has the shortest diagonal of any legal leg to that column.
 
-The lean then escalates — 45°, then 60°, then 75° — **only** when no 45° leg
-reaches a clear column. A tip sitting just above a wide obstacle has no 45° leg
-at all (measured: one such fixture grazes the clearance by 0.01 mm), and a
-slightly shallower diagonal still ends in a single joint and a vertical drop.
+The shape is one 45° diagonal per direction, and there is no second lean to fall
+back on: `EscapeJointSearchOptions.leanFromVerticalDeg` is a single number, so a
+caller cannot ask for a flat member even by accident. A tip sitting just above a
+wide obstacle has no 45° leg at all (measured: one such fixture grazes the
+clearance by 0.01 mm) and is left to the pillar path rather than leaned flat.
 
 The walk is bounded three ways: by the lateral envelope
 (`min(72, max(48, verticalSpan × 2.5))` mm), by the height available above the

@@ -14,6 +14,13 @@
  * the same column, and its diagonal is the shortest. Steeper is legal but never
  * better, so the search never spends probes on it.
  *
+ * It never tilts the other way either. The diagonal used to escalate to 60° and
+ * then 75° from vertical when no 45° leg reached a clear column, to get over a
+ * wide obstacle just below the tip. Those are flat members leaning off the model
+ * rather than carrying it, and they read as exactly that: a strut crossing a gap
+ * on its way to a contact it cannot hold. A contact the search cannot serve at
+ * the shape is left unsupported and takes a pillar instead.
+ *
  * What it deliberately is not:
  *
  * - Not a lattice search. No grid, no frontier, no cost function, no expansion
@@ -40,12 +47,11 @@ export interface EscapeJointSearchOptions {
     /** Hard cap on how far the joint may sit from the socket's own column. */
     maxLateralMm: number;
     /**
-     * Lean ceiling from vertical, in degrees, as a ramp tried in order. The
-     * first entry is the shape: a 45° diagonal out of the pocket. Later entries
-     * exist only for obstacles no 45° leg can get around — the shaft still ends
-     * in a single joint and a vertical drop, it just tilts further to clear.
+     * Lean of the diagonal, in degrees from vertical. The shape is one 45°
+     * diagonal out of the pocket, and it does not tilt further: a flatter leg
+     * is a member leaning off the model instead of carrying it.
      */
-    leanRampFromVerticalDeg: number[];
+    leanFromVerticalDeg: number;
     /** Shortest vertical leg worth having below the joint, in mm. */
     minVerticalLegMm: number;
     /**
@@ -127,44 +133,43 @@ export function findEscapeJoint(
     for (let directionIndex = 0; directionIndex < opts.directions.length; directionIndex++) {
         const dir = opts.directions[directionIndex];
 
-        for (const leanDeg of opts.leanRampFromVerticalDeg) {
-            const sinLean = Math.sin(leanDeg * DEG);
-            const cosLean = Math.cos(leanDeg * DEG);
-            // Once a joint is in hand, every remaining walk only has to beat it.
-            const lateralLimitMm = best ? best.lateralMm : maxLateralMm;
-            const maxTravelMm = lateralLimitMm / sinLean;
-            let previous = socketPos;
+        const leanDeg = opts.leanFromVerticalDeg;
+        const sinLean = Math.sin(leanDeg * DEG);
+        const cosLean = Math.cos(leanDeg * DEG);
+        // Once a joint is in hand, every remaining walk only has to beat it.
+        const lateralLimitMm = best ? best.lateralMm : maxLateralMm;
+        const maxTravelMm = lateralLimitMm / sinLean;
+        let previous = socketPos;
 
-            for (let travelledMm = opts.stepMm; travelledMm <= maxTravelMm; travelledMm += opts.stepMm) {
-                if (probes >= MAX_PROBES) {
-                    return best
-                        ? { joint: best, probes, outcome: 'found' }
-                        : { joint: null, probes, outcome: 'probe-budget' };
-                }
-
-                const lateralMm = travelledMm * sinLean;
-                if (best && lateralMm >= best.lateralMm) break;
-                const point: Vec3 = {
-                    x: socketPos.x + lateralMm * dir.x,
-                    y: socketPos.y + lateralMm * dir.y,
-                    z: socketPos.z - travelledMm * cosLean,
-                };
-                if (point.z <= rootTopZ + opts.minVerticalLegMm) break;
-
-                // The leg itself must stay clear. Without this, a diagonal
-                // aimed across the model can punch through a thin wall and
-                // emerge into open air on the far side, which would read as a
-                // valid escape.
-                if (!segmentClear(previous, point)) break;
-
-                if (columnClear(point.x, point.y, point.z) && opts.baseFitsAt(point.x, point.y)) {
-                    best = { joint: point, leanFromVerticalDeg: leanDeg, lateralMm, directionIndex };
-                    // This walk cannot beat itself: lateral only grows along it.
-                    break;
-                }
-
-                previous = point;
+        for (let travelledMm = opts.stepMm; travelledMm <= maxTravelMm; travelledMm += opts.stepMm) {
+            if (probes >= MAX_PROBES) {
+                return best
+                    ? { joint: best, probes, outcome: 'found' }
+                    : { joint: null, probes, outcome: 'probe-budget' };
             }
+
+            const lateralMm = travelledMm * sinLean;
+            if (best && lateralMm >= best.lateralMm) break;
+            const point: Vec3 = {
+                x: socketPos.x + lateralMm * dir.x,
+                y: socketPos.y + lateralMm * dir.y,
+                z: socketPos.z - travelledMm * cosLean,
+            };
+            if (point.z <= rootTopZ + opts.minVerticalLegMm) break;
+
+            // The leg itself must stay clear. Without this, a diagonal
+            // aimed across the model can punch through a thin wall and
+            // emerge into open air on the far side, which would read as a
+            // valid escape.
+            if (!segmentClear(previous, point)) break;
+
+            if (columnClear(point.x, point.y, point.z) && opts.baseFitsAt(point.x, point.y)) {
+                best = { joint: point, leanFromVerticalDeg: leanDeg, lateralMm, directionIndex };
+                // This walk cannot beat itself: lateral only grows along it.
+                break;
+            }
+
+            previous = point;
         }
     }
 
@@ -180,7 +185,7 @@ export interface GridJointSearchOptions {
     /** Hard cap on how far the joint may sit from the socket's own column. */
     maxLateralMm: number;
     /** Lean ramp from vertical, in degrees, tried in order. See `findEscapeJoint`. */
-    leanRampFromVerticalDeg: number[];
+    leanFromVerticalDeg: number;
     /** Shortest vertical leg worth having below the joint, in mm. */
     minVerticalLegMm: number;
     /** How many of the nearest nodes to try before giving up. */
@@ -247,30 +252,26 @@ export function findGridJoint(
         const lateralMm = Math.hypot(x - socketPos.x, y - socketPos.y);
         if (lateralMm > maxLateralMm) return null;
 
-        for (const leanDeg of opts.leanRampFromVerticalDeg) {
-            if (probes >= MAX_PROBES) {
-                return { joint: null, probes, outcome: 'probe-budget' };
-            }
-
-            // A shallower lean reaches the node with less drop, which lifts the
-            // joint and lengthens the vertical leg. The ramp runs from the
-            // shape's 45 degrees outwards only because a wide obstacle can
-            // leave the 45 degree path blocked.
-            const dropMm = lateralMm / Math.tan(leanDeg * DEG);
-            const z = socketPos.z - dropMm;
-            if (z <= rootTopZ + opts.minVerticalLegMm) continue;
-
-            const joint: Vec3 = { x, y, z };
-            if (!segmentClear(socketPos, joint)) continue;
-            if (!columnClear(x, y, z)) continue;
-            if (!opts.baseFitsAt(x, y)) continue;
-            return {
-                joint: { joint, leanFromVerticalDeg: leanDeg, lateralMm },
-                probes,
-                outcome: 'found',
-            };
+        if (probes >= MAX_PROBES) {
+            return { joint: null, probes, outcome: 'probe-budget' };
         }
-        return null;
+
+        // The joint sits where the shape's ray from the socket passes this
+        // node's column, so the drop follows from the lean.
+        const leanDeg = opts.leanFromVerticalDeg;
+        const dropMm = lateralMm / Math.tan(leanDeg * DEG);
+        const z = socketPos.z - dropMm;
+        if (z <= rootTopZ + opts.minVerticalLegMm) return null;
+
+        const joint: Vec3 = { x, y, z };
+        if (!segmentClear(socketPos, joint)) return null;
+        if (!columnClear(x, y, z)) return null;
+        if (!opts.baseFitsAt(x, y)) return null;
+        return {
+            joint: { joint, leanFromVerticalDeg: leanDeg, lateralMm },
+            probes,
+            outcome: 'found',
+        };
     };
 
     // Square rings outwards from the socket's own node, so the nearest node that
