@@ -104,6 +104,35 @@ export const SHORT_SPAN_DETOUR_MAX_LENGTH_MM = 3;
 export const SHORT_SPAN_DETOUR_MAX_ANGLE_FROM_VERTICAL_DEG = 60;
 
 /**
+ * Lean of a trunk's diagonal, degrees from vertical: the shape rule. A routed
+ * trunk is one 45° diagonal and one joint, and it does not escalate to 60° or
+ * 75° when no 45° leg reaches a clear column, because a flatter member reads as
+ * a strut leaning off the model rather than a support. A contact the shape
+ * cannot serve takes a pillar instead.
+ *
+ * Lives here rather than beside the router so callers that build or move trunk
+ * geometry can hold a snapped shape to the same limit: see
+ * `PlacementLogic/Grid/gridPlacement.ts`.
+ */
+export const TRUNK_DIAGONAL_LEAN_FROM_VERTICAL_DEG = 45;
+
+/**
+ * Lean of a span, in degrees from vertical, measured on its vertical extent.
+ *
+ * Direction-agnostic on purpose: a chain is passed socket-first by the router and
+ * base-first by anything that reads geometry, and measuring the signed rise made
+ * every descending span read as a violation. A span that is level with any
+ * lateral offset returns Infinity, because that is as flat as a member gets.
+ * Callers compare the result against the allowance for that span's length.
+ */
+export function spanLeanFromVerticalDeg(start: Vec3, end: Vec3): number {
+    const lateral = distanceXY(start, end);
+    const vertical = Math.abs(end.z - start.z);
+    if (vertical <= 1e-6) return Number.POSITIVE_INFINITY;
+    return (Math.atan2(lateral, vertical) * 180) / Math.PI;
+}
+
+/**
  * The angle a segment of this length is allowed to sit at, from vertical.
  *
  * Long spans tighten, because a long slanted shaft sags and shears. That

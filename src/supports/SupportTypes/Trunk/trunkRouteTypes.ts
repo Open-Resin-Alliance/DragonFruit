@@ -16,6 +16,8 @@ export interface TrunkRouteResult {
     warning?: WarningCode;
     angle?: number;
     coneAxis?: Vec3;
+    /** The grid was dropped for this route: its base is routed, not snapped. */
+    gridIgnored?: boolean;
 }
 
 export interface SnappedTrunkRouteResult extends TrunkRouteResult {

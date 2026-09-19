@@ -47,8 +47,13 @@ import { getSocketPosition } from '../SupportPrimitives/ContactCone';
 import { calculateDiskThickness } from '../SupportPrimitives/ContactDisk/contactDiskUtils';
 import type { SupportTipProfile } from '../SupportPrimitives/ContactCone/types';
 import {
+    distance3D,
+    distanceXY,
+    getLengthAwareMaxAngleFromVerticalDeg,
     segmentSatisfiesLengthAwareMaxAngleFromVertical,
     segmentSatisfiesMaxAngleFromVertical,
+    spanLeanFromVerticalDeg,
+    TRUNK_DIAGONAL_LEAN_FROM_VERTICAL_DEG,
 } from '../PlacementLogic/smartPlacementSearchUtils';
 import {
     getSupportPathfindingDebugEnabled,
@@ -63,8 +68,13 @@ export interface SmartPlacementV3Input extends TrunkPlacementInput {
 }
 
 export interface SmartPlacementV3Context {
-    /** Cached SDF for the model mesh. Reuse across placements for the same model. */
+    /** Cached SDF for the model mesh. Reuse across placements for the same mesh. */
     sdfCache?: SDFCache;
+    /**
+     * Resolve as if the grid were off. Set only by the retry below: a grid
+     * placement that cannot meet the shape rule is re-resolved without it.
+     */
+    ignoreGrid?: boolean;
 }
 
 // Standoff from model geometry, matching the shaft collision gate used
@@ -86,14 +96,8 @@ const MAX_BASE_SEARCH_RINGS = 4;
 const GRID_BASE_SEARCH_RINGS = 0;
 // Shortest vertical leg worth putting below a joint.
 const MIN_VERTICAL_LEG_MM = 1.0;
-/**
- * Lean of the trunk diagonal, degrees from vertical. The shape is one 45°
- * diagonal and one joint. It used to escalate to 60° and 75° when no 45° leg
- * reached a clear column, which got over a wide obstacle just below the tip by
- * flattening the member: those read as struts leaning off the model rather than
- * supports, and a contact the shape cannot serve takes a pillar instead.
- */
-const LEAN_FROM_VERTICAL_DEG = 45;
+/** A base this far off the socket's column still counts as a straight drop. */
+const STRAIGHT_BASE_TOLERANCE_MM = 0.05;
 /** Lateral step of the outward walk. One SDF probe pair per step. */
 const WALK_STEP_MM = 0.5;
 /** Directions tried, in preference order, before the router gives up. */
@@ -271,6 +275,35 @@ function resolveBase(args: {
 }
 
 /**
+ * Whether a resolved chain holds the shape rule: every span from the socket down
+ * to the base, measured against the 45 degrees a trunk's diagonal is built to.
+ *
+ * The router's own checks cover the diagonal it chose and the leg below it, but
+ * not the *base* the grid moved: snapping the drop to a node leaves the socket
+ * where the contact is, so the span under the tip can come out flatter than any
+ * diagonal the router would ever have built. A tip low to the plate beside a node
+ * a couple of millimetres out is the case: there is no height left for a 45°
+ * diagonal, and the builder closes the gap with a near-horizontal elbow.
+ */
+function chainHoldsShapeRule(points: Vec3[], clearanceMm: number): boolean {
+    for (let i = 0; i < points.length - 1; i++) {
+        const start = points[i];
+        const end = points[i + 1];
+        if (distanceXY(start, end) <= Math.max(clearanceMm * 0.5, 0.05)) continue;
+        const spanMm = distance3D(start, end);
+        // The same allowance the router applies to the leg it built: short spans
+        // may take the detour slack, longer ones tighten to the trunk's 45 degrees.
+        const allowanceDeg = getLengthAwareMaxAngleFromVerticalDeg(
+            spanMm,
+            TRUNK_DIAGONAL_LEAN_FROM_VERTICAL_DEG,
+            TRUNK_DIAGONAL_LEAN_FROM_VERTICAL_DEG,
+        );
+        if (spanLeanFromVerticalDeg(start, end) > allowanceDeg + 0.05) return false;
+    }
+    return true;
+}
+
+/**
  * Resolves a trunk placement: the socket the shaft leaves from, the chain that
  * gets it to the plate, and the cone that attaches it to the model.
  *
@@ -297,7 +330,8 @@ export function calculateSmartPlacementV3(
     const diskHeight = settings.roots.diskHeightMm;
     const coneHeight = settings.roots.coneHeightMm;
     const spacingMm = settings.grid.spacingMm;
-    const gridEnabled = settings.grid.enabled;
+    const ignoredGrid = Boolean(settings.grid.enabled && context?.ignoreGrid);
+    const gridEnabled = settings.grid.enabled && !context?.ignoreGrid;
 
     // Two memos only: the roots volume (a disk + cone sweep, the most
     // expensive per-point check here) and the segment test the chain uses.
@@ -359,7 +393,7 @@ export function calculateSmartPlacementV3(
                 stage: 'route',
                 severity: args.status === 'blocked' ? 'warning' : 'success',
                 message: args.reason,
-                details: `${args.routerProbes} probes, diagonal lean ${LEAN_FROM_VERTICAL_DEG}deg`,
+                details: `${args.routerProbes} probes, diagonal lean ${TRUNK_DIAGONAL_LEAN_FROM_VERTICAL_DEG}deg`,
             }],
             updatedAtMs: Date.now(),
             isPreview: input.isPreview,
@@ -402,13 +436,26 @@ export function calculateSmartPlacementV3(
             baseFitsAt: (x, y) => !rootsBlockedAt(x, y),
             segmentBlockedBetween,
         });
-        if (base) {
+        // "Straight" means the column under the socket, and the grid is allowed to
+        // move the base off it. That is not a straight drop any more: the builder
+        // draws it as a vertical leg plus a short closing member, and with a low
+        // contact that member comes out near-horizontal. A base the grid moved is
+        // left to the routing below, which is where a diagonal belongs.
+        const baseIsUnderSocket = Boolean(base) && Math.hypot(
+            base!.basePos.x - cone.socketPos.x,
+            base!.basePos.y - cone.socketPos.y,
+        ) <= STRAIGHT_BASE_TOLERANCE_MM;
+        if (base && baseIsUnderSocket) {
+            const straightChain = [cone.socketPos, base.rootTopTarget];
+            if (gridEnabled && !chainHoldsShapeRule(straightChain, clearanceMm)) {
+                return calculateSmartPlacementV3(input, { ...context, ignoreGrid: true });
+            }
             publishDebug({
                 status: 'straight',
                 reason: 'socket column and roots are clear, no routing',
                 resolvedSocketPos: cone.socketPos,
                 basePos: base.basePos,
-                finalChain: [cone.socketPos, base.rootTopTarget],
+                finalChain: straightChain,
                 straightPreflightClear,
                 rootsFitStraightDown,
                 routerProbes: 0,
@@ -423,6 +470,7 @@ export function calculateSmartPlacementV3(
                 snappedNodeKey: base.nodeKey,
                 coneAxis: cone.coneAxis,
                 error: undefined,
+                gridIgnored: ignoredGrid,
             };
         }
     }
@@ -438,7 +486,7 @@ export function calculateSmartPlacementV3(
     const jointSearchShared = {
         clearanceMm,
         maxLateralMm,
-        leanFromVerticalDeg: LEAN_FROM_VERTICAL_DEG,
+        leanFromVerticalDeg: TRUNK_DIAGONAL_LEAN_FROM_VERTICAL_DEG,
         minVerticalLegMm: MIN_VERTICAL_LEG_MM,
         baseFitsAt: (x: number, y: number) => !rootsBlockedAt(x, y),
     };
@@ -463,6 +511,12 @@ export function calculateSmartPlacementV3(
             ),
         });
     if (!found.joint) {
+        // The grid could not serve this contact: no node left room for the drop at
+        // a lean the shape rule allows. That is the case the grid is dropped for,
+        // rather than refused: the contact is reachable, just not on a node.
+        if (gridEnabled) {
+            return calculateSmartPlacementV3(input, { ...context, ignoreGrid: true });
+        }
         publishDebug({
             status: 'blocked',
             reason: `no joint reached a clear column (${found.outcome}, ${found.probes} probes)`,
@@ -550,6 +604,14 @@ export function calculateSmartPlacementV3(
         return { ...standard, error: 'COLLISION_WITH_MODEL' };
     }
 
+    // Same rule, measured on the whole chain: the leg below the joint can be the
+    // span the grid made flat, when the node it snapped to is off the joint's
+    // column and the joint is low enough to leave no height for the lean.
+    if (gridEnabled
+        && !chainHoldsShapeRule([cone.socketPos, found.joint.joint, base.rootTopTarget], clearanceMm)) {
+        return calculateSmartPlacementV3(input, { ...context, ignoreGrid: true });
+    }
+
     publishDebug({
         status: 'routed',
         reason: `one ${found.joint.leanFromVerticalDeg.toFixed(0)}° diagonal `
@@ -572,5 +634,6 @@ export function calculateSmartPlacementV3(
         snappedNodeKey: base.nodeKey,
         coneAxis: cone.coneAxis,
         error: undefined,
+        gridIgnored: ignoredGrid,
     };
 }

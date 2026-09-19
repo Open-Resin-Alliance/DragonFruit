@@ -319,6 +319,7 @@ export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: T
         warning: placement.warning,
         angle: placement.angle,
         coneAxis: effectiveConeAxis,
+        gridIgnored: placement.gridIgnored,
     };
     const route: TrunkRouteResult | SnappedTrunkRouteResult = placement.snappedNodeKey
         ? {
