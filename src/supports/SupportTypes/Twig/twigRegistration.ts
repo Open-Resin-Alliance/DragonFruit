@@ -25,6 +25,8 @@ registerContactBridgeBuilder('twig', (request) => {
         mesh: request.mesh as THREE.Mesh | undefined,
     });
     // Enforced here rather than at each caller: a twig that hangs its island off
-    // a near-horizontal whisker is not a support, whichever path built it.
-    return twig && isTwigShaftVerticalEnough(twig) ? { entity: twig, error } : null;
+    // a near-horizontal whisker is not a support, whichever automatic path built
+    // it. A manual placement is exempt -- the user aimed both contacts and can
+    // see the cant in the preview, so the call is theirs.
+    return twig && (request.manual || isTwigShaftVerticalEnough(twig)) ? { entity: twig, error } : null;
 });

@@ -619,9 +619,12 @@ export function BranchPlacementController() {
 
                              // The registry chose the type and knows how to
                              // build it; the preview only relabels the result.
+                             // Manual: the cant caps are the auto pass's, not
+                             // the user's, who is aiming these two contacts.
                              const built = buildContactBridge(kind, {
                                  modelId, aPos: tipPosition, aNormal: tipNormal, bPos, bNormal,
                                  mesh: resolveTipMesh(),
+                                 manual: true,
                              });
                              if (built) {
                                  const entity = built.entity as { id: string; segments: Segment[] };
@@ -718,6 +721,7 @@ export function BranchPlacementController() {
                     bPos: meshHover.pos,
                     bNormal: meshHover.normal,
                     mesh: resolveTipMesh(),
+                    manual: true,
                 });
                 if (!built || built.error) return;
                 addSupportEntityWithHistory(
