@@ -141,7 +141,6 @@ const DEFAULT_XRAY_OPACITY = 0.25;
 const DEFAULT_SHADER_TYPE: MeshShaderType = 'soft_clay';
 const DEFAULT_MATCAP_VARIANT: MatcapVariant = 'neutral';
 const DEFAULT_FLAT_USE_VERTEX_COLORS = true;
-const DEFAULT_TOON_STEPS = 5;
 const DEFAULT_HOVER_TINT_STRENGTH = 0.5;
 const DEFAULT_SELECTED_TINT_STRENGTH = 0.70;
 const DRAGONFRUIT_VERSION = process.env.NEXT_PUBLIC_APP_VERSION ?? '0.0.0';
@@ -176,14 +175,13 @@ type SettingsModalProps = {
   onSelectionColorChange: (color: string) => void;
   hoverColor: string;
   onHoverColorChange: (color: string) => void;
-  shaderType: MeshShaderType;
-  onShaderTypeChange: (shaderType: MeshShaderType) => void;
+  /** The type the Mesh tab is configuring. Does not change what the viewport renders. */
+  configuredShaderType: MeshShaderType;
+  onConfiguredShaderTypeChange: (shaderType: MeshShaderType) => void;
   matcapVariant: MatcapVariant;
   onMatcapVariantChange: (variant: MatcapVariant) => void;
   flatUseVertexColors: boolean;
   onFlatUseVertexColorsChange: (value: boolean) => void;
-  toonSteps: number;
-  onToonStepsChange: (value: number) => void;
   ambientIntensity: number;
   onAmbientIntensityChange: (value: number) => void;
   directionalIntensity: number;
@@ -295,14 +293,12 @@ export function SettingsModal({
   onSelectionColorChange,
   hoverColor,
   onHoverColorChange,
-  shaderType,
-  onShaderTypeChange,
+  configuredShaderType,
+  onConfiguredShaderTypeChange,
   matcapVariant,
   onMatcapVariantChange,
   flatUseVertexColors,
   onFlatUseVertexColorsChange,
-  toonSteps,
-  onToonStepsChange,
   ambientIntensity,
   onAmbientIntensityChange,
   directionalIntensity,
@@ -389,10 +385,9 @@ export function SettingsModal({
   const [draftLocale, setDraftLocale] = useState(activeLocale);
 
   const [draftMeshColor, setDraftMeshColor] = useState(meshColor);
-  const [draftShaderType, setDraftShaderType] = useState(shaderType);
+  const [draftShaderType, setDraftShaderType] = useState(configuredShaderType);
   const [draftMatcapVariant, setDraftMatcapVariant] = useState(matcapVariant);
   const [draftFlatUseVertexColors, setDraftFlatUseVertexColors] = useState(flatUseVertexColors);
-  const [draftToonSteps, setDraftToonSteps] = useState(toonSteps);
   const [draftAmbientIntensity, setDraftAmbientIntensity] = useState(ambientIntensity);
   const [draftDirectionalIntensity, setDraftDirectionalIntensity] = useState(directionalIntensity);
   const [draftMaterialRoughness, setDraftMaterialRoughness] = useState(materialRoughness);
@@ -491,10 +486,9 @@ export function SettingsModal({
     const savedThemeProfile = getThemeProfile(savedThemePreset, savedThemeProfiles);
 
     setDraftMeshColor(meshColor);
-    setDraftShaderType(shaderType);
+    setDraftShaderType(configuredShaderType);
     setDraftMatcapVariant(matcapVariant);
     setDraftFlatUseVertexColors(flatUseVertexColors);
-    setDraftToonSteps(toonSteps);
     setDraftAmbientIntensity(ambientIntensity);
     setDraftDirectionalIntensity(directionalIntensity);
     setDraftMaterialRoughness(materialRoughness);
@@ -538,7 +532,6 @@ export function SettingsModal({
     directionalIntensity,
     flatUseVertexColors,
     meshColor,
-    toonSteps,
     matcapVariant,
     materialRoughness,
     heatmapColors,
@@ -549,7 +542,7 @@ export function SettingsModal({
     debugPrimitivesPanelVisible,
     view3dSettings,
     slicingThumbnailRenderSettings,
-    shaderType,
+    configuredShaderType,
     xrayOpacity,
     heatmapMinAngle,
     heatmapMaxAngle,
@@ -856,7 +849,6 @@ export function SettingsModal({
     setDraftShaderType(DEFAULT_SHADER_TYPE);
     setDraftMatcapVariant(DEFAULT_MATCAP_VARIANT);
     setDraftFlatUseVertexColors(DEFAULT_FLAT_USE_VERTEX_COLORS);
-    setDraftToonSteps(DEFAULT_TOON_STEPS);
     setDraftAmbientIntensity(DEFAULT_AMBIENT_INTENSITY);
     setDraftDirectionalIntensity(DEFAULT_DIRECTIONAL_INTENSITY);
     setDraftMaterialRoughness(DEFAULT_MATERIAL_ROUGHNESS);
@@ -935,10 +927,9 @@ export function SettingsModal({
   const handleApply = React.useCallback(() => {
     applyLocale(draftLocale);
     onMeshColorChange(draftMeshColor);
-    onShaderTypeChange(draftShaderType);
+    onConfiguredShaderTypeChange(draftShaderType);
     onMatcapVariantChange(draftMatcapVariant);
     onFlatUseVertexColorsChange(draftFlatUseVertexColors);
-    onToonStepsChange(draftToonSteps);
     onAmbientIntensityChange(draftAmbientIntensity);
     onDirectionalIntensityChange(draftDirectionalIntensity);
     onMaterialRoughnessChange(draftMaterialRoughness);
@@ -1028,7 +1019,6 @@ export function SettingsModal({
     draftHigherContrastModelEdges,
     draftThemePreset,
     draftShaderType,
-    draftToonSteps,
     draftThemePreference,
     draftThemeColors,
     draftThemeProfiles,
@@ -1069,8 +1059,7 @@ export function SettingsModal({
     onDebugPrimitivesPanelVisibleChange,
     onSlicingThumbnailRenderSettingsChange,
     onView3dSettingsChange,
-    onShaderTypeChange,
-    onToonStepsChange,
+    onConfiguredShaderTypeChange,
     onXrayOpacityChange,
     onHeatmapMinAngleChange,
     onHeatmapMaxAngleChange,
@@ -1544,14 +1533,12 @@ export function SettingsModal({
               )}
               {activeTab === 'mesh' && (
                 <MeshSettingsTab
-                  shaderType={draftShaderType}
-                  onShaderTypeChange={setDraftShaderType}
+                  configuredShaderType={draftShaderType}
+                  onConfiguredShaderTypeChange={setDraftShaderType}
                   matcapVariant={draftMatcapVariant}
                   onMatcapVariantChange={setDraftMatcapVariant}
                   flatUseVertexColors={draftFlatUseVertexColors}
                   onFlatUseVertexColorsChange={setDraftFlatUseVertexColors}
-                  toonSteps={draftToonSteps}
-                  onToonStepsChange={setDraftToonSteps}
                   meshColor={draftMeshColor}
                   onMeshColorChange={setDraftMeshColor}
                   ambientIntensity={draftAmbientIntensity}

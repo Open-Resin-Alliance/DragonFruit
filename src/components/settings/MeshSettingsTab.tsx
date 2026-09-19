@@ -20,14 +20,13 @@ type PreviewModelsManifest = {
 };
 
 type MeshSettingsTabProps = {
-  shaderType: MeshShaderType;
-  onShaderTypeChange: (shaderType: MeshShaderType) => void;
+  /** The type this tab is configuring. Independent of the camera dropdown's view mode. */
+  configuredShaderType: MeshShaderType;
+  onConfiguredShaderTypeChange: (shaderType: MeshShaderType) => void;
   matcapVariant: MatcapVariant;
   onMatcapVariantChange: (variant: MatcapVariant) => void;
   flatUseVertexColors: boolean;
   onFlatUseVertexColorsChange: (value: boolean) => void;
-  toonSteps: number;
-  onToonStepsChange: (value: number) => void;
   meshColor: string;
   onMeshColorChange: (color: string) => void;
   ambientIntensity: number;
@@ -56,14 +55,12 @@ type MeshSettingsTabProps = {
   defaultHoverColor?: string;
 };
 export function MeshSettingsTab({
-  shaderType,
-  onShaderTypeChange,
+  configuredShaderType,
+  onConfiguredShaderTypeChange,
   matcapVariant,
   onMatcapVariantChange,
   flatUseVertexColors,
   onFlatUseVertexColorsChange,
-  toonSteps,
-  onToonStepsChange,
   meshColor,
   onMeshColorChange,
   ambientIntensity,
@@ -125,15 +122,14 @@ export function MeshSettingsTab({
   const previewSelectedTintColor = selectionColor;
   const previewSelectedTintStrength = selectedTintStrength;
 
-  const showLighting = shaderType === 'soft_clay' || shaderType === 'toon' || shaderType === 'xray';
-  const showRoughness = shaderType === 'soft_clay' || shaderType === 'xray';
+  const showLighting = configuredShaderType === 'soft_clay' || configuredShaderType === 'xray';
+  const showRoughness = configuredShaderType === 'soft_clay' || configuredShaderType === 'xray';
   const hasRenderingOptions =
-    shaderType === 'matcap' ||
-    shaderType === 'flat_unlit' ||
-    shaderType === 'toon' ||
+    configuredShaderType === 'matcap' ||
+    configuredShaderType === 'flat_unlit' ||
     showRoughness ||
     showLighting ||
-    shaderType === 'overhang_heatmap';
+    configuredShaderType === 'overhang_heatmap';
 
   const activeHexColor = activeColorIndex === 0 ? meshColor : heatmapColors[activeColorIndex - 1];
   const onActiveHexChange = React.useCallback((c: string) => {
@@ -177,7 +173,7 @@ export function MeshSettingsTab({
               Shader &amp; Preview
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Choose the active render shader and tune the mesh color.
+              Pick the shader type to configure here, and tune the mesh color. The camera dropdown chooses what the viewport renders.
             </p>
           </div>
         </div>
@@ -188,8 +184,8 @@ export function MeshSettingsTab({
               Shader Type
             </label>
             <Select
-              value={shaderType}
-              onChange={(e) => onShaderTypeChange(e.target.value as MeshShaderType)}
+              value={configuredShaderType}
+              onChange={(e) => onConfiguredShaderTypeChange(e.target.value as MeshShaderType)}
               className="w-full !h-8"
             >
               {MESH_SHADER_OPTIONS.map((opt) => (
@@ -223,10 +219,9 @@ export function MeshSettingsTab({
             style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)', aspectRatio: '10 / 7' }}
           >
             <MeshShaderPreviewSlot
-              shaderType={shaderType}
+              shaderType={configuredShaderType}
               matcapVariant={matcapVariant}
               flatUseVertexColors={flatUseVertexColors}
-              toonSteps={toonSteps}
               meshColor={meshColor}
               materialRoughness={materialRoughness}
               previewModel={previewModel}
@@ -266,7 +261,7 @@ export function MeshSettingsTab({
               />
             </div>
 
-            {shaderType === 'overhang_heatmap' && (
+            {configuredShaderType === 'overhang_heatmap' && (
               <div className="flex items-center gap-1 pt-0.5">
                 <button
                   type="button"
@@ -311,7 +306,7 @@ export function MeshSettingsTab({
             </div>
 
             <div className="grid grid-cols-2 gap-2 mt-2">
-            {shaderType === 'matcap' && (
+            {configuredShaderType === 'matcap' && (
               <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
                 <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-muted)' }}>
                   Matcap Style
@@ -328,7 +323,7 @@ export function MeshSettingsTab({
               </div>
             )}
 
-            {shaderType === 'flat_unlit' && (
+            {configuredShaderType === 'flat_unlit' && (
               <div className="col-span-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
                 <div className="flex items-center justify-between gap-3">
                   <div>
@@ -354,22 +349,6 @@ export function MeshSettingsTab({
                     {flatUseVertexColors ? 'ON' : 'OFF'}
                   </button>
                 </div>
-              </div>
-            )}
-
-            {shaderType === 'toon' && (
-              <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-                <div className="flex items-center justify-between text-xs mb-1.5">
-                  <span className="font-medium" style={{ color: 'var(--text-muted)' }}>Toon Steps</span>
-                  <span className="font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{toonSteps}</span>
-                </div>
-                <input
-                  type="range" min="2" max="16" step="1"
-                  value={toonSteps}
-                  onChange={(e) => onToonStepsChange(parseInt(e.target.value, 10))}
-                  className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-                  style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
-                />
               </div>
             )}
 
@@ -421,7 +400,7 @@ export function MeshSettingsTab({
               </div>
             )}
 
-            {shaderType === 'xray' && (
+            {configuredShaderType === 'xray' && (
               <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
                 <div className="flex items-center justify-between text-xs mb-1.5">
                   <span className="font-medium" style={{ color: 'var(--text-muted)' }}>X-Ray Opacity</span>
@@ -437,7 +416,7 @@ export function MeshSettingsTab({
               </div>
             )}
 
-            {shaderType === 'overhang_heatmap' && (
+            {configuredShaderType === 'overhang_heatmap' && (
               <>
                 <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
                   <div className="flex items-center justify-between text-xs mb-1.5">
@@ -628,7 +607,6 @@ export function MeshSettingsTab({
                 matcapVariant="neutral"
                 flatUseVertexColors={true}
                 useVertexColors={false}
-                toonSteps={5}
                 meshColor="#a3a3a3"
                 materialRoughness={0.55}
                 previewModel="knot"

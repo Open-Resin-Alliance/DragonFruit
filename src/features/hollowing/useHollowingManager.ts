@@ -5,7 +5,6 @@ import type { useSceneCollectionManager } from '@/features/scene/useSceneCollect
 import type { useTransformManager } from '@/features/transform/useTransformManager';
 import type { HollowingPanelState } from '@/features/hollowing';
 import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
-import type { MeshShaderType } from '@/features/shaders/mesh';
 import type { HolePunchPanelState } from '@/features/hole-punching/HolePunchPanel';
 import type { HolePunchPlacementState } from '@/features/hole-punching/holePunchGeometry';
 import { snapshotGeometryPositions, geometryFromSnapshot } from '@/utils/geometrySnapshot';
@@ -77,7 +76,6 @@ export type HollowingManagerDeps = {
   persistActiveModelModifiers: (next: ModelMeshModifiers | undefined) => void;
   setPendingModifierResetAction: React.Dispatch<React.SetStateAction<'hollowing' | 'hole_punch' | 'clear_hollowing' | null>>;
   setInteriorView: React.Dispatch<React.SetStateAction<boolean>>;
-  setSessionShaderOverride: React.Dispatch<React.SetStateAction<MeshShaderType | null>>;
   computeAutoHolePunchDepthMmForGeometry: (
     model: SceneManager['models'][number],
     targetGeometry: THREE.BufferGeometry,
@@ -289,7 +287,6 @@ export function useHollowingManager({
         // Hollowing is now baked — clear the preview overlay and exit X-Ray
         // forced shader so the user can see surface detail for hole placement.
         clearHollowPreview();
-        deps.current.setSessionShaderOverride(null);
 
         const sourceSnapshot = snapshotGeometryPositions(sourceGeometry);
         let cavityPositionsBase64: string | undefined;

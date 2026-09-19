@@ -3,7 +3,6 @@ import type { MatcapVariant, MeshShaderType } from './types';
 import { SoftClayMaterial } from './softClay';
 import { FlatUnlitMaterial } from './flatUnlit';
 import { MatcapMaterial } from './matcap';
-import { ToonMaterial } from './toon';
 import { NormalDebugMaterial } from './normalDebug';
 import { WireframeMaterial } from './wireframe';
 import { XrayMaterial } from './xray';
@@ -27,7 +26,6 @@ export function MeshShaderMaterial({
   heatmapColors,
   matcapVariant,
   flatUseVertexColors,
-  toonSteps,
 }: {
   shaderType: MeshShaderType;
   isSelected: boolean;
@@ -46,7 +44,6 @@ export function MeshShaderMaterial({
   heatmapColors?: string[];
   matcapVariant?: MatcapVariant;
   flatUseVertexColors?: boolean;
-  toonSteps?: number;
 }) {
   switch (shaderType) {
     case 'flat_unlit':
@@ -76,22 +73,6 @@ export function MeshShaderMaterial({
           useVertexColors={useVertexColors}
           meshColor={meshColor}
           variant={matcapVariant}
-          clippingPlanes={clippingPlanes}
-        />
-      );
-
-    case 'toon':
-      return (
-        <ToonMaterial
-          isSelected={isSelected}
-          isHovered={isHovered}
-          hoverTintColor={hoverTintColor}
-          selectedTintColor={selectedTintColor}
-          hoverTintStrength={hoverTintStrength}
-          selectedTintStrength={selectedTintStrength}
-          useVertexColors={useVertexColors}
-          meshColor={meshColor}
-          toonSteps={toonSteps}
           clippingPlanes={clippingPlanes}
         />
       );

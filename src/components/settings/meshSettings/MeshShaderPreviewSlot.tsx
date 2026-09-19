@@ -8,7 +8,6 @@ export function MeshShaderPreviewSlot({
   shaderType,
   matcapVariant,
   flatUseVertexColors,
-  toonSteps,
   meshColor,
   materialRoughness,
   previewModel,
@@ -24,7 +23,6 @@ export function MeshShaderPreviewSlot({
   shaderType: MeshShaderType;
   matcapVariant: MatcapVariant;
   flatUseVertexColors: boolean;
-  toonSteps: number;
   meshColor: string;
   materialRoughness: number;
   previewModel: string;
@@ -43,7 +41,6 @@ export function MeshShaderPreviewSlot({
         shaderType={shaderType}
         matcapVariant={matcapVariant}
         flatUseVertexColors={flatUseVertexColors}
-        toonSteps={toonSteps}
         meshColor={meshColor}
         materialRoughness={materialRoughness}
         previewModel={previewModel}

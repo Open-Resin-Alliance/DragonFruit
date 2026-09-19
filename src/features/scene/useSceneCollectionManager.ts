@@ -52,7 +52,7 @@ import {
 } from '@/features/scene/sceneImportMessages';
 import { registerMeshForAutoBrace, unregisterMeshForAutoBrace } from '@/supports/autoBracing/meshGeometryStore';
 import { buildModelEdgeGeometry } from '@/hooks/useStlGeometry';
-import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
+import { MESH_SHADER_TYPES, type MatcapVariant, type MeshShaderType } from '@/features/shaders/mesh';
 import { getSavedThemeCustomColors } from '@/components/settings/themeCustomizations';
 import {
   getSavedWorkspaceCameraSettings,
@@ -89,10 +89,12 @@ import { performModelCut, selectModelsForClipboard } from '@/features/scene/mode
 
 type PersistedMeshAppearance = {
   v: 1;
+  /** The view mode the camera dropdown shows, which is also the shader the viewport renders. */
   shaderType: MeshShaderType;
+  /** The type the Mesh settings tab is configuring. Independent of what the viewport renders. */
+  configuredShaderType: MeshShaderType;
   matcapVariant: MatcapVariant;
   flatUseVertexColors: boolean;
-  toonSteps: number;
   ambientIntensity: number;
   directionalIntensity: number;
   materialRoughness: number;
@@ -124,7 +126,6 @@ export const DEFAULT_HEATMAP_COLORS = ['#E55959', '#E5A559', '#D9D959', '#73D973
 const DEFAULT_SHADER_TYPE: MeshShaderType = 'soft_clay';
 const DEFAULT_MATCAP_VARIANT: MatcapVariant = 'neutral';
 const DEFAULT_FLAT_USE_VERTEX_COLORS = true;
-const DEFAULT_TOON_STEPS = 5;
 export const DEFAULT_SELECTION_COLOR = '#ec2a77';
 export const DEFAULT_HOVER_COLOR = '#ec2a77';
 export function getThemedDefaultSelectionColor(): string {
@@ -418,12 +419,8 @@ function clampMatcapVariant(input: unknown, fallback: MatcapVariant): MatcapVari
 }
 
 function clampPersistedMeshShaderType(input: unknown, fallback: MeshShaderType): MeshShaderType {
-  return input === 'soft_clay'
-    || input === 'toon'
-    || input === 'normal_debug'
-    || input === 'wireframe'
-    || input === 'xray'
-    ? input
+  return typeof input === 'string' && (MESH_SHADER_TYPES as readonly string[]).includes(input)
+    ? (input as MeshShaderType)
     : fallback;
 }
 
@@ -450,9 +447,9 @@ function readMeshAppearanceFromLocalStorage(): PersistedMeshAppearance | null {
     return {
       v: 1,
       shaderType,
+      configuredShaderType: clampPersistedMeshShaderType(parsed.configuredShaderType ?? parsed.shaderType, DEFAULT_SHADER_TYPE),
       matcapVariant: clampMatcapVariant(parsed.matcapVariant, DEFAULT_MATCAP_VARIANT),
       flatUseVertexColors: clampBoolean(parsed.flatUseVertexColors, DEFAULT_FLAT_USE_VERTEX_COLORS),
-      toonSteps: clampInt(parsed.toonSteps, 2, 16, DEFAULT_TOON_STEPS),
       ambientIntensity: clampNumber(parsed.ambientIntensity, 0, 4, DEFAULT_AMBIENT_INTENSITY),
       directionalIntensity: clampNumber(parsed.directionalIntensity, 0, 4, DEFAULT_DIRECTIONAL_INTENSITY),
       materialRoughness: clampNumber(parsed.materialRoughness, 0, 1, DEFAULT_MATERIAL_ROUGHNESS),
@@ -1553,9 +1550,12 @@ export function useSceneCollectionManager() {
 
   // Shader-specific settings (Global)
   const [shaderType, setShaderType] = useState<MeshShaderType>(DEFAULT_SHADER_TYPE);
+  // What the Mesh settings tab edits. Deliberately separate from shaderType:
+  // the camera dropdown owns what the viewport renders, the settings tab owns
+  // which type's options it is showing.
+  const [configuredShaderType, setConfiguredShaderType] = useState<MeshShaderType>(DEFAULT_SHADER_TYPE);
   const [matcapVariant, setMatcapVariant] = useState<MatcapVariant>(DEFAULT_MATCAP_VARIANT);
   const [flatUseVertexColors, setFlatUseVertexColors] = useState<boolean>(DEFAULT_FLAT_USE_VERTEX_COLORS);
-  const [toonSteps, setToonSteps] = useState<number>(DEFAULT_TOON_STEPS);
   const [wireframeThicknessPx, setWireframeThicknessPx] = useState<number>(DEFAULT_WIREFRAME_THICKNESS_PX);
   const [xrayOpacity, setXrayOpacity] = useState<number>(DEFAULT_XRAY_OPACITY);
   const [heatmapMinAngle, setHeatmapMinAngle] = useState<number>(DEFAULT_HEATMAP_MIN_ANGLE);
@@ -1596,9 +1596,9 @@ export function useSceneCollectionManager() {
     const persistedAppearance = readMeshAppearanceFromLocalStorage();
     if (persistedAppearance) {
       setShaderType(persistedAppearance.shaderType);
+      setConfiguredShaderType(persistedAppearance.configuredShaderType);
       setMatcapVariant(persistedAppearance.matcapVariant);
       setFlatUseVertexColors(persistedAppearance.flatUseVertexColors);
-      setToonSteps(persistedAppearance.toonSteps);
       setAmbientIntensity(persistedAppearance.ambientIntensity);
       setDirectionalIntensity(persistedAppearance.directionalIntensity);
       setMaterialRoughness(persistedAppearance.materialRoughness);
@@ -1618,34 +1618,49 @@ export function useSceneCollectionManager() {
     setView3dSettingsState(getSavedView3DSettings());
   }, []);
 
+  // The whole appearance record is persisted whenever any of it changes, so
+  // settings survive a reload: the view mode the camera dropdown picks, the
+  // type the Mesh tab is configuring, and every parameter either of them edits.
   useEffect(() => {
-    const prev = readMeshAppearanceFromLocalStorage();
-    if (!prev) {
-      writeMeshAppearanceToLocalStorage({
-        v: 1,
-        shaderType,
-        matcapVariant,
-        flatUseVertexColors,
-        toonSteps,
-        ambientIntensity,
-        directionalIntensity,
-        materialRoughness,
-        wireframeThicknessPx,
-        xrayOpacity,
-        heatmapMinAngle,
-        heatmapMaxAngle,
-        heatmapColors,
-        meshColor: preferredMeshColor,
-        hoverTintStrength,
-        selectedTintStrength,
-        selectionColor,
-        hoverColor,
-      });
-      return;
-    }
-    if (prev.selectionColor === selectionColor && prev.hoverColor === hoverColor) return;
-    writeMeshAppearanceToLocalStorage({ ...prev, selectionColor, hoverColor });
-  }, [selectionColor, hoverColor]);
+    writeMeshAppearanceToLocalStorage({
+      v: 1,
+      shaderType,
+      configuredShaderType,
+      matcapVariant,
+      flatUseVertexColors,
+      ambientIntensity,
+      directionalIntensity,
+      materialRoughness,
+      wireframeThicknessPx,
+      xrayOpacity,
+      heatmapMinAngle,
+      heatmapMaxAngle,
+      heatmapColors,
+      meshColor: preferredMeshColor,
+      hoverTintStrength,
+      selectedTintStrength,
+      selectionColor,
+      hoverColor,
+    });
+  }, [
+    shaderType,
+    configuredShaderType,
+    matcapVariant,
+    flatUseVertexColors,
+    ambientIntensity,
+    directionalIntensity,
+    materialRoughness,
+    wireframeThicknessPx,
+    xrayOpacity,
+    heatmapMinAngle,
+    heatmapMaxAngle,
+    heatmapColors,
+    preferredMeshColor,
+    hoverTintStrength,
+    selectedTintStrength,
+    selectionColor,
+    hoverColor,
+  ]);
 
   const setView3dSettings = useCallback((next: View3DSettings) => {
     const normalized = normalizeView3DSettings(next);
@@ -5594,31 +5609,7 @@ export function useSceneCollectionManager() {
         return { ...m, color: normalizedColor };
       }));
     }
-
-    const prev = readMeshAppearanceFromLocalStorage();
-
-    const persistedShaderType = clampPersistedMeshShaderType(prev?.shaderType ?? shaderType, DEFAULT_SHADER_TYPE);
-    writeMeshAppearanceToLocalStorage({
-      v: 1,
-      shaderType: persistedShaderType,
-      matcapVariant: prev?.matcapVariant ?? matcapVariant,
-      flatUseVertexColors: prev?.flatUseVertexColors ?? flatUseVertexColors,
-      toonSteps: prev?.toonSteps ?? toonSteps,
-      ambientIntensity: prev?.ambientIntensity ?? ambientIntensity,
-      directionalIntensity: prev?.directionalIntensity ?? directionalIntensity,
-      materialRoughness: prev?.materialRoughness ?? materialRoughness,
-      wireframeThicknessPx: prev?.wireframeThicknessPx ?? wireframeThicknessPx,
-      xrayOpacity: prev?.xrayOpacity ?? xrayOpacity,
-      heatmapMinAngle: prev?.heatmapMinAngle ?? heatmapMinAngle,
-      heatmapMaxAngle: prev?.heatmapMaxAngle ?? heatmapMaxAngle,
-      heatmapColors: prev?.heatmapColors ?? heatmapColors,
-      meshColor: normalizedColor,
-      selectionColor: prev?.selectionColor ?? selectionColor,
-      hoverColor: prev?.hoverColor ?? hoverColor,
-      hoverTintStrength: prev?.hoverTintStrength ?? hoverTintStrength,
-      selectedTintStrength: prev?.selectedTintStrength ?? selectedTintStrength,
-    });
-  }, [activeModelId, ambientIntensity, directionalIntensity, flatUseVertexColors, heatmapMinAngle, heatmapColors, heatmapMaxAngle, hoverColor, hoverTintStrength, materialRoughness, matcapVariant, selectedTintStrength, selectionColor, shaderType, toonSteps, wireframeThicknessPx, xrayOpacity]);
+  }, [activeModelId]);
 
   const setMeshVisible = useCallback((visible: boolean) => {
     if (activeModelId) {
@@ -5973,12 +5964,12 @@ export function useSceneCollectionManager() {
     setHeatmapMaxAngle,
     shaderType,
     setShaderType,
+    configuredShaderType,
+    setConfiguredShaderType,
     matcapVariant,
     setMatcapVariant,
     flatUseVertexColors,
     setFlatUseVertexColors,
-    toonSteps,
-    setToonSteps,
     selectionColor,
     setSelectionColor,
     hoverColor,

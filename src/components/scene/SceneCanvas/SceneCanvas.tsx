@@ -427,7 +427,6 @@ export function SceneCanvas({
   shaderType,
   matcapVariant,
   flatUseVertexColors,
-  toonSteps,
   xrayOpacity,
   heatmapMinAngle,
   heatmapMaxAngle,
@@ -541,7 +540,6 @@ export function SceneCanvas({
   shaderType?: import('@/features/shaders/mesh').MeshShaderType;
   matcapVariant?: import('@/features/shaders/mesh').MatcapVariant;
   flatUseVertexColors?: boolean;
-  toonSteps?: number;
   xrayOpacity?: number;
   heatmapMinAngle?: number;
   heatmapMaxAngle?: number;
@@ -6078,7 +6076,6 @@ export function SceneCanvas({
                       shaderType={shaderType ?? 'soft_clay'}
                       matcapVariant={matcapVariant}
                       flatUseVertexColors={flatUseVertexColors}
-                      toonSteps={toonSteps}
                       xrayOpacity={xrayOpacity}
                       heatmapMinAngle={heatmapMinAngle}
                       heatmapMaxAngle={heatmapMaxAngle}

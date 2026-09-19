@@ -178,7 +178,6 @@ function StlMeshComponent({
   shaderType,
   matcapVariant,
   flatUseVertexColors,
-  toonSteps,
   xrayOpacity,
   heatmapMinAngle,
   heatmapMaxAngle,
@@ -245,7 +244,6 @@ function StlMeshComponent({
   shaderType: MeshShaderType;
   matcapVariant?: import('@/features/shaders/mesh').MatcapVariant;
   flatUseVertexColors?: boolean;
-  toonSteps?: number;
   xrayOpacity?: number;
   heatmapMinAngle?: number;
   heatmapMaxAngle?: number;
@@ -1476,7 +1474,6 @@ if (uDitherAmount > 0.0) {
             meshColor={meshColor}
             matcapVariant={matcapVariant}
             flatUseVertexColors={flatUseVertexColors}
-            toonSteps={toonSteps}
             materialRoughness={materialRoughness}
             clippingPlanes={planes}
             xrayOpacity={xrayOpacity}
@@ -1504,7 +1501,6 @@ if (uDitherAmount > 0.0) {
               meshColor={meshColor}
               matcapVariant={matcapVariant}
               flatUseVertexColors={flatUseVertexColors}
-              toonSteps={toonSteps}
               materialRoughness={materialRoughness}
               clippingPlanes={planes}
               xrayOpacity={xrayOpacity}
