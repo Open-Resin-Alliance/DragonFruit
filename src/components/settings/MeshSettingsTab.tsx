@@ -6,7 +6,7 @@ import { MATCAP_OPTIONS, MESH_SHADER_OPTIONS, type MatcapVariant, type MeshShade
 import { HexColorPicker } from 'react-colorful';
 import { MeshShaderPreviewSlot } from '@/components/settings/meshSettings/MeshShaderPreviewSlot';
 import { MeshShaderPreviewCanvas } from '@/components/settings/meshSettings/MeshShaderPreviewCanvas';
-import { Input, Select } from '@/components/atoms';
+import { ColorSwatchInput, Input, Select } from '@/components/atoms';
 import { Layers, MousePointer2, RotateCcw, SlidersHorizontal } from 'lucide-react';
 import { DEFAULT_HOVER_COLOR, DEFAULT_SELECTION_COLOR } from '@/features/scene/useSceneCollectionManager';
 
@@ -492,12 +492,10 @@ export function MeshSettingsTab({
                 <div className="space-y-1">
                   <div className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Selection Color</div>
                   <div className="flex items-center gap-2">
-                    <input
-                      type="color"
+                    <ColorSwatchInput
                       value={selectionColor}
-                      onChange={(e) => onSelectionColorChange(e.target.value)}
-                      className="h-8 w-10 shrink-0 cursor-pointer appearance-none overflow-hidden rounded border p-0 [&::-webkit-color-swatch]:border-0 [&::-webkit-color-swatch-wrapper]:p-0 [&::-moz-color-swatch]:border-0"
-                      style={{ borderColor: 'var(--border-subtle)' }}
+                      onChange={onSelectionColorChange}
+                      className="h-8 w-10"
                     />
                     <input
                       type="text"
@@ -511,12 +509,10 @@ export function MeshSettingsTab({
                 <div className="space-y-1">
                   <div className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Hover Color</div>
                   <div className="flex items-center gap-2">
-                    <input
-                      type="color"
+                    <ColorSwatchInput
                       value={hoverColor}
-                      onChange={(e) => onHoverColorChange(e.target.value)}
-                      className="h-8 w-10 shrink-0 cursor-pointer appearance-none overflow-hidden rounded border p-0 [&::-webkit-color-swatch]:border-0 [&::-webkit-color-swatch-wrapper]:p-0 [&::-moz-color-swatch]:border-0"
-                      style={{ borderColor: 'var(--border-subtle)' }}
+                      onChange={onHoverColorChange}
+                      className="h-8 w-10"
                     />
                     <input
                       type="text"

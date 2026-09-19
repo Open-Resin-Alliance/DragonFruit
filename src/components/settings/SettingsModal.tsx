@@ -34,6 +34,7 @@ import {
   getSavedThemeCustomColors,
   getSavedCustomThemeProfiles,
   getThemeProfile,
+  getThemeProfiles,
   getSavedThemePreset,
   getSavedThemePreference,
   exportThemeProfileToJson,
@@ -130,6 +131,7 @@ import {
   saveImportDefaultsSettings,
   type ImportDefaultsSettings,
 } from '@/features/scene/importDefaultsPreferences';
+import { ColorSwatchInput } from '@/components/atoms';
 
 const DEFAULT_MESH_COLOR = '#a3a3a3';
 const DEFAULT_HEATMAP_MIN_ANGLE = 0;
@@ -1578,11 +1580,7 @@ export function SettingsModal({
               )}
               {activeTab === 'ui' && (
                 <UISettingsTab
-                  themeProfiles={[
-                    getThemeProfile('dragonfruit-dark', draftThemeProfiles),
-                    getThemeProfile('dragonfruit-light', draftThemeProfiles),
-                    ...draftThemeProfiles.map((profile) => getThemeProfile(profile.id, draftThemeProfiles)),
-                  ]}
+                  themeProfiles={getThemeProfiles(draftThemeProfiles)}
                   themePreset={draftThemePreset}
                   onThemePresetChange={handleThemePresetChange}
                   themePreference={draftThemePreference}
@@ -2207,12 +2205,10 @@ export function SettingsModal({
                   Primary branding
                 </label>
                 <div className="flex items-center gap-1.5">
-                  <input
-                    type="color"
+                  <ColorSwatchInput
                     value={draftThemeCreatePrimaryBrandColor}
-                    onChange={(event) => setDraftThemeCreatePrimaryBrandColor(event.target.value)}
-                    className="h-8 w-9 shrink-0 rounded border"
-                    style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}
+                    onChange={setDraftThemeCreatePrimaryBrandColor}
+                    className="h-8 w-9"
                   />
                   <input
                     type="text"
@@ -2229,12 +2225,10 @@ export function SettingsModal({
                   Secondary branding
                 </label>
                 <div className="flex items-center gap-1.5">
-                  <input
-                    type="color"
+                  <ColorSwatchInput
                     value={draftThemeCreateSecondaryBrandColor}
-                    onChange={(event) => setDraftThemeCreateSecondaryBrandColor(event.target.value)}
-                    className="h-8 w-9 shrink-0 rounded border"
-                    style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}
+                    onChange={setDraftThemeCreateSecondaryBrandColor}
+                    className="h-8 w-9"
                   />
                   <input
                     type="text"
