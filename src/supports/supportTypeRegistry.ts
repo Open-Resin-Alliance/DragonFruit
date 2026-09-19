@@ -1201,6 +1201,14 @@ export interface ContactBridgeRequest {
      * does not depend on the renderer.
      */
     mesh?: { isMesh: boolean };
+    /**
+     * True when a person aimed both contacts by hand, rather than the auto
+     * pass filling a gap. The cant caps a bridge type declares keep the auto
+     * pass from crossing a gap with a near-horizontal whisker; an explicit aim
+     * is the user's call, so a manual bridge is built whatever its cant. Auto
+     * callers leave this unset and keep the caps.
+     */
+    manual?: boolean;
 }
 
 /**
