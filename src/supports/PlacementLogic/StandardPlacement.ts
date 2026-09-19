@@ -18,6 +18,12 @@ export interface TrunkPlacementResult {
     socketPos: Vec3;
     unsnappedBottomPos?: Vec3;
     snappedNodeKey?: string | null;
+    /**
+     * Set when the grid was dropped for this placement: the base is where the
+     * router put it, not on a node. Nothing downstream may snap it back, or the
+     * member the snap would need comes back with it.
+     */
+    gridIgnored?: boolean;
     joints?: Vec3[]; // New: List of all joints for multi-segment paths
     constructionJoints?: Vec3[];
     error?: LimitationCode; // Block placement

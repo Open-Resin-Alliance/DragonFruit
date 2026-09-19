@@ -6,6 +6,7 @@ import type { TrunkPlacementResult } from '../PlacementLogic/StandardPlacement';
 import { decideGridPlacement } from '../PlacementLogic/Grid/gridPlacement';
 import { getFinalSocketPosition } from '../SupportPrimitives/ContactCone';
 import { getResolvedSnappedNodeKey } from '../SupportTypes/Trunk/trunkRouteResolution';
+import { gridNodeKeyFromXY } from '../PlacementLogic/Grid/gridMath';
 import { setSettings } from '../Settings/state';
 import { createDefaultSettings } from '../Settings/types';
 import type { SupportState } from '../types';
@@ -58,13 +59,17 @@ function makePlacement(args: {
     x: number;
     y: number;
     socketZ: number;
+    baseX?: number;
+    baseY?: number;
     joints?: TrunkPlacementResult['joints'];
     constructionJoints?: TrunkPlacementResult['constructionJoints'];
 }): TrunkPlacementResult {
+    const baseX = args.baseX ?? args.x;
+    const baseY = args.baseY ?? args.y;
     return {
-        basePos: { x: args.x, y: args.y, z: 0 },
+        basePos: { x: baseX, y: baseY, z: 0 },
         socketPos: { x: args.x, y: args.y, z: args.socketZ },
-        unsnappedBottomPos: { x: args.x, y: args.y, z: 0 },
+        unsnappedBottomPos: { x: baseX, y: baseY, z: 0 },
         snappedNodeKey: null,
         joints: args.joints ?? [],
         constructionJoints: args.constructionJoints ?? [],
@@ -78,6 +83,8 @@ function buildStraightFixture(args: {
     socketZ: number;
     rootsDiskHeightMm?: number;
     rootsConeHeightMm?: number;
+    baseX?: number;
+    baseY?: number;
 }): FixtureBuild {
     const input: TrunkBuildInput = {
         tipPos: { x: args.x, y: args.y, z: args.tipZ },
@@ -91,7 +98,7 @@ function buildStraightFixture(args: {
 
     const build = buildTrunkDataFromPlacement(
         input,
-        makePlacement({ x: args.x, y: args.y, socketZ: args.socketZ }),
+        makePlacement({ x: args.x, y: args.y, socketZ: args.socketZ, baseX: args.baseX, baseY: args.baseY }),
     );
 
     return { input, build };
@@ -613,4 +620,171 @@ test('grid mode routes a tip under an overhang instead of refusing to reach it',
         mesh,
     });
     assert.equal(decision.kind, 'place_trunk');
+});
+
+// ---------------------------------------------------------------------------
+// The grid is a convenience for where the base lands, not a licence to break
+// the shape rule, and not a reason to plant a pillar on top of an existing one.
+// ---------------------------------------------------------------------------
+
+/** Lean of a trunk's own segments, in degrees from vertical. */
+function trunkSegmentLeansDeg(fixture: Pick<FixtureBuild, 'build'>): number[] {
+    const root = fixture.build.root;
+    const cone = fixture.build.trunk.contactCone;
+    const topZ = fixture.build.trunk.segments[fixture.build.trunk.segments.length - 1]?.topJoint?.pos;
+    return fixture.build.trunk.segments.map((seg) => {
+        const start = seg.bottomJoint?.pos ?? root.transform.pos;
+        const end = seg.topJoint?.pos ?? (cone ? getFinalSocketPosition(cone) : { x: start.x, y: start.y, z: topZ?.z ?? start.z });
+        const rise = end.z - start.z;
+        const lateral = Math.hypot(end.x - start.x, end.y - start.y);
+        return (Math.atan2(lateral, Math.max(rise, 1e-6)) * 180) / Math.PI;
+    });
+}
+
+/** Slab with a low jaw reaching out at ~7mm: the contact sits barely above the anchor band. */
+function makeLowOverhangMesh(): THREE.Mesh {
+    const body = new THREE.BoxGeometry(25, 20, 8);
+    body.translate(-9, 0, 4);
+    const jaw = new THREE.BoxGeometry(6, 20, 2);
+    jaw.translate(3, 0, 7);
+    const geometry = mergeGeometries([body, jaw])!;
+    accelerateGeometry(geometry);
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial());
+    mesh.updateMatrixWorld(true);
+    return mesh;
+}
+
+test('a low contact whose grid node would need a flatter shaft than 45 degrees drops the grid', () => {
+    initializeBVH();
+    const settings = makeSettings();
+    setSettings(settings);
+    const mesh = makeLowOverhangMesh();
+    const tipPos = { x: 6, y: 0, z: 6.2 };
+    const tipNormal = { x: 0, y: 0, z: -1 };
+
+    // The column under this contact is clear, but the node nearest it is 2 mm out
+    // and the contact sits ~1.6 mm above the root top: a 45 degree diagonal needs
+    // more height than that, so the grid drop would close the gap with a
+    // near-horizontal elbow (measured at 74 degrees from vertical).
+    const trunk = buildTrunkData({ tipPos, tipNormal, modelId: MODEL_ID, mesh });
+    assert.equal(trunk.error, undefined, `the tip is reachable (${trunk.error})`);
+    assert.equal(getResolvedSnappedNodeKey(trunk.route), null,
+        'the grid is ignored rather than met with a shaft past 45 degrees');
+    for (const leanDeg of trunkSegmentLeansDeg({ build: trunk })) {
+        assert.ok(leanDeg <= 45 + 1e-6, `every routed span stays inside the shape rule, got ${leanDeg}`);
+    }
+
+    // The decision must not put the snap back: it is the same node, and the same
+    // flat span, whether the snap happens in the router or in the decision.
+    const decision = decideGridPlacement({
+        settings,
+        snapshot: makeEmptySnapshot(),
+        candidate: trunk,
+        tipPos,
+        tipNormal,
+        modelId: MODEL_ID,
+        mesh,
+    });
+    assert.equal(decision.kind, 'place_trunk');
+    if (decision.kind !== 'place_trunk') return;
+    assert.equal(decision.nodeKey, 'unsnapped');
+    assert.equal(decision.trunkBuild.root.transform.pos.x, 6, 'the clear column under the contact stands');
+    for (const leanDeg of trunkSegmentLeansDeg({ build: decision.trunkBuild })) {
+        assert.ok(leanDeg <= 45 + 1e-6, `the placed trunk stays inside the shape rule, got ${leanDeg}`);
+    }
+});
+
+test('a snap that keeps the shaft inside 45 degrees still lands on the node', () => {
+    const settings = makeSettings();
+    setSettings(settings);
+
+    // Same 2 mm snap, but 10 mm of rise under it: 11 degrees, well inside the rule.
+    const candidate = buildStraightFixture({ x: 2, y: 0, tipZ: 10, socketZ: 10 });
+
+    const decision = decideGridPlacement({
+        settings,
+        snapshot: makeEmptySnapshot(),
+        candidate: candidate.build,
+        tipPos: candidate.input.tipPos,
+        tipNormal: candidate.input.tipNormal,
+        modelId: MODEL_ID,
+    });
+
+    assert.equal(decision.kind, 'place_trunk');
+    assert.equal(decision.nodeKey, '1,0');
+    if (decision.kind !== 'place_trunk') return;
+    assert.equal(decision.trunkBuild.root.transform.pos.x, 4, 'the base lands on the node');
+});
+
+test('a trunk standing between nodes still takes the merge for the node it covers', () => {
+    const settings = makeSettings();
+    setSettings(settings);
+
+    // A hand-placed root 2 mm off node (0,0) keys to the neighbouring node (1,0),
+    // so a key lookup at (0,0) finds no host: the point is occupied all the same.
+    const snapshot = makeEmptySnapshot();
+    const host = buildStraightFixture({ x: 2, y: 0, tipZ: 10, socketZ: 9 });
+    addTrunkBuild(snapshot, host);
+
+    const candidate = buildStraightFixture({ x: 0, y: 0, tipZ: 6, socketZ: 5 });
+
+    const decision = decideGridPlacement({
+        settings,
+        snapshot,
+        candidate: candidate.build,
+        tipPos: candidate.input.tipPos,
+        tipNormal: candidate.input.tipNormal,
+        modelId: MODEL_ID,
+    });
+
+    if (decision.kind !== 'place_branch' && decision.kind !== 'place_leaf') {
+        assert.fail(`expected a merge into the trunk already standing there, got ${decision.kind}`);
+    }
+    assert.equal(decision.hostTrunkId, host.build.trunk.id);
+});
+
+test('decideGridPlacement merges into a trunk standing off-grid whose contact holds the node', () => {
+    const settings = makeSettings();
+    setSettings(settings);
+
+    const snapshot = makeEmptySnapshot();
+    // The grid could not be met at 45 degrees, so the base stands routed away
+    // from the contact it carries (gridIgnored): its root is not on this node.
+    const offGridHost = buildStraightFixture({
+        x: 0,
+        y: 0,
+        tipZ: 10,
+        socketZ: 9,
+        baseX: 2.5,
+    });
+    addTrunkBuild(snapshot, offGridHost);
+    assert.equal(
+        gridNodeKeyFromXY(offGridHost.build.root.transform.pos.x, offGridHost.build.root.transform.pos.y, GRID_SPACING_MM),
+        '1,0',
+        'fixture premise: the routed base is keyed to a neighbouring node',
+    );
+
+    const candidate = buildStraightFixture({
+        x: -0.5,
+        y: 0,
+        tipZ: 9.5,
+        socketZ: 8.5,
+    });
+
+    const decision = decideGridPlacement({
+        settings,
+        snapshot,
+        candidate: candidate.build,
+        tipPos: candidate.input.tipPos,
+        tipNormal: candidate.input.tipNormal,
+        modelId: MODEL_ID,
+    });
+
+    // The contact is what occupies the point: a second pillar beside the first
+    // is a preview that overlaps it and a placement the click refuses.
+    if (decision.kind !== 'place_branch' && decision.kind !== 'place_leaf') {
+        assert.fail(`expected an attachment to the trunk serving this node, got ${decision.kind}`);
+    }
+    assert.equal(decision.nodeKey, '0,0');
+    assert.equal(decision.hostTrunkId, offGridHost.build.trunk.id);
 });

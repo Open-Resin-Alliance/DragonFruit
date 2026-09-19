@@ -18,6 +18,28 @@ Grid support logic ensures deterministic trunk ownership and efficient branch re
    contact becomes a branch on the existing pillar so the pillar keeps serving every
    contact it already carries.
 4. Search alternate nodes only when no same-node trunk ownership applies.
+5. The grid is dropped when it cannot be met at 45° or steeper. A contact low to the
+   plate beside a node a couple of millimetres out has no height left for the trunk
+   diagonal, so a base held to that node is not a straight drop any more: the builder
+   draws a vertical leg plus a short closing member, and that closing member comes out
+   near-horizontal (measured at 74° from vertical on a 6mm contact). The router
+   resolves the placement with the grid out instead (`TrunkPlacementResult.gridIgnored`,
+   carried onto the route), the base lands under the contact's own column, and the drop
+   stays vertical or a proper 45° diagonal. The decision never snaps such a route back
+   onto a node, and it never invents one: the flag is the signal.
+6. A node that already holds a trunk is an occupied point, even when the map misses it.
+   Each trunk is indexed by both ends it has: where the pillar stands (its root) and the
+   point it serves (its contact). A root-only index goes wrong twice over — a root
+   sitting between nodes (hand placed, or placed before the spacing changed) is keyed to
+   a neighbour, and a base routed off the grid (policy 5) stands a shaft height away
+   from its own contact, so the point that trunk serves looks free and the next contact
+   there gets offered a second pillar overlapping the first. Within half a step of the
+   node centre, measured to whichever end is nearer, the trunk standing there takes the
+   merge (branch or leaf); grid mode never replaces a trunk, and a second pillar beside
+   the first is a preview that gets refused rather than a placement. A short graft into
+   a trunk on an occupied node may lean like a socket elbow (≤3mm, ≤75° from vertical) —
+   the bound the rest of the system gives a short member under a contact — because
+   refusing it leaves the tip unplaced with no second pillar to fall back to.
 
 ## Branch support contract
 
