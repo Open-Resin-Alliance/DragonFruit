@@ -9,7 +9,7 @@ import { SettingsModal, type SettingsTabKey } from '@/components/settings/Settin
 import { ProfileSettingsModal } from '@/components/settings/ProfileSettingsModal';
 import type { SupportMode } from '@/supports/types';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
-import { Button } from '@/components/atoms';
+import { AlertDiamondIcon, Button } from '@/components/atoms';
 import { Activity, AlertTriangle, Anchor, ChevronDown, FolderInput, FolderOpen, Lock, Maximize2, Minimize2, Power, Printer, Save, SaveAll, Square, Upload, X } from 'lucide-react';
 import {
   applyThemeCustomColors,
@@ -43,14 +43,13 @@ interface TopBarProps {
   onSelectionColorChange: (color: string) => void;
   hoverColor: string;
   onHoverColorChange: (color: string) => void;
-  shaderType: MeshShaderType;
-  onShaderTypeChange: (shaderType: MeshShaderType) => void;
+  /** The type the Mesh tab in Settings is configuring. */
+  configuredShaderType: MeshShaderType;
+  onConfiguredShaderTypeChange: (shaderType: MeshShaderType) => void;
   matcapVariant: MatcapVariant;
   onMatcapVariantChange: (variant: MatcapVariant) => void;
   flatUseVertexColors: boolean;
   onFlatUseVertexColorsChange: (value: boolean) => void;
-  toonSteps: number;
-  onToonStepsChange: (value: number) => void;
   ambientIntensity: number;
   onAmbientIntensityChange: (value: number) => void;
   directionalIntensity: number;
@@ -78,11 +77,12 @@ interface TopBarProps {
   onModeChange: (mode: SupportMode) => void;
   hasModels: boolean;
   hasPrintingData: boolean;
-  viewTypeOverride: MeshShaderType | null;
-  onViewTypeOverrideChange: (value: MeshShaderType | null) => void;
-  interiorView: boolean;
-  onInteriorViewChange: (value: boolean) => void;
-  interiorViewAvailable?: boolean;
+  /** The persisted view mode: what the camera dropdown shows and the viewport renders. */
+  viewType: MeshShaderType;
+  onViewTypeChange: (value: MeshShaderType) => void;
+  /** True while the Overhangs view mode is active, so the quick toggle can show it. */
+  overhangViewActive: boolean;
+  onOverhangViewChange: (value: boolean) => void;
   heatmapColors: string[];
   onHeatmapColorChange: (index: number, color: string) => void;
   isSlicingBusy?: boolean;
@@ -111,14 +111,12 @@ export function TopBar({
   onSelectionColorChange,
   hoverColor,
   onHoverColorChange,
-  shaderType,
-  onShaderTypeChange,
+  configuredShaderType,
+  onConfiguredShaderTypeChange,
   matcapVariant,
   onMatcapVariantChange,
   flatUseVertexColors,
   onFlatUseVertexColorsChange,
-  toonSteps,
-  onToonStepsChange,
   ambientIntensity,
   onAmbientIntensityChange,
   directionalIntensity,
@@ -145,11 +143,10 @@ export function TopBar({
   onModeChange,
   hasModels,
   hasPrintingData,
-  viewTypeOverride,
-  onViewTypeOverrideChange,
-  interiorView,
-  onInteriorViewChange,
-  interiorViewAvailable = true,
+  viewType,
+  onViewTypeChange,
+  overhangViewActive,
+  onOverhangViewChange,
   heatmapColors,
   onHeatmapColorChange,
   isSlicingBusy = false,
@@ -587,6 +584,11 @@ export function TopBar({
     if (typeof window === 'undefined') return false;
     return window.innerWidth < 800;
   });
+  // The view mode trigger shows the selected shader's name when the bar has room
+  // and falls back to its icon when it does not. Its own width feeds the
+  // measurement it is based on, so the thresholds are asymmetric: appearing
+  // needs more room than staying does.
+  const [showViewModeLabel, setShowViewModeLabel] = React.useState(false);
 
   React.useEffect(() => {
     const el = stepsContainerRef.current;
@@ -595,6 +597,7 @@ export function TopBar({
       const gapPx = 4;
       const perButton = (entry.contentRect.width - 3 * gapPx) / 4;
       setHideBadges(perButton < 120);
+      setShowViewModeLabel((previous) => (previous ? perButton >= 130 : perButton >= 155));
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -1125,28 +1128,22 @@ export function TopBar({
           {!hideWorkflowControls && (
           <>
           <ViewTypeDropdown
-            value={viewTypeOverride}
-            onChange={onViewTypeOverrideChange}
-            iconOnly
+            value={viewType}
+            onChange={onViewTypeChange}
+            iconOnly={!showViewModeLabel}
             title={_(msg`View mode`)}
-            className="[&>button]:!h-8 [&>button]:!w-8 [&>button]:!p-0"
           />
           <Button
             type="button"
-            variant={interiorView ? 'primary' : 'secondary'}
+            variant={overhangViewActive ? 'primary' : 'secondary'}
             className="!p-2"
-            onClick={() => onInteriorViewChange(!interiorView)}
-            disabled={topbarActionsDisabled || !interiorViewAvailable}
-            title={interiorView ? _(msg({ message: 'Interior view: On', comment: 'Tooltip for a toggle button showing its current state, format "Feature name: state". Interior view is a 3D viewport mode that renders the inside of a hollowed model.' })) : interiorViewAvailable ? _(msg`Interior view: Off`) : _(msg`Interior view: Unavailable (apply hollowing first)`)}
-            aria-label={interiorView ? _(msg`Interior view: On`) : interiorViewAvailable ? _(msg`Interior view: Off`) : _(msg`Interior view: Unavailable`)}
+            onClick={() => onOverhangViewChange(!overhangViewActive)}
+            disabled={topbarActionsDisabled}
+            title={overhangViewActive ? _(msg({ message: 'Overhangs view: On', comment: 'Tooltip for a toggle button showing its current state, format "Feature name: state". The Overhangs view colours surfaces by how steeply they overhang, which is where supports are needed.' })) : _(msg`Overhangs view: Off`)}
+            aria-label={overhangViewActive ? _(msg`Overhangs view: On`) : _(msg`Overhangs view: Off`)}
             data-no-window-drag="true"
           >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2">
-              {/* Cube with inward-facing arrow to symbolize inner/backface viewing */}
-              <path strokeLinecap="round" strokeLinejoin="round" d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 002 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v18M3.6 9l16.8 0M3.6 15l16.8 0" opacity="0.3" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 11l-2 2m2-2l2 2m-2-2v3" />
-            </svg>
+            <AlertDiamondIcon className="w-4 h-4" />
           </Button>
           </>
           )}
@@ -1329,14 +1326,12 @@ export function TopBar({
         onSelectionColorChange={onSelectionColorChange}
         hoverColor={hoverColor}
         onHoverColorChange={onHoverColorChange}
-        shaderType={shaderType}
-        onShaderTypeChange={onShaderTypeChange}
+        configuredShaderType={configuredShaderType}
+        onConfiguredShaderTypeChange={onConfiguredShaderTypeChange}
         matcapVariant={matcapVariant}
         onMatcapVariantChange={onMatcapVariantChange}
         flatUseVertexColors={flatUseVertexColors}
         onFlatUseVertexColorsChange={onFlatUseVertexColorsChange}
-        toonSteps={toonSteps}
-        onToonStepsChange={onToonStepsChange}
         ambientIntensity={ambientIntensity}
         onAmbientIntensityChange={onAmbientIntensityChange}
         directionalIntensity={directionalIntensity}

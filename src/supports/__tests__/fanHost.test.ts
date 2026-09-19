@@ -307,9 +307,13 @@ test('fanLeafToTrunk routes long island spans to branches', () => {
     }
 });
 
-test('fanLeafToTrunk keeps long overhang spans as leaves', () => {
-    // Same geometry with overhang origin: overhang fanning stays leaves
-    // by rule, even past the branch threshold.
+test('fanLeafToTrunk branches a long overhang span too', () => {
+    // Same geometry with overhang origin. This used to stay a leaf "by rule",
+    // which is how an 11.6mm tapered cone got built and merged: a leaf is a
+    // seg-less cone, so past the branch threshold it stands next to its trunk
+    // as a spindly spike rather than supporting anything. Nothing about a
+    // downward-facing contact makes that acceptable — buildConsolidationBranch
+    // has always built overhang-origin branches.
     const draft = trunkWithShaft('host', 0, 0, 0, 19);
     const fan = fanLeafToTrunk(
         { x: 3, y: 0, z: 18 }, 'm', [sp('host', 0, 0, 12)],
@@ -318,8 +322,11 @@ test('fanLeafToTrunk keeps long overhang spans as leaves', () => {
 
     assert.equal(fan.ok, true, 'fan succeeds');
     if (fan.ok) {
-        assert.equal(fan.kind, 'leaf', 'overhang origin stays a leaf');
-        assert.equal(Object.keys(fan.draft.leaves).length, 1, 'one leaf attached');
+        assert.equal(fan.kind, 'branch', 'a 6.7mm overhang span gets a real shaft');
+        assert.equal(Object.keys(fan.draft.branches).length, 1, 'one branch attached');
+        assert.equal(Object.keys(fan.draft.leaves).length, 0, 'no leaf cone built');
+        assert.equal(Object.values(fan.draft.branches)[0].origin, 'overhang',
+            'and it carries the overhang origin, like the consolidation branches do');
     }
 });
 
@@ -340,4 +347,37 @@ test('findMergeHost prefers the less-loaded of equidistant hosts', () => {
 
     const host = findMergeHost({ x: 0, y: 0, z: 1 }, 'm', draft);
     assert.ok(host && host.trunkId === 'B', 'merge avoids the loaded host');
+});
+
+test('a cavity rescue links a low host that the normal span cap refuses', () => {
+    // The real case: a tip at the top of a spike, and the only host close to it
+    // in plan is 2.2mm away but low — so every sample that clears the angle
+    // gate is far enough down to make a long link. The derived wide-tier cap
+    // (reach / sin(maxAngle) = 24mm here) refuses all of them, the refusal
+    // reports `noHost (nearest 2.2mm plan, no legal host)`, and the tip ends up
+    // as a model-to-model stick carrying a second scar on the model.
+    const draft = trunkWithShaft('host', 0, 0, 2, 11);
+    const pool = [sp('host', 0, 0, 4), sp('host', 0, 0, 8), sp('host', 0, 0, 11)];
+    const target = { x: 2.2, y: 0, z: 39.6 };
+
+    const capped = fanLeafToTrunk(target, 'm', pool, new Set(), 'cap', 12, 12, 30, 12, draft, undefined);
+    assert.equal(capped.ok, false, 'the derived cap leaves the tip stranded');
+    if (!capped.ok) {
+        assert.equal(capped.reason, 'noHost', 'and says so in a way that names the reach, not the angle');
+        assert.ok(Math.abs((capped.nearestHostMm ?? 0) - 2.2) < 0.01,
+            `while reporting how close the host actually is (${capped.nearestHostMm})`);
+        assert.equal(capped.nearestSteepMm, undefined, 'no sample was ever legal');
+    }
+
+    const rescued = fanLeafToTrunk(
+        target, 'm', pool, new Set(), 'rescue', 12, 12, 30, 12, draft, undefined,
+        undefined, 'steepest', Number.POSITIVE_INFINITY,
+    );
+    assert.ok(rescued.ok, `the cavity rescue carries it (${rescued.ok ? '' : rescued.reason})`);
+    if (rescued.ok) {
+        assert.equal(rescued.trunkId, 'host');
+        assert.equal(rescued.kind, 'branch', 'a 29mm link is a branch, not a leaf cone');
+        assert.ok(rescued.angleDeg < 10, `the link is near-vertical (${rescued.angleDeg.toFixed(1)}deg)`);
+        assert.ok(rescued.distMm > 25, `it reaches the low sample (${rescued.distMm.toFixed(1)}mm)`);
+    }
 });

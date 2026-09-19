@@ -4,6 +4,7 @@ import {
   type OrganicCutColors,
 } from './organicCutColors';
 import { useOrganicCutColors } from './useOrganicCutColors';
+import { ColorSwatchInput } from '@/components/atoms';
 
 const FIELDS: { key: keyof OrganicCutColors; label: string; hint: string }[] = [
   { key: 'seam', label: 'Seam', hint: 'The cut line you draw.' },
@@ -66,12 +67,10 @@ export function OrganicCutColorsSection() {
                 {label}
               </label>
               <div className="flex min-w-0 items-center gap-1.5">
-                <input
-                  type="color"
+                <ColorSwatchInput
                   value={colors[key]}
-                  onChange={(e) => set(key, e.target.value)}
-                  className="h-7 w-8 shrink-0 rounded border"
-                  style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                  onChange={(next) => set(key, next)}
+                  className="h-7 w-8"
                 />
                 <input
                   type="text"

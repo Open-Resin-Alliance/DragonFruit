@@ -52,6 +52,17 @@ backup/legacy keys, sanitize-on-read, `setState → sanitize → persist → not
 and active-material sidecar keys. Minimal examples: `printerReachabilityStore.ts`,
 `src/volumeAnalysis/Islands/hoverStore.ts`.
 
+One store splits its two channels on purpose.
+`src/components/scene/SceneCanvas/supportPlacementGuideStore.ts` holds the
+support placement guide plane, which follows the pointer continuously: it
+notifies on the boolean "is the plane set" (that flips on enter and leave, and is
+what `SceneCanvas` subscribes to in order to mount the overlay) and exposes the Z
+itself through a plain getter, read every frame by the guide's material. A value
+that moves every frame is not a snapshot — subscribing to it would re-render the
+scene per pointer move, and throttling it is what made the line step on shallow
+faces. Reach for this shape only when a consumer genuinely needs the live value
+outside render.
+
 ## The support store
 
 `src/supports/state.ts` is the largest module store here and departs from the

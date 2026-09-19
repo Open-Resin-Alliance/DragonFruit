@@ -21,16 +21,6 @@ export type GridPlacementDecision =
         nodeKey: GridNodeKey;
     }
     | {
-        kind: 'replace_trunk';
-        nodeKey: GridNodeKey;
-        hostTrunkId: string;
-        trunkBuild: TrunkBuildResult;
-        promoteKnot: Knot;
-        promoteBranch: Branch;
-        oldTrunkKnot: Knot | null;
-        oldTrunkBranch: Branch | null;
-    }
-    | {
         kind: 'place_branch';
         nodeKey: GridNodeKey;
         hostTrunkId: string;

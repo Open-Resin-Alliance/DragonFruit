@@ -31,6 +31,7 @@ import { MeshRepairModals } from '@/components/organisms/modals/MeshRepairModals
 import { useMirrorManager } from '@/features/mirror/useMirrorManager';
 import { useArrangeManager } from '@/features/scene/arrange/useArrangeManager';
 import { useHolePunchManager } from '@/features/hole-punching/useHolePunchManager';
+import { type MeshShaderType } from '@/features/shaders/mesh';
 import { useHollowingManager } from '@/features/hollowing/useHollowingManager';
 import type { HollowingManagerDeps } from '@/features/hollowing/useHollowingManager';
 import { useModifierApplyOverlay } from '@/features/hollowing/useModifierApplyOverlay';
@@ -358,7 +359,6 @@ import { getSupportsForModel, modelIdOfParentShaft } from '@/supports/PlacementL
 import { buildProjectedCrossSectionZRange } from '@/features/slicing/rasterLayerZipExport';
 import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
 
-import { type MeshShaderType } from '@/features/shaders/mesh';
 import type { ModelTransform, TransformMode } from '@/hooks/useModelTransform';
 import type { Segment, SupportMode } from '@/supports/types';
 import { VoxlSizeLimitError } from '@/features/scene/voxl';
@@ -687,7 +687,6 @@ export default function Home() {
     persistActiveModelModifiers: () => {},
     setPendingModifierResetAction: () => {},
     setInteriorView: () => {},
-    setSessionShaderOverride: () => {},
     computeAutoHolePunchDepthMmForGeometry: () => 0,
     setHolePunchState: () => {},
     setHolePunchPlacements: () => {},
@@ -1062,7 +1061,6 @@ export default function Home() {
     sceneImportReport: scene.sceneImportReport,
   });
 
-  const [sessionShaderOverride, setSessionShaderOverride] = React.useState<MeshShaderType | null>(null);
   const [interiorView, setInteriorView] = React.useState(false);
   const isSupportSpotlightHoldActive = useActionActive('SUPPORTS', 'TEMP_SPOTLIGHT_HOLD');
   const [allowPrepareWithoutPrinter, setAllowPrepareWithoutPrinter] = React.useState(false);
@@ -9231,7 +9229,22 @@ export default function Home() {
     && !scene.activeModel?.meshModifiers?.hollowing?.bakedIntoGeometry;
   const effectiveShaderType = (shouldForceHollowingXray || hollowPreview)
     ? 'xray'
-    : (sessionShaderOverride ?? scene.shaderType);
+    : scene.shaderType;
+
+  // The Overhangs quick toggle remembers what it interrupted, so turning it off
+  // puts the viewport back where it was rather than on an arbitrary mode.
+  const preOverhangViewTypeRef = React.useRef<MeshShaderType>('soft_clay');
+  const toggleOverhangView = React.useCallback((next: boolean) => {
+    if (next) {
+      if (scene.shaderType !== 'overhang_heatmap') {
+        preOverhangViewTypeRef.current = scene.shaderType;
+      }
+      scene.setShaderType('overhang_heatmap');
+      return;
+    }
+    const previous = preOverhangViewTypeRef.current;
+    scene.setShaderType(previous === 'overhang_heatmap' ? 'soft_clay' : previous);
+  }, [scene.shaderType, scene.setShaderType]);
 
   // Populate the hollowing manager deps now that the hole-punch manager and
   // shared callbacks exist (breaks the TDZ/dependency cycle).
@@ -9244,7 +9257,6 @@ export default function Home() {
     persistActiveModelModifiers,
     setPendingModifierResetAction,
     setInteriorView,
-    setSessionShaderOverride,
     computeAutoHolePunchDepthMmForGeometry,
     setHolePunchState,
     setHolePunchPlacements,
@@ -9774,14 +9786,12 @@ export default function Home() {
         onSelectionColorChange={scene.setSelectionColor}
         hoverColor={scene.hoverColor}
         onHoverColorChange={scene.setHoverColor}
-        shaderType={scene.shaderType}
-        onShaderTypeChange={scene.setShaderType}
+        configuredShaderType={scene.configuredShaderType}
+        onConfiguredShaderTypeChange={scene.setConfiguredShaderType}
         matcapVariant={scene.matcapVariant}
         onMatcapVariantChange={scene.setMatcapVariant}
         flatUseVertexColors={scene.flatUseVertexColors}
         onFlatUseVertexColorsChange={scene.setFlatUseVertexColors}
-        toonSteps={scene.toonSteps}
-        onToonStepsChange={scene.setToonSteps}
         ambientIntensity={scene.ambientIntensity}
         onAmbientIntensityChange={scene.setAmbientIntensity}
         directionalIntensity={scene.directionalIntensity}
@@ -9813,11 +9823,10 @@ export default function Home() {
         onModeChange={handleModeChange}
         hasModels={scene.models.length > 0}
         hasPrintingData={hasPrintingWorkspaceData}
-        viewTypeOverride={sessionShaderOverride}
-        onViewTypeOverrideChange={setSessionShaderOverride}
-        interiorView={interiorView}
-        onInteriorViewChange={setInteriorView}
-        interiorViewAvailable={hasCavityGeometry}
+        viewType={scene.shaderType}
+        onViewTypeChange={scene.setShaderType}
+        overhangViewActive={scene.shaderType === 'overhang_heatmap'}
+        onOverhangViewChange={toggleOverhangView}
         hideWorkflowControls={onboardingMounted && wizardActive}
         heatmapColors={scene.heatmapColors}
         onHeatmapColorChange={scene.onHeatmapColorChange}
@@ -10129,8 +10138,7 @@ export default function Home() {
             shaderType={effectiveShaderType}
             matcapVariant={scene.matcapVariant}
             flatUseVertexColors={scene.flatUseVertexColors}
-            toonSteps={scene.toonSteps}
-            xrayOpacity={scene.xrayOpacity}
+                xrayOpacity={scene.xrayOpacity}
             heatmapMinAngle={scene.heatmapMinAngle}
             heatmapMaxAngle={scene.heatmapMaxAngle}
             heatmapColors={scene.heatmapColors}

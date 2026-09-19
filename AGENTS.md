@@ -90,7 +90,10 @@ Reference example: `docs/dev/experiments-framework.md`.
 Run `npm run check:docs` before you push. It verifies that every path and code
 symbol a document cites still exists, that no page pins a line number (they
 drift within a week), and that the MkDocs nav matches what is on disk. It runs
-in CI. Deliberate exceptions — schematic names, external APIs, symbols named
+in CI. It reads the working tree rather than git, so a stale build under one of
+its code roots can mask a real problem: a leftover `src-tauri/frontend-dist`
+bundle that still contained a deleted symbol made the check pass locally while
+CI, on a clean checkout, failed on it. Deliberate exceptions — schematic names, external APIs, symbols named
 precisely because they were removed — go in
 `scripts/docs-accuracy-allowlist.json` **with a reason**.
 
@@ -187,8 +190,8 @@ Two invariants that mimicry won't teach — get either wrong and undo breaks **s
 
 ## Rust crate version bumps
 
-The native crates under `rust/` (`dragonfruit-islands`, `dragonfruit-sdf`,
-`dragonfruit-mesh-core`, …) are **standalone crates** — there is no workspace
+The native crates under `rust/` (`dragonfruit-islands`, `dragonfruit-mesh-core`,
+`dragonfruit-slicing-engine`, …) are **standalone crates** — there is no workspace
 root — consumed by the Tauri shell via path dependencies in
 `src-tauri/Cargo.toml`. Because path deps always resolve, a stale `version` is
 invisible locally but breaks the lock file, caches, and any versioned consumer.

@@ -4,6 +4,7 @@ import { useModelTransform } from '@/hooks/useModelTransform';
 import { computeLowestZ, computeBoundsZ } from '@/utils/geometry';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
+import { DEFAULT_LIFT_DISTANCE_MM } from './liftDefaults';
 
 interface TransformManagerProps {
   geom: GeometryWithBounds | null;
@@ -29,9 +30,9 @@ export function useTransformManager({ geom }: TransformManagerProps) {
   const [liftDistance, setLiftDistance] = useState(() => {
     if (typeof window !== 'undefined') {
       const saved = window.localStorage.getItem('liftDistance');
-      return saved ? parseFloat(saved) : 5;
+      return saved ? parseFloat(saved) : DEFAULT_LIFT_DISTANCE_MM;
     }
-    return 5;
+    return DEFAULT_LIFT_DISTANCE_MM;
   });
 
   // Persistence

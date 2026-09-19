@@ -76,8 +76,35 @@ either case would clear the support selection set.
 - By hand: modifier keys choose the family, the first click's target chooses the type — [Support Placement Modifiers](../reference/support-placement-modifiers.md).
 - Automatically: `autoSupport/` generates candidates from island analysis and overhang regions, then sizes and places a forest. Gated behind an experiment.
 
+## The placement guide line
+
+Hovering a model in Support mode marks the band where the tip will land: the
+intersection of the horizontal plane at the hovered point's height with the
+model. Dragging a tip drives the same plane from the drag's hit point, which is
+what tips get levelled against when several of them have to meet the model at one
+height.
+
+The plane lives in `supportPlacementGuideStore` (`src/components/scene/SceneCanvas/`).
+It has two writers, `handleSupportHover` in `SceneCanvas` for model hover and
+`useContactDiskDragSession` for a tip drag, and they do not share a render pass:
+while `isContactDiskHudDraggingActive()` the hover path leaves the plane alone, so
+a drag cannot fight the hover's ray for the same pointer.
+
+Only the store's "is the plane set" flag is subscribed to (by `SceneCanvas`, to
+mount the overlay); the Z is read imperatively every frame by `StlMesh`, which
+writes the `uPlaneZ` uniform. The split is deliberate. The Z follows the pointer,
+so carrying it in render state means either a scene re-render per pointer move or
+a deadband on the value — and a deadband steps the line by `z / tan(tilt)` of
+contour travel on screen, which is pixels on a shallow face and nothing on a
+steep one.
+
+The stripe itself is measured along the surface: distance to the plane's contour
+divided by the surface's tilt against the plane. A face lying in the plane has no
+contour and gets a faint wash instead of a stripe as wide as the face. The stripe
+width is half the contact diameter of the tip being placed.
+
 ## Related pages
 
-- [Grid and Branching](grid-and-branching.md) — grid ownership and trunk replacement
+- [Grid and Branching](grid-and-branching.md) — grid node ownership and attachment
 - [Support Pathfinding V3](support-pathfinding-v3.md) — the routing solver
 - [Raft Geometry](raft-geometry.md) — the base derived from support roots

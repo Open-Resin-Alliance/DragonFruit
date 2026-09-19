@@ -1478,26 +1478,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "dragonfruit-astar"
-version = "0.1.0"
-dependencies = [
- "ahash 0.8.12",
- "dragonfruit-sdf",
- "serde",
-]
-
-[[package]]
 name = "dragonfruit-desktop"
 version = "0.1.15"
 dependencies = [
  "base64 0.22.1",
  "bytemuck",
- "dragonfruit-astar",
  "dragonfruit-islands",
  "dragonfruit-mesh-repair",
  "dragonfruit-organic-cut",
  "dragonfruit-rtsp-relay",
- "dragonfruit-sdf",
  "dragonfruit-slicing-engine",
  "futures-util",
  "if-addrs",
@@ -1592,15 +1581,6 @@ dependencies = [
  "serde_json",
  "tungstenite",
  "url",
-]
-
-[[package]]
-name = "dragonfruit-sdf"
-version = "0.1.0"
-dependencies = [
- "ahash 0.8.12",
- "rayon",
- "smallvec",
 ]
 
 [[package]]

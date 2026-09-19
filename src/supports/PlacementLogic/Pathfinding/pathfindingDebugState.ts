@@ -1,18 +1,5 @@
 import type { Vec3 } from '../../types';
 
-export interface GridAStarDebugPassSnapshot {
-    label: string;
-    searchStepMm: number;
-    expansions: number;
-    reached: boolean;
-    stagnated: boolean;
-    hitExpansionLimit: boolean;
-    expandedNodes: Vec3[];
-    frontierNodes: Vec3[];
-    rawPath: Vec3[];
-    simplifiedPath: Vec3[];
-}
-
 export interface SupportPathfindingDebugEvent {
     stage: string;
     severity: 'info' | 'success' | 'warning' | 'error';
@@ -20,20 +7,9 @@ export interface SupportPathfindingDebugEvent {
     details?: string;
 }
 
-export interface SupportPathfindingConeDebugMetrics {
-    nominalClear: boolean;
-    activeClear: boolean;
-    activeDiskAngleDeg: number;
-    maxDiskAngleDeg: number;
-    activeConeLengthMm: number;
-    activeAddedLengthMm: number;
-    stretchLimitExceeded: boolean;
-    diskAngleLimitExceeded: boolean;
-}
-
 export interface SupportPathfindingSearchDebugEnvelope {
+    /** How far the joint may sit from the socket's own column. */
     maxTotalLateralMm: number;
-    rescueRadiiMm: number[];
     rootTopZ: number;
     clearanceMm: number;
 }
@@ -53,29 +29,23 @@ export interface SupportPathfindingDebugSnapshot {
     basePos?: Vec3;
     finalChain?: Vec3[];
     outcome?: SupportPathfindingDebugOutcome;
-    cone?: SupportPathfindingConeDebugMetrics;
     envelope?: SupportPathfindingSearchDebugEnvelope;
     events?: SupportPathfindingDebugEvent[];
-    passes: GridAStarDebugPassSnapshot[];
     updatedAtMs: number;
     // Extended diagnostics for tuning
     /** True when this is a hover-preview call (reduced budget, endpoint-only checks). */
     isPreview?: boolean;
-    /** The A* routing angle budget in degrees (may differ from final angle validation). */
-    routingAngleDeg?: number;
     /** The final angle validation threshold in degrees. */
     maxSegmentAngleDeg?: number;
-    /** True when the stagnation cache was bypassed due to wide envelope. */
-    stagnationCacheBypassed?: boolean;
-    /** Max lateral reach of the cone-clear seed search (mm). */
-    coneSeedMaxRadiusMm?: number;
     /** True when the straight-down pre-flight check was clear. */
     straightPreflightClear?: boolean;
     /** True when roots fit under the straight-down socket. */
     rootsFitStraightDown?: boolean;
-    /** A* grid step sizes (mm) for fine and wide passes. */
-    fineStepMm?: number;
-    wideStepMm?: number;
+    /**
+     * SDF probes the router spent on this placement. The unit of cost for the
+     * route search, so a slow placement can be told from a slow frame.
+     */
+    routerProbes?: number;
 }
 
 export interface PotentialFieldDebugTuning {

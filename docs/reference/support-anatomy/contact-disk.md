@@ -34,6 +34,8 @@ Implemented in `calculateDiskThickness` (`src/supports/SupportPrimitives/Contact
 ## Behavior
 
 - The disk is draggable across the model surface: `ContactDiskHud` renders a ring gizmo around it, and `contactDiskDragController` runs the drag session.
+- Selecting a disk requires its parent support to be selected first; the ring gizmo only exists while the disk itself is selected.
+- While a tip is being dragged, the placement guide line sits at the contact height being dragged, so tips can be lined up against one line. The line's store and its other writer are described in [Support System](../../dev/support-system.md).
 - During a drag the surface normal is re-derived from the mesh (`calculateSmoothedNormal`) rather than carried over, so the disk re-seats itself as it moves. Clip bounds are respected.
 - Because thickness follows the angle, moving a disk onto a steeper face thickens it on its own.
 - `placementSurface` records whether the contact landed on the model's interior or exterior.

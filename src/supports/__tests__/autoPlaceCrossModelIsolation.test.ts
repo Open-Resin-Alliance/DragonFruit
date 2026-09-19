@@ -248,13 +248,21 @@ test('a second model rebuilding the same island ids does not steal the first mod
 
     // Both models scan the same geometry, so both produce island ids A / o15
     // and therefore the same auto knot ids.
-    runAutoPlace([makeIsland('A', 0, 0, 40, 30), makeOverhang('o15', 3, 0, 33)], 'model-a', AUTO_SETTINGS);
+    // o15 sits inside the merge radius of A's shaft, so it attaches as a member
+    // (leaf or branch) off A with a candidate-derived knot id — the id collision
+    // this test is about. Further out it would fan, and past the leaf threshold a
+    // host with no sample for a legal branch departure leaves it a pillar.
+    runAutoPlace([makeIsland('A', 0, 0, 40, 30), makeOverhang('o15', 2, 0, 38)], 'model-a', AUTO_SETTINGS);
     const afterA = getSnapshot();
     const aEntities = modelEntities(afterA, 'model-a');
-    assert.ok(Object.keys(afterA.leaves).length > 0, 'model-a placed a fanned leaf');
+    // The fixture's span is past the leaf threshold, so the fan member is a
+    // branch — what matters here is that a member with a candidate-derived
+    // knot id exists, and both kinds mint one through freeKnotId.
+    assert.ok(Object.keys(afterA.leaves).length + Object.keys(afterA.branches).length > 0,
+        'model-a placed a fanned member');
     assertMembersHostedByOwnModel(afterA);
 
-    runAutoPlace([makeIsland('A', 100, 0, 40, 30), makeOverhang('o15', 103, 0, 33)], 'model-b', AUTO_SETTINGS);
+    runAutoPlace([makeIsland('A', 100, 0, 40, 30), makeOverhang('o15', 102, 0, 38)], 'model-b', AUTO_SETTINGS);
     const afterB = getSnapshot();
 
     assertMembersHostedByOwnModel(afterB);
