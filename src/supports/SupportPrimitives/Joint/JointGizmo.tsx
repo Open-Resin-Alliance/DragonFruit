@@ -1,14 +1,13 @@
 import React, { useSyncExternalStore, useCallback, useRef, useEffect, useLayoutEffect } from 'react';
 import { ScreenSpaceGizmo } from '@/components/gizmo/ScreenSpaceGizmo';
-import { subscribe, getSnapshot, findShaftOwnerOfJoint, getSupportEntity } from '../../state';
+import { subscribe, getSnapshot, findShaftOwnerOfJoint, getSupportEntity, resolveDeclaredHosts } from '../../state';
 import { getSupportTypeDescriptor, updateSupportEntity, type SupportTypeId } from '../../supportTypeRegistry';
 import * as THREE from 'three';
 import { pushSupportHistory } from '@/supports/history/supportHistory';
-import { SUPPORT_UPDATE_TRUNK } from '../../history/actionTypes';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 import { useCurveInteractionState } from '../../Curves/curveInteractionState';
 import { calculateDiskThickness } from '../ContactDisk/contactDiskUtils';
-import { Trunk, Branch, Twig, Stick, Joint, Segment } from '../../types';
+import { Trunk, Twig, Joint, Segment } from '../../types';
 import type { Kickstand } from '../../SupportTypes/Kickstand/types';
 import { useJointDragPosition } from '../../interaction/jointDragPosition';
 import { clearSupportDragPreview, emitSupportDragPreview, setJointInteractionLock } from './jointDragRuntime';
@@ -20,8 +19,8 @@ export function JointGizmo() {
     const MOVE_DELTA_EPS_SQ = 1e-12;
     const state = useSyncExternalStore(subscribe, getSnapshot);
     const selectedId = state.selectedId;
-    const initialTrunkRef = useRef<Trunk | null>(null);
-    const initialBranchRef = useRef<Branch | null>(null);
+    /** The entity before a drag, for a type that owns its own history entry. */
+    const initialOwnHistoryRef = useRef<Trunk | null>(null);
     const initialEditSnapshotRef = useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
     const dragPosRef = useRef<THREE.Vector3 | null>(null);
     const { isActive: isCurveMode } = useCurveInteractionState();
@@ -150,14 +149,15 @@ export function JointGizmo() {
         let gizmoPos = newPos;
 
         if (owner && descriptor && !descriptor.jointDragMovesContacts) {
-            // Trunk keeps a before-snapshot for its own history entry.
-            if (descriptor.ownsEditHistoryEntry && !initialTrunkRef.current) {
-                initialTrunkRef.current = cloneObj(result!.entity as Trunk);
+            // A type that owns its history entry keeps its own before-snapshot.
+            if (descriptor.ownsEditHistoryEntry && !initialOwnHistoryRef.current) {
+                initialOwnHistoryRef.current = cloneObj(result!.entity as Trunk);
             }
 
-            const root = descriptor.ownsRoot
-                ? state.roots[(result!.entity as { rootId?: string }).rootId ?? '']
-                : undefined;
+            // The pair the declared lower endpoint resolves from, so the field
+            // each host lives in is not restated here.
+            const declaredHosts = resolveDeclaredHosts(owner.typeId, result!.entity as unknown as Record<string, unknown>);
+            const root = descriptor.ownsRoot ? declaredHosts.root : undefined;
 
             const next = computeJointDragSupportPreview({
                 kind: owner.typeId,
@@ -167,7 +167,7 @@ export function JointGizmo() {
                 // Only a type with a curve-capable shaft reads the curve mode.
                 isCurveMode: descriptor.jointDragCanCurveShaft && isCurveMode,
                 root,
-                contextStart: resolveShaftAnchor(owner.typeId, { root }) ?? undefined,
+                contextStart: resolveShaftAnchor(owner.typeId, { root, hostKnot: declaredHosts.hostKnot }) ?? undefined,
             });
 
             if (livePreviewOf<typeof next>(owner.typeId) !== next) {
@@ -239,23 +239,27 @@ export function JointGizmo() {
         dragPosRef.current = null;
         pendingDeltaRef.current.set(0, 0, 0);
 
-        // Trunk records its own typed before/after entry. The action's payload
-        // type is per-action, so this one stays typed rather than dispatched:
-        // widening `type` would lose the payload check that keeps it honest.
-        if (initialTrunkRef.current && owner?.typeId === 'trunk') {
-            const committedTrunk = livePreviewOf<Trunk>('trunk')
-                ?? getSupportEntity('trunk', owner.id) as Trunk | null;
-            if (committedTrunk) {
-                const applied = cloneObj(commitJointDragSupport('trunk', committedTrunk));
+        // A type that owns its history entry records a TYPED before/after entry.
+        // The action's payload type is per-action, so this one stays typed rather
+        // than dispatched; the action comes off the descriptor that declares it.
+        if (initialOwnHistoryRef.current && owner
+            && descriptor!.ownsEditHistoryEntry && descriptor!.historyUpdate) {
+            const committed = livePreviewOf<JointDragSupport>(owner.typeId)
+                ?? getSupportEntity(owner.typeId, owner.id) as JointDragSupport | null;
+            if (committed) {
+                const applied = cloneObj(commitJointDragSupport(owner.typeId, committed as never));
                 if (applied) {
                     pushSupportHistory({
-                        type: SUPPORT_UPDATE_TRUNK,
+                        type: descriptor!.historyUpdate,
                         description: `Move ${descriptor!.singular} joint`,
-                        payload: { before: initialTrunkRef.current, after: applied },
+                        // The payload cast keeps the per-action payload map the
+                        // single source of truth, as the delete path does: the
+                        // action is the type's own, chosen at runtime.
+                        payload: { before: initialOwnHistoryRef.current, after: applied } as never,
                     });
                 }
             }
-            initialTrunkRef.current = null;
+            initialOwnHistoryRef.current = null;
         }
 
         // Trunk pushed its own typed entry above; the rest share one. The
@@ -274,7 +278,6 @@ export function JointGizmo() {
             initialEditSnapshotRef.current = null;
         }
 
-        initialBranchRef.current = null;
         livePreviewRef.current = null;
     };
 

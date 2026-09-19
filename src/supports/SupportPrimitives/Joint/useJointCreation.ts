@@ -3,10 +3,11 @@ import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { subscribe, getSnapshot, findShaftOwnerOfSegment, getSupportEntity, updateKnot } from '../../state';
 import { splitSupportShaft } from './jointUtils';
+import type { ShaftEntity } from '../Knot/segmentEndpoints';
 import { getSupportTypeDescriptor, updateSupportEntity, type SupportEdge } from '../../supportTypeRegistry';
 import type { KnotSplitRemap } from '../Knot/knotUtils';
 import { SnapTarget } from '../../interaction/SnappingManager';
-import { Segment, Vec3 } from '../../types';
+import { Vec3 } from '../../types';
 import { useJointCreationState } from './jointCreationState';
 import { getJointDiameter } from '../../constants';
 import { usePlacementSnappingSession } from '../../interaction/shared/placement/snapping/usePlacementSnappingSession';
@@ -120,8 +121,7 @@ export function useJointCreation() {
                     )?.field as keyof typeof linked | undefined;
 
                     const { entity: split, knotRemaps } = splitSupportShaft(
-                        owner.typeId,
-                        entity as { segments: Segment[] },
+                        entity as ShaftEntity,
                         target.segmentId,
                         preview.pos,
                         target.t,

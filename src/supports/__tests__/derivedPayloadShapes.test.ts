@@ -1,57 +1,76 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { SUPPORT_REMOVAL_SHAPES, SUPPORT_TYPES } from '../supportTypeRegistry';
-import type {
-    SupportAnchorPayload,
-    SupportAnchorRemovePayload,
-    SupportStickPayload,
-    SupportStickRemovePayload,
-    SupportTwigPayload,
-    SupportTwigRemovePayload,
-} from '../history/actionTypes';
-import type { Anchor, Knot, Leaf, Stick, Twig } from '../types';
+import {
+    removalShapeFor,
+    SUPPORT_REMOVAL_SHAPES,
+    SUPPORT_TYPES,
+    type SupportEntityFor,
+    type SupportEntityPayload,
+    type SupportRemovalResult,
+    type SupportTypeId,
+} from '../supportTypeRegistry';
 
 /**
- * History payload shapes, derived rather than written out.
+ * History payload shapes, derived from the registry rather than written out:
+ * `{ self }` for an add, `{ self, ...cascade }` for a removal, both from the
+ * shape each type declares in `SUPPORT_REMOVAL_SHAPES`.
  *
- * Six interfaces repeated what `SUPPORT_REMOVAL_SHAPES` already declares --
- * twig, stick and anchor each spelled `{ self }` for their add payload and
- * `{ self, knots, leaves }` for their removal. The compile-time assertions
- * below are the real test: they fail to build if a derived type stops matching
- * the interface it replaced.
+ * These assertions fail to build if a derived payload stops matching its
+ * declared shape. Nothing here names a type.
  */
 
-// The shapes the hand-written interfaces had. A derived type that drifts from
-// these is a compile error, not a silent change.
-const _twigAdd: SupportTwigPayload = { twig: {} as Twig };
-const _stickAdd: SupportStickPayload = { stick: {} as Stick };
-const _anchorAdd: SupportAnchorPayload = { anchor: {} as Anchor };
-
-const _twigRemove: SupportTwigRemovePayload = {
-    twig: {} as Twig, knots: [] as Knot[], leaves: [] as Leaf[],
-};
-const _stickRemove: SupportStickRemovePayload = {
-    stick: {} as Stick, knots: [] as Knot[], leaves: [] as Leaf[],
-};
-const _anchorRemove: SupportAnchorRemovePayload = {
-    anchor: {} as Anchor, knots: [] as Knot[], leaves: [] as Leaf[],
+/**
+ * An add payload for one type: the field the entity arrives under, carrying that
+ * type's entity from the registry's entity mapping.
+ */
+type ExpectedEntityPayload<T extends SupportTypeId> = {
+    [S in (typeof SUPPORT_REMOVAL_SHAPES)[T]['self']]: SupportEntityFor<T>;
 };
 
-void _twigAdd; void _stickAdd; void _anchorAdd;
-void _twigRemove; void _stickRemove; void _anchorRemove;
+/**
+ * The fields a removal of `T` reports: its own entity field, plus one name per
+ * declared cascade entry. An entry declared as an array names several slots
+ * rather than one.
+ */
+type ExpectedRemovalFields<T extends SupportTypeId> =
+    | (typeof SUPPORT_REMOVAL_SHAPES)[T]['self']
+    | {
+        [K in keyof (typeof SUPPORT_REMOVAL_SHAPES)[T]['cascade']]:
+            (typeof SUPPORT_REMOVAL_SHAPES)[T]['cascade'][K] extends readonly string[]
+                ? (typeof SUPPORT_REMOVAL_SHAPES)[T]['cascade'][K][number]
+                : (typeof SUPPORT_REMOVAL_SHAPES)[T]['cascade'][K]
+    }[keyof (typeof SUPPORT_REMOVAL_SHAPES)[T]['cascade']];
+
+/** Whether two types are the same, in both directions. */
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+
+/**
+ * The declared types whose derived payloads no longer match the shape they
+ * declare; empty when every one agrees. Mapped so each type is checked alone.
+ */
+type PayloadShapeDrift = {
+    [T in SupportTypeId]:
+        Same<SupportEntityPayload<T>, ExpectedEntityPayload<T>> extends true
+            ? SupportRemovalResult<T> extends ExpectedEntityPayload<T>
+                ? Same<keyof SupportRemovalResult<T>, ExpectedRemovalFields<T>> extends true ? never : T
+                : T
+            : T;
+}[SupportTypeId];
+
+/** The compile-time net: `never` when nothing drifts, the failing ids otherwise. */
+const _payloadShapeDrift: Record<PayloadShapeDrift, true> = true;
+void _payloadShapeDrift;
 
 test('the derived payloads carry the fields their shape declares', () => {
-    // The runtime half: the declaration those types read from still names the
-    // fields the assertions above rely on.
-    for (const typeId of ['twig', 'stick', 'anchor'] as const) {
-        const shape = SUPPORT_REMOVAL_SHAPES[typeId];
-        assert.equal(shape.self, typeId, `${typeId}: payload keyed on its own name`);
-        assert.deepEqual(
-            Object.entries(shape.cascade).sort(),
-            [['knots', 'knots'], ['leaves', 'leaves']],
-            `${typeId}: cascades knots and leaves`,
-        );
+    for (const descriptor of SUPPORT_TYPES) {
+        const shape = removalShapeFor(descriptor.id);
+        assert.equal(shape.self, descriptor.id, `${descriptor.id}: payload keyed on its own name`);
+
+        // Every collection a removal drains, and the field each reports under.
+        const drained = Object.keys(shape.cascade);
+        assert.ok(drained.length > 0, `${descriptor.id} declares a cascade`);
+        assert.ok(drained.includes('knots'), `${descriptor.id} cascades its knots`);
     }
 });
 
@@ -59,7 +78,7 @@ test('every type declares a removal shape keyed on a real field name', () => {
     // A shape whose `self` was empty would derive a payload with no entity
     // field at all, which no handler could seed from.
     for (const descriptor of SUPPORT_TYPES) {
-        const shape = SUPPORT_REMOVAL_SHAPES[descriptor.id];
+        const shape = removalShapeFor(descriptor.id);
         assert.ok(shape, `${descriptor.id} declares a shape`);
         assert.ok(shape.self.length > 0, `${descriptor.id} names its entity field`);
     }

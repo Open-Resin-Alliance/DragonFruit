@@ -26,7 +26,7 @@ test('selected auto trunk loads its own sized parameters, not the global band', 
         areaMm2: 400, contactVoxels: footprintFromPoints(contactVoxels),
     };
     const result = runAutoPlace([facet], 'model-a', { debugSkipAutoBracing: true });
-    assert.ok(result.placedTrunks > 0, 'trunks placed');
+    assert.ok(result.placed.trunk > 0, 'trunks placed');
 
     // Select the first auto-placed trunk through the production chain.
     const snapshot = getSnapshot();

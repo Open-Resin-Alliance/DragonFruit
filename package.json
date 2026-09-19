@@ -28,9 +28,9 @@
     "lint": "eslint",
     "macos:thumbnails": "node scripts/macos-thumbnails.mjs",
     "postversion": "npm run sync:version && npm run sync:contributors && npm run sync:sponsors",
-    "prebuild": "npm run generate:plugin-registry && npm run generate:builtin-simple-plugins",
-    "prebuild:tauri": "npm run generate:plugin-registry && npm run generate:builtin-simple-plugins",
-    "predev": "npm run generate:plugin-registry && npm run generate:builtin-simple-plugins",
+    "prebuild": "npm run generate:plugin-registry && npm run generate:builtin-simple-plugins && npm run generate:support-registrations && npm run generate:support-renderers",
+    "prebuild:tauri": "npm run generate:plugin-registry && npm run generate:builtin-simple-plugins && npm run generate:support-registrations && npm run generate:support-renderers",
+    "predev": "npm run generate:plugin-registry && npm run generate:builtin-simple-plugins && npm run generate:support-registrations && npm run generate:support-renderers",
     "pretauri:build": "npm run sync:version",
     "pretauri:bundle": "npm run sync:version",
     "pretauri:bundle:linux": "npm run sync:version",
@@ -39,7 +39,7 @@
     "pretauri:bundle:macos:universal": "npm run sync:version",
     "pretauri:bundle:windows": "npm run sync:version",
     "pretauri:dev": "npm run sync:version",
-    "pretest": "npm run generate:plugin-registry && npm run generate:builtin-simple-plugins",
+    "pretest": "npm run generate:plugin-registry && npm run generate:builtin-simple-plugins && npm run generate:support-registrations && npm run generate:support-renderers",
     "scan:support-types": "tsx scripts/scan-support-type-references.ts",
     "sync:contributors": "node scripts/sync-contributors.mjs",
     "sync:sponsors": "node scripts/sync-sponsors.mjs",
@@ -53,7 +53,9 @@
     "tauri:bundle:windows": "node scripts/tauri-build.mjs --target x86_64-pc-windows-msvc --bundles msi,nsis",
     "tauri:dev": "node scripts/tauri-dev.mjs",
     "test": "node --import tsx --test 'src/**/*.test.{ts,tsx}' 'plugins/**/*.test.{ts,tsx}'",
-    "test:watch": "node --import tsx --test --watch 'src/**/*.test.{ts,tsx}' 'plugins/**/*.test.{ts,tsx}'"
+    "test:watch": "node --import tsx --test --watch 'src/**/*.test.{ts,tsx}' 'plugins/**/*.test.{ts,tsx}'",
+    "generate:support-registrations": "node scripts/generate-support-registrations.mjs",
+    "generate:support-renderers": "node scripts/generate-support-renderers.mjs"
   },
   "dependencies": {
     "@lingui/core": "^6.3.0",

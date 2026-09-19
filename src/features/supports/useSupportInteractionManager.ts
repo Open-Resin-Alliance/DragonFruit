@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useSyncExternalStore, useRef } from 'react';
 import * as THREE from 'three';
 import type { SupportMode } from '@/supports/types';
-import type { SupportPlacementPreviews } from '@/supports/rendering';
+import type { SupportPlacementActive, SupportPlacementPreviews } from '@/supports/rendering';
 import { useTrunkPlacementV2 } from '@/supports/SupportTypes/Trunk/useTrunkPlacement';
 import { useBranchPlacement } from '@/supports/SupportTypes/Branch/useBranchPlacement';
 import { useLeafPlacement } from '@/supports/SupportTypes/Leaf/useLeafPlacement';
@@ -13,19 +13,19 @@ import { useInteractionStatus } from '@/supports/interaction/useInteractionStatu
 import { useJointCreationHotkey } from '@/supports/SupportPrimitives/Joint/useJointCreationHotkey';
 import { useCurveHotkey } from '@/supports/Curves/useCurveHotkey';
 import { useJointCreationState } from '@/supports/SupportPrimitives/Joint/jointCreationState';
-import { computeAndApplyTrunkDiameterProfile } from '@/supports/SupportTypes/Trunk/TrunkReplacement';
-import { cloneSupportState, getSelectedId, getSelectedCategory, findShaftOwnerOfJoint, findShaftOwnerOfSegment, getSupportEntities, getSupportTypeOf, getSupports, getSnapshot, removeBranch, removeBrace, removeLeaf, removeSupportEntity, removeJointById, updateKnot, setSelectedId, setHoveredState, subscribe } from '@/supports/state';
+import { cloneSupportState, getSelectedId, getSelectedCategory, findShaftOwnerOfJoint, findShaftOwnerOfSegment, getSupportEntities, getSupportTypeOf, getSupports, getSnapshot, removeJointById, setSelectedId, setHoveredState, subscribe } from '@/supports/state';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { pushSupportHistory } from '@/supports/history/supportHistory';
-import { SUPPORT_UPDATE_TRUNK, SUPPORT_UPDATE_BRANCH, SUPPORT_AUTO_BRACE_REPLACE, type SupportBranchRemovePayload, removeAction } from '@/supports/history/actionTypes';
-import { findKnotHost, getSupportTypeBySelectionCategory, getSupportTypeDescriptor, KNOT_HOST_PRECEDENCE, RESHAPED_REMOVAL_PAYLOADS, SUPPORT_TYPES, updateSupportEntity } from '@/supports/supportTypeRegistry';
+import { SUPPORT_AUTO_BRACE_REPLACE } from '@/supports/history/actionTypes';
+import { findKnotHost, getSupportTypeBySelectionCategory, getSupportTypeDescriptor, KNOT_HOST_PRECEDENCE, SUPPORT_TYPES } from '@/supports/supportTypeRegistry';
+import { removeSupportEntityWithPayload } from '@/supports/history/removalPayload';
 import { MODEL_SURFACE_GESTURE_TYPES } from '@/supports/supportTypeRegistry';
 import type { ModelSurfaceGestureTypeId } from '@/supports/supportTypeRegistry';
 import { knotFields } from '@/supports/interaction/shared/selection/selectedIdsByType';
 import { clearSupportSelection, getResolvedPrimarySelection, selectSupportIds } from '@/supports/interaction/shared/selection/selectionController';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { resolveSupportPlacementHotkeyBindings } from '@/supports/interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
-import { resolveSupportPlacementRouting, routeModelPlacementHit } from '@/supports/interaction/shared/placement/hotkeys/supportPlacementRouting';
+import { resolveSupportPlacementRouting, routeModelPlacementHit, BRACE_PLACEMENT_OWNER, BRANCH_FAMILY_PLACEMENT_OWNER, DEFAULT_PLACEMENT_TYPE_ID, KICKSTAND_PLACEMENT_OWNER, LEAF_PLACEMENT_OWNER } from '@/supports/interaction/shared/placement/hotkeys/supportPlacementRouting';
 import type { SupportModelPlacementHandlers, SupportModelPlacementOwner } from '@/supports/interaction/shared/placement/hotkeys/supportPlacementHotkeyTypes';
 import { isKeyPressedSync } from '@/hotkeys/hotkeyStore';
 
@@ -49,7 +49,7 @@ function collectAllSupportIds() {
 
 /**
  * @deprecated for removal -- prefer `findShaftOwnerOfSegment(id)` from state,
- * which resolves every type and brace's `braceSegment:` prefix from the registry.
+ * which resolves every type's declared segment prefix from the registry.
  */
 export function resolveSupportOwnerFromSegmentId(segmentId: string) {
   const owner = findShaftOwnerOfSegment(segmentId);
@@ -77,11 +77,16 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
    * The model-face placement hooks, keyed by the owner the router names. One
    * owner takes the hit and the rest are cleared, so the handlers index this
    * rather than testing the owner against a type name.
+   *
+   * The keys are the owners the registry declares, so renaming a type moves them
+   * with it: what a type is called is decided in the registry, not here.
    */
-  const modelPlacementByOwner = useMemo(() => ({
-    branch: branchPlacement,
-    leaf: leafPlacement,
-  } satisfies Record<ModelSurfaceGestureTypeId, SupportModelPlacementHandlers>), [branchPlacement, leafPlacement]);
+  const modelPlacementByOwner = useMemo(() => {
+    const handlersByOwner = {} as Record<ModelSurfaceGestureTypeId, SupportModelPlacementHandlers>;
+    handlersByOwner[BRANCH_FAMILY_PLACEMENT_OWNER] = branchPlacement;
+    handlersByOwner[LEAF_PLACEMENT_OWNER] = leafPlacement;
+    return handlersByOwner;
+  }, [branchPlacement, leafPlacement]);
 
   /** Route a model-face gesture: `owner` gets the hit, every other owner null. */
   const dispatchModelHover = useCallback((owner: SupportModelPlacementOwner, hit: THREE.Intersection | null) => {
@@ -155,7 +160,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
 
     const fanningActive = leafPlacement.sproutParentingLockHeld || leafPlacement.stage === 'awaitingSproutTip';
     if (fanningActive) {
-      dispatchModelHover('leaf', hit);
+      dispatchModelHover(LEAF_PLACEMENT_OWNER, hit);
       return;
     }
 
@@ -204,68 +209,6 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
     trunkPlacementV2.onSupportClick(hit);
   }, [trunkPlacementV2, modelPlacementByOwner, leafPlacement, jointCreationState.isActive, resolvePlacementRouting]);
 
-  // Handler for SUPPORT hover (branch base preview when hovering existing support shafts)
-  // NOTE: We do NOT check isPlacementDisabled here because branch placement
-  // REQUIRES hovering over supports. The isPlacementDisabled check would
-  // always be true when hovering a support, breaking branch placement.
-  const onSupportHover = useCallback((hit: THREE.Intersection | null) => {
-    if (mode !== 'support') return;
-
-    if (isSupportEditInteractionActive()) {
-      leafPlacement.onSupportHover(null);
-      branchPlacement.onSupportHover(null);
-      return;
-    }
-
-    const fanningActive = leafPlacement.sproutParentingLockHeld || leafPlacement.stage === 'awaitingSproutTip';
-    if (fanningActive) {
-      branchPlacement.onSupportHover(null);
-      leafPlacement.onSupportHover(hit);
-      return;
-    }
-
-    const routing = resolvePlacementRouting();
-
-    if (routing.supportHoverOwner === 'leaf') {
-      leafPlacement.onSupportHover(hit);
-      branchPlacement.onSupportHover(null);
-    } else if (routing.supportHoverOwner === 'branch') {
-      branchPlacement.onSupportHover(hit);
-      leafPlacement.onSupportHover(null);
-    } else {
-      leafPlacement.onSupportHover(null);
-      branchPlacement.onSupportHover(null);
-    }
-  }, [mode, branchPlacement, leafPlacement, resolvePlacementRouting]);
-
-  // Handler for SUPPORT click (branch base placement on existing support shaft)
-  const onSupportClick = useCallback((hit: THREE.Intersection) => {
-    if (mode !== 'support') return;
-
-    if (isSupportEditInteractionActive()) {
-      return;
-    }
-
-    const fanningActive = leafPlacement.sproutParentingLockHeld || leafPlacement.stage === 'awaitingSproutTip';
-    if (fanningActive) {
-      leafPlacement.onSupportClick(hit);
-      return;
-    }
-
-    const routing = resolvePlacementRouting();
-
-    if (routing.blocksDefaultSupportPlacement) {
-      return;
-    }
-
-    if (routing.supportClickOwner === 'leaf') {
-      leafPlacement.onSupportClick(hit);
-    } else if (routing.supportClickOwner === 'branch') {
-      branchPlacement.onSupportClick(hit);
-    }
-    // Note: clicking on supports in non-branch mode is handled by SupportRenderer (selection)
-  }, [mode, branchPlacement, leafPlacement, resolvePlacementRouting]);
-
   useEffect(() => {
     if (mode !== 'support') return;
 
@@ -279,24 +222,18 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
         }
         // Whether a joint removal records an update is the type's declared
         // `historyUpdate`; a type without one (kickstand today) rides the
-        // full-state snapshot. The payload map is keyed per action, so each
-        // push stays narrow while the DECISION comes from the registry.
+        // full-state snapshot. The action and payload are the type's own, so
+        // the push uses the declared action; the payload cast keeps the
+        // per-action payload map the single source of truth for what a handler
+        // understands.
         const descriptor = getSupportTypeDescriptor(result.typeId);
         if (recordHistory && descriptor.historyUpdate) {
           const description = `Delete ${descriptor.singular} joint`;
-          if (result.typeId === 'trunk') {
-            pushSupportHistory({
-              type: SUPPORT_UPDATE_TRUNK,
-              description,
-              payload: { before: result.before, after: result.after },
-            });
-          } else if (result.typeId === 'branch') {
-            pushSupportHistory({
-              type: SUPPORT_UPDATE_BRANCH,
-              description,
-              payload: { before: result.before, after: result.after },
-            });
-          }
+          pushSupportHistory({
+            type: descriptor.historyUpdate,
+            description,
+            payload: { before: result.before, after: result.after } as never,
+          });
         }
         setSelectedId(result.id);
         return true;
@@ -308,36 +245,11 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
         return deleteSelectionByCategoryAndId(owner.category, owner.id, recordHistory);
       }
 
-      if (category === 'leaf') {
-        const snapshots = removeLeaf(id);
-        if (!snapshots) return false;
-        if (recordHistory) {
-          pushSupportHistory({
-            type: removeAction('leaf'),
-            payload: { leaf: snapshots.leaf, knot: snapshots.knot ?? null },
-          });
-        }
-        setSelectedId(null);
-        return true;
-      }
-
-      // Types whose removal is the cascade plus one history entry, under the
-      // action they declare. Branch, leaf and brace reshape their payload and
-      // keep their own blocks below.
-      const removalDescriptor = getSupportTypeBySelectionCategory(category);
-      if (removalDescriptor && !RESHAPED_REMOVAL_PAYLOADS.has(removalDescriptor.id)) {
-        const snapshots = removeSupportEntity(removalDescriptor.id, id);
-        if (!snapshots) return false;
-        if (recordHistory) {
-          pushSupportHistory({
-            type: removalDescriptor.historyRemove,
-            payload: snapshots,
-          } as Parameters<typeof pushSupportHistory>[0]);
-        }
-        setSelectedId(null);
-        return true;
-      }
-
+      // Every type whose removal is the cascade plus one history entry, under
+      // the action it declares. A type that shapes its payload -- or has to
+      // repair something the removal invalidated -- registered a reshaper in
+      // its own folder, so there is no list of names here: the registration is
+      // the answer to "does this type reshape".
       if (category === 'knot') {
         // Deleting a knot deletes what it hosts. Which types can host, and the
         // field each reads, come from the declared knot edges; the order is the
@@ -351,56 +263,19 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
         );
       }
 
-      if (category === 'branch') {
-        const beforeSnapshot = getSnapshot();
-        const snapshots = removeBranch(id);
-        if (!snapshots) return false;
-        const afterSnapshot = getSnapshot();
-
-        let trunkUpdate: SupportBranchRemovePayload['trunkUpdate'];
-        let knotUpdates: SupportBranchRemovePayload['knotUpdates'];
-        const removedRootBranch = snapshots.branches.find(b => b.id === id) ?? snapshots.branches[0];
-        const parentKnot = removedRootBranch?.parentKnotId ? beforeSnapshot.knots[removedRootBranch.parentKnotId] : undefined;
-        const parentSegId = parentKnot?.parentShaftId;
-        const trunkId = parentSegId
-          ? Object.values(beforeSnapshot.trunks).find(t => t.segments.some(s => s.id === parentSegId))?.id
-          : undefined;
-
-        if (trunkId && afterSnapshot.trunks[trunkId]) {
-          const applied = computeAndApplyTrunkDiameterProfile(afterSnapshot, trunkId);
-          if (applied) {
-            for (const u of applied.knotUpdates) updateKnot(u.after);
-            updateSupportEntity('trunk', applied.trunk);
-            const beforeTrunk = beforeSnapshot.trunks[trunkId];
-            if (beforeTrunk) {
-              trunkUpdate = { before: structuredClone(beforeTrunk), after: structuredClone(applied.trunk) };
-              knotUpdates = applied.knotUpdates;
-            }
-          }
-        }
+      const removalDescriptor = getSupportTypeBySelectionCategory(category);
+      if (removalDescriptor) {
+        // The removal and its payload are resolved by a plain function so they
+        // can be tested; this hook cannot be. See
+        // supports/history/removalPayload.ts.
+        const removed = removeSupportEntityWithPayload(removalDescriptor.id, id);
+        if (!removed) return false;
 
         if (recordHistory) {
           pushSupportHistory({
-            type: removeAction('branch'),
-            payload: {
-              ...snapshots,
-              trunkUpdate,
-              knotUpdates,
-            },
-          });
-        }
-        setSelectedId(null);
-        return true;
-      }
-
-      if (category === 'brace') {
-        const snapshots = removeBrace(id);
-        if (!snapshots) return false;
-        if (recordHistory) {
-          pushSupportHistory({
-            type: removeAction('brace'),
-            payload: { brace: snapshots.brace, startKnot: snapshots.startKnot ?? null, endKnot: snapshots.endKnot ?? null },
-          });
+            type: removalDescriptor.historyRemove,
+            payload: removed.payload,
+          } as Parameters<typeof pushSupportHistory>[0]);
         }
         setSelectedId(null);
         return true;
@@ -418,8 +293,8 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       const category = getSelectedCategory();
       const id = getSelectedId();
       if (!id || !category) return false;
-      // Every support type is deletable; 'joint' too. Enumerating them here is
-      // how anchors ended up deletable but gated out of single-selection Delete.
+      // Every support type is deletable, and 'joint' too, so this asks the
+      // registry rather than listing categories.
       if (category === 'joint' || getSupportTypeBySelectionCategory(category)) return true;
 
       // A knot is deletable when something hangs off it. Which types can, and
@@ -509,16 +384,25 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
               setSelectedId(parentKnotId);
             }
           } else if (category === 'knot') {
+            // Children of a knot are whatever types declare a `hostedBy` edge
+            // onto knots and name this knot. Derived, so a type that can hang
+            // off a knot is walkable here the moment it says so.
             const snapshot = getSnapshot();
-            const childLeaves = Object.values(snapshot.leaves).filter(l => l.parentKnotId === id);
-            const childBranches = Object.values(snapshot.branches).filter(b => b.parentKnotId === id);
-            const children = [
-              ...childLeaves.map(l => ({ id: l.id, category: 'leaf' })),
-              ...childBranches.map(b => ({ id: b.id, category: 'branch' })),
-            ];
-            if (children.length > 0) {
-              children.sort((a, b) => a.id.localeCompare(b.id));
-              selectSupportIds([children[0].id]);
+            const childIds: string[] = [];
+            for (const descriptor of SUPPORT_TYPES) {
+              const fields = descriptor.edges
+                .filter((edge) => edge.to === 'knots' && edge.ownership === 'hostedBy')
+                .map((edge) => edge.field);
+              if (fields.length === 0) continue;
+              const collection = snapshot[descriptor.location.key] as unknown as
+                Record<string, Record<string, unknown>> | undefined;
+              for (const [childId, entity] of Object.entries(collection ?? {})) {
+                if (fields.some((field) => entity[field] === id)) childIds.push(childId);
+              }
+            }
+            if (childIds.length > 0) {
+              childIds.sort((a, b) => a.localeCompare(b));
+              selectSupportIds([childIds[0]]);
             }
           }
         }
@@ -589,21 +473,34 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
     // Model interaction (for trunk placement or branch tip)
     onModelHover,
     onModelClick,
-    // Support interaction (for branch base placement)
-    onSupportHover,
-    onSupportClick,
     previewError: trunkPlacementV2.previewError,
     previewWarning: trunkPlacementV2.previewWarning,
     /**
      * Placement previews, keyed by type. Brace names its field `preview`
      * where the others use `previewData`; that is the only difference.
+     *
+     * Keyed by the owners the registry declares rather than by literals, so a
+     * renamed type moves its key here too. The record is still indexed by type
+     * downstream, which is the point: `placementActive` and `placementPreviews`
+     * keep a key per declared type.
      */
     placementPreviews: {
-      trunk: trunkPlacementV2.previewData,
-      branch: branchPlacement.previewData,
-      leaf: leafPlacement.previewData,
-      brace: bracePlacement.preview,
-      kickstand: kickstandPlacement.previewData,
+      [DEFAULT_PLACEMENT_TYPE_ID]: trunkPlacementV2.previewData,
+      [BRANCH_FAMILY_PLACEMENT_OWNER]: branchPlacement.previewData,
+      [LEAF_PLACEMENT_OWNER]: leafPlacement.previewData,
+      [BRACE_PLACEMENT_OWNER]: bracePlacement.preview,
+      [KICKSTAND_PLACEMENT_OWNER]: kickstandPlacement.previewData,
     } satisfies SupportPlacementPreviews,
+    /**
+     * Which placement modes are live, keyed by type, next to the previews above
+     * so the scene takes one prop rather than one per type. Trunk is absent: it
+     * is the default tool rather than a mode anything toggles.
+     */
+    placementActive: {
+      [BRANCH_FAMILY_PLACEMENT_OWNER]: branchPlacement.isActive,
+      [LEAF_PLACEMENT_OWNER]: leafPlacement.isActive,
+      [BRACE_PLACEMENT_OWNER]: bracePlacement.isActive,
+      [KICKSTAND_PLACEMENT_OWNER]: kickstandPlacement.isActive,
+    } satisfies SupportPlacementActive,
   };
 }

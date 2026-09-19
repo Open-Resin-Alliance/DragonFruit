@@ -234,7 +234,7 @@ Supports payloads are DragonFruitImportFormat-compatible. Common arrays include:
 
 Optional arrays:
 
-- `twigs`, `sticks`, `kickstands`
+- `twigs`, `sticks`, `stumps`, `kickstands`
 
 Every entity may carry an optional `typeId` naming its support type (V2.3). A payload without
 it is read exactly as before, with each entity's type derived from the array it appears in.

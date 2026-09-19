@@ -9,6 +9,7 @@ import {
   buildSolidSliceMeshForWasm,
 } from '../rasterLayerZipExport';
 import { setSnapshot } from '@/supports/state';
+import { createEmptySupportCollections } from '@/supports/supportTypeRegistry';
 
 function createMockModel(
   id: string,
@@ -145,16 +146,8 @@ test('twig contact disks are successfully appended to the sliced geometry', asyn
   };
 
   const initialSupportState = {
-    roots: {},
-    trunks: {},
-    branches: {},
-    leaves: {},
+    ...createEmptySupportCollections(),
     twigs: { 'twig-1': mockTwig as any },
-    sticks: {},
-    braces: {},
-    anchors: {},
-    kickstands: {},
-    knots: {},
     selectedId: null,
     hoveredId: null,
     selectedCategory: null,
@@ -183,16 +176,7 @@ test('twig contact disks are successfully appended to the sliced geometry', asyn
 
   // Clean up
   setSnapshot({
-    roots: {},
-    trunks: {},
-    branches: {},
-    leaves: {},
-    twigs: {},
-    sticks: {},
-    braces: {},
-    anchors: {},
-    kickstands: {},
-    knots: {},
+    ...createEmptySupportCollections(),
     selectedId: null,
     hoveredId: null,
     selectedCategory: null,
@@ -232,16 +216,7 @@ test('anchor supports contribute root, joint, and cone triangles to the sliced g
   };
 
   const emptyState = {
-    roots: {},
-    trunks: {},
-    branches: {},
-    leaves: {},
-    twigs: {},
-    sticks: {},
-    braces: {},
-    anchors: {},
-    kickstands: {},
-    knots: {},
+    ...createEmptySupportCollections(),
     selectedId: null,
     hoveredId: null,
     selectedCategory: null,
@@ -259,7 +234,7 @@ test('anchor supports contribute root, joint, and cone triangles to the sliced g
   });
 
   // With one anchor.
-  setSnapshot({ ...emptyState, anchors: { 'anchor-1': mockAnchor } });
+  setSnapshot({ ...emptyState, stumps: { 'anchor-1': mockAnchor } });
   const withAnchor = await buildSolidSliceMeshForWasm({
     models: [model],
     printerProfile: mockPrinterProfile,
@@ -270,7 +245,7 @@ test('anchor supports contribute root, joint, and cone triangles to the sliced g
   assert.equal(withAnchor.modelTriangleCount, 2);
   assert.ok(
     withAnchor.trianglesXYZ.length > baseline.trianglesXYZ.length,
-    'Anchor root frustum, joint sphere, and contact cone must add slice triangles',
+    'Stump root frustum, joint sphere, and contact cone must add slice triangles',
   );
 
   setSnapshot(emptyState);

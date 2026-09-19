@@ -74,8 +74,11 @@ export const GRIDLESS_MERGE_RADIUS_MM = 4.0;
  *  (mm-equivalent per mm) against raw distance — Dumas Score = Gain − k·lmax
  *  shape with k explicit. Zero hosted members → pure nearest-first. */
 export const MERGE_HOST_LOAD_WEIGHT = 0.5;
+/** Leaf fanning: the least reach the fan is allowed (mm). Every path floors here. */
+export const MIN_LEAF_FAN_RADIUS_MM = 8;
+
 /** Leaf fanning: max distance from a trunk shaft sample to an uncovered island (mm). */
-export const LEAF_FAN_RADIUS_MM = 5.0;
+export const LEAF_FAN_RADIUS_MM = MIN_LEAF_FAN_RADIUS_MM;
 
 /** Leaf fanning: max distance from a DENSITY-GRID trunk shaft (mm). Grid
  *  supports are fanning hosts only up close — a tight threshold keeps fan

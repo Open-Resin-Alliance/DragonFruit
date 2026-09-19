@@ -1,6 +1,6 @@
 import type { Knot, SupportState } from '../types';
 import type { SupportCollectionKey } from '../supportTypeRegistry';
-import { getSupportTypeDescriptor, parseKnotHostId, SUPPORT_TYPES, SHAFTED_COLLECTION_KEYS } from '../supportTypeRegistry';
+import { getSupportTypeDescriptor, knotHostId, parseKnotHostId, spanKnotHostType, SUPPORT_TYPES, SHAFTED_COLLECTION_KEYS } from '../supportTypeRegistry';
 
 export interface SupportRenderLookupSnapshot {
   supportIdBySegmentId: Record<string, string>;
@@ -17,7 +17,6 @@ export interface SupportRenderLookupSnapshot {
 export interface SupportRenderLookupInput {
   state: Pick<SupportState, SupportCollectionKey>;
   activePreviewSupport?: {
-    kind: 'trunk' | 'branch' | 'kickstand' | null;
     support: { segments: Array<{ id: string }> } | null;
   } | null;
 }
@@ -108,7 +107,7 @@ export function computeSupportRenderLookup(input: SupportRenderLookupInput, opti
 
   for (const brace of Object.values(state.braces)) {
     if (shouldAbort?.()) break;
-    const braceSegmentId = `braceSegment:${brace.id}`;
+    const braceSegmentId = knotHostId(spanKnotHostType(), brace.id);
     supportIdBySegmentId[braceSegmentId] = brace.id;
     entitySegmentModelIdById[braceSegmentId] = brace.modelId;
     supportIdByKnotId[brace.startKnotId] = brace.id;

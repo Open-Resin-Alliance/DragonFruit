@@ -75,7 +75,7 @@ nav:
       - Anatomy of Supports:
           - Overview: reference/support-anatomy/index.md
           - Roots: reference/support-anatomy/roots.md
-          - Anchor: reference/support-anatomy/anchor.md
+          - Stump: reference/support-anatomy/stump.md
           - Trunk: reference/support-anatomy/trunk.md
           - Branch: reference/support-anatomy/branch.md
           - Leaf: reference/support-anatomy/leaf.md

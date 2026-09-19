@@ -1,6 +1,6 @@
 import type { Branch, Joint, Knot, Roots, SupportState, Trunk, Vec3 } from '../../../types';
 import { updateSupportEntity } from '../../../supportTypeRegistry';
-import { cloneSupportState, addBranch, addKnot, addLeaf, addRoot, addTrunk, getSnapshot, removeBranch, removeLeaf, removeTrunk, updateKnot } from '../../../state';
+import { addSupportEntity, removeSupportEntity, cloneSupportState, addKnot, addRoot, getSnapshot, updateKnot } from '../../../state';
 import { pushSupportHistory } from '@/supports/history/supportHistory';
 import { SUPPORT_REPLACE_TRUNK } from '../../../history/actionTypes';
 import type { SupportReplaceTrunkPayload } from '../../../history/actionTypes';
@@ -12,7 +12,7 @@ import { getFinalSocketPosition } from '../../../SupportPrimitives/ContactCone/c
 import { getSettingsSnapshot } from '../../../Settings/state';
 import { getJointDiameter } from '../../../constants';
 import type { TrunkReplacementPlan } from './types';
-import { computeAndApplyTrunkDiameterProfile } from './maxConnectedDiameter';
+import { computeAndApplySupportDiameterProfile } from './maxConnectedDiameter';
 import { v4 as uuidv4 } from 'uuid';
 
 function satisfiesMinAngleFromHorizontal(tipPos: Vec3, knotPos: Vec3, minAngleDeg: number): boolean {
@@ -272,7 +272,7 @@ function createAttachmentKnotOnTrunk(args: {
     // Iterate segments from top to bottom.
     for (let segIndex = trunk.segments.length - 1; segIndex >= 0; segIndex--) {
         const seg = trunk.segments[segIndex];
-        const endpoints = resolveSegmentEndpoints('trunk', trunk, seg, segIndex, { root });
+        const endpoints = resolveSegmentEndpoints(trunk, seg, segIndex, { root });
         if (!seg || !endpoints) continue;
 
         const approxLen = Math.max(
@@ -403,7 +403,7 @@ export function applyTrunkReplacement(
     };
 
     addRoot(aligned.root);
-    addTrunk(aligned.trunk);
+    addSupportEntity(aligned.trunk);
 
     const settings = getSettingsSnapshot();
     const attachStepMm = settings.grid?.attachSearchStepMm ?? 2.0;
@@ -454,7 +454,7 @@ export function applyTrunkReplacement(
             });
 
             addKnot(oldTrunkContactKnot);
-            addBranch(preservedWithConeAndSocket);
+            addSupportEntity(preservedWithConeAndSocket);
         }
     }
 
@@ -480,7 +480,10 @@ export function applyTrunkReplacement(
 
         addKnot(newParentKnot);
         const updated = adjustBranchForNewParentKnot(existingBranch, newParentKnot);
-        updateSupportEntity('branch', updated);
+        // The branch came out of the store, so it carries its own `typeId` and
+        // the updater reads the type off it -- naming the type here would be a
+        // second place to keep in sync with the registry.
+        updateSupportEntity(updated);
     }
 
     // Rehost all connected leaves by recreating the leaf + its parent knot (no leaf update function).
@@ -491,7 +494,7 @@ export function applyTrunkReplacement(
         if (!oldParentKnot) continue;
 
         // Remove old leaf first (also removes its knot if present).
-        removeLeaf(existingLeaf.id);
+        removeSupportEntity(existingLeaf.id);
 
         const newParentKnot = createAttachmentKnotOnTrunk({
             trunk: aligned.trunk,
@@ -515,7 +518,7 @@ export function applyTrunkReplacement(
         });
 
         addKnot(newParentKnot);
-        addLeaf({
+        addSupportEntity({
             ...built.leaf,
             id: existingLeaf.id,
             contactCone: {
@@ -526,14 +529,14 @@ export function applyTrunkReplacement(
     }
 
     // Remove the promoted branch (it becomes the new trunk).
-    removeBranch(plan.candidate.branchId);
+    removeSupportEntity(plan.candidate.branchId);
 
     // Now it's safe to remove the old trunk without cascading away the rehosted trees.
-    removeTrunk(plan.trunkToRemoveId);
+    removeSupportEntity(plan.trunkToRemoveId);
 
     // Apply stepwise trunk diameter profile on the resulting trunk based on its attached branches.
     const snapshotWithAttachments = getSnapshot();
-    const applied = computeAndApplyTrunkDiameterProfile(snapshotWithAttachments, aligned.trunk.id, {
+    const applied = computeAndApplySupportDiameterProfile(snapshotWithAttachments, aligned.trunk.id, {
         baseShaftDiameterMm: promotedBaselineDiameterMm,
     });
     if (applied) {

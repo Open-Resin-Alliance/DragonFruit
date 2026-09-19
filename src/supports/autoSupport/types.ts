@@ -1,15 +1,14 @@
 import type { Vec3, SupportState } from '../types';
-import type { SupportTypeId } from '../supportTypeRegistry';
+import { AUTO_PLACED_TYPE_IDS, type AutoPlacedTypeId, type ShaftHostedMemberTypeId, type SupportTypeId } from '../supportTypeRegistry';
 
-/**
- * Auto-placement reports cover a subset of the support types, not all of them.
- * `Extract` keeps each subset narrow while tying the names to the registry, so
- * a renamed or misspelled type fails to compile here.
- */
-export type PlacedKind = Extract<SupportTypeId, 'trunk' | 'anchor' | 'leaf' | 'branch' | 'stick' | 'twig'>;
-type AttachmentKind = Extract<SupportTypeId, 'leaf' | 'branch'>;
-type CavityFallbackKind = Extract<SupportTypeId, 'stick' | 'twig'>;
-type OrphanKind = Extract<SupportTypeId, 'leaf' | 'branch' | 'trunk'>;
+export type { AutoPlacedTypeId };
+
+/** A type the ledger can report, from the registry's declared set. */
+export type PlacedKind = AutoPlacedTypeId;
+/** A hosted member auto-placement can attach: what the member walk visits. */
+export type AttachmentKind = ShaftHostedMemberTypeId;
+/** Which kind of entity was culled: any host type, or a hosted member. */
+type OrphanKind = SupportTypeId;
 
 /** What one candidate resolved to: a placed support type, or no placement. */
 export type PlacementOutcomeKind = SupportTypeId | 'reject';
@@ -50,15 +49,10 @@ export type RejectReason =
     | 'already_supported'
     | 'exception';
 
-/**
- * The ledger's own type set, as values. `satisfies` ties it to `PlacedKind`, so
- * adding a name here that is not a support type fails to compile.
- */
-export const LEDGER_KINDS = ['trunk', 'anchor', 'leaf', 'branch', 'stick', 'twig'] as const satisfies readonly PlacedKind[];
+/** The ledger's own type set, as values. */
+export const LEDGER_KINDS: readonly PlacedKind[] = AUTO_PLACED_TYPE_IDS;
 
-export function isLedgerKind(kind: PlacementOutcomeKind): kind is PlacedKind {
-    return (LEDGER_KINDS as readonly string[]).includes(kind);
-}
+export { isAutoPlacedType as isLedgerKind } from '../supportTypeRegistry';
 
 /** Per-placed-entity entry in the Forest Report ledger. */
 export interface ForestLedgerEntry {
@@ -114,14 +108,16 @@ export interface ForestScanMetrics {
 
 /** Structured per-run summary of the placed forest. */
 export interface ForestReport {
-    trunkCount: number;
-    anchorCount: number;
+    /** Hosts the forest is built from, one count per declared host type. */
+    hostCount: number;
+    stumpCount: number;
     leafCount: number;
     branchCount: number;
     stickCount: number;
     twigCount: number;
     trees: ForestTree[];
-    bareTrunks: Array<{ id: string; z: number; shaftDiameterMm: number; sizingNote: string }>;
+    /** Hosts carrying no fan members. */
+    bareHosts: Array<{ id: string; z: number; shaftDiameterMm: number; sizingNote: string }>;
     /** Input-side island/overhang scan metrics (set by the orchestrator). */
     scan?: ForestScanMetrics;
     /** Leaves/branches whose host knot drifted, crossed, or lost its host segment. */
@@ -129,7 +125,7 @@ export interface ForestReport {
     /** Placement diagnostics: why trunks are where they are, fan/merge refusal counts */
     diagnostics?: {
         candidatesBySource: { voxel: number; minima: number; intersection: number; overhang: number; stabilization: number };
-        trunksByKind: { gridInfill: number; coverageFill: number; standalone: number };
+        hostsByKind: { gridInfill: number; coverageFill: number; standalone: number };
         fanRefusals: Partial<Record<string, number>>;
         mergeRefusals: Partial<Record<string, number>>;
         /** Why consolidation (chunk fanning) refused candidates — sameZ means
@@ -137,10 +133,9 @@ export interface ForestReport {
          *  angle (raft/connector territory). */
         consolidationRefusals: Partial<Record<string, number>>;
         /** Candidates whose trunk could not reach the plate and were bridged
-         *  model-to-model instead (cavity stick/twig). Tip position = where
-         *  the bridge starts; each entry is a candidate for elimination by
-         *  better routing. */
-        cavityFallbacks: Array<{ id: string; kind: CavityFallbackKind; tip: { x: number; y: number; z: number }; fanRefusal?: string }>;
+         *  model-to-model instead, by whichever type registered a bridge
+         *  builder. Tip = where the bridge starts. */
+        cavityFallbacks: Array<{ id: string; kind: SupportTypeId; tip: { x: number; y: number; z: number }; fanRefusal?: string }>;
     };
 }
 
@@ -148,7 +143,7 @@ export interface ForestReport {
 export interface OrphanInfo {
     id: string;
     kind: OrphanKind;
-    reason: 'missingKnot' | 'missingHost' | 'missingSegment' | 'drift' | 'cross' | 'blocked' | 'trunkBlocked';
+    reason: 'missingKnot' | 'missingHost' | 'missingSegment' | 'drift' | 'cross' | 'blocked' | 'hostBlocked';
     hostId?: string;
     knotId?: string;
     detail?: string;
@@ -203,7 +198,7 @@ export interface PlacementDiagnostics {
     /** Candidate counts by detector source. */
     candidatesBySource: { voxel: number; minima: number; intersection: number; overhang: number; stabilization: number };
     /** Placed trunks by origin. */
-    trunksByKind: {
+    hostsByKind: {
         /** Fixed-density grid points (boundary ring + lattice infill). */
         gridInfill: number;
         /** Coverage-convergence gap-fill points. */
@@ -216,9 +211,10 @@ export interface PlacementDiagnostics {
     /** Why candidates failed to merge (no host vs host rejected the attachment). */
     mergeRefusals: Partial<Record<'noHost' | 'rejected', number>>;
     /** Candidates whose trunk could not reach the plate and were bridged
-     *  model-to-model instead (cavity stick/twig). Tip = where the bridge
+     *  model-to-model instead -- by whichever type registered a bridge
+     *  builder. Tip = where the bridge
      *  starts; each entry is a candidate for elimination by better routing. */
-    cavityFallbacks: Array<{ id: string; kind: CavityFallbackKind; tip: { x: number; y: number; z: number }; fanRefusal?: string }>;
+    cavityFallbacks: Array<{ id: string; kind: SupportTypeId; tip: { x: number; y: number; z: number }; fanRefusal?: string }>;
 }
 
 /** Physics-based sizing debug data. */
@@ -229,9 +225,9 @@ export interface SizingDebugInfo {
     weightPerSupportG: number;
     avgIslandAreaMm2: number;
     /** Standalone trunks (neither fanned nor merged) — the over-supply signal. */
-    standaloneTrunks: number;
+    standaloneHosts: number;
     /** Trunks from the fixed-density grid (boundary ring + infill + gap fill). */
-    gridInfillTrunks: number;
+    gridInfillHosts: number;
     shaftDiameterRange: { min: number; max: number; avg: number };
     tipContactRange: { min: number; max: number; avg: number };
 }
@@ -258,11 +254,15 @@ export type AutoPlaceStatus =
 
 /** Result returned by the auto-place orchestrator. */
 export interface AutoPlaceResult {
-    placedTrunks: number;
-    placedAnchors: number;
-    placedBranches: number;
-    placedLeaves: number;
-    placedSticks: number;
+    /**
+     * Supports placed this run, one count per support type.
+     *
+     * Keyed by the registry's type ids, so every type reports and a type with
+     * no placement path reports zero rather than going uncounted. Twigs are
+     * placed as cavity fallbacks and were the type missing from the five
+     * hand-written counters this replaced.
+     */
+    placed: Record<SupportTypeId, number>;
     rejectedCandidates: number;
     /** Whether any supports were actually added/removed. */
     changed: boolean;

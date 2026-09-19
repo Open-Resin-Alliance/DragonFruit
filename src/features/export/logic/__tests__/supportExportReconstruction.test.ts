@@ -4,12 +4,13 @@ import * as THREE from 'three';
 import type { KickstandState } from '@/supports/SupportTypes/Kickstand/types';
 import type { SupportState } from '@/supports/types';
 import { JOINT_DIAMETER_OFFSET_MM } from '@/supports/constants';
-import { SupportGeometryGenerator } from '../SupportGeometryGenerator';
+import { SupportGeometryGenerator } from '@/supports/exportGeometry/SupportGeometryGenerator';
 import { buildScopedSupportExportDocument, buildScopedSupportGeometryGroup } from '../supportExportReconstruction';
-import { exportGroupName, SUPPORT_TYPES } from '@/supports/supportTypeRegistry';
+import { createEmptySupportCollections, exportGroupName, SUPPORT_TYPES } from '@/supports/supportTypeRegistry';
 
 function makeSupportState(): SupportState {
   return {
+    ...createEmptySupportCollections(),
     roots: {
       'root-a': {
         id: 'root-a',
@@ -110,7 +111,6 @@ function makeSupportState(): SupportState {
         },
       },
     },
-    sticks: {},
     braces: {
       'brace-a': {
         id: 'brace-a',
@@ -127,7 +127,7 @@ function makeSupportState(): SupportState {
         profile: { diameter: 0.6 },
       },
     },
-    anchors: {
+    stumps: {
       'anchor-a': {
         id: 'anchor-a',
         modelId: 'model-a',
@@ -145,7 +145,6 @@ function makeSupportState(): SupportState {
         },
       },
     },
-    kickstands: {},
     knots: {
       'knot-a': { id: 'knot-a', parentShaftId: 'trunk-a-seg', pos: { x: 0, y: 0, z: 4 }, diameter: 1.1 },
       'knot-b': { id: 'knot-b', parentShaftId: 'trunk-b-seg', pos: { x: 20, y: 0, z: 4 }, diameter: 1.1 },
@@ -232,10 +231,10 @@ test('scoped support export document keeps only requested model supports', () =>
   assert.equal(scoped.branches.length, 1);
   assert.equal(scoped.leaves.length, 1);
   assert.equal(scoped.braces.length, 1);
-  assert.equal(scoped.anchors?.length ?? 0, 1);
+  assert.equal(scoped.stumps?.length ?? 0, 1);
   assert.equal(scoped.kickstands?.length ?? 0, 1);
 
-  for (const collection of [scoped.roots, scoped.trunks, scoped.branches, scoped.leaves, scoped.braces, scoped.anchors ?? []]) {
+  for (const collection of [scoped.roots, scoped.trunks, scoped.branches, scoped.leaves, scoped.braces, scoped.stumps ?? []]) {
     for (const item of collection) {
       assert.equal(item.modelId, 'model-a');
     }

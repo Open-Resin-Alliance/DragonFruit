@@ -9,12 +9,20 @@ import { SUPPORT_AUTO_PLACE } from '../history/actionTypes';
 import { registerSupportHistoryHandlers } from '../history/useSupportHistoryHandlers';
 import { runAutoPlace } from '../autoSupport/autoPlace';
 import { setModelMesh } from '../autoSupport/meshStore';
-import { resetStore, getSnapshot, setSnapshot, resetKickstandsInState} from '../state';
+import { resetStore, getSnapshot, setSnapshot, resetKickstandsInState, getSupportTypeOf } from '../state';
 import { initializeBVH, accelerateGeometry } from '@/utils/bvh';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
 import { isShaftBlocked } from '../PlacementLogic/CollisionAvoidance';
 import { getSettings, setSettings } from '../Settings/state';
 import { createDefaultSettings } from '../Settings/types';
+import {
+    contactBridgeTypes,
+    defaultPlacementToolTypeId,
+    getSupportTypeDescriptor,
+    selectTypeForPlacement,
+} from '../supportTypeRegistry';
+import { entitiesIn, keyOf } from './helpers/typeCollections';
+import type { SupportEntityAny } from '../types';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -54,7 +62,7 @@ test('runAutoPlace places standalone trunks and pushes an undoable history entry
 
     const result = runAutoPlace(islands, 'model-a');
 
-    assert.equal(result.placedTrunks, 2, 'both islands become trunks');
+    assert.equal(result.placed.trunk, 2, 'both islands become trunks');
     assert.equal(result.rejectedCandidates, 0);
     assert.equal(result.changed, true);
 
@@ -92,7 +100,7 @@ test('runAutoPlace resolves the underside surface normal from the mesh', () => {
     const islands = [makeIsland('i1', 0, 0, 20, 0.5)];
     const result = runAutoPlace(islands, 'model-a', { debugSkipAutoBracing: true });
 
-    assert.equal(result.placedTrunks, 1, 'underside island places a trunk');
+    assert.equal(result.placed.trunk, 1, 'underside island places a trunk');
 
     const snapshot = getSnapshot();
     const trunk = Object.values(snapshot.trunks)[0];
@@ -138,11 +146,11 @@ test('runAutoPlace grids a large flat region at fixed density (uniform distribut
     // consolidate into fan trees — supports release in chunks, so plate
     // contacts drop well below the candidate count (leaves attach to chunk
     // hosts; branches only appear when a straight leaf is blocked).
-    assert.ok(result.placedTrunks >= 30 && result.placedTrunks <= 120,
-        `placed ${result.placedTrunks} chunk hosts for ~200 tips (consolidated into trees)`);
-    assert.ok(result.placedLeaves >= 50,
-        `consolidated into fan leaves (${result.placedLeaves})`);
-    assert.equal(result.placedBranches, 0,
+    assert.ok(result.placed.trunk >= 30 && result.placed.trunk <= 120,
+        `placed ${result.placed.trunk} chunk hosts for ~200 tips (consolidated into trees)`);
+    assert.ok(result.placed.leaf >= 50,
+        `consolidated into fan leaves (${result.placed.leaf})`);
+    assert.equal(result.placed.branch, 0,
         'flat underside leaves fan straight — no routed branches needed');
 
     const snapshot = getSnapshot();
@@ -152,7 +160,7 @@ test('runAutoPlace grids a large flat region at fixed density (uniform distribut
     assert.equal(Object.keys(snapshot.branches).length, 0,
         'no branches — the flat grid is a pure pillar forest');
     const trunkCount = Object.keys(snapshot.trunks).length;
-    assert.equal(trunkCount, result.placedTrunks, 'trunks committed to the store');
+    assert.equal(trunkCount, result.placed.trunk, 'trunks committed to the store');
 
     setModelMesh('model-a', null);
     disposeHandlers();
@@ -200,8 +208,8 @@ test('runAutoPlace places grid trunks on a rotated mesh via the region normal', 
 
     const result = runAutoPlace([facet], 'model-a', { debugSkipAutoBracing: true, stabilizationEnabled: false });
 
-    assert.ok(result.placedTrunks >= 15,
-        `placed ${result.placedTrunks} grid trunks on the rotated face`);
+    assert.ok(result.placed.trunk >= 15,
+        `placed ${result.placed.trunk} grid trunks on the rotated face`);
     assert.equal(result.rejectedCandidates, 0,
         'no rejections: the region normal keeps the cone clear');
 
@@ -260,7 +268,14 @@ function elevatedJawScenario(gridEnabled: boolean): () => void {
     assert.ok(jawTrunk, 'jaw tip is carried by a plate-rooted trunk');
     assert.equal(result.rejectedCandidates, 0,
         `nothing rejected (${result.rejectedCandidates})`);
-    assert.equal(result.placedSticks, 0,
+    // The long-span bridge is the BRIDGING type whose contact-span rule is
+    // unbounded above -- the registry's own way of saying it serves the spans
+    // past the twig cutoff. Asked of the registry rather than named.
+    const longBridgeTypeId = contactBridgeTypes().find(
+        (typeId) => getSupportTypeDescriptor(typeId).placementRule?.maxMm === undefined,
+    );
+    assert.ok(longBridgeTypeId, 'a bridging type serves the long spans');
+    assert.equal(result.placed[longBridgeTypeId], 0,
         'no cavity stick — the routed trunk made the bridge unnecessary');
     // The routed shaft must actually clear the body: every segment passes
     // the same post-thickening check the orphan cull applies.
@@ -313,8 +328,8 @@ test('runAutoPlace gap-fills under-covered regions (coverage convergence)', () =
 
     // Initial grid at 5.5mm spacing ≈ 16 points + gap-fill, then the
     // anchor-tree pass merges trunks into branches — assert TIPS preserved.
-    assert.ok(result.placedTrunks + result.placedBranches >= 20,
-        `gap-fill + tree merge preserved tips (${result.placedTrunks}T + ${result.placedBranches}B)`);
+    assert.ok(result.placed.trunk + result.placed.branch >= 20,
+        `gap-fill + tree merge preserved tips (${result.placed.trunk}T + ${result.placed.branch}B)`);
 
     setModelMesh('model-a', null);
     disposeHandlers();
@@ -346,7 +361,7 @@ test('runAutoPlace gives small sub-threshold regions a single pillar', () => {
 
     const result = runAutoPlace([foot], 'model-a', { debugSkipAutoBracing: true });
 
-    assert.equal(result.placedTrunks, 1, 'sub-threshold patch → exactly one pillar');
+    assert.equal(result.placed.trunk, 1, 'sub-threshold patch → exactly one pillar');
 
     setModelMesh('model-a', null);
     disposeHandlers();
@@ -381,15 +396,15 @@ test('runAutoPlace fans sub-threshold overhang candidates instead of standalone 
         { debugSkipAutoBracing: true,  },
     );
 
-    assert.equal(result.placedTrunks, 1, 'o15 fanned instead of becoming a trunk');
-    assert.ok(result.placedLeaves >= 1, 'o15 attached as a leaf');
+    assert.equal(result.placed.trunk, 1, 'o15 fanned instead of becoming a trunk');
+    assert.ok(result.placed.leaf >= 1, 'o15 attached as a leaf');
     assert.ok(Object.values(getSnapshot().leaves).some((l) => l.origin === 'overhang'),
         'fanned overhang leaf carries the overhang origin');
     assert.ok(Object.values(getSnapshot().branches).every((b) => b.origin !== 'overhang'),
         'overhang fanning never branches — leaves only');
 
     const placement = result.analytics?.placement;
-    assert.equal(placement?.trunksByKind.standalone, 1, 'only trunk A is standalone (voxel island)');
+    assert.equal(placement?.hostsByKind.standalone, 1, 'only trunk A is standalone (voxel island)');
     assert.deepEqual(placement?.fanRefusals, {}, 'o15 fanned — no refusal for it');
     assert.deepEqual(placement?.mergeRefusals, { noHost: 1 }, 'trunk A had no host to merge into');
 
@@ -427,10 +442,10 @@ test('runAutoPlace falls back to a standalone trunk when no fan host exists', ()
         { debugSkipAutoBracing: true,  },
     );
 
-    assert.equal(result.placedTrunks, 2, 'far overhang keeps its standalone trunk (coverage)');
+    assert.equal(result.placed.trunk, 2, 'far overhang keeps its standalone trunk (coverage)');
 
     const placement = result.analytics?.placement;
-    assert.equal(placement?.trunksByKind.standalone, 2, 'both became standalone trunks');
+    assert.equal(placement?.hostsByKind.standalone, 2, 'both became standalone trunks');
     assert.deepEqual(placement?.fanRefusals, { noHost: 1 }, 'o20 found no shaft within the fan radius');
     assert.deepEqual(placement?.mergeRefusals, { noHost: 2 }, 'neither had a host within the merge radius');
 
@@ -480,7 +495,7 @@ test('runAutoPlace dispatches by shape: planar → grid, organic → Poisson', (
 
     const result = runAutoPlace([planar, organic], 'model-a', { debugSkipAutoBracing: true });
 
-    assert.ok((result.analytics?.placement?.trunksByKind.gridInfill ?? 0) > 0,
+    assert.ok((result.analytics?.placement?.hostsByKind.gridInfill ?? 0) > 0,
         'both regions place via the unified grid distribution');
 
     setModelMesh('model-a', null);
@@ -520,7 +535,7 @@ test('runAutoPlace does not duplicate a pillar on top of an existing island trun
         { debugSkipAutoBracing: true, areaPerSupportMm2: 8 },
     );
 
-    assert.ok(result.placedTrunks >= 10, 'the organic region places its own pillar set');
+    assert.ok(result.placed.trunk >= 10, 'the organic region places its own pillar set');
 
     const snapshot = getSnapshot();
     const aTrunkRoot = Object.values(snapshot.roots).find(
@@ -609,8 +624,8 @@ test('runAutoPlace merges with a steep knot, not at the host junction', () => {
         { debugSkipAutoBracing: true,  },
     );
 
-    assert.equal(result.placedTrunks, 1, 'one trunk — the merge never builds a second');
-    assert.ok(result.placedLeaves >= 1, 'A attached as a leaf');
+    assert.equal(result.placed.trunk, 1, 'one trunk — the merge never builds a second');
+    assert.ok(result.placed.leaf >= 1, 'A attached as a leaf');
 
     const snapshot = getSnapshot();
     const mergeKnot = Object.values(snapshot.knots).find((k) => k.id.startsWith('auto-merge-'));
@@ -667,15 +682,15 @@ test('runAutoPlace places low undersides as a standalone pillar forest', () => {
         { debugSkipAutoBracing: true },
     );
 
-    assert.equal(result.placedBranches, 0, 'leaves only — no routed branches');
+    assert.equal(result.placed.branch, 0, 'leaves only — no routed branches');
 
     const snapshot = getSnapshot();
     const trunks = Object.values(snapshot.trunks);
     assert.ok(trunks.some((t) => t.origin === 'overhang'), 'chunk hosts carry the overhang origin');
     assert.ok(trunks.some((t) => t.origin === 'standalone'),
         'the o15 sliver keeps its own standalone pillar');
-    assert.ok(result.placedLeaves >= 5,
-        `o0 consolidates into fan leaves (${result.placedLeaves})`);
+    assert.ok(result.placed.leaf >= 5,
+        `o0 consolidates into fan leaves (${result.placed.leaf})`);
 
     setModelMesh('model-a', null);
     disposeHandlers();
@@ -699,6 +714,10 @@ test('runAutoPlace with no viable candidates returns changed=false and pushes no
  * steps a small disc around the tip before falling back.
  */
 test('a punched hole above a cavity ceiling does not delete its support', () => {
+    // The types that bridge model-to-model, in registry order; each keeps its
+    // entities in its own collection.
+    const bridgeTypeIds = contactBridgeTypes();
+
     const buildShell = (ceilingHoleMm: number | null): THREE.Mesh => {
         const box = (w: number, h: number, d: number, x: number, y: number, z: number) => {
             const g = new THREE.BoxGeometry(w, h, d);
@@ -740,10 +759,11 @@ test('a punched hole above a cavity ceiling does not delete its support', () => 
             stabilizationEnabled: false,
         });
         const snapshot = getSnapshot();
-        const bridges = [
-            ...Object.values(snapshot.sticks),
-            ...Object.values(snapshot.twigs),
-        ];
+        // Every bridging type's own collection, walked from the registry: a
+        // third bridge added later is picked up without touching this test.
+        const bridges = bridgeTypeIds.flatMap(
+            (typeId) => entitiesIn<SupportEntityAny>(snapshot, keyOf(typeId)),
+        );
         const contacts = bridges.flatMap((b) => [
             'contactConeA' in b ? b.contactConeA?.pos : undefined,
             'contactConeB' in b ? b.contactConeB?.pos : undefined,
@@ -753,11 +773,21 @@ test('a punched hole above a cavity ceiling does not delete its support', () => 
 
         setModelMesh('model-a', null);
         disposeHandlers();
-        return { result, contacts };
+        return { result, contacts, bridges };
     };
 
     const sealed = run(null);
     assert.equal(sealed.contacts.length, 2, 'sealed cavity: one bridge between ceiling and floor');
+    // Summed over every bridging type the registry declares.
+    const bridgePlacements = bridgeTypeIds.reduce(
+        (total, typeId) => total + (sealed.result.placed[typeId] ?? 0),
+        0,
+    );
+    assert.equal(
+        bridgePlacements,
+        sealed.bridges.length,
+        `every bridge is counted (${sealed.bridges.map((b) => b.id).join(', ')})`,
+    );
 
     const punched = run(4);
     assert.equal(punched.result.rejectedCandidates, 0,
@@ -766,6 +796,58 @@ test('a punched hole above a cavity ceiling does not delete its support', () => 
     const roofContact = punched.contacts.reduce((top, p) => (p.z > top.z ? p : top));
     assert.ok(Math.abs(roofContact.z - 10) < 0.6,
         `the contact stays on the ceiling, not on the far side (z=${roofContact.z.toFixed(2)})`);
+});
+
+/**
+ * A sealed cavity whose floor is within the stick/twig cutoff: the trunk cannot
+ * reach the plate, so the contact is bridged to the cavity floor just below it.
+ * A bridge that short is a twig.
+ */
+test('a short cavity bridge is built as a twig and counted', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+    initializeBVH();
+
+    const box = (w: number, h: number, d: number, x: number, y: number, z: number) => {
+        const g = new THREE.BoxGeometry(w, h, d);
+        g.translate(x, y, z);
+        return g;
+    };
+    // Interior cavity x,y ∈ (-8,8), z ∈ (2,6); floor top at z=2, ceiling
+    // underside at z=6 — a 4mm span, inside the 5mm stick/twig cutoff.
+    const geometry = mergeGeometries([
+        box(2, 20, 12, -9, 0, 3),
+        box(2, 20, 12, 9, 0, 3),
+        box(20, 2, 12, 0, -9, 3),
+        box(20, 2, 12, 0, 9, 3),
+        box(20, 20, 2, 0, 0, 1),
+        box(20, 20, 2, 0, 0, 7),
+    ])!;
+    accelerateGeometry(geometry);
+    const mesh = new THREE.Mesh(geometry);
+    mesh.updateMatrixWorld();
+    setModelMesh('model-a', mesh);
+
+    const result = runAutoPlace([makeIsland('ceiling', 0, 0, 6, 16)], 'model-a', {
+        debugSkipAutoBracing: true,
+        stabilizationEnabled: false,
+    });
+
+    const snapshot = getSnapshot();
+    assert.equal(Object.keys(snapshot.twigs).length, 1, 'the short span bridges as a twig');
+    assert.equal(result.placed.twig, 1, 'the placed twig is counted');
+    assert.equal(result.changed, true, 'a twig-only run is a change');
+
+    // The diagnostic names the type that bridged, so a bridging type added
+    // later is reported without touching the auto-place pass.
+    const fallbacks = result.analytics?.forestReport?.diagnostics?.cavityFallbacks ?? [];
+    assert.equal(fallbacks.length, 1, 'the bridge is reported as a cavity fallback');
+    assert.equal(fallbacks[0]?.kind, 'twig', 'reported under the type that built it');
+
+    setModelMesh('model-a', null);
+    disposeHandlers();
 });
 
 /**
@@ -818,4 +900,60 @@ test('no branch leaves its host shallower than the branch-angle rule', () => {
 
     setModelMesh('model-a', null);
     disposeHandlers();
+});
+
+
+// ---------------------------------------------------------------------------
+// The near-plate band: auto-support builds the type that overrides it, not a
+// trunk. Run end to end, since the unit tests reach only `decideGridPlacement`
+// and not the override or the commit path.
+// ---------------------------------------------------------------------------
+
+test('runAutoPlace builds the near-plate overridden type for a low island, not a trunk', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+
+    // A tip below the near-plate threshold, with the serving type read from the
+    // declared band rather than named.
+    const TIP_Z = 3;
+    const nearPlateTypeId = selectTypeForPlacement('tipHeight', TIP_Z);
+    assert.ok(nearPlateTypeId, 'a type must claim the near-plate band');
+    // The default tool must not serve this band, or the assertions below would
+    // pass on the fallback.
+    assert.notEqual(
+        nearPlateTypeId,
+        defaultPlacementToolTypeId(),
+        'the near-plate band must resolve to a type other than the default tool',
+    );
+
+    const islands = [makeIsland('i-low', 0, 0, TIP_Z, 1)];
+    const result = runAutoPlace(islands, 'model-a');
+
+    // The planner reports it under the resolved id.
+    assert.equal(result.placed[nearPlateTypeId], 1, 'one support of the resolved type');
+    assert.equal(result.placed[defaultPlacementToolTypeId()] ?? 0, 0, 'no trunk stood on the band');
+
+    // The store holds exactly one, in that type's own collection and stamped
+    // with its type.
+    const snapshot = getSnapshot();
+    const stored = Object.values(snapshot.stumps) as Array<{
+        id: string; typeId?: string;
+        contactCone: { pos: { z: number } };
+        joint: { pos: { z: number } };
+    }>;
+    assert.equal(stored.length, 1, 'the store holds exactly one');
+    const entity = stored[0]!;
+    assert.equal(entity.typeId, nearPlateTypeId, 'the entity carries its own type');
+    assert.equal(getSupportTypeOf(entity.id), nearPlateTypeId, 'and resolves back to it');
+
+    // The type's own two invariants, checked on the committed entity: it meets
+    // the plate at the tip, and its cone never dips below the root joint.
+    assert.ok(
+        entity.contactCone.pos.z > entity.joint.pos.z - 1e-3,
+        `cone dips below the root joint: ${entity.contactCone.pos.z} < ${entity.joint.pos.z}`,
+    );
+    assert.ok(entity.joint.pos.z > 0, 'the root joint sits above the plate');
+
+    setModelMesh('model-a', null);
 });

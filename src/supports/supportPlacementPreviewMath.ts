@@ -1,18 +1,14 @@
 import * as THREE from 'three';
 
-import type { BezierSegment, Knot, Leaf, Twig } from './types';
+import type { BezierSegment } from './types';
 import type { SupportData } from './rendering';
-import type { BracePreviewData } from './SupportTypes/Brace/bracePlacementState';
 import type { ContactDiskProfile } from './SupportPrimitives/ContactCone/types';
 import type { InstancedShaft } from './SupportPrimitives/Shaft/InstancedShaftGroup';
 import type { InstancedJoint } from './SupportPrimitives/Joint/InstancedJointGroup';
 import type { InstancedRoot } from './SupportPrimitives/Roots/InstancedRootsGroup';
 import type { InstancedContactCone } from './SupportPrimitives/ContactCone/InstancedContactConeGroup';
-import { resolveTwigDiameterAtSegmentT } from './SupportTypes/Twig/twigTaper';
 import { bezierSegmentToBatchedShaft } from './Curves/batchedBezierShaft';
 import { getFinalSocketPosition } from './SupportPrimitives/ContactCone/contactConeUtils';
-import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactDiskUtils';
-import { getAutoBracingSettings } from './Settings/state';
 
 /**
  * Geometry for the translucent preview shown while placing a support.
@@ -72,82 +68,6 @@ export const PLACEMENT_PREVIEW_WARNING_COLOR = '#ffcc00';
 export const PLACEMENT_PREVIEW_ORANGE_COLOR = '#c7722f';
 export const PLACEMENT_PREVIEW_OPACITY = 0.5;
 export const PLACEMENT_PREVIEW_ERROR_OPACITY = 0.15;
-
-export function recomputeLeafPreviewContactCone(
-    leaf: Leaf,
-    previewKnot: Knot,
-    twigBySegmentId: Map<string, Twig>,
-) {
-    const cone = leaf.contactCone;
-    if (!cone?.surfaceNormal) return leaf;
-
-    const previewKnotPos = previewKnot.pos;
-    const tip = new THREE.Vector3(cone.pos.x, cone.pos.y, cone.pos.z);
-    const sn = new THREE.Vector3(cone.surfaceNormal.x, cone.surfaceNormal.y, cone.surfaceNormal.z);
-    const knot = new THREE.Vector3(previewKnotPos.x, previewKnotPos.y, previewKnotPos.z);
-
-    let axis = knot.clone().sub(tip);
-    if (axis.lengthSq() < 0.000001) {
-        axis.set(sn.x, sn.y, sn.z);
-    }
-    axis.normalize();
-
-    let finalLength = Math.max(0.1, knot.distanceTo(tip));
-
-    for (let i = 0; i < 3; i++) {
-        const axisVec3 = { x: axis.x, y: axis.y, z: axis.z };
-        const thickness = cone.profile.type === 'disk'
-            ? calculateDiskThickness(cone.surfaceNormal, axisVec3, cone.profile)
-            : 0;
-
-        const start = tip.clone().add(sn.clone().multiplyScalar(thickness));
-        const coneVec = knot.clone().sub(start);
-        const len = coneVec.length();
-        if (len > 0.000001) {
-            axis = coneVec.normalize();
-            finalLength = Math.max(0.1, len);
-        }
-    }
-
-    // If the parent knot sits on a tapered twig, the leaf's wide-end diameter
-    // (bodyDiameterMm) must live-track the twig's local diameter at the knot's
-    // current slide T. Otherwise the cone "neck" stays frozen at the placement
-    // diameter while the knot visibly grows/shrinks.
-    let nextBodyDiameterMm = cone.profile.bodyDiameterMm;
-    const hostTwig = previewKnot.parentShaftId ? twigBySegmentId.get(previewKnot.parentShaftId) : undefined;
-    if (hostTwig && previewKnot.t !== undefined) {
-        const localTwigDia = resolveTwigDiameterAtSegmentT(hostTwig, previewKnot.parentShaftId, previewKnot.t);
-        if (localTwigDia !== null) {
-            nextBodyDiameterMm = localTwigDia;
-        }
-    }
-
-    const oldNormal = cone.normal;
-    const oldLen = cone.profile.lengthMm;
-    const oldBodyDia = cone.profile.bodyDiameterMm;
-    if (
-        oldLen === finalLength
-        && oldBodyDia === nextBodyDiameterMm
-        && oldNormal.x === axis.x
-        && oldNormal.y === axis.y
-        && oldNormal.z === axis.z
-    ) {
-        return leaf;
-    }
-
-    return {
-        ...leaf,
-        contactCone: {
-            ...cone,
-            normal: { x: axis.x, y: axis.y, z: axis.z },
-            profile: {
-                ...cone.profile,
-                lengthMm: finalLength,
-                bodyDiameterMm: nextBodyDiameterMm,
-            },
-        },
-    };
-}
 
 export function resolvePlacementPreviewMaterial(preview: SupportData): { color: string; opacity: number } {
     if (preview.error) {
@@ -431,69 +351,5 @@ export function buildSupportPlacementPreviewBatch(
         joints: Array.from(jointsMap.values()),
         roots,
         cones,
-    };
-}
-
-export function buildBracePlacementPreviewBatch(id: string, preview: BracePreviewData): PlacementPreviewBatch | null {
-    const start = preview.start;
-    const end = preview.end;
-    const dx = end.x - start.x;
-    const dy = end.y - start.y;
-    const dz = end.z - start.z;
-    const lenSq = dx * dx + dy * dy + dz * dz;
-    const braceDia = getAutoBracingSettings().braceDiameterMm;
-    const startDiameter = Math.min(braceDia, Math.max(0.001, preview.startDiameterMm));
-    const endDiameter = Math.min(braceDia, Math.max(0.001, preview.endDiameterMm));
-    const knotStartDiameter = Math.max(0.001, preview.startDiameterMm + 0.1);
-    const knotEndDiameter = Math.max(0.001, preview.endDiameterMm + 0.1);
-
-    const joints: InstancedJoint[] = [
-        {
-            id: `${id}:start-joint`,
-            pos: start,
-            diameter: knotStartDiameter,
-            supportId: id,
-        },
-    ];
-
-    const shafts: InstancedShaft[] = [];
-    const taperedShafts: PlacementPreviewTaperedShaft[] = [];
-    if (lenSq >= 1e-6) {
-        if (Math.abs(startDiameter - endDiameter) > 1e-4) {
-            taperedShafts.push({
-                id: `${id}:shaft`,
-                start,
-                end,
-                diameterStart: startDiameter,
-                diameterEnd: endDiameter,
-            });
-        } else {
-            shafts.push({
-                id: `${id}:shaft`,
-                start,
-                end,
-                diameter: (startDiameter + endDiameter) / 2,
-                supportId: id,
-            });
-        }
-
-        joints.push({
-            id: `${id}:end-joint`,
-            pos: end,
-            diameter: knotEndDiameter,
-            supportId: id,
-        });
-    }
-
-    return {
-        id,
-        color: PLACEMENT_PREVIEW_COLOR,
-        opacity: PLACEMENT_PREVIEW_OPACITY,
-        shafts,
-        taperedShafts,
-        disks: [],
-        joints,
-        roots: [],
-        cones: [],
     };
 }

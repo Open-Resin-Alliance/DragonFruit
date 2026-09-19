@@ -1,3 +1,4 @@
+import { registerAnatomyPreview } from '../../../anatomyPreviewRegistry';
 import React from 'react';
 import { SupportBuilder } from '@/supports/rendering/SupportBuilder';
 import { ANATOMY_CONFIG } from '../../AnatomyPreviewConfig';
@@ -86,7 +87,7 @@ export function RaftPreview({
         <>
             {/* Raft-specific lighting was in the Canvas, should we move it here? 
                 The Canvas had:
-                {activeKind === 'raft' && ( <directionalLight ... /> )}
+                {activePanel === 'raft' && ( <directionalLight ... /> )}
                 It's better to keep scene lighting in the scene/canvas or move it here if it's strictly raft related.
                 Let's keep it in Canvas for now to minimize changes to global scene, 
                 OR move it here if we want self-contained component. 
@@ -131,3 +132,6 @@ export function RaftPreview({
         </>
     );
 }
+
+// The raft's own anatomy preview, registered where it lives.
+registerAnatomyPreview('raft', RaftPreview);

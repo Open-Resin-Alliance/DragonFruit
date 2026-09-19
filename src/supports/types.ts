@@ -13,7 +13,7 @@ export type SupportMode = 'prepare' | 'analysis' | 'support' | 'export' | 'print
 export type LimitationCode =
     | 'ANGLE_TOO_STEEP'
     | 'KNOT_ABOVE_TIP'
-    | 'ANCHOR_BELOW_ROOT'
+    | 'STUMP_BELOW_ROOT'
     | 'COLLISION_WITH_MODEL'
     | 'TOO_CLOSE_TO_EXISTING'
     | 'OUT_OF_BOUNDS';
@@ -88,7 +88,7 @@ export interface Roots extends SupportEntity {
 }
 
 /**
- * Knot (Anchor): A connection point on a Shaft.
+ * Knot (Stump): A connection point on a Shaft.
  * Branches and Braces attach here.
  */
 export interface Knot {
@@ -229,11 +229,11 @@ export type BraceCurve = {
 };
 
 /**
- * Anchor: A minimal near-plate support for contact points below 5mm.
+ * Stump: A minimal near-plate support for contact points below 5mm.
  * Bypasses grid system entirely. Not a target for branches, leaves, or braces.
  * Geometry: frustum root → joint → single segment → contact cone.
  */
-export interface AnchorFields {
+export interface StumpFields {
     rootPos: Vec3;
     rootBaseDiameter: number;
     rootTopDiameter: number;
@@ -243,7 +243,7 @@ export interface AnchorFields {
     contactCone: ContactCone;
 }
 
-export type Anchor = SupportEntity & AnchorFields;
+export type Stump = SupportEntity & StumpFields;
 
 /**
  * Brace: A stabilizer bar connecting two supports.
@@ -316,7 +316,7 @@ export interface SupportFieldsByType {
     twig: TwigFields;
     stick: StickFields;
     brace: BraceFields;
-    anchor: AnchorFields;
+    stump: StumpFields;
     kickstand: KickstandFields;
 }
 
@@ -328,7 +328,7 @@ export interface SupportCollectionByType {
     twig: 'twigs';
     stick: 'sticks';
     brace: 'braces';
-    anchor: 'anchors';
+    stump: 'stumps';
     kickstand: 'kickstands';
 }
 
@@ -340,7 +340,7 @@ export interface SupportEntityByCollection {
     twigs: Twig;
     sticks: Stick;
     braces: Brace;
-    anchors: Anchor;
+    stumps: Stump;
     kickstands: Kickstand;
     knots: Knot;
 }
@@ -392,7 +392,7 @@ export interface DragonfruitImportFormat {
     twigs?: Twig[];
     sticks?: Stick[];
     braces: Brace[];
-    anchors?: Anchor[];
+    stumps?: Stump[];
     knots: Knot[];
     kickstands?: KickstandBuildResult[];
 }

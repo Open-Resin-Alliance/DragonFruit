@@ -58,7 +58,7 @@ import {
 } from '@/components/controls/ArrangePanel';
 import { DuplicatePanel, type DuplicateLayoutMode } from '../components/controls/DuplicatePanel';
 import { VisualSettingsPanel } from '@/components/controls/VisualSettingsPanel';
-import { contactEndpointsFor, countSupportCollections, getSupportTypeDescriptor, MODEL_ID_COLLECTION_KEYS, SUPPORT_COLLECTION_KEYS, SUPPORT_TYPES, updateSupportEntity, type SupportCollectionKey } from '@/supports/supportTypeRegistry';
+import { contactEndpointsFor, countSupportCollections, knotHostId, spanKnotHostType, getSupportTypeDescriptor, MODEL_ID_COLLECTION_KEYS, SUPPORT_COLLECTION_KEYS, SUPPORT_TYPES, updateSupportEntity, type SupportCollectionKey, type SupportTypeId } from '@/supports/supportTypeRegistry';
 import { LayerSlider } from '@/components/controls/LayerSlider';
 import { PrintingLayerGpuPreview } from '@/components/controls/PrintingLayerGpuPreview';
 import { SupportSidebar } from '@/supports/Settings/SupportSidebar';
@@ -324,10 +324,10 @@ import {
   getSavedUvToolsSettings,
   resolveUvToolsExecutablePath,
 } from '@/components/settings/uvToolsPreferences';
-import { subscribe as subscribeSupportState, findShaftOwnerOfSegment, getSnapshot as getSupportSnapshot, getModelIdForSupportEntityId, getSupportEntity, toggleSegmentCurve, transformSupportsForModel, updateKnot } from '@/supports/state';
+import { subscribe as subscribeSupportState, findShaftOwnerOfSegment, getSnapshot as getSupportSnapshot, getModelIdForSupportEntityId, getSupportEntity, resolveDeclaredHosts, toggleSegmentCurve, transformSupportsForModel, updateKnot } from '@/supports/state';
 import { bracePlacementStore } from '@/supports/SupportTypes/Brace/bracePlacementState';
 import { splitSupportShaft } from '@/supports/SupportPrimitives/Joint/jointUtils';
-import { resolveSegmentEndpoints } from '@/supports/SupportPrimitives/Knot/segmentEndpoints';
+import { resolveSegmentEndpoints, type ShaftEntity } from '@/supports/SupportPrimitives/Knot/segmentEndpoints';
 import { knotFields } from '@/supports/interaction/shared/selection/selectedIdsByType';
 import type { KnotSplitRemap } from '@/supports/SupportPrimitives/Knot/knotUtils';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '@/supports/history/supportEditHistory';
@@ -2024,7 +2024,7 @@ export default function Home() {
         : null,
       braceSnapKind: snapTarget?.kind ?? null,
       braceSnapSegmentId: snappedSegmentId,
-      braceSnapLeafId: snapTarget?.kind === 'leaf' ? (snapTarget.leafId ?? null) : null,
+      braceSnapPrimitiveId: snapTarget?.entityId ?? null,
       previewStart: preview?.start ?? null,
       previewEnd: preview?.end ?? null,
       hoveredVsSnapMismatch,
@@ -2062,8 +2062,8 @@ export default function Home() {
   // stub in support mode (trackSupportCollectionsInHome), so counting from it
   // would silently report zero exactly where orient needs the truth. In
   // prepare mode the stub mirrors the store, so existing callers are unaffected.
-  // Summed over every modelId-bearing collection: a hand-written list left
-  // anchors uncounted, so a model carrying only anchors skipped the warning.
+  // Summed over every modelId-bearing collection, so a model carrying only one
+  // type still reports its supports.
   const getSupportPrimitiveCountForModel = React.useCallback((modelId: string | null | undefined) => {
     if (!modelId) return 0;
 
@@ -2977,16 +2977,14 @@ export default function Home() {
       addRootVolume(root);
     }
 
-    // Every shafted type, by its declared segments and contacts. Written out
-    // per type this covered six of the eight and left anchors uncounted.
+    // Every type with segments or contacts, by its declared segments and
+    // contacts. A brace has neither (its shaft is a curve between two knots),
+    // so the guard below skips it and it is summed on its own below.
     for (const descriptor of SUPPORT_TYPES) {
       if (!descriptor.hasSegments && descriptor.contactFields.length === 0) continue;
-      // A brace spans two knots along a curve instead of carrying segments; it
-      // is summed on its own below.
-      if (descriptor.id === 'brace') continue;
 
       const collection = supportStateSnapshot[descriptor.location.key as SupportCollectionKey] as unknown as Record<string, {
-        id: string; modelId: string; segments?: Segment[]; rootId?: string; parentKnotId?: string; hostKnotId?: string;
+        id: string; typeId?: SupportTypeId; modelId: string; segments?: Segment[]; rootId?: string; parentKnotId?: string; hostKnotId?: string;
       }>;
 
       for (const entity of Object.values(collection ?? {})) {
@@ -2999,7 +2997,7 @@ export default function Home() {
 
         const segments = entity.segments ?? [];
         for (let i = 0; i < segments.length; i += 1) {
-          const endpoints = resolveSegmentEndpoints(descriptor.id, entity as never, segments[i], i, hosts);
+          const endpoints = resolveSegmentEndpoints(entity as ShaftEntity, segments[i], i, hosts);
           if (!endpoints) continue;
           supportMl += segmentVolumeMl(segments[i], endpoints.start, endpoints.end);
         }
@@ -5745,7 +5743,7 @@ export default function Home() {
         if (state.selectedCategory === 'segment' && state.selectedId) {
           toggleSegmentCurve(state.selectedId);
         } else if (state.selectedId && state.braces[state.selectedId]) {
-          toggleSegmentCurve(`braceSegment:${state.selectedId}`);
+          toggleSegmentCurve(knotHostId(spanKnotHostType(), state.selectedId));
         }
         break;
       }
@@ -5759,19 +5757,16 @@ export default function Home() {
         const beforeSnapshot = captureSupportEditSnapshot();
 
         const owner = findShaftOwnerOfSegment(segmentId);
-        const entity = owner ? getSupportEntity(owner.typeId, owner.id) as { segments: Segment[] } | null : null;
+        const entity = owner ? getSupportEntity(owner.typeId, owner.id) as ShaftEntity | null : null;
         if (owner && entity) {
           const segmentIndex = entity.segments.findIndex((segment) => segment.id === segmentId);
           const segment = entity.segments[segmentIndex];
           if (segment) {
             const descriptor = getSupportTypeDescriptor(owner.typeId);
-            const hosts = {
-              root: descriptor.ownsRoot ? state.roots[(entity as { rootId?: string }).rootId ?? ''] : undefined,
-              hostKnot: descriptor.lower.kind === 'knot'
-                ? state.knots[(entity as { parentKnotId?: string }).parentKnotId ?? '']
-                : undefined,
-            };
-            const endpoints = resolveSegmentEndpoints(owner.typeId, entity, segment, segmentIndex, hosts);
+            // Read off the declared edges: a kickstand's knot is at its upper
+            // end, so `lower.kind` would hand it none.
+            const hosts = resolveDeclaredHosts(owner.typeId, entity as unknown as Record<string, unknown>);
+            const endpoints = resolveSegmentEndpoints(entity, segment, segmentIndex, hosts);
 
             if (endpoints) {
               const { start, end } = endpoints;
@@ -5779,7 +5774,7 @@ export default function Home() {
                 ? projectBezierSplitPoint(start, segment.controlPoint1, segment.controlPoint2, end, splitTargetPoint)
                 : projectSplitPoint(start, end, splitTargetPoint);
               const { entity: updated, knotRemaps } = splitSupportShaft(
-                owner.typeId, entity, segmentId, projected.point, projected.t, hosts, state.knots,
+                entity, segmentId, projected.point, projected.t, hosts, state.knots,
               );
               applyJointSplitKnotRemaps(knotRemaps);
               updateSupportEntity(owner.typeId, updated);
@@ -6369,7 +6364,7 @@ export default function Home() {
     return false;
   }, []);
 
-  // Every collection, so a scene holding only anchors is not reported empty.
+  // Every collection, so a scene holding only one type is not reported empty.
   const hasSupportOrRaftGeometry = React.useMemo(() => {
     if (raftSettingsSnapshot.bottomMode !== 'off') return true;
     return SUPPORT_COLLECTION_KEYS.some((key) => hasAnyEntries(supportStateSnapshot[key]));
@@ -7213,8 +7208,7 @@ export default function Home() {
       }
     }
 
-    // Every type's joints and declared contacts. Written out per type this
-    // covered six of the eight, so an anchor never grew the bounds.
+    // Every type's joints and declared contacts, so each one grows the bounds.
     for (const descriptor of SUPPORT_TYPES) {
       const collection = supportStateSnapshot[descriptor.location.key as SupportCollectionKey] as unknown as
         Record<string, { modelId?: string; segments?: Segment[] }>;
@@ -10220,10 +10214,7 @@ export default function Home() {
             onMarqueeSelectionChange={handleSceneMarqueeSelection}
             placementPreviews={supports.placementPreviews}
             blockSupportPlacement={supports.isPlacementHardDisabled}
-            isBranchPlacementActive={supports.branchPlacement.isActive}
-            isLeafPlacementActive={supports.leafPlacement.isActive}
-            isBracePlacementActive={supports.bracePlacement.isActive}
-            isKickstandPlacementActive={supports.kickstandPlacement.isActive}
+            placementActive={supports.placementActive}
             branchTipPosition={supports.branchPlacement.tipPosition}
             branchHoverPosition={supports.branchPlacement.hoverPosition}
             leafTipPosition={supports.leafPlacement.tipPosition}

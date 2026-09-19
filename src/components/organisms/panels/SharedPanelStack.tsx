@@ -69,7 +69,7 @@ type SupportDebugStats = {
   braceStartSegmentId: string | null;
   braceSnapKind: string | null;
   braceSnapSegmentId: string | null;
-  braceSnapLeafId: string | null;
+  braceSnapPrimitiveId: string | null;
   previewStart: Vec3Like | null;
   previewEnd: Vec3Like | null;
   hoveredVsSnapMismatch: boolean;
@@ -309,7 +309,7 @@ export function SharedPanelStack({
               <div>Brace Alt active: {supportDebugStats.braceAltActive ? 'true' : 'false'}</div>
               <div>Brace stage: {supportDebugStats.braceStage}</div>
               <div>Brace start: {supportDebugStats.braceStartKind ?? 'none'} / {supportDebugStats.braceStartSegmentId ?? 'n/a'}</div>
-              <div>Brace snap: {supportDebugStats.braceSnapKind ?? 'none'} / {supportDebugStats.braceSnapSegmentId ?? supportDebugStats.braceSnapLeafId ?? 'n/a'}</div>
+              <div>Brace snap: {supportDebugStats.braceSnapKind ?? 'none'} / {supportDebugStats.braceSnapSegmentId ?? supportDebugStats.braceSnapPrimitiveId ?? 'n/a'}</div>
               <div>Preview start: {formatDebugVec3Like(supportDebugStats.previewStart)}</div>
               <div>Preview end: {formatDebugVec3Like(supportDebugStats.previewEnd)}</div>
               <div>Suppressed: {supportDebugStats.supportInteractionSuppressed ? 'true' : 'false'}</div>

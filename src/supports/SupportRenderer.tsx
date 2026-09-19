@@ -7,9 +7,7 @@ import { removeRootById, subscribe, getSnapshot,
   getKickstandRoots,
 } from './state';
 import {
-    buildBracePlacementPreviewBatch,
     buildSupportPlacementPreviewBatch,
-    recomputeLeafPreviewContactCone,
     resolvePlacementPreviewMaterial,
     type InteriorContactFilter,
     type InteriorContactPoint,
@@ -19,40 +17,50 @@ import {
     type PlacementSurface,
     type Vec3Like,
 } from './supportPlacementPreviewMath';
-import { anyContactMatches, collectOwnedRootIds, contactEndpointsFor, getSupportTypeBySelectionCategory, getSupportTypeDescriptor, SUPPORT_COLLECTION_KEYS, SUPPORT_TYPES, type SupportCollectionKey, type SupportTypeId } from './supportTypeRegistry';
+import { buildSegmentPreviewBatch } from './previewGeometry/seam';
+import './previewGeometry/registerBuiltinPreviewBuilders';
+import {
+    anyContactMatches,
+    collectOwnedRootIds,
+    contactEndpointsFor,
+    parseKnotHostId,
+    knotHostId,
+    isConeKnotHost,
+    isSpanKnotHost,
+    spanKnotHostType,
+    coneKnotHostType,
+    getSupportTypeBySelectionCategory,
+    getSupportTypeDescriptor,
+    SUPPORT_COLLECTION_KEYS,
+    SUPPORT_TYPES,
+    type SupportCollectionKey,
+    type SupportTypeId,
+} from './supportTypeRegistry';
 import { buildKnotIndex, selectedIdsForType, type CollectionLookup, type SelectionInputs } from './interaction/shared/selection/selectedIdsByType';
 import { resolveSegmentEndpoints, type EndpointHosts } from './SupportPrimitives/Knot/segmentEndpoints';
-import { TrunkRenderer } from './SupportTypes/Trunk/TrunkRenderer';
-import { BranchRenderer } from './SupportTypes/Branch/BranchRenderer';
-import { LeafRenderer } from './SupportTypes/Leaf/LeafRenderer';
-import { BraceRenderer } from './SupportTypes/Brace/BraceRenderer';
-import { TwigRenderer } from './SupportTypes/Twig/TwigRenderer';
-import { StickRenderer } from './SupportTypes/Stick/StickRenderer';
-import { KickstandRenderer } from './SupportTypes/Kickstand/KickstandRenderer';
-import { AnchorRenderer } from './SupportTypes/Anchor/AnchorRenderer';
+import './detailRenderer/registerBuiltinDetailRenderers';
+import { detailRenderersFor, type DetailRendererContext } from './detailRenderer/seam';
 import { InstancedShaftGroup, type InstancedShaft } from './SupportPrimitives/Shaft/InstancedShaftGroup';
 import { InstancedJointGroup, type InstancedJoint } from './SupportPrimitives/Joint/InstancedJointGroup';
 import { InstancedRootsGroup, type InstancedRoot } from './SupportPrimitives/Roots/InstancedRootsGroup';
 import { InstancedContactConeGroup, type InstancedContactCone } from './SupportPrimitives/ContactCone/InstancedContactConeGroup';
 import { useBracePlacementState } from './SupportTypes/Brace/bracePlacementState';
 import { useLeafPlacementState } from './SupportTypes/Leaf/leafPlacementState';
-import type { Kickstand } from './SupportTypes/Kickstand/types';
 import { useKickstandPlacementState } from './SupportTypes/Kickstand/kickstandPlacementState';
 import { useJointInteraction } from './SupportPrimitives/Joint/useJointInteraction';
 import { useKnotInteraction } from './SupportPrimitives/Knot/useKnotInteraction';
 import { useActiveJointDragPreview, useJointDragPreviewOverrides } from './interaction/jointDragPreview';
 import { useActiveKnotDragPreview } from './interaction/knotDragPreview';
 import { useActiveTwigDragPreview } from './SupportTypes/Twig/twigDragPreview';
-import { buildBranchCandidateKnotIdsByBranchId, buildBranchesByParentKnotId, buildBraceIdsByKnotId, buildLeafIdsByParentKnotId, collectPreviewLeavesById, computeCascadedPreviewKnotOverrides } from './interaction/supportPreviewOverlay';
+import { buildBranchCandidateKnotIdsByBranchId, buildEntitiesByHostKnot, collectPreviewLeavesById, computeCascadedPreviewKnotOverrides } from './interaction/supportPreviewOverlay';
 import { JointCreationManager } from './SupportPrimitives/Joint/JointCreationManager';
 import { JointGizmo } from './SupportPrimitives/Joint/JointGizmo';
 import { KnotGizmo } from './SupportPrimitives/Knot/KnotGizmo';
 import { BezierGizmoManager } from './Curves/BezierGizmo/BezierGizmoManager';
-import { ContactDisk, SupportMode, BezierSegment, type Anchor, type Brace, type Knot, type Leaf, type Roots, type Segment, type Stick, type SupportEntityAny, type Trunk, type Branch, type Twig, type SupportOrigin, type Vec3 } from './types';
+import { ContactDisk, SupportMode, BezierSegment, type Stump, type Brace, type Knot, type Leaf, type Roots, type Segment, type SupportEntityAny, type Twig, type SupportOrigin, type Vec3 } from './types';
 import { resolveTwigDiameterAtSegmentT } from './SupportTypes/Twig/twigTaper';
 import { bezierSegmentToBatchedShaft, braceBezierToBatchedShaft } from './Curves/batchedBezierShaft';
 import { EMPTY_PLACEMENT_PREVIEWS, type SupportData, type SupportPlacementPreviews } from './rendering';
-import type { BracePreviewData } from './SupportTypes/Brace/bracePlacementState';
 import { useJointCreationState } from './SupportPrimitives/Joint/jointCreationState';
 import { subscribeToSettings, getSettingsSnapshot } from './Settings/state';
 import { emitSupportModelPointerHover, emitSupportModelPointerSelect, handleSupportClick } from './interaction/clickHandlers';
@@ -132,11 +140,37 @@ const BATCHED_JOINT_WIDTH_SEGMENTS = 12;
 const BATCHED_JOINT_HEIGHT_SEGMENTS = 10;
 const MULTI_SELECTION_DETAIL_THRESHOLD = 24;
 const BULK_MULTI_SELECTED_COLOR = '#80fffd';
-/** Debug origin coloring (AutoSupport "Origin Colors" toggle): red = anchor
+
+/**
+ * Whether a type's live marquee highlight can be drawn as a batched overlay:
+ * the overlay reaches a type declaring `batchesShaft`, `batchesContactCones`
+ * or `ownsRoot`. A type with none takes the preview through its own detail
+ * renderer instead; see `sharedRenderProps`.
+ */
+/**
+ * Whether a support should be drawn as selected, by any of three routes: it is
+ * in its type's selected set, the bulk marquee colour stands in for the sets
+ * past the detail threshold, or a drag is currently over it. A detail renderer
+ * dims anything it is not told is selected, overwriting its colour.
+ */
+export function supportIsDrawnSelected(input: {
+    inSelectedSet: boolean;
+    bulkSelected: boolean;
+    marqueePreview: boolean;
+}): boolean {
+    return input.inSelectedSet || input.bulkSelected || input.marqueePreview;
+}
+
+export function typeHasBatchedMarqueeOverlay(typeId: SupportTypeId): boolean {
+    const descriptor = getSupportTypeDescriptor(typeId);
+    return descriptor.batchesShaft || descriptor.batchesContactCones || descriptor.ownsRoot;
+}
+/** Debug origin coloring (AutoSupport "Origin Colors" toggle): red = near-plate
  *  band, orange = overhang (grid infill / organic Poisson / fanned overhang),
  *  blue = island (voxel/minima), purple = standalone overhang trunks. */
 const ORIGIN_COLORS: Record<SupportOrigin, string> = {
-    anchor: '#ff3b30',
+    // Spelled so the Record keeps checking that every origin has a colour.
+    stump: '#ff3b30',
     overhang: '#ff9f0a',
     island: '#0a84ff',
     standalone: '#bf5af2',
@@ -155,8 +189,21 @@ const SCENE_JOINT_DIAMETER_BLEND_MM = JOINT_DIAMETER_OFFSET_MM * 0.75;
  *  pre-compensate to keep the exact KnotRenderer sphere size. */
 const KNOT_BATCH_DIAMETER_PRECOMPENSATION_MM = SCENE_JOINT_DIAMETER_BLEND_MM - JOINT_DIAMETER_OFFSET_MM;
 const EMPTY_SUPPORT_ID_LIST: readonly string[] = Object.freeze([]);
-const EMPTY_KNOT_DRAG_BRANCH_SEGMENTS_BY_ID: Record<string, never> = Object.freeze({});
+const EMPTY_KNOT_DRAG_SHAFT_SEGMENTS_BY_ID: Record<string, never> = Object.freeze({});
 const FREEZE_DEPENDENT_PREVIEW_DURING_JOINT_DRAG = true;
+
+/**
+ * The two types this layer batches by hand: the leaf, whose joint is the host
+ * knot it hangs from rather than a shaft joint, and the brace, whose shaft is
+ * its own span between two knots.
+ */
+const LEAF_TYPE_ID = coneKnotHostType();
+const BRACE_TYPE_ID = spanKnotHostType();
+
+/** The leaf's placement-preview batch, whose joints are tinted green while the
+ *  leaf placement is still waiting for its sprout tip. The batch id is the one
+ *  `buildPlacementPreviewBatches` builds from the same descriptor. */
+const LEAF_PREVIEW_BATCH_ID = `placement-preview:${LEAF_TYPE_ID}`;
 
 /** Simple line vector for debugSimpleSupportRender — like J×2 pathfinding debug, but for all shafts. */
 function SimpleShaftLines({ shafts, color }: { shafts: InstancedShaft[]; color: string }) {
@@ -204,8 +251,16 @@ function buildPlacementPreviewBatches(
 
         const id = `placement-preview:${descriptor.id}`;
 
+        // A segment-shaped preview comes from the type's own registered builder;
+        // everything else shares the generic provisional-support batch.
         if (descriptor.previewShape === 'segment') {
-            const segmentBatch = buildBracePlacementPreviewBatch(id, preview as BracePreviewData);
+            const segmentBatch = buildSegmentPreviewBatch(
+                descriptor.id,
+                id,
+                // The builder takes the preview as `unknown`: the shape is the type's own.
+                preview,
+                { maxShaftDiameterMm: getAutoBracingSettings().braceDiameterMm },
+            );
             if (segmentBatch) next.push(segmentBatch);
             continue;
         }
@@ -310,23 +365,23 @@ export function SupportPlacementPreviewLayer({
                         <InstancedJointGroup
                             joints={batch.joints}
                             color={
-                                batch.id === 'placement-preview:leaf' && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
+                                batch.id === LEAF_PREVIEW_BATCH_ID && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
                                     ? '#00ff00'
                                     : batch.color
                             }
                             emissive={
-                                batch.id === 'placement-preview:leaf' && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
+                                batch.id === LEAF_PREVIEW_BATCH_ID && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
                                     ? '#00ff00'
                                     : batch.color
                             }
                             emissiveIntensity={
-                                batch.id === 'placement-preview:leaf' && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
+                                batch.id === LEAF_PREVIEW_BATCH_ID && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
                                     ? 0.5
                                     : 0.08
                             }
                             transparent
                             opacity={
-                                batch.id === 'placement-preview:leaf' && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
+                                batch.id === LEAF_PREVIEW_BATCH_ID && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
                                     ? 0.70
                                     : batch.opacity
                             }
@@ -391,11 +446,6 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const useMultiSelectionDetail = hasSupportMultiSelection && effectiveSelectedSupportIds.length <= MULTI_SELECTION_DETAIL_THRESHOLD;
     const dimNonSelected = selectedId !== null || hasSupportMultiSelection;
     const hideUnselectedKnots = selectedId !== null || hasSupportMultiSelection;
-    // Twigs participate in scene-batched shaft rendering like other supports.
-    // TwigRenderer still mounts (to draw the disks + joints, which have no
-    // scene-batched equivalent); it just defers its straight shafts to the
-    // batched pipeline via deferStraightShaftsToSceneBatch.
-    const enableTwigSceneBatching = true;
 
     const interactionHooksEnabled = !passive;
     const [gizmoInteractionLockActive, setGizmoInteractionLockActive] = React.useState(false);
@@ -447,10 +497,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const marqueeHoveredSupportIdSet = useMemo(() => new Set(marqueeHoveredSupportIds), [marqueeHoveredSupportIds]);
     const activeKnotDragPreview = useActiveKnotDragPreview();
     const activeTwigDragPreview = useActiveTwigDragPreview();
-    // Collections picked by SUPPORT_COLLECTION_KEYS rather than listed: the old
-    // list omitted anchors, so nothing could resolve which support an anchor
-    // segment belonged to. `state` is the dependency because the picked object is
-    // rebuilt whenever any collection identity changes, which is what `state` does.
+    // Collections picked by SUPPORT_COLLECTION_KEYS. `state` is the dependency
+    // because the picked object rebuilds whenever any collection identity changes.
     const supportRenderLookupInput = useMemo(() => {
         const picked = {} as Record<string, unknown>;
         for (const key of SUPPORT_COLLECTION_KEYS) picked[key] = state[key];
@@ -489,9 +537,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
         return map;
     }, [twigList, activeTwigDragPreview]);
-    const stickList = useMemo(() => Object.values(state.sticks), [state.sticks]);
     const braceList = useMemo(() => Object.values(state.braces), [state.braces]);
-    const anchorList = useMemo(() => Object.values(state.anchors), [state.anchors]);
+    const stumpList = useMemo(() => Object.values(state.stumps), [state.stumps]);
     const kickstandList = useMemo(() => Object.values(state.kickstands), [state.kickstands]);
     const matchesInteriorContact = useMemo<InteriorContactFilter>(() => {
         if (!interiorView) return () => true;
@@ -534,14 +581,15 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const resolveParentShaftInterior = (parentShaftId?: string, visitedBraceIds?: Set<string>): boolean => {
             if (!parentShaftId) return false;
 
-            if (parentShaftId.startsWith('leafCone:')) {
-                const leafId = parentShaftId.slice('leafCone:'.length);
-                const leaf = state.leaves[leafId];
+            const host = parseKnotHostId(parentShaftId);
+
+            if (host && isConeKnotHost(host.typeId)) {
+                const leaf = state.leaves[host.entityId];
                 return !!leaf && matchesInteriorContact(leaf.contactCone, leaf.modelId);
             }
 
-            if (parentShaftId.startsWith('braceSegment:')) {
-                const braceId = parentShaftId.slice('braceSegment:'.length);
+            if (host && isSpanKnotHost(host.typeId)) {
+                const braceId = host.entityId;
                 const brace = state.braces[braceId];
                 if (!brace) return false;
                 if (brace.placementSurface === 'interior') return true;
@@ -578,19 +626,16 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         if (modelId) return modelId;
         if (!supportId) return undefined;
 
-        // Every type, from the registry: its own modelId, then the knots it
-        // declares a `hostedBy` edge onto. The hand-written chain covered seven
-        // of eight -- an anchor id resolved to undefined.
+        // Every type: its own modelId, the root it owns, then its `hostedBy` knots.
         for (const descriptor of SUPPORT_TYPES) {
-            const collection = descriptor.id === 'kickstand'
-                ? state.kickstands
-                : (state as unknown as Record<string, Record<string, { modelId?: string }>>)[descriptor.location.key];
+            const collection = (state as unknown as Record<string, Record<string, { modelId?: string }>>)[descriptor.location.key];
             const entity = collection?.[supportId] as Record<string, unknown> | undefined;
             if (!entity) continue;
 
             if (typeof entity.modelId === 'string' && entity.modelId) return entity.modelId;
 
-            if (descriptor.id === 'kickstand') {
+            // A root-owning type resolves its model from that root.
+            if (descriptor.ownsRoot) {
                 const rootId = entity.rootId as string | undefined;
                 const rootModelId = rootId ? state.roots[rootId]?.modelId : undefined;
                 if (rootModelId) return rootModelId;
@@ -834,12 +879,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const supportIdByContactDiskId = useMemo(() => {
         const map = new Map<string, string>();
         for (const [id, supportId] of Object.entries(supportRenderLookup.supportIdByContactDiskId)) map.set(id, supportId);
-        // Add anchor contact cones (not indexed by render lookup worker)
-        for (const anchor of anchorList) {
-            if (anchor.contactCone?.id) map.set(anchor.contactCone.id, anchor.id);
+        // Add the near-plate type's contact cones (not indexed by the render lookup worker)
+        for (const stump of stumpList) {
+            if (stump.contactCone?.id) map.set(stump.contactCone.id, stump.id);
         }
         return map;
-    }, [supportRenderLookup.supportIdByContactDiskId, anchorList]);
+    }, [supportRenderLookup.supportIdByContactDiskId, stumpList]);
 
     const hoveredSupportIdFromPicking = useMemo(() => {
         return resolveHoveredSupportOwnerId(
@@ -1098,14 +1143,17 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         return origin ? ORIGIN_COLORS[origin] : ORIGIN_NO_ORIGIN_COLOR;
     }, [debugOriginColors, originById]);
 
+    /** Whether the bulk marquee colour is what marks this support selected. */
+    const isBulkSelected = React.useCallback((supportId: string) => (
+        hasSupportMultiSelection && !useMultiSelectionDetail && selectedSupportIdSet.has(supportId)
+    ), [hasSupportMultiSelection, useMultiSelectionDetail, selectedSupportIdSet]);
+
     const resolveSceneSupportColor = React.useCallback((
         modelId: string | undefined,
         supportId: string,
         typeId?: SupportTypeId,
     ) => {
-        if (hasSupportMultiSelection && !useMultiSelectionDetail && selectedSupportIdSet.has(supportId)) {
-            return BULK_MULTI_SELECTED_COLOR;
-        }
+        if (isBulkSelected(supportId)) return BULK_MULTI_SELECTED_COLOR;
 
         // Debug origin coloring: anchor / overhang / island / standalone, gray
         // for an entity stamped before origins existed, and a separate slate
@@ -1118,7 +1166,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return dimNonSelected ? '#666666' : resolveBaseColor(modelId);
-    }, [hasSupportMultiSelection, useMultiSelectionDetail, selectedSupportIdSet, dimNonSelected, resolveBaseColor, debugOriginColors, originColorFor]);
+    }, [isBulkSelected, dimNonSelected, resolveBaseColor, debugOriginColors, originColorFor]);
 
     const resolveModelDropOffsetZ = React.useCallback((modelId?: string) => {
         if (!modelId) return 0;
@@ -1170,7 +1218,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         for (const brace of braceList) {
-            map.set(`braceSegment:${brace.id}`, brace.id);
+            map.set(knotHostId(spanKnotHostType(), brace.id), brace.id);
         }
 
         return map;
@@ -1240,12 +1288,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         [selectedIdsByType, EMPTY_SELECTION],
     );
 
-    const selectedTrunkIds = selectedOf('trunk');
-    const selectedBranchIds = selectedOf('branch');
-    const selectedLeafIds = selectedOf('leaf');
-    const selectedStickIds = selectedOf('stick');
-    const selectedBraceIds = selectedOf('brace');
-    const selectedKickstandIds = selectedOf('kickstand');
+    const selectedLeafIds = selectedOf(LEAF_TYPE_ID);
+    const selectedBraceIds = selectedOf(BRACE_TYPE_ID);
 
     const knotIdsByParentShaftId = useMemo(() => {
         const map = new Map<string, string[]>();
@@ -1288,9 +1332,19 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         candidateKnots: previewCandidateKnots,
     });
 
-    const branchesByParentKnotId = useMemo(() => buildBranchesByParentKnotId(branchList), [branchList]);
-    const leafIdsByParentKnotId = useMemo(() => buildLeafIdsByParentKnotId(leafList), [leafList]);
-    const braceIdsByKnotId = useMemo(() => buildBraceIdsByKnotId(braceList), [braceList]);
+    // One derived index over each entity's type and its declared host-knot edges.
+    const branchesByParentKnotId = useMemo(
+        () => buildEntitiesByHostKnot(branchList, (branch) => branch),
+        [branchList],
+    );
+    const leafIdsByParentKnotId = useMemo(
+        () => buildEntitiesByHostKnot(leafList, (leaf) => leaf.id),
+        [leafList],
+    );
+    const braceIdsByKnotId = useMemo(
+        () => buildEntitiesByHostKnot(braceList, (brace) => brace.id),
+        [braceList],
+    );
     const branchCandidateKnotIdsByBranchId = useMemo(
         () => buildBranchCandidateKnotIdsByBranchId(branchList, knotIdsByParentShaftId),
         [branchList, knotIdsByParentShaftId],
@@ -1343,8 +1397,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             previewKnotOverrides,
             leafIdsByParentKnotId,
             leavesById: state.leaves,
-            recomputeLeafPreviewContactCone: (leaf, previewKnot) =>
-                recomputeLeafPreviewContactCone(leaf, previewKnot, twigBySegmentId),
+            twigBySegmentId,
         });
     }, [hasPreviewKnotOverrides, previewKnotOverrideIds, previewKnotOverrides, leafIdsByParentKnotId, state.leaves, twigBySegmentId]);
 
@@ -1395,24 +1448,20 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         return enableBraceLivePreview ? renderKnotsById : state.knots;
     }, [enableBraceLivePreview, renderKnotsById, state.knots]);
 
-    const knotDragPreviewBranchSegmentsById = activeKnotDragPreview?.branchSegmentsById ?? EMPTY_KNOT_DRAG_BRANCH_SEGMENTS_BY_ID;
-    const knotDragPreviewBranchIds = useMemo(() => Object.keys(knotDragPreviewBranchSegmentsById), [knotDragPreviewBranchSegmentsById]);
+    const knotDragPreviewShaftSegmentsById = activeKnotDragPreview?.shaftSegmentsById ?? EMPTY_KNOT_DRAG_SHAFT_SEGMENTS_BY_ID;
+    const knotDragPreviewShaftIds = useMemo(() => Object.keys(knotDragPreviewShaftSegmentsById), [knotDragPreviewShaftSegmentsById]);
     const branchListWithKnotDragPreview = useMemo(() => {
-        if (knotDragPreviewBranchIds.length === 0) return branchList;
+        if (knotDragPreviewShaftIds.length === 0) return branchList;
         return branchList.map((branch) => {
-            const previewSegments = knotDragPreviewBranchSegmentsById[branch.id];
+            const previewSegments = knotDragPreviewShaftSegmentsById[branch.id];
             if (!previewSegments || previewSegments === branch.segments) return branch;
             return { ...branch, segments: previewSegments };
         });
-    }, [branchList, knotDragPreviewBranchSegmentsById, knotDragPreviewBranchIds]);
+    }, [branchList, knotDragPreviewShaftSegmentsById, knotDragPreviewShaftIds]);
 
     /**
-     * Entities a knot drag has reflowed, by entity id.
-     *
-     * A knot drag moves whatever hangs from the knot, so several entities of a
-     * type can change at once -- unlike a joint drag, which reflows the one
-     * support being dragged. Both producers key by entity id, so the render
-     * pass substitutes by id without asking which type it is looking at.
+     * Entities a knot drag has reflowed, by entity id. A knot drag can change
+     * several at once, unlike a joint drag; both producers key by entity id.
      */
     const knotDragOverridesById = useMemo(() => {
         const overrides = new Map<string, SupportEntityAny>();
@@ -1428,12 +1477,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [previewLeavesById, branchListWithKnotDragPreview, state.branches]);
 
     /**
-     * What each type renders: its stored entities, with any live preview
-     * substituted, filtered for interior view by the rule it declares.
-     *
-     * Eight memos differing only in those two steps. The substitution source is
-     * the one active joint-drag preview, plus the leaf and branch knot-drag
-     * previews that reflow a whole list rather than one entity.
+     * What each type renders: its stored entities with any live preview
+     * substituted, filtered for interior view by the rule it declares. The
+     * source is the active joint-drag preview plus the list-reflowing knot ones.
      */
     const renderListByType = useMemo(() => {
         const lists = {} as Record<SupportTypeId, readonly SupportEntityAny[]>;
@@ -1481,16 +1527,11 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [state, knotDragOverridesById, activePreviewEntity, interiorView, matchesInteriorContact, matchesInteriorBrace]);
 
     /*
-     * Thin typed reads of `renderListByType`, one per type. DEBT, not API: they
-     * exist because ~80 call sites below still name a list, and each binds a
-     * type id and nothing else. They go as those sites move to the map.
+     * Thin typed reads of `renderListByType`, for the call sites below that
+     * still name a list. They go as those sites move to the map.
      */
-    const renderTrunkList = renderListByType.trunk as unknown as Trunk[];
-    const renderBranchList = renderListByType.branch as unknown as Branch[];
-    const renderLeafList = renderListByType.leaf as unknown as Leaf[];
-    const renderStickList = renderListByType.stick as unknown as Stick[];
-    const renderBraceList = renderListByType.brace as unknown as Brace[];
-    const renderKickstandList = renderListByType.kickstand as unknown as Kickstand[];
+    const renderLeafList = renderListByType[LEAF_TYPE_ID] as unknown as Leaf[];
+    const renderBraceList = renderListByType[BRACE_TYPE_ID] as unknown as Brace[];
 
     const renderKnotList = useMemo(() => {
         if (!hasPreviewKnotOverrides) return knotList;
@@ -1539,7 +1580,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             let fullyBatchable = true;
 
             entity.segments.forEach((segment, index) => {
-                const endpoints = resolveSegmentEndpoints(typeId, entity, segment, index, hosts);
+                const endpoints = resolveSegmentEndpoints(entity, segment, index, hosts);
                 if (!endpoints) return;
 
                 const start = new THREE.Vector3(endpoints.start.x, endpoints.start.y, endpoints.start.z);
@@ -1619,7 +1660,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             }
 
             const diameter = (startHostDiameter + endHostDiameter) * 0.5;
-            const segmentId = `braceSegment:${brace.id}`;
+            const segmentId = knotHostId(spanKnotHostType(), brace.id);
             const shafts = brace.curve?.type === 'bezier'
                 ? [braceBezierToBatchedShaft(
                     segmentId,
@@ -1652,12 +1693,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [renderBraceList, braceRenderKnotsById, isModelVisible]);
 
     /**
-     * Plain shaft sets per type, keyed by type id then by support.
-     *
-     * What a shaft needs beyond the entity is declared: `ownsRoot` means it
-     * leaves a root, a `hostedBy` knot edge means it hangs from a knot. Only
-     * WHERE those live still differs -- kickstands keep their roots and knots
-     * in their own store.
+     * Plain shaft sets per type, keyed by type id then by support. `ownsRoot`
+     * means it leaves a root, a `hostedBy` knot edge that it hangs from one;
+     * only where those live still differs.
      */
     const plainShaftsByType = useMemo(() => {
         const byType = {} as Record<SupportTypeId, Map<string, SupportShaftSet>>;
@@ -1665,8 +1703,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         for (const descriptor of SUPPORT_TYPES) {
             // Brace builds its own set (its shaft is a curve between two
             // knots); anchor declares a shaft but builds none.
-            if (!descriptor.batchesPlainShafts) continue;
-            if (descriptor.id === 'twig' && !enableTwigSceneBatching) continue;
+            if (!descriptor.batchesShaft) continue;
 
             // Roots are looked up by the entity's own rootId, so the shared
             // collection answers for every type; only the knot index differs,
@@ -1692,7 +1729,6 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [
         renderListByType,
         buildPlainShaftSet,
-        enableTwigSceneBatching,
         state.roots,
         renderKnotsById,
     ]);
@@ -1718,36 +1754,22 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const modelIdByKnotId = useMemo(() => {
         const map = new Map<string, string | undefined>();
 
-        for (const knot of renderKnotList) {
-            const parentShaftId = knot.parentShaftId;
-            let modelId: string | undefined;
+        // A knot rides either a declared pseudo-shaft or a real segment.
+        const modelIdOfParentShaft = (parentShaftId: string): string | undefined => {
+            const host = parseKnotHostId(parentShaftId);
+            if (host && isSpanKnotHost(host.typeId)) return renderBracesById[host.entityId]?.modelId;
+            if (host && isConeKnotHost(host.typeId)) return renderLeavesById[host.entityId]?.modelId;
+            return segmentModelIdById.get(parentShaftId);
+        };
 
-            if (parentShaftId.startsWith('braceSegment:')) {
-                const braceId = parentShaftId.slice('braceSegment:'.length);
-                modelId = renderBracesById[braceId]?.modelId;
-            } else if (parentShaftId.startsWith('leafCone:')) {
-                const leafId = parentShaftId.slice('leafCone:'.length);
-                modelId = renderLeavesById[leafId]?.modelId;
-            } else {
-                modelId = segmentModelIdById.get(parentShaftId);
-            }
+        for (const knot of renderKnotList) {
+            const modelId = modelIdOfParentShaft(knot.parentShaftId);
 
             map.set(knot.id, modelId);
         }
 
         for (const knot of renderKickstandKnotList) {
-            const parentShaftId = knot.parentShaftId;
-            let modelId: string | undefined;
-
-            if (parentShaftId.startsWith('braceSegment:')) {
-                const braceId = parentShaftId.slice('braceSegment:'.length);
-                modelId = renderBracesById[braceId]?.modelId;
-            } else if (parentShaftId.startsWith('leafCone:')) {
-                const leafId = parentShaftId.slice('leafCone:'.length);
-                modelId = renderLeavesById[leafId]?.modelId;
-            } else {
-                modelId = segmentModelIdById.get(parentShaftId);
-            }
+            const modelId = modelIdOfParentShaft(knot.parentShaftId);
 
             map.set(knot.id, modelId);
         }
@@ -1758,9 +1780,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     /**
      * Contact cones for the batched pass, keyed by support.
      *
-     * Which fields to read comes from the declared contact endpoints. Anchors
-     * are absent deliberately -- AnchorRenderer draws their cone itself, and
-     * only while selected; see the note in the plan.
+     * Which fields to read comes from the declared contact endpoints. The stump
+     * is absent: StumpRenderer draws its own cone, and only while selected.
      */
     const contactConesBySupport = useMemo(() => {
         const result = new Map<string, { supportId: string; modelId?: string; cones: InstancedContactCone[] }>();
@@ -1857,7 +1878,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const shaftJointsByType = useMemo(() => {
         const byType = {} as Record<SupportTypeId, ReturnType<typeof collectShaftJoints>>;
         for (const descriptor of SUPPORT_TYPES) {
-            if (!descriptor.batchesShaftJoints) continue;
+            if (!descriptor.batchesShaft) continue;
             // The flag admits only types whose segments carry the joints.
             byType[descriptor.id] = collectShaftJoints(
                 descriptor.id,
@@ -1954,7 +1975,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const jointSet = leafJointsBySupport.get(leaf.id);
             if (!jointSet) continue;
 
-            const color = resolveSceneSupportColor(jointSet.modelId, leaf.id, 'leaf');
+            const color = resolveSceneSupportColor(jointSet.modelId, leaf.id, LEAF_TYPE_ID);
             pushJoints(color, jointSet.joints);
         }
 
@@ -2022,7 +2043,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 : null;
             const color = debugSection
                 ? AUTO_BRACING_DEBUG_SECTION_COLORS[debugSection]
-                : resolveSceneSupportColor(shaftSet.modelId, brace.id, 'brace');
+                : resolveSceneSupportColor(shaftSet.modelId, brace.id, BRACE_TYPE_ID);
 
             const existing = grouped.get(color);
             if (existing) {
@@ -2119,18 +2140,30 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         resolveSceneSupportColor, applyDropToVec3Like,
     ]);
 
-    const sceneBatchedTrunkRootGroups = useMemo(
-        () => groupRootsForSceneBatch('trunk', renderTrunkList, selectedTrunkIds, state.roots, () => 1.5),
-        [renderTrunkList, selectedTrunkIds, state.roots, groupRootsForSceneBatch],
-    );
-
-    const sceneBatchedKickstandRootGroups = useMemo(
-        () => groupRootsForSceneBatch(
-            'kickstand', renderKickstandList, selectedKickstandIds,
-            kickstandRootsById, (kickstand) => kickstand.profile.bodyDiameterMm,
-        ),
-        [renderKickstandList, selectedKickstandIds, kickstandRootsById, groupRootsForSceneBatch],
-    );
+    /**
+     * Plate roots for the batched pass, keyed by type. Only the shaft-diameter
+     * fallback differs, declared as `shaftFallback.fallbackDiameterMm`.
+     */
+    const sceneBatchedRootGroupsByType = useMemo(() => {
+        const byType = {} as Record<SupportTypeId, Array<{ color: string; roots: InstancedRoot[] }>>;
+        for (const descriptor of SUPPORT_TYPES) {
+            if (!descriptor.ownsRoot) continue;
+            const list = renderListByType[descriptor.id] as readonly { id: string; modelId?: string; rootId: string; segments?: Segment[] }[];
+            byType[descriptor.id] = groupRootsForSceneBatch(
+                descriptor.id,
+                list,
+                selectedOf(descriptor.id),
+                state.roots,
+                (entity) => {
+                    const fallback = descriptor.shaftFallback.fallbackDiameterMm;
+                    if (typeof fallback === 'number') return fallback;
+                    if (fallback) return readNumberPath(entity, fallback.path) ?? 1.5;
+                    return 1.5;
+                },
+            );
+        }
+        return byType;
+    }, [renderListByType, selectedOf, state.roots, groupRootsForSceneBatch, readNumberPath]);
 
     const sceneBatchedContactConeGroups = useMemo(() => {
         const grouped = new Map<string, { color: string; cones: InstancedContactCone[] }>();
@@ -2156,15 +2189,20 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             }
         };
 
-        collect('trunk', renderTrunkList, selectedTrunkIds);
-        collect('branch', renderBranchList, selectedBranchIds);
-        collect('stick', renderStickList, selectedStickIds);
-        collect('leaf', renderLeafList, selectedLeafIds);
+        // The types whose contact cones the shared pass draws, in registry order.
+        // `collect` skips an entity with no cone set.
+        for (const descriptor of SUPPORT_TYPES) {
+            if (!descriptor.batchesContactCones) continue;
+            collect(
+                descriptor.id,
+                renderListByType[descriptor.id] as readonly { id: string }[],
+                selectedOf(descriptor.id),
+            );
+        }
 
         return Array.from(grouped.values());
     }, [
-        renderBranchList, renderLeafList, renderStickList, renderTrunkList,
-        selectedTrunkIds, selectedBranchIds, selectedStickIds, selectedLeafIds,
+        renderListByType, selectedOf,
         contactConesBySupport, resolveSceneSupportColor, applyDropToVec3Like,
     ]);
 
@@ -2611,22 +2649,17 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         modelId?: string,
     ) => {
         // Past MULTI_SELECTION_DETAIL_THRESHOLD the per-type selected sets are
-        // left empty, so `isSelected` never reaches a detail renderer and the
-        // bulk colour is the only thing marking a selection. Anchor has no
-        // batched shaft pass, so without this it never highlights in a large
-        // marquee.
-        if (hasSupportMultiSelection && !useMultiSelectionDetail && selectedSupportIdSet.has(supportId)) {
-            return BULK_MULTI_SELECTED_COLOR;
-        }
+        // left empty, so the bulk colour is the only thing marking a selection.
+        // The renderer's dim gate overwrites the colour unless it is also told
+        // the support is selected -- see `supportIsDrawnSelected`.
+        if (isBulkSelected(supportId)) return BULK_MULTI_SELECTED_COLOR;
 
         if (!debugOriginColors) return resolveBaseColor(modelId);
         return getSupportTypeDescriptor(typeId).hasOrigin
             ? originColorFor(supportId) ?? ORIGIN_NO_ORIGIN_COLOR
             : ORIGIN_NOT_APPLICABLE_COLOR;
     }, [
-        hasSupportMultiSelection,
-        useMultiSelectionDetail,
-        selectedSupportIdSet,
+        isBulkSelected,
         debugOriginColors,
         originColorFor,
         resolveBaseColor,
@@ -2643,21 +2676,37 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         typeId: SupportTypeId,
         entity: { id: string; modelId?: string },
         isSelected: boolean,
-    ) => ({
-        isSelected,
-        selectedId: isSelected ? selectedId : null,
-        dimNonSelected,
-        isHovered: hoveredSupportIdForVisual === entity.id
-            || marqueeHoveredSupportIdSet.has(entity.id),
-        baseColor: resolveDetailSupportColor(typeId, entity.id, entity.modelId),
-        suppressHover,
-        isInteractable,
-    }), [
+    ) => {
+        // The bulk marquee colour and an in-progress drag both mark a support
+        // selected without the per-type set -- see `supportIsDrawnSelected`.
+        const bulkSelected = isBulkSelected(entity.id);
+        const marqueePreview = marqueeHoveredSupportIdSet.has(entity.id)
+            && !typeHasBatchedMarqueeOverlay(typeId);
+        const drawnSelected = supportIsDrawnSelected({
+            inSelectedSet: isSelected,
+            bulkSelected,
+            marqueePreview,
+        });
+
+        return {
+            isSelected: drawnSelected,
+            // Keyed on the real selection: a previewed or bulk-marked support
+            // must not expose what a selection does, such as the contact-disk HUD.
+            selectedId: isSelected ? selectedId : null,
+            dimNonSelected,
+            isHovered: hoveredSupportIdForVisual === entity.id
+                || marqueeHoveredSupportIdSet.has(entity.id),
+            baseColor: resolveDetailSupportColor(typeId, entity.id, entity.modelId),
+            suppressHover,
+            isInteractable,
+        };
+    }, [
         selectedId,
         dimNonSelected,
         hoveredSupportIdForVisual,
         marqueeHoveredSupportIdSet,
         resolveDetailSupportColor,
+        isBulkSelected,
         suppressHover,
         isInteractable,
     ]);
@@ -2669,11 +2718,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         options?: { detailedOnly?: boolean },
     ) => {
         if (options?.detailedOnly && simpleRender) return null;
-        // One instanced group per COLOUR, never per model: the per-model drop
-        // offset is baked into each instance, so models sharing a colour share a
-        // draw. Keying by colour alone (not `model:color`, and not the instance
-        // count) also keeps the mesh mounted when supports are edited — the
-        // count in the key used to remount and reallocate its buffers.
+        // One instanced group per colour, never per model: the drop offset is
+        // baked into each instance. An instance count in the key would remount
+        // the mesh and reallocate its buffers on every edit.
         return groups.map((group) => (
             <group key={`scene-${typeId}-batch:${group.color}`}>
                 {simpleRender ? (
@@ -2952,167 +2999,31 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         // Re-apply clipping when committed support geometry collections change.
         // Without this, newly added meshes can miss clipping until some other
         // dependency (like slider movement) forces a re-run.
-        state.roots,
-        state.trunks,
-        state.branches,
-        state.leaves,
-        state.twigs,
-        state.sticks,
-        state.braces,
-        state.anchors,
-        state.knots,
+        //
+        // `state` is the whole store snapshot, so one identity covers every
+        // collection the effect reads.
+        state,
         kickstandRootsById,
-        state.kickstands,
         kickstandKnotsById,
     ]);
 
     /**
-     * What each type's detail renderer is and what it needs. Held here rather
-     * than in the registry because every entry closes over live scene state.
-     *
-     * `hosts` returning null skips the entity; `skip` is the per-type
-     * "draws nothing this frame" rule.
+     * The live scene state the per-type detail renderers close over. Built
+     * once and folded into the registered factories by the seam.
      */
-    const detailRenderers = useMemo((): Partial<Record<SupportTypeId, {
-        component: React.ComponentType<Record<string, unknown>>;
-        entityProp: string;
-        hosts?: (entity: never) => Record<string, unknown> | null;
-        skip?: (context: { entity: never; isSelected: boolean; isBatchable: boolean }) => boolean;
-        extraProps?: (context: { entity: never; isSelected: boolean; isBatchable: boolean }) => Record<string, unknown>;
-        noClipping?: (context: { entity: never; isSelected: boolean; isBatchable: boolean }) => boolean;
-        /** Where "is this shaft batched" comes from, when not `plainShaftsOf`. */
-        batchedIds?: ReadonlySet<string> | { has(id: string): boolean };
-    }>> => ({
-        trunk: {
-            component: TrunkRenderer as never,
-            entityProp: 'trunk',
-            hosts: (trunk: Trunk) => {
-                const root = state.roots[trunk.rootId];
-                return root ? { root } : null;
-            },
-            // Only a selected trunk mounts the detail renderer; the rest are
-            // fully scene-batched.
-            skip: ({ isSelected }) => !isSelected || simpleRender,
-            noClipping: () => true,
-            extraProps: ({ entity, isSelected }) => ({
-                deferStraightShaftsToSceneBatch: !isSelected,
-                deferInteractionToSceneBatch: !isSelected,
-                deferRootsToSceneBatch: !isSelected,
-                deferContactConesToSceneBatch: !isSelected && !!(entity as Trunk).contactCone,
-                hidePlateContactPrimitives: hidePlateContactPrimitivesEffective,
-            }),
-        },
-        branch: {
-            component: BranchRenderer as never,
-            entityProp: 'branch',
-            hosts: (branch: Branch) => {
-                const parentKnot = renderKnotsById[branch.parentKnotId];
-                return parentKnot ? { parentKnot } : null;
-            },
-            skip: ({ isSelected }) => !isSelected || simpleRender,
-            noClipping: () => true,
-            extraProps: ({ entity, isSelected }) => ({
-                showKnots: simpleRender ? false : (!hideUnselectedKnots || isSelected),
-                deferStraightShaftsToSceneBatch: !isSelected,
-                deferInteractionToSceneBatch: !isSelected,
-                deferContactConesToSceneBatch: !isSelected && !!(entity as Branch).contactCone,
-            }),
-        },
-        leaf: {
-            component: LeafRenderer as never,
-            entityProp: 'leaf',
-            hosts: (leaf: Leaf) => {
-                const parentKnot = renderKnotsById[leaf.parentKnotId];
-                return parentKnot ? { parentKnot } : null;
-            },
-            // Unselected leaves are fully scene-batched: cones via
-            // deferContactConesToSceneBatch, base knots via leafJointsBySupport,
-            // so the junction ball stays visible without a per-leaf renderer.
-            skip: ({ isSelected }) => !isSelected,
-            noClipping: () => true,
-            extraProps: ({ entity, isSelected }) => ({
-                showKnots: !simpleRender,
-                deferContactConesToSceneBatch: !isSelected && !!(entity as Leaf).contactCone,
-            }),
-        },
-        twig: {
-            component: TwigRenderer as never,
-            entityProp: 'twig',
-            // A twig always mounts: its contact disks and joints have no
-            // scene-batched equivalent and would vanish when unselected.
-            noClipping: ({ isSelected }) => isSelected,
-            extraProps: ({ isSelected, isBatchable }) => ({
-                deferStraightShaftsToSceneBatch: !isSelected && isBatchable,
-                deferInteractionToSceneBatch: !isSelected && isBatchable,
-            }),
-        },
-        stick: {
-            component: StickRenderer as never,
-            entityProp: 'stick',
-            skip: ({ isSelected, isBatchable }) => !(isSelected || !isBatchable) || simpleRender,
-            noClipping: ({ isSelected }) => isSelected,
-            extraProps: ({ isSelected, isBatchable }) => ({
-                deferStraightShaftsToSceneBatch: !isSelected && isBatchable,
-                deferInteractionToSceneBatch: !isSelected && isBatchable,
-                deferContactConesToSceneBatch: !isSelected,
-            }),
-        },
-        brace: {
-            component: BraceRenderer as never,
-            entityProp: 'brace',
-            // A brace's shaft is a curve between two knots, so it builds its
-            // own batched set rather than appearing in `plainShaftsByType`.
-            batchedIds: braceShaftsBySupport,
-            hosts: (brace: Brace) => {
-                const startKnot = braceRenderKnotsById[brace.startKnotId];
-                const endKnot = braceRenderKnotsById[brace.endKnotId];
-                return startKnot && endKnot ? { startKnot, endKnot } : null;
-            },
-            skip: ({ entity, isSelected, isBatchable }) => {
-                if (simpleRender) return true;
-                const ghosted = ghostedBraceIdSet.has((entity as Brace).id);
-                return !(isSelected || !isBatchable || ghosted);
-            },
-            noClipping: ({ isSelected }) => isSelected,
-            extraProps: ({ entity, isSelected, isBatchable }) => {
-                const ghosted = ghostedBraceIdSet.has((entity as Brace).id);
-                return {
-                    ghosted,
-                    ghostOpacity: ghostOpacityClamped,
-                    showKnots: !hideUnselectedKnots || isSelected,
-                    // A ghosted brace is scenery: it neither hovers nor picks,
-                    // whatever the shared props say. Applied after the spread.
-                    suppressHover: suppressHover || ghosted,
-                    isInteractable: isInteractable && !ghosted,
-                    deferStraightShaftToSceneBatch: !isSelected && isBatchable && !ghosted,
-                    deferInteractionToSceneBatch: (!isSelected && isBatchable) || ghosted,
-                    debugSectionColors: settings.autoBracing.debugSectionColorsEnabled,
-                };
-            },
-        },
-        kickstand: {
-            component: KickstandRenderer as never,
-            entityProp: 'kickstand',
-            hosts: (kickstand: Kickstand) => {
-                const root = state.roots[kickstand.rootId];
-                const hostKnot = renderKnotsById[kickstand.hostKnotId];
-                return root && hostKnot ? { root, hostKnot } : null;
-            },
-            skip: ({ isSelected, isBatchable }) => !(isSelected || !isBatchable) || simpleRender,
-            noClipping: ({ isSelected }) => isSelected,
-            extraProps: ({ isSelected, isBatchable }) => ({
-                showKnot: simpleRender ? false : (!hideUnselectedKnots || isSelected),
-                deferStraightShaftsToSceneBatch: !isSelected && isBatchable,
-                deferInteractionToSceneBatch: !isSelected && isBatchable,
-                hidePlateContactPrimitives: hidePlateContactPrimitivesEffective,
-            }),
-        },
-        anchor: {
-            component: AnchorRenderer as never,
-            entityProp: 'anchor',
-            // Anchor is drawn entirely by its detail renderer -- no batched
-            // shaft pass -- so it never skips and never opts out of clipping.
-        },
+    const detailRendererContext = useMemo<DetailRendererContext>(() => ({
+        roots: state.roots,
+        renderKnotsById,
+        braceRenderKnotsById,
+        simpleRender,
+        hideUnselectedKnots,
+        hidePlateContactPrimitivesEffective,
+        ghostedBraceIdSet,
+        ghostOpacityClamped,
+        suppressHover,
+        isInteractable,
+        debugSectionColorsEnabled: settings.autoBracing.debugSectionColorsEnabled,
+        braceShaftsBySupport,
     }), [
         state.roots,
         renderKnotsById,
@@ -3120,13 +3031,18 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         simpleRender,
         hideUnselectedKnots,
         hidePlateContactPrimitivesEffective,
-        braceShaftsBySupport,
         ghostedBraceIdSet,
         ghostOpacityClamped,
         suppressHover,
         isInteractable,
         settings.autoBracing.debugSectionColorsEnabled,
+        braceShaftsBySupport,
     ]);
+
+    const detailRenderers = useMemo(
+        () => detailRenderersFor(detailRendererContext),
+        [detailRendererContext],
+    );
 
     /**
      * One type's detail renderers for this frame.
@@ -3138,6 +3054,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const renderDetailFor = useCallback((typeId: SupportTypeId) => {
         const entry = detailRenderers[typeId];
         if (!entry) return null;
+        // A renderer takes its entity under the type's declared singular name.
+        const entityProp = getSupportTypeDescriptor(typeId).singular;
 
         const Component = entry.component;
         const selected = selectedOf(typeId);
@@ -3157,7 +3075,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             return (
                 <group key={entity.id} userData={{ noClipping: entry.noClipping?.(context) ?? false }}>
                     <Component
-                        {...{ [entry.entityProp]: entity }}
+                        {...{ [entityProp]: entity }}
                         {...hosts}
                         {...sharedRenderProps(typeId, entity, isSelected)}
                         {...(entry.extraProps?.(context) ?? {})}
@@ -3185,8 +3103,6 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             <KnotGizmo />
             <BezierGizmoManager />
 
-            {/* Render Trunks */}
-            {renderSceneBatchedShafts('trunk', sceneBatchedShaftsOf('trunk'))}
             {!simpleRender && sceneBatchedJointGroups.map((group) => (
                 <group key={`scene-joint-batch:${group.color}`}>
                     <InstancedJointGroup
@@ -3202,8 +3118,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     />
                 </group>
             ))}
-            {!simpleRender && sceneBatchedTrunkRootGroups.map((group) => (
-                <group key={`scene-trunk-root-batch:${group.color}`}>
+            {!simpleRender && Object.entries(sceneBatchedRootGroupsByType).flatMap(([typeId, groups]) => groups.map((group) => (
+                <group key={`scene-${typeId}-root-batch:${group.color}`}>
                     <InstancedRootsGroup
                         roots={group.roots}
                         color={group.color}
@@ -3214,21 +3130,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         onRootPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
                     />
                 </group>
-            ))}
-
-            {!simpleRender && sceneBatchedKickstandRootGroups.map((group) => (
-                <group key={`scene-kickstand-root-batch:${group.color}`}>
-                    <InstancedRootsGroup
-                        roots={group.roots}
-                        color={group.color}
-                        transparent={ghostTransparent}
-                        opacity={ghostOpacityClamped}
-                        onRootClick={isPointerInteractable ? handleSceneBatchedRootClick : undefined}
-                        onRootPointerMove={isPointerInteractable ? handleSceneBatchedRootPointerMove : undefined}
-                        onRootPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
-                    />
-                </group>
-            ))}
+            )))}
             {sceneBatchedContactConeGroups.map((group) => (
                 <group key={`scene-cone-batch:${group.color}`}>
                     <InstancedContactConeGroup
@@ -3311,23 +3213,23 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         <InstancedJointGroup
                             joints={batch.joints}
                             color={
-                                batch.id === 'placement-preview:leaf' && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
+                                batch.id === LEAF_PREVIEW_BATCH_ID && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
                                     ? '#00ff00'
                                     : batch.color
                             }
                             emissive={
-                                batch.id === 'placement-preview:leaf' && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
+                                batch.id === LEAF_PREVIEW_BATCH_ID && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
                                     ? '#00ff00'
                                     : batch.color
                             }
                             emissiveIntensity={
-                                batch.id === 'placement-preview:leaf' && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
+                                batch.id === LEAF_PREVIEW_BATCH_ID && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
                                     ? 0.5
                                     : 0.08
                             }
                             transparent
                             opacity={
-                                batch.id === 'placement-preview:leaf' && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
+                                batch.id === LEAF_PREVIEW_BATCH_ID && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
                                     ? 0.70
                                     : batch.opacity
                             }
@@ -3484,42 +3386,26 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 />
             )}
 
-            {renderDetailFor('trunk')}
 
-            {/* Render Branches */}
-            {renderSceneBatchedShafts('branch', sceneBatchedShaftsOf('branch'))}
-
-            {renderDetailFor('branch')}
-
-            {/* Render Leaves */}
-            {renderDetailFor('leaf')}
-
-            {/* Render Twigs.
-             *
-             * Unlike Trunks/Branches, twigs always mount TwigRenderer (even
-             * when scene-batched), because the contact disks and joints have
-             * no scene-batched equivalent and would otherwise vanish for
-             * unselected twigs. TwigRenderer defers its shafts to the
-             * scene batch via deferStraightShaftsToSceneBatch.
-             */}
-            {renderDetailFor('twig')}
-
-            {renderSceneBatchedShafts('twig', sceneBatchedShaftsOf('twig'))}
-            {/* Render Sticks */}
-            {renderDetailFor('stick')}
-
-            {renderSceneBatchedShafts('stick', sceneBatchedShaftsOf('stick'))}
-
-            {/* Render Braces */}
-            {renderSceneBatchedShafts('brace', sceneBatchedBraceShaftGroups, { detailedOnly: true })}
-
-            {renderDetailFor('brace')}
-            {/* Render Kickstands */}
-            {renderDetailFor('kickstand')}
-
-            {renderSceneBatchedShafts('kickstand', sceneBatchedShaftsOf('kickstand'))}
-            {/* Render Anchors */}
-            {renderDetailFor('anchor')}
+            {/*
+              The per-type detail and batched-shaft passes, in registry order.
+              A type that addresses its shaft as a selectable segment (brace)
+              batches its own set -- a curve, drawn only in the detailed pass;
+              every other type batches plainly or not at all.
+            */}
+            {SUPPORT_TYPES.map((descriptor) => {
+                const ownBatchedSet = getSupportTypeDescriptor(descriptor.id).segmentSelectionPrefix;
+                return (
+                    <React.Fragment key={descriptor.id}>
+                        {renderSceneBatchedShafts(
+                            descriptor.id,
+                            ownBatchedSet ? sceneBatchedBraceShaftGroups : sceneBatchedShaftsOf(descriptor.id),
+                            ownBatchedSet ? { detailedOnly: true } : undefined,
+                        )}
+                        {renderDetailFor(descriptor.id)}
+                    </React.Fragment>
+                );
+            })}
 
             {/*
               Auto-bracing debug overlay mount point.

@@ -1,14 +1,15 @@
-import type { Anchor, Branch, Knot, Leaf, SupportState, Vec3 } from '../../types';
+import type { SupportState, Vec3 } from '../../types';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import type { SupportSettings } from '../../Settings/types';
 import type { TrunkBuildResult } from '../../SupportTypes/Trunk/trunkBuilder';
+import type { PlacedSupport, SupportTypeId } from '../../supportTypeRegistry';
 import type * as THREE from 'three';
 
 export type GridNodeKey = string;
 
 export type GridPlacementRejectReason =
     | 'KNOT_ABOVE_TIP'
-    | 'ANCHOR_BELOW_ROOT'
+    | 'STUMP_BELOW_ROOT'
     | 'NO_HOST_SEGMENT'
     | 'MODEL_MISMATCH'
     | 'NO_VALID_ATTACHMENT'
@@ -16,40 +17,27 @@ export type GridPlacementRejectReason =
 
 export type GridPlacementDecision =
     | {
-        kind: 'place_trunk';
-        trunkBuild: TrunkBuildResult;
+        /** A support is placed on this contact, in the registry's generic shape. */
+        kind: 'place';
+        /** The grid node it landed on, for logging. Empty when the build never
+         * consults the grid (a type's own override). */
         nodeKey: GridNodeKey;
+        placed: PlacedSupport;
+        /** Preview and validation state, whatever built the support. */
+        supportData?: SupportData;
     }
     | {
-        kind: 'replace_trunk';
+        /** The placed support replaces the host occupying its grid node. */
+        kind: 'promote';
+        hostTypeId: SupportTypeId;
+        hostId: string;
         nodeKey: GridNodeKey;
-        hostTrunkId: string;
-        trunkBuild: TrunkBuildResult;
-        promoteKnot: Knot;
-        promoteBranch: Branch;
-        oldTrunkKnot: Knot | null;
-        oldTrunkBranch: Branch | null;
-    }
-    | {
-        kind: 'place_branch';
-        nodeKey: GridNodeKey;
-        hostTrunkId: string;
-        knot: Knot;
-        branch: Branch;
-        supportData: SupportData;
-    }
-    | {
-        kind: 'place_leaf';
-        nodeKey: GridNodeKey;
-        hostTrunkId: string;
-        knot: Knot;
-        leaf: Leaf;
-        supportData: SupportData;
-    }
-    | {
-        kind: 'place_anchor';
-        anchor: Anchor;
-        supportData: SupportData;
+        /** The support taking the node, in the same generic shape. */
+        placed: PlacedSupport;
+        /** The member preserving the displaced host's own contact. */
+        promotedMember?: PlacedSupport;
+        /** Preview state for what is being placed. */
+        supportData?: SupportData;
     }
     | {
         kind: 'reject';

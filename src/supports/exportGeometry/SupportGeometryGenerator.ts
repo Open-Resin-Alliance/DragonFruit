@@ -10,17 +10,23 @@ import { JOINT_DIAMETER_OFFSET_MM } from '@/supports/constants';
 
 /**
  * SupportGeometryGenerator
- * 
- * A pure-logic class that generates THREE.Mesh objects for supports.
- * This is used for:
- * 1. Offline STL export (headless)
- * 2. Future: Merging supports into a single mesh for performance
- * 
+ *
+ * A pure-logic class that generates THREE.Mesh objects for supports -- the
+ * meshes an export writes, with no React and no scene. Lives here, beside the
+ * rest of the support geometry, because everything it builds is support
+ * geometry: no part of it belongs to the export pipeline that consumes it.
+ *
+ * Two consumers: offline STL/format export (headless), and any future pass that
+ * merges supports into one mesh.
+ *
  * It replicates the visual output of the React components:
  * - RootsRenderer
  * - ShaftRenderer
  * - JointRenderer
  * - ContactConeRenderer
+ *
+ * Each type's own folder reaches it through the `exportGeometry/helpers.ts`
+ * facade, so the generator can move without touching eight folders.
  */
 export class SupportGeometryGenerator {
   private static readonly NON_SELECTED_JOINT_BLEND_MM = JOINT_DIAMETER_OFFSET_MM * 0.75;

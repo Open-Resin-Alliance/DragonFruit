@@ -275,7 +275,16 @@ export function getSettingsSnapshot(): SupportSettings {
 
 const STORAGE_KEY = 'support-settings';
 
+/**
+ * Whether this context has the storage the settings persist to. The worker
+ * loads this module and has none; tested directly rather than through `window`.
+ */
+function hasLocalStorage(): boolean {
+    return typeof localStorage !== 'undefined';
+}
+
 export function saveSettingsToLocalStorage(): void {
+    if (!hasLocalStorage()) return;
     try {
         // Exclude dev tools settings from saved state to reset on next app startup
         const toSave = {
@@ -291,6 +300,7 @@ export function saveSettingsToLocalStorage(): void {
 }
 
 export function loadSettingsFromLocalStorage(): boolean {
+    if (!hasLocalStorage()) return false;
     try {
         const stored = localStorage.getItem(STORAGE_KEY);
         if (!stored) return false;
@@ -314,6 +324,4 @@ export function loadSettingsFromLocalStorage(): boolean {
 
 // --- Initialize ---
 
-if (typeof window !== 'undefined') {
-    loadSettingsFromLocalStorage();
-}
+loadSettingsFromLocalStorage();

@@ -7,6 +7,7 @@ import { AUTO_BRACING_HARD_RULES, type AutoBracingSettings } from '../../autoBra
 import { getAllMeshEntriesForAutoBrace } from '../../autoBracing/meshGeometryStore';
 import { resolveSegmentEndpoints } from '../../SupportPrimitives/Knot/segmentEndpoints';
 import { linePassesMeshClearance } from '../../autoBracing/meshClearance';
+import { isKickstandHostType, resolveSupportTypeIdOf } from '../../supportTypeRegistry';
 import {
     additionalAxesNeededForTwoAxisBracing,
     hasQualifiedTwoAxisBracing,
@@ -303,6 +304,13 @@ export function generateRequiredKickstands(
         const root = snapshot.roots[trunk.rootId];
         if (!root) continue;
 
+        // The kind this kickstand rides is the trunk's OWN type, read off the
+        // entity the store stamps, and taken only when the registry says a
+        // kickstand may host on it. A trunk that resolves to no such type has
+        // nothing for this pass to brace.
+        const hostKind = resolveSupportTypeIdOf(trunk);
+        if (!hostKind || !isKickstandHostType(hostKind)) continue;
+
         let maxZ = root.transform.pos.z;
         
         interface CandidateAnchor {
@@ -314,7 +322,7 @@ export function generateRequiredKickstands(
         const candidateAnchors: CandidateAnchor[] = [];
 
         trunk.segments.forEach((seg, idx) => {
-            const ep = resolveSegmentEndpoints('trunk', trunk, seg, idx, { root });
+            const ep = resolveSegmentEndpoints(trunk, seg, idx, { root });
             if (ep) {
                 if (ep.end.z > maxZ) {
                     maxZ = ep.end.z;
@@ -505,7 +513,7 @@ export function generateRequiredKickstands(
 
                     const hostTarget: KickstandHostTarget = {
                         segmentId: anchor.segmentId,
-                        supportKind: 'trunk',
+                        supportKind: hostKind,
                         t: anchor.t,
                         pos: anchor.pos,
                         diameterMm: anchor.diameterMm,

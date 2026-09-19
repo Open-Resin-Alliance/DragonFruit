@@ -13,6 +13,6 @@ export { planTrunkReplacement } from './planTrunkReplacement';
 
 export { applyTrunkReplacement } from './applyTrunkReplacement';
 
-export { applyDiameterToTrunk, computeAndApplyTrunkDiameterProfile, computeMaxConnectedDiameterFromTrunk } from './maxConnectedDiameter';
+export { applyDiameterToTrunk, computeAndApplySupportDiameterProfile, computeMaxConnectedDiameterFromTrunk } from './maxConnectedDiameter';
 
 export type PlanTrunkReplacement = (args: PlanTrunkReplacementArgs) => TrunkReplacementPlannerResult | null;

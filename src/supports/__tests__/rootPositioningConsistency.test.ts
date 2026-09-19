@@ -27,6 +27,7 @@ test('Trunk segment endpoints Z-position matches root geometry with solid raft',
 
     const trunk = {
         id: 'support-1',
+        typeId: 'trunk',
         modelId: 'model-1',
         segments: [
             {
@@ -40,7 +41,7 @@ test('Trunk segment endpoints Z-position matches root geometry with solid raft',
 
     const segment = trunk.segments[0];
 
-    const endpoints = resolveSegmentEndpoints('trunk', trunk as any, segment as any, 0, { root: root as any });
+    const endpoints = resolveSegmentEndpoints(trunk as any, segment as any, 0, { root: root as any });
     assert.ok(endpoints, 'Endpoints should be generated');
 
     // Expected root top Z = diskHeight (1.0) + coneHeight (1.5) = 2.5.

@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { remapKnotAcrossSplit, calculateKnotPositionOnSegmentFromT } from '../SupportPrimitives/Knot/knotUtils';
-import { splitShaft } from '../SupportPrimitives/Joint/jointUtils';
+import { splitSupportShaft } from '../SupportPrimitives/Joint/jointUtils';
 import { subdivideCubicBezier, getBezierPointAtT } from '../Curves/BezierUtils';
 import type { Knot, Trunk, Roots, Vec3, BezierSegment, StraightSegment } from '../types';
 
@@ -126,7 +126,7 @@ describe('remap preserves world position on a BEZIER segment', () => {
     });
 });
 
-describe('splitShaft emits knot remaps for attached knots', () => {
+describe('splitSupportShaft emits knot remaps for attached knots', () => {
     const root: Roots = {
         id: 'root-1',
         transform: { pos: { x: 0, y: 0, z: 0 }, rot: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
@@ -136,6 +136,7 @@ describe('splitShaft emits knot remaps for attached knots', () => {
 
     const trunk: Trunk = {
         id: 'trunk-1',
+        typeId: 'trunk',
         rootId: 'root-1',
         modelId: 'model-1',
         segments: [
@@ -150,7 +151,7 @@ describe('splitShaft emits knot remaps for attached knots', () => {
             'k-other': makeKnot({ id: 'k-other', parentShaftId: 'seg-elsewhere', t: 0.5 }),
         };
 
-        const { trunk: after, knotRemaps } = splitShaft(trunk, 'seg-orig', { x: 0, y: 0, z: 5 }, 0.5, root, knots);
+        const { entity: after, knotRemaps } = splitSupportShaft(trunk, 'seg-orig', { x: 0, y: 0, z: 5 }, 0.5, { root }, knots);
 
         // Bottom keeps original id, top is new.
         assert.strictEqual(after.segments.length, 2);
@@ -169,7 +170,7 @@ describe('splitShaft emits knot remaps for attached knots', () => {
     });
 
     it('emits no remaps when no knots are supplied', () => {
-        const { knotRemaps } = splitShaft(trunk, 'seg-orig', { x: 0, y: 0, z: 5 }, 0.5, root);
+        const { knotRemaps } = splitSupportShaft(trunk, 'seg-orig', { x: 0, y: 0, z: 5 }, 0.5, { root });
         assert.strictEqual(knotRemaps.length, 0);
     });
 });

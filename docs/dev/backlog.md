@@ -34,13 +34,25 @@ from it. `SupportState`'s collections, the modelId and shafted walks, root
 ownership, the updater and knot-diameter slots, and several behaviour decisions
 that used to be hardcoded type names now come from there.
 
-**Adoption is partway.** Measured by `npm run scan:support-types`: **7,052
-hand-written type references across 147 files**, down from 12,164. History
+**Adoption is partway.** Measured by `npm run scan:support-types`: **5,219
+hand-written type references across 148 files**, down from 12,164. History
 handlers, registration slots, the support primitives, the clipboard, geometry
-export and most of `state.ts` are converted; auto-placement (769) and
-`SupportRenderer.tsx` (663) remain the two largest holdouts. Adding a type is
-therefore still partly manual — see `dev/support-type-extension.md`, which marks
-each step.
+export and most of `state.ts` are converted; `state.ts` (751),
+`SupportRenderer.tsx` (457) and auto-placement (325) remain the largest
+holdouts. Adding a type is therefore still partly manual — see
+`dev/support-type-extension.md`, which marks each step.
+
+**Quote the per-type rename test, not one headline.** `rename-test.py <type>`
+is the goal mechanised, and the types differ: `branch` 16, `leaf` 14, `trunk` 3,
+`anchor` 1, `stick` 0. Measuring on the easiest type alone reads as finished
+when another is ten times worse. The detail lives in
+`dev/support-type-literal-plan.md` §1.1.
+
+Neither instrument alone is the picture: the rename test sees only what `tsc`
+can prove, so a literal that survives a rename *without* a compile error is
+invisible to it. Catching those needs a scan of every distinct token (736 of
+them over 6,014 occurrences when last measured). Report both. A string literal
+is invisible to BOTH: the knot-host prefixes needed a source scan.
 
 **Remaining goal:** move the rest of the per-type threading behind the registry,
 so the renderer, interaction manager and export derive their behaviour rather
@@ -60,20 +72,16 @@ from the registry or declare it as a descriptor property. Never subtract
 (`.filter(id => id !== 'trunk')`): a new type silently joins or skips the set,
 which is the exact failure the registry exists to prevent.
 
-Known remaining hand-written lists worth converting:
-
-- (none outstanding here; see `support-registry-findings.md` for the open items)
-
 ### Bugs found while converting
 
 Converting each hand-written type list turned up defects where the list
 disagreed with the registry. They are recorded in
-[`support-registry-findings.md`](support-registry-findings.md) -- 89 findings,
-27 still open -- rather than here, because they are per-site detail rather than
-rules to follow.
+[`support-registry-findings.md`](support-registry-findings.md) -- 22 still open
+-- rather than here, because they are per-site detail rather than rules to
+follow.
 
 The rule they add up to is the one above: derive, never subtract. Two were
-invisible to the whole suite AND all 22 goldens, so passing tests are not
+invisible to the whole suite AND every golden, so passing tests are not
 evidence a flag is covered -- see AGENTS.md trap 4.
 
 ## Desired: route every native call through the IPC bridge

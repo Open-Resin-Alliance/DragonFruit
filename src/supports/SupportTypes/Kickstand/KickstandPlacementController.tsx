@@ -13,7 +13,6 @@ import { clampKickstandHostT } from './kickstandRules';
 import { buildKickstandData, toKickstandPreviewData } from './kickstandBuilder';
 import { getKickstandPlacementOffsetMm } from './kickstandSettings';
 import { kickstandPlacementStore, useKickstandPlacementState, type KickstandPlacementTarget } from './kickstandPlacementState';
-import { leafPlacementStore } from '../Leaf/leafPlacementState';
 import type { Vec3 } from '../../types';
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
 import { canResolveSupportPlacementBindingFromModifierState, getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByModifierState, resolveSupportPlacementHotkeyBindings, resolveSupportPlacementHotkeyIntent } from '../../interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';

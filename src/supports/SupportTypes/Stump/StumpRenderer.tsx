@@ -1,7 +1,8 @@
 import { useContactDiskDragSession } from '../useContactDiskDragSession';
 import React, { useMemo } from 'react';
 import { useThree } from '@react-three/fiber';
-import type { Anchor, Roots, Vec3 } from '../../types';
+import type { Stump, Roots, Vec3 } from '../../types';
+import { registerSupportDetailRenderer } from '../../detailRenderer/seam';
 import type { ContactCone } from '../../SupportPrimitives/ContactCone/types';
 import { RootsRenderer } from '../../SupportPrimitives/Roots/RootsRenderer';
 import { ContactConeRenderer, getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
@@ -9,10 +10,11 @@ import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/Contac
 import { isPrimaryPointerPress, type ContactDiskDragHit } from '../../SupportPrimitives/ContactDisk/contactDiskDragController';
 import { handleSupportClick } from '../../interaction/clickHandlers';
 import { useHighlight } from '../../interaction/useHighlight';
-import { getSnapshot, updateAnchor } from '../../state';
+import { getSnapshot } from '../../state';
+import { updateSupportEntity } from '../../supportTypeRegistry';
 
-interface AnchorRendererProps {
-    anchor: Anchor;
+interface StumpRendererProps {
+    stump: Stump;
     isSelected?: boolean;
     selectedId?: string | null;
     dimNonSelected?: boolean;
@@ -24,8 +26,8 @@ interface AnchorRendererProps {
     onContactDiskHudHoverChange?: (hovered: boolean) => void;
 }
 
-export const AnchorRenderer = React.memo(function AnchorRenderer({
-    anchor,
+export const StumpRenderer = React.memo(function StumpRenderer({
+    stump,
     isSelected,
     selectedId,
     dimNonSelected,
@@ -35,12 +37,12 @@ export const AnchorRenderer = React.memo(function AnchorRenderer({
     baseColor = '#ff8800',
     deferContactConesToSceneBatch = false,
     onContactDiskHudHoverChange,
-}: AnchorRendererProps) {
+}: StumpRendererProps) {
     const { camera, scene, gl } = useThree();
 
 
     const { pickRef, visuals, isPickingHovered } = useHighlight({
-        id: anchor.id,
+        id: stump.id,
         category: 'support',
         enabled: !!isInteractable && !suppressHover && !isSelected,
         isSelected,
@@ -51,53 +53,55 @@ export const AnchorRenderer = React.memo(function AnchorRenderer({
 
     // Build a synthetic Roots entity so RootsRenderer handles raft offset, sphere top, etc.
     const syntheticRoot: Roots = useMemo(() => ({
-        id: `${anchor.id}:root`,
-        modelId: anchor.modelId,
-        transform: { pos: anchor.rootPos, rot: { x: 0, y: 0, z: 0, w: 1 } },
-        diameter: anchor.rootBaseDiameter,
+        id: `${stump.id}:root`,
+        modelId: stump.modelId,
+        transform: { pos: stump.rootPos, rot: { x: 0, y: 0, z: 0, w: 1 } },
+        diameter: stump.rootBaseDiameter,
         diskHeight: 0.1,
-        coneHeight: anchor.rootHeight,
-    }), [anchor.id, anchor.modelId, anchor.rootPos, anchor.rootBaseDiameter, anchor.rootHeight]);
+        coneHeight: stump.rootHeight,
+    }), [stump.id, stump.modelId, stump.rootPos, stump.rootBaseDiameter, stump.rootHeight]);
 
     const handleClick = (e: any) => {
-        handleSupportClick(e, anchor.id, !!isInteractable);
+        handleSupportClick(e, stump.id, !!isInteractable);
     };
 
     const socketAnchorRef = React.useRef<Vec3 | undefined>(undefined);
-    const typeId = anchor.typeId ?? 'anchor';
+    const typeId = stump.typeId ?? 'stump';
 
     const tipDrag = useContactDiskDragSession<ContactCone>(typeId, {
         onHit: ({ point, surfaceNormal, mesh }: ContactDiskDragHit) => {
-            const latest = getSnapshot().anchors[anchor.id];
+            const latest = getSnapshot().stumps[stump.id];
             if (!latest?.contactCone) return null;
             return recomputeContactConeForMovedDisk(
                 latest.contactCone, point, surfaceNormal, socketAnchorRef.current, mesh,
             );
         },
         onCommit: (cone) => {
-            const latest = getSnapshot().anchors[anchor.id];
-            if (latest) updateAnchor({ ...latest, contactCone: cone });
+            const latest = getSnapshot().stumps[stump.id];
+            // The one-argument form reads the type off the entity, so this
+            // does not name the type to write it.
+            if (latest) updateSupportEntity({ ...latest, contactCone: cone });
         },
     });
 
     const handleContactDiskHudPointerDown = React.useCallback((e: any) => {
-        if (!isSelected || !anchor.contactCone) return;
+        if (!isSelected || !stump.contactCone) return;
         if (!isPrimaryPointerPress(e)) return;
 
-        socketAnchorRef.current = getFinalSocketPosition(anchor.contactCone);
+        socketAnchorRef.current = getFinalSocketPosition(stump.contactCone);
         tipDrag.start({
             event: e, camera, domElement: gl.domElement, scene,
-            modelId: anchor.modelId,
-            placementSurface: anchor.contactCone?.placementSurface,
+            modelId: stump.modelId,
+            placementSurface: stump.contactCone?.placementSurface,
         });
-    }, [anchor.contactCone, anchor.modelId, camera, gl.domElement, isSelected, scene, tipDrag]);
+    }, [stump.contactCone, stump.modelId, camera, gl.domElement, isSelected, scene, tipDrag]);
 
     const handleContactDiskHudPointerUp = React.useCallback(() => {
         tipDrag.stop();
     }, [tipDrag]);
 
     // Render contact cone
-    const effectiveCone = tipDrag.preview ?? anchor.contactCone;
+    const effectiveCone = tipDrag.preview ?? stump.contactCone;
     let coneRender = null;
     if (effectiveCone && !deferContactConesToSceneBatch) {
         const isConeSelected = !!effectiveCone.id && selectedId === effectiveCone.id;
@@ -127,7 +131,7 @@ export const AnchorRenderer = React.memo(function AnchorRenderer({
         <group onClick={handleClick} ref={pickRef as any}>
             <RootsRenderer
                 root={syntheticRoot}
-                shaftDiameter={anchor.rootTopDiameter}
+                shaftDiameter={stump.rootTopDiameter}
                 color={visuals.color}
                 emissive={visuals.emissive}
                 emissiveIntensity={visuals.emissiveIntensity}
@@ -137,4 +141,8 @@ export const AnchorRenderer = React.memo(function AnchorRenderer({
     );
 });
 
-AnchorRenderer.displayName = 'AnchorRenderer';
+StumpRenderer.displayName = 'StumpRenderer';
+
+registerSupportDetailRenderer('stump', () => ({
+    component: StumpRenderer as never,
+}));

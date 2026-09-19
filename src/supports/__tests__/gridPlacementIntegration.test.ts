@@ -7,12 +7,13 @@ import { decideGridPlacement } from '../PlacementLogic/Grid/gridPlacement';
 import { getFinalSocketPosition } from '../SupportPrimitives/ContactCone';
 import { setSettings } from '../Settings/state';
 import { createDefaultSettings } from '../Settings/types';
-import type { SupportState } from '../types';
+import type { Stump, SupportState } from '../types';
 import {
     buildTrunkDataFromPlacement,
     type TrunkBuildInput,
     type TrunkBuildResult,
 } from '../SupportTypes/Trunk/trunkBuilder';
+import { createEmptySupportCollections } from '../supportTypeRegistry';
 
 const GRID_SPACING_MM = 4;
 const GRID_RING_RADIUS = 4;
@@ -34,16 +35,7 @@ function makeSettings() {
 
 function makeEmptySnapshot(): SupportState {
     return {
-        roots: {},
-        trunks: {},
-        branches: {},
-        leaves: {},
-        twigs: {},
-        sticks: {},
-        braces: {},
-        anchors: {},
-        kickstands: {},
-        knots: {},
+        ...createEmptySupportCollections(),
         selectedId: null,
         hoveredId: null,
     };
@@ -192,9 +184,9 @@ test('decideGridPlacement merges into the preferred occupied node before conside
         modelId: MODEL_ID,
     });
 
-    assert.equal(decision.kind, 'place_leaf');
+    assert.equal(decision.kind, 'place');
     assert.equal(decision.nodeKey, '0,0');
-    assert.equal(decision.hostTrunkId, preferredHost.build.trunk.id);
+    assert.equal(decision.placed.hostedBy?.id, preferredHost.build.trunk.id);
 });
 
 test('decideGridPlacement replaces the preferred occupied node before considering nearby empty nodes when the candidate is taller', () => {
@@ -226,9 +218,9 @@ test('decideGridPlacement replaces the preferred occupied node before considerin
         modelId: MODEL_ID,
     });
 
-    assert.equal(decision.kind, 'replace_trunk');
+    assert.equal(decision.kind, 'promote');
     assert.equal(decision.nodeKey, '0,0');
-    assert.equal(decision.hostTrunkId, preferredHost.build.trunk.id);
+    assert.equal(decision.hostId, preferredHost.build.trunk.id);
 });
 
 test('decideGridPlacement places a branch on the occupied preferred node when the host remains taller', () => {
@@ -261,9 +253,9 @@ test('decideGridPlacement places a branch on the occupied preferred node when th
         modelId: MODEL_ID,
     });
 
-    assert.equal(decision.kind, 'place_leaf');
+    assert.equal(decision.kind, 'place');
     assert.equal(decision.nodeKey, '0,0');
-    assert.equal(decision.hostTrunkId, preferredHost.build.trunk.id);
+    assert.equal(decision.placed.hostedBy?.id, preferredHost.build.trunk.id);
 });
 
 test('decideGridPlacement keeps using a branch when the direct hosted span is too long for an auto-leaf', () => {
@@ -295,9 +287,9 @@ test('decideGridPlacement keeps using a branch when the direct hosted span is to
         modelId: MODEL_ID,
     });
 
-    assert.equal(decision.kind, 'place_branch');
+    assert.equal(decision.kind, 'place');
     assert.equal(decision.nodeKey, '0,0');
-    assert.equal(decision.hostTrunkId, preferredHost.build.trunk.id);
+    assert.equal(decision.placed.hostedBy?.id, preferredHost.build.trunk.id);
 });
 
 test('decideGridPlacement replaces the preferred host trunk when the candidate tip is higher', () => {
@@ -330,9 +322,9 @@ test('decideGridPlacement replaces the preferred host trunk when the candidate t
         modelId: MODEL_ID,
     });
 
-    assert.equal(decision.kind, 'replace_trunk');
+    assert.equal(decision.kind, 'promote');
     assert.equal(decision.nodeKey, '0,0');
-    assert.equal(decision.hostTrunkId, preferredHost.build.trunk.id);
+    assert.equal(decision.hostId, preferredHost.build.trunk.id);
 });
 
 test('decideGridPlacement rejects when the fixed preferred host cannot accept an attachment', () => {
@@ -477,9 +469,9 @@ test('decideGridPlacement places branch on neighbor host when co-located host ca
         modelId: MODEL_ID,
     });
 
-    assert.equal(decision.kind, 'place_branch');
+    assert.equal(decision.kind, 'place');
     assert.equal(decision.nodeKey, '1,0'); // Snapped to neighbor node
-    assert.equal(decision.hostTrunkId, neighborHost.build.trunk.id);
+    assert.equal(decision.placed.hostedBy?.id, neighborHost.build.trunk.id);
 });
 
 test('decideGridPlacement rejects an anchor whose tip sits below the root joint and previews the ghost', () => {
@@ -503,11 +495,11 @@ test('decideGridPlacement rejects an anchor whose tip sits below the root joint 
         modelId: MODEL_ID,
     });
 
-    if (decision.kind !== 'reject' || decision.reason !== 'ANCHOR_BELOW_ROOT') {
-        assert.fail(`expected ANCHOR_BELOW_ROOT reject, got ${decision.kind}`);
+    if (decision.kind !== 'reject' || decision.reason !== 'STUMP_BELOW_ROOT') {
+        assert.fail(`expected STUMP_BELOW_ROOT reject, got ${decision.kind}`);
     }
     // Ghost preview carries the reason so the hover tooltip can render it.
-    assert.equal(decision.supportData?.error, 'ANCHOR_BELOW_ROOT');
+    assert.equal(decision.supportData?.error, 'STUMP_BELOW_ROOT');
 });
 
 test('decideGridPlacement places a valid anchor for an above-root near-plate tip', () => {
@@ -530,8 +522,10 @@ test('decideGridPlacement places a valid anchor for an above-root near-plate tip
         tipNormal: { x: 0, y: 0, z: -1 },
         modelId: MODEL_ID,
     });
-    if (decision.kind !== 'place_anchor') assert.fail(`expected place_anchor, got ${decision.kind}`);
-    const anchor = decision.anchor;
+    if (decision.kind !== 'place') assert.fail(`expected place, got ${decision.kind}`);
+    // The decision no longer names the type; it carries the id the registry
+    // resolved for this tip height, and the entity that type's own builder made.
+    const anchor = decision.placed.entity as Stump;
     const socketZ = getFinalSocketPosition(anchor.contactCone).z;
     const lowestShaftZ = Math.min(anchor.contactCone.pos.z, socketZ);
     assert.ok(

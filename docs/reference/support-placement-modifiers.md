@@ -12,7 +12,7 @@ In support mode, held modifier keys decide *which kind* of support a click place
 | `Ctrl` | support shaft | Kickstand |
 | `Ctrl`+`Alt` | model | Leaf |
 
-Bindings are configurable — these are the defaults from `SUPPORTS` in `src/hotkeys/hotkeyConfig.ts` (`BRANCH_PLACEMENT`, `LEAF_PLACEMENT`, `KICKSTAND_PLACEMENT`). A contact below 5 mm gets an [anchor](support-anatomy/anchor.md) rather than a trunk, decided by height, not by modifier.
+Bindings are configurable — these are the defaults from `SUPPORTS` in `src/hotkeys/hotkeyConfig.ts` (`BRANCH_PLACEMENT`, `LEAF_PLACEMENT`, `KICKSTAND_PLACEMENT`). A contact below 5 mm gets an [stump](support-anatomy/stump.md) rather than a trunk, decided by height, not by modifier.
 
 !!! warning "On macOS these are the literal keys, not Cmd"
     Everywhere else in the app a binding that declares `ctrl` is matched against

@@ -200,9 +200,6 @@ function StlMeshComponent({
   modelId,
   isSelected,
   isMarqueeCandidate,
-  isBranchPlacementActive,
-  isLeafPlacementActive,
-  isBracePlacementActive,
   onModelHoverPointChange,
   onModelHoverModelChange,
   revealGhostOpacity,
@@ -281,11 +278,6 @@ function StlMeshComponent({
   isSelected?: boolean;
   /** Whether model is currently inside marquee drag window */
   isMarqueeCandidate?: boolean;
-  /** Whether branch placement mode is active (Alt held) */
-  isBranchPlacementActive?: boolean;
-  /** Whether leaf placement mode is active (Alt+Shift held) */
-  isLeafPlacementActive?: boolean;
-  isBracePlacementActive?: boolean;
   onModelHoverPointChange?: (point: THREE.Vector3 | null) => void;
   onModelHoverModelChange?: (modelId: string | null) => void;
   revealGhostOpacity?: number;

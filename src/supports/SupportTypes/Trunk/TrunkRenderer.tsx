@@ -1,5 +1,6 @@
 import { useContactDiskDragSession } from '../useContactDiskDragSession';
 import { updateSupportEntity } from '../../supportTypeRegistry';
+import { registerSupportDetailRenderer } from '../../detailRenderer/seam';
 import React, { useSyncExternalStore } from 'react';
 import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
@@ -302,3 +303,20 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk: baseTrun
 });
 
 TrunkRenderer.displayName = 'TrunkRenderer';
+
+registerSupportDetailRenderer('trunk', (ctx) => ({
+    component: TrunkRenderer as never,
+    hosts: (trunk: Trunk) => {
+        const root = ctx.roots[trunk.rootId];
+        return root ? { root } : null;
+    },
+    skip: ({ isSelected }) => !isSelected || ctx.simpleRender,
+    noClipping: () => true,
+    extraProps: ({ entity, isSelected }) => ({
+        deferStraightShaftsToSceneBatch: !isSelected,
+        deferInteractionToSceneBatch: !isSelected,
+        deferRootsToSceneBatch: !isSelected,
+        deferContactConesToSceneBatch: !isSelected && !!(entity as Trunk).contactCone,
+        hidePlateContactPrimitives: ctx.hidePlateContactPrimitivesEffective,
+    }),
+}));

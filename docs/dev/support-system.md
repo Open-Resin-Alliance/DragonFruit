@@ -7,11 +7,11 @@ The largest subsystem in the frontend. `src/supports/` owns everything from the 
 | Directory | Holds |
 | --------- | ----- |
 | `SupportPrimitives/` | The reusable pieces every type is built from — Roots, Shaft, Joint, Knot, ContactCone, ContactDisk. Each with its renderer and, where it pays, an instanced group |
-| `SupportTypes/` | One directory per placeable type — Trunk, Branch, Leaf, Twig, Stick, Brace, Kickstand, Anchor — each with a renderer and usually a builder |
+| `SupportTypes/` | One directory per placeable type — Trunk, Branch, Leaf, Twig, Stick, Brace, Kickstand, Stump — each with a renderer and usually a builder |
 | `PlacementLogic/` | Where a support is allowed to go: pathfinding, collision, solvers, grid policy |
 | `interaction/` | Hover, selection, snapping, and the routing that decides which controller owns a click |
 | `rendering/`, `Renderers/` | Shared render assembly and batched/instanced groups |
-| `autoSupport/` | Automatic placement: candidate generation, coverage, Poisson spacing, anchor bands, physics-driven sizing |
+| `autoSupport/` | Automatic placement: candidate generation, coverage, Poisson spacing, near-plate bands, physics-driven sizing |
 | `autoBracing/` | Automatic brace generation, plus the mesh geometry store used for clearance |
 | `Grid/`, `Curves/`, `Rafts/` | Grid lattice, curved segments, raft geometry |
 | `history/` | The typed history façade for support actions |

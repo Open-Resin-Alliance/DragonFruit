@@ -10,7 +10,7 @@ import { LimitationCode, WarningCode } from '../types';
 export const SupportLimitations: Record<LimitationCode, MessageDescriptor> = {
     ANGLE_TOO_STEEP: msg`Surface angle is upward facing. Supports cannot be placed here.`,
     KNOT_ABOVE_TIP: msg`Support base must be below the tip (knot cannot be above the tip).`,
-    ANCHOR_BELOW_ROOT: msg`Contact point is lower than the anchor root — the shaft would extend below the root joint.`,
+    STUMP_BELOW_ROOT: msg`Contact point is lower than the stump root — the shaft would extend below the root joint.`,
     COLLISION_WITH_MODEL: msg`Support would collide with the model geometry.`,
     TOO_CLOSE_TO_EXISTING: msg`Too close to an existing support.`,
     OUT_OF_BOUNDS: msg`Support placement is outside the build volume.`

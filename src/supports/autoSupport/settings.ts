@@ -1,3 +1,4 @@
+import { MIN_LEAF_FAN_RADIUS_MM } from './constants';
 export interface AutoSupportSettings {
     enabled: boolean;
     minIslandAreaMm2: number;
@@ -48,7 +49,7 @@ export interface AutoSupportSettings {
     stabilizationEnabled: boolean;
 }
 
-type NumericConstraint = {
+export type NumericConstraint = {
     min: number;
     max: number;
     step: number;
@@ -56,7 +57,7 @@ type NumericConstraint = {
     integer?: boolean;
 };
 
-type NumericAutoSupportSettingKey =
+export type NumericAutoSupportSettingKey =
     | 'minIslandAreaMm2'
     | 'tipInfluenceRadiusMm'
     | 'maxAttachmentsPerTrunk'
@@ -68,7 +69,6 @@ type NumericAutoSupportSettingKey =
     | 'slopeRelaxFactor'
         | 'suctionAreaExponent'
           | 'coverageTargetPercent'
-    | 'sizingPreset'
     | 'leafFanRadiusMm'
     | 'leafFanMaxAngleDeg';
 
@@ -84,8 +84,7 @@ export const AUTO_SUPPORT_CONSTRAINTS = {
     slopeRelaxFactor: { min: 1, max: 2, step: 0.1, defaultValue: 1.3 },
     suctionAreaExponent: { min: 0, max: 0.4, step: 0.05, defaultValue: 0.15 },
     coverageTargetPercent: { min: 75, max: 100, step: 5, defaultValue: 95, integer: true },
-    sizingPreset: { min: 0, max: 2, step: 1, defaultValue: 1 },
-    leafFanRadiusMm: { min: 2, max: 15, step: 0.5, defaultValue: 5 },
+    leafFanRadiusMm: { min: MIN_LEAF_FAN_RADIUS_MM, max: 15, step: 0.5, defaultValue: MIN_LEAF_FAN_RADIUS_MM },
     leafFanMaxAngleDeg: { min: 20, max: 80, step: 5, defaultValue: 45, integer: true },
 } satisfies Record<NumericAutoSupportSettingKey, NumericConstraint>;
 

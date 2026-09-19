@@ -1,5 +1,5 @@
 import { MODEL_ID_COLLECTION_KEYS, type SupportCollectionKey } from './supportTypeRegistry';
-import type { SupportState } from './types';
+import type { DragonfruitImportFormat, SupportState } from './types';
 
 /**
  * Keys of `SupportState` holding modelId-bearing support entities. Excludes
@@ -19,11 +19,9 @@ export interface SupportEntityLike {
 }
 
 /**
- * Apply `mapEntity` to every entity in every collection, copy-on-write.
- *
- * Returns the original object when nothing changed, so callers keep their
- * `if (changed)` short-circuit. `mapEntity` signals "no change" by returning the
- * entity by reference.
+ * Apply `mapEntity` to every entity in every collection, copy-on-write. Returns
+ * the original when nothing changed; `mapEntity` signals no change by returning
+ * the entity by reference.
  */
 export function mapSupportEntities<T extends SupportEntityCollections>(
     collections: T,
@@ -59,12 +57,9 @@ export function mapSupportEntities<T extends SupportEntityCollections>(
 
 
 /**
- * Apply `mapEntity` to every support entity in an import payload.
- *
- * The payload stores collections as arrays, so it needs its own walk. Optional
- * collections stay `undefined` rather than `[]` -- the shape is part of the
- * import contract. Kickstands nest at `kickstands[].kickstand` and are not
- * covered here.
+ * Apply `mapEntity` to every support entity in an import payload, which stores
+ * its collections as arrays. Optional collections stay `undefined` rather than
+ * `[]`. Kickstands nest at `kickstands[].kickstand` and are not covered here.
  */
 export function mapImportPayloadEntities<T extends Partial<Record<SupportEntityCollectionKey, unknown>>>(
     payload: T,
@@ -77,4 +72,39 @@ export function mapImportPayloadEntities<T extends Partial<Record<SupportEntityC
         (next as Record<string, unknown>)[key] = list.map((entity) => mapEntity(entity, key));
     }
     return next;
+}
+
+/** The payload's collection part: every `DragonfruitImportFormat` key but `version` and `meta`. */
+export type ImportPayloadCollections = Pick<DragonfruitImportFormat, SupportCollectionKey>;
+
+/**
+ * The payload's collections in the order `DragonfruitImportFormat` declares
+ * them. Written out because the order is part of the wire format, which the
+ * export goldens compare byte-for-byte. Membership is guarded by
+ * `registryIsSingleSourceOfTruth.test.ts`.
+ */
+export const IMPORT_PAYLOAD_COLLECTION_ORDER: readonly SupportCollectionKey[] = [
+    'roots',
+    'trunks',
+    'branches',
+    'leaves',
+    'twigs',
+    'sticks',
+    'braces',
+    'stumps',
+    'knots',
+    'kickstands',
+];
+
+/**
+ * The wire format's collections, read out of any registry-keyed source as
+ * arrays. The format stores arrays; the store holds id-keyed records.
+ */
+export function importPayloadCollections(source: Partial<Record<SupportCollectionKey, unknown>>): ImportPayloadCollections {
+    const collections = {} as Record<SupportCollectionKey, unknown[]>;
+    for (const key of IMPORT_PAYLOAD_COLLECTION_ORDER) {
+        const value = (source as Record<string, unknown>)[key];
+        collections[key] = Array.isArray(value) ? value : Object.values((value ?? {}) as Record<string, unknown>);
+    }
+    return collections as ImportPayloadCollections;
 }

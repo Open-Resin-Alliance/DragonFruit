@@ -52,9 +52,12 @@ export interface SupportLeafPayload {
 export interface SupportBranchPayload {
   branch: Branch;
   knot?: Knot | null;
-  trunkUpdate?: {
-    before: Trunk;
-    after: Trunk;
+  /** The host re-solved because one of its attachments changed, with the
+   *  collection it lives in. */
+  hostUpdate?: {
+    typeId: SupportTypeId;
+    before: { id: string };
+    after: { id: string };
   };
   knotUpdates?: {
     before: Knot;
@@ -74,9 +77,12 @@ export interface SupportBranchRemovePayload {
   kickstands?: Kickstand[];
   leaves: Leaf[];
   knots: Knot[];
-  trunkUpdate?: {
-    before: Trunk;
-    after: Trunk;
+  /** The host re-solved because one of its attachments changed, with the
+   *  collection it lives in. */
+  hostUpdate?: {
+    typeId: SupportTypeId;
+    before: { id: string };
+    after: { id: string };
   };
   knotUpdates?: {
     before: Knot;
@@ -94,16 +100,6 @@ export interface BraceLinkPayload {
 export interface SupportKickstandPayload {
   build: KickstandBuildResult;
 }
-
-/** Removal payloads, derived from what the registry declares each type takes. */
-export type SupportTwigPayload = SupportEntityPayload<'twig'>;
-export type SupportStickPayload = SupportEntityPayload<'stick'>;
-export type SupportAnchorPayload = SupportEntityPayload<'anchor'>;
-
-export type SupportTwigRemovePayload = SupportRemovalResult<'twig'>;
-export type SupportStickRemovePayload = SupportRemovalResult<'stick'>;
-export type SupportAnchorRemovePayload = SupportRemovalResult<'anchor'>;
-export type SupportKickstandRemovePayload = SupportRemovalResult<'kickstand'>;
 
 export interface SupportReplaceTrunkPayload {
   before: SupportState;

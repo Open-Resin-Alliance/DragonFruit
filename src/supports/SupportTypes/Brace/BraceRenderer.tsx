@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import * as THREE from 'three';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import type { Brace, Knot } from '../../types';
+import { registerSupportDetailRenderer } from '../../detailRenderer/seam';
 import { useHighlight } from '../../interaction/useHighlight';
 import { handleSupportClick } from '../../interaction/clickHandlers';
 import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
@@ -297,3 +298,32 @@ export const BraceRenderer = React.memo(function BraceRenderer({
 });
 
 BraceRenderer.displayName = 'BraceRenderer';
+
+registerSupportDetailRenderer('brace', (ctx) => ({
+    component: BraceRenderer as never,
+    batchedIds: ctx.braceShaftsBySupport,
+    hosts: (brace: Brace) => {
+        const startKnot = ctx.braceRenderKnotsById[brace.startKnotId];
+        const endKnot = ctx.braceRenderKnotsById[brace.endKnotId];
+        return startKnot && endKnot ? { startKnot, endKnot } : null;
+    },
+    skip: ({ entity, isSelected, isBatchable }) => {
+        if (ctx.simpleRender) return true;
+        const ghosted = ctx.ghostedBraceIdSet.has((entity as Brace).id);
+        return !(isSelected || !isBatchable || ghosted);
+    },
+    noClipping: ({ isSelected }) => isSelected,
+    extraProps: ({ entity, isSelected, isBatchable }) => {
+        const ghosted = ctx.ghostedBraceIdSet.has((entity as Brace).id);
+        return {
+            ghosted,
+            ghostOpacity: ctx.ghostOpacityClamped,
+            showKnots: !ctx.hideUnselectedKnots || isSelected,
+            suppressHover: ctx.suppressHover || ghosted,
+            isInteractable: ctx.isInteractable && !ghosted,
+            deferStraightShaftToSceneBatch: !isSelected && isBatchable && !ghosted,
+            deferInteractionToSceneBatch: (!isSelected && isBatchable) || ghosted,
+            debugSectionColors: ctx.debugSectionColorsEnabled,
+        };
+    },
+}));

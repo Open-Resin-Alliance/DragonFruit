@@ -3,11 +3,50 @@ import test from 'node:test';
 import * as THREE from 'three';
 
 import { getSnapshot, loadFromImportFormat, resetStore, transformAllSupportsForSingleModel, transformSupportsForModel } from '../state';
+import {
+  getSupportTypeDescriptor,
+  SUPPORT_COLLECTION_KEYS,
+  type SupportCollectionKey,
+  type SupportTypeId,
+} from '../supportTypeRegistry';
 import { readKickstands } from './helpers/kickstandFixture';
-import type { DragonfruitImportFormat } from '../types';
+import type { DragonfruitImportFormat, SupportCollectionByType } from '../types';
+
+/**
+ * A payload keys a support collection by its NAME, and that name is the
+ * registry's to declare: spelling `twigs`/`sticks` here would make renaming a
+ * type edit this fixture too. Laying the empty keys down from
+ * `SUPPORT_COLLECTION_KEYS`, and filling the rest through the type that declares
+ * them, keeps a rename a registry-only edit.
+ *
+ * `roots` and `knots` are primitives -- no type declares them and no rename
+ * reaches them -- so the literal names those two keys directly.
+ */
+function emptyWireCollections(): Pick<DragonfruitImportFormat, SupportCollectionKey> {
+  const collections = {} as Record<string, unknown[]>;
+  for (const key of SUPPORT_COLLECTION_KEYS) collections[key] = [];
+  return collections as unknown as Pick<DragonfruitImportFormat, SupportCollectionKey>;
+}
+
+/** What the wire format carries under a type's collection key. */
+type WireEntities<K extends SupportTypeId> =
+  DragonfruitImportFormat[SupportCollectionByType[K] & keyof DragonfruitImportFormat];
+
+/**
+ * Fill one collection, keyed by the TYPE that declares it. The key comes from
+ * the registry, and the rows are still checked against what that key carries.
+ */
+function setCollection<K extends SupportTypeId>(
+  payload: DragonfruitImportFormat,
+  typeId: K,
+  entities: WireEntities<K>,
+): void {
+  (payload as unknown as Record<string, unknown>)[getSupportTypeDescriptor(typeId).location.key] = entities;
+}
 
 function makeBaseData(): DragonfruitImportFormat {
-  return {
+  const payload: DragonfruitImportFormat = {
+    ...emptyWireCollections(),
     version: 1,
     meta: {
       source: 'unit-test',
@@ -26,30 +65,6 @@ function makeBaseData(): DragonfruitImportFormat {
         coneHeight: 1,
       },
     ],
-    trunks: [
-      {
-        id: 'trunk-1',
-        modelId: 'model-1',
-        rootId: 'root-1',
-        segments: [
-          {
-            id: 'seg-1',
-            type: 'straight',
-            diameter: 1,
-            topJoint: {
-              id: 'seg-1-top',
-              pos: { x: 1, y: 2, z: 10 },
-              diameter: 1,
-            },
-          },
-        ],
-      },
-    ],
-    branches: [],
-    leaves: [],
-    twigs: [],
-    sticks: [],
-    braces: [],
     knots: [
       {
         id: 'knot-1',
@@ -59,59 +74,82 @@ function makeBaseData(): DragonfruitImportFormat {
         diameter: 1.1,
       },
     ],
-    kickstands: [
-      {
-        root: {
-          id: 'support-brace-root-1',
-          modelId: 'model-1',
-          transform: {
-            pos: { x: 3, y: -2, z: 0 },
-            rot: { x: 0, y: 0, z: 0, w: 1 },
-          },
-          diameter: 2,
-          diskHeight: 0.4,
-          coneHeight: 0.7,
-        },
-        hostKnot: {
-          id: 'support-brace-host-knot-1',
-          parentShaftId: 'seg-1',
-          t: 0.9,
-          pos: { x: 1, y: 2, z: 9 },
+  };
+
+  setCollection(payload, 'trunk', [
+    {
+      id: 'trunk-1',
+      modelId: 'model-1',
+      rootId: 'root-1',
+      segments: [
+        {
+          id: 'seg-1',
+          type: 'straight',
           diameter: 1,
-        },
-        kickstand: {
-          id: 'support-brace-1',
-          modelId: 'model-1',
-          rootId: 'support-brace-root-1',
-          hostKnotId: 'support-brace-host-knot-1',
-          hostSegmentId: 'seg-1',
-          hostMinT: 0,
-          segments: [
-            {
-              id: 'support-brace-seg-1',
-              type: 'straight',
-              diameter: 0.7,
-              bottomJoint: {
-                id: 'support-brace-j0',
-                pos: { x: 3, y: -2, z: 2 },
-                diameter: 0.8,
-              },
-              topJoint: {
-                id: 'support-brace-j1',
-                pos: { x: 2, y: 0, z: 6 },
-                diameter: 0.8,
-              },
-            },
-          ],
-          profile: {
-            bodyDiameterMm: 0.7,
-            terminalStartDiameterMm: 0.7,
-            terminalEndDiameterMm: 0.9,
+          topJoint: {
+            id: 'seg-1-top',
+            pos: { x: 1, y: 2, z: 10 },
+            diameter: 1,
           },
+        },
+      ],
+    },
+  ]);
+
+  setCollection(payload, 'kickstand', [
+    {
+      root: {
+        id: 'support-brace-root-1',
+        modelId: 'model-1',
+        transform: {
+          pos: { x: 3, y: -2, z: 0 },
+          rot: { x: 0, y: 0, z: 0, w: 1 },
+        },
+        diameter: 2,
+        diskHeight: 0.4,
+        coneHeight: 0.7,
+      },
+      hostKnot: {
+        id: 'support-brace-host-knot-1',
+        parentShaftId: 'seg-1',
+        t: 0.9,
+        pos: { x: 1, y: 2, z: 9 },
+        diameter: 1,
+      },
+      kickstand: {
+        id: 'support-brace-1',
+        modelId: 'model-1',
+        rootId: 'support-brace-root-1',
+        hostKnotId: 'support-brace-host-knot-1',
+        hostSegmentId: 'seg-1',
+        hostMinT: 0,
+        segments: [
+          {
+            id: 'support-brace-seg-1',
+            type: 'straight',
+            diameter: 0.7,
+            bottomJoint: {
+              id: 'support-brace-j0',
+              pos: { x: 3, y: -2, z: 2 },
+              diameter: 0.8,
+            },
+            topJoint: {
+              id: 'support-brace-j1',
+              pos: { x: 2, y: 0, z: 6 },
+              diameter: 0.8,
+            },
+          },
+        ],
+        profile: {
+          bodyDiameterMm: 0.7,
+          terminalStartDiameterMm: 0.7,
+          terminalEndDiameterMm: 0.9,
         },
       },
-    ],
-  };
+    },
+  ]);
+
+  return payload;
 }
 
 test('transformSupportsForModel keeps support roots grounded during pure Z translation', () => {

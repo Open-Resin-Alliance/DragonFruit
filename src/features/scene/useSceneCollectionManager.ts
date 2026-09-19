@@ -768,30 +768,20 @@ function remapModelIdsInPayload<T>(value: T, idMap: Map<string, string>): T {
   return visit(value) as T;
 }
 
+/** Whether a serialized scene carries any support at all. */
 function voxlSupportsContainData(document: VoxlDocumentV1): boolean {
-  const supports = document.supports;
-  return supports.roots.length > 0
-    || supports.trunks.length > 0
-    || supports.branches.length > 0
-    || supports.leaves.length > 0
-    || (supports.twigs?.length ?? 0) > 0
-    || (supports.sticks?.length ?? 0) > 0
-    || supports.braces.length > 0
-    || supports.knots.length > 0
-    || (supports.kickstands?.length ?? 0) > 0;
+  return payloadCollections(document.supports).some((entities) => entities.length > 0);
+}
+
+/** A payload's collections as arrays, keyed by the registry's collection names. */
+function payloadCollections(payload: DragonfruitImportFormat): unknown[][] {
+  const record = payload as unknown as Record<string, unknown[] | undefined>;
+  return SUPPORT_COLLECTION_KEYS.map((key) => record[key] ?? []);
 }
 
 function countSupportEntries(payload: DragonfruitImportFormat | null | undefined): number {
   if (!payload) return 0;
-  return payload.roots.length
-    + payload.trunks.length
-    + payload.branches.length
-    + payload.leaves.length
-    + (payload.twigs?.length ?? 0)
-    + (payload.sticks?.length ?? 0)
-    + payload.braces.length
-    + payload.knots.length
-    + (payload.kickstands?.length ?? 0);
+  return payloadCollections(payload).reduce((total, entities) => total + entities.length, 0);
 }
 
 function applyImportDefaultsToRaftState() {
@@ -871,9 +861,13 @@ function asDragonfruitImportFormat(value: unknown): DragonfruitImportFormat | nu
     return null;
   }
 
-  if (candidate.twigs != null && !Array.isArray(candidate.twigs)) return null;
-  if (candidate.sticks != null && !Array.isArray(candidate.sticks)) return null;
-  if (candidate.kickstands != null && !Array.isArray(candidate.kickstands)) return null;
+  // Every optional collection the registry declares; the required ones are
+  // checked above.
+  const collections = candidate as unknown as Record<string, unknown>;
+  for (const key of SUPPORT_COLLECTION_KEYS) {
+    const value = collections[key];
+    if (value != null && !Array.isArray(value)) return null;
+  }
 
   return candidate as DragonfruitImportFormat;
 }
@@ -966,7 +960,8 @@ type DebugPrimitiveType =
 
 type DebugPrimitiveSizePreset = 'small' | 'medium' | 'large';
 
-import { deleteSupportsForModel, getSupportsForModel } from '@/supports/PlacementLogic/SupportModelLinker';
+import { deleteSupportsForModel, getSupportsForModel, type ModelSupportIds } from '@/supports/PlacementLogic/SupportModelLinker';
+import { contactEndpointsFor, MODEL_ID_COLLECTION_KEYS, SUPPORT_COLLECTION_KEYS, SUPPORT_TYPES } from '@/supports/supportTypeRegistry';
 import { beginSupportStateBatch, endSupportStateBatch } from '@/supports/state';
 import {
   captureModelSupportsToClipboard,
@@ -3872,30 +3867,16 @@ export function useSceneCollectionManager() {
       });
 
     const supportStateBeforeDelete = getSnapshot();
-    const kickstandSnapshotBefore = getSnapshot();
-
-    const kickstandCountByModel = new Map<string, number>();
-    for (const kickstand of Object.values(kickstandSnapshotBefore.kickstands)) {
-      const current = kickstandCountByModel.get(kickstand.modelId) ?? 0;
-      kickstandCountByModel.set(kickstand.modelId, current + 1);
-    }
-
-    const supportsByModel = new Map<string, ReturnType<typeof getSupportsForModel>>();
+    const supportsByModel = new Map<string, ModelSupportIds>();
     const supportPrimitiveCountByModel = new Map<string, number>();
 
     for (const model of existing) {
       const supportIds = getSupportsForModel(supportStateBeforeDelete, model.id);
       supportsByModel.set(model.id, supportIds);
 
-      const kickstandCount = kickstandCountByModel.get(model.id) ?? 0;
-      const supportPrimitiveCount = supportIds.roots.length
-        + supportIds.trunks.length
-        + supportIds.branches.length
-        + supportIds.braces.length
-        + supportIds.leaves.length
-        + supportIds.twigs.length
-        + supportIds.sticks.length
-        + kickstandCount;
+      // Every modelId-bearing collection `getSupportsForModel` fills.
+      const supportPrimitiveCount = MODEL_ID_COLLECTION_KEYS
+        .reduce((total, key) => total + supportIds[key].length, 0);
 
       supportPrimitiveCountByModel.set(model.id, supportPrimitiveCount);
     }
@@ -3913,17 +3894,7 @@ export function useSceneCollectionManager() {
         supportsByModel.set(modelId, supportIds);
       }
 
-      const hasMainSupports = supportIds.roots.length > 0
-        || supportIds.trunks.length > 0
-        || supportIds.branches.length > 0
-        || supportIds.braces.length > 0
-        || supportIds.leaves.length > 0
-        || supportIds.twigs.length > 0
-        || supportIds.sticks.length > 0;
-
-      if (hasMainSupports) return true;
-
-      return (kickstandCountByModel.get(modelId) ?? 0) > 0;
+      return MODEL_ID_COLLECTION_KEYS.some((key) => supportIds[key].length > 0);
     };
 
     const includeSupportHistory = existing.some((model) => modelHasSupports(model.id));
@@ -3977,18 +3948,10 @@ export function useSceneCollectionManager() {
       // Defensive pass: guarantee no orphaned supports survive model deletion.
       for (const modelId of ids) {
         const remaining = getSupportsForModel(getSnapshot(), modelId);
-        const hasRemainingMainSupports = remaining.roots.length > 0
-          || remaining.trunks.length > 0
-          || remaining.branches.length > 0
-          || remaining.braces.length > 0
-          || remaining.leaves.length > 0
-          || remaining.twigs.length > 0
-          || remaining.sticks.length > 0;
+        const hasRemainingSupports = MODEL_ID_COLLECTION_KEYS
+          .some((key) => remaining[key].length > 0);
 
-        const hasRemainingKickstands = Object.values(getSnapshot().kickstands)
-          .some((kickstand) => kickstand.modelId === modelId);
-
-        if (hasRemainingMainSupports || hasRemainingKickstands) {
+        if (hasRemainingSupports) {
           totalRemovedSupports += deleteSupportsForModel(getSnapshot(), modelId);
         }
       }
@@ -4018,22 +3981,9 @@ export function useSceneCollectionManager() {
     if (existingModelIds.length === 0) return 0;
 
     const supportStateBefore = getSnapshot();
-    const kickstandStateBefore = getSnapshot();
-
     const hasSupportsForModel = (modelId: string) => {
       const supportIds = getSupportsForModel(supportStateBefore, modelId);
-      const hasMainSupports = supportIds.roots.length > 0
-        || supportIds.trunks.length > 0
-        || supportIds.branches.length > 0
-        || supportIds.braces.length > 0
-        || supportIds.leaves.length > 0
-        || supportIds.twigs.length > 0
-        || supportIds.sticks.length > 0;
-
-      if (hasMainSupports) return true;
-
-      return Object.values(kickstandStateBefore.kickstands)
-        .some((kickstand) => kickstand.modelId === modelId);
+      return MODEL_ID_COLLECTION_KEYS.some((key) => supportIds[key].length > 0);
     };
 
     const targetIds = existingModelIds.filter((modelId) => hasSupportsForModel(modelId));
@@ -4133,8 +4083,6 @@ export function useSceneCollectionManager() {
     const beforeActiveModelId = activeModelId;
     const beforeSelectedModelIds = selectedModelIds;
     const supportStateBefore = getSnapshot();
-    const kickstandStateBefore = getSnapshot();
-
     const first = modelClipboard[0];
 
     const pastedGeometry = cloneGeometryWithBounds(first.geometry, { shared: true });
@@ -4198,8 +4146,6 @@ export function useSceneCollectionManager() {
     const beforeActiveModelId = activeModelId;
     const beforeSelectedModelIds = selectedModelIds;
     const supportStateBefore = getSnapshot();
-    const kickstandStateBefore = getSnapshot();
-
     const entries = modelClipboard;
 
     const centerX = defaultImportCenterXY.x;
@@ -4301,40 +4247,25 @@ export function useSceneCollectionManager() {
         });
       };
 
-      payload.trunks.forEach((trunk) => {
-        expandSegments(trunk.segments as any[]);
-        if (trunk.contactCone) {
-          expand(trunk.contactCone.pos, Math.max(0.001, trunk.contactCone.profile.contactDiameterMm / 2));
+      // Every declared type widens the rectangle. A brace contributes nothing
+      // of its own: the knots it spans are expanded above. The radius field
+      // differs by contact kind -- a cone's is in its profile, a disk's is on
+      // the contact.
+      for (const descriptor of SUPPORT_TYPES) {
+        const entities = payload[descriptor.location.key] as unknown as Array<Record<string, any>> | undefined;
+        if (!entities) continue;
+        for (const entity of entities) {
+          if (descriptor.hasSegments) expandSegments(entity.segments as any[]);
+          for (const { kind, field } of contactEndpointsFor(descriptor.id)) {
+            const contact = entity[field];
+            if (!contact?.pos) continue;
+            const diameter = kind === 'cone'
+              ? contact.profile?.contactDiameterMm
+              : contact.contactDiameterMm;
+            expand(contact.pos, Math.max(0.001, (diameter ?? 0) / 2));
+          }
         }
-      });
-
-      payload.branches.forEach((branch) => {
-        expandSegments(branch.segments as any[]);
-        if (branch.contactCone) {
-          expand(branch.contactCone.pos, Math.max(0.001, branch.contactCone.profile.contactDiameterMm / 2));
-        }
-      });
-
-      payload.leaves.forEach((leaf) => {
-        if (!leaf.contactCone) return;
-        expand(leaf.contactCone.pos, Math.max(0.001, leaf.contactCone.profile.contactDiameterMm / 2));
-      });
-
-      payload.twigs.forEach((twig) => {
-        expandSegments(twig.segments as any[]);
-        expand(twig.contactDiskA.pos, Math.max(0.001, twig.contactDiskA.contactDiameterMm / 2));
-        expand(twig.contactDiskB.pos, Math.max(0.001, twig.contactDiskB.contactDiameterMm / 2));
-      });
-
-      payload.sticks.forEach((stick) => {
-        expandSegments(stick.segments as any[]);
-        expand(stick.contactConeA.pos, Math.max(0.001, stick.contactConeA.profile.contactDiameterMm / 2));
-        expand(stick.contactConeB.pos, Math.max(0.001, stick.contactConeB.profile.contactDiameterMm / 2));
-      });
-
-      payload.kickstands.forEach((kickstand) => {
-        expandSegments(kickstand.segments as any[]);
-      });
+      }
 
       return hasAny ? { minX, maxX, minY, maxY } : null;
     };

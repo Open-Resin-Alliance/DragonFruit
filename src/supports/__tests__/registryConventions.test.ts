@@ -33,19 +33,43 @@ test('every registration slot takes the type id first, named typeId', () => {
     }
 });
 
-test('generic resolvers take the type id first, named typeId', () => {
+test('a resolver takes the type id first, or an entity that names its own type', () => {
+    // Two legal forms. `f(typeId, entity, ...)` where the caller has no entity
+    // yet, and `f(entity, ...)` where the entity carries its own `typeId` --
+    // which is what makes a type rename reach the resolver.
     for (const name of ['resolveKnotDiameter', 'inferSupportSettings', 'updateSupportEntity']) {
-        const match = SOURCE.match(new RegExp(`export function ${name}[^(]*\\(\\s*(\\w+):\\s*(\\w+)`));
-        assert.ok(match, `${name} not found`);
-        assert.equal(match[1], 'typeId', `${name} should name its first parameter "typeId"`);
-        assert.equal(match[2], 'SupportTypeId', `${name} should take a SupportTypeId first`);
+        const signatures = [
+            ...SOURCE.matchAll(new RegExp(`export function ${name}([^(]*)\\(([^)]*)`, 'g')),
+        ];
+        assert.ok(signatures.length > 0, `${name} not found`);
+
+        for (const [, generic, params] of signatures) {
+            const first = params.split(',')[0].trim();
+            // The implementation signature takes a union of both legal forms.
+            if (/^typeIdOrEntity\b/.test(first)) continue;
+
+            const explicit = /^typeId:\s*SupportTypeId$/.test(first);
+            // The entity form constrains its generic to a carrier of `typeId?`.
+            const entityForm = /^entity\b/.test(first) && /typeId\?:/.test(generic);
+            assert.ok(
+                explicit || entityForm,
+                `${name}'s first parameter must be \`typeId: SupportTypeId\` or an entity carrying \`typeId?\``,
+            );
+        }
     }
+
+    // The explicit form stays available for a caller holding a type with no entity yet.
+    assert.match(
+        SOURCE,
+        /export function updateSupportEntity\(\s*typeId: SupportTypeId,/,
+        'updateSupportEntity must keep its explicit (typeId, entity) form',
+    );
 });
 
 test('every derived list is built from SUPPORT_TYPES, not written out', () => {
     // A hand-written list is a place a ninth type silently joins or skips.
     const derived = [
-        'MODEL_ID_COLLECTION_KEYS', 'MODEL_ID_TYPES', 'SHAFTED_COLLECTION_KEYS',
+        'MODEL_ID_COLLECTION_KEYS', 'SHAFTED_COLLECTION_KEYS',
         'SUPPORT_COLLECTION_KEYS', 'SUPPORT_STATE_COLLECTIONS', 'SUPPORT_STATE_TYPES',
         'EDITABLE_SUPPORT_TYPES', 'SUPPORT_GRAPH_NODES',
     ];

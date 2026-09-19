@@ -13,6 +13,8 @@ import {
   collectRaftBaseCirclesByModel,
   fromRaftModelKey,
   RAFT_UNASSIGNED_MODEL_KEY,
+  raftFootprintSourceRefs,
+  sameRaftFootprintSource,
   toRaftModelKey,
 } from './Rafts/Crenelated/raftFootprintCircles';
 
@@ -57,8 +59,8 @@ type VisibleRaftEntry = {
 };
 
 type RaftProxyCacheEntry = {
-  supportRootsRef: ReturnType<typeof getSnapshot>['roots'];
-  supportAnchorsRef: ReturnType<typeof getSnapshot>['anchors'];
+  /** The collections the footprint read, so the cache invalidates on exactly those. */
+  footprintSourceRefs: readonly unknown[];
   raftSignature: string;
   geometriesByModel: Map<string, CachedRaftGeometry>;
 };
@@ -196,8 +198,13 @@ export function RaftProxyMeshLayer({
 }: RaftProxyMeshLayerProps) {
   const { hit } = usePicking();
   const supportState = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-  const supportRoots = supportState.roots;
-  const supportAnchors = supportState.anchors;
+  // The collections the footprint reads: the shared roots plus whichever types
+  // carry their own inline root. The cache identity, so editing a type that puts
+  // nothing on the raft does not rebuild the meshes.
+  const footprintSourceRefs = React.useMemo(
+    () => raftFootprintSourceRefs(supportState),
+    [supportState],
+  );
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
 
   const selectedModelIdSet = React.useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
@@ -225,17 +232,13 @@ export function RaftProxyMeshLayer({
   const geometriesByModel = React.useMemo(() => {
     if (
       raftProxyCache
-      && raftProxyCache.supportRootsRef === supportRoots
-      && raftProxyCache.supportAnchorsRef === supportAnchors
+      && sameRaftFootprintSource(raftProxyCache.footprintSourceRefs, footprintSourceRefs)
       && raftProxyCache.raftSignature === raftSignature
     ) {
       return raftProxyCache.geometriesByModel;
     }
 
-    const rootCirclesByModel = collectRaftBaseCirclesByModel({
-      roots: Object.values(supportRoots),
-      anchors: Object.values(supportAnchors),
-    }, {
+    const rootCirclesByModel = collectRaftBaseCirclesByModel(supportState, {
       fallbackModelKey: RAFT_UNASSIGNED_MODEL_KEY,
     });
     const next = new Map<string, CachedRaftGeometry>();
@@ -295,14 +298,13 @@ export function RaftProxyMeshLayer({
     }
 
     raftProxyCache = {
-      supportRootsRef: supportRoots,
-      supportAnchorsRef: supportAnchors,
+      footprintSourceRefs,
       raftSignature,
       geometriesByModel: next,
     };
 
     return next;
-  }, [raft, raftSignature, supportRoots, supportAnchors]);
+  }, [raft, raftSignature, supportState, footprintSourceRefs]);
 
   const visibleEntries = React.useMemo<VisibleRaftEntry[]>(() => {
     const entries: VisibleRaftEntry[] = [];

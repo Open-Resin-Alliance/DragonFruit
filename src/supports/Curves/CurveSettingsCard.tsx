@@ -112,7 +112,7 @@ export function CurveSettingsCard({ embedded = false }: { embedded?: boolean }) 
             } else {
                 newTrunk = updateCurveTension(selectedTrunk, selectedId!, val, root);
             }
-            updateSupportEntity('trunk', newTrunk);
+            updateSupportEntity(newTrunk);
             pushSupportEditHistory('Adjust curve tension', before, captureSupportEditSnapshot());
         }
     };
@@ -136,7 +136,7 @@ export function CurveSettingsCard({ embedded = false }: { embedded?: boolean }) 
                     }
                 }
             }
-            updateSupportEntity('trunk', newTrunk);
+            updateSupportEntity(newTrunk);
             pushSupportEditHistory('Adjust curve bias', before, captureSupportEditSnapshot());
         }
     };
@@ -150,7 +150,7 @@ export function CurveSettingsCard({ embedded = false }: { embedded?: boolean }) 
             } else {
                 newTrunk = removeCurveAtJoint(selectedTrunk, selectedId!);
             }
-            updateSupportEntity('trunk', newTrunk);
+            updateSupportEntity(newTrunk);
             pushSupportEditHistory('Remove curve', before, captureSupportEditSnapshot());
         }
     };

@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { getFinalSocketPosition } from '../ContactCone';
 import {
     getSupportTypeDescriptor,
+    resolveSupportTypeIdOf,
     type SupportEndpoint,
     type SupportTypeDescriptor,
     type SupportTypeId,
@@ -30,7 +31,11 @@ export interface EndpointHosts {
 }
 
 /** Any shafted entity. Contact fields are read by the names the registry declares. */
-type ShaftEntity = { segments: Segment[] };
+export interface ShaftEntity {
+    id: string;
+    typeId?: SupportTypeId;
+    segments: Segment[];
+}
 
 const vec = (p: Vec3) => new THREE.Vector3(p.x, p.y, p.z);
 const out = (v: THREE.Vector3): Vec3 => ({ x: v.x, y: v.y, z: v.z });
@@ -80,16 +85,11 @@ function contactAt(endpoint: SupportEndpoint, entity: ShaftEntity): THREE.Vector
 }
 
 /**
- * Endpoints of `segment` on a shafted support, or null when the host it needs
- * is missing.
- *
- * A type whose segments carry both joints resolves from the segment alone; the
- * others fall back through the previous joint, the declared anchor, and finally
- * the contact socket.
- */
-/**
  * Where a shaft is anchored, as a plain Vec3. The joint-drag angle clamp
  * measures from here.
+ *
+ * Takes the type rather than the entity, because the shaft being dragged is not
+ * always the thing the caller holds.
  */
 export function resolveShaftAnchor(
     typeId: SupportTypeId,
@@ -99,13 +99,22 @@ export function resolveShaftAnchor(
     return point ? out(point) : null;
 }
 
+/**
+ * Endpoints of `segment` on a shafted support, or null when the entity carries
+ * no type or the host it needs is missing.
+ *
+ * The type comes off the entity, so no caller restates it. A type whose segments
+ * carry both joints resolves from the segment alone; the others fall back
+ * through the previous joint, the declared anchor, then the contact socket.
+ */
 export function resolveSegmentEndpoints(
-    typeId: SupportTypeId,
     entity: ShaftEntity,
     segment: Segment,
     segmentIndex: number,
     hosts: EndpointHosts = {},
 ): SegmentEndpoints | null {
+    const typeId = resolveSupportTypeIdOf(entity);
+    if (!typeId) return null;
     const descriptor = getSupportTypeDescriptor(typeId);
     if (!descriptor.hasSegments) return null;
 

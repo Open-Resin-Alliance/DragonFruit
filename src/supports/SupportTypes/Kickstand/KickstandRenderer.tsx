@@ -13,6 +13,7 @@ import { RootsRenderer } from '../../SupportPrimitives/Roots/RootsRenderer';
 import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
 import { usePartDragUpdate } from '../../interaction/partDragPreview';
 import type { Kickstand } from './types';
+import { registerSupportDetailRenderer } from '../../detailRenderer/seam';
 
 interface KickstandRendererProps {
     kickstand: Kickstand;
@@ -80,7 +81,7 @@ export const KickstandRenderer = React.memo(function KickstandRenderer({
     const batchedStraightShafts: InstancedShaft[] = [];
     const joints: React.ReactNode[] = [];
 
-    const shaftSegments = useShaftSegments(typeId, kickstand, { root, hostKnot });
+    const shaftSegments = useShaftSegments(kickstand, { root, hostKnot });
 
     shaftSegments.forEach((shaft) => {
         const segment = shaft.segment;
@@ -177,3 +178,20 @@ export const KickstandRenderer = React.memo(function KickstandRenderer({
 });
 
 KickstandRenderer.displayName = 'KickstandRenderer';
+
+registerSupportDetailRenderer('kickstand', (ctx) => ({
+    component: KickstandRenderer as never,
+    hosts: (kickstand: Kickstand) => {
+        const root = ctx.roots[kickstand.rootId];
+        const hostKnot = ctx.renderKnotsById[kickstand.hostKnotId];
+        return root && hostKnot ? { root, hostKnot } : null;
+    },
+    skip: ({ isSelected, isBatchable }) => !(isSelected || !isBatchable) || ctx.simpleRender,
+    noClipping: ({ isSelected }) => isSelected,
+    extraProps: ({ isSelected, isBatchable }) => ({
+        showKnot: ctx.simpleRender ? false : (!ctx.hideUnselectedKnots || isSelected),
+        deferStraightShaftsToSceneBatch: !isSelected && isBatchable,
+        deferInteractionToSceneBatch: !isSelected && isBatchable,
+        hidePlateContactPrimitives: ctx.hidePlateContactPrimitivesEffective,
+    }),
+}));

@@ -1,17 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {
-    addBranch,
-    addKnot,
-    addLeaf,
-    addRoot,
-    addSupportEntity,
-    addTrunk,
-    applySettingsToSupportTarget,
-    getSnapshot,
-    resetStore,
-} from '../state';
+import { addKnot, addRoot, addSupportEntity, applySettingsToSupportTarget, getSnapshot, resetStore } from '../state';
 import { EDITABLE_SUPPORT_TYPES, getSupportTypeDescriptor } from '../supportTypeRegistry';
 import { createDefaultSettings } from '../Settings/types';
 import { DEFAULT_TIP_PROFILE } from '../SupportPrimitives/ContactCone/types';
@@ -50,16 +40,16 @@ function scene() {
         transform: { pos: { x: 0, y: 0, z: 0 }, rot: { x: 0, y: 0, z: 0, w: 1 } },
         diameter: 3, diskHeight: 0.5, coneHeight: 1.5,
     } as never);
-    addTrunk({
+    addSupportEntity('trunk', {
         id: 'trunk-a', modelId: MODEL, rootId: 'root-a',
         segments: [segment('seg-ta')], contactCone: cone('cone-ta'),
     } as unknown as Trunk);
     addKnot({ id: 'knot-a', parentShaftId: 'seg-ta', t: 0.5, pos: { x: 0, y: 0, z: 2 }, diameter: 1 } as never);
-    addBranch({
+    addSupportEntity('branch', {
         id: 'branch-a', modelId: MODEL, parentKnotId: 'knot-a',
         segments: [segment('seg-ba')], contactCone: cone('cone-ba'),
     } as unknown as Branch);
-    addLeaf({ id: 'leaf-a', modelId: MODEL, parentKnotId: 'knot-a', contactCone: cone('cone-la') } as unknown as Leaf);
+    addSupportEntity('leaf', { id: 'leaf-a', modelId: MODEL, parentKnotId: 'knot-a', contactCone: cone('cone-la') } as unknown as Leaf);
     addRoot({
         id: 'root-k', modelId: MODEL,
         transform: { pos: { x: 5, y: 0, z: 0 }, rot: { x: 0, y: 0, z: 0, w: 1 } },

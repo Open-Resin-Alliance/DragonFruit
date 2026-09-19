@@ -1,8 +1,8 @@
 import { calculateKnotPositionOnSegmentFromT } from '../SupportPrimitives/Knot/knotUtils';
-import { resolveSegmentEndpoints } from '../SupportPrimitives/Knot/segmentEndpoints';
+import { resolveSegmentEndpoints, type EndpointHosts } from '../SupportPrimitives/Knot/segmentEndpoints';
 import type { Branch, Knot, Roots, Trunk, Vec3 } from '../types';
 import type { Kickstand } from '../SupportTypes/Kickstand/types';
-import type { JointDragPreviewTypeId } from '../supportTypeRegistry';
+import { getSupportTypeDescriptor, type JointDragPreviewTypeId } from '../supportTypeRegistry';
 
 /** Types whose joint drags publish a preview, from `JOINT_DRAG_PREVIEW_BY_TYPE`. */
 export type JointDragPreviewKind = JointDragPreviewTypeId;
@@ -46,29 +46,6 @@ function buildCandidateKnotIdsByParentShaftId(candidateKnots: JointDragPreviewCa
   return map;
 }
 
-function getKickstandSegmentEndpoints(
-  kickstand: Kickstand,
-  segmentIndex: number,
-  root: Roots,
-  hostKnot: Knot,
-) {
-  const segment = kickstand.segments[segmentIndex];
-  if (!segment) return null;
-
-  const rootTop = {
-    x: root.transform.pos.x,
-    y: root.transform.pos.y,
-    z: root.transform.pos.z + root.diskHeight + root.coneHeight,
-  };
-
-  const start = segment.bottomJoint?.pos
-    ?? (segmentIndex > 0 ? kickstand.segments[segmentIndex - 1]?.topJoint?.pos ?? rootTop : rootTop);
-  const end = segment.topJoint?.pos ?? hostKnot.pos;
-
-  if (!start || !end) return null;
-
-  return { start, end, segment };
-}
 
 /** Closest t on the straight segment [start, end] to a point. Auto
  *  merge/fan knots carry no `t` — project their position so leaves follow
@@ -91,84 +68,21 @@ export function computeJointDragPreviewKnots(
 ) {
   const shouldAbort = options?.shouldAbort;
   const support = preview?.support;
-  if (!support) return {} as Record<string, Knot>;
+  if (!preview || !support) return {} as Record<string, Knot>;
 
   const nextKnots: Record<string, Knot> = {};
   const candidateKnotIdsByParentShaftId = buildCandidateKnotIdsByParentShaftId(candidateKnots);
   if (candidateKnotIdsByParentShaftId.size === 0) return nextKnots;
 
-  if (preview.kind === 'trunk') {
-    const trunk = support as Trunk;
-    const root = context.root ?? null;
-    if (!root) return nextKnots;
-
-    for (let segIndex = 0; segIndex < support.segments.length; segIndex += 1) {
-      if (shouldAbort?.()) return nextKnots;
-      const segment = support.segments[segIndex];
-      const segmentKnotIds = candidateKnotIdsByParentShaftId.get(segment.id);
-      if (!segmentKnotIds || segmentKnotIds.length === 0) continue;
-
-      const endpoints = resolveSegmentEndpoints('trunk', trunk, segment, segIndex, { root });
-      if (!endpoints) continue;
-
-      for (const knotId of segmentKnotIds) {
-        if (shouldAbort?.()) return nextKnots;
-        const knot = candidateKnots[knotId];
-        if (!knot) continue;
-
-        // t-less auto knots project their position onto the moved segment so
-        // the preview leaf follows live during the drag.
-        const tForKnot = knot.t !== undefined
-          ? knot.t
-          : closestTToPoint(knot.pos, endpoints.start, endpoints.end);
-        const nextPos = calculateKnotPositionOnSegmentFromT(endpoints.start, endpoints.end, segment, tForKnot);
-        nextKnots[knot.id] = {
-          ...knot,
-          pos: nextPos,
-          diameter: segment.diameter + 0.125,
-        };
-      }
-    }
-
-    return nextKnots;
-  }
-
-  if (preview.kind === 'kickstand') {
-    const kickstand = support as Kickstand;
-    const root = context.root ?? null;
-    const hostKnot = context.hostKnot ?? null;
-    if (!root || !hostKnot) return nextKnots;
-
-    for (let segIndex = 0; segIndex < support.segments.length; segIndex += 1) {
-      if (shouldAbort?.()) return nextKnots;
-      const segment = support.segments[segIndex];
-      const segmentKnotIds = candidateKnotIdsByParentShaftId.get(segment.id);
-      if (!segmentKnotIds || segmentKnotIds.length === 0) continue;
-
-      const endpoints = getKickstandSegmentEndpoints(kickstand, segIndex, root, hostKnot);
-      if (!endpoints) continue;
-
-      for (const knotId of segmentKnotIds) {
-        if (shouldAbort?.()) return nextKnots;
-        const knot = candidateKnots[knotId];
-        if (!knot) continue;
-
-        const tForKnot = knot.t !== undefined
-          ? knot.t
-          : closestTToPoint(knot.pos, endpoints.start, endpoints.end);
-        nextKnots[knot.id] = {
-          ...knot,
-          pos: calculateKnotPositionOnSegmentFromT(endpoints.start, endpoints.end, endpoints.segment, tForKnot),
-        };
-      }
-    }
-
-    return nextKnots;
-  }
-
-  const branch = support as Branch;
-  const parentKnot = context.parentKnot ?? null;
-  if (!parentKnot) return nextKnots;
+  // Every preview type resolves the same way: its declared hosts (a root when
+  // it owns one, a hosted knot when it hangs from one) feed `resolveSegmentEndpoints`,
+  // and a knot on the default host renders at the joint diameter so it is not
+  // hidden inside the joint sphere (`knotTakesJointDiameter`).
+  const descriptor = getSupportTypeDescriptor(preview.kind);
+  const hosts: EndpointHosts = {
+    root: context.root ?? undefined,
+    hostKnot: (context.parentKnot ?? context.hostKnot) ?? undefined,
+  };
 
   for (let segIndex = 0; segIndex < support.segments.length; segIndex += 1) {
     if (shouldAbort?.()) return nextKnots;
@@ -176,7 +90,7 @@ export function computeJointDragPreviewKnots(
     const segmentKnotIds = candidateKnotIdsByParentShaftId.get(segment.id);
     if (!segmentKnotIds || segmentKnotIds.length === 0) continue;
 
-    const endpoints = resolveSegmentEndpoints('branch', branch, segment, segIndex, { hostKnot: parentKnot });
+    const endpoints = resolveSegmentEndpoints(support, segment, segIndex, hosts);
     if (!endpoints) continue;
 
     for (const knotId of segmentKnotIds) {
@@ -184,12 +98,16 @@ export function computeJointDragPreviewKnots(
       const knot = candidateKnots[knotId];
       if (!knot) continue;
 
+      // t-less auto knots project their position onto the moved segment so
+      // the preview leaf follows live during the drag.
       const tForKnot = knot.t !== undefined
         ? knot.t
         : closestTToPoint(knot.pos, endpoints.start, endpoints.end);
+      const nextPos = calculateKnotPositionOnSegmentFromT(endpoints.start, endpoints.end, segment, tForKnot);
       nextKnots[knot.id] = {
         ...knot,
-        pos: calculateKnotPositionOnSegmentFromT(endpoints.start, endpoints.end, segment, tForKnot),
+        pos: nextPos,
+        ...(descriptor.knotTakesJointDiameter ? { diameter: segment.diameter + 0.125 } : {}),
       };
     }
   }
