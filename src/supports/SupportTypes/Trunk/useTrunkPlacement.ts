@@ -5,8 +5,6 @@ import { pushSupportHistory } from '@/supports/history/supportHistory';
 import { addAction } from '../../history/actionTypes';
 import { useInteractionStatus } from '../../interaction/useInteractionStatus';
 import { buildTrunkData } from './trunkBuilder';
-import { buildBranchData } from '../Branch/branchBuilder';
-import { getFinalSocketPosition } from '../../SupportPrimitives/ContactCone/contactConeUtils';
 import { computeAndApplyTrunkDiameterProfile } from './TrunkReplacement';
 import { supportDataForEntity, type SupportData } from '../../rendering/SupportBuilder';
 import { markPlacementSurface, markSupportDataPlacementSurface, type PlacementSurface } from '../../PlacementLogic/placementSurface';
@@ -660,32 +658,8 @@ export function useTrunkPlacementV2() {
         }
 
         if (decision.kind === 'place_branch') {
-            // The branch's visible shaft starts at the graft knot. Graft
-            // below the host segment's bottom joint when the walk stopped
-            // above it: re-pin the knot just under that joint and rebuild
-            // the branch from there, so the shaft descends from the knot
-            // instead of rising out of it beside the joint.
-            const hostBefore = getSnapshot().trunks[decision.hostTrunkId];
-            const graftSeg = hostBefore?.segments.find((s) => s.id === decision.knot.parentShaftId);
-            const jointZ = graftSeg?.bottomJoint?.pos.z;
-            const cone = decision.branch.contactCone;
-            const socketZ = cone ? getFinalSocketPosition(cone).z : undefined;
-            // Re-pin below the joint only when the socket ends up above
-            // the knot: then the shaft must rise out of it. Otherwise the
-            // cone aims down at the host and the shaft already descends.
-            const knot = jointZ !== undefined && cone && socketZ !== undefined
-                && decision.knot.pos.z >= jointZ && socketZ >= decision.knot.pos.z
-                ? { ...decision.knot, pos: { ...decision.knot.pos, z: jointZ - 0.3 } }
-                : decision.knot;
-            const branch = knot === decision.knot || !cone
-                ? markPlacementSurface('branch', decision.branch, placementSurface)
-                : markPlacementSurface('branch', buildBranchData({
-                    tipPos: cone.pos,
-                    tipNormal: cone.surfaceNormal ?? cone.normal,
-                    modelId: decision.branch.modelId,
-                    parentKnot: knot,
-                }).branch, placementSurface);
-            addKnot(knot);
+            const branch = markPlacementSurface('branch', decision.branch, placementSurface);
+            addKnot(decision.knot);
             addBranch(branch);
 
             const snapshotAfterAdd = getSnapshot();

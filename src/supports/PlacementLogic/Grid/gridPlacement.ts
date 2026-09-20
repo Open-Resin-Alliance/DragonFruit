@@ -359,10 +359,11 @@ function tryBuildAutoLeafDecision(args: {
  * Picks where a candidate attaches on a host trunk and builds that member, or
  * returns null when the host cannot take it.
  *
- * The loop walks the host's segments from the top down, and each segment from
- * its top end to its bottom, so the highest usable knot wins; reaching further
- * down the shaft buys a steeper departure when the branch cannot legally leave
- * the top.
+ * Every passing knot is scored by its built departure and the steepest
+ * wins: the walk's top-down order would otherwise stop at the first
+ * passing knot high on the shaft, where the short-span slack lets a
+ * shallow chord through. The gates still decide what passes; this only
+ * chooses among what does.
  */
 function selectAttachmentDecision(args: {
     nodeKey: string;
@@ -410,6 +411,8 @@ function selectAttachmentDecision(args: {
     };
 
     // Iterate segments from top (last) to bottom (first).
+    let best: GridPlacementDecision | null = null;
+    let bestDepartureDeg = Number.POSITIVE_INFINITY;
     for (let segIndex = hostTrunk.segments.length - 1; segIndex >= 0; segIndex--) {
         const segment = hostTrunk.segments[segIndex];
         const endpoints = getTrunkSegmentEndpointsWithSettings(hostTrunk, hostRoot, segIndex, settings);
@@ -471,14 +474,21 @@ function selectAttachmentDecision(args: {
                 modelId,
                 settings,
             });
-            if (leafDecision) return leafDecision;
+            if (leafDecision) {
+                const departureDeg = memberDepartureAngleFromVerticalDeg(pos, tipPos);
+                if (departureDeg < bestDepartureDeg) {
+                    best = leafDecision;
+                    bestDepartureDeg = departureDeg;
+                }
+                continue;
+            }
 
             // A longer span becomes a branch, and a branch's departure is NOT
             // its chord: the contact cone is clamped toward the surface normal
             // at the tip, so the shaft can leave the host nearly level, satisfy
             // the knot-to-tip angle, and bend into a steep cone only at the tip.
-            // Gate the built shaft where it leaves the host, and let the loop
-            // try a lower knot rather than accept a level branch.
+            // Gate the built shaft where it leaves the host, and keep scanning:
+            // a lower knot that leaves steeper wins over this one.
             perfMark('grid:branch-build');
             const { branch, supportData } = buildBranchData({
                 tipPos,
@@ -489,17 +499,22 @@ function selectAttachmentDecision(args: {
             });
             perfMeasureWithSpike('grid:branch-build', 'branch:build');
             const firstJoint = branch.segments[0]?.topJoint?.pos;
+            const departureDeg = firstJoint
+                ? memberDepartureAngleFromVerticalDeg(pos, firstJoint)
+                : memberDepartureAngleFromVerticalDeg(pos, tipPos);
             if (firstJoint
-                && memberDepartureAngleFromVerticalDeg(pos, firstJoint)
-                    > memberAllowanceFromVerticalDeg(distance3D(pos, firstJoint))) {
+                && departureDeg > memberAllowanceFromVerticalDeg(distance3D(pos, firstJoint))) {
                 continue;
             }
 
-            return { kind: 'place_branch', nodeKey, hostTrunkId, knot, branch, supportData };
+            if (departureDeg < bestDepartureDeg) {
+                best = { kind: 'place_branch', nodeKey, hostTrunkId, knot, branch, supportData };
+                bestDepartureDeg = departureDeg;
+            }
         }
     }
 
-    return null;
+    return best;
 }
 
 function findNeighborAttachment(args: {
