@@ -14,6 +14,7 @@ import { calculateSmoothedNormal } from '../../PlacementLogic/PlacementUtils';
 import { getSettings } from '../../Settings/state';
 import { decideGridPlacement } from '../../PlacementLogic/Grid';
 import { buildContactBridge, selectTypeForPlacement, type SupportTypeId, updateSupportEntity } from '../../supportTypeRegistry';
+import { splitSupportShaft } from '../../SupportPrimitives/Joint/jointUtils';
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
 import { isContactDiskHudInteractionActive, shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { perfMark, perfMeasureWithSpike, perfEndFrame } from '../../PlacementLogic/Pathfinding/pathfindingPerf';
@@ -659,6 +660,16 @@ export function useTrunkPlacementV2() {
 
         if (decision.kind === 'place_branch') {
             const branch = markPlacementSurface('branch', decision.branch, placementSurface);
+            // The branch's visible shaft starts at the graft knot, so the
+            // host needs a joint there: split the grafted segment at the
+            // knot before adding either, or the shaft draws through where
+            // the knot sits and reads as rising out of it.
+            const hostBefore = getSnapshot().trunks[decision.hostTrunkId];
+            const hostRoot = hostBefore ? getSnapshot().roots[hostBefore.rootId] : undefined;
+            if (hostBefore && hostRoot) {
+                const { entity: splitHost } = splitSupportShaft('trunk', hostBefore, decision.knot.parentShaftId, decision.knot.pos, decision.knot.t, { root: hostRoot });
+                updateSupportEntity('trunk', splitHost);
+            }
             addKnot(decision.knot);
             addBranch(branch);
 
