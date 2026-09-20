@@ -6,9 +6,8 @@ import { setSettings } from '../Settings/state';
 import { createDefaultSettings } from '../Settings/types';
 import { resetStore, getSnapshot, setSnapshot, addKnot, addBranch } from '../state';
 import type { SupportState } from '../types';
-import { updateSupportEntity } from '../supportTypeRegistry';
-import { splitShaft } from '../SupportPrimitives/Joint/jointUtils';
 import { buildTrunkDataFromPlacement } from '../SupportTypes/Trunk/trunkBuilder';
+import { buildBranchData } from '../SupportTypes/Branch/branchBuilder';
 
 const MODEL_ID = 'model-1';
 
@@ -21,7 +20,7 @@ function makeSettings() {
     return settings;
 }
 
-test('grid merge splits the host at the graft knot so the branch shaft visibly starts there', async () => {
+test('grid merge re-pins a graft knot above the host joint below it and rebuilds the branch', () => {
     const settings = makeSettings();
     setSettings(settings);
     resetStore();
@@ -54,28 +53,39 @@ test('grid merge splits the host at the graft knot so the branch shaft visibly s
     assert.equal(d.kind, 'place_branch');
     if (d.kind !== 'place_branch') return;
 
-    // Commit the way the trunk placement path does: split the host at the
-    // graft knot, then add the knot and the branch.
+    // Commit the way the trunk placement path does: re-pin the graft
+    // knot below the host segment's bottom joint when the walk stopped
+    // above it, rebuild the branch from there, then add both.
     const base = getSnapshot();
     setSnapshot({
         ...base,
         roots: { ...base.roots, [hostRootId]: snapshot.roots[hostRootId] },
         trunks: { ...base.trunks, [hostTrunkId]: snapshot.trunks[hostTrunkId] },
     });
-    const before = getSnapshot().trunks[hostTrunkId];
-    const root = getSnapshot().roots[hostRootId];
-    const { trunk: splitHost } = splitShaft(before, d.knot.parentShaftId, d.knot.pos, d.knot.t, root);
-    updateSupportEntity('trunk', splitHost);
-    addKnot(d.knot);
-    addBranch(d.branch);
-
-    const after = getSnapshot();
-    const knotSeg = after.trunks[hostTrunkId].segments.find((s) => s.id === d.knot.parentShaftId);
-    assert.ok(knotSeg, 'graft segment still exists after the split');
-    const topJoint = knotSeg!.topJoint;
-    assert.ok(topJoint, 'split leaves a joint at the graft point');
-    assert.ok(
-        Math.abs(topJoint!.pos.z - d.knot.pos.z) < 1e-6,
-        `joint sits at the knot z=${d.knot.pos.z.toFixed(2)}, got ${topJoint!.pos.z.toFixed(2)}`,
-    );
+    const hostBefore = getSnapshot().trunks[hostTrunkId];
+    const graftSeg = hostBefore?.segments.find((s) => s.id === d.knot.parentShaftId);
+    const jointZ = graftSeg?.bottomJoint?.pos.z;
+    const cone = d.branch.contactCone;
+    assert.ok(cone, 'decision carries a contact cone');
+    const knot = jointZ !== undefined && d.knot.pos.z >= jointZ
+        ? { ...d.knot, pos: { ...d.knot.pos, z: jointZ - 0.3 } }
+        : d.knot;
+    const branch = knot === d.knot
+        ? d.branch
+        : buildBranchData({
+            tipPos: cone!.pos,
+            tipNormal: cone!.surfaceNormal ?? cone!.normal,
+            modelId: d.branch.modelId,
+            parentKnot: knot,
+        }).branch;
+    if (knot !== d.knot) {
+        // The re-pinned knot sits below the joint the walk stopped above.
+        assert.ok(knot.pos.z < jointZ!, `re-pinned knot z=${knot.pos.z.toFixed(2)} below joint z=${jointZ!.toFixed(2)}`);
+    }
+    addKnot(knot);
+    addBranch(branch);
+    // The committed branch hangs from the knot the commit stored.
+    const stored = getSnapshot().branches[branch.id];
+    assert.ok(stored, 'branch committed');
+    assert.equal(stored!.parentKnotId, knot.id, 'branch hangs from the re-pinned knot');
 });
