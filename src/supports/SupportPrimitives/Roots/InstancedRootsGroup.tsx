@@ -175,6 +175,9 @@ function RootBucketMesh({
     return (
         <group>
             <instancedMesh
+                // Same remount-for-fresh-interaction-registration as the shaft,
+                // cone and joint batches.
+                key={`root-disk:${bucket.roots.length}`}
                 ref={diskRef}
                 args={[undefined, undefined, bucket.roots.length]}
                 frustumCulled={false}
@@ -197,6 +200,7 @@ function RootBucketMesh({
 
             {bucket.coneHeight > 0 && (
                 <instancedMesh
+                    key={`root-cone:${bucket.roots.length}`}
                     ref={coneRef}
                     args={[undefined, undefined, bucket.roots.length]}
                     frustumCulled={false}
@@ -221,6 +225,7 @@ function RootBucketMesh({
 
             {bucket.coneHeight > 0 && (
                 <instancedMesh
+                    key={`root-sphere:${bucket.roots.length}`}
                     ref={sphereRef}
                     args={[undefined, undefined, bucket.roots.length]}
                     frustumCulled={false}

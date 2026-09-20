@@ -257,7 +257,13 @@ function ConeBucketMesh({
     return (
         <group>
             {bucket.profileType === 'disk' && (
+                // Keyed by count, not just bucket: R3F rebuilds the object in
+                // place when args change but never re-registers the new object
+                // in its interaction manager, so a grown batch goes dead to
+                // hover until anything re-registers it (orbit, reselect). A
+                // remount registers fresh. Mirrors the shaft batch key.
                 <instancedMesh
+                    key={`cone-disk:${bucket.cones.length}`}
                     ref={diskRef}
                     args={[undefined, undefined, bucket.cones.length]}
                     frustumCulled={false}
@@ -281,6 +287,7 @@ function ConeBucketMesh({
             )}
 
             <instancedMesh
+                key={`cone-body:${bucket.cones.length}`}
                 ref={bodyRef}
                 args={[undefined, undefined, bucket.cones.length]}
                 frustumCulled={false}
@@ -300,6 +307,7 @@ function ConeBucketMesh({
             </instancedMesh>
 
             <instancedMesh
+                key={`cone-tip:${bucket.cones.length}`}
                 ref={tipSphereRef}
                 args={[undefined, undefined, bucket.cones.length]}
                 frustumCulled={false}
