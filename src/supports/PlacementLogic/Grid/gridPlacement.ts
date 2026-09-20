@@ -30,6 +30,7 @@ import {
     memberDepartureAngleFromVerticalDeg,
     SHORT_SPAN_DETOUR_MAX_LENGTH_MM,
     SOCKET_ELBOW_MAX_ANGLE_FROM_VERTICAL_DEG,
+    TRUNK_DIAGONAL_LEAN_FROM_VERTICAL_DEG,
 } from '../smartPlacementSearchUtils';
 
 /**
@@ -359,11 +360,10 @@ function tryBuildAutoLeafDecision(args: {
  * Picks where a candidate attaches on a host trunk and builds that member, or
  * returns null when the host cannot take it.
  *
- * Every passing knot is scored by its built departure and the steepest
- * wins: the walk's top-down order would otherwise stop at the first
- * passing knot high on the shaft, where the short-span slack lets a
- * shallow chord through. The gates still decide what passes; this only
- * chooses among what does.
+ * First passing knot top-down whose built member holds 45 degrees wins: a
+ * high graft with a proper climb beats a long dive to the base that only
+ * leaves steeper. Nothing reaching 45 keeps the steepest built departure
+ * as the fallback, so a tip nothing steep can serve still places.
  */
 function selectAttachmentDecision(args: {
     nodeKey: string;
@@ -436,8 +436,12 @@ function selectAttachmentDecision(args: {
 
         const step = Math.max(0.0005, attachStepMm / approxLen);
 
-        for (let t = 1; t >= 0; t -= step) {
-            const pos = calculateKnotPositionOnSegmentFromT(endpoints.start, endpoints.end, segment, t);
+        for (let t = 1; t >= -1e-9; t -= step) {
+            // The loop below skips t < 0, so clamp: with a coarse step the
+            // last sample stops above the segment base and a low graft the
+            // tip needs is never tried. The base (t=0) is always sampled.
+            const tc = Math.max(0, t);
+            const pos = calculateKnotPositionOnSegmentFromT(endpoints.start, endpoints.end, segment, tc);
 
             // Must be below tip
             if (pos.z >= tipPos.z) continue;
@@ -453,7 +457,7 @@ function selectAttachmentDecision(args: {
             const knot: Knot = {
                 id: uuidv4(),
                 parentShaftId: segment.id,
-                t,
+                t: tc,
                 pos,
                 diameter: (segment.diameter ?? shaftDiameterMm) + 0.1,
             };
@@ -476,6 +480,7 @@ function selectAttachmentDecision(args: {
             });
             if (leafDecision) {
                 const departureDeg = memberDepartureAngleFromVerticalDeg(pos, tipPos);
+                if (departureDeg <= TRUNK_DIAGONAL_LEAN_FROM_VERTICAL_DEG) return leafDecision;
                 if (departureDeg < bestDepartureDeg) {
                     best = leafDecision;
                     bestDepartureDeg = departureDeg;
@@ -487,8 +492,9 @@ function selectAttachmentDecision(args: {
             // its chord: the contact cone is clamped toward the surface normal
             // at the tip, so the shaft can leave the host nearly level, satisfy
             // the knot-to-tip angle, and bend into a steep cone only at the tip.
-            // Gate the built shaft where it leaves the host, and keep scanning:
-            // a lower knot that leaves steeper wins over this one.
+            // Gate the built shaft where it leaves the host. The first knot
+            // whose shaft holds 45 degrees wins outright; otherwise the
+            // steepest built shaft below takes the fallback.
             perfMark('grid:branch-build');
             const { branch, supportData } = buildBranchData({
                 tipPos,
@@ -507,6 +513,9 @@ function selectAttachmentDecision(args: {
                 continue;
             }
 
+            if (departureDeg <= TRUNK_DIAGONAL_LEAN_FROM_VERTICAL_DEG) {
+                return { kind: 'place_branch', nodeKey, hostTrunkId, knot, branch, supportData };
+            }
             if (departureDeg < bestDepartureDeg) {
                 best = { kind: 'place_branch', nodeKey, hostTrunkId, knot, branch, supportData };
                 bestDepartureDeg = departureDeg;
