@@ -89,7 +89,7 @@ export function SidebarPanelTabs({
                         key={tab.tab}
                         type="button"
                         onClick={() => onChange(tab.tab)}
-                        className={`flex h-12 cursor-pointer items-center justify-center rounded-md border px-2 transition-all duration-150 hover:brightness-110 hover:shadow-[0_8px_18px_rgba(0,0,0,0.18)] ${showIcons ? 'gap-2' : 'gap-0'}`}
+                        className={`flex h-8 cursor-pointer items-center justify-center rounded-md border px-2 transition-all duration-150 hover:brightness-110 hover:shadow-[0_8px_18px_rgba(0,0,0,0.18)] ${showIcons ? 'gap-2' : 'gap-0'}`}
                         style={isActive
                             ? {
                                 background: 'color-mix(in srgb, var(--accent), var(--surface-0) 78%)',
@@ -98,14 +98,16 @@ export function SidebarPanelTabs({
                                 boxShadow: '0 0 0 1px color-mix(in srgb, var(--accent), transparent 74%) inset',
                             }
                             : {
-                                background: 'var(--surface-1)',
-                                borderColor: 'var(--border-subtle)',
+                                // A 20% secondary tint, so an inactive tab still
+                                // reads as a card rather than a bare label.
+                                background: 'color-mix(in srgb, var(--accent-secondary) 20%, var(--surface-1))',
+                                borderColor: 'color-mix(in srgb, var(--accent-secondary) 22%, var(--border-subtle))',
                                 color: 'var(--text-muted)',
                             }}
                         title={_(tab.label)}
                     >
                         {showIcons && <Icon className="h-4 w-4 shrink-0" />}
-                        <span className="text-[13px] font-semibold leading-none">{_(tab.label)}</span>
+                        <span className="text-[15px] font-semibold">{_(tab.label)}</span>
                     </button>
                 );
             })}
