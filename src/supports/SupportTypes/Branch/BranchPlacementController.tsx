@@ -18,8 +18,9 @@ import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { matchesConfiguredHotkeyUp } from '@/hotkeys/hotkeyConfig';
-import { subscribe, getSnapshot, addBranch, addKnot, addSupportEntityWithHistory } from '../../state';
-import { buildContactBridge, selectTypeForPlacement } from '../../supportTypeRegistry';
+import { addSupportEntity, subscribe, getSnapshot, addKnot, addSupportEntityWithHistory } from '../../state';
+import { buildContactBridge, parsePrefixedSegmentId, selectTypeForPlacement } from '../../supportTypeRegistry';
+import type { SupportTypeId } from '../../supportTypeRegistry';
 import { pushSupportHistory } from '@/supports/history/supportHistory';
 import { getClipBounds } from '@/components/scene/SceneCanvas/clipBoundsStore';
 import { addAction } from '../../history/actionTypes';
@@ -132,7 +133,7 @@ export function BranchPlacementController() {
     const isHoveringSupportTarget = rawHoveringSupportTarget && immediateModelHoverId === null;
 
     const meshHoverRef = useRef<{ pos: Vec3; normal: Vec3; modelId: string } | null>(null);
-    const meshKindRef = useRef<'twig' | 'stick' | null>(null);
+    const meshKindRef = useRef<SupportTypeId | null>(null);
     const hoveredShaftRef = useRef<ShaftHoverDetail | null>(null);
     const pointerFreshSinceIdleActivationRef = useRef(false);
     const supportEditSuppressedRef = useRef(false);
@@ -385,8 +386,9 @@ export function BranchPlacementController() {
             }
 
             // If snapped to a brace, compute local tapered host diameter.
-            if (resolvedSnap.targetId.startsWith('braceSegment:')) {
-                const braceId = resolvedSnap.targetId.slice('braceSegment:'.length);
+            const snapSpan = parsePrefixedSegmentId(resolvedSnap.targetId);
+            if (snapSpan) {
+                const braceId = snapSpan.entityId;
                 const brace = supportState.braces[braceId];
                 const startKnot = brace ? supportState.knots[brace.startKnotId] : undefined;
                 const endKnot = brace ? supportState.knots[brace.endKnotId] : undefined;
@@ -474,8 +476,9 @@ export function BranchPlacementController() {
                     t = projected.t;
                     hostDiameterMm = hoveredTarget.pathSegment.radius * 2;
 
-                    if (segmentId.startsWith('braceSegment:')) {
-                        const braceId = segmentId.slice('braceSegment:'.length);
+                    const hoverSpan = parsePrefixedSegmentId(segmentId);
+                    if (hoverSpan) {
+                        const braceId = hoverSpan.entityId;
                         const brace = supportState.braces[braceId];
                         const startKnot = brace ? supportState.knots[brace.startKnotId] : undefined;
                         const endKnot = brace ? supportState.knots[brace.endKnotId] : undefined;
@@ -600,8 +603,12 @@ export function BranchPlacementController() {
                         const dy = tipPosition.y - bPos.y;
                         const dz = tipPosition.z - bPos.z;
                         const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-                        // contactSpan is declared only by twig and stick.
-                        const kind = (selectTypeForPlacement('contactSpan', dist) ?? 'twig') as 'twig' | 'stick';
+                        // Which bridge type a span calls for is the registry's
+                        // answer. An unknown span asks the same question at the
+                        // boundary -- zero -- which names no type here.
+                        const kind = selectTypeForPlacement('contactSpan', dist)
+                            ?? selectTypeForPlacement('contactSpan', 0);
+                        if (!kind) return;
                         meshKindRef.current = kind;
 
                         const meshLinkSignature = [
@@ -765,7 +772,7 @@ export function BranchPlacementController() {
             const markedBranch = markPlacementSurface('branch', branch, placementSurface);
 
             addKnot(parentKnot);
-            addBranch(markedBranch);
+            addSupportEntity(markedBranch);
 
             pushSupportHistory({
                 type: addAction('branch'),

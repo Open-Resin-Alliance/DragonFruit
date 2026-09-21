@@ -4,8 +4,6 @@ import test from 'node:test';
 import '../state';
 import {
     collectionsMissingRestore,
-    inferSupportSettings,
-    resolveKnotDiameter,
     SUPPORT_TYPES,
     updateSupportEntity,
 } from '../supportTypeRegistry';
@@ -29,4 +27,3 @@ test('every type registers an updater', () => {
 test('every collection registers a restore', () => {
     assert.deepEqual(collectionsMissingRestore(), []);
 });
-

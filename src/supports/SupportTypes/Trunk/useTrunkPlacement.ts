@@ -1,24 +1,52 @@
 import { useCallback, useState, useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import { addAnchor, addBranch, addKnot, addLeaf, addRoot, addSupportEntityWithHistory, addTrunk, getSnapshot, updateKnot } from '../../state';
+import { addSupportEntity, addKnot, addRoot, addSupportEntityWithHistory, getSnapshot, updateKnot } from '../../state';
 import { pushSupportHistory } from '@/supports/history/supportHistory';
 import { addAction } from '../../history/actionTypes';
 import { useInteractionStatus } from '../../interaction/useInteractionStatus';
 import { buildTrunkData } from './trunkBuilder';
-import { computeAndApplyTrunkDiameterProfile } from './TrunkReplacement';
+import { computeAndApplySupportDiameterProfile } from './TrunkReplacement';
 import { supportDataForEntity, type SupportData } from '../../rendering/SupportBuilder';
 import { markPlacementSurface, markSupportDataPlacementSurface, type PlacementSurface } from '../../PlacementLogic/placementSurface';
-import type { Anchor, Branch, ContactDisk, Leaf, LimitationCode, Segment, Stick, Twig, WarningCode } from '../../types';
-import type { ContactCone } from '../../SupportPrimitives/ContactCone/types';
+import type { LimitationCode, Segment, WarningCode } from '../../types';
 import { calculateSmoothedNormal } from '../../PlacementLogic/PlacementUtils';
 import { getSettings } from '../../Settings/state';
 import { decideGridPlacement } from '../../PlacementLogic/Grid';
-import { buildContactBridge, selectTypeForPlacement, type SupportTypeId, updateSupportEntity } from '../../supportTypeRegistry';
+import { getSupportTypeDescriptor, bridgeMayLandSideways, buildContactBridge, buildContactOverride, resolveSupportTypeIdOf, selectTypeForPlacement, type SupportTypeId, updateSupportEntity } from '../../supportTypeRegistry';
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
 import { isContactDiskHudInteractionActive, shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { perfMark, perfMeasureWithSpike, perfEndFrame } from '../../PlacementLogic/Pathfinding/pathfindingPerf';
 
 import { isShaftBlocked } from '../../PlacementLogic/CollisionAvoidance';
+
+/**
+ * Re-solve a host whose diameter is derived from what it carries, after one of
+ * its members was added. Returns the undo payload for that repair.
+ *
+ * The profile function is the trunk's: trunk is the only type that derives its
+ * diameter this way, which is what `recomputesDiameterFromAttachments` declares.
+ * A host of another type would need its own here.
+ */
+function repairHostDiameter(host: { typeId: SupportTypeId; id: string }): Record<string, unknown> | null {
+    const snapshotAfterAdd = getSnapshot();
+    const collection = snapshotAfterAdd[getSupportTypeDescriptor(host.typeId).location.key] as unknown;
+    const hostEntity = (collection as Record<string, unknown>)[host.id];
+    if (!hostEntity) return null;
+
+    const applied = computeAndApplySupportDiameterProfile(snapshotAfterAdd, host.id);
+    if (!applied) return null;
+
+    for (const update of applied.knotUpdates) updateKnot(update.after);
+    updateSupportEntity(host.typeId, applied.trunk);
+    return {
+        hostUpdate: {
+            typeId: host.typeId,
+            before: hostEntity as { id: string },
+            after: applied.trunk as unknown as { id: string },
+        },
+        knotUpdates: applied.knotUpdates,
+    };
+}
 import { checkShortBridgeCollision } from '../../PlacementLogic/CollisionUtils';
 import { useActionActive } from '@/hotkeys/hotkeyStore';
 import { getSupportPathfindingDebugEnabled, setSupportPathfindingDebugSnapshot } from '../../PlacementLogic/Pathfinding/pathfindingDebugState';
@@ -37,11 +65,16 @@ function getPlacementSurfaceFromHit(hit: THREE.Intersection | null): PlacementSu
     return hit?.object?.userData?.supportPlacementSurface === 'interior' ? 'interior' : undefined;
 }
 
+/** The build's own trunk, marked with the surface it was placed against. */
 function markTrunkBuildPlacementSurface<T extends ReturnType<typeof buildTrunkData>>(build: T, surface?: PlacementSurface): T {
     if (!surface) return build;
+    // The trunk the builder just returned is stamped with its type, so the
+    // contact fields to mark come off the entity rather than a name here.
+    const typeId = resolveSupportTypeIdOf(build.trunk);
+    if (!typeId) return build;
     return {
         ...build,
-        trunk: markPlacementSurface('trunk', build.trunk, surface),
+        trunk: markPlacementSurface(typeId, build.trunk, surface),
         supportData: markSupportDataPlacementSurface(build.supportData, surface),
     } as T;
 }
@@ -162,7 +195,10 @@ export function buildCavityBridge(
     const kind = selectTypeForPlacement('contactSpan', dist);
     if (kind === null) return null;
 
-    if (kind === 'stick' && reachedSideways && dist > cutoff) return null;
+    // Landing beyond the near cutoff on the wide search is a lateral prop, which
+    // only a type declaring `mayReachSideways` may build. The rule is a plain
+    // function because this caller is a hook and cannot be exercised in tests.
+    if (!bridgeMayLandSideways(kind, dist, cutoff, reachedSideways)) return null;
 
     const built = buildContactBridge(kind, {
         modelId,
@@ -175,6 +211,12 @@ export function buildCavityBridge(
     });
     if (!built) return null;
     const entity = built.entity as BridgingEntity;
+    // The SHORT bridge is the type whose contact-span rule is bounded above --
+    // the registry's own way of saying it serves only the spans under the
+    // stick/twig cutoff. Its shaft is a thin strut, so it tolerates cant a
+    // column cannot; the longer bridge keeps the near-search behaviour.
+    const shortBridge = getSupportTypeDescriptor(kind).placementRule?.maxMm !== undefined;
+
 
     // The shaft must not pierce the model. Matches the trunk post-cull
     // clearance (radius + 0.15mm) and catches the bridges that shot straight
@@ -185,7 +227,7 @@ export function buildCavityBridge(
     const radius = (seg?.diameter ?? sizing?.shaftDiameterMm ?? 1) / 2 + 0.15;
     // Ray-based for a twig, like buildTwig: the SDF reads the thin gap a twig
     // spans as material, so a signed-distance gate would refuse it.
-    const blocked = kind === 'twig'
+    const blocked = shortBridge
         ? checkShortBridgeCollision(start, end, radius, mesh).hit
         : isShaftBlocked(start, end, radius, mesh);
     if (blocked) return null;
@@ -241,14 +283,18 @@ export function useTrunkPlacementV2() {
     const commitTrunkBuild = useCallback((trunkBuild: ReturnType<typeof buildTrunkData>, placementSurface?: PlacementSurface) => {
         const markedBuild = markTrunkBuildPlacementSurface(trunkBuild, placementSurface);
         addRoot(markedBuild.root);
-        addTrunk(markedBuild.trunk);
+        addSupportEntity(markedBuild.trunk);
+        // The action and the payload key are both declared by the type, so
+        // neither is written here.
+        const trunkTypeId = resolveSupportTypeIdOf(markedBuild.trunk);
+        if (!trunkTypeId) return;
         pushSupportHistory({
-            type: addAction('trunk'),
+            type: getSupportTypeDescriptor(trunkTypeId).historyAdd,
             payload: {
                 trunk: markedBuild.trunk,
                 roots: [markedBuild.root],
             },
-        });
+        } as Parameters<typeof pushSupportHistory>[0]);
         clearSupportSelection();
     }, []);
 
@@ -422,13 +468,14 @@ export function useTrunkPlacementV2() {
         }
 
         // When grid is disabled, the trunk candidate is already final — skip
-        // the grid snapping/branch logic entirely. Near-plate tips are the
-        // exception: decideGridPlacement owns the anchor decision in BOTH
-        // modes (its validation also previews the rejection ghost), so they
-        // must not take this early out.
-        // Only a tip the anchor rule claims takes the grid path.
-        const isNearPlateTip = selectTypeForPlacement('tipHeight', tipPos.z) === 'anchor';
-        if (!isGridMode && !isNearPlateTip) {
+        // the grid snapping/branch logic entirely. A tip height claimed by a
+        // type that OVERRIDES the default build is the exception:
+        // decideGridPlacement owns that decision in BOTH modes (its validation
+        // also previews the rejection ghost), so those must not take this early
+        // out. Asked of the registry rather than naming the claiming type.
+        const claimedType = selectTypeForPlacement('tipHeight', tipPos.z);
+        const isOverriddenBand = !!claimedType && !!buildContactOverride(claimedType);
+        if (!isGridMode && !isOverriddenBand) {
             setPreviewData(result.supportData);
             setPreviewError(forcePlaceOverrideRef.current ? null : (result.error || null));
             setPreviewWarning(result.warning || null);
@@ -461,34 +508,16 @@ export function useTrunkPlacementV2() {
         });
         perfMeasureWithSpike('hover:grid-decision', 'grid:decision');
 
-        if (decision.kind === 'place_trunk') {
-            setPreviewData(decision.trunkBuild.supportData);
-            setPreviewError(forcePlaceOverrideRef.current ? null : (decision.trunkBuild.error || null));
-            setPreviewWarning(decision.trunkBuild.warning || null);
-            perfEndFrame();
-            return;
-        }
-
-        if (decision.kind === 'place_branch') {
-            setPreviewData(decision.supportData);
-            setPreviewError(null);
-            setPreviewWarning(null);
-            perfEndFrame();
-            return;
-        }
-
-        if (decision.kind === 'place_leaf') {
-            setPreviewData(decision.supportData);
-            setPreviewError(null);
-            setPreviewWarning(null);
-            perfEndFrame();
-            return;
-        }
-
-        if (decision.kind === 'place_anchor') {
-            setPreviewData(decision.supportData);
-            setPreviewError(null);
-            setPreviewWarning(null);
+        // Every accepted decision previews what it will place, and a rejected
+        // one previews the ghost the engine built. Neither needs to know which
+        // type is involved.
+        const previewData = decision.kind === 'place'
+            ? decision.supportData
+            : decision.trunkBuild?.supportData;
+        if (decision.kind !== 'reject' && previewData) {
+            setPreviewData(previewData);
+            setPreviewError(forcePlaceOverrideRef.current ? null : (previewData.error || null));
+            setPreviewWarning(previewData.warning || null);
             perfEndFrame();
             return;
         }
@@ -507,7 +536,7 @@ export function useTrunkPlacementV2() {
             }
         }
 
-        // Rejections that already built geometry (anchor validation) preview
+        // Rejections that already built geometry (stump validation) preview
         // the invalid support as a red ghost; the `error` on the SupportData
         // drives the "Cannot Place Support" tooltip.
         if (decision.kind === 'reject' && decision.supportData) {
@@ -518,7 +547,9 @@ export function useTrunkPlacementV2() {
             return;
         }
 
-        if (decision.trunkBuild) {
+        // A rejection from the GRID engine still previews the trunk it built,
+        // so the ghost and the reason stay available.
+        if (decision.kind === 'reject' && decision.trunkBuild) {
             setPreviewData(decision.trunkBuild.supportData);
             setPreviewError(forcePlaceOverrideRef.current ? null : (decision.trunkBuild.error || null));
             setPreviewWarning(decision.trunkBuild.warning || null);
@@ -529,11 +560,11 @@ export function useTrunkPlacementV2() {
         setPreviewData((prev) => (prev === null ? prev : null));
         setPreviewError(forcePlaceOverrideRef.current
             ? null
-            : decision.reason === 'KNOT_ABOVE_TIP'
+            : decision.kind === 'reject' && decision.reason === 'KNOT_ABOVE_TIP'
                 ? 'KNOT_ABOVE_TIP'
-                : decision.reason === 'ANCHOR_BELOW_ROOT'
-                    ? 'ANCHOR_BELOW_ROOT'
-                    : decision.reason === 'COLLISION_WITH_MODEL'
+                : decision.kind === 'reject' && decision.reason === 'STUMP_BELOW_ROOT'
+                    ? 'STUMP_BELOW_ROOT'
+                    : decision.kind === 'reject' && decision.reason === 'COLLISION_WITH_MODEL'
                         ? 'COLLISION_WITH_MODEL'
                         : null
         );
@@ -625,8 +656,9 @@ export function useTrunkPlacementV2() {
             return;
         }
 
-        // In grid mode, decideGridPlacement may override a trunk error into a place_branch decision.
-        // Only bail on trunk errors when grid is disabled (direct placement path).
+        // In grid mode, decideGridPlacement may override a trunk error into an
+        // attachment decision. Only bail on trunk errors when grid is disabled
+        // (direct placement path).
         if (result.error && !settings.grid?.enabled) {
             if (forcePlaceOverrideRef.current) {
                 commitTrunkBuild(result, placementSurface);
@@ -646,62 +678,37 @@ export function useTrunkPlacementV2() {
             mesh,
         });
 
-        if (decision.kind === 'place_anchor') {
-            const anchor = markPlacementSurface('anchor', decision.anchor, placementSurface);
-            addAnchor(anchor);
-            pushSupportHistory({
-                type: addAction('anchor'),
-                payload: { anchor },
-            });
-            clearSupportSelection();
-            return;
-        }
+        // ONE path for every type. What the entity joins is declared
+        // (`location.key`), what travels with it is declared (`edges`), and
+        // whether its host must be re-solved afterwards is declared too
+        // (`recomputesDiameterFromAttachments`). So the commit names no type.
+        if (decision.kind === 'place') {
+            const { typeId, entity: placed, supplied, hostedBy } = decision.placed;
+            const entity = markPlacementSurface(typeId, placed, placementSurface);
 
-        if (decision.kind === 'place_branch') {
-            const branch = markPlacementSurface('branch', decision.branch, placementSurface);
-            addKnot(decision.knot);
-            addBranch(branch);
+            // The primitives this type declares edges to. The edge names the
+            // collection, so this dispatches on a declared key rather than
+            // guessing from the value's shape.
+            const descriptor = getSupportTypeDescriptor(typeId);
+            for (const edge of descriptor.edges) {
+                const primitive = supplied[edge.field];
+                if (!primitive) continue;
+                if (edge.to === 'roots') addRoot(primitive as never);
+                else if (edge.to === 'knots') addKnot(primitive as never);
+            }
 
-            const snapshotAfterAdd = getSnapshot();
-            const hostTrunk = snapshotAfterAdd.trunks[decision.hostTrunkId];
-            const trunkUpdate = hostTrunk
-                ? (() => {
-                    const applied = computeAndApplyTrunkDiameterProfile(snapshotAfterAdd, decision.hostTrunkId);
-                    if (!applied) return null;
+            // A hosted support loads its host, so a host that re-solves its
+            // diameter from what it carries has to be re-solved. Asked of the
+            // descriptions, never of a type name.
+            const host = hostedBy;
+            const repairsHost = host
+                && getSupportTypeDescriptor(host.typeId).recomputesDiameterFromAttachments
+                && descriptor.repairsHostDiameterOnAdd;
+            const hostRepair = repairsHost && host ? repairHostDiameter(host) : null;
 
-                    for (const u of applied.knotUpdates) {
-                        updateKnot(u.after);
-                    }
-
-                    updateSupportEntity('trunk', applied.trunk);
-                    return { before: hostTrunk, after: applied.trunk, knotUpdates: applied.knotUpdates };
-                })()
-                : null;
-
-            pushSupportHistory({
-                type: addAction('branch'),
-                payload: {
-                    branch,
-                    knot: decision.knot,
-                    trunkUpdate: trunkUpdate ? { before: trunkUpdate.before, after: trunkUpdate.after } : undefined,
-                    knotUpdates: trunkUpdate?.knotUpdates ?? undefined,
-                },
-            });
-            clearSupportSelection();
-            return;
-        }
-
-        if (decision.kind === 'place_leaf') {
-            const leaf = markPlacementSurface('leaf', decision.leaf, placementSurface);
-            addKnot(decision.knot);
-            addLeaf(leaf);
-
-            pushSupportHistory({
-                type: addAction('leaf'),
-                payload: {
-                    leaf,
-                    knot: decision.knot,
-                },
+            addSupportEntityWithHistory(typeId, entity, {
+                ...(supplied.parentKnotId ? { knot: supplied.parentKnotId } : {}),
+                ...(hostRepair ?? {}),
             });
             clearSupportSelection();
             return;
@@ -727,12 +734,6 @@ export function useTrunkPlacementV2() {
             // Stick/twig is now strict last resort: keep reject behavior here.
             return;
         }
-
-        // decision.kind === 'place_trunk'
-        const trunkBuild = decision.trunkBuild;
-        
-        commitTrunkBuild(trunkBuild, placementSurface);
-        console.log('[V2] Added trunk:', trunkBuild.trunk.id, 'to model:', modelId);
     }, [commitTrunkBuild, isPlacementHardDisabled]);
 
     return {

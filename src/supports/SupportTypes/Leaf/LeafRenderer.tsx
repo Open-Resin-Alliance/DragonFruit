@@ -1,8 +1,10 @@
 import React from 'react';
 import { useThree } from '@react-three/fiber';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
-import { getSnapshot, updateLeaf } from '../../state';
+import { getSnapshot } from '../../state';
+import { updateSupportEntity } from '../../supportTypeRegistry';
 import { Leaf, Knot, Vec3 } from '../../types';
+import { registerSupportDetailRenderer } from '../../detailRenderer/seam';
 import { ContactConeRenderer, getFinalSocketPosition, type ContactCone } from '../../SupportPrimitives/ContactCone';
 import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
 import { isPrimaryPointerPress, type ContactDiskDragHit } from '../../SupportPrimitives/ContactDisk/contactDiskDragController';
@@ -128,7 +130,9 @@ export const LeafRenderer = React.memo(function LeafRenderer({
         },
         onCommit: (nextCone) => {
             const latest = getSnapshot().leaves[leaf.id];
-            if (latest) updateLeaf({ ...latest, contactCone: nextCone });
+            // The one-argument form reads the type off the entity, so this does not
+            // name the type to write it.
+            if (latest) updateSupportEntity({ ...latest, contactCone: nextCone });
         },
     });
 
@@ -195,3 +199,17 @@ export const LeafRenderer = React.memo(function LeafRenderer({
 });
 
 LeafRenderer.displayName = 'LeafRenderer';
+
+registerSupportDetailRenderer('leaf', (ctx) => ({
+    component: LeafRenderer as never,
+    hosts: (leaf: Leaf) => {
+        const parentKnot = ctx.renderKnotsById[leaf.parentKnotId];
+        return parentKnot ? { parentKnot } : null;
+    },
+    skip: ({ isSelected }) => !isSelected,
+    noClipping: () => true,
+    extraProps: ({ entity, isSelected }) => ({
+        showKnots: !ctx.simpleRender,
+        deferContactConesToSceneBatch: !isSelected && !!(entity as Leaf).contactCone,
+    }),
+}));

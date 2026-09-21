@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import type { Leaf, Knot, Vec3 } from '../../types';
 import type { ContactCone, SupportTipProfile } from '../../SupportPrimitives/ContactCone/types';
-import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
+// Direct, not through the barrel: the barrel re-exports renderers and their
+// React hooks, which a server route cannot import.
+import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk/ContactDiskInteraction';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import { getSettings } from '../../Settings/state';
 import { applySizingOverridesToSettings } from '../../autoSupport/parameterSizing';
@@ -115,6 +117,7 @@ export function buildLeafData(input: LeafBuildInput): LeafBuildResult {
     const leafId = uuidv4();
     const leaf: Leaf = {
         id: leafId,
+        typeId: 'leaf',
         modelId,
         settingsCodeHex,
         parentKnotId: parentKnot.id,

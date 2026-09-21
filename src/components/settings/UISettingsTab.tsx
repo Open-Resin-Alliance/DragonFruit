@@ -2,7 +2,7 @@ import React from 'react';
 import { Palette } from 'lucide-react';
 import { OrganicCutColorsSection } from '@/features/organicCut';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
-import { Select } from '@/components/atoms';
+import { ColorSwatchInput, Select } from '@/components/atoms';
 import type { ThemeCustomColors, ThemePreference, ThemePreset, ThemeProfile } from '@/components/settings/themeCustomizations';
 
 type ThemeColorField = {
@@ -225,13 +225,11 @@ export function UISettingsTab({
 					</label>
 				</div>
 				<div className="flex min-w-0 items-center gap-1.5">
-					<input
-						type="color"
+					<ColorSwatchInput
 						value={getDisplayThemeColor(row.key)}
-						onChange={(event) => handleThemeColorPickerDraftChange(row.key, event.target.value)}
+						onChange={(next) => handleThemeColorPickerDraftChange(row.key, next)}
 						onBlur={() => commitThemeColorPickerChange(row.key)}
-						className="h-7 w-8 shrink-0 cursor-pointer appearance-none overflow-hidden rounded border p-0 [&::-webkit-color-swatch]:border-0 [&::-webkit-color-swatch-wrapper]:p-0 [&::-moz-color-swatch]:border-0"
-						style={{ borderColor: 'var(--border-subtle)' }}
+						className="h-7 w-8"
 					/>
 					<input
 						type="text"

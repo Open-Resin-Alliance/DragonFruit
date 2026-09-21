@@ -36,7 +36,7 @@ fn distance_to_surface(bvh: &dragonfruit_mesh_core::bvh::Bvh, mesh: &IndexedMesh
             max: Vec3::new(p.x + r, p.y + r, p.z + r),
         };
         let mut best = f32::INFINITY;
-        bvh.query_aabb(&query, |ti| {
+        bvh.query_aabb(mesh, &query, |ti| {
             let t = &mesh.triangles[ti as usize];
             let (_, d2) = dragonfruit_organic_cut::membrane::closest_on_tri(
                 p,

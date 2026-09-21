@@ -1,4 +1,4 @@
-import type { SupportKind } from './supportKindState';
+import type { SidebarTab } from './sidebarPanels';
 
 type ScrollViewport = {
     scrollTo(options?: ScrollToOptions): void;
@@ -6,8 +6,8 @@ type ScrollViewport = {
 
 export function resetSupportSettingsScrollForTabChange(
     viewport: ScrollViewport | null,
-    currentTab: SupportKind,
-    nextTab: SupportKind,
+    currentTab: SidebarTab | 'auto',
+    nextTab: SidebarTab,
 ): boolean {
     if (!viewport || currentTab === nextTab) return false;
 

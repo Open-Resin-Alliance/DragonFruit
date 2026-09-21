@@ -11,7 +11,7 @@ import { registerSupportHistoryHandler } from './supportHistory';
 import { removeSupportEntity, updateKnot, setSnapshot, getSnapshot } from '../state';
 import { setSupportBlockedTriangles } from '../autoSupport/supportBlockers';
 import { clearSupportSelection } from '../interaction/shared/selection/selectionController';
-import { getSupportTypeBySelectionCategory, getSupportTypeDescriptor, parsePrefixedSegmentId, restoreToCollection, updateSupportEntity, SHAFTED_COLLECTION_KEYS, SUPPORT_PRIMITIVE_COLLECTIONS, SUPPORT_REMOVAL_SHAPES, SUPPORT_TYPES, type SupportCollectionKey, type SupportEntityIn, type SupportTypeDescriptor } from '../supportTypeRegistry';
+import { getSupportTypeBySelectionCategory, getSupportTypeDescriptor, parsePrefixedSegmentId, restoreToCollection, updateSupportEntity, SHAFTED_COLLECTION_KEYS, SUPPORT_PRIMITIVE_COLLECTIONS, removalShapeFor, SUPPORT_TYPES, type SupportCollectionKey, type SupportEntityIn, type SupportTypeDescriptor, type SupportTypeId } from '../supportTypeRegistry';
 
 function applySnapshotHistory(payload: SupportReplaceStatePayload, direction: 'undo' | 'redo') {
   clearSupportSelection();
@@ -83,7 +83,7 @@ function payloadFields(descriptor: SupportTypeDescriptor): {
   self: string;
   cascade: [SupportCollectionKey, string | readonly string[]][];
 } {
-  const shape = SUPPORT_REMOVAL_SHAPES[descriptor.id];
+  const shape = removalShapeFor(descriptor.id);
   return {
     self: shape.self,
     cascade: Object.entries(shape.cascade) as [SupportCollectionKey, string | readonly string[]][],
@@ -143,19 +143,20 @@ function restoreRemoved(descriptor: SupportTypeDescriptor, payload: unknown): vo
 function applyHostEdits(payload: unknown, direction: 'undo' | 'redo'): void {
   const fields = payload as {
     knotUpdates?: { before: SupportEntityIn<'knots'>; after: SupportEntityIn<'knots'> }[];
-    trunkUpdate?: { before: SupportEntityIn<'trunks'>; after: SupportEntityIn<'trunks'> };
+    hostUpdate?: { typeId: SupportTypeId; before: { id: string }; after: { id: string } };
   } | null | undefined;
   if (!fields) return;
 
   for (const update of fields.knotUpdates ?? []) {
     updateKnot(direction === 'undo' ? update.before : update.after);
   }
-  // Stays named: `trunkUpdate` is a field on the stored payload, so the type
-  // name is in the history wire format rather than in this dispatch. Goes with
-  // the payload shapes, not with this file.
-  const trunkUpdate = fields.trunkUpdate;
-  if (trunkUpdate) {
-    updateSupportEntity('trunk', direction === 'undo' ? trunkUpdate.before : trunkUpdate.after);
+  // The host's own type travels WITH the repair, so this restores the right
+  // collection without naming one. (It was `trunkUpdate`, and history is
+  // in-memory only -- nothing serialises a payload -- so the field was free to
+  // stop naming a type.)
+  const hostUpdate = fields.hostUpdate;
+  if (hostUpdate) {
+    updateSupportEntity(hostUpdate.typeId, direction === 'undo' ? hostUpdate.before : hostUpdate.after);
   }
 }
 

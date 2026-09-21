@@ -27,7 +27,7 @@ export function XrayMaterial({
   opacity?: number;
 }) {
   const baseColor = meshColor ?? '#a3a3a3';
-  const selectedStrength = clampTintStrength(selectedTintStrength, 0.75);
+  const selectedStrength = clampTintStrength(selectedTintStrength, 0.70);
   const hoverStrength = clampTintStrength(hoverTintStrength, 0.5);
   const tintColor = isSelected
     ? blendTintColor(baseColor, selectedTintColor, selectedStrength)

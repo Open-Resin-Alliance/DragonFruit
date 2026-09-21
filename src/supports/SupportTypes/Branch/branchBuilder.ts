@@ -4,7 +4,9 @@ import { Branch, Joint, Knot, Segment, Vec3 } from '../../types';
 import type { ContactCone, SupportTipProfile } from '../../SupportPrimitives/ContactCone/types';
 import { getFinalSocketPosition } from '../../SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/contactDiskUtils';
-import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
+// Direct, not through the barrel: the barrel re-exports renderers and their
+// React hooks, which a server route cannot import.
+import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk/ContactDiskInteraction';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import { getSettings } from '../../Settings/state';
 import type { SupportSettings } from '../../Settings/types';
@@ -416,6 +418,7 @@ export function buildBranchData(input: BranchBuildInput): BranchBuildResult {
     const branchId = uuidv4();
     const branch: Branch = {
         id: branchId,
+        typeId: 'branch',
         modelId,
         settingsCodeHex,
         parentKnotId: parentKnot.id,

@@ -1,1 +1,1 @@
-export { applyDiameterToTrunk, computeAndApplyTrunkDiameterProfile, computeMaxConnectedDiameterFromTrunk } from './maxConnectedDiameter';
+export { applyDiameterToTrunk, computeAndApplySupportDiameterProfile, computeMaxConnectedDiameterFromTrunk } from './maxConnectedDiameter';

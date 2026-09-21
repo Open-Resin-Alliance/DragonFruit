@@ -1,49 +1,65 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readFileSync } from 'node:fs';
 
-import { ANATOMY_PREVIEW_KINDS } from '../Settings/AnatomyPreview/anatomyPreviews';
-import { SUPPORT_KINDS, kindDrawsOwnPreview, type SupportKind } from '../Settings/supportKindState';
+// Loading the previews is what registers them, exactly as the sidebar's import
+// graph does at runtime.
+import '../Settings/AnatomyPreview/PreviewTypes/Raft/RaftPreview';
+import '../Settings/AnatomyPreview/PreviewTypes/Grid/GridPreview';
+import '../Settings/AnatomyPreview/PreviewTypes/Brace/BracePreview';
+import { anatomyPreviewFor, hasOwnAnatomyPreview } from '../Settings/anatomyPreviewRegistry';
+import { SIDEBAR_PANELS, typePanelFacts } from '../Settings/sidebarPanels';
+import { SUPPORT_TYPES } from '../supportTypeRegistry';
 
 /**
- * The anatomy canvas mounts a kind's own preview from a table and falls through
- * to `TrunkPreview` otherwise. The table and `drawsOwnPreview` are two
- * statements of one fact: a kind in one and not the other either renders
- * nothing or renders twice.
+ * The anatomy preview registration.
+ *
+ * A panel draws its own preview when it registered one, so a registration
+ * cannot disagree with itself. These hold the properties that follow from it.
  */
 
-const CANVAS = readFileSync(
-    new URL('../Settings/AnatomyPreview/SupportAnatomyPreviewCanvas.tsx', import.meta.url),
-    'utf8',
-);
-
-test('the table covers exactly the kinds that draw their own preview', () => {
-    const declared = (Object.keys(SUPPORT_KINDS) as SupportKind[]).filter(kindDrawsOwnPreview);
-
-    assert.deepEqual([...ANATOMY_PREVIEW_KINDS].sort(), declared.sort());
-});
-
-test('a kind drawing its own preview is not also drawn as a trunk', () => {
-    // The fallback is the negation of the table, so overlap would double draw.
-    for (const kind of ANATOMY_PREVIEW_KINDS) {
-        assert.equal(kindDrawsOwnPreview(kind), true, `${kind} has a preview but would also render as a trunk`);
-    }
-});
-
-test('the canvas mounts previews from the table, not by name', () => {
-    assert.match(CANVAS, /ANATOMY_PREVIEWS\[activeKind\]/, 'the canvas no longer resolves from the table');
-
-    for (const component of ['RaftPreview', 'GridPreview', 'BracePreview']) {
-        assert.ok(
-            !CANVAS.includes(`<${component}`),
-            `${component} is mounted by name again; it should come from the table`,
+test('a panel that registered a preview is reported as drawing its own', () => {
+    for (const panel of SIDEBAR_PANELS) {
+        assert.equal(
+            hasOwnAnatomyPreview(panel),
+            anatomyPreviewFor(panel) !== null,
+            `${panel}: the flag and the registry must answer the same thing`,
         );
     }
 });
 
-test('TrunkPreview stays the mounted fallback', () => {
-    // It is the default for every kind without an entry, so it is not a table
-    // entry and must remain mounted directly.
-    assert.ok(CANVAS.includes('<TrunkPreview'), 'the trunk fallback is gone');
-    assert.match(CANVAS, /!kindDrawsOwnPreview\(activeKind\)/, 'the fallback no longer guards on the flag');
+test('the panels with their own preview are the ones that registered one', () => {
+    // Raft, grid and stick have bespoke previews; everything else falls through
+    // to the generic renderer. This is the set the sidebar relies on.
+    const own = SIDEBAR_PANELS.filter(hasOwnAnatomyPreview);
+    assert.deepEqual(own, ['stick', 'raft', 'grid'], 'the bespoke previews');
+});
+
+test('a panel with no preview falls through rather than failing', () => {
+    assert.equal(anatomyPreviewFor('trunk'), null, 'trunk uses the generic renderer');
+    assert.equal(hasOwnAnatomyPreview('trunk'), false);
+});
+
+test('no type is reported as drawing a preview it did not register', () => {
+    // `drawsOwnPreview` is derived, so a type cannot claim one in the registry
+    // and forget to register the component -- and vice versa.
+    for (const descriptor of SUPPORT_TYPES) {
+        assert.equal(
+            typePanelFacts(descriptor.id).drawsOwnPreview,
+            hasOwnAnatomyPreview(descriptor.id),
+            `${descriptor.id} disagrees about its own preview`,
+        );
+    }
+});
+
+test('every type answers panel facts, including ones with no panel yet', () => {
+    // A type the sidebar does not offer still answers, so offering it later is a
+    // UI change rather than a data gap.
+    for (const descriptor of SUPPORT_TYPES) {
+        const facts = typePanelFacts(descriptor.id);
+        assert.ok(facts.settingsGroups, `${descriptor.id} has no settings groups`);
+        assert.equal(typeof facts.settingsGroups.tip, 'boolean');
+        assert.equal(typeof facts.settingsGroups.shaft, 'boolean');
+        assert.equal(typeof facts.settingsGroups.roots, 'boolean');
+        assert.ok(facts.tab, `${descriptor.id} has no tab`);
+    }
 });

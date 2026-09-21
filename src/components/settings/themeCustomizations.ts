@@ -4,7 +4,18 @@ export const THEME_PRESET_STORAGE_KEY = 'app-theme-preset';
 export const THEME_CUSTOM_PROFILES_STORAGE_KEY = 'app-theme-custom-profiles';
 
 export type ThemePreference = 'dark' | 'light';
-export type BuiltInThemePreset = 'dragonfruit-dark' | 'dragonfruit-light';
+
+// Every built-in preset, as a runtime list as well as a type: the profile table
+// below and the "is this built in" check both read it, so adding one is a single
+// entry here and a single profile further down.
+const BUILT_IN_THEME_PRESET_IDS = [
+  'dragonfruit-dark',
+  'dragonfruit-light',
+  'concepts-3d',
+  'atlas-3dss',
+] as const;
+
+export type BuiltInThemePreset = (typeof BUILT_IN_THEME_PRESET_IDS)[number];
 export type ThemePreset = BuiltInThemePreset | string;
 
 const LEGACY_DEFAULT_ACCENT = '#d946ef';
@@ -124,6 +135,67 @@ export const DRAGONFRUIT_LIGHT_THEME_COLORS: ThemeCustomColors = {
   success: '#2eb67d',
 };
 
+// Two sponsor themes, shipped as authored in their own exports (name and
+// colours as exported; only the preset id is ours).
+const CONCEPTS_3D_THEME_COLORS: ThemeCustomColors = {
+  background: '#161515',
+  foreground: '#f8f6f1',
+  surface0: '#221f1e',
+  surface1: '#2c2928',
+  surface2: '#373331',
+  textStrong: '#f8f6f1',
+  textMuted: '#cbc5ba',
+  indicator: '#cbc5ba',
+  borderSubtle: '#3f3a36',
+  borderStrong: '#4f4945',
+  accent: '#f0ad4e',
+  accentHover: '#e59c36',
+  primaryButtonSurface: '#f0ad4e',
+  accentContrast: '#1d1307',
+  accentSecondary: '#8ab4f8',
+  accentSecondaryHover: '#95c2ff',
+  secondaryButtonSurface: '#8ab4f8',
+  accentSecondaryContrast: '#161515',
+  topbarAccent: '#f0ad4e',
+  sceneGradientRadial: '#b18f67',
+  sceneGradientLinearStart: '#9a7854',
+  sceneGradientLinearMid: '#6b5640',
+  danger: '#e45454',
+  success: '#2eb67d',
+};
+
+// The two brand colours are the sponsor's own (teal #0a667c, green #86c232); the
+// neutrals are tinted to that teal so the surfaces read as one family instead of
+// the default blue-greys with a teal accent dropped in. Contrast is unchanged:
+// light text 17.9:1 on the background, muted text 11.9:1, and the same within a
+// tenth of the previous ratios on every surface.
+const ATLAS_3DSS_THEME_COLORS: ThemeCustomColors = {
+  background: '#0c1112',
+  foreground: '#f5f9fa',
+  surface0: '#111618',
+  surface1: '#181e20',
+  surface2: '#21292b',
+  textStrong: '#f5f9fa',
+  textMuted: '#c0cfd3',
+  indicator: '#c0cfd3',
+  borderSubtle: '#273134',
+  borderStrong: '#374448',
+  accent: '#0a667c',
+  accentHover: '#085466',
+  primaryButtonSurface: '#085061',
+  accentContrast: '#f8fbfc',
+  accentSecondary: '#86c232',
+  accentSecondaryHover: '#73a72b',
+  secondaryButtonSurface: '#6b9b28',
+  accentSecondaryContrast: '#0e1415',
+  topbarAccent: '#0a667c',
+  sceneGradientRadial: '#123e49',
+  sceneGradientLinearStart: '#122e36',
+  sceneGradientLinearMid: '#1b3c2b',
+  danger: '#e45454',
+  success: '#36ba78',
+};
+
 const BUILT_IN_THEME_PROFILES: ThemeProfile[] = [
   {
     id: 'dragonfruit-dark',
@@ -137,6 +209,20 @@ const BUILT_IN_THEME_PROFILES: ThemeProfile[] = [
     name: 'DragonFruit Light',
     preference: 'light',
     colors: DRAGONFRUIT_LIGHT_THEME_COLORS,
+    isBuiltIn: true,
+  },
+  {
+    id: 'concepts-3d',
+    name: 'Concepts 3D',
+    preference: 'dark',
+    colors: CONCEPTS_3D_THEME_COLORS,
+    isBuiltIn: true,
+  },
+  {
+    id: 'atlas-3dss',
+    name: 'Atlas 3DSS',
+    preference: 'dark',
+    colors: ATLAS_3DSS_THEME_COLORS,
     isBuiltIn: true,
   },
 ];
@@ -153,7 +239,7 @@ function createBuiltInThemeProfiles(): ThemeProfile[] {
 }
 
 export function isBuiltInThemePreset(preset: ThemePreset): preset is BuiltInThemePreset {
-  return preset === 'dragonfruit-dark' || preset === 'dragonfruit-light';
+  return (BUILT_IN_THEME_PRESET_IDS as readonly string[]).includes(preset);
 }
 
 function normalizeThemePreference(value: unknown, fallback: ThemePreference): ThemePreference {
@@ -234,9 +320,8 @@ function createCustomThemeProfileId(name: string): string {
 }
 
 export function getThemePresetColors(preset: ThemePreset): ThemeCustomColors {
-  return isBuiltInThemePreset(preset) && preset === 'dragonfruit-light'
-    ? cloneThemeColors(DRAGONFRUIT_LIGHT_THEME_COLORS)
-    : cloneThemeColors(DEFAULT_THEME_CUSTOM_COLORS);
+  const profile = BUILT_IN_THEME_PROFILES.find((entry) => entry.id === preset);
+  return cloneThemeColors(profile?.colors ?? DEFAULT_THEME_CUSTOM_COLORS);
 }
 
 export function getSavedCustomThemeProfiles(): SavedCustomThemeProfile[] {

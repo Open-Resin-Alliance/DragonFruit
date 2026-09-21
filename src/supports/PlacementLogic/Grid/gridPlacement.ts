@@ -11,19 +11,20 @@ import {
     hasResolvedSnappedRoot,
 } from '../../SupportTypes/Trunk/trunkRouteResolution';
 import { gridNodeKeyFromXY, gridSnappedXYFromKey } from './gridMath';
-import type { DecideGridPlacementArgs, GridPlacementDecision } from './types';
+import type { DecideGridPlacementArgs, GridPlacementDecision, GridPlacementRejectReason } from './types';
 import { getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
 import { calculateKnotPositionOnSegmentFromT } from '../../SupportPrimitives/Knot/knotUtils';
 import { isShaftBlocked } from '../CollisionAvoidance';
 import * as THREE from 'three';
 import { v4 as uuidv4 } from 'uuid';
-import { buildAnchorData } from '../../SupportTypes/Anchor/anchorBuilder';
 import { buildLeafData } from '../../SupportTypes/Leaf/leafBuilder';
 import { perfMark, perfMeasureWithSpike } from '../Pathfinding/pathfindingPerf';
 import {
     MAX_AUTO_LEAF_SPAN_MM,
 } from '../../autoSupport/constants';
-import { selectTypeForPlacement } from '../../supportTypeRegistry';
+import { buildContactOverride, GRID_HOST_TYPES, getSupportTypeDescriptor, placementOfResolved, resolveSupportTypeIdOf, selectTypeForPlacement } from '../../supportTypeRegistry';
+import type { SupportTypeId } from '../../supportTypeRegistry';
+import type { SupportData } from '../../rendering/SupportBuilder';
 import {
     distance3D,
     getLengthAwareMaxAngleFromVerticalDeg,
@@ -50,10 +51,15 @@ const MIN_TRUNK_CLEARANCE_MM = 0.15;
 const GRID_UNSNAPPED_NODE_KEY = 'unsnapped';
 
 
-/** A trunk as the grid sees it: the pillar, and the root it stands on. */
+/**
+ * A host as the grid sees it: the entity, the type that declares it, and the
+ * root it stands on. Any `canBeGridHost` type can be one, so the grid never
+ * names a collection.
+ */
 interface GridHostEntry {
-    trunkId: string;
-    trunk: Trunk;
+    hostTypeId: SupportTypeId;
+    hostId: string;
+    entity: HostEntity;
     root: Roots;
 }
 
@@ -78,7 +84,7 @@ function buildHostIndex(
             index.set(key, [entry]);
             return;
         }
-        if (hosts.some((host) => host.trunkId === entry.trunkId)) return;
+        if (hosts.some((host) => host.hostId === entry.hostId)) return;
         hosts.push(entry);
     };
     for (const entry of trunks) {
@@ -88,7 +94,7 @@ function buildHostIndex(
     // allowed, a shaft height from its contact, so a root key says nothing
     // about which points are already taken: the contact occupies its cell too.
     for (const entry of trunks) {
-        const contact = entry.trunk.contactCone?.pos;
+        const contact = entry.entity.contactCone?.pos;
         if (contact) add(gridNodeKeyFromXY(contact.x, contact.y, spacingMm), entry);
     }
     return index;
@@ -117,7 +123,7 @@ function hostsNearNode(
             entry.root.transform.pos.x - centre.x,
             entry.root.transform.pos.y - centre.y,
         );
-        const contact = entry.trunk.contactCone?.pos;
+        const contact = entry.entity.contactCone?.pos;
         if (contact) {
             distanceMm = Math.min(distanceMm, Math.hypot(contact.x - centre.x, contact.y - centre.y));
         }
@@ -149,11 +155,12 @@ function attachToHost(args: {
     occupiedPoint?: boolean;
 }): GridPlacementDecision | null {
     for (const host of args.hosts) {
-        if (host.trunk.segments.length === 0) continue;
+        if (host.entity.segments.length === 0) continue;
         const decision = selectAttachmentDecision({
             nodeKey: args.nodeKey,
-            hostTrunkId: host.trunkId,
-            hostTrunk: host.trunk,
+            hostTypeId: host.hostTypeId,
+            hostId: host.hostId,
+            hostEntity: host.entity,
             hostRoot: host.root,
             tipPos: args.tipPos,
             minAngleDeg: args.minAngleDeg,
@@ -390,13 +397,21 @@ function branchCollidesWithMesh(
     return isShaftBlocked(knot.pos, socketApprox, radius, mesh);
 }
 
+/** The type a just-built member carries, stamped on it by its own builder. */
+function builtMemberTypeId(member: { id: string; typeId?: SupportTypeId }): SupportTypeId {
+    const typeId = resolveSupportTypeIdOf(member);
+    if (!typeId) throw new Error(`built member ${member.id} carries no typeId`);
+    return typeId;
+}
+
 function getHostDiameterMmFromKnot(knot: Knot, settings: DecideGridPlacementArgs['settings']): number {
     return Math.max(0.001, (knot.diameter ?? (settings.shaft.diameterMm + 0.1)) - 0.1);
 }
 
 function tryBuildAutoLeafDecision(args: {
     nodeKey: string;
-    hostTrunkId: string;
+    hostTypeId: SupportTypeId;
+    hostId: string;
     knot: Knot;
     tipPos: Vec3;
     tipNormal: Vec3;
@@ -404,7 +419,7 @@ function tryBuildAutoLeafDecision(args: {
     settings: DecideGridPlacementArgs['settings'];
     mesh?: THREE.Mesh;
 }): GridPlacementDecision | null {
-    const { nodeKey, hostTrunkId, knot, tipPos, tipNormal, modelId, settings, mesh } = args;
+    const { nodeKey, hostTypeId, hostId, knot, tipPos, tipNormal, modelId, settings, mesh } = args;
     const dx = tipPos.x - knot.pos.x;
     const dy = tipPos.y - knot.pos.y;
     const dz = tipPos.z - knot.pos.z;
@@ -431,13 +446,38 @@ function tryBuildAutoLeafDecision(args: {
     });
 
     return {
-        kind: 'place_leaf',
+        kind: 'place',
         nodeKey,
-        hostTrunkId,
-        knot,
-        leaf,
+        placed: placementOfResolved(
+            builtMemberTypeId(leaf),
+            leaf,
+            { parentKnotId: knot },
+            { typeId: hostTypeId, id: hostId },
+        ),
         supportData,
     };
+}
+
+/** A host entity as the grid reads it: any `canBeGridHost` type owning a root. */
+interface HostEntity {
+    id: string;
+    modelId?: string;
+    origin?: string;
+    rootId?: string;
+    segments: Trunk['segments'];
+    contactCone?: { pos: Vec3 };
+}
+
+/**
+ * The host as the grid's root-stack resolver sees it: the plate stack comes
+ * from the grid settings the root was built with. A host rooting another way
+ * throws rather than resolving off the wrong stack.
+ */
+function settingsRootedHost(hostTypeId: SupportTypeId, entity: HostEntity): Trunk {
+    if (getSupportTypeDescriptor(hostTypeId).lower.kind !== 'plateRoot') {
+        throw new Error(`grid attachment search has no root-stack resolution for "${hostTypeId}"`);
+    }
+    return entity as unknown as Trunk;
 }
 
 /**
@@ -451,8 +491,9 @@ function tryBuildAutoLeafDecision(args: {
  */
 function selectAttachmentDecision(args: {
     nodeKey: string;
-    hostTrunkId: string;
-    hostTrunk: Trunk;
+    hostTypeId: SupportTypeId;
+    hostId: string;
+    hostEntity: HostEntity;
     hostRoot: Roots;
     tipPos: Vec3;
     minAngleDeg: number;
@@ -470,10 +511,11 @@ function selectAttachmentDecision(args: {
     occupiedPoint?: boolean;
 }): GridPlacementDecision | null {
     const {
-        nodeKey, hostTrunkId, hostTrunk, hostRoot, tipPos,
+        nodeKey, hostTypeId, hostId, hostEntity, hostRoot, tipPos,
         minAngleDeg, settings, attachStepMm, mesh, tipNormal, modelId,
         occupiedPoint = false,
     } = args;
+    const hostTrunk = settingsRootedHost(hostTypeId, hostEntity);
     const shaftDiameterMm = settings.shaft.diameterMm;
     // A member may not leave its host shallower than the configured branch
     // angle (60 degrees above horizontal by default, so 30 from vertical),
@@ -555,7 +597,8 @@ function selectAttachmentDecision(args: {
             // chord the gate above measured, so its departure is covered there.
             const leafDecision = tryBuildAutoLeafDecision({
                 nodeKey,
-                hostTrunkId,
+                hostTypeId,
+                hostId,
                 knot,
                 tipPos,
                 tipNormal,
@@ -598,10 +641,30 @@ function selectAttachmentDecision(args: {
             }
 
             if (departureDeg <= TRUNK_DIAGONAL_LEAN_FROM_VERTICAL_DEG) {
-                return { kind: 'place_branch', nodeKey, hostTrunkId, knot, branch, supportData };
+                return {
+                    kind: 'place',
+                    nodeKey,
+                    placed: placementOfResolved(
+                        builtMemberTypeId(branch),
+                        branch,
+                        { parentKnotId: knot },
+                        { typeId: hostTypeId, id: hostId },
+                    ),
+                    supportData,
+                };
             }
             if (departureDeg < bestDepartureDeg) {
-                best = { kind: 'place_branch', nodeKey, hostTrunkId, knot, branch, supportData };
+                best = {
+                    kind: 'place',
+                    nodeKey,
+                    placed: placementOfResolved(
+                        builtMemberTypeId(branch),
+                        branch,
+                        { parentKnotId: knot },
+                        { typeId: hostTypeId, id: hostId },
+                    ),
+                    supportData,
+                };
                 bestDepartureDeg = departureDeg;
             }
         }
@@ -684,50 +747,70 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
 
     const spacingMm = settings.grid?.spacingMm ?? 4;
     
-    // Every trunk of this model, indexed by the nodes it covers.
+    // Every host of this model, over every declared host type with a root,
+    // indexed by the nodes it covers.
     const trunks: GridHostEntry[] = [];
-    for (const trunk of Object.values(snapshot.trunks)) {
-        if (trunk.modelId !== modelId) continue;
-        const root = snapshot.roots[trunk.rootId];
-        if (!root) continue;
-        trunks.push({ trunkId: trunk.id, trunk, root });
+    for (const descriptor of GRID_HOST_TYPES) {
+        if (!descriptor.ownsRoot) continue;
+        const collection = snapshot[descriptor.location.key] as unknown as
+            Record<string, HostEntity> | undefined;
+        for (const [hostId, entity] of Object.entries(collection ?? {})) {
+            if (entity.modelId !== modelId) continue;
+            const root = snapshot.roots[entity.rootId ?? ''];
+            if (!root) continue;
+            trunks.push({ hostTypeId: descriptor.id, hostId, entity, root });
+        }
     }
     const hostsByNode = buildHostIndex(trunks, spacingMm);
 
-    // Which type a tip height calls for is declared; anchor claims the
-    // near-plate band, trunk everything above it.
-    if (selectTypeForPlacement('tipHeight', tipPos.z) === 'anchor') {
-        const { anchor, supportData } = buildAnchorData({ tipPos, tipNormal, modelId, mesh });
-        // The cone body spans contact disk → socket and must never dip below
-        // the root joint: a tip lower than the root (or an over-long cone on a
-        // downward axis) would push the shaft below the root, into -Z.
-        const jointZ = anchor.joint.pos.z;
-        const lowestShaftZ = Math.min(
-            anchor.contactCone.pos.z,
-            getFinalSocketPosition(anchor.contactCone).z,
-        );
-        if (lowestShaftZ < jointZ - 1e-3) {
-            // Ghost-preview the invalid anchor (red, with the reason as
-            // `error`) so the hover tooltip explains the rejection.
+    // The type this tip height calls for. One registering a build override takes
+    // the branch below; otherwise this is the default type.
+    const claimedTypeId = selectTypeForPlacement('tipHeight', tipPos.z);
+    const override = claimedTypeId ? buildContactOverride(claimedTypeId) : undefined;
+    if (claimedTypeId && override) {
+        const built = override({ tipPos, tipNormal, modelId, mesh });
+        if (!built) {
+            // A claimed band that cannot build rejects here rather than falling
+            // through to the default.
+            return { kind: 'reject', nodeKey: '', reason: 'NO_VALID_ATTACHMENT' };
+        }
+        if (built.refusal) {
             return {
                 kind: 'reject',
                 nodeKey: '',
-                reason: 'ANCHOR_BELOW_ROOT',
-                supportData: { ...supportData, error: 'ANCHOR_BELOW_ROOT' },
+                // The type's own reason, cast into this module's reject codes.
+                reason: built.refusal as GridPlacementRejectReason,
+                supportData: built.supportData as SupportData,
             };
         }
-        return { kind: 'place_anchor', anchor, supportData };
+        return {
+            kind: 'place',
+            nodeKey: '',
+            placed: built.placed,
+            supportData: built.supportData as SupportData,
+        };
     }
 
+    // Everything below stands the built trunk on the contact. No claimed type
+    // means the placement rules leave this height unclaimed.
+    if (!claimedTypeId) {
+        throw new Error(`No support type claims a tipHeight of ${tipPos.z}`);
+    }
+    const placedTypeId = claimedTypeId;
+
     if (!settings.grid?.enabled) {
+        const trunkBuild = withResolvedSnappedRoute(candidate, {
+            snappedRootPos: getResolvedSnappedRootPos(candidate.route, candidate.root.transform.pos),
+            snappedNodeKey: 'disabled',
+            snappedValidity: getResolvedSnappedValidity(candidate.route) ?? getDefaultSnappedValidity(candidate.route),
+        });
         return {
-            kind: 'place_trunk',
-            trunkBuild: withResolvedSnappedRoute(candidate, {
-                snappedRootPos: getResolvedSnappedRootPos(candidate.route, candidate.root.transform.pos),
-                snappedNodeKey: 'disabled',
-                snappedValidity: getResolvedSnappedValidity(candidate.route) ?? getDefaultSnappedValidity(candidate.route),
-            }),
+            kind: 'place',
             nodeKey: 'disabled',
+            placed: placementOfResolved(placedTypeId, trunkBuild.trunk, {
+                rootId: trunkBuild.root,
+            }),
+            supportData: trunkBuild.supportData,
         };
     }
 
@@ -809,30 +892,27 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
         const collidesWithGroundRoute = Boolean(mesh && trunkCollidesWithMesh(snappedCandidate, settings, mesh));
         perfMeasureWithSpike('grid:trunk-collision', 'grid:collision-check');
         if (!collidesWithGroundRoute) {
-            // The router resolved this placement with the grid out, because holding
-            // the base to a node would have asked for a member past what its length
-            // may lean: a contact low to the plate beside a node a couple of
-            // millimetres out has no height left for a 45 degree diagonal, so the
-            // drop would have closed the gap with a near-horizontal elbow. Snapping
-            // here would build that elbow, so the routed base stands.
             // The router already resolved this placement with the grid out, because
             // the grid could not be met at 45 degrees or steeper. Snapping here would
             // build the member the router declined to build, so the routed base stands.
             if (candidate.route.gridIgnored) {
                 return {
-                    kind: 'place_trunk',
-                    trunkBuild: candidate,
+                    kind: 'place',
                     nodeKey: GRID_UNSNAPPED_NODE_KEY,
+                    placed: placementOfResolved(placedTypeId, candidate.trunk, { rootId: candidate.root }),
+                    supportData: candidate.supportData,
                 };
             }
+            const trunkBuild = withResolvedSnappedRoute(snappedCandidate, {
+                snappedRootPos: getResolvedSnappedRootPos(snappedCandidate.route, snappedCandidate.root.transform.pos),
+                snappedNodeKey: nodeKey,
+                snappedValidity: getResolvedSnappedValidity(snappedCandidate.route) ?? getDefaultSnappedValidity(snappedCandidate.route),
+            });
             return {
-                kind: 'place_trunk',
-                trunkBuild: withResolvedSnappedRoute(snappedCandidate, {
-                    snappedRootPos: getResolvedSnappedRootPos(snappedCandidate.route, snappedCandidate.root.transform.pos),
-                    snappedNodeKey: nodeKey,
-                    snappedValidity: getResolvedSnappedValidity(snappedCandidate.route) ?? getDefaultSnappedValidity(snappedCandidate.route),
-                }),
+                kind: 'place',
                 nodeKey,
+                placed: placementOfResolved(placedTypeId, trunkBuild.trunk, { rootId: trunkBuild.root }),
+                supportData: trunkBuild.supportData,
             };
         }
 
@@ -875,7 +955,7 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
     // pillar keeps serving every contact it already carries.
     // ================================================================
 
-    if (nodeHosts.every((host) => host.trunk.segments.length === 0)) {
+    if (nodeHosts.every((host) => host.entity.segments.length === 0)) {
         return {
             kind: 'reject',
             nodeKey,

@@ -151,11 +151,28 @@ impl IndexedMesh {
     /// soup as used by the existing staging buffers). Auto-welds by quantizing
     /// to `merge_epsilon` relative to the bbox diagonal.
     pub fn from_triangle_soup(positions: &[f32], merge_epsilon: f32) -> Self {
+        Self::from_triangle_soup_with_corner_map(positions, merge_epsilon).0
+    }
+
+    /// As [`Self::from_triangle_soup`], and also the vertex each corner of the
+    /// input welded into, in the soup's own corner order.
+    ///
+    /// A caller that has per-*corner* results to attach to vertices — the
+    /// occlusion bake does — otherwise has to rediscover this mapping by replaying
+    /// the traversal and the quantisation, which is a second hash pass over every
+    /// corner of the soup and, worse, two independent chances to disagree about
+    /// which corners are the same vertex. That disagreement is what put occlusion
+    /// from one mesh onto another and rendered it as misaligned triangles.
+    pub fn from_triangle_soup_with_corner_map(
+        positions: &[f32],
+        merge_epsilon: f32,
+    ) -> (Self, Vec<u32>) {
         let tri_count = positions.len() / 9;
         let mut out = IndexedMesh {
             positions: Vec::with_capacity(tri_count * 3 / 2),
             triangles: Vec::with_capacity(tri_count),
         };
+        let mut corner_map: Vec<u32> = Vec::with_capacity(tri_count * 3);
 
         // First pass: bbox to derive quantization scale.
         let mut bbox = Aabb::empty();
@@ -199,8 +216,11 @@ impl IndexedMesh {
             let i1 = intern(v1, &mut out);
             let i2 = intern(v2, &mut out);
             out.triangles.push([i0, i1, i2]);
+            corner_map.push(i0);
+            corner_map.push(i1);
+            corner_map.push(i2);
         }
-        out
+        (out, corner_map)
     }
 
     /// Unindex into a flat soup (9 floats per triangle). Used for exporting.

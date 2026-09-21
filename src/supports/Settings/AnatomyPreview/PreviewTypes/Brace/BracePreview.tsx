@@ -1,3 +1,5 @@
+import { registerAnatomyPreview } from '../../../anatomyPreviewRegistry';
+import { panelForTab } from '../../../sidebarPanels';
 import React from 'react';
 import * as THREE from 'three';
 import { SupportBuilder } from '@/supports/rendering/SupportBuilder';
@@ -291,3 +293,6 @@ export function BracePreview({
         </group>
     );
 }
+
+// Registered under the panel it draws: the one the bracing tab opens.
+registerAnatomyPreview(panelForTab('bracing'), BracePreview);

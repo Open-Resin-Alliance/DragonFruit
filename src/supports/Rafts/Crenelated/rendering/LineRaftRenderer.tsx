@@ -238,10 +238,7 @@ export default function LineRaftRenderer({
   const raftMeshes = React.useMemo(() => {
     if (raft.bottomMode !== 'line') return null;
 
-    const rootsByModel = collectRaftBaseCirclesByModel({
-      roots: Object.values(supportState.roots),
-      anchors: Object.values(supportState.anchors),
-    }, {
+    const rootsByModel = collectRaftBaseCirclesByModel(supportState, {
       modelFilterId,
       excludeModelId,
       excludedModelIds: excludedModelIdSet,

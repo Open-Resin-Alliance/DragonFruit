@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { footprintFromPoints } from '@/volumeAnalysis/Islands/voxelFootprint';
 import { clearHistory } from '../../history/historyStore';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
-import { collectFanShaftPoints, computeAutoSupportPlan, fanLeafToTrunk, runAutoPlace } from '../autoSupport/autoPlace';
+import { collectFanShaftPoints, computeAutoSupportPlan, fanLeafToHost, runAutoPlace } from '../autoSupport/autoPlace';
 import { setModelMesh } from '../autoSupport/meshStore';
 import { registerSupportHistoryHandlers } from '../history/useSupportHistoryHandlers';
 import { modelIdOfParentShaft } from '../PlacementLogic/SupportModelLinker';
@@ -97,7 +97,7 @@ function trunkEntities(state: SupportState, modelId: string): string {
 // Fanning host pool
 // ---------------------------------------------------------------------------
 
-test('fanLeafToTrunk never hosts on another model\'s shaft', () => {
+test('fanLeafToHost never hosts on another model\'s shaft', () => {
     const draft = emptySnapshot();
     addTrunk(draft, 'a', 'model-a', 8.25, 0, 0, 20);
     addTrunk(draft, 'b', 'model-b', 8, 0, 0, 20);
@@ -105,7 +105,7 @@ test('fanLeafToTrunk never hosts on another model\'s shaft', () => {
     // (9, 0, 12) is in reach of both shafts; model-a's is marginally closer,
     // so its sample is the steeper one and a global pool picks the foreign
     // shaft.
-    const result = fanLeafToTrunk(
+    const result = fanLeafToHost(
         { x: 9, y: 0, z: 12 },
         'model-b',
         collectFanShaftPoints(draft),
@@ -121,7 +121,7 @@ test('fanLeafToTrunk never hosts on another model\'s shaft', () => {
 
     assert.equal(result.ok, true, 'model-b\'s own shaft is in reach');
     if (result.ok) {
-        assert.equal(result.trunkId, 'b', 'hosted on the supported model\'s trunk');
+        assert.equal(result.hostId, 'b', 'hosted on the supported model\'s trunk');
         assert.equal(result.draft.knots['auto-fan-v2'].parentShaftId, 'seg-b');
     }
 });
@@ -151,7 +151,7 @@ test('an auto knot id already taken by another member is not reused', () => {
         contactCone: { id: 'cone-a', pos: { x: 8.25, y: 0, z: 6 }, normal: { x: 0, y: 0, z: -1 } },
     };
 
-    const result = fanLeafToTrunk(
+    const result = fanLeafToHost(
         { x: 9, y: 0, z: 12 },
         'model-b',
         collectFanShaftPoints(draft),
@@ -168,7 +168,9 @@ test('an auto knot id already taken by another member is not reused', () => {
     assert.equal(result.ok, true, 'model-b\'s candidate attaches');
     if (!result.ok) return;
     const after = result.draft;
-    const member = result.kind === 'leaf' ? after.leaves[result.leafId] : after.branches[result.branchId];
+    const member = result.kind === 'leaf'
+        ? after.leaves[result.entityId]
+        : after.branches[result.entityId];
     assert.ok(member, 'the new member exists');
 
     assert.equal(after.knots['auto-fan-v2'].parentShaftId, 'seg-a', 'model-a\'s knot is untouched');

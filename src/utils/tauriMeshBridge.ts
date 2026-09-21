@@ -108,3 +108,67 @@ export async function readPositionsFromCommand(
   const bytes = await invoke<ArrayBuffer | Uint8Array | number[]>(command);
   return decodeF32(bytes, command);
 }
+
+/**
+ * Ask the native side to refine geometry an importer built in the renderer.
+ *
+ * Only the importers that build geometry themselves need this: the native loaders
+ * refine coarse faces as they read a file, but a plugin cannot call native code,
+ * so LYS geometry never passes through them. Subdividing faces longer than a
+ * fraction of the model's diagonal (bounded, longest first) is what stops a flat
+ * panel interpolating its occlusion across a ten millimetre triangle.
+ *
+ * Returns a new geometry with the refined positions and welded, crease-aware
+ * normals, or `null` when there is no native side to ask (the web build) or the
+ * import failed.
+ */
+export async function refineCoarseFaces(
+  geometry: THREE.BufferGeometry,
+): Promise<THREE.BufferGeometry | null> {
+  const core = await loadTauriCore();
+  if (!core || !geometry.getAttribute('position')) return null;
+
+  const soup = expandGeometryToTriangleSoup(geometry);
+  const body = new Uint8Array(soup.buffer, soup.byteOffset, soup.byteLength);
+  const payload = await core.invoke<ArrayBuffer | Uint8Array | number[]>(
+    'refine_mesh_soup',
+    body,
+    { headers: { 'Content-Type': 'application/octet-stream' } },
+  );
+
+  return parseRefinedMesh(payload);
+}
+
+/**
+ * Decode a `refine_mesh_soup` response: `[u32 triangle count][positions][normals]`,
+ * both 9 floats per triangle with the normals welded and split at creases.
+ * Returns `null` when the payload does not describe the same mesh the header
+ * claims, rather than attaching slices of one mesh to another.
+ */
+export function parseRefinedMesh(
+  payload: ArrayBuffer | Uint8Array | number[],
+): THREE.BufferGeometry | null {
+  const bytes = payload instanceof ArrayBuffer
+    ? new Uint8Array(payload)
+    : payload instanceof Uint8Array
+      ? payload
+      : new Uint8Array(payload);
+  if (bytes.byteLength < 4) return null;
+  const triangles = new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0, true);
+  if (triangles === 0 || bytes.byteLength !== 4 + triangles * 18 * 4) return null;
+
+  // Copy before viewing: the IPC buffer is not guaranteed to be aligned, and it
+  // may not outlive the call.
+  const copy = new Uint8Array(triangles * 72);
+  copy.set(bytes.subarray(4));
+  const refined = new THREE.BufferGeometry();
+  refined.setAttribute(
+    'position',
+    new THREE.BufferAttribute(new Float32Array(copy.buffer, 0, triangles * 9), 3),
+  );
+  refined.setAttribute(
+    'normal',
+    new THREE.BufferAttribute(new Float32Array(copy.buffer, triangles * 36, triangles * 9), 3),
+  );
+  return refined;
+}

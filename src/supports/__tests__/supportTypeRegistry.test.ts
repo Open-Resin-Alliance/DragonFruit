@@ -9,7 +9,6 @@ import {
   countSupportCollections,
   SUPPORT_COLLECTION_KEYS,
   MODEL_ID_COLLECTION_KEYS,
-  MODEL_ID_TYPES,
   SUPPORT_STATE_TYPES,
   SHAFTED_COLLECTION_KEYS,
   getSupportTypeDescriptor,
@@ -19,11 +18,14 @@ import * as actionTypes from '../history/actionTypes';
 
 test('every support type is declared exactly once', () => {
   const ids = SUPPORT_TYPES.map((d) => d.id);
-  assert.equal(new Set(ids).size, ids.length);
-  assert.deepEqual(
-    [...ids].sort(),
-    ['anchor', 'brace', 'branch', 'kickstand', 'leaf', 'stick', 'trunk', 'twig'].sort(),
-  );
+  assert.equal(new Set(ids).size, ids.length, 'a type is declared more than once');
+  // Two descriptors sharing one collection would silently overwrite each other.
+  const keys = SUPPORT_TYPES.map((d) => d.location.key);
+  assert.equal(new Set(keys).size, keys.length, 'two types share a collection');
+  // Completeness -- that the registry declares every type and no others -- is
+  // asserted against the folders on disk by `supportTypeFolders.test.ts`, in
+  // both directions: every registered type has a folder, and every folder
+  // belongs to a registered type.
 });
 
 test('history actions match what the builders produce', () => {
@@ -55,23 +57,24 @@ test('every type lives on SupportState', () => {
   assert.equal(SUPPORT_STATE_TYPES.length, SUPPORT_TYPES.length);
 });
 
-test('all types carry a modelId', () => {
-  assert.equal(MODEL_ID_TYPES.length, SUPPORT_TYPES.length);
-});
-
 
 test('empty collections cover every entity collection on SupportState', () => {
   const keys = Object.keys(createEmptySupportCollections()).sort();
   assert.deepEqual(keys, [
-    'anchors', 'braces', 'branches', 'kickstands', 'knots', 'leaves', 'roots', 'sticks', 'trunks', 'twigs',
+    'braces', 'branches', 'kickstands', 'knots', 'leaves', 'roots', 'sticks', 'stumps', 'trunks', 'twigs',
   ]);
 });
 
 
 test('selection resolves roots first, then support types in registry order', () => {
+  const categories = SUPPORT_STATE_COLLECTIONS.map((c) => c.selectionCategory);
+  // A root is a primitive, not a type, so it is named. Everything after it is
+  // the declared types in registration order, each selecting under its own id.
+  assert.equal(categories[0], 'root', 'roots resolve before any type');
   assert.deepEqual(
-    SUPPORT_STATE_COLLECTIONS.map((c) => c.selectionCategory),
-    ['root', 'trunk', 'branch', 'leaf', 'twig', 'stick', 'brace', 'anchor', 'kickstand'],
+    categories.slice(1),
+    SUPPORT_STATE_TYPES.map((d) => d.id),
+    'each declared type selects under its own id, in registry order',
   );
 });
 
@@ -100,4 +103,21 @@ test('the modelId walk covers everything except knots', () => {
     const walked = new Set<string>(MODEL_ID_COLLECTION_KEYS);
     const all = Object.keys(createEmptySupportCollections());
     assert.deepEqual(all.filter((key) => !walked.has(key)), ['knots']);
+});
+
+test("a type's display label names the same type its id does", () => {
+  // `label` is a second spelling of the type's name and cannot be derived from
+  // `id`: the plurals are irregular (`leaf` -> `Leaves`, not `Leafs`). This
+  // catches a label left behind by a rename.
+  //
+  // The invariant is deliberately weak, since a label may be a nicer word than
+  // the id: it must share the type's stem. Three characters is what the
+  // irregular plurals allow -- `Leaves`/`leaf` agree only up to `lea`.
+  for (const descriptor of SUPPORT_TYPES) {
+    const stem = descriptor.id.slice(0, 3).toLowerCase();
+    assert.ok(
+      descriptor.label.toLowerCase().startsWith(stem),
+      `${descriptor.id}: label "${descriptor.label}" does not look like a name for this type`,
+    );
+  }
 });

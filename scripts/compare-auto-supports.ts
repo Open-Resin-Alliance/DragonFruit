@@ -15,8 +15,10 @@
 import { readFileSync } from 'node:fs';
 import { parseVoxlAuto } from '../src/features/scene/voxl/codec';
 import type { DragonfruitImportFormat } from '../src/supports/types';
+import { SUPPORT_TYPES } from '../src/supports/supportTypeRegistry';
 
 type XY = { x: number; y: number };
+type XYZ = XY & { z: number };
 type Tip = XY & { z: number; kind: string };
 
 const [oursPath, proPath] = process.argv.slice(2);
@@ -40,16 +42,31 @@ function load(path: string): DragonfruitImportFormat {
     return supports;
 }
 
+/** Every tip and plate footprint in a payload, labelled by the type it came from. */
 function extract(s: DragonfruitImportFormat): { tips: Tip[]; rootXY: XY[] } {
     const tips: Tip[] = [];
-    for (const t of s.trunks ?? []) if (t.contactCone?.pos) tips.push({ ...t.contactCone.pos, kind: 'trunk' });
-    for (const b of s.branches ?? []) if (b.contactCone?.pos) tips.push({ ...b.contactCone.pos, kind: 'branch' });
-    for (const l of s.leaves ?? []) if (l.contactCone?.pos) tips.push({ ...l.contactCone.pos, kind: 'leaf' });
-    for (const a of s.anchors ?? []) tips.push({ x: a.rootPos.x, y: a.rootPos.y, z: 0, kind: 'anchor' });
-    const rootXY: XY[] = [
-        ...(s.roots ?? []).map((r) => ({ x: r.transform.pos.x, y: r.transform.pos.y })),
-        ...(s.anchors ?? []).map((a) => ({ x: a.rootPos.x, y: a.rootPos.y })),
-    ];
+    const rootXY: XY[] = [...(s.roots ?? []).map((r) => ({ x: r.transform.pos.x, y: r.transform.pos.y }))];
+    const payload = s as unknown as Record<string, Record<string, unknown>[] | undefined>;
+
+    for (const descriptor of SUPPORT_TYPES) {
+        const entities = payload[descriptor.location.key] ?? [];
+        const coneField = descriptor.upper.kind === 'cone' ? descriptor.upper.field : undefined;
+        // An inline root is geometry on the entity itself, at a declared field.
+        const rootField = descriptor.lower.kind === 'inlineRoot' ? descriptor.lower.field : undefined;
+
+        for (const entity of entities) {
+            const cone = coneField ? (entity[coneField] as { pos?: XYZ } | undefined) : undefined;
+            if (cone?.pos) {
+                tips.push({ ...cone.pos, kind: descriptor.id });
+                continue;
+            }
+            const rootPos = rootField ? (entity[rootField] as XYZ | undefined) : undefined;
+            if (rootPos) {
+                tips.push({ x: rootPos.x, y: rootPos.y, z: 0, kind: descriptor.id });
+                rootXY.push({ x: rootPos.x, y: rootPos.y });
+            }
+        }
+    }
     return { tips, rootXY };
 }
 
@@ -98,7 +115,7 @@ function report(name: string, tips: Tip[], rootXY: XY[]): void {
     const byKind: Record<string, number> = {};
     for (const t of tips) byKind[t.kind] = (byKind[t.kind] ?? 0) + 1;
     const minTipZ = Math.min(...tips.map((t) => t.z), Infinity);
-    // Anchor layer: the first-printed band (tips within 5 mm of the model's
+    // Stump layer: the first-printed band (tips within 5 mm of the model's
     // lowest contact) — the density we tune with the anchor knobs.
     const anchorTips = tips.filter((t) => t.z <= minTipZ + 5);
     console.log(`  ${name}: ${tips.length} tips (${Object.entries(byKind).map(([k, v]) => `${k}=${v}`).join(', ')})`);
@@ -119,14 +136,14 @@ console.log(`  pro tips not covered by ours: ${diff.missed} cells (${diff.missed
 console.log(`  our tips not covered by pro:  ${diff.extra} cells (${diff.extraAreaMm2.toFixed(0)} mm²)`);
 console.log(`  pro tips within 4 mm of an ours tip: ${diff.proCoveredByOursPct.toFixed(1)}%`);
 
-// Anchor-layer spatial diff (the thing we're tuning).
+// Stump-layer spatial diff (the thing we're tuning).
 const oursMinZ = Math.min(...ours.tips.map((t) => t.z), Infinity);
 const proMinZ = Math.min(...pro.tips.map((t) => t.z), Infinity);
 const anchorDiff = spatialDiff(
     ours.tips.filter((t) => t.z <= oursMinZ + 5),
     pro.tips.filter((t) => t.z <= proMinZ + 5),
 );
-console.log(`\n== Anchor-layer diff (first 5 mm above the lowest contact) ==`);
+console.log(`\n== Stump-layer diff (first 5 mm above the lowest contact) ==`);
 console.log(`  pro anchor cells not covered by ours: ${anchorDiff.missed} (${anchorDiff.missedAreaMm2.toFixed(0)} mm²)`);
 console.log(`  our anchor cells not covered by pro:  ${anchorDiff.extra} (${anchorDiff.extraAreaMm2.toFixed(0)} mm²)`);
 console.log(`  pro anchor tips within 4 mm of an ours: ${anchorDiff.proCoveredByOursPct.toFixed(1)}%`);

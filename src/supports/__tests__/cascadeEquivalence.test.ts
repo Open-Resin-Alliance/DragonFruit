@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { collectCascade, type EntityRef } from '../supportCascade';
-import { SUPPORT_COLLECTION_KEYS } from '../supportTypeRegistry';
+import { SUPPORT_COLLECTION_KEYS, SUPPORT_TYPES } from '../supportTypeRegistry';
+import { keyOf } from './helpers/typeCollections';
 import type { SupportState } from '../types';
 
 /**
@@ -32,6 +33,18 @@ function build(parts: Partial<Record<string, Record<string, unknown>>>): Support
     return { ...emptyState(), ...parts } as unknown as SupportState;
 }
 
+/**
+ * The collections these shapes are built from, asked of the registry through the
+ * type that owns each one.
+ *
+ * The graph roles ARE the subject here -- a trunk owns its root, a branch hangs
+ * off a knot, a brace spans two -- so each type is named once and no collection
+ * is spelled at all.
+ */
+const TRUNKS = keyOf('trunk');
+const BRANCHES = keyOf('branch');
+const BRACES = keyOf('brace');
+
 const sorted = (set: ReadonlySet<string>) => [...set].sort();
 
 /** trunk -> knot -> branch -> knot -> branch ... `depth` levels deep. */
@@ -51,17 +64,17 @@ function chain(depth: number) {
         };
         shaft = `seg-b${i}`;
     }
-    return build({ roots, trunks, branches, knots });
+    return build({ roots, [TRUNKS]: trunks, [BRANCHES]: branches, knots });
 }
 
 test('a deep chain takes everything below the seed', () => {
     for (const depth of [1, 2, 5, 12]) {
         const state = chain(depth);
-        const doomed = collectCascade(state, [{ collection: 'trunks', id: 'trunk-0' }]);
+        const doomed = collectCascade(state, [{ collection: TRUNKS, id: 'trunk-0' }]);
 
-        const expected = ['roots:root-0', 'trunks:trunk-0'];
+        const expected = ['roots:root-0', `${TRUNKS}:trunk-0`];
         for (let i = 0; i < depth; i++) {
-            expected.push(`branches:branch-${i}`, `knots:knot-${i}`);
+            expected.push(`${BRANCHES}:branch-${i}`, `knots:knot-${i}`);
         }
         assert.deepEqual(sorted(doomed), expected.sort(), `depth ${depth}`);
     }
@@ -69,12 +82,12 @@ test('a deep chain takes everything below the seed', () => {
 
 test('removing mid-chain takes the rest of the chain, not the trunk above', () => {
     const state = chain(4);
-    const doomed = collectCascade(state, [{ collection: 'branches', id: 'branch-1' }]);
+    const doomed = collectCascade(state, [{ collection: BRANCHES, id: 'branch-1' }]);
 
     // branch-1 hangs from knot-1, which it takes (takeHost: always). Everything
     // below follows; trunk-0, root-0, branch-0 and knot-0 stay.
     assert.deepEqual(sorted(doomed), [
-        'branches:branch-1', 'branches:branch-2', 'branches:branch-3',
+        `${BRANCHES}:branch-1`, `${BRANCHES}:branch-2`, `${BRANCHES}:branch-3`,
         'knots:knot-1', 'knots:knot-2', 'knots:knot-3',
     ]);
 });
@@ -82,7 +95,7 @@ test('removing mid-chain takes the rest of the chain, not the trunk above', () =
 test('a brace between two shafts takes only its own end knots', () => {
     const state = build({
         roots: { 'root-a': { id: 'root-a', modelId: 'm' }, 'root-b': { id: 'root-b', modelId: 'm' } },
-        trunks: {
+        [TRUNKS]: {
             'trunk-a': { id: 'trunk-a', modelId: 'm', rootId: 'root-a', segments: [seg('seg-a')] },
             'trunk-b': { id: 'trunk-b', modelId: 'm', rootId: 'root-b', segments: [seg('seg-b')] },
         },
@@ -90,17 +103,17 @@ test('a brace between two shafts takes only its own end knots', () => {
             'knot-a': { id: 'knot-a', parentShaftId: 'seg-a' },
             'knot-b': { id: 'knot-b', parentShaftId: 'seg-b' },
         },
-        braces: { 'brace-a': { id: 'brace-a', modelId: 'm', startKnotId: 'knot-a', endKnotId: 'knot-b' } },
+        [BRACES]: { 'brace-a': { id: 'brace-a', modelId: 'm', startKnotId: 'knot-a', endKnotId: 'knot-b' } },
     });
 
-    const doomed = collectCascade(state, [{ collection: 'braces', id: 'brace-a' }]);
-    assert.deepEqual(sorted(doomed), ['braces:brace-a', 'knots:knot-a', 'knots:knot-b']);
+    const doomed = collectCascade(state, [{ collection: BRACES, id: 'brace-a' }]);
+    assert.deepEqual(sorted(doomed), [`${BRACES}:brace-a`, 'knots:knot-a', 'knots:knot-b']);
 });
 
 test('removing a trunk takes the brace hanging off it but not the far trunk', () => {
     const state = build({
         roots: { 'root-a': { id: 'root-a', modelId: 'm' }, 'root-b': { id: 'root-b', modelId: 'm' } },
-        trunks: {
+        [TRUNKS]: {
             'trunk-a': { id: 'trunk-a', modelId: 'm', rootId: 'root-a', segments: [seg('seg-a')] },
             'trunk-b': { id: 'trunk-b', modelId: 'm', rootId: 'root-b', segments: [seg('seg-b')] },
         },
@@ -108,46 +121,55 @@ test('removing a trunk takes the brace hanging off it but not the far trunk', ()
             'knot-a': { id: 'knot-a', parentShaftId: 'seg-a' },
             'knot-b': { id: 'knot-b', parentShaftId: 'seg-b' },
         },
-        braces: { 'brace-a': { id: 'brace-a', modelId: 'm', startKnotId: 'knot-a', endKnotId: 'knot-b' } },
+        [BRACES]: { 'brace-a': { id: 'brace-a', modelId: 'm', startKnotId: 'knot-a', endKnotId: 'knot-b' } },
     });
 
-    const doomed = collectCascade(state, [{ collection: 'trunks', id: 'trunk-a' }]);
+    const doomed = collectCascade(state, [{ collection: TRUNKS, id: 'trunk-a' }]);
     // knot-b survives: it sits on trunk-b's shaft, which nobody asked to remove.
-    assert.deepEqual(sorted(doomed), ['braces:brace-a', 'knots:knot-a', 'roots:root-a', 'trunks:trunk-a']);
+    assert.deepEqual(sorted(doomed), [`${BRACES}:brace-a`, 'knots:knot-a', 'roots:root-a', `${TRUNKS}:trunk-a`]);
 });
 
 test('two branches sharing a knot both go when the shaft does', () => {
     const state = build({
         roots: { 'root-a': { id: 'root-a', modelId: 'm' } },
-        trunks: { 'trunk-a': { id: 'trunk-a', modelId: 'm', rootId: 'root-a', segments: [seg('seg-a')] } },
+        [TRUNKS]: { 'trunk-a': { id: 'trunk-a', modelId: 'm', rootId: 'root-a', segments: [seg('seg-a')] } },
         knots: { 'knot-a': { id: 'knot-a', parentShaftId: 'seg-a' } },
-        branches: {
+        [BRANCHES]: {
             'branch-1': { id: 'branch-1', modelId: 'm', parentKnotId: 'knot-a', segments: [seg('seg-1')] },
             'branch-2': { id: 'branch-2', modelId: 'm', parentKnotId: 'knot-a', segments: [seg('seg-2')] },
         },
     });
 
-    const doomed = collectCascade(state, [{ collection: 'trunks', id: 'trunk-a' }]);
+    const doomed = collectCascade(state, [{ collection: TRUNKS, id: 'trunk-a' }]);
     assert.deepEqual(sorted(doomed), [
-        'branches:branch-1', 'branches:branch-2', 'knots:knot-a', 'roots:root-a', 'trunks:trunk-a',
+        `${BRANCHES}:branch-1`, `${BRANCHES}:branch-2`, 'knots:knot-a', 'roots:root-a', `${TRUNKS}:trunk-a`,
     ]);
 });
 
 test('a seed with no dependents returns just itself', () => {
-    const state = build({ sticks: { 'stick-a': { id: 'stick-a', modelId: 'm', segments: [seg('seg-s')] } } });
-    const doomed = collectCascade(state, [{ collection: 'sticks', id: 'stick-a' }]);
-    assert.deepEqual(sorted(doomed), ['sticks:stick-a']);
+    // Whichever shafted type the registry declares first with no edges of its
+    // own: nothing it points at, nothing pointing at it. The shape is the
+    // subject, not a particular type.
+    const descriptor = SUPPORT_TYPES.find((candidate) => candidate.hasSegments && candidate.edges.length === 0);
+    assert.ok(descriptor, 'fixture: no declared type stands alone in the graph');
+
+    const collection = descriptor.location.key;
+    const entityId = `${descriptor.singular}-a`;
+    const state = build({ [collection]: { [entityId]: { id: entityId, modelId: 'm', segments: [seg('seg-s')] } } });
+
+    const doomed = collectCascade(state, [{ collection, id: entityId }]);
+    assert.deepEqual(sorted(doomed), [`${collection}:${entityId}`]);
 });
 
 test('multiple seeds union their cascades', () => {
     const state = chain(3);
     const separately = new Set([
-        ...collectCascade(state, [{ collection: 'branches', id: 'branch-1' }]),
-        ...collectCascade(state, [{ collection: 'branches', id: 'branch-2' }]),
+        ...collectCascade(state, [{ collection: BRANCHES, id: 'branch-1' }]),
+        ...collectCascade(state, [{ collection: BRANCHES, id: 'branch-2' }]),
     ]);
     const together = collectCascade(state, [
-        { collection: 'branches', id: 'branch-1' },
-        { collection: 'branches', id: 'branch-2' },
+        { collection: BRANCHES, id: 'branch-1' },
+        { collection: BRANCHES, id: 'branch-2' },
     ]);
     assert.deepEqual(sorted(together), sorted(separately));
 });
@@ -155,22 +177,22 @@ test('multiple seeds union their cascades', () => {
 test('a dangling reference does not invent an entity', () => {
     // branch-0 points at a knot that is not in the store.
     const state = build({
-        branches: { 'branch-0': { id: 'branch-0', modelId: 'm', parentKnotId: 'gone', segments: [seg('seg-b')] } },
+        [BRANCHES]: { 'branch-0': { id: 'branch-0', modelId: 'm', parentKnotId: 'gone', segments: [seg('seg-b')] } },
     });
-    const doomed = collectCascade(state, [{ collection: 'branches', id: 'branch-0' }]);
-    assert.deepEqual(sorted(doomed), ['branches:branch-0']);
+    const doomed = collectCascade(state, [{ collection: BRANCHES, id: 'branch-0' }]);
+    assert.deepEqual(sorted(doomed), [`${BRANCHES}:branch-0`]);
 });
 
 test('the seed is always present, even when it does not exist', () => {
-    const doomed = collectCascade(emptyState(), [{ collection: 'trunks', id: 'ghost' }]);
-    assert.deepEqual(sorted(doomed), ['trunks:ghost']);
+    const doomed = collectCascade(emptyState(), [{ collection: TRUNKS, id: 'ghost' }]);
+    assert.deepEqual(sorted(doomed), [`${TRUNKS}:ghost`]);
 });
 
 test('a cascade is deterministic regardless of seed order', () => {
     const state = chain(4);
     const seeds: EntityRef[] = [
-        { collection: 'branches', id: 'branch-2' },
-        { collection: 'branches', id: 'branch-0' },
+        { collection: BRANCHES, id: 'branch-2' },
+        { collection: BRANCHES, id: 'branch-0' },
     ];
     assert.deepEqual(
         sorted(collectCascade(state, seeds)),

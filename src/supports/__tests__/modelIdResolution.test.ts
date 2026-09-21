@@ -1,10 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {
-    addBrace, addBranch, addKnot, addLeaf, addRoot, addTrunk,
-    getModelIdForSupportEntityId, resetStore,
-} from '../state';
+import { addSupportEntity, addKnot, addRoot, getModelIdForSupportEntityId, resetStore } from '../state';
 import { MODEL_ID_COLLECTION_KEYS } from '../supportTypeRegistry';
 
 /**
@@ -31,11 +28,11 @@ function scene() {
         transform: { pos: { x: 0, y: 0, z: 0 }, rot: { x: 0, y: 0, z: 0, w: 1 } },
         diameter: 3, diskHeight: 0.5, coneHeight: 1.5,
     } as never);
-    addTrunk({ id: 'trunk-a', modelId: MODEL, rootId: 'root-a', segments: [segment('seg-ta')] } as never);
+    addSupportEntity('trunk', { id: 'trunk-a', modelId: MODEL, rootId: 'root-a', segments: [segment('seg-ta')] } as never);
     addKnot({ id: 'knot-a', parentShaftId: 'seg-ta', t: 0.5, pos: { x: 0, y: 0, z: 2 }, diameter: 1 } as never);
-    addBranch({ id: 'branch-a', modelId: MODEL, parentKnotId: 'knot-a', segments: [segment('seg-ba')] } as never);
-    addLeaf({ id: 'leaf-a', modelId: MODEL, parentKnotId: 'knot-a' } as never);
-    addBrace({
+    addSupportEntity('branch', { id: 'branch-a', modelId: MODEL, parentKnotId: 'knot-a', segments: [segment('seg-ba')] } as never);
+    addSupportEntity('leaf', { id: 'leaf-a', modelId: MODEL, parentKnotId: 'knot-a' } as never);
+    addSupportEntity('brace', {
         id: 'brace-a', modelId: 'model-b',
         startKnotId: 'knot-a', endKnotId: 'knot-a', profile: { diameter: 0.8 },
     } as never);

@@ -1,14 +1,6 @@
-/**
- * Branch Placement State Store
- * 
- * Global state for branch placement, similar to jointCreationState.
- * This allows the placement logic to be shared between:
- * - useBranchPlacement (page-level hook for Alt key and model clicks)
- * - BranchPlacementController (canvas-level component for snapping)
- */
-
-import { useSyncExternalStore } from 'react';
 import type { SupportData } from '../../rendering/SupportBuilder';
+import { createPlacementStore, usePlacementStoreState } from '../../interaction/shared/placement/placementStore';
+import { hostSnapTargetEq, hoverPositionEq, type HostSnapTarget } from '../../interaction/shared/placement/placementComparators';
 import type { Vec3 } from '../../types';
 
 type Stage = 'idle' | 'awaitingBase';
@@ -22,13 +14,7 @@ interface BranchPlacementState {
     modelId: string;
     placementSurface?: PlacementSurface;
     previewData: SupportData | null;
-    snapTarget: {
-        targetId: string;
-        snappedPos: Vec3;
-        t?: number;
-        hostDiameterMm?: number;
-        hostSegmentId?: string;
-    } | null;
+    snapTarget: HostSnapTarget | null;
     /** Flag to prevent preview from being set immediately after branch creation */
     justFinalized: boolean;
     /** Hover position on model while Alt is held (for preview dot before first click) */
@@ -48,125 +34,80 @@ const initialState: BranchPlacementState = {
     hoverPosition: null,
 };
 
-let state = { ...initialState };
-const listeners = new Set<() => void>();
-
-function notify() {
-    listeners.forEach(l => l());
-}
-
-function snapTargetEq(a: BranchPlacementState['snapTarget'], b: BranchPlacementState['snapTarget']) {
-    if (a === b) return true;
-    if (!a || !b) return false;
-    return (
-        a.targetId === b.targetId &&
-        a.t === b.t &&
-        a.hostDiameterMm === b.hostDiameterMm &&
-        a.hostSegmentId === b.hostSegmentId &&
-        a.snappedPos.x === b.snappedPos.x &&
-        a.snappedPos.y === b.snappedPos.y &&
-        a.snappedPos.z === b.snappedPos.z
-    );
-}
+const store = createPlacementStore(initialState);
 
 export const branchPlacementStore = {
-    subscribe(listener: () => void) {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-    },
-
-    getSnapshot(): BranchPlacementState {
-        return state;
-    },
+    subscribe: store.subscribe,
+    getSnapshot: store.getSnapshot,
 
     setAltActive(active: boolean) {
+        const state = store.read();
         if (state.altActive === active) return;
 
-        // Releasing Alt should cancel branch placement entirely.
-        // Do the full reset here so no other code path can leave a stale preview behind.
-        if (!active) {
-            state = { ...initialState, altActive: false };
-            notify();
-            return;
-        }
-
-        state = { ...initialState, altActive: true };
-        notify();
+        // Either way this is a full reset: releasing Alt cancels branch
+        // placement entirely, and pressing it starts a fresh one. Doing it here
+        // means no other code path can leave a stale preview behind.
+        store.write({ ...initialState, altActive: active });
     },
 
     setTip(tipPosition: Vec3, tipNormal: Vec3, modelId: string, placementSurface?: PlacementSurface) {
-        state = {
-            ...state,
+        store.write({
+            ...store.read(),
             tipPosition,
             tipNormal,
             modelId,
             placementSurface,
             stage: 'awaitingBase',
             justFinalized: false, // Clear the flag when starting new placement
-        };
-        notify();
+        });
     },
 
     setPreviewData(previewData: SupportData | null) {
+        const state = store.read();
         // If just finalized, ignore any attempts to set preview data
         // This prevents the useFrame loop from re-setting the preview
-        if (state.justFinalized && previewData !== null) {
-            return;
-        }
+        if (state.justFinalized && previewData !== null) return;
+        if (state.previewData === previewData) return;
 
-        if (state.previewData !== previewData) {
-            state = { ...state, previewData };
-            notify();
-        }
+        store.write({ ...state, previewData });
     },
 
-    setSnapTarget(snapTarget: BranchPlacementState['snapTarget']) {
-        if (snapTargetEq(state.snapTarget, snapTarget)) return;
-        state = { ...state, snapTarget };
-        notify();
+    setSnapTarget(snapTarget: HostSnapTarget | null) {
+        const state = store.read();
+        if (hostSnapTargetEq(state.snapTarget, snapTarget)) return;
+
+        store.write({ ...state, snapTarget });
     },
 
     setHoverPosition(hoverPosition: Vec3 | null) {
         // Only update if position actually changed (avoid unnecessary re-renders)
-        if (state.hoverPosition?.x !== hoverPosition?.x ||
-            state.hoverPosition?.y !== hoverPosition?.y ||
-            state.hoverPosition?.z !== hoverPosition?.z) {
-            state = { ...state, hoverPosition };
-            notify();
-        }
+        const state = store.read();
+        if (hoverPositionEq(state.hoverPosition, hoverPosition)) return;
+
+        store.write({ ...state, hoverPosition });
     },
 
     getSnapTarget() {
-        return state.snapTarget;
+        return store.read().snapTarget;
     },
 
     /** Call this when a branch is successfully created to prevent ghost preview */
     finalize() {
-        state = {
-            ...initialState,
-            altActive: state.altActive,
-            justFinalized: true,
-        };
-        notify();
+        store.write({ ...initialState, altActive: store.read().altActive, justFinalized: true });
     },
 
     reset() {
-        // Reset to initial state, preserving altActive
-        state = { ...initialState, altActive: state.altActive };
-        notify();
+        store.resetPreserving('altActive');
     },
 
     isActive(): boolean {
+        const state = store.read();
         return state.altActive || state.stage === 'awaitingBase';
-    }
+    },
 };
 
 export function useBranchPlacementState() {
-    const snapshot = useSyncExternalStore(
-        branchPlacementStore.subscribe,
-        branchPlacementStore.getSnapshot,
-        branchPlacementStore.getSnapshot
-    );
+    const snapshot = usePlacementStoreState(branchPlacementStore);
 
     return {
         ...snapshot,

@@ -4,6 +4,7 @@ import test from 'node:test';
 
 import { buildAutoBracedSnapshot } from '../autoBracing/autoBrace';
 import { createDefaultAutoBracingSettings } from '../autoBracing/settings';
+import { createEmptySupportCollections } from '../supportTypeRegistry';
 import type { Roots, SupportState, Trunk } from '../types';
 
 function createRoot(id: string, modelId: string, x: number, y = 0): Roots {
@@ -23,6 +24,7 @@ function createRoot(id: string, modelId: string, x: number, y = 0): Roots {
 function createTrunk(id: string, modelId: string, rootId: string, segmentId: string, x: number, y = 0, topZ = 4): Trunk {
     return {
         id,
+        typeId: 'trunk',
         modelId,
         rootId,
         segments: [
@@ -41,16 +43,7 @@ function createTrunk(id: string, modelId: string, rootId: string, segmentId: str
 
 function createEmptySnapshot(): SupportState {
     return {
-        roots: {},
-        trunks: {},
-        branches: {},
-        leaves: {},
-        twigs: {},
-        sticks: {},
-        braces: {},
-        anchors: {},
-        kickstands: {},
-        knots: {},
+        ...createEmptySupportCollections(),
         selectedId: null,
         selectedCategory: null,
         hoveredId: null,

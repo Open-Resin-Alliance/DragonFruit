@@ -1484,6 +1484,7 @@ dependencies = [
  "base64 0.22.1",
  "bytemuck",
  "dragonfruit-islands",
+ "dragonfruit-mesh-core",
  "dragonfruit-mesh-repair",
  "dragonfruit-organic-cut",
  "dragonfruit-rtsp-relay",
@@ -1530,17 +1531,18 @@ dependencies = [
 
 [[package]]
 name = "dragonfruit-mesh-core"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "ahash 0.8.12",
  "bytemuck",
+ "rayon",
  "serde",
  "smallvec",
 ]
 
 [[package]]
 name = "dragonfruit-mesh-repair"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "ahash 0.8.12",
  "bytemuck",
@@ -1559,7 +1561,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfruit-organic-cut"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ahash 0.8.12",
  "bytemuck",

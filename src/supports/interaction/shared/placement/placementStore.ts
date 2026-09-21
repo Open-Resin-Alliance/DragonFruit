@@ -1,3 +1,5 @@
+import { useSyncExternalStore } from 'react';
+
 /**
  * The subscribe/notify half of a placement store.
  *
@@ -15,10 +17,24 @@ export interface PlacementStore<T> {
     /**
      * Replaces the state and notifies. Pass a function to derive the next
      * state from the current one.
+     *
+     * Unconditional: a setter wanting a no-op guard writes it, using `read()`.
      */
     write(next: T | ((current: T) => T)): void;
-    /** Restores the initial state, notifying only if something changed. */
-    reset(): void;
+    /**
+     * Restores the initial state, keeping the named fields' current values.
+     *
+     * Every adopter's reset preserves its mode flag: releasing a placement must
+     * not release the mode. A store already holding those values notifies nobody,
+     * on an idle store cannot churn every subscriber.
+     */
+    resetPreserving<K extends keyof T>(...preserved: K[]): void;
+}
+
+function shallowEqual<T extends object>(a: T, b: T): boolean {
+    const keys = Object.keys(a) as (keyof T)[];
+    if (keys.length !== Object.keys(b).length) return false;
+    return keys.every((key) => a[key] === b[key]);
 }
 
 export function createPlacementStore<T extends object>(initialState: T): PlacementStore<T> {
@@ -41,15 +57,28 @@ export function createPlacementStore<T extends object>(initialState: T): Placeme
             notify();
         },
 
-        reset() {
-            // A store already at its initial values notifies nobody, so a
-            // reset on an idle store cannot churn every subscriber.
-            const unchanged = (Object.keys(initialState) as (keyof T)[])
-                .every((key) => state[key] === initialState[key]);
-            if (unchanged) return;
+        resetPreserving<K extends keyof T>(...preserved: K[]) {
+            const next = { ...initialState };
+            for (const key of preserved) next[key] = state[key];
+            if (shallowEqual(next, state)) return;
 
-            state = { ...initialState };
+            state = next;
             notify();
         },
     };
+}
+
+/**
+ * The React half of the primitive.
+ *
+ * All four placement stores wrapped `useSyncExternalStore` with the same three
+ * arguments in the same order, including `getSnapshot` as its own server
+ * snapshot. A store's hook spreads this result and adds whatever `isActive`
+ * means for that type.
+ */
+export function usePlacementStoreState<T>(store: PlacementStore<T> | {
+    subscribe: (listener: () => void) => () => void;
+    getSnapshot: () => T;
+}): T {
+    return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
 }

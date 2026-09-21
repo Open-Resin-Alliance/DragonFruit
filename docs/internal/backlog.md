@@ -255,26 +255,6 @@
 - Context: the retired DEPRECATED_hotkeys page claimed release *does* cancel,
   which is where the discrepancy surfaced.
 
-### [fix] Delete does nothing on a selected anchor — S · low risk
-- Where: src/features/supports/useSupportInteractionManager.ts, `canDeleteSelection`.
-- What: the single-selection gate lists `joint | trunk | leaf | branch | twig |
-  stick | brace` and omits `anchor`, while `deleteSelectionByCategoryAndId`
-  handles anchors fine. So Delete silently no-ops on a selected anchor.
-  Multi-selection is unaffected (it returns early on `selectedIds.length > 0`).
-- Why: one missing string in a gate; the delete path underneath already works.
-- Context: documented as a known bug in `docs/dev/support-type-extension.md` and
-  in `docs/reference/support-anatomy/anchor.md`. Retire both notes when fixed.
-
-### [docs] "Anchor" names three unrelated things — M · medium risk
-- Where: src/supports/types.ts (`Anchor` support type, and the `Knot` doc comment
-  reading "Knot (Anchor)").
-- What: a placeable support type, a legacy alias for the knot primitive, and the
-  auto-support densification band over the first-printed surface — one word.
-- Why: costs a code read every time. Cheapest fix is dropping the "(Anchor)" from
-  the `Knot` comment, which is the only one of the three that is purely vestigial.
-- Context: recorded in CONTEXT.md; do not rename the type or the bands, both are
-  load-bearing (`selectedCategory` strings persist in saved scenes).
-
 ### [ci] `guard:plugin-boundaries` exists but never runs — S · low risk
 - Where: package.json (`guard:plugin-boundaries`), scripts/check-plugin-boundaries.mjs,
   .github/workflows/.
@@ -355,7 +335,7 @@
   the `connectedBranchIds` / `connectedLeafIds` rehost loops).
 - What: the promoted branch's trunk inherits every branch/leaf rehosted off the
   replaced trunk with no capacity check — the only member-adding path in the auto
-  pipeline that does not consult `countAttachmentsOnTrunk`/`isTrunkAtAttachmentCapacity`.
+  pipeline that does not consult `countAttachmentsOnHost`/`isHostAtAttachmentCapacity`.
   A host already at the cap, plus its inherited set, can end up over it.
 - Why: the report cannot explain a host with more members than the setting allows
   (e.g. 36 members on one hub with cap 12 in the fan-out groups), and the layer
@@ -363,8 +343,8 @@
 - Context: docs/dev/auto-supports.md § "Rules worth knowing before you change placement".
 
 ### [fix] Consolidation gives grid hosts the regular 8 mm fan radius — S · medium risk
-- Where: src/supports/autoSupport/autoPlace.ts, `fanLeafToTrunk(...)` call in the
-  consolidation pass (~line 2372) passes `new Set()` as `gridTrunkIds`.
+- Where: src/supports/autoSupport/autoPlace.ts, `fanLeafToHost(...)` call in the
+  consolidation pass (~line 2372) passes `new Set()` as `gridHostIds`.
 - What: with an empty grid set every host is treated as a regular trunk, so chunk
   links reach `CONSOLIDATION_FAN_RADIUS_MM` (8 mm) from grid hosts instead of
   `GRID_HOST_FAN_RADIUS_MM` (2.5 mm).

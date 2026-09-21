@@ -11,7 +11,9 @@ import { Vec3, Roots, Trunk, Segment, Joint } from '../../types';
 import type { ContactCone, SupportTipProfile } from '../../SupportPrimitives/ContactCone/types';
 import { getFinalSocketPosition, getSocketPosition } from '../../SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/contactDiskUtils';
-import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
+// Direct, not through the barrel: the barrel re-exports renderers and their
+// React hooks, which a server route cannot import.
+import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk/ContactDiskInteraction';
 import { getJointDiameter } from '../../constants';
 import { getSettings } from '../../Settings/state';
 import { applySizingOverridesToSettings } from '../../autoSupport/parameterSizing';
@@ -438,6 +440,7 @@ export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: T
     // Build Trunk
     const trunk: Trunk = {
         id: trunkId,
+        typeId: 'trunk',
         modelId: modelId, // Link to model
         settingsCodeHex,
         rootId: rootId,

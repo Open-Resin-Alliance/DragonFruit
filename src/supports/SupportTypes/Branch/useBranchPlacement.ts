@@ -74,10 +74,6 @@ export function useBranchPlacement() {
         console.log('[BranchPlacement] Tip set at', pos, 'awaiting base click on support');
     }, [isPlacementHardDisabled]);
 
-    // These are no-ops - snapping is handled by BranchPlacementController
-    const onSupportHover = useCallback((hit: THREE.Intersection | null) => { void hit; }, []);
-    const onSupportClick = useCallback((hit: THREE.Intersection | null) => { void hit; }, []);
-
     // Clear if placement disabled and idle
     useEffect(() => {
         if (isPlacementHardDisabled && state.stage === 'idle') {
@@ -99,7 +95,5 @@ export function useBranchPlacement() {
         hoverPosition: state.hoverPosition,
         onModelHover,
         onModelClick,
-        onSupportHover,
-        onSupportClick,
     };
 }

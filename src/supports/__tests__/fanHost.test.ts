@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { pickFanHost, leafPathCrossesSupports, collectFanShaftPoints, fanLeafToTrunk, findMergeHost, buildConsolidationBranch, type FanShaftPoint } from '../autoSupport/autoPlace';
+import { pickFanHost, leafPathCrossesSupports, collectFanShaftPoints, fanLeafToHost, findMergeHost, buildConsolidationBranch, type FanShaftPoint } from '../autoSupport/autoPlace';
 import type { SupportState } from '../types';
+import { createEmptySupportCollections, NEAR_PLATE_ORIGIN } from '../supportTypeRegistry';
 
 function emptySnapshot(): SupportState {
     return {
-        roots: {}, trunks: {}, branches: {}, leaves: {}, twigs: {}, sticks: {},
-        braces: {}, anchors: {}, kickstands: {}, knots: {},
+        ...createEmptySupportCollections(),
         selectedId: null, selectedCategory: null,
         hoveredId: null, hoveredCategory: 'none', interactionWarning: null,
     };
@@ -30,7 +30,8 @@ function trunkWithShaft(trunkId: string, x: number, y: number, z0: number, z1: n
 }
 
 const sp = (trunkId: string, x: number, y: number, z: number): FanShaftPoint => ({
-    trunkId,
+    hostTypeId: 'trunk',
+    hostId: trunkId,
     pos: { x, y, z },
     diameter: 1,
 });
@@ -41,14 +42,14 @@ const GRID_FAN = 2.5;
 test('nearest shaft wins', () => {
     const points = [sp('t1', 0, 0, 10), sp('t2', 6, 0, 10)];
     const picked = pickFanHost(points, new Set(), { x: 1, y: 0, z: 10 }, REGULAR_FAN, GRID_FAN);
-    assert.equal(picked?.sp.trunkId, 't1');
+    assert.equal(picked?.sp.hostId, 't1');
 });
 
 test('grid trunk hosts fans when close enough (tight radius)', () => {
     const grid = new Set(['g1']);
     const points = [sp('g1', 0, 0, 10), sp('r1', 8, 0, 10)];
     const picked = pickFanHost(points, grid, { x: 2, y: 0, z: 10 }, REGULAR_FAN, GRID_FAN);
-    assert.equal(picked?.sp.trunkId, 'g1', '2mm from the grid shaft → attach to the grid trunk');
+    assert.equal(picked?.sp.hostId, 'g1', '2mm from the grid shaft → attach to the grid trunk');
 });
 
 test('falls back to the nearest regular trunk when the grid host is too far', () => {
@@ -57,7 +58,7 @@ test('falls back to the nearest regular trunk when the grid host is too far', ()
     // Target 3mm from the grid shaft (> 2.5 tight cap) but 1mm from a
     // regular trunk — the long grid-host leaf is refused, the regular host wins.
     const picked = pickFanHost(points, grid, { x: 3, y: 0, z: 10 }, REGULAR_FAN, GRID_FAN);
-    assert.equal(picked?.sp.trunkId, 'r1');
+    assert.equal(picked?.sp.hostId, 'r1');
 });
 
 test('no host qualifies within the radii', () => {
@@ -134,7 +135,7 @@ test('collectFanShaftPoints samples every segment endpoint', () => {
     assert.equal(points.length, 11, '10 samples + the top endpoint');
     const zs = points.map((p) => Math.round(p.pos.z * 10) / 10);
     assert.deepEqual(zs, [0, 1.9, 3.8, 5.7, 7.6, 9.5, 11.4, 13.3, 15.2, 17.1, 19]);
-    assert.ok(points.every((p) => p.trunkId === 't1'));
+    assert.ok(points.every((p) => p.hostId === 't1'));
 });
 
 test('buildConsolidationBranch attaches a routed branch to a host shaft', () => {
@@ -185,11 +186,11 @@ test('buildConsolidationBranch refuses a link whose shaft would leave too flat',
 test('collectFanShaftPoints excludes anchor-origin trunks', () => {
     // Anchors are load-bearing standalone pillars — never fan hosts.
     const draft = trunkWithShaft('host', 0, 0, 0, 19);
-    draft.trunks['anchor'] = {
-        id: 'anchor',
+    draft.trunks['stump'] = {
+        id: 'stump',
         modelId: 'm',
         rootId: 'r-anchor',
-        origin: 'anchor',
+        origin: NEAR_PLATE_ORIGIN,
         segments: [{
             id: 'seg-anchor',
             diameter: 1,
@@ -199,7 +200,7 @@ test('collectFanShaftPoints excludes anchor-origin trunks', () => {
     };
     const points = collectFanShaftPoints(draft);
     assert.ok(points.length > 0, 'regular trunks still provide shaft points');
-    assert.ok(points.every((p) => p.trunkId === 'host'),
+    assert.ok(points.every((p) => p.hostId === 'host'),
         'anchor-origin trunks are not in the fan host pool');
 });
 
@@ -207,11 +208,11 @@ test('findMergeHost never returns an anchor-origin trunk', () => {
     // A tip 0.5 mm from the anchor shaft's bottom joint would merge without
     // the exclusion (joint within the 4 mm radius) — with it, no host.
     const draft = trunkWithShaft('island', 0, 0, 0, 19);
-    draft.trunks['anchor'] = {
-        id: 'anchor',
+    draft.trunks['stump'] = {
+        id: 'stump',
         modelId: 'm',
         rootId: 'r-anchor',
-        origin: 'anchor',
+        origin: NEAR_PLATE_ORIGIN,
         segments: [{
             id: 'seg-anchor',
             diameter: 1,
@@ -222,11 +223,11 @@ test('findMergeHost never returns an anchor-origin trunk', () => {
     assert.equal(findMergeHost({ x: 10.5, y: 0, z: 3 }, 'm', draft), null,
         'anchor trunks are not merge hosts');
     const islandHost = findMergeHost({ x: 0.5, y: 0, z: 3 }, 'm', draft);
-    assert.ok(islandHost && islandHost.trunkId === 'island',
+    assert.ok(islandHost && islandHost.hostId === 'island',
         'a regular island trunk in range still hosts merges');
 });
 
-test('fanLeafToTrunk attaches a leaf at reach beyond the merge radius', () => {
+test('fanLeafToHost attaches a leaf at reach beyond the merge radius', () => {
     // Target 4.3 mm from the shaft: outside the 4 mm gridless merge radius,
     // inside the 5 mm fan radius, valid angle — the fan path is the only way
     // this becomes a leaf instead of a standalone trunk.
@@ -234,11 +235,11 @@ test('fanLeafToTrunk attaches a leaf at reach beyond the merge radius', () => {
     const shaftPoints = [sp('host', 0, 0, 12.5)];
     const target = { x: 4.3, y: 0, z: 15 };
 
-    const fan = fanLeafToTrunk(target, 'm', shaftPoints, new Set(), 'fan-test', 5, 2.5, 60, 12, draft, undefined);
+    const fan = fanLeafToHost(target, 'm', shaftPoints, new Set(), 'fan-test', 5, 2.5, 60, 12, draft, undefined);
 
     assert.equal(fan.ok, true, 'fan succeeds (4.3 mm < 5 mm fan radius)');
     if (fan.ok) {
-        assert.equal(fan.trunkId, 'host');
+        assert.equal(fan.hostId, 'host');
         assert.equal(Object.keys(fan.draft.leaves).length, 1, 'one leaf attached');
         assert.equal(Object.keys(fan.draft.knots).length, 1, 'knot attached to the shaft');
         const knot = Object.values(fan.draft.knots)[0];
@@ -247,9 +248,9 @@ test('fanLeafToTrunk attaches a leaf at reach beyond the merge radius', () => {
     }
 });
 
-test('fanLeafToTrunk refuses when no shaft is in range', () => {
+test('fanLeafToHost refuses when no shaft is in range', () => {
     const draft = trunkWithShaft('host', 0, 0, 0, 19);
-    const fan = fanLeafToTrunk(
+    const fan = fanLeafToHost(
         { x: 20, y: 0, z: 15 }, 'm', [sp('host', 0, 0, 12.5)], new Set(), 'fan-test', 5, 2.5, 60, 12, draft, undefined,
     );
 
@@ -257,9 +258,9 @@ test('fanLeafToTrunk refuses when no shaft is in range', () => {
     if (!fan.ok) assert.equal(fan.reason, 'noHost');
 });
 
-test('fanLeafToTrunk refuses steep angles', () => {
+test('fanLeafToHost refuses steep angles', () => {
     const draft = trunkWithShaft('host', 0, 0, 0, 19);
-    const fan = fanLeafToTrunk(
+    const fan = fanLeafToHost(
         // 2 mm vertical drop, 4.3 mm lateral → 65° — steeper than the limit.
         { x: 4.3, y: 0, z: 13 }, 'm', [sp('host', 0, 0, 11)], new Set(), 'fan-test', 5, 2.5, 60, 12, draft, undefined,
     );
@@ -268,12 +269,12 @@ test('fanLeafToTrunk refuses steep angles', () => {
     if (!fan.ok) assert.equal(fan.reason, 'angle');
 });
 
-test('fanLeafToTrunk prefers the steepest sample over the nearest', () => {
+test('fanLeafToHost prefers the steepest sample over the nearest', () => {
     // Two eligible samples on one shaft: a shallow one just below the tip
     // (nearest — the old code picked this, the "knot at the junction" look)
     // and a deep one at a steep rise. The steep one must win.
     const draft = trunkWithShaft('host', 0, 0, 0, 19);
-    const fan = fanLeafToTrunk(
+    const fan = fanLeafToHost(
         { x: 2, y: 0, z: 15 }, 'm',
         [sp('host', 0, 0, 13.7), sp('host', 0, 0, 11.0)],
         new Set(), 'fan-test', 5, 2.5, 60, 12, draft, undefined,
@@ -289,12 +290,12 @@ test('fanLeafToTrunk prefers the steepest sample over the nearest', () => {
     }
 });
 
-test('fanLeafToTrunk routes long island spans to branches', () => {
+test('fanLeafToHost routes long island spans to branches', () => {
     // 6.7 mm span at 26°: inside the 8 mm fan radius but past the 6 mm
     // leaf span — an island target must get a branch with a real shaft,
     // not a long tapered leaf cone.
     const draft = trunkWithShaft('host', 0, 0, 0, 19);
-    const fan = fanLeafToTrunk(
+    const fan = fanLeafToHost(
         { x: 3, y: 0, z: 18 }, 'm', [sp('host', 0, 0, 12)],
         new Set(), 'fan-test', 8, 2.5, 60, 12, draft, undefined,
     );
@@ -307,7 +308,7 @@ test('fanLeafToTrunk routes long island spans to branches', () => {
     }
 });
 
-test('fanLeafToTrunk branches a long overhang span too', () => {
+test('fanLeafToHost branches a long overhang span too', () => {
     // Same geometry with overhang origin. This used to stay a leaf "by rule",
     // which is how an 11.6mm tapered cone got built and merged: a leaf is a
     // seg-less cone, so past the branch threshold it stands next to its trunk
@@ -315,7 +316,7 @@ test('fanLeafToTrunk branches a long overhang span too', () => {
     // downward-facing contact makes that acceptable — buildConsolidationBranch
     // has always built overhang-origin branches.
     const draft = trunkWithShaft('host', 0, 0, 0, 19);
-    const fan = fanLeafToTrunk(
+    const fan = fanLeafToHost(
         { x: 3, y: 0, z: 18 }, 'm', [sp('host', 0, 0, 12)],
         new Set(), 'fan-test', 8, 2.5, 60, 12, draft, undefined, 'overhang',
     );
@@ -346,7 +347,7 @@ test('findMergeHost prefers the less-loaded of equidistant hosts', () => {
     } as never;
 
     const host = findMergeHost({ x: 0, y: 0, z: 1 }, 'm', draft);
-    assert.ok(host && host.trunkId === 'B', 'merge avoids the loaded host');
+    assert.ok(host && host.hostId === 'B', 'merge avoids the loaded host');
 });
 
 test('a cavity rescue links a low host that the normal span cap refuses', () => {
@@ -360,7 +361,7 @@ test('a cavity rescue links a low host that the normal span cap refuses', () => 
     const pool = [sp('host', 0, 0, 4), sp('host', 0, 0, 8), sp('host', 0, 0, 11)];
     const target = { x: 2.2, y: 0, z: 39.6 };
 
-    const capped = fanLeafToTrunk(target, 'm', pool, new Set(), 'cap', 12, 12, 30, 12, draft, undefined);
+    const capped = fanLeafToHost(target, 'm', pool, new Set(), 'cap', 12, 12, 30, 12, draft, undefined);
     assert.equal(capped.ok, false, 'the derived cap leaves the tip stranded');
     if (!capped.ok) {
         assert.equal(capped.reason, 'noHost', 'and says so in a way that names the reach, not the angle');
@@ -369,13 +370,13 @@ test('a cavity rescue links a low host that the normal span cap refuses', () => 
         assert.equal(capped.nearestSteepMm, undefined, 'no sample was ever legal');
     }
 
-    const rescued = fanLeafToTrunk(
+    const rescued = fanLeafToHost(
         target, 'm', pool, new Set(), 'rescue', 12, 12, 30, 12, draft, undefined,
         undefined, 'steepest', Number.POSITIVE_INFINITY,
     );
     assert.ok(rescued.ok, `the cavity rescue carries it (${rescued.ok ? '' : rescued.reason})`);
     if (rescued.ok) {
-        assert.equal(rescued.trunkId, 'host');
+        assert.equal(rescued.hostId, 'host');
         assert.equal(rescued.kind, 'branch', 'a 29mm link is a branch, not a leaf cone');
         assert.ok(rescued.angleDeg < 10, `the link is near-vertical (${rescued.angleDeg.toFixed(1)}deg)`);
         assert.ok(rescued.distMm > 25, `it reaches the low sample (${rescued.distMm.toFixed(1)}mm)`);

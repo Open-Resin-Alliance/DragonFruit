@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+// Every type's registration runs from the barrel `state.ts` loads, and
+// `state.ts` asserts at load that they all did — so a focused test has to
+// enter the graph through `state.ts`, not through one registration module:
+// that module reaches `state.ts` back through the export helpers, and the
+// assertion would run before its own registration had.
+import '../state';
 import { shaftVerticalCos, type ShaftedEntity } from '../SupportTypes/shaftVerticality';
 import { MAX_TWIG_SHAFT_ANGLE_DEG } from '../SupportTypes/Twig/twigVerticality';
-// The registry is populated by the type registrations' side effects, which
-// `state.ts` imports for the app; a focused test has to ask for its own.
-import '../SupportTypes/Twig/twigRegistration';
 import { buildContactBridge, type ContactBridgeRequest } from '../supportTypeRegistry';
 
 // The registry types a bridge entity as `{ id: string }`; the geometry is in

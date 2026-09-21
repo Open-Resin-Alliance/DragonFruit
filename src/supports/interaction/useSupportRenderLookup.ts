@@ -16,7 +16,6 @@ import type {
 interface UseSupportRenderLookupOptions {
   state: Pick<SupportState, SupportCollectionKey>;
   activePreviewSupport?: {
-    kind: 'trunk' | 'branch' | 'kickstand' | null;
     support: { segments: Array<{ id: string }> } | null;
   } | null;
 }
@@ -106,14 +105,14 @@ function buildInputDelta(
 
 function applyDeltaToWorkerCollectionsRef(target: WorkerCollectionsRef, delta: SupportLookupInputDelta) {
   if (delta.state) {
-    applyRecordDeltaInPlace(target.state.roots, delta.state.roots);
-    applyRecordDeltaInPlace(target.state.trunks, delta.state.trunks);
-    applyRecordDeltaInPlace(target.state.branches, delta.state.branches);
-    applyRecordDeltaInPlace(target.state.leaves, delta.state.leaves);
-    applyRecordDeltaInPlace(target.state.twigs, delta.state.twigs);
-    applyRecordDeltaInPlace(target.state.sticks, delta.state.sticks);
-    applyRecordDeltaInPlace(target.state.braces, delta.state.braces);
-    applyRecordDeltaInPlace(target.state.knots, delta.state.knots);
+    for (const key of SUPPORT_COLLECTION_KEYS) {
+      const diff = delta.state[key as keyof typeof delta.state];
+      if (!diff) continue;
+      applyRecordDeltaInPlace(
+        (target.state as unknown as Record<string, MutableRecord<unknown>>)[key],
+        diff as RecordDelta<unknown>,
+      );
+    }
   }
 
 
@@ -358,9 +357,7 @@ export function useSupportRenderLookup(options: UseSupportRenderLookupOptions): 
     if (postLatestRequestRef.current) {
       postLatestRequestRef.current();
     }
-    // `options.state` rather than each collection: the caller rebuilds that object
-    // whenever any collection identity changes, so it is the same signal without a
-    // list to keep in step with the registry.
+    // `options.state` is rebuilt whenever any collection identity changes.
   }, [options.state, options.activePreviewSupport]);
 
   React.useEffect(() => {

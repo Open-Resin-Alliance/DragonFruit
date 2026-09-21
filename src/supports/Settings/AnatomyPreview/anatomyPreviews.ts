@@ -1,38 +1,26 @@
-import type { ComponentType } from 'react';
+import { getSupportTypeDescriptor } from '../../supportTypeRegistry';
+import type { SidebarPanel } from '../sidebarPanels';
 
-import { RaftPreview } from './PreviewTypes/Raft/RaftPreview';
-import { GridPreview } from './PreviewTypes/Grid/GridPreview';
-import { BracePreview } from './PreviewTypes/Brace/BracePreview';
-import { SUPPORT_KINDS, type SupportKind } from '../supportKindState';
-
-/**
- * Everything a preview may read. Each component destructures the subset it
- * needs, so one shape covers all of them.
- */
-export interface AnatomyPreviewProps {
-    settings: unknown;
-    liveConfig: unknown;
-    previewState: unknown;
-    activeKind: SupportKind;
-    anatomyOverrides: unknown;
-    raftSettings: unknown;
-}
+// The preview registry lives in `../anatomyPreviewRegistry.ts` -- beside the
+// sidebar it serves rather than inside this folder -- so that a panel's facts
+// can be derived from it without the Settings layer and the previews importing
+// each other in a circle.
+export {
+    anatomyPreviewFor,
+    hasOwnAnatomyPreview,
+    registerAnatomyPreview,
+    type AnatomyPreviewProps,
+} from '../anatomyPreviewRegistry';
 
 /**
- * The kinds that draw their own anatomy preview, by kind.
+ * The settings group a panel's preview highlights, from the registry.
  *
- * Every other kind falls through to `TrunkPreview`, which the canvas mounts
- * directly -- it is the default, not an entry. Membership here must match
- * `drawsOwnPreview` on the kind; `anatomyPreviewTable.test.ts` holds them
- * together.
+ * Kept here because it is a preview concern: which settings field the anatomy
+ * diagram calls out, which follows from the type's declared shape.
  */
-export const ANATOMY_PREVIEWS: Partial<Record<SupportKind, ComponentType<AnatomyPreviewProps>>> = {
-    raft: RaftPreview,
-    grid: GridPreview,
-    stick: BracePreview,
-
-};
-
-/** Kinds with their own preview, in table order so mounting is stable. */
-export const ANATOMY_PREVIEW_KINDS: readonly SupportKind[] =
-    (Object.keys(SUPPORT_KINDS) as SupportKind[]).filter((kind) => kind in ANATOMY_PREVIEWS);
+export function anatomyPreviewFocusSetting(panel: SidebarPanel): string | null {
+    const descriptor = getSupportTypeDescriptor(panel as never);
+    if (!descriptor) return null;
+    if (descriptor.canBeGridHost) return 'shaft.diameterMm';
+    return null;
+}

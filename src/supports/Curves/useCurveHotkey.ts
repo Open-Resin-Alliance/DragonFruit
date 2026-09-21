@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { curveInteractionStore } from './curveInteractionState';
 import { useActionActive } from '@/hotkeys/hotkeyStore';
 import { getSnapshot, toggleSegmentCurve } from '../state';
+import { knotHostId, spanKnotHostType } from '../supportTypeRegistry';
 
 export function useCurveHotkey(mode: string) {
     void mode;
@@ -20,7 +21,7 @@ export function useCurveHotkey(mode: string) {
                 if (state.selectedCategory === 'segment' && state.selectedId) {
                     toggleSegmentCurve(state.selectedId);
                 } else if (state.selectedId && state.braces[state.selectedId]) {
-                    toggleSegmentCurve(`braceSegment:${state.selectedId}`);
+                    toggleSegmentCurve(knotHostId(spanKnotHostType(), state.selectedId));
                 }
             }
         }

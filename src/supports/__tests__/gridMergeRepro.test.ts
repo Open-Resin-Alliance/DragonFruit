@@ -5,7 +5,7 @@ import { decideGridPlacement } from '../PlacementLogic/Grid/gridPlacement';
 import { memberDepartureAngleFromVerticalDeg } from '../PlacementLogic/smartPlacementSearchUtils';
 import { setSettings } from '../Settings/state';
 import { createDefaultSettings } from '../Settings/types';
-import type { SupportState } from '../types';
+import type { Branch, Knot, SupportState } from '../types';
 import { buildTrunkDataFromPlacement } from '../SupportTypes/Trunk/trunkBuilder';
 
 const MODEL_ID = 'model-1';
@@ -50,15 +50,18 @@ test('grid merge takes the highest graft whose shaft holds 45 degrees', () => {
         settings, snapshot, candidate: cand.build,
         tipPos: cand.input.tipPos, tipNormal: cand.input.tipNormal, modelId: MODEL_ID,
     });
-    assert.equal(d.kind, 'place_branch');
-    if (d.kind !== 'place_branch') return;
+    assert.equal(d.kind, 'place');
+    if (d.kind !== 'place') return;
+    assert.equal(d.placed.typeId, 'branch', 'a close tip grafts as a branch on the host');
     // A close tip must graft high with a proper climb, not dive to the
     // base: the first knot top-down whose built shaft holds 45 wins.
-    const segIndex = host.build.trunk.segments.findIndex((s) => s.id === d.knot.parentShaftId);
+    const knot = d.placed.supplied.parentKnotId as Knot | undefined;
+    assert.ok(knot, 'the graft carries the knot it hangs from');
+    const segIndex = host.build.trunk.segments.findIndex((s) => s.id === knot.parentShaftId);
     assert.equal(segIndex, 1, `graft lands on the upper section, not segment ${segIndex}`);
-    const firstJoint = d.branch.segments[0]?.topJoint?.pos;
+    const firstJoint = (d.placed.entity as Branch).segments[0]?.topJoint?.pos;
     assert.ok(firstJoint, 'branch has a first joint');
-    const departureDeg = memberDepartureAngleFromVerticalDeg(d.knot.pos, firstJoint!);
+    const departureDeg = memberDepartureAngleFromVerticalDeg(knot.pos, firstJoint);
     assert.ok(
         departureDeg <= 45.05,
         `merged shaft leaves at ${departureDeg.toFixed(1)}deg, shallower than 45`,

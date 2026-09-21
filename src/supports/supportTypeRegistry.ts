@@ -1,8 +1,17 @@
-import type { SupportCollectionByType, SupportCollectionName, SupportEntityByCollection, SupportFieldsByType, SupportRemovedEntityByCollection, SupportState } from './types';
+import type { Branch, Knot, Roots, SupportCollectionByType, SupportCollectionName, SupportEntityAny, SupportEntityByCollection, SupportFieldsByType, SupportRemovedEntityByCollection, SupportState, Trunk } from './types';
 import { SUPPORT_UPDATE_TRUNK, SUPPORT_UPDATE_BRANCH } from './history/actionTypes';
 import type { SupportHistoryActionType } from './history/actionTypes';
 import { ANCHOR_HEIGHT_THRESHOLD_MM } from './autoSupport/constants';
 import { getSettings } from './Settings/state';
+
+/**
+ * The sidebar's tabs, by the PAGE each opens rather than by a type.
+ *
+ * The support-info tab carries the contact cone, cone angle and root settings
+ * that apply to supports generally, so it is not any one type's page. Two of
+ * the four are also tool panel ids, where page and tool are the same thing.
+ */
+export type SidebarTab = 'supportInfo' | 'raft' | 'grid' | 'bracing';
 
 /** Every declared support type, named once in `SupportFieldsByType`. */
 export type SupportTypeId = keyof SupportFieldsByType;
@@ -45,6 +54,13 @@ export type SupportEndpointKind =
 export interface SupportEndpoint {
     kind: SupportEndpointKind;
     field?: string;
+    /**
+     * For `inlineRoot`: the field holding the base's radius.
+     *
+     * An inline root is plate geometry on the entity itself, so its width is a
+     * field of that entity rather than the `diameter` of a shared `Roots` record.
+     */
+    radiusField?: string;
 }
 
 /**
@@ -135,7 +151,13 @@ export interface SupportEdge {
  */
 export interface SupportTypeDescriptor {
     id: SupportTypeId;
-    /** Plural display name, so panels listing collections need no label table. */
+    /**
+     * Plural display name, so panels listing collections need no label table.
+     *
+     * RENAMING A TYPE MUST UPDATE THIS. It is a second spelling of the type's
+     * name, and cannot be derived from `id`: these plurals are irregular
+     * (`leaf` -> `Leaves`, not `Leafs`). No rename check catches it.
+     */
     label: string;
     /**
      * Singular lower-case name, for history descriptions like
@@ -167,9 +189,52 @@ export interface SupportTypeDescriptor {
      * exists at all.
      */
     historyUpdate?: SupportHistoryActionType;
-    /** Whether a modelId walk includes this type. All eight do; the flag exists so a future type can opt out. */
-    carriesModelId: boolean;
-    /** Whether instances carry real shafts, for segment and joint walks. */
+    /**
+     * The sidebar tab this type is edited under. Declared for every type, even
+     * one the sidebar has no panel for yet.
+     */
+    sidebarTab: SidebarTab;
+    /**
+     * Whether this type's diameter is re-solved from the members it carries. A
+     * removal that changes them re-solves the host through
+     * `computeAndApplySupportDiameterProfile`.
+     */
+    recomputesDiameterFromAttachments: boolean;
+    /**
+     * Whether adding one of these re-solves the diameter of the host it hangs
+     * from. The host declares `recomputesDiameterFromAttachments` (it can be
+     * re-solved); this says adding one changes what it carries.
+     */
+    repairsHostDiameterOnAdd: boolean;
+    /**
+     * Whether the bridge search may reach sideways to land this type.
+     *
+     * Twig alone: a twig is short, so it can prop a contact off a neighbouring
+     * surface the near search misses. A stick has to stay near vertical and
+     * keeps the near search, so the sideways reach never applies to it.
+     */
+    mayReachSideways: boolean;
+    /**
+     * Whether instances can host a fan link off their shaft. Read by
+     * `collectFanShaftPoints`, which builds the fan host pool, and by
+     * auto-placement, which records a grid-placed instance as a near-only host.
+     */
+    canBeGridHost: boolean;
+    /**
+     * Whether a kickstand's host knot may ride this type's segments.
+     *
+     * Trunk and branch: a kickstand braces a shaft standing in the print. Read
+     * through `KICKSTAND_HOST_TYPES`, or `KICKSTAND_HOST_BY_TYPE` for the union.
+     */
+    hostsKickstand: boolean;
+    /**
+     * Whether the auto-support pass places this type and the ledger reports it.
+     * A type added by hand or by its own tool declares false. Read through
+     * `AUTO_PLACED_TYPE_IDS`, or `AUTO_PLACED_BY_TYPE` for the narrowed union.
+     */
+    isAutoPlaced: boolean;
+    /**
+     * Whether instances carry real shafts, for segment and joint walks. */
     hasSegments: boolean;
     /**
      * Contact primitive fields, lower end first. Use for "every contact",
@@ -215,10 +280,24 @@ export interface SupportTypeDescriptor {
      */
     previewShape?: 'support' | 'segment';
     /**
-     * Whether auto-bracing samples this type's shafts as a brace endpoint: a
-     * shaft running plate-to-model, not one bridging two model contacts.
+     * Whether auto-bracing may brace this type's shafts. Read through
+     * `autoBraceableShaftTypes()`, which also requires a shaft and excludes
+     * lateral stabilisers, those being generated by the pass itself.
      */
     isAutoBraceable: boolean;
+    /**
+     * Whether the auto-bracing hotkey is available while this type's tool is
+     * active. Stick is the auto-placed span support auto-bracing adds braces
+     * to, so its tool is where the hotkey runs.
+     */
+    hasAutoBracingHotkey?: boolean;
+    /**
+     * Whether a brace endpoint snaps to this type's contact cone (a primitive)
+     * rather than a shaft segment. Leaf alone: it carries no shaft, so a brace
+     * snaps to its cone. The brace snap code reads this flag instead of naming
+     * the type, so a rename reaches only this descriptor.
+     */
+    hostsBraceSnapCone?: boolean;
     /**
      * The measurement range this type serves, when the type is chosen
      * automatically rather than picked by the user.
@@ -228,6 +307,16 @@ export interface SupportTypeDescriptor {
      * Enforced by `__tests__/placementRules.test.ts`.
      */
     placementRule?: SupportPlacementRule;
+    /**
+     * Names this type was known by before, for reading payloads written then.
+     * `migrateSupportPayload` is the only reader.
+     */
+    renamedFrom?: {
+        /** Type ids this type's entities were stamped with. */
+        ids?: readonly string[];
+        /** SupportState collection keys its entities were stored under. */
+        collectionKeys?: readonly string[];
+    };
     /** Auto-placement density and shaft sizing. See {@link SupportAutoPlacement}. */
     autoPlacement?: SupportAutoPlacement;
     /**
@@ -251,18 +340,10 @@ export interface SupportTypeDescriptor {
      */
     placementModeDisplacesDefault?: boolean;
     /**
-     * Where this type sits when several live previews answer the same
-     * question, per purpose. Lower ranks are consulted first.
-     *
-     * A type omitted from a purpose is never consulted for it: brace appears
-     * in neither, because its preview is a bare segment with no contacts to
-     * measure and no error to report.
-     *
-     * `whileActive` is a second, earlier rank used only while this type's own
-     * placement mode is active; `onlyWhileActive` drops the type from the
-     * order entirely unless its mode is active. The two purposes produce
-     * different orders, and deliberately -- see
-     * `__tests__/placementPreviewPriority.test.ts`.
+     * Where this type sits when several live previews answer the same question,
+     * per purpose; lower ranks first, and a type omitted is never consulted.
+     * `whileActive` is an earlier rank used only while this type's placement
+     * mode is active; `onlyWhileActive` drops it from the order otherwise.
      */
     previewPriority?: Partial<Record<SupportPreviewPurpose, {
         rank: number;
@@ -280,6 +361,22 @@ export interface SupportTypeDescriptor {
         /** Entity paths holding the start and end diameters. */
         from: readonly [string, string];
     };
+    /**
+     * Which shaft this type's contact-cone body follows. The resize pass
+     * thickens shafts after cones are built, so `syncContactConeDiameters` sets
+     * the body back to the shaft; the tip diameter never moves. Declaring a
+     * source also makes this type's segments readable as a host for a cone
+     * hosted through a knot.
+     *
+     * - `ownLastSegment` -- the shaft climbs into the cone;
+     * - `ownFirstSegment` -- the shaft leaves the cone and hangs down;
+     * - `hostKnotSegment` -- the cone sits on the model, and the host shaft is
+     *   read through the knot this entity hangs from.
+     *
+     * Absent means neither role: the cone body is left as placed and the
+     * segments are offered as no host.
+     */
+    coneBodyFollows?: 'ownFirstSegment' | 'ownLastSegment' | 'hostKnotSegment';
     /** What sits at the bottom of this type. */
     lower: SupportEndpoint;
     /** What sits at the top of this type. */
@@ -328,6 +425,12 @@ export interface SupportTypeDescriptor {
      */
     jointDragUsesLivePreview: boolean;
     /**
+     * Whether a curve drag that produces no preview re-reads the entity from
+     * the store before committing. True for a type whose segments another
+     * interaction (the elastic chain on a knot drag) updates mid-drag.
+     */
+    curveDragReconcilesFromStore?: boolean;
+    /**
      * Prefix for this type's bezier handle context ids.
      *
      * Those ids are React keys. Trunk's predate the others and carry no prefix;
@@ -358,6 +461,29 @@ export interface SupportTypeDescriptor {
      */
     projectsUnparameterisedKnots: boolean;
     /**
+     * Whether a knot drag on this type's shaft defers elastic-chain solving to
+     * release. True for the default host, whose knots are the common case and
+     * skip the per-frame solve for a smoother preview.
+     */
+    knotDragDefersElasticPreview?: boolean;
+    /**
+     * Whether a knot drag on this type's shaft computes its preview on the main
+     * thread rather than delegating to a worker. True for the default host,
+     * whose previews are the common case and skip the worker handoff.
+     */
+    knotDragComputesInline?: boolean;
+    /**
+     * Whether this type's shaft flexes when the knot it hangs from is dragged.
+     * The elastic solver walks its segment joints, so a type with no segments
+     * to bend declares nothing and is skipped.
+     */
+    flexesOnHostKnotDrag?: boolean;
+    /**
+     * Whether a knot drag on this type's shaft updates the attached leaf cones'
+     * wide-end diameter from the taper at the knot's new position.
+     */
+    knotDragUpdatesLeafConeDiameter?: boolean;
+    /**
      * How interior view decides whether an instance is inside the cavity.
      *
      * - `contacts`  -- test the type's own declared contacts.
@@ -369,25 +495,16 @@ export interface SupportTypeDescriptor {
      * Whether unselected contact cones are drawn by the shared batched pass.
      *
      * A type that draws its own cone instead would get two if it also batched.
-     * Anchor is the one: its renderer draws the cone directly, and only while
+     * Stump is the one: its renderer draws the cone directly, and only while
      * selected.
      */
     batchesContactCones: boolean;
     /**
-     * Whether the type's shaft joints are drawn by the shared batched pass.
-     *
-     * The joints a shaft carries hang off its segments. Anchor declares a
-     * shaft but builds none, keeping its single joint on the entity instead,
-     * so there is nothing per-segment for the batch to collect.
+     * Whether the shared batched passes draw this type's shaft: its straight
+     * segments and the joints they carry. A type whose shaft is a curve, or
+     * whose renderer draws its joints directly, opts out.
      */
-    batchesShaftJoints: boolean;
-    /**
-     * Whether the shared plain-shaft batcher builds this type's shafts.
-     *
-     * Brace opts out: its shaft is a curve between two knots and it builds its
-     * own set. Anchor declares a shaft but builds none.
-     */
-    batchesPlainShafts: boolean;
+    batchesShaft: boolean;
     /**
      * Whether dragging a joint re-solves the type's contact primitives.
      *
@@ -424,6 +541,12 @@ export interface SupportTypeDescriptor {
          * self-contained types; a hosted type stays straight instead.
          */
         startFallsBackToSplitPoint: boolean;
+        /**
+         * Shaft diameter when the entity carries no segments. A number is the
+         * constant; a `{ path }` reads the diameter off the entity (a dotted
+         * path, resolved like `shaftTaper.from`).
+         */
+        fallbackDiameterMm?: number | { path: string };
     };
     /**
      * Whether instances have per-entity editable settings.
@@ -433,6 +556,11 @@ export interface SupportTypeDescriptor {
      * evict on remove or the next entity reusing that id inherits stale values.
      */
     hasEditableSettings: boolean;
+    /**
+     * Whether the settings sidebar offers a panel for this type. Not the same
+     * question as `hasEditableSettings`: the two sets genuinely differ.
+     */
+    offersSidebarPanel: boolean;
 }
 
 /**
@@ -445,7 +573,14 @@ export interface SupportTypeDescriptor {
 const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAdd' | 'historyRemove'>[] = [
     {
         id: 'trunk',
+        sidebarTab: 'supportInfo',
         hasEditableSettings: true,
+        offersSidebarPanel: true,
+        recomputesDiameterFromAttachments: true,
+        repairsHostDiameterOnAdd: false,
+        mayReachSideways: false,
+        canBeGridHost: true,
+        hostsKickstand: true,
         edges: [{ field: 'rootId', to: 'roots', ownership: 'owns' }],
         ownsRoot: true,
         segmentsCarryBothJoints: false,
@@ -455,17 +590,18 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         ownsEditHistoryEntry: true,
         jointDragUsesLivePreview: true,
         batchesContactCones: true,
-        batchesShaftJoints: true,
-        batchesPlainShafts: true,
+        batchesShaft: true,
         bezierContextIdPrefix: '',
         broadcastsAttachmentsWhileDragging: false,
         knotTakesJointDiameter: true,
         projectsUnparameterisedKnots: true,
+        knotDragDefersElasticPreview: true,
+        knotDragComputesInline: true,
         interiorVisibility: 'contacts',
         jointDragMovesContacts: false,
         jointDragCanCurveShaft: true,
         contactFields: ['contactCone'],
-        shaftFallback: { stubLengthMm: 10, startFallsBackToSplitPoint: false },
+        shaftFallback: { stubLengthMm: 10, startFallsBackToSplitPoint: false, fallbackDiameterMm: 1.5 },
         hasOrigin: true,
         hasPlacementPreview: true,
         claimsModelSurfaceGestures: false,
@@ -477,19 +613,25 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         },
         placementRule: { metric: 'tipHeight', minMm: ANCHOR_HEIGHT_THRESHOLD_MM, boundary: 'upper' },
         isAutoBraceable: true,
+        // The shaft climbs INTO the cone, so the terminal segment is the one
+        // under it.
+        coneBodyFollows: 'ownLastSegment',
         lower: { kind: 'plateRoot' },
         upper: { kind: 'cone', field: 'contactCone' },
+        isAutoPlaced: true,
         hasSegments: true,
         label: 'Trunks',
         singular: 'trunk',
         location: { store: 'support', key: 'trunks' },
         selectionCategory: 'trunk',
         historyUpdate: SUPPORT_UPDATE_TRUNK,
-        carriesModelId: true,
     },
     {
         id: 'branch',
+        sidebarTab: 'supportInfo',
         hasEditableSettings: true,
+        offersSidebarPanel: true,
+        flexesOnHostKnotDrag: true,
         edges: [{ field: 'parentKnotId', to: 'knots', ownership: 'hostedBy', takeHost: 'always' }],
         ownsRoot: false,
         segmentsCarryBothJoints: false,
@@ -498,9 +640,9 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         transformPropagatesToShaft: true,
         ownsEditHistoryEntry: false,
         jointDragUsesLivePreview: true,
+        curveDragReconcilesFromStore: true,
         batchesContactCones: true,
-        batchesShaftJoints: true,
-        batchesPlainShafts: true,
+        batchesShaft: true,
         bezierContextIdPrefix: 'branch-',
         broadcastsAttachmentsWhileDragging: false,
         knotTakesJointDiameter: false,
@@ -521,20 +663,31 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
             limitationFeedback: { rank: 1, onlyWhileActive: true },
         },
         isAutoBraceable: true,
+        // The shaft leaves the cone and hangs DOWN, so the first segment is
+        // the one under it.
+        coneBodyFollows: 'ownFirstSegment',
         lower: { kind: 'knot' },
         upper: { kind: 'cone', field: 'contactCone' },
+        recomputesDiameterFromAttachments: false,
+        repairsHostDiameterOnAdd: true,
+        mayReachSideways: false,
+        canBeGridHost: false,
+        hostsKickstand: true,
+        isAutoPlaced: true,
         hasSegments: true,
         label: 'Branches',
         singular: 'branch',
         location: { store: 'support', key: 'branches' },
         selectionCategory: 'branch',
         historyUpdate: SUPPORT_UPDATE_BRANCH,
-        carriesModelId: true,
     },
     {
         id: 'leaf',
+        sidebarTab: 'supportInfo',
         hasEditableSettings: true,
+        offersSidebarPanel: true,
         knotHostPrefix: 'leafCone:',
+        hostsBraceSnapCone: true,
         edges: [{ field: 'parentKnotId', to: 'knots', ownership: 'hostedBy', takeHost: 'ifUnused' }],
         ownsRoot: false,
         segmentsCarryBothJoints: true,
@@ -544,8 +697,7 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         ownsEditHistoryEntry: false,
         jointDragUsesLivePreview: true,
         batchesContactCones: true,
-        batchesShaftJoints: false,
-        batchesPlainShafts: false,
+        batchesShaft: false,
         bezierContextIdPrefix: 'leaf-',
         broadcastsAttachmentsWhileDragging: false,
         knotTakesJointDiameter: false,
@@ -565,18 +717,28 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
             limitationFeedback: { rank: 0 },
         },
         isAutoBraceable: false,
+        // The cone sits on the model while the leaf hangs off a knot on someone
+        // else's shaft, so the host is read through that knot.
+        coneBodyFollows: 'hostKnotSegment',
         lower: { kind: 'knot' },
         upper: { kind: 'cone', field: 'contactCone' },
+        recomputesDiameterFromAttachments: false,
+        repairsHostDiameterOnAdd: false,
+        mayReachSideways: false,
+        canBeGridHost: false,
+        hostsKickstand: false,
+        isAutoPlaced: true,
         hasSegments: false,
         label: 'Leaves',
         singular: 'leaf',
         location: { store: 'support', key: 'leaves' },
         selectionCategory: 'leaf',
-        carriesModelId: true,
     },
     {
         id: 'twig',
+        sidebarTab: 'supportInfo',
         hasEditableSettings: false,
+        offersSidebarPanel: true,
         edges: [],
         ownsRoot: false,
         segmentsCarryBothJoints: true,
@@ -586,10 +748,10 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         ownsEditHistoryEntry: false,
         jointDragUsesLivePreview: true,
         batchesContactCones: false,
-        batchesShaftJoints: true,
-        batchesPlainShafts: true,
+        batchesShaft: true,
         bezierContextIdPrefix: 'twig-',
         broadcastsAttachmentsWhileDragging: true,
+        knotDragUpdatesLeafConeDiameter: true,
         knotTakesJointDiameter: false,
         projectsUnparameterisedKnots: false,
         interiorVisibility: 'contacts',
@@ -605,16 +767,23 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         isAutoBraceable: false,
         lower: { kind: 'disk', field: 'contactDiskA' },
         upper: { kind: 'disk', field: 'contactDiskB' },
+        recomputesDiameterFromAttachments: false,
+        repairsHostDiameterOnAdd: false,
+        mayReachSideways: true,
+        canBeGridHost: false,
+        hostsKickstand: false,
+        isAutoPlaced: true,
         hasSegments: true,
         label: 'Twigs',
         singular: 'twig',
         location: { store: 'support', key: 'twigs' },
         selectionCategory: 'twig',
-        carriesModelId: true,
     },
     {
         id: 'stick',
+        sidebarTab: 'bracing',
         hasEditableSettings: false,
+        offersSidebarPanel: true,
         edges: [],
         ownsRoot: false,
         segmentsCarryBothJoints: true,
@@ -624,9 +793,9 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         ownsEditHistoryEntry: false,
         jointDragUsesLivePreview: true,
         batchesContactCones: true,
-        batchesShaftJoints: true,
-        batchesPlainShafts: true,
+        batchesShaft: true,
         bezierContextIdPrefix: 'stick-',
+        hasAutoBracingHotkey: true,
         broadcastsAttachmentsWhileDragging: false,
         knotTakesJointDiameter: false,
         projectsUnparameterisedKnots: false,
@@ -642,18 +811,25 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         isAutoBraceable: false,
         lower: { kind: 'cone', field: 'contactConeA' },
         upper: { kind: 'cone', field: 'contactConeB' },
+        recomputesDiameterFromAttachments: false,
+        repairsHostDiameterOnAdd: false,
+        mayReachSideways: false,
+        canBeGridHost: false,
+        hostsKickstand: false,
+        isAutoPlaced: true,
         hasSegments: true,
         label: 'Sticks',
         singular: 'stick',
         location: { store: 'support', key: 'sticks' },
         selectionCategory: 'stick',
-        carriesModelId: true,
     },
     {
         id: 'brace',
+        sidebarTab: 'supportInfo',
         // Two named knot fields rather than a list: the history payload and its
         // undo handler read them by name, and start/end are not interchangeable.
         hasEditableSettings: false,
+        offersSidebarPanel: false,
         edges: [
             { field: 'startKnotId', to: 'knots', ownership: 'hostedBy', takeHost: 'ifUnused' },
             { field: 'endKnotId', to: 'knots', ownership: 'hostedBy', takeHost: 'ifUnused' },
@@ -666,8 +842,7 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         ownsEditHistoryEntry: false,
         jointDragUsesLivePreview: true,
         batchesContactCones: false,
-        batchesShaftJoints: false,
-        batchesPlainShafts: false,
+        batchesShaft: false,
         bezierContextIdPrefix: 'brace-',
         broadcastsAttachmentsWhileDragging: false,
         knotTakesJointDiameter: false,
@@ -686,16 +861,25 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         isAutoBraceable: false,
         lower: { kind: 'knot' },
         upper: { kind: 'knot' },
+        recomputesDiameterFromAttachments: false,
+        repairsHostDiameterOnAdd: false,
+        mayReachSideways: false,
+        canBeGridHost: false,
+        hostsKickstand: false,
+        isAutoPlaced: false,
         hasSegments: false,
         label: 'Braces',
         singular: 'brace',
         location: { store: 'support', key: 'braces' },
         selectionCategory: 'brace',
-        carriesModelId: true,
     },
     {
-        id: 'anchor',
+        id: 'stump',
+        // Written before the rename, so payloads saved then still load.
+        renamedFrom: { ids: ['anchor'], collectionKeys: ['anchors'] },
+        sidebarTab: 'supportInfo',
         hasEditableSettings: false,
+        offersSidebarPanel: false,
         edges: [],
         ownsRoot: false,
         segmentsCarryBothJoints: true,
@@ -705,9 +889,8 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         ownsEditHistoryEntry: false,
         jointDragUsesLivePreview: true,
         batchesContactCones: false,
-        batchesShaftJoints: false,
-        batchesPlainShafts: false,
-        bezierContextIdPrefix: 'anchor-',
+        batchesShaft: false,
+        bezierContextIdPrefix: 'stump-',
         broadcastsAttachmentsWhileDragging: false,
         knotTakesJointDiameter: false,
         projectsUnparameterisedKnots: false,
@@ -727,18 +910,25 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
             shaftMultiplier: 1.25,
         },
         isAutoBraceable: false,
-        lower: { kind: 'inlineRoot', field: 'rootPos' },
+        lower: { kind: 'inlineRoot', field: 'rootPos', radiusField: 'rootBaseDiameter' },
         upper: { kind: 'cone', field: 'contactCone' },
+        recomputesDiameterFromAttachments: false,
+        repairsHostDiameterOnAdd: false,
+        mayReachSideways: false,
+        canBeGridHost: false,
+        hostsKickstand: false,
+        isAutoPlaced: true,
         hasSegments: true,
-        label: 'Anchors',
-        singular: 'anchor',
-        location: { store: 'support', key: 'anchors' },
-        selectionCategory: 'anchor',
-        carriesModelId: true,
+        label: 'Stumps',
+        singular: 'stump',
+        location: { store: 'support', key: 'stumps' },
+        selectionCategory: 'stump',
     },
     {
         id: 'kickstand',
+        sidebarTab: 'supportInfo',
         hasEditableSettings: true,
+        offersSidebarPanel: false,
         edges: [
             { field: 'rootId', to: 'roots', ownership: 'owns' },
             { field: 'hostKnotId', to: 'knots', ownership: 'hostedBy', takeHost: 'always' },
@@ -752,8 +942,7 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         ownsEditHistoryEntry: false,
         jointDragUsesLivePreview: false,
         batchesContactCones: false,
-        batchesShaftJoints: true,
-        batchesPlainShafts: true,
+        batchesShaft: true,
         bezierContextIdPrefix: 'kickstand-',
         broadcastsAttachmentsWhileDragging: false,
         knotTakesJointDiameter: false,
@@ -762,7 +951,7 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         jointDragMovesContacts: false,
         jointDragCanCurveShaft: true,
         contactFields: [],
-        shaftFallback: { stubLengthMm: 5, startFallsBackToSplitPoint: false },
+        shaftFallback: { stubLengthMm: 5, startFallsBackToSplitPoint: false, fallbackDiameterMm: { path: 'profile.bodyDiameterMm' } },
         hasOrigin: false,
         shaftTaper: { segments: 'last', from: ['profile.terminalStartDiameterMm', 'profile.terminalEndDiameterMm'] },
         hasPlacementPreview: true,
@@ -775,13 +964,18 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         isAutoBraceable: true,
         lower: { kind: 'plateRoot' },
         upper: { kind: 'knot' },
+        recomputesDiameterFromAttachments: false,
+        repairsHostDiameterOnAdd: false,
+        mayReachSideways: false,
+        canBeGridHost: false,
+        hostsKickstand: false,
+        isAutoPlaced: false,
         hasSegments: true,
         label: 'Kickstands',
         singular: 'kickstand',
         location: { store: 'support', key: 'kickstands' },
         selectionCategory: 'kickstand',
         serialisedAsBundle: true,
-        carriesModelId: true,
     },
 ];
 
@@ -808,13 +1002,60 @@ export function registerSupportUpdater<T>(typeId: SupportTypeId, update: (entity
     UPDATERS.set(typeId, update as SupportUpdater);
 }
 
+/** Whether a type has already claimed its updater slot from its own folder. */
+export function hasSupportUpdater(typeId: SupportTypeId): boolean {
+    return UPDATERS.has(typeId);
+}
+
 /**
- * Apply an entity back to the store by type id.
- *
- * Returns false when nothing is registered for the id, so a caller can tell
- * "no updater" from "updated".
+ * Resolves an id to its type by looking in the store. A slot, because importing
+ * `state.ts` back would be an initialisation cycle. Consulted only for an
+ * entity that lost its `typeId`.
  */
-export function updateSupportEntity(typeId: SupportTypeId, entity: unknown): boolean {
+let resolveSupportTypeOfId: ((id: string) => SupportTypeId | null) | null = null;
+
+/** Called once by state.ts. */
+export function registerSupportTypeResolver(resolve: (id: string) => SupportTypeId | null): void {
+    resolveSupportTypeOfId = resolve;
+}
+
+/**
+ * The type an entity is, so a reader can dispatch without the caller restating
+ * it. Falls back to the store's membership scan for an entity that lost its
+ * `typeId` -- a whole-store payload restored through `setSnapshot` bypasses the
+ * writers that stamp it.
+ */
+export function resolveSupportTypeIdOf(entity: { typeId?: SupportTypeId; id: string }): SupportTypeId | null {
+    return entity.typeId ?? resolveSupportTypeOfId?.(entity.id) ?? null;
+}
+
+/**
+ * Apply an entity back to the store.
+ *
+ * Two forms: `updateSupportEntity(entity)` reads the type off the entity and
+ * is preferred; `(typeId, entity)` is for a fresh build that carries none yet.
+ * Returns false when nothing is registered for the id.
+ */
+export function updateSupportEntity<E extends { typeId?: SupportTypeId; id: string }>(entity: E): boolean;
+export function updateSupportEntity(typeId: SupportTypeId, entity: unknown): boolean;
+export function updateSupportEntity(
+    typeIdOrEntity: SupportTypeId | { typeId?: SupportTypeId; id: string },
+    maybeEntity?: unknown,
+): boolean {
+    // A string first argument is the explicit form. Anything else must be the
+    // entity, and its own `typeId` decides -- falling back to the store's
+    // membership scan for an entity that lost the field on the way in.
+    let typeId: SupportTypeId | null;
+    let entity: unknown;
+    if (typeof typeIdOrEntity === 'string') {
+        typeId = typeIdOrEntity;
+        entity = maybeEntity;
+    } else {
+        entity = typeIdOrEntity;
+        typeId = resolveSupportTypeIdOf(typeIdOrEntity);
+    }
+    if (!typeId) return false;
+
     const update = UPDATERS.get(typeId);
     if (!update) return false;
     (update as (value: unknown) => void)(entity);
@@ -865,21 +1106,20 @@ export const SUPPORT_REMOVAL_SHAPES = {
     twig: { self: 'twig', cascade: { knots: 'knots', leaves: 'leaves' } },
     stick: { self: 'stick', cascade: { knots: 'knots', leaves: 'leaves' } },
     brace: { self: 'brace', cascade: { knots: ['startKnot', 'endKnot'] } },
-    anchor: { self: 'anchor', cascade: { knots: 'knots', leaves: 'leaves' } },
+    stump: { self: 'stump', cascade: { knots: 'knots', leaves: 'leaves' } },
     kickstand: { self: 'kickstand', cascade: { roots: 'roots', knots: 'knots', braces: 'braces', leaves: 'leaves', branches: 'branches', kickstands: 'kickstands' } },
     // `satisfies` keeps the literal narrowing the result types read, while
     // making a renamed type a compile error here rather than at the call site.
 } as const satisfies Record<SupportTypeId, { self: string; cascade: Record<string, string | readonly string[]> }>;
 
 /**
- * Types whose removal history payload is not the cascade result verbatim.
- *
- * Leaf and brace narrow `null` to `undefined`; branch adds the trunk diameter
- * reprofile its removal triggers. Everything else pushes the shape it got.
+ * The shape a value-level type id maps to. The map above is `as const` so the
+ * result types derive from its literals, which a `SupportTypeId` value cannot
+ * index; this reads it without giving that up.
  */
-export const RESHAPED_REMOVAL_PAYLOADS: ReadonlySet<SupportTypeId> = new Set<SupportTypeId>([
-    'leaf', 'brace', 'branch',
-]);
+export function removalShapeFor(typeId: SupportTypeId): { self: string; cascade: Record<string, string | readonly string[]> } {
+    return (SUPPORT_REMOVAL_SHAPES as Record<SupportTypeId, { self: string; cascade: Record<string, string | readonly string[]> }>)[typeId];
+}
 
 /**
  * The entity type living in each collection, so a removal result can be typed
@@ -934,7 +1174,7 @@ type UnionToIntersection<U> =
 /** Type id -> the collection its entities live in, kept literal for the above. */
 export const SUPPORT_TYPE_COLLECTION: SupportCollectionByType = {
     trunk: 'trunks', branch: 'branches', leaf: 'leaves', twig: 'twigs',
-    stick: 'sticks', brace: 'braces', anchor: 'anchors', kickstand: 'kickstands',
+    stick: 'sticks', brace: 'braces', stump: 'stumps', kickstand: 'kickstands',
 };
 
 /** Compile-time check that every support type declares a removal shape. */
@@ -1066,6 +1306,24 @@ function thresholdMm(
  * Bounds are half-open, so adjacent types meet without overlapping and the
  * answer is unambiguous.
  */
+/**
+ * Whether a bridge of `typeId` may land where the search ended up. The search
+ * runs near radii first; a type declaring `mayReachSideways` searches wider,
+ * and landing beyond the near cutoff is a lateral prop.
+ *
+ * A plain function so the rule is testable: its caller is a React hook.
+ */
+export function bridgeMayLandSideways(
+    typeId: SupportTypeId,
+    distMm: number,
+    cutoffMm: number,
+    reachedSideways: boolean,
+): boolean {
+    if (!reachedSideways) return true;
+    if (distMm <= cutoffMm) return true;
+    return getSupportTypeDescriptor(typeId).mayReachSideways;
+}
+
 export function selectTypeForPlacement(
     metric: SupportPlacementMetric,
     valueMm: number,
@@ -1178,6 +1436,36 @@ export function lateralStabiliserTypes(): readonly SupportTypeId[] {
     return SUPPORT_TYPES.filter((d) => LATERAL_STABILISERS.has(d.id)).map((d) => d.id);
 }
 
+/** Whether this type is a lateral stabiliser, generated beside a group. */
+export function isLateralStabiliserType(typeId: SupportTypeId | string): boolean {
+    return (lateralStabiliserTypes() as readonly string[]).includes(typeId);
+}
+
+/** The type whose brace snap target is its contact cone (leaf), if any. */
+export function braceSnapConeType(): SupportTypeId | null {
+    return SUPPORT_TYPES.find((d) => d.hostsBraceSnapCone)?.id ?? null;
+}
+
+/**
+ * Types whose shafts auto-bracing may brace to each other: `isAutoBraceable`
+ * plus `hasSegments`, less the lateral stabilisers, which the pass offers
+ * beside a group rather than bracing as members of one.
+ *
+ * The stabiliser half needs the type registrations loaded; the pass runs long
+ * after load, and a test pins it.
+ */
+export function autoBraceableShaftTypes(): readonly SupportTypeId[] {
+    const stabilisers = new Set(lateralStabiliserTypes());
+    return SUPPORT_TYPES
+        .filter((d) => d.isAutoBraceable && d.hasSegments && !stabilisers.has(d.id))
+        .map((d) => d.id);
+}
+
+/** Whether this type's shafts may be braced to each other. */
+export function isAutoBraceableShaftType(typeId: SupportTypeId | string): boolean {
+    return (autoBraceableShaftTypes() as readonly string[]).includes(typeId);
+}
+
 /** Runs one type's generator, or returns nothing when it registers none. */
 export function generateLateralStabilisers(
     typeId: SupportTypeId,
@@ -1253,9 +1541,150 @@ export function contactBridgeTypes(): readonly SupportTypeId[] {
     return SUPPORT_TYPES.filter((d) => CONTACT_BRIDGE_BUILDERS.has(d.id)).map((d) => d.id);
 }
 
+/**
+ * The entity type a given type id holds.
+ *
+ * Derived through `SUPPORT_TYPE_COLLECTION` and the collection's own entity
+ * type, so a ninth type joins by being declared. Naming Trunk, Branch and the
+ * rest here is the POINT of this module: the registry is where a type is named,
+ * and a shape that names none of them is a shape no consumer can type-check
+ * against.
+ */
+export type SupportEntityFor<T extends SupportTypeId> =
+    SupportEntityIn<(typeof SUPPORT_TYPE_COLLECTION)[T]>;
+
+/**
+ * The primitives a placement can carry in alongside its entity.
+ *
+ * Only roots and knots: an `edges` entry pointing at `'segment'` names part of
+ * the entity itself rather than a collection member, and every other declared
+ * edge is one of these two.
+ */
+export type PlacementPrimitives = Partial<Record<string, Roots | Knot>>;
+
+/**
+ * A support the engine has built and is about to place.
+ *
+ * A discriminated union on `typeId`, so narrowing on it gives the entity's REAL
+ * type — `placed.typeId === 'trunk'` makes `placed.entity` a `Trunk`. That is
+ * what lets every consumer commit a placement without a cast.
+ *
+ * Keep the per-type body: an untyped `{ id: string }` erases the typing and
+ * forces `as never` at every consumer.
+ */
+export type PlacedSupport = {
+    [T in SupportTypeId]: {
+        typeId: T;
+        entity: SupportEntityFor<T>;
+        /** Primitives keyed by the `edges` field that declares each one, so a
+         *  caller passes what it built under the same names the declaration
+         *  uses and the two cannot drift. */
+        supplied: PlacementPrimitives;
+        /** The host it hangs from, when it hangs from one. */
+        hostedBy?: { typeId: SupportTypeId; id: string };
+    };
+}[SupportTypeId];
+
+/** What a type's build override is handed. */
+export interface ContactOverrideRequest {
+    tipPos: { x: number; y: number; z: number };
+    tipNormal: { x: number; y: number; z: number };
+    modelId: string;
+    /**
+     * Checked for clearance when given. Structural rather than `THREE.Mesh` --
+     * the registry declares rules and does not depend on the renderer.
+     */
+    mesh?: { isMesh: boolean };
+}
+
+/**
+ * What a type's override built.
+ *
+ * `refusal` is how a type declines a contact it cannot serve — it carries the
+ * reason rather than the engine inferring one, because the invariant being
+ * checked is the type's own (an anchor's cone must not dip below its root) and
+ * the engine has no business reading that type's geometry to test it.
+ */
+export interface ContactOverrideResult {
+    placed: PlacedSupport;
+    /** Set when the type refuses this contact; passed through as the rejection. */
+    refusal?: string;
+    /** Preview and validation state for the ghost. Typed `unknown` because the
+     *  renderer owns that shape and this module does not depend on it. */
+    supportData?: unknown;
+}
+
+type ContactOverride = (request: ContactOverrideRequest) => ContactOverrideResult | null;
+
+/**
+ * Pair a type id with the entity built for it. Checked against the registry, so
+ * `placementOf('trunk', leaf)` is a compile error. The unchecked path is a
+ * differently named function ({@link placementOfResolved}) rather than an
+ * overload, which TypeScript would fall through to.
+ */
+export function placementOf<T extends SupportTypeId>(
+    typeId: T,
+    entity: SupportEntityFor<T>,
+    supplied?: PlacementPrimitives,
+    hostedBy?: { typeId: SupportTypeId; id: string },
+): PlacedSupport {
+    return { typeId, entity, supplied: supplied ?? {}, hostedBy } as PlacedSupport;
+}
+
+/**
+ * The same, for the engine's own paths, where the id comes from
+ * `selectTypeForPlacement` at run time and the entity was built to match it.
+ *
+ * Named apart because it witnesses the pairing instead of checking it: the
+ * caller resolved an id and then built that type's support, and nothing in the
+ * type system connects those two facts. One named place to audit, rather than a
+ * cast at each site.
+ */
+export function placementOfResolved(
+    typeId: SupportTypeId,
+    entity: SupportEntityAny,
+    supplied?: PlacementPrimitives,
+    hostedBy?: { typeId: SupportTypeId; id: string },
+): PlacedSupport {
+    return { typeId, entity, supplied: supplied ?? {}, hostedBy } as PlacedSupport;
+}
+
+const CONTACT_OVERRIDES = new Map<SupportTypeId, ContactOverride>();
+
+/**
+ * A type that OVERRIDES the default trunk build for the contact band it claims.
+ *
+ * Auto-placement stands a trunk on a contact by default. A type that claims a
+ * `tipHeight` band and registers here builds its own support instead. Mirrors
+ * the export and preview seams: the builder returns the same generic shape a
+ * placement commits with, so it introduces no per-type branch and no per-type
+ * decision arm.
+ */
+export function registerContactOverride(typeId: SupportTypeId, build: ContactOverride): void {
+    CONTACT_OVERRIDES.set(typeId, build);
+}
+
+/** This type's own build for a contact, or undefined when it does not override. */
+export function buildContactOverride(typeId: SupportTypeId): ContactOverride | undefined {
+    return CONTACT_OVERRIDES.get(typeId);
+}
+
+/**
+ * Types that claim a `tipHeight` band but registered no override. The default
+ * tool is excluded, being what the fallback already builds; every other
+ * claimant needs one, or the engine selects a type it cannot construct.
+ */
+export function typesMissingContactOverride(): readonly SupportTypeId[] {
+    const defaultToolId = defaultPlacementToolTypeId();
+    return SUPPORT_TYPES
+        .filter((d) => d.placementRule?.metric === 'tipHeight' && d.id !== defaultToolId)
+        .filter((d) => !CONTACT_OVERRIDES.has(d.id))
+        .map((d) => d.id);
+}
+
 export const SUPPORT_TRANSFORM_EXTRAS = {
     brace: ['curve'],
-    anchor: ['rootPos', 'joint'],
+    stump: ['rootPos', 'joint'],
 } as const satisfies Partial<Record<SupportTypeId, readonly string[]>>;
 
 /** Extra transform fields this type declares, or none. */
@@ -1271,6 +1700,41 @@ export function transformExtrasFor(typeId: SupportTypeId): readonly string[] {
 export const EDITABLE_SUPPORT_TYPES: readonly SupportTypeDescriptor[] =
     SUPPORT_TYPES.filter((descriptor) => descriptor.hasEditableSettings);
 
+/**
+ * The order the sidebar offers a type's own panel in. Observable, and not
+ * registry order: `panelForTab` opens the first panel declaring a tab. Which
+ * types are offered is `offersSidebarPanel`, held to this list by
+ * `sidebarPanelOrderDrift`.
+ */
+export const SIDEBAR_PANEL_TYPE_ORDER = ['trunk', 'leaf', 'branch', 'twig', 'stick'] as const satisfies readonly SupportTypeId[];
+
+/** How `SIDEBAR_PANEL_TYPE_ORDER` and the `offersSidebarPanel` flag disagree. */
+export function sidebarPanelOrderDrift(): readonly string[] {
+    const derived = SUPPORT_TYPES.filter((descriptor) => descriptor.offersSidebarPanel).map((d) => d.id);
+    const declared: readonly SupportTypeId[] = SIDEBAR_PANEL_TYPE_ORDER;
+    const drift: string[] = [];
+    for (const id of derived) {
+        if (!declared.includes(id)) drift.push(`${id} offers a sidebar panel but is missing from SIDEBAR_PANEL_TYPE_ORDER`);
+    }
+    for (const id of declared) {
+        if (!derived.includes(id)) drift.push(`${id} is in SIDEBAR_PANEL_TYPE_ORDER but does not offer a sidebar panel`);
+    }
+    if (declared.length !== derived.length) {
+        const repeated = declared.filter((id, index) => declared.indexOf(id) !== index);
+        drift.push(`SIDEBAR_PANEL_TYPE_ORDER lists ${[...new Set(repeated)].join(', ')} more than once`);
+    }
+    return drift;
+}
+
+const SIDEBAR_PANEL_ORDER_DRIFT = sidebarPanelOrderDrift();
+if (SIDEBAR_PANEL_ORDER_DRIFT.length > 0) {
+    throw new Error(`Sidebar panel order disagrees with the declared flags: ${SIDEBAR_PANEL_ORDER_DRIFT.join('; ')}`);
+}
+
+/** The types the sidebar offers a panel for, in the order it offers them. */
+export const SIDEBAR_PANEL_TYPE_IDS: readonly SupportTypeId[] = SIDEBAR_PANEL_TYPE_ORDER;
+
+
 /** Whether `id` names a type with editable settings. */
 export function isEditableSupportType(id: string): id is SupportTypeId {
     return EDITABLE_SUPPORT_TYPES.some((descriptor) => descriptor.id === id);
@@ -1283,13 +1747,33 @@ export function isEditableSupportType(id: string): id is SupportTypeId {
  * plate and island trunks carry their own geometry, so neither converts.
  */
 export const SUPPORT_ORIGINS = {
-    anchor: { convertibleToTree: false },
+    stump: { convertibleToTree: false },
     overhang: { convertibleToTree: true },
     island: { convertibleToTree: false },
     standalone: { convertibleToTree: true },
 } as const;
 
 export type SupportOriginId = keyof typeof SUPPORT_ORIGINS;
+
+/**
+ * The origin a support is stamped with when placed in the near-plate band. The
+ * band is claimed by a type through its `placementRule`, and the origin is named
+ * after that type.
+ *
+ * Origin keys are their own vocabulary and do not follow `SupportTypeId`, so
+ * callers compare against this rather than spelling the name.
+ */
+export const NEAR_PLATE_ORIGIN: SupportOriginId = (() => {
+    const matches = (Object.keys(SUPPORT_ORIGINS) as SupportOriginId[])
+        .filter((origin) => SUPPORT_TYPES.some((descriptor) => descriptor.id === origin));
+    const [origin, ...rest] = matches;
+    if (!origin || rest.length > 0) {
+        throw new Error(
+            `expected exactly one origin named after a support type, found: ${matches.join(', ') || 'none'}.`,
+        );
+    }
+    return origin;
+})();
 
 /** Whether a trunk with this origin may be converted into a tree. */
 export function isOriginConvertibleToTree(origin: string | undefined): boolean {
@@ -1370,10 +1854,52 @@ export const SUPPORT_STATE_TYPES: readonly SupportTypeDescriptor[] = SUPPORT_TYP
     (descriptor) => descriptor.location.store === 'support',
 );
 
-/** Types whose instances carry a modelId. */
-export const MODEL_ID_TYPES: readonly SupportTypeDescriptor[] = SUPPORT_TYPES.filter(
-    (descriptor) => descriptor.carriesModelId,
+/**
+ * Types whose shafts the fan host pool offers, in registry order.
+ *
+ * The pool, the merge search, the attachment-capacity check and the forest
+ * report's host index all walk this one list, so extending `canBeGridHost` to
+ * a second type reaches every one of them.
+ */
+export const GRID_HOST_TYPES: readonly SupportTypeDescriptor[] = SUPPORT_TYPES.filter(
+    (descriptor) => descriptor.canBeGridHost,
 );
+
+/**
+ * Mirrors each descriptor's `isAutoPlaced` with the literals kept, so the ledger
+ * keeps the NARROW union of these names (`PlacedKind`) rather than widening to
+ * `SupportTypeId`. A literal map gives both the narrow union and the check that
+ * it matches the flag; held to it by `derivedTypeSubsets.test.ts`.
+ */
+export const AUTO_PLACED_BY_TYPE = {
+    trunk: true,
+    branch: true,
+    leaf: true,
+    twig: true,
+    stick: true,
+    brace: false,
+    stump: true,
+    kickstand: false,
+} as const satisfies Record<SupportTypeId, boolean>;
+
+/** A type the auto-placement pass can place. */
+export type AutoPlacedTypeId = {
+    [K in SupportTypeId]: (typeof AUTO_PLACED_BY_TYPE)[K] extends true ? K : never;
+}[SupportTypeId];
+
+/** Every type that pass can place, in registry order. */
+export const AUTO_PLACED_TYPE_IDS: readonly AutoPlacedTypeId[] =
+    (Object.keys(AUTO_PLACED_BY_TYPE) as SupportTypeId[])
+        .filter((id): id is AutoPlacedTypeId => AUTO_PLACED_BY_TYPE[id]);
+
+/** Whether a placed kind is one the ledger reports. */
+export function isAutoPlacedType(kind: SupportTypeId | 'reject'): kind is AutoPlacedTypeId {
+    return (AUTO_PLACED_TYPE_IDS as readonly string[]).includes(kind);
+}
+
+/** Collections whose entities can host a fan link, in registry order. */
+export const GRID_HOST_COLLECTION_KEYS: readonly SupportCollectionKey[] = GRID_HOST_TYPES
+    .map((descriptor) => descriptor.location.key as SupportCollectionKey);
 
 /**
  * Collections on SupportState that are not support types. Roots and knots are
@@ -1469,12 +1995,18 @@ export function countSupportCollections(
     return counts;
 }
 
-/** SupportState collection keys whose entities carry a modelId, in registry order. */
+/**
+ * SupportState collection keys whose entities carry a modelId, in registry
+ * order.
+ *
+ * Every support type does, and `roots` is the one primitive that does -- a
+ * knot's model comes from its host shaft instead. Kept as its own list rather
+ * than collapsed into `SUPPORT_STATE_COLLECTIONS`, which answers a different
+ * question and only coincides today.
+ */
 export const MODEL_ID_COLLECTION_KEYS: readonly SupportCollectionKey[] = [
     'roots' as SupportCollectionKey,
-    ...SUPPORT_STATE_TYPES
-        .filter((d) => d.carriesModelId)
-        .map((d) => d.location.key as SupportCollectionKey),
+    ...SUPPORT_STATE_TYPES.map((descriptor) => descriptor.location.key as SupportCollectionKey),
 ];
 
 /**
@@ -1488,9 +2020,7 @@ export function findKnotHost(
 ): { typeId: SupportTypeId; id: string } | null {
     for (const typeId of order) {
         const descriptor = getSupportTypeDescriptor(typeId);
-        const fields = descriptor.edges
-            .filter((edge) => edge.to === 'knots' && edge.ownership === 'hostedBy')
-            .map((edge) => edge.field);
+        const fields = hostKnotFieldsFor(descriptor.id);
         if (fields.length === 0) continue;
 
         const record = state[descriptor.location.key] as unknown as
@@ -1504,10 +2034,173 @@ export function findKnotHost(
     return null;
 }
 
+/**
+ * Every type that flexes when its host knot is dragged, with the edge fields
+ * naming that knot. Derived, so adding a flexing type needs no change here.
+ */
+export const FLEXING_KNOT_HOST_TYPES: readonly {
+    typeId: SupportTypeId;
+    knotFields: readonly string[];
+}[] = SUPPORT_TYPES
+    .filter((descriptor) => descriptor.flexesOnHostKnotDrag)
+    .map((descriptor) => ({
+        typeId: descriptor.id,
+        knotFields: [...hostKnotFieldsFor(descriptor.id)],
+    }));
+
 /** Precedence `findKnotHost` resolves in when several types name one knot. */
 export const KNOT_HOST_PRECEDENCE: readonly SupportTypeId[] = [
     'leaf', 'branch', 'brace', 'kickstand',
 ];
+
+/**
+ * The order to walk the types that hang off a host shaft by a knot. Observable,
+ * and not registry order: the cull and the forest report both list leaves
+ * before branches. Membership is held to the edge declarations by
+ * `shaftHostedMemberOrderDrift`.
+ */
+export const SHAFT_HOSTED_MEMBER_TYPE_ORDER = ['leaf', 'branch'] as const satisfies readonly SupportTypeId[];
+
+/** A type the walk above visits. */
+export type ShaftHostedMemberTypeId = Extract<SupportTypeId, (typeof SHAFT_HOSTED_MEMBER_TYPE_ORDER)[number]>;
+
+/**
+ * How `SHAFT_HOSTED_MEMBER_TYPE_ORDER` and the edge rule disagree, as messages.
+ * Empty when they agree; this module throws at load when they do not.
+ */
+export function shaftHostedMemberOrderDrift(): readonly string[] {
+    // The rule: a shaft-hosted member hangs by a knot and by nothing else --
+    // exactly one `hostedBy` edge onto `knots`, none onto a segment. Leaf and
+    // branch. A brace names two knots, so it is not one; a kickstand names a
+    // knot AND a segment, so it is not one either -- it rides a specific span.
+    const derived = SUPPORT_TYPES
+        .filter((descriptor) => {
+            const hostedBy = descriptor.edges.filter((edge) => edge.ownership === 'hostedBy');
+            return hostedBy.filter((edge) => edge.to === 'knots').length === 1
+                && hostedBy.filter((edge) => edge.to === 'segment').length === 0;
+        })
+        .map((descriptor) => descriptor.id);
+    const declared: readonly SupportTypeId[] = SHAFT_HOSTED_MEMBER_TYPE_ORDER;
+    const drift: string[] = [];
+    for (const id of derived) {
+        if (!declared.includes(id)) {
+            drift.push(`${id} declares a shaft-hosted member but is missing from SHAFT_HOSTED_MEMBER_TYPE_ORDER`);
+        }
+    }
+    for (const id of declared) {
+        if (!derived.includes(id)) {
+            drift.push(`${id} is in SHAFT_HOSTED_MEMBER_TYPE_ORDER but declares no shaft-hosted member`);
+        }
+    }
+    if (declared.length !== derived.length) {
+        const repeated = declared.filter((id, index) => declared.indexOf(id) !== index);
+        drift.push(`SHAFT_HOSTED_MEMBER_TYPE_ORDER lists ${[...new Set(repeated)].join(', ')} more than once`);
+    }
+    return drift;
+}
+
+const SHAFT_HOSTED_MEMBER_ORDER_DRIFT = shaftHostedMemberOrderDrift();
+if (SHAFT_HOSTED_MEMBER_ORDER_DRIFT.length > 0) {
+    throw new Error(`Shaft-hosted member walk order disagrees with the declared edges: ${SHAFT_HOSTED_MEMBER_ORDER_DRIFT.join('; ')}`);
+}
+
+/** One shaft-hosted member type, as a walk over those members needs it. */
+export interface ShaftHostedMemberType {
+    /** The type id, which is also the `kind` a cull record for it carries. */
+    typeId: ShaftHostedMemberTypeId;
+    /** The entity field naming the knot this member hangs from. */
+    knotField: string;
+    /** The SupportState collection its entities live in. */
+    collectionKey: SupportCollectionKey;
+}
+
+/**
+ * Which types own a placement mode of their own, with the literals kept so the
+ * owner union narrows rather than widening to every type.
+ * `placementModeOwnerDrift` holds the table to the descriptor flags at load.
+ */
+export const PLACEMENT_MODE_OWNER_BY_TYPE = {
+    trunk: false,
+    branch: true,
+    leaf: true,
+    twig: false,
+    stick: false,
+    brace: true,
+    stump: false,
+    kickstand: true,
+} as const satisfies Record<SupportTypeId, boolean>;
+
+/** The types that own a placement mode. */
+export type PlacementModeOwnerTypeId = {
+    [K in SupportTypeId]: (typeof PLACEMENT_MODE_OWNER_BY_TYPE)[K] extends true ? K : never;
+}[SupportTypeId];
+
+export const PLACEMENT_MODE_OWNER_TYPES: readonly PlacementModeOwnerTypeId[] =
+    (Object.keys(PLACEMENT_MODE_OWNER_BY_TYPE) as SupportTypeId[])
+        .filter((id): id is PlacementModeOwnerTypeId => PLACEMENT_MODE_OWNER_BY_TYPE[id]);
+
+/** How `PLACEMENT_MODE_OWNER_BY_TYPE` and the descriptor flags disagree. */
+export function placementModeOwnerDrift(): readonly string[] {
+    const derived = SUPPORT_TYPES
+        .filter((descriptor) => descriptor.hasPlacementPreview && !descriptor.previewYieldsToOtherModes)
+        .map((descriptor) => descriptor.id);
+    const declared: readonly SupportTypeId[] = PLACEMENT_MODE_OWNER_TYPES;
+    const drift: string[] = [];
+    for (const id of derived) {
+        if (!declared.includes(id)) drift.push(`${id} owns a placement mode but is missing from PLACEMENT_MODE_OWNER_BY_TYPE`);
+    }
+    for (const id of declared) {
+        if (!derived.includes(id)) drift.push(`${id} is marked as owning a placement mode but declares none`);
+    }
+    return drift;
+}
+
+const PLACEMENT_MODE_OWNER_DRIFT = placementModeOwnerDrift();
+if (PLACEMENT_MODE_OWNER_DRIFT.length > 0) {
+    throw new Error(`Placement mode owners disagree with the declared flags: ${PLACEMENT_MODE_OWNER_DRIFT.join('; ')}`);
+}
+
+/**
+ * The types sharing the ONE `branchFamily` placement binding.
+ *
+ * Branch and brace are placed by the same binding, so the family they belong to
+ * is named `branchFamily` rather than after either type. Every other placement
+ * owner is named after its own type, which is what
+ * `OwnNamedPlacementFamilyTypeId` below says.
+ */
+export const BRANCH_FAMILY_MEMBER_TYPES = ['branch', 'brace'] as const satisfies readonly PlacementModeOwnerTypeId[];
+
+/** A type whose placement is driven by the shared branch binding. */
+export type BranchFamilyMemberTypeId = (typeof BRANCH_FAMILY_MEMBER_TYPES)[number];
+
+/** The placement owners named after their own type rather than folded into a family. */
+export type OwnNamedPlacementFamilyTypeId = Exclude<PlacementModeOwnerTypeId, BranchFamilyMemberTypeId>;
+
+/**
+ * The family a placement mode belongs to.
+ *
+ * `branchFamily` is a family NAME, not a type id -- it exists because branch and
+ * brace are driven by one binding. The rest of the union is derived, so renaming
+ * a type renames its family here.
+ */
+export type PlacementFamilyName = 'branchFamily' | OwnNamedPlacementFamilyTypeId;
+
+/**
+ * The shaft-hosted member types, in the order to walk them.
+ *
+ * The single naming point for those walks: a caller iterates this rather than
+ * naming a collection or a member type, so a renamed type id reaches the
+ * descriptor, this list and the walk together, and a stale walk does not compile.
+ */
+export const SHAFT_HOSTED_MEMBER_TYPES: readonly ShaftHostedMemberType[] =
+    SHAFT_HOSTED_MEMBER_TYPE_ORDER.map((typeId) => {
+        const descriptor = getSupportTypeDescriptor(typeId);
+        const knotField = hostKnotFieldsFor(typeId)[0];
+        if (!knotField) {
+            throw new Error(`${typeId} is walked as a shaft-hosted member but declares no hostedBy edge onto knots`);
+        }
+        return { typeId, knotField, collectionKey: descriptor.location.key };
+    });
 
 /**
  * Whether each type's joint drags publish a live shaft preview.
@@ -1522,7 +2215,7 @@ export const JOINT_DRAG_PREVIEW_BY_TYPE = {
     twig: false,
     stick: false,
     brace: false,
-    anchor: false,
+    stump: false,
     kickstand: true,
 } as const satisfies Record<SupportTypeId, boolean>;
 
@@ -1552,7 +2245,7 @@ export const MODEL_SURFACE_GESTURE_BY_TYPE = {
     twig: false,
     stick: false,
     brace: false,
-    anchor: false,
+    stump: false,
     kickstand: false,
 } as const satisfies Record<SupportTypeId, boolean>;
 
@@ -1605,6 +2298,190 @@ export function parseKnotHostId(
     return null;
 }
 
+/** The selection id for an entity whose span stands in for a segment. */
+export function segmentSelectionId(typeId: SupportTypeId, entityId: string): string {
+    const prefix = getSupportTypeDescriptor(typeId).segmentSelectionPrefix;
+    if (!prefix) throw new Error(`${typeId} declares no segmentSelectionPrefix; its segments are real`);
+    return `${prefix}${entityId}`;
+}
+
+/** Split a segment selection id into its type and entity id, or null for a real segment. */
+export function parseSegmentSelectionId(
+    segmentId: string,
+): { typeId: SupportTypeId; entityId: string } | null {
+    for (const descriptor of SUPPORT_TYPES) {
+        const prefix = descriptor.segmentSelectionPrefix;
+        if (!prefix || !segmentId.startsWith(prefix)) continue;
+        return { typeId: descriptor.id, entityId: segmentId.slice(prefix.length) };
+    }
+    return null;
+}
+
+/**
+ * The two kinds of pseudo-shaft a knot can ride, told apart by what they
+ * declare rather than by name.
+ *
+ * A SPAN is selectable as a segment, so it declares a `segmentSelectionPrefix`
+ * too (a brace's span between its knots). A CONE host is a knot host only (a
+ * leaf's contact cone), so it declares no segment prefix -- which is exactly
+ * the distinction `implicitSegmentCount` already relies on.
+ */
+function knotHostTypesWhere(wantsSegment: boolean): readonly SupportTypeId[] {
+    return SUPPORT_TYPES
+        .filter((d) => d.knotHostPrefix && !!d.segmentSelectionPrefix === wantsSegment)
+        .map((d) => d.id);
+}
+
+/** Types whose knot host is a cone, not a selectable span. */
+export const CONE_KNOT_HOST_TYPES: readonly SupportTypeId[] = knotHostTypesWhere(false);
+
+/** Types whose knot host is a span that is also selectable as a segment. */
+export const SPAN_KNOT_HOST_TYPES: readonly SupportTypeId[] = knotHostTypesWhere(true);
+
+/** Whether this type hosts knots on a cone rather than a span. */
+export function isConeKnotHost(typeId: SupportTypeId): boolean {
+    return CONE_KNOT_HOST_TYPES.includes(typeId);
+}
+
+/**
+ * The single type whose knot host is a selectable span.
+ *
+ * Callers that build such an id hold the entity but not its type; there is one
+ * span host, and this asserts that rather than assuming it silently.
+ */
+export function spanKnotHostType(): SupportTypeId {
+    const [typeId, ...rest] = SPAN_KNOT_HOST_TYPES;
+    if (!typeId || rest.length > 0) {
+        throw new Error(
+            `expected exactly one span knot host, found: ${SPAN_KNOT_HOST_TYPES.join(', ') || 'none'}. `
+            + 'A caller builds these ids without holding a type; give it the type instead.',
+        );
+    }
+    return typeId;
+}
+
+/**
+ * The single type whose knot host is a contact cone. Same contract as
+ * `spanKnotHostType`: it asserts the "exactly one" rather than assuming it.
+ */
+export function coneKnotHostType(): SupportTypeId {
+    const [typeId, ...rest] = CONE_KNOT_HOST_TYPES;
+    if (!typeId || rest.length > 0) {
+        throw new Error(
+            `expected exactly one cone knot host, found: ${CONE_KNOT_HOST_TYPES.join(', ') || 'none'}. `
+            + 'A caller builds these ids without holding a type; give it the type instead.',
+        );
+    }
+    return typeId;
+}
+
+/**
+ * The single type that is the default placement tool -- the one whose preview
+ * yields to every other mode, and which auto-placement's fallback builds.
+ *
+ * Same contract as `coneKnotHostType`: it asserts the "exactly one" rather than
+ * assuming it, so a second type claiming the flag fails loudly at the call
+ * instead of silently widening what "not the default" excludes.
+ */
+export function defaultPlacementToolTypeId(): SupportTypeId {
+    const matches = SUPPORT_TYPES.filter((descriptor) => descriptor.previewYieldsToOtherModes).map((d) => d.id);
+    const [typeId, ...rest] = matches;
+    if (!typeId || rest.length > 0) {
+        throw new Error(
+            `expected exactly one default placement tool, found: ${matches.join(', ') || 'none'}.`,
+        );
+    }
+    return typeId;
+}
+
+/**
+ * The type whose entities live in `key`: the inverse of each descriptor's
+ * `location.key`, for a caller walking a `SupportState` collection by key.
+ */
+export function typeIdForCollection(key: SupportCollectionKey): SupportTypeId {
+    const descriptor = SUPPORT_TYPES.find((candidate) => candidate.location.key === key);
+    if (!descriptor) {
+        throw new Error(`no support type stores its entities in the "${key}" collection`);
+    }
+    return descriptor.id;
+}
+
+/**
+ * The single type serialised as a bundle with the root and host knot it owns.
+ *
+ * Same contract as `coneKnotHostType`: it asserts the "exactly one" rather than
+ * assuming it, so a second bundled type is a loud failure instead of a silent
+ * change to whose primitives a caller reads.
+ */
+export function bundledSupportTypeId(): SupportTypeId {
+    const matches = SUPPORT_TYPES.filter((descriptor) => descriptor.serialisedAsBundle).map((d) => d.id);
+    const [typeId, ...rest] = matches;
+    if (!typeId || rest.length > 0) {
+        throw new Error(
+            `expected exactly one bundled support type, found: ${matches.join(', ') || 'none'}.`,
+        );
+    }
+    return typeId;
+}
+
+/**
+ * The types whose base is geometry on the entity rather than a shared `Roots`
+ * record, and the fields that base position and radius live in.
+ *
+ * Read one type through `inlineRootPlacementFor`, or iterate for the whole set.
+ */
+export interface InlineRootPlacement {
+    typeId: SupportTypeId;
+    /** The collection the entities live in. */
+    collectionKey: SupportCollectionKey;
+    /** The field holding the base position. */
+    posField: string;
+    /** The field holding the base radius. */
+    radiusField: string;
+}
+
+export const INLINE_ROOT_TYPES: readonly InlineRootPlacement[] = SUPPORT_TYPES
+    .filter((descriptor) => descriptor.lower.kind === 'inlineRoot')
+    .map((descriptor) => {
+        const { field, radiusField } = descriptor.lower;
+        if (!field || !radiusField) {
+            throw new Error(
+                `${descriptor.id} declares an inlineRoot without both a position and a radius field, `
+                + 'so nothing can place its base on the raft',
+            );
+        }
+        return {
+            typeId: descriptor.id,
+            collectionKey: descriptor.location.key,
+            posField: field,
+            radiusField,
+        };
+    });
+
+/**
+ * The fields through which a type hangs off a host knot: its `hostedBy` edges
+ * onto `knots`. Empty for a type that hangs off no knot -- one standing on its
+ * own root, or spanning two model contacts.
+ */
+export function hostKnotFieldsFor(typeId: SupportTypeId): readonly string[] {
+    return getSupportTypeDescriptor(typeId).edges
+        .filter((edge) => edge.to === 'knots' && edge.ownership === 'hostedBy')
+        .map((edge) => edge.field);
+}
+
+/** Whether this type hosts knots on a selectable span. */
+export function isSpanKnotHost(typeId: SupportTypeId): boolean {
+    return SPAN_KNOT_HOST_TYPES.includes(typeId);
+}
+
+/**
+ * Whether a `parentShaftId` names a pseudo-shaft rather than a real segment.
+ * Asks every declared prefix, so a type gaining one is covered.
+ */
+export function isKnotHostId(parentShaftId: string): boolean {
+    return parseKnotHostId(parentShaftId) !== null;
+}
+
 /** The `parentShaftId` a knot carries when it rides this type's pseudo-shaft. */
 export function knotHostId(typeId: SupportTypeId, entityId: string): string {
     const prefix = getSupportTypeDescriptor(typeId).knotHostPrefix;
@@ -1631,3 +2508,74 @@ export function parsePrefixedSegmentId(
 export const MODEL_SURFACE_GESTURE_TYPES: readonly ModelSurfaceGestureTypeId[] =
     (Object.keys(MODEL_SURFACE_GESTURE_BY_TYPE) as SupportTypeId[])
         .filter((id): id is ModelSurfaceGestureTypeId => MODEL_SURFACE_GESTURE_BY_TYPE[id]);
+
+/**
+ * Types that own their edit-history entry but declare no update action.
+ *
+ * The joint-drag path pushes that type's OWN typed action for the entry, so a
+ * type declaring the flag without the action would record no undo entry at all,
+ * and nothing would say so. `state.ts` asserts this list is empty at load, beside
+ * the other flag-and-registration completeness checks.
+ */
+export function typesDeclaringOwnHistoryEntryWithoutUpdate(): readonly SupportTypeId[] {
+    return SUPPORT_TYPES
+        .filter((descriptor) => descriptor.ownsEditHistoryEntry && !descriptor.historyUpdate)
+        .map((descriptor) => descriptor.id);
+}
+
+/**
+ * Mirrors each descriptor's `hostsKickstand` with the literals kept, so the host
+ * union narrows instead of widening to every type. `derivedTypeSubsets.test.ts`
+ * holds the two in step.
+ */
+export const KICKSTAND_HOST_BY_TYPE = {
+    trunk: true,
+    branch: true,
+    leaf: false,
+    twig: false,
+    stick: false,
+    brace: false,
+    stump: false,
+    kickstand: false,
+} as const satisfies Record<SupportTypeId, boolean>;
+
+/** The types a kickstand's host knot may ride. */
+export type KickstandHostTypeId = {
+    [K in SupportTypeId]: (typeof KICKSTAND_HOST_BY_TYPE)[K] extends true ? K : never;
+}[SupportTypeId];
+
+export const KICKSTAND_HOST_TYPES: readonly KickstandHostTypeId[] =
+    (Object.keys(KICKSTAND_HOST_BY_TYPE) as SupportTypeId[])
+        .filter((id): id is KickstandHostTypeId => KICKSTAND_HOST_BY_TYPE[id]);
+
+/** Whether an untrusted `kind` names a type a kickstand may host on. */
+export function isKickstandHostType(kind: string): kind is KickstandHostTypeId {
+    return (KICKSTAND_HOST_TYPES as readonly string[]).includes(kind);
+}
+
+/**
+ * Whether one joint of this type can be removed on its own, keeping the support.
+ *
+ * Such a segment resolves an endpoint from a root, a host knot or its neighbour,
+ * so a joint removal merges two segments. `derivedTypeSubsets.test.ts` holds it.
+ */
+export const JOINT_REMOVAL_BY_TYPE = {
+    trunk: true,
+    branch: true,
+    leaf: false,
+    twig: false,
+    stick: false,
+    brace: false,
+    stump: false,
+    kickstand: true,
+} as const satisfies Record<SupportTypeId, boolean>;
+
+/** The types whose joints `removeJointById` reports. */
+export type JointRemovalTypeId = {
+    [K in SupportTypeId]: (typeof JOINT_REMOVAL_BY_TYPE)[K] extends true ? K : never;
+}[SupportTypeId];
+
+/** The same set at runtime, for the scan that answers which entity holds a joint. */
+export const JOINT_REMOVAL_TYPES: readonly JointRemovalTypeId[] =
+    (Object.keys(JOINT_REMOVAL_BY_TYPE) as SupportTypeId[])
+        .filter((id): id is JointRemovalTypeId => JOINT_REMOVAL_BY_TYPE[id]);

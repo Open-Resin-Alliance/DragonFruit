@@ -2,7 +2,7 @@ import { useEffect, useCallback, useMemo, useRef, useSyncExternalStore } from 'r
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
-import { subscribe, getSnapshot, addKnot, addLeaf } from '../../state';
+import { addSupportEntity, subscribe, getSnapshot, addKnot } from '../../state';
 import { pushSupportHistory } from '@/supports/history/supportHistory';
 import type { SnapTarget } from '../../interaction/SnappingManager';
 import type { Vec3, Knot, Joint, Segment } from '../../types';
@@ -20,7 +20,8 @@ import { clearSupportSelection } from '../../interaction/shared/selection/select
 import { canResolveSupportPlacementBindingFromModifierState, getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByModifierState } from '../../interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
 import { usePlacementSnappingSession } from '../../interaction/shared/placement/snapping/usePlacementSnappingSession';
 import { buildKickstandPathSnapTargets, buildPrimarySnapTargetIndex, ALL_SNAP_TYPES, buildSupportPathSnapTargets } from '../../interaction/shared/placement/snapping/supportPathTargets';
-import { getSupportTypeDescriptor, type SupportCollectionKey } from '../../supportTypeRegistry';
+import { getSupportTypeDescriptor, KICKSTAND_HOST_TYPES, parseSegmentSelectionId, resolveSupportTypeIdOf, type SupportCollectionKey } from '../../supportTypeRegistry';
+import { LEAF_PLACEMENT_OWNER } from '../../interaction/shared/placement/hotkeys/supportPlacementRouting';
 import { projectPointToSnapTargetPath, projectRayToSnapTargetPath, selectNearestPathTarget } from '../../interaction/shared/placement/snapping/pathProjection';
 import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
 import { previewVecKey, previewNormalKey, quantizePreviewValue } from '../shared/previewSignature';
@@ -272,8 +273,9 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                 }
 
                 // If snapped to a brace, compute local tapered host diameter.
-                if (resolvedSnap.targetId.startsWith('braceSegment:')) {
-                    const braceId = resolvedSnap.targetId.slice('braceSegment:'.length);
+                const spanTarget = parseSegmentSelectionId(resolvedSnap.targetId);
+                if (spanTarget) {
+                    const braceId = spanTarget.entityId;
                     const brace = supportState.braces[braceId];
                     const startKnot = brace ? supportState.knots[brace.startKnotId] : undefined;
                     const endKnot = brace ? supportState.knots[brace.endKnotId] : undefined;
@@ -329,8 +331,9 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                         t = projected.t;
                         hostDiameterMm = hoveredTarget.pathSegment.radius * 2;
 
-                        if (segmentId.startsWith('braceSegment:')) {
-                            const braceId = segmentId.slice('braceSegment:'.length);
+                        const spanSegment = parseSegmentSelectionId(segmentId);
+                        if (spanSegment) {
+                            const braceId = spanSegment.entityId;
                             const brace = supportState.braces[braceId];
                             const startKnot = brace ? supportState.knots[brace.startKnotId] : undefined;
                             const endKnot = brace ? supportState.knots[brace.endKnotId] : undefined;
@@ -551,10 +554,15 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                     let isBottom = false;
 
                     /**
-                     * @deprecated Belongs in the registry as a declared flag,
-                     * pending a decision on which types may host a sprout.
+                     * The types whose shafts may host a sprout knot.
+                     *
+                     * Read from the registry's declared shaft hosts -- the
+                     * types a hosted knot may ride (`hostsKickstand`, the
+                     * same shafts a leaf sprouts from: a support standing in
+                     * the print with segments to hang a knot on) -- rather
+                     * than spelled, so a renamed type moves with it.
                      */
-                    const leafSproutHosts = ['trunk', 'branch'] as const;
+                    const leafSproutHosts = KICKSTAND_HOST_TYPES;
 
                     for (const typeId of leafSproutHosts) {
                         const key = getSupportTypeDescriptor(typeId).location.key as SupportCollectionKey;
@@ -647,9 +655,13 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                     hostDiameterMm,
                     mesh: resolveTipMesh(tipPosition),
                 });
-                const markedLeaf = markPlacementSurface('leaf', leaf, placementSurface);
+                // The built leaf stamps its own `typeId`, so the controller reads
+                // it back rather than restating the name: the surface mark and the
+                // history action below both name the type the leaf declares.
+                const leafTypeId = resolveSupportTypeIdOf(leaf) ?? LEAF_PLACEMENT_OWNER;
+                const markedLeaf = markPlacementSurface(leafTypeId, leaf, placementSurface);
 
-                addLeaf(markedLeaf);
+                addSupportEntity(markedLeaf);
 
                 // Reload pattern: create new knot at the same position and lock junctionHubId to it
                 const newParentKnotId = uuidv4();
@@ -661,7 +673,7 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                 leafPlacementStore.setJunctionHub(newParentKnotId, true);
 
                 pushSupportHistory({
-                    type: addAction('leaf'),
+                    type: addAction(leafTypeId),
                     payload: {
                         leaf: markedLeaf,
                         knot: snap.junctionHubIsNew ? parentKnot : undefined,
@@ -718,13 +730,16 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                     hostDiameterMm,
                     mesh: resolveTipMesh(tipPosition),
                 });
-                const markedLeaf = markPlacementSurface('leaf', leaf, placementSurface);
+                // Same derivation as the sprout path above: the type the leaf
+                // declares, read back off the entity it just stamped.
+                const leafTypeId = resolveSupportTypeIdOf(leaf) ?? LEAF_PLACEMENT_OWNER;
+                const markedLeaf = markPlacementSurface(leafTypeId, leaf, placementSurface);
 
                 addKnot(parentKnot);
-                addLeaf(markedLeaf);
+                addSupportEntity(markedLeaf);
 
                 pushSupportHistory({
-                    type: addAction('leaf'),
+                    type: addAction(leafTypeId),
                     payload: {
                         leaf: markedLeaf,
                         knot: parentKnot,

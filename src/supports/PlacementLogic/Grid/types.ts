@@ -1,14 +1,15 @@
-import type { Anchor, Branch, Knot, Leaf, SupportState, Vec3 } from '../../types';
+import type { SupportState, Vec3 } from '../../types';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import type { SupportSettings } from '../../Settings/types';
 import type { TrunkBuildResult } from '../../SupportTypes/Trunk/trunkBuilder';
+import type { PlacedSupport } from '../../supportTypeRegistry';
 import type * as THREE from 'three';
 
 export type GridNodeKey = string;
 
 export type GridPlacementRejectReason =
     | 'KNOT_ABOVE_TIP'
-    | 'ANCHOR_BELOW_ROOT'
+    | 'STUMP_BELOW_ROOT'
     | 'NO_HOST_SEGMENT'
     | 'MODEL_MISMATCH'
     | 'NO_VALID_ATTACHMENT'
@@ -16,30 +17,14 @@ export type GridPlacementRejectReason =
 
 export type GridPlacementDecision =
     | {
-        kind: 'place_trunk';
-        trunkBuild: TrunkBuildResult;
+        /** A support is placed on this contact, in the registry's generic shape. */
+        kind: 'place';
+        /** The grid node it landed on, for logging. Empty when the build never
+         * consults the grid (a type's own override). */
         nodeKey: GridNodeKey;
-    }
-    | {
-        kind: 'place_branch';
-        nodeKey: GridNodeKey;
-        hostTrunkId: string;
-        knot: Knot;
-        branch: Branch;
-        supportData: SupportData;
-    }
-    | {
-        kind: 'place_leaf';
-        nodeKey: GridNodeKey;
-        hostTrunkId: string;
-        knot: Knot;
-        leaf: Leaf;
-        supportData: SupportData;
-    }
-    | {
-        kind: 'place_anchor';
-        anchor: Anchor;
-        supportData: SupportData;
+        placed: PlacedSupport;
+        /** Preview and validation state, whatever built the support. */
+        supportData?: SupportData;
     }
     | {
         kind: 'reject';

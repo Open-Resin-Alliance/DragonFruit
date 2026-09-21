@@ -611,7 +611,7 @@ fn normal_around(bvh: &Bvh, mesh: &IndexedMesh, p: Vec3, reach: f32) -> Option<V
     };
     let r2 = reach * reach;
     let mut sum = Vec3::new(0.0, 0.0, 0.0);
-    bvh.query_aabb(&query, |ti| {
+    bvh.query_aabb(mesh, &query, |ti| {
         let t = &mesh.triangles[ti as usize];
         let (_, d2) = closest_on_tri(
             p,
@@ -638,7 +638,7 @@ fn nearest_face(bvh: &Bvh, mesh: &IndexedMesh, p: Vec3) -> Option<u32> {
             max: Vec3::new(p.x + r, p.y + r, p.z + r),
         };
         let mut best = (f32::INFINITY, u32::MAX);
-        bvh.query_aabb(&query, |ti| {
+        bvh.query_aabb(mesh, &query, |ti| {
             let t = &mesh.triangles[ti as usize];
             let (_, d2) = closest_on_tri(
                 p,

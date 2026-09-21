@@ -1,14 +1,13 @@
 import React from 'react';
 import { flushSync } from 'react-dom';
-import type { Branch, Knot, Roots, Trunk } from '../types';
+import type { Knot, Roots } from '../types';
 import { computeJointDragPreviewKnots, type JointDragPreviewCandidateKnots, type JointDragPreviewContext, type JointDragPreviewKind, type JointDragPreviewPayload, type JointDragPreviewSnapshot } from './jointDragPreviewMath';
 import type { PartDragPreviewPayload } from './partDragPreview';
-import { isJointDragPreviewType } from '../supportTypeRegistry';
+import { getSupportTypeDescriptor, isJointDragPreviewType } from '../supportTypeRegistry';
 import { subscribeSupportInteractionReset } from './supportInteractionReset';
 import { getSupportWorkerRuntimeCapabilities } from './supportWorkerCapabilities';
 import { isSupportWorkerSafetyModeEnabled } from './supportWorkerSafetyMode';
 import { SupportComputeRuntime } from './supportComputeRuntime';
-import type { Kickstand } from '../SupportTypes/Kickstand/types';
 import type {
   JointDragPreviewInputDelta,
   JointDragPreviewWorkerCollectionsRef,
@@ -334,21 +333,28 @@ export function useJointDragPreviewOverrides({ roots, knots, kickstandKnots, can
     const support = activePreview.support;
     if (!support) return {};
 
-    if (activePreview.kind === 'trunk') {
-      const trunkSupport = support as Trunk;
-      return { root: roots[trunkSupport.rootId] ?? null };
+    const descriptor = getSupportTypeDescriptor(activePreview.kind);
+    const entity = support as unknown as Record<string, unknown>;
+    const context: JointDragPreviewContext = {};
+
+    if (descriptor.ownsRoot) {
+      context.root = roots[entity.rootId as string] ?? null;
     }
 
-    if (activePreview.kind === 'kickstand') {
-      const kickstandSupport = support as Kickstand;
-      return {
-        root: roots[kickstandSupport.rootId] ?? null,
-        hostKnot: kickstandKnots?.[kickstandSupport.hostKnotId] ?? knots[kickstandSupport.hostKnotId] ?? null,
-      };
+    // A knot-hosted lower end (a branch) rides its parent knot; a knot-hosted
+    // upper end (a kickstand) braces its host knot, which carries a drag-preview
+    // override in the kickstand view.
+    const knotEdge = descriptor.edges.find((edge) => edge.to === 'knots' && edge.ownership === 'hostedBy');
+    if (knotEdge) {
+      const knotId = entity[knotEdge.field] as string | undefined;
+      if (descriptor.lower.kind === 'knot') {
+        context.parentKnot = knotId ? (knots[knotId] ?? null) : null;
+      } else {
+        context.hostKnot = knotId ? (kickstandKnots?.[knotId] ?? knots[knotId] ?? null) : null;
+      }
     }
 
-    const branchSupport = support as Branch;
-    return { parentKnot: knots[branchSupport.parentKnotId] ?? null };
+    return context;
   }, [roots, kickstandKnots, knots]);
 
   const computeSync = React.useCallback((activePreview: JointDragPreviewSnapshot) => {
@@ -395,7 +401,7 @@ export function useJointDragPreviewOverrides({ roots, knots, kickstandKnots, can
   }, [candidateKnots, computeSync, resolvePreviewContext]);
 
   const candidateKnotCount = React.useMemo(() => countCandidateKnots(candidateKnots), [candidateKnots]);
-  const useInlinePreviewCompute = preview?.kind === 'trunk' || candidateKnotCount <= INLINE_PREVIEW_CANDIDATE_THRESHOLD;
+  const useInlinePreviewCompute = (preview && getSupportTypeDescriptor(preview.kind).knotDragComputesInline) || candidateKnotCount <= INLINE_PREVIEW_CANDIDATE_THRESHOLD;
   const inlinePreviewKnots = React.useMemo(() => {
     if (!preview || !useInlinePreviewCompute) return EMPTY_PREVIEW_KNOTS;
     return computeSync(preview);
