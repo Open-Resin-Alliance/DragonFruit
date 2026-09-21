@@ -38,6 +38,7 @@ import { gridNodeKeyFromXY, gridSnappedXYFromKey } from '../PlacementLogic/Grid/
 import { buildNearestCandidateNodeKeys } from '../PlacementLogic/Grid/nearestCandidateNodeKeys';
 import type { SDFCache } from '../PlacementLogic/Pathfinding/SDFCache';
 import { getOrCreateSDFCache } from '../PlacementLogic/Pathfinding/SDFCachePool';
+import { isContactConeBlocked } from '../PlacementLogic/CollisionAvoidance';
 import { buildDirectionFan, findEscapeJoint, findGridJoint } from './EscapeJointSearch';
 import {
     clampConeAxisDeviationFromSurfaceNormal,
@@ -116,6 +117,15 @@ const GRID_JOINT_NODE_BUDGET = 24;
  */
 const ROUTED_DETOUR_SLACK_DEG = 10;
 const MIN_ALLOWED_ROUTED_ANGLE_DEG = 15;
+/**
+ * How far the cone may swing off the surface normal when the cone at the
+ * nominal socket is blocked, and how many directions around the tip are tried
+ * at each angle. Smallest deviation first, so the cone stays as short and as
+ * near-normal as the geometry allows — the same preference the retired engine
+ * scored its socket rescue by.
+ */
+const CONE_DEVIATION_ANGLES_DEG = [10, 20, 30];
+const CONE_DEVIATION_DIRECTION_COUNT = 8;
 
 /**
  * Roots volume check: does the disk + cone the root is made of intersect the model?
@@ -181,8 +191,10 @@ function resolveConeSocketAndAxis(args: {
     /** The pre-routing axis: used for the disk thickness, and as the fallback direction. */
     coneAxisHint: Vec3;
     coneBlockedAt: (socketPos: Vec3) => boolean;
+    /** The cone body from the disk surface to the socket, against the model. */
+    contactConeBlockedAt: (coneStartPos: Vec3, socketPos: Vec3) => boolean;
     segmentBlockedBetween: (from: Vec3, to: Vec3) => boolean;
-}): { socketPos: Vec3; coneAxis: Vec3 } {
+}): { socketPos: Vec3; coneAxis: Vec3; coneStartPos: Vec3 } {
     const { socketPos, joints, tipPos, tipNormal, tipProfile, coneAxisHint } = args;
 
     const diskThickness = tipProfile.type === 'disk'
@@ -207,8 +219,10 @@ function resolveConeSocketAndAxis(args: {
             MAX_CONE_AXIS_DEVIATION_FROM_SURFACE_NORMAL_DEG,
         );
         const alignedSocket = getSocketPosition(coneStartPos, alignedAxis, tipProfile);
-        if (!args.coneBlockedAt(alignedSocket) && !args.segmentBlockedBetween(alignedSocket, firstJoint)) {
-            return { socketPos: alignedSocket, coneAxis: alignedAxis };
+        if (!args.coneBlockedAt(alignedSocket)
+            && !args.contactConeBlockedAt(coneStartPos, alignedSocket)
+            && !args.segmentBlockedBetween(alignedSocket, firstJoint)) {
+            return { socketPos: alignedSocket, coneAxis: alignedAxis, coneStartPos };
         }
     }
 
@@ -219,7 +233,51 @@ function resolveConeSocketAndAxis(args: {
             socketPos.y - coneStartPos.y,
             socketPos.z - coneStartPos.z,
         ).normalize(),
+        coneStartPos,
     };
+}
+
+/**
+ * Axes the cone can take to reach around geometry beside the tip.
+ *
+ * The contact disk stays flat on the surface, so the cone may only swing away
+ * from the surface normal by `MAX_CONE_AXIS_DEVIATION_FROM_SURFACE_NORMAL_DEG`.
+ * Inside that budget the socket walks around the contact point, which is what
+ * lets a trunk leave a tip that sits in a pocket without leaning into the wall
+ * beside it. Ordered smallest deviation first, then outward direction first, so
+ * the first candidate that clears is the least-distorted cone.
+ */
+function buildConeDeviationAxes(tipNormal: Vec3, outwardHint: Vec3): Vec3[] {
+    const normal = new THREE.Vector3(tipNormal.x, tipNormal.y, tipNormal.z);
+    if (normal.lengthSq() < 1e-10) return [];
+    normal.normalize();
+
+    // The fan is generated in 2D and mapped onto the plane the cone can tilt in.
+    const reference = Math.abs(normal.z) < 0.9
+        ? new THREE.Vector3(0, 0, 1)
+        : new THREE.Vector3(1, 0, 0);
+    const tangentX = new THREE.Vector3().crossVectors(reference, normal).normalize();
+    const tangentY = new THREE.Vector3().crossVectors(normal, tangentX).normalize();
+
+    const hint = new THREE.Vector3(outwardHint.x, outwardHint.y, outwardHint.z);
+    hint.addScaledVector(normal, -hint.dot(normal));
+    const preferred = hint.lengthSq() > 1e-6
+        ? { x: hint.dot(tangentX), y: hint.dot(tangentY) }
+        : { x: 1, y: 0 };
+
+    const axes: Vec3[] = [];
+    for (const angleDeg of CONE_DEVIATION_ANGLES_DEG) {
+        const angleRad = THREE.MathUtils.degToRad(
+            Math.min(angleDeg, MAX_CONE_AXIS_DEVIATION_FROM_SURFACE_NORMAL_DEG),
+        );
+        for (const direction of buildDirectionFan(preferred, CONE_DEVIATION_DIRECTION_COUNT)) {
+            const tilt = tangentX.clone().multiplyScalar(direction.x).addScaledVector(tangentY, direction.y);
+            // Rotating the normal about (normal × tilt) swings it toward tilt.
+            const axis = normal.clone().applyAxisAngle(normal.clone().cross(tilt).normalize(), angleRad);
+            axes.push({ x: axis.x, y: axis.y, z: axis.z });
+        }
+    }
+    return axes;
 }
 
 /**
@@ -357,6 +415,32 @@ export function calculateSmartPlacementV3(
     const coneBlockedAt = (socketPos: Vec3): boolean => (
         sdf.distanceAt(socketPos.x, socketPos.y, socketPos.z) < clearanceMm
     );
+    /**
+     * The cone body, not just the socket point: a cone can lean sideways into
+     * geometry the socket itself clears, and the builder renders exactly the
+     * cone the router blessed.
+     */
+    const contactConeBlockedAt = (coneStartPos: Vec3, socketPos: Vec3): boolean => (
+        isContactConeBlocked(sdf, {
+            start: coneStartPos,
+            end: socketPos,
+            startRadius: input.tipProfile.contactDiameterMm / 2,
+            endRadius: input.tipProfile.bodyDiameterMm / 2,
+        })
+    );
+    /** The same cone start, a different axis: the socket follows the axis. */
+    const coneAtAxis = (coneStartPos: Vec3, axis: Vec3) => ({
+        socketPos: getSocketPosition(coneStartPos, axis, input.tipProfile),
+        coneAxis: axis,
+        coneStartPos,
+    });
+    // Built only when the cone at the nominal socket is blocked: the walk around
+    // the tip is the rare case, and the common one pays nothing for it.
+    let deviationAxes: Vec3[] | null = null;
+    const getDeviationCones = (coneStartPos: Vec3) => {
+        deviationAxes ??= buildConeDeviationAxes(input.tipNormal, standard.coneAxis ?? input.tipNormal);
+        return deviationAxes.map((axis) => coneAtAxis(coneStartPos, axis));
+    };
 
     const socketPos = standard.socketPos;
     const verticalSpanMm = Math.max(0, socketPos.z - rootTopZ);
@@ -407,22 +491,30 @@ export function calculateSmartPlacementV3(
     const straightPreflightClear = !segmentBlockedBetween(socketPos, { x: socketPos.x, y: socketPos.y, z: rootTopZ });
     const rootsFitStraightDown = !rootsBlockedAt(socketPos.x, socketPos.y);
 
-    // 1. Straight: the column below the socket is already clear and a root fits
-    //    there. Nothing to route, and this is the strongest shape there is.
-    if (straightPreflightClear && rootsFitStraightDown) {
-        const cone = resolveConeSocketAndAxis({
-            socketPos,
-            joints: [],
-            tipPos: input.tipPos,
-            tipNormal: input.tipNormal,
-            tipProfile: input.tipProfile,
-            coneAxisHint: standard.coneAxis ?? input.tipNormal,
-            coneBlockedAt,
-            segmentBlockedBetween,
-        });
+    // 1. Straight: the column below the socket is clear and a root fits there.
+    //    Nothing to route, and this is the strongest shape there is. The cone
+    //    comes first and may walk around the tip, because a cone leaning into
+    //    geometry beside it is not a placement; routing below gets its turn
+    //    only when no deviation clears.
+    const straightCone = resolveConeSocketAndAxis({
+        socketPos,
+        joints: [],
+        tipPos: input.tipPos,
+        tipNormal: input.tipNormal,
+        tipProfile: input.tipProfile,
+        coneAxisHint: standard.coneAxis ?? input.tipNormal,
+        coneBlockedAt,
+        contactConeBlockedAt,
+        segmentBlockedBetween,
+    });
+    for (const candidate of [straightCone, ...getDeviationCones(straightCone.coneStartPos)]) {
+        if (contactConeBlockedAt(candidate.coneStartPos, candidate.socketPos)) continue;
+        const columnEnd = { x: candidate.socketPos.x, y: candidate.socketPos.y, z: rootTopZ };
+        if (segmentBlockedBetween(candidate.socketPos, columnEnd)) continue;
+        if (rootsBlockedAt(candidate.socketPos.x, candidate.socketPos.y)) continue;
         const base = resolveBase({
-            preferredXY: { x: cone.socketPos.x, y: cone.socketPos.y },
-            lastSegmentStart: cone.socketPos,
+            preferredXY: { x: candidate.socketPos.x, y: candidate.socketPos.y },
+            lastSegmentStart: candidate.socketPos,
             rootTopZ,
             spacingMm,
             gridEnabled,
@@ -442,42 +534,48 @@ export function calculateSmartPlacementV3(
         // contact that member comes out near-horizontal. A base the grid moved is
         // left to the routing below, which is where a diagonal belongs.
         const baseIsUnderSocket = Boolean(base) && Math.hypot(
-            base!.basePos.x - cone.socketPos.x,
-            base!.basePos.y - cone.socketPos.y,
+            base!.basePos.x - candidate.socketPos.x,
+            base!.basePos.y - candidate.socketPos.y,
         ) <= STRAIGHT_BASE_TOLERANCE_MM;
-        if (base && baseIsUnderSocket) {
-            const straightChain = [cone.socketPos, base.rootTopTarget];
-            if (gridEnabled && !chainHoldsShapeRule(straightChain, clearanceMm)) {
-                return calculateSmartPlacementV3(input, { ...context, ignoreGrid: true });
-            }
-            publishDebug({
-                status: 'straight',
-                reason: 'socket column and roots are clear, no routing',
-                resolvedSocketPos: cone.socketPos,
-                basePos: base.basePos,
-                finalChain: straightChain,
-                straightPreflightClear,
-                rootsFitStraightDown,
-                routerProbes: 0,
-            });
-            return {
-                ...standard,
-                socketPos: cone.socketPos,
-                joints: [],
-                constructionJoints: [],
-                basePos: base.basePos,
-                unsnappedBottomPos: cone.socketPos,
-                snappedNodeKey: base.nodeKey,
-                coneAxis: cone.coneAxis,
-                error: undefined,
-                gridIgnored: ignoredGrid,
-            };
+        if (!base || !baseIsUnderSocket) continue;
+
+        const straightChain = [candidate.socketPos, base.rootTopTarget];
+        if (gridEnabled && !chainHoldsShapeRule(straightChain, clearanceMm)) {
+            return calculateSmartPlacementV3(input, { ...context, ignoreGrid: true });
         }
+        publishDebug({
+            status: 'straight',
+            reason: candidate === straightCone
+                ? 'socket column and roots are clear, no routing'
+                : 'cone deviated clear of the model, straight drop',
+            resolvedSocketPos: candidate.socketPos,
+            basePos: base.basePos,
+            finalChain: straightChain,
+            straightPreflightClear,
+            rootsFitStraightDown,
+            routerProbes: 0,
+        });
+        return {
+            ...standard,
+            socketPos: candidate.socketPos,
+            joints: [],
+            constructionJoints: [],
+            basePos: base.basePos,
+            unsnappedBottomPos: candidate.socketPos,
+            snappedNodeKey: base.nodeKey,
+            coneAxis: candidate.coneAxis,
+            error: undefined,
+            gridIgnored: ignoredGrid,
+        };
     }
 
     // 2. One diagonal to a column that clears, then straight down. The fan is
     //    ordered so the way off the surface the tip is attached to is tried
     //    first; every direction is tried before giving up.
+    const configuredRoutedAngleDeg = Math.max(
+        MIN_ALLOWED_ROUTED_ANGLE_DEG,
+        90 - settings.grid.minRoutedTrunkAngleDeg,
+    );
     const outward = new THREE.Vector3(
         (standard.coneAxis ?? input.tipNormal).x,
         (standard.coneAxis ?? input.tipNormal).y,
@@ -490,150 +588,171 @@ export function calculateSmartPlacementV3(
         minVerticalLegMm: MIN_VERTICAL_LEG_MM,
         baseFitsAt: (x: number, y: number) => !rootsBlockedAt(x, y),
     };
-    // Grid mode searches the lattice: the drop has to land on a node, so the
-    // node is chosen first and the joint derived from it. Every other mode
-    // drops at the first column that clears.
-    const found = gridEnabled
-        ? findGridJoint(sdf, socketPos, rootTopZ, {
-            ...jointSearchShared,
-            spacingMm,
-            maxNodeCount: GRID_JOINT_NODE_BUDGET,
-            // Keep leaving the way the cone points: the node nearest that
-            // direction wins over an equally close node the other way.
-            preferredDirection: outward.lengthSq() > 1e-6 ? { x: outward.x, y: outward.y } : null,
-        })
-        : findEscapeJoint(sdf, socketPos, rootTopZ, {
-            ...jointSearchShared,
-            stepMm: WALK_STEP_MM,
-            directions: buildDirectionFan(
-                outward.lengthSq() > 1e-6 ? { x: outward.x, y: outward.y } : null,
-                DIRECTION_COUNT,
-            ),
+    /**
+     * The cone decides which socket the chain starts from: a socket whose cone
+     * buries the tip in geometry is not a starting point. So the cone is checked
+     * first — it is the cheap test — and the joint search, which is the
+     * expensive one, runs once per socket that clears. The walk starts at the
+     * socket the cone policy picked and then goes around the tip within the
+     * cone's deviation budget, which is what lets a trunk leave a contact that
+     * sits in a pocket.
+     */
+    const socketCandidates = [
+        { ...straightCone, deviated: false },
+        ...getDeviationCones(straightCone.coneStartPos)
+            .map((candidate) => ({ ...candidate, deviated: true })),
+    ];
+    let refusalReason = 'no cone clears the model at the socket';
+    let refusalProbes = 0;
+    for (const socketCandidate of socketCandidates) {
+        const startSocket = socketCandidate.socketPos;
+        if (contactConeBlockedAt(socketCandidate.coneStartPos, startSocket)) continue;
+
+        // Grid mode searches the lattice: the drop has to land on a node, so the
+        // node is chosen first and the joint derived from it. Every other mode
+        // drops at the first column that clears.
+        const found = gridEnabled
+            ? findGridJoint(sdf, startSocket, rootTopZ, {
+                ...jointSearchShared,
+                spacingMm,
+                maxNodeCount: GRID_JOINT_NODE_BUDGET,
+                // Keep leaving the way the cone points: the node nearest that
+                // direction wins over an equally close node the other way.
+                preferredDirection: outward.lengthSq() > 1e-6 ? { x: outward.x, y: outward.y } : null,
+            })
+            : findEscapeJoint(sdf, startSocket, rootTopZ, {
+                ...jointSearchShared,
+                stepMm: WALK_STEP_MM,
+                directions: buildDirectionFan(
+                    outward.lengthSq() > 1e-6 ? { x: outward.x, y: outward.y } : null,
+                    DIRECTION_COUNT,
+                ),
+            });
+        if (!found.joint) {
+            // The grid could not serve this contact: no node left room for the drop
+            // at a lean the shape rule allows. That is the case the grid is dropped
+            // for, rather than refused: the contact is reachable, just not on a node.
+            if (gridEnabled) {
+                return calculateSmartPlacementV3(input, { ...context, ignoreGrid: true });
+            }
+            refusalReason = `no joint reached a clear column (${found.outcome}, ${found.probes} probes)`;
+            refusalProbes = found.probes;
+            continue;
+        }
+
+        const jointPos: Vec3 = found.joint.joint;
+        const jointLeanDeg: number = found.joint.leanFromVerticalDeg;
+        const joints: Vec3[] = [jointPos];
+        // The cone the chain leaves from: aimed at the joint when that lines the
+        // cone up with the shaft, otherwise the socket that cleared.
+        const cone = resolveConeSocketAndAxis({
+            socketPos: startSocket,
+            joints,
+            tipPos: input.tipPos,
+            tipNormal: input.tipNormal,
+            tipProfile: input.tipProfile,
+            coneAxisHint: standard.coneAxis ?? input.tipNormal,
+            coneBlockedAt,
+            contactConeBlockedAt,
+            segmentBlockedBetween,
         });
-    if (!found.joint) {
-        // The grid could not serve this contact: no node left room for the drop at
-        // a lean the shape rule allows. That is the case the grid is dropped for,
-        // rather than refused: the contact is reachable, just not on a node.
-        if (gridEnabled) {
+        // A deviated cone moved the socket, so its diagonal is judged against the
+        // ceiling the joint search itself used: the joint's own lean was measured
+        // from the socket that search started at.
+        const diagonalWithinCeiling = (deviated: boolean): boolean => (
+            segmentSatisfiesMaxAngleFromVertical(
+                cone.socketPos,
+                jointPos,
+                (deviated ? TRUNK_DIAGONAL_LEAN_FROM_VERTICAL_DEG : jointLeanDeg) + 0.05,
+            )
+        );
+        if (contactConeBlockedAt(cone.coneStartPos, cone.socketPos)) continue;
+        if (segmentBlockedBetween(cone.socketPos, jointPos)) continue;
+        if (!diagonalWithinCeiling(socketCandidate.deviated)) continue;
+
+        const base = resolveBase({
+            preferredXY: { x: jointPos.x, y: jointPos.y },
+            lastSegmentStart: jointPos,
+            rootTopZ,
+            spacingMm,
+            gridEnabled,
+            maxSearchRings: gridEnabled ? GRID_BASE_SEARCH_RINGS : MAX_BASE_SEARCH_RINGS,
+            sdf,
+            diskHeight,
+            coneHeight,
+            rootsRadius,
+            shaftRadius,
+            clearanceMm,
+            baseFitsAt: (x, y) => !rootsBlockedAt(x, y),
+            segmentBlockedBetween,
+        });
+        if (!base) {
+            refusalReason = 'no committed base under the joint';
+            refusalProbes = found.probes;
+            continue;
+        }
+
+        // 3. The chain is built from the socket the cone actually ends at, so the
+        //    leg angles are checked against the real geometry. The diagonal is the
+        //    one segment exempt from the length-aware tightening (its job is to get
+        //    out from under the model, and the load-bearing span below it is
+        //    vertical), and it is bounded by the lean ceiling instead.
+        const verticalLegOk = !segmentBlockedBetween(jointPos, base.rootTopTarget)
+            && segmentSatisfiesLengthAwareMaxAngleFromVertical(
+                jointPos,
+                base.rootTopTarget,
+                Math.min(89, configuredRoutedAngleDeg + ROUTED_DETOUR_SLACK_DEG),
+                configuredRoutedAngleDeg,
+            );
+        if (!verticalLegOk) {
+            refusalReason = 'rejected chain: vertical leg blocked or too shallow';
+            refusalProbes = found.probes;
+            continue;
+        }
+
+        // Same rule, measured on the whole chain: the leg below the joint can be
+        // the span the grid made flat, when the node it snapped to is off the
+        // joint's column and the joint is low enough to leave no height for the lean.
+        if (gridEnabled
+            && !chainHoldsShapeRule([cone.socketPos, jointPos, base.rootTopTarget], clearanceMm)) {
             return calculateSmartPlacementV3(input, { ...context, ignoreGrid: true });
         }
-        publishDebug({
-            status: 'blocked',
-            reason: `no joint reached a clear column (${found.outcome}, ${found.probes} probes)`,
-            resolvedSocketPos: socketPos,
-            straightPreflightClear,
-            rootsFitStraightDown,
-            routerProbes: found.probes,
-        });
-        return { ...standard, error: 'COLLISION_WITH_MODEL' };
-    }
 
-    const joints: Vec3[] = [found.joint.joint];
-    const cone = resolveConeSocketAndAxis({
-        socketPos,
-        joints,
-        tipPos: input.tipPos,
-        tipNormal: input.tipNormal,
-        tipProfile: input.tipProfile,
-        coneAxisHint: standard.coneAxis ?? input.tipNormal,
-        coneBlockedAt,
-        segmentBlockedBetween,
-    });
-    const base = resolveBase({
-        preferredXY: { x: found.joint.joint.x, y: found.joint.joint.y },
-        lastSegmentStart: found.joint.joint,
-        rootTopZ,
-        spacingMm,
-        gridEnabled,
-        maxSearchRings: gridEnabled ? GRID_BASE_SEARCH_RINGS : MAX_BASE_SEARCH_RINGS,
-        sdf,
-        diskHeight,
-        coneHeight,
-        rootsRadius,
-        shaftRadius,
-        clearanceMm,
-        baseFitsAt: (x, y) => !rootsBlockedAt(x, y),
-        segmentBlockedBetween,
-    });
-    if (!base) {
         publishDebug({
-            status: 'blocked',
-            reason: 'no committed base under the joint',
+            status: 'routed',
+            reason: `one ${jointLeanDeg.toFixed(0)}° diagonal `
+                + `${found.joint.lateralMm.toFixed(2)}mm out of the socket, then vertical`,
             resolvedSocketPos: cone.socketPos,
-            finalChain: [cone.socketPos, found.joint.joint],
+            basePos: base.basePos,
+            finalChain: [cone.socketPos, jointPos, base.rootTopTarget],
             straightPreflightClear,
             rootsFitStraightDown,
             routerProbes: found.probes,
         });
-        return { ...standard, error: 'COLLISION_WITH_MODEL' };
+
+        return {
+            ...standard,
+            socketPos: cone.socketPos,
+            joints,
+            constructionJoints: [],
+            basePos: base.basePos,
+            unsnappedBottomPos: { x: jointPos.x, y: jointPos.y, z: 0 },
+            snappedNodeKey: base.nodeKey,
+            coneAxis: cone.coneAxis,
+            error: undefined,
+            gridIgnored: ignoredGrid,
+        };
     }
 
-    // 3. The chain is built from the socket the cone actually ends at, so the
-    //    leg angles are checked against the real geometry. The diagonal is the
-    //    one segment exempt from the length-aware tightening (its job is to get
-    //    out from under the model, and the load-bearing span below it is
-    //    vertical), and it is bounded by the lean ceiling instead.
-    const firstSegmentOk = segmentSatisfiesMaxAngleFromVertical(
-        cone.socketPos,
-        found.joint.joint,
-        found.joint.leanFromVerticalDeg + 0.05,
-    );
-    const configuredRoutedAngleDeg = Math.max(
-        MIN_ALLOWED_ROUTED_ANGLE_DEG,
-        90 - settings.grid.minRoutedTrunkAngleDeg,
-    );
-    const verticalLegOk = !segmentBlockedBetween(found.joint.joint, base.rootTopTarget)
-        && segmentSatisfiesLengthAwareMaxAngleFromVertical(
-            found.joint.joint,
-            base.rootTopTarget,
-            Math.min(89, configuredRoutedAngleDeg + ROUTED_DETOUR_SLACK_DEG),
-            configuredRoutedAngleDeg,
-        );
-    if (!firstSegmentOk || !verticalLegOk) {
-        publishDebug({
-            status: 'blocked',
-            reason: 'rejected chain: '
-                + `${firstSegmentOk ? '' : 'diagonal past its lean '}`
-                + `${verticalLegOk ? '' : 'vertical leg blocked or too shallow'}`.trim(),
-            resolvedSocketPos: cone.socketPos,
-            finalChain: [cone.socketPos, found.joint.joint, base.rootTopTarget],
-            straightPreflightClear,
-            rootsFitStraightDown,
-            routerProbes: found.probes,
-        });
-        return { ...standard, error: 'COLLISION_WITH_MODEL' };
-    }
-
-    // Same rule, measured on the whole chain: the leg below the joint can be the
-    // span the grid made flat, when the node it snapped to is off the joint's
-    // column and the joint is low enough to leave no height for the lean.
-    if (gridEnabled
-        && !chainHoldsShapeRule([cone.socketPos, found.joint.joint, base.rootTopTarget], clearanceMm)) {
-        return calculateSmartPlacementV3(input, { ...context, ignoreGrid: true });
-    }
-
+    // Nothing here can attach this contact: the caller has the cavity fallback
+    // for exactly this case.
     publishDebug({
-        status: 'routed',
-        reason: `one ${found.joint.leanFromVerticalDeg.toFixed(0)}° diagonal `
-            + `${found.joint.lateralMm.toFixed(2)}mm out of the socket, then vertical`,
-        resolvedSocketPos: cone.socketPos,
-        basePos: base.basePos,
-        finalChain: [cone.socketPos, found.joint.joint, base.rootTopTarget],
+        status: 'blocked',
+        reason: refusalReason,
+        resolvedSocketPos: standard.socketPos,
         straightPreflightClear,
         rootsFitStraightDown,
-        routerProbes: found.probes,
+        routerProbes: refusalProbes,
     });
-
-    return {
-        ...standard,
-        socketPos: cone.socketPos,
-        joints,
-        constructionJoints: [],
-        basePos: base.basePos,
-        unsnappedBottomPos: { x: found.joint.joint.x, y: found.joint.joint.y, z: 0 },
-        snappedNodeKey: base.nodeKey,
-        coneAxis: cone.coneAxis,
-        error: undefined,
-        gridIgnored: ignoredGrid,
-    };
+    return { ...standard, error: 'COLLISION_WITH_MODEL' };
 }
