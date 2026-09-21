@@ -29,6 +29,7 @@ import {
     distance3D,
     getLengthAwareMaxAngleFromVerticalDeg,
     memberDepartureAngleFromVerticalDeg,
+    SHORT_SPAN_DETOUR_MAX_ANGLE_FROM_VERTICAL_DEG,
     SHORT_SPAN_DETOUR_MAX_LENGTH_MM,
     SOCKET_ELBOW_MAX_ANGLE_FROM_VERTICAL_DEG,
     TRUNK_DIAGONAL_LEAN_FROM_VERTICAL_DEG,
@@ -572,11 +573,24 @@ function selectAttachmentDecision(args: {
             // Must be below tip
             if (pos.z >= tipPos.z) continue;
 
-            // Cheap chord gate, on knot to tip, at the same length-aware
-            // allowance the built member gets below. It is a pre-filter, not
-            // the member's angle: see the departure gate further down.
-            const spanMm = distance3D(pos, tipPos);
-            if (memberDepartureAngleFromVerticalDeg(pos, tipPos) > memberAllowanceFromVerticalDeg(spanMm)) {
+            // Cheap chord gate, on knot to tip. It is a pre-filter, not the
+            // member's angle (see the departure gate below), so it has to be
+            // the LOOSEST allowance that gate can grant: a knot dropped here is
+            // a knot never tried. The gate measures the built shaft's first
+            // segment, which is short, and a short first segment may lean to
+            // the socket elbow's 75 degrees. Measuring the chord against the
+            // length-aware allowance instead (30 degrees past 5mm) dropped
+            // grafts the gate would have taken: a tip 3mm off the host grafted
+            // 6mm below the host's top, because every knot above it had a
+            // straight line to the tip shallower than the branch angle while
+            // its built shaft left at 31.7 and 23.7 degrees against the 60 it
+            // is allowed. The walk could then only return a knot where the
+            // chord itself reached the branch angle, which for a tip offset
+            // laterally is a long way down the host.
+            const chordPreFilterMaxFromVerticalDeg = occupiedPoint
+                ? SOCKET_ELBOW_MAX_ANGLE_FROM_VERTICAL_DEG
+                : SHORT_SPAN_DETOUR_MAX_ANGLE_FROM_VERTICAL_DEG;
+            if (memberDepartureAngleFromVerticalDeg(pos, tipPos) > chordPreFilterMaxFromVerticalDeg) {
                 continue;
             }
 
