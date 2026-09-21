@@ -8,8 +8,10 @@ import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import { Trans } from '@lingui/react/macro';
 import {
+    formatBulkDeletePresetsTitle,
     formatDeletePresetTitle,
     formatOverwritePresetTitle,
+    formatPresetSelectionCount,
     formatPresetSlotLabel,
     translatePresetName,
 } from '@/supports/Settings/presetMessages';
@@ -25,7 +27,9 @@ import {
     updateCustomPresetMetadata,
     createPreset,
     deletePreset,
+    deletePresets,
     setPresetPinnedSlot,
+    movePresetBefore,
     isPresetDirtyForSettings,
     restoreFactoryDefaults,
 } from '../presets';
@@ -39,6 +43,26 @@ type PresetSelectorProps = {
     /** Incremented externally to trigger a save of the currently-selected
      *  dirty preset (e.g. from the Support Studio save button). */
     saveTrigger?: number;
+};
+
+/** Travel before a press on a preset row becomes a drag rather than a click. */
+const PRESET_DRAG_THRESHOLD_PX = 4;
+
+/**
+ * Where a dragged preset would land: a slot, in front of a listed preset, or
+ * the end of the list. `key` is what the highlight compares, since the target is
+ * rebuilt on every pointer move.
+ */
+type PresetDropTarget =
+    | { key: string; kind: 'slot'; slot: number }
+    | { key: string; kind: 'row'; presetId: string }
+    | { key: string; kind: 'list' };
+
+/** Outline for the cell a dragged preset would land in. */
+const PRESET_DROP_TARGET_STYLE: React.CSSProperties = {
+    borderRadius: '5px',
+    outline: '1px dashed color-mix(in srgb, var(--accent), transparent 20%)',
+    outlineOffset: '1px',
 };
 
 export function PresetSelector({
@@ -95,53 +119,155 @@ export function PresetSelector({
     // Dragging a preset to a slot pins it there, and dragging one onto the list
     // below the slots unpins it. The context menu's Pin/Unpin entries stay the
     // keyboard path: a drag is not reachable without a pointer.
+    //
+    // Pointer events, not HTML5 drag and drop. Tauri leaves `dragDropEnabled`
+    // on (the window takes OS file drops, which is how a mesh is imported), and
+    // on Windows that makes the webview reject every page-level drag: the
+    // cursor turns into the no-drop one and no `dragstart` is delivered, so an
+    // HTML5 drag cannot even begin. Pointer events are unaffected, and they are
+    // how the rest of the app already drags things.
     const [presetDragId, setPresetDragId] = useState<string | null>(null);
-    const [presetDropTarget, setPresetDropTarget] = useState<number | 'list' | null>(null);
+    const [presetDropTarget, setPresetDropTarget] = useState<PresetDropTarget | null>(null);
+    const [presetDragPoint, setPresetDragPoint] = useState<{ x: number; y: number } | null>(null);
+    const presetDragStartRef = useRef<{ id: string; x: number; y: number; pointerId: number } | null>(null);
+    const presetDragMovedRef = useRef(false);
 
-    function handlePresetDrop(target: number | 'list') {
-        const draggedId = presetDragId;
+    /** The slot, row or list under the pointer, or null when it is over none. */
+    function presetDropTargetAt(x: number, y: number): PresetDropTarget | null {
+        const element = document.elementFromPoint(x, y);
+        if (!element) return null;
+
+        const slot = element.closest('[data-preset-slot]');
+        if (slot) {
+            const value = Number(slot.getAttribute('data-preset-slot'));
+            return { key: `slot:${value}`, kind: 'slot', slot: value };
+        }
+
+        const presetId = element.closest('[data-preset-row]')?.getAttribute('data-preset-row');
+        if (presetId) return { key: `row:${presetId}`, kind: 'row', presetId };
+
+        return element.closest('[data-preset-drop-list]') ? { key: 'list', kind: 'list' } : null;
+    }
+
+    function endPresetDrag() {
+        presetDragStartRef.current = null;
         setPresetDragId(null);
         setPresetDropTarget(null);
-        if (!draggedId) return;
+        setPresetDragPoint(null);
+    }
+
+    function handlePresetDrop(draggedId: string, target: PresetDropTarget) {
         const dragged = presets.find((preset) => preset.id === draggedId);
         if (!dragged) return;
 
-        if (target === 'list') {
-            if (dragged.pinnedSlot == null) return;
-            setPresetPinnedSlot(dragged.id, null);
+        if (target.kind === 'row') {
+            // Out of the rail and into the list, where it landed.
+            if (dragged.pinnedSlot != null) setPresetPinnedSlot(dragged.id, null);
+            movePresetBefore(dragged.id, target.presetId);
             return;
         }
 
-        if (dragged.pinnedSlot === target) return;
-        const occupant = getPresetForPinnedSlot(target);
+        if (target.kind === 'list') {
+            if (dragged.pinnedSlot != null) {
+                setPresetPinnedSlot(dragged.id, null);
+                return;
+            }
+            movePresetBefore(dragged.id, null);
+            return;
+        }
+
+        if (dragged.pinnedSlot === target.slot) return;
+        const occupant = getPresetForPinnedSlot(target.slot);
         // Slot to slot is a swap, so moving a preset across the rail never
         // drops the other one out of it. From the list there is no slot to hand
         // back, so the occupant leaves the rail.
         if (occupant && dragged.pinnedSlot != null) {
             setPresetPinnedSlot(occupant.id, dragged.pinnedSlot);
         }
-        setPresetPinnedSlot(dragged.id, target);
+        setPresetPinnedSlot(dragged.id, target.slot);
     }
 
-    /** The drop half of the drag: a slot cell takes a preset, the list releases it. */
-    function slotDropHandlers(target: number) {
-        return {
-            onDragOver: (event: React.DragEvent) => {
-                if (!presetDragId) return;
-                event.preventDefault();
-                event.dataTransfer.dropEffect = 'move';
-                if (presetDropTarget !== target) setPresetDropTarget(target);
-            },
-            onDragLeave: (event: React.DragEvent) => {
-                if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
-                setPresetDropTarget((current) => (current === target ? null : current));
-            },
-            onDrop: (event: React.DragEvent) => {
-                event.preventDefault();
-                event.stopPropagation();
-                handlePresetDrop(target);
-            },
+    function handlePresetPointerDown(event: React.PointerEvent<HTMLButtonElement>, presetId: string) {
+        if (event.button !== 0) return;
+        presetDragStartRef.current = {
+            id: presetId,
+            x: event.clientX,
+            y: event.clientY,
+            pointerId: event.pointerId,
         };
+        presetDragMovedRef.current = false;
+        // Capture so the moves and the release keep arriving here while the
+        // pointer is over another cell.
+        event.currentTarget.setPointerCapture(event.pointerId);
+    }
+
+    function handlePresetPointerMove(event: React.PointerEvent<HTMLButtonElement>) {
+        const start = presetDragStartRef.current;
+        if (!start || start.pointerId !== event.pointerId) return;
+
+        if (!presetDragMovedRef.current) {
+            // A press that has not travelled is a click, not a drag.
+            if (Math.hypot(event.clientX - start.x, event.clientY - start.y) < PRESET_DRAG_THRESHOLD_PX) return;
+            presetDragMovedRef.current = true;
+            setPresetDragId(start.id);
+        }
+
+        setPresetDragPoint({ x: event.clientX, y: event.clientY });
+        const target = presetDropTargetAt(event.clientX, event.clientY);
+        setPresetDropTarget((current) => (current?.key === target?.key ? current : target));
+    }
+
+    function handlePresetPointerUp(event: React.PointerEvent<HTMLButtonElement>) {
+        const start = presetDragStartRef.current;
+        if (!start) return;
+        const dropped = presetDragMovedRef.current ? presetDropTargetAt(event.clientX, event.clientY) : null;
+        endPresetDrag();
+        if (dropped == null) return;
+        handlePresetDrop(start.id, dropped);
+    }
+
+    const presetDragPreset = presetDragId ? presets.find((preset) => preset.id === presetDragId) ?? null : null;
+
+    // Multi-selection over the unpinned list: Ctrl/Cmd toggles a preset,
+    // Shift takes the range from the applied preset (or the last one toggled).
+    // It drives bulk actions only, so a plain click still applies a preset and
+    // clears it.
+    const [presetSelection, setPresetSelection] = useState<string[]>([]);
+    const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+    const unpinnedIds = unpinnedPresets.map((preset) => preset.id);
+    const selectedPresets = presetSelection
+        .map((id) => presets.find((preset) => preset.id === id))
+        .filter((preset): preset is (typeof presets)[number] => Boolean(preset));
+
+    function handlePresetRowClick(event: React.MouseEvent<HTMLButtonElement>, presetId: string) {
+        // The press that just dragged is not a click.
+        if (presetDragMovedRef.current) {
+            presetDragMovedRef.current = false;
+            return;
+        }
+
+        const additive = event.ctrlKey || event.metaKey;
+        if (event.shiftKey) {
+            const anchorId = effectiveSelectedPresetId && unpinnedIds.includes(effectiveSelectedPresetId)
+                ? effectiveSelectedPresetId
+                : presetSelection[presetSelection.length - 1] ?? presetId;
+            const from = unpinnedIds.indexOf(anchorId);
+            const to = unpinnedIds.indexOf(presetId);
+            if (from < 0 || to < 0) return;
+            const range = unpinnedIds.slice(Math.min(from, to), Math.max(from, to) + 1);
+            setPresetSelection((current) => (additive ? [...new Set([...current, ...range])] : range));
+            return;
+        }
+
+        if (additive) {
+            setPresetSelection((current) => (current.includes(presetId)
+                ? current.filter((id) => id !== presetId)
+                : [...current, presetId]));
+            return;
+        }
+
+        setPresetSelection([]);
+        handlePresetSelect(presetId);
     }
 
     const effectiveSelectedPresetId = selectedPresetIdOverride === undefined
@@ -222,24 +348,17 @@ export function PresetSelector({
     function renderPresetRow(preset: (typeof presets)[number]) {
         const isSelected = effectiveSelectedPresetId === preset.id;
         const showDirtyIndicator = isSelected && selectedPresetIsDirty;
+        const isMultiSelected = presetSelection.includes(preset.id);
 
         return (
             <button
                 type="button"
-                draggable={renamingPresetId !== preset.id}
-                className="w-full px-3 py-2 text-sm relative rounded-[5px] border transition-colors cursor-grab active:cursor-grabbing"
-                onDragStart={(event) => {
-                    event.dataTransfer.effectAllowed = 'move';
-                    event.dataTransfer.setData('text/plain', preset.id);
-                    setPresetDragId(preset.id);
-                }}
-                onDragEnd={() => {
-                    setPresetDragId(null);
-                    setPresetDropTarget(null);
-                }}
-                onClick={() => {
-                    handlePresetSelect(preset.id);
-                }}
+                className="w-full px-3 py-2 text-sm relative rounded-[5px] border transition-colors cursor-grab active:cursor-grabbing select-none"
+                onPointerDown={(event) => handlePresetPointerDown(event, preset.id)}
+                onPointerMove={handlePresetPointerMove}
+                onPointerUp={handlePresetPointerUp}
+                onPointerCancel={endPresetDrag}
+                onClick={(event) => handlePresetRowClick(event, preset.id)}
                 onMouseEnter={() => {
                     setHoveredPresetId(preset.id);
                     setAnatomyPreviewHoveredPresetSettings(preset.settings);
@@ -257,16 +376,20 @@ export function PresetSelector({
                     setAnatomyPreviewHoveredPresetSettings(null);
                 }}
                 style={{
-                    background: isSelected
-                        ? preset.pinnedSlot != null
-                            ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 88%)'
-                            : 'color-mix(in srgb, var(--primary-button-surface), var(--surface-0) 90%)'
-                        : 'var(--surface-0)',
-                    borderColor: isSelected
-                        ? preset.pinnedSlot != null
-                            ? 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 25%)'
-                            : 'color-mix(in srgb, var(--primary-button-surface), var(--border-subtle) 30%)'
-                        : 'var(--border-subtle)',
+                    background: isMultiSelected
+                        ? 'color-mix(in srgb, var(--accent), var(--surface-0) 84%)'
+                        : isSelected
+                            ? preset.pinnedSlot != null
+                                ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 88%)'
+                                : 'color-mix(in srgb, var(--primary-button-surface), var(--surface-0) 90%)'
+                            : 'var(--surface-0)',
+                    borderColor: isMultiSelected
+                        ? 'color-mix(in srgb, var(--accent), var(--border-subtle) 40%)'
+                        : isSelected
+                            ? preset.pinnedSlot != null
+                                ? 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 25%)'
+                                : 'color-mix(in srgb, var(--primary-button-surface), var(--border-subtle) 30%)'
+                            : 'var(--border-subtle)',
                     opacity: presetDragId === preset.id ? 0.45 : undefined,
                 }}
             >
@@ -459,27 +582,20 @@ export function PresetSelector({
                         <div className="grid grid-cols-2 gap-1 px-1">
                             {[1, 2, 3, 4, 5, 6].map((slot) => {
                                 const preset = pinnedPresets.find((p) => p.pinnedSlot === slot);
-                                const dropHandlers = slotDropHandlers(slot);
-                                const isDropTarget = presetDropTarget === slot;
-                                const dropStyle = isDropTarget
-                                    ? {
-                                        borderRadius: '5px',
-                                        outline: '1px dashed color-mix(in srgb, var(--accent), transparent 20%)',
-                                        outlineOffset: '1px',
-                                    }
-                                    : undefined;
+                                const isDropTarget = presetDropTarget?.kind === 'slot' && presetDropTarget.slot === slot;
+                                const dropStyle = isDropTarget ? PRESET_DROP_TARGET_STYLE : undefined;
                                 return preset ? (
                                     <div
                                         key={preset.id}
                                         data-preset-cell
+                                        data-preset-slot={slot}
                                         onContextMenu={(e) => handleContextMenu(e, preset.id)}
                                         style={dropStyle}
-                                        {...dropHandlers}
                                     >
                                         {renderPresetRow(preset)}
                                     </div>
                                 ) : (
-                                    <div key={`empty-slot-${slot}`} style={dropStyle} {...dropHandlers}>
+                                    <div key={`empty-slot-${slot}`} data-preset-slot={slot} style={dropStyle}>
                                         <button
                                             type="button"
                                             disabled
@@ -510,32 +626,55 @@ export function PresetSelector({
                         </div>
 
                         <div className="mx-3 mt-4 mb-3 border-t" style={{ borderColor: 'var(--border-subtle)' }} />
+
+                        {selectedPresets.length > 0 ? (
+                            <div
+                                className="mx-1 mb-2 flex items-center justify-between gap-2 rounded-md border px-2 py-1.5 text-[11px]"
+                                style={{
+                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 90%)',
+                                    color: 'var(--text-strong)',
+                                }}
+                            >
+                                <span className="font-medium tabular-nums">
+                                    {formatPresetSelectionCount(selectedPresets.length, _)}
+                                </span>
+                                <div className="flex items-center gap-1">
+                                    <button
+                                        type="button"
+                                        className="ui-button ui-button-secondary !h-6 px-2 text-[11px]"
+                                        onClick={() => setPresetSelection([])}
+                                    >
+                                        <Trans>Clear</Trans>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="ui-button !h-6 px-2 text-[11px] inline-flex items-center gap-1"
+                                        style={{ color: 'var(--danger)' }}
+                                        onClick={() => setBulkDeleteOpen(true)}
+                                    >
+                                        <Trash2 className="h-3 w-3" />
+                                        <Trans>Delete</Trans>
+                                    </button>
+                                </div>
+                            </div>
+                        ) : null}
+
                         <div
                             className="grid grid-cols-2 gap-1 px-1"
-                            onDragOver={(event) => {
-                                if (!presetDragId) return;
-                                event.preventDefault();
-                                event.dataTransfer.dropEffect = 'move';
-                                if (presetDropTarget !== 'list') setPresetDropTarget('list');
-                            }}
-                            onDragLeave={(event) => {
-                                if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
-                                setPresetDropTarget((current) => (current === 'list' ? null : current));
-                            }}
-                            onDrop={(event) => {
-                                event.preventDefault();
-                                handlePresetDrop('list');
-                            }}
-                            style={presetDropTarget === 'list'
-                                ? {
-                                    borderRadius: '5px',
-                                    outline: '1px dashed color-mix(in srgb, var(--accent), transparent 20%)',
-                                    outlineOffset: '1px',
-                                }
-                                : undefined}
+                            data-preset-drop-list
+                            style={presetDropTarget?.kind === 'list' ? PRESET_DROP_TARGET_STYLE : undefined}
                         >
                             {unpinnedPresets.map((preset) => (
-                                <div key={preset.id} data-preset-cell onContextMenu={(e) => handleContextMenu(e, preset.id)}>
+                                <div
+                                    key={preset.id}
+                                    data-preset-cell
+                                    data-preset-row={preset.id}
+                                    onContextMenu={(e) => handleContextMenu(e, preset.id)}
+                                    style={presetDropTarget?.kind === 'row' && presetDropTarget.presetId === preset.id
+                                        ? PRESET_DROP_TARGET_STYLE
+                                        : undefined}
+                                >
                                     {renderPresetRow(preset)}
                                 </div>
                             ))}
@@ -702,6 +841,69 @@ export function PresetSelector({
                     <Trans>This will reset <strong style={{ color: 'var(--text-strong)' }}>Detail</strong>, <strong style={{ color: 'var(--text-strong)' }}>Structure</strong>, and <strong style={{ color: 'var(--text-strong)' }}>Anchor</strong> to their factory settings and unpin all user presets. Your user presets will <strong style={{ color: 'var(--text-strong)' }}>not</strong> be deleted.</Trans>
                 </p>
             </StructuredDialogModal>
+
+            {/* ── Bulk Delete Modal ─────────────────────────────────────── */}
+            <StructuredDialogModal
+                open={bulkDeleteOpen && selectedPresets.length > 0}
+                ariaLabel={_(msg`Delete presets`)}
+                title={formatBulkDeletePresetsTitle(selectedPresets.length, _)}
+                subtitle={_(msg`This action cannot be undone.`)}
+                icon={<Trash2 className="h-4 w-4" />}
+                iconTone="warning"
+                zIndexClassName="z-[300]"
+                closeAriaLabel={_(msg`Cancel delete`)}
+                onClose={() => setBulkDeleteOpen(false)}
+                actions={(
+                    <>
+                        <button
+                            type="button"
+                            className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
+                            onClick={() => setBulkDeleteOpen(false)}
+                        >
+                            <Trans>Cancel</Trans>
+                        </button>
+                        <button
+                            type="button"
+                            className="ui-button !h-9 w-full px-3 text-xs inline-flex items-center justify-center gap-1.5"
+                            style={{
+                                borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
+                                background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
+                                color: 'var(--danger)',
+                            }}
+                            onClick={() => {
+                                deletePresets(selectedPresets.map((preset) => preset.id));
+                                setPresetSelection([]);
+                                setBulkDeleteOpen(false);
+                            }}
+                        >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            <Trans>Delete</Trans>
+                        </button>
+                    </>
+                )}
+            >
+                <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                    {selectedPresets.map((preset) => translatePresetName(preset, _)).join(', ')}
+                </p>
+            </StructuredDialogModal>
+
+            {/* ── Drag Ghost ───────────────────────────────────────────── */}
+            {presetDragPoint && presetDragPreset ? ReactDOM.createPortal(
+                <div
+                    className="pointer-events-none fixed z-[200] max-w-[220px] truncate rounded-[5px] border px-3 py-2 text-sm"
+                    style={{
+                        left: presetDragPoint.x + 12,
+                        top: presetDragPoint.y + 10,
+                        borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                        background: 'color-mix(in srgb, var(--surface-0), #000 10%)',
+                        color: 'var(--text-strong)',
+                        boxShadow: '0 8px 20px rgba(0, 0, 0, 0.35)',
+                    }}
+                >
+                    {translatePresetName(presetDragPreset, _)}
+                </div>,
+                document.body
+            ) : null}
 
             {/* ── Right-click Context Menu ──────────────────────────────── */}
             {contextMenu ? ReactDOM.createPortal(

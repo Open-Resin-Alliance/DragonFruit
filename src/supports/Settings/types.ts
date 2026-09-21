@@ -242,7 +242,7 @@ export interface SupportPreset {
     icon?: string;
     isBuiltIn: boolean;
     /** Pinned slot (1-4) for quick-access hotkeys, or undefined if unpinned. */
-    pinnedSlot?: number;
+    pinnedSlot?: number | null;
     settings: SupportSettings;
     createdAt?: number;
     updatedAt?: number;

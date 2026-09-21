@@ -23,6 +23,29 @@ This page is the developer-facing source of truth for client-side persistence us
 | `support-presets-v1`          | localStorage | Preset definitions + active preset metadata                              |
 | `support-active-preset-id-v1` | localStorage | Legacy active preset key (redundant with `support-presets-v1`)           |
 
+### Support presets (`support-presets-v1`)
+
+`src/supports/Settings/presets.ts` owns the store: `byId`, `allIds` and
+`activePresetId`. Two facts about it are load-bearing, because both are user
+arrangement that has to survive a reload:
+
+- **`allIds` is the rail's order.** The list of unpinned presets renders in that
+  order, so `movePresetBefore` is the reorder entry point and the loader restores
+  the stored array rather than rebuilding it from `byId` (JSON key order is
+  creation order, which silently discarded a reorder). Pinned order comes from
+  the slot number, not from `allIds`.
+- **A slot holds one preset.** `pinnedSlot` is 1-6, or `null` for unpinned.
+  `null` is stored explicitly, not omitted: an absent key is a record from before
+  slots existed, where the factory preset's own slot still applies, and treating
+  the two the same brought an unpinned factory preset back on the next load. The
+  loader also drops the second claimant of a slot it finds.
+
+The rail's drag is pointer events (`onPointerDown` + `setPointerCapture` +
+`elementFromPoint` hit testing), not HTML5 drag and drop. Tauri leaves
+`dragDropEnabled` on because the window takes OS file drops, and on Windows that
+makes the webview reject page-level drags outright: the cursor becomes the
+no-drop one and no `dragstart` is delivered. See `PresetSelector.tsx`.
+
 ## Profiles and plugin keys
 
 | Key                                              | Medium                        | Purpose                                            |

@@ -288,7 +288,12 @@ function loadPresetsFromStorage(): PresetCollection {
                     defaults.byId[id] = {
                         ...fallbackPreset,
                         name: parsedPreset.name || fallbackPreset.name,
-                        pinnedSlot: parsedPreset.pinnedSlot ?? fallbackPreset.pinnedSlot,
+                        // A stored `null` means the user unpinned it; a missing
+                        // key is a record from before slots existed, where the
+                        // factory slot still applies.
+                        pinnedSlot: parsedPreset.pinnedSlot === undefined
+                            ? fallbackPreset.pinnedSlot
+                            : parsedPreset.pinnedSlot,
                         settings: migrateLegacyPresetAutoSupport(
                             parsedPreset.settings,
                             fallbackPreset.settings,
@@ -324,6 +329,30 @@ function loadPresetsFromStorage(): PresetCollection {
                     }
                 });
             }
+
+            // The stored order is the rail's order, and a reorder is only a
+            // preference if it survives a reload. The recovery loop above
+            // appends custom ids in `byId` order, which is creation order, not
+            // the order the user arranged them in.
+            if (Array.isArray(parsed.allIds)) {
+                const ordered = (parsed.allIds as string[]).filter((id) => Boolean(defaults.byId[id]));
+                const rest = defaults.allIds.filter((id) => !ordered.includes(id));
+                defaults.allIds = [...ordered, ...rest];
+            }
+
+            // One preset per slot. A stored record can claim the slot a factory
+            // preset just re-took, and the rail reads the first claimant, so the
+            // loser leaves the rail rather than sharing it.
+            const claimedSlots = new Set<number>();
+            defaults.allIds.forEach((id) => {
+                const preset = defaults.byId[id];
+                if (!preset || preset.pinnedSlot == null) return;
+                if (claimedSlots.has(preset.pinnedSlot)) {
+                    defaults.byId[id] = { ...preset, pinnedSlot: null };
+                    return;
+                }
+                claimedSlots.add(preset.pinnedSlot);
+            });
 
             // Restore active ID if valid
             if (parsed.activePresetId && defaults.byId[parsed.activePresetId]) {
@@ -430,15 +459,38 @@ export function setPresetPinnedSlot(id: string, slot: number | null): void {
     if (slot != null) {
         for (const other of Object.values(presets.byId)) {
             if (other.id !== id && other.pinnedSlot === slot) {
-                other.pinnedSlot = undefined;
+                other.pinnedSlot = null;
             }
         }
     }
 
     presets.byId[id] = {
         ...presets.byId[id],
-        pinnedSlot: slot ?? undefined,
+        // `null`, not `undefined`: the storage round trip drops an absent key,
+        // and the loader cannot then tell "unpinned" from "written before
+        // slots existed", so unpinning a factory preset came back on reload.
+        pinnedSlot: slot,
     };
+
+    savePresetsToStorage();
+    notify();
+}
+
+/**
+ * Moves a preset in front of `beforeId`, or to the end of the rail when that is
+ * null. Slot order comes from the slot number, so this only orders the list of
+ * unpinned presets.
+ */
+export function movePresetBefore(id: string, beforeId: string | null): void {
+    if (id === beforeId || !presets.byId[id]) return;
+    if (beforeId != null && !presets.byId[beforeId]) return;
+
+    const rest = presets.allIds.filter((presetId) => presetId !== id);
+    const at = beforeId == null ? rest.length : rest.indexOf(beforeId);
+    if (at < 0) return;
+
+    rest.splice(at, 0, id);
+    presets.allIds = rest;
 
     savePresetsToStorage();
     notify();
@@ -611,6 +663,26 @@ export function savePreset(id: string): void {
     console.log('[PresetStore] Saved settings to preset:', id);
 }
 
+/**
+ * Deletes several presets in one write, so a multi-selection delete persists
+ * and notifies once.
+ */
+export function deletePresets(ids: readonly string[]): void {
+    const present = ids.filter((id) => Boolean(presets.byId[id]));
+    if (present.length === 0) return;
+
+    present.forEach((id) => { delete presets.byId[id]; });
+    const removed = new Set(present);
+    presets.allIds = presets.allIds.filter((id) => !removed.has(id));
+    if (presets.activePresetId && removed.has(presets.activePresetId)) {
+        presets.activePresetId = presets.allIds[0] ?? null;
+    }
+
+    savePresetsToStorage();
+    notify();
+    console.log('[PresetStore] Deleted presets:', present.join(', '));
+}
+
 export function renamePreset(id: string, newName: string): void {
     if (!presets.byId[id]) {
         console.warn('[PresetStore] Cannot rename, preset not found:', id);
@@ -730,7 +802,7 @@ export function restoreFactoryDefaults(): void {
         if (id === 'detail' || id === 'structure' || id === 'anchor') return;
         const preset = presets.byId[id];
         if (preset) {
-            presets.byId[id] = { ...preset, pinnedSlot: undefined };
+            presets.byId[id] = { ...preset, pinnedSlot: null };
         }
     });
 
