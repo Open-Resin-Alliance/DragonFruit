@@ -46,6 +46,12 @@ The rail's drag is pointer events (`onPointerDown` + `setPointerCapture` +
 makes the webview reject page-level drags outright: the cursor becomes the
 no-drop one and no `dragstart` is delivered. See `PresetSelector.tsx`.
 
+The same drag is the rail's delete gesture: released outside the Support Studio
+panel (the element carrying `data-support-studio-panel`) it asks to delete the
+dragged preset, or the whole selection when the dragged row is part of one. The
+pointer turns into a trash can there, from the `body.preset-drag-delete` rule in
+`src/app/globals.css`.
+
 ## Profiles and plugin keys
 
 | Key                                              | Medium                        | Purpose                                            |

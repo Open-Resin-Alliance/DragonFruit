@@ -1144,7 +1144,9 @@ export function SupportSidebar() {
         <>
 
 
-        <div ref={supportSidebarAnchorRef}>
+        {/* `data-support-studio-panel` is the boundary the preset rail's
+            drag-off-to-delete gesture reads: outside it a drop means delete. */}
+        <div ref={supportSidebarAnchorRef} data-support-studio-panel>
         <Card className={expanded ? 'max-h-[calc(100dvh-var(--topbar-height)-24px)] overflow-hidden flex flex-col' : undefined}>
             <CardHeader
                 left={(

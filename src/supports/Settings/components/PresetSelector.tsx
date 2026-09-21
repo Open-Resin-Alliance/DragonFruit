@@ -8,10 +8,10 @@ import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import { Trans } from '@lingui/react/macro';
 import {
+    formatBulkDeletePresetsAction,
     formatBulkDeletePresetsTitle,
     formatDeletePresetTitle,
     formatOverwritePresetTitle,
-    formatPresetSelectionCount,
     formatPresetSlotLabel,
     translatePresetName,
 } from '@/supports/Settings/presetMessages';
@@ -49,14 +49,16 @@ type PresetSelectorProps = {
 const PRESET_DRAG_THRESHOLD_PX = 4;
 
 /**
- * Where a dragged preset would land: a slot, in front of a listed preset, or
- * the end of the list. `key` is what the highlight compares, since the target is
- * rebuilt on every pointer move.
+ * Where a dragged preset would land: a slot, in front of a listed preset, the
+ * end of the list, or outside the Support Studio panel, which is a delete
+ * gesture. `key` is what the highlight compares, since the target is rebuilt on
+ * every pointer move.
  */
 type PresetDropTarget =
     | { key: string; kind: 'slot'; slot: number }
     | { key: string; kind: 'row'; presetId: string }
-    | { key: string; kind: 'list' };
+    | { key: string; kind: 'list' }
+    | { key: string; kind: 'delete' };
 
 /** Outline for the cell a dragged preset would land in. */
 const PRESET_DROP_TARGET_STYLE: React.CSSProperties = {
@@ -131,9 +133,21 @@ export function PresetSelector({
     const [presetDragPoint, setPresetDragPoint] = useState<{ x: number; y: number } | null>(null);
     const presetDragStartRef = useRef<{ id: string; x: number; y: number; pointerId: number } | null>(null);
     const presetDragMovedRef = useRef(false);
+    /** The Support Studio panel the drag started in, for the outside test. */
+    const presetDragPanelRef = useRef<Element | null>(null);
 
-    /** The slot, row or list under the pointer, or null when it is over none. */
+    /** The slot, row, list or outside-panel target under the pointer. */
     function presetDropTargetAt(x: number, y: number): PresetDropTarget | null {
+        const panel = presetDragPanelRef.current;
+        if (panel) {
+            const rect = panel.getBoundingClientRect();
+            const insidePanel = x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+            // Off the panel is the delete gesture, so it wins over the cells:
+            // the rail is scrolled, and a cell can sit under a point the pointer
+            // reached by leaving the panel.
+            if (!insidePanel) return { key: 'delete', kind: 'delete' };
+        }
+
         const element = document.elementFromPoint(x, y);
         if (!element) return null;
 
@@ -149,6 +163,17 @@ export function PresetSelector({
         return element.closest('[data-preset-drop-list]') ? { key: 'list', kind: 'list' } : null;
     }
 
+    /**
+     * Off the panel the pointer becomes a trash can, on the body so it beats
+     * the cursor of whatever cell is under it. The ghost carries the same icon,
+     * which is the part that shows even when a cursor cannot be loaded.
+     */
+    useEffect(() => {
+        const offPanel = presetDropTarget?.kind === 'delete';
+        document.body.classList.toggle('preset-drag-delete', offPanel);
+        return () => document.body.classList.remove('preset-drag-delete');
+    }, [presetDropTarget]);
+
     function endPresetDrag() {
         presetDragStartRef.current = null;
         setPresetDragId(null);
@@ -159,6 +184,17 @@ export function PresetSelector({
     function handlePresetDrop(draggedId: string, target: PresetDropTarget) {
         const dragged = presets.find((preset) => preset.id === draggedId);
         if (!dragged) return;
+
+        if (target.kind === 'delete') {
+            // Dragged off the panel: ask before anything goes. Dragging one of
+            // a multi-selection takes the whole selection with it.
+            if (presetSelection.includes(dragged.id) && presetSelection.length > 1) {
+                setBulkDeleteOpen(true);
+                return;
+            }
+            setDeleteConfirmId(dragged.id);
+            return;
+        }
 
         if (target.kind === 'row') {
             // Out of the rail and into the list, where it landed.
@@ -196,6 +232,7 @@ export function PresetSelector({
             pointerId: event.pointerId,
         };
         presetDragMovedRef.current = false;
+        presetDragPanelRef.current = event.currentTarget.closest('[data-support-studio-panel]');
         // Capture so the moves and the release keep arriving here while the
         // pointer is over another cell.
         event.currentTarget.setPointerCapture(event.pointerId);
@@ -220,13 +257,16 @@ export function PresetSelector({
     function handlePresetPointerUp(event: React.PointerEvent<HTMLButtonElement>) {
         const start = presetDragStartRef.current;
         if (!start) return;
-        const dropped = presetDragMovedRef.current ? presetDropTargetAt(event.clientX, event.clientY) : null;
+        const dropped = presetDragMovedRef.current
+            ? presetDropTargetAt(event.clientX, event.clientY)
+            : null;
         endPresetDrag();
         if (dropped == null) return;
         handlePresetDrop(start.id, dropped);
     }
 
     const presetDragPreset = presetDragId ? presets.find((preset) => preset.id === presetDragId) ?? null : null;
+    const presetDragOffPanel = presetDropTarget?.kind === 'delete';
 
     // Multi-selection over the unpinned list: Ctrl/Cmd toggles a preset,
     // Shift takes the range from the applied preset (or the last one toggled).
@@ -239,13 +279,22 @@ export function PresetSelector({
         .map((id) => presets.find((preset) => preset.id === id))
         .filter((preset): preset is (typeof presets)[number] => Boolean(preset));
 
-    function handlePresetRowClick(event: React.MouseEvent<HTMLButtonElement>, presetId: string) {
+    function handlePresetRowClick(event: React.MouseEvent<HTMLButtonElement>, preset: (typeof presets)[number]) {
         // The press that just dragged is not a click.
         if (presetDragMovedRef.current) {
             presetDragMovedRef.current = false;
             return;
         }
 
+        // A pinned row is not part of the multi-selection: it applies, whatever
+        // modifiers are held, so Ctrl cannot pick up a slot.
+        if (preset.pinnedSlot != null) {
+            setPresetSelection([]);
+            handlePresetSelect(preset.id);
+            return;
+        }
+
+        const presetId = preset.id;
         const additive = event.ctrlKey || event.metaKey;
         if (event.shiftKey) {
             const anchorId = effectiveSelectedPresetId && unpinnedIds.includes(effectiveSelectedPresetId)
@@ -286,6 +335,9 @@ export function PresetSelector({
     // render, so gating the dialog on it dropped the request instead of showing
     // the dialog.
     const confirmPreset = confirmId ? presets.find((preset) => preset.id === confirmId) ?? null : null;
+    const deleteConfirmPreset = deleteConfirmId
+        ? presets.find((preset) => preset.id === deleteConfirmId) ?? null
+        : null;
 
     // Keep a ref so the save-trigger effect always reads the latest values
     // without needing them as effect dependencies.
@@ -358,7 +410,7 @@ export function PresetSelector({
                 onPointerMove={handlePresetPointerMove}
                 onPointerUp={handlePresetPointerUp}
                 onPointerCancel={endPresetDrag}
-                onClick={(event) => handlePresetRowClick(event, preset.id)}
+                onClick={(event) => handlePresetRowClick(event, preset)}
                 onMouseEnter={() => {
                     setHoveredPresetId(preset.id);
                     setAnatomyPreviewHoveredPresetSettings(preset.settings);
@@ -578,6 +630,14 @@ export function PresetSelector({
                             if (!effectiveSelectedPresetId) return;
                             handleContextMenu(e, effectiveSelectedPresetId);
                         }}
+                        onPointerDown={(e) => {
+                            // A press on the empty rail clears the selection; a
+                            // right-click does not, so right-clicking inside a
+                            // selection can act on it.
+                            if (e.button !== 0) return;
+                            if ((e.target as HTMLElement).closest('[data-preset-cell]')) return;
+                            setPresetSelection([]);
+                        }}
                     >
                         <div className="grid grid-cols-2 gap-1 px-1">
                             {[1, 2, 3, 4, 5, 6].map((slot) => {
@@ -626,39 +686,6 @@ export function PresetSelector({
                         </div>
 
                         <div className="mx-3 mt-4 mb-3 border-t" style={{ borderColor: 'var(--border-subtle)' }} />
-
-                        {selectedPresets.length > 0 ? (
-                            <div
-                                className="mx-1 mb-2 flex items-center justify-between gap-2 rounded-md border px-2 py-1.5 text-[11px]"
-                                style={{
-                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 90%)',
-                                    color: 'var(--text-strong)',
-                                }}
-                            >
-                                <span className="font-medium tabular-nums">
-                                    {formatPresetSelectionCount(selectedPresets.length, _)}
-                                </span>
-                                <div className="flex items-center gap-1">
-                                    <button
-                                        type="button"
-                                        className="ui-button ui-button-secondary !h-6 px-2 text-[11px]"
-                                        onClick={() => setPresetSelection([])}
-                                    >
-                                        <Trans>Clear</Trans>
-                                    </button>
-                                    <button
-                                        type="button"
-                                        className="ui-button !h-6 px-2 text-[11px] inline-flex items-center gap-1"
-                                        style={{ color: 'var(--danger)' }}
-                                        onClick={() => setBulkDeleteOpen(true)}
-                                    >
-                                        <Trash2 className="h-3 w-3" />
-                                        <Trans>Delete</Trans>
-                                    </button>
-                                </div>
-                            </div>
-                        ) : null}
 
                         <div
                             className="grid grid-cols-2 gap-1 px-1"
@@ -745,9 +772,9 @@ export function PresetSelector({
 
             {/* ── Delete Preset Modal ────────────────────────────────────── */}
             <StructuredDialogModal
-                open={deleteConfirmId !== null && selectedPreset !== null && deleteConfirmId === selectedPreset.id}
+                open={deleteConfirmPreset !== null}
                 ariaLabel={_(msg`Delete preset`)}
-                title={formatDeletePresetTitle(selectedPreset ? translatePresetName(selectedPreset, _) : '', _)}
+                title={formatDeletePresetTitle(deleteConfirmPreset ? translatePresetName(deleteConfirmPreset, _) : '', _)}
                 subtitle={_(msg`This action cannot be undone.`)}
                 icon={<Trash2 className="h-4 w-4" />}
                 iconTone="warning"
@@ -772,8 +799,8 @@ export function PresetSelector({
                                 color: 'var(--danger)',
                             }}
                             onClick={() => {
-                                if (selectedPreset) {
-                                    deletePreset(selectedPreset.id);
+                                if (deleteConfirmPreset) {
+                                    deletePreset(deleteConfirmPreset.id);
                                 }
                                 setDeleteConfirmId(null);
                                 setIsEditingName(false);
@@ -786,7 +813,7 @@ export function PresetSelector({
                 )}
             >
                 <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                    <Trans>This will permanently remove the preset <strong style={{ color: 'var(--text-strong)' }}>{selectedPreset ? translatePresetName(selectedPreset, _) : ''}</strong> and all of its saved settings.</Trans>
+                    <Trans>This will permanently remove the preset <strong style={{ color: 'var(--text-strong)' }}>{deleteConfirmPreset ? translatePresetName(deleteConfirmPreset, _) : ''}</strong> and all of its saved settings.</Trans>
                 </p>
             </StructuredDialogModal>
 
@@ -890,17 +917,22 @@ export function PresetSelector({
             {/* ── Drag Ghost ───────────────────────────────────────────── */}
             {presetDragPoint && presetDragPreset ? ReactDOM.createPortal(
                 <div
-                    className="pointer-events-none fixed z-[200] max-w-[220px] truncate rounded-[5px] border px-3 py-2 text-sm"
+                    className="pointer-events-none fixed z-[200] inline-flex max-w-[220px] items-center gap-1.5 truncate rounded-[5px] border px-3 py-2 text-sm"
                     style={{
                         left: presetDragPoint.x + 12,
                         top: presetDragPoint.y + 10,
-                        borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                        background: 'color-mix(in srgb, var(--surface-0), #000 10%)',
-                        color: 'var(--text-strong)',
+                        borderColor: presetDragOffPanel
+                            ? 'color-mix(in srgb, #ef4444, var(--border-subtle) 40%)'
+                            : 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                        background: presetDragOffPanel
+                            ? 'color-mix(in srgb, #ef4444, var(--surface-0) 84%)'
+                            : 'color-mix(in srgb, var(--surface-0), #000 10%)',
+                        color: presetDragOffPanel ? '#fecaca' : 'var(--text-strong)',
                         boxShadow: '0 8px 20px rgba(0, 0, 0, 0.35)',
                     }}
                 >
-                    {translatePresetName(presetDragPreset, _)}
+                    {presetDragOffPanel ? <Trash2 className="h-3.5 w-3.5 shrink-0" /> : null}
+                    <span className="truncate">{translatePresetName(presetDragPreset, _)}</span>
                 </div>,
                 document.body
             ) : null}
@@ -1138,13 +1170,23 @@ export function PresetSelector({
                         onClick={() => {
                             const preset = presets.find((p) => p.id === contextMenu.presetId);
                             if (!preset) return;
-                            handlePresetSelect(preset.id);
-                            setDeleteConfirmId(preset.id);
+                            setIsEditingName(false);
                             setContextMenu(null);
+                            // Right-clicking inside a multi-selection acts on the
+                            // selection, the way a file list does.
+                            if (presetSelection.includes(preset.id) && presetSelection.length > 1) {
+                                setBulkDeleteOpen(true);
+                                return;
+                            }
+                            // Only the delete is asked for: selecting the preset
+                            // first would apply its settings on the way out.
+                            setDeleteConfirmId(preset.id);
                         }}
                     >
                         <Trash2 className="h-3.5 w-3.5" />
-                        <Trans>Delete</Trans>
+                        {presetSelection.includes(contextMenu.presetId) && presetSelection.length > 1
+                            ? formatBulkDeletePresetsAction(presetSelection.length, _)
+                            : <Trans>Delete</Trans>}
                     </button>
                 </div>,
                 document.body

@@ -51,12 +51,12 @@ export function formatPresetSlotLabel(slot: number, translate: Translate): strin
   return translate(msg`Slot ${slot}`);
 }
 
-/** Bulk-selection bar, e.g. "3 selected". */
-export function formatPresetSelectionCount(count: number, translate: Translate): string {
-  return translate(msg`${count} selected`);
-}
-
 /** Title of the bulk delete confirmation, e.g. `Delete 3 presets?`. */
 export function formatBulkDeletePresetsTitle(count: number, translate: Translate): string {
   return translate(msg`Delete ${count} presets?`);
+}
+
+/** Context-menu entry that deletes the whole selection, e.g. "Delete 3 presets". */
+export function formatBulkDeletePresetsAction(count: number, translate: Translate): string {
+  return translate(msg`Delete ${count} presets`);
 }
