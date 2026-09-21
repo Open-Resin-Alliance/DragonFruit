@@ -211,22 +211,14 @@ export function AutoBracingSettingsCard({
             <button
                 type="button"
                 onClick={onAutoBrace}
-                className="w-full !h-10 rounded-md border px-3 text-[12px] font-semibold inline-flex items-center justify-center gap-2 transition-colors"
+                className="ui-button w-full !h-8 text-[11px]"
                 style={{
-                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
+                    borderColor: 'var(--accent)',
+                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 86%)',
                     color: 'var(--accent)',
                 }}
             >
-                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M14.5 3.5 12 6l2.5 2.5L17 6l-2.5-2.5z" />
-                    <path d="M9.5 14.5 7 17l2.5 2.5L12 17l-2.5-2.5z" />
-                    <path d="M15 13l-3 3 2 2 3-3-2-2z" />
-                    <path d="M6 8l-3 3 2 2 3-3-2-2z" />
-                    <path d="M8 6l2-2" />
-                    <path d="M16 16l2 2" />
-                </svg>
-                {_(msg`Apply Auto Brace`)}
+                {_(msg`Apply Bracing`)}
             </button>
         </div>
     );

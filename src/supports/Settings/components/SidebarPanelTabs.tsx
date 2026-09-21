@@ -17,7 +17,7 @@ type TabDef = {
 // Each id names the PAGE it opens, not a support type: `supportInfo` carries the
 // contact cone, cone angle and root settings that apply to supports generally.
 const TABS: TabDef[] = [
-    { tab: 'supportInfo', label: msg({ message: 'Support Info', comment: 'Support kind tab. One of four tabs on a narrow row; two words here, unlike the others.' }), icon: Pickaxe },
+    { tab: 'supportInfo', label: msg({ message: 'General', comment: 'Support kind tab. One of four tabs on a narrow row, so keep it to one short word.' }), icon: Pickaxe },
     { tab: 'raft', label: msg({ message: 'Raft', comment: 'Support kind tab. One of four tabs on a narrow row, so keep it to one short word.' }), icon: Sailboat },
     { tab: 'grid', label: msg({ message: 'Grid', comment: 'Support kind tab. One of four tabs on a narrow row, so keep it to one short word.' }), icon: Grid3X3 },
     { tab: 'bracing', label: msg({ message: 'Bracing', comment: 'Support kind tab. One of four tabs on a narrow row, so keep it to one short word.' }), icon: WandSparkles },
