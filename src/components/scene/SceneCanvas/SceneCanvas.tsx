@@ -1910,7 +1910,10 @@ export function SceneCanvas({
   ]);
 
   const supportPlacementGuideLineWidthMm = React.useMemo(() => {
-    const toGuideWidthMm = (contactDiameterMm: number) => Math.max(0.01, contactDiameterMm * 0.5);
+    // The stripe is as wide as the contact disk that will land on it, so the
+    // line can be lined up with the disk by eye. Half of it read as a thinner
+    // guide than the contact it was standing in for.
+    const toGuideWidthMm = (contactDiameterMm: number) => Math.max(0.01, contactDiameterMm);
 
     const pickPreviewContactDiameterMm = (preview: SupportData | null | undefined): number | null => {
       if (!preview) return null;
