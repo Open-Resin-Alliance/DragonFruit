@@ -416,6 +416,9 @@ test('decideGridPlacement rejects when the fixed preferred host cannot accept an
     assert.equal(decision.kind, 'reject');
     assert.equal(decision.nodeKey, '0,0');
     assert.equal(decision.reason, 'NO_VALID_ATTACHMENT');
+    // The preview draws this trunk as a ghost: without a reason on it the ghost
+    // of a second pillar on the node reads as a placement that works.
+    assert.equal(decision.trunkBuild?.supportData.error, 'TOO_CLOSE_TO_EXISTING');
 });
 
 test('decideGridPlacement applies the same trunk collision gate for preview and commit', () => {
@@ -787,4 +790,62 @@ test('decideGridPlacement merges into a trunk standing off-grid whose contact ho
     }
     assert.equal(decision.nodeKey, '0,0');
     assert.equal(decision.hostTrunkId, offGridHost.build.trunk.id);
+});
+
+test('a neighbour leaning over a node does not hide the pillar standing on it', () => {
+    const settings = makeSettings();
+    setSettings(settings);
+
+    const snapshot = makeEmptySnapshot();
+    // The pillar standing on the node the candidate wants.
+    const standing = buildStraightFixture({ x: 0, y: 0, tipZ: 8, socketZ: 7 });
+    addTrunkBuild(snapshot, standing);
+
+    // A neighbour one node over, whose shaft leans back over this node: its
+    // base keys to (1,0), its contact lands in (0,0) — the same key as the
+    // pillar standing there.
+    const leaning = buildStraightFixture({ x: 8, y: 0, tipZ: 12, socketZ: 11 });
+    const leaningSegment = {
+        ...leaning.build.trunk.segments[0],
+        topJoint: {
+            ...leaning.build.trunk.segments[0].topJoint!,
+            pos: { x: 1.5, y: 0, z: 11 },
+        },
+    };
+    leaning.build.trunk = {
+        ...leaning.build.trunk,
+        segments: [leaningSegment],
+        contactCone: { ...leaning.build.trunk.contactCone!, pos: { x: 1.5, y: 0, z: 12 } },
+    };
+    addTrunkBuild(snapshot, leaning);
+
+    assert.equal(
+        gridNodeKeyFromXY(leaning.build.root.transform.pos.x, leaning.build.root.transform.pos.y, GRID_SPACING_MM),
+        '2,0',
+        'fixture premise: the leaning trunk stands on another node',
+    );
+    assert.equal(
+        gridNodeKeyFromXY(leaning.build.trunk.contactCone!.pos.x, leaning.build.trunk.contactCone!.pos.y, GRID_SPACING_MM),
+        '0,0',
+        'fixture premise: the leaning trunk contact covers the candidate node',
+    );
+
+    // A low tip directly over the pillar standing on (0,0). The leaning
+    // neighbour cannot reach it: its shaft is millimetres away at this height,
+    // so the merge has to be the pillar underneath.
+    const candidate = buildStraightFixture({ x: 0, y: 0, tipZ: 6, socketZ: 5 });
+
+    const decision = decideGridPlacement({
+        settings,
+        snapshot,
+        candidate: candidate.build,
+        tipPos: candidate.input.tipPos,
+        tipNormal: candidate.input.tipNormal,
+        modelId: MODEL_ID,
+    });
+
+    if (decision.kind !== 'place_branch' && decision.kind !== 'place_leaf') {
+        assert.fail(`expected a merge into the pillar standing on the node, got ${decision.kind}`);
+    }
+    assert.equal(decision.hostTrunkId, standing.build.trunk.id);
 });

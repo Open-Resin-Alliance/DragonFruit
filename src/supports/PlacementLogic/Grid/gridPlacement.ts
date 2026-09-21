@@ -50,26 +50,69 @@ const MIN_TRUNK_CLEARANCE_MM = 0.15;
 const GRID_UNSNAPPED_NODE_KEY = 'unsnapped';
 
 
+/** A trunk as the grid sees it: the pillar, and the root it stands on. */
+interface GridHostEntry {
+    trunkId: string;
+    trunk: Trunk;
+    root: Roots;
+}
+
 /**
- * The trunk standing on this node, if there is one.
+ * Every host that indexes each node: where a pillar stands first, then the
+ * contacts trunks carry.
  *
- * The node map is keyed by the node nearest a trunk's root, so a root sitting
+ * A node keeps a list, not a single host. A trunk's contact can land in the
+ * same cell as another trunk's root (a neighbour leaning back over the node),
+ * and with one entry per key that contact evicted the pillar standing there:
+ * the merge then aimed at a shaft millimetres away, could not reach it, and
+ * refused a contact the pillar underneath could have carried.
+ */
+function buildHostIndex(
+    trunks: GridHostEntry[],
+    spacingMm: number,
+): Map<string, GridHostEntry[]> {
+    const index = new Map<string, GridHostEntry[]>();
+    const add = (key: string, entry: GridHostEntry) => {
+        const hosts = index.get(key);
+        if (!hosts) {
+            index.set(key, [entry]);
+            return;
+        }
+        if (hosts.some((host) => host.trunkId === entry.trunkId)) return;
+        hosts.push(entry);
+    };
+    for (const entry of trunks) {
+        add(gridNodeKeyFromXY(entry.root.transform.pos.x, entry.root.transform.pos.y, spacingMm), entry);
+    }
+    // A base routed off the grid (gridIgnored) stands wherever 45 degrees
+    // allowed, a shaft height from its contact, so a root key says nothing
+    // about which points are already taken: the contact occupies its cell too.
+    for (const entry of trunks) {
+        const contact = entry.trunk.contactCone?.pos;
+        if (contact) add(gridNodeKeyFromXY(contact.x, contact.y, spacingMm), entry);
+    }
+    return index;
+}
+
+/**
+ * The trunks standing on this node, nearest first, if the index misses them.
+ *
+ * The index is keyed by the node nearest a trunk's end, so a root sitting
  * between nodes (hand placed, or placed before the spacing changed) is keyed to
- * a neighbour and the map misses it exactly where the new contact is aiming.
+ * a neighbour and the index misses it exactly where the new contact is aiming.
  * Half a step of tolerance covers that band and no more: a trunk on its own
  * node, a full step away, is not this node's host. A trunk is measured by
  * whichever of its two ends is nearer — the pillar's base, and the contact it
  * carries.
  */
-function findHostTrunkNearNode(
-    trunkGridMap: Map<string, { trunkId: string; trunk: Trunk; root: Roots }>,
+function hostsNearNode(
+    trunks: GridHostEntry[],
     nodeKey: string,
     spacingMm: number,
-): { trunkId: string; trunk: Trunk; root: Roots } | null {
+): GridHostEntry[] {
     const centre = gridSnappedXYFromKey(nodeKey, spacingMm);
-    let best: { trunkId: string; trunk: Trunk; root: Roots } | null = null;
-    let bestDistanceMm = spacingMm * 0.5;
-    for (const entry of trunkGridMap.values()) {
+    const near: Array<{ entry: GridHostEntry; distanceMm: number }> = [];
+    for (const entry of trunks) {
         let distanceMm = Math.hypot(
             entry.root.transform.pos.x - centre.x,
             entry.root.transform.pos.y - centre.y,
@@ -78,11 +121,52 @@ function findHostTrunkNearNode(
         if (contact) {
             distanceMm = Math.min(distanceMm, Math.hypot(contact.x - centre.x, contact.y - centre.y));
         }
-        if (distanceMm > bestDistanceMm) continue;
-        best = entry;
-        bestDistanceMm = distanceMm;
+        if (distanceMm > spacingMm * 0.5) continue;
+        near.push({ entry, distanceMm });
     }
-    return best;
+    near.sort((a, b) => a.distanceMm - b.distanceMm);
+    return near.map((item) => item.entry);
+}
+
+/**
+ * The first host of these that can actually take this contact.
+ *
+ * Every trunk indexing the node is tried — the pillar standing on it first,
+ * then the trunks whose contact covers it — because a node with one unreachable
+ * host is still a node with a pillar on it, and refusing there leaves the tip
+ * unplaced with no second pillar to fall back to.
+ */
+function attachToHost(args: {
+    hosts: GridHostEntry[];
+    nodeKey: string;
+    tipPos: Vec3;
+    tipNormal: Vec3;
+    modelId: string;
+    minAngleDeg: number;
+    settings: DecideGridPlacementArgs['settings'];
+    attachStepMm: number;
+    mesh?: THREE.Mesh;
+    occupiedPoint?: boolean;
+}): GridPlacementDecision | null {
+    for (const host of args.hosts) {
+        if (host.trunk.segments.length === 0) continue;
+        const decision = selectAttachmentDecision({
+            nodeKey: args.nodeKey,
+            hostTrunkId: host.trunkId,
+            hostTrunk: host.trunk,
+            hostRoot: host.root,
+            tipPos: args.tipPos,
+            minAngleDeg: args.minAngleDeg,
+            settings: args.settings,
+            attachStepMm: args.attachStepMm,
+            mesh: args.mesh,
+            tipNormal: args.tipNormal,
+            modelId: args.modelId,
+            occupiedPoint: args.occupiedPoint ?? false,
+        });
+        if (decision) return decision;
+    }
+    return null;
 }
 
 function withResolvedSnappedRoute(
@@ -528,7 +612,7 @@ function selectAttachmentDecision(args: {
 
 function findNeighborAttachment(args: {
     nodeKey: string;
-    trunkGridMap: Map<string, { trunkId: string; trunk: Trunk; root: Roots }>;
+    hostsByNode: Map<string, GridHostEntry[]>;
     tipPos: Vec3;
     tipNormal: Vec3;
     modelId: string;
@@ -549,24 +633,19 @@ function findNeighborAttachment(args: {
 
     for (const offset of neighborOffsets) {
         const neighborKey = `${gx + offset.dx},${gy + offset.dy}`;
-        const neighborHost = args.trunkGridMap.get(neighborKey);
-        if (neighborHost && neighborHost.trunk.segments.length > 0) {
-            const neighborDecision = selectAttachmentDecision({
-                nodeKey: neighborKey,
-                hostTrunkId: neighborHost.trunkId,
-                hostTrunk: neighborHost.trunk,
-                hostRoot: neighborHost.root,
-                tipPos: args.tipPos,
-                minAngleDeg: args.minAngleDeg,
-                settings: args.settings,
-                attachStepMm: args.attachStepMm,
-                mesh: args.mesh,
-                tipNormal: args.tipNormal,
-                modelId: args.modelId,
-            });
-            if (neighborDecision) {
-                return neighborDecision;
-            }
+        const neighborDecision = attachToHost({
+            hosts: args.hostsByNode.get(neighborKey) ?? [],
+            nodeKey: neighborKey,
+            tipPos: args.tipPos,
+            tipNormal: args.tipNormal,
+            modelId: args.modelId,
+            minAngleDeg: args.minAngleDeg,
+            settings: args.settings,
+            attachStepMm: args.attachStepMm,
+            mesh: args.mesh,
+        });
+        if (neighborDecision) {
+            return neighborDecision;
         }
     }
     return null;
@@ -605,30 +684,15 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
 
     const spacingMm = settings.grid?.spacingMm ?? 4;
     
-    // Build O(1) grid hash map of hosts
-    const trunkGridMap = new Map<string, { trunkId: string; trunk: Trunk; root: Roots }>();
-    const trunks: { trunkId: string; trunk: Trunk; root: Roots }[] = [];
+    // Every trunk of this model, indexed by the nodes it covers.
+    const trunks: GridHostEntry[] = [];
     for (const trunk of Object.values(snapshot.trunks)) {
         if (trunk.modelId !== modelId) continue;
         const root = snapshot.roots[trunk.rootId];
         if (!root) continue;
         trunks.push({ trunkId: trunk.id, trunk, root });
     }
-    // Indexed twice, roots first: where each pillar stands, then the point it
-    // serves. A base routed off the grid (gridIgnored) stands wherever 45 degrees
-    // allowed, a shaft height from its contact, so a root key says nothing about
-    // which points are already taken. Contacts are written last, so the point a
-    // trunk serves wins a node some other trunk merely stands on.
-    for (const entry of trunks) {
-        trunkGridMap.set(
-            gridNodeKeyFromXY(entry.root.transform.pos.x, entry.root.transform.pos.y, spacingMm),
-            entry,
-        );
-    }
-    for (const entry of trunks) {
-        const contact = entry.trunk.contactCone?.pos;
-        if (contact) trunkGridMap.set(gridNodeKeyFromXY(contact.x, contact.y, spacingMm), entry);
-    }
+    const hostsByNode = buildHostIndex(trunks, spacingMm);
 
     // Which type a tip height calls for is declared; anchor claims the
     // near-plate band, trunk everything above it.
@@ -678,7 +742,7 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
         { x: preferredReference.x, y: preferredReference.y }
     );
     const nodeKey = preferredNodeKey;
-    const host = trunkGridMap.get(nodeKey) ?? null;
+    const nodeHosts = hostsByNode.get(nodeKey) ?? [];
     const snappedCandidate = hasResolvedSnappedRoot(candidate.route) && nodeKey === resolvedNodeKey
         ? candidate
         : applyGridSnapToNodeKey(
@@ -686,33 +750,31 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
             spacingMm,
             nodeKey,
         );
-    if (!host) {
+    if (nodeHosts.length === 0) {
         // The node is free by key, but a trunk may still be standing on it: a
         // root between nodes is keyed to a neighbour. When one is there, this is
         // an occupied point, so the merge is what the answer has to be. Grid
         // mode never replaces a trunk, and a second pillar beside the first is
         // not a placement either: it is the preview that gets refused.
-        const hostOnNode = findHostTrunkNearNode(trunkGridMap, nodeKey, spacingMm);
-        if (hostOnNode && hostOnNode.trunk.segments.length > 0) {
-            const attachment = selectAttachmentDecision({
+        const nearHosts = hostsNearNode(trunks, nodeKey, spacingMm);
+        if (nearHosts.length > 0) {
+            const attachment = attachToHost({
+                hosts: nearHosts,
                 nodeKey,
-                hostTrunkId: hostOnNode.trunkId,
-                hostTrunk: hostOnNode.trunk,
-                hostRoot: hostOnNode.root,
                 tipPos,
+                tipNormal,
+                modelId,
                 minAngleDeg,
                 settings,
                 attachStepMm,
                 mesh,
-                tipNormal,
-                modelId,
                 occupiedPoint: true,
             });
             if (attachment) return attachment;
 
             const neighborMerge = findNeighborAttachment({
                 nodeKey,
-                trunkGridMap,
+                hostsByNode,
                 tipPos,
                 tipNormal,
                 modelId,
@@ -725,7 +787,9 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
 
             // Occupied point, and no member can leave the trunk standing there. A
             // pillar beside it is the preview that gets refused, so this is refused
-            // too: the answer is a different contact, not a second trunk.
+            // too: the answer is a different contact, not a second trunk. The error
+            // is what makes that legible — the preview renders this trunk as a
+            // ghost, and without a reason it reads as a placement that works.
             return {
                 kind: 'reject',
                 nodeKey,
@@ -734,7 +798,7 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
                     snappedRootPos: getResolvedSnappedRootPos(snappedCandidate.route, snappedCandidate.root.transform.pos),
                     snappedNodeKey: nodeKey,
                     snappedValidity: getDefaultSnappedValidity(snappedCandidate.route),
-                    error: snappedCandidate.route.error,
+                    error: snappedCandidate.route.error ?? 'TOO_CLOSE_TO_EXISTING',
                 }),
             };
         }
@@ -774,7 +838,7 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
 
         const neighborDecision = findNeighborAttachment({
             nodeKey,
-            trunkGridMap,
+            hostsByNode,
             tipPos,
             tipNormal,
             modelId,
@@ -811,7 +875,7 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
     // pillar keeps serving every contact it already carries.
     // ================================================================
 
-    if (host.trunk.segments.length === 0) {
+    if (nodeHosts.every((host) => host.trunk.segments.length === 0)) {
         return {
             kind: 'reject',
             nodeKey,
@@ -821,19 +885,18 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
                 snappedNodeKey: nodeKey,
                 snappedValidity: 'hard_invalid',
                 validity: 'hard_invalid',
+                error: 'TOO_CLOSE_TO_EXISTING',
             }),
         };
     }
 
-    // Attach to the co-located host: highest usable knot that can take the
+    // Attach to a co-located host: highest usable knot that can take the
     // member, else a neighbouring node, else refuse. The host is never removed
     // or replaced, whatever the new contact's height.
     perfMark('grid:attach-search');
-    const attachment = selectAttachmentDecision({
+    const attachment = attachToHost({
+        hosts: nodeHosts,
         nodeKey,
-        hostTrunkId: host.trunkId,
-        hostTrunk: host.trunk,
-        hostRoot: host.root,
         tipPos,
         minAngleDeg,
         settings,
@@ -848,7 +911,7 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
 
     const neighborDecision = findNeighborAttachment({
         nodeKey,
-        trunkGridMap,
+        hostsByNode,
         tipPos,
         tipNormal,
         modelId,
@@ -869,7 +932,7 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
             snappedRootPos: getResolvedSnappedRootPos(snappedCandidate.route, snappedCandidate.root.transform.pos),
             snappedNodeKey: nodeKey,
             snappedValidity: getDefaultSnappedValidity(snappedCandidate.route),
-            error: snappedCandidate.route.error,
+            error: snappedCandidate.route.error ?? 'TOO_CLOSE_TO_EXISTING',
         }),
     }
 }
