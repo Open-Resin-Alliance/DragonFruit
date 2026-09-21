@@ -72,6 +72,7 @@ function mergeWithDefaults(settings: SupportSettings): SupportSettings {
         devToolsEnabled: settings.devToolsEnabled !== undefined ? settings.devToolsEnabled : defaults.devToolsEnabled,
         devTools: settings.devTools ? { ...defaults.devTools, ...settings.devTools } : defaults.devTools,
         debugSimpleSupportRender: typeof settings.debugSimpleSupportRender === 'boolean' ? settings.debugSimpleSupportRender : defaults.debugSimpleSupportRender,
+        navigationDiscsOnly: typeof settings.navigationDiscsOnly === 'boolean' ? settings.navigationDiscsOnly : defaults.navigationDiscsOnly,
     };
 }
 
@@ -249,6 +250,15 @@ export function updateDebugSimpleSupportRender(enabled: boolean): void {
     currentSettings = {
         ...currentSettings,
         debugSimpleSupportRender: enabled,
+    };
+    notify();
+}
+
+/** The eye button in the Support Studio header: contact discs only, lines for the rest. */
+export function updateNavigationDiscsOnly(enabled: boolean): void {
+    currentSettings = {
+        ...currentSettings,
+        navigationDiscsOnly: enabled,
     };
     notify();
 }

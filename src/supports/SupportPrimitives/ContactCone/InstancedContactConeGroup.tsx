@@ -22,6 +22,15 @@ export interface InstancedContactCone {
 
 interface InstancedContactConeGroupProps {
     cones: InstancedContactCone[];
+    /**
+     * Keep only the contact primitive: the disk for a disk profile, the tip
+     * sphere otherwise. The cone body is left to the caller, which draws it as
+     * a line in the navigation view.
+     */
+    discsOnly?: boolean;
+    /** Colour for the contact primitive in the discs-only view, so the discs
+     *  stand out from the member colours around them. */
+    discColor?: string;
     color?: string;
     emissive?: string;
     emissiveIntensity?: number;
@@ -58,8 +67,39 @@ const getDiskThicknessForCone = (cone: InstancedContactCone): number => {
     return cone.diskLengthOverride ?? calculateDiskThickness(effectiveSurfaceNormal, cone.normal, cone.profile);
 };
 
+/**
+ * The cone's visual axis in world space: the socket the member's shaft ends at,
+ * and the centre of the contact primitive it grows from. The navigation view
+ * draws this where the cone body would be, so its line meets the shaft line at
+ * the socket instead of leaving a gap there.
+ */
+export function coneAxisSpan(cone: InstancedContactCone): { start: Vec3; end: Vec3 } {
+    const surfaceNormal = cone.surfaceNormal ?? cone.normal;
+    const thickness = getDiskThicknessForCone(cone);
+    const coneStart = {
+        x: cone.pos.x + surfaceNormal.x * thickness,
+        y: cone.pos.y + surfaceNormal.y * thickness,
+        z: cone.pos.z + surfaceNormal.z * thickness,
+    };
+    const halfLength = cone.profile.lengthMm / 2;
+    const centre = getConeCenterPosition(coneStart, cone.normal, cone.profile);
+    return {
+        // The far end of the body, which is where the shaft's last segment ends.
+        start: {
+            x: centre.x + cone.normal.x * halfLength,
+            y: centre.y + cone.normal.y * halfLength,
+            z: centre.z + cone.normal.z * halfLength,
+        },
+        end: cone.profile.type === 'disk'
+            ? getDiskCenter(cone.pos, surfaceNormal, thickness)
+            : coneStart,
+    };
+}
+
 function ConeBucketMesh({
     bucket,
+    discsOnly = false,
+    discColor,
     diskThicknessByCone,
     color,
     emissive,
@@ -75,6 +115,8 @@ function ConeBucketMesh({
     resolvePenetration,
 }: {
     bucket: ConeBucket;
+    discsOnly?: boolean;
+    discColor?: string;
     diskThicknessByCone: ReadonlyMap<InstancedContactCone, number>;
     color: string;
     emissive: string;
@@ -272,7 +314,7 @@ function ConeBucketMesh({
                 >
                     <cylinderGeometry args={[bucket.contactRadius, bucket.contactRadius, bucket.diskThickness + bucket.penetration, 10]} />
                     <meshStandardMaterial
-                        color={color}
+                        color={discColor ?? color}
                         emissive={emissive}
                         emissiveIntensity={emissiveIntensity}
                         transparent={transparent}
@@ -286,6 +328,9 @@ function ConeBucketMesh({
                 </instancedMesh>
             )}
 
+            {/* In the discs-only view the body stays mounted at zero alpha:
+                the caller draws its axis as a line, and the body is what the
+                pointer hits, exactly as in the full render. */}
             <instancedMesh
                 key={`cone-body:${bucket.cones.length}`}
                 ref={bodyRef}
@@ -299,13 +344,16 @@ function ConeBucketMesh({
                     color={color}
                     emissive={emissive}
                     emissiveIntensity={emissiveIntensity}
-                    transparent={transparent}
-                    opacity={opacity}
-                    depthWrite={!transparent}
+                    transparent={discsOnly || transparent}
+                    opacity={discsOnly ? 0 : opacity}
+                    depthWrite={!discsOnly && !transparent}
                     clippingPlanes={clippingPlanes ?? undefined}
                 />
             </instancedMesh>
 
+            {/* The tip sphere is a sphere profile's contact primitive, so it
+                stays visible there; a disk profile draws the disk instead, and
+                the sphere goes to zero alpha rather than away. */}
             <instancedMesh
                 key={`cone-tip:${bucket.cones.length}`}
                 ref={tipSphereRef}
@@ -316,38 +364,42 @@ function ConeBucketMesh({
             >
                 <sphereGeometry args={[bucket.contactRadius, 10, 8]} />
                 <meshStandardMaterial
-                    color={color}
+                    color={discColor ?? color}
                     emissive={emissive}
                     emissiveIntensity={emissiveIntensity}
-                    transparent={transparent}
-                    opacity={opacity}
-                    depthWrite={!transparent}
+                    transparent={(discsOnly && bucket.profileType === 'disk') || transparent}
+                    opacity={discsOnly && bucket.profileType === 'disk' ? 0 : opacity}
+                    depthWrite={!((discsOnly && bucket.profileType === 'disk') || transparent)}
                     clippingPlanes={clippingPlanes ?? undefined}
                 />
             </instancedMesh>
 
             {outOfBoundsMaterial && (
                 <>
-                    <instancedMesh
-                        ref={overlayBodyRef}
-                        args={[undefined, undefined, bucket.cones.length]}
-                        frustumCulled={false}
-                        raycast={() => null}
-                        renderOrder={100000}
-                        material={outOfBoundsMaterial}
-                    >
-                        <cylinderGeometry args={[bucket.contactRadius, bucket.bodyRadius, bucket.length, 10]} />
-                    </instancedMesh>
-                    <instancedMesh
-                        ref={overlayTipSphereRef}
-                        args={[undefined, undefined, bucket.cones.length]}
-                        frustumCulled={false}
-                        raycast={() => null}
-                        renderOrder={100000}
-                        material={outOfBoundsMaterial}
-                    >
-                        <sphereGeometry args={[bucket.contactRadius, 10, 8]} />
-                    </instancedMesh>
+                    {!discsOnly && (
+                        <instancedMesh
+                            ref={overlayBodyRef}
+                            args={[undefined, undefined, bucket.cones.length]}
+                            frustumCulled={false}
+                            raycast={() => null}
+                            renderOrder={100000}
+                            material={outOfBoundsMaterial}
+                        >
+                            <cylinderGeometry args={[bucket.contactRadius, bucket.bodyRadius, bucket.length, 10]} />
+                        </instancedMesh>
+                    )}
+                    {(!discsOnly || bucket.profileType !== 'disk') && (
+                        <instancedMesh
+                            ref={overlayTipSphereRef}
+                            args={[undefined, undefined, bucket.cones.length]}
+                            frustumCulled={false}
+                            raycast={() => null}
+                            renderOrder={100000}
+                            material={outOfBoundsMaterial}
+                        >
+                            <sphereGeometry args={[bucket.contactRadius, 10, 8]} />
+                        </instancedMesh>
+                    )}
                     {bucket.profileType === 'disk' && (
                         <instancedMesh
                             ref={overlayDiskRef}
@@ -368,6 +420,8 @@ function ConeBucketMesh({
 
 export function InstancedContactConeGroup({
     cones,
+    discsOnly = false,
+    discColor,
     color = '#ff8800',
     emissive = '#000000',
     emissiveIntensity = 0,
@@ -468,6 +522,8 @@ export function InstancedContactConeGroup({
                 <ConeBucketMesh
                     key={bucket.key}
                     bucket={bucket}
+                    discsOnly={discsOnly}
+                    discColor={discColor}
                     diskThicknessByCone={diskThicknessByCone}
                     color={color}
                     emissive={emissive}

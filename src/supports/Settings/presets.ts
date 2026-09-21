@@ -150,6 +150,7 @@ const DETAIL_PRESET: SupportPreset = {
         devToolsEnabled: false,
         devTools: createDefaultSettings().devTools,
         debugSimpleSupportRender: false,
+        navigationDiscsOnly: false,
     },
 };
 
@@ -242,6 +243,7 @@ const ANCHOR_PRESET: SupportPreset = {
         devToolsEnabled: false,
         devTools: createDefaultSettings().devTools,
         debugSimpleSupportRender: false,
+        navigationDiscsOnly: false,
     },
 };
 
@@ -615,6 +617,10 @@ export function setActivePreset(id: string | null): void {
         autoSupport: {
             ...current.autoSupport,
         },
+        // Preserve the navigation view. It is how the user is looking at the
+        // forest, not part of a sizing profile, so switching presets must not
+        // flip it (and the stored flag a preset carries is never applied).
+        navigationDiscsOnly: current.navigationDiscsOnly,
     });
 
     // Keep selected preset + persisted settings in sync across app restarts.

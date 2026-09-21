@@ -2,6 +2,8 @@
 
 import React, { useSyncExternalStore, forwardRef, useImperativeHandle, useCallback, useEffect, useMemo } from 'react';
 import * as THREE from 'three';
+import { useThree, type ThreeEvent } from '@react-three/fiber';
+import { LineMaterial, LineSegments2, LineSegmentsGeometry } from 'three-stdlib';
 import { removeRootById, subscribe, getSnapshot,
   getKickstandKnots,
   getKickstandRoots,
@@ -43,7 +45,7 @@ import { detailRenderersFor, type DetailRendererContext } from './detailRenderer
 import { InstancedShaftGroup, type InstancedShaft } from './SupportPrimitives/Shaft/InstancedShaftGroup';
 import { InstancedJointGroup, type InstancedJoint } from './SupportPrimitives/Joint/InstancedJointGroup';
 import { InstancedRootsGroup, type InstancedRoot } from './SupportPrimitives/Roots/InstancedRootsGroup';
-import { InstancedContactConeGroup, type InstancedContactCone } from './SupportPrimitives/ContactCone/InstancedContactConeGroup';
+import { InstancedContactConeGroup, coneAxisSpan, type InstancedContactCone } from './SupportPrimitives/ContactCone/InstancedContactConeGroup';
 import { useBracePlacementState } from './SupportTypes/Brace/bracePlacementState';
 import { useLeafPlacementState } from './SupportTypes/Leaf/leafPlacementState';
 import { useKickstandPlacementState } from './SupportTypes/Kickstand/kickstandPlacementState';
@@ -205,8 +207,38 @@ const BRACE_TYPE_ID = spanKnotHostType();
  *  `buildPlacementPreviewBatches` builds from the same descriptor. */
 const LEAF_PREVIEW_BATCH_ID = `placement-preview:${LEAF_TYPE_ID}`;
 
-/** Simple line vector for debugSimpleSupportRender — like J×2 pathfinding debug, but for all shafts. */
-function SimpleShaftLines({ shafts, color }: { shafts: InstancedShaft[]; color: string }) {
+/** The root's axis as the line the navigation view draws for it: the plate
+ *  contact up to the top of the root cone, which is where the member's shaft
+ *  starts, so the line runs into the shaft instead of stopping above the plate. */
+function rootNavigationSpan(root: InstancedRoot): { start: Vec3; end: Vec3 } {
+    return {
+        start: root.basePos,
+        end: {
+            x: root.basePos.x,
+            y: root.basePos.y,
+            z: root.basePos.z + root.effectiveDiskHeight + root.coneHeight,
+        },
+    };
+}
+
+/**
+ * The navigation view's vector thickness, in screen pixels. `LineBasicMaterial`
+ * ignores `linewidth` in WebGL, so the vectors are fat lines (`LineSegments2`),
+ * which also carry their width in screen space.
+ */
+const NAVIGATION_LINE_WIDTH_PX = 2;
+
+/** The navigation view's contact discs, blue against the member colours. */
+const NAVIGATION_CONTACT_COLOR = '#3b82f6';
+
+/**
+ * The line vector the simple and navigation views draw for a member. It is
+ * never the pointer target: the solid geometry stays mounted at zero alpha
+ * beside it (see `renderSceneBatchedShafts`), so the pointer still hits the
+ * shaft it stands for.
+ */
+function SimpleShaftLines({ shafts, color }: { shafts: readonly { start: Vec3; end: Vec3 }[]; color: string }) {
+    const viewport = useThree((state) => state.size);
     const line = React.useMemo(() => {
         if (shafts.length === 0) return null;
         const positions: number[] = [];
@@ -214,14 +246,30 @@ function SimpleShaftLines({ shafts, color }: { shafts: InstancedShaft[]; color: 
             positions.push(s.start.x, s.start.y, s.start.z, s.end.x, s.end.y, s.end.z);
         }
         if (positions.length === 0) return null;
-        const geometry = new THREE.BufferGeometry();
-        geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-        const material = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.95, depthWrite: false, depthTest: true });
-        const obj = new THREE.LineSegments(geometry, material);
+        const geometry = new LineSegmentsGeometry();
+        geometry.setPositions(positions);
+        const material = new LineMaterial({
+            // The typings take a hex number here; the material hands it to
+            // `Color`, which reads it as sRGB like the string form would.
+            color: new THREE.Color(color).getHex(),
+            linewidth: NAVIGATION_LINE_WIDTH_PX,
+            transparent: true,
+            opacity: 0.95,
+            depthWrite: false,
+            depthTest: true,
+        });
+        const obj = new LineSegments2(geometry, material);
         obj.frustumCulled = false;
         obj.renderOrder = 999;
         return obj;
     }, [shafts, color]);
+    // The width is screen-space, so the material needs the viewport it draws
+    // into. Handed over here rather than in the memo, which would rebuild the
+    // geometry on every resize.
+    React.useLayoutEffect(() => {
+        if (!line) return;
+        (line.material as LineMaterial).resolution.set(viewport.width, viewport.height);
+    }, [line, viewport.width, viewport.height]);
     React.useEffect(() => () => { line?.geometry.dispose(); (line?.material as THREE.Material)?.dispose(); }, [line]);
     if (!line || shafts.length === 0) return null;
     return <primitive object={line} />;
@@ -419,7 +467,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const state = useSyncExternalStore(subscribe, getSnapshot);
     const resolvedSelection = useResolvedSelectionState();
     const settings = useSyncExternalStore(subscribeToSettings, getSettingsSnapshot, getSettingsSnapshot);
-    const simpleRender = settings.debugSimpleSupportRender;
+    // The eye button's navigation view is the simple render plus cones reduced
+    // to lines, so it takes every gate below and adds the cone handling.
+    const discsOnly = settings.navigationDiscsOnly;
+    const simpleRender = settings.debugSimpleSupportRender || discsOnly;
     const raftSettings = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
     // The knots kickstands host and the roots they own, derived from the
     // registry's edges rather than a kickstand-specific store.
@@ -2717,14 +2768,32 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         groups: ReadonlyArray<{ color: string; shafts: InstancedShaft[] }>,
         options?: { detailedOnly?: boolean },
     ) => {
-        if (options?.detailedOnly && simpleRender) return null;
+        // The detailed-only groups are the brace curves. The simple view drops
+        // them; the navigation view keeps them as the lines everything else is.
+        if (options?.detailedOnly && simpleRender && !discsOnly) return null;
         // One instanced group per colour, never per model: the drop offset is
         // baked into each instance. An instance count in the key would remount
         // the mesh and reallocate its buffers on every edit.
         return groups.map((group) => (
             <group key={`scene-${typeId}-batch:${group.color}`}>
                 {simpleRender ? (
-                    <SimpleShaftLines shafts={group.shafts} color={group.color} />
+                    <>
+                        <SimpleShaftLines shafts={group.shafts} color={group.color} />
+                        {/* The line is the picture, the shaft is the pointer
+                            target: the solid batch stays mounted at zero alpha
+                            so hover and click behave exactly as in the full
+                            render. */}
+                        <InstancedShaftGroup
+                            shafts={group.shafts}
+                            color={group.color}
+                            transparent
+                            opacity={0}
+                            radialSegments={sceneBatchedShaftRadialSegments}
+                            onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
+                            onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
+                            onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                        />
+                    </>
                 ) : (
                     <InstancedShaftGroup
                         shafts={group.shafts}
@@ -3016,6 +3085,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         renderKnotsById,
         braceRenderKnotsById,
         simpleRender,
+        navigationView: discsOnly,
         hideUnselectedKnots,
         hidePlateContactPrimitivesEffective,
         ghostedBraceIdSet,
@@ -3029,6 +3099,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         renderKnotsById,
         braceRenderKnotsById,
         simpleRender,
+        discsOnly,
         hideUnselectedKnots,
         hidePlateContactPrimitivesEffective,
         ghostedBraceIdSet,
@@ -3103,13 +3174,13 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             <KnotGizmo />
             <BezierGizmoManager />
 
-            {!simpleRender && sceneBatchedJointGroups.map((group) => (
+            {sceneBatchedJointGroups.map((group) => (
                 <group key={`scene-joint-batch:${group.color}`}>
                     <InstancedJointGroup
                         joints={group.joints}
                         color={group.color}
-                        transparent={ghostTransparent}
-                        opacity={ghostOpacityClamped}
+                        transparent={ghostTransparent || discsOnly}
+                        opacity={discsOnly ? 0 : ghostOpacityClamped}
                         widthSegments={BATCHED_JOINT_WIDTH_SEGMENTS}
                         heightSegments={BATCHED_JOINT_HEIGHT_SEGMENTS}
                         onJointClick={isPointerInteractable ? handleSceneBatchedJointClick : undefined}
@@ -3118,10 +3189,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     />
                 </group>
             ))}
-            {!simpleRender && Object.entries(sceneBatchedRootGroupsByType).flatMap(([typeId, groups]) => groups.map((group) => (
+            {Object.entries(sceneBatchedRootGroupsByType).flatMap(([typeId, groups]) => groups.map((group) => (
                 <group key={`scene-${typeId}-root-batch:${group.color}`}>
                     <InstancedRootsGroup
                         roots={group.roots}
+                        diskOnly={discsOnly}
+                        discColor={discsOnly ? NAVIGATION_CONTACT_COLOR : undefined}
                         color={group.color}
                         transparent={ghostTransparent}
                         opacity={ghostOpacityClamped}
@@ -3129,12 +3202,20 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         onRootPointerMove={isPointerInteractable ? handleSceneBatchedRootPointerMove : undefined}
                         onRootPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
                     />
+                    {discsOnly && (
+                        <SimpleShaftLines
+                            shafts={group.roots.map(rootNavigationSpan)}
+                            color={group.color}
+                        />
+                    )}
                 </group>
             )))}
             {sceneBatchedContactConeGroups.map((group) => (
                 <group key={`scene-cone-batch:${group.color}`}>
                     <InstancedContactConeGroup
                         cones={group.cones}
+                        discsOnly={discsOnly}
+                        discColor={discsOnly ? NAVIGATION_CONTACT_COLOR : undefined}
                         color={group.color}
                         transparent={ghostTransparent}
                         opacity={ghostOpacityClamped}
@@ -3142,6 +3223,15 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         onConePointerMove={isPointerInteractable ? handleSceneBatchedConePointerMove : undefined}
                         onConePointerOut={isPointerInteractable ? handleSceneBatchedConePointerOut : undefined}
                     />
+                    {discsOnly && (
+                        // The cone body the group leaves out, as the axis it
+                        // occupies: socket to contact, so it continues the
+                        // shaft's line instead of stopping short of it.
+                        <SimpleShaftLines
+                            shafts={group.cones.map(coneAxisSpan)}
+                            color={group.color}
+                        />
+                    )}
                 </group>
             ))}
 

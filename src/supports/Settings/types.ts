@@ -145,6 +145,12 @@ export interface SupportSettings {
     devTools: DevToolsSettings;
     /** Debug: only render contact disk/cone + line vector for shaft (like J×2 pathfinding debug). */
     debugSimpleSupportRender: boolean;
+    /**
+     * View: only the contact discs stay solid meshes, every other member is a
+     * line vector. A navigation aid for a dense forest, and not part of a
+     * preset, so switching presets cannot flip the view.
+     */
+    navigationDiscsOnly: boolean;
 }
 
 // --- Default Factory ---
@@ -229,6 +235,7 @@ export function createDefaultSettings(): SupportSettings {
             maxBranchesPerTrunk: 3,
         },
         debugSimpleSupportRender: false,
+        navigationDiscsOnly: false,
     };
 }
 

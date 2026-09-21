@@ -1,6 +1,6 @@
 import { useContactDiskDragSession } from '../useContactDiskDragSession';
 import { updateSupportEntity } from '../../supportTypeRegistry';
-import { registerSupportDetailRenderer } from '../../detailRenderer/seam';
+import { detailSkippedInSimpleView, registerSupportDetailRenderer } from '../../detailRenderer/seam';
 import React, { useSyncExternalStore } from 'react';
 import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
@@ -310,7 +310,7 @@ registerSupportDetailRenderer('trunk', (ctx) => ({
         const root = ctx.roots[trunk.rootId];
         return root ? { root } : null;
     },
-    skip: ({ isSelected }) => !isSelected || ctx.simpleRender,
+    skip: ({ isSelected }) => !isSelected || detailSkippedInSimpleView(ctx, isSelected),
     noClipping: () => true,
     extraProps: ({ entity, isSelected }) => ({
         deferStraightShaftsToSceneBatch: !isSelected,

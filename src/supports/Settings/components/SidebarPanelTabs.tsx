@@ -98,10 +98,10 @@ export function SidebarPanelTabs({
                                 boxShadow: '0 0 0 1px color-mix(in srgb, var(--accent), transparent 74%) inset',
                             }
                             : {
-                                // A 20% secondary tint, so an inactive tab still
+                                // A light primary tint, so an inactive tab still
                                 // reads as a card rather than a bare label.
-                                background: 'color-mix(in srgb, var(--accent-secondary) 20%, var(--surface-1))',
-                                borderColor: 'color-mix(in srgb, var(--accent-secondary) 22%, var(--border-subtle))',
+                                background: 'color-mix(in srgb, var(--accent) 10%, var(--surface-1))',
+                                borderColor: 'color-mix(in srgb, var(--accent) 12%, var(--border-subtle))',
                                 color: 'var(--text-muted)',
                             }}
                         title={_(tab.label)}
