@@ -18,6 +18,7 @@ import {
     getActivePreset,
     getPinnedPresets,
     getUnpinnedPresets,
+    getPresetForPinnedSlot,
     setActivePreset,
     subscribeToPresets,
     savePreset,
@@ -90,6 +91,58 @@ export function PresetSelector({
     const pinnedPresets = getPinnedPresets();
     const unpinnedPresets = getUnpinnedPresets();
     const availableSlots = [1, 2, 3, 4, 5, 6].filter((slot) => !pinnedPresets.some((p) => p.pinnedSlot === slot));
+
+    // Dragging a preset to a slot pins it there, and dragging one onto the list
+    // below the slots unpins it. The context menu's Pin/Unpin entries stay the
+    // keyboard path: a drag is not reachable without a pointer.
+    const [presetDragId, setPresetDragId] = useState<string | null>(null);
+    const [presetDropTarget, setPresetDropTarget] = useState<number | 'list' | null>(null);
+
+    function handlePresetDrop(target: number | 'list') {
+        const draggedId = presetDragId;
+        setPresetDragId(null);
+        setPresetDropTarget(null);
+        if (!draggedId) return;
+        const dragged = presets.find((preset) => preset.id === draggedId);
+        if (!dragged) return;
+
+        if (target === 'list') {
+            if (dragged.pinnedSlot == null) return;
+            setPresetPinnedSlot(dragged.id, null);
+            return;
+        }
+
+        if (dragged.pinnedSlot === target) return;
+        const occupant = getPresetForPinnedSlot(target);
+        // Slot to slot is a swap, so moving a preset across the rail never
+        // drops the other one out of it. From the list there is no slot to hand
+        // back, so the occupant leaves the rail.
+        if (occupant && dragged.pinnedSlot != null) {
+            setPresetPinnedSlot(occupant.id, dragged.pinnedSlot);
+        }
+        setPresetPinnedSlot(dragged.id, target);
+    }
+
+    /** The drop half of the drag: a slot cell takes a preset, the list releases it. */
+    function slotDropHandlers(target: number) {
+        return {
+            onDragOver: (event: React.DragEvent) => {
+                if (!presetDragId) return;
+                event.preventDefault();
+                event.dataTransfer.dropEffect = 'move';
+                if (presetDropTarget !== target) setPresetDropTarget(target);
+            },
+            onDragLeave: (event: React.DragEvent) => {
+                if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+                setPresetDropTarget((current) => (current === target ? null : current));
+            },
+            onDrop: (event: React.DragEvent) => {
+                event.preventDefault();
+                event.stopPropagation();
+                handlePresetDrop(target);
+            },
+        };
+    }
 
     const effectiveSelectedPresetId = selectedPresetIdOverride === undefined
         ? activePreset?.id ?? null
@@ -173,7 +226,17 @@ export function PresetSelector({
         return (
             <button
                 type="button"
-                className="w-full px-3 py-2 text-sm relative rounded-[5px] border transition-colors"
+                draggable={renamingPresetId !== preset.id}
+                className="w-full px-3 py-2 text-sm relative rounded-[5px] border transition-colors cursor-grab active:cursor-grabbing"
+                onDragStart={(event) => {
+                    event.dataTransfer.effectAllowed = 'move';
+                    event.dataTransfer.setData('text/plain', preset.id);
+                    setPresetDragId(preset.id);
+                }}
+                onDragEnd={() => {
+                    setPresetDragId(null);
+                    setPresetDropTarget(null);
+                }}
                 onClick={() => {
                     handlePresetSelect(preset.id);
                 }}
@@ -204,6 +267,7 @@ export function PresetSelector({
                             ? 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 25%)'
                             : 'color-mix(in srgb, var(--primary-button-surface), var(--border-subtle) 30%)'
                         : 'var(--border-subtle)',
+                    opacity: presetDragId === preset.id ? 0.45 : undefined,
                 }}
             >
                 {isSelected && preset.pinnedSlot == null ? (
@@ -395,42 +459,81 @@ export function PresetSelector({
                         <div className="grid grid-cols-2 gap-1 px-1">
                             {[1, 2, 3, 4, 5, 6].map((slot) => {
                                 const preset = pinnedPresets.find((p) => p.pinnedSlot === slot);
+                                const dropHandlers = slotDropHandlers(slot);
+                                const isDropTarget = presetDropTarget === slot;
+                                const dropStyle = isDropTarget
+                                    ? {
+                                        borderRadius: '5px',
+                                        outline: '1px dashed color-mix(in srgb, var(--accent), transparent 20%)',
+                                        outlineOffset: '1px',
+                                    }
+                                    : undefined;
                                 return preset ? (
-                                    <div key={preset.id} data-preset-cell onContextMenu={(e) => handleContextMenu(e, preset.id)}>
+                                    <div
+                                        key={preset.id}
+                                        data-preset-cell
+                                        onContextMenu={(e) => handleContextMenu(e, preset.id)}
+                                        style={dropStyle}
+                                        {...dropHandlers}
+                                    >
                                         {renderPresetRow(preset)}
                                     </div>
                                 ) : (
-                                    <button
-                                        key={`empty-slot-${slot}`}
-                                        type="button"
-                                        disabled
-                                        className="w-full rounded-[5px] border border-dashed px-3 py-2 text-sm relative"
-                                        style={{
-                                            color: 'color-mix(in srgb, var(--text-muted), transparent 40%)',
-                                            borderColor: 'color-mix(in srgb, var(--border-subtle), transparent 40%)',
-                                        }}
-                                    >
-                                        <div className="w-full min-w-0">
-                                            <div className="relative flex items-center justify-center text-center">
-                                                <span
-                                                    className="absolute left-0 inline-flex h-4 w-4 items-center justify-center rounded-[3px] text-[11px] font-bold tabular-nums leading-none"
-                                                    style={{
-                                                        background: 'color-mix(in srgb, var(--text-muted), transparent 84%)',
-                                                        color: 'color-mix(in srgb, var(--text-muted), transparent 40%)',
-                                                    }}
-                                                >
-                                                    {slot}
-                                                </span>
-                                                <div className="flex-1 truncate">Slot {slot}</div>
+                                    <div key={`empty-slot-${slot}`} style={dropStyle} {...dropHandlers}>
+                                        <button
+                                            type="button"
+                                            disabled
+                                            className="pointer-events-none w-full rounded-[5px] border border-dashed px-3 py-2 text-sm relative"
+                                            style={{
+                                                color: 'color-mix(in srgb, var(--text-muted), transparent 40%)',
+                                                borderColor: 'color-mix(in srgb, var(--border-subtle), transparent 40%)',
+                                            }}
+                                        >
+                                            <div className="w-full min-w-0">
+                                                <div className="relative flex items-center justify-center text-center">
+                                                    <span
+                                                        className="absolute left-0 inline-flex h-4 w-4 items-center justify-center rounded-[3px] text-[11px] font-bold tabular-nums leading-none"
+                                                        style={{
+                                                            background: 'color-mix(in srgb, var(--text-muted), transparent 84%)',
+                                                            color: 'color-mix(in srgb, var(--text-muted), transparent 40%)',
+                                                        }}
+                                                    >
+                                                        {slot}
+                                                    </span>
+                                                    <div className="flex-1 truncate">Slot {slot}</div>
+                                                </div>
                                             </div>
-                                        </div>
-                                    </button>
+                                        </button>
+                                    </div>
                                 );
                             })}
                         </div>
 
                         <div className="mx-3 mt-4 mb-3 border-t" style={{ borderColor: 'var(--border-subtle)' }} />
-                        <div className="grid grid-cols-2 gap-1 px-1">
+                        <div
+                            className="grid grid-cols-2 gap-1 px-1"
+                            onDragOver={(event) => {
+                                if (!presetDragId) return;
+                                event.preventDefault();
+                                event.dataTransfer.dropEffect = 'move';
+                                if (presetDropTarget !== 'list') setPresetDropTarget('list');
+                            }}
+                            onDragLeave={(event) => {
+                                if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+                                setPresetDropTarget((current) => (current === 'list' ? null : current));
+                            }}
+                            onDrop={(event) => {
+                                event.preventDefault();
+                                handlePresetDrop('list');
+                            }}
+                            style={presetDropTarget === 'list'
+                                ? {
+                                    borderRadius: '5px',
+                                    outline: '1px dashed color-mix(in srgb, var(--accent), transparent 20%)',
+                                    outlineOffset: '1px',
+                                }
+                                : undefined}
+                        >
                             {unpinnedPresets.map((preset) => (
                                 <div key={preset.id} data-preset-cell onContextMenu={(e) => handleContextMenu(e, preset.id)}>
                                     {renderPresetRow(preset)}
