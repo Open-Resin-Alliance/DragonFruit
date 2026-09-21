@@ -97,10 +97,16 @@ export function PresetSelector({
     const selectedPreset = effectiveSelectedPresetId
         ? presets.find((preset) => preset.id === effectiveSelectedPresetId) ?? null
         : null;
-    const selectedPresetIsBuiltIn = selectedPreset?.isBuiltIn ?? false;
     const hoveredPreset = hoveredPresetId ? presets.find((preset) => preset.id === hoveredPresetId) ?? null : null;
     const previewDescription = hoveredPreset?.description ?? selectedPreset?.description ?? '';
     const selectedPresetIsDirty = isPresetDirtyForSettings(effectiveSelectedPresetId, settings);
+
+    // The preset a confirm dialog acts on: the one the request named, which is
+    // not necessarily the selection. A right-clicked preset is the target
+    // without becoming active, and `selectedPreset` lags the request by a
+    // render, so gating the dialog on it dropped the request instead of showing
+    // the dialog.
+    const confirmPreset = confirmId ? presets.find((preset) => preset.id === confirmId) ?? null : null;
 
     // Keep a ref so the save-trigger effect always reads the latest values
     // without needing them as effect dependencies.
@@ -282,11 +288,6 @@ export function PresetSelector({
         setIsEditingName(false);
     };
 
-    const handleSaveRequest = () => {
-        if (!selectedPreset || selectedPresetIsBuiltIn) return;
-        setConfirmId(selectedPreset.id);
-    };
-
     const startInlineRename = (presetId: string) => {
         const preset = presets.find((p) => p.id === presetId);
         if (!preset) return;
@@ -456,9 +457,9 @@ export function PresetSelector({
 
             {/* ── Overwrite Preset Modal ─────────────────────────────────── */}
             <StructuredDialogModal
-                open={confirmId !== null && selectedPreset !== null && confirmId === selectedPreset.id}
+                open={confirmPreset !== null}
                 ariaLabel={_(msg`Overwrite preset`)}
-                title={formatOverwritePresetTitle(selectedPreset ? translatePresetName(selectedPreset, _) : '', _)}
+                title={formatOverwritePresetTitle(confirmPreset ? translatePresetName(confirmPreset, _) : '', _)}
                 subtitle={_(msg`This will replace the preset with your current settings.`)}
                 icon={<Save className="h-4 w-4" />}
                 iconTone="accent"
@@ -483,8 +484,8 @@ export function PresetSelector({
                                 color: 'var(--accent)',
                             }}
                             onClick={() => {
-                                if (selectedPreset) {
-                                    savePreset(selectedPreset.id);
+                                if (confirmPreset) {
+                                    savePreset(confirmPreset.id);
                                 }
                                 setConfirmId(null);
                             }}
@@ -496,7 +497,7 @@ export function PresetSelector({
                 )}
             >
                 <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                    <Trans>Overwrite the preset <strong style={{ color: 'var(--text-strong)' }}>{selectedPreset ? translatePresetName(selectedPreset, _) : ''}</strong> with the current scene settings?</Trans>
+                    <Trans>Overwrite the preset <strong style={{ color: 'var(--text-strong)' }}>{confirmPreset ? translatePresetName(confirmPreset, _) : ''}</strong> with the current scene settings?</Trans>
                 </p>
             </StructuredDialogModal>
 
@@ -659,8 +660,10 @@ export function PresetSelector({
                                 onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
                                 onClick={() => {
                                     setContextMenu(null);
-                                    handlePresetSelect(menuPreset.id);
-                                    handleSaveRequest();
+                                    // The right-clicked preset is the target. It is not
+                                    // selected first: selecting applies that preset's
+                                    // settings, replacing the ones this save captures.
+                                    setConfirmId(menuPreset.id);
                                 }}
                             >
                                 <Save className="h-3.5 w-3.5" />
