@@ -6,7 +6,7 @@ import {
     SUPPORT_AUTO_BRACE_REPLACE,
     type SupportReplaceStatePayload,
 } from '../history/actionTypes';
-import { cloneSupportState, getSnapshot, setSnapshot } from '../state';
+import { cloneSupportState, getSnapshot, removeSupportEntity, setSnapshot } from '../state';
 import {
     calculateKnotPositionOnSegmentFromT,
 } from '../SupportPrimitives/Knot/knotUtils';
@@ -1181,6 +1181,37 @@ export function runAutoBracing(): AutoBraceResult {
         },
     });
     return built;
+}
+
+/**
+ * Removes every brace of one model and returns how many went.
+ *
+ * Each brace is removed through the cascading store call, so the knots it owns
+ * go with it, and the whole sweep is one history entry: the payload is a
+ * before/after pair, which is what makes it one undo step rather than one per
+ * brace. The store writes are synchronous, so React renders the result once.
+ */
+export function clearBracesForModel(modelId: string | null | undefined): number {
+    if (!modelId) return 0;
+
+    const braceIds = Object.values(getSnapshot().braces)
+        .filter((brace) => brace.modelId === modelId)
+        .map((brace) => brace.id);
+    if (braceIds.length === 0) return 0;
+
+    const before = cloneSupportState(getSnapshot());
+    for (const braceId of braceIds) {
+        removeSupportEntity('brace', braceId);
+    }
+
+    pushSupportHistory({
+        type: SUPPORT_AUTO_BRACE_REPLACE,
+        payload: {
+            before,
+            after: cloneSupportState(getSnapshot()),
+        },
+    });
+    return braceIds.length;
 }
 
 type BuildSnapshotResult = AutoBraceResult & { snapshot: SupportState };

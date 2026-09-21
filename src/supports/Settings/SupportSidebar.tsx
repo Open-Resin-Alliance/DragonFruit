@@ -6,7 +6,7 @@ import ReactDOM from 'react-dom';
 import { Check, Eye, Save, RotateCcw, Sparkles, Wrench, WandSparkles, Sailboat, Grid3X3, Pickaxe } from 'lucide-react';
 import { usePresetHotkeys } from '@/hotkeys/usePresetHotkeys';
 import { useLingui } from '@lingui/react';
-import { formatAutoBraceStatus } from '../autoBracing/autoBraceMessages';
+import { formatAutoBraceStatus, formatBracesCleared } from '../autoBracing/autoBraceMessages';
 import { msg } from '@lingui/core/macro';
 import {
     getSettings,
@@ -47,7 +47,7 @@ import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { SupportAnatomyPreviewSlot } from './AnatomyPreview/SupportAnatomyPreviewSlot';
 import { AutoBracingSettingsCard } from '../autoBracing/AutoBracingSettingsCard';
 import { CurveSettingsCard, getCurveSettingsSelection } from '../Curves/CurveSettingsCard';
-import { runAutoBracing } from '../autoBracing/autoBrace';
+import { clearBracesForModel, runAutoBracing } from '../autoBracing/autoBrace';
 import { shouldRunAutoBracingHotkey } from '../autoBracing/autoBracingHotkey';
 import { useActionActive } from '@/hotkeys/hotkeyStore';
 import { setAnatomyPreviewActiveSettingKey, subscribeToAnatomyPreviewState, getAnatomyPreviewState } from './AnatomyPreview/previewState';
@@ -172,7 +172,7 @@ function fieldFocusProps(
  * Main settings panel for support mode.
  * Displays presets and editable settings for tip, shaft, roots, base flare, and grid.
  */
-export function SupportSidebar() {
+export function SupportSidebar({ activeModelId = null }: { activeModelId?: string | null }) {
     const { _ } = useLingui();
     usePresetHotkeys();
     const autoBracingHotkeyActive = useActionActive('SUPPORTS', 'AUTO_BRACING');
@@ -621,6 +621,29 @@ export function SupportSidebar() {
             autoBraceStatusTimeoutRef.current = null;
         }, 2800);
     }, [_]);
+
+    const handleClearBraces = React.useCallback(() => {
+        let message: string;
+        let kind: 'success' | 'warning' | 'error' = 'success';
+        try {
+            const removed = clearBracesForModel(activeModelId);
+            message = formatBracesCleared(removed, _);
+            if (removed === 0) kind = 'warning';
+        } catch (err) {
+            console.error('[SupportSidebar] Clear braces failed:', err);
+            message = _(msg`Clear All failed. Check console for details.`);
+            kind = 'error';
+        }
+
+        setAutoBraceStatus({ kind, message });
+        if (autoBraceStatusTimeoutRef.current !== null) {
+            window.clearTimeout(autoBraceStatusTimeoutRef.current);
+        }
+        autoBraceStatusTimeoutRef.current = window.setTimeout(() => {
+            setAutoBraceStatus(null);
+            autoBraceStatusTimeoutRef.current = null;
+        }, 2800);
+    }, [activeModelId, _]);
 
     useEffect(() => {
         if (shouldRunAutoBracingHotkey({
@@ -1262,6 +1285,7 @@ export function SupportSidebar() {
                                                     settings={settings.autoBracing}
                                                     onChange={(partial) => updateAutoBracingSettings(partial)}
                                                     onAutoBrace={handleAutoBrace}
+                                                    onClearBraces={handleClearBraces}
                                                     status={autoBraceStatus}
                                                 />
                                             </div>

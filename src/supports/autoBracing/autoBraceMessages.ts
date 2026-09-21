@@ -15,6 +15,17 @@ import type { AutoBraceResult } from './autoBrace';
 
 type Translate = (descriptor: MessageDescriptor) => string;
 
+/** The sentence Clear All shows, e.g. "Removed 12 braces." */
+export function formatBracesCleared(count: number, translate: Translate): string {
+  if (count === 0) {
+    return translate(msg`No braces to remove on this model.`);
+  }
+  return translate(msg`Removed ${plural(count, {
+    one: '# brace',
+    other: '# braces',
+  })}.`);
+}
+
 export function formatAutoBraceStatus(result: AutoBraceResult, translate: Translate): string {
   if (result.status === 'no-eligible-supports') {
     return translate(msg`No eligible supports found for Auto Bracing.`);

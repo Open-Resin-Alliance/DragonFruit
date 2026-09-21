@@ -16,6 +16,8 @@ interface AutoBracingSettingsCardProps {
     settings: AutoBracingSettings;
     onChange: (patch: Partial<AutoBracingSettings>) => void;
     onAutoBrace: () => void;
+    /** Removes every brace of the model the Studio is working on. */
+    onClearBraces: () => void;
     status?: {
         kind: 'success' | 'warning' | 'error';
         message: string;
@@ -38,6 +40,7 @@ export function AutoBracingSettingsCard({
     settings,
     onChange,
     onAutoBrace,
+    onClearBraces,
     status,
 }: AutoBracingSettingsCardProps) {
     const { _ } = useLingui();
@@ -208,18 +211,32 @@ export function AutoBracingSettingsCard({
 
             <div className="h-2" />
 
-            <button
-                type="button"
-                onClick={onAutoBrace}
-                className="ui-button w-full !h-8 text-[11px]"
-                style={{
-                    borderColor: 'var(--accent)',
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 86%)',
-                    color: 'var(--accent)',
-                }}
-            >
-                {_(msg`Apply Bracing`)}
-            </button>
+            <div className="flex items-stretch gap-1.5">
+                <button
+                    type="button"
+                    onClick={onAutoBrace}
+                    className="ui-button flex-1 !h-8 text-[11px]"
+                    style={{
+                        borderColor: 'var(--accent)',
+                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 86%)',
+                        color: 'var(--accent)',
+                    }}
+                >
+                    {_(msg`Apply Bracing`)}
+                </button>
+                <button
+                    type="button"
+                    onClick={onClearBraces}
+                    className="ui-button flex-1 !h-8 text-[11px]"
+                    style={{
+                        borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 40%)',
+                        background: 'color-mix(in srgb, var(--danger), var(--surface-0) 88%)',
+                        color: 'var(--danger)',
+                    }}
+                >
+                    {_(msg`Clear All`)}
+                </button>
+            </div>
         </div>
     );
 }
