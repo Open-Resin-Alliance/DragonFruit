@@ -471,6 +471,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     // to lines, so it takes every gate below and adds the cone handling.
     const discsOnly = settings.navigationDiscsOnly;
     const simpleRender = settings.debugSimpleSupportRender || discsOnly;
+    // Hover and marquee highlights still reveal joints and roots in the
+    // navigation view, whose static batches strip them; only the debug simple
+    // render suppresses those overlays.
+    const debugSimple = settings.debugSimpleSupportRender;
     const raftSettings = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
     // The knots kickstands host and the roots they own, derived from the
     // registry's edges rather than a kickstand-specific store.
@@ -3381,7 +3385,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 />
             )}
 
-            {!simpleRender && hoveredSupportOverlayJoints.length > 0 && hoveredSupportJointSet && (
+            {!debugSimple && hoveredSupportOverlayJoints.length > 0 && hoveredSupportJointSet && (
                 <InstancedJointGroup
                     key={`scene-joint-hover-overlay:${hoveredSupportJointSet.supportId}:${hoveredSupportOverlayJoints.length}`}
                     joints={hoveredSupportOverlayJoints}
@@ -3398,7 +3402,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 />
             )}
 
-            {!simpleRender && hoveredSupportOverlayRoots.length > 0 && (
+            {!debugSimple && hoveredSupportOverlayRoots.length > 0 && (
                 <InstancedRootsGroup
                     key={`scene-root-hover-overlay:${hoveredSupportOverlayRoots.map((root) => root.supportId ?? root.id).join(':')}:${hoveredSupportOverlayRoots.length}`}
                     roots={hoveredSupportOverlayRoots}
@@ -3444,7 +3448,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 />
             )}
 
-            {!simpleRender && marqueeHoveredOverlayJoints.length > 0 && (
+            {!debugSimple && marqueeHoveredOverlayJoints.length > 0 && (
                 <InstancedJointGroup
                     key={`scene-marquee-overlay-joints:${marqueeHoveredSupportIds.join(':')}:${marqueeHoveredOverlayJoints.length}`}
                     joints={marqueeHoveredOverlayJoints}
@@ -3461,7 +3465,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 />
             )}
 
-            {!simpleRender && marqueeHoveredOverlayRoots.length > 0 && (
+            {!debugSimple && marqueeHoveredOverlayRoots.length > 0 && (
                 <InstancedRootsGroup
                     key={`scene-marquee-overlay-roots:${marqueeHoveredSupportIds.join(':')}:${marqueeHoveredOverlayRoots.length}`}
                     roots={marqueeHoveredOverlayRoots}
