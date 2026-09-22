@@ -445,15 +445,19 @@ export function ZUpGizmoHelper({
             <RotationArrow direction="down" position={[0, -ARROW_DISTANCE, 0]} rotation={0} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} />
             <RotationArrow direction="left" position={[-ARROW_DISTANCE, 0, 0]} rotation={-Math.PI / 2} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} />
             <RotationArrow direction="right" position={[ARROW_DISTANCE, 0, 0]} rotation={Math.PI / 2} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} />
-            <HomeButton
-              position={[HOME_OFFSET, -HOME_OFFSET, 0]}
-              color={arrowColor}
-              hoverColor={arrowHoverColor}
-              strokeColor={arrowStrokeColor}
-              onClick={onHome}
-            />
           </group>
         )}
+        {/* Home is useful from any angle, so it is always shown (the quarter-turn
+            arrows are not). */}
+        <group position={[x, y, 0]} scale={[60, 60, 60]}>
+          <HomeButton
+            position={[HOME_OFFSET, -HOME_OFFSET, 0]}
+            color={arrowColor}
+            hoverColor={arrowHoverColor}
+            strokeColor={arrowStrokeColor}
+            onClick={onHome}
+          />
+        </group>
       </Context.Provider>
     </Hud>
   );
