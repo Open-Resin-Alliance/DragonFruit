@@ -26,6 +26,8 @@ The input is the angle between the disk's surface normal and the cone axis — `
 - Above the threshold, thickness interpolates linearly toward `maxStandoffMm`, reaching it at ~81°.
 - Degenerate normals or a missing profile fall back to the minimum thickness.
 
+Then the round tip that sits on the disk's top face floors it: the ball is centered **on** that face, so a disk shorter than the ball's radius leaves the ball's underside below the flat contact face, poking out through it into the model. The floor is `contactDiameterMm / 2`, which is why a wider contact grows the disk in length as well as diameter. A profile that declares no `contactDiameterMm` (an import converter's bare `ContactDiskProfile`, say) keeps the pure angle-based thickness.
+
 Implemented in `calculateDiskThickness` (`src/supports/SupportPrimitives/ContactDisk/contactDiskUtils.ts`).
 
 !!! warning "Legacy clamp on `maxStandoffMm`"
