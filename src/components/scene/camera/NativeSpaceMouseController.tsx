@@ -363,7 +363,12 @@ export function NativeSpaceMouseController({
 
       // Apply navlib's pose BEFORE handing back on the final frame, so hand-back
       // re-seats the pivot against the pose OrbitControls actually resumes from.
-      if (out.seq !== lastAppliedSeqRef.current) {
+      //
+      // Only apply while navlib is actually navigating. Idle output is an echo of
+      // the pose we reported; applying it re-asserts navlib's up-vector, which
+      // leaves the regular mouse orbiting a rolled horizon from app start until the
+      // first SpaceMouse gesture re-arms the horizon reset.
+      if (out.seq !== lastAppliedSeqRef.current && (out.motion || motionEnding)) {
         lastAppliedSeqRef.current = out.seq;
         applyAffine(out.affine); // pan + orbit + dolly
         onNavigationFrame?.();

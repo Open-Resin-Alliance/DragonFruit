@@ -101,6 +101,12 @@ takes back over. It must be that event, not a React drag counter: in
 prepare/transform mode the interaction state is deliberately not tracked, so a
 counter-driven reset would never fire and the roll would stick.
 
+The native controller only applies navlib's affine **while `out.motion` is true**
+(plus the final frame). Idle output is an echo of the pose we reported, and
+applying it re-asserts navlib's up-vector — which would leave the regular mouse
+orbiting a rolled horizon from app start, before the first gesture, with no
+pending re-level.
+
 Because hover keeps updating, the **support trunk router must not run per
 frame** — it would pathfind continuously as the camera moves. `SceneCanvas` sets
 `setSupportNavigationActive` (see
