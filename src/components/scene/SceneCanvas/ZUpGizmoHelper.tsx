@@ -4,9 +4,11 @@ import * as React from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { Group, Matrix4, Object3D, Quaternion, Vector3 } from 'three';
 import type { OrthographicCamera as ThreeOrthographicCamera } from 'three';
-import { GizmoHelperProps, Hud, OrthographicCamera } from '@react-three/drei';
+import { Edges, GizmoHelperProps, Hud, OrthographicCamera } from '@react-three/drei';
 
 type TweenCamera = (direction: Vector3) => void;
+type QuarterTurnDirection = 'left' | 'right' | 'up' | 'down';
+type QuarterTurn = (direction: QuarterTurnDirection) => void;
 
 type OrbitControlsLike = {
   minPolarAngle: number;
@@ -22,8 +24,9 @@ type CameraControlsLike = {
   update: (delta?: number) => void;
 };
 
-const Context = React.createContext<{ tweenCamera: TweenCamera }>({
+const Context = React.createContext<{ tweenCamera: TweenCamera; quarterTurn: QuarterTurn }>({
   tweenCamera: () => undefined,
+  quarterTurn: () => undefined,
 });
 
 export const useGizmoContext = () => React.useContext(Context);
@@ -83,14 +86,76 @@ function isCameraControls(
   );
 }
 
+/**
+ * Enable/disable whichever controls hook is in use. Lives outside the component
+ * so the write does not read as mutating a hook-returned value in render scope.
+ */
+function assignControlsEnabled(controls: unknown, enabled: boolean): void {
+  if (isOrbitControls(controls) || isCameraControls(controls)) {
+    (controls as { enabled?: boolean }).enabled = enabled;
+  }
+}
+
+/** How far the quarter-turn arrows sit from the widget centre (cube half is 0.5). */
+const ARROW_DISTANCE = 0.74;
+/** Arrowhead size in gizmo units (cube half is 0.5). */
+const ARROW_RADIUS = 0.085;
+const ARROW_HEIGHT = 0.22;
+
+function RotationArrow({
+  direction,
+  position,
+  rotation,
+  color,
+  hoverColor,
+  strokeColor,
+}: {
+  direction: QuarterTurnDirection;
+  position: [number, number, number];
+  rotation: number;
+  color: string;
+  hoverColor: string;
+  strokeColor: string;
+}) {
+  const { quarterTurn } = React.useContext(Context);
+  const [hover, setHover] = React.useState(false);
+
+  return (
+    <mesh
+      position={position}
+      rotation={[0, 0, rotation]}
+      onPointerOver={(e) => {
+        e.stopPropagation();
+        setHover(true);
+      }}
+      onPointerOut={(e) => {
+        e.stopPropagation();
+        setHover(false);
+      }}
+      onClick={(e) => {
+        e.stopPropagation();
+        quarterTurn(direction);
+      }}
+    >
+      <coneGeometry args={[ARROW_RADIUS, ARROW_HEIGHT, 4]} />
+      <meshBasicMaterial color={hover ? hoverColor : color} transparent opacity={hover ? 0.95 : 0.8} />
+      {/* Same secondary outline the cube faces carry. */}
+      <Edges color={strokeColor} />
+    </mesh>
+  );
+}
+
 export function ZUpGizmoHelper({
   alignment = 'bottom-right',
   margin = [80, 80],
   renderPriority = 1,
+  arrowColor = '#f0f0f0',
+  arrowHoverColor = '#999999',
+  arrowStrokeColor = '#baf72e',
   onUpdate,
   onTarget,
   children,
-}: GizmoHelperProps) {
+}: GizmoHelperProps & { arrowColor?: string; arrowHoverColor?: string; arrowStrokeColor?: string }) {
   const size = useThree((state) => state.size);
   const mainCamera = useThree((state) => state.camera);
   const defaultControls = useThree((state) => state.controls) as unknown;
@@ -105,7 +170,7 @@ export function ZUpGizmoHelper({
   const restoreControls = React.useCallback(() => {
     if (isOrbitControls(defaultControls) || isCameraControls(defaultControls)) {
       if (savedControlsEnabled.current !== null && typeof defaultControls.enabled === 'boolean') {
-        defaultControls.enabled = savedControlsEnabled.current;
+        assignControlsEnabled(defaultControls, savedControlsEnabled.current);
       }
       if (isCameraControls(defaultControls)) {
         defaultControls.setPosition(mainCamera.position.x, mainCamera.position.y, mainCamera.position.z);
@@ -115,16 +180,17 @@ export function ZUpGizmoHelper({
     savedControlsEnabled.current = null;
   }, [defaultControls, mainCamera]);
 
+  const resolveFocusPoint = React.useCallback((): Vector3 => {
+    if (onTarget) return focusPoint.current.copy(onTarget());
+    if (isCameraControls(defaultControls)) return defaultControls.getTarget(focusPoint.current);
+    if (isOrbitControls(defaultControls)) return focusPoint.current.copy(defaultControls.target);
+    return focusPoint.current.set(0, 0, 0);
+  }, [defaultControls, onTarget]);
+
   const tweenCamera = React.useCallback<TweenCamera>(
     (direction) => {
       animating.current = true;
-      if (onTarget) {
-        focusPoint.current.copy(onTarget());
-      } else if (isCameraControls(defaultControls)) {
-        defaultControls.getTarget(focusPoint.current);
-      } else if (isOrbitControls(defaultControls)) {
-        focusPoint.current.copy(defaultControls.target);
-      }
+      resolveFocusPoint();
       radius.current = mainCamera.position.distanceTo(focusPoint.current);
       q1.copy(mainCamera.quaternion);
       targetDirection.copy(stabilizeDirection(direction));
@@ -143,11 +209,33 @@ export function ZUpGizmoHelper({
         && typeof defaultControls.enabled === 'boolean'
       ) {
         savedControlsEnabled.current = defaultControls.enabled;
-        defaultControls.enabled = false;
+        assignControlsEnabled(defaultControls, false);
       }
       invalidate();
     },
-    [defaultControls, mainCamera, onTarget, invalidate],
+    [defaultControls, invalidate, mainCamera, resolveFocusPoint],
+  );
+
+  // Orbit exactly 90° about the axis perpendicular to the arrow, using the
+  // camera's own axes — so the arrow always means "turn one quarter in this
+  // screen direction from wherever I am now".
+  const quarterTurn = React.useCallback<QuarterTurn>(
+    (direction) => {
+      const focus = resolveFocusPoint();
+      mainCamera.updateMatrixWorld();
+      const offset = mainCamera.position.clone().sub(focus).normalize();
+      const right = new Vector3().setFromMatrixColumn(mainCamera.matrixWorld, 0).normalize();
+      const up = new Vector3().setFromMatrixColumn(mainCamera.matrixWorld, 1).normalize();
+      const quarter = Math.PI / 2;
+
+      if (direction === 'up') offset.applyAxisAngle(right, -quarter);
+      else if (direction === 'down') offset.applyAxisAngle(right, quarter);
+      else if (direction === 'right') offset.applyAxisAngle(up, quarter);
+      else offset.applyAxisAngle(up, -quarter);
+
+      tweenCamera(offset);
+    },
+    [mainCamera, resolveFocusPoint, tweenCamera],
   );
 
   useFrame((_, delta) => {
@@ -184,7 +272,7 @@ export function ZUpGizmoHelper({
         && (isOrbitControls(defaultControls) || isCameraControls(defaultControls))
         && typeof defaultControls.enabled === 'boolean'
       ) {
-        defaultControls.enabled = savedControlsEnabled.current;
+        assignControlsEnabled(defaultControls, savedControlsEnabled.current);
       }
       savedControlsEnabled.current = null;
     };
@@ -193,8 +281,9 @@ export function ZUpGizmoHelper({
   const gizmoHelperContext = React.useMemo(
     () => ({
       tweenCamera,
+      quarterTurn,
     }),
-    [tweenCamera],
+    [quarterTurn, tweenCamera],
   );
 
   const [marginX, marginY] = margin;
@@ -215,6 +304,14 @@ export function ZUpGizmoHelper({
         <OrthographicCamera makeDefault ref={virtualCam} position={[0, 0, 200]} />
         <group ref={gizmoRef} position={[x, y, 0]}>
           {children}
+        </group>
+        {/* Quarter-turn arrows live outside the rotating group, so they stay
+            screen-aligned: the top arrow is always "turn up from here". */}
+        <group position={[x, y, 0]} scale={[60, 60, 60]}>
+          <RotationArrow direction="up" position={[0, ARROW_DISTANCE, 0]} rotation={Math.PI} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} />
+          <RotationArrow direction="down" position={[0, -ARROW_DISTANCE, 0]} rotation={0} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} />
+          <RotationArrow direction="left" position={[-ARROW_DISTANCE, 0, 0]} rotation={-Math.PI / 2} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} />
+          <RotationArrow direction="right" position={[ARROW_DISTANCE, 0, 0]} rotation={Math.PI / 2} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} />
         </group>
       </Context.Provider>
     </Hud>
