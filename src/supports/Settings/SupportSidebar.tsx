@@ -32,6 +32,7 @@ import {
 } from '../state';
 import { checkPresetDrift, findMatchingPresetIdForSettings, getPresetById } from './presets';
 import { createDefaultSettings, type SupportSettings } from './types';
+import { SUPPORT_PROFILE_LIMITS } from './defaults';
 import { applySettingsToSelectedSupports } from './applySettingsToSelectedSupports';
 import { areSupportGeometrySettingsEqual } from './supportSettingsCodec';
 import { captureSupportEditSnapshot, pushSupportEditHistory, type SupportEditHistorySnapshot } from '../history/supportEditHistory';
@@ -865,6 +866,7 @@ export function SupportSidebar({ activeModelId = null }: { activeModelId?: strin
                         onChange={(val) => updateTipProfile({ contactDiameterMm: val })}
                         step={0.1}
                         showStepper={false}
+                        {...SUPPORT_PROFILE_LIMITS.tip.contactDiameterMm}
                         {...getInputProps('tip.contactDiameterMm', compactInputClass)}
                     />
                     {unitHint('mm')}
@@ -880,6 +882,7 @@ export function SupportSidebar({ activeModelId = null }: { activeModelId?: strin
                             onChange={(val) => updateTipProfile({ lengthMm: val })}
                             step={0.1}
                             showStepper={false}
+                            {...SUPPORT_PROFILE_LIMITS.tip.lengthMm}
                             {...getInputProps('tip.lengthMm', compactInputClass)}
                         />
                         {unitHint('mm')}
@@ -936,6 +939,7 @@ export function SupportSidebar({ activeModelId = null }: { activeModelId?: strin
                                     aria-label={_(msg`Adaptive offset`)}
                                     title={_(msg`Adaptive offset`)}
                                     showStepper={false}
+                                    {...SUPPORT_PROFILE_LIMITS.tip.adaptiveConeAngleOffsetDeg}
                                     {...getInputProps('tip.adaptiveConeAngleOffsetDeg', compactInputClass)}
                                 />
                                 {unitHint('°')}
@@ -954,6 +958,7 @@ export function SupportSidebar({ activeModelId = null }: { activeModelId?: strin
                             onChange={(val) => updateShaftProfile({ diameterMm: val })}
                             step={0.1}
                             showStepper={false}
+                            {...SUPPORT_PROFILE_LIMITS.shaft.diameterMm}
                             {...getInputProps('shaft.diameterMm', compactInputClass)}
                         />
                         {unitHint('mm')}
@@ -973,6 +978,7 @@ export function SupportSidebar({ activeModelId = null }: { activeModelId?: strin
                                 onChange={(val) => updateRootsProfile({ diameterMm: val })}
                                 step={0.1}
                                 showStepper={false}
+                                {...SUPPORT_PROFILE_LIMITS.roots.diameterMm}
                                 {...getInputProps('roots.diameterMm', compactInputClass)}
                             />
                             {unitHint('mm')}
@@ -988,6 +994,7 @@ export function SupportSidebar({ activeModelId = null }: { activeModelId?: strin
                                     onChange={(val) => updateRootsProfile({ diskHeightMm: val })}
                                     step={0.1}
                                     showStepper={false}
+                                    {...SUPPORT_PROFILE_LIMITS.roots.diskHeightMm}
                                     {...getInputProps('roots.diskHeightMm', compactInputClass)}
                                 />
                                 {unitHint('mm')}
@@ -1002,6 +1009,7 @@ export function SupportSidebar({ activeModelId = null }: { activeModelId?: strin
                                     onChange={(val) => updateRootsProfile({ coneHeightMm: val })}
                                     step={0.1}
                                     showStepper={false}
+                                    {...SUPPORT_PROFILE_LIMITS.roots.coneHeightMm}
                                     {...getInputProps('roots.coneHeightMm', compactInputClass)}
                                 />
                                 {unitHint('mm')}
@@ -1024,6 +1032,7 @@ export function SupportSidebar({ activeModelId = null }: { activeModelId?: strin
                             onChange={(val) => updateTipProfile({ contactDiameterMm: val })}
                             step={0.1}
                             showStepper={false}
+                            {...SUPPORT_PROFILE_LIMITS.tip.contactDiameterMm}
                             {...getInputProps('tip.contactDiameterMm', compactInputClass)}
                         />
                         {unitHint('mm')}
@@ -1038,6 +1047,7 @@ export function SupportSidebar({ activeModelId = null }: { activeModelId?: strin
                             onChange={(val) => updateTipProfile({ lengthMm: val })}
                             step={0.1}
                             showStepper={false}
+                            {...SUPPORT_PROFILE_LIMITS.tip.lengthMm}
                             {...getInputProps('tip.lengthMm', compactInputClass)}
                         />
                         {unitHint('mm')}
@@ -1092,6 +1102,7 @@ export function SupportSidebar({ activeModelId = null }: { activeModelId?: strin
                                 aria-label={_(msg`Adaptive offset`)}
                                 title={_(msg`Adaptive offset`)}
                                 showStepper={false}
+                                {...SUPPORT_PROFILE_LIMITS.tip.adaptiveConeAngleOffsetDeg}
                                 {...getInputProps('tip.adaptiveConeAngleOffsetDeg', compactInputClass)}
                             />
                             {unitHint('°')}
@@ -1109,6 +1120,7 @@ export function SupportSidebar({ activeModelId = null }: { activeModelId?: strin
                             onChange={(val) => updateShaftProfile({ diameterMm: val })}
                             step={0.1}
                             showStepper={false}
+                            {...SUPPORT_PROFILE_LIMITS.shaft.diameterMm}
                             {...getInputProps('shaft.diameterMm', compactInputClass)}
                         />
                         {unitHint('mm')}
@@ -1123,6 +1135,7 @@ export function SupportSidebar({ activeModelId = null }: { activeModelId?: strin
                             onChange={(val) => updateRootsProfile({ diameterMm: val })}
                             step={0.1}
                             showStepper={false}
+                            {...SUPPORT_PROFILE_LIMITS.roots.diameterMm}
                             {...getInputProps('roots.diameterMm', compactInputClass)}
                         />
                         {unitHint('mm')}
@@ -1139,6 +1152,7 @@ export function SupportSidebar({ activeModelId = null }: { activeModelId?: strin
                             onChange={(val) => updateRootsProfile({ diskHeightMm: val })}
                             step={0.1}
                             showStepper={false}
+                            {...SUPPORT_PROFILE_LIMITS.roots.diskHeightMm}
                             {...getInputProps('roots.diskHeightMm', compactInputClass)}
                         />
                         {unitHint('mm')}
@@ -1153,6 +1167,7 @@ export function SupportSidebar({ activeModelId = null }: { activeModelId?: strin
                             onChange={(val) => updateRootsProfile({ coneHeightMm: val })}
                             step={0.1}
                             showStepper={false}
+                            {...SUPPORT_PROFILE_LIMITS.roots.coneHeightMm}
                             {...getInputProps('roots.coneHeightMm', compactInputClass)}
                         />
                         {unitHint('mm')}

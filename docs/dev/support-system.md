@@ -59,6 +59,22 @@ current support selection, resolves every selected support to its editable
 target, and batches all store mutations into one notification. When no
 multi-selection exists, it falls back to the primary selected support.
 
+### Profile field limits
+
+`SUPPORT_PROFILE_LIMITS` (`src/supports/Settings/defaults.ts`) holds the sane
+range of every General-tab profile field (`tip`, `shaft`, `roots`). The store
+applies it through `clampProfileFields` on **every** write — the tab, a preset, an
+imported scene and a plugin call all pass through it — so no path can hand a
+negative or absurd dimension to the geometry builders. The same table supplies
+the inputs' `min`/`max`, which also switches `NumberInput` to a pattern that
+cannot start a negative value.
+
+Zero is a legal limit for a height that may mean "no feature" (root disk/cone
+height); diameters floor just above zero because a zero-radius disk or cone has
+no usable normal. Upper bounds are generous — they catch a stray digit, not model
+a printer. A new General-tab field is not protected until it is in that table and
+clamped in `clampProfileFields`.
+
 The settings sidebar shows the last selected support's values. Changing a value
 applies those settings to the complete selection. The sidebar captures one
 before/after support edit snapshot around the editing session, so undo restores
