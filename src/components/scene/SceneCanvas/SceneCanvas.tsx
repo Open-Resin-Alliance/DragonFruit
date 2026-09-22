@@ -1280,7 +1280,6 @@ export function SceneCanvas({
       return state !== 2 && state !== 4 && state !== 5;
     }, []);
 
-  const [mouseOrbitDragRunId, setMouseOrbitDragRunId] = React.useState(0);
   // When the native 3DxWare/navlib bridge is driving the camera, the Gamepad-API
   // SpaceMouseController is unmounted entirely so the two never fight over the
   // same physical puck.
@@ -5062,7 +5061,6 @@ export function SceneCanvas({
     if (useReactOrbitInteractionState) {
       setIsOrbitRotating(isRotateInteraction);
       setIsOrbitInteracting(true);
-      setMouseOrbitDragRunId((id) => id + 1);
     }
     window.dispatchEvent(new Event('picking-orbit-start'));
     if (!isRotateInteraction) {
@@ -7267,7 +7265,6 @@ export function SceneCanvas({
             pivotCandidates={spaceMousePivotCandidates}
             fallbackPivot={buildVolumeCenterTarget}
             sceneRadius={orthoSceneRadiusMm}
-            mouseOrbitDragRunId={mouseOrbitDragRunId}
             onNavigationActiveChange={setSpaceMouseNavigationActive}
             onNavigationFrame={handleSpaceMouseNavigationFrame}
             onNewDeviceDetected={onNewDeviceDetected}

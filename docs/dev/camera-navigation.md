@@ -94,6 +94,13 @@ the picker and disable mesh raycast). Instead it fires
 `spacemouse-navigation-start` / `-change` / `-end`, which only `useSceneAutosave`
 listens to so saving still defers until the camera settles.
 
+navlib can roll the view, and the roll is kept after release (useful for
+inspection). Constrained orbit is world Z-up, so both controllers re-level the
+horizon on the next OrbitControls `start` event — the moment the regular mouse
+takes back over. It must be that event, not a React drag counter: in
+prepare/transform mode the interaction state is deliberately not tracked, so a
+counter-driven reset would never fire and the roll would stick.
+
 Because hover keeps updating, the **support trunk router must not run per
 frame** — it would pathfind continuously as the camera moves. `SceneCanvas` sets
 `setSupportNavigationActive` (see

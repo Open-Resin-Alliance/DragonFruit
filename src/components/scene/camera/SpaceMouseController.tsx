@@ -99,7 +99,6 @@ export function SpaceMouseController({
   pivotCandidates,
   fallbackPivot,
   sceneRadius,
-  mouseOrbitDragRunId,
   onNavigationActiveChange,
   onNavigationFrame,
   onNewDeviceDetected,
@@ -108,7 +107,6 @@ export function SpaceMouseController({
   pivotCandidates?: THREE.Vector3[];
   fallbackPivot?: THREE.Vector3 | null;
   sceneRadius?: number;
-  mouseOrbitDragRunId?: number;
   onNavigationActiveChange?: (active: boolean) => void;
   onNavigationFrame?: () => void;
   onNewDeviceDetected?: (deviceId: string) => void;
@@ -202,15 +200,23 @@ export function SpaceMouseController({
     return true;
   }, [camera, scene, settings.pivotMode]);
 
+  // Re-level the horizon when the mouse takes back over. Triggered by
+  // OrbitControls' own 'start' event rather than a React drag counter, so it also
+  // fires in prepare/transform mode (where the interaction state is deliberately
+  // not tracked) and the roll cannot stick.
   React.useEffect(() => {
-    if (!pendingHorizonResetRef.current) return;
-    if (!mouseOrbitDragRunId || mouseOrbitDragRunId <= 0) return;
-    if (!isOrbitLikeControls(controls)) return;
+    if (!isOrbitLikeControls(controls) || !controls.addEventListener) return;
 
-    alignCameraToHorizon(camera, controls.target, worldUp);
-    controls.update();
-    pendingHorizonResetRef.current = false;
-  }, [camera, controls, mouseOrbitDragRunId, worldUp]);
+    const onStart = () => {
+      if (!pendingHorizonResetRef.current) return;
+      pendingHorizonResetRef.current = false;
+      alignCameraToHorizon(camera, controls.target, worldUp);
+      controls.update();
+    };
+
+    controls.addEventListener('start', onStart);
+    return () => controls.removeEventListener?.('start', onStart);
+  }, [camera, controls, worldUp]);
 
   React.useEffect(() => {
     return () => {

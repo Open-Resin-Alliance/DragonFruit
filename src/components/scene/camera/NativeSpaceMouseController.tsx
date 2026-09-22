@@ -341,36 +341,42 @@ export function NativeSpaceMouseController({
     // 1. Apply navlib's latest camera (from the previous frame's sync).
     const out = latestOutRef.current;
     if (out) {
-      // Motion edge FIRST, so the first applied frame starts the ortho radius from
-      // the current derived value rather than a stale one.
-      if (out.motion !== prevMotionRef.current) {
-        prevMotionRef.current = out.motion;
-        if (out.motion) {
-          navRadiusRef.current = THREE.MathUtils.clamp(
-            camera.position.distanceTo(controls.target),
-            ORTHO_MIN_RADIUS,
-            ORTHO_MAX_RADIUS,
-          );
-          navHasAxialRef.current = false;
-          focusDistRef.current = navRadiusRef.current;
-          if (!weDisabledOrbitRef.current) {
-            controls.enabled = false;
-            weDisabledOrbitRef.current = true;
-          }
-          onNavigationActiveChange?.(true);
-        } else {
-          navHasAxialRef.current = false;
-          focusDistRef.current = navRadiusRef.current;
-          handBackToOrbit();
-          onNavigationActiveChange?.(false);
+      const motionStarting = out.motion && !prevMotionRef.current;
+      const motionEnding = !out.motion && prevMotionRef.current;
+
+      if (motionStarting) {
+        // Start the ortho radius from the current derived value before the first
+        // applied pose, so there is no scale jump at gesture start.
+        navRadiusRef.current = THREE.MathUtils.clamp(
+          camera.position.distanceTo(controls.target),
+          ORTHO_MIN_RADIUS,
+          ORTHO_MAX_RADIUS,
+        );
+        navHasAxialRef.current = false;
+        focusDistRef.current = navRadiusRef.current;
+        if (!weDisabledOrbitRef.current) {
+          controls.enabled = false;
+          weDisabledOrbitRef.current = true;
         }
+        onNavigationActiveChange?.(true);
       }
 
+      // Apply navlib's pose BEFORE handing back on the final frame, so hand-back
+      // re-seats the pivot against the pose OrbitControls actually resumes from.
       if (out.seq !== lastAppliedSeqRef.current) {
         lastAppliedSeqRef.current = out.seq;
         applyAffine(out.affine); // pan + orbit + dolly
         onNavigationFrame?.();
       }
+
+      if (motionEnding) {
+        navHasAxialRef.current = false;
+        focusDistRef.current = navRadiusRef.current;
+        handBackToOrbit();
+        onNavigationActiveChange?.(false);
+      }
+
+      prevMotionRef.current = out.motion;
     }
 
     // 2. Push the current camera to navlib for the next frame (one call in
