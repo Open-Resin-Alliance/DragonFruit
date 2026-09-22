@@ -178,7 +178,7 @@ function RotationArrow({
 }
 
 /** Home button sits on the bottom-right diagonal, between the right and bottom arrows. */
-const HOME_OFFSET = 0.7;
+const HOME_OFFSET = 0.76;
 const HOME_SIZE = 0.3;
 
 function HomeButton({
