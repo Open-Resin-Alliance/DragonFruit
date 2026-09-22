@@ -13,6 +13,12 @@ export interface DetailRendererEntry {
     component: ComponentType<Record<string, unknown>>;
     hosts?: (entity: never) => Record<string, unknown> | null;
     skip?: (context: { entity: never; isSelected: boolean; isBatchable: boolean }) => boolean;
+    /**
+     * Draws its own simplified form, so the seam does not skip it when
+     * `simpleRender` is set. A type that leaves this off is skipped, and the
+     * batched pass draws whatever lines it contributes.
+     */
+    drawsSimplified?: boolean;
     extraProps?: (context: { entity: never; isSelected: boolean; isBatchable: boolean }) => Record<string, unknown>;
     noClipping?: (context: { entity: never; isSelected: boolean; isBatchable: boolean }) => boolean;
     /** Where "is this shaft batched" comes from, when not `plainShaftsOf`. */
@@ -61,25 +67,45 @@ export function registerSupportDetailRenderer(typeId: SupportTypeId, factory: De
 }
 
 /**
- * Whether the simple/navigation view hides this member.
+ * Whether a simple view hides this member's detail.
  *
- * The navigation view is the exception that keeps a SELECTED support whole: a
- * selection is a deliberate act, so the support it names is drawn in full while
- * the rest of the forest is lines. Nothing else in the view draws detail — the
- * batches do not mount the solids a line stands for, and a hovered member is
- * revealed by the hover overlay — so the exception cannot leave a support
- * showing primitives it was never selected for.
+ * The seam applies it in `detailRenderersFor`, so a type cannot keep drawing
+ * solid geometry by forgetting a flag. The navigation view is the exception that
+ * keeps a SELECTED support whole: a selection is a deliberate act, so the
+ * support it names is drawn in full while the rest of the forest is lines.
+ * Nothing else in the view draws detail — the batches do not mount the solids a
+ * line stands for, and a hovered member is revealed by the hover overlay — so
+ * the exception cannot leave a support showing primitives it was never selected
+ * for.
  */
-export function detailSkippedInSimpleView(context: DetailRendererContext, isSelected: boolean): boolean {
+export function simpleViewHidesDetail(context: DetailRendererContext, isSelected: boolean): boolean {
     return context.simpleRender && !(context.navigationView && isSelected);
 }
 
-/** The detail renderer table for this frame, keyed by type id. */
+/**
+ * The detail renderer table for this frame, keyed by type id.
+ *
+ * Under `simpleRender` an entry is skipped unless it declares
+ * `drawsSimplified`, so a type that draws only through its own renderer cannot
+ * keep drawing solid geometry by forgetting the flag. A selected support in the
+ * navigation view is what survives that skip.
+ */
 export function detailRenderersFor(context: DetailRendererContext): Partial<Record<SupportTypeId, DetailRendererEntry>> {
     const entries: Partial<Record<SupportTypeId, DetailRendererEntry>> = {};
     for (const descriptor of SUPPORT_TYPES) {
         const factory = FACTORIES.get(descriptor.id);
-        if (factory) entries[descriptor.id] = factory(context);
+        if (!factory) continue;
+
+        const entry = factory(context);
+        entries[descriptor.id] = context.simpleRender && !entry.drawsSimplified
+            ? {
+                ...entry,
+                // The type's own reasons to skip still stand; the seam only adds
+                // the simple view's, which is what a selected support survives.
+                skip: (skipContext) => Boolean(entry.skip?.(skipContext))
+                    || simpleViewHidesDetail(context, skipContext.isSelected),
+            }
+            : entry;
     }
     return entries;
 }

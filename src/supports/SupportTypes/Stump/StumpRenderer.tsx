@@ -11,7 +11,7 @@ import { isPrimaryPointerPress, type ContactDiskDragHit } from '../../SupportPri
 import { handleSupportClick } from '../../interaction/clickHandlers';
 import { useHighlight } from '../../interaction/useHighlight';
 import { getSnapshot } from '../../state';
-import { updateSupportEntity } from '../../supportTypeRegistry';
+import { inlineRootId, updateSupportEntity } from '../../supportTypeRegistry';
 
 interface StumpRendererProps {
     stump: Stump;
@@ -53,7 +53,7 @@ export const StumpRenderer = React.memo(function StumpRenderer({
 
     // Build a synthetic Roots entity so RootsRenderer handles raft offset, sphere top, etc.
     const syntheticRoot: Roots = useMemo(() => ({
-        id: `${stump.id}:root`,
+        id: inlineRootId(stump.id),
         modelId: stump.modelId,
         transform: { pos: stump.rootPos, rot: { x: 0, y: 0, z: 0, w: 1 } },
         diameter: stump.rootBaseDiameter,

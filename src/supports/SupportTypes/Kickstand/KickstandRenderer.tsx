@@ -13,7 +13,7 @@ import { RootsRenderer } from '../../SupportPrimitives/Roots/RootsRenderer';
 import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
 import { usePartDragUpdate } from '../../interaction/partDragPreview';
 import type { Kickstand } from './types';
-import { detailSkippedInSimpleView, registerSupportDetailRenderer } from '../../detailRenderer/seam';
+import { registerSupportDetailRenderer, simpleViewHidesDetail } from '../../detailRenderer/seam';
 
 interface KickstandRendererProps {
     kickstand: Kickstand;
@@ -186,10 +186,10 @@ registerSupportDetailRenderer('kickstand', (ctx) => ({
         const hostKnot = ctx.renderKnotsById[kickstand.hostKnotId];
         return root && hostKnot ? { root, hostKnot } : null;
     },
-    skip: ({ isSelected, isBatchable }) => (!isSelected && isBatchable) || detailSkippedInSimpleView(ctx, isSelected),
+    skip: ({ isSelected, isBatchable }) => !(isSelected || !isBatchable),
     noClipping: ({ isSelected }) => isSelected,
     extraProps: ({ isSelected, isBatchable }) => ({
-        showKnot: detailSkippedInSimpleView(ctx, isSelected) ? false : (!ctx.hideUnselectedKnots || isSelected),
+        showKnot: simpleViewHidesDetail(ctx, isSelected) ? false : (!ctx.hideUnselectedKnots || isSelected),
         deferStraightShaftsToSceneBatch: !isSelected && isBatchable,
         deferInteractionToSceneBatch: !isSelected && isBatchable,
         hidePlateContactPrimitives: ctx.hidePlateContactPrimitivesEffective,

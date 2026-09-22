@@ -55,6 +55,12 @@ function scene() {
         transform: { pos: { x: 5, y: 0, z: 0 }, rot: { x: 0, y: 0, z: 0, w: 1 } },
         diameter: 3, diskHeight: 0.5, coneHeight: 1.5,
     } as never);
+    addSupportEntity('stump', {
+        id: 'stump-a', modelId: MODEL,
+        rootPos: { x: 10, y: 0, z: 0 }, rootBaseDiameter: 3, rootTopDiameter: 1.5, rootHeight: 2,
+        joint: { id: 'stump-a-joint', pos: { x: 10, y: 0, z: 2 }, diameter: 1.2 },
+        segments: [segment('seg-sa')], contactCone: cone('cone-sa'),
+    } as never);
     addSupportEntity('kickstand', {
         id: 'kickstand-a', modelId: MODEL, rootId: 'root-k',
         hostKnotId: 'knot-a', hostSegmentId: 'seg-ta',
@@ -86,6 +92,22 @@ test('every editable type applies without falling through', () => {
     }
 });
 
+
+test('an inline root takes the root settings, as a shared one does', () => {
+    // A `Roots` row is written separately; an inline root is fields on the
+    // entity, so without this the settings were silently dropped.
+    scene();
+    const settingsToApply = settings();
+    assert.equal(
+        applySettingsToSupportTarget({ kind: 'stump', id: 'stump-a' }, settingsToApply as never),
+        true,
+    );
+
+    const stump = getSnapshot().stumps['stump-a'] as unknown as Record<string, number>;
+    assert.equal(stump.rootBaseDiameter, settingsToApply.roots.diameterMm);
+    assert.equal(stump.rootTopDiameter, settingsToApply.roots.neckDiameterMm);
+    assert.equal(stump.rootHeight, settingsToApply.roots.coneHeightMm);
+});
 
 test('a missing entity or non-editable type applies nothing', () => {
     scene();

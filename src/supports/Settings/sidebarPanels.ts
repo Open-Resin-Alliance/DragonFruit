@@ -62,7 +62,7 @@ export function typePanelFacts(typeId: SupportTypeId): PanelFacts {
         settingsGroups: {
             tip: d.hasEditableSettings && d.contactFields.some((field) => field.startsWith('contactCone')),
             shaft: d.hasEditableSettings && d.hasSegments && !d.shaftTaper,
-            roots: d.lower.kind === 'plateRoot',
+            roots: d.lower.kind === 'plateRoot' || d.lower.kind === 'inlineRoot',
         },
         drawsOwnPreview: hasOwnAnatomyPreview(typeId),
     };

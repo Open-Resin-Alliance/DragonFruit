@@ -61,6 +61,13 @@ export interface SupportEndpoint {
      * field of that entity rather than the `diameter` of a shared `Roots` record.
      */
     radiusField?: string;
+    /**
+     * For `inlineRoot`: the fields holding the rest of the base's dimensions,
+     * which a `Roots` row would carry as `diameter` / `coneHeight`. Declared so
+     * the settings reach an inline root the same way they reach a shared one.
+     */
+    topRadiusField?: string;
+    heightField?: string;
 }
 
 /**
@@ -878,7 +885,7 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         // Written before the rename, so payloads saved then still load.
         renamedFrom: { ids: ['anchor'], collectionKeys: ['anchors'] },
         sidebarTab: 'supportInfo',
-        hasEditableSettings: false,
+        hasEditableSettings: true,
         offersSidebarPanel: false,
         edges: [],
         ownsRoot: false,
@@ -910,7 +917,13 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
             shaftMultiplier: 1.25,
         },
         isAutoBraceable: false,
-        lower: { kind: 'inlineRoot', field: 'rootPos', radiusField: 'rootBaseDiameter' },
+        lower: {
+            kind: 'inlineRoot',
+            field: 'rootPos',
+            radiusField: 'rootBaseDiameter',
+            topRadiusField: 'rootTopDiameter',
+            heightField: 'rootHeight',
+        },
         upper: { kind: 'cone', field: 'contactCone' },
         recomputesDiameterFromAttachments: false,
         repairsHostDiameterOnAdd: false,
@@ -2303,6 +2316,23 @@ export function segmentSelectionId(typeId: SupportTypeId, entityId: string): str
     const prefix = getSupportTypeDescriptor(typeId).segmentSelectionPrefix;
     if (!prefix) throw new Error(`${typeId} declares no segmentSelectionPrefix; its segments are real`);
     return `${prefix}${entityId}`;
+}
+
+/**
+ * The primitive id for a type's inline root, which is geometry on the entity
+ * rather than a `Roots` row, so it has no id of its own to select.
+ */
+const INLINE_ROOT_SUFFIX = ':root';
+
+export function inlineRootId(entityId: string): string {
+    return `${entityId}${INLINE_ROOT_SUFFIX}`;
+}
+
+/** The entity owning an inline-root primitive id, or null for any other id. */
+export function parseInlineRootId(primitiveId: string): string | null {
+    return primitiveId.endsWith(INLINE_ROOT_SUFFIX)
+        ? primitiveId.slice(0, -INLINE_ROOT_SUFFIX.length)
+        : null;
 }
 
 /** Split a segment selection id into its type and entity id, or null for a real segment. */

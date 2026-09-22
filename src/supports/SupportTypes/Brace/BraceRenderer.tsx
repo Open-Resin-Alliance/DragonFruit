@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import * as THREE from 'three';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import type { Brace, Knot } from '../../types';
-import { detailSkippedInSimpleView, registerSupportDetailRenderer } from '../../detailRenderer/seam';
+import { registerSupportDetailRenderer } from '../../detailRenderer/seam';
 import { useHighlight } from '../../interaction/useHighlight';
 import { handleSupportClick } from '../../interaction/clickHandlers';
 import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
@@ -309,7 +309,6 @@ registerSupportDetailRenderer('brace', (ctx) => ({
         return startKnot && endKnot ? { startKnot, endKnot } : null;
     },
     skip: ({ entity, isSelected, isBatchable }) => {
-        if (detailSkippedInSimpleView(ctx, isSelected)) return true;
         const ghosted = ctx.ghostedBraceIdSet.has((entity as Brace).id);
         return !(isSelected || !isBatchable || ghosted);
     },

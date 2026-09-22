@@ -4,7 +4,7 @@ import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { getSnapshot } from '../../state';
 import { updateSupportEntity } from '../../supportTypeRegistry';
 import { Leaf, Knot, Vec3 } from '../../types';
-import { detailSkippedInSimpleView, registerSupportDetailRenderer } from '../../detailRenderer/seam';
+import { registerSupportDetailRenderer, simpleViewHidesDetail } from '../../detailRenderer/seam';
 import { ContactConeRenderer, getFinalSocketPosition, type ContactCone } from '../../SupportPrimitives/ContactCone';
 import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
 import { isPrimaryPointerPress, type ContactDiskDragHit } from '../../SupportPrimitives/ContactDisk/contactDiskDragController';
@@ -209,7 +209,7 @@ registerSupportDetailRenderer('leaf', (ctx) => ({
     skip: ({ isSelected }) => !isSelected,
     noClipping: () => true,
     extraProps: ({ entity, isSelected }) => ({
-        showKnots: !detailSkippedInSimpleView(ctx, isSelected),
+        showKnots: !simpleViewHidesDetail(ctx, isSelected),
         deferContactConesToSceneBatch: !isSelected && !!(entity as Leaf).contactCone,
     }),
 }));
