@@ -296,7 +296,8 @@ export function useTrunkPlacementV2() {
             },
         } as Parameters<typeof pushSupportHistory>[0]);
         clearSupportSelection();
-    }, []);
+        clearPreview();
+    }, [clearPreview]);
 
     const resolveCavityBridgePreview = useCallback((
         hit: THREE.Intersection,
@@ -634,6 +635,7 @@ export function useTrunkPlacementV2() {
                         markPlacementSurface(cavityBridge.kind, cavityBridge.entity, placementSurface),
                     );
                     clearSupportSelection();
+                    clearPreview();
                     return;
                 }
             }
@@ -705,15 +707,14 @@ export function useTrunkPlacementV2() {
                 && getSupportTypeDescriptor(host.typeId).recomputesDiameterFromAttachments
                 && descriptor.repairsHostDiameterOnAdd;
             const hostRepair = repairsHost && host ? repairHostDiameter(host) : null;
-
             addSupportEntityWithHistory(typeId, entity, {
                 ...(supplied.parentKnotId ? { knot: supplied.parentKnotId } : {}),
                 ...(hostRepair ?? {}),
             });
             clearSupportSelection();
+            clearPreview();
             return;
         }
-
         if (decision.kind === 'reject') {
             if (decision.reason === 'COLLISION_WITH_MODEL' && mesh) {
                 const cavityBridge = buildCavityBridge(tipPos, tipNormal, modelId, mesh);
@@ -725,6 +726,7 @@ export function useTrunkPlacementV2() {
                         markPlacementSurface(cavityBridge.kind, cavityBridge.entity, placementSurface),
                     );
                     clearSupportSelection();
+                    clearPreview();
                     return;
                 }
             }
@@ -734,7 +736,7 @@ export function useTrunkPlacementV2() {
             // Stick/twig is now strict last resort: keep reject behavior here.
             return;
         }
-    }, [commitTrunkBuild, isPlacementHardDisabled]);
+    }, [commitTrunkBuild, clearPreview, isPlacementHardDisabled]);
 
     return {
         onSupportHover,
