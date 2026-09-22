@@ -94,6 +94,14 @@ the picker and disable mesh raycast). Instead it fires
 `spacemouse-navigation-start` / `-change` / `-end`, which only `useSceneAutosave`
 listens to so saving still defers until the camera settles.
 
+Because hover keeps updating, the **support trunk router must not run per
+frame** — it would pathfind continuously as the camera moves. `SceneCanvas` sets
+`setSupportNavigationActive` (see
+`src/supports/interaction/navigationActiveStore.ts`) while navigating;
+`useTrunkPlacement`'s hover handler returns early on it, freezing the preview.
+It re-routes once navigation stops. Mouse navigation needs no such gate because
+its picking is paused, so no new hover arrives.
+
 ## Tests
 
 `src/components/scene/camera/__tests__/orthoDolly.test.ts` covers the frustum

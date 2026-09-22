@@ -132,6 +132,7 @@ import { StlMesh } from './StlMesh';
 import { setClipBounds } from './clipBoundsStore';
 import { setSupportPlacementGuideZ, useSupportPlacementGuideActive } from './supportPlacementGuideStore';
 import { setModelMesh } from '@/supports/autoSupport/meshStore';
+import { setSupportNavigationActive } from '@/supports/interaction/navigationActiveStore';
 import { useIsLinux } from '@/hooks/usePlatform';
 import {
   DEFAULT_CAMERA_PROJECTION_SETTINGS,
@@ -5342,7 +5343,12 @@ export function SceneCanvas({
   }, [freezeViewportActive, frozenViewportDataUrl]);
 
   React.useEffect(() => {
-    if (cameraInteractionCycleEnabled && spaceMouseNavigationActive) {
+    const navigating = cameraInteractionCycleEnabled && spaceMouseNavigationActive;
+    // Placement previews freeze while navigating, so the trunk router does not run
+    // per frame now that SpaceMouse navigation keeps picking live.
+    setSupportNavigationActive(navigating);
+
+    if (navigating) {
       // See handleSpaceMouseNavigationFrame: SpaceMouse navigation keeps picking
       // live, so it signals autosave on its own channel instead of picking-pan-*.
       window.dispatchEvent(new Event('spacemouse-navigation-start'));

@@ -4,6 +4,7 @@ import { addSupportEntity, addKnot, addRoot, addSupportEntityWithHistory, getSna
 import { pushSupportHistory } from '@/supports/history/supportHistory';
 import { addAction } from '../../history/actionTypes';
 import { useInteractionStatus } from '../../interaction/useInteractionStatus';
+import { getSupportNavigationActive } from '../../interaction/navigationActiveStore';
 import { buildTrunkData } from './trunkBuilder';
 import { computeAndApplySupportDiameterProfile } from './TrunkReplacement';
 import { supportDataForEntity, type SupportData } from '../../rendering/SupportBuilder';
@@ -369,6 +370,14 @@ export function useTrunkPlacementV2() {
     }, []);
 
     const processSupportHover = useCallback((hit: THREE.Intersection | null) => {
+        // SpaceMouse navigation keeps picking live, so a new hover arrives every
+        // frame as the camera moves. Freeze the preview and skip the router —
+        // routing here would run the pathfinder continuously. It re-routes when
+        // navigation stops.
+        if (getSupportNavigationActive()) {
+            return;
+        }
+
         if (isContactDiskHudInteractionActive()) {
             clearPreview();
             lastProcessedHoverRef.current = null;
