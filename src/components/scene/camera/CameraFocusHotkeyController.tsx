@@ -193,7 +193,7 @@ export function CameraFocusHotkeyController({
     };
   }, [cameraRef, orbitControlsRef, perspectiveFov, setOrbitTargetFromPoint]);
 
-  useCameraFocusHotkey(() => {
+  const runFocus = React.useCallback(() => {
     const visibleModels = models.filter((model) => model.visible);
     const visibleById = new Map(visibleModels.map((model) => [model.id, model] as const));
     const hoverPoint = hoverPointRef.current;
@@ -251,7 +251,17 @@ export function CameraFocusHotkeyController({
 
     const bestSphere = computeModelWorldBoundingSphere(bestModel);
     snapCameraToPoint(bestSphere.center, bestSphere.radius);
-  });
+  }, [activeModelId, hoveredModelId, models, orbitTarget, selectedModelIds, snapCameraToPoint]);
+
+  useCameraFocusHotkey(runFocus);
+
+  // The SpaceMouse's Fit button is delivered through navlib, whose fit distance is
+  // sized for a perspective projection and lands too close in ortho. Run the same
+  // focus the F key does instead — it frames the model properly.
+  React.useEffect(() => {
+    window.addEventListener('camera-fit-request', runFocus);
+    return () => window.removeEventListener('camera-fit-request', runFocus);
+  }, [runFocus]);
 
   return null;
 }

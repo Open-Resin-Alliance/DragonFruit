@@ -6,19 +6,16 @@ import {
   ORTHO_DEPTH_MARGIN,
   ORTHO_FAR,
   ORTHO_NEAR,
-  ORTHO_REFERENCE_FOV_DEG,
   applyOrthoFrustum,
   dollyOrthoToCursor,
   ORTHO_VIEW_TURN_RAD,
+  isOrthoFitFrame,
   orthoAspectOf,
-  orthoFitRadiusForScene,
   orthoHalfHeightForRadius,
   orthoWheelRadiusScale,
   resolveOrthoNavRadius,
   syncOrthoFrustum,
 } from '../orthoDolly';
-
-const degToRad = THREE.MathUtils.degToRad;
 
 function makeOrthoCamera(distance = 100, aspect = 1): {
   camera: THREE.OrthographicCamera;
@@ -140,20 +137,7 @@ test('resolveOrthoNavRadius keeps the zoom on a reorientation preset', () => {
   assert.equal(next, 100);
 });
 
-test('resolveOrthoNavRadius re-fits the scene on a pure distance jump (fit)', () => {
-  const next = resolveOrthoNavRadius({
-    currentRadius: 100,
-    prevAxial: -100,
-    axial: -20,
-    hasPrevious: true,
-    turn: 0,
-    eyeJump: 80,
-    sceneRadius: 300,
-  });
-  assert.ok(Math.abs(next - orthoFitRadiusForScene(300)) < 1e-9);
-});
-
-test('resolveOrthoNavRadius keeps the zoom on a fit with no scene radius', () => {
+test('resolveOrthoNavRadius keeps the zoom on a pure distance jump (fit)', () => {
   const next = resolveOrthoNavRadius({
     currentRadius: 100,
     prevAxial: -100,
@@ -177,9 +161,12 @@ test('resolveOrthoNavRadius passes the first frame through', () => {
   assert.equal(next, 100);
 });
 
-test('orthoFitRadiusForScene frames the sphere for the reference FOV', () => {
-  const radius = orthoFitRadiusForScene(200);
-  assert.ok(Math.abs(radius - (200 * 1.05) / Math.tan(degToRad(ORTHO_REFERENCE_FOV_DEG) / 2)) < 1e-9);
+test('isOrthoFitFrame flags a rotationless distance jump only', () => {
+  const base = { currentRadius: 100, prevAxial: -100, axial: -20, hasPrevious: true, turn: 0, eyeJump: 80 };
+  assert.equal(isOrthoFitFrame(base), true);
+  assert.equal(isOrthoFitFrame({ ...base, turn: ORTHO_VIEW_TURN_RAD + 0.01 }), false);
+  assert.equal(isOrthoFitFrame({ ...base, eyeJump: 5 }), false);
+  assert.equal(isOrthoFitFrame({ ...base, turn: 0, hasPrevious: false }), false);
 });
 
 

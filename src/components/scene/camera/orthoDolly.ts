@@ -114,19 +114,13 @@ export function orthoWheelRadiusScale(deltaY: number, zoomSpeed: number): number
   return deltaY < 0 ? step : 1 / step;
 }
 
-/** Radius that frames a sphere of `sceneRadius` for the reference FOV. */
-export function orthoFitRadiusForScene(
-  sceneRadius: number,
-  fovDeg = ORTHO_REFERENCE_FOV_DEG,
-  margin = 1.05,
-): number {
-  return (Math.max(EPSILON, sceneRadius) * margin) / Math.max(EPSILON, Math.tan(THREE.MathUtils.degToRad(fovDeg) * 0.5));
-}
-
-/** A navlib frame that reorients by more than this is a view preset, not a drag. */
-export const ORTHO_VIEW_TURN_RAD = THREE.MathUtils.degToRad(25);
-/** An eye jump above this fraction of the radius is a view command, not a dolly. */
-export const ORTHO_VIEW_JUMP_FRACTION = 0.3;
+/**
+ * Any real rotation keeps the on-screen scale. Presets reorient, and an orbit
+ * never changes distance — so a rotating frame must never drive the zoom.
+ */
+export const ORTHO_VIEW_TURN_RAD = THREE.MathUtils.degToRad(3);
+/** A single-frame eye jump above this fraction of the radius is a Fit, not a dolly. */
+export const ORTHO_FIT_JUMP_FRACTION = 0.3;
 
 export type OrthoNavFrame = {
   currentRadius: number;
@@ -138,20 +132,31 @@ export type OrthoNavFrame = {
   turn: number;
   /** World-space eye movement since the previous applied frame. */
   eyeJump: number;
-  sceneRadius?: number;
   minRadius?: number;
   maxRadius?: number;
-  fovDeg?: number;
 };
+
+/**
+ * Whether a frame looks like a Fit: no rotation, but a large single-frame jump in
+ * the eye. The controller runs the app's own focus (the F action) for these
+ * rather than trusting navlib's perspective-fit eye distance.
+ */
+export function isOrthoFitFrame(frame: OrthoNavFrame): boolean {
+  return (
+    frame.hasPrevious
+    && frame.turn <= ORTHO_VIEW_TURN_RAD
+    && frame.eyeJump > ORTHO_FIT_JUMP_FRACTION * Math.max(EPSILON, frame.currentRadius)
+  );
+}
 
 /**
  * The next ortho dolly radius for one navlib frame.
  *
- * Interactive frames integrate navlib's own axial delta (a real dolly). View
- * commands do not: navlib picks their eye distance for a perspective projection,
- * so under the derived ortho frustum that distance is the scale and can land far
- * too close. A reorientation (preset) keeps the user's zoom; a pure distance jump
- * (fit) re-fits the scene when its radius is known.
+ * Interactive dollies integrate navlib's own axial delta. View commands do not:
+ * navlib picks their eye distance for a perspective projection, so under the
+ * derived ortho frustum that distance *is* the scale and lands far too close.
+ * A reorientation (preset) keeps the user's zoom, and so does a Fit — the
+ * controller runs the app's focus for that separately.
  */
 export function resolveOrthoNavRadius(frame: OrthoNavFrame): number {
   const {
@@ -160,11 +165,8 @@ export function resolveOrthoNavRadius(frame: OrthoNavFrame): number {
     axial,
     hasPrevious,
     turn,
-    eyeJump,
-    sceneRadius,
     minRadius = ORTHO_MIN_RADIUS,
     maxRadius = ORTHO_MAX_RADIUS,
-    fovDeg,
   } = frame;
 
   if (!hasPrevious) return currentRadius;
@@ -174,11 +176,8 @@ export function resolveOrthoNavRadius(frame: OrthoNavFrame): number {
     return currentRadius;
   }
 
-  if (eyeJump > ORTHO_VIEW_JUMP_FRACTION * Math.max(EPSILON, currentRadius)) {
-    // Fit: frame the scene if we know its radius, else keep the scale.
-    if (sceneRadius != null && sceneRadius > 0) {
-      return THREE.MathUtils.clamp(orthoFitRadiusForScene(sceneRadius, fovDeg), minRadius, maxRadius);
-    }
+  if (isOrthoFitFrame(frame)) {
+    // Fit: keep the scale here; the controller runs the app's focus.
     return currentRadius;
   }
 

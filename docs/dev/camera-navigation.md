@@ -118,12 +118,14 @@ navlib's latest write. An extents write is handled as a pan/zoom by
 
 View commands need their scale handling too (`resolveOrthoNavRadius`): navlib
 chooses their eye distance for a *perspective* projection, and under the derived
-ortho frustum that distance *is* the scale — which is why a preset could land
-far too close and why Fit, which only changes the eye distance, was invisible.
-A frame that reorients by more than `ORTHO_VIEW_TURN_RAD` is treated as a preset
-and keeps the user's zoom; a pure distance jump (`ORTHO_VIEW_JUMP_FRACTION`) is
-treated as a fit and re-framed to the scene radius. Interactive frames still
-integrate navlib's axial delta as a real dolly.
+ortho frustum that distance *is* the scale — which is why a preset landed far too
+close. Any frame that rotates past `ORTHO_VIEW_TURN_RAD` keeps the user's zoom
+(presets reorient; an orbit never changes distance), and `isOrthoFitFrame` flags
+a rotationless distance jump as a Fit. A Fit also keeps the scale, and the
+controller fires a `camera-fit-request` window event;
+`CameraFocusHotkeyController` runs the same focus the F key does, which frames
+the model properly instead of trusting navlib's fit distance. Interactive dollies
+still integrate navlib's axial delta as a real dolly.
 
 Because hover keeps updating, the **support trunk router must not run per
 frame** — it would pathfind continuously as the camera moves. `SceneCanvas` sets

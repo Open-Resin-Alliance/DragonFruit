@@ -19,6 +19,7 @@ import {
   ORTHO_MIN_RADIUS,
   ORTHO_REFERENCE_FOV_DEG,
   applyOrthoFrustum,
+  isOrthoFitFrame,
   orthoAspectOf,
   resolveOrthoNavRadius,
 } from './orthoDolly';
@@ -109,6 +110,8 @@ export function NativeSpaceMouseController({
   const navHasAxialRef = React.useRef(false);
   const navPrevFwdRef = React.useRef(new THREE.Vector3(0, 0, -1));
   const navPrevEyeRef = React.useRef(new THREE.Vector3());
+  // Set when a frame looks like navlib's Fit; the app's focus is run for it.
+  const fitRequestedRef = React.useRef(false);
   // Cached model extents + refresh counter.
   const modelBoxRef = React.useRef(new THREE.Box3());
   const modelBoxAgeRef = React.useRef(MODEL_EXTENTS_REFRESH_FRAMES);
@@ -209,20 +212,23 @@ export function NativeSpaceMouseController({
       const fwd = tmpDir.current.set(0, 0, -1).applyQuaternion(tmpQuat.current).normalize();
       const pivot = getTarget(tmpTarget.current);
       const axial = tmpPan.current.copy(tmpPos.current).sub(pivot).dot(fwd);
-      // Resolve the new scale. Interactive frames integrate navlib's own axial
-      // delta; view commands (preset/fit) are handled in resolveOrthoNavRadius
-      // because navlib sizes their eye distance for a perspective projection.
+      // Resolve the new scale. Interactive dollies integrate navlib's own axial
+      // delta; view commands do not, because navlib sizes their eye distance for a
+      // perspective projection. A Fit keeps the scale and asks the app to run its
+      // own focus (the F action), which frames the model properly.
       const hasPrevious = navHasAxialRef.current;
-      navRadiusRef.current = resolveOrthoNavRadius({
+      const navFrame = {
         currentRadius: navRadiusRef.current,
         prevAxial: navPrevAxialRef.current,
         axial,
         hasPrevious,
         turn: hasPrevious ? navPrevFwdRef.current.angleTo(fwd) : 0,
         eyeJump: hasPrevious ? tmpPos.current.distanceTo(navPrevEyeRef.current) : 0,
-        sceneRadius,
-        fovDeg,
-      });
+      };
+      if (isOrthoFitFrame(navFrame)) {
+        fitRequestedRef.current = true;
+      }
+      navRadiusRef.current = resolveOrthoNavRadius(navFrame);
       navPrevAxialRef.current = axial;
       navPrevFwdRef.current.copy(fwd);
       navPrevEyeRef.current.copy(tmpPos.current);
@@ -441,6 +447,11 @@ export function NativeSpaceMouseController({
         lastAppliedSeqRef.current = out.seq;
         applyAffine(out.affine); // pan + orbit + dolly
         onNavigationFrame?.();
+      }
+
+      if (fitRequestedRef.current) {
+        fitRequestedRef.current = false;
+        window.dispatchEvent(new Event('camera-fit-request'));
       }
 
       // A view box write is a pan/zoom/Fit command (navlib only writes extents
