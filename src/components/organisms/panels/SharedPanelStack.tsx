@@ -298,49 +298,65 @@ export function SharedPanelStack({
             </div>
           )}
 
-          {scene.mode === 'support' && (
-            <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                Placement Lock Debug
+          {scene.mode === 'support' && (() => {
+            const armed = [
+              supportDebugStats.supportInteractionSuppressed && 'interaction',
+              supportDebugStats.disableSelectionAndHover && 'selection+hover',
+              supportDebugStats.gizmoInteractionLockActive && 'gizmo lock',
+              supportDebugStats.knotGizmoDragging && 'knot drag',
+              supportDebugStats.jointGizmoDragging && 'joint drag',
+            ].filter(Boolean) as string[];
+
+            return (
+              <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                  Support Debug
+                </div>
+                <div>hover: {supportDebugStats.hoveredCategory} / {supportDebugStats.hoveredId ?? 'none'}</div>
+                <div>scene hover: {supportDebugStats.sceneHoveredSupportId ?? 'none'}</div>
+                <div>segment hover: {supportDebugStats.shaftHoveredSegmentId ?? 'none'}</div>
+                <div>hover model: {supportDebugStats.effectiveHoverModelId ?? 'none'}</div>
+                <div>visual hover: {supportDebugStats.hoveredCategoryForVisual ?? 'none'} / {supportDebugStats.hoveredIdForVisual ?? 'none'}</div>
+                {armed.length > 0 && (
+                  <div style={{ color: '#ff8a8a' }}>suppressed: {armed.join(' · ')}</div>
+                )}
+                {supportDebugStats.hoveredVsSnapMismatch && (
+                  <div style={{ color: '#ff8a8a' }}>hover/snap segment mismatch</div>
+                )}
+
+                <details className="mt-1">
+                  <summary className="cursor-pointer text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                    Details
+                  </summary>
+                  <div className="mt-1">
+                    <div>Shaft hover point: {formatDebugVec3Like(supportDebugStats.shaftHoverPoint)}</div>
+                    <div>Brace Alt active: {supportDebugStats.braceAltActive ? 'true' : 'false'}</div>
+                    <div>Brace stage: {supportDebugStats.braceStage}</div>
+                    <div>Brace start: {supportDebugStats.braceStartKind ?? 'none'} / {supportDebugStats.braceStartSegmentId ?? 'n/a'}</div>
+                    <div>Brace snap: {supportDebugStats.braceSnapKind ?? 'none'} / {supportDebugStats.braceSnapSegmentId ?? supportDebugStats.braceSnapPrimitiveId ?? 'n/a'}</div>
+                    <div>Preview start: {formatDebugVec3Like(supportDebugStats.previewStart)}</div>
+                    <div>Preview end: {formatDebugVec3Like(supportDebugStats.previewEnd)}</div>
+                    <div>Suppressed: {supportDebugStats.supportInteractionSuppressed ? 'true' : 'false'}</div>
+                    <div>disableSelectionAndHover: {supportDebugStats.disableSelectionAndHover ? 'true' : 'false'}</div>
+                    <div>Gizmo lock active: {supportDebugStats.gizmoInteractionLockActive ? 'true' : 'false'}</div>
+                    <div>Knot dragging: {supportDebugStats.knotGizmoDragging ? 'true' : 'false'}</div>
+                    <div>Joint dragging: {supportDebugStats.jointGizmoDragging ? 'true' : 'false'}</div>
+                    <div>Knot guard remaining: {supportDebugStats.knotGuardRemainingMs} ms</div>
+                    <div>Knot-only guard: {supportDebugStats.knotOnlyGuardRemainingMs} ms</div>
+                    <div>Joint-only guard: {supportDebugStats.jointOnlyGuardRemainingMs} ms</div>
+                    <div>Immediate hover model: {supportDebugStats.immediateModelHoverId ?? 'none'}</div>
+                    <div>External hover model: {supportDebugStats.externalHoverModelId ?? 'none'}</div>
+                    <div>Hovered support owner: {supportDebugStats.hoveredSupportModelId ?? 'none'}
+                      {supportDebugStats.hoveredSupportOwnedByActiveModel === true ? ' (active model)' : null}
+                      {supportDebugStats.hoveredSupportOwnedByActiveModel === false ? ' (OTHER MODEL)' : null}
+                    </div>
+                    <div>Marquee hovered support: {supportDebugStats.marqueeHoveredSupportId ?? 'none'}</div>
+                    <div>Raw hover: {supportDebugStats.rawHoveredCategory ?? 'none'} / {supportDebugStats.rawHoveredId ?? 'none'}</div>
+                  </div>
+                </details>
               </div>
-              <div>Hovered category/id: {supportDebugStats.hoveredCategory} / {supportDebugStats.hoveredId ?? 'none'}</div>
-              <div>Shaft hovered segment: {supportDebugStats.shaftHoveredSegmentId ?? 'none'}</div>
-              <div>Shaft hover point: {formatDebugVec3Like(supportDebugStats.shaftHoverPoint)}</div>
-              <div>Brace Alt active: {supportDebugStats.braceAltActive ? 'true' : 'false'}</div>
-              <div>Brace stage: {supportDebugStats.braceStage}</div>
-              <div>Brace start: {supportDebugStats.braceStartKind ?? 'none'} / {supportDebugStats.braceStartSegmentId ?? 'n/a'}</div>
-              <div>Brace snap: {supportDebugStats.braceSnapKind ?? 'none'} / {supportDebugStats.braceSnapSegmentId ?? supportDebugStats.braceSnapPrimitiveId ?? 'n/a'}</div>
-              <div>Preview start: {formatDebugVec3Like(supportDebugStats.previewStart)}</div>
-              <div>Preview end: {formatDebugVec3Like(supportDebugStats.previewEnd)}</div>
-              <div>Suppressed: {supportDebugStats.supportInteractionSuppressed ? 'true' : 'false'}</div>
-              <div>disableSelectionAndHover: {supportDebugStats.disableSelectionAndHover ? 'true' : 'false'}</div>
-              <div>Gizmo lock active: {supportDebugStats.gizmoInteractionLockActive ? 'true' : 'false'}</div>
-              <div>Knot dragging: {supportDebugStats.knotGizmoDragging ? 'true' : 'false'}</div>
-              <div>Joint dragging: {supportDebugStats.jointGizmoDragging ? 'true' : 'false'}</div>
-              <div>Knot guard remaining: {supportDebugStats.knotGuardRemainingMs} ms</div>
-              <div>Knot-only guard: {supportDebugStats.knotOnlyGuardRemainingMs} ms</div>
-              <div>Joint-only guard: {supportDebugStats.jointOnlyGuardRemainingMs} ms</div>
-              <div>Immediate hover model: {supportDebugStats.immediateModelHoverId ?? 'none'}</div>
-              <div>External hover model: {supportDebugStats.externalHoverModelId ?? 'none'}</div>
-              <div>Effective hover model: {supportDebugStats.effectiveHoverModelId ?? 'none'}</div>
-              <div>Scene hovered support: {supportDebugStats.sceneHoveredSupportId ?? 'none'}</div>
-              <div>
-                {'Hovered support owner: '}
-                {supportDebugStats.hoveredSupportModelId ?? 'none'}
-                {supportDebugStats.hoveredSupportOwnedByActiveModel === true ? ' (active model)' : null}
-                {supportDebugStats.hoveredSupportOwnedByActiveModel === false ? ' (OTHER MODEL)' : null}
-              </div>
-              <div>Marquee hovered support: {supportDebugStats.marqueeHoveredSupportId ?? 'none'}</div>
-              <div>Raw hovered category/id: {supportDebugStats.rawHoveredCategory ?? 'none'} / {supportDebugStats.rawHoveredId ?? 'none'}</div>
-              <div>Visual hovered category/id: {supportDebugStats.hoveredCategoryForVisual ?? 'none'} / {supportDebugStats.hoveredIdForVisual ?? 'none'}</div>
-              <div>
-                Hover vs snap segment mismatch:{' '}
-                <span style={{ color: supportDebugStats.hoveredVsSnapMismatch ? '#ff8a8a' : 'var(--text-strong)' }}>
-                  {supportDebugStats.hoveredVsSnapMismatch ? 'YES' : 'no'}
-                </span>
-              </div>
-            </div>
-          )}
+            );
+          })()}
 
           {scene.mode !== 'support' && scene.mode !== 'printing' && (
             <>

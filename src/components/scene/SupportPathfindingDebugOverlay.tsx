@@ -1,7 +1,7 @@
 import React from 'react';
 import * as THREE from 'three';
 import type { Vec3 } from '@/supports/types';
-import type { GridAStarDebugPassSnapshot, SupportPathfindingDebugSnapshot } from '@/supports/PlacementLogic/Pathfinding/pathfindingDebugState';
+import type { SupportPathfindingDebugSnapshot } from '@/supports/PlacementLogic/Pathfinding/pathfindingDebugState';
 
 
 function buildPositionArray(points: Vec3[]): Float32Array {
@@ -89,10 +89,6 @@ function fmtMm(value: number | undefined): string {
   return value === undefined || !Number.isFinite(value) ? 'n/a' : `${value.toFixed(2)}mm`;
 }
 
-function fmtDeg(value: number | undefined): string {
-  return value === undefined || !Number.isFinite(value) ? 'n/a' : `${value.toFixed(1)}deg`;
-}
-
 function severityColor(severity: 'info' | 'success' | 'warning' | 'error'): string {
   if (severity === 'success') return '#86efac';
   if (severity === 'warning') return '#fde68a';
@@ -124,10 +120,6 @@ function buildTuningSuggestions(snapshot: SupportPathfindingDebugSnapshot): stri
 
   if (hasReason('stagnation') || hasReason('stagnated')) {
     pushSuggestion('Increase lateral envelope (maxTotalLateralMm) to escape local cavities before declaring stagnation.');
-  }
-
-  if (hasReason('expansion budget') || snapshot.passes.some((pass) => pass.hitExpansionLimit)) {
-    pushSuggestion('Raise A* expansion budgets (fine/wide) or trigger wide-step fallback earlier.');
   }
 
   if (hasReason('no valid path reached root target')) {
@@ -172,16 +164,7 @@ export function SupportPathfindingDebugHud({
 }) {
   if (!snapshot) return null;
 
-  const passLines = snapshot.passes.map((pass) => {
-    const flags = [
-      pass.reached ? 'reached' : 'miss',
-      pass.stagnated ? 'stagnated' : null,
-      pass.hitExpansionLimit ? 'budget' : null,
-    ].filter(Boolean).join(', ');
-    return `${pass.label}: ${flags} | exp ${pass.expansions} | step ${pass.searchStepMm}mm | raw ${pass.rawPath.length} simp ${pass.simplifiedPath.length}`;
-  });
-  const latestEvents = (snapshot.events ?? []).slice(-8);
-  const cone = snapshot.cone;
+(snapshot.events ?? []).slice(-8);
   const outcome = snapshot.outcome;
   const blockedReasons = outcome?.status === 'blocked' ? (outcome.blockedReasons ?? []) : [];
   const tuningSuggestions = showTuningSuggestions ? buildTuningSuggestions(snapshot) : [];
@@ -192,6 +175,8 @@ export function SupportPathfindingDebugHud({
       snapshot.socketPos.z - snapshot.nominalSocketPos.z,
     )
     : 0;
+
+  const latestEvents = (snapshot.events ?? []).slice(-8);
 
   return (
     <div
@@ -257,26 +242,12 @@ export function SupportPathfindingDebugHud({
           )}
         </div>
       )}
-      {cone && (
-        <div style={{ marginTop: 6 }}>
-          <div><span style={{ color: '#94a3b8' }}>cone:</span> nominal {cone.nominalClear ? 'clear' : 'blocked'}, active {cone.activeClear ? 'clear' : 'blocked'}</div>
-          <div>
-            <span style={{ color: '#94a3b8' }}>disk angle:</span>{' '}
-            <span style={{ color: cone.diskAngleLimitExceeded ? '#fca5a5' : '#e5eefb' }}>
-              {fmtDeg(cone.activeDiskAngleDeg)} / {fmtDeg(cone.maxDiskAngleDeg)}
-            </span>
-            {' '}<span style={{ color: '#94a3b8' }}>length:</span> {fmtMm(cone.activeConeLengthMm)}
-          </div>
-          <div><span style={{ color: '#94a3b8' }}>socket shift:</span> {fmtMm(socketShift)} <span style={{ color: '#94a3b8' }}>added cone:</span> {fmtMm(cone.activeAddedLengthMm)}</div>
-        </div>
-      )}
       {snapshot.envelope && (
         <div style={{ marginTop: 6 }}>
           <span style={{ color: '#94a3b8' }}>envelope:</span>{' '}
           <span style={{ color: '#e5eefb' }}>{fmtMm(snapshot.envelope.maxTotalLateralMm)}</span>
           {' '}<span style={{ color: '#64748b' }}>lateral</span>
           {' | '}<span style={{ color: '#64748b' }}>clearance</span> {fmtMm(snapshot.envelope.clearanceMm)}
-          {' | '}<span style={{ color: '#64748b' }}>rescue</span> {snapshot.envelope.rescueRadiiMm.length}
         </div>
       )}
       {/* Extended diagnostics */}
@@ -286,18 +257,8 @@ export function SupportPathfindingDebugHud({
           <span style={{ color: snapshot.isPreview ? '#fde68a' : '#86efac' }}>
             {snapshot.isPreview ? 'preview' : 'click'}
           </span>
-          {' | '}routing angle:{' '}
-          <span style={{ color: '#e5eefb' }}>{snapshot.routingAngleDeg ?? '?'}°</span>
           {' | '}final angle:{' '}
           <span style={{ color: '#e5eefb' }}>{snapshot.maxSegmentAngleDeg ?? '?'}°</span>
-        </div>
-        <div>
-          stagnation cache:{' '}
-          <span style={{ color: snapshot.stagnationCacheBypassed ? '#fde68a' : '#86efac' }}>
-            {snapshot.stagnationCacheBypassed ? 'BYPASSED' : 'active'}
-          </span>
-          {' | '}cone seed:{' '}
-          <span style={{ color: '#e5eefb' }}>{fmtMm(snapshot.coneSeedMaxRadiusMm)}</span>
         </div>
         <div>
           straight:{' '}
@@ -308,17 +269,12 @@ export function SupportPathfindingDebugHud({
           <span style={{ color: snapshot.rootsFitStraightDown ? '#86efac' : '#fca5a5' }}>
             {snapshot.rootsFitStraightDown === undefined ? 'pending' : snapshot.rootsFitStraightDown ? 'fit' : 'blocked'}
           </span>
-        </div>
-        <div>
-          A* steps: fine {fmtMm(snapshot.fineStepMm)} | wide {fmtMm(snapshot.wideStepMm)}
+          {' | '}probes:{' '}
+          <span style={{ color: '#e5eefb' }}>{snapshot.routerProbes ?? '?'}</span>
+          {' | '}socket shift:{' '}
+          <span style={{ color: '#e5eefb' }}>{fmtMm(socketShift)}</span>
         </div>
       </div>
-      {passLines.length > 0 && (
-        <div style={{ marginTop: 6 }}>
-          <div style={{ color: '#94a3b8' }}>passes:</div>
-          {passLines.map((line) => <div key={line}>{line}</div>)}
-        </div>
-      )}
       {latestEvents.length > 0 && (
         <div
           style={{
@@ -337,35 +293,7 @@ export function SupportPathfindingDebugHud({
           ))}
         </div>
       )}
-      {tuningApplied && (
-        <div style={{ marginTop: 10, borderTop: '1px solid rgba(148, 163, 184, 0.3)', paddingTop: 8 }}>
-          <div style={{ color: '#94a3b8' }}>Potential Field is now the permanent default routing algorithm.</div>
-        </div>
-      )}
     </div>
-  );
-}
-
-function PassOverlay({
-  pass,
-  expandedColor,
-  frontierColor,
-  rawPathColor,
-  simplifiedPathColor,
-}: {
-  pass: GridAStarDebugPassSnapshot;
-  expandedColor: string;
-  frontierColor: string;
-  rawPathColor: string;
-  simplifiedPathColor: string;
-}) {
-  return (
-    <>
-      <DebugPoints points={pass.expandedNodes} color={expandedColor} size={4.5} opacity={0.22} />
-      <DebugPoints points={pass.frontierNodes} color={frontierColor} size={6.5} opacity={0.8} />
-      <DebugLine points={pass.rawPath} color={rawPathColor} opacity={0.45} />
-      <DebugLine points={pass.simplifiedPath} color={simplifiedPathColor} opacity={0.95} />
-    </>
   );
 }
 
@@ -385,35 +313,12 @@ export function SupportPathfindingDebugOverlay({
 
   if (!snapshot) return null;
 
-  const finePass = snapshot.passes.find((pass) => pass.label === 'fine') ?? null;
-  const widePass = snapshot.passes.find((pass) => pass.label === 'wide') ?? null;
-
   return (
     <group name="support-pathfinding-debug-overlay">
       <DebugPoints points={socketPoint} color="#ff4fd8" size={11} opacity={1} />
       <DebugPoints points={rootTargetPoint} color="#5eead4" size={9} opacity={0.95} />
       <DebugPoints points={basePoint} color="#f8fafc" size={8} opacity={0.95} />
       <DebugLine points={finalChain} color="#ffffff" opacity={0.9} />
-
-      {finePass && (
-        <PassOverlay
-          pass={finePass}
-          expandedColor="#f59e0b"
-          frontierColor="#fde68a"
-          rawPathColor="#f97316"
-          simplifiedPathColor="#22c55e"
-        />
-      )}
-
-      {widePass && (
-        <PassOverlay
-          pass={widePass}
-          expandedColor="#38bdf8"
-          frontierColor="#bfdbfe"
-          rawPathColor="#60a5fa"
-          simplifiedPathColor="#a855f7"
-        />
-      )}
     </group>
   );
 }

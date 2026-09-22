@@ -2,7 +2,7 @@ import type { SupportState, Vec3 } from '../../types';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import type { SupportSettings } from '../../Settings/types';
 import type { TrunkBuildResult } from '../../SupportTypes/Trunk/trunkBuilder';
-import type { PlacedSupport, SupportTypeId } from '../../supportTypeRegistry';
+import type { PlacedSupport } from '../../supportTypeRegistry';
 import type * as THREE from 'three';
 
 export type GridNodeKey = string;
@@ -24,19 +24,6 @@ export type GridPlacementDecision =
         nodeKey: GridNodeKey;
         placed: PlacedSupport;
         /** Preview and validation state, whatever built the support. */
-        supportData?: SupportData;
-    }
-    | {
-        /** The placed support replaces the host occupying its grid node. */
-        kind: 'promote';
-        hostTypeId: SupportTypeId;
-        hostId: string;
-        nodeKey: GridNodeKey;
-        /** The support taking the node, in the same generic shape. */
-        placed: PlacedSupport;
-        /** The member preserving the displaced host's own contact. */
-        promotedMember?: PlacedSupport;
-        /** Preview state for what is being placed. */
         supportData?: SupportData;
     }
     | {

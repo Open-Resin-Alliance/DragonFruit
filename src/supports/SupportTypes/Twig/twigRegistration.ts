@@ -7,6 +7,7 @@ import { registerContactBridgeBuilder, registerKnotDiameterRule } from '../../su
 import type { Twig } from '../../types';
 import { resolveTwigDiameterAtSegmentT, twigJointDiameterForLocalDiameter } from './twigTaper';
 import { buildTwig } from './twigBuilder';
+import { isTwigShaftVerticalEnough } from './twigVerticality';
 import './twigProxyGeometry';
 import './twigMarqueeShape';
 
@@ -29,7 +30,11 @@ registerContactBridgeBuilder('twig', (request) => {
         tipContactDiameterMm: request.tipContactDiameterMm,
         mesh: request.mesh as THREE.Mesh | undefined,
     });
-    return twig ? { entity: twig, error } : null;
+    // Enforced here rather than at each caller: a twig that hangs its island off
+    // a near-horizontal whisker is not a support, whichever automatic path built
+    // it. A manual placement is exempt -- the user aimed both contacts and can
+    // see the cant in the preview, so the call is theirs.
+    return twig && (request.manual || isTwigShaftVerticalEnough(twig)) ? { entity: twig, error } : null;
 });
 
 /**

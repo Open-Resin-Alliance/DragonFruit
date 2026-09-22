@@ -1,6 +1,6 @@
 import { useCallback, useState, useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import { addSupportEntity, addKnot, addRoot, addSupportEntityWithHistory, getSnapshot, setSnapshot, updateKnot } from '../../state';
+import { addSupportEntity, addKnot, addRoot, addSupportEntityWithHistory, getSnapshot, updateKnot } from '../../state';
 import { pushSupportHistory } from '@/supports/history/supportHistory';
 import { addAction } from '../../history/actionTypes';
 import { useInteractionStatus } from '../../interaction/useInteractionStatus';
@@ -12,8 +12,7 @@ import type { LimitationCode, Segment, WarningCode } from '../../types';
 import { calculateSmoothedNormal } from '../../PlacementLogic/PlacementUtils';
 import { getSettings } from '../../Settings/state';
 import { decideGridPlacement } from '../../PlacementLogic/Grid';
-import { getSupportTypeDescriptor, bridgeMayLandSideways, buildContactBridge, buildContactOverride, promoteAwayHost, resolveSupportTypeIdOf, selectTypeForPlacement, type SupportTypeId, updateSupportEntity } from '../../supportTypeRegistry';
-import { shaftVerticalCos } from '../Stick/stickVerticality';
+import { getSupportTypeDescriptor, bridgeMayLandSideways, buildContactBridge, buildContactOverride, resolveSupportTypeIdOf, selectTypeForPlacement, type SupportTypeId, updateSupportEntity } from '../../supportTypeRegistry';
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
 import { isContactDiskHudInteractionActive, shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { perfMark, perfMeasureWithSpike, perfEndFrame } from '../../PlacementLogic/Pathfinding/pathfindingPerf';
@@ -142,8 +141,9 @@ export function buildCavityBridge(
     // directly below is missing — a punched drain hole, a gap between
     // features — the vertical ray escapes and the tip used to end up with no
     // support at all, even though the floor a couple of mm to the side is
-    // right there. Nearest radius wins; the 20° verticality gate below (and
-    // the shaft-blocked check after the build) bound how far the cant may go.
+    // right there. Nearest radius wins; the kind's own verticality gate — 20°
+    // for a stick, 45° for a twig, both enforced in the type's registered
+    // builder — and the shaft-blocked check after the build bound the cant.
     const settings = getSettings();
     const cutoff = settings.meshToMesh?.stickVsTwigCutoffMm ?? 5;
     const NEAR_RADII_MM = [0, 0.75, 1.5, 2.25] as const;
@@ -217,18 +217,6 @@ export function buildCavityBridge(
     // column cannot; the longer bridge keeps the near-search behaviour.
     const shortBridge = getSupportTypeDescriptor(kind).placementRule?.maxMm !== undefined;
 
-    // Twigs are short bridges, not lateral props: the visible shaft
-    // (socket to socket — a sidewall landing's standoff is what shoves a
-    // grazing twig sideways) must stay somewhat vertical, like sticks. A
-    // twig much past 45° hangs its island off a whisker that cannot carry
-    // peel, and it renders as the near-horizontal struts in the preview.
-    // Looser than the 20° stick gate — which the stick's registered builder
-    // enforces — because a 1–2 mm strut tolerates cant a 12 mm column cannot;
-    // pointed tips propped off a nearby wall with a real drop underneath
-    // still pass.
-    if (shortBridge && shaftVerticalCos(entity) < Math.cos((CAVITY_TWIG_MAX_SHAFT_ANGLE_DEG * Math.PI) / 180)) {
-        return null;
-    }
 
     // The shaft must not pierce the model. Matches the trunk post-cull
     // clearance (radius + 0.15mm) and catches the bridges that shot straight
@@ -248,13 +236,6 @@ export function buildCavityBridge(
 }
 
 type CavityBridgeBuildResult = NonNullable<ReturnType<typeof buildCavityBridge>>;
-
-// A cavity twig bridges down, not sideways: a shaft canted much past this
-// from vertical is a lateral whisker to a sidewall, not a bridge. Looser than
-// the 20° stick gate — measured thin-gap and floor twigs build at ≤17°,
-// pointed-tip props off a nearby wall with a real drop land 23–43°, the
-// grazers at 48° and up (calibration knob).
-export const CAVITY_TWIG_MAX_SHAFT_ANGLE_DEG = 45;
 
 export function useTrunkPlacementV2() {
     // Debounce tuned for human hand drift (~1-2mm) and 60fps target.
@@ -294,6 +275,15 @@ export function useTrunkPlacementV2() {
         setPreviewError((prev) => (prev === null ? prev : null));
         setPreviewWarning((prev) => (prev === null ? prev : null));
         cavityPreviewCacheRef.current = null;
+        // A click can leave the pointer exactly where it was after a commit. Cancel
+        // the queued hover and forget its stored hit so that a scheduled frame
+        // cannot rebuild the same preview before the pointer moves again.
+        if (hoverFrameRef.current !== null) {
+            cancelAnimationFrame(hoverFrameRef.current);
+            hoverFrameRef.current = null;
+        }
+        latestHoverRef.current = null;
+        lastProcessedHoverRef.current = null;
         if (getSupportPathfindingDebugEnabled()) {
             setSupportPathfindingDebugSnapshot(null);
         }
@@ -315,7 +305,8 @@ export function useTrunkPlacementV2() {
             },
         } as Parameters<typeof pushSupportHistory>[0]);
         clearSupportSelection();
-    }, []);
+        clearPreview();
+    }, [clearPreview]);
 
     const resolveCavityBridgePreview = useCallback((
         hit: THREE.Intersection,
@@ -439,14 +430,16 @@ export function useTrunkPlacementV2() {
         const settings = getSettings();
         const isGridMode = Boolean(settings.grid?.enabled && settings.grid.spacingMm > 0);
 
-        // Grid mode is intentionally grid-native: build a cheap straight
-        // candidate, then let the fixed-grid resolver snap/merge/reject it.
-        // Feeding the mesh here starts the flexible A* router, which is the
-        // wrong cost model for hover on a fixed lattice.
         const mesh = hit.object instanceof THREE.Mesh ? hit.object : undefined;
 
         perfMark('hover:trunk-build');
-        const result = buildTrunkData({ tipPos, tipNormal, modelId, mesh: isGridMode ? undefined : mesh, isPreview: true });
+        // Grid mode routes like every other mode. It used to build a straight
+        // candidate with no mesh, which meant a grid support could not reach
+        // anything under an overhang: the pillar was drawn straight down, the
+        // collision gate refused it, and the fixed-node resolver had nothing
+        // left to attach to. The router is cheap enough now (~20 probes) that
+        // the only reason to skip it was the old search's cost.
+        const result = buildTrunkData({ tipPos, tipNormal, modelId, mesh, isPreview: true });
         perfMeasureWithSpike('hover:trunk-build', 'trunk:build');
 
         // Fast-path for cavity hover when the trunk can't route to the build
@@ -528,7 +521,7 @@ export function useTrunkPlacementV2() {
         // Every accepted decision previews what it will place, and a rejected
         // one previews the ghost the engine built. Neither needs to know which
         // type is involved.
-        const previewData = decision.kind === 'place' || decision.kind === 'promote'
+        const previewData = decision.kind === 'place'
             ? decision.supportData
             : decision.trunkBuild?.supportData;
         if (decision.kind !== 'reject' && previewData) {
@@ -624,12 +617,12 @@ export function useTrunkPlacementV2() {
         const placementSurface = getPlacementSurfaceFromHit(hit);
         
         const settings = getSettings();
-        const isGridMode = Boolean(settings.grid?.enabled && settings.grid.spacingMm > 0);
 
-        // In grid mode, avoid the flexible A* route search entirely. The grid
-        // resolver owns snapping and same-node merge behavior.
+        // Grid mode routes too: the router commits its base to a legal grid
+        // node when the grid is on, and the resolver below adopts that node
+        // rather than re-deriving one from a straight drop.
         const mesh = hit.object instanceof THREE.Mesh ? hit.object : undefined;
-        const result = buildTrunkData({ tipPos, tipNormal, modelId, mesh: isGridMode ? undefined : mesh });
+        const result = buildTrunkData({ tipPos, tipNormal, modelId, mesh });
 
         // When the trunk can't route to the build plate (stagnation, budget
         // exhaustion, or general collision), fall back to a cavity stick/twig
@@ -651,6 +644,7 @@ export function useTrunkPlacementV2() {
                         markPlacementSurface(cavityBridge.kind, cavityBridge.entity, placementSurface),
                     );
                     clearSupportSelection();
+                    clearPreview();
                     return;
                 }
             }
@@ -673,8 +667,9 @@ export function useTrunkPlacementV2() {
             return;
         }
 
-        // In grid mode, decideGridPlacement may override a trunk error into a place_branch decision.
-        // Only bail on trunk errors when grid is disabled (direct placement path).
+        // In grid mode, decideGridPlacement may override a trunk error into an
+        // attachment decision. Only bail on trunk errors when grid is disabled
+        // (direct placement path).
         if (result.error && !settings.grid?.enabled) {
             if (forcePlaceOverrideRef.current) {
                 commitTrunkBuild(result, placementSurface);
@@ -721,34 +716,14 @@ export function useTrunkPlacementV2() {
                 && getSupportTypeDescriptor(host.typeId).recomputesDiameterFromAttachments
                 && descriptor.repairsHostDiameterOnAdd;
             const hostRepair = repairsHost && host ? repairHostDiameter(host) : null;
-
             addSupportEntityWithHistory(typeId, entity, {
                 ...(supplied.parentKnotId ? { knot: supplied.parentKnotId } : {}),
                 ...(hostRepair ?? {}),
             });
             clearSupportSelection();
+            clearPreview();
             return;
         }
-
-        // A placement that replaces the host on its node goes through that
-        // host type's OWN registered promotion: rehosting the removed host's
-        // attachments is its business, so the rules live in its folder.
-        if (decision.kind === 'promote') {
-            const promoted = promoteAwayHost(decision.hostTypeId, {
-                draft: getSnapshot(),
-                placed: decision.placed,
-                promotedMember: decision.promotedMember,
-                hostId: decision.hostId,
-                nodeKey: decision.nodeKey,
-                recordHistory: true, // a manual click is its own undo entry
-            });
-            if (promoted) {
-                setSnapshot(promoted);
-                clearSupportSelection();
-            }
-            return;
-        }
-
         if (decision.kind === 'reject') {
             if (decision.reason === 'COLLISION_WITH_MODEL' && mesh) {
                 const cavityBridge = buildCavityBridge(tipPos, tipNormal, modelId, mesh);
@@ -760,6 +735,7 @@ export function useTrunkPlacementV2() {
                         markPlacementSurface(cavityBridge.kind, cavityBridge.entity, placementSurface),
                     );
                     clearSupportSelection();
+                    clearPreview();
                     return;
                 }
             }
@@ -769,7 +745,7 @@ export function useTrunkPlacementV2() {
             // Stick/twig is now strict last resort: keep reject behavior here.
             return;
         }
-    }, [commitTrunkBuild, isPlacementHardDisabled]);
+    }, [commitTrunkBuild, clearPreview, isPlacementHardDisabled]);
 
     return {
         onSupportHover,

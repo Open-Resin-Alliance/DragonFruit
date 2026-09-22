@@ -2,6 +2,8 @@
 
 import React, { useSyncExternalStore, forwardRef, useImperativeHandle, useCallback, useEffect, useMemo } from 'react';
 import * as THREE from 'three';
+import { useThree, type ThreeEvent } from '@react-three/fiber';
+import { LineMaterial, LineSegments2, LineSegmentsGeometry } from 'three-stdlib';
 import { removeRootById, subscribe, getSnapshot,
   getKickstandKnots,
   getKickstandRoots,
@@ -34,6 +36,7 @@ import {
     SUPPORT_COLLECTION_KEYS,
     SUPPORT_TYPES,
     type SupportCollectionKey,
+    type SupportEndpoint,
     type SupportTypeId,
 } from './supportTypeRegistry';
 import { buildKnotIndex, selectedIdsForType, type CollectionLookup, type SelectionInputs } from './interaction/shared/selection/selectedIdsByType';
@@ -43,7 +46,9 @@ import { detailRenderersFor, type DetailRendererContext } from './detailRenderer
 import { InstancedShaftGroup, type InstancedShaft } from './SupportPrimitives/Shaft/InstancedShaftGroup';
 import { InstancedJointGroup, type InstancedJoint } from './SupportPrimitives/Joint/InstancedJointGroup';
 import { InstancedRootsGroup, type InstancedRoot } from './SupportPrimitives/Roots/InstancedRootsGroup';
-import { InstancedContactConeGroup, type InstancedContactCone } from './SupportPrimitives/ContactCone/InstancedContactConeGroup';
+import { inlineRootBatchInstance } from './SupportPrimitives/Roots/inlineRootBatch';
+import { batchesInView, BATCHED_PASSES } from './rendering/batchCoverage';
+import { InstancedContactConeGroup, coneAxisSpan, type InstancedContactCone } from './SupportPrimitives/ContactCone/InstancedContactConeGroup';
 import { useBracePlacementState } from './SupportTypes/Brace/bracePlacementState';
 import { useLeafPlacementState } from './SupportTypes/Leaf/leafPlacementState';
 import { useKickstandPlacementState } from './SupportTypes/Kickstand/kickstandPlacementState';
@@ -142,12 +147,6 @@ const MULTI_SELECTION_DETAIL_THRESHOLD = 24;
 const BULK_MULTI_SELECTED_COLOR = '#80fffd';
 
 /**
- * Whether a type's live marquee highlight can be drawn as a batched overlay:
- * the overlay reaches a type declaring `batchesShaft`, `batchesContactCones`
- * or `ownsRoot`. A type with none takes the preview through its own detail
- * renderer instead; see `sharedRenderProps`.
- */
-/**
  * Whether a support should be drawn as selected, by any of three routes: it is
  * in its type's selected set, the bulk marquee colour stands in for the sets
  * past the detail threshold, or a drag is currently over it. A detail renderer
@@ -161,9 +160,18 @@ export function supportIsDrawnSelected(input: {
     return input.inSelectedSet || input.bulkSelected || input.marqueePreview;
 }
 
-export function typeHasBatchedMarqueeOverlay(typeId: SupportTypeId): boolean {
+/**
+ * Whether a type's live marquee highlight can be drawn as a batched overlay.
+ *
+ * The overlay reaches whatever the batched passes carry in this view, so the
+ * question is `batchesInView`, not the raw flags: a type with no batched form
+ * takes the preview through its own detail renderer instead — which a simple
+ * view has none of, so a type the passes carry there must use the overlay. See
+ * `sharedRenderProps`.
+ */
+export function typeHasBatchedMarqueeOverlay(typeId: SupportTypeId, simpleRender: boolean): boolean {
     const descriptor = getSupportTypeDescriptor(typeId);
-    return descriptor.batchesShaft || descriptor.batchesContactCones || descriptor.ownsRoot;
+    return BATCHED_PASSES.some((pass) => batchesInView(pass, descriptor, simpleRender));
 }
 /** Debug origin coloring (AutoSupport "Origin Colors" toggle): red = near-plate
  *  band, orange = overhang (grid infill / organic Poisson / fanned overhang),
@@ -205,8 +213,105 @@ const BRACE_TYPE_ID = spanKnotHostType();
  *  `buildPlacementPreviewBatches` builds from the same descriptor. */
 const LEAF_PREVIEW_BATCH_ID = `placement-preview:${LEAF_TYPE_ID}`;
 
-/** Simple line vector for debugSimpleSupportRender — like J×2 pathfinding debug, but for all shafts. */
-function SimpleShaftLines({ shafts, color }: { shafts: InstancedShaft[]; color: string }) {
+/** The root's axis as the line the navigation view draws for it: the plate
+ *  contact up to the top of the root cone, which is where the member's shaft
+ *  starts, so the line runs into the shaft instead of stopping above the plate. */
+function rootNavigationSpan(root: InstancedRoot): { start: Vec3; end: Vec3 } {
+    return {
+        start: root.basePos,
+        end: {
+            x: root.basePos.x,
+            y: root.basePos.y,
+            z: root.basePos.z + root.effectiveDiskHeight + root.coneHeight,
+        },
+    };
+}
+
+/**
+ * The navigation view's vector thickness, in screen pixels. `LineBasicMaterial`
+ * ignores `linewidth` in WebGL, so the vectors are fat lines (`LineSegments2`),
+ * which also carry their width in screen space.
+ */
+const NAVIGATION_LINE_WIDTH_PX = 2;
+
+/** The navigation view's contact discs, blue against the member colours. */
+const NAVIGATION_CONTACT_COLOR = '#3b82f6';
+
+/**
+ * How many line widths a simple view's pick target spans.
+ *
+ * A simple view answers the pointer through a slim tube along the member's
+ * line rather than through the member's own geometry: a trunk is millimetres
+ * wide, and the pointer there is aiming at a two-pixel vector, so the member's
+ * girth answers clicks well away from the line the eye is following. Three
+ * widths keeps a little forgiveness without reaching for the neighbouring
+ * support.
+ */
+const NAVIGATION_PICK_LINE_WIDTHS = 3;
+
+/**
+ * World units per screen pixel at a point, for the active projection.
+ *
+ * Null when the camera is neither projection this scene builds, in which case
+ * the caller leaves the geometry as it is rather than guessing a tube size.
+ */
+function worldUnitsPerPixelAt(camera: THREE.Camera, viewportHeightPx: number, point: Vec3): number | null {
+    const height = Math.max(1, viewportHeightPx);
+
+    if (camera instanceof THREE.OrthographicCamera) {
+        return ((camera.top - camera.bottom) / Math.max(1e-6, camera.zoom)) / height;
+    }
+
+    if (camera instanceof THREE.PerspectiveCamera) {
+        const distance = Math.max(0.001, Math.hypot(
+            camera.position.x - point.x,
+            camera.position.y - point.y,
+            camera.position.z - point.z,
+        ));
+        return (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5) * distance) / height;
+    }
+
+    return null;
+}
+
+/**
+ * The same shafts, as the slim tubes a simple view answers the pointer with:
+ * three line widths across, measured at the shaft's own distance so the tube
+ * reads the same size on screen as the vector it belongs to.
+ *
+ * Capped at the member's own diameter, because a line thick enough to rival a
+ * thin trunk would otherwise hand out a *bigger* target than the geometry does.
+ * The member's girth stays for the full view, where the pointer is aiming at
+ * the solid it sees.
+ */
+function slimPickShafts(
+    shafts: readonly InstancedShaft[],
+    camera: THREE.Camera,
+    viewportHeightPx: number,
+): InstancedShaft[] {
+    return shafts.map((shaft) => {
+        const perPixel = worldUnitsPerPixelAt(camera, viewportHeightPx, {
+            x: (shaft.start.x + shaft.end.x) / 2,
+            y: (shaft.start.y + shaft.end.y) / 2,
+            z: (shaft.start.z + shaft.end.z) / 2,
+        });
+        if (perPixel === null) return shaft;
+
+        const tubeDiameter = perPixel * NAVIGATION_LINE_WIDTH_PX * NAVIGATION_PICK_LINE_WIDTHS;
+        if (tubeDiameter >= shaft.diameter) return shaft;
+
+        return { ...shaft, diameter: tubeDiameter };
+    });
+}
+
+/**
+ * The line vector the simple and navigation views draw for a member. It is
+ * never the pointer target: a slim tube along the same vector is mounted at
+ * zero alpha beside it (see `slimPickShafts`), so the pointer hits the line it
+ * is aiming at rather than the member's full girth.
+ */
+function SimpleShaftLines({ shafts, color }: { shafts: readonly { start: Vec3; end: Vec3 }[]; color: string }) {
+    const viewport = useThree((state) => state.size);
     const line = React.useMemo(() => {
         if (shafts.length === 0) return null;
         const positions: number[] = [];
@@ -214,14 +319,30 @@ function SimpleShaftLines({ shafts, color }: { shafts: InstancedShaft[]; color: 
             positions.push(s.start.x, s.start.y, s.start.z, s.end.x, s.end.y, s.end.z);
         }
         if (positions.length === 0) return null;
-        const geometry = new THREE.BufferGeometry();
-        geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-        const material = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.95, depthWrite: false, depthTest: true });
-        const obj = new THREE.LineSegments(geometry, material);
+        const geometry = new LineSegmentsGeometry();
+        geometry.setPositions(positions);
+        const material = new LineMaterial({
+            // The typings take a hex number here; the material hands it to
+            // `Color`, which reads it as sRGB like the string form would.
+            color: new THREE.Color(color).getHex(),
+            linewidth: NAVIGATION_LINE_WIDTH_PX,
+            transparent: true,
+            opacity: 0.95,
+            depthWrite: false,
+            depthTest: true,
+        });
+        const obj = new LineSegments2(geometry, material);
         obj.frustumCulled = false;
         obj.renderOrder = 999;
         return obj;
     }, [shafts, color]);
+    // The width is screen-space, so the material needs the viewport it draws
+    // into. Handed over here rather than in the memo, which would rebuild the
+    // geometry on every resize.
+    React.useLayoutEffect(() => {
+        if (!line) return;
+        (line.material as LineMaterial).resolution.set(viewport.width, viewport.height);
+    }, [line, viewport.width, viewport.height]);
     React.useEffect(() => () => { line?.geometry.dispose(); (line?.material as THREE.Material)?.dispose(); }, [line]);
     if (!line || shafts.length === 0) return null;
     return <primitive object={line} />;
@@ -419,7 +540,18 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const state = useSyncExternalStore(subscribe, getSnapshot);
     const resolvedSelection = useResolvedSelectionState();
     const settings = useSyncExternalStore(subscribeToSettings, getSettingsSnapshot, getSettingsSnapshot);
-    const simpleRender = settings.debugSimpleSupportRender;
+    // The simple views size their pick tubes in screen pixels, so they need the
+    // projection and the viewport the lines are drawn into.
+    const camera = useThree((three) => three.camera);
+    const viewport = useThree((three) => three.size);
+    // The eye button's navigation view is the simple render plus cones reduced
+    // to lines, so it takes every gate below and adds the cone handling.
+    const discsOnly = settings.navigationDiscsOnly;
+    const simpleRender = settings.debugSimpleSupportRender || discsOnly;
+    // Hover and marquee highlights still reveal joints and roots in the
+    // navigation view, whose static batches strip them; only the debug simple
+    // render suppresses those overlays.
+    const debugSimple = settings.debugSimpleSupportRender;
     const raftSettings = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
     // The knots kickstands host and the roots they own, derived from the
     // registry's edges rather than a kickstand-specific store.
@@ -1701,9 +1833,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const byType = {} as Record<SupportTypeId, Map<string, SupportShaftSet>>;
 
         for (const descriptor of SUPPORT_TYPES) {
-            // Brace builds its own set (its shaft is a curve between two
-            // knots); anchor declares a shaft but builds none.
-            if (!descriptor.batchesShaft) continue;
+            if (!batchesInView('shaft', descriptor, simpleRender)) continue;
 
             // Roots are looked up by the entity's own rootId, so the shared
             // collection answers for every type; only the knot index differs,
@@ -1731,6 +1861,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         buildPlainShaftSet,
         state.roots,
         renderKnotsById,
+        simpleRender,
     ]);
 
     const segmentModelIdById = useMemo(() => {
@@ -1780,8 +1911,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     /**
      * Contact cones for the batched pass, keyed by support.
      *
-     * Which fields to read comes from the declared contact endpoints. The stump
-     * is absent: StumpRenderer draws its own cone, and only while selected.
+     * Which fields to read comes from the declared contact endpoints. A simple
+     * view also carries the types whose own renderer draws them otherwise: the
+     * renderers are all skipped there, so the batch is what is left.
      */
     const contactConesBySupport = useMemo(() => {
         const result = new Map<string, { supportId: string; modelId?: string; cones: InstancedContactCone[] }>();
@@ -1820,7 +1952,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         // A knot-hosted type resolves its model through the host when it
         // carries none of its own; the rest read it directly.
         for (const descriptor of SUPPORT_TYPES) {
-            if (!descriptor.batchesContactCones) continue;
+            if (!batchesInView('cone', descriptor, simpleRender)) continue;
             collect(descriptor.id, renderListByType[descriptor.id], (entity) => (
                 descriptor.lower.kind === 'knot'
                     ? entity.modelId ?? modelIdByKnotId.get((entity as { parentKnotId?: string }).parentKnotId ?? '')
@@ -1829,7 +1961,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [renderListByType, modelIdByKnotId, isModelVisible]);
+    }, [renderListByType, modelIdByKnotId, isModelVisible, simpleRender]);
 
     /**
      * A type's shaft joints, keyed by support. `segmentsCarryBothJoints`
@@ -2088,16 +2220,38 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     );
 
     /**
+     * The pick tubes the simple views mount at zero alpha, per batch, keyed by
+     * the batch's own shaft array. Built here rather than in the render pass so
+     * a zoom, which changes every tube's size, rebuilds them once per change.
+     */
+    const slimPickShaftsByBatch = useMemo(() => {
+        const byBatch = new Map<readonly InstancedShaft[], InstancedShaft[]>();
+        if (!simpleRender) return byBatch;
+
+        for (const groups of Object.values(sceneBatchedShaftGroupsByType)) {
+            for (const group of groups) {
+                byBatch.set(group.shafts, slimPickShafts(group.shafts, camera, viewport.height));
+            }
+        }
+        for (const group of sceneBatchedBraceShaftGroups) {
+            byBatch.set(group.shafts, slimPickShafts(group.shafts, camera, viewport.height));
+        }
+
+        return byBatch;
+    }, [camera, simpleRender, viewport.height, sceneBatchedShaftGroupsByType, sceneBatchedBraceShaftGroups]);
+
+    /**
      * Plate roots for the batched pass, grouped by model and colour.
      *
      * Both root-owning types build these identically; only the shaft-diameter
      * fallback differs, and the store the root comes from.
      */
-    const groupRootsForSceneBatch = useCallback(<T extends { id: string; modelId?: string; rootId: string; segments?: Segment[] }>(
+    const groupRootsForSceneBatch = useCallback(<T extends { id: string; modelId?: string; rootId?: string; segments?: Segment[] }>(
         typeId: SupportTypeId,
         list: readonly T[],
         selectedIds: ReadonlySet<string>,
         roots: Record<string, Roots>,
+        inlineRoot: SupportEndpoint | null,
         fallbackShaftDiameter: (entity: T) => number,
     ) => {
         if (hidePlateContactPrimitivesEffective) {
@@ -2110,26 +2264,36 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!isModelVisible(entity.modelId, entity.id)) continue;
             if (selectedIds.has(entity.id)) continue;
 
-            const root = roots[entity.rootId];
-            if (!root) continue;
+            // A type whose plate geometry is on the entity has no `Roots` row to
+            // look up; its dimensions come off the fields its endpoint declares.
+            const inline = inlineRoot
+                ? inlineRootBatchInstance(inlineRoot, entity as unknown as { id: string; modelId?: string } & Record<string, unknown>)
+                : null;
+            const root = roots[entity.rootId ?? ''];
+            if (!inline && !root) continue;
 
             const shaftDiameter = Math.max(0.001, entity.segments?.[0]?.diameter ?? fallbackShaftDiameter(entity));
             const color = resolveSceneSupportColor(entity.modelId, entity.id, typeId);
             const existing = grouped.get(color) ?? { color, roots: [] };
 
-            existing.roots.push({
-                id: root.id,
+            const instance: InstancedRoot = inline ?? {
+                id: root!.id,
                 supportId: entity.id,
                 modelId: entity.modelId,
-                basePos: applyDropToVec3Like({
-                    x: root.transform.pos.x,
-                    y: root.transform.pos.y,
-                    z: root.transform.pos.z,
-                }, entity.modelId),
-                bottomRadius: Math.max(0.001, root.diameter / 2),
+                basePos: {
+                    x: root!.transform.pos.x,
+                    y: root!.transform.pos.y,
+                    z: root!.transform.pos.z,
+                },
+                bottomRadius: Math.max(0.001, root!.diameter / 2),
                 topRadius: shaftDiameter / 2,
-                effectiveDiskHeight: Math.max(0.001, root.diskHeight),
-                coneHeight: Math.max(0, root.coneHeight),
+                effectiveDiskHeight: Math.max(0.001, root!.diskHeight),
+                coneHeight: Math.max(0, root!.coneHeight),
+            };
+
+            existing.roots.push({
+                ...instance,
+                basePos: applyDropToVec3Like(instance.basePos, entity.modelId),
             });
             grouped.set(color, existing);
         }
@@ -2147,13 +2311,19 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const sceneBatchedRootGroupsByType = useMemo(() => {
         const byType = {} as Record<SupportTypeId, Array<{ color: string; roots: InstancedRoot[] }>>;
         for (const descriptor of SUPPORT_TYPES) {
-            if (!descriptor.ownsRoot) continue;
+            // A type carrying its root as geometry on the entity (the stump's
+            // frustum) is not a root-owning one: there is no row for the plate
+            // pass to find, so its disc and axis line are read off the fields its
+            // endpoint declares.
+            const inlineRoot = descriptor.lower.kind === 'inlineRoot' ? descriptor.lower : null;
+            if (!batchesInView('root', descriptor, simpleRender)) continue;
             const list = renderListByType[descriptor.id] as readonly { id: string; modelId?: string; rootId: string; segments?: Segment[] }[];
             byType[descriptor.id] = groupRootsForSceneBatch(
                 descriptor.id,
                 list,
                 selectedOf(descriptor.id),
                 state.roots,
+                inlineRoot,
                 (entity) => {
                     const fallback = descriptor.shaftFallback.fallbackDiameterMm;
                     if (typeof fallback === 'number') return fallback;
@@ -2163,7 +2333,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             );
         }
         return byType;
-    }, [renderListByType, selectedOf, state.roots, groupRootsForSceneBatch, readNumberPath]);
+    }, [renderListByType, selectedOf, state.roots, groupRootsForSceneBatch, readNumberPath, simpleRender]);
 
     const sceneBatchedContactConeGroups = useMemo(() => {
         const grouped = new Map<string, { color: string; cones: InstancedContactCone[] }>();
@@ -2189,10 +2359,11 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             }
         };
 
-        // The types whose contact cones the shared pass draws, in registry order.
-        // `collect` skips an entity with no cone set.
+        // Every type is offered: `collect` reads the cone-set map, which already
+        // holds exactly the types the pass carries, so a second copy of that rule
+        // here is a second chance to disagree with it (the stump's contact disc
+        // went missing that way).
         for (const descriptor of SUPPORT_TYPES) {
-            if (!descriptor.batchesContactCones) continue;
             collect(
                 descriptor.id,
                 renderListByType[descriptor.id] as readonly { id: string }[],
@@ -2378,13 +2549,24 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             };
         }
 
+        // A type whose root is geometry on the entity (the stump) has no `Roots`
+        // row, so its instance comes off the fields its endpoint declares - the
+        // same mapping the batched pass uses.
+        for (const descriptor of SUPPORT_TYPES) {
+            if (descriptor.lower.kind !== 'inlineRoot') continue;
+            const entity = (state[descriptor.location.key] as Record<string, SupportEntityAny | undefined>)[supportId];
+            if (!entity) continue;
+
+            const root = inlineRootBatchInstance(descriptor.lower, entity as never);
+            if (!root) return null;
+            return { ...root, basePos: applyDropToVec3Like(root.basePos, entity.modelId) };
+        }
+
         return null;
     }, [
         raftSettings.bottomMode,
         raftSettings.thickness,
-        state.trunks,
-        state.roots,
-        state.kickstands,
+        state,
         kickstandRootsById,
         applyDropToVec3Like,
     ]);
@@ -2681,7 +2863,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         // selected without the per-type set -- see `supportIsDrawnSelected`.
         const bulkSelected = isBulkSelected(entity.id);
         const marqueePreview = marqueeHoveredSupportIdSet.has(entity.id)
-            && !typeHasBatchedMarqueeOverlay(typeId);
+            && !typeHasBatchedMarqueeOverlay(typeId, simpleRender);
         const drawnSelected = supportIsDrawnSelected({
             inSelectedSet: isSelected,
             bulkSelected,
@@ -2709,6 +2891,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         isBulkSelected,
         suppressHover,
         isInteractable,
+        simpleRender,
     ]);
 
     /** Draws one type's batched shaft groups. Six identical blocks became this. */
@@ -2717,14 +2900,32 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         groups: ReadonlyArray<{ color: string; shafts: InstancedShaft[] }>,
         options?: { detailedOnly?: boolean },
     ) => {
-        if (options?.detailedOnly && simpleRender) return null;
+        // The detailed-only groups are the brace curves. The simple view drops
+        // them; the navigation view keeps them as the lines everything else is.
+        if (options?.detailedOnly && simpleRender && !discsOnly) return null;
         // One instanced group per colour, never per model: the drop offset is
         // baked into each instance. An instance count in the key would remount
         // the mesh and reallocate its buffers on every edit.
         return groups.map((group) => (
-            <group key={`scene-${typeId}-batch:${group.color}`}>
+            <group key={`scene-${typeId}-batch:${group.color}:${simpleRender ? 'simple' : 'full'}`}>
                 {simpleRender ? (
-                    <SimpleShaftLines shafts={group.shafts} color={group.color} />
+                    <>
+                        <SimpleShaftLines shafts={group.shafts} color={group.color} />
+                        {/* The line is the picture, the pick tube is the pointer
+                            target: it stays mounted at zero alpha, sized to the
+                            line rather than to the member, so hover and click
+                            answer where the eye is. */}
+                        <InstancedShaftGroup
+                            shafts={slimPickShaftsByBatch.get(group.shafts) ?? group.shafts}
+                            color={group.color}
+                            transparent
+                            opacity={0}
+                            radialSegments={sceneBatchedShaftRadialSegments}
+                            onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
+                            onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
+                            onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                        />
+                    </>
                 ) : (
                     <InstancedShaftGroup
                         shafts={group.shafts}
@@ -2741,6 +2942,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         ));
     }, [
         simpleRender, ghostTransparent, ghostOpacityClamped, sceneBatchedShaftRadialSegments,
+        slimPickShaftsByBatch,
         isPointerInteractable, handleSceneBatchedShaftClick,
         handleSceneBatchedShaftPointerMove, handleSceneBatchedShaftPointerOut,
     ]);
@@ -3016,6 +3218,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         renderKnotsById,
         braceRenderKnotsById,
         simpleRender,
+        navigationView: discsOnly,
         hideUnselectedKnots,
         hidePlateContactPrimitivesEffective,
         ghostedBraceIdSet,
@@ -3029,6 +3232,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         renderKnotsById,
         braceRenderKnotsById,
         simpleRender,
+        discsOnly,
         hideUnselectedKnots,
         hidePlateContactPrimitivesEffective,
         ghostedBraceIdSet,
@@ -3103,6 +3307,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             <KnotGizmo />
             <BezierGizmoManager />
 
+            {/* Joints are solids with no line form, so a simple view does not draw
+                them at all. Unmounted, not faded: a zero-alpha batch left mounted
+                for picking is what kept showing joint spheres after a mode switch,
+                because the fade is a material prop on an already-built mesh. */}
             {!simpleRender && sceneBatchedJointGroups.map((group) => (
                 <group key={`scene-joint-batch:${group.color}`}>
                     <InstancedJointGroup
@@ -3118,10 +3326,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     />
                 </group>
             ))}
-            {!simpleRender && Object.entries(sceneBatchedRootGroupsByType).flatMap(([typeId, groups]) => groups.map((group) => (
+            {Object.entries(sceneBatchedRootGroupsByType).flatMap(([typeId, groups]) => groups.map((group) => (
                 <group key={`scene-${typeId}-root-batch:${group.color}`}>
                     <InstancedRootsGroup
                         roots={group.roots}
+                        diskOnly={simpleRender}
+                        discColor={discsOnly ? NAVIGATION_CONTACT_COLOR : undefined}
                         color={group.color}
                         transparent={ghostTransparent}
                         opacity={ghostOpacityClamped}
@@ -3129,12 +3339,20 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         onRootPointerMove={isPointerInteractable ? handleSceneBatchedRootPointerMove : undefined}
                         onRootPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
                     />
+                    {discsOnly && (
+                        <SimpleShaftLines
+                            shafts={group.roots.map(rootNavigationSpan)}
+                            color={group.color}
+                        />
+                    )}
                 </group>
             )))}
             {sceneBatchedContactConeGroups.map((group) => (
-                <group key={`scene-cone-batch:${group.color}`}>
+                <group key={`scene-cone-batch:${group.color}:${discsOnly ? 'discs' : 'full'}`}>
                     <InstancedContactConeGroup
                         cones={group.cones}
+                        discsOnly={discsOnly}
+                        discColor={discsOnly ? NAVIGATION_CONTACT_COLOR : undefined}
                         color={group.color}
                         transparent={ghostTransparent}
                         opacity={ghostOpacityClamped}
@@ -3142,6 +3360,15 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         onConePointerMove={isPointerInteractable ? handleSceneBatchedConePointerMove : undefined}
                         onConePointerOut={isPointerInteractable ? handleSceneBatchedConePointerOut : undefined}
                     />
+                    {discsOnly && (
+                        // The cone body the group leaves out, as the axis it
+                        // occupies: socket to contact, so it continues the
+                        // shaft's line instead of stopping short of it.
+                        <SimpleShaftLines
+                            shafts={group.cones.map(coneAxisSpan)}
+                            color={group.color}
+                        />
+                    )}
                 </group>
             ))}
 
@@ -3291,7 +3518,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 />
             )}
 
-            {!simpleRender && hoveredSupportOverlayJoints.length > 0 && hoveredSupportJointSet && (
+            {!debugSimple && hoveredSupportOverlayJoints.length > 0 && hoveredSupportJointSet && (
                 <InstancedJointGroup
                     key={`scene-joint-hover-overlay:${hoveredSupportJointSet.supportId}:${hoveredSupportOverlayJoints.length}`}
                     joints={hoveredSupportOverlayJoints}
@@ -3308,7 +3535,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 />
             )}
 
-            {!simpleRender && hoveredSupportOverlayRoots.length > 0 && (
+            {!debugSimple && hoveredSupportOverlayRoots.length > 0 && (
                 <InstancedRootsGroup
                     key={`scene-root-hover-overlay:${hoveredSupportOverlayRoots.map((root) => root.supportId ?? root.id).join(':')}:${hoveredSupportOverlayRoots.length}`}
                     roots={hoveredSupportOverlayRoots}
@@ -3354,7 +3581,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 />
             )}
 
-            {!simpleRender && marqueeHoveredOverlayJoints.length > 0 && (
+            {!debugSimple && marqueeHoveredOverlayJoints.length > 0 && (
                 <InstancedJointGroup
                     key={`scene-marquee-overlay-joints:${marqueeHoveredSupportIds.join(':')}:${marqueeHoveredOverlayJoints.length}`}
                     joints={marqueeHoveredOverlayJoints}
@@ -3371,7 +3598,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 />
             )}
 
-            {!simpleRender && marqueeHoveredOverlayRoots.length > 0 && (
+            {!debugSimple && marqueeHoveredOverlayRoots.length > 0 && (
                 <InstancedRootsGroup
                     key={`scene-marquee-overlay-roots:${marqueeHoveredSupportIds.join(':')}:${marqueeHoveredOverlayRoots.length}`}
                     roots={marqueeHoveredOverlayRoots}

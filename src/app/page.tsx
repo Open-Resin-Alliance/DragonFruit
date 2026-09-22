@@ -9934,7 +9934,7 @@ export default function Home() {
 
         ) : scene.mode === 'support' ? (
           <>
-            <SupportSidebar key="support-settings" />
+            <SupportSidebar key="support-settings" activeModelId={scene.activeModelId} />
             {autoSupportsExperimentEnabled && (
               <AutoSupportPanel
                 key="support-auto"

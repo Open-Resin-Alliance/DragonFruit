@@ -3,10 +3,10 @@
 
 import React, { useState, useEffect, useLayoutEffect, useSyncExternalStore } from 'react';
 import ReactDOM from 'react-dom';
-import { Check, Save, RotateCcw, Sparkles, Wrench, WandSparkles, Sailboat, Grid3X3, Pickaxe } from 'lucide-react';
+import { Check, Eye, Save, RotateCcw, Sparkles, Wrench, WandSparkles, Sailboat, Grid3X3, Pickaxe } from 'lucide-react';
 import { usePresetHotkeys } from '@/hotkeys/usePresetHotkeys';
 import { useLingui } from '@lingui/react';
-import { formatAutoBraceStatus } from '../autoBracing/autoBraceMessages';
+import { formatAutoBraceStatus, formatBracesCleared } from '../autoBracing/autoBraceMessages';
 import { msg } from '@lingui/core/macro';
 import {
     getSettings,
@@ -21,6 +21,7 @@ import {
     updateAutoBracingSettings,
     updateAutoSupportSettings,
     updateDevToolsEnabled,
+    updateNavigationDiscsOnly,
 } from './state';
 import {
     subscribe as subscribeToSupportState,
@@ -31,6 +32,7 @@ import {
 } from '../state';
 import { checkPresetDrift, findMatchingPresetIdForSettings, getPresetById } from './presets';
 import { createDefaultSettings, type SupportSettings } from './types';
+import { SUPPORT_PROFILE_LIMITS } from './defaults';
 import { applySettingsToSelectedSupports } from './applySettingsToSelectedSupports';
 import { areSupportGeometrySettingsEqual } from './supportSettingsCodec';
 import { captureSupportEditSnapshot, pushSupportEditHistory, type SupportEditHistorySnapshot } from '../history/supportEditHistory';
@@ -46,7 +48,7 @@ import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { SupportAnatomyPreviewSlot } from './AnatomyPreview/SupportAnatomyPreviewSlot';
 import { AutoBracingSettingsCard } from '../autoBracing/AutoBracingSettingsCard';
 import { CurveSettingsCard, getCurveSettingsSelection } from '../Curves/CurveSettingsCard';
-import { runAutoBracing } from '../autoBracing/autoBrace';
+import { clearBracesForModel, runAutoBracing } from '../autoBracing/autoBrace';
 import { shouldRunAutoBracingHotkey } from '../autoBracing/autoBracingHotkey';
 import { useActionActive } from '@/hotkeys/hotkeyStore';
 import { setAnatomyPreviewActiveSettingKey, subscribeToAnatomyPreviewState, getAnatomyPreviewState } from './AnatomyPreview/previewState';
@@ -171,7 +173,7 @@ function fieldFocusProps(
  * Main settings panel for support mode.
  * Displays presets and editable settings for tip, shaft, roots, base flare, and grid.
  */
-export function SupportSidebar() {
+export function SupportSidebar({ activeModelId = null }: { activeModelId?: string | null }) {
     const { _ } = useLingui();
     usePresetHotkeys();
     const autoBracingHotkeyActive = useActionActive('SUPPORTS', 'AUTO_BRACING');
@@ -186,6 +188,8 @@ export function SupportSidebar() {
     const autoBraceStatusTimeoutRef = React.useRef<number | null>(null);
     const autoBracingHotkeyWasActiveRef = React.useRef(false);
     const isAdaptiveConeAngle = (settings.tip.coneAngleMode ?? 'normal') === 'adaptive';
+    /** The eye button's state: contact discs solid, every member a line. */
+    const discsOnlyView = settings.navigationDiscsOnly;
     const sidebarPanelState = React.useSyncExternalStore(subscribeToSidebarPanel, getSidebarPanelSnapshot, getSidebarPanelSnapshot);
     const activePanel = sidebarPanelState.panel;
     const useAdaptiveIconCompactDisplay = isAdaptiveConeAngle && activePanel === DEFAULT_SIDEBAR_PANEL;
@@ -619,6 +623,29 @@ export function SupportSidebar() {
         }, 2800);
     }, [_]);
 
+    const handleClearBraces = React.useCallback(() => {
+        let message: string;
+        let kind: 'success' | 'warning' | 'error' = 'success';
+        try {
+            const removed = clearBracesForModel(activeModelId);
+            message = formatBracesCleared(removed, _);
+            if (removed === 0) kind = 'warning';
+        } catch (err) {
+            console.error('[SupportSidebar] Clear braces failed:', err);
+            message = _(msg`Clear All failed. Check console for details.`);
+            kind = 'error';
+        }
+
+        setAutoBraceStatus({ kind, message });
+        if (autoBraceStatusTimeoutRef.current !== null) {
+            window.clearTimeout(autoBraceStatusTimeoutRef.current);
+        }
+        autoBraceStatusTimeoutRef.current = window.setTimeout(() => {
+            setAutoBraceStatus(null);
+            autoBraceStatusTimeoutRef.current = null;
+        }, 2800);
+    }, [activeModelId, _]);
+
     useEffect(() => {
         if (shouldRunAutoBracingHotkey({
             active: autoBracingHotkeyActive,
@@ -839,6 +866,7 @@ export function SupportSidebar() {
                         onChange={(val) => updateTipProfile({ contactDiameterMm: val })}
                         step={0.1}
                         showStepper={false}
+                        {...SUPPORT_PROFILE_LIMITS.tip.contactDiameterMm}
                         {...getInputProps('tip.contactDiameterMm', compactInputClass)}
                     />
                     {unitHint('mm')}
@@ -854,6 +882,7 @@ export function SupportSidebar() {
                             onChange={(val) => updateTipProfile({ lengthMm: val })}
                             step={0.1}
                             showStepper={false}
+                            {...SUPPORT_PROFILE_LIMITS.tip.lengthMm}
                             {...getInputProps('tip.lengthMm', compactInputClass)}
                         />
                         {unitHint('mm')}
@@ -910,6 +939,7 @@ export function SupportSidebar() {
                                     aria-label={_(msg`Adaptive offset`)}
                                     title={_(msg`Adaptive offset`)}
                                     showStepper={false}
+                                    {...SUPPORT_PROFILE_LIMITS.tip.adaptiveConeAngleOffsetDeg}
                                     {...getInputProps('tip.adaptiveConeAngleOffsetDeg', compactInputClass)}
                                 />
                                 {unitHint('°')}
@@ -928,6 +958,7 @@ export function SupportSidebar() {
                             onChange={(val) => updateShaftProfile({ diameterMm: val })}
                             step={0.1}
                             showStepper={false}
+                            {...SUPPORT_PROFILE_LIMITS.shaft.diameterMm}
                             {...getInputProps('shaft.diameterMm', compactInputClass)}
                         />
                         {unitHint('mm')}
@@ -947,6 +978,7 @@ export function SupportSidebar() {
                                 onChange={(val) => updateRootsProfile({ diameterMm: val })}
                                 step={0.1}
                                 showStepper={false}
+                                {...SUPPORT_PROFILE_LIMITS.roots.diameterMm}
                                 {...getInputProps('roots.diameterMm', compactInputClass)}
                             />
                             {unitHint('mm')}
@@ -962,6 +994,7 @@ export function SupportSidebar() {
                                     onChange={(val) => updateRootsProfile({ diskHeightMm: val })}
                                     step={0.1}
                                     showStepper={false}
+                                    {...SUPPORT_PROFILE_LIMITS.roots.diskHeightMm}
                                     {...getInputProps('roots.diskHeightMm', compactInputClass)}
                                 />
                                 {unitHint('mm')}
@@ -976,6 +1009,7 @@ export function SupportSidebar() {
                                     onChange={(val) => updateRootsProfile({ coneHeightMm: val })}
                                     step={0.1}
                                     showStepper={false}
+                                    {...SUPPORT_PROFILE_LIMITS.roots.coneHeightMm}
                                     {...getInputProps('roots.coneHeightMm', compactInputClass)}
                                 />
                                 {unitHint('mm')}
@@ -998,6 +1032,7 @@ export function SupportSidebar() {
                             onChange={(val) => updateTipProfile({ contactDiameterMm: val })}
                             step={0.1}
                             showStepper={false}
+                            {...SUPPORT_PROFILE_LIMITS.tip.contactDiameterMm}
                             {...getInputProps('tip.contactDiameterMm', compactInputClass)}
                         />
                         {unitHint('mm')}
@@ -1012,6 +1047,7 @@ export function SupportSidebar() {
                             onChange={(val) => updateTipProfile({ lengthMm: val })}
                             step={0.1}
                             showStepper={false}
+                            {...SUPPORT_PROFILE_LIMITS.tip.lengthMm}
                             {...getInputProps('tip.lengthMm', compactInputClass)}
                         />
                         {unitHint('mm')}
@@ -1066,6 +1102,7 @@ export function SupportSidebar() {
                                 aria-label={_(msg`Adaptive offset`)}
                                 title={_(msg`Adaptive offset`)}
                                 showStepper={false}
+                                {...SUPPORT_PROFILE_LIMITS.tip.adaptiveConeAngleOffsetDeg}
                                 {...getInputProps('tip.adaptiveConeAngleOffsetDeg', compactInputClass)}
                             />
                             {unitHint('°')}
@@ -1083,6 +1120,7 @@ export function SupportSidebar() {
                             onChange={(val) => updateShaftProfile({ diameterMm: val })}
                             step={0.1}
                             showStepper={false}
+                            {...SUPPORT_PROFILE_LIMITS.shaft.diameterMm}
                             {...getInputProps('shaft.diameterMm', compactInputClass)}
                         />
                         {unitHint('mm')}
@@ -1097,6 +1135,7 @@ export function SupportSidebar() {
                             onChange={(val) => updateRootsProfile({ diameterMm: val })}
                             step={0.1}
                             showStepper={false}
+                            {...SUPPORT_PROFILE_LIMITS.roots.diameterMm}
                             {...getInputProps('roots.diameterMm', compactInputClass)}
                         />
                         {unitHint('mm')}
@@ -1113,6 +1152,7 @@ export function SupportSidebar() {
                             onChange={(val) => updateRootsProfile({ diskHeightMm: val })}
                             step={0.1}
                             showStepper={false}
+                            {...SUPPORT_PROFILE_LIMITS.roots.diskHeightMm}
                             {...getInputProps('roots.diskHeightMm', compactInputClass)}
                         />
                         {unitHint('mm')}
@@ -1127,6 +1167,7 @@ export function SupportSidebar() {
                             onChange={(val) => updateRootsProfile({ coneHeightMm: val })}
                             step={0.1}
                             showStepper={false}
+                            {...SUPPORT_PROFILE_LIMITS.roots.coneHeightMm}
                             {...getInputProps('roots.coneHeightMm', compactInputClass)}
                         />
                         {unitHint('mm')}
@@ -1144,7 +1185,9 @@ export function SupportSidebar() {
         <>
 
 
-        <div ref={supportSidebarAnchorRef}>
+        {/* `data-support-studio-panel` is the boundary the preset rail's
+            drag-off-to-delete gesture reads: outside it a drop means delete. */}
+        <div ref={supportSidebarAnchorRef} data-support-studio-panel>
         <Card className={expanded ? 'max-h-[calc(100dvh-var(--topbar-height)-24px)] overflow-hidden flex flex-col' : undefined}>
             <CardHeader
                 left={(
@@ -1173,6 +1216,13 @@ export function SupportSidebar() {
                 )}
                 right={(
                     <div className="inline-flex items-center gap-1">
+                        <IconButton
+                            onClick={() => updateNavigationDiscsOnly(!discsOnlyView)}
+                            className={`!p-0.5 transition-colors ${discsOnlyView ? '!bg-sky-600/25 !text-sky-300' : '!text-[var(--text-muted)] hover:!text-[var(--text-strong)] hover:!bg-[var(--surface-2)]'}`}
+                            title={discsOnlyView ? _(msg`Show full supports`) : _(msg`Contact discs only, supports as lines`)}
+                        >
+                            <Eye className="h-3.5 w-3.5" />
+                        </IconButton>
                         <IconButton
                             onClick={handleSave}
                             className={`!p-0.5 transition-colors ${saveStatus === 'saved' ? '!bg-green-600/30 !text-green-400' : saveStatus === 'error' ? '!bg-red-600/30 !text-red-400' : '!text-green-400/70 hover:!text-green-400 hover:!bg-green-600/15'}`}
@@ -1250,6 +1300,7 @@ export function SupportSidebar() {
                                                     settings={settings.autoBracing}
                                                     onChange={(partial) => updateAutoBracingSettings(partial)}
                                                     onAutoBrace={handleAutoBrace}
+                                                    onClearBraces={handleClearBraces}
                                                     status={autoBraceStatus}
                                                 />
                                             </div>
@@ -1301,6 +1352,9 @@ export function SupportSidebar() {
                                                             autoSupport: {
                                                                 ...current.autoSupport,
                                                             },
+                                                            // The navigation view is how the user is looking
+                                                            // at the forest, not part of a preset.
+                                                            navigationDiscsOnly: current.navigationDiscsOnly,
                                                         };
                                                         editSessionLatestSettingsRef.current = nextSettings;
                                                         setSettings(nextSettings);

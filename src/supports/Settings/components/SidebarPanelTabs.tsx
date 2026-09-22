@@ -17,7 +17,7 @@ type TabDef = {
 // Each id names the PAGE it opens, not a support type: `supportInfo` carries the
 // contact cone, cone angle and root settings that apply to supports generally.
 const TABS: TabDef[] = [
-    { tab: 'supportInfo', label: msg({ message: 'Support Info', comment: 'Support kind tab. One of four tabs on a narrow row; two words here, unlike the others.' }), icon: Pickaxe },
+    { tab: 'supportInfo', label: msg({ message: 'General', comment: 'Support kind tab. One of four tabs on a narrow row, so keep it to one short word.' }), icon: Pickaxe },
     { tab: 'raft', label: msg({ message: 'Raft', comment: 'Support kind tab. One of four tabs on a narrow row, so keep it to one short word.' }), icon: Sailboat },
     { tab: 'grid', label: msg({ message: 'Grid', comment: 'Support kind tab. One of four tabs on a narrow row, so keep it to one short word.' }), icon: Grid3X3 },
     { tab: 'bracing', label: msg({ message: 'Bracing', comment: 'Support kind tab. One of four tabs on a narrow row, so keep it to one short word.' }), icon: WandSparkles },
@@ -89,7 +89,7 @@ export function SidebarPanelTabs({
                         key={tab.tab}
                         type="button"
                         onClick={() => onChange(tab.tab)}
-                        className={`flex h-12 cursor-pointer items-center justify-center rounded-md border px-2 transition-all duration-150 hover:brightness-110 hover:shadow-[0_8px_18px_rgba(0,0,0,0.18)] ${showIcons ? 'gap-2' : 'gap-0'}`}
+                        className={`flex h-[34px] cursor-pointer items-center justify-center rounded-md border px-2 transition-all duration-150 hover:brightness-110 hover:shadow-[0_8px_18px_rgba(0,0,0,0.18)] ${showIcons ? 'gap-2' : 'gap-0'}`}
                         style={isActive
                             ? {
                                 background: 'color-mix(in srgb, var(--accent), var(--surface-0) 78%)',
@@ -98,14 +98,16 @@ export function SidebarPanelTabs({
                                 boxShadow: '0 0 0 1px color-mix(in srgb, var(--accent), transparent 74%) inset',
                             }
                             : {
-                                background: 'var(--surface-1)',
-                                borderColor: 'var(--border-subtle)',
+                                // A light primary tint, so an inactive tab still
+                                // reads as a card rather than a bare label.
+                                background: 'color-mix(in srgb, var(--accent) 10%, var(--surface-1))',
+                                borderColor: 'color-mix(in srgb, var(--accent) 12%, var(--border-subtle))',
                                 color: 'var(--text-muted)',
                             }}
                         title={_(tab.label)}
                     >
                         {showIcons && <Icon className="h-4 w-4 shrink-0" />}
-                        <span className="text-[13px] font-semibold leading-none">{_(tab.label)}</span>
+                        <span className="text-[14px] font-semibold">{_(tab.label)}</span>
                     </button>
                 );
             })}

@@ -6,7 +6,7 @@ import {
     parseInlineRootId,
     typesDeclaringOwnHistoryEntryWithoutUpdate,
     typesMissingContactOverride,
-    typesMissingHostPromotion, removalShapeFor, type SupportRemovalResult } from './supportTypeRegistry';
+    removalShapeFor, type SupportRemovalResult } from './supportTypeRegistry';
 import { collectCascade, groupByCollection, isReferencedOutside } from './supportCascade';
 import { pushSupportHistory } from './history/supportHistory';
 import { supportSettleFor } from './settle/seam';
@@ -3616,15 +3616,6 @@ if (missingRestore.length > 0) {
 const missingExportGroups = typesMissingExportGroupBuilder();
 if (missingExportGroups.length > 0) {
     throw new Error(`No export group builder registered for: ${missingExportGroups.join(', ')}`);
-}
-
-// A type that declares it can be replaced by a higher candidate must register
-// the code that does it. Without this the flag would be a lie that only shows up
-// as a promotion silently failing mid-run -- exactly the drift that made
-// SUPPORT_KINDS untrustworthy, where flags had no implementation to check.
-const missingPromotions = typesMissingHostPromotion();
-if (missingPromotions.length > 0) {
-    throw new Error(`Declares replacedByHigherContact but registered no promotion: ${missingPromotions.join(', ')}`);
 }
 
 // The joint-drag path pushes a type's own typed history action when it owns its

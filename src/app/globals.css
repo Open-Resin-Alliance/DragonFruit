@@ -878,6 +878,14 @@ input[type="number"].no-spinners {
   animation: spinOnceCCW 500ms ease-in-out;
 }
 
+/* While a preset is dragged off the Support Studio panel, the pointer is a
+   trash can: releasing there asks to delete it. Set on the body with
+   `!important` because the cell under the pointer sets its own cursor. */
+body.preset-drag-delete,
+body.preset-drag-delete * {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='26' height='26' viewBox='0 0 24 24' fill='none' stroke='%23ef4444' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 6h18'/%3E%3Cpath d='M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2'/%3E%3Cpath d='M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6'/%3E%3Cpath d='M10 11v6'/%3E%3Cpath d='M14 11v6'/%3E%3C/svg%3E") 8 4, not-allowed !important;
+}
+
 /* Themed custom scrollbar */
 .custom-scrollbar {
   scrollbar-width: thin;

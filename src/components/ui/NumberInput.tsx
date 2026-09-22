@@ -8,6 +8,11 @@ interface NumberInputProps extends Omit<React.InputHTMLAttributes<HTMLInputEleme
   showStepper?: boolean;
 }
 
+/** Accepts a minus, decimals, and the transitional states '-', '.' and '-.'. */
+const NUMERIC_INPUT_PATTERN = /^-?(?:\d+)?(?:\.\d{0,2})?$/;
+/** The same without the minus, for fields whose minimum is 0 or more. */
+const NON_NEGATIVE_INPUT_PATTERN = /^(?:\d+)?(?:\.\d{0,2})?$/;
+
 function parseNumericBound(bound: string | number | undefined): number | null {
   if (typeof bound === 'number' && Number.isFinite(bound)) return bound;
   if (typeof bound === 'string') {
@@ -56,7 +61,9 @@ export function NumberInput({ value, onChange, className, onBlur, showStepper = 
 
     // Allow optional leading minus, optional decimals, and up to 2 decimal places.
     // Also allows transitional editing states like '-', '.', and '-.'.
-    const numericPattern = /^-?(?:\d+)?(?:\.\d{0,2})?$/;
+    // A field whose minimum is 0 or more has no legal negative state, so the minus
+    // key never starts one there (the store clamps too, for non-typed writes).
+    const numericPattern = minBound != null && minBound >= 0 ? NON_NEGATIVE_INPUT_PATTERN : NUMERIC_INPUT_PATTERN;
     if (!numericPattern.test(newVal)) {
       return;
     }

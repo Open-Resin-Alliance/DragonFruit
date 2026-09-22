@@ -1,13 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod astar;
 mod mesh_minima;
 mod mesh_repair;
 mod mesh_refine;
 mod network;
 mod ao_vertex;
 mod overhang;
-mod sdf;
 mod spacemouse;
 mod updater_channel;
 
@@ -4489,10 +4487,6 @@ fn main() {
             mesh_repair::mesh_organic_cut_read_tenon,
             mesh_repair::mesh_repair_read_positions,
             mesh_repair::load_stl_file,
-            sdf::compute_sdf_from_staged,
-            sdf::compute_heightmap_from_staged,
-            sdf::invalidate_sdf_cache,
-            astar::run_astar_pathfinding,
             updater_channel::check_updates,
             updater_channel::perform_update,
             updater_channel::get_saved_update_channel,

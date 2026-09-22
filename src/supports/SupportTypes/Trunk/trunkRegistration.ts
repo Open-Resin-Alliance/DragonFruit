@@ -7,10 +7,6 @@ import { mergeSettingsWithDefaults, type SupportSettings } from '../../Settings/
 import { getRootById } from '../../state';
 import type { Roots, Trunk } from '../../types';
 
-// A trunk yields its grid node to a higher candidate, rehosting its own
-// attachments onto the promoted shaft. Registered here because those rules are
-// the trunk's; the grid engine only decides WHICH host yields.
-import './trunkHostPromotion';
 import './trunkProxyGeometry';
 import './trunkMarqueeShape';
 

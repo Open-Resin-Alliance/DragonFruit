@@ -4,7 +4,6 @@ import {
     getSupportTypeDescriptor,
     GRID_HOST_TYPES,
     isOriginConvertibleToTree,
-    promoteAwayHost,
     resolveSupportTypeIdOf,
     SHAFT_HOSTED_MEMBER_TYPES,
     SUPPORT_TYPES,
@@ -41,6 +40,7 @@ import {
 import { sizeParameters, presetForArea } from './parameterSizing';
 import type { ModelSizingContext } from './parameterSizing';
 import { getSettings } from '../Settings/state';
+import { memberDepartureAngleFromVerticalDeg } from '../PlacementLogic/smartPlacementSearchUtils';
 import { DEFAULT_GRID_MIN_BRANCH_ANGLE_DEG } from '../Settings/defaults';
 import { cloneSupportState, getSnapshot, setSnapshot } from '../state';
 import { draftAddEntity, draftAddPrimitive, draftCommitSupport } from './supportDraft';
@@ -65,6 +65,7 @@ import {
     GRID_HOST_FAN_RADIUS_MM,
     LEAF_FAN_MAX_ANGLE_DEG,
     CONSOLIDATION_FAN_RADIUS_MM,
+    CAVITY_FAN_RADIUS_MM,
     CONSOLIDATION_MAX_ANGLE_DEG,
     CONSOLIDATION_BRANCH_MIN_HEIGHT_MM,
     MAX_LEAF_SPAN_BEFORE_BRANCH_MM,
@@ -97,14 +98,14 @@ function memberMaxAngleFromVerticalDeg(): number {
  * read 30° while every shaft left the host at 42°. Gate the shaft, not the
  * chord.
  */
+/** The angle this branch's shaft leaves its host at. 0 when it has no joints yet. */
 function branchDepartureAngleDeg(
     branch: Branch,
     knotPos: { x: number; y: number; z: number },
 ): number {
     const firstJoint = branch.segments[0]?.topJoint?.pos;
     if (!firstJoint) return 0;
-    const lateral = Math.hypot(firstJoint.x - knotPos.x, firstJoint.y - knotPos.y);
-    return (Math.atan2(lateral, firstJoint.z - knotPos.z) * 180) / Math.PI;
+    return memberDepartureAngleFromVerticalDeg(knotPos, firstJoint);
 }
 
 // Per-entity placement logging (Trunk/Leaf/Merge lines) is OFF by default —
@@ -726,7 +727,7 @@ function placeOneCandidate(
     draft: SupportState,
     _settingsOverride: Partial<AutoSupportSettings> | undefined,
     gridHostIds?: ReadonlySet<string>,
-): { kind: PlacementOutcomeKind; draft: SupportState; rejectedReason?: RejectReason; preset?: 'detail' | 'structure' | 'anchor'; entityId?: string; stickCount?: number; fanRefusal?: FanLeafRefusal; mergeRefusal?: 'noHost' | 'rejected'; cavityFanRefusal?: FanLeafRefusal } {
+): { kind: PlacementOutcomeKind; draft: SupportState; rejectedReason?: RejectReason; preset?: 'detail' | 'structure' | 'anchor'; entityId?: string; stickCount?: number; fanRefusal?: FanLeafRefusal; mergeRefusal?: 'noHost' | 'rejected'; cavityFanRefusal?: string } {
     const supportSettings = getSettings();
     const snapshot = draft;
     let d = draft;
@@ -961,11 +962,14 @@ function placeOneCandidate(
                             }
                         } catch {}
                     }
-                } else if (leafSpanMm > MAX_LEAF_SPAN_BEFORE_BRANCH_MM && candidate.source !== 'overhang') {
-                    // Branch: requires upward angle from knot to tip. Only ISLAND
-                    // candidates branch here — overhang fanning is leaves by rule,
-                    // so an overhang single beyond leaf reach falls through and
-                    // the consolidation pass attaches it as a leaf where possible.
+                } else if (leafSpanMm > MAX_LEAF_SPAN_BEFORE_BRANCH_MM) {
+                    // Branch: requires upward angle from knot to tip. Every origin
+                    // branches here, overhang included: a leaf is a seg-less
+                    // tapered cone, so past MAX_LEAF_SPAN_BEFORE_BRANCH_MM it is a
+                    // spindly spike standing next to its trunk rather than a
+                    // support — an 11.6mm one came out of this merge path.
+                    // `buildConsolidationBranch` has always built overhang-origin
+                    // branches, so there is nothing overhang-specific about it.
                     const hDist2 = Math.sqrt(
                         (tipPos.x - knotPos.x) ** 2 + (tipPos.y - knotPos.y) ** 2,
                     );
@@ -997,9 +1001,7 @@ function placeOneCandidate(
                                 // fall through to standalone trunk
                             } else {
                                 d = draftAddPrimitive(d, 'knots', parentKnot);
-                                // Branch fallback is island-only (overhang fanning
-                                // is leaves) — the origin is always island here.
-                                branch.origin = 'island';
+                                branch.origin = candidate.source === 'overhang' ? 'overhang' : 'island';
                                 const memberTypeId = builtMemberTypeId(branch);
                                 d = draftAddEntity(d, memberTypeId, branch);
                                 const ma = (Math.atan2(hDist2, vDist2) * 180) / Math.PI;
@@ -1046,7 +1048,7 @@ function placeOneCandidate(
             // reads as a regular tree, not a "stick under the jaw". The trunk
             // build's COLLISION_WITH_MODEL means "no plate route found", not
             // "nowhere to attach".
-            let cavityFanRefusal: FanLeafRefusal | undefined;
+            let cavityFanRefusal: string | undefined;
             try {
                 const auto = getSettings().autoSupport ?? {};
                 const fan = fanLeafToHost(
@@ -1055,20 +1057,38 @@ function placeOneCandidate(
                     collectFanShaftPoints(draft),
                     gridHostIds ?? new Set<string>(),
                     `auto-cavity-fan-${candidate.id}`,
-                    Math.max(MIN_LEAF_FAN_RADIUS_MM, auto.leafFanRadiusMm ?? LEAF_FAN_RADIUS_MM),
-                    GRID_HOST_FAN_RADIUS_MM,
+                    // The widest search in the pipeline, and the same for a grid
+                    // host: the alternative to carrying this tip is a
+                    // model-to-model bridge, which leaves a second scar on the
+                    // model, and the grid forest's 2.5 mm limit is there to keep
+                    // ordinary fan leaves off it, not to strand a cavity tip.
+                    CAVITY_FAN_RADIUS_MM,
+                    CAVITY_FAN_RADIUS_MM,
                     Math.min(auto.leafFanMaxAngleDeg ?? LEAF_FAN_MAX_ANGLE_DEG, memberMaxAngleFromVerticalDeg()),
                     auto.maxAttachmentsPerTrunk ?? 12,
                     draft,
                     mesh,
                     candidate.source as SupportOrigin | undefined,
+                    'steepest',
+                    Number.POSITIVE_INFINITY,
                 );
                 if (fan.ok) {
                     const fanKind = typeWord(fan.kind);
                     logPlacement(`${fanKind} (cavity-fan) ${candidate.id} → ${typeWord(fan.hostTypeId).toLowerCase()} ${fan.hostId} dist=${fan.distMm.toFixed(1)}mm angle=${fan.angleDeg.toFixed(0)}°`);
                     return { kind: fan.kind, preset, draft: fan.draft, entityId: fan.entityId };
                 }
-                cavityFanRefusal = fan.reason;
+                // Carry the numbers: `noHost` cannot say whether there was no
+                // host at all or only a far one, and that decides whether the
+                // reach is the lever or the angle gate is.
+                const nearest = fan.nearestHostMm;
+                const steep = fan.nearestSteepMm;
+                cavityFanRefusal = nearest === undefined
+                    ? fan.reason
+                    : `${fan.reason} (nearest ${nearest.toFixed(1)}mm plan${
+                        steep === undefined
+                            ? ', no legal host'
+                            : `, nearest legal ${steep.toFixed(1)}mm @ ${(fan.steepAngleDeg ?? 0).toFixed(0)}°`
+                    })`;
             } catch {}
             const band = activeSizingBand();
             const cavityResult = buildCavityBridge(tipPos, tipNormal, candidate.modelId, mesh, band);
@@ -1181,32 +1201,6 @@ function placeOneCandidate(
             };
         }
 
-        case 'promote': {
-            // The host type's own registered promotion: the engine says which
-            // host yields, the type rehosts its attachments.
-            const promoted = promoteAwayHost(decision.hostTypeId, {
-                draft: d,
-                placed: decision.placed,
-                promotedMember: decision.promotedMember,
-                hostId: decision.hostId,
-                nodeKey: decision.nodeKey,
-                recordHistory: false, // the whole run is one undoable entry
-            });
-            if (!promoted) {
-                logPlacement(
-                    `Promote skip ${candidate.id}: ${typeWord(decision.hostTypeId).toLowerCase()} ` +
-                    `promotion failed (host ${decision.hostId})`);
-                return { kind: 'reject', rejectedReason: 'grid_reject_other', preset, draft: d };
-            }
-            d = promoted;
-            logPlacement(
-                `Promote ${typeWord(decision.hostTypeId).toLowerCase()} @ ${decision.nodeKey}: ` +
-                `${candidate.id} (Z=${candidate.zHeight.toFixed(1)}) → host ${decision.hostId}`);
-            return {
-                kind: decision.placed.typeId, preset, entityId: decision.placed.entity.id, draft: d,
-            };
-        }
-
         case 'reject': {
             const reason: RejectReason =
                 decision.reason === 'COLLISION_WITH_MODEL' ? 'grid_reject_collision' :
@@ -1248,10 +1242,9 @@ function placeOneCandidate(
  * The base states and mesh default to the live stores/model, but can be passed
  * explicitly (worker deserialization); settings are read from the live store.
  *
- * NOTE: the one store-coupled path is the grid promote (`replace_trunk`), which
- * runs the shared manual-promote machinery via a mid-run swap; the rollback
- * guard below keeps that atomic. Everything else — placement, gap-fill,
- * fanning, overhang coverage, bracing — is draft-only.
+ * NOTE: placement, gap-fill, fanning, overhang coverage and bracing all work
+ * on the local draft, so nothing here commits to the store mid-run; the
+ * rollback guard below restores the pre-run snapshot if the run throws.
  */
 export type FanShaftPoint = {
     /** The type whose shaft this sample sits on. */
@@ -1422,7 +1415,20 @@ export function collectFanShaftPoints(draft: SupportState): FanShaftPoint[] {
  */
 export type FanLeafResult =
     | { ok: true; kind: AttachmentKind; draft: SupportState; hostTypeId: SupportTypeId; hostId: string; entityId: string; distMm: number; angleDeg: number }
-    | { ok: false; reason: FanLeafRefusal };
+    | {
+        ok: false;
+        reason: FanLeafRefusal;
+        /** Plan distance to the closest same-model host sample, whatever it was.
+         *  `noHost` alone cannot say whether there was no host or only a far
+         *  one, which is the difference between widening the reach and
+         *  something else. */
+        nearestHostMm?: number;
+        /** Plan distance and angle of the closest sample that DID clear the
+         *  angle gate: set means a legal host exists but was out of reach,
+         *  unset means the angle gate was the binder. */
+        nearestSteepMm?: number;
+        steepAngleDeg?: number;
+    };
 
 /** How a fanning/cluster link picks its host among eligible shaft samples.
  *  `steepest` (placement fanning) reads as a real branch; `nearest` (chunk
@@ -1950,6 +1956,15 @@ export function fanLeafToHost(
     mesh: THREE.Mesh | undefined,
     origin?: SupportOrigin,
     hostOrder: FanHostOrder = 'steepest',
+    /** Span ceiling for the wide tier, overriding the derived reach/sin(maxAngle).
+     *  The derived cap is what keeps an ordinary fan link short, and it is the
+     *  right answer almost everywhere. A cavity rescue passes Infinity: its
+     *  alternative is a model-to-model stick whose lower contact is a second
+     *  scar on the model, so a long near-vertical branch onto a host that is
+     *  close in plan but low is still the better support. The wide tier takes
+     *  the SHORTEST legal link, so it never spends more than that geometry
+     *  forces. */
+    rescueSpanOverrideMm?: number,
 ): FanLeafResult {
     // Single pass over the shaft pool: the ELIGIBLE sample (grid hosts accept
     // only up close) that is geometrically VALID (not same-Z, within the max
@@ -1961,7 +1976,23 @@ export function fanLeafToHost(
     // it skip the adjacent pillar for a taller one up to 8mm away, which is
     // the long diagonal that reads as a stray branch.
     const candidates: Array<{ sp: FanShaftPoint; dist2: number; angleDeg: number }> = [];
+    // A second, wider tier, offered only when the first finds nothing: the
+    // same plan reach with a span the angle gate implies (reach / sin(maxAngle)
+    // — at the full reach that pins the link to exactly the legal angle, and it
+    // shrinks with the host's reach, so a grid host's rescue stays short).
+    // Without it a tip beside a TALL thin neighbour had no host at all: the
+    // samples close in 3D are the ones near the host's top, which are the
+    // shallow ones the angle gate refuses, while the steep sample that would
+    // have been legal sits further down — outside a 3D radius that counted the
+    // drop as if it were lateral. That tip stood alone as a 1:1 pillar, or
+    // crossed to the model as a stick with two contact scars instead of one.
+    // Tier 1 keeps every placement that already worked, and the look that goes
+    // with it; the wide tier only ever rescues a tip that had nothing.
+    const rescue: Array<{ sp: FanShaftPoint; dist2: number; angleDeg: number }> = [];
     let refusal: FanLeafRefusal = 'noHost';
+    let nearestHostMm = Infinity;
+    let nearestSteepMm = Infinity;
+    let steepAngleDeg = Infinity;
 
     for (const sp of shaftPoints) {
         // A host must belong to the model being supported. The shaft pool is
@@ -1975,7 +2006,15 @@ export function fanLeafToHost(
         const ddy = sp.pos.y - target.y;
         const ddz = sp.pos.z - target.z;
         const dist2 = ddx * ddx + ddy * ddy + ddz * ddz;
-        if (dist2 > limit * limit) continue;
+        const lateral2 = ddx * ddx + ddy * ddy;
+        const lateralMm = Math.sqrt(lateral2);
+        if (lateralMm < nearestHostMm) nearestHostMm = lateralMm;
+        if (lateral2 > limit * limit) continue;
+        const inReach = dist2 <= limit * limit;
+        const rescueSpanMm = rescueSpanOverrideMm
+            ?? (maxAngleDeg > 0 ? limit / Math.sin((maxAngleDeg * Math.PI) / 180) : Infinity);
+        const inRescue = dist2 <= rescueSpanMm * rescueSpanMm;
+        if (!inReach && !inRescue) continue;
 
         // The leaf must RISE: the host sample must sit below the target tip.
         // absVDist here was the bug — it let leaves attach from a sample ABOVE
@@ -1993,19 +2032,38 @@ export function fanLeafToHost(
             if (refusal === 'noHost') refusal = 'angle';
             continue;
         }
-        candidates.push({ sp, dist2, angleDeg });
+        if (lateralMm < nearestSteepMm) {
+            nearestSteepMm = lateralMm;
+            steepAngleDeg = angleDeg;
+        }
+        (inReach ? candidates : rescue).push({ sp, dist2, angleDeg });
     }
-    if (candidates.length === 0) return { ok: false, reason: refusal };
+    // Tier 1 keeps every placement that already worked, and the look that goes
+    // with it. The rescue tier answers a different question — it removes a lone
+    // pillar, it does not add material — so it takes the SHORTEST legal link
+    // (the least drop that still clears the angle) instead of the steepest,
+    // which would spend the whole rescue span on a longer member for no gain.
+    const pool = candidates.length > 0 ? candidates : rescue;
+    if (pool.length === 0) {
+        return {
+            ok: false,
+            reason: refusal,
+            nearestHostMm: Number.isFinite(nearestHostMm) ? nearestHostMm : undefined,
+            nearestSteepMm: Number.isFinite(nearestSteepMm) ? nearestSteepMm : undefined,
+            steepAngleDeg: Number.isFinite(steepAngleDeg) ? steepAngleDeg : undefined,
+        };
+    }
+    const order: FanHostOrder = candidates.length > 0 ? hostOrder : 'nearest';
 
     // Steepest first (placement fanning) or nearest first (chunk
     // consolidation); the other metric breaks ties.
-    candidates.sort((a, b) => (hostOrder === 'nearest'
+    pool.sort((a, b) => (order === 'nearest'
         ? a.dist2 - b.dist2 || a.angleDeg - b.angleDeg
         : a.angleDeg - b.angleDeg || a.dist2 - b.dist2));
 
     // Try each candidate until one clears blocked/cross/capacity/build.
     let lastBlockedReason: FanLeafRefusal | null = null;
-    for (const { sp, dist2, angleDeg } of candidates) {
+    for (const { sp, dist2, angleDeg } of pool) {
         const parentKnot = {
             id: freeKnotId(draft, knotIdPrefix),
             parentShaftId: sp.segmentId ?? sp.hostId,
@@ -2019,11 +2077,14 @@ export function fanLeafToHost(
         }
 
         const resolved = resolveSurfaceNormal(target, mesh ?? undefined);
-        // Long island spans route to branches with real shafts instead of
-        // long tapered leaf cones (spindly spikes). Overhang fanning stays
-        // leaves by rule; failed branch attempts fall through to the next
-        // candidate (a shorter span may still leaf).
-        if (origin !== 'overhang' && Math.sqrt(dist2) > MAX_LEAF_SPAN_BEFORE_BRANCH_MM) {
+        // Long spans route to branches with real shafts instead of long tapered
+        // leaf cones (spindly spikes), for EVERY origin. Overhang fanning used to
+        // stay a leaf past this threshold, which is how an 11.6mm cone got built;
+        // the leaf's own rule — past ~6mm it stands next to its trunk rather than
+        // supporting it — does not care which surface the tip touches. Failed
+        // branch attempts fall through to the next candidate (a shorter span may
+        // still leaf).
+        if (Math.sqrt(dist2) > MAX_LEAF_SPAN_BEFORE_BRANCH_MM) {
             try {
                 const band = activeSizingBand();
                 const built = buildBranchData({
@@ -2051,7 +2112,7 @@ export function fanLeafToHost(
                         continue;
                     }
                     const next = draftAddPrimitive(draft, 'knots', parentKnot);
-                    built.branch.origin = 'island';
+                    built.branch.origin = origin === 'overhang' ? 'overhang' : 'island';
                     const memberTypeId = builtMemberTypeId(built.branch);
                     return {
                         ok: true,
@@ -2301,7 +2362,7 @@ export function forestReportToText(report: ForestReport): string {
             const fanStr = fanEntries.length > 0 ? fanEntries.map(([k, v]) => `${k}=${v}`).join(', ') : 'none';
             const mergeStr = mergeEntries.length > 0 ? mergeEntries.map(([k, v]) => `${k}=${v}`).join(', ') : 'none';
             const fanMaxDeg = getSettings().autoSupport?.leafFanMaxAngleDeg ?? LEAF_FAN_MAX_ANGLE_DEG;
-            lines.push(`  Fan refusals: ${fanStr} (noHost=too far >5mm/2.5mm grid, angle=>${Math.min(fanMaxDeg, memberMaxAngleFromVerticalDeg())}° too flat, sameZ|cross|blocked|capacity=host full)`);
+            lines.push(`  Fan refusals: ${fanStr} (noHost=too far in plan >5mm/2.5mm grid, angle=>${Math.min(fanMaxDeg, memberMaxAngleFromVerticalDeg())}° too flat, sameZ|cross|blocked|capacity=host full)`);
             const conEntries = Object.entries(d.consolidationRefusals ?? {}).filter(([, v]) => v);
             if (conEntries.length > 0) {
                 const conStr = conEntries.map(([k, v]) => `${k}=${v}`).join(', ');
@@ -3156,9 +3217,9 @@ export function computeAutoSupportPlan(
             `Overhang coverage: ${overhangSupportsPlaced} additional branches placed for flat surfaces.`);
     }
     } catch (e) {
-        // Safety net: the promote path can mid-run swap the store, so restore
-        // the pre-run snapshots on failure. Everything else never commits, so
-        // this is the only path that can leave anything behind.
+        // Safety net: no path here commits mid-run, so the live store still
+        // holds the pre-run snapshot — restore it explicitly and report the
+        // failure rather than letting a half-built plan escape.
         console.error(LOG_PREFIX,
             `Auto-support failed mid-run — rolling back.`,
             e instanceof Error ? e.message : String(e));

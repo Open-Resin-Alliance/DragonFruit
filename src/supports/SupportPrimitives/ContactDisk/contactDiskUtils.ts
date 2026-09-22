@@ -19,6 +19,12 @@ function clamp01(value: number): number {
  * Logic:
  * - Ideally perpendicular (Cone Axis aligned with Surface Normal) -> Min thickness.
  * - Steeper angle -> Thicker disk to prevent cone body from clipping into wall.
+ * - Never shorter than the round tip's radius: the ball is centered on the nib's
+ *   top face, so a shorter nib leaves the ball's underside below the flat contact
+ *   face, poking out through it into the model. Only the nib's diameter used to
+ *   follow the contact diameter, so that gap grew with the contact diameter —
+ *   the floor grows the nib in length with it. Matches the twig rule
+ *   (`twigDiskJointStandoff`), which keeps its joint sphere off the model.
  */
 export function calculateDiskThickness(
     surfaceNormal: Vec3,
@@ -31,7 +37,12 @@ export function calculateDiskThickness(
     }
 
     const threshold = profile.standoffAngleThreshold ?? DEFAULT_STANDOFF_ANGLE_THRESHOLD_RAD;
-    const minThickness = profile.diskThicknessMm ?? DEFAULT_MIN_DISK_THICKNESS_MM;
+    // The round tip's own radius is a floor on the nib: the ball's underside is
+    // inside the nib only while the nib is at least this tall.
+    const minThickness = Math.max(
+        profile.diskThicknessMm ?? DEFAULT_MIN_DISK_THICKNESS_MM,
+        Math.max(0, profile.contactDiameterMm ?? 0) / 2,
+    );
     
     // SMART LEGACY FIX: 
     // If maxStandoff is exactly 1.5 (old default), clamp it to 0.35.

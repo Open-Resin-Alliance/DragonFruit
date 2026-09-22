@@ -10,9 +10,8 @@ import type { Knot, Roots, SupportState } from '../types';
  * arm of the store's `addSupportEntity` (state.ts), minus the settings-code-hex
  * cache and the `notify()` side effects.
  *
- * The placement phase only ever ADDS entities (the one replacement case uses
- * `applyTrunkReplacement` via a store swap), so these two cover every mutation
- * the plan phase needs.
+ * The placement phase only ever ADDS entities, so these two cover every
+ * mutation the plan phase needs.
  */
 
 /**

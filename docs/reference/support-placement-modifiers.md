@@ -14,6 +14,15 @@ In support mode, held modifier keys decide *which kind* of support a click place
 
 Bindings are configurable — these are the defaults from `SUPPORTS` in `src/hotkeys/hotkeyConfig.ts` (`BRANCH_PLACEMENT`, `LEAF_PLACEMENT`, `KICKSTAND_PLACEMENT`). A contact below 5 mm gets an [stump](support-anatomy/stump.md) rather than a trunk, decided by height, not by modifier.
 
+!!! note "A bridge you aim by hand is not held to the cant caps"
+    Two model clicks under `Alt` build a [twig](support-anatomy/twig.md) when the
+    contacts are within `stickVsTwigCutoffMm` (5 mm by default) and a
+    [stick](support-anatomy/stick.md) beyond it, so the span picks the type. The
+    cant caps those types declare (45° and 20° from vertical) apply to the
+    automatic passes only; a hand-aimed bridge is built at whatever cant you aim
+    it, since both contacts are yours and the preview shows the shape. A
+    collision still refuses it.
+
 !!! warning "On macOS these are the literal keys, not Cmd"
     Everywhere else in the app a binding that declares `ctrl` is matched against
     the *primary modifier*, which `getPrimaryModifierKey()` maps to Cmd on macOS

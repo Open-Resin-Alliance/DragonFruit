@@ -224,23 +224,28 @@ function runSignature(gridEnabled: boolean): RunSignature {
  * `placed` is what the ladder decided, one number per `SUPPORT_TYPES` entry in
  * registry order; `inStore` is what survived the resize and consolidation
  * passes. Both move under a rewrite, so both are pinned.
+ *
+ * Recorded on THIS branch's placement policy, which differs from dev's on two
+ * counts: grid mode attaches to the trunk already standing on a node instead of
+ * standing a second one (so fewer trunks, the tips becoming leaves), and a long
+ * overhang fan link becomes a branch rather than staying a leaf.
  */
 const RECORDED = {
     /** Grid enabled: candidates resolve through `decideGridPlacement`, branch-heavy. */
     gridOn: {
-        placed: [49, 151, 0, 198, 0, 0, 1, 0],
+        placed: [28, 151, 21, 197, 0, 0, 1, 0],
         rejectedCandidates: 0,
         changed: true,
-        inStore: { trunks: 28, branches: 172, leaves: 0, twigs: 198, sticks: 0, anchors: 1, knots: 172, roots: 28 },
-        forest: { hostCount: 28, leafCount: 0, branchCount: 172, bareHosts: 2 },
+        inStore: { trunks: 28, branches: 151, leaves: 21, twigs: 197, sticks: 0, anchors: 1, knots: 172, roots: 28 },
+        forest: { hostCount: 28, leafCount: 21, branchCount: 151, bareHosts: 2 },
     },
     /** Grid disabled: candidates resolve through the merge/trunk/cavity ladder, leaf-heavy. */
     gridOff: {
-        placed: [73, 0, 127, 197, 0, 0, 1, 0],
+        placed: [73, 1, 126, 197, 0, 0, 1, 0],
         rejectedCandidates: 0,
         changed: true,
-        inStore: { trunks: 73, branches: 0, leaves: 127, twigs: 197, sticks: 0, anchors: 1, knots: 127, roots: 73 },
-        forest: { hostCount: 73, leafCount: 127, branchCount: 0, bareHosts: 2 },
+        inStore: { trunks: 73, branches: 1, leaves: 126, twigs: 197, sticks: 0, anchors: 1, knots: 127, roots: 73 },
+        forest: { hostCount: 73, leafCount: 126, branchCount: 1, bareHosts: 2 },
     },
 } as const;
 

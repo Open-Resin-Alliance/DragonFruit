@@ -20,6 +20,7 @@ const EMPTY_CONTEXT: DetailRendererContext = {
     renderKnotsById: {},
     braceRenderKnotsById: {},
     simpleRender: false,
+    navigationView: false,
     hideUnselectedKnots: false,
     hidePlateContactPrimitivesEffective: false,
     ghostedBraceIdSet: new Set(),
@@ -71,11 +72,34 @@ test('simplified render skips every type that does not draw its own simplified f
 });
 
 test('an entry keeps its own skip when simplified render is off', () => {
-    // The wrapper replaces `skip` outright, so this pins that it only does so
-    // under simplified render: a selected support still draws normally.
+    // The seam only adds its own reason to skip, and only under simplified
+    // render, so this pins that a selected support still draws normally.
     const entries = detailRenderersFor(EMPTY_CONTEXT);
     const entity = { id: 'probe' } as never;
     const drawsWhenSelected = SUPPORT_TYPES.filter((descriptor) =>
         entries[descriptor.id]?.skip?.({ entity, isSelected: true, isBatchable: false }) === false);
     assert.ok(drawsWhenSelected.length > 0, 'a selected support still draws when not simplified');
+});
+
+test('the navigation view keeps a selected support whole while the rest is lines', () => {
+    // Hiding the simple views' solids structurally took this exception with it,
+    // so a selected support vanished instead of showing the primitives it was
+    // selected to inspect. Every type draws when it is the selection; nothing
+    // else in the view does.
+    const entity = { id: 'probe' } as never;
+    const entries = detailRenderersFor({ ...EMPTY_CONTEXT, simpleRender: true, navigationView: true });
+    for (const descriptor of SUPPORT_TYPES) {
+        const entry = entries[descriptor.id];
+        assert.ok(entry, `${descriptor.id} resolves an entry`);
+        assert.equal(
+            entry.skip?.({ entity, isSelected: true, isBatchable: false }),
+            false,
+            `${descriptor.id} must be drawn when it is selected in the navigation view`,
+        );
+        assert.equal(
+            entry.skip?.({ entity, isSelected: false, isBatchable: false }),
+            true,
+            `${descriptor.id} must stay lines when it is not selected`,
+        );
+    }
 });

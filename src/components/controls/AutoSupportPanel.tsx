@@ -107,9 +107,9 @@ const PRESETS = {
 /** Density tiers on the quick-select row. Module level so React Compiler cannot
  *  rename anything the Lingui macro depends on. */
 const PRESET_LABELS: Record<keyof typeof PRESETS, MessageDescriptor> = {
-  light: msg({ message: 'light', comment: 'Auto-support density tier, rendered uppercase on a narrow button next to "medium" and "heavy".' }),
-  medium: msg({ message: 'medium', comment: 'Auto-support density tier, rendered uppercase on a narrow button next to "light" and "heavy".' }),
-  heavy: msg({ message: 'heavy', comment: 'Auto-support density tier, rendered uppercase on a narrow button next to "light" and "medium".' }),
+  light: msg({ message: 'light', comment: 'Auto-support density tier, rendered capitalised on a narrow button next to "medium" and "heavy".' }),
+  medium: msg({ message: 'medium', comment: 'Auto-support density tier, rendered capitalised on a narrow button next to "light" and "heavy".' }),
+  heavy: msg({ message: 'heavy', comment: 'Auto-support density tier, rendered capitalised on a narrow button next to "light" and "medium".' }),
 };
 
 function SliderRow({ knob, draft, setDraft }: { knob: KnobDef; draft: AutoSupportSettings; setDraft: React.Dispatch<React.SetStateAction<AutoSupportSettings>> }) {
@@ -129,6 +129,14 @@ function SliderRow({ knob, draft, setDraft }: { knob: KnobDef; draft: AutoSuppor
     </div>
   );
 }
+
+// Active treatment for the density tier row, matching the bracing card's
+// quick-pick selector so the two panels read as one system.
+const TIER_ACTIVE_STYLE: React.CSSProperties = {
+  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
+  background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)',
+  color: 'var(--text-strong)',
+};
 
 export function AutoSupportPanel({ islands, hasGeometry, activeModelId, onBeforeRun }: AutoSupportPanelProps) {
   const { _ } = useLingui();
@@ -471,24 +479,23 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, onBefore
               </div>
             </div>
 
-            {/* Preset quick-select */}
-            <div className="rounded-md border p-2" style={SECTION_CARD}>
-              <div className="grid grid-cols-3 gap-1.5">
-                {(['light', 'medium', 'heavy'] as const).map((key) => (
-                  <button key={key} type="button"
-                    onClick={() => {
-                      // Density + sizing tier only — the trunk preset
-                      // (manual placement) is deliberately not touched.
-                      updateAutoSupportSettings(PRESETS[key]);
-                      setActivePreset(key);
-                    }}
-                    className="h-8 rounded-md border text-[11px] font-semibold capitalize transition-colors"
-                    style={activePreset === key
-                      ? { borderColor: 'color-mix(in srgb, var(--accent), white 10%)', background: 'color-mix(in srgb, var(--accent), var(--surface-1) 84%)', color: 'var(--accent)' }
-                      : { borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
-                  >{_(PRESET_LABELS[key])}</button>
-                ))}
-              </div>
+            {/* Density tier quick-select — the bracing card's quick-pick button
+                style, unboxed and on the card surface: the row sits directly on
+                the panel, so the plain secondary surface is what matches the cards
+                around it (the bracing row keeps its darker inset inside its card). */}
+            <div className="grid grid-cols-3 gap-1.5">
+              {(['light', 'medium', 'heavy'] as const).map((key) => (
+                <button key={key} type="button"
+                  onClick={() => {
+                    // Density + sizing tier only — the trunk preset
+                    // (manual placement) is deliberately not touched.
+                    updateAutoSupportSettings(PRESETS[key]);
+                    setActivePreset(key);
+                  }}
+                  className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] capitalize sm:text-[11px]"
+                  style={activePreset === key ? TIER_ACTIVE_STYLE : undefined}
+                >{_(PRESET_LABELS[key])}</button>
+              ))}
             </div>
 
             {/* Sizing debug */}

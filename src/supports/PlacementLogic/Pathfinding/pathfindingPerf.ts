@@ -79,24 +79,16 @@ const DEFAULT_CONFIG: PerfConfig = {
     maxHistoryFrames: 120,
     thresholds: {
         'trunk:build': 70,
-        'trunk:v2-placement': 65,
-        'trunk:v2-setup': 30,
+        'trunk:v3-placement': 20,
         'trunk:build-from-placement': 10,
-        'trunk:cone-rescue': 55,
-        'trunk:cone-rescue:jointed': 50,
-        'trunk:cone-rescue:seed': 20,
-        'trunk:preflight': 5,
-        'trunk:pre-a-star': 5,
-        'trunk:astar': 25,
-        'trunk:astar:wide': 25,
-        'branch:build': 30,
         'branch:cone-search': 18,
-        'branch:cavity-stick': 12,
-        'branch:collision': 12,
-        'grid:decision': 30,
-        'grid:attachment-search': 15,
-        'grid:collision-check': 10,
+        'grid:attach-search': 15,
+        'grid:branch-build': 15,
+        'grid:trunk-collision': 10,
         'hover:total': 50,
+        'hover:trunk-build': 40,
+        'hover:grid-decision': 30,
+        'hover:cavity-stick': 12,
     },
     defaultThresholdMs: 16, // one frame at 60fps
     logSpikes: false,
@@ -322,7 +314,7 @@ export { configurePerf as setPathfindingPerfConfig };
  *   __dfPerf.report()        // full PerfReport object
  *   __dfPerf.spikes(false)   // mute spike warnings
  *   __dfPerf.spikes(true)    // re-enable spike warnings
- *   __dfPerf.threshold('trunk:astar', 50)  // raise threshold
+ *   __dfPerf.threshold('trunk:v3-placement', 35)  // raise threshold
  *   __dfPerf.reset()         // clear history
  */
 export function installPerfConsoleAPI(): void {

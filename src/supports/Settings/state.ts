@@ -7,6 +7,15 @@
 
 import { SupportSettings, createDefaultSettings } from './types';
 import {
+    DEFAULT_ROOTS_CONE_HEIGHT_MM,
+    DEFAULT_ROOTS_DIAMETER_MM,
+    DEFAULT_ROOTS_DISK_HEIGHT_MM,
+    DEFAULT_SHAFT_DIAMETER_MM,
+    DEFAULT_TIP_CONTACT_DIAMETER_MM,
+    DEFAULT_TIP_LENGTH_MM,
+    SUPPORT_PROFILE_LIMITS,
+} from './defaults';
+import {
     applyAutoBracingSettingsPatch,
     normalizeAutoBracingSettings,
 } from '../autoBracing/settings';
@@ -25,6 +34,39 @@ function coerceNumber(value: unknown, fallback: number): number {
 
 function coerceBoolean(value: unknown, fallback: boolean): boolean {
     return typeof value === 'boolean' ? value : fallback;
+}
+
+/** Clamp a field to its `SUPPORT_PROFILE_LIMITS` range; non-finite falls back. */
+function clampToRange(value: unknown, fallback: number, range: { min: number; max: number }): number {
+    return Math.min(range.max, Math.max(range.min, coerceNumber(value, fallback)));
+}
+
+/**
+ * Apply the General tab's field limits to a profile set. Runs on every write —
+ * including presets, imported scenes and plugin calls — so no path can hand a
+ * negative diameter or length to the geometry builders.
+ */
+function clampProfileFields(settings: SupportSettings): SupportSettings {
+    return {
+        ...settings,
+        tip: {
+            ...settings.tip,
+            contactDiameterMm: clampToRange(settings.tip.contactDiameterMm, DEFAULT_TIP_CONTACT_DIAMETER_MM, SUPPORT_PROFILE_LIMITS.tip.contactDiameterMm),
+            lengthMm: clampToRange(settings.tip.lengthMm, DEFAULT_TIP_LENGTH_MM, SUPPORT_PROFILE_LIMITS.tip.lengthMm),
+            // 30 mirrors the fallback the General tab uses when the offset is unset.
+            adaptiveConeAngleOffsetDeg: clampToRange(settings.tip.adaptiveConeAngleOffsetDeg, 30, SUPPORT_PROFILE_LIMITS.tip.adaptiveConeAngleOffsetDeg),
+        },
+        shaft: {
+            ...settings.shaft,
+            diameterMm: clampToRange(settings.shaft.diameterMm, DEFAULT_SHAFT_DIAMETER_MM, SUPPORT_PROFILE_LIMITS.shaft.diameterMm),
+        },
+        roots: {
+            ...settings.roots,
+            diameterMm: clampToRange(settings.roots.diameterMm, DEFAULT_ROOTS_DIAMETER_MM, SUPPORT_PROFILE_LIMITS.roots.diameterMm),
+            diskHeightMm: clampToRange(settings.roots.diskHeightMm, DEFAULT_ROOTS_DISK_HEIGHT_MM, SUPPORT_PROFILE_LIMITS.roots.diskHeightMm),
+            coneHeightMm: clampToRange(settings.roots.coneHeightMm, DEFAULT_ROOTS_CONE_HEIGHT_MM, SUPPORT_PROFILE_LIMITS.roots.coneHeightMm),
+        },
+    };
 }
 
 function mergeWithDefaults(settings: SupportSettings): SupportSettings {
@@ -50,7 +92,7 @@ function mergeWithDefaults(settings: SupportSettings): SupportSettings {
         ...((settings as any).autoBracing ?? {}),
     });
 
-    return {
+    return clampProfileFields({
         ...defaults,
         ...settings,
         tip: mergedTip,
@@ -72,7 +114,8 @@ function mergeWithDefaults(settings: SupportSettings): SupportSettings {
         devToolsEnabled: settings.devToolsEnabled !== undefined ? settings.devToolsEnabled : defaults.devToolsEnabled,
         devTools: settings.devTools ? { ...defaults.devTools, ...settings.devTools } : defaults.devTools,
         debugSimpleSupportRender: typeof settings.debugSimpleSupportRender === 'boolean' ? settings.debugSimpleSupportRender : defaults.debugSimpleSupportRender,
-    };
+        navigationDiscsOnly: typeof settings.navigationDiscsOnly === 'boolean' ? settings.navigationDiscsOnly : defaults.navigationDiscsOnly,
+    });
 }
 
 type SettingsListener = () => void;
@@ -148,36 +191,33 @@ export function updateTipProfile(tip: Partial<SupportSettings['tip']>): void {
     if (mergedTip.bodyDiameterMm > currentSettings.shaft.diameterMm) {
         mergedTip.bodyDiameterMm = currentSettings.shaft.diameterMm;
     }
-    currentSettings = {
+    currentSettings = clampProfileFields({
         ...currentSettings,
         tip: mergedTip,
-    };
+    });
     notify();
 }
 
 export function updateShaftProfile(shaft: Partial<SupportSettings['shaft']>): void {
-    const nextShaft = { ...currentSettings.shaft, ...shaft };
-    const nextDiameter = shaft.diameterMm;
-    const shouldSyncTipBodyDiameter = typeof nextDiameter === 'number' && Number.isFinite(nextDiameter) && nextDiameter > 0;
-
-    currentSettings = {
+    // Clamp first, then mirror the accepted diameter onto the cone body: clamping
+    // after the sync would leave a body diameter wider than the trunk.
+    const next = clampProfileFields({
         ...currentSettings,
-        shaft: nextShaft,
-        tip: shouldSyncTipBodyDiameter
-            ? {
-                ...currentSettings.tip,
-                bodyDiameterMm: nextDiameter,
-            }
-            : currentSettings.tip,
-    };
+        shaft: { ...currentSettings.shaft, ...shaft },
+    });
+    const shouldSyncTipBodyDiameter = typeof shaft.diameterMm === 'number' && Number.isFinite(shaft.diameterMm) && shaft.diameterMm > 0;
+
+    currentSettings = shouldSyncTipBodyDiameter
+        ? { ...next, tip: { ...next.tip, bodyDiameterMm: next.shaft.diameterMm } }
+        : next;
     notify();
 }
 
 export function updateRootsProfile(roots: Partial<SupportSettings['roots']>): void {
-    currentSettings = {
+    currentSettings = clampProfileFields({
         ...currentSettings,
         roots: { ...currentSettings.roots, ...roots },
-    };
+    });
     notify();
 }
 
@@ -249,6 +289,15 @@ export function updateDebugSimpleSupportRender(enabled: boolean): void {
     currentSettings = {
         ...currentSettings,
         debugSimpleSupportRender: enabled,
+    };
+    notify();
+}
+
+/** The eye button in the Support Studio header: contact discs only, lines for the rest. */
+export function updateNavigationDiscsOnly(enabled: boolean): void {
+    currentSettings = {
+        ...currentSettings,
+        navigationDiscsOnly: enabled,
     };
     notify();
 }

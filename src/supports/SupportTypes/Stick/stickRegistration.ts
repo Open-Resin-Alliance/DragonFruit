@@ -13,7 +13,9 @@ import './stickMarqueeShape';
 //
 // The verticality gate belongs here rather than at the caller: a stick that
 // cants too far is not a bridge, and refusing to build one is a fact about
-// sticks, not about whoever asked for one.
+// sticks, not about whoever asked for one. The exception is the manual
+// placement that asked for it by hand -- an aim the user can see in the
+// preview, so the cant is theirs to accept. The auto pass keeps the gate.
 registerContactBridgeBuilder('stick', (request) => {
     const { stick, error } = buildStick({
         modelId: request.modelId,
@@ -25,7 +27,7 @@ registerContactBridgeBuilder('stick', (request) => {
         tipContactDiameterMm: request.tipContactDiameterMm,
         mesh: request.mesh as THREE.Mesh | undefined,
     });
-    if (!stick || !isShaftVerticalEnough(stick)) return null;
+    if (!stick || !(request.manual || isShaftVerticalEnough(stick))) return null;
     return { entity: stick, error };
 });
 

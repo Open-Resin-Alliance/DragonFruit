@@ -104,7 +104,10 @@ export function ModelAttachedSupportLayer({
   const useUltraLazySupports = mode !== 'support';
   const proxyPointerSelectionEnabled = mode === 'prepare' && !navigationLodActive && !disableSelectionAndHover && !passive;
   const proxyIncludeDetailedPrimitives = supportProxyIncludeDetailedPrimitives;
-  const simpleRender = React.useSyncExternalStore(subscribeToSettings, getSettings, getSettings).debugSimpleSupportRender;
+  const settingsForSimpleRender = React.useSyncExternalStore(subscribeToSettings, getSettings, getSettings);
+  // The navigation view (the Studio's eye button) is a line view too, so the
+  // raft goes with the shafts: it is the biggest solid thing on screen.
+  const simpleRender = settingsForSimpleRender.debugSimpleSupportRender || settingsForSimpleRender.navigationDiscsOnly;
   const hideRaftPrimitivesEffective = hideRaftPrimitives || simpleRender;
 
   return (

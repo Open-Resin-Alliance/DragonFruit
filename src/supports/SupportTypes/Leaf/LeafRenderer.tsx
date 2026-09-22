@@ -3,17 +3,17 @@ import { useThree } from '@react-three/fiber';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { getSnapshot } from '../../state';
 import { updateSupportEntity } from '../../supportTypeRegistry';
-import { Leaf, Knot } from '../../types';
-import { registerSupportDetailRenderer } from '../../detailRenderer/seam';
-import { ContactConeRenderer, getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
+import { Leaf, Knot, Vec3 } from '../../types';
+import { registerSupportDetailRenderer, simpleViewHidesDetail } from '../../detailRenderer/seam';
+import { ContactConeRenderer, getFinalSocketPosition, type ContactCone } from '../../SupportPrimitives/ContactCone';
 import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
-import { isPrimaryPointerPress, startContactDiskDragSession, type ContactDiskDragHit, type ContactDiskDragSession } from '../../SupportPrimitives/ContactDisk/contactDiskDragController';
+import { isPrimaryPointerPress, type ContactDiskDragHit } from '../../SupportPrimitives/ContactDisk/contactDiskDragController';
 import { handleSupportClick } from '../../interaction/clickHandlers';
 import { getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByModifierState } from '../../interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
 import { useHighlight } from '../../interaction/useHighlight';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
 import { branchPlacementStore } from '../Branch/branchPlacementState';
-import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
+import { useContactDiskDragSession } from '../useContactDiskDragSession';
 
 interface LeafRendererProps {
     leaf: Leaf;
@@ -76,19 +76,11 @@ export const LeafRenderer = React.memo(function LeafRenderer({
     const highDetailPrimitiveSegments = 24;
     const lowDetailPrimitiveSegments = 8;
     const useLowDetailPrimitives = !isSelected && !propHovered;
-    const dragSessionRef = React.useRef<ContactDiskDragSession | null>(null);
-    const liveDragConeRef = React.useRef<import('../../SupportPrimitives/ContactCone/types').ContactCone | null>(null);
-    const beforeHistoryRef = React.useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
-    const [, setDragTick] = React.useState(0);
-
-    React.useEffect(() => {
-        return () => {
-            dragSessionRef.current?.stop();
-            dragSessionRef.current = null;
-            liveDragConeRef.current = null;
-            beforeHistoryRef.current = null;
-        };
-    }, []);
+    // The entity names its own type; the store stamps it on every write.
+    const typeId = leaf.typeId ?? 'leaf';
+    // The socket the cone pivots around is fixed at pointer-down, so a drag
+    // across a re-hit surface cannot re-socket the leaf mid-flight.
+    const dragSocketAnchorRef = React.useRef<Vec3 | undefined>(undefined);
 
     const { pickRef, visuals } = useHighlight({
         id: leaf.id,
@@ -129,56 +121,42 @@ export const LeafRenderer = React.memo(function LeafRenderer({
         handleSupportClick(e, leaf.id, !!isInteractable);
     };
 
+    const tipDrag = useContactDiskDragSession<ContactCone>(typeId, {
+        onHit: ({ point, surfaceNormal, mesh }: ContactDiskDragHit) => {
+            const latest = getSnapshot().leaves[leaf.id];
+            const socketAnchor = dragSocketAnchorRef.current;
+            if (!latest?.contactCone || !socketAnchor) return null;
+            return recomputeContactConeForMovedDisk(latest.contactCone, point, surfaceNormal, socketAnchor, mesh);
+        },
+        onCommit: (nextCone) => {
+            const latest = getSnapshot().leaves[leaf.id];
+            // The one-argument form reads the type off the entity, so this does not
+            // name the type to write it.
+            if (latest) updateSupportEntity({ ...latest, contactCone: nextCone });
+        },
+    });
+
     const handleContactDiskHudPointerDown = React.useCallback((e: LeafRendererPointerEvent) => {
         if (!isSelected || !leaf.contactCone) return;
         if (!isPrimaryPointerPress(e)) return;
 
-        const socketAnchor = getFinalSocketPosition(leaf.contactCone);
+        dragSocketAnchorRef.current = getFinalSocketPosition(leaf.contactCone);
 
-        beforeHistoryRef.current = captureSupportEditSnapshot();
-
-        dragSessionRef.current?.stop();
-        dragSessionRef.current = startContactDiskDragSession({
-            camera,
-            domElement: gl.domElement,
-            scene,
-            initialEvent: e,
+        tipDrag.start({
+            event: e, camera, domElement: gl.domElement, scene,
             modelId: leaf.modelId,
-            placementSurface: leaf.contactCone?.placementSurface,
-            onHit: ({ point, surfaceNormal, mesh }: ContactDiskDragHit) => {
-                const latest = getSnapshot().leaves[leaf.id];
-                if (!latest?.contactCone) return;
-                liveDragConeRef.current = recomputeContactConeForMovedDisk(latest.contactCone, point, surfaceNormal, socketAnchor, mesh);
-                setDragTick(t => t + 1);
-            },
-            onEnd: () => {
-                if (liveDragConeRef.current) {
-                    const latest = getSnapshot().leaves[leaf.id];
-                    if (latest) {
-                        // The one-argument form reads the type off the entity, so this does not
-// name the type to write it.
-updateSupportEntity({ ...latest, contactCone: liveDragConeRef.current });
-                        if (beforeHistoryRef.current) {
-                            pushSupportEditHistory('Move leaf tip', beforeHistoryRef.current, captureSupportEditSnapshot());
-                        }
-                    }
-                }
-                liveDragConeRef.current = null;
-                dragSessionRef.current = null;
-                beforeHistoryRef.current = null;
-            },
+            placementSurface: leaf.contactCone.placementSurface,
         });
-    }, [camera, gl.domElement, isSelected, leaf.id, leaf.contactCone, leaf.modelId, scene]);
+    }, [camera, gl.domElement, isSelected, leaf.contactCone, leaf.modelId, scene, tipDrag]);
 
     const handleContactDiskHudPointerUp = React.useCallback(() => {
-        dragSessionRef.current?.stop();
-        dragSessionRef.current = null;
-    }, []);
+        tipDrag.stop();
+    }, [tipDrag]);
     return (
         <group onClick={handleClick}>
             <group ref={pickRef}>
                 {(() => {
-                    const effectiveCone = liveDragConeRef.current ?? leaf.contactCone;
+                    const effectiveCone = tipDrag.preview ?? leaf.contactCone;
                     if (!effectiveCone || deferContactConesToSceneBatch) return null;
                     const isConeSelected = !!effectiveCone.id && selectedId === effectiveCone.id;
                     return (
@@ -231,7 +209,7 @@ registerSupportDetailRenderer('leaf', (ctx) => ({
     skip: ({ isSelected }) => !isSelected,
     noClipping: () => true,
     extraProps: ({ entity, isSelected }) => ({
-        showKnots: !ctx.simpleRender,
+        showKnots: !simpleViewHidesDetail(ctx, isSelected),
         deferContactConesToSceneBatch: !isSelected && !!(entity as Leaf).contactCone,
     }),
 }));

@@ -123,6 +123,10 @@ export function InstancedJointGroup({
     return (
         <>
             <instancedMesh
+                // Same remount-for-fresh-interaction-registration as the shaft
+                // and cone batches: without the key, a grown batch keeps the
+                // old raycast/matrix state until something re-registers it.
+                key={`joint:${validJoints.length}`}
                 ref={meshRef}
                 args={[undefined, undefined, validJoints.length]}
                 frustumCulled={false}

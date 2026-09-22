@@ -5,7 +5,7 @@ import { useShaftSegments } from '../useShaftSegments';
 import React from 'react';
 import { useThree } from '@react-three/fiber';
 import { Branch, Knot } from '../../types';
-import { registerSupportDetailRenderer } from '../../detailRenderer/seam';
+import { registerSupportDetailRenderer, simpleViewHidesDetail } from '../../detailRenderer/seam';
 import { JointRenderer } from '../../SupportPrimitives/Joint/JointRenderer';
 import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
 import { ContactConeRenderer } from '../../SupportPrimitives/ContactCone';
@@ -255,7 +255,7 @@ registerSupportDetailRenderer('branch', (ctx) => ({
     skip: ({ isSelected }) => !isSelected,
     noClipping: () => true,
     extraProps: ({ entity, isSelected }) => ({
-        showKnots: ctx.simpleRender ? false : (!ctx.hideUnselectedKnots || isSelected),
+        showKnots: simpleViewHidesDetail(ctx, isSelected) ? false : (!ctx.hideUnselectedKnots || isSelected),
         deferStraightShaftsToSceneBatch: !isSelected,
         deferInteractionToSceneBatch: !isSelected,
         deferContactConesToSceneBatch: !isSelected && !!(entity as Branch).contactCone,

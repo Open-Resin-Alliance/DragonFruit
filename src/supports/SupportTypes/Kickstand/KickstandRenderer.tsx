@@ -13,7 +13,7 @@ import { RootsRenderer } from '../../SupportPrimitives/Roots/RootsRenderer';
 import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
 import { usePartDragUpdate } from '../../interaction/partDragPreview';
 import type { Kickstand } from './types';
-import { registerSupportDetailRenderer } from '../../detailRenderer/seam';
+import { registerSupportDetailRenderer, simpleViewHidesDetail } from '../../detailRenderer/seam';
 
 interface KickstandRendererProps {
     kickstand: Kickstand;
@@ -189,7 +189,7 @@ registerSupportDetailRenderer('kickstand', (ctx) => ({
     skip: ({ isSelected, isBatchable }) => !(isSelected || !isBatchable),
     noClipping: ({ isSelected }) => isSelected,
     extraProps: ({ isSelected, isBatchable }) => ({
-        showKnot: ctx.simpleRender ? false : (!ctx.hideUnselectedKnots || isSelected),
+        showKnot: simpleViewHidesDetail(ctx, isSelected) ? false : (!ctx.hideUnselectedKnots || isSelected),
         deferStraightShaftsToSceneBatch: !isSelected && isBatchable,
         deferInteractionToSceneBatch: !isSelected && isBatchable,
         hidePlateContactPrimitives: ctx.hidePlateContactPrimitivesEffective,

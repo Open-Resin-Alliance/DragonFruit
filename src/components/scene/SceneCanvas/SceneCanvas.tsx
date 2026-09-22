@@ -51,7 +51,7 @@ import type { SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
 import { JointPlacementPreview } from '@/supports/SupportPrimitives/Joint/JointPlacementPreview';
 import { useJointCreationState } from '@/supports/SupportPrimitives/Joint/jointCreationState';
 import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone/contactConeUtils';
-import { isContactDiskHudInteractionActive } from '@/supports/SupportPrimitives/ContactDisk/contactDiskHudInteraction';
+import { isContactDiskHudDraggingActive, isContactDiskHudInteractionActive } from '@/supports/SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { PLACEMENT_CONTROLLERS, PLACEMENT_CONTROLLER_TYPES } from '@/supports/placementControllers';
 import { clearSupportSelection } from '@/supports/interaction/shared/selection/selectionController';
 import { isSupportTargetHoverCategory } from '@/supports/interaction/shared/hover/supportHoverResolver';
@@ -123,6 +123,7 @@ import { PickingProviderWrapper, SelectionSync, useInteractionWarning } from './
 import { CameraClipPlaneStabilizer, CameraProvider, EnableLocalClipping, Helpers, Lights, SceneMoodOverlay } from './SceneEnvironment';
 import { StlMesh } from './StlMesh';
 import { setClipBounds } from './clipBoundsStore';
+import { setSupportPlacementGuideZ, useSupportPlacementGuideActive } from './supportPlacementGuideStore';
 import { setModelMesh } from '@/supports/autoSupport/meshStore';
 import { useIsLinux } from '@/hooks/usePlatform';
 import {
@@ -182,6 +183,7 @@ import {
 import { applyScaleFactor } from '@/components/gizmo/scale/applyScaleFactor';
 import { createWheelDeviceClassifier, type WheelDevice } from '@/components/scene/SceneCanvas/wheelDeviceClassifier';
 import { getSelectionGizmoCenter } from '@/features/scene/selectionPosition';
+import { DEFAULT_LIFT_DISTANCE_MM } from '@/features/transform/liftDefaults';
 
 const Canvas = dynamic(() => import('@react-three/fiber').then(m => m.Canvas), { ssr: false });
 
@@ -465,7 +467,7 @@ export function SceneCanvas({
   uniformScaling = true,
   localTransformSpace = false,
   autoLift = false,
-  liftDistance = 5,
+  liftDistance = DEFAULT_LIFT_DISTANCE_MM,
   autoSnapEnabled = true,
   onTransformChange,
   onTransformStart,
@@ -995,9 +997,7 @@ export function SceneCanvas({
 
   const prevBranchHoverDotVisibleRef = React.useRef<boolean | null>(null);
   const prevLeafHoverDotVisibleRef = React.useRef<boolean | null>(null);
-  const supportPlacementGuideRafRef = React.useRef<number | null>(null);
-  const supportPlacementGuidePendingZRef = React.useRef<number | null>(null);
-  const [supportPlacementGuideZ, setSupportPlacementGuideZ] = React.useState<number | null>(null);
+  const supportPlacementGuideActive = useSupportPlacementGuideActive();
   const [supportHelpEnabled, setSupportHelpEnabled] = React.useState(() => getSupportPlacementHelpEnabled());
   React.useEffect(() => subscribeSupportPlacementHelp(() => setSupportHelpEnabled(getSupportPlacementHelpEnabled())), []);
 
@@ -1852,53 +1852,30 @@ export function SceneCanvas({
   const suppressSupportPlacementPreviewRendering = contactDiskHudInteractionActive
     || (!supportCreationModeActive && (supportHoverTargetActive || sceneHoveredSupportId !== null));
 
-  const queueSupportPlacementGuideZ = React.useCallback((nextZ: number | null) => {
-    supportPlacementGuidePendingZRef.current = nextZ;
-    if (supportPlacementGuideRafRef.current !== null) return;
-
-    supportPlacementGuideRafRef.current = requestAnimationFrame(() => {
-      supportPlacementGuideRafRef.current = null;
-      const pendingZ = supportPlacementGuidePendingZRef.current;
-      supportPlacementGuidePendingZRef.current = null;
-      setSupportPlacementGuideZ((previous) => {
-        if (previous === null && pendingZ === null) return previous;
-        if (previous !== null && pendingZ !== null && Math.abs(previous - pendingZ) <= 0.02) return previous;
-        return pendingZ;
-      });
-    });
-  }, []);
-
-  React.useEffect(() => {
-    return () => {
-      if (supportPlacementGuideRafRef.current !== null) {
-        cancelAnimationFrame(supportPlacementGuideRafRef.current);
-        supportPlacementGuideRafRef.current = null;
-      }
-      supportPlacementGuidePendingZRef.current = null;
-    };
-  }, []);
-
+  // The guide plane Z has to follow the cursor exactly, so it never rides in
+  // React state: a deadband in Z (the old 0.02 mm one) steps the line by
+  // z / tan(surface tilt) on screen -- several pixels per step on a shallow
+  // face, invisible on a steep one. The plane lives in its own store now and
+  // StlMesh reads it every frame for the uniform, so hovering costs no render
+  // and the plane has somewhere to live besides this component's state.
   React.useEffect(() => {
     if (mode === 'support' && !blockSupportPlacement) return;
-    queueSupportPlacementGuideZ(null);
-  }, [blockSupportPlacement, mode, queueSupportPlacementGuideZ]);
+    setSupportPlacementGuideZ(null);
+  }, [blockSupportPlacement, mode]);
 
   const handleSupportHover = React.useCallback((hit: THREE.Intersection | null) => {
-    if (mode === 'support' && !blockSupportPlacement) {
-      const nextZ = hit && Number.isFinite(hit.point.z) ? hit.point.z : null;
-      queueSupportPlacementGuideZ(nextZ);
-    } else {
-      queueSupportPlacementGuideZ(null);
+    // A tip drag owns the plane while it runs: the same pointer hovers the
+    // model, and the hover must not fight the contact height being dragged.
+    if (!isContactDiskHudDraggingActive()) {
+      setSupportPlacementGuideZ(mode === 'support' && !blockSupportPlacement && hit ? hit.point.z : null);
     }
 
     onSupportHover?.(hit);
-  }, [blockSupportPlacement, mode, onSupportHover, queueSupportPlacementGuideZ]);
+  }, [blockSupportPlacement, mode, onSupportHover]);
 
-  const supportPlacementIndicatorPlaneZ = React.useMemo(() => {
-    if (mode !== 'support' || blockSupportPlacement) return null;
-    if (supportPlacementGuideZ == null || !Number.isFinite(supportPlacementGuideZ)) return null;
-    return supportPlacementGuideZ;
-  }, [blockSupportPlacement, mode, supportPlacementGuideZ]);
+  const supportPlacementGuideEnabled = React.useMemo(() => (
+    mode === 'support' && !blockSupportPlacement && supportPlacementGuideActive
+  ), [blockSupportPlacement, mode, supportPlacementGuideActive]);
 
   // Which placement mode is active. Read by the preview gate, and by the two
   // questions that consult several live previews in a declared order.
@@ -1935,7 +1912,10 @@ export function SceneCanvas({
   ]);
 
   const supportPlacementGuideLineWidthMm = React.useMemo(() => {
-    const toGuideWidthMm = (contactDiameterMm: number) => Math.max(0.01, contactDiameterMm * 0.3);
+    // The stripe is as wide as the contact disk that will land on it, so the
+    // line can be lined up with the disk by eye. Half of it read as a thinner
+    // guide than the contact it was standing in for.
+    const toGuideWidthMm = (contactDiameterMm: number) => Math.max(0.01, contactDiameterMm);
 
     const pickPreviewContactDiameterMm = (preview: SupportData | null | undefined): number | null => {
       if (!preview) return null;
@@ -6023,7 +6003,7 @@ export function SceneCanvas({
                       outOfBoundsMin={shaderOutOfBoundsBounds?.min ?? null}
                       outOfBoundsMax={shaderOutOfBoundsBounds?.max ?? null}
                       outOfBoundsStripeColor={outOfBoundsStripeColor}
-                      supportPlacementGuidePlaneZ={!thumbnailCaptureActive && isActive ? supportPlacementIndicatorPlaneZ : null}
+                      supportPlacementGuideEnabled={!thumbnailCaptureActive && isActive && supportPlacementGuideEnabled}
                       supportPlacementGuideColor="#baf72e"
                       supportPlacementGuideLineWidthMm={supportPlacementGuideLineWidthMm}
                       supportPlacementGuideOpacity={0.62}

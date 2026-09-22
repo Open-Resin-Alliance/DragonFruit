@@ -17,8 +17,8 @@ test('auto-bracing defaults are created from the SSOT constraint defaults', () =
     assert.equal(settings.seedSpacingMm, AUTO_BRACING_CONSTRAINTS.seedSpacingMm.defaultValue);
     assert.equal(settings.seedJitterMm, AUTO_BRACING_CONSTRAINTS.seedJitterMm.defaultValue);
     assert.equal(settings.maxBraceLengthMm, AUTO_BRACING_CONSTRAINTS.maxBraceLengthMm.defaultValue);
-    assert.equal(settings.initialPattern, 'singleDiagonal');
-    assert.equal(settings.repeatingPattern, 'singleDiagonal');
+    assert.equal(settings.initialPattern, 'zigZag');
+    assert.equal(settings.repeatingPattern, 'zigZag');
     assert.equal(settings.debugSectionColorsEnabled, false);
     assert.equal(settings.debugVoronoiSeedsEnabled, false);
 });
@@ -43,7 +43,7 @@ test('normalizeAutoBracingSettings clamps numeric values and restores invalid pa
     assert.equal(normalized.seedSpacingMm, AUTO_BRACING_CONSTRAINTS.seedSpacingMm.max);
     assert.equal(normalized.seedJitterMm, AUTO_BRACING_CONSTRAINTS.seedJitterMm.max);
     assert.equal(normalized.maxBraceLengthMm, AUTO_BRACING_CONSTRAINTS.maxBraceLengthMm.min);
-    assert.equal(normalized.initialPattern, 'singleDiagonal');
+    assert.equal(normalized.initialPattern, 'zigZag');
     assert.equal(normalized.repeatingPattern, 'crossDiagonal');
     assert.equal(normalized.debugSectionColorsEnabled, false);
     assert.equal(normalized.debugVoronoiSeedsEnabled, false);

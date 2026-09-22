@@ -275,7 +275,7 @@ export function AutoRotationPanel({ activeModelId, activeModelName, currentRotat
           ) : (
             <div className="flex flex-col gap-1">
               <Select
-                style={{ textAlign: 'center' }}
+                style={{ textAlign: 'center', background: 'var(--surface-1)' }}
                 value={objective}
                 onChange={(e) => setObjective(e.target.value as OrientationObjective)}
                 disabled={busy || !activeModelId}

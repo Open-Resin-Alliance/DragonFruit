@@ -111,7 +111,6 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
     applySettings,
     resetSettings,
     applyingSettings,
-    hasPendingChanges,
   } = islands;
 
   const totalDetected = tableStats?.allTotal ?? 0;
@@ -322,8 +321,7 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
             <button
               type="button"
               onClick={() => { applySettings(); setShowSettings(false); }}
-              disabled={!hasPendingChanges}
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
               style={{
                 borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
                 background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',

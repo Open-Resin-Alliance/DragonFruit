@@ -208,13 +208,6 @@ export interface SupportTypeDescriptor {
      */
     recomputesDiameterFromAttachments: boolean;
     /**
-     * Whether a candidate landing on this instance's grid node with a higher
-     * contact replaces it. A type setting this must register a promotion (see
-     * `registerHostPromotion`), which rebuilds the removed host's attachments
-     * onto the promoted one; setting it and registering none is a load error.
-     */
-    replacedByHigherContact: boolean;
-    /**
      * Whether adding one of these re-solves the diameter of the host it hangs
      * from. The host declares `recomputesDiameterFromAttachments` (it can be
      * re-solved); this says adding one changes what it carries.
@@ -591,7 +584,6 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         hasEditableSettings: true,
         offersSidebarPanel: true,
         recomputesDiameterFromAttachments: true,
-        replacedByHigherContact: true,
         repairsHostDiameterOnAdd: false,
         mayReachSideways: false,
         canBeGridHost: true,
@@ -684,7 +676,6 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         lower: { kind: 'knot' },
         upper: { kind: 'cone', field: 'contactCone' },
         recomputesDiameterFromAttachments: false,
-        replacedByHigherContact: false,
         repairsHostDiameterOnAdd: true,
         mayReachSideways: false,
         canBeGridHost: false,
@@ -739,7 +730,6 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         lower: { kind: 'knot' },
         upper: { kind: 'cone', field: 'contactCone' },
         recomputesDiameterFromAttachments: false,
-        replacedByHigherContact: false,
         repairsHostDiameterOnAdd: false,
         mayReachSideways: false,
         canBeGridHost: false,
@@ -785,7 +775,6 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         lower: { kind: 'disk', field: 'contactDiskA' },
         upper: { kind: 'disk', field: 'contactDiskB' },
         recomputesDiameterFromAttachments: false,
-        replacedByHigherContact: false,
         repairsHostDiameterOnAdd: false,
         mayReachSideways: true,
         canBeGridHost: false,
@@ -830,7 +819,6 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         lower: { kind: 'cone', field: 'contactConeA' },
         upper: { kind: 'cone', field: 'contactConeB' },
         recomputesDiameterFromAttachments: false,
-        replacedByHigherContact: false,
         repairsHostDiameterOnAdd: false,
         mayReachSideways: false,
         canBeGridHost: false,
@@ -881,7 +869,6 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         lower: { kind: 'knot' },
         upper: { kind: 'knot' },
         recomputesDiameterFromAttachments: false,
-        replacedByHigherContact: false,
         repairsHostDiameterOnAdd: false,
         mayReachSideways: false,
         canBeGridHost: false,
@@ -939,7 +926,6 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         },
         upper: { kind: 'cone', field: 'contactCone' },
         recomputesDiameterFromAttachments: false,
-        replacedByHigherContact: false,
         repairsHostDiameterOnAdd: false,
         mayReachSideways: false,
         canBeGridHost: false,
@@ -992,7 +978,6 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         lower: { kind: 'plateRoot' },
         upper: { kind: 'knot' },
         recomputesDiameterFromAttachments: false,
-        replacedByHigherContact: false,
         repairsHostDiameterOnAdd: false,
         mayReachSideways: false,
         canBeGridHost: false,
@@ -1517,6 +1502,14 @@ export interface ContactBridgeRequest {
      * does not depend on the renderer.
      */
     mesh?: { isMesh: boolean };
+    /**
+     * True when a person aimed both contacts by hand, rather than the auto
+     * pass filling a gap. The cant caps a bridge type declares keep the auto
+     * pass from crossing a gap with a near-horizontal whisker; an explicit aim
+     * is the user's call, so a manual bridge is built whatever its cant. Auto
+     * callers leave this unset and keep the caps.
+     */
+    manual?: boolean;
 }
 
 /**
@@ -1699,58 +1692,6 @@ export function typesMissingContactOverride(): readonly SupportTypeId[] {
     return SUPPORT_TYPES
         .filter((d) => d.placementRule?.metric === 'tipHeight' && d.id !== defaultToolId)
         .filter((d) => !CONTACT_OVERRIDES.has(d.id))
-        .map((d) => d.id);
-}
-
-/**
- * What a host type is handed when a placement lands on its grid node and should
- * replace it.
- *
- * The WHOLE placed support arrives in the generic shape, so the host hook reads
- * what it needs off `placed.supplied` by declared edge field rather than through
- * parameters named after one type's entity parts.
- */
-export interface HostPromotionRequest {
-    /** The draft the run has built so far. */
-    draft: SupportState;
-    /** The support being placed, which takes the node. */
-    placed: PlacedSupport;
-    /** The member preserving the replaced host's own contact, when the host
-     *  type promotes one. */
-    promotedMember?: PlacedSupport;
-    /** The host it replaces. */
-    hostId: string;
-    nodeKey: string;
-    /**
-     * How the promotion should be recorded: the auto run wraps everything in one
-     * entry of its own, while a manual click lets the replacement push its own.
-     */
-    recordHistory: boolean;
-}
-
-type HostPromotion = (request: HostPromotionRequest) => SupportState | null;
-
-const HOST_PROMOTIONS = new Map<SupportTypeId, HostPromotion>();
-
-/**
- * Registered from the host type's own folder, because replacing a host is not
- * generic: the removed host's attachments have to be rebuilt onto the placed
- * shaft, and only that host type knows how. A type that declares
- * `replacedByHigherContact` and registers nothing is a load-time error.
- */
-export function registerHostPromotion(typeId: SupportTypeId, promote: HostPromotion): void {
-    HOST_PROMOTIONS.set(typeId, promote);
-}
-
-/** Replaces one host with the support landing on its node, or null when it cannot. */
-export function promoteAwayHost(typeId: SupportTypeId, request: HostPromotionRequest): SupportState | null {
-    return HOST_PROMOTIONS.get(typeId)?.(request) ?? null;
-}
-
-/** Every type that declares `replacedByHigherContact` but registered nothing. */
-export function typesMissingHostPromotion(): readonly SupportTypeId[] {
-    return SUPPORT_TYPES
-        .filter((d) => d.replacedByHigherContact && !HOST_PROMOTIONS.has(d.id))
         .map((d) => d.id);
 }
 

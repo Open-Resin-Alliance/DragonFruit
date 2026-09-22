@@ -3,6 +3,7 @@
 import React from 'react';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
+import { Trash2, WandSparkles } from 'lucide-react';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { Button, Toast, ToastViewport } from '@/components/atoms';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
@@ -16,6 +17,8 @@ interface AutoBracingSettingsCardProps {
     settings: AutoBracingSettings;
     onChange: (patch: Partial<AutoBracingSettings>) => void;
     onAutoBrace: () => void;
+    /** Removes every brace of the model the Studio is working on. */
+    onClearBraces: () => void;
     status?: {
         kind: 'success' | 'warning' | 'error';
         message: string;
@@ -38,6 +41,7 @@ export function AutoBracingSettingsCard({
     settings,
     onChange,
     onAutoBrace,
+    onClearBraces,
     status,
 }: AutoBracingSettingsCardProps) {
     const { _ } = useLingui();
@@ -97,7 +101,7 @@ export function AutoBracingSettingsCard({
                         label: pattern === 'singleDiagonal' ? 'Single Diagonal' : pattern === 'zigZag' ? 'Zig Zag' : 'Cross Diagonal',
                     }))}
                     className="min-w-0 space-y-0"
-                    selectClassName="h-[36px] px-3 py-2 text-base"
+                    selectClassName="h-[36px] px-3 py-2 text-base !text-center"
                 />
             </label>
         );
@@ -208,26 +212,34 @@ export function AutoBracingSettingsCard({
 
             <div className="h-2" />
 
-            <button
-                type="button"
-                onClick={onAutoBrace}
-                className="w-full !h-10 rounded-md border px-3 text-[12px] font-semibold inline-flex items-center justify-center gap-2 transition-colors"
-                style={{
-                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                    color: 'var(--accent)',
-                }}
-            >
-                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M14.5 3.5 12 6l2.5 2.5L17 6l-2.5-2.5z" />
-                    <path d="M9.5 14.5 7 17l2.5 2.5L12 17l-2.5-2.5z" />
-                    <path d="M15 13l-3 3 2 2 3-3-2-2z" />
-                    <path d="M6 8l-3 3 2 2 3-3-2-2z" />
-                    <path d="M8 6l2-2" />
-                    <path d="M16 16l2 2" />
-                </svg>
-                {_(msg`Apply Auto Brace`)}
-            </button>
+            <div className="flex items-stretch gap-1.5">
+                <button
+                    type="button"
+                    onClick={onAutoBrace}
+                    className="ui-button flex flex-1 items-center justify-center gap-1 !h-8 text-[11px]"
+                    style={{
+                        borderColor: 'var(--accent)',
+                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 86%)',
+                        color: 'var(--accent)',
+                    }}
+                >
+                    <WandSparkles className="h-3.5 w-3.5 shrink-0" />
+                    {_(msg`Apply`)}
+                </button>
+                <button
+                    type="button"
+                    onClick={onClearBraces}
+                    className="ui-button flex flex-1 items-center justify-center gap-1 !h-8 text-[11px]"
+                    style={{
+                        borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 40%)',
+                        background: 'color-mix(in srgb, var(--danger), var(--surface-0) 88%)',
+                        color: 'var(--danger)',
+                    }}
+                >
+                    <Trash2 className="h-3.5 w-3.5 shrink-0" />
+                    {_(msg`Clear All`)}
+                </button>
+            </div>
         </div>
     );
 }

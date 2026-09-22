@@ -1,4 +1,17 @@
 import { footprintFromPoints } from '@/volumeAnalysis/Islands/voxelFootprint';
+/** No auto leaf may be a tapered spike: past the branch threshold it must be a
+ *  branch, whichever surface its tip touches and whichever pass attached it. */
+function assertNoLeafPastBranchThreshold(): void {
+    for (const leaf of Object.values(getSnapshot().leaves)) {
+        const knot = leaf.parentKnotId ? getSnapshot().knots[leaf.parentKnotId] : undefined;
+        const tip = leaf.contactCone?.pos;
+        if (!knot || !tip) continue;
+        const spanMm = Math.hypot(tip.x - knot.pos.x, tip.y - knot.pos.y, tip.z - knot.pos.z);
+        assert.ok(spanMm <= 6.01,
+            `leaf ${leaf.id} spans ${spanMm.toFixed(1)}mm — past the branch threshold, it must be a branch`);
+    }
+}
+
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
@@ -367,15 +380,18 @@ test('runAutoPlace gives small sub-threshold regions a single pillar', () => {
     disposeHandlers();
 });
 
-test('runAutoPlace fans sub-threshold overhang candidates instead of standalone trunks', () => {
+test('a sub-threshold overhang candidate past the leaf threshold becomes a pillar, not a spike', () => {
     resetStore();
     resetKickstandsInState();
     clearHistory();
     const disposeHandlers = registerSupportHistoryHandlers();
 
-    // Trunk A (voxel island) at the origin; overhang region o15 at (3,0,33)
-    // is sub-threshold and non-anchor (band off) → must attach as a fan leaf
-    // off A's shaft, not become a second straight trunk next to it.
+    // Trunk A (voxel island) at the origin; overhang region o15 at (3,0,33) is
+    // sub-threshold and non-anchor (band off), so it is offered to A's shaft.
+    // The link is past the leaf threshold, so the old answer was a 7mm tapered
+    // cone — a spike standing next to the trunk rather than a support. It gets
+    // a branch or, when no sample on A gives one a legal departure (as here), a
+    // pillar of its own; the consolidation pass merges pillars into chunk trees.
     const result = runAutoPlace(
         [
             makeIsland('A', 0, 0, 40, 30),
@@ -396,23 +412,12 @@ test('runAutoPlace fans sub-threshold overhang candidates instead of standalone 
         { debugSkipAutoBracing: true,  },
     );
 
-    assert.equal(result.placed.trunk, 1, 'o15 fanned instead of becoming a trunk');
-    assert.ok(result.placed.leaf >= 1, 'o15 attached as a leaf');
-    assert.ok(Object.values(getSnapshot().leaves).some((l) => l.origin === 'overhang'),
-        'fanned overhang leaf carries the overhang origin');
-    assert.ok(Object.values(getSnapshot().branches).every((b) => b.origin !== 'overhang'),
-        'overhang fanning never branches — leaves only');
+    assertNoLeafPastBranchThreshold();
+    assert.equal(result.placed.leaf, 0, 'no leaf cone: the span is past the threshold');
+    assert.equal(result.placed.trunk, 2, 'o15 stands on the plate instead');
 
-    const placement = result.analytics?.placement;
-    assert.equal(placement?.hostsByKind.standalone, 1, 'only trunk A is standalone (voxel island)');
-    assert.deepEqual(placement?.fanRefusals, {}, 'o15 fanned — no refusal for it');
-    assert.deepEqual(placement?.mergeRefusals, { noHost: 1 }, 'trunk A had no host to merge into');
-
-    const snapshot = getSnapshot();
-    const leaf = Object.values(snapshot.leaves)[0];
-    const tip = leaf?.contactCone?.pos;
-    assert.ok(tip && Math.abs(tip.x - 3) < 0.6 && Math.abs(tip.z - 33) < 0.6,
-        `leaf tip lands on the overhang (x=${tip?.x.toFixed(1)}, z=${tip?.z.toFixed(1)})`);
+    // Both contacts are still supported — the pillar is a real support, not a drop.
+    assert.ok((result.analytics?.areaCoverage ?? 0) >= 0.99, 'both contacts are supported');
 
     setModelMesh('model-a', null);
     disposeHandlers();
@@ -902,6 +907,107 @@ test('no branch leaves its host shallower than the branch-angle rule', () => {
     disposeHandlers();
 });
 
+test('grid mode attaches the tips on a flat region instead of dropping most of them', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+
+    // The same 20×20 flat underside the density-grid test uses, with the grid
+    // on. Its tips are on a ~1.5mm lattice and the grid nodes are 4mm apart, so
+    // most of them land between nodes and have to attach to the trunk standing
+    // there. The hosts are only as tall as the region's clearance, which is why
+    // the length-aware slack is what lets anything leave them.
+    const previous = getSettings();
+    const settings = createDefaultSettings();
+    settings.grid.enabled = true;
+    settings.grid.spacingMm = 4;
+    setSettings(settings);
+
+    const contactVoxels: { x: number; y: number }[] = [];
+    for (let x = -10; x <= 10; x += 0.25) {
+        for (let y = -10; y <= 10; y += 0.25) {
+            contactVoxels.push({ x, y });
+        }
+    }
+    const facet: DetectedIsland = {
+        id: 'o0',
+        source: 'overhang',
+        contact: new THREE.Vector3(0, 0, 6.5),
+        baseZ: 6.5,
+        areaMm2: 400,
+        contactVoxels: footprintFromPoints(contactVoxels),
+    };
+
+    const result = runAutoPlace([facet], 'model-a', { debugSkipAutoBracing: true });
+
+    // Before the length-aware allowance this run kept 7 attachments and refused
+    // the rest: 25 trunks standing alone on a lattice, 74% area coverage.
+    assert.ok(result.placed.trunk >= 20,
+        `the nodes carry pillars (${result.placed.trunk})`);
+    assert.ok(result.placed.branch + result.placed.leaf >= 60,
+        `the tips between nodes attach (${result.placed.leaf} leaves, ${result.placed.branch} branches)`);
+    const areaCoverage = result.analytics?.areaCoverage ?? 0;
+    assert.ok(areaCoverage >= 0.95,
+        `the region ends up covered (${(areaCoverage * 100).toFixed(0)}%)`);
+
+    setModelMesh('model-a', null);
+    setSettings(previous);
+    disposeHandlers();
+});
+
+test('a long fan link becomes a pillar, never a tapered spike', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+
+    // A thin pillar to Z=20, and a lone tip 6mm to its side sitting 2.5mm above
+    // its top. Every sample of the host is then illegally shallow (the top of
+    // the host is the closest sample, and 6mm lateral over a 2.5mm drop is 67°
+    // from vertical) while the sample deep enough to be steep is outside a 3D
+    // 8mm reach — so the tip used to stand as its own pillar, or bridge to the
+    // model as a stick and leave a second scar.
+    const facetAt = (id: string, cx: number, cy: number, z: number, half: number): DetectedIsland => {
+        const voxels: { x: number; y: number }[] = [];
+        for (let x = cx - half; x <= cx + half; x += 0.25) {
+            for (let y = cy - half; y <= cy + half; y += 0.25) {
+                voxels.push({ x, y });
+            }
+        }
+        return {
+            id,
+            source: 'overhang',
+            contact: new THREE.Vector3(cx, cy, z),
+            baseZ: z,
+            areaMm2: (half * 2) * (half * 2),
+            contactVoxels: footprintFromPoints(voxels),
+        };
+    };
+
+    const host = facetAt('host-spike', 0, 0, 20, 2);
+    const neighbour = facetAt('lone-tip', 6, 0, 22.5, 2);
+
+    const result = runAutoPlace([host, neighbour], 'model-a', { debugSkipAutoBracing: true });
+
+    // The link that would carry this tip is ~12mm, past the leaf threshold, and
+    // this host's shaft gives no sample a legal branch departure — so the tip
+    // keeps a pillar. The 12.2mm tapered cone this used to build is exactly the
+    // shape the rule forbids, and a pillar is not worse: one plate contact and
+    // one model contact, the same as any trunk, and the consolidation pass can
+    // still chunk it into the forest.
+    assert.equal(result.placed.stick, 0,
+        `never bridged model-to-model (${result.placed.stick} sticks)`);
+    assertNoLeafPastBranchThreshold();
+    assert.equal(result.placed.leaf, 0, 'no leaf cone of the link length');
+    assert.equal(result.placed.branch, 0, 'and no branch this host could carry');
+    assert.ok(result.placed.trunk <= 2,
+        `it stands on the plate instead (${result.placed.trunk} trunks)`);
+    assert.ok((result.analytics?.areaCoverage ?? 0) >= 0.99, 'the contact is still supported');
+
+    setModelMesh('model-a', null);
+    disposeHandlers();
+});
 
 // ---------------------------------------------------------------------------
 // The near-plate band: auto-support builds the type that overrides it, not a

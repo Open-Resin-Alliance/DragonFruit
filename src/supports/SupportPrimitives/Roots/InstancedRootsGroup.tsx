@@ -17,6 +17,12 @@ export interface InstancedRoot {
 
 interface InstancedRootsGroupProps {
     roots: InstancedRoot[];
+    /** Keep the plate disk visible: the navigation view's reference for where a
+     *  support meets the plate. The rest of the root stays mounted at zero
+     *  alpha so the pointer still hits it. */
+    diskOnly?: boolean;
+    /** Colour for that disk, so it matches the contact discs. */
+    discColor?: string;
     color?: string;
     emissive?: string;
     emissiveIntensity?: number;
@@ -54,6 +60,8 @@ const toBucketKey = (root: InstancedRoot) => {
 
 function RootBucketMesh({
     bucket,
+    diskOnly = false,
+    discColor,
     color,
     emissive,
     emissiveIntensity,
@@ -67,6 +75,8 @@ function RootBucketMesh({
     onRootPointerOut,
 }: {
     bucket: RootBucket;
+    diskOnly?: boolean;
+    discColor?: string;
     color: string;
     emissive: string;
     emissiveIntensity: number;
@@ -175,6 +185,9 @@ function RootBucketMesh({
     return (
         <group>
             <instancedMesh
+                // Same remount-for-fresh-interaction-registration as the shaft,
+                // cone and joint batches.
+                key={`root-disk:${bucket.roots.length}`}
                 ref={diskRef}
                 args={[undefined, undefined, bucket.roots.length]}
                 frustumCulled={false}
@@ -185,7 +198,7 @@ function RootBucketMesh({
             >
                 <cylinderGeometry args={[bucket.diskRadius, bucket.diskRadius, bucket.diskHeight, 10]} />
                 <meshStandardMaterial
-                    color={color}
+                    color={discColor ?? color}
                     emissive={emissive}
                     emissiveIntensity={emissiveIntensity}
                     transparent={transparent}
@@ -195,8 +208,9 @@ function RootBucketMesh({
                 />
             </instancedMesh>
 
-            {bucket.coneHeight > 0 && (
+            {!diskOnly && bucket.coneHeight > 0 && (
                 <instancedMesh
+                    key={`root-cone:${bucket.roots.length}`}
                     ref={coneRef}
                     args={[undefined, undefined, bucket.roots.length]}
                     frustumCulled={false}
@@ -219,8 +233,9 @@ function RootBucketMesh({
                 </instancedMesh>
             )}
 
-            {bucket.coneHeight > 0 && (
+            {!diskOnly && bucket.coneHeight > 0 && (
                 <instancedMesh
+                    key={`root-sphere:${bucket.roots.length}`}
                     ref={sphereRef}
                     args={[undefined, undefined, bucket.roots.length]}
                     frustumCulled={false}
@@ -255,7 +270,7 @@ function RootBucketMesh({
                     >
                         <cylinderGeometry args={[bucket.diskRadius, bucket.diskRadius, bucket.diskHeight, 10]} />
                     </instancedMesh>
-                    {bucket.coneHeight > 0 && (
+                    {!diskOnly && bucket.coneHeight > 0 && (
                         <instancedMesh
                             ref={overlayConeRef}
                             args={[undefined, undefined, bucket.roots.length]}
@@ -267,7 +282,7 @@ function RootBucketMesh({
                             <cylinderGeometry args={[bucket.coneTopRadius, bucket.coneBottomRadius, bucket.coneHeight, 10]} />
                         </instancedMesh>
                     )}
-                    {bucket.coneHeight > 0 && (
+                    {!diskOnly && bucket.coneHeight > 0 && (
                         <instancedMesh
                             ref={overlaySphereRef}
                             args={[undefined, undefined, bucket.roots.length]}
@@ -287,6 +302,8 @@ function RootBucketMesh({
 
 export function InstancedRootsGroup({
     roots,
+    diskOnly = false,
+    discColor,
     color = '#ff8800',
     emissive = '#000000',
     emissiveIntensity = 0,
@@ -337,6 +354,8 @@ export function InstancedRootsGroup({
                 <RootBucketMesh
                     key={bucket.key}
                     bucket={bucket}
+                    diskOnly={diskOnly}
+                    discColor={discColor}
                     color={color}
                     emissive={emissive}
                     emissiveIntensity={emissiveIntensity}
