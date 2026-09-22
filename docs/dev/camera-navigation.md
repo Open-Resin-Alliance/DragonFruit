@@ -29,25 +29,21 @@ SpaceMouse zoom came from.
 The camera system now has a single ortho scale source: the dolly radius.
 
 ```
-halfHeight = tan(ORTHO_REFERENCE_FOV_DEG / 2) * radius
+halfHeight = tan(fov / 2) * radius
 radius     = |camera.position - controls.target|
 camera.zoom = 1
 ```
+
+`fov` is the app's live FOV setting, the same value perspective uses;
+`ORTHO_REFERENCE_FOV_DEG` is only the fallback when a caller does not pass one.
+Both projections therefore share one FOV, so **switching projection is the
+identity** — same position, same apparent size, no compensation. (ADR-0032
+previously kept ortho on a fixed default FOV; that is superseded here.)
 
 `src/components/scene/camera/orthoDolly.ts` owns this. `syncOrthoFrustum`
 derives the frustum from the current position, `applyOrthoFrustum` writes it for
 an explicit radius (used by the SpaceMouse controllers), and
 `dollyOrthoToCursor` performs a cursor-anchored dolly.
-
-### Projection switching preserves apparent size
-
-Ortho derives from the fixed reference FOV while perspective uses the user's
-FOV, so switching at the same distance would change the framing. Perspective to
-ortho therefore scales the distance by
-`tan(perspectiveFov/2) / tan(referenceFov/2)`
-(`orthoRadiusForPerspectiveFraming`), and ortho to perspective already solves
-distance for the same reason. Together they make the round trip the identity —
-without the first half, each toggle compounds the scale error.
 
 `OrthoFrustumSync` (same file as `CameraProjectionController`) keeps the frustum
 in sync: it listens to OrbitControls' `change` event, re-derives on resize, and

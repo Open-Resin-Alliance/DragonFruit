@@ -99,6 +99,7 @@ export function SpaceMouseController({
   pivotCandidates,
   fallbackPivot,
   sceneRadius,
+  fovDeg,
   onNavigationActiveChange,
   onNavigationFrame,
   onNewDeviceDetected,
@@ -107,6 +108,7 @@ export function SpaceMouseController({
   pivotCandidates?: THREE.Vector3[];
   fallbackPivot?: THREE.Vector3 | null;
   sceneRadius?: number;
+  fovDeg?: number;
   onNavigationActiveChange?: (active: boolean) => void;
   onNavigationFrame?: () => void;
   onNewDeviceDetected?: (deviceId: string) => void;
@@ -541,7 +543,7 @@ export function SpaceMouseController({
         ORTHO_MIN_RADIUS,
         ORTHO_MAX_RADIUS,
       );
-      applyOrthoFrustum(orthoCamera, radius, orthoAspectOf(orthoCamera), { sceneRadius });
+      applyOrthoFrustum(orthoCamera, radius, orthoAspectOf(orthoCamera), { sceneRadius, fovDeg });
     }
 
     onNavigationFrame?.();

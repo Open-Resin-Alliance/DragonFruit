@@ -13,6 +13,7 @@ type CameraIntroControllerProps = {
   mode?: SupportMode;
   plateWidthMm?: number;
   plateDepthMm?: number;
+  perspectiveFov?: number;
 };
 
 type OrbitLikeControls = {
@@ -47,6 +48,7 @@ export function CameraIntroController({
   mode = 'prepare',
   plateWidthMm,
   plateDepthMm,
+  perspectiveFov = 50,
 }: CameraIntroControllerProps) {
   const { camera, controls, size } = useThree();
   const sizeRef = React.useRef(size);
@@ -77,7 +79,7 @@ export function CameraIntroController({
     const isPerspective = camera instanceof THREE.PerspectiveCamera;
     const vFov = isPerspective
       ? THREE.MathUtils.degToRad((camera as THREE.PerspectiveCamera).fov)
-      : THREE.MathUtils.degToRad(50);
+      : THREE.MathUtils.degToRad(perspectiveFov);
     const viewport = sizeRef.current;
     const aspect = viewport.width / Math.max(1, viewport.height);
 
@@ -233,7 +235,7 @@ export function CameraIntroController({
         activeRunIdRef.current = 0;
       }
     };
-  }, [bounds, camera, controls, mode, onComplete, plateDepthMm, plateWidthMm, preserveCurrentViewDirection, runId]);
+  }, [bounds, camera, controls, mode, onComplete, perspectiveFov, plateDepthMm, plateWidthMm, preserveCurrentViewDirection, runId]);
 
   return null;
 }

@@ -5,7 +5,6 @@ import type { CameraProjectionMode } from '@/components/settings/cameraProjectio
 import {
   ORTHO_FAR,
   ORTHO_NEAR,
-  orthoRadiusForPerspectiveFraming,
   syncOrthoFrustum,
 } from '@/components/scene/camera/orthoDolly';
 
@@ -34,7 +33,7 @@ export function CameraProjectionController({
       // The frustum is derived from the dolly radius (see orthoDolly.ts), so a
       // resize only needs to re-derive it at the new aspect ratio.
       const target = orbitTargetOf(controls) ?? new THREE.Vector3();
-      syncOrthoFrustum(camera, target, aspect, { sceneRadius });
+      syncOrthoFrustum(camera, target, aspect, { sceneRadius, fovDeg: perspectiveFov });
       // NOTE: Do NOT call controls.update() here. If we do, and the user
       // hasn't interacted with the camera since the intro animation,
       // OrbitControls may apply internal constraints that cause the view
@@ -73,15 +72,9 @@ export function CameraProjectionController({
       // manual=true R3F skips updateCamera entirely and OrthoFrustumSync is the
       // sole authority on left/right/top/bottom.
       (next as any).manual = true;
-      // Ortho derives from the reference FOV, perspective uses the user's FOV, so
-      // scale the distance to keep the apparent size. Without this, a switch at a
-      // non-default FOV changes the framing and every round trip compounds it.
-      const viewOffset = camera.position.clone().sub(target);
-      const viewDistance = viewOffset.length();
-      if (viewDistance < 1e-10) viewOffset.set(-1, -1, 1);
-      viewOffset.normalize();
-      const orthoDistance = orthoRadiusForPerspectiveFraming(viewDistance, perspectiveFov);
-      next.position.copy(target).addScaledVector(viewOffset, orthoDistance);
+      // Ortho and perspective now share the live FOV, so keeping the position
+      // preserves the apparent size — the switch is the identity.
+      next.position.copy(camera.position);
       // Preserve view direction. Without copying quaternion, the new camera has identity
       // rotation (looking down -Z) until OrbitControls.update() corrects it. At initial
       // app load controls is null, so update() is never called — the camera stays
@@ -89,7 +82,7 @@ export function CameraProjectionController({
       next.quaternion.copy(camera.quaternion);
       next.up.copy(camera.up);
 
-      syncOrthoFrustum(next, target, aspect, { sceneRadius });
+      syncOrthoFrustum(next, target, aspect, { sceneRadius, fovDeg: perspectiveFov });
       // Force matrixWorld to be set from position+quaternion immediately so the
       // PickingRenderer (which runs in useFrame, before gl.render) gets a valid
       // camera matrix on the very first frame after the switch.
@@ -161,10 +154,12 @@ export function OrthoFrustumSync({
   mode,
   suspended,
   sceneRadius,
+  fovDeg,
 }: {
   mode: CameraProjectionMode;
   suspended: boolean;
   sceneRadius?: number;
+  fovDeg?: number;
 }) {
   const { camera, controls, size } = useThree();
   const aspect = size.width / Math.max(1, size.height);
@@ -173,8 +168,8 @@ export function OrthoFrustumSync({
     if (suspended) return;
     if (mode !== 'orthographic') return;
     if (!(camera instanceof THREE.OrthographicCamera)) return;
-    syncOrthoFrustum(camera, orbitTargetOf(controls) ?? new THREE.Vector3(), aspect, { sceneRadius });
-  }, [aspect, camera, controls, mode, sceneRadius, suspended]);
+    syncOrthoFrustum(camera, orbitTargetOf(controls) ?? new THREE.Vector3(), aspect, { sceneRadius, fovDeg });
+  }, [aspect, camera, controls, fovDeg, mode, sceneRadius, suspended]);
 
   React.useLayoutEffect(() => {
     sync();
@@ -274,12 +269,14 @@ export function CameraModeEntryFramingController({
   target,
   plateWidthMm,
   plateDepthMm,
+  perspectiveFov = 50,
 }: {
   runId: number;
   restoreRunId: number;
   target: THREE.Vector3;
   plateWidthMm: number;
   plateDepthMm: number;
+  perspectiveFov?: number;
 }) {
   const { camera, controls, size } = useThree();
   const sizeRef = React.useRef(size);
@@ -431,7 +428,7 @@ export function CameraModeEntryFramingController({
     const padding = 1.04;
     const fov = camera instanceof THREE.PerspectiveCamera
       ? THREE.MathUtils.degToRad(camera.fov)
-      : THREE.MathUtils.degToRad(50);
+      : THREE.MathUtils.degToRad(perspectiveFov);
     const viewport = sizeRef.current;
     const aspect = viewport.width / Math.max(1, viewport.height);
     const hFov = 2 * Math.atan(Math.tan(fov * 0.5) * aspect);
@@ -460,7 +457,7 @@ export function CameraModeEntryFramingController({
         activeRunIdRef.current = null;
       }
     };
-  }, [animateTo, camera, controls, plateDepthMm, plateWidthMm, runId, target]);
+  }, [animateTo, camera, controls, perspectiveFov, plateDepthMm, plateWidthMm, runId, target]);
 
   React.useLayoutEffect(() => {
     if (!restoreRunId) return;

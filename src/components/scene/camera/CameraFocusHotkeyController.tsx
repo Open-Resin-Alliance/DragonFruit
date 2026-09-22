@@ -28,6 +28,7 @@ type CameraFocusHotkeyControllerProps = {
   orbitTarget: [number, number, number];
   cameraRef: React.MutableRefObject<THREE.Camera | null>;
   orbitControlsRef: React.MutableRefObject<{ target: THREE.Vector3; update: () => void } | null>;
+  perspectiveFov?: number;
 };
 
 type FocusTransition = {
@@ -84,6 +85,7 @@ export function CameraFocusHotkeyController({
   orbitTarget,
   cameraRef,
   orbitControlsRef,
+  perspectiveFov = 50,
 }: CameraFocusHotkeyControllerProps) {
   const { size } = useThree();
   const sizeRef = React.useRef(size);
@@ -159,7 +161,7 @@ export function CameraFocusHotkeyController({
       const isPerspective = camera instanceof THREE.PerspectiveCamera;
       const vFov = isPerspective
         ? THREE.MathUtils.degToRad((camera as THREE.PerspectiveCamera).fov)
-        : THREE.MathUtils.degToRad(50);
+        : THREE.MathUtils.degToRad(perspectiveFov);
       const { width, height } = sizeRef.current;
       const aspect = width / Math.max(1, height);
       const hFov = 2 * Math.atan(Math.tan(vFov * 0.5) * aspect);
@@ -189,7 +191,7 @@ export function CameraFocusHotkeyController({
       prevDamping,
       prevEnabled,
     };
-  }, [cameraRef, orbitControlsRef, setOrbitTargetFromPoint]);
+  }, [cameraRef, orbitControlsRef, perspectiveFov, setOrbitTargetFromPoint]);
 
   useCameraFocusHotkey(() => {
     const visibleModels = models.filter((model) => model.visible);

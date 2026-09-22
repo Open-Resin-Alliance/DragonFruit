@@ -17,6 +17,7 @@ import {
 import {
   ORTHO_MAX_RADIUS,
   ORTHO_MIN_RADIUS,
+  ORTHO_REFERENCE_FOV_DEG,
   applyOrthoFrustum,
   orthoAspectOf,
   resolveOrthoNavRadius,
@@ -70,12 +71,14 @@ export function NativeSpaceMouseController({
   pivotPoint,
   fallbackPivot,
   sceneRadius,
+  fovDeg,
   onNavigationActiveChange,
   onNavigationFrame,
 }: {
   pivotPoint?: THREE.Vector3 | null;
   fallbackPivot?: THREE.Vector3 | null;
   sceneRadius?: number;
+  fovDeg?: number;
   onNavigationActiveChange?: (active: boolean) => void;
   onNavigationFrame?: () => void;
 }) {
@@ -220,6 +223,7 @@ export function NativeSpaceMouseController({
         turn: hasPrevious ? navPrevFwdRef.current.angleTo(fwd) : 0,
         eyeJump: hasPrevious ? tmpPos.current.distanceTo(navPrevEyeRef.current) : 0,
         sceneRadius,
+        fovDeg,
       });
       navPrevAxialRef.current = axial;
       navPrevFwdRef.current.copy(fwd);
@@ -232,10 +236,10 @@ export function NativeSpaceMouseController({
       camera.updateMatrixWorld();
 
       const ortho = camera as THREE.OrthographicCamera;
-      applyOrthoFrustum(ortho, navRadiusRef.current, orthoAspectOf(ortho), { sceneRadius });
+      applyOrthoFrustum(ortho, navRadiusRef.current, orthoAspectOf(ortho), { sceneRadius, fovDeg });
       focusDistRef.current = navRadiusRef.current;
     },
-    [camera, getTarget, sceneRadius],
+    [camera, fovDeg, getTarget, sceneRadius],
   );
 
   const handBackToOrbit = React.useCallback(() => {
@@ -291,14 +295,17 @@ export function NativeSpaceMouseController({
     // Report perspective to navlib when the camera really is perspective, OR when
     // we're forcing the lie on an ortho camera so its camera-family modes engage.
     const reportPerspective = isPerspective || (FORCE_PERSPECTIVE_IN_ORTHO && isOrtho);
+    // Report the FOV the ortho frustum is actually derived from (the app's FOV
+    // setting), not an arbitrary constant: navlib's virtual perspective camera is
+    // then exactly the virtual camera behind the ortho view, so its own framing
+    // math (presets, fit) lands where ours does.
     const fov = isPerspective
       ? THREE.MathUtils.degToRad((camera as THREE.PerspectiveCamera).fov)
-      : 0.8;
+      : THREE.MathUtils.degToRad(fovDeg ?? ORTHO_REFERENCE_FOV_DEG);
 
     // In the ortho lie, size the reported focus distance so navlib's perspective
     // view half-height at the focus plane (focusDistance·tan(fov/2)) equals the
-    // ortho view's half-height. Otherwise navlib pans/zooms at the wrong world
-    // scale (the real eye→target distance makes pan feel far too slow).
+    // ortho view's half-height. With the real FOV that is simply the dolly radius.
     let focusDistanceForNav = focusDistance;
     if (FORCE_PERSPECTIVE_IN_ORTHO && isOrtho) {
       const oc = camera as THREE.OrthographicCamera;

@@ -5165,7 +5165,7 @@ export function SceneCanvas({
                 minRadius: ORTHO_MIN_RADIUS,
                 maxRadius: ORTHO_MAX_RADIUS,
                 aspect,
-                options: { sceneRadius: orthoSceneRadiusMm },
+                options: { sceneRadius: orthoSceneRadiusMm, fovDeg: perspectiveFov },
               });
               zoomControls.target.copy(nextTarget);
               zoomControls.update();
@@ -5228,6 +5228,7 @@ export function SceneCanvas({
     handleOrbitEnd,
     handleOrbitStart,
     orthoSceneRadiusMm,
+    perspectiveFov,
     scheduleTrackpadGestureEnd,
   ]);
 
@@ -5905,7 +5906,12 @@ export function SceneCanvas({
         <EnableLocalClipping enabled={clipLower != null || clipUpper != null || indicatorPlaneZ != null || !!organicCutKeyGizmo} />
         <CameraProvider cameraRef={cameraRef} />
         <CameraProjectionController mode={cameraProjectionMode} perspectiveFov={perspectiveFov} sceneRadius={orthoSceneRadiusMm} />
-        <OrthoFrustumSync mode={cameraProjectionMode} suspended={spaceMouseNavigationActive} sceneRadius={orthoSceneRadiusMm} />
+        <OrthoFrustumSync
+          mode={cameraProjectionMode}
+          suspended={spaceMouseNavigationActive}
+          sceneRadius={orthoSceneRadiusMm}
+          fovDeg={perspectiveFov}
+        />
         <CameraClipPlaneStabilizer />
         {/* GPU Picking Provider - wraps all pickable content when enabled */}
         <PickingProviderWrapper
@@ -7255,6 +7261,7 @@ export function SceneCanvas({
             pivotPoint={selectedSpaceMousePivotPoint}
             fallbackPivot={buildVolumeCenterTarget}
             sceneRadius={orthoSceneRadiusMm}
+            fovDeg={perspectiveFov}
             onNavigationActiveChange={setSpaceMouseNavigationActive}
             onNavigationFrame={handleSpaceMouseNavigationFrame}
           />
@@ -7265,6 +7272,7 @@ export function SceneCanvas({
             pivotCandidates={spaceMousePivotCandidates}
             fallbackPivot={buildVolumeCenterTarget}
             sceneRadius={orthoSceneRadiusMm}
+            fovDeg={perspectiveFov}
             onNavigationActiveChange={setSpaceMouseNavigationActive}
             onNavigationFrame={handleSpaceMouseNavigationFrame}
             onNewDeviceDetected={onNewDeviceDetected}
@@ -7281,6 +7289,7 @@ export function SceneCanvas({
             orbitTarget={orbitTarget}
             cameraRef={cameraRef}
             orbitControlsRef={orbitControlsRef as React.MutableRefObject<{ target: THREE.Vector3; update: () => void } | null>}
+            perspectiveFov={perspectiveFov}
           />
         )}
         <CameraIntroController
@@ -7290,6 +7299,7 @@ export function SceneCanvas({
           mode={mode}
           plateWidthMm={activeBuildVolumeSettings.widthMm}
           plateDepthMm={activeBuildVolumeSettings.depthMm}
+          perspectiveFov={perspectiveFov}
         />
         <CameraHomeResetController
           runId={cameraHomeResetRunId}
@@ -7303,6 +7313,7 @@ export function SceneCanvas({
           target={buildVolumeCenterTarget}
           plateWidthMm={activeBuildVolumeSettings.widthMm}
           plateDepthMm={activeBuildVolumeSettings.depthMm}
+          perspectiveFov={perspectiveFov}
         />
         <CameraControlsRecovery />
         <CameraFocusController selectedIslandId={overlaySelectedIslandId ?? null} islandMarkers={islandMarkers ?? []} onClearSelection={onClearSelection} />

@@ -13,7 +13,6 @@ import {
   orthoAspectOf,
   orthoFitRadiusForScene,
   orthoHalfHeightForRadius,
-  orthoRadiusForPerspectiveFraming,
   orthoWheelRadiusScale,
   resolveOrthoNavRadius,
   syncOrthoFrustum,
@@ -181,21 +180,6 @@ test('resolveOrthoNavRadius passes the first frame through', () => {
 test('orthoFitRadiusForScene frames the sphere for the reference FOV', () => {
   const radius = orthoFitRadiusForScene(200);
   assert.ok(Math.abs(radius - (200 * 1.05) / Math.tan(degToRad(ORTHO_REFERENCE_FOV_DEG) / 2)) < 1e-9);
-});
-
-test('orthoRadiusForPerspectiveFraming preserves apparent size and round-trips', () => {
-  // At the reference FOV the radius is unchanged.
-  assert.ok(Math.abs(orthoRadiusForPerspectiveFraming(100, ORTHO_REFERENCE_FOV_DEG) - 100) < 1e-9);
-
-  const perspectiveFov = 80;
-  const orthoRadius = orthoRadiusForPerspectiveFraming(100, perspectiveFov);
-  assert.ok(
-    Math.abs(orthoRadius - (100 * Math.tan(degToRad(perspectiveFov) / 2)) / Math.tan(degToRad(ORTHO_REFERENCE_FOV_DEG) / 2)) < 1e-6,
-  );
-
-  // perspective -> ortho -> perspective returns to the original distance.
-  const backToPerspective = (orthoRadius * Math.tan(degToRad(ORTHO_REFERENCE_FOV_DEG) / 2)) / Math.tan(degToRad(perspectiveFov) / 2);
-  assert.ok(Math.abs(backToPerspective - 100) < 1e-6);
 });
 
 

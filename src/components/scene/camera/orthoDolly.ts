@@ -11,8 +11,9 @@ import { DEFAULT_FOV_DEG } from '@/components/settings/cameraFovPreferences';
  * actually moves); the frustum follows, so apparent size scales exactly like a
  * perspective dolly. `zoom` is pinned to 1 and is never the navigation state.
  *
- * The reference FOV is fixed at the default rather than the user's perspective
- * FOV, so the FOV slider never changes the orthographic scale (ADR-0032).
+ * Callers pass the app's live FOV setting, the same value perspective uses, so
+ * both projections share one FOV and switching is the identity.
+ * `ORTHO_REFERENCE_FOV_DEG` is only the fallback when none is supplied.
  */
 export const ORTHO_REFERENCE_FOV_DEG = DEFAULT_FOV_DEG;
 
@@ -105,25 +106,6 @@ export function syncOrthoFrustum(
 }
 
 /**
- * The ortho radius that reproduces a perspective view's apparent size.
- *
- * Ortho derives from the fixed reference FOV while perspective uses the user's
- * FOV, so switching projections at the same distance would change the framing —
- * and because the return trip solves distance, every round trip would compound
- * that error. Scaling the radius by `tan(perspFov/2) / tan(refFov/2)` makes the
- * switch preserve apparent size, so the round trip is the identity.
- */
-export function orthoRadiusForPerspectiveFraming(
-  radius: number,
-  perspectiveFovDeg: number,
-  orthoFovDeg = ORTHO_REFERENCE_FOV_DEG,
-): number {
-  const perspectiveTan = Math.tan(THREE.MathUtils.degToRad(perspectiveFovDeg) * 0.5);
-  const orthoTan = Math.tan(THREE.MathUtils.degToRad(orthoFovDeg) * 0.5);
-  return (perspectiveTan * Math.max(EPSILON, radius)) / Math.max(EPSILON, orthoTan);
-}
-
-/**
  * OrbitControls-compatible wheel scale. Mirrors `getZoomScale()` =
  * `0.95^zoomSpeed`; returns a multiplier applied to the radius (<1 zooms in).
  */
@@ -159,6 +141,7 @@ export type OrthoNavFrame = {
   sceneRadius?: number;
   minRadius?: number;
   maxRadius?: number;
+  fovDeg?: number;
 };
 
 /**
@@ -181,6 +164,7 @@ export function resolveOrthoNavRadius(frame: OrthoNavFrame): number {
     sceneRadius,
     minRadius = ORTHO_MIN_RADIUS,
     maxRadius = ORTHO_MAX_RADIUS,
+    fovDeg,
   } = frame;
 
   if (!hasPrevious) return currentRadius;
@@ -193,7 +177,7 @@ export function resolveOrthoNavRadius(frame: OrthoNavFrame): number {
   if (eyeJump > ORTHO_VIEW_JUMP_FRACTION * Math.max(EPSILON, currentRadius)) {
     // Fit: frame the scene if we know its radius, else keep the scale.
     if (sceneRadius != null && sceneRadius > 0) {
-      return THREE.MathUtils.clamp(orthoFitRadiusForScene(sceneRadius), minRadius, maxRadius);
+      return THREE.MathUtils.clamp(orthoFitRadiusForScene(sceneRadius, fovDeg), minRadius, maxRadius);
     }
     return currentRadius;
   }
