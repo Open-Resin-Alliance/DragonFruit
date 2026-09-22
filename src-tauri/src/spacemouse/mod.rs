@@ -216,6 +216,10 @@ mod nav {
         extents_seq: u64,
         /// navlib exclusive-control signal.
         motion: bool,
+        /// Set when a session starts. The next idle sync takes JS's pushed pose
+        /// unconditionally, so a fresh client owns the camera instead of inheriting
+        /// the previous session's affine (which snapped the camera on remount).
+        claim_pose: bool,
     }
 
     impl Default for NavState {
@@ -233,6 +237,7 @@ mod nav {
                 ortho_max: PointT { x: 10.0, y: 10.0, z: 1000.0 },
                 extents_seq: 0,
                 motion: false,
+                claim_pose: false,
             }
         }
     }
@@ -589,6 +594,19 @@ mod nav {
             write_bool(&navlib, handle, P_FOCUS, true);
         }
 
+        // A new session is a new client. The shadow is process-wide and keeps the
+        // previous session's affine/extents, and the JS side restarts its
+        // `lastAppliedSeq` at 0 — so without resetting the counters here the
+        // ownership handshake in `sync` reads the stale seq as "navlib has an
+        // unconsumed write" and hands the previous session's pose back, snapping
+        // the camera to wherever it was before the remount.
+        if let Ok(mut s) = nav_state().lock() {
+            s.seq = 0;
+            s.extents_seq = 0;
+            s.motion = false;
+            s.claim_pose = true;
+        }
+
         log::info!("[spacemouse] navlib bridge started (handle={handle}) from {loaded_from}");
         *guard = Some(NavSession {
             navlib,
@@ -639,13 +657,14 @@ mod nav {
         // (a Fit that does not set `motion`) is overwritten here by JS's pushed pose
         // before JS ever sees it, so the command silently does nothing.
         if !s.motion {
-            if s.seq == cam.last_applied_seq {
+            if s.claim_pose || s.seq == cam.last_applied_seq {
                 s.affine = cam.affine;
             }
-            if s.extents_seq == cam.last_applied_extents_seq {
+            if s.claim_pose || s.extents_seq == cam.last_applied_extents_seq {
                 s.ortho_min = PointT { x: cam.ortho_min[0], y: cam.ortho_min[1], z: cam.ortho_min[2] };
                 s.ortho_max = PointT { x: cam.ortho_max[0], y: cam.ortho_max[1], z: cam.ortho_max[2] };
             }
+            s.claim_pose = false;
         }
 
         NavOutput {

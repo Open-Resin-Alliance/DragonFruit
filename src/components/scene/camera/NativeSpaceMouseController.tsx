@@ -187,6 +187,14 @@ export function NativeSpaceMouseController({
         navPrevEyeRef.current.copy(camera.position);
         navPrevFwdRef.current.copy(seedForward);
         navPrevAxialRef.current = new THREE.Vector3().copy(camera.position).sub(seedPivot).dot(seedForward);
+        // Seed the dolly radius from the live camera too: it otherwise starts at a
+        // hardcoded value, so the first applied frame (e.g. an idle command after a
+        // bridge restart) would set the ortho scale to that wrong radius.
+        navRadiusRef.current = THREE.MathUtils.clamp(
+          camera.position.distanceTo(seedPivot),
+          ORTHO_MIN_RADIUS,
+          ORTHO_MAX_RADIUS,
+        );
         navHasAxialRef.current = true;
       }
 
