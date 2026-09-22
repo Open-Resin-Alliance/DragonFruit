@@ -206,8 +206,10 @@ function HomeButton({
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
 
-    // Rasterize lucide's House icon (the same one the rest of the UI uses) with
-    // its own 24x24 viewBox and default stroke, scaled to the canvas.
+    // Rasterize lucide's House icon (the same one the rest of the UI uses),
+    // filled rather than stroked. lucide is stroke-only, so fill the closed
+    // silhouette path and punch the open detail path (the door) out with
+    // destination-out — the filled-home look.
     const viewBox = 24;
     const padding = size * 0.06;
     const scale = (size - padding * 2) / viewBox;
@@ -215,13 +217,20 @@ function HomeButton({
     ctx.save();
     ctx.translate(padding, padding);
     ctx.scale(scale, scale);
-    ctx.strokeStyle = strokeColor;
-    ctx.lineWidth = 2;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
+
+    const paths: { path: Path2D; closed: boolean }[] = [];
     for (const [tag, attrs] of houseIconNode) {
       if (tag !== 'path' || typeof attrs.d !== 'string') continue;
-      ctx.stroke(new Path2D(attrs.d));
+      paths.push({ path: new Path2D(attrs.d), closed: /z\s*$/i.test(attrs.d.trim()) });
+    }
+
+    ctx.fillStyle = strokeColor;
+    for (const { path, closed } of paths) {
+      if (closed) ctx.fill(path);
+    }
+    ctx.globalCompositeOperation = 'destination-out';
+    for (const { path, closed } of paths) {
+      if (!closed) ctx.fill(path);
     }
     ctx.restore();
 
@@ -251,7 +260,7 @@ function HomeButton({
       <meshBasicMaterial
         map={texture ?? undefined}
         transparent
-        opacity={hover ? 1 : 0.75}
+        opacity={hover ? 1 : 0.9}
         depthWrite={false}
         side={DoubleSide}
       />
