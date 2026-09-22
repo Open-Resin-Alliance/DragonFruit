@@ -1303,7 +1303,7 @@ export function SceneCanvas({
     activeBuildVolumeSettings.widthMm,
   ]);
 
-  const { defaultCamera, orbitTarget, setOrbitTargetFromPoint, introBoundsSnapshot, cameraIntroRunId, cameraHomeResetRunId } =
+  const { defaultCamera, orbitTarget, setOrbitTargetFromPoint, introBoundsSnapshot, cameraIntroRunId, cameraHomeResetRunId, resetCameraHome } =
     useStlLoadCameraIntro(models, buildVolumeCenterTarget, { deferIntro: deferCameraIntro });
   const [cameraIntroCompletedRunId, setCameraIntroCompletedRunId] = React.useState(0);
   const [cameraHomeResetCompletedRunId, setCameraHomeResetCompletedRunId] = React.useState(0);
@@ -7247,6 +7247,7 @@ export function SceneCanvas({
             arrowColor={gizmoColors.face}
             arrowHoverColor={gizmoColors.accent}
             arrowStrokeColor={gizmoColors.accent}
+            onHome={resetCameraHome}
           >
             <ZUpGizmoViewcube
               font="600 24px Inter, system-ui, sans-serif"

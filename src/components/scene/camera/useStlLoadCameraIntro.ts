@@ -18,6 +18,8 @@ type StlLoadCameraIntroState = {
   introBoundsSnapshot: THREE.Box3 | null;
   cameraIntroRunId: number;
   cameraHomeResetRunId: number;
+  /** Animate the camera back to the default home view. */
+  resetCameraHome: () => void;
 };
 
 export function useStlLoadCameraIntro(
@@ -205,6 +207,10 @@ export function useStlLoadCameraIntro(
     lastAppliedIntroRunIdRef.current = cameraIntroRunId;
   }, [cameraIntroRunId, introBoundsSnapshot, sceneWorldBounds]);
 
+  const resetCameraHome = React.useCallback(() => {
+    setCameraHomeResetRunId((id) => id + 1);
+  }, []);
+
   return {
     defaultCamera,
     orbitTarget,
@@ -212,5 +218,6 @@ export function useStlLoadCameraIntro(
     introBoundsSnapshot,
     cameraIntroRunId,
     cameraHomeResetRunId,
+    resetCameraHome,
   };
 }

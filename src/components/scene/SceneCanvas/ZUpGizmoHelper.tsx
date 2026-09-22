@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
-import { BufferGeometry, DoubleSide, Float32BufferAttribute, Group, Matrix4, Object3D, Quaternion, Vector3 } from 'three';
+import { BufferGeometry, CanvasTexture, DoubleSide, Float32BufferAttribute, Group, Matrix4, Object3D, Quaternion, Vector3 } from 'three';
 import type { OrthographicCamera as ThreeOrthographicCamera } from 'three';
 import { Edges, GizmoHelperProps, Hud, OrthographicCamera } from '@react-three/drei';
 
@@ -176,6 +176,83 @@ function RotationArrow({
   );
 }
 
+/** Home button sits on the bottom-right diagonal, between the right and bottom arrows. */
+const HOME_OFFSET = 0.7;
+const HOME_SIZE = 0.28;
+
+function HomeButton({
+  position,
+  color,
+  hoverColor,
+  strokeColor,
+  onClick,
+}: {
+  position: [number, number, number];
+  color: string;
+  hoverColor: string;
+  strokeColor: string;
+  onClick?: () => void;
+}) {
+  const [hover, setHover] = React.useState(false);
+
+  const texture = React.useMemo(() => {
+    if (typeof document === 'undefined') return null;
+    const size = 64;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    ctx.fillStyle = color;
+    ctx.fillRect(0, 0, size, size);
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = 5;
+    ctx.strokeRect(2.5, 2.5, size - 5, size - 5);
+
+    // House glyph: roof + body, in the accent colour.
+    ctx.fillStyle = strokeColor;
+    ctx.beginPath();
+    ctx.moveTo(size * 0.5, size * 0.18);
+    ctx.lineTo(size * 0.84, size * 0.5);
+    ctx.lineTo(size * 0.16, size * 0.5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillRect(size * 0.29, size * 0.5, size * 0.42, size * 0.32);
+
+    return new CanvasTexture(canvas);
+  }, [color, strokeColor]);
+
+  React.useEffect(() => () => texture?.dispose(), [texture]);
+
+  return (
+    <mesh
+      position={position}
+      onPointerOver={(e) => {
+        e.stopPropagation();
+        setHover(true);
+      }}
+      onPointerOut={(e) => {
+        e.stopPropagation();
+        setHover(false);
+      }}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick?.();
+      }}
+    >
+      <planeGeometry args={[HOME_SIZE, HOME_SIZE]} />
+      <meshBasicMaterial
+        map={texture ?? undefined}
+        color={hover ? hoverColor : '#ffffff'}
+        transparent
+        opacity={hover ? 0.95 : 0.85}
+        side={DoubleSide}
+      />
+    </mesh>
+  );
+}
+
 export function ZUpGizmoHelper({
   alignment = 'bottom-right',
   margin = [80, 80],
@@ -183,10 +260,16 @@ export function ZUpGizmoHelper({
   arrowColor = '#f0f0f0',
   arrowHoverColor = '#999999',
   arrowStrokeColor = '#baf72e',
+  onHome,
   onUpdate,
   onTarget,
   children,
-}: GizmoHelperProps & { arrowColor?: string; arrowHoverColor?: string; arrowStrokeColor?: string }) {
+}: GizmoHelperProps & {
+  arrowColor?: string;
+  arrowHoverColor?: string;
+  arrowStrokeColor?: string;
+  onHome?: () => void;
+}) {
   const size = useThree((state) => state.size);
   const mainCamera = useThree((state) => state.camera);
   const defaultControls = useThree((state) => state.controls) as unknown;
@@ -362,6 +445,13 @@ export function ZUpGizmoHelper({
             <RotationArrow direction="down" position={[0, -ARROW_DISTANCE, 0]} rotation={0} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} />
             <RotationArrow direction="left" position={[-ARROW_DISTANCE, 0, 0]} rotation={-Math.PI / 2} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} />
             <RotationArrow direction="right" position={[ARROW_DISTANCE, 0, 0]} rotation={Math.PI / 2} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} />
+            <HomeButton
+              position={[HOME_OFFSET, -HOME_OFFSET, 0]}
+              color={arrowColor}
+              hoverColor={arrowHoverColor}
+              strokeColor={arrowStrokeColor}
+              onClick={onHome}
+            />
           </group>
         )}
       </Context.Provider>
