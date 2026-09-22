@@ -260,7 +260,6 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
   const [draftConsolidationDistance, setDraftConsolidationDistance] = useState<number>(0.2);
   const [draftReduceIntersection, setDraftReduceIntersection] = useState<boolean>(false);
   const [draftIntersectionThreshold, setDraftIntersectionThreshold] = useState<number>(0.5);
-  const [draftShowOverhangs, setDraftShowOverhangs] = useState<boolean>(true);
   const [draftScaleMarkersWithArea, setDraftScaleMarkersWithArea] = useState<boolean>(true);
   const [draftEnableContourRegions, setDraftEnableContourRegions] = useState<boolean>(true);
   const [draftMaxContourRegions, setDraftMaxContourRegions] = useState<number>(20);
@@ -963,7 +962,6 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
       setConsolidationDistance(draftConsolidationDistance);
       setReduceIntersection(draftReduceIntersection);
       setIntersectionThreshold(draftIntersectionThreshold);
-      setShowOverhangs(draftShowOverhangs);
       setScaleMarkersWithArea(draftScaleMarkersWithArea);
       setEnableContourRegions(draftEnableContourRegions);
       setMaxContourRegions(draftMaxContourRegions);
@@ -981,7 +979,6 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     draftConsolidationDistance,
     draftReduceIntersection,
     draftIntersectionThreshold,
-    draftShowOverhangs,
     draftScaleMarkersWithArea,
     draftEnableContourRegions,
     draftMaxContourRegions,
@@ -999,7 +996,6 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     setDraftConsolidationDistance(0.2);
     setDraftReduceIntersection(false);
     setDraftIntersectionThreshold(0.5);
-    setDraftShowOverhangs(true);
     setDraftScaleMarkersWithArea(true);
     setDraftEnableContourRegions(true);
     setDraftMaxContourRegions(20);
@@ -1008,42 +1004,6 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     setDraftMinAreaMm2(0.02);
     setDraftMinimaK(2);
   }, []);
-
-  const hasPendingChanges = useMemo(() => {
-    return (
-      pxMm !== draftPxMm ||
-      supportBufMm !== draftSupportBufMm ||
-      connectivity !== draftConnectivity ||
-      consolidateVoxel !== draftConsolidateVoxel ||
-      consolidationDistance !== draftConsolidationDistance ||
-      reduceIntersection !== draftReduceIntersection ||
-      intersectionThreshold !== draftIntersectionThreshold ||
-      showOverhangs !== draftShowOverhangs ||
-      scaleMarkersWithArea !== draftScaleMarkersWithArea ||
-      enableContourRegions !== draftEnableContourRegions ||
-      maxContourRegions !== draftMaxContourRegions ||
-      removeSupportedAreaClusters !== draftRemoveSupportedAreaClusters ||
-      areaPerSupport !== draftAreaPerSupport ||
-      minAreaMm2 !== draftMinAreaMm2 ||
-      minimaK !== draftMinimaK
-    );
-  }, [
-    pxMm, draftPxMm,
-    supportBufMm, draftSupportBufMm,
-    connectivity, draftConnectivity,
-    consolidateVoxel, draftConsolidateVoxel,
-    consolidationDistance, draftConsolidationDistance,
-    reduceIntersection, draftReduceIntersection,
-    intersectionThreshold, draftIntersectionThreshold,
-    showOverhangs, draftShowOverhangs,
-    scaleMarkersWithArea, draftScaleMarkersWithArea,
-    enableContourRegions, draftEnableContourRegions,
-    maxContourRegions, draftMaxContourRegions,
-    removeSupportedAreaClusters, draftRemoveSupportedAreaClusters,
-    areaPerSupport, draftAreaPerSupport,
-    minAreaMm2, draftMinAreaMm2,
-    minimaK, draftMinimaK,
-  ]);
 
   return {
     scanning,
@@ -1124,8 +1084,6 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     setDraftReduceIntersection,
     draftIntersectionThreshold,
     setDraftIntersectionThreshold,
-    draftShowOverhangs,
-    setDraftShowOverhangs,
     draftScaleMarkersWithArea,
     setDraftScaleMarkersWithArea,
     draftEnableContourRegions,
@@ -1143,7 +1101,6 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     applySettings,
     resetSettings,
     applyingSettings,
-    hasPendingChanges,
   };
 }
 
