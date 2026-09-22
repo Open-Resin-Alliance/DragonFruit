@@ -75,7 +75,6 @@ export function CameraIntroController({
     const radius = Math.max(0.001, sphere.radius);
 
     const isPerspective = camera instanceof THREE.PerspectiveCamera;
-    const isOrthographic = camera instanceof THREE.OrthographicCamera;
     const vFov = isPerspective
       ? THREE.MathUtils.degToRad((camera as THREE.PerspectiveCamera).fov)
       : THREE.MathUtils.degToRad(50);
@@ -125,15 +124,6 @@ export function CameraIntroController({
 
     const startPos = camera.position.clone();
     const startTarget = orbitControls.target.clone();
-    const startZoom = isOrthographic ? (camera as THREE.OrthographicCamera).zoom : 1;
-
-    let endZoom = startZoom;
-    if (isOrthographic) {
-      const ortho = camera as THREE.OrthographicCamera;
-      const frustumHeight = Math.max(1e-6, ortho.top - ortho.bottom);
-      const requiredWorldHeight = (radius * 2) * (mode === 'support' ? supportFitMargin : 1.08);
-      endZoom = THREE.MathUtils.clamp(frustumHeight / Math.max(1e-6, requiredWorldHeight), 0.0001, 200);
-    }
 
     if (preserveCurrentViewDirection) {
       orbitControls.target.copy(center);
@@ -202,12 +192,6 @@ export function CameraIntroController({
       const eased = THREE.MathUtils.lerp(smoothStep, easeInOutQuint(t), 0.72);
 
       camera.position.lerpVectors(startPos, endPos, eased);
-
-      if (isOrthographic) {
-        const ortho = camera as THREE.OrthographicCamera;
-        ortho.zoom = THREE.MathUtils.lerp(startZoom, endZoom, eased);
-        ortho.updateProjectionMatrix();
-      }
 
       if (preserveCurrentViewDirection) {
         orbitControls.target.copy(endTarget);

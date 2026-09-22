@@ -11,6 +11,7 @@ Internals of DragonFruit, for people changing them. Start with [Architecture Ove
 | Make something undoable | [History and Undo/Redo](history-and-undo-redo.md) |
 | Show the user a message | [Notifications and Toasts](notifications.md) |
 | Bind a key | [Hotkeys](hotkeys.md), [Support Placement Modifiers](../reference/support-placement-modifiers.md) |
+| Move or frame the 3D camera | [Camera Navigation](camera-navigation.md) |
 | Call native code | [Tauri IPC and Native Bridge](tauri-ipc-bridge.md) |
 | Ship something unfinished | [Experiments Framework](experiments-framework.md) |
 | Support a new printer or format | [Plugin Framework](plugins-framework.md), [Complex Plugin Contributing](plugins-complex-contributing.md), [Formats](formats.md) |

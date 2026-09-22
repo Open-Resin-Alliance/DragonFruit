@@ -105,8 +105,15 @@ import { ModelAttachedSupportLayer } from './ModelAttachedSupportLayer';
 import {
   CameraModeEntryFramingController,
   CameraProjectionController,
+  OrthoFrustumSync,
   OrbitPivotIndicator,
 } from './SceneCanvasCameraControllers';
+import {
+  ORTHO_MAX_RADIUS,
+  ORTHO_MIN_RADIUS,
+  dollyOrthoToCursor,
+  orthoWheelRadiusScale,
+} from '@/components/scene/camera/orthoDolly';
 import { useMarqueeSelectionHandlers } from './useMarqueeSelectionHandlers';
 import {
   marqueeModeForDrag,
@@ -5113,7 +5120,35 @@ export function SceneCanvas({
           cameraTrackpadSettings,
           cameraTrackpadModifierKey,
         );
-        if (action === null) return;
+        if (action === null) {
+          // Orthographic wheel is a real dolly: move the camera along its view
+          // axis and let OrthoFrustumSync derive the frustum from the new
+          // radius. OrbitControls' zoom is disabled in ortho, so we own it.
+          const camera = cameraRef.current;
+          const zoomControls = orbitControlsRef.current;
+          if (camera instanceof THREE.OrthographicCamera && zoomControls) {
+            const rect = container.getBoundingClientRect();
+            if (rect.width > 0 && rect.height > 0) {
+              event.preventDefault();
+              const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+              const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+              const aspect = (camera.right - camera.left) / Math.max(1e-6, camera.top - camera.bottom);
+              const nextTarget = dollyOrthoToCursor({
+                camera,
+                target: zoomControls.target,
+                ndcX,
+                ndcY,
+                radiusScale: orthoWheelRadiusScale(event.deltaY, zoomControls.zoomSpeed),
+                minRadius: ORTHO_MIN_RADIUS,
+                maxRadius: ORTHO_MAX_RADIUS,
+                aspect,
+              });
+              zoomControls.target.copy(nextTarget);
+              zoomControls.update();
+            }
+          }
+          return;
+        }
 
         const controls = orbitControlsRef.current;
         if (!controls || controls.enabled === false) return;
@@ -5840,6 +5875,7 @@ export function SceneCanvas({
         <EnableLocalClipping enabled={clipLower != null || clipUpper != null || indicatorPlaneZ != null || !!organicCutKeyGizmo} />
         <CameraProvider cameraRef={cameraRef} />
         <CameraProjectionController mode={cameraProjectionMode} perspectiveFov={perspectiveFov} />
+        <OrthoFrustumSync mode={cameraProjectionMode} suspended={spaceMouseNavigationActive} />
         <CameraClipPlaneStabilizer />
         {/* GPU Picking Provider - wraps all pickable content when enabled */}
         <PickingProviderWrapper
@@ -7150,6 +7186,9 @@ export function SceneCanvas({
           screenSpacePanning
           zoomToCursor
           enablePan
+          // Orthographic wheel is a real dolly handled in onTrackpadWheel; letting
+          // OrbitControls also zoom would fight the derived frustum.
+          enableZoom={cameraProjectionMode === 'perspective'}
           enabled={
             cameraInteractionCycleEnabled
             && !((mode === 'prepare' || mode === 'support') && transformMode === 'supportBlockers' && blockerStrokeActive)
@@ -7225,7 +7264,6 @@ export function SceneCanvas({
           runId={cameraHomeResetRunId}
           homePosition={defaultCamera.position}
           homeTarget={[buildVolumeCenterTarget.x, buildVolumeCenterTarget.y, buildVolumeCenterTarget.z]}
-          homeFovDeg={defaultCamera.fov}
           onComplete={setCameraHomeResetCompletedRunId}
         />
         <CameraModeEntryFramingController
