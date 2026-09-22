@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
-import { BufferGeometry, CanvasTexture, DoubleSide, Float32BufferAttribute, Group, Matrix4, Object3D, Quaternion, Vector3 } from 'three';
+import { BufferGeometry, CanvasTexture, DoubleSide, Float32BufferAttribute, Group, MathUtils, Matrix4, Object3D, Quaternion, Vector3 } from 'three';
 import type { OrthographicCamera as ThreeOrthographicCamera } from 'three';
 import { Edges, GizmoHelperProps, Hud, OrthographicCamera } from '@react-three/drei';
 import { __iconNode as houseIconNode } from 'lucide-react/dist/esm/icons/house.js';
@@ -103,11 +103,14 @@ const ARROW_DISTANCE = 0.74;
 const ARROW_WIDTH = 0.22;
 const ARROW_HEIGHT = 0.12;
 /**
- * Only show the quarter-turn arrows when the view is within this many degrees of
- * a face — a quarter turn is only meaningful from a face-on (FRONT/TOP/…) view.
+ * Quarter-turn arrows fade with how face-on the view is: fully opaque within
+ * ARROW_FADE_FULL_DEGREES of a face, gone by ARROW_FADE_ZERO_DEGREES. A quarter
+ * turn is only meaningful from a face-on (FRONT/TOP/…) view.
  */
-const ARROW_FACE_ON_DEGREES = 10;
-const ARROW_FACE_ON_COS = Math.cos((ARROW_FACE_ON_DEGREES * Math.PI) / 180);
+const ARROW_FADE_FULL_DEGREES = 6;
+const ARROW_FADE_ZERO_DEGREES = 20;
+const ARROW_FADE_FULL_COS = Math.cos((ARROW_FADE_FULL_DEGREES * Math.PI) / 180);
+const ARROW_FADE_ZERO_COS = Math.cos((ARROW_FADE_ZERO_DEGREES * Math.PI) / 180);
 const arrowViewDirection = new Vector3();
 
 /**
@@ -129,63 +132,52 @@ arrowTriangle.setAttribute(
 );
 arrowTriangle.computeVertexNormals();
 
-/** Shown (dimmed) when a quarter turn would not be meaningful. */
-const ARROW_DISABLED_COLOR = '#8b9095';
-const ARROW_DISABLED_OPACITY = 0.4;
-
 function RotationArrow({
   direction,
   position,
   rotation,
+  fade,
   color,
   hoverColor,
   strokeColor,
-  disabled = false,
 }: {
   direction: QuarterTurnDirection;
   position: [number, number, number];
   rotation: number;
+  fade: number;
   color: string;
   hoverColor: string;
   strokeColor: string;
-  disabled?: boolean;
 }) {
   const { quarterTurn } = React.useContext(Context);
   const [hover, setHover] = React.useState(false);
-
-  const tone = disabled ? ARROW_DISABLED_COLOR : hover ? hoverColor : color;
-  const outline = disabled ? ARROW_DISABLED_COLOR : strokeColor;
 
   return (
     <mesh
       geometry={arrowTriangle}
       position={position}
       rotation={[0, 0, rotation]}
-      // Dimmed rather than removed, but inert while unavailable.
       onPointerOver={(e) => {
         e.stopPropagation();
-        if (disabled) return;
         setHover(true);
       }}
       onPointerOut={(e) => {
         e.stopPropagation();
-        if (disabled) return;
         setHover(false);
       }}
       onClick={(e) => {
         e.stopPropagation();
-        if (disabled) return;
         quarterTurn(direction);
       }}
     >
       <meshBasicMaterial
-        color={tone}
+        color={hover ? hoverColor : color}
         transparent
-        opacity={disabled ? ARROW_DISABLED_OPACITY : hover ? 0.95 : 0.8}
+        opacity={(hover ? 0.95 : 0.8) * fade}
         side={DoubleSide}
       />
       {/* Same secondary outline the cube faces carry. */}
-      <Edges color={outline} />
+      <Edges color={strokeColor} transparent opacity={0.9 * fade} />
     </mesh>
   );
 }
@@ -294,8 +286,8 @@ export function ZUpGizmoHelper({
   const radius = React.useRef(0);
   const focusPoint = React.useRef(new Vector3(0, 0, 0));
   const savedControlsEnabled = React.useRef<boolean | null>(null);
-  const [showArrows, setShowArrows] = React.useState(false);
-  const showArrowsRef = React.useRef(false);
+  const [arrowFade, setArrowFade] = React.useState(0);
+  const arrowFadeRef = React.useRef(0);
 
   const restoreControls = React.useCallback(() => {
     if (isOrbitControls(defaultControls) || isCameraControls(defaultControls)) {
@@ -392,17 +384,24 @@ export function ZUpGizmoHelper({
       gizmoRef.current.quaternion.setFromRotationMatrix(matrix);
     }
 
-    // Show the quarter-turn arrows only from a face-on view. Re-render only when
-    // the state flips, not every frame.
+    // Fade the quarter-turn arrows with how face-on the view is. Re-render only
+    // when the fade moves meaningfully, not every frame.
     mainCamera.getWorldDirection(arrowViewDirection);
     const faceOn = Math.max(
       Math.abs(arrowViewDirection.x),
       Math.abs(arrowViewDirection.y),
       Math.abs(arrowViewDirection.z),
-    ) > ARROW_FACE_ON_COS;
-    if (faceOn !== showArrowsRef.current) {
-      showArrowsRef.current = faceOn;
-      setShowArrows(faceOn);
+    );
+    const rawFade = MathUtils.clamp(
+      (faceOn - ARROW_FADE_ZERO_COS) / Math.max(1e-6, ARROW_FADE_FULL_COS - ARROW_FADE_ZERO_COS),
+      0,
+      1,
+    );
+    // Snap the ends so the meshes leave the scene (and the raycast) entirely.
+    const fade = rawFade <= 0.02 ? 0 : rawFade >= 0.98 ? 1 : rawFade * rawFade * (3 - 2 * rawFade);
+    if (Math.abs(fade - arrowFadeRef.current) > 0.01) {
+      arrowFadeRef.current = fade;
+      setArrowFade(fade);
     }
   });
 
@@ -449,15 +448,18 @@ export function ZUpGizmoHelper({
           {children}
         </group>
         {/* Quarter-turn arrows live outside the rotating group, so they stay
-            screen-aligned: the top arrow is always "turn up from here". They are
-            dimmed and non-interactive unless the view is face-on, where a quarter
-            turn is meaningful. */}
-        <group position={[x, y, 0]} scale={[60, 60, 60]}>
-          <RotationArrow direction="up" position={[0, ARROW_DISTANCE, 0]} rotation={Math.PI} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} disabled={!showArrows} />
-          <RotationArrow direction="down" position={[0, -ARROW_DISTANCE, 0]} rotation={0} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} disabled={!showArrows} />
-          <RotationArrow direction="left" position={[-ARROW_DISTANCE, 0, 0]} rotation={-Math.PI / 2} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} disabled={!showArrows} />
-          <RotationArrow direction="right" position={[ARROW_DISTANCE, 0, 0]} rotation={Math.PI / 2} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} disabled={!showArrows} />
-        </group>
+            screen-aligned: the top arrow is always "turn up from here". They
+            fade out as the view leaves a face — a quarter turn is meaningless
+            from an arbitrary angle. Fully faded frames render nothing (not
+            `visible`), so the faded arrows cannot be hit. */}
+        {arrowFade > 0 && (
+          <group position={[x, y, 0]} scale={[60, 60, 60]}>
+            <RotationArrow direction="up" position={[0, ARROW_DISTANCE, 0]} rotation={Math.PI} fade={arrowFade} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} />
+            <RotationArrow direction="down" position={[0, -ARROW_DISTANCE, 0]} rotation={0} fade={arrowFade} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} />
+            <RotationArrow direction="left" position={[-ARROW_DISTANCE, 0, 0]} rotation={-Math.PI / 2} fade={arrowFade} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} />
+            <RotationArrow direction="right" position={[ARROW_DISTANCE, 0, 0]} rotation={Math.PI / 2} fade={arrowFade} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} />
+          </group>
+        )}
         {/* Home is useful from any angle, so it is always shown (the quarter-turn
             arrows are not). */}
         <group position={[x, y, 0]} scale={[60, 60, 60]}>
