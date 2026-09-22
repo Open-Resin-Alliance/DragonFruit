@@ -232,10 +232,77 @@ const NAVIGATION_LINE_WIDTH_PX = 2;
 const NAVIGATION_CONTACT_COLOR = '#3b82f6';
 
 /**
+ * How many line widths a simple view's pick target spans.
+ *
+ * A simple view answers the pointer through a slim tube along the member's
+ * line rather than through the member's own geometry: a trunk is millimetres
+ * wide, and the pointer there is aiming at a two-pixel vector, so the member's
+ * girth answers clicks well away from the line the eye is following. Three
+ * widths keeps a little forgiveness without reaching for the neighbouring
+ * support.
+ */
+const NAVIGATION_PICK_LINE_WIDTHS = 3;
+
+/**
+ * World units per screen pixel at a point, for the active projection.
+ *
+ * Null when the camera is neither projection this scene builds, in which case
+ * the caller leaves the geometry as it is rather than guessing a tube size.
+ */
+function worldUnitsPerPixelAt(camera: THREE.Camera, viewportHeightPx: number, point: Vec3): number | null {
+    const height = Math.max(1, viewportHeightPx);
+
+    if (camera instanceof THREE.OrthographicCamera) {
+        return ((camera.top - camera.bottom) / Math.max(1e-6, camera.zoom)) / height;
+    }
+
+    if (camera instanceof THREE.PerspectiveCamera) {
+        const distance = Math.max(0.001, Math.hypot(
+            camera.position.x - point.x,
+            camera.position.y - point.y,
+            camera.position.z - point.z,
+        ));
+        return (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5) * distance) / height;
+    }
+
+    return null;
+}
+
+/**
+ * The same shafts, as the slim tubes a simple view answers the pointer with:
+ * three line widths across, measured at the shaft's own distance so the tube
+ * reads the same size on screen as the vector it belongs to.
+ *
+ * Capped at the member's own diameter, because a line thick enough to rival a
+ * thin trunk would otherwise hand out a *bigger* target than the geometry does.
+ * The member's girth stays for the full view, where the pointer is aiming at
+ * the solid it sees.
+ */
+function slimPickShafts(
+    shafts: readonly InstancedShaft[],
+    camera: THREE.Camera,
+    viewportHeightPx: number,
+): InstancedShaft[] {
+    return shafts.map((shaft) => {
+        const perPixel = worldUnitsPerPixelAt(camera, viewportHeightPx, {
+            x: (shaft.start.x + shaft.end.x) / 2,
+            y: (shaft.start.y + shaft.end.y) / 2,
+            z: (shaft.start.z + shaft.end.z) / 2,
+        });
+        if (perPixel === null) return shaft;
+
+        const tubeDiameter = perPixel * NAVIGATION_LINE_WIDTH_PX * NAVIGATION_PICK_LINE_WIDTHS;
+        if (tubeDiameter >= shaft.diameter) return shaft;
+
+        return { ...shaft, diameter: tubeDiameter };
+    });
+}
+
+/**
  * The line vector the simple and navigation views draw for a member. It is
- * never the pointer target: the solid geometry stays mounted at zero alpha
- * beside it (see `renderSceneBatchedShafts`), so the pointer still hits the
- * shaft it stands for.
+ * never the pointer target: a slim tube along the same vector is mounted at
+ * zero alpha beside it (see `slimPickShafts`), so the pointer hits the line it
+ * is aiming at rather than the member's full girth.
  */
 function SimpleShaftLines({ shafts, color }: { shafts: readonly { start: Vec3; end: Vec3 }[]; color: string }) {
     const viewport = useThree((state) => state.size);
@@ -467,6 +534,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const state = useSyncExternalStore(subscribe, getSnapshot);
     const resolvedSelection = useResolvedSelectionState();
     const settings = useSyncExternalStore(subscribeToSettings, getSettingsSnapshot, getSettingsSnapshot);
+    // The simple views size their pick tubes in screen pixels, so they need the
+    // projection and the viewport the lines are drawn into.
+    const camera = useThree((three) => three.camera);
+    const viewport = useThree((three) => three.size);
     // The eye button's navigation view is the simple render plus cones reduced
     // to lines, so it takes every gate below and adds the cone handling.
     const discsOnly = settings.navigationDiscsOnly;
@@ -2143,6 +2214,27 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     );
 
     /**
+     * The pick tubes the simple views mount at zero alpha, per batch, keyed by
+     * the batch's own shaft array. Built here rather than in the render pass so
+     * a zoom, which changes every tube's size, rebuilds them once per change.
+     */
+    const slimPickShaftsByBatch = useMemo(() => {
+        const byBatch = new Map<readonly InstancedShaft[], InstancedShaft[]>();
+        if (!simpleRender) return byBatch;
+
+        for (const groups of Object.values(sceneBatchedShaftGroupsByType)) {
+            for (const group of groups) {
+                byBatch.set(group.shafts, slimPickShafts(group.shafts, camera, viewport.height));
+            }
+        }
+        for (const group of sceneBatchedBraceShaftGroups) {
+            byBatch.set(group.shafts, slimPickShafts(group.shafts, camera, viewport.height));
+        }
+
+        return byBatch;
+    }, [camera, simpleRender, viewport.height, sceneBatchedShaftGroupsByType, sceneBatchedBraceShaftGroups]);
+
+    /**
      * Plate roots for the batched pass, grouped by model and colour.
      *
      * Both root-owning types build these identically; only the shaft-diameter
@@ -2783,12 +2875,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 {simpleRender ? (
                     <>
                         <SimpleShaftLines shafts={group.shafts} color={group.color} />
-                        {/* The line is the picture, the shaft is the pointer
-                            target: the solid batch stays mounted at zero alpha
-                            so hover and click behave exactly as in the full
-                            render. */}
+                        {/* The line is the picture, the pick tube is the pointer
+                            target: it stays mounted at zero alpha, sized to the
+                            line rather than to the member, so hover and click
+                            answer where the eye is. */}
                         <InstancedShaftGroup
-                            shafts={group.shafts}
+                            shafts={slimPickShaftsByBatch.get(group.shafts) ?? group.shafts}
                             color={group.color}
                             transparent
                             opacity={0}
@@ -2814,6 +2906,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         ));
     }, [
         simpleRender, ghostTransparent, ghostOpacityClamped, sceneBatchedShaftRadialSegments,
+        slimPickShaftsByBatch,
         isPointerInteractable, handleSceneBatchedShaftClick,
         handleSceneBatchedShaftPointerMove, handleSceneBatchedShaftPointerOut,
     ]);
