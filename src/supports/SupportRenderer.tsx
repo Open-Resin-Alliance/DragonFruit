@@ -36,6 +36,7 @@ import {
     SUPPORT_COLLECTION_KEYS,
     SUPPORT_TYPES,
     type SupportCollectionKey,
+    type SupportEndpoint,
     type SupportTypeId,
 } from './supportTypeRegistry';
 import { buildKnotIndex, selectedIdsForType, type CollectionLookup, type SelectionInputs } from './interaction/shared/selection/selectedIdsByType';
@@ -45,6 +46,8 @@ import { detailRenderersFor, type DetailRendererContext } from './detailRenderer
 import { InstancedShaftGroup, type InstancedShaft } from './SupportPrimitives/Shaft/InstancedShaftGroup';
 import { InstancedJointGroup, type InstancedJoint } from './SupportPrimitives/Joint/InstancedJointGroup';
 import { InstancedRootsGroup, type InstancedRoot } from './SupportPrimitives/Roots/InstancedRootsGroup';
+import { inlineRootBatchInstance } from './SupportPrimitives/Roots/inlineRootBatch';
+import { batchesInView, BATCHED_PASSES } from './rendering/batchCoverage';
 import { InstancedContactConeGroup, coneAxisSpan, type InstancedContactCone } from './SupportPrimitives/ContactCone/InstancedContactConeGroup';
 import { useBracePlacementState } from './SupportTypes/Brace/bracePlacementState';
 import { useLeafPlacementState } from './SupportTypes/Leaf/leafPlacementState';
@@ -144,12 +147,6 @@ const MULTI_SELECTION_DETAIL_THRESHOLD = 24;
 const BULK_MULTI_SELECTED_COLOR = '#80fffd';
 
 /**
- * Whether a type's live marquee highlight can be drawn as a batched overlay:
- * the overlay reaches a type declaring `batchesShaft`, `batchesContactCones`
- * or `ownsRoot`. A type with none takes the preview through its own detail
- * renderer instead; see `sharedRenderProps`.
- */
-/**
  * Whether a support should be drawn as selected, by any of three routes: it is
  * in its type's selected set, the bulk marquee colour stands in for the sets
  * past the detail threshold, or a drag is currently over it. A detail renderer
@@ -163,9 +160,18 @@ export function supportIsDrawnSelected(input: {
     return input.inSelectedSet || input.bulkSelected || input.marqueePreview;
 }
 
-export function typeHasBatchedMarqueeOverlay(typeId: SupportTypeId): boolean {
+/**
+ * Whether a type's live marquee highlight can be drawn as a batched overlay.
+ *
+ * The overlay reaches whatever the batched passes carry in this view, so the
+ * question is `batchesInView`, not the raw flags: a type with no batched form
+ * takes the preview through its own detail renderer instead — which a simple
+ * view has none of, so a type the passes carry there must use the overlay. See
+ * `sharedRenderProps`.
+ */
+export function typeHasBatchedMarqueeOverlay(typeId: SupportTypeId, simpleRender: boolean): boolean {
     const descriptor = getSupportTypeDescriptor(typeId);
-    return descriptor.batchesShaft || descriptor.batchesContactCones || descriptor.ownsRoot;
+    return BATCHED_PASSES.some((pass) => batchesInView(pass, descriptor, simpleRender));
 }
 /** Debug origin coloring (AutoSupport "Origin Colors" toggle): red = near-plate
  *  band, orange = overhang (grid infill / organic Poisson / fanned overhang),
@@ -1827,9 +1833,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const byType = {} as Record<SupportTypeId, Map<string, SupportShaftSet>>;
 
         for (const descriptor of SUPPORT_TYPES) {
-            // Brace builds its own set (its shaft is a curve between two
-            // knots); anchor declares a shaft but builds none.
-            if (!descriptor.batchesShaft) continue;
+            if (!batchesInView('shaft', descriptor, simpleRender)) continue;
 
             // Roots are looked up by the entity's own rootId, so the shared
             // collection answers for every type; only the knot index differs,
@@ -1857,6 +1861,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         buildPlainShaftSet,
         state.roots,
         renderKnotsById,
+        simpleRender,
     ]);
 
     const segmentModelIdById = useMemo(() => {
@@ -1906,8 +1911,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     /**
      * Contact cones for the batched pass, keyed by support.
      *
-     * Which fields to read comes from the declared contact endpoints. The stump
-     * is absent: StumpRenderer draws its own cone, and only while selected.
+     * Which fields to read comes from the declared contact endpoints. A simple
+     * view also carries the types whose own renderer draws them otherwise: the
+     * renderers are all skipped there, so the batch is what is left.
      */
     const contactConesBySupport = useMemo(() => {
         const result = new Map<string, { supportId: string; modelId?: string; cones: InstancedContactCone[] }>();
@@ -1946,7 +1952,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         // A knot-hosted type resolves its model through the host when it
         // carries none of its own; the rest read it directly.
         for (const descriptor of SUPPORT_TYPES) {
-            if (!descriptor.batchesContactCones) continue;
+            if (!batchesInView('cone', descriptor, simpleRender)) continue;
             collect(descriptor.id, renderListByType[descriptor.id], (entity) => (
                 descriptor.lower.kind === 'knot'
                     ? entity.modelId ?? modelIdByKnotId.get((entity as { parentKnotId?: string }).parentKnotId ?? '')
@@ -1955,7 +1961,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [renderListByType, modelIdByKnotId, isModelVisible]);
+    }, [renderListByType, modelIdByKnotId, isModelVisible, simpleRender]);
 
     /**
      * A type's shaft joints, keyed by support. `segmentsCarryBothJoints`
@@ -2240,11 +2246,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
      * Both root-owning types build these identically; only the shaft-diameter
      * fallback differs, and the store the root comes from.
      */
-    const groupRootsForSceneBatch = useCallback(<T extends { id: string; modelId?: string; rootId: string; segments?: Segment[] }>(
+    const groupRootsForSceneBatch = useCallback(<T extends { id: string; modelId?: string; rootId?: string; segments?: Segment[] }>(
         typeId: SupportTypeId,
         list: readonly T[],
         selectedIds: ReadonlySet<string>,
         roots: Record<string, Roots>,
+        inlineRoot: SupportEndpoint | null,
         fallbackShaftDiameter: (entity: T) => number,
     ) => {
         if (hidePlateContactPrimitivesEffective) {
@@ -2257,26 +2264,36 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!isModelVisible(entity.modelId, entity.id)) continue;
             if (selectedIds.has(entity.id)) continue;
 
-            const root = roots[entity.rootId];
-            if (!root) continue;
+            // A type whose plate geometry is on the entity has no `Roots` row to
+            // look up; its dimensions come off the fields its endpoint declares.
+            const inline = inlineRoot
+                ? inlineRootBatchInstance(inlineRoot, entity as unknown as { id: string; modelId?: string } & Record<string, unknown>)
+                : null;
+            const root = roots[entity.rootId ?? ''];
+            if (!inline && !root) continue;
 
             const shaftDiameter = Math.max(0.001, entity.segments?.[0]?.diameter ?? fallbackShaftDiameter(entity));
             const color = resolveSceneSupportColor(entity.modelId, entity.id, typeId);
             const existing = grouped.get(color) ?? { color, roots: [] };
 
-            existing.roots.push({
-                id: root.id,
+            const instance: InstancedRoot = inline ?? {
+                id: root!.id,
                 supportId: entity.id,
                 modelId: entity.modelId,
-                basePos: applyDropToVec3Like({
-                    x: root.transform.pos.x,
-                    y: root.transform.pos.y,
-                    z: root.transform.pos.z,
-                }, entity.modelId),
-                bottomRadius: Math.max(0.001, root.diameter / 2),
+                basePos: {
+                    x: root!.transform.pos.x,
+                    y: root!.transform.pos.y,
+                    z: root!.transform.pos.z,
+                },
+                bottomRadius: Math.max(0.001, root!.diameter / 2),
                 topRadius: shaftDiameter / 2,
-                effectiveDiskHeight: Math.max(0.001, root.diskHeight),
-                coneHeight: Math.max(0, root.coneHeight),
+                effectiveDiskHeight: Math.max(0.001, root!.diskHeight),
+                coneHeight: Math.max(0, root!.coneHeight),
+            };
+
+            existing.roots.push({
+                ...instance,
+                basePos: applyDropToVec3Like(instance.basePos, entity.modelId),
             });
             grouped.set(color, existing);
         }
@@ -2294,13 +2311,19 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const sceneBatchedRootGroupsByType = useMemo(() => {
         const byType = {} as Record<SupportTypeId, Array<{ color: string; roots: InstancedRoot[] }>>;
         for (const descriptor of SUPPORT_TYPES) {
-            if (!descriptor.ownsRoot) continue;
+            // A type carrying its root as geometry on the entity (the stump's
+            // frustum) is not a root-owning one: there is no row for the plate
+            // pass to find, so its disc and axis line are read off the fields its
+            // endpoint declares.
+            const inlineRoot = descriptor.lower.kind === 'inlineRoot' ? descriptor.lower : null;
+            if (!batchesInView('root', descriptor, simpleRender)) continue;
             const list = renderListByType[descriptor.id] as readonly { id: string; modelId?: string; rootId: string; segments?: Segment[] }[];
             byType[descriptor.id] = groupRootsForSceneBatch(
                 descriptor.id,
                 list,
                 selectedOf(descriptor.id),
                 state.roots,
+                inlineRoot,
                 (entity) => {
                     const fallback = descriptor.shaftFallback.fallbackDiameterMm;
                     if (typeof fallback === 'number') return fallback;
@@ -2310,7 +2333,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             );
         }
         return byType;
-    }, [renderListByType, selectedOf, state.roots, groupRootsForSceneBatch, readNumberPath]);
+    }, [renderListByType, selectedOf, state.roots, groupRootsForSceneBatch, readNumberPath, simpleRender]);
 
     const sceneBatchedContactConeGroups = useMemo(() => {
         const grouped = new Map<string, { color: string; cones: InstancedContactCone[] }>();
@@ -2336,10 +2359,11 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             }
         };
 
-        // The types whose contact cones the shared pass draws, in registry order.
-        // `collect` skips an entity with no cone set.
+        // Every type is offered: `collect` reads the cone-set map, which already
+        // holds exactly the types the pass carries, so a second copy of that rule
+        // here is a second chance to disagree with it (the stump's contact disc
+        // went missing that way).
         for (const descriptor of SUPPORT_TYPES) {
-            if (!descriptor.batchesContactCones) continue;
             collect(
                 descriptor.id,
                 renderListByType[descriptor.id] as readonly { id: string }[],
@@ -2525,13 +2549,24 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             };
         }
 
+        // A type whose root is geometry on the entity (the stump) has no `Roots`
+        // row, so its instance comes off the fields its endpoint declares - the
+        // same mapping the batched pass uses.
+        for (const descriptor of SUPPORT_TYPES) {
+            if (descriptor.lower.kind !== 'inlineRoot') continue;
+            const entity = (state[descriptor.location.key] as Record<string, SupportEntityAny | undefined>)[supportId];
+            if (!entity) continue;
+
+            const root = inlineRootBatchInstance(descriptor.lower, entity as never);
+            if (!root) return null;
+            return { ...root, basePos: applyDropToVec3Like(root.basePos, entity.modelId) };
+        }
+
         return null;
     }, [
         raftSettings.bottomMode,
         raftSettings.thickness,
-        state.trunks,
-        state.roots,
-        state.kickstands,
+        state,
         kickstandRootsById,
         applyDropToVec3Like,
     ]);
@@ -2828,7 +2863,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         // selected without the per-type set -- see `supportIsDrawnSelected`.
         const bulkSelected = isBulkSelected(entity.id);
         const marqueePreview = marqueeHoveredSupportIdSet.has(entity.id)
-            && !typeHasBatchedMarqueeOverlay(typeId);
+            && !typeHasBatchedMarqueeOverlay(typeId, simpleRender);
         const drawnSelected = supportIsDrawnSelected({
             inSelectedSet: isSelected,
             bulkSelected,
@@ -2856,6 +2891,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         isBulkSelected,
         suppressHover,
         isInteractable,
+        simpleRender,
     ]);
 
     /** Draws one type's batched shaft groups. Six identical blocks became this. */

@@ -46,9 +46,12 @@ test('each route on its own is enough to be drawn as selected', () => {
 
 /**
  * Every type can show that a marquee drag has caught it, by one of two routes:
- * the batched instanced overlay (any type declaring `batchesShaft`,
- * `batchesContactCones` or `ownsRoot`), or its own detail renderer. A type with
- * neither is caught and selected while showing nothing.
+ * the batched instanced overlay (whatever the batched passes carry), or its own
+ * detail renderer. A type with neither is caught and selected while showing
+ * nothing.
+ *
+ * The overlay route is per view: a simple view has no detail renderers left, so
+ * a type the passes carry only there has to take it.
  */
 
 const EMPTY_CONTEXT = {
@@ -56,6 +59,7 @@ const EMPTY_CONTEXT = {
     renderKnotsById: {},
     braceRenderKnotsById: {},
     simpleRender: false,
+    navigationView: false,
     hideUnselectedKnots: false,
     hidePlateContactPrimitivesEffective: false,
     ghostedBraceIdSet: new Set<string>(),
@@ -70,7 +74,7 @@ test('every type is previewed by a batched overlay or by its own detail renderer
     const entries = detailRenderersFor(EMPTY_CONTEXT);
 
     for (const descriptor of SUPPORT_TYPES) {
-        const hasOverlay = typeHasBatchedMarqueeOverlay(descriptor.id);
+        const hasOverlay = typeHasBatchedMarqueeOverlay(descriptor.id, false);
         const hasDetailRenderer = Boolean(entries[descriptor.id]);
 
         assert.ok(
@@ -85,7 +89,7 @@ test('the types with no batched overlay are exactly the ones the detail route se
     // Pins the measured partition, so a type that LOSES its batching flags is
     // noticed: it moves into this list and starts relying on the detail route.
     const withoutOverlay = SUPPORT_TYPES
-        .filter((descriptor) => !typeHasBatchedMarqueeOverlay(descriptor.id))
+        .filter((descriptor) => !typeHasBatchedMarqueeOverlay(descriptor.id, false))
         .map((descriptor) => descriptor.id)
         .sort();
 
@@ -94,4 +98,14 @@ test('the types with no batched overlay are exactly the ones the detail route se
         ['brace', 'stump'],
         'the set of types relying on the detail route changed',
     );
+});
+
+test('a simple view moves a type the passes carry there onto the overlay route', () => {
+    // The stump draws through no batched pass in the full view, where its own
+    // renderer is what the marquee colours. A simple view skips that renderer,
+    // and carries the stump through the cone and root passes, so the overlay is
+    // the only route left to it.
+    assert.equal(typeHasBatchedMarqueeOverlay('stump', false), false);
+    assert.equal(typeHasBatchedMarqueeOverlay('stump', true), true);
+    assert.equal(typeHasBatchedMarqueeOverlay('brace', true), false, 'brace keeps its own curve batch');
 });
