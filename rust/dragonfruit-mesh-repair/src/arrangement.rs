@@ -387,7 +387,7 @@ fn collect_face_segments(mesh: &IndexedMesh) -> Vec<Vec<(Vec3, Vec3)>> {
 
             let mut found: Vec<(u32, (Vec3, Vec3))> = Vec::new();
             let mut candidates: Vec<u32> = Vec::new();
-            bvh.query_aabb(&bb, |other| candidates.push(other));
+            bvh.query_aabb(mesh, &bb, |other| candidates.push(other));
             for fj in candidates {
                 if fj <= fi {
                     continue;

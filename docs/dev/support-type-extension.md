@@ -6,7 +6,11 @@ work on its own: **declaring** a type is registry work, **wiring** it is still
 partly manual. Steps below are marked accordingly.
 
 The existing types are `Trunk`, `Branch`, `Leaf`, `Twig`, `Stick`, `Brace`,
-`Anchor`, `Kickstand`.
+`Stump`, `Kickstand`.
+
+**Three documents, no overlap:** this one is how to add a type;
+`support-type-literal-plan.md` is what is left to convert;
+`support-registry-findings.md` is what is still broken.
 
 > ⚠️ **Do not convert hand-wired paths to the registry while adding your type** —
 > it puts a new feature and a behaviour-preserving refactor in one diff. Note
@@ -18,6 +22,9 @@ Three reference shapes, by complexity:
   placement UX (created as a cavity fallback inside trunk/branch placement).
 - **Leaf** — the canonical *fully placeable* template: renderer + builder +
   placement-state store + page-level placement hook + canvas controller.
+  The store is not written from scratch: `createPlacementStore` supplies the
+  subscribe/getSnapshot/notify/reset half, and the type adds only its own state
+  shape and setters (see `interaction/shared/placement/placementStore.ts`).
 - **Kickstand** — the "owns its own barrel" template
   (`SupportTypes/Kickstand/index.ts`). Declare your entity in `types.ts` and
   read `SupportState` directly; do not add a per-type store.
@@ -55,7 +62,9 @@ every descriptor declares all of them:
 
 | Flag | Ask |
 | ---- | --- |
-| `carriesModelId` | Do instances own a `modelId`? |
+| `canBeGridHost` | Can a fan link attach to this type's shaft? (the host pool, merge search, attachment cap and forest report all read it) |
+| `hostsKickstand` | May a kickstand's host knot ride this type's segments? Read through `KICKSTAND_HOST_TYPES`; `KICKSTAND_HOST_BY_TYPE` mirrors it with literals kept so the host union narrows |
+| `isAutoPlaced` | Does the auto-support pass place this type, and does the ledger report it? Read through `AUTO_PLACED_TYPE_IDS`, or `AUTO_PLACED_BY_TYPE` for the narrowed union |
 | `hasSegments` | Do instances have real shafts? |
 | `contactFields` | Which contact primitive fields, in order? |
 | `segmentsCarryBothJoints` | Does each segment carry both its joints, or do endpoints come from a root / parent knot / neighbour? |
@@ -77,8 +86,9 @@ entity needs more than the tip/root/shaft the descriptor already declares.
 
 You do **not** register an updater. `state.ts` walks the registry and gives every
 type the generic one, which writes the entity, repositions the knots riding its
-shafts and recomputes dependent geometry. Add an entry to `BESPOKE_UPDATERS` only
-if your type genuinely needs different work -- three do.
+shafts and recomputes dependent geometry. If your type genuinely needs different
+work -- three do -- call `registerSupportUpdater` from your own registration
+file, and the generic pass leaves that slot alone.
 
 ## 2. The per-type directory — `src/supports/SupportTypes/Gadget/` *(hand-wired)*
 
@@ -90,24 +100,38 @@ whether the type is user-placeable.
   resolves hover via `useHighlight(...)`, and commits edits via
   `captureSupportEditSnapshot()` / `pushSupportEditHistory()` (see the Stick
   renderer).
-- *Placeable only*: `gadgetBuilder.ts` (geometry/state builder), a
-  placement-state store, a `useGadgetPlacement` hook, and a
-  `GadgetPlacementController` listed in `supports/placementControllers.ts`.
-- `index.ts` barrels are **optional** — only Anchor and Kickstand have one.
+- *Placeable only*: `gadgetBuilder.ts` (geometry/state builder), a placement-state
+  store built on `createPlacementStore` — declare your own state interface,
+  `initialState`, and setters; spread `store.subscribe`/`store.getSnapshot` into
+  your exported store and use `usePlacementStoreState` in the hook — a
+  `useGadgetPlacement` hook, and a `GadgetPlacementController` listed in
+  `supports/placementControllers.ts`. `placementComparators.ts` has the shared
+  value comparisons (`vecEq`, `hostSnapTargetEq`) before you write your own.
+- `index.ts` barrels are **optional** — only Stump and Kickstand have one.
 
-## 3. Rendering — `src/supports/SupportRenderer.tsx` *(hand-wired)*
+## 3. Rendering — your own folder *(registry-driven)*
 
-1. Import the renderer and add an entry to the `detailRenderers` table:
+1. Call `registerSupportDetailRenderer('gadget', …)` from your renderer module,
+   the way `TrunkRenderer.tsx` and `TwigRenderer.tsx` do. The factory returns
    `component`, `entityProp`, and optionally `hosts` (return null to skip),
    `skip`, `extraProps` and `noClipping`.
-2. Add `{renderDetailFor('gadget')}` to the JSX, in the order your type should
-   draw relative to the batched-shaft passes.
-3. *Optional*: declare `batchesPlainShafts` / `batchesShaftJoints` so unselected
+2. `SupportRenderer.tsx` — **nothing.** It asks `detailRenderersFor(...)` and
+   loops over `SUPPORT_TYPES`; there is no table to edit and no JSX to add.
+3. *Optional*: declare `batchesShaft` so unselected
    straight shafts and joints render via `InstancedShaftGroup`.
 4. *Optional*: add the type to the render-lookup worker for primitive picking.
-   Anchors skip it entirely, so it is not required for selectability.
+   Stumps skip it entirely, so it is not required for selectability.
 
 `detailRendererCoverage.test.ts` fails if a declared type has no entry.
+
+Bezier handles come from the registry: `Curves/BezierGizmo/bezierContextIndex.ts`
+walks every `hasSegments` type and builds one context per joint and per segment
+end, keyed by the selection id and prefixed with `bezierContextIdPrefix`. Both
+ends resolve the way `resolveSegmentEndpoints` does — the declared lower
+endpoint where a first segment carries no bottom joint, and the declared upper
+endpoint at the top (a contact socket, or the host knot for a type whose
+`upper.kind` is `knot`). Nothing to add, unless your type needs a handle no
+declaration describes.
 
 ## 4. History — `src/supports/history/` *(registry-driven)*
 
@@ -148,17 +172,33 @@ Still the heaviest step.
 - `transformSupportsForModel` / `setSnapshot` — walk gadgets if they must move
   with a model transform.
 
-## 6. Export — `src/features/export/logic/supportExportReconstruction.ts` *(hand-wired)*
+## 6. Export — `SupportTypes/Gadget/gadgetRegistration.ts` *(registry-driven)*
 
-- Include gadgets in `extractScopedSupportPayload`. Scoping itself is
-  registry-driven -- `belongsToScope` walks your declared `edges`.
-- Add `gadgets` to `buildScopedSupportExportDocument`'s returned format.
-- Add a `buildGadgetGroup(...)` and one `gadget:` entry to the `groupBuilders`
-  table in `buildScopedSupportGeometryGroup`. The table is typed
-  `Record<SupportTypeId, GroupBuilder>`, so a missing entry fails to compile
-  rather than dropping your type from every export.
-- Do **not** name the group: return `{ id, group }` and the dispatch names it
-  `Gadget_<id>` from `exportGroupName`, derived from the descriptor's `singular`.
+- Register how your type exports, in your own folder:
+
+```ts
+registerSupportExportGroup<Gadget>('gadget', (gadget, context) => {
+    const group = new THREE.Group();
+    addModelMetadata(group, gadget.modelId);
+    // …build into `group`…
+    return group;
+});
+```
+
+- Return `null` to drop ONE entity (a broken host link) rather than failing the
+  export.
+- Use `context.supportState` to resolve an owned root or host knot, and
+  `context.modelIdOf(id)` to follow an entity's declared links to its model.
+- Take the shared pieces from `supports/exportGeometry/helpers.ts`:
+  `addModelMetadata`, `appendShafts`, `appendConeGeometry`, `raftSettingsFor`,
+  `globalPenetrationMm`, `SupportGeometryGenerator`.
+- Do **not** name the returned group: the walk names it `Gadget_<id>` from
+  `exportGroupName`.
+
+`supportExportReconstruction.ts` needs **nothing**: the payload, the document and
+the geometry group are all filled by walking `SUPPORT_TYPES`. `state.ts` throws at
+load if a declared type registered no builder, and `supportTypeFolders.test.ts`
+fails if the registration file is missing.
 
 ## 7. Interaction — only for user-placeable types *(hand-wired)*
 
@@ -169,12 +209,26 @@ wiring is explicit:
   its callbacks through `resolvePlacementRouting()`.
 - `resolveSupportCategoryFromSnapshot`, `collectAllSupportIds` and
   `canDeleteSelection` need **nothing**: all three resolve from the registry.
-- `deleteSelectionByCategoryAndId` needs **nothing** for a type whose removal is
-  the cascade plus one history entry: a generic block reads `historyRemove` off
-  your descriptor. Only a type whose payload carries something extra (a branch's
-  trunk reprofile) needs its own block, and it must then be listed in
-  `RESHAPED_REMOVAL_PAYLOADS` — otherwise the generic block claims it first and
-  your block is dead code.
+- `deleteSelectionByCategoryAndId` needs **nothing**: the manager resolves the
+  type from `selectionCategory`, removes it with `removeSupportEntity`, and the
+  payload comes from `supports/history/removalPayload.ts`, derived from your
+  `SUPPORT_REMOVAL_SHAPES` entry — its `self` plus one field per declared
+  cascade entry. A field declared as an array (`['startKnot', 'endKnot']`) is a
+  set of NAMED singular slots rather than a list.
+- Removing one of your type also re-solves a host it hung from, when that
+  host's own type declares `recomputesDiameterFromAttachments` — the host is
+  found through your declared `hostedBy` knot edge and re-solved, with the
+  result reported beside the cascade. The flag sits on the HOST, not on you:
+  trunk is the one type that declares it, because a stepwise shaft diameter is
+  derived from what it carries.
+- A bridge type you declare for `contactSpan` may refuse a wide landing by
+  leaving `mayReachSideways` false: the bridge search runs near radii first, and
+  only a type allowed to reach sideways may land beyond the near cutoff. Twig
+  allows it (short props off a neighbouring surface); stick does not (it stays
+  near vertical).
+- `PlacedKind` and `LEDGER_KINDS` come from the registry's declared
+  `AUTO_PLACED_TYPE_IDS` — if auto-placement can place your type, add it there
+  rather than to any list in `autoSupport/`.
 - Deleting a **knot** deletes what it hosts, resolved by `findKnotHost` from the
   `hostedBy` edges onto `knots` that you declare. If your type can hang off a
   knot, add it to `KNOT_HOST_PRECEDENCE` (registry) — a knot-hosting type absent
@@ -204,23 +258,33 @@ wiring is explicit:
   your type: it gets a settings-hex cache bucket, and reads values back off the
   entity through the generic inference. Leave it false and the menu resolves no
   target for your type, so edits silently do nothing.
+- **A sidebar panel** (optional) — the panel's three settings flags derive from
+  the registry automatically, so your type answers them already; offering a panel
+  is adding your id to `TYPE_PANELS` in `Settings/sidebarPanels.ts`. If it should
+  draw its own anatomy preview rather than fall through to the generic renderer,
+  call `registerAnatomyPreview('gadget', GadgetPreview)` from wherever that
+  preview lives. See `registration-seams.md`.
 
 ## Minimal checklist (bare, render-only Gadget)
 
 1. `types.ts` — entity interface, one line in `SupportEntityByCollection`, format field
 2. `supportTypeRegistry.ts` — `SupportTypeId` + descriptor with every behaviour flag
 3. `SupportTypes/Gadget/GadgetRenderer.tsx` (+ `gadgetBuilder.ts` if it has geometry)
-4. `SupportRenderer.tsx` — one entry in the `detailRenderers` table; the render
-   loop, selected sets and batching derive from the registry
+4. `SupportTypes/Gadget/GadgetRenderer.tsx` — one
+   `registerSupportDetailRenderer('gadget', …)` call. **Not**
+   `SupportRenderer.tsx`: the render loop, selected sets and batching all derive
+   from the registry
 5. `state.ts` — SelectionCategory, lookup cache, import/merge/isolate. **Not** the
    updater (the registry loop covers it) and **not** `initialState` (derived)
 6. `useSupportHistoryHandlers.ts` — add/remove handlers. **Not** `actionTypes.ts`:
    the action strings and their payload entries derive from the type id
 7. `useSupportInteractionManager.ts` — **nothing**, unless the type reshapes its
    removal payload or can host a knot (see step 7 above)
-8. `supportExportReconstruction.ts` — one entry in the `groupBuilders` table,
-   typed `Record<SupportTypeId, GroupBuilder>`, so a missing type is a compile
-   error. The group's exported name derives from `singular`
+8. `SupportTypes/Gadget/gadgetRegistration.ts` — one
+   `registerSupportExportGroup<Gadget>(...)` call under your own type id. The
+   loader, the payload, the document and the group name all derive; the
+   registration file is discovered from your folder, and `state.ts` throws at
+   load if it never ran
 
 After wiring, run the registry tests — they fail loudly on a half-declared type:
 

@@ -5,6 +5,7 @@ import React, { useMemo } from 'react';
 import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { ContactDisk, Twig, type Segment } from '../../types';
+import { registerSupportDetailRenderer } from '../../detailRenderer/seam';
 import { JointRenderer } from '../../SupportPrimitives/Joint/JointRenderer';
 import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
 import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
@@ -15,7 +16,7 @@ import { handleSupportClick } from '../../interaction/clickHandlers';
 import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
 import { useHighlight } from '../../interaction/useHighlight';
 import { usePartDragUpdate } from '../../interaction/partDragPreview';
-import { getSnapshot, updateKnot, updateLeaf } from '../../state';
+import { getSnapshot, updateKnot } from '../../state';
 import { twigDiskJointStandoff } from './twigJointStandoff';
 import { clearTwigDragPreview, computeTwigDragAttachmentUpdates, emitTwigDragPreview } from './twigDragPreview';
 
@@ -216,7 +217,7 @@ export const TwigRenderer = React.memo(function TwigRenderer({
       updateSupportEntity('twig', nextTwig);
       const { knotsById, leavesById } = attachmentUpdatesFor(nextTwig);
       for (const knot of Object.values(knotsById)) updateKnot(knot);
-      for (const leaf of Object.values(leavesById)) updateLeaf(leaf);
+      for (const leaf of Object.values(leavesById)) updateSupportEntity(leaf);
     },
     onSettled: () => clearTwigDragPreview(),
   });
@@ -288,7 +289,7 @@ export const TwigRenderer = React.memo(function TwigRenderer({
   const isDiskASelected = selectedId === effectiveTwig.contactDiskA.id;
   const isDiskBSelected = selectedId === effectiveTwig.contactDiskB.id;
 
-  const twigShaftSegments = useShaftSegments(typeId, effectiveTwig, {});
+  const twigShaftSegments = useShaftSegments(effectiveTwig, {});
 
   twigShaftSegments.forEach(({ segment: seg, start: startPosVec, end: endPosVec, startVec: startPoint, endVec: endPoint, ...taper }) => {
     // Twig declares a taper on every segment, so these are always present.
@@ -503,6 +504,15 @@ export const TwigRenderer = React.memo(function TwigRenderer({
 });
 
 TwigRenderer.displayName = 'TwigRenderer';
+
+registerSupportDetailRenderer('twig', () => ({
+    component: TwigRenderer as never,
+    noClipping: ({ isSelected }) => isSelected,
+    extraProps: ({ isSelected, isBatchable }) => ({
+        deferStraightShaftsToSceneBatch: !isSelected && isBatchable,
+        deferInteractionToSceneBatch: !isSelected && isBatchable,
+    }),
+}));
 
 // Invisible pick-only tube hugging a bezier twig segment. Lives inside the
 // twig's pickRef so the GPU picker registers hits on it as twig hits (for

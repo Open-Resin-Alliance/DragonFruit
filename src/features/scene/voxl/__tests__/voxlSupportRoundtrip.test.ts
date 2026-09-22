@@ -4,7 +4,33 @@ import test from 'node:test';
 import { buildSupportExportFromStores, buildVoxlDocumentV1, parseVoxlDocument, serializeVoxlDocument } from '../codec';
 import { getSnapshot, loadFromImportFormat, resetStore, resetKickstandsInState} from '@/supports/state';
 import { readKickstands } from '@/supports/__tests__/helpers/kickstandFixture';
-import type { DragonfruitImportFormat } from '@/supports/types';
+import {
+    getSupportTypeDescriptor,
+    SUPPORT_COLLECTION_KEYS,
+    type SupportCollectionKey,
+    type SupportTypeId,
+} from '@/supports/supportTypeRegistry';
+import type { DragonfruitImportFormat, SupportCollectionByType } from '@/supports/types';
+
+/** Collection keys come from the registry; `roots` and `knots` are primitives. */
+function emptyWireCollections(): Pick<DragonfruitImportFormat, SupportCollectionKey> {
+    const collections = {} as Record<string, unknown[]>;
+    for (const key of SUPPORT_COLLECTION_KEYS) collections[key] = [];
+    return collections as unknown as Pick<DragonfruitImportFormat, SupportCollectionKey>;
+}
+
+/** What the wire format carries under a type's collection key. */
+type WireEntities<K extends SupportTypeId> =
+    DragonfruitImportFormat[SupportCollectionByType[K] & keyof DragonfruitImportFormat];
+
+/** Fill one collection, keyed by the type that declares it. */
+function setCollection<K extends SupportTypeId>(
+    payload: DragonfruitImportFormat,
+    typeId: K,
+    entities: WireEntities<K>,
+): void {
+    (payload as unknown as Record<string, unknown>)[getSupportTypeDescriptor(typeId).location.key] = entities;
+}
 
 function almostEqual(a: number, b: number, epsilon = 1e-6): boolean {
     return Math.abs(a - b) <= epsilon;
@@ -15,6 +41,7 @@ test('VOXL support roundtrip preserves imported leaf and brace normalization int
     resetKickstandsInState();
 
     const imported: DragonfruitImportFormat = {
+        ...emptyWireCollections(),
         version: 1,
         meta: {
             source: 'unit-test',
@@ -38,88 +65,6 @@ test('VOXL support roundtrip preserves imported leaf and brace normalization int
                 coneHeight: 1,
             },
         ],
-        trunks: [
-            {
-                id: 'trunk-left',
-                modelId: 'model-1',
-                rootId: 'root-left',
-                segments: [
-                    {
-                        id: 'seg-left',
-                        type: 'straight',
-                        diameter: 0.8,
-                        topJoint: { id: 'joint-left-top', pos: { x: 0, y: 0, z: 10 }, diameter: 0.9 },
-                    },
-                ],
-            },
-            {
-                id: 'trunk-right',
-                modelId: 'model-1',
-                rootId: 'root-right',
-                segments: [
-                    {
-                        id: 'seg-right',
-                        type: 'straight',
-                        diameter: 1.6,
-                        topJoint: { id: 'joint-right-top', pos: { x: 12, y: 0, z: 10 }, diameter: 1.7 },
-                    },
-                ],
-            },
-        ],
-        branches: [
-            {
-                id: 'branch-1',
-                modelId: 'model-1',
-                parentKnotId: 'k-parent',
-                segments: [
-                    {
-                        id: 'branch-seg-1',
-                        type: 'straight',
-                        diameter: 1,
-                        topJoint: {
-                            id: 'branch-top',
-                            pos: { x: 0, y: 0, z: 10 },
-                            diameter: 1,
-                        },
-                    },
-                ],
-            },
-        ],
-        leaves: [
-            {
-                id: 'leaf-1',
-                modelId: 'model-1',
-                parentKnotId: 'k-leaf',
-                contactCone: {
-                    id: 'cone-1',
-                    pos: { x: 2, y: 0, z: 12 },
-                    normal: { x: 0, y: 0, z: -1 },
-                    surfaceNormal: { x: 0, y: 0, z: -1 },
-                    profile: {
-                        type: 'disk',
-                        contactDiameterMm: 0.4,
-                        bodyDiameterMm: 1.2,
-                        lengthMm: 3,
-                        penetrationMm: 0.05,
-                        diskThicknessMm: 0.1,
-                        maxStandoffMm: 0.25,
-                        standoffAngleThreshold: Math.PI / 4,
-                    },
-                },
-            },
-        ],
-        twigs: [],
-        sticks: [],
-        braces: [
-            {
-                id: 'brace-1',
-                modelId: 'model-1',
-                startKnotId: 'k-left',
-                endKnotId: 'k-right',
-                profile: { diameter: 1.0 },
-            },
-        ],
-        anchors: [],
         knots: [
             {
                 id: 'k-parent',
@@ -152,8 +97,90 @@ test('VOXL support roundtrip preserves imported leaf and brace normalization int
                 _importHint: 'braceImported',
             },
         ],
-        kickstands: [],
     };
+
+    setCollection(imported, 'trunk', [
+        {
+            id: 'trunk-left',
+            modelId: 'model-1',
+            rootId: 'root-left',
+            segments: [
+                {
+                    id: 'seg-left',
+                    type: 'straight',
+                    diameter: 0.8,
+                    topJoint: { id: 'joint-left-top', pos: { x: 0, y: 0, z: 10 }, diameter: 0.9 },
+                },
+            ],
+        },
+        {
+            id: 'trunk-right',
+            modelId: 'model-1',
+            rootId: 'root-right',
+            segments: [
+                {
+                    id: 'seg-right',
+                    type: 'straight',
+                    diameter: 1.6,
+                    topJoint: { id: 'joint-right-top', pos: { x: 12, y: 0, z: 10 }, diameter: 1.7 },
+                },
+            ],
+        },
+    ]);
+
+    setCollection(imported, 'branch', [
+        {
+            id: 'branch-1',
+            modelId: 'model-1',
+            parentKnotId: 'k-parent',
+            segments: [
+                {
+                    id: 'branch-seg-1',
+                    type: 'straight',
+                    diameter: 1,
+                    topJoint: {
+                        id: 'branch-top',
+                        pos: { x: 0, y: 0, z: 10 },
+                        diameter: 1,
+                    },
+                },
+            ],
+        },
+    ]);
+
+    setCollection(imported, 'leaf', [
+        {
+            id: 'leaf-1',
+            modelId: 'model-1',
+            parentKnotId: 'k-leaf',
+            contactCone: {
+                id: 'cone-1',
+                pos: { x: 2, y: 0, z: 12 },
+                normal: { x: 0, y: 0, z: -1 },
+                surfaceNormal: { x: 0, y: 0, z: -1 },
+                profile: {
+                    type: 'disk',
+                    contactDiameterMm: 0.4,
+                    bodyDiameterMm: 1.2,
+                    lengthMm: 3,
+                    penetrationMm: 0.05,
+                    diskThicknessMm: 0.1,
+                    maxStandoffMm: 0.25,
+                    standoffAngleThreshold: Math.PI / 4,
+                },
+            },
+        },
+    ]);
+
+    setCollection(imported, 'brace', [
+        {
+            id: 'brace-1',
+            modelId: 'model-1',
+            startKnotId: 'k-left',
+            endKnotId: 'k-right',
+            profile: { diameter: 1.0 },
+        },
+    ]);
 
     loadFromImportFormat(imported);
     const normalizedSnapshot = getSnapshot();

@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { addKnot, addRoot, addSupportEntity, findShaftOwnerOfJoint, findShaftOwnerOfSegment, getSnapshot, getSupportTypeOf, setSnapshot, loadFromImportFormat, removeSupportEntity, resetStore } from '../state';
-import { SUPPORT_TYPES, getSupportTypeDescriptor, restoreToCollection, updateSupportEntity } from '../supportTypeRegistry';
+import { addKnot, addRoot, addSupportEntity, getSnapshot, getSupportTypeOf, getSupports, setSnapshot, loadFromImportFormat, removeSupportEntity, resetStore } from '../state';
+import { SUPPORT_TYPES, contactEndpointsFor, defaultPlacementToolTypeId, getSupportTypeDescriptor, removalShapeFor, restoreToCollection, updateSupportEntity, type SupportEdge, type SupportTypeDescriptor } from '../supportTypeRegistry';
 import { buildSupportExportFromStores } from '@/features/scene/voxl/codec';
 
 /**
@@ -15,12 +15,27 @@ import { buildSupportExportFromStores } from '@/features/scene/voxl/codec';
  *
  * The field is optional on the interface only so files written before it
  * existed still typecheck. Anything the store hands out carries it.
+ *
+ * Every fixture below is built from what a type declares -- `hasSegments`, its
+ * edges, its contact fields. Nothing here is keyed by a type's spelling.
  */
+
+/** The straight segment `seg` builds, and so the shaft the knot scaffold rides. */
+const SEGMENT_TOP_Z = 4;
+
+/** How far apart the scene's roots sit, so no two land on the same spot. */
+const ROOT_SPACING_MM = 3;
+
+/** The diameter written into a field a type declares by path. */
+const DECLARED_DIAMETER_MM = 1;
+
+/** The lowest `t` at which a type hosted on another shaft's segment may sit. */
+const HOST_MIN_T = 0.2;
 
 const seg = (id: string) => ({
     id, diameter: 1,
     bottomJoint: { id: `${id}-bj`, pos: { x: 0, y: 0, z: 0 }, diameter: 1 },
-    topJoint: { id: `${id}-tj`, pos: { x: 0, y: 0, z: 4 }, diameter: 1 },
+    topJoint: { id: `${id}-tj`, pos: { x: 0, y: 0, z: SEGMENT_TOP_Z }, diameter: 1 },
 });
 
 const root = (id: string, x: number) => ({
@@ -43,32 +58,126 @@ const disk = (x: number) => ({
     profile: { type: 'disk', lengthMm: 1, contactDiameterMm: 0.4, bodyDiameterMm: 0.8 },
 });
 
-/** A minimal but valid instance of each type, keyed by type id. */
-const SEED: Record<string, (id: string) => Record<string, unknown>> = {
-    trunk: (id) => ({ id, modelId: 'model-a', rootId: 'root-a', segments: [seg(`${id}-s`)], contactCone: cone() }),
-    branch: (id) => ({ id, modelId: 'model-a', parentKnotId: 'knot-a', segments: [seg(`${id}-s`)], contactCone: cone() }),
-    leaf: (id) => ({ id, modelId: 'model-a', parentKnotId: 'knot-a', contactCone: cone() }),
-    twig: (id) => ({ id, modelId: 'model-a', segments: [seg(`${id}-s`)], contactDiskA: disk(1), contactDiskB: disk(2) }),
-    stick: (id) => ({ id, modelId: 'model-a', segments: [seg(`${id}-s`)], contactConeA: cone(), contactConeB: cone() }),
-    brace: (id) => ({ id, modelId: 'model-a', startKnotId: 'knot-a', endKnotId: 'knot-b' }),
-    anchor: (id) => ({ id, modelId: 'model-a', segments: [seg(`${id}-s`)], contactCone: cone() }),
-    kickstand: (id) => ({
-        id, modelId: 'model-a', rootId: 'ks-root', hostKnotId: 'knot-b',
-        hostSegmentId: 'trunk-a-s', hostMinT: 0.2, segments: [seg(`${id}-s`)],
-        profile: { bodyDiameterMm: 1, terminalStartDiameterMm: 1.2, terminalEndDiameterMm: 0.8 },
-    }),
-};
+/** The id one instance of a type carries in the scene `oneOfEach` builds. */
+const instanceId = (typeId: string) => `${typeId}-a`;
+
+/** The `roots` entry a type's edge into `roots` points at. */
+const rootIdFor = (descriptor: SupportTypeDescriptor) => `${descriptor.id}-root`;
+
+/**
+ * The knot an edge into `knots` points at, named for the type and the field
+ * rather than shared between them: two ends that both declare `takeHost` must
+ * not be able to take each other's knot out from under the scene.
+ */
+const knotIdFor = (descriptor: SupportTypeDescriptor, edge: SupportEdge) => `${descriptor.id}-${edge.field}`;
+
+/** Every knot the scene needs: one per declared edge into `knots`. */
+const KNOT_IDS: readonly string[] = SUPPORT_TYPES.flatMap((descriptor) =>
+    descriptor.edges.filter((edge) => edge.to === 'knots').map((edge) => knotIdFor(descriptor, edge)));
+
+/**
+ * The shaft every knot rides. The default placement tool's instance is the one
+ * shaft the scene always builds, and `seg` names its segment from the instance
+ * id, so the knot's host follows from the type rather than from a literal id.
+ */
+const hostSegmentId = () => `${instanceId(defaultPlacementToolTypeId())}-s`;
+
+/**
+ * The numeric fields a type declares by path but carries no value for: the two
+ * ends of its shaft taper, and the one its fallback diameter reads. A type
+ * carrying a profile names every field of it here, so the object is built from
+ * the declaration.
+ */
+function declaredDiameterFields(descriptor: SupportTypeDescriptor): Record<string, string[]> {
+    const fallback = descriptor.shaftFallback.fallbackDiameterMm;
+    const paths = [
+        ...(descriptor.shaftTaper?.from ?? []),
+        ...(fallback && typeof fallback === 'object' ? [fallback.path] : []),
+    ];
+
+    const byRoot: Record<string, string[]> = {};
+    for (const path of paths) {
+        const dot = path.indexOf('.');
+        if (dot < 0) continue;
+        const root_ = path.slice(0, dot);
+        byRoot[root_] = [...(byRoot[root_] ?? []), path.slice(dot + 1)];
+    }
+    return byRoot;
+}
+
+/** The entity an edge points at, from the vocabulary the edge declares. */
+function edgeTargetFor(descriptor: SupportTypeDescriptor, edge: SupportEdge): string {
+    if (edge.to === 'roots') return rootIdFor(descriptor);
+    if (edge.to === 'segment') return hostSegmentId();
+    if (edge.to === 'knots') return knotIdFor(descriptor, edge);
+    throw new Error(`${descriptor.id} declares an edge to ${edge.to}, which the seed scene builds no target for`);
+}
+
+/**
+ * A minimal but valid instance of `descriptor`.
+ *
+ * Every field comes from a declared fact: `hasSegments` for the shaft, the
+ * declared contacts and their kinds for the primitives, `edges` for the links
+ * to roots, knots and the host segment, and the taper/fallback paths for the
+ * diameters a type carries inside a profile.
+ */
+function seedFor(descriptor: SupportTypeDescriptor, id: string): Record<string, unknown> {
+    const entity: Record<string, unknown> = { id, modelId: 'model-a' };
+
+    if (descriptor.hasSegments) entity.segments = [seg(`${id}-s`)];
+
+    const kindByField: Record<string, string> = {};
+    for (const { field, kind } of contactEndpointsFor(descriptor.id)) kindByField[field] = kind;
+
+    let disks = 0;
+    for (const field of descriptor.contactFields) {
+        if (kindByField[field] === 'disk') {
+            disks += 1;
+            entity[field] = disk(disks);
+        } else {
+            entity[field] = cone();
+        }
+    }
+
+    for (const edge of descriptor.edges) entity[edge.field] = edgeTargetFor(descriptor, edge);
+
+    // A type riding another shaft's segment sits at a `t` along it and records
+    // the lowest one it may take. The edge to `segment` says so; the t is not
+    // declared anywhere, so the scaffold pins the number itself.
+    if (descriptor.edges.some((edge) => edge.to === 'segment')) entity.hostMinT = HOST_MIN_T;
+
+    for (const [root_, fields] of Object.entries(declaredDiameterFields(descriptor))) {
+        // Skipped where the entity already carries the object: a taper path may
+        // point into a contact the loop above built (a twig's two disks).
+        if (root_ in entity) continue;
+        entity[root_] = Object.fromEntries(fields.map((field) => [field, DECLARED_DIAMETER_MM]));
+    }
+
+    return entity;
+}
 
 /** One of every type, added through the generic adder. */
 function oneOfEach() {
     resetStore();
-    addRoot(root('root-a', 0) as never);
-    addRoot(root('ks-root', 3) as never);
-    addKnot({ id: 'knot-a', parentShaftId: 'trunk-a-s', t: 0.5, pos: { x: 0, y: 0, z: 2 }, diameter: 1 } as never);
-    addKnot({ id: 'knot-b', parentShaftId: 'trunk-a-s', t: 0.3, pos: { x: 0, y: 0, z: 1.2 }, diameter: 1 } as never);
+
+    SUPPORT_TYPES
+        .filter((descriptor) => descriptor.edges.some((edge) => edge.to === 'roots'))
+        .forEach((descriptor, index) => addRoot(root(rootIdFor(descriptor), index * ROOT_SPACING_MM) as never));
+
+    KNOT_IDS.forEach((knotId, index) => {
+        // Spread along the shaft, so no two knots land on the same spot.
+        const t = (index + 1) / (KNOT_IDS.length + 1);
+        addKnot({
+            id: knotId,
+            parentShaftId: hostSegmentId(),
+            t,
+            pos: { x: 0, y: 0, z: t * SEGMENT_TOP_Z },
+            diameter: 1,
+        } as never);
+    });
 
     for (const descriptor of SUPPORT_TYPES) {
-        addSupportEntity(descriptor.id, SEED[descriptor.id](`${descriptor.id}-a`) as never);
+        addSupportEntity(descriptor.id, seedFor(descriptor, instanceId(descriptor.id)) as never);
     }
 }
 
@@ -102,9 +211,16 @@ test('an entity arriving with the wrong type is corrected, not trusted', () => {
     // The adder knows the collection it is writing to; a caller passing a
     // stale or hand-written typeId must not be able to desynchronise the two.
     oneOfEach();
-    addSupportEntity('twig', { ...SEED.twig('twig-b'), typeId: 'trunk' } as never);
+    for (const descriptor of SUPPORT_TYPES) {
+        const wrong = SUPPORT_TYPES.find((candidate) => candidate.id !== descriptor.id);
+        assert.ok(wrong, 'a type can only be given a wrong one while a second type exists');
 
-    assert.equal(getSnapshot().twigs['twig-b'].typeId, 'twig');
+        const id = `${descriptor.id}-wrong`;
+        addSupportEntity(descriptor.id, { ...seedFor(descriptor, id), typeId: wrong.id } as never);
+
+        const collection = getSnapshot()[descriptor.location.key] as Record<string, { typeId?: string }>;
+        assert.equal(collection[id]?.typeId, descriptor.id, `${descriptor.id} trusted the type it was handed`);
+    }
 });
 
 test('updating an entity keeps the type', () => {
@@ -125,17 +241,17 @@ test('restoring after a removal keeps the type', () => {
     for (const descriptor of SUPPORT_TYPES) {
         oneOfEach();
 
-        const removed = removeSupportEntity(descriptor.id, `${descriptor.id}-a`);
+        const removed = removeSupportEntity(descriptor.id, instanceId(descriptor.id));
         assert.ok(removed, `${descriptor.id} was not removed`);
-        // The removal result names the entity by its `self` key, which is the
-        // type id -- SUPPORT_REMOVAL_SHAPES declares it.
-        const self = (removed as Record<string, unknown>)[descriptor.id];
+        // The removal result names the entity under the `self` key its shape
+        // declares, which the registry derives from the type.
+        const self = (removed as Record<string, unknown>)[removalShapeFor(descriptor.id).self];
         assert.ok(self, `${descriptor.id} removal returned no entity`);
         restoreToCollection(descriptor.location.key, self);
 
         const collection = getSnapshot()[descriptor.location.key] as Record<string, { typeId?: string }>;
         assert.equal(
-            collection[`${descriptor.id}-a`]?.typeId,
+            collection[instanceId(descriptor.id)]?.typeId,
             descriptor.id,
             `${descriptor.id} lost its type on restore`,
         );
@@ -156,13 +272,26 @@ test('a loaded file carries the type, derived from the array it came out of', ()
 test('an entity that reaches the store unstamped is stamped on entry', () => {
     // `setSnapshot` replaces the whole store and is the path undo of a
     // whole-store action takes. It stamps, so an entity that arrives without a
-    // typeId still lands in its collection.
+    // typeId still lands in its collection. `seedFor` never writes a typeId,
+    // so every seed here is unstamped.
     oneOfEach();
-    const forced = { ...getSnapshot() } as Record<string, unknown>;
-    forced.twigs = { unstamped: { id: 'unstamped', modelId: 'model-a', segments: [] } };
+    const forced = { ...getSnapshot() } as unknown as Record<string, unknown>;
+    for (const descriptor of SUPPORT_TYPES) {
+        const id = `${descriptor.id}-unstamped`;
+        forced[descriptor.location.key] = { [id]: seedFor(descriptor, id) };
+    }
     setSnapshot(forced as never);
 
-    assert.equal(getSupportTypeOf('unstamped'), 'twig');
+    for (const descriptor of SUPPORT_TYPES) {
+        const id = `${descriptor.id}-unstamped`;
+        assert.equal(
+            getSupportTypeOf(id),
+            descriptor.id,
+            `${descriptor.id} arrived unstamped and was not stamped by the store`,
+        );
+        // Not just resolvable from its collection: the store hands it out
+        // carrying the stamp.
+        assert.equal(getSupports()[id]?.typeId, descriptor.id, `${descriptor.id} was not stamped on entry`);
+    }
     assert.equal(getSupportTypeOf('not-in-the-store'), null);
 });
-

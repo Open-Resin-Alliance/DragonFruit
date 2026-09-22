@@ -1,15 +1,14 @@
-import { resolveSegmentEndpoints, resolveShaftAnchor } from '../Knot/segmentEndpoints';
+import { resolveSegmentEndpoints, resolveShaftAnchor, type ShaftEntity } from '../Knot/segmentEndpoints';
 import { resolveDraggedContacts } from './resolveDraggedContacts';
 import { useEffect, useRef, useCallback } from 'react';
 import * as THREE from 'three';
 import { useThree, useFrame } from '@react-three/fiber';
 import { usePicking } from '@/components/picking';
-import { findShaftOwnerOfJoint, getSupportEntity, jointPosIn, getSnapshot, getSelectedId, getRootById, getKnotById, setInteractionWarning } from '../../state';
+import { findShaftOwnerOfJoint, getSupportEntity, jointPosIn, getSelectedId, resolveDeclaredHosts, setInteractionWarning } from '../../state';
 import { getSupportTypeDescriptor, updateSupportEntity, type SupportTypeId } from '../../supportTypeRegistry';
-import { Vec3, Trunk, Branch, Roots, Segment, Twig, Stick, ContactDisk } from '../../types';
+import { Vec3, Trunk, Branch, Roots, Segment, Twig, ContactDisk } from '../../types';
 import type { Kickstand } from '../../SupportTypes/Kickstand/types';
 import { pushSupportHistory } from '@/supports/history/supportHistory';
-import { SUPPORT_UPDATE_TRUNK } from '../../history/actionTypes';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 import { calculateDiskThickness } from '../ContactDisk/contactDiskUtils';
 import {
@@ -44,9 +43,6 @@ export function useJointInteraction(enabled: boolean = true) {
     const activeJointId = useRef<string | null>(null);
     /** The support whose joint is being dragged. One slot, not one ref per type. */
     const activeSupport = useRef<{ typeId: SupportTypeId; id: string } | null>(null);
-    /** True when the drag belongs to this type, for the per-type commit paths. */
-    const activeIdOf = (typeId: SupportTypeId): string | null =>
-        activeSupport.current?.typeId === typeId ? activeSupport.current.id : null;
     const dragPlane = useRef<THREE.Plane>(new THREE.Plane());
     const dragOffset = useRef<THREE.Vector3>(new THREE.Vector3());
     const planeIntersectionRef = useRef<THREE.Vector3>(new THREE.Vector3());
@@ -54,7 +50,8 @@ export function useJointInteraction(enabled: boolean = true) {
     /** Where the joint sat when the drag began, to tell a drag from a click. */
     const dragStartJointPos = useRef<Vec3 | null>(null);
     const forceEndDragRef = useRef(false);
-    const initialTrunkSnapshot = useRef<Trunk | null>(null);
+    /** The entity as it was before a drag, for a type that owns its history entry. */
+    const initialOwnHistorySnapshot = useRef<Trunk | null>(null);
     const initialEditSnapshotRef = useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
     const lastAppliedDragPosRef = useRef<THREE.Vector3 | null>(null);
     // One preview for whichever support is being dragged; `activeSupport` says
@@ -152,6 +149,19 @@ export function useJointInteraction(enabled: boolean = true) {
         return segment?.[nextBinding.jointKey]?.pos ?? null;
     }, [resolveJointBinding]);
 
+    /**
+     * Whether the support just computed is the one already on screen, so it need
+     * not be published again.
+     *
+     * Where the answer comes from is declared: a type that seeds and reads a live
+     * preview compares against it, and one that does not compares against the
+     * committed entity the store still holds.
+     */
+    const previewAlreadyShown = (typeId: SupportTypeId, id: string, next: unknown): boolean =>
+        getSupportTypeDescriptor(typeId).jointDragUsesLivePreview
+            ? livePreviewOf(typeId) === next
+            : getSupportEntity(typeId, id) === next;
+
     const shouldPublishForClampedPos = useCallback((clampedPos: Vec3 | null) => {
         if (!clampedPos) return true;
         const prev = lastPublishedClampedJointPosRef.current;
@@ -205,7 +215,7 @@ export function useJointInteraction(enabled: boolean = true) {
 
         activeJointId.current = null;
         activeSupport.current = null;
-        initialTrunkSnapshot.current = null;
+        initialOwnHistorySnapshot.current = null;
         initialEditSnapshotRef.current = null;
         livePreviewRef.current = null;
         forceEndDragRef.current = false;
@@ -372,12 +382,13 @@ export function useJointInteraction(enabled: boolean = true) {
                 activeSupport.current = { typeId: owner.typeId, id: owner.id };
 
                 const descriptor = getSupportTypeDescriptor(owner.typeId);
-                const hostRoot = descriptor.ownsRoot
-                    ? getRootById((foundParent as { rootId?: string }).rootId ?? '') ?? undefined
-                    : undefined;
-                const hostKnot = descriptor.lower.kind === 'knot'
-                    ? getKnotById((foundParent as { parentKnotId?: string }).parentKnotId ?? '') ?? undefined
-                    : undefined;
+                // The pair the declared lower endpoint resolves from: the root a
+                // plate-rooted shaft owns, or the knot a knot-lowered one hangs
+                // from. Read off the declared edges, so the field each lives in is
+                // not restated here.
+                const declaredHosts = resolveDeclaredHosts(owner.typeId, foundParent as Record<string, unknown>);
+                const hostRoot = descriptor.ownsRoot ? declaredHosts.root : undefined;
+                const hostKnot = descriptor.lower.kind === 'knot' ? declaredHosts.hostKnot : undefined;
 
                 activeConstraintRootRef.current = hostRoot;
                 activeConstraintStartRef.current = resolveShaftAnchor(owner.typeId, {
@@ -392,8 +403,7 @@ export function useJointInteraction(enabled: boolean = true) {
                     .findIndex((s) => s.topJoint?.id === jointId);
                 if (hostRoot && draggedSegIndex > 0) {
                     const endpoints = resolveSegmentEndpoints(
-                        owner.typeId,
-                        foundParent as never,
+                        foundParent as ShaftEntity,
                         (foundParent as { segments: Segment[] }).segments[draggedSegIndex],
                         draggedSegIndex,
                         { root: hostRoot, hostKnot },
@@ -404,7 +414,7 @@ export function useJointInteraction(enabled: boolean = true) {
                 // Trunk pushes its own typed history entry, so it keeps a direct
                 // immutable reference instead of the shared edit snapshot.
                 if (descriptor.ownsEditHistoryEntry) {
-                    initialTrunkSnapshot.current = foundParent as Trunk;
+                    initialOwnHistorySnapshot.current = foundParent as Trunk;
                 } else {
                     initialEditSnapshotRef.current = captureSupportEditSnapshot();
                 }
@@ -458,14 +468,13 @@ export function useJointInteraction(enabled: boolean = true) {
                     // only in where the angle clamp measures from, which the
                     // declared lower endpoint gives.
                     const { typeId, id } = activeSupport.current!;
-                    const support = getSupportEntity(typeId, id) as { rootId?: string; parentKnotId?: string } | null;
+                    const support = getSupportEntity(typeId, id) as Record<string, unknown> | null;
 
                     if (support) {
-                        const root = activeConstraintRootRef.current
-                            ?? (support.rootId ? getRootById(support.rootId) ?? undefined : undefined);
-                        const hostKnot = support.parentKnotId ? getKnotById(support.parentKnotId) ?? undefined : undefined;
+                        const declared = resolveDeclaredHosts(typeId, support);
+                        const root = activeConstraintRootRef.current ?? declared.root;
                         const contextStart = activeConstraintStartRef.current
-                            ?? resolveShaftAnchor(typeId, { root, hostKnot }) ?? undefined;
+                            ?? resolveShaftAnchor(typeId, declared) ?? undefined;
 
                         const resolved = computeJointDragSupportPreview({
                             kind: typeId as never,
@@ -492,21 +501,29 @@ export function useJointInteraction(enabled: boolean = true) {
                 }
             }
 
-            if (initialTrunkSnapshot.current && activeIdOf('trunk')) {
-                const currentTrunk = getSupportEntity('trunk', activeSupport.current!.id) as Trunk | null;
-                if (currentTrunk) {
+            // A type that owns its history entry pushes a TYPED action; the
+            // payload map is keyed per action, so the push stays narrow and the
+            // action comes off the descriptor rather than the type's name.
+            // `shouldEndDrag` is only truthy when a support is being dragged, so
+            // the ref is set here; the assertion states that rather than leaving
+            // the narrowing to inference.
+            const endedSupport = activeSupport.current!;
+            const endDescriptor = getSupportTypeDescriptor(endedSupport.typeId);
+            if (initialOwnHistorySnapshot.current && endDescriptor.ownsEditHistoryEntry && endDescriptor.historyUpdate) {
+                const currentSupport = getSupportEntity(endedSupport.typeId, endedSupport.id);
+                if (currentSupport) {
                     pushSupportHistory({
-                        type: SUPPORT_UPDATE_TRUNK,
-                        description: 'Move trunk joint',
+                        type: endDescriptor.historyUpdate,
+                        description: `Move ${endDescriptor.singular} joint`,
                         payload: {
-                            before: initialTrunkSnapshot.current,
-                            after: cloneTrunk(currentTrunk),
+                            before: initialOwnHistorySnapshot.current,
+                            after: cloneTrunk(currentSupport as Trunk),
                         },
                     });
                 }
             }
 
-            // Trunk pushed its own typed entry above; the rest share one.
+            // A type that owns its entry pushed it above; the rest share one.
             if (initialEditSnapshotRef.current && activeSupport.current
                 && !getSupportTypeDescriptor(activeSupport.current.typeId).ownsEditHistoryEntry) {
                 pushSupportEditHistory(
@@ -525,7 +542,7 @@ export function useJointInteraction(enabled: boolean = true) {
 
             activeJointId.current = null;
             activeSupport.current = null;
-            initialTrunkSnapshot.current = null;
+            initialOwnHistorySnapshot.current = null;
             initialEditSnapshotRef.current = null;
             livePreviewRef.current = null;
             forceEndDragRef.current = false;
@@ -612,108 +629,56 @@ export function useJointInteraction(enabled: boolean = true) {
                     lastAppliedDragPosRef.current.copy(newPos);
                 }
 
-                if (activeIdOf('trunk')) {
-                    // Update trunk
-                    const trunk = getSupportEntity('trunk', activeSupport.current!.id) as Trunk | null;
-                    if (trunk) {
-                        // Resolve Context for constraints (cached from drag start)
-                        const root = activeConstraintRootRef.current ?? getRootById(trunk.rootId) ?? undefined;
-                        const contextStart = activeConstraintStartRef.current;
+                const { typeId, id } = activeSupport.current;
+                const entity = getSupportEntity(typeId, id) as
+                    | (Record<string, unknown> & { id: string; segments: Segment[] })
+                    | null;
 
-                        const newTrunk = computeJointDragSupportPreview({
-                            kind: 'trunk',
-                            support: trunk,
-                            jointId: activeJointId.current!,
-                            newPos: newPosVec3,
-                            isCurveMode: false,
-                            root,
-                            contextStart,
-                        });
+                if (entity && JOINT_DRAG_HOSTED_SHAFT_TYPES.has(typeId)) {
+                    // A hosted shaft clamps against a host, so the root, the angle
+                    // clamp's origin and the preview all come off the entity's
+                    // declared endpoints -- no arm per type.
+                    const declared = resolveDeclaredHosts(typeId, entity);
+                    const root = activeConstraintRootRef.current ?? declared.root;
+                    // The fallback measures from the same root the clamp gets, which
+                    // may be the one captured at drag start rather than the declared.
+                    const contextStart = activeConstraintStartRef.current
+                        ?? resolveShaftAnchor(typeId, { root, hostKnot: declared.hostKnot }) ?? undefined;
 
-                        const clampedTrunkJointPos = resolveJointPosById(newTrunk.segments, activeJointId.current!);
-                        const shouldPublish = shouldPublishForClampedPos(clampedTrunkJointPos);
-                        if (livePreviewOf<typeof newTrunk>('trunk') !== newTrunk && shouldPublish) {
-                            setLivePreview(newTrunk);
-                            publishJointDragSupportPreview('trunk', newTrunk);
-                            markPublishedClampedPos(clampedTrunkJointPos);
-                        }
+                    const next = computeJointDragSupportPreview({
+                        kind: typeId as never,
+                        support: entity as never,
+                        jointId: activeJointId.current!,
+                        newPos: newPosVec3,
+                        isCurveMode: false,
+                        root,
+                        contextStart,
+                    }) as { id: string; segments: Segment[] };
 
-                        emitPreviewJointPos(clampedTrunkJointPos, newPosVec3);
-                        applyWarningForDragDelta(clampedTrunkJointPos, newPosVec3);
+                    const clamped = resolveJointPosById(next.segments, activeJointId.current!);
+                    if (shouldPublishForClampedPos(clamped) && !previewAlreadyShown(typeId, id, next)) {
+                        if (getSupportTypeDescriptor(typeId).jointDragUsesLivePreview) setLivePreview(next);
+                        publishJointDragSupportPreview(typeId as never, next as never);
+                        markPublishedClampedPos(clamped);
                     }
-                } else if (activeIdOf('branch')) {
-                    // Update branch
-                    const branch = getSupportEntity('branch', activeSupport.current!.id) as Branch | null;
-                    if (branch) {
-                        const contextStart = activeConstraintStartRef.current ?? getKnotById(branch.parentKnotId)?.pos;
 
-                        const newBranch = computeJointDragSupportPreview({
-                            kind: 'branch',
-                            support: branch,
-                            jointId: activeJointId.current!,
-                            newPos: newPosVec3,
-                            isCurveMode: false,
-                            contextStart,
-                        });
+                    emitPreviewJointPos(clamped, newPosVec3);
+                    applyWarningForDragDelta(clamped, newPosVec3);
+                } else if (entity) {
+                    // A type contacting the model at both ends re-solves those
+                    // contacts against the moved joint instead of clamping to a host.
+                    const moved = updateSegmentsJointPos(entity.segments as any[], activeJointId.current!, newPosVec3) as Segment[];
+                    const next = resolveDraggedContacts(typeId, entity as never, activeJointId.current!, moved) as
+                        { id: string; segments: Segment[] };
 
-                        const clampedBranchJointPos = resolveJointPosById(newBranch.segments, activeJointId.current!);
-                        const shouldPublish = shouldPublishForClampedPos(clampedBranchJointPos);
-                        if (livePreviewOf<typeof newBranch>('branch') !== newBranch && shouldPublish) {
-                            setLivePreview(newBranch);
-                            publishJointDragSupportPreview('branch', newBranch);
-                            markPublishedClampedPos(clampedBranchJointPos);
-                        }
-
-                        emitPreviewJointPos(clampedBranchJointPos, newPosVec3);
-                        applyWarningForDragDelta(clampedBranchJointPos, newPosVec3);
+                    const clamped = resolveJointPosById(next.segments, activeJointId.current!);
+                    if (shouldPublishForClampedPos(clamped) && !previewAlreadyShown(typeId, id, next)) {
+                        if (getSupportTypeDescriptor(typeId).jointDragUsesLivePreview) setLivePreview(next);
+                        emitSupportDragPreview(typeId, next.id, next);
+                        markPublishedClampedPos(clamped);
                     }
-                } else if (activeIdOf('kickstand')) {
-                    const kickstand = getSnapshot().kickstands[activeSupport.current!.id];
-                    if (kickstand) {
-                        const root = activeConstraintRootRef.current ?? getRootById(kickstand.rootId) ?? undefined;
-                        let contextStart = activeConstraintStartRef.current;
-                        if (!contextStart && root) {
-                            const rPos = root.transform.pos;
-                            const startZ = rPos.z + root.diskHeight + root.coneHeight;
-                            contextStart = { x: rPos.x, y: rPos.y, z: startZ };
-                        }
 
-                        const newKickstand = computeJointDragSupportPreview({
-                            kind: 'kickstand',
-                            support: kickstand,
-                            jointId: activeJointId.current!,
-                            newPos: newPosVec3,
-                            isCurveMode: false,
-                            root,
-                            contextStart,
-                        });
-
-                        const clampedKickstandJointPos = resolveJointPosById(newKickstand.segments, activeJointId.current!);
-                        const shouldPublish = shouldPublishForClampedPos(clampedKickstandJointPos);
-                        if (getSnapshot().kickstands[activeSupport.current!.id] !== newKickstand && shouldPublish) {
-                            publishJointDragSupportPreview('kickstand', newKickstand);
-                            markPublishedClampedPos(clampedKickstandJointPos);
-                        }
-
-                        emitPreviewJointPos(clampedKickstandJointPos, newPosVec3);
-                        applyWarningForDragDelta(clampedKickstandJointPos, newPosVec3);
-                    }
-                } else if (activeSupport.current) {
-                    const { typeId, id } = activeSupport.current;
-                    const entity = getSupportEntity(typeId, id) as { id: string; segments: Segment[] } | null;
-                    if (entity) {
-                        const moved = updateSegmentsJointPos(entity.segments as any[], activeJointId.current!, newPosVec3) as Segment[];
-                        const next = resolveDraggedContacts(typeId, entity, activeJointId.current!, moved);
-
-                        const clamped = resolveJointPosById(next.segments, activeJointId.current!);
-                        if (livePreviewOf<typeof next>(typeId) !== next && shouldPublishForClampedPos(clamped)) {
-                            setLivePreview(next);
-                            emitSupportDragPreview(typeId, next.id, next);
-                            markPublishedClampedPos(clamped);
-                        }
-
-                        emitPreviewJointPos(clamped, newPosVec3);
-                    }
+                    emitPreviewJointPos(clamped, newPosVec3);
                 }
             }
         }

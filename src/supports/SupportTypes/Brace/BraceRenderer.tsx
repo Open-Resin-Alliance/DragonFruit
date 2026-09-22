@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import * as THREE from 'three';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import type { Brace, Knot } from '../../types';
+import { registerSupportDetailRenderer } from '../../detailRenderer/seam';
 import { useHighlight } from '../../interaction/useHighlight';
 import { handleSupportClick } from '../../interaction/clickHandlers';
 import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
@@ -12,6 +13,7 @@ import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitive
 import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import { branchPlacementStore } from '../Branch/branchPlacementState';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
+import { segmentSelectionId, spanKnotHostType } from '../../supportTypeRegistry';
 
 const DEBUG_SECTION_COLORS: Record<string, string> = {
     initial: '#00ff00',
@@ -68,7 +70,7 @@ export const BraceRenderer = React.memo(function BraceRenderer({
 }: BraceRendererProps) {
     const { getHotkey } = useHotkeyConfig();
     const branchFamilyBinding = getHotkey('SUPPORTS', 'BRANCH_PLACEMENT');
-    const segmentId = `braceSegment:${brace.id}`;
+    const segmentId = segmentSelectionId(spanKnotHostType(), brace.id);
     const effectiveInteractable = isInteractable && !ghosted;
     const shaftOpacity = ghosted ? Math.max(0.18, Math.min(ghostOpacity, 0.35)) : 1;
     const shaftTransparent = ghosted ? shaftOpacity < 0.999 : false;
@@ -297,3 +299,31 @@ export const BraceRenderer = React.memo(function BraceRenderer({
 });
 
 BraceRenderer.displayName = 'BraceRenderer';
+
+registerSupportDetailRenderer('brace', (ctx) => ({
+    component: BraceRenderer as never,
+    batchedIds: ctx.braceShaftsBySupport,
+    hosts: (brace: Brace) => {
+        const startKnot = ctx.braceRenderKnotsById[brace.startKnotId];
+        const endKnot = ctx.braceRenderKnotsById[brace.endKnotId];
+        return startKnot && endKnot ? { startKnot, endKnot } : null;
+    },
+    skip: ({ entity, isSelected, isBatchable }) => {
+        const ghosted = ctx.ghostedBraceIdSet.has((entity as Brace).id);
+        return !(isSelected || !isBatchable || ghosted);
+    },
+    noClipping: ({ isSelected }) => isSelected,
+    extraProps: ({ entity, isSelected, isBatchable }) => {
+        const ghosted = ctx.ghostedBraceIdSet.has((entity as Brace).id);
+        return {
+            ghosted,
+            ghostOpacity: ctx.ghostOpacityClamped,
+            showKnots: !ctx.hideUnselectedKnots || isSelected,
+            suppressHover: ctx.suppressHover || ghosted,
+            isInteractable: ctx.isInteractable && !ghosted,
+            deferStraightShaftToSceneBatch: !isSelected && isBatchable && !ghosted,
+            deferInteractionToSceneBatch: (!isSelected && isBatchable) || ghosted,
+            debugSectionColors: ctx.debugSectionColorsEnabled,
+        };
+    },
+}));

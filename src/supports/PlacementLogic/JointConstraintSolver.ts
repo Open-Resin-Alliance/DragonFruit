@@ -1,5 +1,6 @@
 import { Trunk, Branch, Vec3, Roots, Knot } from '../types';
 import { getKnotById, getSupportEntities } from '../state';
+import { FLEXING_KNOT_HOST_TYPES } from '../supportTypeRegistry';
 import { clampShaftAngle } from './ShaftAngleConstraint';
 import { getFinalSocketPosition } from '../SupportPrimitives/ContactCone/contactConeUtils';
 import * as THREE from 'three';
@@ -125,10 +126,16 @@ export function solveKnotConstraint(
     ignoredBranchIds?: string[]
 ): Vec3 {
     let clampedPos = { ...candidatePos };
-    const branches = getSupportEntities<Branch>('branch');
 
-    // Find all branches attached to this knot
-    const attachedBranches = branches.filter(b => b.parentKnotId === knot.id);
+    // Find all branches attached to this knot, over every type declaring a
+    // flexing host-knot edge.
+    const attachedBranches: Branch[] = [];
+    for (const { typeId, knotFields } of FLEXING_KNOT_HOST_TYPES) {
+        for (const branch of getSupportEntities<Branch>(typeId)) {
+            const fields = branch as unknown as Record<string, unknown>;
+            if (knotFields.some((field) => fields[field] === knot.id)) attachedBranches.push(branch);
+        }
+    }
 
     for (const branch of attachedBranches) {
         if (ignoredBranchIds?.includes(branch.id)) continue;

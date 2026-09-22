@@ -1,9 +1,9 @@
 import type { Branch, Knot, Leaf, Roots, SupportState, Trunk } from '../../../types';
 import { getJointDiameter } from '../../../constants';
-import { splitShaft } from '../../../SupportPrimitives/Joint/jointUtils';
+import { splitSupportShaft } from '../../../SupportPrimitives/Joint/jointUtils';
 import { resolveSegmentEndpoints } from '../../../SupportPrimitives/Knot/segmentEndpoints';
 import { getSettings } from '../../../Settings/state';
-import { getSupportTypeDescriptor, SUPPORT_TYPES, type SupportTypeDescriptor, type SupportTypeId } from '../../../supportTypeRegistry';
+import { coneKnotHostType, getSupportTypeDescriptor, knotHostId, SUPPORT_TYPES, type SupportTypeDescriptor, type SupportTypeId } from '../../../supportTypeRegistry';
 
 function maxNum(a: number, b: number) {
     return a > b ? a : b;
@@ -66,8 +66,8 @@ function ownerOfShaft(snapshot: SupportState, shaftId: string): { typeId: Suppor
 }
 
 
-function leafConeKey(leafId: string) {
-    return `leafCone:${leafId}`;
+function coneHostKey(leafId: string) {
+    return knotHostId(coneKnotHostType(), leafId);
 }
 
 /**
@@ -142,7 +142,7 @@ export function computeMaxConnectedDiameterFromTrunk(snapshot: SupportState, tru
             }
 
             // A leaf's cone is addressed as a shaft too, so a knot can sit on it.
-            for (const knotId of knotIdsByShaft.get(leafConeKey(next.id)) ?? []) knotQueue.push(knotId);
+            for (const knotId of knotIdsByShaft.get(coneHostKey(next.id)) ?? []) knotQueue.push(knotId);
 
             continue;
         }
@@ -269,7 +269,12 @@ function computeLinearT(
 
 export type TrunkKnotUpdate = { before: Knot; after: Knot };
 
-export function computeAndApplyTrunkDiameterProfile(
+/**
+ * Re-solve a host's stepwise shaft diameter from the branches it carries, for a
+ * type declaring `recomputesDiameterFromAttachments`. Segment boundaries split
+ * at each branch-carrying knot, and the knots move with them.
+ */
+export function computeAndApplySupportDiameterProfile(
     snapshot: SupportState,
     trunkId: string,
     options?: { baseShaftDiameterMm?: number }
@@ -328,7 +333,7 @@ export function computeAndApplyTrunkDiameterProfile(
         if (segIndex === -1) continue;
 
         const seg = nextTrunk.segments[segIndex];
-        const endpoints = resolveSegmentEndpoints('trunk', nextTrunk, seg, segIndex, { root });
+        const endpoints = resolveSegmentEndpoints(nextTrunk, seg, segIndex, { root });
 
         const existingT = typeof knot.t === 'number'
             ? Math.min(1, Math.max(0, knot.t))
@@ -360,7 +365,7 @@ export function computeAndApplyTrunkDiameterProfile(
 
         // This caller performs its own knot rehosting below, so it does not pass
         // knots into splitShaft and only consumes the trunk.
-        const { trunk: trunkAfterSplit } = splitShaft(nextTrunk, segIdToSplit, splitPoint, splitT, root);
+        const { entity: trunkAfterSplit } = splitSupportShaft(nextTrunk, segIdToSplit, splitPoint, splitT, { root });
         const bottomSegIndex = trunkAfterSplit.segments.findIndex((s) => s.id === segIdToSplit);
         if (bottomSegIndex === -1) {
             nextTrunk = trunkAfterSplit;
@@ -523,7 +528,7 @@ export function computeAndApplyTrunkDiameterProfile(
 export function computeForestDiameterProfile(snapshot: SupportState): SupportState {
     let working = snapshot;
     for (const trunkId of Object.keys(snapshot.trunks)) {
-        const applied = computeAndApplyTrunkDiameterProfile(working, trunkId);
+        const applied = computeAndApplySupportDiameterProfile(working, trunkId);
         if (!applied) continue;
 
         let nextKnots = working.knots;

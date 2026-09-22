@@ -14,7 +14,7 @@ import { DETAIL_PRESET, STRUCTURE_PRESET, ANCHOR_PRESET } from '@/supports/Setti
 import type { SizingDebugInfo, AutoSupportSettings, ForestReport } from '@/supports/autoSupport';
 import { getSettings, updateAutoSupportSettings, subscribeToSettings, updateDebugSimpleSupportRender } from '@/supports/Settings/state';
 import { getSnapshot, setSnapshot } from '@/supports/state';
-import { SUPPORT_COLLECTION_KEYS, SUPPORT_TYPES, type SupportCollectionKey } from '@/supports/supportTypeRegistry';
+import { knotHostId, coneKnotHostType, SUPPORT_COLLECTION_KEYS, SUPPORT_TYPES, type SupportCollectionKey } from '@/supports/supportTypeRegistry';
 import type { Knot } from '@/supports/types';
 /** Set to true while auto-support is busy (scanning or placing).
  *  Page-level overlay reads this to show the "Generating Supports"
@@ -107,27 +107,36 @@ const PRESETS = {
 /** Density tiers on the quick-select row. Module level so React Compiler cannot
  *  rename anything the Lingui macro depends on. */
 const PRESET_LABELS: Record<keyof typeof PRESETS, MessageDescriptor> = {
-  light: msg({ message: 'light', comment: 'Auto-support density tier, rendered uppercase on a narrow button next to "medium" and "heavy".' }),
-  medium: msg({ message: 'medium', comment: 'Auto-support density tier, rendered uppercase on a narrow button next to "light" and "heavy".' }),
-  heavy: msg({ message: 'heavy', comment: 'Auto-support density tier, rendered uppercase on a narrow button next to "light" and "medium".' }),
+  light: msg({ message: 'light', comment: 'Auto-support density tier, rendered capitalised on a narrow button next to "medium" and "heavy".' }),
+  medium: msg({ message: 'medium', comment: 'Auto-support density tier, rendered capitalised on a narrow button next to "light" and "heavy".' }),
+  heavy: msg({ message: 'heavy', comment: 'Auto-support density tier, rendered capitalised on a narrow button next to "light" and "medium".' }),
 };
 
 function SliderRow({ knob, draft, setDraft }: { knob: KnobDef; draft: AutoSupportSettings; setDraft: React.Dispatch<React.SetStateAction<AutoSupportSettings>> }) {
   const { _ } = useLingui();
   const value = draft[knob.key];
+  const { min, max, step } = knob;
   return (
     <div>
       <div className="flex items-center justify-between mb-1">
         <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }} title={_(knob.hint)}>{_(knob.label)}</span>
-        <span className="text-[11px] tabular-nums font-semibold" style={{ color: 'var(--text-strong)' }}>{value.toFixed(knob.step < 0.1 ? 2 : knob.step < 1 ? 1 : 0)}{knob.unit}</span>
+        <span className="text-[11px] tabular-nums font-semibold" style={{ color: 'var(--text-strong)' }}>{value.toFixed(step < 0.1 ? 2 : step < 1 ? 1 : 0)}{knob.unit}</span>
       </div>
-      <input type="range" min={knob.min} max={knob.max} step={knob.step} value={value}
+      <input type="range" min={min} max={max} step={step} value={value}
         onChange={(e) => setDraft((d) => ({ ...d, [knob.key]: parseFloat(e.target.value) }))}
         className="ui-range w-full"
       />
     </div>
   );
 }
+
+// Active treatment for the density tier row, matching the bracing card's
+// quick-pick selector so the two panels read as one system.
+const TIER_ACTIVE_STYLE: React.CSSProperties = {
+  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
+  background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)',
+  color: 'var(--text-strong)',
+};
 
 export function AutoSupportPanel({ islands, hasGeometry, activeModelId, onBeforeRun }: AutoSupportPanelProps) {
   const { _ } = useLingui();
@@ -234,8 +243,8 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, onBefore
       for (const id of Object.keys(snap.leaves)) {
         if (snap.leaves[id].modelId === activeModelId) delete next.leaves[id];
       }
-      for (const id of Object.keys(snap.anchors)) {
-        if (snap.anchors[id].modelId === activeModelId) delete next.anchors[id];
+      for (const id of Object.keys(snap.stumps)) {
+        if (snap.stumps[id].modelId === activeModelId) delete next.stumps[id];
       }
       // Delete only this model's braces: those carrying its modelId, or whose
       // knots hang off its segments (legacy braces without modelId). Other
@@ -285,7 +294,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, onBefore
       // six other consumers treat leaves. Kept explicit until that is a
       // deliberate change of its own.
       for (const l of Object.values(next.leaves)) {
-        survivingSegmentIds.add(`leafCone:${l.id}`);
+        survivingSegmentIds.add(knotHostId(coneKnotHostType(), l.id));
       }
       // The model's kickstands are supports too — drop them from the
       // kickstand store. They used to leak into the next run: stale roots
@@ -470,24 +479,23 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, onBefore
               </div>
             </div>
 
-            {/* Preset quick-select */}
-            <div className="rounded-md border p-2" style={SECTION_CARD}>
-              <div className="grid grid-cols-3 gap-1.5">
-                {(['light', 'medium', 'heavy'] as const).map((key) => (
-                  <button key={key} type="button"
-                    onClick={() => {
-                      // Density + sizing tier only — the trunk preset
-                      // (manual placement) is deliberately not touched.
-                      updateAutoSupportSettings(PRESETS[key]);
-                      setActivePreset(key);
-                    }}
-                    className="h-8 rounded-md border text-[11px] font-semibold capitalize transition-colors"
-                    style={activePreset === key
-                      ? { borderColor: 'color-mix(in srgb, var(--accent), white 10%)', background: 'color-mix(in srgb, var(--accent), var(--surface-1) 84%)', color: 'var(--accent)' }
-                      : { borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
-                  >{_(PRESET_LABELS[key])}</button>
-                ))}
-              </div>
+            {/* Density tier quick-select — the bracing card's quick-pick button
+                style, unboxed and on the card surface: the row sits directly on
+                the panel, so the plain secondary surface is what matches the cards
+                around it (the bracing row keeps its darker inset inside its card). */}
+            <div className="grid grid-cols-3 gap-1.5">
+              {(['light', 'medium', 'heavy'] as const).map((key) => (
+                <button key={key} type="button"
+                  onClick={() => {
+                    // Density + sizing tier only — the trunk preset
+                    // (manual placement) is deliberately not touched.
+                    updateAutoSupportSettings(PRESETS[key]);
+                    setActivePreset(key);
+                  }}
+                  className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] capitalize sm:text-[11px]"
+                  style={activePreset === key ? TIER_ACTIVE_STYLE : undefined}
+                >{_(PRESET_LABELS[key])}</button>
+              ))}
             </div>
 
             {/* Sizing debug */}
@@ -512,8 +520,8 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, onBefore
                     <div className="flex justify-between"><span>{_(msg`Candidates`)}</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.totalCandidates}</span></div>
                     <div className="flex justify-between"><span>{_(msg`Weight / support`)}</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.weightPerSupportG.toFixed(2)} g</span></div>
                     <div className="flex justify-between"><span>{_(msg`Avg island area`)}</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.avgIslandAreaMm2.toFixed(2)} mm²</span></div>
-                    <div className="flex justify-between"><span>{_(msg`Standalone trunks`)}</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.standaloneTrunks}</span></div>
-                    <div className="flex justify-between"><span>{_(msg`Grid infill trunks`)}</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.gridInfillTrunks}</span></div>
+                    <div className="flex justify-between"><span>{_(msg`Standalone trunks`)}</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.standaloneHosts}</span></div>
+                    <div className="flex justify-between"><span>{_(msg`Grid infill trunks`)}</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.gridInfillHosts}</span></div>
                     <div className="flex justify-between" style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 2, marginTop: 2 }}>
                       <span>{_(msg`Shaft Ø range`)}</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.shaftDiameterRange.min.toFixed(2)}–{sizingDebug.shaftDiameterRange.max.toFixed(2)} mm</span>
                     </div>
@@ -533,7 +541,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, onBefore
               >
                 <span>{_(msg`Forest Report`)}</span>
                 <span className="text-[9px] normal-case tracking-normal">
-                  {forestReport.trunkCount}T {forestReport.leafCount}L {forestReport.branchCount}B · {forestReport.trees.length} trees
+                  {forestReport.hostCount}H {forestReport.leafCount}L {forestReport.branchCount}B · {forestReport.trees.length} trees
                 </span>
               </button>
             )}
@@ -631,7 +639,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, onBefore
               {([
                 { key: 'enabled' as const, label: _(msg`Enabled`), title: _(msg`Generate supports automatically on scan`) },
                 { key: 'prioritizeIntersection' as const, label: _(msg`Prioritize Dual`), title: _(msg`Islands found by BOTH the slice and mesh scans are placed first (they are the most certain)`) },
-                { key: 'debugSupportOriginColors' as const, label: _(msg`Origin Colors`), title: _(msg`Debug: color supports by origin — anchor (red), overhang (orange), island (blue), standalone (purple)`) },
+                { key: 'debugSupportOriginColors' as const, label: _(msg`Origin Colors`), title: _(msg`Debug: color supports by origin — stump (red), overhang (orange), island (blue), standalone (purple)`) },
                 { key: 'debugSkipAutoBracing' as const, label: _(msg`No Brace`), title: _(msg`Debug: skip automatic bracing for this run`) },
               ]).map((t) => (
                 <button key={t.key} type="button" title={t.title}

@@ -7,11 +7,11 @@ The largest subsystem in the frontend. `src/supports/` owns everything from the 
 | Directory | Holds |
 | --------- | ----- |
 | `SupportPrimitives/` | The reusable pieces every type is built from — Roots, Shaft, Joint, Knot, ContactCone, ContactDisk. Each with its renderer and, where it pays, an instanced group |
-| `SupportTypes/` | One directory per placeable type — Trunk, Branch, Leaf, Twig, Stick, Brace, Kickstand, Anchor — each with a renderer and usually a builder |
+| `SupportTypes/` | One directory per placeable type — Trunk, Branch, Leaf, Twig, Stick, Brace, Kickstand, Stump — each with a renderer and usually a builder |
 | `PlacementLogic/` | Where a support is allowed to go: pathfinding, collision, solvers, grid policy |
 | `interaction/` | Hover, selection, snapping, and the routing that decides which controller owns a click |
 | `rendering/`, `Renderers/` | Shared render assembly and batched/instanced groups |
-| `autoSupport/` | Automatic placement: candidate generation, coverage, Poisson spacing, anchor bands, physics-driven sizing |
+| `autoSupport/` | Automatic placement: candidate generation, coverage, Poisson spacing, near-plate bands, physics-driven sizing |
 | `autoBracing/` | Automatic brace generation, plus the mesh geometry store used for clearance |
 | `Grid/`, `Curves/`, `Rafts/` | Grid lattice, curved segments, raft geometry |
 | `history/` | The typed history façade for support actions |
@@ -59,6 +59,22 @@ current support selection, resolves every selected support to its editable
 target, and batches all store mutations into one notification. When no
 multi-selection exists, it falls back to the primary selected support.
 
+### Profile field limits
+
+`SUPPORT_PROFILE_LIMITS` (`src/supports/Settings/defaults.ts`) holds the sane
+range of every General-tab profile field (`tip`, `shaft`, `roots`). The store
+applies it through `clampProfileFields` on **every** write — the tab, a preset, an
+imported scene and a plugin call all pass through it — so no path can hand a
+negative or absurd dimension to the geometry builders. The same table supplies
+the inputs' `min`/`max`, which also switches `NumberInput` to a pattern that
+cannot start a negative value.
+
+Zero is a legal limit for a height that may mean "no feature" (root disk/cone
+height); diameters floor just above zero because a zero-radius disk or cone has
+no usable normal. Upper bounds are generous — they catch a stray digit, not model
+a printer. A new General-tab field is not protected until it is in that table and
+clamped in `clampProfileFields`.
+
 The settings sidebar shows the last selected support's values. Changing a value
 applies those settings to the complete selection. The sidebar captures one
 before/after support edit snapshot around the editing session, so undo restores
@@ -76,8 +92,35 @@ either case would clear the support selection set.
 - By hand: modifier keys choose the family, the first click's target chooses the type — [Support Placement Modifiers](../reference/support-placement-modifiers.md).
 - Automatically: `autoSupport/` generates candidates from island analysis and overhang regions, then sizes and places a forest. Gated behind an experiment.
 
+## The placement guide line
+
+Hovering a model in Support mode marks the band where the tip will land: the
+intersection of the horizontal plane at the hovered point's height with the
+model. Dragging a tip drives the same plane from the drag's hit point, which is
+what tips get levelled against when several of them have to meet the model at one
+height.
+
+The plane lives in `supportPlacementGuideStore` (`src/components/scene/SceneCanvas/`).
+It has two writers, `handleSupportHover` in `SceneCanvas` for model hover and
+`useContactDiskDragSession` for a tip drag, and they do not share a render pass:
+while `isContactDiskHudDraggingActive()` the hover path leaves the plane alone, so
+a drag cannot fight the hover's ray for the same pointer.
+
+Only the store's "is the plane set" flag is subscribed to (by `SceneCanvas`, to
+mount the overlay); the Z is read imperatively every frame by `StlMesh`, which
+writes the `uPlaneZ` uniform. The split is deliberate. The Z follows the pointer,
+so carrying it in render state means either a scene re-render per pointer move or
+a deadband on the value — and a deadband steps the line by `z / tan(tilt)` of
+contour travel on screen, which is pixels on a shallow face and nothing on a
+steep one.
+
+The stripe itself is measured along the surface: distance to the plane's contour
+divided by the surface's tilt against the plane. A face lying in the plane has no
+contour and gets a faint wash instead of a stripe as wide as the face. The stripe
+width is half the contact diameter of the tip being placed.
+
 ## Related pages
 
-- [Grid and Branching](grid-and-branching.md) — grid ownership and trunk replacement
+- [Grid and Branching](grid-and-branching.md) — grid node ownership and attachment
 - [Support Pathfinding V3](support-pathfinding-v3.md) — the routing solver
 - [Raft Geometry](raft-geometry.md) — the base derived from support roots

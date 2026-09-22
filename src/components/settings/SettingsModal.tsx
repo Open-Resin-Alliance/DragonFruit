@@ -10,6 +10,7 @@ import { SponsorsCarousel } from '@/components/settings/SponsorsCarousel';
 import { CameraSettingsTab } from '@/components/settings/CameraSettingsTab';
 import { HotkeysSettingsTab } from '@/components/settings/HotkeysSettingsTab';
 import { MeshSettingsTab } from '@/components/settings/MeshSettingsTab';
+import { DEFAULT_BAKED_OCCLUSION_INTENSITY } from '@/features/scene/bakedOcclusion';
 import { PluginsSettingsTab } from '@/components/settings/PluginsSettingsTab';
 import { ExperimentsSettingsTab } from '@/components/settings/ExperimentsSettingsTab';
 import { getEnabledExperimentIds } from '@/features/experiments/experimentsRegistry';
@@ -34,6 +35,7 @@ import {
   getSavedThemeCustomColors,
   getSavedCustomThemeProfiles,
   getThemeProfile,
+  getThemeProfiles,
   getSavedThemePreset,
   getSavedThemePreference,
   exportThemeProfileToJson,
@@ -130,20 +132,20 @@ import {
   saveImportDefaultsSettings,
   type ImportDefaultsSettings,
 } from '@/features/scene/importDefaultsPreferences';
+import { ColorSwatchInput } from '@/components/atoms';
 
 const DEFAULT_MESH_COLOR = '#a3a3a3';
 const DEFAULT_HEATMAP_MIN_ANGLE = 0;
 const DEFAULT_HEATMAP_MAX_ANGLE = 45;
-const DEFAULT_AMBIENT_INTENSITY = 0.6;
-const DEFAULT_DIRECTIONAL_INTENSITY = 0.8;
-const DEFAULT_MATERIAL_ROUGHNESS = 0.65;
+const DEFAULT_AMBIENT_INTENSITY = 0.28;
+const DEFAULT_DIRECTIONAL_INTENSITY = 1.12;
+const DEFAULT_MATERIAL_ROUGHNESS = 0.55;
 const DEFAULT_XRAY_OPACITY = 0.25;
 const DEFAULT_SHADER_TYPE: MeshShaderType = 'soft_clay';
 const DEFAULT_MATCAP_VARIANT: MatcapVariant = 'neutral';
 const DEFAULT_FLAT_USE_VERTEX_COLORS = true;
-const DEFAULT_TOON_STEPS = 5;
 const DEFAULT_HOVER_TINT_STRENGTH = 0.5;
-const DEFAULT_SELECTED_TINT_STRENGTH = 0.75;
+const DEFAULT_SELECTED_TINT_STRENGTH = 0.70;
 const DRAGONFRUIT_VERSION = process.env.NEXT_PUBLIC_APP_VERSION ?? '0.0.0';
 const DRAGONFRUIT_BUILD_CHANNEL = (process.env.NEXT_PUBLIC_BUILD_CHANNEL ?? 'mainline').trim().toLowerCase();
 const DRAGONFRUIT_GIT_COMMIT = process.env.NEXT_PUBLIC_GIT_COMMIT ?? '';
@@ -176,20 +178,22 @@ type SettingsModalProps = {
   onSelectionColorChange: (color: string) => void;
   hoverColor: string;
   onHoverColorChange: (color: string) => void;
-  shaderType: MeshShaderType;
-  onShaderTypeChange: (shaderType: MeshShaderType) => void;
+  /** The type the Mesh tab is configuring. Does not change what the viewport renders. */
+  configuredShaderType: MeshShaderType;
+  onConfiguredShaderTypeChange: (shaderType: MeshShaderType) => void;
   matcapVariant: MatcapVariant;
   onMatcapVariantChange: (variant: MatcapVariant) => void;
   flatUseVertexColors: boolean;
   onFlatUseVertexColorsChange: (value: boolean) => void;
-  toonSteps: number;
-  onToonStepsChange: (value: number) => void;
   ambientIntensity: number;
   onAmbientIntensityChange: (value: number) => void;
   directionalIntensity: number;
   onDirectionalIntensityChange: (value: number) => void;
   materialRoughness: number;
+  /** Multiplier on the baked occlusion's strength; 0 means the bake is off. */
+  bakedAoIntensity: number;
   onMaterialRoughnessChange: (value: number) => void;
+  onBakedAoIntensityChange: (value: number) => void;
   xrayOpacity: number;
   heatmapMinAngle: number;
   heatmapMaxAngle: number;
@@ -295,19 +299,19 @@ export function SettingsModal({
   onSelectionColorChange,
   hoverColor,
   onHoverColorChange,
-  shaderType,
-  onShaderTypeChange,
+  configuredShaderType,
+  onConfiguredShaderTypeChange,
   matcapVariant,
   onMatcapVariantChange,
   flatUseVertexColors,
   onFlatUseVertexColorsChange,
-  toonSteps,
-  onToonStepsChange,
   ambientIntensity,
   onAmbientIntensityChange,
   directionalIntensity,
   onDirectionalIntensityChange,
   materialRoughness,
+  bakedAoIntensity,
+  onBakedAoIntensityChange,
   onMaterialRoughnessChange,
   xrayOpacity,
   heatmapMinAngle,
@@ -389,13 +393,13 @@ export function SettingsModal({
   const [draftLocale, setDraftLocale] = useState(activeLocale);
 
   const [draftMeshColor, setDraftMeshColor] = useState(meshColor);
-  const [draftShaderType, setDraftShaderType] = useState(shaderType);
+  const [draftShaderType, setDraftShaderType] = useState(configuredShaderType);
   const [draftMatcapVariant, setDraftMatcapVariant] = useState(matcapVariant);
   const [draftFlatUseVertexColors, setDraftFlatUseVertexColors] = useState(flatUseVertexColors);
-  const [draftToonSteps, setDraftToonSteps] = useState(toonSteps);
   const [draftAmbientIntensity, setDraftAmbientIntensity] = useState(ambientIntensity);
   const [draftDirectionalIntensity, setDraftDirectionalIntensity] = useState(directionalIntensity);
   const [draftMaterialRoughness, setDraftMaterialRoughness] = useState(materialRoughness);
+  const [draftBakedAoIntensity, setDraftBakedAoIntensity] = useState(bakedAoIntensity);
   const [draftXrayOpacity, setDraftXrayOpacity] = useState(xrayOpacity);
   const [draftHeatmapMinAngle, setDraftHeatmapMinAngle] = useState(heatmapMinAngle);
   const [draftHeatmapMaxAngle, setDraftHeatmapMaxAngle] = useState(heatmapMaxAngle);
@@ -491,13 +495,13 @@ export function SettingsModal({
     const savedThemeProfile = getThemeProfile(savedThemePreset, savedThemeProfiles);
 
     setDraftMeshColor(meshColor);
-    setDraftShaderType(shaderType);
+    setDraftShaderType(configuredShaderType);
     setDraftMatcapVariant(matcapVariant);
     setDraftFlatUseVertexColors(flatUseVertexColors);
-    setDraftToonSteps(toonSteps);
     setDraftAmbientIntensity(ambientIntensity);
     setDraftDirectionalIntensity(directionalIntensity);
     setDraftMaterialRoughness(materialRoughness);
+    setDraftBakedAoIntensity(bakedAoIntensity);
     setDraftXrayOpacity(xrayOpacity);
     setDraftHeatmapMinAngle(heatmapMinAngle);
     setDraftHeatmapMaxAngle(heatmapMaxAngle);
@@ -538,9 +542,9 @@ export function SettingsModal({
     directionalIntensity,
     flatUseVertexColors,
     meshColor,
-    toonSteps,
     matcapVariant,
     materialRoughness,
+    bakedAoIntensity,
     heatmapColors,
     hoverTintStrength,
     selectedTintStrength,
@@ -549,7 +553,7 @@ export function SettingsModal({
     debugPrimitivesPanelVisible,
     view3dSettings,
     slicingThumbnailRenderSettings,
-    shaderType,
+    configuredShaderType,
     xrayOpacity,
     heatmapMinAngle,
     heatmapMaxAngle,
@@ -856,10 +860,10 @@ export function SettingsModal({
     setDraftShaderType(DEFAULT_SHADER_TYPE);
     setDraftMatcapVariant(DEFAULT_MATCAP_VARIANT);
     setDraftFlatUseVertexColors(DEFAULT_FLAT_USE_VERTEX_COLORS);
-    setDraftToonSteps(DEFAULT_TOON_STEPS);
     setDraftAmbientIntensity(DEFAULT_AMBIENT_INTENSITY);
     setDraftDirectionalIntensity(DEFAULT_DIRECTIONAL_INTENSITY);
     setDraftMaterialRoughness(DEFAULT_MATERIAL_ROUGHNESS);
+    setDraftBakedAoIntensity(DEFAULT_BAKED_OCCLUSION_INTENSITY);
     setDraftXrayOpacity(DEFAULT_XRAY_OPACITY);
     setDraftHeatmapMinAngle(DEFAULT_HEATMAP_MIN_ANGLE);
     setDraftHeatmapMaxAngle(DEFAULT_HEATMAP_MAX_ANGLE);
@@ -935,13 +939,13 @@ export function SettingsModal({
   const handleApply = React.useCallback(() => {
     applyLocale(draftLocale);
     onMeshColorChange(draftMeshColor);
-    onShaderTypeChange(draftShaderType);
+    onConfiguredShaderTypeChange(draftShaderType);
     onMatcapVariantChange(draftMatcapVariant);
     onFlatUseVertexColorsChange(draftFlatUseVertexColors);
-    onToonStepsChange(draftToonSteps);
     onAmbientIntensityChange(draftAmbientIntensity);
     onDirectionalIntensityChange(draftDirectionalIntensity);
     onMaterialRoughnessChange(draftMaterialRoughness);
+    onBakedAoIntensityChange(draftBakedAoIntensity);
     onXrayOpacityChange(draftXrayOpacity);
     onHeatmapMinAngleChange(draftHeatmapMinAngle);
     onHeatmapMaxAngleChange(draftHeatmapMaxAngle);
@@ -1010,6 +1014,9 @@ export function SettingsModal({
     didCommitThemeDraftRef.current = true;
     requestClose();
   }, [
+    // Every draft this callback reads belongs in this list. One omission and
+    // Apply pushes whatever the draft happened to be when the callback was last
+    // rebuilt, which presents as a control that saves once and then reverts.
     applyLocale,
     draftLocale,
     draftAmbientIntensity,
@@ -1017,6 +1024,7 @@ export function SettingsModal({
     draftFlatUseVertexColors,
     draftMatcapVariant,
     draftMaterialRoughness,
+    draftBakedAoIntensity,
     draftMeshColor,
     draftHoverTintStrength,
     draftSelectedTintStrength,
@@ -1028,7 +1036,6 @@ export function SettingsModal({
     draftHigherContrastModelEdges,
     draftThemePreset,
     draftShaderType,
-    draftToonSteps,
     draftThemePreference,
     draftThemeColors,
     draftThemeProfiles,
@@ -1069,8 +1076,7 @@ export function SettingsModal({
     onDebugPrimitivesPanelVisibleChange,
     onSlicingThumbnailRenderSettingsChange,
     onView3dSettingsChange,
-    onShaderTypeChange,
-    onToonStepsChange,
+    onConfiguredShaderTypeChange,
     onXrayOpacityChange,
     onHeatmapMinAngleChange,
     onHeatmapMaxAngleChange,
@@ -1544,14 +1550,12 @@ export function SettingsModal({
               )}
               {activeTab === 'mesh' && (
                 <MeshSettingsTab
-                  shaderType={draftShaderType}
-                  onShaderTypeChange={setDraftShaderType}
+                  configuredShaderType={draftShaderType}
+                  onConfiguredShaderTypeChange={setDraftShaderType}
                   matcapVariant={draftMatcapVariant}
                   onMatcapVariantChange={setDraftMatcapVariant}
                   flatUseVertexColors={draftFlatUseVertexColors}
                   onFlatUseVertexColorsChange={setDraftFlatUseVertexColors}
-                  toonSteps={draftToonSteps}
-                  onToonStepsChange={setDraftToonSteps}
                   meshColor={draftMeshColor}
                   onMeshColorChange={setDraftMeshColor}
                   ambientIntensity={draftAmbientIntensity}
@@ -1560,6 +1564,8 @@ export function SettingsModal({
                   onDirectionalIntensityChange={setDraftDirectionalIntensity}
                   materialRoughness={draftMaterialRoughness}
                   onMaterialRoughnessChange={setDraftMaterialRoughness}
+                  bakedAoIntensity={draftBakedAoIntensity}
+                  onBakedAoIntensityChange={setDraftBakedAoIntensity}
                   xrayOpacity={draftXrayOpacity}
                   heatmapMinAngle={draftHeatmapMinAngle}
                   heatmapMaxAngle={draftHeatmapMaxAngle}
@@ -1591,11 +1597,7 @@ export function SettingsModal({
               )}
               {activeTab === 'ui' && (
                 <UISettingsTab
-                  themeProfiles={[
-                    getThemeProfile('dragonfruit-dark', draftThemeProfiles),
-                    getThemeProfile('dragonfruit-light', draftThemeProfiles),
-                    ...draftThemeProfiles.map((profile) => getThemeProfile(profile.id, draftThemeProfiles)),
-                  ]}
+                  themeProfiles={getThemeProfiles(draftThemeProfiles)}
                   themePreset={draftThemePreset}
                   onThemePresetChange={handleThemePresetChange}
                   themePreference={draftThemePreference}
@@ -2220,12 +2222,10 @@ export function SettingsModal({
                   Primary branding
                 </label>
                 <div className="flex items-center gap-1.5">
-                  <input
-                    type="color"
+                  <ColorSwatchInput
                     value={draftThemeCreatePrimaryBrandColor}
-                    onChange={(event) => setDraftThemeCreatePrimaryBrandColor(event.target.value)}
-                    className="h-8 w-9 shrink-0 rounded border"
-                    style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}
+                    onChange={setDraftThemeCreatePrimaryBrandColor}
+                    className="h-8 w-9"
                   />
                   <input
                     type="text"
@@ -2242,12 +2242,10 @@ export function SettingsModal({
                   Secondary branding
                 </label>
                 <div className="flex items-center gap-1.5">
-                  <input
-                    type="color"
+                  <ColorSwatchInput
                     value={draftThemeCreateSecondaryBrandColor}
-                    onChange={(event) => setDraftThemeCreateSecondaryBrandColor(event.target.value)}
-                    className="h-8 w-9 shrink-0 rounded border"
-                    style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}
+                    onChange={setDraftThemeCreateSecondaryBrandColor}
+                    className="h-8 w-9"
                   />
                   <input
                     type="text"

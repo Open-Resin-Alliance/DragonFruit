@@ -1,31 +1,27 @@
 import React, { useSyncExternalStore, useCallback, useMemo, useState, useRef, useEffect } from 'react';
 import * as THREE from 'three';
 import { subscribe, getSnapshot, getSupportEntity } from '../../state';
-import { Trunk, Branch, Twig, Stick, Brace, Segment, BezierSegment, Joint } from '../../types';
+import { Trunk, Branch, Twig, Brace, Segment, BezierSegment } from '../../types';
 import { BezierHandle } from './BezierHandle';
+import { buildGizmoContextIndex, type HandleContext } from './bezierContextIndex';
 import { calculateControlPoint } from './utils';
 import { useCurveInteractionState, curveInteractionStore } from '../../Curves/curveInteractionState';
 import { pushSupportHistory } from '@/supports/history/supportHistory';
 import { SUPPORT_UPDATE_TRUNK } from '../../history/actionTypes';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
-import { resolveShaftAnchor } from '../../SupportPrimitives/Knot/segmentEndpoints';
-import type { ContactCone } from '../../SupportPrimitives/ContactCone/types';
-import { getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
 import { clearSupportDragPreview, emitSupportDragPreview } from '../../SupportPrimitives/Joint/jointDragRuntime';
 import { clearTwigDragPreview, computeTwigDragAttachmentUpdates, emitTwigDragPreview } from '../../SupportTypes/Twig/twigDragPreview';
-import { getSupportTypeDescriptor, parsePrefixedSegmentId, SUPPORT_TYPES, updateSupportEntity, type SupportTypeId } from '../../supportTypeRegistry';
+import { getSupportTypeBySelectionCategory, getSupportTypeDescriptor, parsePrefixedSegmentId, updateSupportEntity, type SupportTypeId } from '../../supportTypeRegistry';
 
-interface HandleContext {
-    id: string; // Unique ID for key
-    /** The support this handle reshapes, and which type it is. */
-    entity?: { id: string; segments?: Segment[] };
-    typeId?: SupportTypeId;
-    joint: Joint;
-    incomingSegment?: Segment; // Segment ending at this joint (from below)
-    incomingIndex: number;
-    outgoingSegment?: Segment; // Segment starting at this joint (going up)
-    outgoingIndex: number;
-    activeHandle: 'incoming' | 'outgoing'; // Which handle to show for this context
+/**
+ * Whether the type carries its curve on the entity rather than on segments. A
+ * span type has no real segments and selects its span as a segment, so the
+ * descriptor answers without naming the type.
+ */
+function carriesCurveOnEntity(typeId: SupportTypeId | null | undefined): boolean {
+    if (!typeId) return false;
+    const descriptor = getSupportTypeDescriptor(typeId);
+    return !descriptor.hasSegments && descriptor.segmentSelectionPrefix !== undefined;
 }
 
 export function BezierGizmoManager() {
@@ -73,276 +69,7 @@ export function BezierGizmoManager() {
         };
     }, [setBezierGizmoInteractionFlags, clearLiveSupportPreviews]);
 
-    const gizmoContextIndex = useMemo(() => {
-        const jointContextsById = new Map<string, HandleContext[]>();
-        const segmentContextsById = new Map<string, HandleContext[]>();
-        const braceContextsById = new Map<string, HandleContext[]>();
-
-        const pushContext = (map: Map<string, HandleContext[]>, key: string | null | undefined, context: HandleContext) => {
-            if (!key) return;
-            const existing = map.get(key);
-            if (existing) {
-                existing.push(context);
-            } else {
-                map.set(key, [context]);
-            }
-        };
-
-        // Every shafted type builds the same handles. Both differences are
-        // declared: where a first segment's missing bottom joint comes from
-        // (the lower endpoint), and the context id prefix, which is a React key.
-        for (const descriptor of SUPPORT_TYPES) {
-            if (!descriptor.hasSegments) continue;
-
-            const prefix = descriptor.bezierContextIdPrefix;
-            const collection = state[descriptor.location.key] as unknown as
-                Record<string, { id: string; segments: Segment[]; rootId?: string; parentKnotId?: string; contactCone?: ContactCone }>;
-
-            for (const entity of Object.values(collection ?? {})) {
-                const segments = entity.segments ?? [];
-
-                for (let i = 0; i < segments.length; i++) {
-                    const seg = segments[i];
-
-                    if (seg.topJoint?.id) {
-                        for (const activeHandle of ['incoming', 'outgoing'] as const) {
-                            pushContext(jointContextsById, seg.topJoint.id, {
-                                id: `${prefix}joint-${seg.topJoint.id}-${activeHandle}`,
-                                entity,
-                                typeId: descriptor.id,
-                                joint: seg.topJoint,
-                                incomingSegment: seg,
-                                incomingIndex: i,
-                                outgoingSegment: segments[i + 1],
-                                outgoingIndex: i + 1,
-                                activeHandle,
-                            });
-                        }
-                    }
-
-                    if (seg.bottomJoint?.id && i === 0) {
-                        pushContext(jointContextsById, seg.bottomJoint.id, {
-                            id: `${prefix}joint-${seg.bottomJoint.id}-outgoing`,
-                            entity,
-                            typeId: descriptor.id,
-                            joint: seg.bottomJoint,
-                            incomingSegment: undefined,
-                            incomingIndex: -1,
-                            outgoingSegment: seg,
-                            outgoingIndex: i,
-                            activeHandle: 'outgoing',
-                        });
-                    }
-
-                    if (seg.type !== 'bezier') continue;
-
-                    // A first segment with no bottom joint starts at whatever the
-                    // type declares as its lower endpoint.
-                    let bottomJoint = seg.bottomJoint;
-                    if (!bottomJoint) {
-                        if (i > 0) {
-                            bottomJoint = segments[i - 1].topJoint;
-                        } else {
-                            const root = descriptor.ownsRoot ? state.roots[entity.rootId ?? ''] : undefined;
-                            const hostKnot = descriptor.lower.kind === 'knot'
-                                ? state.knots[entity.parentKnotId ?? '']
-                                : undefined;
-                            const anchor = resolveShaftAnchor(descriptor.id, { root, hostKnot });
-                            if (anchor) {
-                                bottomJoint = {
-                                    id: root?.id ?? hostKnot?.id ?? `${entity.id}-anchor`,
-                                    pos: anchor,
-                                    diameter: root?.diameter ?? hostKnot?.diameter ?? seg.diameter,
-                                };
-                            }
-                        }
-                    }
-
-                    if (bottomJoint) {
-                        pushContext(segmentContextsById, seg.id, {
-                            id: `seg-${seg.id}-bottom`,
-                            entity,
-                            typeId: descriptor.id,
-                            joint: bottomJoint,
-                            incomingSegment: segments[i - 1],
-                            incomingIndex: i - 1,
-                            outgoingSegment: seg,
-                            outgoingIndex: i,
-                            activeHandle: 'outgoing',
-                        });
-                    }
-
-                    if (seg.topJoint) {
-                        pushContext(segmentContextsById, seg.id, {
-                            id: `seg-${seg.id}-top`,
-                            entity,
-                            typeId: descriptor.id,
-                            joint: seg.topJoint,
-                            incomingSegment: seg,
-                            incomingIndex: i,
-                            outgoingSegment: segments[i + 1],
-                            outgoingIndex: i + 1,
-                            activeHandle: 'incoming',
-                        });
-                    } else if (entity.contactCone) {
-                        const socketPos = getFinalSocketPosition(entity.contactCone);
-                        pushContext(segmentContextsById, seg.id, {
-                            id: `seg-${seg.id}-top-cone`,
-                            entity,
-                            typeId: descriptor.id,
-                            joint: {
-                                id: entity.contactCone.socketJointId || 'cone-socket',
-                                pos: { x: socketPos.x, y: socketPos.y, z: socketPos.z },
-                                diameter: entity.contactCone.profile?.bodyDiameterMm ?? seg.diameter,
-                            },
-                            incomingSegment: seg,
-                            incomingIndex: i,
-                            outgoingSegment: undefined,
-                            outgoingIndex: i + 1,
-                            activeHandle: 'incoming',
-                        });
-                    }
-                }
-            }
-        }
-
-        for (const brace of Object.values(state.braces)) {
-            if (brace?.curve?.type !== 'bezier') continue;
-            const startKnot = state.knots[brace.startKnotId];
-            const endKnot = state.knots[brace.endKnotId];
-            if (!startKnot || !endKnot) continue;
-
-            const startJoint: Joint = { id: startKnot.id, pos: startKnot.pos, diameter: startKnot.diameter ?? 1.5 };
-            const endJoint: Joint = { id: endKnot.id, pos: endKnot.pos, diameter: endKnot.diameter ?? 1.5 };
-
-            pushContext(braceContextsById, brace.id, {
-                id: `brace-${brace.id}-start-outgoing`,
-                entity: brace,
-                typeId: 'brace',
-                joint: startJoint,
-                incomingSegment: undefined,
-                incomingIndex: -1,
-                outgoingSegment: undefined,
-                outgoingIndex: 0,
-                activeHandle: 'outgoing',
-            });
-
-            pushContext(braceContextsById, brace.id, {
-                id: `brace-${brace.id}-end-incoming`,
-                entity: brace,
-                typeId: 'brace',
-                joint: endJoint,
-                incomingSegment: undefined,
-                incomingIndex: 0,
-                outgoingSegment: undefined,
-                outgoingIndex: 1,
-                activeHandle: 'incoming',
-            });
-        }
-
-        for (const kickstand of Object.values(state.kickstands)) {
-            const segments = kickstand.segments;
-            const hostKnot = state.knots[kickstand.hostKnotId];
-
-            for (let i = 0; i < segments.length; i++) {
-                const seg = segments[i];
-
-                if (seg.topJoint?.id) {
-                    pushContext(jointContextsById, seg.topJoint.id, {
-                        id: `kickstand-joint-${seg.topJoint.id}-incoming`,
-                        entity: kickstand,
-                        typeId: 'kickstand',
-                        joint: seg.topJoint,
-                        incomingSegment: seg,
-                        incomingIndex: i,
-                        outgoingSegment: segments[i + 1],
-                        outgoingIndex: i + 1,
-                        activeHandle: 'incoming',
-                    });
-
-                    pushContext(jointContextsById, seg.topJoint.id, {
-                        id: `kickstand-joint-${seg.topJoint.id}-outgoing`,
-                        entity: kickstand,
-                        typeId: 'kickstand',
-                        joint: seg.topJoint,
-                        incomingSegment: seg,
-                        incomingIndex: i,
-                        outgoingSegment: segments[i + 1],
-                        outgoingIndex: i + 1,
-                        activeHandle: 'outgoing',
-                    });
-                }
-
-                if (seg.bottomJoint?.id && i === 0) {
-                    pushContext(jointContextsById, seg.bottomJoint.id, {
-                        id: `kickstand-joint-${seg.bottomJoint.id}-outgoing`,
-                        entity: kickstand,
-                        typeId: 'kickstand',
-                        joint: seg.bottomJoint,
-                        incomingSegment: undefined,
-                        incomingIndex: -1,
-                        outgoingSegment: seg,
-                        outgoingIndex: i,
-                        activeHandle: 'outgoing',
-                    });
-                }
-
-                if (seg.type !== 'bezier') continue;
-
-                if (seg.bottomJoint) {
-                    pushContext(segmentContextsById, seg.id, {
-                        id: `kickstand-seg-${seg.id}-bottom`,
-                        entity: kickstand,
-                        typeId: 'kickstand',
-                        joint: seg.bottomJoint,
-                        incomingSegment: segments[i - 1],
-                        incomingIndex: i - 1,
-                        outgoingSegment: seg,
-                        outgoingIndex: i,
-                        activeHandle: 'outgoing',
-                    });
-                }
-
-                if (seg.topJoint) {
-                    pushContext(segmentContextsById, seg.id, {
-                        id: `kickstand-seg-${seg.id}-top`,
-                        entity: kickstand,
-                        typeId: 'kickstand',
-                        joint: seg.topJoint,
-                        incomingSegment: seg,
-                        incomingIndex: i,
-                        outgoingSegment: segments[i + 1],
-                        outgoingIndex: i + 1,
-                        activeHandle: 'incoming',
-                    });
-                } else if (hostKnot) {
-                    const syntheticJoint: Joint = {
-                        id: hostKnot.id,
-                        pos: hostKnot.pos,
-                        diameter: hostKnot.diameter ?? seg.diameter,
-                    };
-
-                    pushContext(segmentContextsById, seg.id, {
-                        id: `kickstand-seg-${seg.id}-top-host`,
-                        entity: kickstand,
-                        typeId: 'kickstand',
-                        joint: syntheticJoint,
-                        incomingSegment: seg,
-                        incomingIndex: i,
-                        outgoingSegment: undefined,
-                        outgoingIndex: i + 1,
-                        activeHandle: 'incoming',
-                    });
-                }
-            }
-        }
-
-        return {
-            jointContextsById,
-            segmentContextsById,
-            braceContextsById,
-        };
-    }, [state]);
+    const gizmoContextIndex = useMemo(() => buildGizmoContextIndex(state), [state]);
 
     const contexts = useMemo(() => {
         if (!selectedId) return [] as HandleContext[];
@@ -362,7 +89,8 @@ export function BezierGizmoManager() {
             return gizmoContextIndex.segmentContextsById.get(selectedId) ?? [];
         }
 
-        if (selectedCategory === 'brace') {
+        const selectedDescriptor = getSupportTypeBySelectionCategory(selectedCategory);
+        if (selectedDescriptor && carriesCurveOnEntity(selectedDescriptor.id)) {
             return gizmoContextIndex.braceContextsById.get(selectedId) ?? [];
         }
 
@@ -395,22 +123,27 @@ export function BezierGizmoManager() {
 
         // A type recording its own before/after entry. The action's payload type
         // is per-action, so this stays typed rather than dispatched.
-        if (initialTrunkRef.current && ctx.entity && ctx.typeId === 'trunk') {
+        if (initialTrunkRef.current && ctx.entity && ctx.typeId
+            && getSupportTypeDescriptor(ctx.typeId).ownsEditHistoryEntry) {
+            // The type is the handle's own, asked of the registry: which type
+            // records its own entry, what it is called and which collection it
+            // lives in are all declared there.
+            const ownEntryDescriptor = getSupportTypeDescriptor(ctx.typeId);
             const latestTrunk = (livePreviewRef.current?.support as Trunk | undefined)
-                ?? getSupportEntity('trunk', ctx.entity.id) as Trunk | null;
+                ?? getSupportEntity(ctx.entity.id);
             if (latestTrunk) {
                 // Final exact reconciliation after drag-time fast-path updates.
-                updateSupportEntity('trunk', latestTrunk);
+                updateSupportEntity(latestTrunk);
                 pushSupportHistory({
                     type: SUPPORT_UPDATE_TRUNK,
-                    description: `Edit ${getSupportTypeDescriptor('trunk').singular} curve`,
+                    description: `Edit ${ownEntryDescriptor.singular} curve`,
                     payload: {
                         before: initialTrunkRef.current,
                         after: JSON.parse(JSON.stringify(latestTrunk)),
                     },
                 });
             }
-            clearSupportDragPreview('trunk', ctx.entity.id);
+            clearSupportDragPreview(ctx.typeId, ctx.entity.id);
             livePreviewRef.current = null;
             initialTrunkRef.current = null;
         }
@@ -429,10 +162,11 @@ export function BezierGizmoManager() {
 
             if (preview) {
                 updateSupportEntity(typeId, preview);
-            } else if (typeId === 'branch' && draggedId) {
-                // Branches reconcile from the store when no preview was produced.
-                const latestBranch = getSupportEntity('branch', draggedId) as Branch | null;
-                if (latestBranch) updateSupportEntity('branch', latestBranch);
+            } else if (draggedId && descriptor.curveDragReconcilesFromStore) {
+                // The segments another interaction updated mid-drag (the
+                // elastic chain on a knot drag) are re-read from the store.
+                const latest = getSupportEntity(typeId, draggedId);
+                if (latest) updateSupportEntity(typeId, latest);
             }
 
             if (draggedId) clearSupportDragPreview(typeId, draggedId);
@@ -466,7 +200,7 @@ export function BezierGizmoManager() {
             return (dx * dx + dy * dy + dz * dz) <= MIN_CONTROL_POINT_DELTA_SQ;
         };
 
-        if (typeId === 'brace') {
+        if (carriesCurveOnEntity(typeId)) {
             const brace = entity as unknown as Brace | undefined;
             if (!brace?.curve || brace.curve.type !== 'bezier') return;
             const newBrace = JSON.parse(JSON.stringify(brace)) as Brace;
@@ -489,7 +223,7 @@ export function BezierGizmoManager() {
                 curve.controlPoint2 = { x: newPos.x, y: newPos.y, z: newPos.z };
             }
 
-            updateSupportEntity('brace', newBrace);
+            updateSupportEntity(typeId!, newBrace);
             return;
         }
 
@@ -599,7 +333,7 @@ export function BezierGizmoManager() {
                 const jointPos = new THREE.Vector3(ctx.joint.pos.x, ctx.joint.pos.y, ctx.joint.pos.z);
                 let cpPos: THREE.Vector3 | null = null;
                 // A type with no segments carries its curve on the entity.
-                const entityCurve = ctx.typeId === 'brace'
+                const entityCurve = carriesCurveOnEntity(ctx.typeId)
                     ? (ctx.entity as unknown as Brace | undefined)?.curve
                     : undefined;
 

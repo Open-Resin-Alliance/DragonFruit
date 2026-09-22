@@ -1,10 +1,12 @@
-import { useSyncExternalStore } from 'react';
+import { createPlacementStore, usePlacementStoreState } from '../../interaction/shared/placement/placementStore';
+import { vecEq } from '../../interaction/shared/placement/placementComparators';
 import type { Vec3 } from '../../types';
+import type { SupportTypeId } from '../../supportTypeRegistry';
 
 type Stage = 'idle' | 'awaitingEnd';
 
 export interface BraceSnapTarget {
-    kind: 'shaft' | 'leaf';
+    kind: 'shaft' | SupportTypeId;
     snappedPos: Vec3;
     hostDiameterMm?: number;
     ownerModelId?: string;
@@ -13,8 +15,8 @@ export interface BraceSnapTarget {
     segmentId?: string;
     t?: number;
 
-    // Leaf cone endpoint
-    leafId?: string;
+    // Cone-primitive endpoint (the type whose `hostsBraceSnapCone` is true)
+    entityId?: string;
     coneT?: number;
 }
 
@@ -44,117 +46,95 @@ const initialState: BracePlacementState = {
     justFinalized: false,
 };
 
-let state: BracePlacementState = { ...initialState };
-const listeners = new Set<() => void>();
+const store = createPlacementStore(initialState);
 
-function notify() {
-    listeners.forEach((l) => l());
-}
-
-function snapTargetEq(a: BraceSnapTarget | null, b: BraceSnapTarget | null) {
+function snapTargetEq(a: BraceSnapTarget | null, b: BraceSnapTarget | null): boolean {
     if (a === b) return true;
     if (!a || !b) return false;
+
     return (
-        a.kind === b.kind &&
-        a.hostDiameterMm === b.hostDiameterMm &&
-        a.ownerModelId === b.ownerModelId &&
-        a.segmentId === b.segmentId &&
-        a.t === b.t &&
-        a.leafId === b.leafId &&
-        a.coneT === b.coneT &&
-        a.snappedPos.x === b.snappedPos.x &&
-        a.snappedPos.y === b.snappedPos.y &&
-        a.snappedPos.z === b.snappedPos.z
+        a.kind === b.kind
+        && a.hostDiameterMm === b.hostDiameterMm
+        && a.ownerModelId === b.ownerModelId
+        && a.segmentId === b.segmentId
+        && a.t === b.t
+        && a.entityId === b.entityId
+        && a.coneT === b.coneT
+        && vecEq(a.snappedPos, b.snappedPos)
     );
 }
 
-function previewEq(a: BracePreviewData | null, b: BracePreviewData | null) {
+/**
+ * A brace is the one type that compares its preview structurally rather than by
+ * reference: the two endpoints are re-derived every frame while dragging, so a
+ * fresh-but-identical pair would re-render the preview shaft each time.
+ */
+function previewEq(a: BracePreviewData | null, b: BracePreviewData | null): boolean {
     if (a === b) return true;
     if (!a || !b) return false;
+
     return (
-        a.startDiameterMm === b.startDiameterMm &&
-        a.endDiameterMm === b.endDiameterMm &&
-        a.start.x === b.start.x &&
-        a.start.y === b.start.y &&
-        a.start.z === b.start.z &&
-        a.end.x === b.end.x &&
-        a.end.y === b.end.y &&
-        a.end.z === b.end.z
+        a.startDiameterMm === b.startDiameterMm
+        && a.endDiameterMm === b.endDiameterMm
+        && vecEq(a.start, b.start)
+        && vecEq(a.end, b.end)
     );
 }
 
 export const bracePlacementStore = {
-    subscribe(listener: () => void) {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-    },
-
-    getSnapshot(): BracePlacementState {
-        return state;
-    },
+    subscribe: store.subscribe,
+    getSnapshot: store.getSnapshot,
 
     setAltActive(active: boolean) {
-        if (state.altActive !== active) {
-            state = { ...state, altActive: active };
-            notify();
-        }
+        const state = store.read();
+        if (state.altActive === active) return;
+
+        // Only the flag: a brace's first endpoint survives the Alt key, unlike
+        // branch and leaf, whose press/release clears the whole flow.
+        store.write({ ...state, altActive: active });
     },
 
     setStart(start: BraceSnapTarget) {
-        state = {
-            ...state,
+        store.write({
+            ...store.read(),
             start,
             stage: 'awaitingEnd',
             preview: null,
             justFinalized: false,
-        };
-        notify();
+        });
     },
 
     setSnapTarget(snapTarget: BraceSnapTarget | null) {
+        const state = store.read();
         if (snapTargetEq(state.snapTarget, snapTarget)) return;
-        state = { ...state, snapTarget };
-        notify();
+
+        store.write({ ...state, snapTarget });
     },
 
     getSnapTarget() {
-        return state.snapTarget;
+        return store.read().snapTarget;
     },
 
     setPreview(preview: BracePreviewData | null) {
-        if (state.justFinalized && preview !== null) {
-            return;
-        }
-
+        const state = store.read();
+        if (state.justFinalized && preview !== null) return;
         if (previewEq(state.preview, preview)) return;
-        state = { ...state, preview };
-        notify();
+
+        store.write({ ...state, preview });
     },
 
     finalize() {
-        state = {
-            ...state,
-            preview: null,
-            snapTarget: null,
-            start: null,
-            stage: 'idle',
-            justFinalized: true,
-        };
-        notify();
+        const state = store.read();
+        store.write({ ...state, preview: null, snapTarget: null, start: null, stage: 'idle', justFinalized: true });
     },
 
     reset() {
-        state = { ...initialState, altActive: state.altActive };
-        notify();
+        store.resetPreserving('altActive');
     },
 };
 
 export function useBracePlacementState() {
-    const snapshot = useSyncExternalStore(
-        bracePlacementStore.subscribe,
-        bracePlacementStore.getSnapshot,
-        bracePlacementStore.getSnapshot
-    );
+    const snapshot = usePlacementStoreState(bracePlacementStore);
 
     return {
         ...snapshot,

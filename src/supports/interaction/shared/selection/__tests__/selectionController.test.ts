@@ -13,6 +13,7 @@ import {
     resetStore,
     setSnapshot,
 } from '@/supports/state';
+import { createEmptySupportCollections } from '@/supports/supportTypeRegistry';
 import {
     clearSupportSelection,
     getResolvedPrimarySelection,
@@ -44,16 +45,9 @@ function makeRoot(trunkId: string): Roots {
 
 function seedTrunks(...ids: string[]) {
     const snapshot: SupportState = {
+        ...createEmptySupportCollections(),
         roots: Object.fromEntries(ids.map((id) => [`root-${id}`, makeRoot(id)])),
         trunks: Object.fromEntries(ids.map((id) => [id, makeTrunk(id)])),
-        branches: {},
-        leaves: {},
-        twigs: {},
-        sticks: {},
-        braces: {},
-        anchors: {},
-        kickstands: {},
-        knots: {},
         selectedId: null,
         hoveredId: null,
         selectedCategory: null,

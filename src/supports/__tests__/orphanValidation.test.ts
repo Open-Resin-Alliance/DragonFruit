@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { collectFanShaftPoints, fanLeafToTrunk, rehostLegacyKnots, validateAndCullOrphans } from '../autoSupport/autoPlace';
+import { collectFanShaftPoints, fanLeafToHost, rehostLegacyKnots, validateAndCullOrphans } from '../autoSupport/autoPlace';
 import type { SupportState } from '../types';
 
 function emptySnapshot(): SupportState {
@@ -49,13 +49,13 @@ test('rehostLegacyKnots converts trunkId parent to segmentId', () => {
     assert.ok(typeof knot.t === 'number' && knot.t >= 0 && knot.t <= 1, 't computed');
 });
 
-test('fanLeafToTrunk creates knot with segmentId and t (not trunkId)', () => {
+test('fanLeafToHost creates knot with segmentId and t (not trunkId)', () => {
     const draft = trunkWithShaft('host', 0, 0, 0, 10);
     const pool = collectFanShaftPoints(draft);
     assert.ok(pool.length > 0 && pool[0].segmentId, 'pool has segmentId');
     assert.ok(typeof pool[0].t === 'number', 'pool has t');
 
-    const result = fanLeafToTrunk(
+    const result = fanLeafToHost(
         { x: 1, y: 0, z: 9 },
         'm',
         pool,
@@ -78,7 +78,7 @@ test('fanLeafToTrunk creates knot with segmentId and t (not trunkId)', () => {
         const validated = validateAndCullOrphans(result.draft, undefined);
         assert.equal(validated.orphans.length, 0, 'valid leaf not orphaned');
         assert.equal(result.kind, 'leaf', 'short span stays a leaf');
-        if (result.kind === 'leaf') assert.ok(validated.draft.leaves[result.leafId], 'leaf remains after validation');
+        if (result.kind === 'leaf') assert.ok(validated.draft.leaves[result.entityId], 'leaf remains after validation');
     }
 });
 

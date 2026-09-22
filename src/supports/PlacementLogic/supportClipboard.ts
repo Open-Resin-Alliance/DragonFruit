@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { getSnapshot, setSnapshot, transformSupportsForModel } from '@/supports/state';
-import type { Brace, Branch, Knot, Leaf, Roots, Segment, Stick, SupportState, Trunk, Twig, Vec3 } from '@/supports/types';
+import type { Knot, Roots, Segment, SupportState, Vec3 } from '@/supports/types';
 import type { Kickstand } from '@/supports/SupportTypes/Kickstand/types';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '@/supports/history/supportEditHistory';
 import { getRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
@@ -72,14 +72,6 @@ function extractSupportClipboardPayload(modelId: string): SupportClipboardPayloa
       .filter((item) => item.modelId === modelId)
       .map(clonePlain);
   }
-  const roots = owned.roots;
-  const trunks = owned.trunks;
-  const branches = owned.branches;
-  const leaves = owned.leaves;
-  const twigs = owned.twigs;
-  const sticks = owned.sticks;
-  const braces = owned.braces;
-
   const kickstands = Object.values(snapshot.kickstands)
     .filter((item) => item.modelId === modelId)
     .map(clonePlain);
@@ -201,8 +193,8 @@ function mergeSupportClipboardPayload(
    * Everything the clone touches is declared: `hasSegments` says whether to
    * walk shafts, `contactFields` names the contact primitives, and `edges`
    * names each id-bearing field and the collection it points into. A type is
-   * copied by declaring it -- which is how anchors came to be dropped, being
-   * the one type with no edges and an inline root.
+   * copied by declaring it. The stump is the one type with no edges and an
+   * inline root, so it appears in no id-remapping list.
    */
   const cloneEntity = (descriptor: SupportTypeDescriptor, entity: Record<string, unknown>) => {
     const id = uuidv4();
@@ -223,7 +215,7 @@ function mergeSupportClipboardPayload(
       });
     }
 
-    // An anchor carries a bare `joint` outside its segments; nothing else does.
+    // A stump carries a bare `joint` outside its segments; nothing else does.
     const ownJoint = entity.joint as { id: string } | undefined;
     if (ownJoint) next.joint = remapSupportJoint(ownJoint as never, jointIdMap);
 
@@ -263,7 +255,7 @@ function mergeSupportClipboardPayload(
     const id = knotIdMap.get(knot.id) ?? uuidv4();
 
     // A knot names a shaft segment, or one of the prefixed pseudo-shafts a
-    // type declares (`leafCone:`, `braceSegment:`) -- resolved through the
+    // type declares as its `knotHostPrefix` -- resolved through the
     // prefix owner's own id map.
     let parentShaftId = knot.parentShaftId;
     const prefixOwner = SUPPORT_TYPES.find((descriptor) => descriptor.knotHostPrefix
@@ -437,7 +429,7 @@ export function estimateSupportBoundsForModel(modelId: string): SupportModelBoun
       return hosts?.[parentShaftId.slice(prefix.length)]?.modelId === modelId;
     }
 
-    // Every shafted type, so a knot riding an anchor or kickstand resolves too.
+    // Every shafted type, so a knot riding a stump or kickstand resolves too.
     for (const descriptor of SUPPORT_TYPES) {
       if (!descriptor.hasSegments) continue;
       const collection = state[descriptor.location.key] as unknown as Record<string, { modelId: string; segments?: Segment[] }>;

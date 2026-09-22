@@ -82,9 +82,6 @@ export function useLeafPlacement() {
         leafPlacementStore.setTip(pos, surfaceNormal, modelId, placementSurface);
     }, [state.hotkeyActive, isPlacementDisabled]);
 
-    const onSupportHover = useCallback((hit: THREE.Intersection | null) => { void hit; }, []);
-    const onSupportClick = useCallback((hit: THREE.Intersection | null) => { void hit; }, []);
-
     useEffect(() => {
         if (isPlacementDisabled && state.stage === 'idle') {
             leafPlacementStore.reset();
@@ -102,7 +99,5 @@ export function useLeafPlacement() {
         sproutParentingLockHeld: state.sproutParentingLockHeld,
         onModelHover,
         onModelClick,
-        onSupportHover,
-        onSupportClick,
     };
 }

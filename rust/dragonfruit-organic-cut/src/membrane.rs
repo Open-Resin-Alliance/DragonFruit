@@ -1562,7 +1562,7 @@ fn signed_side_on_cut_face(
     };
     let mut best_d2 = band * band;
     let mut best_signed = None;
-    bvh.query_aabb(&query, |ti| {
+    bvh.query_aabb(membrane_mesh, &query, |ti| {
         let t = &membrane_mesh.triangles[ti as usize];
         let a = membrane_mesh.positions[t[0] as usize];
         let b = membrane_mesh.positions[t[1] as usize];
@@ -1945,7 +1945,7 @@ fn last_exit_along(
         max: p.max(far),
     };
     let mut last: Option<f32> = None;
-    bvh.query_aabb(&query, |ti| {
+    bvh.query_aabb(model, &query, |ti| {
         let t = &model.triangles[ti as usize];
         let hit = dragonfruit_mesh_core::bvh::ray_tri(
             p,
@@ -2285,7 +2285,7 @@ fn distance_to_surface(
             max: Vec3::new(p.x + r, p.y + r, p.z + r),
         };
         let mut best = f32::INFINITY;
-        bvh.query_aabb(&query, |t| {
+        bvh.query_aabb(mesh, &query, |t| {
             let t = &mesh.triangles[t as usize];
             let (_, d2) = closest_on_tri(
                 p,

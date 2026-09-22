@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import React from 'react';
 
-import { resolveSegmentEndpoints } from '../SupportPrimitives/Knot/segmentEndpoints';
-import { getSupportTypeDescriptor, type SupportTypeId } from '../supportTypeRegistry';
+import { resolveSegmentEndpoints, type ShaftEntity } from '../SupportPrimitives/Knot/segmentEndpoints';
+import { getSupportTypeDescriptor, resolveSupportTypeIdOf } from '../supportTypeRegistry';
 import type { Knot, Roots, Segment, Vec3 } from '../types';
 
 /**
@@ -45,16 +45,19 @@ export interface ShaftHosts {
 }
 
 export function resolveShaftSegments(
-    typeId: SupportTypeId,
-    entity: { segments?: Segment[] } | null | undefined,
+    entity: ShaftEntity | null | undefined,
     hosts: ShaftHosts = {},
 ): ShaftSegment[] {
-    const segments = entity?.segments ?? [];
+    if (!entity) return [];
+    const typeId = resolveSupportTypeIdOf(entity);
+    if (!typeId) return [];
+
+    const segments = entity.segments;
     const taper = getSupportTypeDescriptor(typeId).shaftTaper;
     const out: ShaftSegment[] = [];
 
     segments.forEach((segment, index) => {
-        const endpoints = resolveSegmentEndpoints(typeId, entity as { segments: Segment[] }, segment, index, hosts);
+        const endpoints = resolveSegmentEndpoints(entity, segment, index, hosts);
         if (!endpoints) return;
 
         const isLast = index === segments.length - 1;
@@ -82,13 +85,12 @@ export function resolveShaftSegments(
 
 /** Memoised for render use; recomputes when the entity or its hosts change. */
 export function useShaftSegments(
-    typeId: SupportTypeId,
-    entity: { segments?: Segment[] } | null | undefined,
+    entity: ShaftEntity | null | undefined,
     hosts: ShaftHosts = {},
 ): ShaftSegment[] {
     const { root, hostKnot } = hosts;
     return React.useMemo(
-        () => resolveShaftSegments(typeId, entity, { root, hostKnot }),
-        [typeId, entity, root, hostKnot],
+        () => resolveShaftSegments(entity, { root, hostKnot }),
+        [entity, root, hostKnot],
     );
 }

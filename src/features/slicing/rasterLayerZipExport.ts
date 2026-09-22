@@ -21,7 +21,7 @@ import type { ContactDisk, Segment, SupportState, Vec3 } from '@/supports/types'
 import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness, getDiskCenter, getDiskRotation } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
 import { getBezierPointAtT } from '@/supports/Curves/BezierUtils';
-import { resolveSegmentEndpoints } from '@/supports/SupportPrimitives/Knot/segmentEndpoints';
+import { resolveSegmentEndpoints, type ShaftEntity } from '@/supports/SupportPrimitives/Knot/segmentEndpoints';
 import { resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { JOINT_DIAMETER_OFFSET_MM } from '@/supports/constants';
@@ -1015,8 +1015,9 @@ export function buildSupportAndRaftWorldTriangles(
       }
 
       const segments = (entity.segments as Segment[] | undefined) ?? [];
+      const shaft = entity as unknown as ShaftEntity;
       segments.forEach((seg, index) => {
-        const endpoints = resolveSegmentEndpoints(descriptor.id, entity as never, seg, index, { root, hostKnot });
+        const endpoints = resolveSegmentEndpoints(shaft, seg, index, { root, hostKnot });
         if (!endpoints) return;
 
         appendSegmentPrimitive(

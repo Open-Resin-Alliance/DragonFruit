@@ -84,7 +84,7 @@ r3f.useFrame = () => {};
 import { KickstandPlacementController } from '../SupportTypes/Kickstand/KickstandPlacementController';
 import { kickstandPlacementStore } from '../SupportTypes/Kickstand/kickstandPlacementState';
 import { readKickstands } from './helpers/kickstandFixture';
-import { getSnapshot, resetStore, resetKickstandsInState} from '../state';
+import { addSupportEntity, getSnapshot, resetStore, resetKickstandsInState } from '../state';
 
 test('Kickstand click-commit tests', async (t) => {
   await t.test('succeeds on click-commit with valid preview', () => {
@@ -299,7 +299,7 @@ test('Kickstand click-commit tests', async (t) => {
       coneHeight: 0.7,
     });
 
-    addTrunk({
+    addSupportEntity('trunk', {
       id: 'host-trunk-id',
       modelId: 'model-1',
       rootId: 'host-root-id',

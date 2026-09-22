@@ -6,14 +6,16 @@ import * as THREE from 'three';
 import { Canvas, useThree, useFrame } from '@react-three/fiber';
 import { OrbitControls, TransformControls } from '@react-three/drei';
 import { TrunkPreview } from './PreviewTypes/Trunk/TrunkPreview';
-import { ANATOMY_PREVIEWS } from './anatomyPreviews';
+import './registerBuiltinAnatomyPreviews';
 import { subscribeToSettings, getSettingsSnapshot } from '../state';
 import { subscribeToAnatomyPreviewState, getAnatomyPreviewState, setAnatomyPreviewActiveSettingKey } from './previewState';
 import { ANATOMY_CONFIG } from './AnatomyPreviewConfig';
 import { getTargetFocusState } from './AnatomyPreviewCameraLogic';
-import type { SupportKind } from '../supportKindState';
-import { getSupportKindSnapshot, kindDrawsOwnPreview, subscribeToSupportKindState } from '../supportKindState';
+import type { SidebarPanel } from '../sidebarPanels';
+import { anatomyPreviewFor, hasOwnAnatomyPreview } from '../anatomyPreviewRegistry';
+import { DEFAULT_SIDEBAR_PANEL, getSidebarPanelSnapshot, subscribeToSidebarPanel } from '../sidebarPanels';
 import { getRaftSettings, subscribeToRaftStore } from '../../Rafts/Crenelated/RaftState';
+import { getSupportTypeDescriptor, SIDEBAR_PANEL_TYPE_IDS } from '../../supportTypeRegistry';
 import { resolveConeAxisPolicy } from '@/supports/PlacementLogic/ConeAxisPolicy';
 import { calculateDiskThickness } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
 import type { SupportTipProfile } from '@/supports/SupportPrimitives/ContactCone/types';
@@ -189,13 +191,13 @@ function DebugOverlay({
     onApply,
     autoCameraEnabled,
     onSetAutoCameraEnabled,
-    activeKind
+    activePanel
 }: {
     data: CapturedConfig | null;
     onApply: (updates: Partial<CapturedConfig['camera'] | CapturedConfig['support']>, category: 'camera' | 'support') => void;
     autoCameraEnabled: boolean;
     onSetAutoCameraEnabled: (enabled: boolean) => void;
-    activeKind: SupportKind;
+    activePanel: SidebarPanel;
 }) {
     if (!data) return null;
     if (typeof document === 'undefined') return null;
@@ -220,7 +222,7 @@ function DebugOverlay({
     };
 
     const resetToHome = () => {
-        const home = getTargetFocusState(activeKind, null);
+        const home = getTargetFocusState(activePanel, null);
         onApply({
             position: home.position,
             target: home.target,
@@ -282,6 +284,17 @@ function DebugOverlay({
     );
 }
 
+/**
+ * The panels whose type is a span propped between two model contacts. A span's
+ * contacts sit either side of the frame, so zooming needs a wider band than a
+ * support with a single contact.
+ */
+const CONTACT_SPAN_PANEL_IDS: readonly SidebarPanel[] = SIDEBAR_PANEL_TYPE_IDS.filter((typeId) => {
+    const { lower, upper } = getSupportTypeDescriptor(typeId);
+    return (lower.kind === 'cone' || lower.kind === 'disk')
+        && (upper.kind === 'cone' || upper.kind === 'disk');
+});
+
 // Internal component to handle camera framing and support rendering
 function PreviewContent({
     setDebugData,
@@ -296,11 +309,11 @@ function PreviewContent({
     const settings = React.useSyncExternalStore(subscribeToSettings, getSettingsSnapshot, getSettingsSnapshot);
     const previewState = React.useSyncExternalStore(subscribeToAnatomyPreviewState, getAnatomyPreviewState, getAnatomyPreviewState);
     const previewSettings = previewState.hoveredPresetSettings ?? settings;
-    const supportKindState = React.useSyncExternalStore(subscribeToSupportKindState, getSupportKindSnapshot, getSupportKindSnapshot);
-    const activeKind = supportKindState.kind;
+    const sidebarPanelState = React.useSyncExternalStore(subscribeToSidebarPanel, getSidebarPanelSnapshot, getSidebarPanelSnapshot);
+    const activePanel = sidebarPanelState.panel;
     const raftSettings = React.useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
     // A kind that draws its own preview names it; the rest fall through to trunk.
-    const ActivePreview = ANATOMY_PREVIEWS[activeKind];
+    const ActivePreview = anatomyPreviewFor(activePanel);
     const orbitRef = React.useRef<any>(null);
     const isUserInteractingRef = React.useRef(false);
 
@@ -443,12 +456,12 @@ function PreviewContent({
         }
 
         const focusKey = previewState.activeSettingKey;
-        const targetFocus = getTargetFocusState(activeKind, focusKey);
+        const targetFocus = getTargetFocusState(activePanel, focusKey);
 
         // --- Dynamic Zoom Logic for Tip Contact Diameter Only ---
         const isContactDiameterFocus = previewState.activeSettingKey === 'tip.contactDiameterMm';
-        const isStickLikeKind = activeKind === 'stick' || activeKind === 'twig';
-        const isTrunkKind = activeKind === 'trunk';
+        const isStickLikeKind = CONTACT_SPAN_PANEL_IDS.includes(activePanel);
+        const isTrunkKind = activePanel === DEFAULT_SIDEBAR_PANEL;
 
         // Strict scope: ONLY 'tip.contactDiameterMm' triggers dynamic zoom
         // Previously we checked startsWith('tip.'), which caused snapback on other tip settings
@@ -617,14 +630,14 @@ function PreviewContent({
     const lastFramedKindRef = React.useRef<string | null>(null);
 
     React.useLayoutEffect(() => {
-        if (lastFramedKindRef.current !== activeKind) {
+        if (lastFramedKindRef.current !== activePanel) {
             hasFramed.current = false;
-            lastFramedKindRef.current = activeKind;
+            lastFramedKindRef.current = activePanel;
         }
-    }, [activeKind]);
+    }, [activePanel]);
     React.useLayoutEffect(() => {
         if (groupRef.current && !hasFramed.current) {
-            const home = getTargetFocusState(activeKind, null);
+            const home = getTargetFocusState(activePanel, null);
 
             camera.position.set(home.position[0], home.position[1], home.position[2]);
 
@@ -642,7 +655,7 @@ function PreviewContent({
             camera.updateProjectionMatrix();
             hasFramed.current = true;
         }
-    }, [activeKind, camera]);
+    }, [activePanel, camera]);
 
     const showPreviewTuner = previewState.showTuner;
 
@@ -742,7 +755,7 @@ function PreviewContent({
                 intensity={ANATOMY_CONFIG.lighting.fillLight.intensity}
             />
 
-            {activeKind === 'raft' && (
+            {activePanel === 'raft' && (
                 <directionalLight
                     position={[0, 0, -20]}
                     intensity={0.8}
@@ -755,7 +768,7 @@ function PreviewContent({
                     <ActivePreview
                         settings={previewSettings}
                         liveConfig={liveConfig}
-                        activeKind={activeKind}
+                        activePanel={activePanel}
                         previewState={previewState}
                         anatomyOverrides={anatomyOverrides}
                         raftSettings={raftSettings}
@@ -763,11 +776,11 @@ function PreviewContent({
                 )}
 
                 {/* Every kind without its own preview is drawn as a trunk. */}
-                {!kindDrawsOwnPreview(activeKind) && (
+                {!hasOwnAnatomyPreview(activePanel) && (
                     <TrunkPreview
                         settings={previewSettings}
                         liveConfig={liveConfig}
-                        activeKind={activeKind}
+                        activePanel={activePanel}
                         previewState={previewState}
                         anatomyOverrides={anatomyOverrides}
                     />
@@ -801,8 +814,8 @@ export function SupportAnatomyPreviewCanvas() {
     const previewState = React.useSyncExternalStore(subscribeToAnatomyPreviewState, getAnatomyPreviewState, getAnatomyPreviewState);
     const showPreviewTuner = previewState.showTuner;
 
-    const supportKindState = React.useSyncExternalStore(subscribeToSupportKindState, getSupportKindSnapshot, getSupportKindSnapshot);
-    const activeKind = supportKindState.kind;
+    const sidebarPanelState = React.useSyncExternalStore(subscribeToSidebarPanel, getSidebarPanelSnapshot, getSidebarPanelSnapshot);
+    const activePanel = sidebarPanelState.panel;
 
     const handleApply = (updates: any, category: 'camera' | 'support') => {
         if (category === 'camera') {
@@ -820,7 +833,7 @@ export function SupportAnatomyPreviewCanvas() {
                     onApply={handleApply}
                     autoCameraEnabled={autoCameraEnabled}
                     onSetAutoCameraEnabled={setAutoCameraEnabled}
-                    activeKind={activeKind}
+                    activePanel={activePanel}
                 />
             )}
             <Canvas

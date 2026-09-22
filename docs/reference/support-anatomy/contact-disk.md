@@ -26,6 +26,8 @@ The input is the angle between the disk's surface normal and the cone axis — `
 - Above the threshold, thickness interpolates linearly toward `maxStandoffMm`, reaching it at ~81°.
 - Degenerate normals or a missing profile fall back to the minimum thickness.
 
+Then the round tip that sits on the disk's top face floors it: the ball is centered **on** that face, so a disk shorter than the ball's radius leaves the ball's underside below the flat contact face, poking out through it into the model. The floor is `contactDiameterMm / 2`, which is why a wider contact grows the disk in length as well as diameter. A profile that declares no `contactDiameterMm` (an import converter's bare `ContactDiskProfile`, say) keeps the pure angle-based thickness.
+
 Implemented in `calculateDiskThickness` (`src/supports/SupportPrimitives/ContactDisk/contactDiskUtils.ts`).
 
 !!! warning "Legacy clamp on `maxStandoffMm`"
@@ -34,6 +36,8 @@ Implemented in `calculateDiskThickness` (`src/supports/SupportPrimitives/Contact
 ## Behavior
 
 - The disk is draggable across the model surface: `ContactDiskHud` renders a ring gizmo around it, and `contactDiskDragController` runs the drag session.
+- Selecting a disk requires its parent support to be selected first; the ring gizmo only exists while the disk itself is selected.
+- While a tip is being dragged, the placement guide line sits at the contact height being dragged, so tips can be lined up against one line. The line's store and its other writer are described in [Support System](../../dev/support-system.md).
 - During a drag the surface normal is re-derived from the mesh (`calculateSmoothedNormal`) rather than carried over, so the disk re-seats itself as it moves. Clip bounds are respected.
 - Because thickness follows the angle, moving a disk onto a steeper face thickens it on its own.
 - `placementSurface` records whether the contact landed on the model's interior or exterior.

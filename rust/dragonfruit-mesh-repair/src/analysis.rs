@@ -435,7 +435,7 @@ pub fn count_self_intersections(mesh: &IndexedMesh) -> usize {
             let tri_verts = mesh.triangles[fi];
 
             let mut hit = false;
-            bvh.query_aabb(&bb, |other| {
+            bvh.query_aabb(mesh, &bb, |other| {
                 if hit || other == fi as u32 || other < fi as u32 {
                     // Dedupe: count each pair once, from the lower index.
                     return;

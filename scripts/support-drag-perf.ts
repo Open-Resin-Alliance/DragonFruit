@@ -9,10 +9,29 @@
 import { computeJointDragPreviewKnots } from '../src/supports/interaction/jointDragPreviewMath';
 import {
   buildBranchCandidateKnotIdsByBranchId,
-  buildBranchesByParentKnotId,
+  buildEntitiesByHostKnot,
   computeCascadedPreviewKnotOverrides,
 } from '../src/supports/interaction/supportPreviewOverlay';
+import { getSupportTypeDescriptor, isJointDragPreviewType, SHAFT_HOSTED_MEMBER_TYPES } from '../src/supports/supportTypeRegistry';
+import type { JointDragPreviewTypeId } from '../src/supports/supportTypeRegistry';
 import type { Branch, Knot, Roots, Trunk } from '../src/supports/types';
+
+/**
+ * The type this scenario simulates: the shaft-hosted member that carries its
+ * own segments. A leaf is the other shaft-hosted member and carries none, so
+ * this says which member the fixture below is without the script naming it --
+ * and it is read through the registry's declared walk, which is also what
+ * `validateAndCullOrphans` and the forest report read those members through.
+ */
+const SIMULATED_MEMBER_TYPE_ID = ((): JointDragPreviewTypeId => {
+  const memberTypeId = SHAFT_HOSTED_MEMBER_TYPES.find(
+    (memberType) => getSupportTypeDescriptor(memberType.typeId).hasSegments,
+  )?.typeId;
+  if (!memberTypeId || !isJointDragPreviewType(memberTypeId)) {
+    throw new Error('no shaft-hosted member type with its own segments publishes a joint-drag preview');
+  }
+  return memberTypeId;
+})();
 
 interface BenchResult {
   name: string;
@@ -87,6 +106,10 @@ function createTrunk(root: Roots): Trunk {
 function createBranch(id: number, parentKnotId: string, x: number, zBase: number): Branch {
   return {
     id: `branch-${id}`,
+    // Stamped from the derived member type, as the store stamps a real entity:
+    // the index reads the type off the entity, so an unstamped fixture would
+    // index nothing and the benchmark would measure an empty walk.
+    typeId: SIMULATED_MEMBER_TYPE_ID,
     modelId: 'model-0',
     parentKnotId,
     segments: [
@@ -146,7 +169,7 @@ function buildScenario(branchCount = 320) {
     else knotIdsByParentShaftId.set(knot.parentShaftId, [knot.id]);
   }
 
-  const branchesByParentKnotId = buildBranchesByParentKnotId(branches);
+  const branchesByParentKnotId = buildEntitiesByHostKnot(branches, (branch) => branch);
   const branchCandidateKnotIdsByBranchId = buildBranchCandidateKnotIdsByBranchId(branches, knotIdsByParentShaftId);
 
   const branchesById: Record<string, Branch> = {};
@@ -176,7 +199,7 @@ function buildScenario(branchCount = 320) {
   }
 
   const basePreviewKnotOverrides = computeJointDragPreviewKnots(
-    { kind: 'branch', supportId: activeBranch.id, support: activeBranchPreview },
+    { kind: SIMULATED_MEMBER_TYPE_ID, supportId: activeBranch.id, support: activeBranchPreview },
     { parentKnot: committedKnotsById[activeBranch.parentKnotId] },
     candidateKnots,
   );
@@ -208,7 +231,7 @@ function main() {
 
   const jointPreviewResult = bench('joint preview knot projection', iterations, () => {
     computeJointDragPreviewKnots(
-      { kind: 'branch', supportId: s.activeBranch.id, support: s.activeBranchPreview },
+      { kind: SIMULATED_MEMBER_TYPE_ID, supportId: s.activeBranch.id, support: s.activeBranchPreview },
       { parentKnot: s.committedKnotsById[s.activeBranch.parentKnotId] },
       s.candidateKnots,
     );

@@ -3,10 +3,10 @@
 
 import React, { useState, useEffect, useLayoutEffect, useSyncExternalStore } from 'react';
 import ReactDOM from 'react-dom';
-import { Check, Save, RotateCcw, Sparkles, Wrench, WandSparkles, Sailboat, Grid3X3, Pickaxe } from 'lucide-react';
+import { Check, Eye, Save, RotateCcw, Sparkles, Wrench, WandSparkles, Sailboat, Grid3X3, Pickaxe } from 'lucide-react';
 import { usePresetHotkeys } from '@/hotkeys/usePresetHotkeys';
 import { useLingui } from '@lingui/react';
-import { formatAutoBraceStatus } from '../autoBracing/autoBraceMessages';
+import { formatAutoBraceStatus, formatBracesCleared } from '../autoBracing/autoBraceMessages';
 import { msg } from '@lingui/core/macro';
 import {
     getSettings,
@@ -21,6 +21,7 @@ import {
     updateAutoBracingSettings,
     updateAutoSupportSettings,
     updateDevToolsEnabled,
+    updateNavigationDiscsOnly,
 } from './state';
 import {
     subscribe as subscribeToSupportState,
@@ -31,6 +32,7 @@ import {
 } from '../state';
 import { checkPresetDrift, findMatchingPresetIdForSettings, getPresetById } from './presets';
 import { createDefaultSettings, type SupportSettings } from './types';
+import { SUPPORT_PROFILE_LIMITS } from './defaults';
 import { applySettingsToSelectedSupports } from './applySettingsToSelectedSupports';
 import { areSupportGeometrySettingsEqual } from './supportSettingsCodec';
 import { captureSupportEditSnapshot, pushSupportEditHistory, type SupportEditHistorySnapshot } from '../history/supportEditHistory';
@@ -38,7 +40,7 @@ import {
     PresetSelector,
     RaftSettingsCard,
     GridSettingsCard,
-    SupportKindTabs,
+    SidebarPanelTabs,
 } from './components';
 import { Card, CardHeader, IconButton } from '@/components/atoms';
 import { NumberInput } from '@/components/ui/NumberInput';
@@ -46,19 +48,21 @@ import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { SupportAnatomyPreviewSlot } from './AnatomyPreview/SupportAnatomyPreviewSlot';
 import { AutoBracingSettingsCard } from '../autoBracing/AutoBracingSettingsCard';
 import { CurveSettingsCard, getCurveSettingsSelection } from '../Curves/CurveSettingsCard';
-import { runAutoBracing } from '../autoBracing/autoBrace';
+import { clearBracesForModel, runAutoBracing } from '../autoBracing/autoBrace';
 import { shouldRunAutoBracingHotkey } from '../autoBracing/autoBracingHotkey';
 import { useActionActive } from '@/hotkeys/hotkeyStore';
 import { setAnatomyPreviewActiveSettingKey, subscribeToAnatomyPreviewState, getAnatomyPreviewState } from './AnatomyPreview/previewState';
 import {
-    DEFAULT_SUPPORT_KIND,
-    getSupportKindSnapshot,
-    isSupportKind,
-    kindHas,
-    setActiveSupportKind,
-    subscribeToSupportKindState,
-    tabKindFor,
-} from './supportKindState';
+    DEFAULT_SIDEBAR_PANEL,
+    getSidebarPanelSnapshot,
+    isSidebarPanel,
+    panelHas,
+    SIDEBAR_PANELS,
+    setActiveSidebarPanel,
+    subscribeToSidebarPanel,
+    panelForTab,
+    tabPanelFor,
+} from './sidebarPanels';
 import {
     getRaftSettings,
     subscribeToRaftStore,
@@ -68,7 +72,7 @@ import {
     resetRaftSessionModificationFlag,
 } from '../Rafts/Crenelated/RaftState';
 import { DEFAULT_RAFT_SETTINGS } from '../Rafts/Crenelated/RaftDefaults';
-import type { SupportKind } from './supportKindState';
+import type { SidebarPanel } from './sidebarPanels';
 import { resetSupportSettingsScrollForTabChange } from './supportSidebarScroll';
 
 const INPUT_CLASS = 'ui-input h-8 w-full px-2.5 text-xs sm:text-sm text-center no-spinners !bg-[var(--surface-0)]';
@@ -81,22 +85,26 @@ const ACCENT_CARD_STYLE: React.CSSProperties = {
     background: 'color-mix(in srgb, var(--accent), var(--surface-1) 95%)',
 };
 
-// `label` is currently unread — only `icon` is consumed (see activeKindMeta
-// below), so these strings are deliberately left out of the catalogue rather
-// than shipped to translators as copy nothing renders.
-const KIND_META: Record<SupportKind, { label: string; icon: typeof Pickaxe }> = {
-    trunk: { label: 'Trunk', icon: Pickaxe },
-    branch: { label: 'Branch', icon: Wrench },
-    leaf: { label: 'Leaf', icon: Sparkles },
-    twig: { label: 'Twig', icon: WandSparkles },
-    raft: { label: 'Raft', icon: Sailboat },
-    grid: { label: 'Grid', icon: Grid3X3 },
-    stick: { label: 'Bracing', icon: WandSparkles },
-    auto: { label: 'Auto', icon: Sparkles },
-};
+/**
+ * The panels that swap to the compact layout when their content overflows.
+ *
+ * These are the panels the sidebar opens by opening THEIR tab -- the one that
+ * declares it rather than another sharing it, which leaves out the extra panels
+ * riding the support-info page (leaf, branch, twig). `auto` is reached from the
+ * mode rather than a tab, so it is its own page too.
+ */
+const OVERFLOW_COMPACT_KIND_SET = new Set<SidebarPanel>(
+    SIDEBAR_PANELS.filter((panel) => {
+        const tab = tabPanelFor(panel);
+        return tab === 'auto' || panelForTab(tab) === panel;
+    }),
+);
 
-const OVERFLOW_COMPACT_KIND_SET = new Set<SupportKind>(['trunk', 'raft', 'grid', 'stick', 'auto']);
-const POPUP_PREVIEW_KIND_SET = new Set<SupportKind>(['trunk']);
+/**
+ * The panel whose preview floats in a popup when the sidebar is too short to
+ * show it -- the default panel, which is the one shown on opening.
+ */
+const POPUP_PREVIEW_KIND_SET = new Set<SidebarPanel>([DEFAULT_SIDEBAR_PANEL]);
 
 function hasMeaningfulSupportEditChange(
     before: SupportEditHistorySnapshot,
@@ -165,7 +173,7 @@ function fieldFocusProps(
  * Main settings panel for support mode.
  * Displays presets and editable settings for tip, shaft, roots, base flare, and grid.
  */
-export function SupportSidebar() {
+export function SupportSidebar({ activeModelId = null }: { activeModelId?: string | null }) {
     const { _ } = useLingui();
     usePresetHotkeys();
     const autoBracingHotkeyActive = useActionActive('SUPPORTS', 'AUTO_BRACING');
@@ -180,11 +188,12 @@ export function SupportSidebar() {
     const autoBraceStatusTimeoutRef = React.useRef<number | null>(null);
     const autoBracingHotkeyWasActiveRef = React.useRef(false);
     const isAdaptiveConeAngle = (settings.tip.coneAngleMode ?? 'normal') === 'adaptive';
-    const supportKindState = React.useSyncExternalStore(subscribeToSupportKindState, getSupportKindSnapshot, getSupportKindSnapshot);
-    const activeKind = supportKindState.kind;
-    const useAdaptiveIconCompactDisplay = isAdaptiveConeAngle && activeKind === 'trunk';
-    const tabKind = tabKindFor(activeKind);
-    const activeKindMeta = KIND_META[activeKind];
+    /** The eye button's state: contact discs solid, every member a line. */
+    const discsOnlyView = settings.navigationDiscsOnly;
+    const sidebarPanelState = React.useSyncExternalStore(subscribeToSidebarPanel, getSidebarPanelSnapshot, getSidebarPanelSnapshot);
+    const activePanel = sidebarPanelState.panel;
+    const useAdaptiveIconCompactDisplay = isAdaptiveConeAngle && activePanel === DEFAULT_SIDEBAR_PANEL;
+    const tabKind = tabPanelFor(activePanel);
     const raftSettings = React.useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
     const supportState = React.useSyncExternalStore(subscribeToSupportState, getSupportSnapshot, getSupportSnapshot);
     const previewState = React.useSyncExternalStore(subscribeToAnatomyPreviewState, getAnatomyPreviewState, getAnatomyPreviewState);
@@ -237,16 +246,16 @@ export function SupportSidebar() {
     const compactEnteredWindowHeightRef = React.useRef<number | null>(null);
 
     useEffect(() => {
-        if (!OVERFLOW_COMPACT_KIND_SET.has(activeKind) || !trunkCompactByOverflow) {
+        if (!OVERFLOW_COMPACT_KIND_SET.has(activePanel) || !trunkCompactByOverflow) {
             compactEnteredWindowHeightRef.current = null;
             return;
         }
 
         compactEnteredWindowHeightRef.current = window.innerHeight;
-    }, [activeKind, trunkCompactByOverflow]);
+    }, [activePanel, trunkCompactByOverflow]);
 
     useLayoutEffect(() => {
-        if (!expanded || showCurvePage || !OVERFLOW_COMPACT_KIND_SET.has(activeKind)) return;
+        if (!expanded || showCurvePage || !OVERFLOW_COMPACT_KIND_SET.has(activePanel)) return;
         const viewport = scrollViewportRef.current;
         if (!viewport) return;
 
@@ -314,13 +323,13 @@ export function SupportSidebar() {
                 window.cancelAnimationFrame(rafId);
             }
         };
-    }, [expanded, showCurvePage, activeKind]);
+    }, [expanded, showCurvePage, activePanel]);
 
     useEffect(() => {
-        if (!OVERFLOW_COMPACT_KIND_SET.has(activeKind) && trunkCompactByOverflow) {
+        if (!OVERFLOW_COMPACT_KIND_SET.has(activePanel) && trunkCompactByOverflow) {
             setTrunkCompactByOverflow(false);
         }
-    }, [activeKind, trunkCompactByOverflow]);
+    }, [activePanel, trunkCompactByOverflow]);
 
     const makeRowFocusHandlers = React.useCallback((key: string) => {
         return {
@@ -432,8 +441,8 @@ export function SupportSidebar() {
             globalSettingsBeforeSupportEditRef.current = null;
         }
 
-        if (leavingSupportEdit && activeKind !== DEFAULT_SUPPORT_KIND) {
-            setActiveSupportKind(DEFAULT_SUPPORT_KIND);
+        if (leavingSupportEdit && activePanel !== DEFAULT_SIDEBAR_PANEL) {
+            setActiveSidebarPanel(DEFAULT_SIDEBAR_PANEL);
         }
     }, [editableTarget, commitPendingSettingsSession]);
 
@@ -491,12 +500,12 @@ export function SupportSidebar() {
 
         // Not every editable type has a sidebar tool, so only follow the
         // selection when one exists.
-        if (selectionChanged && activeKind !== editableTarget.kind && isSupportKind(editableTarget.kind)) {
-            setActiveSupportKind(editableTarget.kind);
+        if (selectionChanged && activePanel !== editableTarget.kind && isSidebarPanel(editableTarget.kind)) {
+            setActiveSidebarPanel(editableTarget.kind);
         }
 
         lastEditableTargetKeyRef.current = targetKey;
-    }, [editableTarget, selectedSupportSettings, settings, activeKind]);
+    }, [editableTarget, selectedSupportSettings, settings, activePanel]);
 
     React.useEffect(() => {
         if (!editableTarget) return;
@@ -614,12 +623,35 @@ export function SupportSidebar() {
         }, 2800);
     }, [_]);
 
+    const handleClearBraces = React.useCallback(() => {
+        let message: string;
+        let kind: 'success' | 'warning' | 'error' = 'success';
+        try {
+            const removed = clearBracesForModel(activeModelId);
+            message = formatBracesCleared(removed, _);
+            if (removed === 0) kind = 'warning';
+        } catch (err) {
+            console.error('[SupportSidebar] Clear braces failed:', err);
+            message = _(msg`Clear All failed. Check console for details.`);
+            kind = 'error';
+        }
+
+        setAutoBraceStatus({ kind, message });
+        if (autoBraceStatusTimeoutRef.current !== null) {
+            window.clearTimeout(autoBraceStatusTimeoutRef.current);
+        }
+        autoBraceStatusTimeoutRef.current = window.setTimeout(() => {
+            setAutoBraceStatus(null);
+            autoBraceStatusTimeoutRef.current = null;
+        }, 2800);
+    }, [activeModelId, _]);
+
     useEffect(() => {
         if (shouldRunAutoBracingHotkey({
             active: autoBracingHotkeyActive,
             wasActive: autoBracingHotkeyWasActiveRef.current,
             sidebarExpanded: expanded,
-            activeSupportKind: activeKind,
+            activeSupportKind: activePanel,
             curvePageVisible: showCurvePage,
             modalOpen: document.querySelector('[role="dialog"][aria-modal="true"]') !== null,
         })) {
@@ -630,7 +662,7 @@ export function SupportSidebar() {
         }
 
         autoBracingHotkeyWasActiveRef.current = autoBracingHotkeyActive;
-    }, [activeKind, autoBracingHotkeyActive, expanded, handleAutoBrace, showCurvePage]);
+    }, [activePanel, autoBracingHotkeyActive, expanded, handleAutoBrace, showCurvePage]);
 
     const getInputProps = React.useCallback((key: string, baseClass: string) => {
         const isActive = activeKey === key;
@@ -659,18 +691,18 @@ export function SupportSidebar() {
     );
 
     const sectionScrollClass = 'flex-1 min-h-0 overflow-y-auto custom-scrollbar';
-    const shouldUseOverflowCompactMode = OVERFLOW_COMPACT_KIND_SET.has(activeKind) && trunkCompactByOverflow;
-    const shouldUseCompactTrunkLayout = activeKind === 'trunk' && shouldUseOverflowCompactMode;
-    const hasFloatingTrunkPreviewTrigger = POPUP_PREVIEW_KIND_SET.has(activeKind)
+    const shouldUseOverflowCompactMode = OVERFLOW_COMPACT_KIND_SET.has(activePanel) && trunkCompactByOverflow;
+    const shouldUseCompactTrunkLayout = activePanel === DEFAULT_SIDEBAR_PANEL && shouldUseOverflowCompactMode;
+    const hasFloatingTrunkPreviewTrigger = POPUP_PREVIEW_KIND_SET.has(activePanel)
         && (Boolean(activeKey) || Boolean(previewState.hoveredPresetSettings));
     const shouldShowFloatingTrunkPreview = expanded
-        && POPUP_PREVIEW_KIND_SET.has(activeKind)
+        && POPUP_PREVIEW_KIND_SET.has(activePanel)
         && shouldUseOverflowCompactMode
         && floatingTrunkPreviewHeldOpen;
 
     useEffect(() => {
         const supportsFloatingPreview = expanded
-            && POPUP_PREVIEW_KIND_SET.has(activeKind)
+            && POPUP_PREVIEW_KIND_SET.has(activePanel)
             && shouldUseOverflowCompactMode;
         if (!supportsFloatingPreview) {
             if (floatingTrunkPreviewHideTimeoutRef.current !== null) {
@@ -718,7 +750,7 @@ export function SupportSidebar() {
                 setFloatingTrunkPreviewFadingOut(false);
             }, 240);
         }, 2000);
-    }, [expanded, activeKind, shouldUseOverflowCompactMode, hasFloatingTrunkPreviewTrigger, floatingTrunkPreviewHeldOpen]);
+    }, [expanded, activePanel, shouldUseOverflowCompactMode, hasFloatingTrunkPreviewTrigger, floatingTrunkPreviewHeldOpen]);
 
     useEffect(() => {
         return () => {
@@ -834,13 +866,14 @@ export function SupportSidebar() {
                         onChange={(val) => updateTipProfile({ contactDiameterMm: val })}
                         step={0.1}
                         showStepper={false}
+                        {...SUPPORT_PROFILE_LIMITS.tip.contactDiameterMm}
                         {...getInputProps('tip.contactDiameterMm', compactInputClass)}
                     />
                     {unitHint('mm')}
                 </div>
             </div>
 
-            {kindHas(activeKind, 'hasContactCone') && (
+            {panelHas(activePanel, 'tip') && (
                 <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('tip.lengthMm')}>
                     <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title={_(msg`Contact Cone Length`)}>{_(msg`Contact Cone Length`)}</div>
                     <div className="relative">
@@ -849,6 +882,7 @@ export function SupportSidebar() {
                             onChange={(val) => updateTipProfile({ lengthMm: val })}
                             step={0.1}
                             showStepper={false}
+                            {...SUPPORT_PROFILE_LIMITS.tip.lengthMm}
                             {...getInputProps('tip.lengthMm', compactInputClass)}
                         />
                         {unitHint('mm')}
@@ -856,7 +890,7 @@ export function SupportSidebar() {
                 </div>
             )}
 
-            {kindHas(activeKind, 'hasContactCone') && (
+            {panelHas(activePanel, 'tip') && (
                 <div className="space-y-1 min-w-0" {...fieldFocusProps('tip.coneAngleMode', () => setAnatomyPreviewActiveSettingKey('tip.coneAngleMode'), (e) => {
                     const next = e.relatedTarget as Node | null;
                     if (next && e.currentTarget.contains(next)) return;
@@ -905,6 +939,7 @@ export function SupportSidebar() {
                                     aria-label={_(msg`Adaptive offset`)}
                                     title={_(msg`Adaptive offset`)}
                                     showStepper={false}
+                                    {...SUPPORT_PROFILE_LIMITS.tip.adaptiveConeAngleOffsetDeg}
                                     {...getInputProps('tip.adaptiveConeAngleOffsetDeg', compactInputClass)}
                                 />
                                 {unitHint('°')}
@@ -914,7 +949,7 @@ export function SupportSidebar() {
                 </div>
             )}
 
-            {kindHas(activeKind, 'hasShaft') && (
+            {panelHas(activePanel, 'shaft') && (
                 <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('shaft.diameterMm')}>
                     <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title={_(msg`Trunk Diameter`)}>{_(msg`Trunk Diameter`)}</div>
                     <div className="relative">
@@ -923,6 +958,7 @@ export function SupportSidebar() {
                             onChange={(val) => updateShaftProfile({ diameterMm: val })}
                             step={0.1}
                             showStepper={false}
+                            {...SUPPORT_PROFILE_LIMITS.shaft.diameterMm}
                             {...getInputProps('shaft.diameterMm', compactInputClass)}
                         />
                         {unitHint('mm')}
@@ -930,7 +966,7 @@ export function SupportSidebar() {
                 </div>
             )}
 
-            {kindHas(activeKind, 'hasPlateRoot') && (
+            {panelHas(activePanel, 'roots') && (
                 <>
                     <div className="h-px" style={{ background: 'var(--border-subtle)' }} />
 
@@ -942,6 +978,7 @@ export function SupportSidebar() {
                                 onChange={(val) => updateRootsProfile({ diameterMm: val })}
                                 step={0.1}
                                 showStepper={false}
+                                {...SUPPORT_PROFILE_LIMITS.roots.diameterMm}
                                 {...getInputProps('roots.diameterMm', compactInputClass)}
                             />
                             {unitHint('mm')}
@@ -957,6 +994,7 @@ export function SupportSidebar() {
                                     onChange={(val) => updateRootsProfile({ diskHeightMm: val })}
                                     step={0.1}
                                     showStepper={false}
+                                    {...SUPPORT_PROFILE_LIMITS.roots.diskHeightMm}
                                     {...getInputProps('roots.diskHeightMm', compactInputClass)}
                                 />
                                 {unitHint('mm')}
@@ -971,6 +1009,7 @@ export function SupportSidebar() {
                                     onChange={(val) => updateRootsProfile({ coneHeightMm: val })}
                                     step={0.1}
                                     showStepper={false}
+                                    {...SUPPORT_PROFILE_LIMITS.roots.coneHeightMm}
                                     {...getInputProps('roots.coneHeightMm', compactInputClass)}
                                 />
                                 {unitHint('mm')}
@@ -993,6 +1032,7 @@ export function SupportSidebar() {
                             onChange={(val) => updateTipProfile({ contactDiameterMm: val })}
                             step={0.1}
                             showStepper={false}
+                            {...SUPPORT_PROFILE_LIMITS.tip.contactDiameterMm}
                             {...getInputProps('tip.contactDiameterMm', compactInputClass)}
                         />
                         {unitHint('mm')}
@@ -1007,6 +1047,7 @@ export function SupportSidebar() {
                             onChange={(val) => updateTipProfile({ lengthMm: val })}
                             step={0.1}
                             showStepper={false}
+                            {...SUPPORT_PROFILE_LIMITS.tip.lengthMm}
                             {...getInputProps('tip.lengthMm', compactInputClass)}
                         />
                         {unitHint('mm')}
@@ -1061,6 +1102,7 @@ export function SupportSidebar() {
                                 aria-label={_(msg`Adaptive offset`)}
                                 title={_(msg`Adaptive offset`)}
                                 showStepper={false}
+                                {...SUPPORT_PROFILE_LIMITS.tip.adaptiveConeAngleOffsetDeg}
                                 {...getInputProps('tip.adaptiveConeAngleOffsetDeg', compactInputClass)}
                             />
                             {unitHint('°')}
@@ -1078,6 +1120,7 @@ export function SupportSidebar() {
                             onChange={(val) => updateShaftProfile({ diameterMm: val })}
                             step={0.1}
                             showStepper={false}
+                            {...SUPPORT_PROFILE_LIMITS.shaft.diameterMm}
                             {...getInputProps('shaft.diameterMm', compactInputClass)}
                         />
                         {unitHint('mm')}
@@ -1092,6 +1135,7 @@ export function SupportSidebar() {
                             onChange={(val) => updateRootsProfile({ diameterMm: val })}
                             step={0.1}
                             showStepper={false}
+                            {...SUPPORT_PROFILE_LIMITS.roots.diameterMm}
                             {...getInputProps('roots.diameterMm', compactInputClass)}
                         />
                         {unitHint('mm')}
@@ -1108,6 +1152,7 @@ export function SupportSidebar() {
                             onChange={(val) => updateRootsProfile({ diskHeightMm: val })}
                             step={0.1}
                             showStepper={false}
+                            {...SUPPORT_PROFILE_LIMITS.roots.diskHeightMm}
                             {...getInputProps('roots.diskHeightMm', compactInputClass)}
                         />
                         {unitHint('mm')}
@@ -1122,6 +1167,7 @@ export function SupportSidebar() {
                             onChange={(val) => updateRootsProfile({ coneHeightMm: val })}
                             step={0.1}
                             showStepper={false}
+                            {...SUPPORT_PROFILE_LIMITS.roots.coneHeightMm}
                             {...getInputProps('roots.coneHeightMm', compactInputClass)}
                         />
                         {unitHint('mm')}
@@ -1135,14 +1181,13 @@ export function SupportSidebar() {
         ? supportGeometryFieldsCompactTrunk
         : supportGeometryFieldsDefault;
 
-    const activeKindIcon = activeKindMeta.icon;
-    const ActiveKindIcon = activeKindIcon;
-
     return (
         <>
 
 
-        <div ref={supportSidebarAnchorRef}>
+        {/* `data-support-studio-panel` is the boundary the preset rail's
+            drag-off-to-delete gesture reads: outside it a drop means delete. */}
+        <div ref={supportSidebarAnchorRef} data-support-studio-panel>
         <Card className={expanded ? 'max-h-[calc(100dvh-var(--topbar-height)-24px)] overflow-hidden flex flex-col' : undefined}>
             <CardHeader
                 left={(
@@ -1171,6 +1216,13 @@ export function SupportSidebar() {
                 )}
                 right={(
                     <div className="inline-flex items-center gap-1">
+                        <IconButton
+                            onClick={() => updateNavigationDiscsOnly(!discsOnlyView)}
+                            className={`!p-0.5 transition-colors ${discsOnlyView ? '!bg-sky-600/25 !text-sky-300' : '!text-[var(--text-muted)] hover:!text-[var(--text-strong)] hover:!bg-[var(--surface-2)]'}`}
+                            title={discsOnlyView ? _(msg`Show full supports`) : _(msg`Contact discs only, supports as lines`)}
+                        >
+                            <Eye className="h-3.5 w-3.5" />
+                        </IconButton>
                         <IconButton
                             onClick={handleSave}
                             className={`!p-0.5 transition-colors ${saveStatus === 'saved' ? '!bg-green-600/30 !text-green-400' : saveStatus === 'error' ? '!bg-red-600/30 !text-red-400' : '!text-green-400/70 hover:!text-green-400 hover:!bg-green-600/15'}`}
@@ -1201,20 +1253,20 @@ export function SupportSidebar() {
                                 </>
                             ) : (
                                 <>
-                                    <SupportKindTabs
+                                    <SidebarPanelTabs
                                         value={tabKind}
-                                        onChange={(kind) => {
+                                        onChange={(tab) => {
                                             resetSupportSettingsScrollForTabChange(
                                                 scrollViewportRef.current,
                                                 tabKind,
-                                                kind,
+                                                tab,
                                             );
                                             setAnatomyPreviewActiveSettingKey(null);
-                                            setActiveSupportKind(kind);
+                                            setActiveSidebarPanel(panelForTab(tab));
                                         }}
                                     />
 
-                                    {activeKind === 'raft' ? (
+                                    {activePanel === 'raft' ? (
                                         <>
                                             {!shouldUseOverflowCompactMode ? (
                                                 renderPreviewBox('h-[220px]')
@@ -1226,7 +1278,7 @@ export function SupportSidebar() {
                                                 />
                                             </div>
                                         </>
-                                    ) : activeKind === 'grid' ? (
+                                    ) : activePanel === 'grid' ? (
                                         <>
                                             {!shouldUseOverflowCompactMode ? (
                                                 renderPreviewBox('h-[220px]')
@@ -1238,7 +1290,7 @@ export function SupportSidebar() {
                                                 />
                                             </div>
                                         </>
-                                    ) : activeKind === 'stick' ? (
+                                    ) : tabKind === 'bracing' ? (
                                         <>
                                             {!shouldUseOverflowCompactMode ? (
                                                 renderPreviewBox('h-[220px]')
@@ -1248,11 +1300,12 @@ export function SupportSidebar() {
                                                     settings={settings.autoBracing}
                                                     onChange={(partial) => updateAutoBracingSettings(partial)}
                                                     onAutoBrace={handleAutoBrace}
+                                                    onClearBraces={handleClearBraces}
                                                     status={autoBraceStatus}
                                                 />
                                             </div>
                                         </>
-                                    ) : activeKind === 'trunk' ? (
+                                    ) : activePanel === DEFAULT_SIDEBAR_PANEL ? (
                                         <>
                                             {shouldUseCompactTrunkLayout ? (
                                                 <div className="rounded-md border p-2" style={SECTION_CARD_STYLE}>
@@ -1299,6 +1352,9 @@ export function SupportSidebar() {
                                                             autoSupport: {
                                                                 ...current.autoSupport,
                                                             },
+                                                            // The navigation view is how the user is looking
+                                                            // at the forest, not part of a preset.
+                                                            navigationDiscsOnly: current.navigationDiscsOnly,
                                                         };
                                                         editSessionLatestSettingsRef.current = nextSettings;
                                                         setSettings(nextSettings);

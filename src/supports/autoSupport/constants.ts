@@ -64,6 +64,19 @@ export const SUPPORT_RESTSTACK_DELTA_MM = 5.0;
  */
 export const MAX_CAVITY_BRIDGE_MM = 12;
 
+/**
+ * Reach of the cavity fallback's fan search, in plan. A tip with no plate route
+ * has exactly two outcomes: carried by a neighbouring trunk, or bridged
+ * model-to-model as a stick whose second contact scar is on the model. The
+ * bridge is strictly worse, so this is the widest host search in the pipeline —
+ * including for grid hosts, whose 2.5 mm limit exists to keep ordinary fan
+ * leaves from sweeping across the grid forest, a reason that does not apply to
+ * a tip with nothing else. The branch-angle gate still governs the link, so a
+ * host this far out has to be tall enough to offer a sample steep enough to be
+ * legal; that is what keeps a long rescue member honest.
+ */
+export const CAVITY_FAN_RADIUS_MM = 12;
+
 /** Distance (mm) within which an existing support tip counts a candidate as already supported. */
 export const ALREADY_SUPPORTED_RADIUS_MM = 3.0;
 
@@ -74,8 +87,11 @@ export const GRIDLESS_MERGE_RADIUS_MM = 4.0;
  *  (mm-equivalent per mm) against raw distance — Dumas Score = Gain − k·lmax
  *  shape with k explicit. Zero hosted members → pure nearest-first. */
 export const MERGE_HOST_LOAD_WEIGHT = 0.5;
+/** Leaf fanning: the least reach the fan is allowed (mm). Every path floors here. */
+export const MIN_LEAF_FAN_RADIUS_MM = 8;
+
 /** Leaf fanning: max distance from a trunk shaft sample to an uncovered island (mm). */
-export const LEAF_FAN_RADIUS_MM = 5.0;
+export const LEAF_FAN_RADIUS_MM = MIN_LEAF_FAN_RADIUS_MM;
 
 /** Leaf fanning: max distance from a DENSITY-GRID trunk shaft (mm). Grid
  *  supports are fanning hosts only up close — a tight threshold keeps fan

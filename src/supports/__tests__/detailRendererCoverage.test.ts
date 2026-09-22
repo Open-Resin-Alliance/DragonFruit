@@ -2,61 +2,104 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 
+import '../detailRenderer/registerBuiltinDetailRenderers';
+import { detailRenderersFor, detailRenderersMissingTypes, type DetailRendererContext } from '../detailRenderer/seam';
 import { SUPPORT_TYPES } from '../supportTypeRegistry';
 
 /**
- * Every declared type has a detail renderer entry.
+ * Every declared type registers a detail renderer.
  *
- * `SupportRenderer` used to hold eight hand-written `renderXList.map(...)`
- * blocks; they are one `detailRenderers` table and one `renderDetailFor` loop
- * now. Nothing mounts the component in tests, so this reads the source: a
- * ninth type that reaches the registry without a table entry would draw
- * nothing, silently, and no other check would notice.
+ * Each renderer lives in its type's own folder and registers into the seam. A
+ * type that reaches the registry without registering would draw nothing, so the
+ * load-time completeness check asserts the missing list is empty and a resolved
+ * table has a component for every type.
  */
+
+const EMPTY_CONTEXT: DetailRendererContext = {
+    roots: {},
+    renderKnotsById: {},
+    braceRenderKnotsById: {},
+    simpleRender: false,
+    navigationView: false,
+    hideUnselectedKnots: false,
+    hidePlateContactPrimitivesEffective: false,
+    ghostedBraceIdSet: new Set(),
+    ghostOpacityClamped: 1,
+    suppressHover: false,
+    isInteractable: false,
+    debugSectionColorsEnabled: false,
+    braceShaftsBySupport: new Map(),
+};
+
+test('every support type registers a detail renderer', () => {
+    assert.deepEqual(detailRenderersMissingTypes(), []);
+});
+
+test('every type resolves to an entry that names a component', () => {
+    const entries = detailRenderersFor(EMPTY_CONTEXT);
+    for (const descriptor of SUPPORT_TYPES) {
+        const entry = entries[descriptor.id];
+        assert.ok(entry, `${descriptor.id} has no detail renderer entry`);
+        assert.ok(entry.component, `${descriptor.id} names no component`);
+    }
+});
 
 const SOURCE = readFileSync(new URL('../SupportRenderer.tsx', import.meta.url), 'utf8');
 
-/** The table body, so a match cannot come from an unrelated part of the file. */
-function detailRendererTable(): string {
-    const start = SOURCE.indexOf('const detailRenderers = useMemo(');
-    assert.ok(start > 0, 'the detailRenderers table is gone -- this test needs rewriting');
-    const end = SOURCE.indexOf('const renderDetailFor', start);
-    assert.ok(end > start, 'renderDetailFor no longer follows the table');
-    return SOURCE.slice(start, end);
-}
+test('the entity prop is derived from the registry, not spelled per type', () => {
+    assert.match(
+        SOURCE,
+        /const entityProp = getSupportTypeDescriptor\(typeId\)\.singular;/,
+        'renderDetailFor must derive the entity prop from the registry',
+    );
+});
 
-test('every support type has an entry in the detail renderer table', () => {
-    const table = detailRendererTable();
-
+test('simplified render skips every type that does not draw its own simplified form', () => {
+    // A type drawn only by its detail renderer kept drawing solid geometry
+    // under simplified render by not checking the flag. The seam now decides,
+    // so a new type inherits the skip rather than having to remember it.
+    const entries = detailRenderersFor({ ...EMPTY_CONTEXT, simpleRender: true });
     for (const descriptor of SUPPORT_TYPES) {
-        assert.match(
-            table,
-            new RegExp(`^\\s{8}${descriptor.id}:\\s*\\{`, 'm'),
-            `${descriptor.id} has no detailRenderers entry, so it would render nothing`,
+        const entry = entries[descriptor.id];
+        assert.ok(entry, `${descriptor.id} resolves an entry`);
+        if (entry.drawsSimplified) continue;
+        assert.equal(
+            entry.skip?.({ entity: { id: 'probe' } as never, isSelected: true, isBatchable: false }),
+            true,
+            `${descriptor.id} must be skipped under simplified render`,
         );
     }
 });
 
-test('every type is drawn by the render loop', () => {
-    // The table alone is not enough: the JSX has to call for each type, since
-    // ordering against the batched-shaft passes is still explicit.
+test('an entry keeps its own skip when simplified render is off', () => {
+    // The seam only adds its own reason to skip, and only under simplified
+    // render, so this pins that a selected support still draws normally.
+    const entries = detailRenderersFor(EMPTY_CONTEXT);
+    const entity = { id: 'probe' } as never;
+    const drawsWhenSelected = SUPPORT_TYPES.filter((descriptor) =>
+        entries[descriptor.id]?.skip?.({ entity, isSelected: true, isBatchable: false }) === false);
+    assert.ok(drawsWhenSelected.length > 0, 'a selected support still draws when not simplified');
+});
+
+test('the navigation view keeps a selected support whole while the rest is lines', () => {
+    // Hiding the simple views' solids structurally took this exception with it,
+    // so a selected support vanished instead of showing the primitives it was
+    // selected to inspect. Every type draws when it is the selection; nothing
+    // else in the view does.
+    const entity = { id: 'probe' } as never;
+    const entries = detailRenderersFor({ ...EMPTY_CONTEXT, simpleRender: true, navigationView: true });
     for (const descriptor of SUPPORT_TYPES) {
-        assert.ok(
-            SOURCE.includes(`renderDetailFor('${descriptor.id}')`),
-            `${descriptor.id} is never passed to renderDetailFor`,
+        const entry = entries[descriptor.id];
+        assert.ok(entry, `${descriptor.id} resolves an entry`);
+        assert.equal(
+            entry.skip?.({ entity, isSelected: true, isBatchable: false }),
+            false,
+            `${descriptor.id} must be drawn when it is selected in the navigation view`,
+        );
+        assert.equal(
+            entry.skip?.({ entity, isSelected: false, isBatchable: false }),
+            true,
+            `${descriptor.id} must stay lines when it is not selected`,
         );
     }
 });
-
-test('each entry names a component and the prop it takes its entity under', () => {
-    const table = detailRendererTable();
-
-    for (const descriptor of SUPPORT_TYPES) {
-        const entry = table.slice(table.indexOf(`\n        ${descriptor.id}: {`));
-        const body = entry.slice(0, entry.indexOf('\n        },'));
-
-        assert.match(body, /component:\s*\w+Renderer/, `${descriptor.id} names no component`);
-        assert.match(body, /entityProp:\s*'[a-z]+'/, `${descriptor.id} declares no entityProp`);
-    }
-});
-

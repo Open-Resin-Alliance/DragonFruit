@@ -1,3 +1,5 @@
+import { registerAnatomyPreview } from '../../../anatomyPreviewRegistry';
+import { panelForTab } from '../../../sidebarPanels';
 import React from 'react';
 import * as THREE from 'three';
 import { SupportBuilder } from '@/supports/rendering/SupportBuilder';
@@ -112,9 +114,9 @@ export function BracePreview({
 }: BracePreviewProps) {
     const autoBracing = settings.autoBracing ?? {};
     const braceDiameter = autoBracing.braceDiameterMm ?? 0.7;
-    const initialPattern: string = autoBracing.initialPattern ?? 'singleDiagonal';
+    const initialPattern: string = autoBracing.initialPattern ?? 'zigZag';
     const initialDistance = autoBracing.initialDistanceMm ?? 2.0;
-    const repeatingPattern: string = autoBracing.repeatingPattern ?? 'singleDiagonal';
+    const repeatingPattern: string = autoBracing.repeatingPattern ?? 'zigZag';
     const patternInterval = autoBracing.patternIntervalMm ?? 10.0;
     const shaftDiameterMm = Math.max(0.5, settings.shaft?.diameterMm ?? 1.0);
     const rootsDiameterMm = settings.roots?.diameterMm ?? 2.0;
@@ -291,3 +293,6 @@ export function BracePreview({
         </group>
     );
 }
+
+// Registered under the panel it draws: the one the bracing tab opens.
+registerAnatomyPreview(panelForTab('bracing'), BracePreview);

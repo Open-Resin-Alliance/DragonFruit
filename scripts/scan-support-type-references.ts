@@ -11,6 +11,8 @@
  *   npx tsx scripts/scan-support-type-references.ts --file X     one file
  *   npx tsx scripts/scan-support-type-references.ts --json       machine readable
  *   npx tsx scripts/scan-support-type-references.ts --check --budget N
+ *
+ * `--check` also fails on any id prefix spelled outside the registry.
  */
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
@@ -21,6 +23,16 @@ import {
     SUPPORT_COLLECTION_KEYS,
     SUPPORT_TYPES,
 } from '../src/supports/supportTypeRegistry';
+
+/** The id prefixes each type declares, so a new one is covered once declared. */
+function declaredPrefixes(): string[] {
+    const prefixes = new Set<string>();
+    for (const descriptor of SUPPORT_TYPES) {
+        if (descriptor.knotHostPrefix) prefixes.add(descriptor.knotHostPrefix);
+        if (descriptor.segmentSelectionPrefix) prefixes.add(descriptor.segmentSelectionPrefix);
+    }
+    return [...prefixes];
+}
 
 const ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..');
 const SRC = join(ROOT, 'src');
@@ -36,6 +48,7 @@ const REGISTRY = 'src/supports/supportTypeRegistry.ts';
 const EXEMPT = [REGISTRY, 'src/supports/types.ts', 'src/supports/SupportTypes/'];
 
 interface Match { line: number; identifier: string; text: string }
+interface PrefixHit { path: string; line: number; prefix: string; text: string }
 interface Entry { path: string; refs: number; lines: number; matches: Match[] }
 
 /**
@@ -114,17 +127,31 @@ const value = (name: string) => {
 };
 
 const pattern = buildPattern(vocabulary());
+const PREFIXES = declaredPrefixes();
 const only = value('--file');
 const files: Entry[] = [];
+const prefixHits: PrefixHit[] = [];
 
 for (const abs of walk(SRC)) {
     const path = relative(ROOT, abs).split(sep).join('/');
     if (path.includes('__tests__')) continue;
-    if (EXEMPT.some((e) => path === e || path.startsWith(e))) continue;
     if (only && !path.includes(only)) continue;
 
     const raw = readFileSync(abs, 'utf8');
     const rawLines = raw.split('\n');
+
+    // Scanned everywhere but the registry: a type's own folder may spell its
+    // NAME, but an id format is cross-cutting.
+    if (path !== REGISTRY) {
+        for (const prefix of PREFIXES) {
+            rawLines.forEach((text, index) => {
+                if (!text.includes(prefix)) return;
+                prefixHits.push({ path, line: index + 1, prefix, text: text.trim() });
+            });
+        }
+    }
+
+    if (EXEMPT.some((e) => path === e || path.startsWith(e))) continue;
     const matches: Match[] = [];
     blankComments(raw).split('\n').forEach((text, index) => {
         for (const m of text.matchAll(pattern)) {
@@ -156,10 +183,32 @@ if (flag('--json')) {
     }
 }
 
+if (prefixHits.length && !flag('--json')) {
+    console.log(`\n${prefixHits.length} spelled-out id prefix(es):\n`);
+    for (const hit of prefixHits) {
+        console.log(`  ${hit.path}:${hit.line}  ${hit.prefix}`);
+        console.log(`        ${hit.text.slice(0, 90)}`);
+    }
+}
+
 if (flag('--check')) {
+    let failed = false;
+
     const budget = Number(value('--budget') ?? Infinity);
     if (total > budget) {
         console.error(`\nover budget: ${total} > ${budget}`);
-        process.exit(1);
+        failed = true;
     }
+
+    // No budget: a spelled prefix splits a write from its read on a rename.
+    if (prefixHits.length) {
+        console.error(
+            `\n${prefixHits.length} spelled-out id prefix(es) outside the registry. `
+            + 'Build with `knotHostId` / `segmentSelectionId`, parse with '
+            + '`parseKnotHostId` / `parseSegmentSelectionId`.',
+        );
+        failed = true;
+    }
+
+    if (failed) process.exit(1);
 }

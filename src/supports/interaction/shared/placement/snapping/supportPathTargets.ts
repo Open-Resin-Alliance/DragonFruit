@@ -1,6 +1,6 @@
 import type { SnapTarget } from '../../../SnappingManager';
 import type { Segment, SupportState, Vec3, Brace, Knot } from '../../../../types';
-import { getPlacementSurface, SUPPORT_TYPES, type SupportCollectionKey, type SupportTypeId } from '../../../../supportTypeRegistry';
+import { getPlacementSurface, knotHostId, spanKnotHostType, SUPPORT_TYPES, typeIdForCollection, type SupportCollectionKey, type SupportTypeId } from '../../../../supportTypeRegistry';
 import { getFinalSocketPosition } from '../../../../SupportPrimitives/ContactCone';
 import type { ContactCone } from '../../../../SupportPrimitives/ContactCone/types';
 import { calculateDiskThickness } from '../../../../SupportPrimitives/ContactDisk/contactDiskUtils';
@@ -108,9 +108,12 @@ export function buildSupportPathSnapTargets(
     } = options;
 
     const snap = new Set(snapTypes);
-    const includeTrunks = snap.has('trunk');
-    const includeBranches = snap.has('branch');
-    const includeBraces = snap.has('brace');
+    // Each flag guards the pass that walks one collection below, so the type
+    // each pass asks about is read off that very collection key rather than
+    // named again. The state keys do not move when a type is renamed.
+    const includeTrunks = snap.has(typeIdForCollection('trunks'));
+    const includeBranches = snap.has(typeIdForCollection('branches'));
+    const includeBraces = snap.has(typeIdForCollection('braces'));
 
     const targets: SnapTarget[] = [];
     const rootMap = new Map(Object.values(supportState.roots).map((root) => [root.id, root]));
@@ -194,7 +197,7 @@ export function buildSupportPathSnapTargets(
     if (includeBraces) {
         for (const brace of Object.values(supportState.braces)) {
             if (!matchesPlacementSurfaceFilter(brace.placementSurface, placementSurface)) continue;
-            const braceSegmentId = `braceSegment:${brace.id}`;
+            const braceSegmentId = knotHostId(spanKnotHostType(), brace.id);
             if (shouldExclude(braceSegmentId, excludeSegmentIds)) continue;
 
             const startKnot = knotMap.get(brace.startKnotId);

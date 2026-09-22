@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 
 import { SUPPORT_TYPES } from '../supportTypeRegistry';
@@ -45,6 +45,40 @@ test('every type folder provides a renderer', () => {
         assert.ok(
             files.some((f) => f === `${name}Renderer.tsx`),
             `${descriptor.id} has no ${name}Renderer.tsx`,
+        );
+    }
+});
+
+test('every type folder provides the registration the generator looks for', () => {
+    // The generator finds each type's registrations by this file name; a type
+    // with no such file fills no seam.
+    for (const descriptor of SUPPORT_TYPES) {
+        const name = folderFor(descriptor.id);
+        const registration = `${name[0].toLowerCase()}${name.slice(1)}Registration.ts`;
+        const files = readdirSync(path.join(TYPES_DIR, name));
+        assert.ok(
+            files.includes(registration),
+            `${descriptor.id} has no SupportTypes/${name}/${registration}`
+            + ' — its per-type registrations would never load',
+        );
+    }
+});
+
+test('every type renderer takes its entity under the name the renderer feeds it', () => {
+    // The renderer is handed its entity under a computed key, so TypeScript
+    // cannot check the component destructures the same name.
+    for (const descriptor of SUPPORT_TYPES) {
+        const name = folderFor(descriptor.id);
+        const renderer = path.join(TYPES_DIR, name, `${name}Renderer.tsx`);
+        if (!existsSync(renderer)) continue;
+        const source = readFileSync(renderer, 'utf8');
+        // An interface field, a destructured binding, or an aliased one: the
+        // prop must arrive under the descriptor's name.
+        const destructured = new RegExp(`^\\s*${descriptor.singular}\\s*[:,]`, 'm');
+        assert.ok(
+            destructured.test(source),
+            `${descriptor.id}: ${name}Renderer.tsx does not take its entity as \`${descriptor.singular}\`, `
+            + 'which is the prop name the renderer passes it under',
         );
     }
 });

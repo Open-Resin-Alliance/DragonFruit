@@ -3,7 +3,7 @@ import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import { Plural } from '@lingui/react/macro';
 import { NumberInput } from '@/components/ui/NumberInput';
-import { Card, CardHeader, IconButton, Input } from '@/components/atoms';
+import { Card, CardHeader, ColorSwatchInput, IconButton, Input } from '@/components/atoms';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 type IslandOverlayControlsProps = {
@@ -136,16 +136,13 @@ export function IslandOverlayControls({
           <div className="space-y-1">
             <label className="ui-meta">{_(msg`Color`)}</label>
             <div className="flex gap-1.5 items-center">
-              <input
-                type="color"
+              <ColorSwatchInput
                 value={color}
-                onChange={(e) => {
-                  const newColor = e.target.value;
+                onChange={(newColor) => {
                   setEditingColor(newColor);
                   onColorChange(newColor);
                 }}
-                className="w-10 h-8 rounded border cursor-pointer p-0"
-                style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                className="h-8 w-10"
               />
               <Input
                 type="text"

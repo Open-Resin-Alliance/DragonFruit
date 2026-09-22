@@ -15,7 +15,7 @@ export {
   normalizeAutoSupportSettings,
   applyAutoSupportSettingsPatch,
 } from "./settings";
-export type { AutoSupportSettings } from "./settings";
+export type { AutoSupportSettings, NumericConstraint, NumericAutoSupportSettingKey } from "./settings";
 
 export {
   generateCandidates,

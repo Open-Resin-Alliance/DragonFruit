@@ -35,9 +35,9 @@ type NumericAutoBracingSettingKey =
     | 'maxBraceLengthMm';
 
 export const AUTO_BRACING_PATTERN_OPTIONS: readonly AutoBracingPattern[] = [
+    'zigZag',
     'singleDiagonal',
     'crossDiagonal',
-    'zigZag',
 ];
 
 export const AUTO_BRACING_CONSTRAINTS = {
@@ -117,9 +117,9 @@ function normalizeBoolean(value: unknown, fallback: boolean): boolean {
 export function createDefaultAutoBracingSettings(): AutoBracingSettings {
     return {
         braceDiameterMm: AUTO_BRACING_CONSTRAINTS.braceDiameterMm.defaultValue,
-        initialPattern: 'singleDiagonal',
+        initialPattern: 'zigZag',
         initialDistanceMm: AUTO_BRACING_CONSTRAINTS.initialDistanceMm.defaultValue,
-        repeatingPattern: 'singleDiagonal',
+        repeatingPattern: 'zigZag',
         patternIntervalMm: AUTO_BRACING_CONSTRAINTS.patternIntervalMm.defaultValue,
         seedSpacingMm: AUTO_BRACING_CONSTRAINTS.seedSpacingMm.defaultValue,
         seedJitterMm: AUTO_BRACING_CONSTRAINTS.seedJitterMm.defaultValue,

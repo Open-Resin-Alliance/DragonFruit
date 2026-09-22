@@ -1,16 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {
-    addBranch,
-    addKnot,
-    addLeaf,
-    addRoot,
-    addTrunk,
-    resetStore,
-    resolveEditableSupportTarget,
-} from '../state';
-import { EDITABLE_SUPPORT_TYPES, isEditableSupportType, SUPPORT_TYPES } from '../supportTypeRegistry';
+import { addSupportEntity, addKnot, addRoot, resetStore, resolveEditableSupportTarget } from '../state';
+import { EDITABLE_SUPPORT_TYPES, inlineRootId, isEditableSupportType, SUPPORT_TYPES } from '../supportTypeRegistry';
 import { DEFAULT_TIP_PROFILE } from '../SupportPrimitives/ContactCone/types';
 import type { Branch, Leaf, Trunk } from '../types';
 
@@ -50,16 +42,22 @@ function scene() {
         transform: { pos: { x: 0, y: 0, z: 0 }, rot: { x: 0, y: 0, z: 0, w: 1 } },
         diameter: 3, diskHeight: 0.5, coneHeight: 1.5,
     } as never);
-    addTrunk({
+    addSupportEntity('trunk', {
         id: 'trunk-a', modelId: MODEL, rootId: 'root-a',
         segments: [segment('seg-ta')], contactCone: cone('cone-ta'),
     } as unknown as Trunk);
     addKnot({ id: 'knot-a', parentShaftId: 'seg-ta', t: 0.5, pos: { x: 0, y: 0, z: 2 }, diameter: 1 } as never);
-    addBranch({
+    addSupportEntity('branch', {
         id: 'branch-a', modelId: MODEL, parentKnotId: 'knot-a',
         segments: [segment('seg-ba')], contactCone: cone('cone-ba'),
     } as unknown as Branch);
-    addLeaf({ id: 'leaf-a', modelId: MODEL, parentKnotId: 'knot-a', contactCone: cone('cone-la') } as unknown as Leaf);
+    addSupportEntity('leaf', { id: 'leaf-a', modelId: MODEL, parentKnotId: 'knot-a', contactCone: cone('cone-la') } as unknown as Leaf);
+    addSupportEntity('stump', {
+        id: 'stump-a', modelId: MODEL,
+        rootPos: { x: 10, y: 0, z: 0 }, rootBaseDiameter: 3, rootTopDiameter: 1.5, rootHeight: 2,
+        joint: { id: 'stump-a-joint', pos: { x: 10, y: 0, z: 2 }, diameter: 1.2 },
+        segments: [segment('seg-sa')], contactCone: cone('cone-sa'),
+    } as never);
 }
 
 test('a selected support resolves to itself', () => {
@@ -76,6 +74,16 @@ test('a selected support resolves to itself', () => {
 test('a root resolves to the trunk that owns it', () => {
     scene();
     assert.deepEqual(resolveEditableSupportTarget('root-a', 'root'), { kind: 'trunk', id: 'trunk-a' });
+});
+
+test('an inline root resolves to the entity carrying it', () => {
+    // A type declaring `inlineRoot` has no `Roots` row, so its root primitive
+    // is named after the entity rather than looked up by `rootId`.
+    scene();
+    assert.deepEqual(
+        resolveEditableSupportTarget(inlineRootId('stump-a'), 'root'),
+        { kind: 'stump', id: 'stump-a' },
+    );
 });
 
 test('a segment resolves to its owner, trunk or branch', () => {

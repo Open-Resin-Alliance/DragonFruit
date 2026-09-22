@@ -15,6 +15,7 @@
             "removeGadget",
             "updateGadget",
             "n_coords",
+            "n_indices",
             "version_comparator",
             "kerf_mm",
             "useEditorHotkeys",
@@ -43,27 +44,39 @@
             "ANCHOR_SHAFT_MULTIPLIER",
             "updateTrunk",
             "kickstandBefore",
-            "kickstandAfter"
+            "kickstandAfter",
+            "gridAStar",
+            "fieldDeterministicSolver",
+            "potentialFieldSolver",
+            "satisfiesMinAngleFromHorizontal",
+            "SmartPlacementV2",
+            "applyTrunkReplacement",
+            "SUPPORT_KINDS"
       ],
       "paths": [
+            "src/supports/generatedSupportRegistrations.ts",
             "src/features/plugins/generatedBuiltinComplexPlugins.ts",
             "src/features/plugins/generatedBuiltinComplexPluginNetworkHandlers.ts",
             "src/features/plugins/generatedBuiltinComplexPluginUploadHandlers.ts",
             "src/features/plugins/generatedBuiltinComplexPluginFileTypeHandlers.ts",
             "src-tauri/src/generated_builtin_plugins.rs",
             "src-tauri/generated_crate_requirements.toml",
-            "rust/dragonfruit-slicing-engine/src/encoders/generated_plugin_encoders.rs"
+            "rust/dragonfruit-slicing-engine/src/encoders/generated_plugin_encoders.rs",
+            "src/supports/PlacementLogic/Pathfinding/PotentialFieldSolver.ts"
       ],
       "_reasons": {
             "schematic names": "registerX/subscribeX/getX* and the Gadget* family are invented stand-ins in walkthroughs (registration-seams.md, state-and-stores.md, support-type-extension.md), not real symbols.",
-            "external symbols": "n_coords is a field of the third-party LYS format; version_comparator is a tauri-plugin-updater API.",
-            "deliberately removed": "kerf_mm is named in organic-cut-surface-redesign.md precisely to record that it is gone.",
+            "external symbols": "n_coords and n_indices are fields of the third-party LYS mesh format, cited by docs/dev/lys-mesh-extraction-spec.md. n_indices previously matched by coincidence inside pure_down_indices() in the retired dragonfruit-astar crate, which is why its removal exposed the gap; version_comparator is a tauri-plugin-updater API.",
+            "deliberately removed": "kerf_mm is named in organic-cut-surface-redesign.md precisely to record that it is gone. satisfiesMinAngleFromHorizontal was the flat angle test in the grid attach path and auto-supports.md names it to record that the length-aware allowance replaced it.",
             "aspirational": "page-tsx-refactor-handoff.md is a refactor plan; its symbols name extractions not yet made. packageManager is a package.json key npm has not adopted here.",
             "generated at build time": "the paths are produced by scripts/generate-plugin-registry.mjs and are gitignored (**/generated*), so they are absent from a clean checkout.",
             "proposed, not built": "island_replay is the name ADR-0025 proposes for a capability not yet folded in; pushToast is named in notifications.md precisely to state that no such API exists.",
-            "upstream windowing APIs": "PlatformWebview and cef_window_handle_t are tauri and CEF APIs; wl_surface and wl_subsurface are Wayland protocol objects; windowless_rendering_enabled and set_as_windowless belong to the cef crate. ADR-0005 and ADR-0040 cite them to explain why the Linux CEF build embeds through an X11 window id, so they name code we depend on but do not own."
+            "removed with the V3 routing": "SmartPlacementV2 is the multi-joint router that SmartPlacementV3 replaced; docs/adr/0028-potential-gradient-pathfinding.md names it because the ADR records the approach it chose and the engine it ran in, and an ADR is history rather than a description of the current code. applyTrunkReplacement is named by docs/internal/backlog.md in an unpublished finding about the trunk replacement flow, which was deleted with it.",
+      "upstream windowing APIs": "PlatformWebview and cef_window_handle_t are tauri and CEF APIs; wl_surface and wl_subsurface are Wayland protocol objects; windowless_rendering_enabled and set_as_windowless belong to the cef crate. ADR-0005 and ADR-0040 cite them to explain why the Linux CEF build embeds through an X11 window id, so they name code we depend on but do not own."
       },
       "_comment_webkit_symbols": "The eight WebKit/JavaScriptCore internals above (javascript_gc_object_count through operationMapHash) are cited by docs/dev/performance-debugging.md as they appear in `sample` output and WebKit's own logs. They belong to the platform, not to this codebase, and will never be found here.",
       "_comment_anchor_constants": "ANCHOR_MIN_* / ANCHOR_SHAFT_MULTIPLIER: removed constants, cited by name in support-registry-findings.md because the finding IS their removal. The values live on the anchor descriptor's autoPlacement and are pinned by __tests__/autoPlacementPolicy.test.ts.",
-      "_comment_removed_support_symbols": "updateTrunk / kickstandBefore / kickstandAfter: removed during the registry refactor and cited by name in support-registry-findings.md because the finding IS their removal. updateTrunk became the shared update skeleton; the kickstand* fields left AutoSupportPlan when kickstands joined SupportState."
+      "_comment_removed_support_symbols": "updateTrunk / kickstandBefore / kickstandAfter: removed during the registry refactor and cited by name in support-registry-findings.md because the finding IS their removal. updateTrunk became the shared update skeleton; the kickstand* fields left AutoSupportPlan when kickstands joined SupportState.",
+      "_comment_removed_pathfinders": "gridAStar / fieldDeterministicSolver / potentialFieldSolver, and the PotentialFieldSolver.ts path: the trunk-routing engines replaced by SmartPlacementV3 (PlacementLogicV3/SmartPlacementV3.ts). ADR-0028 is the decision record for the A* replacement and necessarily names what it replaced; page-tsx-refactor-handoff.md names the two solvers whose pre-existing test failures it recorded. Both files are historical records, so they keep the names instead of being rewritten to pretend the removed code never existed.",
+      "_comment_removed_kind_table": "SUPPORT_KINDS: the eight-entry per-panel table in Settings/supportKindState.ts, deleted when the sidebar's panel vocabulary was derived from the registry (Settings/sidebarPanels.ts). support-registry-findings.md cites it by name because the finding IS its removal, and its flags (hasContactCone/hasShaft/hasPlateRoot) are the drift the derived panels removed."
 }

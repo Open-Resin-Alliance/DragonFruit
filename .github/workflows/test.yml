@@ -78,3 +78,6 @@ jobs:
 
       - name: Lint the directories under lint control
         run: npm run check:lint
+
+      - name: Check support id prefixes are derived
+        run: npm run check:support-prefixes

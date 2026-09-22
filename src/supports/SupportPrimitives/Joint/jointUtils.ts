@@ -1,4 +1,4 @@
-import { Trunk, Branch, Twig, Stick, Segment, Joint, Vec3, Roots, Knot, BezierSegment } from '../../types';
+import { Trunk, Segment, Joint, Vec3, Roots, Knot, BezierSegment } from '../../types';
 import * as THREE from 'three';
 import { v4 as uuidv4 } from 'uuid';
 import { getSocketPosition, getFinalSocketPosition } from '../ContactCone';
@@ -8,7 +8,8 @@ import { getBezierPointAtT, toVector3, subdivideCubicBezier, toVec3 } from '../.
 import { getKnotById } from '../../state';
 import { solveJointConstraint } from '../../PlacementLogic/JointConstraintSolver';
 import { remapKnotAcrossSplit, type KnotSplitRemap } from '../Knot/knotUtils';
-import { getSupportTypeDescriptor, type SupportTypeId } from '../../supportTypeRegistry';
+import { getSupportTypeDescriptor, resolveSupportTypeIdOf } from '../../supportTypeRegistry';
+import type { ShaftEntity } from '../Knot/segmentEndpoints';
 
 function remapKnotsForSplit(
     knots: Record<string, Knot> | undefined,
@@ -116,9 +117,11 @@ export interface SplitHosts {
  * Splits a shaft segment on any type, inserting a joint at `splitPoint`.
  * Start and end come from the declared endpoints; `shaftFallback` covers
  * what to do when neither resolves.
+ *
+ * The type comes off the entity. One that carries no type is not a support, so
+ * nothing is split and a warning says which segment was asked for.
  */
-export function splitSupportShaft<T extends { segments: Segment[] }>(
-    typeId: SupportTypeId,
+export function splitSupportShaft<T extends ShaftEntity>(
     entity: T,
     segmentId: string,
     splitPoint: Vec3,
@@ -126,6 +129,11 @@ export function splitSupportShaft<T extends { segments: Segment[] }>(
     hosts: SplitHosts = {},
     knots?: Record<string, Knot>,
 ): { entity: T; knotRemaps: KnotSplitRemap[] } {
+    const typeId = resolveSupportTypeIdOf(entity);
+    if (!typeId) {
+        console.warn('[JointUtils] Segment has no support type:', segmentId, entity.id);
+        return { entity, knotRemaps: [] };
+    }
     const descriptor = getSupportTypeDescriptor(typeId);
     const { stubLengthMm, startFallsBackToSplitPoint } = descriptor.shaftFallback;
     const unresolved = startFallsBackToSplitPoint ? splitPoint : null;
@@ -169,57 +177,6 @@ export function splitSupportShaft<T extends { segments: Segment[] }>(
         knotRemaps: remapKnotsForSplit(knots, segmentId, res.topSegmentId, splitT),
     };
 }
-
-/** @deprecated for removal — call splitSupportShaft('trunk', ...) directly. */
-export function splitShaft(
-    trunk: Trunk,
-    segmentId: string,
-    splitPoint: Vec3,
-    splitT?: number,
-    root?: Roots,
-    knots?: Record<string, Knot>
-): { trunk: Trunk; knotRemaps: KnotSplitRemap[] } {
-    const { entity, knotRemaps } = splitSupportShaft('trunk', trunk, segmentId, splitPoint, splitT, { root }, knots);
-    return { trunk: entity, knotRemaps };
-}
-
-/** @deprecated for removal -- call splitSupportShaft('branch', ...) directly. */
-export function splitBranchShaft(
-    branch: Branch,
-    segmentId: string,
-    splitPoint: Vec3,
-    splitT?: number,
-    parentKnot?: Knot,
-    knots?: Record<string, Knot>
-): { branch: Branch; knotRemaps: KnotSplitRemap[] } {
-    const { entity, knotRemaps } = splitSupportShaft('branch', branch, segmentId, splitPoint, splitT, { hostKnot: parentKnot }, knots);
-    return { branch: entity, knotRemaps };
-}
-
-/** @deprecated for removal -- call splitSupportShaft('twig', ...) directly. */
-export function splitTwigShaft(
-    twig: Twig,
-    segmentId: string,
-    splitPoint: Vec3,
-    splitT?: number,
-    knots?: Record<string, Knot>
-): { twig: Twig; knotRemaps: KnotSplitRemap[] } {
-    const { entity, knotRemaps } = splitSupportShaft('twig', twig, segmentId, splitPoint, splitT, {}, knots);
-    return { twig: entity, knotRemaps };
-}
-
-/** @deprecated for removal -- call splitSupportShaft('stick', ...) directly. */
-export function splitStickShaft(
-    stick: Stick,
-    segmentId: string,
-    splitPoint: Vec3,
-    splitT?: number,
-    knots?: Record<string, Knot>
-): { stick: Stick; knotRemaps: KnotSplitRemap[] } {
-    const { entity, knotRemaps } = splitSupportShaft('stick', stick, segmentId, splitPoint, splitT, {}, knots);
-    return { stick: entity, knotRemaps };
-}
-
 
 export function findClosestSegment(trunk: Trunk, root: Roots, point: Vec3): { segment: Segment, t: number, pointOnLine: Vec3 } | null {
     // Reconstruct skeleton start

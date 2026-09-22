@@ -21,6 +21,33 @@ function normalizeRaftSettings(settings: RaftSettings): RaftSettings {
   };
 }
 
+/**
+ * The `wallEnabled` last chosen while the bottom mode was solid.
+ *
+ * A line base has no perimeter to wall, so its effective `wallEnabled` is
+ * forced off. Without this, that forced value becomes indistinguishable from a
+ * user choice and the mode round-trip Solid → Line → Solid silently comes back
+ * with the wall off. Mode switches carry no `wallEnabled` in their patch, so
+ * they restore from here; an explicit `wallEnabled` (the Wall toggle, a full
+ * settings load) replaces it.
+ */
+let rememberedSolidWallEnabled = DEFAULT_RAFT_SETTINGS.wallEnabled;
+
+/**
+ * Resolve the effective settings for a write. `wallIsExplicit` says whether the
+ * caller supplied a `wallEnabled` of its own; when it did not, the last solid
+ * choice is restored instead of whatever the forced value happened to be.
+ */
+function resolveRaftSettings(next: RaftSettings, wallIsExplicit: boolean): RaftSettings {
+  const normalized = normalizeRaftSettings(next);
+  if (normalized.bottomMode !== 'solid') {
+    return { ...normalized, wallEnabled: false };
+  }
+  const wallEnabled = wallIsExplicit ? normalized.wallEnabled : rememberedSolidWallEnabled;
+  rememberedSolidWallEnabled = wallEnabled;
+  return { ...normalized, wallEnabled };
+}
+
 type RaftStoreListener = () => void;
 const listeners = new Set<RaftStoreListener>();
 
@@ -39,23 +66,19 @@ export function getRaftSettings(): RaftSettings {
 }
 
 export function setRaftSettings(settings: RaftSettings): void {
-  const next = { ...DEFAULT_RAFT_SETTINGS, ...settings };
-  const normalized = normalizeRaftSettings(next);
-  currentRaftSettings = {
-    ...normalized,
-    wallEnabled: normalized.bottomMode === 'solid' ? normalized.wallEnabled : false,
-  };
+  currentRaftSettings = resolveRaftSettings({ ...DEFAULT_RAFT_SETTINGS, ...settings }, true);
   wasManuallyModifiedInSession = true;
   notify();
 }
 
 export function updateRaftSettings(partial: Partial<RaftSettings>): void {
   const next = { ...DEFAULT_RAFT_SETTINGS, ...currentRaftSettings, ...partial };
-  const normalized = normalizeRaftSettings(next);
-  currentRaftSettings = {
-    ...normalized,
-    wallEnabled: normalized.bottomMode === 'solid' ? normalized.wallEnabled : false,
-  };
+  // A mode switch does not name a wall, so the mode round-trip keeps the last
+  // solid choice rather than the off value the line mode forced.
+  currentRaftSettings = resolveRaftSettings(
+    next,
+    Object.prototype.hasOwnProperty.call(partial, 'wallEnabled'),
+  );
   wasManuallyModifiedInSession = true;
   notify();
 }
@@ -65,12 +88,7 @@ export function updateRaftSettings(partial: Partial<RaftSettings>): void {
  * This allows import defaults to be overridden by subsequent manual changes.
  */
 export function applyImportDefaultRaftSettings(settings: RaftSettings): void {
-  const next = { ...DEFAULT_RAFT_SETTINGS, ...settings };
-  const normalized = normalizeRaftSettings(next);
-  currentRaftSettings = {
-    ...normalized,
-    wallEnabled: normalized.bottomMode === 'solid' ? normalized.wallEnabled : false,
-  };
+  currentRaftSettings = resolveRaftSettings({ ...DEFAULT_RAFT_SETTINGS, ...settings }, true);
   // Don't set wasManuallyModifiedInSession = true here to allow manual changes to take priority
   notify();
 }

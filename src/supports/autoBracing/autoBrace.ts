@@ -6,7 +6,7 @@ import {
     SUPPORT_AUTO_BRACE_REPLACE,
     type SupportReplaceStatePayload,
 } from '../history/actionTypes';
-import { cloneSupportState, getSnapshot, setSnapshot } from '../state';
+import { cloneSupportState, getSnapshot, removeSupportEntity, setSnapshot } from '../state';
 import {
     calculateKnotPositionOnSegmentFromT,
 } from '../SupportPrimitives/Knot/knotUtils';
@@ -33,13 +33,13 @@ import { applyRepeatingPattern } from './repeatingPattern';
 import { runZigZagChain } from './zigzagChain';
 import { buildBraceProfile } from './braceDiameter';
 import type { KickstandBuildResult } from '../SupportTypes/Kickstand/types';
-import { generateLateralStabilisers, getSupportTypeDescriptor, lateralStabiliserTypes, SUPPORT_TYPES, type SupportCollectionKey, type SupportEdge, type SupportTypeDescriptor, type SupportTypeId } from '../supportTypeRegistry';
+import { generateLateralStabilisers, getSupportTypeDescriptor, parsePrefixedSegmentId, isAutoBraceableShaftType, isLateralStabiliserType, lateralStabiliserTypes, spanKnotHostType, SUPPORT_TYPES, type SupportCollectionKey, type SupportEdge, type SupportTypeDescriptor, type SupportTypeId } from '../supportTypeRegistry';
 import { resolveSegmentEndpoints } from '../SupportPrimitives/Knot/segmentEndpoints';
 import { linePassesMeshClearance } from './meshClearance';
 
 const EPS = 0.000001;
 /** The types auto-bracing samples. Derived, so a ninth type joins by declaring it. */
-type SupportKind = SupportTypeId;
+type SidebarPanel = SupportTypeId;
 
 function maxHorizontalRunFromBraceLen(maxBraceLenMm: number): number {
     return maxBraceLenMm;
@@ -55,7 +55,7 @@ type SegmentSample = {
 
 type SupportSample = {
     supportId: string;
-    supportKind: SupportKind;
+    supportKind: SidebarPanel;
     modelId: string;
     segments: SegmentSample[];
     topReferenceZ: number;
@@ -180,7 +180,7 @@ function buildSupportSamples(snapshot: SupportState): SupportSample[] {
 
             const segments: SegmentSample[] = [];
             entity.segments.forEach((seg, idx) => {
-                const ep = resolveSegmentEndpoints(descriptor.id, entity, seg, idx, hosts);
+                const ep = resolveSegmentEndpoints(entity, seg, idx, hosts);
                 if (ep) segments.push({ segmentId: seg.id, segment: seg, start: ep.start, end: ep.end, diameterMm: seg.diameter });
             });
             if (segments.length === 0) continue;
@@ -431,7 +431,9 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
     const settings = normalizeAutoBracingSettings(inputSettings);
     const activeGridSettings = getSettings().grid;
     const maxRun = maxHorizontalRunFromBraceLen(settings.maxBraceLengthMm);
-    const trunkSamples = buildSupportSamples(snapshot).filter(s => s.supportKind === 'trunk');
+    // Every declared braceable shaft type -- trunk AND branch. This filtered on
+    // the literal 'trunk', so branch samples were built and then discarded here.
+    const trunkSamples = buildSupportSamples(snapshot).filter(s => isAutoBraceableShaftType(s.supportKind));
 
     if (trunkSamples.length < AUTO_BRACING_HARD_RULES.minGroupSize) {
         return {
@@ -649,7 +651,7 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
     }
 
     const groupedIds = new Set<string>();
-    groupedSupports.forEach(g => g.forEach(s => { if (s.supportKind === 'trunk') groupedIds.add(s.supportId); }));
+    groupedSupports.forEach(g => g.forEach(s => { if (isAutoBraceableShaftType(s.supportKind)) groupedIds.add(s.supportId); }));
 
     // Keep braces this tool did not generate; `generatedBy` distinguishes them.
     const keptBraces: SupportState['braces'] = {};
@@ -660,8 +662,9 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
     }
 
     // The collection this pass rebuilds, so its kept set is read instead of the
-    // snapshot's. Named from the registry rather than written as 'braces'.
-    const bracesKey = getSupportTypeDescriptor('brace').location.key;
+    // snapshot's. The brace type comes from the registry rather than being
+    // written as 'brace': it is the type whose knot host is a selectable span.
+    const bracesKey = getSupportTypeDescriptor(spanKnotHostType()).location.key;
 
     const braceKnotIds = new Set<string>();
     for (const b of Object.values(snapshot.braces)) { braceKnotIds.add(b.startKnotId); braceKnotIds.add(b.endKnotId); }
@@ -705,7 +708,9 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
     const nextKnots: Record<string, Knot> = {};
     for (const [id, k] of Object.entries(snapshot.knots)) { if (!braceKnotIds.has(id) || preservedKnotIds.has(id)) nextKnots[id] = k; }
 
-    const selectedBraceId = snapshot.selectedId?.replace('braceSegment:', '');
+    const selectedBraceId = snapshot.selectedId
+        ? parsePrefixedSegmentId(snapshot.selectedId)?.entityId ?? snapshot.selectedId
+        : undefined;
     const nextSnapshot: SupportState = {
         ...snapshot,
         braces: keptBraces,
@@ -740,7 +745,7 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
 
     for (let groupIndex = 0; groupIndex < groupedSupports.length; groupIndex += 1) {
         const groupMembers = groupedSupports[groupIndex];
-        const groupTrunks = groupMembers.filter((s) => s.supportKind === 'trunk');
+        const groupTrunks = groupMembers.filter((s) => isAutoBraceableShaftType(s.supportKind));
         const modelId = groupTrunks[0]?.modelId;
         let pairs = modelId ? pairsByModel.get(modelId) : undefined;
         if (!pairs) {
@@ -753,7 +758,7 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
             );
             if (modelId) pairsByModel.set(modelId, pairs);
         }
-        const extra = groupMembers.filter((s) => s.supportKind === 'kickstand');
+        const extra = groupMembers.filter((s) => isLateralStabiliserType(s.supportKind));
         if (extra.length > 0 && groupTrunks.length > 0) {
             const stabiliserCandidateEdges: Edge[] = [];
             for (const sb of extra) {
@@ -957,7 +962,7 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
     // kickstand decisions), so a trunk's braces match what the kickstand
     // logic saw — no kickstands next to fully braced trunks.
     for (const [modelId, pairs] of pairsByModel) {
-        const modelTrunks = trunkSamples.filter((s) => s.modelId === modelId && s.supportKind === 'trunk');
+        const modelTrunks = trunkSamples.filter((s) => s.modelId === modelId);
         const maxZ = Math.max(...modelTrunks.map(s => s.topReferenceZ));
 
         const ladder: number[] = [settings.initialDistanceMm];
@@ -1031,7 +1036,7 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
 
                 // Only trunk↔trunk braces count toward the two-axis stability
                 // contract — braces to kickstands are the kickstand's own bracing.
-                if (lowS.supportKind === 'trunk' && highS.supportKind === 'trunk') {
+                if (isAutoBraceableShaftType(lowS.supportKind) && isAutoBraceableShaftType(highS.supportKind)) {
                     const angleRad = normalizeAxisAngleRad(Math.atan2(dy, dx));
                     for (const tid of [lowS.supportId, highS.supportId]) {
                         const list = bracedAxesByTrunkId.get(tid) ?? [];
@@ -1176,6 +1181,37 @@ export function runAutoBracing(): AutoBraceResult {
         },
     });
     return built;
+}
+
+/**
+ * Removes every brace of one model and returns how many went.
+ *
+ * Each brace is removed through the cascading store call, so the knots it owns
+ * go with it, and the whole sweep is one history entry: the payload is a
+ * before/after pair, which is what makes it one undo step rather than one per
+ * brace. The store writes are synchronous, so React renders the result once.
+ */
+export function clearBracesForModel(modelId: string | null | undefined): number {
+    if (!modelId) return 0;
+
+    const braceIds = Object.values(getSnapshot().braces)
+        .filter((brace) => brace.modelId === modelId)
+        .map((brace) => brace.id);
+    if (braceIds.length === 0) return 0;
+
+    const before = cloneSupportState(getSnapshot());
+    for (const braceId of braceIds) {
+        removeSupportEntity('brace', braceId);
+    }
+
+    pushSupportHistory({
+        type: SUPPORT_AUTO_BRACE_REPLACE,
+        payload: {
+            before,
+            after: cloneSupportState(getSnapshot()),
+        },
+    });
+    return braceIds.length;
 }
 
 type BuildSnapshotResult = AutoBraceResult & { snapshot: SupportState };

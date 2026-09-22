@@ -5,8 +5,8 @@ import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { ChevronDown, ChevronRight, X } from 'lucide-react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { getSnapshot as getSupportSnapshot, subscribe as subscribeSupportState } from '@/supports/state';
-import { getSupportsForModel } from '@/supports/PlacementLogic/SupportModelLinker';
-import { getSupportTypeDescriptor, MODEL_ID_COLLECTION_KEYS, parseKnotHostId, SUPPORT_COLLECTION_KEYS, SUPPORT_STATE_TYPES, type SupportCollectionKey } from '@/supports/supportTypeRegistry';
+import { getSupportsForModel, modelIdOfParentShaft } from '@/supports/PlacementLogic/SupportModelLinker';
+import { MODEL_ID_COLLECTION_KEYS, SUPPORT_COLLECTION_KEYS, SUPPORT_STATE_TYPES, type SupportCollectionKey } from '@/supports/supportTypeRegistry';
 
 type ModelSupportsModalProps = {
   isOpen: boolean;
@@ -41,24 +41,12 @@ export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModa
     const grouped = {} as ModelSupportGroups;
     for (const key of MODEL_ID_COLLECTION_KEYS) grouped[key] = sortIds(byModel[key]);
 
-    const knots = sortIds(Object.values(supportSnapshot.knots).filter((item) => {
-      const parent = item.parentShaftId;
-      const trunk = supportSnapshot.trunks[parent];
-      if (trunk) return trunk.modelId === modelId;
-      const branch = supportSnapshot.branches[parent];
-      if (branch) return branch.modelId === modelId;
-      const twig = supportSnapshot.twigs[parent];
-      if (twig) return twig.modelId === modelId;
-      const stick = supportSnapshot.sticks[parent];
-      if (stick) return stick.modelId === modelId;
-      const host = parseKnotHostId(parent);
-      if (host) {
-        const collections = supportSnapshot as unknown as Record<string, Record<string, { modelId?: string }>>;
-        const collection = collections[getSupportTypeDescriptor(host.typeId).location.key];
-        return collection?.[host.entityId]?.modelId === modelId;
-      }
-      return false;
-    }).map((item) => item.id));
+    // Which model a knot belongs to is which model its parent shaft belongs to.
+    // `parentShaftId` is a SEGMENT id, so the owner is resolved through the
+    // segment rather than by looking the id up in a collection of entities.
+    const knots = sortIds(Object.values(supportSnapshot.knots)
+      .filter((item) => modelIdOfParentShaft(supportSnapshot, item.parentShaftId) === modelId)
+      .map((item) => item.id));
 
     grouped.knots = knots;
     return grouped;

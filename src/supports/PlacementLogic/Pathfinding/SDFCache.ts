@@ -17,8 +17,6 @@
  */
 
 import * as THREE from 'three';
-import { PrecomputedSDFGrid } from './PrecomputedSDFGrid';
-import type { ClearanceHeightmap } from './ClearanceHeightmap';
 import { quantizeToCell } from '@/utils/math';
 
 // ---------- Types ----------
@@ -103,15 +101,6 @@ export class SDFCache {
     /** Last seen matrixWorld — used to detect stale cache. */
     private readonly _lastMatrix = new THREE.Matrix4();
 
-    /** Optional pre-computed sparse SDF grid from Rust. When set, lookups
-     *  check this grid first (zero BVH overhead) and only fall back to BVH
-     *  for cells outside the pre-computed shell. */
-    private precomputedGrid: PrecomputedSDFGrid | null = null;
-
-    /** Optional clearance heightmap from Rust. Enables O(1) straight-descent
-     *  viability checks and a tighter A* heuristic. */
-    private heightmap: ClearanceHeightmap | null = null;
-
     constructor(mesh: THREE.Mesh, opts?: SDFCacheOptions) {
         this.cellSize = opts?.cellSize ?? 0.5;
         this.mesh = mesh;
@@ -167,74 +156,6 @@ export class SDFCache {
         return false;
     }
 
-    /**
-     * Load a pre-computed sparse SDF grid from the Rust backend.
-     * Once set, all `distanceAt` / `isBlocked` / `segmentBlocked` calls
-     * check this grid first — zero BVH overhead for pre-computed cells.
-     * Cells outside the pre-computed shell still fall back to BVH.
-     */
-    loadPrecomputed(grid: PrecomputedSDFGrid): void {
-        if (grid.cellSize !== this.cellSize) {
-            console.warn(
-                `SDFCache: precomputed cellSize ${grid.cellSize} != cache cellSize ${this.cellSize}. ` +
-                `The precomputed grid will be used but quantisation may differ.`
-            );
-        }
-        this.precomputedGrid = grid;
-    }
-
-    /**
-     * Load a clearance heightmap from the Rust backend.
-     * Enables O(1) straight-descent viability checks via {@link columnIsClear}
-     * and provides the data for a tighter A* heuristic.
-     */
-    loadHeightmap(hm: ClearanceHeightmap): void {
-        this.heightmap = hm;
-    }
-
-    /** True if a pre-computed grid has been loaded. */
-    get hasPrecomputed(): boolean {
-        return this.precomputedGrid !== null;
-    }
-
-    /** True if a clearance heightmap has been loaded. */
-    get hasHeightmap(): boolean {
-        return this.heightmap !== null;
-    }
-
-    /**
-     * Returns true if a straight-down column from world-space (wx, wy, z)
-     * to the build plate is clear of model geometry.  Uses the pre-computed
-     * heightmap when available (O(1)); falls back to a full SDF column check.
-     */
-    columnIsClear(wx: number, wy: number, z: number): boolean {
-        if (this.heightmap) {
-            // Transform world → local for the heightmap lookup
-            this._localPoint.set(wx, wy, z).applyMatrix4(this.inverseMatrix);
-            return this.heightmap.columnIsClear(
-                this._localPoint.x / this.worldScale,
-                this._localPoint.y / this.worldScale,
-                this._localPoint.z / this.worldScale,
-            );
-        }
-        // Fallback: check the column with segmentBlocked
-        return !this.segmentBlocked(wx, wy, z, wx, wy, 0, 0.001);
-    }
-
-    /**
-     * Returns the highest blocked Z at a world-space XY position.
-     * -Infinity means the column is entirely clear.  Returns NaN if
-     * no heightmap is loaded.
-     */
-    getBlockedZ(wx: number, wy: number): number {
-        if (!this.heightmap) return NaN;
-        this._localPoint.set(wx, wy, 0).applyMatrix4(this.inverseMatrix);
-        return this.heightmap.get(
-            this._localPoint.x / this.worldScale,
-            this._localPoint.y / this.worldScale,
-        ) * this.worldScale;
-    }
-
     // ---- Public API ----
 
     /**
@@ -251,13 +172,6 @@ export class SDFCache {
      * point is on the interior side of the surface.
      */
     distanceAt(wx: number, wy: number, wz: number): number {
-        // Fast path: check pre-computed grid first (zero BVH overhead).
-        const pg = this.precomputedGrid;
-        if (pg) {
-            const dist = this._lookupPrecomputed(wx, wy, wz, pg);
-            if (dist !== undefined) return dist;
-        }
-
         const cs = this.cellSize;
         const qx = quantizeToCell(wx, cs);
         const qy = quantizeToCell(wy, cs);
@@ -272,35 +186,6 @@ export class SDFCache {
         return dist;
     }
 
-    /**
-     * Look up a signed distance in the pre-computed grid.
-     * Transforms world-space coords to model-local, quantises, and
-     * retrieves the pre-computed distance. Returns undefined if the
-     * cell is outside the pre-computed shell.
-     */
-    private _lookupPrecomputed(
-        wx: number, wy: number, wz: number,
-        pg: PrecomputedSDFGrid,
-    ): number | undefined {
-        // Transform world → local
-        this._localPoint.set(wx, wy, wz).applyMatrix4(this.inverseMatrix);
-        const lx = this._localPoint.x;
-        const ly = this._localPoint.y;
-        const lz = this._localPoint.z;
-
-        // Quantise in local space using the pre-computed cell size
-        const cs = pg.cellSize;
-        const qx = quantizeToCell(lx, cs);
-        const qy = quantizeToCell(ly, cs);
-        const qz = quantizeToCell(lz, cs);
-
-        const dist = pg.get(qx, qy, qz);
-        if (dist === undefined) return undefined;
-
-        // Scale back to world-space mm
-        return dist * this.worldScale;
-    }
-
     private _getOrCreateQuantizedDistance(qx: number, qy: number, qz: number, maxDistance = Infinity): number {
         const key = cellKey(qx, qy, qz);
         const cached = this.cache.get(key);
@@ -310,24 +195,6 @@ export class SDFCache {
         const cX = qx * cs;
         const cY = qy * cs;
         const cZ = qz * cs;
-
-        // Check pre-computed grid in local space
-        const pg = this.precomputedGrid;
-        if (pg) {
-            this._localPoint.set(cX, cY, cZ).applyMatrix4(this.inverseMatrix);
-            const lx = this._localPoint.x;
-            const ly = this._localPoint.y;
-            const lz = this._localPoint.z;
-            const lqx = quantizeToCell(lx, pg.cellSize);
-            const lqy = quantizeToCell(ly, pg.cellSize);
-            const lqz = quantizeToCell(lz, pg.cellSize);
-            const preDist = pg.get(lqx, lqy, lqz);
-            if (preDist !== undefined) {
-                const dist = preDist * this.worldScale;
-                this.cache.set(key, dist);
-                return dist;
-            }
-        }
 
         if (maxDistance !== Infinity && !this._expandedWorldBoundsContains(cX, cY, cZ, maxDistance)) {
             return Infinity;
@@ -547,8 +414,7 @@ export class SDFCache {
 
     /**
      * Signed distance at the EXACT world-space point — no cell quantization,
-     * no precomputed-grid shortcut, no caching (callers memoize their own
-     * outcomes). One BVH query per call.
+     * no caching (callers memoize their own outcomes). One BVH query per call.
      *
      * Use this for near-field gates whose safety margins are smaller than the
      * grid substitution error: `distanceAt` answers with the distance at the

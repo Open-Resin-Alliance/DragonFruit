@@ -1,4 +1,5 @@
 import type { HotkeyBinding } from '@/hotkeys/hotkeyConfig';
+import { PLACEMENT_FAMILY_BY_BINDING } from './supportPlacementHotkeyTypes';
 import type {
     ResolvedSupportPlacementHotkeyIntent,
     SupportPlacementHotkeyBindings,
@@ -138,7 +139,7 @@ export function resolveSupportPlacementHotkeyIntent(
 
     if (matches.leaf) {
         return {
-            family: 'leaf',
+            family: PLACEMENT_FAMILY_BY_BINDING.leaf,
             requiredKeysHeld: true,
             releaseShouldCancel: false,
             bindingSource: bindings.leaf,
@@ -148,7 +149,7 @@ export function resolveSupportPlacementHotkeyIntent(
 
     if (matches.branchFamily) {
         return {
-            family: 'branchFamily',
+            family: PLACEMENT_FAMILY_BY_BINDING.branchFamily,
             requiredKeysHeld: true,
             releaseShouldCancel: false,
             bindingSource: bindings.branchFamily,
@@ -158,7 +159,7 @@ export function resolveSupportPlacementHotkeyIntent(
 
     if (matches.kickstand) {
         return {
-            family: 'kickstand',
+            family: PLACEMENT_FAMILY_BY_BINDING.kickstand,
             requiredKeysHeld: true,
             releaseShouldCancel: false,
             bindingSource: bindings.kickstand,

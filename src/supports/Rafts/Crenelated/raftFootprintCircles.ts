@@ -1,16 +1,14 @@
 import type { SupportBaseCircle } from './RaftTypes';
-import type { Anchor, Roots } from '@/supports/types';
+import { INLINE_ROOT_TYPES, type SupportCollectionKey } from '@/supports/supportTypeRegistry';
+import type { SupportState } from '@/supports/types';
 
 export const RAFT_UNASSIGNED_MODEL_KEY = '__raft_unassigned__';
 
-type RootLike = Pick<Roots, 'modelId' | 'diameter' | 'transform'>;
-type AnchorLike = Pick<Anchor, 'modelId' | 'rootBaseDiameter' | 'rootPos'>;
-
-type CollectRaftBaseCirclesInput = {
-  roots?: Iterable<RootLike>;
-  anchors?: Iterable<AnchorLike>;
-  kickstandRoots?: Iterable<RootLike>;
-};
+/**
+ * The state a raft footprint is read from: the collections it walks, which are
+ * the shared roots plus whichever types carry their own inline root.
+ */
+export type RaftFootprintSource = Pick<SupportState, SupportCollectionKey>;
 
 type CollectRaftBaseCirclesOptions = {
   modelFilterId?: string | null;
@@ -66,7 +64,7 @@ export function fromRaftModelKey(
 }
 
 export function collectRaftBaseCirclesByModel(
-  input: CollectRaftBaseCirclesInput,
+  state: RaftFootprintSource,
   options: CollectRaftBaseCirclesOptions = {},
 ): Map<string, SupportBaseCircle[]> {
   const byModel = new Map<string, SupportBaseCircle[]>();
@@ -86,7 +84,9 @@ export function collectRaftBaseCirclesByModel(
     byModel.set(modelKey, [circle]);
   };
 
-  for (const root of input.roots ?? []) {
+  // Every plate-rooted support's base is a `Roots` record in this one
+  // collection, a kickstand's included, so one walk covers all of them.
+  for (const root of Object.values(state.roots ?? {})) {
     pushCircle(root.modelId, {
       x: root.transform.pos.x,
       y: root.transform.pos.y,
@@ -94,21 +94,44 @@ export function collectRaftBaseCirclesByModel(
     });
   }
 
-  for (const anchor of input.anchors ?? []) {
-    pushCircle(anchor.modelId, {
-      x: anchor.rootPos.x,
-      y: anchor.rootPos.y,
-      r: anchor.rootBaseDiameter / 2,
-    });
-  }
-
-  for (const root of input.kickstandRoots ?? []) {
-    pushCircle(root.modelId, {
-      x: root.transform.pos.x,
-      y: root.transform.pos.y,
-      r: root.diameter / 2,
-    });
+  // A type that carries its base as geometry on the entity is not in that
+  // collection, and the fields to read are declared rather than named here.
+  for (const { collectionKey, posField, radiusField } of INLINE_ROOT_TYPES) {
+    const collection = state[collectionKey] as unknown as
+      Record<string, Record<string, unknown>> | undefined;
+    for (const entity of Object.values(collection ?? {})) {
+      const pos = entity[posField] as { x: number; y: number } | undefined;
+      const radius = entity[radiusField] as number | undefined;
+      if (!pos || typeof radius !== 'number') continue;
+      pushCircle(entity.modelId as string | null | undefined, {
+        x: pos.x,
+        y: pos.y,
+        r: radius / 2,
+      });
+    }
   }
 
   return byModel;
+}
+
+/**
+ * The collections the raft footprint reads, in a stable order.
+ *
+ * A caller caching footprint geometry uses this as its identity: it changes when
+ * a contributing collection changes, and not when an unrelated type is edited.
+ */
+export function raftFootprintSourceRefs(state: RaftFootprintSource): readonly unknown[] {
+  return [
+    state.roots,
+    ...INLINE_ROOT_TYPES.map(({ collectionKey }) => state[collectionKey]),
+  ];
+}
+
+/** Whether two source ref sets are the same collections, by identity. */
+export function sameRaftFootprintSource(
+  a: readonly unknown[] | undefined,
+  b: readonly unknown[],
+): boolean {
+  if (!a || a.length !== b.length) return false;
+  return a.every((ref, i) => ref === b[i]);
 }

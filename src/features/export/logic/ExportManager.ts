@@ -11,6 +11,7 @@ import { buildScopedSupportExportDocument, buildScopedSupportGeometryGroup } fro
 import { allocateMeshStagePath, exportMeshFile, pickSavePathWithNativeDialog, writeChunkedToNativePath, writeFileAtomicToNativePath, writeFileAtomicStreamedToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { info as logInfo } from '@tauri-apps/plugin-log';
 import { getSnapshot } from '@/supports/state';
+import { SUPPORT_COLLECTION_KEYS } from '@/supports/supportTypeRegistry';
 import { getRaftSettings, getRaftSettingsForModel } from '@/supports/Rafts/Crenelated/RaftState';
 import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
 import { generateChamferedBase } from '@/supports/Rafts/Crenelated/geometry/generateChamferedBase';
@@ -1189,15 +1190,10 @@ export class ExportManager {
         );
 
     if (!options.includeSupports) {
-      supports.roots = [];
-      supports.trunks = [];
-      supports.branches = [];
-      supports.leaves = [];
-      supports.twigs = [];
-      supports.sticks = [];
-      supports.braces = [];
-      supports.knots = [];
-      supports.kickstands = [];
+      // Every collection the format declares, walked rather than listed, so an
+      // export asked to leave supports out leaves out all of them.
+      const emptyDocument = supports as unknown as Record<string, unknown>;
+      for (const key of SUPPORT_COLLECTION_KEYS) emptyDocument[key] = [];
     }
 
     // Post-C the writer is fed from the chunk store, so `meshBytesMap` stays

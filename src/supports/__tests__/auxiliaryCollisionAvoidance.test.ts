@@ -160,10 +160,12 @@ test('hybrid segmentBlockedMethod detects thin feature in standoff calculation',
     // Place a very thin plate (0.1mm thickness) at z = 0.2, right in the way of the contact disk
     const mesh = makeThinBlockingMesh(0.2);
 
-    // Recompute contact cone without mesh -> standoff is minimal (diskThicknessMm = 0.1)
+    // Recompute contact cone without mesh -> standoff is the nib's own thickness.
+    // 0.2mm is the 0.4mm contact's ball radius, which floors the nib (the ball is
+    // centered on the nib's top face, so a shorter nib would let it poke out).
     const withoutMesh = recomputeContactConeForMovedDisk(cone, { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 }, { x: 0, y: 0, z: 4 });
     assert.ok(withoutMesh.diskLengthOverride !== undefined);
-    assert.equal(withoutMesh.diskLengthOverride, 0.1);
+    assert.equal(withoutMesh.diskLengthOverride, 0.2);
 
     // Recompute contact cone with mesh -> standoff is pushed out past the thin plate (standoff > 0.2mm)
     const withMesh = recomputeContactConeForMovedDisk(cone, { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 }, { x: 0, y: 0, z: 4 }, mesh);

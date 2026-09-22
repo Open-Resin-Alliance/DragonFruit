@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { addTwig, getSnapshot, resetStore } from '../state';
+import { addSupportEntity, getSnapshot, resetStore } from '../state';
 import { deleteSupportsForModel, getSupportsForModel } from '../PlacementLogic/SupportModelLinker';
 
 function makeTwig(id: string, modelId: string) {
@@ -60,8 +60,8 @@ describe('SupportModelLinker', () => {
     const twigA = makeTwig('twig-a', 'model-a');
     const twigB = makeTwig('twig-b', 'model-b');
 
-    addTwig(twigA);
-    addTwig(twigB);
+    addSupportEntity('twig', twigA);
+    addSupportEntity('twig', twigB);
 
     const before = getSupportsForModel(getSnapshot(), 'model-a');
     assert.strictEqual(before.twigs.length, 1, 'Expected one twig mapped to model-a before deletion');

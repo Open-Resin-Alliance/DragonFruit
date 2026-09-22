@@ -11,13 +11,15 @@ import { Vec3, Roots, Trunk, Segment, Joint } from '../../types';
 import type { ContactCone, SupportTipProfile } from '../../SupportPrimitives/ContactCone/types';
 import { getFinalSocketPosition, getSocketPosition } from '../../SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/contactDiskUtils';
-import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
+// Direct, not through the barrel: the barrel re-exports renderers and their
+// React hooks, which a server route cannot import.
+import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk/ContactDiskInteraction';
 import { getJointDiameter } from '../../constants';
 import { getSettings } from '../../Settings/state';
 import { applySizingOverridesToSettings } from '../../autoSupport/parameterSizing';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import { calculateStandardPlacement, type TrunkPlacementResult } from '../../PlacementLogic/StandardPlacement';
-import { calculateSmartPlacementV2 } from '../../PlacementLogic/Pathfinding';
+import { calculateSmartPlacementV3 } from '../../PlacementLogicV3/SmartPlacementV3';
 import type { LimitationCode, WarningCode } from '../../types';
 import type { SnappedTrunkRouteResult, TrunkRouteResult } from './trunkRouteTypes';
 import { gridSnappedXYFromKey } from '../../PlacementLogic/Grid/gridMath';
@@ -154,80 +156,6 @@ export interface TrunkBuildResult {
  * - Route-driven shaft segments and joints
  * - ContactCone at the tip
  */
-// ---------------------------------------------------------------------------
-// Placement result cache — covers V2 A* + V1 fallback together.
-// Multi-entry LRU per model (24 slots) avoids cache thrashing while staying
-// tight enough that trunk/stick decisions revalidate near collision boundaries.
-// ---------------------------------------------------------------------------
-const PLACEMENT_CACHE_QUANT = 0.1; // mm - keep hover cache tight near collision/cavity boundaries
-const NORMAL_CACHE_QUANT = 0.02;   // ~1.1 degree buckets
-const MAX_PLACEMENT_CACHE_ENTRIES = 24;
-export const PLACEMENT_ERROR_CACHE_TTL_MS = 300;
-
-type PlacementCacheEntry = { result: TrunkPlacementResult; cachedAt: number };
-
-// Map<modelId, Map<cacheKey, entry>> — insertion-ordered for FIFO eviction
-type ModelPlacementCache = Map<string, PlacementCacheEntry>;
-const placementCacheByModel = new Map<string, ModelPlacementCache>();
-
-function placementCacheKey(tipPos: Vec3, tipNormal: Vec3): string {
-    const Q = PLACEMENT_CACHE_QUANT;
-    const NQ = NORMAL_CACHE_QUANT;
-    return `${Math.round(tipPos.x / Q)},${Math.round(tipPos.y / Q)},${Math.round(tipPos.z / Q)},${Math.round(tipNormal.x / NQ)},${Math.round(tipNormal.y / NQ)},${Math.round(tipNormal.z / NQ)}`;
-}
-
-/** Error verdicts can be transient (a stagnated march, a cone-gate near-miss,
- *  shared caches warmed by earlier probes). Serving them past a short TTL pins
- *  a stale "blocked" hover on the bucket even after conditions clear, while
- *  click-time — which bypasses this cache — succeeds. Successful placements
- *  stay reusable until evicted. */
-export function isCachedPlacementReusable(entry: PlacementCacheEntry, nowMs: number): boolean {
-    if (!entry.result.error) return true;
-    return nowMs - entry.cachedAt <= PLACEMENT_ERROR_CACHE_TTL_MS;
-}
-
-function getPlacementCache(modelId: string, key: string): TrunkPlacementResult | undefined {
-    const cache = placementCacheByModel.get(modelId);
-    const entry = cache?.get(key);
-    if (!entry) return undefined;
-    if (!isCachedPlacementReusable(entry, Date.now())) {
-        cache!.delete(key);
-        return undefined;
-    }
-    return entry.result;
-}
-
-function setPlacementCache(modelId: string, key: string, result: TrunkPlacementResult): void {
-    let cache = placementCacheByModel.get(modelId);
-    if (!cache) {
-        cache = new Map();
-        placementCacheByModel.set(modelId, cache);
-    }
-    if (cache.has(key)) {
-        // Re-insert to promote to newest (for FIFO correctness)
-        cache.delete(key);
-    } else if (cache.size >= MAX_PLACEMENT_CACHE_ENTRIES) {
-        // Evict oldest entry (first inserted)
-        cache.delete(cache.keys().next().value!);
-    }
-    cache.set(key, { result, cachedAt: Date.now() });
-}
-
-// Cached placements are only valid for the model position and support
-// settings they were computed under; a mismatch drops the model's cache.
-const placementCacheContextByModel = new Map<string, string>();
-
-/** Clear cached placement for a specific model (call when model moves). */
-export function clearPlacementCache(modelId?: string): void {
-    if (modelId) {
-        placementCacheByModel.delete(modelId);
-        placementCacheContextByModel.delete(modelId);
-    } else {
-        placementCacheByModel.clear();
-        placementCacheContextByModel.clear();
-    }
-}
-
 export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
     const { tipPos, tipNormal, modelId, mesh, overrides, isPreview } = input;
 
@@ -258,37 +186,15 @@ export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
     // or clears so tightly that the post-thickening cull kills it (#591
     // follow-up: Puck jaw/mouth lost all supports this way).
     if (mesh) {
-        // V2 grid A* pathfinder (SDF-backed).
+        // V3 router (SDF-backed, bounded).
         // Both preview and click use FULL collision checks to ensure consistent safety.
-        // Preview uses lower budget (800 expansions) for responsiveness.
-        const v2Context = isPreview ? { maxExpansions: 800 } : undefined;
-
-        // Cache key: position + normal quantised at 0.1mm / 0.02 normal.
-        // Only used for preview → preview reuse; click-time bypasses cache
-        // to ensure fresh collision validation against any moved models.
-        const cacheKey = isPreview ? placementCacheKey(tipPos, tipNormal) : null;
-        if (cacheKey) {
-            // Results are only reusable while the model sits where it sat and
-            // the support settings match — otherwise drop this model's cache.
-            const cacheContext = `${mesh.matrixWorld.elements.join(',')}|${encodeSupportSettingsHex(settings)}`;
-            if (placementCacheContextByModel.get(modelId) !== cacheContext) {
-                placementCacheByModel.delete(modelId);
-                placementCacheContextByModel.set(modelId, cacheContext);
-            }
-        }
-        const cached = cacheKey ? getPlacementCache(modelId, cacheKey) : undefined;
-
-        if (cached) {
-            placement = cached;
-        } else {
-            perfMark('trunk:v2-placement');
-            const result = calculateSmartPlacementV2({ ...placementInput, mesh, modelId }, v2Context);
-            perfMeasureWithSpike('trunk:v2-placement', 'trunk:v2-placement');
-            placement = result;
-            if (cacheKey) {
-                setPlacementCache(modelId, cacheKey, placement);
-            }
-        }
+        // One deterministic search, every time. Hover and click run the same
+        // code on the same inputs, so a preview cannot promise a route the click
+        // then refuses. V3 costs a few dozen SDF probes (measured ~0.04mm warm),
+        // which is not worth a cache that can only make the two paths disagree.
+        perfMark('trunk:v3-placement');
+        placement = calculateSmartPlacementV3({ ...placementInput, mesh, modelId, isPreview });
+        perfMeasureWithSpike('trunk:v3-placement', 'trunk:v3-placement');
     } else {
         placement = calculateStandardPlacement(placementInput);
     }
@@ -415,6 +321,7 @@ export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: T
         warning: placement.warning,
         angle: placement.angle,
         coneAxis: effectiveConeAxis,
+        gridIgnored: placement.gridIgnored,
     };
     const route: TrunkRouteResult | SnappedTrunkRouteResult = placement.snappedNodeKey
         ? {
@@ -533,6 +440,7 @@ export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: T
     // Build Trunk
     const trunk: Trunk = {
         id: trunkId,
+        typeId: 'trunk',
         modelId: modelId, // Link to model
         settingsCodeHex,
         rootId: rootId,

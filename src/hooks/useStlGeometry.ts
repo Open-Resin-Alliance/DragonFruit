@@ -1,4 +1,5 @@
 import { isTauriRuntime } from '@/utils/tauriRuntime';
+import { bakeAndAttachOcclusionForGeometry } from '@/features/scene/bakedOcclusion';
 import { getSavedWorkspaceCameraSettings } from '@/components/settings/workspaceCameraPreferences';
 import { useEffect, useState } from 'react';
 import * as THREE from 'three';
@@ -552,8 +553,16 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   // Yield to let the loading indicator repaint before each heavy synchronous op
   await new Promise<void>(r => setTimeout(r, 0));
 
-  if (!options._skipComputeNormals || nativeModifiedGeometry) {
-    console.log(`[${new Date().toISOString()}] [processGeometry] Computing Normals${nativeModifiedGeometry ? ' (geometry modified by native processing)' : ''}`);
+  // A geometry with no `normal` attribute at all must be given one, whatever the
+  // caller asked for: `_skipComputeNormals` means "the loader already computed
+  // them", and the Manifold fallback invalidates that promise by rewriting the
+  // positions and index and deleting the stale normals for the caller to
+  // recompute (see `repairGeometryWithManifold`). Without this the repaired
+  // geometry kept no normals, so it shaded from a zeroed attribute — which reads
+  // as garbage on exactly the imports that needed repair, and is easy to mistake
+  // for the baked occlusion being wrong.
+  if (!options._skipComputeNormals || nativeModifiedGeometry || !geometry.getAttribute('normal')) {
+    console.log(`[${new Date().toISOString()}] [processGeometry] Computing Normals${nativeModifiedGeometry ? ' (geometry modified by native processing)' : geometry.getAttribute('normal') ? '' : ' (geometry has none)'}`);
     geometry.computeVertexNormals();
   } else {
     console.log(`[${new Date().toISOString()}] [processGeometry] Normals already present — skipping computeVertexNormals`);
@@ -624,6 +633,20 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   }
 
   const shouldSurfaceDefects = meshDefects.hasDefects || meshDefects.nativeRepairReport != null;
+  // The model is not added to the scene until this resolves, so its first frame
+  // already carries the occlusion. It runs here, after the rest of prep, rather
+  // than concurrently with it: starting it earlier is faster, because the bake is
+  // native work while prep is synchronous, but it put a request on the wire while
+  // the geometry was still being worked on, and the occlusion came back scattered
+  // across the surface.
+  const baked = await bakeAndAttachOcclusionForGeometry(geometry).catch((error) => {
+    console.warn('[ao] bake during prep failed', error);
+    return false;
+  });
+  if (baked) {
+    console.log(`[${new Date().toISOString()}] [processGeometry] Baked occlusion attached during prep`);
+  }
+
   return { geometry, bbox, center, size, flatteningPlanes, edgeGeometry, ...(shouldSurfaceDefects ? { meshDefects } : {}) };
 }
 

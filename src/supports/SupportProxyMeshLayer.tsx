@@ -3,19 +3,26 @@ import * as THREE from 'three';
 import { useSyncExternalStore } from 'react';
 import type { ThreeEvent } from '@react-three/fiber';
 import { usePicking } from '@/components/picking';
-import { subscribe, getSnapshot, getSupports } from './state';
+import { subscribe, getSnapshot } from './state';
+// Loading the generated barrel runs every type's proxy geometry registration.
+import './generatedSupportRegistrations';
+import { supportProxyGeometryOf, type ProxyGeometryContext } from './proxyGeometry/seam';
 import { getRaftSettings, subscribeToRaftStore } from './Rafts/Crenelated/RaftState';
 import { JOINT_DIAMETER_OFFSET_MM } from './constants';
 import { InstancedShaftGroup, type InstancedShaft } from './SupportPrimitives/Shaft/InstancedShaftGroup';
 import { InstancedRootsGroup, type InstancedRoot } from './SupportPrimitives/Roots/InstancedRootsGroup';
 import { InstancedJointGroup, type InstancedJoint } from './SupportPrimitives/Joint/InstancedJointGroup';
 import { InstancedContactConeGroup, type InstancedContactCone } from './SupportPrimitives/ContactCone/InstancedContactConeGroup';
-import { getFinalSocketPosition } from './SupportPrimitives/ContactCone/contactConeUtils';
-import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactDiskUtils';
 import { emitSupportModelPointerHover } from './interaction/clickHandlers';
-import { bezierSegmentToBatchedShaft, braceBezierToBatchedShaft } from './Curves/batchedBezierShaft';
-import type { ContactDisk, Segment, SupportState, Vec3 } from './types';
+import { bezierSegmentToBatchedShaft } from './Curves/batchedBezierShaft';
+import type { Segment, SupportState, Vec3 } from './types';
 import { MARQUEE_CANDIDATE_TINT_FACTOR } from '@/utils/marqueeCandidateTint';
+import {
+    anyContactMatches,
+    contactEndpointsFor,
+    SUPPORT_TYPES,
+    type SupportTypeId,
+} from './supportTypeRegistry';
 
 interface SupportProxyMeshLayerProps {
   mode?: 'prepare' | 'analysis' | 'support' | 'export' | 'printing';
@@ -84,10 +91,8 @@ type FlatProxyGeometry = {
 };
 
 type SharedProxyCacheEntry = {
-  /** Every entity collection at once; see the comparison below. */
-  supportsRef: ReturnType<typeof getSupports>;
-  supportRootsRef: ReturnType<typeof getSnapshot>['roots'];
-  supportKnotsRef: ReturnType<typeof getSnapshot>['knots'];
+  /** The one input the walk reads, so one identity covers every collection. */
+  supportStateRef: SupportState;
   hasSolidBottom: boolean;
   raftThickness: number;
   includeDetailedPrimitives: boolean;
@@ -107,13 +112,188 @@ function fromModelKey(modelKey: string): string | undefined {
   return modelKey === MODEL_NONE_KEY ? undefined : modelKey;
 }
 
-function getDiskTipCenter(disk: ContactDisk): Vec3 {
-  const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile);
-  return {
-    x: disk.pos.x + (disk.surfaceNormal.x * thickness),
-    y: disk.pos.y + (disk.surfaceNormal.y * thickness),
-    z: disk.pos.z + (disk.surfaceNormal.z * thickness),
+
+/** An interior-support id: the entity's `typeId`, a colon, then its own id. */
+function interiorIdPrefix(entity: { typeId?: SupportTypeId }): string {
+    return `${entity.typeId}:`;
+}
+
+/** The key an entity contributes to, and looks itself up under. */
+function interiorSupportKey(entity: { id: string; typeId?: SupportTypeId }): string {
+    return `${interiorIdPrefix(entity)}${entity.id}`;
+}
+
+/**
+ * Which supports the interior (cavity) view draws. A `plateRoot` type is
+ * skipped; any interior contact qualifies; a shaft is tested along its length
+ * only when it starts at a knot. Predicates are injected to keep this pure.
+ */
+export function interiorSupportIds(
+    state: SupportState,
+    isContactInterior: (contact: unknown, modelId?: string) => boolean,
+    areSegmentsInterior: (segments: readonly Segment[], modelId?: string) => boolean,
+): Set<string> {
+    const ids = new Set<string>();
+
+    for (const descriptor of SUPPORT_TYPES) {
+        // Rooted in the plate: never inside a cavity.
+        if (descriptor.lower.kind === 'plateRoot') continue;
+        if (contactEndpointsFor(descriptor.id).length === 0) continue;
+
+        const collection = state[descriptor.location.key] as unknown as
+            Record<string, { id: string; typeId?: SupportTypeId; modelId?: string; segments?: Segment[] }> | undefined;
+
+        for (const entity of Object.values(collection ?? {})) {
+            const key = interiorSupportKey(entity);
+            if (anyContactMatches(descriptor.id, entity, (contact) => isContactInterior(contact, entity.modelId))) {
+                ids.add(key);
+                continue;
+            }
+            if (descriptor.lower.kind === 'knot'
+                && descriptor.hasSegments
+                && areSegmentsInterior(entity.segments ?? [], entity.modelId)) {
+                ids.add(key);
+            }
+        }
+    }
+
+    return ids;
+}
+
+/** Every proxy primitive the layer draws, grouped by model. Geometry only. */
+export function collectProxyPrimitives(
+    state: SupportState,
+    options: {
+        includeDetailedPrimitives: boolean;
+        interiorSupportIdSet: Set<string> | null;
+    },
+): Map<string, ProxyModelGeometry> {
+    const { includeDetailedPrimitives, interiorSupportIdSet } = options;
+
+  const byModel = new Map<string, ProxyModelGeometry>();
+  const segmentModelIdById = new Map<string, string | undefined>();
+  const segmentSupportIdById = new Map<string, string | undefined>();
+  const seenJointKeysByModel = new Map<string, Set<string>>();
+  const seenConeKeysByModel = new Map<string, Set<string>>();
+
+  const ensureModel = (modelId?: string): ProxyModelGeometry => {
+    const key = toModelKey(modelId);
+    let existing = byModel.get(key);
+    if (!existing) {
+      existing = { modelId, shafts: [], roots: [], joints: [], cones: [] };
+      byModel.set(key, existing);
+    }
+    return existing;
   };
+
+  const ensureJointSeenSet = (modelId?: string): Set<string> => {
+    const key = toModelKey(modelId);
+    const existing = seenJointKeysByModel.get(key);
+    if (existing) return existing;
+    const created = new Set<string>();
+    seenJointKeysByModel.set(key, created);
+    return created;
+  };
+
+  const ensureConeSeenSet = (modelId?: string): Set<string> => {
+    const key = toModelKey(modelId);
+    const existing = seenConeKeysByModel.get(key);
+    if (existing) return existing;
+    const created = new Set<string>();
+    seenConeKeysByModel.set(key, created);
+    return created;
+  };
+
+  const registerSegmentMeta = (segmentId: string, modelId?: string, supportId?: string) => {
+    segmentModelIdById.set(segmentId, modelId);
+    segmentSupportIdById.set(segmentId, supportId);
+  };
+
+  const pushShaft = (shaft: InstancedShaft) => {
+    ensureModel(shaft.modelId).shafts.push(shaft);
+    registerSegmentMeta(shaft.id, shaft.modelId, shaft.supportId);
+  };
+
+  // Curved segments become batched-shaft entries, drawn as capped tubes. The
+  // unscoped STL/3MF export serializes this layer's scene graph, so curves must
+  // be visible here too.
+  const pushSegmentShafts = (segment: Segment, start: Vec3, end: Vec3, supportId: string, modelId?: string) => {
+    if (segment.type === 'bezier') {
+      pushShaft(bezierSegmentToBatchedShaft(segment, start, end, supportId, modelId));
+      return;
+    }
+    pushShaft({
+      id: segment.id,
+      supportId,
+      modelId,
+      start,
+      end,
+      diameter: segment.diameter,
+    });
+  };
+
+  const pushRoot = (root: InstancedRoot) => {
+    const effectiveDiskHeight = Math.max(0.001, root.effectiveDiskHeight);
+    const verticalOffset = 0;
+
+    ensureModel(root.modelId).roots.push({
+      ...root,
+      basePos: {
+        x: root.basePos.x,
+        y: root.basePos.y,
+        z: root.basePos.z + verticalOffset,
+      },
+      effectiveDiskHeight,
+    });
+  };
+
+  const pushJoint = (joint: InstancedJoint, dedupeKey?: string, diameterBlendMm: number = PROXY_JOINT_DIAMETER_BLEND_MM) => {
+    const seen = ensureJointSeenSet(joint.modelId);
+    const key = dedupeKey ?? joint.id;
+    if (seen.has(key)) return;
+    seen.add(key);
+    ensureModel(joint.modelId).joints.push({
+      ...joint,
+      diameter: Math.max(0.001, joint.diameter - diameterBlendMm),
+    });
+  };
+
+  const pushCone = (cone: InstancedContactCone, dedupeKey?: string) => {
+    const seen = ensureConeSeenSet(cone.modelId);
+    const key = dedupeKey ?? cone.id;
+    if (seen.has(key)) return;
+    seen.add(key);
+    ensureModel(cone.modelId).cones.push(cone);
+  };
+
+  const context: ProxyGeometryContext = {
+    state,
+    includeDetailedPrimitives,
+    pushShaft,
+    pushSegmentShafts,
+    pushRoot,
+    pushJoint,
+    pushCone,
+  };
+
+  // One walk over every type, each emitting its own registered recipe.
+  for (const descriptor of SUPPORT_TYPES) {
+    const registered = supportProxyGeometryOf(descriptor.id);
+    if (!registered) continue;
+    if (registered.registration.detailedOnly && !includeDetailedPrimitives) continue;
+    if (registered.registration.skipInInteriorView && interiorSupportIdSet) continue;
+
+    const entities = state[descriptor.location.key] as unknown as
+      | Record<string, { id: string; typeId?: SupportTypeId }>
+      | undefined;
+    for (const entity of Object.values(entities ?? {})) {
+      if (interiorSupportIdSet && !interiorSupportIdSet.has(interiorSupportKey(entity))) continue;
+      registered.build(entity as never, context);
+    }
+  }
+
+
+  return byModel;
 }
 
 export function SupportProxyMeshLayer({
@@ -152,21 +332,7 @@ export function SupportProxyMeshLayer({
   const supportState = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const raftSettings = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
 
-  const supportTrunks = supportState.trunks;
-  const supportRoots = supportState.roots;
-  const supportKnots = supportState.knots;
-  const supportBranches = supportState.branches;
-  const supportLeaves = supportState.leaves;
-  const supportTwigs = supportState.twigs;
-  const supportSticks = supportState.sticks;
-  const supportBraces = supportState.braces;
-  const supportAnchors = supportState.anchors;
-  // Every entity collection as one identity, rebuilt when any changes. Used
-  // for the cache signature; the geometry loops below still read their own
-  // collection, because each builds different primitives.
-  const supports = getSupports();
-  // Roots and knots are reached by the kickstand's own rootId / hostKnotId, so
-  // the shared collections answer without a per-type view.
+  // The walk reads the state itself, so the snapshot is the only identity needed.
   const hasSolidBottom = raftSettings.bottomMode === 'solid';
   const raftThickness = raftSettings.thickness ?? 0;
 
@@ -377,18 +543,15 @@ export function SupportProxyMeshLayer({
       return dot > 0 || result.distance < INTERIOR_WALL_THRESHOLD_MM;
     };
 
-    const isInteriorContactCone = (cone: { pos: Vec3; placementSurface?: 'interior' | 'exterior' } | undefined, modelId?: string): boolean => {
-      if (!cone) return false;
-      if (cone.placementSurface === 'interior') return true;
-      if (cone.placementSurface === 'exterior') return false;
-      return isOnInteriorSide(cone.pos, modelId);
-    };
-
-    const isInteriorContactDisk = (disk: { pos: Vec3; placementSurface?: 'interior' | 'exterior' } | undefined, modelId?: string): boolean => {
-      if (!disk) return false;
-      if (disk.placementSurface === 'interior') return true;
-      if (disk.placementSurface === 'exterior') return false;
-      return isOnInteriorSide(disk.pos, modelId);
+    // A contact is interior when its placement surface says so, or when an
+    // unstamped one sits on the cavity side. Takes `unknown` and narrows here,
+    // since the seam hands over whichever field the descriptor declared.
+    const isInteriorContact = (contact: unknown, modelId?: string): boolean => {
+      const c = contact as { pos?: Vec3; placementSurface?: 'interior' | 'exterior' } | null | undefined;
+      if (!c?.pos) return false;
+      if (c.placementSurface === 'interior') return true;
+      if (c.placementSurface === 'exterior') return false;
+      return isOnInteriorSide(c.pos, modelId);
     };
 
     // Sample a segment shaft for cavity interior crossing. Both endpoints are
@@ -396,7 +559,7 @@ export function SupportProxyMeshLayer({
     // The shaft may only pass through the cavity over a short fraction of its
     // length, so we sample at 10% increments to catch narrow crossings.
     const isAnySegmentPointInterior = (
-      segs: Array<{ bottomJoint?: { pos: Vec3 }; topJoint?: { pos: Vec3 } }>,
+      segs: readonly Segment[],
       modelId?: string,
     ): boolean => {
       for (const seg of segs) {
@@ -420,62 +583,20 @@ export function SupportProxyMeshLayer({
       return false;
     };
 
-    // Trunks always have roots (raft-connected) — their shafts originate at the
-    // build plate and their tips are at the model exterior surface. They never
-    // belong in the interior cavity view.
-    // (trunk loop intentionally omitted — trunks are never added to the set)
-
-    for (const branch of Object.values(supportBranches)) {
-      if (isInteriorContactCone(branch.contactCone, branch.modelId)) {
-        ids.add(`branch:${branch.id}`);
-        continue;
-      }
-      if (isAnySegmentPointInterior(branch.segments, branch.modelId)) {
-        ids.add(`branch:${branch.id}`);
-      }
-    }
-    for (const leaf of Object.values(supportLeaves)) {
-      if (isInteriorContactCone(leaf.contactCone, leaf.modelId)) {
-        ids.add(`leaf:${leaf.id}`);
-      }
-    }
-    for (const stick of Object.values(supportSticks)) {
-      const onA = isInteriorContactCone(stick.contactConeA, stick.modelId);
-      const onB = isInteriorContactCone(stick.contactConeB, stick.modelId);
-      if (onA || onB) ids.add(`stick:${stick.id}`);
-    }
-    for (const anchor of Object.values(supportState.anchors)) {
-      if (isInteriorContactCone(anchor.contactCone, anchor.modelId)) {
-        ids.add(`anchor:${anchor.id}`);
-      }
-    }
-    for (const twig of Object.values(supportTwigs)) {
-      const onA = isInteriorContactDisk(twig.contactDiskA, twig.modelId);
-      const onB = isInteriorContactDisk(twig.contactDiskB, twig.modelId);
-      if (onA || onB) ids.add(`twig:${twig.id}`);
-    }
-
-    return ids;
+    // See `interiorSupportIds`: the descriptor answers every question here.
+    return interiorSupportIds(supportState, isInteriorContact, isAnySegmentPointInterior);
   }, [
     interiorView,
     cavityGeometryByModelId,
     modelWorldInverseById,
-    supportTrunks,
-    supportBranches,
-    supportLeaves,
-    supportSticks,
-    supportTwigs,
-    supportState.anchors,
+    supportState,
   ]);
 
   const baseProxyByModel = React.useMemo(() => {
+    // The snapshot is replaced on any change, so it alone decides a rebuild.
     if (
       sharedProxyCache
-      // One identity covers all eight entity collections: the merged view is
-      // rebuilt whenever any of them changes.
-      && sharedProxyCache.supportsRef === supports
-      && sharedProxyCache.supportRootsRef === supportRoots
-      && sharedProxyCache.supportKnotsRef === supportKnots
+      && sharedProxyCache.supportStateRef === supportState
       && sharedProxyCache.hasSolidBottom === hasSolidBottom
       && sharedProxyCache.raftThickness === raftThickness
       && sharedProxyCache.includeDetailedPrimitives === includeDetailedPrimitives
@@ -484,526 +605,13 @@ export function SupportProxyMeshLayer({
       return sharedProxyCache.baseProxyByModel;
     }
 
-    const byModel = new Map<string, ProxyModelGeometry>();
-    const segmentModelIdById = new Map<string, string | undefined>();
-    const segmentSupportIdById = new Map<string, string | undefined>();
-    const leafModelIdById = new Map<string, string | undefined>();
-    const leafSupportIdById = new Map<string, string | undefined>();
-    const seenJointKeysByModel = new Map<string, Set<string>>();
-    const seenConeKeysByModel = new Map<string, Set<string>>();
-
-    const ensureModel = (modelId?: string): ProxyModelGeometry => {
-      const key = toModelKey(modelId);
-      let existing = byModel.get(key);
-      if (!existing) {
-        existing = { modelId, shafts: [], roots: [], joints: [], cones: [] };
-        byModel.set(key, existing);
-      }
-      return existing;
-    };
-
-    const ensureJointSeenSet = (modelId?: string): Set<string> => {
-      const key = toModelKey(modelId);
-      const existing = seenJointKeysByModel.get(key);
-      if (existing) return existing;
-      const created = new Set<string>();
-      seenJointKeysByModel.set(key, created);
-      return created;
-    };
-
-    const ensureConeSeenSet = (modelId?: string): Set<string> => {
-      const key = toModelKey(modelId);
-      const existing = seenConeKeysByModel.get(key);
-      if (existing) return existing;
-      const created = new Set<string>();
-      seenConeKeysByModel.set(key, created);
-      return created;
-    };
-
-    const registerSegmentMeta = (segmentId: string, modelId?: string, supportId?: string) => {
-      segmentModelIdById.set(segmentId, modelId);
-      segmentSupportIdById.set(segmentId, supportId);
-    };
-
-    const pushShaft = (shaft: InstancedShaft) => {
-      ensureModel(shaft.modelId).shafts.push(shaft);
-      registerSegmentMeta(shaft.id, shaft.modelId, shaft.supportId);
-    };
-
-    // Curved segments become curved batched-shaft entries; InstancedShaftGroup
-    // renders them as smooth capped tubes (same approach as the support-mode
-    // scene batch). This keeps curves visible in proxy views AND in mesh
-    // export: the unscoped STL/3MF path serializes this layer's live scene
-    // graph in prepare/export modes.
-    const pushSegmentShafts = (segment: Segment, start: Vec3, end: Vec3, supportId: string, modelId?: string) => {
-      if (segment.type === 'bezier') {
-        pushShaft(bezierSegmentToBatchedShaft(segment, start, end, supportId, modelId));
-        return;
-      }
-      pushShaft({
-        id: segment.id,
-        supportId,
-        modelId,
-        start,
-        end,
-        diameter: segment.diameter,
-      });
-    };
-
-    const pushRoot = (root: InstancedRoot) => {
-      const effectiveDiskHeight = Math.max(0.001, root.effectiveDiskHeight);
-      const verticalOffset = 0;
-
-      ensureModel(root.modelId).roots.push({
-        ...root,
-        basePos: {
-          x: root.basePos.x,
-          y: root.basePos.y,
-          z: root.basePos.z + verticalOffset,
-        },
-        effectiveDiskHeight,
-      });
-    };
-
-    const pushJoint = (joint: InstancedJoint, dedupeKey?: string, diameterBlendMm: number = PROXY_JOINT_DIAMETER_BLEND_MM) => {
-      const seen = ensureJointSeenSet(joint.modelId);
-      const key = dedupeKey ?? joint.id;
-      if (seen.has(key)) return;
-      seen.add(key);
-      ensureModel(joint.modelId).joints.push({
-        ...joint,
-        diameter: Math.max(0.001, joint.diameter - diameterBlendMm),
-      });
-    };
-
-    const pushCone = (cone: InstancedContactCone, dedupeKey?: string) => {
-      const seen = ensureConeSeenSet(cone.modelId);
-      const key = dedupeKey ?? cone.id;
-      if (seen.has(key)) return;
-      seen.add(key);
-      ensureModel(cone.modelId).cones.push(cone);
-    };
-
-    for (const trunk of Object.values(supportTrunks)) {
-      if (interiorSupportIdSet && !interiorSupportIdSet.has(`trunk:${trunk.id}`)) continue;
-      const root = supportRoots[trunk.rootId];
-      if (!root) continue;
-
-      if (includeDetailedPrimitives && trunk.contactCone) {
-        pushCone({
-          ...trunk.contactCone,
-          supportId: trunk.id,
-          modelId: trunk.modelId,
-        });
-      }
-
-      pushRoot({
-        id: root.id,
-        supportId: trunk.id,
-        modelId: trunk.modelId,
-        basePos: root.transform.pos,
-        bottomRadius: Math.max(0.001, root.diameter / 2),
-        topRadius: Math.max(0.001, (trunk.segments[0]?.diameter ?? root.diameter) / 2),
-        effectiveDiskHeight: Math.max(0.001, root.diskHeight),
-        coneHeight: Math.max(0, root.coneHeight),
-      });
-
-      let currentStart: Vec3 = {
-        x: root.transform.pos.x,
-        y: root.transform.pos.y,
-        z: root.transform.pos.z + root.diskHeight + root.coneHeight,
-      };
-
-      for (const segment of trunk.segments) {
-        if (includeDetailedPrimitives && segment.bottomJoint) {
-          pushJoint({
-            id: segment.bottomJoint.id,
-            pos: segment.bottomJoint.pos,
-            diameter: segment.bottomJoint.diameter,
-            supportId: trunk.id,
-            modelId: trunk.modelId,
-          });
-        }
-
-        if (segment.bottomJoint) currentStart = segment.bottomJoint.pos;
-        const end = segment.topJoint?.pos
-          ?? (trunk.contactCone ? getFinalSocketPosition(trunk.contactCone) : { x: currentStart.x, y: currentStart.y, z: currentStart.z + 5 });
-
-        pushSegmentShafts(segment, currentStart, end, trunk.id, trunk.modelId);
-
-        if (includeDetailedPrimitives && segment.topJoint) {
-          pushJoint({
-            id: segment.topJoint.id,
-            pos: segment.topJoint.pos,
-            diameter: segment.topJoint.diameter,
-            supportId: trunk.id,
-            modelId: trunk.modelId,
-          });
-        }
-
-        currentStart = end;
-      }
-    }
-
-    for (const branch of Object.values(supportBranches)) {
-      if (interiorSupportIdSet && !interiorSupportIdSet.has(`branch:${branch.id}`)) continue;
-      const parentKnot = supportKnots[branch.parentKnotId];
-      if (!parentKnot) continue;
-
-      if (includeDetailedPrimitives && branch.contactCone) {
-        pushCone({
-          ...branch.contactCone,
-          supportId: branch.id,
-          modelId: branch.modelId,
-        });
-      }
-
-      let currentStart: Vec3 = parentKnot.pos;
-
-      for (const segment of branch.segments) {
-        if (includeDetailedPrimitives && segment.bottomJoint) {
-          pushJoint({
-            id: segment.bottomJoint.id,
-            pos: segment.bottomJoint.pos,
-            diameter: segment.bottomJoint.diameter,
-            supportId: branch.id,
-            modelId: branch.modelId,
-          });
-        }
-
-        const end = segment.topJoint?.pos
-          ?? (branch.contactCone ? getFinalSocketPosition(branch.contactCone) : { x: currentStart.x, y: currentStart.y, z: currentStart.z + 5 });
-
-        pushSegmentShafts(segment, currentStart, end, branch.id, branch.modelId);
-
-        if (includeDetailedPrimitives && segment.topJoint) {
-          pushJoint({
-            id: segment.topJoint.id,
-            pos: segment.topJoint.pos,
-            diameter: segment.topJoint.diameter,
-            supportId: branch.id,
-            modelId: branch.modelId,
-          });
-        }
-
-        currentStart = end;
-      }
-
-      // The branch's parent knot renders as a sphere on the host shaft
-      // (BranchRenderer draws it always) — the proxy must carry it too.
-      if (includeDetailedPrimitives) {
-        pushJoint(
-          {
-            id: parentKnot.id,
-            pos: parentKnot.pos,
-            diameter: parentKnot.diameter ?? 1.2,
-            supportId: branch.id,
-            modelId: branch.modelId,
-          },
-          undefined,
-          // KnotRenderer blends the FULL joint offset; the segment joints
-          // use the ×0.75 proxy blend.
-          JOINT_DIAMETER_OFFSET_MM,
-        );
-      }
-    }
-
-    if (includeDetailedPrimitives) {
-      for (const leaf of Object.values(supportLeaves)) {
-        if (interiorSupportIdSet && !interiorSupportIdSet.has(`leaf:${leaf.id}`)) continue;
-        leafModelIdById.set(leaf.id, leaf.modelId);
-        leafSupportIdById.set(leaf.id, leaf.id);
-        pushCone({
-          ...leaf.contactCone,
-          supportId: leaf.id,
-          modelId: leaf.modelId,
-        });
-
-        // Rod connecting the leaf's contact cone (on the model) to its
-        // parent knot on the host shaft. Without this the leaf appears as
-        // a floating cone in proxy views.
-        const parentKnot = supportKnots[leaf.parentKnotId];
-        if (parentKnot) {
-          const tipSocket = getFinalSocketPosition(leaf.contactCone);
-          const cone = leaf.contactCone;
-          const rodDiameter = Math.max(0.001, cone.profile.bodyDiameterMm ?? 0.5);
-          pushShaft({
-            id: `leafRod:${leaf.id}`,
-            supportId: leaf.id,
-            modelId: leaf.modelId,
-            start: tipSocket,
-            end: parentKnot.pos,
-            diameter: rodDiameter,
-          });
-
-          // The leaf base knot sphere (LeafRenderer draws it always).
-          pushJoint(
-            {
-              id: parentKnot.id,
-              pos: parentKnot.pos,
-              diameter: parentKnot.diameter ?? 1.2,
-              supportId: leaf.id,
-              modelId: leaf.modelId,
-            },
-            undefined,
-            JOINT_DIAMETER_OFFSET_MM,
-          );
-        }
-      }
-    }
-
-    for (const twig of Object.values(supportTwigs)) {
-      if (interiorSupportIdSet && !interiorSupportIdSet.has(`twig:${twig.id}`)) continue;
-      if (includeDetailedPrimitives) {
-        pushCone({
-          id: twig.contactDiskA.id,
-          supportId: twig.id,
-          modelId: twig.modelId,
-          pos: twig.contactDiskA.pos,
-          normal: twig.contactDiskA.coneAxis,
-          surfaceNormal: twig.contactDiskA.surfaceNormal,
-          diskLengthOverride: twig.contactDiskA.diskLengthOverride,
-          profile: {
-            type: 'disk',
-            contactDiameterMm: twig.contactDiskA.contactDiameterMm,
-            bodyDiameterMm: twig.contactDiskA.contactDiameterMm,
-            lengthMm: 0.001,
-            penetrationMm: 0,
-            diskThicknessMm: twig.contactDiskA.profile.diskThicknessMm,
-            maxStandoffMm: twig.contactDiskA.profile.maxStandoffMm,
-            standoffAngleThreshold: twig.contactDiskA.profile.standoffAngleThreshold,
-          },
-        });
-        pushCone({
-          id: twig.contactDiskB.id,
-          supportId: twig.id,
-          modelId: twig.modelId,
-          pos: twig.contactDiskB.pos,
-          normal: twig.contactDiskB.coneAxis,
-          surfaceNormal: twig.contactDiskB.surfaceNormal,
-          diskLengthOverride: twig.contactDiskB.diskLengthOverride,
-          profile: {
-            type: 'disk',
-            contactDiameterMm: twig.contactDiskB.contactDiameterMm,
-            bodyDiameterMm: twig.contactDiskB.contactDiameterMm,
-            lengthMm: 0.001,
-            penetrationMm: 0,
-            diskThicknessMm: twig.contactDiskB.profile.diskThicknessMm,
-            maxStandoffMm: twig.contactDiskB.profile.maxStandoffMm,
-            standoffAngleThreshold: twig.contactDiskB.profile.standoffAngleThreshold,
-          },
-        });
-      }
-
-      for (const segment of twig.segments) {
-        if (includeDetailedPrimitives && segment.bottomJoint) {
-          pushJoint({
-            id: segment.bottomJoint.id,
-            pos: segment.bottomJoint.pos,
-            diameter: segment.diameter,
-            supportId: twig.id,
-            modelId: twig.modelId,
-          });
-        }
-
-        const start = segment.bottomJoint?.pos ?? getDiskTipCenter(twig.contactDiskA);
-        const end = segment.topJoint?.pos ?? getDiskTipCenter(twig.contactDiskB);
-
-        pushSegmentShafts(segment, start, end, twig.id, twig.modelId);
-
-        if (includeDetailedPrimitives && segment.topJoint) {
-          pushJoint({
-            id: segment.topJoint.id,
-            pos: segment.topJoint.pos,
-            diameter: segment.diameter,
-            supportId: twig.id,
-            modelId: twig.modelId,
-          });
-        }
-      }
-    }
-
-    for (const stick of Object.values(supportSticks)) {
-      if (interiorSupportIdSet && !interiorSupportIdSet.has(`stick:${stick.id}`)) continue;
-      if (includeDetailedPrimitives) {
-        pushCone({
-          ...stick.contactConeA,
-          supportId: stick.id,
-          modelId: stick.modelId,
-        });
-        pushCone({
-          ...stick.contactConeB,
-          supportId: stick.id,
-          modelId: stick.modelId,
-        });
-      }
-
-      for (const segment of stick.segments) {
-        if (includeDetailedPrimitives && segment.bottomJoint) {
-          pushJoint({
-            id: segment.bottomJoint.id,
-            pos: segment.bottomJoint.pos,
-            diameter: segment.bottomJoint.diameter,
-            supportId: stick.id,
-            modelId: stick.modelId,
-          });
-        }
-
-        const start = segment.bottomJoint?.pos ?? getFinalSocketPosition(stick.contactConeA);
-        const end = segment.topJoint?.pos ?? getFinalSocketPosition(stick.contactConeB);
-
-        pushSegmentShafts(segment, start, end, stick.id, stick.modelId);
-
-        if (includeDetailedPrimitives && segment.topJoint) {
-          pushJoint({
-            id: segment.topJoint.id,
-            pos: segment.topJoint.pos,
-            diameter: segment.topJoint.diameter,
-            supportId: stick.id,
-            modelId: stick.modelId,
-          });
-        }
-      }
-    }
-
-    for (const brace of Object.values(supportBraces)) {
-      // In interior view, hide braces entirely — they're connecting
-      // structures between supports, not model-facing supports.
-      if (interiorSupportIdSet) continue;
-      const startKnot = supportKnots[brace.startKnotId];
-      const endKnot = supportKnots[brace.endKnotId];
-      if (!startKnot || !endKnot) continue;
-
-      // Mirror SupportRenderer: derive visual diameter from host knot diameters (= trunk segment
-      // diameter + 0.1mm offset). Using profile.diameter alone produces the thin brace setting
-      // value and loses the dynamic sizing that matches the attached trunk thickness.
-      const profileDiameter = Math.max(0.001, brace.profile?.diameter ?? 1);
-      const startHostDiameter = Math.min(
-        profileDiameter,
-        Math.max(
-          0.001,
-          (startKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
-        ),
-      );
-      const endHostDiameter = Math.min(
-        profileDiameter,
-        Math.max(
-          0.001,
-          (endKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
-        ),
-      );
-
-      const braceDiameter = (startHostDiameter + endHostDiameter) * 0.5;
-      if (brace.curve?.type === 'bezier') {
-        pushShaft(braceBezierToBatchedShaft(
-          `braceSegment:${brace.id}`,
-          startKnot.pos,
-          endKnot.pos,
-          brace.curve.controlPoint1,
-          brace.curve.controlPoint2,
-          braceDiameter,
-          brace.curve.resolution,
-          brace.id,
-          brace.modelId,
-        ));
-      } else {
-        pushShaft({
-          id: `braceSegment:${brace.id}`,
-          supportId: brace.id,
-          modelId: brace.modelId,
-          start: startKnot.pos,
-          end: endKnot.pos,
-          diameter: braceDiameter,
-        });
-      }
-    }
-
-    // Knots that the scene renders always (leaf base knots and branch parent
-    // knots on host shafts) are emitted as spheres above. The knots still
-    // omitted here — brace endpoints and kickstand host knots — are
-    // selection-only interaction affordances in SupportRenderer, so leaving
-    // them out keeps the proxy geometry clean.
-
-    // Anchors: root + contact cone, no shafts
-    for (const anchor of Object.values(supportAnchors)) {
-      if (interiorSupportIdSet && !interiorSupportIdSet.has(`anchor:${anchor.id}`)) continue;
-      pushRoot({
-        id: `${anchor.id}:root`,
-        supportId: anchor.id,
-        modelId: anchor.modelId,
-        basePos: anchor.rootPos,
-        bottomRadius: Math.max(0.001, anchor.rootBaseDiameter / 2),
-        topRadius: Math.max(0.001, anchor.rootTopDiameter / 2),
-        effectiveDiskHeight: 0.1,
-        coneHeight: Math.max(0, anchor.rootHeight),
-      });
-
-      if (includeDetailedPrimitives && anchor.contactCone) {
-        pushCone({
-          ...anchor.contactCone,
-          supportId: anchor.id,
-          modelId: anchor.modelId,
-        });
-      }
-    }
-
-    for (const kickstand of Object.values(supportState.kickstands)) {
-      if (interiorSupportIdSet && !interiorSupportIdSet.has(`kickstand:${kickstand.id}`)) continue;
-      const root = supportRoots[kickstand.rootId];
-      const hostKnot = supportKnots[kickstand.hostKnotId];
-      if (!root || !hostKnot) continue;
-
-      pushRoot({
-        id: root.id,
-        supportId: kickstand.id,
-        modelId: kickstand.modelId,
-        basePos: root.transform.pos,
-        bottomRadius: Math.max(0.001, root.diameter / 2),
-        topRadius: Math.max(0.001, (kickstand.segments[0]?.diameter ?? root.diameter) / 2),
-        effectiveDiskHeight: Math.max(0.001, root.diskHeight),
-        coneHeight: Math.max(0, root.coneHeight),
-      });
-
-      let currentStart: Vec3 = {
-        x: root.transform.pos.x,
-        y: root.transform.pos.y,
-        z: root.transform.pos.z + root.diskHeight + root.coneHeight,
-      };
-
-      for (const segment of kickstand.segments) {
-        if (includeDetailedPrimitives && segment.bottomJoint) {
-          pushJoint({
-            id: segment.bottomJoint.id,
-            pos: segment.bottomJoint.pos,
-            diameter: segment.bottomJoint.diameter,
-            supportId: kickstand.id,
-            modelId: kickstand.modelId,
-          });
-        }
-
-        const end = segment.topJoint?.pos ?? hostKnot.pos;
-        pushSegmentShafts(segment, currentStart, end, kickstand.id, kickstand.modelId);
-
-        if (includeDetailedPrimitives && segment.topJoint) {
-          pushJoint({
-            id: segment.topJoint.id,
-            pos: segment.topJoint.pos,
-            diameter: segment.topJoint.diameter,
-            supportId: kickstand.id,
-            modelId: kickstand.modelId,
-          });
-        }
-
-        currentStart = end;
-      }
-    }
-
-    // Kickstand host knots are also interaction affordances — omitted from proxy for the same reason.
+    const byModel = collectProxyPrimitives(supportState, {
+      includeDetailedPrimitives,
+      interiorSupportIdSet,
+    });
 
     sharedProxyCache = {
-      supportsRef: supports,
-      supportRootsRef: supportRoots,
-      supportKnotsRef: supportKnots,
+      supportStateRef: supportState,
       hasSolidBottom,
       raftThickness,
       includeDetailedPrimitives,
@@ -1013,16 +621,7 @@ export function SupportProxyMeshLayer({
 
     return byModel;
   }, [
-    supports,
-    supportTrunks,
-    supportRoots,
-    supportKnots,
-    supportBranches,
-    supportLeaves,
-    supportTwigs,
-    supportSticks,
-    supportBraces,
-    supportAnchors,
+    supportState,
     hasSolidBottom,
     raftThickness,
     includeDetailedPrimitives,

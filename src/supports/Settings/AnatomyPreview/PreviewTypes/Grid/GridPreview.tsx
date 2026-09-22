@@ -1,13 +1,14 @@
+import { registerAnatomyPreview } from '../../../anatomyPreviewRegistry';
 import React from 'react';
 import { SupportBuilder } from '@/supports/rendering/SupportBuilder';
 import { ANATOMY_CONFIG } from '../../AnatomyPreviewConfig';
 import { buildGridPreviewSupports } from './previewSupports';
-import type { SupportKind } from '../../../supportKindState';
+import type { SidebarPanel } from '../../../sidebarPanels';
 
 interface GridPreviewProps {
     settings: any;
     liveConfig: any;
-    activeKind: SupportKind;
+    activePanel: SidebarPanel;
     previewState: any;
     anatomyOverrides: any;
 }
@@ -18,13 +19,13 @@ const PREVIEW_HEIGHT_MM = 15;
 export function GridPreview({
     settings,
     liveConfig,
-    activeKind,
+    activePanel,
     previewState,
     anatomyOverrides
 }: GridPreviewProps) {
     const gridPreviewSupports = React.useMemo(() => {
         return buildGridPreviewSupports({ settings, liveConfig });
-    }, [activeKind, settings.grid.spacingMm, liveConfig, settings.tip]);
+    }, [activePanel, settings.grid.spacingMm, liveConfig, settings.tip]);
 
     const spacing = settings.grid.spacingMm;
     const sphereRadius = Math.max(5, spacing * 1.5);
@@ -71,3 +72,5 @@ export function GridPreview({
         </>
     );
 }
+
+registerAnatomyPreview('grid', GridPreview);
