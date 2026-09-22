@@ -8,6 +8,7 @@ import {
   subscribeToSpaceMouseSettings,
   type SpaceMouseSettings,
 } from '@/components/settings/spacemousePreferences';
+import { ORTHO_MAX_RADIUS, ORTHO_MIN_RADIUS, applyOrthoFrustum, orthoAspectOf } from './orthoDolly';
 
 type OrbitLikeControls = {
   target: THREE.Vector3;
@@ -97,6 +98,7 @@ export function SpaceMouseController({
   pivotPoint,
   pivotCandidates,
   fallbackPivot,
+  sceneRadius,
   mouseOrbitDragRunId,
   onNavigationActiveChange,
   onNavigationFrame,
@@ -105,6 +107,7 @@ export function SpaceMouseController({
   pivotPoint?: THREE.Vector3 | null;
   pivotCandidates?: THREE.Vector3[];
   fallbackPivot?: THREE.Vector3 | null;
+  sceneRadius?: number;
   mouseOrbitDragRunId?: number;
   onNavigationActiveChange?: (active: boolean) => void;
   onNavigationFrame?: () => void;
@@ -472,14 +475,9 @@ export function SpaceMouseController({
       camera.position.add(panOffset);
       lookTarget.add(panOffset);
 
-      if (orthoCamera) {
-        // Orthographic zoom should change camera.zoom, not dolly camera position.
-        const zoomFactor = Math.exp(dolly * settings.zoomSensitivity * 2.0 * dt);
-        orthoCamera.zoom = THREE.MathUtils.clamp(orthoCamera.zoom * zoomFactor, 0.0001, 2000);
-        orthoCamera.updateProjectionMatrix();
-      } else {
-        camera.position.addScaledVector(forward, dolly * zoomScale);
-      }
+      // Real dolly in both projections: move the camera along its view axis. For
+      // ortho the derived frustum (below) turns that into scale.
+      camera.position.addScaledVector(forward, dolly * zoomScale);
     }
 
     // ── Rotation (orbit around pivot with free orientation) ──
@@ -527,6 +525,19 @@ export function SpaceMouseController({
 
     camera.lookAt(lookTarget);
     camera.updateMatrixWorld();
+
+    if (orthoCamera) {
+      // The camera now looks at lookTarget, so the axial dolly radius is simply
+      // the distance to it. Set the derived frustum directly; the shared sync is
+      // suspended while this controller owns the camera.
+      const radius = THREE.MathUtils.clamp(
+        camera.position.distanceTo(lookTarget),
+        ORTHO_MIN_RADIUS,
+        ORTHO_MAX_RADIUS,
+      );
+      applyOrthoFrustum(orthoCamera, radius, orthoAspectOf(orthoCamera), { sceneRadius });
+    }
+
     onNavigationFrame?.();
   });
 

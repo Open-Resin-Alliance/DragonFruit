@@ -5,7 +5,6 @@ import type { CameraProjectionMode } from '@/components/settings/cameraProjectio
 import {
   ORTHO_FAR,
   ORTHO_NEAR,
-  bakeOrthoZoomIntoRadius,
   orthoRadiusForPerspectiveFraming,
   syncOrthoFrustum,
 } from '@/components/scene/camera/orthoDolly';
@@ -16,7 +15,15 @@ function orbitTargetOf(controls: unknown): THREE.Vector3 | null {
   return target instanceof THREE.Vector3 ? target : null;
 }
 
-export function CameraProjectionController({ mode, perspectiveFov = 50 }: { mode: CameraProjectionMode; perspectiveFov?: number }) {
+export function CameraProjectionController({
+  mode,
+  perspectiveFov = 50,
+  sceneRadius,
+}: {
+  mode: CameraProjectionMode;
+  perspectiveFov?: number;
+  sceneRadius?: number;
+}) {
   const { camera, controls, set, size } = useThree();
   const PERSPECTIVE_NEAR = 0.005;
   const PERSPECTIVE_FAR = 50000;
@@ -27,7 +34,7 @@ export function CameraProjectionController({ mode, perspectiveFov = 50 }: { mode
       // The frustum is derived from the dolly radius (see orthoDolly.ts), so a
       // resize only needs to re-derive it at the new aspect ratio.
       const target = orbitTargetOf(controls) ?? new THREE.Vector3();
-      syncOrthoFrustum(camera, target, aspect);
+      syncOrthoFrustum(camera, target, aspect, { sceneRadius });
       // NOTE: Do NOT call controls.update() here. If we do, and the user
       // hasn't interacted with the camera since the intro animation,
       // OrbitControls may apply internal constraints that cause the view
@@ -82,7 +89,7 @@ export function CameraProjectionController({ mode, perspectiveFov = 50 }: { mode
       next.quaternion.copy(camera.quaternion);
       next.up.copy(camera.up);
 
-      syncOrthoFrustum(next, target, aspect);
+      syncOrthoFrustum(next, target, aspect, { sceneRadius });
       // Force matrixWorld to be set from position+quaternion immediately so the
       // PickingRenderer (which runs in useFrame, before gl.render) gets a valid
       // camera matrix on the very first frame after the switch.
@@ -134,7 +141,7 @@ export function CameraProjectionController({ mode, perspectiveFov = 50 }: { mode
       (controls as any).update?.();
       next.updateMatrixWorld();
     }
-  }, [camera, controls, mode, perspectiveFov, set, size.height, size.width]);
+  }, [camera, controls, mode, perspectiveFov, sceneRadius, set, size.height, size.width]);
 
   return null;
 }
@@ -153,40 +160,25 @@ export function CameraProjectionController({ mode, perspectiveFov = 50 }: { mode
 export function OrthoFrustumSync({
   mode,
   suspended,
+  sceneRadius,
 }: {
   mode: CameraProjectionMode;
   suspended: boolean;
+  sceneRadius?: number;
 }) {
   const { camera, controls, size } = useThree();
   const aspect = size.width / Math.max(1, size.height);
-  const wasSuspendedRef = React.useRef(false);
-  const suspendedBaseRadiusRef = React.useRef<number | null>(null);
 
   const sync = React.useCallback(() => {
     if (suspended) return;
     if (mode !== 'orthographic') return;
     if (!(camera instanceof THREE.OrthographicCamera)) return;
-    syncOrthoFrustum(camera, orbitTargetOf(controls) ?? new THREE.Vector3(), aspect);
-  }, [aspect, camera, controls, mode, suspended]);
+    syncOrthoFrustum(camera, orbitTargetOf(controls) ?? new THREE.Vector3(), aspect, { sceneRadius });
+  }, [aspect, camera, controls, mode, sceneRadius, suspended]);
 
   React.useLayoutEffect(() => {
-    const isOrtho = mode === 'orthographic' && camera instanceof THREE.OrthographicCamera;
-    if (isOrtho) {
-      const target = orbitTargetOf(controls) ?? new THREE.Vector3();
-      if (suspended) {
-        // Freeze the radius the frustum is derived from; the SpaceMouse's zoom
-        // is relative to this base for the whole gesture.
-        if (suspendedBaseRadiusRef.current === null) {
-          suspendedBaseRadiusRef.current = camera.position.distanceTo(target);
-        }
-      } else if (wasSuspendedRef.current && suspendedBaseRadiusRef.current !== null) {
-        bakeOrthoZoomIntoRadius(camera, target, aspect, suspendedBaseRadiusRef.current);
-        suspendedBaseRadiusRef.current = null;
-      }
-    }
-    wasSuspendedRef.current = suspended;
     sync();
-  }, [aspect, camera, controls, mode, suspended, sync]);
+  }, [sync]);
 
   React.useEffect(() => {
     if (!controls || typeof controls !== 'object') return;

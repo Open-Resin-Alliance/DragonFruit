@@ -14,6 +14,7 @@ import {
   type NativeCameraInput,
   type NativeNavOutput,
 } from './nativeSpaceMouseBridge';
+import { ORTHO_MAX_RADIUS, ORTHO_MIN_RADIUS, applyOrthoFrustum, orthoAspectOf } from './orthoDolly';
 
 type OrbitLikeControls = {
   target: THREE.Vector3;
@@ -62,11 +63,13 @@ const FORCE_PERSPECTIVE_IN_ORTHO = true;
 export function NativeSpaceMouseController({
   pivotPoint,
   fallbackPivot,
+  sceneRadius,
   onNavigationActiveChange,
   onNavigationFrame,
 }: {
   pivotPoint?: THREE.Vector3 | null;
   fallbackPivot?: THREE.Vector3 | null;
+  sceneRadius?: number;
   onNavigationActiveChange?: (active: boolean) => void;
   onNavigationFrame?: () => void;
 }) {
@@ -82,7 +85,6 @@ export function NativeSpaceMouseController({
   const latestOutRef = React.useRef<NativeNavOutput | null>(null);
   const inFlightRef = React.useRef(false);
   const lastAppliedSeqRef = React.useRef(0);
-  const lastAppliedExtentsSeqRef = React.useRef(0);
   const prevMotionRef = React.useRef(false);
   const weDisabledOrbitRef = React.useRef(false);
   // Camera→target distance captured when navlib takes over, so handback can
@@ -92,27 +94,13 @@ export function NativeSpaceMouseController({
   // always world Z-up. We don't level on release (the tilt is kept for viewing) —
   // only when the user next starts a mouse orbit/pan (the controls 'start' event).
   const pendingLevelRef = React.useRef(false);
-  // The focus distance we last REPORTED to navlib. In the ortho lie this is a
-  // synthetic value (sized so navlib's perspective frustum matches the ortho
-  // view), so the dolly→zoom conversion must divide by the same number navlib
-  // used to size its dolly — not the real eye→target distance.
-  const navFocusRef = React.useRef(50);
-  // navlib's eye position drifts FORWARD relative to our camera during a motion:
-  // we strip its perspective dolly each frame (ortho ignores eye distance) but
-  // navlib doesn't re-read our getters mid-motion, so it keeps integrating from
-  // its own (dollied) pose. Measuring the dolly as navlib_eye − camera would read
-  // that growing gap and compound into runaway zoom. Instead we track navlib's
-  // OWN previous eye position and take the per-frame increment, which is immune to
-  // the drift. Reset (navHasPrev=false) at the start of each motion, since navlib
-  // re-snapshots our real pose then and the stale prev would give a first-frame jump.
-  const navPrevPosRef = React.useRef(new THREE.Vector3());
-  const navHasPrevRef = React.useRef(false);
-  // navlib snapshots the focus distance ONCE at motion start and sizes its dolly by
-  // that fixed value for the whole gesture. The dolly→zoom conversion must divide by
-  // the SAME frozen value — using the live (per-frame shrinking) navFocusRef makes
-  // denom = D−dolly collapse as you zoom in, snapping the zoom. Locked at motion start.
-  const navFocusLockedRef = React.useRef(50);
-
+  // Ortho dolly radius while navlib owns the camera. navlib's absolute axial
+  // distance is offset by the pivot it orbits (the selected model centre), which
+  // need not equal the current look target, so we integrate navlib's OWN per-frame
+  // axial delta onto the radius the derived frustum already had — no start jump.
+  const navRadiusRef = React.useRef(50);
+  const navPrevAxialRef = React.useRef(0);
+  const navHasAxialRef = React.useRef(false);
   // Cached model extents + refresh counter.
   const modelBoxRef = React.useRef(new THREE.Box3());
   const modelBoxAgeRef = React.useRef(MODEL_EXTENTS_REFRESH_FRAMES);
@@ -121,8 +109,6 @@ export function NativeSpaceMouseController({
   const tmpMatrix = React.useRef(new THREE.Matrix4());
   const tmpScale = React.useRef(new THREE.Vector3());
   const tmpTarget = React.useRef(new THREE.Vector3());
-  const tmpRight = React.useRef(new THREE.Vector3());
-  const tmpUp = React.useRef(new THREE.Vector3());
   const tmpPan = React.useRef(new THREE.Vector3());
   const tmpPos = React.useRef(new THREE.Vector3());
   const tmpDir = React.useRef(new THREE.Vector3());
@@ -204,56 +190,50 @@ export function NativeSpaceMouseController({
       }
 
       // ── Ortho + forced-perspective lie ──
-      // navlib thinks it's driving a perspective camera, so its "zoom" dollies the
-      // eye FORWARD. We apply navlib's ABSOLUTE eye pose (position + orientation)
-      // straight from the affine: for ortho the eye's distance along the view axis
-      // is invisible (near/far span ±50000), so letting it dolly costs nothing, and
-      // absolute position means the camera lands exactly where navlib frames it —
-      // crucial for the pre-defined view (preset) commands, which reposition the eye
-      // in one big reorientation that per-frame delta integration used to smear
-      // across a rotating frame (→ presets landing in random places).
-      //
-      // The only thing that needs translating for ortho is the "zoom": we still read
-      // navlib's per-frame forward increment (navPos_now − navPos_prev)·fwd and turn
-      // it into camera.zoom below. Because camera.position tracks navPos exactly, the
-      // increment can't diverge, so there is no runaway.
+      // navlib thinks it is driving a perspective camera: it trucks the eye
+      // laterally for pan, rotates it for orbit, and dollies it forward for
+      // "zoom". We apply that absolute pose unchanged (so presets, which
+      // reposition the eye in one reorientation, land where navlib framed them)
+      // and derive the ortho scale from the axial camera→pivot distance, which is
+      // the same radius the derived-frustum sync resumes from on hand-back.
       m.decompose(tmpPos.current, tmpQuat.current, tmpScale.current);
       const fwd = tmpDir.current.set(0, 0, -1).applyQuaternion(tmpQuat.current).normalize();
-      let dolly = 0;
-      if (navHasPrevRef.current) {
-        dolly = tmpPan.current.copy(tmpPos.current).sub(navPrevPosRef.current).dot(fwd);
+      const pivot = getTarget(tmpTarget.current);
+      const axial = tmpPan.current.copy(tmpPos.current).sub(pivot).dot(fwd);
+      // Integrate navlib's own axial delta. Under orbit fwd tracks the pivot, so
+      // axial is the (constant) orbit distance and only a real dolly moves it;
+      // lateral pan is perpendicular and contributes nothing.
+      if (navHasAxialRef.current) {
+        const delta = axial - navPrevAxialRef.current;
+        navRadiusRef.current = THREE.MathUtils.clamp(
+          navRadiusRef.current - delta,
+          ORTHO_MIN_RADIUS,
+          ORTHO_MAX_RADIUS,
+        );
       }
-      navPrevPosRef.current.copy(tmpPos.current);
-      navHasPrevRef.current = true;
+      navPrevAxialRef.current = axial;
+      navHasAxialRef.current = true;
+
       camera.position.copy(tmpPos.current);
       camera.quaternion.copy(tmpQuat.current);
       camera.up.set(affine[4], affine[5], affine[6]).normalize();
-
-      // This frame's forward increment scales apparent size by D/(D−dolly). D must
-      // be the distance navlib used to size the dolly (the synthetic value we
-      // reported), not the real eye→target distance. Because dolly is now a single
-      // frame's motion (∝ gesture ∝ D), the ratio depends only on gesture strength
-      // — consistent at any zoom level and free of the old compounding drift.
-      const ortho = camera as THREE.OrthographicCamera;
-      const D = Math.max(1e-3, navFocusLockedRef.current);
-      const denom = D - dolly;
-      if (Math.abs(dolly) > 1e-6 && denom > 1e-3) {
-        ortho.zoom = THREE.MathUtils.clamp(ortho.zoom * (D / denom), 0.0001, 2000);
-        ortho.updateProjectionMatrix();
-      }
       camera.updateMatrixWorld();
+
+      const ortho = camera as THREE.OrthographicCamera;
+      applyOrthoFrustum(ortho, navRadiusRef.current, orthoAspectOf(ortho), { sceneRadius });
+      focusDistRef.current = navRadiusRef.current;
     },
-    [camera],
+    [camera, getTarget, sceneRadius],
   );
 
   const handBackToOrbit = React.useCallback(() => {
     if (!weDisabledOrbitRef.current) return;
     if (isOrbitLikeControls(controls)) {
       // Re-seat the orbit pivot in FRONT of wherever navlib left the camera, at
-      // the radius it had when navigation began. navlib moves the camera freely
-      // (orbit sweeps it far from the old target); copying that stale pivot back
-      // is what snapped the camera on release after a rotation. A point along the
-      // current view direction keeps the pose OrbitControls resumes from.
+      // the current dolly radius. navlib moves the camera freely (orbit sweeps it
+      // far from the old target); copying that stale pivot back is what snapped the
+      // camera on release after a rotation. A point along the current view direction
+      // keeps the pose — and the ortho scale — OrbitControls resumes from.
       const dir = camera.getWorldDirection(tmpPan.current); // into-screen, unit
       controls.target
         .copy(camera.position)
@@ -290,52 +270,6 @@ export function NativeSpaceMouseController({
     };
   }, [camera]);
 
-  // Apply navlib's ortho extents box. For an orthographic camera navlib does NOT
-  // move `view.affine` to pan — it drives BOTH pan and zoom through `view.extents`
-  // (the eye-space view box): its *width* is the zoom, and its *center* offset is
-  // the pan. We send a camera-centered box each frame (center ≈ 0), so navlib's
-  // returned center is the incremental pan in eye-space world units; we truck the
-  // camera + OrbitControls target along the camera's right/up by that offset
-  // (like the Gamepad controller) and let the width drive `camera.zoom`. Absorbing
-  // the pan into the camera re-centers the box we send next frame.
-  const applyOrthoExtents = React.useCallback(
-    (min: [number, number, number], max: [number, number, number]) => {
-      const ortho = camera as THREE.OrthographicCamera;
-      if (ortho.isOrthographicCamera !== true) return;
-
-      // ── Zoom: box width vs the base frustum ──
-      // Guard non-finite / degenerate navlib boxes (its ortho zoom can collapse
-      // the width to 0 → NaN); never let that reach camera.zoom.
-      const navWidth = max[0] - min[0];
-      const baseWidth = ortho.right - ortho.left;
-      if (Number.isFinite(navWidth) && navWidth > 1e-3 && baseWidth > 1e-9) {
-        ortho.zoom = THREE.MathUtils.clamp(baseWidth / navWidth, 0.0001, 2000);
-        ortho.updateProjectionMatrix();
-      }
-
-      // ── Pan: box center offset vs the (camera-centered) box we sent ──
-      const navCx = (min[0] + max[0]) / 2;
-      const navCy = (min[1] + max[1]) / 2;
-      const sentCx = (ortho.right + ortho.left) / 2;
-      const sentCy = (ortho.top + ortho.bottom) / 2;
-      const panX = navCx - sentCx;
-      const panY = navCy - sentCy;
-      if (Math.abs(panX) > 1e-9 || Math.abs(panY) > 1e-9) {
-        camera.updateMatrixWorld();
-        const right = tmpRight.current.setFromMatrixColumn(camera.matrixWorld, 0).normalize();
-        const up = tmpUp.current.setFromMatrixColumn(camera.matrixWorld, 1).normalize();
-        const pan = tmpPan.current
-          .set(0, 0, 0)
-          .addScaledVector(right, panX)
-          .addScaledVector(up, panY);
-        camera.position.add(pan);
-        if (isOrbitLikeControls(controls)) controls.target.add(pan);
-        camera.updateMatrixWorld();
-      }
-    },
-    [camera, controls],
-  );
-
   const buildCameraInput = React.useCallback((): NativeCameraInput => {
     camera.updateMatrixWorld();
     const target = getTarget(tmpTarget.current);
@@ -361,7 +295,6 @@ export function NativeSpaceMouseController({
       const t = Math.tan(fov / 2);
       if (halfH > 1e-6 && t > 1e-6) focusDistanceForNav = halfH / t;
     }
-    navFocusRef.current = focusDistanceForNav;
 
     if (modelBoxAgeRef.current >= MODEL_EXTENTS_REFRESH_FRAMES) {
       refreshModelExtents();
@@ -400,7 +333,7 @@ export function NativeSpaceMouseController({
         prevMotionRef.current = false;
         onNavigationActiveChange?.(false);
       }
-      navHasPrevRef.current = false;
+      navHasAxialRef.current = false;
       handBackToOrbit();
       return;
     }
@@ -408,44 +341,35 @@ export function NativeSpaceMouseController({
     // 1. Apply navlib's latest camera (from the previous frame's sync).
     const out = latestOutRef.current;
     if (out) {
-      let changed = false;
-      if (out.seq !== lastAppliedSeqRef.current) {
-        lastAppliedSeqRef.current = out.seq;
-        applyAffine(out.affine); // pan + orbit
-        changed = true;
-      }
-      if (out.extentsSeq !== lastAppliedExtentsSeqRef.current) {
-        lastAppliedExtentsSeqRef.current = out.extentsSeq;
-        applyOrthoExtents(out.orthoMin, out.orthoMax); // ortho zoom
-        changed = true;
-      }
-      if (changed) onNavigationFrame?.();
-      // Motion edge: take/release exclusive control of OrbitControls.
+      // Motion edge FIRST, so the first applied frame starts the ortho radius from
+      // the current derived value rather than a stale one.
       if (out.motion !== prevMotionRef.current) {
         prevMotionRef.current = out.motion;
         if (out.motion) {
-          // navlib re-snapshots our real pose at motion start, so any prev eye from
-          // a past motion is stale — drop it to avoid a first-frame dolly jump.
-          navHasPrevRef.current = false;
-          // Freeze the focus distance navlib snapshotted now, so the dolly→zoom
-          // conversion divides by the same value navlib used for the whole gesture.
-          navFocusLockedRef.current = navFocusRef.current;
+          navRadiusRef.current = THREE.MathUtils.clamp(
+            camera.position.distanceTo(controls.target),
+            ORTHO_MIN_RADIUS,
+            ORTHO_MAX_RADIUS,
+          );
+          navHasAxialRef.current = false;
+          focusDistRef.current = navRadiusRef.current;
           if (!weDisabledOrbitRef.current) {
-            // Remember the orbit radius so handback can rebuild the pivot.
-            focusDistRef.current = Math.max(0.1, camera.position.distanceTo(controls.target));
             controls.enabled = false;
             weDisabledOrbitRef.current = true;
           }
           onNavigationActiveChange?.(true);
         } else {
-          // Motion ended: drop the tracked navlib eye now. It sits far forward
-          // (accumulated dollies we stripped), and applyAffine runs BEFORE the
-          // motion-start reset next gesture — clearing it here stops that stale
-          // eye from producing a giant first-frame dolly (a zoom snap).
-          navHasPrevRef.current = false;
+          navHasAxialRef.current = false;
+          focusDistRef.current = navRadiusRef.current;
           handBackToOrbit();
           onNavigationActiveChange?.(false);
         }
+      }
+
+      if (out.seq !== lastAppliedSeqRef.current) {
+        lastAppliedSeqRef.current = out.seq;
+        applyAffine(out.affine); // pan + orbit + dolly
+        onNavigationFrame?.();
       }
     }
 

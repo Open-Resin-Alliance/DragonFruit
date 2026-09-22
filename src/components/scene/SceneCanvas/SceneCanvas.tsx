@@ -3866,6 +3866,26 @@ export function SceneCanvas({
 
   const introControllerRunId = cameraIntroRunId;
 
+  // Radius of the scene around the orbit target, used to size the orthographic
+  // depth range so it tracks the dolly radius instead of a blanket constant.
+  const orthoSceneRadiusMm = React.useMemo(() => {
+    let radius = 0;
+    if (introBoundsSnapshot && !introBoundsSnapshot.isEmpty()) {
+      radius = introBoundsSnapshot.getBoundingSphere(new THREE.Sphere()).radius;
+    }
+    const buildRadius = 0.5 * Math.hypot(
+      activeBuildVolumeSettings.widthMm,
+      activeBuildVolumeSettings.depthMm,
+      activeBuildVolumeSettings.maxZMm,
+    );
+    return Math.max(radius, buildRadius) + 200;
+  }, [
+    activeBuildVolumeSettings.depthMm,
+    activeBuildVolumeSettings.maxZMm,
+    activeBuildVolumeSettings.widthMm,
+    introBoundsSnapshot,
+  ]);
+
   const selectedSpaceMousePivotPoint = React.useMemo(() => {
     if (!activeModel?.visible) return null;
 
@@ -5142,6 +5162,7 @@ export function SceneCanvas({
                 minRadius: ORTHO_MIN_RADIUS,
                 maxRadius: ORTHO_MAX_RADIUS,
                 aspect,
+                options: { sceneRadius: orthoSceneRadiusMm },
               });
               zoomControls.target.copy(nextTarget);
               zoomControls.update();
@@ -5203,6 +5224,7 @@ export function SceneCanvas({
     handleOrbitChange,
     handleOrbitEnd,
     handleOrbitStart,
+    orthoSceneRadiusMm,
     scheduleTrackpadGestureEnd,
   ]);
 
@@ -5874,8 +5896,8 @@ export function SceneCanvas({
         />
         <EnableLocalClipping enabled={clipLower != null || clipUpper != null || indicatorPlaneZ != null || !!organicCutKeyGizmo} />
         <CameraProvider cameraRef={cameraRef} />
-        <CameraProjectionController mode={cameraProjectionMode} perspectiveFov={perspectiveFov} />
-        <OrthoFrustumSync mode={cameraProjectionMode} suspended={spaceMouseNavigationActive} />
+        <CameraProjectionController mode={cameraProjectionMode} perspectiveFov={perspectiveFov} sceneRadius={orthoSceneRadiusMm} />
+        <OrthoFrustumSync mode={cameraProjectionMode} suspended={spaceMouseNavigationActive} sceneRadius={orthoSceneRadiusMm} />
         <CameraClipPlaneStabilizer />
         {/* GPU Picking Provider - wraps all pickable content when enabled */}
         <PickingProviderWrapper
@@ -7224,6 +7246,7 @@ export function SceneCanvas({
           <NativeSpaceMouseController
             pivotPoint={selectedSpaceMousePivotPoint}
             fallbackPivot={buildVolumeCenterTarget}
+            sceneRadius={orthoSceneRadiusMm}
             onNavigationActiveChange={setSpaceMouseNavigationActive}
             onNavigationFrame={handleSpaceMouseNavigationFrame}
           />
@@ -7233,6 +7256,7 @@ export function SceneCanvas({
             pivotPoint={selectedSpaceMousePivotPoint}
             pivotCandidates={spaceMousePivotCandidates}
             fallbackPivot={buildVolumeCenterTarget}
+            sceneRadius={orthoSceneRadiusMm}
             mouseOrbitDragRunId={mouseOrbitDragRunId}
             onNavigationActiveChange={setSpaceMouseNavigationActive}
             onNavigationFrame={handleSpaceMouseNavigationFrame}

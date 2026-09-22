@@ -17,12 +17,15 @@ import { DEFAULT_FOV_DEG } from '@/components/settings/cameraFovPreferences';
 export const ORTHO_REFERENCE_FOV_DEG = DEFAULT_FOV_DEG;
 
 /**
- * Symmetric depth range. Orthographic cameras need a negative near so geometry
- * behind the camera's position stays visible; ±50000 at 24-bit depth is
- * ~0.006 mm resolution across the scene's 100–600 mm working volume.
+ * Fallback symmetric depth range when the scene radius is unknown. Orthographic
+ * cameras need a negative near so geometry behind the camera's position stays
+ * visible; ±50000 at 24-bit depth is ~0.006 mm resolution.
  */
 export const ORTHO_NEAR = -50000;
 export const ORTHO_FAR = 50000;
+
+/** Extra slack beyond `radius + sceneRadius` so edges never clip. */
+export const ORTHO_DEPTH_MARGIN = 500;
 
 /** Bounds on the dolly radius, so the wheel cannot collapse or run away. */
 export const ORTHO_MIN_RADIUS = 0.5;
@@ -41,6 +44,51 @@ export function orthoHalfHeightForRadius(radius: number, fovDeg = ORTHO_REFERENC
   );
 }
 
+export type OrthoFrustumOptions = {
+  fovDeg?: number;
+  /**
+   * Radius of the scene around the target. When known, the depth range is
+   * `±(radius + sceneRadius + margin)` — tighter, so better z precision than the
+   * blanket fallback. Pass 0/undefined to use the fallback.
+   */
+  sceneRadius?: number;
+};
+
+/** The horizontal:vertical aspect of an ortho camera's current frustum. */
+export function orthoAspectOf(camera: THREE.OrthographicCamera): number {
+  return (camera.right - camera.left) / Math.max(EPSILON, camera.top - camera.bottom);
+}
+
+/**
+ * Write a symmetric ortho frustum for an explicit radius and pin `zoom` to 1.
+ * `radius` is the axial camera-to-target distance — the single ortho scale.
+ */
+export function applyOrthoFrustum(
+  camera: THREE.OrthographicCamera,
+  radius: number,
+  aspect: number,
+  options: OrthoFrustumOptions = {},
+): void {
+  const halfH = orthoHalfHeightForRadius(radius, options.fovDeg);
+  const halfW = halfH * Math.max(EPSILON, aspect);
+
+  camera.left = -halfW;
+  camera.right = halfW;
+  camera.top = halfH;
+  camera.bottom = -halfH;
+  camera.zoom = 1;
+
+  if (options.sceneRadius != null && options.sceneRadius > 0) {
+    const depth = Math.max(EPSILON, radius) + options.sceneRadius + ORTHO_DEPTH_MARGIN;
+    camera.near = -depth;
+    camera.far = depth;
+  } else {
+    camera.near = ORTHO_NEAR;
+    camera.far = ORTHO_FAR;
+  }
+  camera.updateProjectionMatrix();
+}
+
 /**
  * Recompute the frustum from the current radius. Returns the radius used.
  * Call after anything that changes `camera.position` or the orbit target.
@@ -49,20 +97,10 @@ export function syncOrthoFrustum(
   camera: THREE.OrthographicCamera,
   target: THREE.Vector3,
   aspect: number,
-  fovDeg = ORTHO_REFERENCE_FOV_DEG,
+  options: OrthoFrustumOptions = {},
 ): number {
   const radius = orthoRadius(camera, target);
-  const halfH = orthoHalfHeightForRadius(radius, fovDeg);
-  const halfW = halfH * Math.max(EPSILON, aspect);
-
-  camera.left = -halfW;
-  camera.right = halfW;
-  camera.top = halfH;
-  camera.bottom = -halfH;
-  camera.zoom = 1;
-  camera.near = ORTHO_NEAR;
-  camera.far = ORTHO_FAR;
-  camera.updateProjectionMatrix();
+  applyOrthoFrustum(camera, radius, aspect, options);
   return radius;
 }
 
@@ -94,32 +132,6 @@ export function orthoWheelRadiusScale(deltaY: number, zoomSpeed: number): number
   return deltaY < 0 ? step : 1 / step;
 }
 
-/**
- * Bake an explicit `camera.zoom` into the radius and return to the derived
- * frustum. The SpaceMouse paths drive `zoom` directly while they hold the
- * camera; on hand-back this converts that accumulated zoom into the equivalent
- * radius so the derived frustum matches the last visible scale.
- *
- * `baseRadius` is the radius the frustum was derived from when the SpaceMouse
- * took over. Its `zoom` is relative to that frozen base — the camera's live
- * position may have drifted along the view axis during the gesture — so pass it
- * whenever it is known; otherwise the live radius is used.
- */
-export function bakeOrthoZoomIntoRadius(
-  camera: THREE.OrthographicCamera,
-  target: THREE.Vector3,
-  aspect: number,
-  baseRadius?: number,
-): number {
-  const radius = baseRadius ?? orthoRadius(camera, target);
-  const zoom = Math.max(EPSILON, camera.zoom || 1);
-  const nextRadius = THREE.MathUtils.clamp(radius / zoom, ORTHO_MIN_RADIUS, ORTHO_MAX_RADIUS);
-  const direction = camera.getWorldDirection(new THREE.Vector3());
-  camera.position.copy(target).addScaledVector(direction, -nextRadius);
-  camera.updateMatrixWorld();
-  return syncOrthoFrustum(camera, target, aspect);
-}
-
 export type OrthoDollyParams = {
   camera: THREE.OrthographicCamera;
   target: THREE.Vector3;
@@ -131,7 +143,7 @@ export type OrthoDollyParams = {
   minRadius?: number;
   maxRadius?: number;
   aspect: number;
-  fovDeg?: number;
+  options?: OrthoFrustumOptions;
 };
 
 /**
@@ -150,7 +162,7 @@ export function dollyOrthoToCursor(params: OrthoDollyParams): THREE.Vector3 {
     minRadius = ORTHO_MIN_RADIUS,
     maxRadius = ORTHO_MAX_RADIUS,
     aspect,
-    fovDeg,
+    options,
   } = params;
 
   camera.updateMatrixWorld();
@@ -162,7 +174,7 @@ export function dollyOrthoToCursor(params: OrthoDollyParams): THREE.Vector3 {
 
   // Move along the view axis to the new radius, keeping the camera's orientation.
   camera.position.copy(target).addScaledVector(direction, -nextRadius);
-  syncOrthoFrustum(camera, target, aspect, fovDeg);
+  applyOrthoFrustum(camera, nextRadius, aspect, options);
   camera.updateMatrixWorld();
 
   // Shift laterally so the anchored point keeps its screen position.

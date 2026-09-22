@@ -3,9 +3,13 @@ import test from 'node:test';
 import * as THREE from 'three';
 
 import {
+  ORTHO_DEPTH_MARGIN,
+  ORTHO_FAR,
+  ORTHO_NEAR,
   ORTHO_REFERENCE_FOV_DEG,
-  bakeOrthoZoomIntoRadius,
+  applyOrthoFrustum,
   dollyOrthoToCursor,
+  orthoAspectOf,
   orthoHalfHeightForRadius,
   orthoRadiusForPerspectiveFraming,
   orthoWheelRadiusScale,
@@ -92,6 +96,24 @@ test('dollyOrthoToCursor clamps the radius to the configured bounds', () => {
   assert.ok(Math.abs(camera.position.distanceTo(nextTarget) - 10) < 1e-4);
 });
 
+test('applyOrthoFrustum sizes the depth range from the scene radius', () => {
+  const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -50000, 50000);
+
+  applyOrthoFrustum(camera, 100, 1, { sceneRadius: 300 });
+  const expectedDepth = 100 + 300 + ORTHO_DEPTH_MARGIN;
+  assert.ok(Math.abs(camera.near + expectedDepth) < 1e-6);
+  assert.ok(Math.abs(camera.far - expectedDepth) < 1e-6);
+
+  applyOrthoFrustum(camera, 100, 1);
+  assert.equal(camera.near, ORTHO_NEAR);
+  assert.equal(camera.far, ORTHO_FAR);
+});
+
+test('orthoAspectOf reports the frustum aspect', () => {
+  const camera = new THREE.OrthographicCamera(-2, 2, 1, -1, -50000, 50000);
+  assert.ok(Math.abs(orthoAspectOf(camera) - 2) < 1e-9);
+});
+
 test('orthoRadiusForPerspectiveFraming preserves apparent size and round-trips', () => {
   // At the reference FOV the radius is unchanged.
   assert.ok(Math.abs(orthoRadiusForPerspectiveFraming(100, ORTHO_REFERENCE_FOV_DEG) - 100) < 1e-9);
@@ -107,33 +129,4 @@ test('orthoRadiusForPerspectiveFraming preserves apparent size and round-trips',
   assert.ok(Math.abs(backToPerspective - 100) < 1e-6);
 });
 
-test('bakeOrthoZoomIntoRadius uses the frozen base radius when the camera drifted', () => {
-  const { camera, target } = makeOrthoCamera(100, 1);
-  // Simulate a SpaceMouse gesture: the frustum base was frozen at radius 100,
-  // the camera drifted along the view axis, and zoom accumulated to 4.
-  camera.position.set(0, 0, 80);
-  camera.zoom = 4;
-  camera.updateMatrixWorld();
 
-  bakeOrthoZoomIntoRadius(camera, target, 1, 100);
-
-  assert.ok(Math.abs(camera.position.distanceTo(target) - 25) < 1e-4);
-  assert.ok(Math.abs(camera.top - orthoHalfHeightForRadius(25)) < 1e-4);
-});
-
-test('bakeOrthoZoomIntoRadius preserves the visible half-height', () => {
-  const { camera, target } = makeOrthoCamera(100, 1);
-
-  camera.zoom = 4;
-  camera.updateProjectionMatrix();
-  const visibleHalfHBefore = (camera.top - camera.bottom) / (2 * camera.zoom);
-
-  bakeOrthoZoomIntoRadius(camera, target, 1);
-
-  const visibleHalfHAfter = (camera.top - camera.bottom) / (2 * camera.zoom);
-  assert.equal(camera.zoom, 1);
-  assert.ok(Math.abs(visibleHalfHAfter - visibleHalfHBefore) < 1e-4);
-  assert.ok(
-    Math.abs(camera.top - orthoHalfHeightForRadius(25, ORTHO_REFERENCE_FOV_DEG)) < 1e-4,
-  );
-});

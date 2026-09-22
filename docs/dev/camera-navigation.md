@@ -35,8 +35,9 @@ camera.zoom = 1
 ```
 
 `src/components/scene/camera/orthoDolly.ts` owns this. `syncOrthoFrustum`
-derives the frustum, `dollyOrthoToCursor` performs a cursor-anchored dolly, and
-`bakeOrthoZoomIntoRadius` converts an explicit `zoom` back into a radius.
+derives the frustum from the current position, `applyOrthoFrustum` writes it for
+an explicit radius (used by the SpaceMouse controllers), and
+`dollyOrthoToCursor` performs a cursor-anchored dolly.
 
 ### Projection switching preserves apparent size
 
@@ -68,18 +69,23 @@ runs once per frame as a safety net for programmatic moves that skip
   disabled (`enableZoom={cameraProjectionMode === 'perspective'}`) and the
   `onTrackpadWheel` handler calls `dollyOrthoToCursor`. Perspective keeps
   OrbitControls' native dolly and `zoomToCursor`.
-- **Ortho near/far are symmetric and large** (`ORTHO_NEAR`/`ORTHO_FAR`) so
-  geometry behind the camera position is never clipped.
+- **Ortho near/far track the radius.** When the scene radius is known, the depth
+  range is `±(radius + sceneRadius + ORTHO_DEPTH_MARGIN)`, so z precision improves
+  as you dolly in. `ORTHO_NEAR`/`ORTHO_FAR` are the fallback when it is not.
 
 ## SpaceMouse
 
-The SpaceMouse controllers (`NativeSpaceMouseController`,
-`SpaceMouseController`) still drive `camera.zoom` directly while they own the
-camera. `OrthoFrustumSync` is suspended for the duration
-(`spaceMouseNavigationActive`) so they run unopposed; on hand-back it calls
-`bakeOrthoZoomIntoRadius` using the radius captured at gesture start, so the
-derived frustum matches the last visible scale before normal navigation
-resumes. Fully unifying the SpaceMouse onto the radius model is still open.
+Both SpaceMouse controllers (`NativeSpaceMouseController`,
+`SpaceMouseController`) now dolly the camera and set the ortho frustum directly
+from the radius via `applyOrthoFrustum` — no `zoom` conversion. The native path
+integrates navlib's own per-frame axial delta onto the current radius (its
+absolute axial distance is offset by the pivot it orbits, which need not be the
+look target, so using it directly would jump at gesture start).
+
+`OrthoFrustumSync` is suspended while a SpaceMouse owns the camera
+(`spaceMouseNavigationActive`); on hand-back the controller re-seats
+`controls.target` along the view axis at the current radius, so the resumed sync
+derives the same frustum with no pop.
 
 ## Tests
 
