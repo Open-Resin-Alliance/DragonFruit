@@ -5,6 +5,7 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { BufferGeometry, CanvasTexture, DoubleSide, Float32BufferAttribute, Group, Matrix4, Object3D, Quaternion, Vector3 } from 'three';
 import type { OrthographicCamera as ThreeOrthographicCamera } from 'three';
 import { Edges, GizmoHelperProps, Hud, OrthographicCamera } from '@react-three/drei';
+import { __iconNode as houseIconNode } from 'lucide-react/dist/esm/icons/house.js';
 
 type TweenCamera = (direction: Vector3) => void;
 type QuarterTurnDirection = 'left' | 'right' | 'up' | 'down';
@@ -200,28 +201,24 @@ function HomeButton({
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
 
-    // Simple house outline (roof + body, closed) with a door; no boxed frame.
+    // Rasterize lucide's House icon (the same one the rest of the UI uses) with
+    // its own 24x24 viewBox and default stroke, scaled to the canvas.
+    const viewBox = 24;
+    const padding = size * 0.06;
+    const scale = (size - padding * 2) / viewBox;
     ctx.clearRect(0, 0, size, size);
+    ctx.save();
+    ctx.translate(padding, padding);
+    ctx.scale(scale, scale);
     ctx.strokeStyle = strokeColor;
-    ctx.lineWidth = 6;
-    ctx.lineJoin = 'round';
+    ctx.lineWidth = 2;
     ctx.lineCap = 'round';
-
-    ctx.beginPath();
-    ctx.moveTo(size * 0.24, size * 0.86);
-    ctx.lineTo(size * 0.24, size * 0.5);
-    ctx.lineTo(size * 0.5, size * 0.18);
-    ctx.lineTo(size * 0.76, size * 0.5);
-    ctx.lineTo(size * 0.76, size * 0.86);
-    ctx.closePath();
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.moveTo(size * 0.42, size * 0.86);
-    ctx.lineTo(size * 0.42, size * 0.66);
-    ctx.lineTo(size * 0.58, size * 0.66);
-    ctx.lineTo(size * 0.58, size * 0.86);
-    ctx.stroke();
+    ctx.lineJoin = 'round';
+    for (const [tag, attrs] of houseIconNode) {
+      if (tag !== 'path' || typeof attrs.d !== 'string') continue;
+      ctx.stroke(new Path2D(attrs.d));
+    }
+    ctx.restore();
 
     return new CanvasTexture(canvas);
   }, [strokeColor]);
