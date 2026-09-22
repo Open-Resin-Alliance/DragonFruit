@@ -178,18 +178,14 @@ function RotationArrow({
 
 /** Home button sits on the bottom-right diagonal, between the right and bottom arrows. */
 const HOME_OFFSET = 0.7;
-const HOME_SIZE = 0.28;
+const HOME_SIZE = 0.3;
 
 function HomeButton({
   position,
-  color,
-  hoverColor,
   strokeColor,
   onClick,
 }: {
   position: [number, number, number];
-  color: string;
-  hoverColor: string;
   strokeColor: string;
   onClick?: () => void;
 }) {
@@ -204,30 +200,38 @@ function HomeButton({
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
 
-    ctx.fillStyle = color;
-    ctx.fillRect(0, 0, size, size);
+    // Simple house outline (roof + body, closed) with a door; no boxed frame.
+    ctx.clearRect(0, 0, size, size);
     ctx.strokeStyle = strokeColor;
-    ctx.lineWidth = 5;
-    ctx.strokeRect(2.5, 2.5, size - 5, size - 5);
+    ctx.lineWidth = 6;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
 
-    // House glyph: roof + body, in the accent colour.
-    ctx.fillStyle = strokeColor;
     ctx.beginPath();
-    ctx.moveTo(size * 0.5, size * 0.18);
-    ctx.lineTo(size * 0.84, size * 0.5);
-    ctx.lineTo(size * 0.16, size * 0.5);
+    ctx.moveTo(size * 0.24, size * 0.86);
+    ctx.lineTo(size * 0.24, size * 0.5);
+    ctx.lineTo(size * 0.5, size * 0.18);
+    ctx.lineTo(size * 0.76, size * 0.5);
+    ctx.lineTo(size * 0.76, size * 0.86);
     ctx.closePath();
-    ctx.fill();
-    ctx.fillRect(size * 0.29, size * 0.5, size * 0.42, size * 0.32);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(size * 0.42, size * 0.86);
+    ctx.lineTo(size * 0.42, size * 0.66);
+    ctx.lineTo(size * 0.58, size * 0.66);
+    ctx.lineTo(size * 0.58, size * 0.86);
+    ctx.stroke();
 
     return new CanvasTexture(canvas);
-  }, [color, strokeColor]);
+  }, [strokeColor]);
 
   React.useEffect(() => () => texture?.dispose(), [texture]);
 
   return (
     <mesh
       position={position}
+      scale={hover ? 1.15 : 1}
       onPointerOver={(e) => {
         e.stopPropagation();
         setHover(true);
@@ -244,9 +248,9 @@ function HomeButton({
       <planeGeometry args={[HOME_SIZE, HOME_SIZE]} />
       <meshBasicMaterial
         map={texture ?? undefined}
-        color={hover ? hoverColor : '#ffffff'}
         transparent
-        opacity={hover ? 0.95 : 0.85}
+        opacity={hover ? 1 : 0.75}
+        depthWrite={false}
         side={DoubleSide}
       />
     </mesh>
@@ -452,8 +456,6 @@ export function ZUpGizmoHelper({
         <group position={[x, y, 0]} scale={[60, 60, 60]}>
           <HomeButton
             position={[HOME_OFFSET, -HOME_OFFSET, 0]}
-            color={arrowColor}
-            hoverColor={arrowHoverColor}
             strokeColor={arrowStrokeColor}
             onClick={onHome}
           />
