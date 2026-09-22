@@ -24,12 +24,6 @@ function isOrbitLikeControls(value: unknown): value is OrbitLikeControls {
   return !!maybe.target && typeof maybe.update === 'function';
 }
 
-function alignCameraToHorizon(camera: THREE.Camera, target: THREE.Vector3, worldUp: THREE.Vector3) {
-  camera.up.copy(worldUp);
-  camera.lookAt(target);
-  camera.updateMatrixWorld();
-}
-
 function deadzoneAxis(value: number, deadzone: number) {
   const abs = Math.abs(value);
   if (abs <= deadzone) return 0;
@@ -115,7 +109,6 @@ export function SpaceMouseController({
 }) {
   const { camera, controls, scene } = useThree();
 
-  const worldUp = React.useMemo(() => new THREE.Vector3(0, 0, 1), []);
   const defaultPivot = React.useMemo(
     () => fallbackPivot?.clone() ?? new THREE.Vector3(0, 0, 0),
     [fallbackPivot?.x, fallbackPivot?.y, fallbackPivot?.z],
@@ -129,8 +122,6 @@ export function SpaceMouseController({
 
   // Track whether *we* disabled OrbitControls so we can restore it.
   const weDisabledOrbitRef = React.useRef(false);
-  // If true, reset any SpaceMouse-induced tilt on next regular mouse orbit start.
-  const pendingHorizonResetRef = React.useRef(false);
   // Persistent pivot — survives across idle gaps (Fusion 360 style).
   // Once established, pan accumulates onto it; only reset on explicit selection change.
   const activePivotRef = React.useRef<THREE.Vector3>(defaultPivot.clone());
@@ -201,24 +192,6 @@ export function SpaceMouseController({
     }
     return true;
   }, [camera, scene, settings.pivotMode]);
-
-  // Re-level the horizon when the mouse takes back over. Triggered by
-  // OrbitControls' own 'start' event rather than a React drag counter, so it also
-  // fires in prepare/transform mode (where the interaction state is deliberately
-  // not tracked) and the roll cannot stick.
-  React.useEffect(() => {
-    if (!isOrbitLikeControls(controls) || !controls.addEventListener) return;
-
-    const onStart = () => {
-      if (!pendingHorizonResetRef.current) return;
-      pendingHorizonResetRef.current = false;
-      alignCameraToHorizon(camera, controls.target, worldUp);
-      controls.update();
-    };
-
-    controls.addEventListener('start', onStart);
-    return () => controls.removeEventListener?.('start', onStart);
-  }, [camera, controls, worldUp]);
 
   React.useEffect(() => {
     return () => {
@@ -296,7 +269,6 @@ export function SpaceMouseController({
       controls.enabled = true;
       controls.update();
       weDisabledOrbitRef.current = false;
-      pendingHorizonResetRef.current = true;
     }
 
     hasActivePivotRef.current = false;
@@ -337,7 +309,6 @@ export function SpaceMouseController({
         controls.enabled = true;
         controls.update();
         weDisabledOrbitRef.current = false;
-        pendingHorizonResetRef.current = true;
       }
       return;
     }
@@ -375,7 +346,6 @@ export function SpaceMouseController({
         controls.enabled = true;
         controls.update();
         weDisabledOrbitRef.current = false;
-        pendingHorizonResetRef.current = true;
       }
       return;
     }
@@ -418,7 +388,6 @@ export function SpaceMouseController({
         controls.enabled = true;
         controls.update();
         weDisabledOrbitRef.current = false;
-        pendingHorizonResetRef.current = true;
       }
       return;
     }

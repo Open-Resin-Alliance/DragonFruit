@@ -99,10 +99,6 @@ export function NativeSpaceMouseController({
   // Camera→target distance captured when navlib takes over, so handback can
   // re-seat the orbit pivot in front of the camera at the same radius.
   const focusDistRef = React.useRef(50);
-  // Set on handback: navlib may have rolled the horizon, and constrained orbit is
-  // always world Z-up. We don't level on release (the tilt is kept for viewing) —
-  // only when the user next starts a mouse orbit/pan (the controls 'start' event).
-  const pendingLevelRef = React.useRef(false);
   // Ortho dolly radius while navlib owns the camera. navlib's absolute axial
   // distance is offset by the pivot it orbits (the selected model centre), which
   // need not equal the current look target, so we integrate navlib's OWN per-frame
@@ -136,25 +132,6 @@ export function NativeSpaceMouseController({
       weDisabledOrbitRef.current = false;
     };
   }, [settings.enabled]);
-
-  // ── Re-level the horizon when the mouse takes back over ──
-  // navlib can roll the view; we keep that roll after release, but constrained orbit
-  // is world Z-up. When the user starts a mouse orbit/pan (OrbitControls 'start'),
-  // snap up back to Z and re-aim at the target — a roll-only change (view direction
-  // is preserved) so the drag begins on a level horizon.
-  React.useEffect(() => {
-    if (!isOrbitLikeControls(controls) || !controls.addEventListener) return;
-    const onStart = () => {
-      if (!pendingLevelRef.current) return;
-      pendingLevelRef.current = false;
-      camera.up.set(0, 0, 1);
-      camera.lookAt(controls.target);
-      camera.updateMatrixWorld();
-      controls.update();
-    };
-    controls.addEventListener('start', onStart);
-    return () => controls.removeEventListener?.('start', onStart);
-  }, [controls, camera]);
 
   const getTarget = React.useCallback(
     (out: THREE.Vector3): THREE.Vector3 => {
@@ -256,9 +233,7 @@ export function NativeSpaceMouseController({
         .addScaledVector(dir, focusDistRef.current);
       controls.enabled = true;
       controls.update();
-      // Keep navlib's roll for now — the horizon only re-levels to Z-up when the
-      // user actually starts a mouse orbit/pan (see the controls 'start' listener).
-      pendingLevelRef.current = true;
+      // The roll navlib left is corrected by HorizonLock once navigation ends.
     }
     weDisabledOrbitRef.current = false;
   }, [controls, camera]);

@@ -194,6 +194,51 @@ export function OrthoFrustumSync({
   return null;
 }
 
+const WORLD_UP = new THREE.Vector3(0, 0, 1);
+
+/**
+ * Re-levels the orbit horizon to world Z-up the moment the regular mouse (or
+ * trackpad) starts driving the camera.
+ *
+ * A SpaceMouse gesture may leave navlib's roll in place — that is deliberate, so
+ * a rolled view can be inspected after release. The roll is not a valid orbit
+ * basis, though, so the first mouse camera input afterwards must snap the
+ * up-vector back to Z. Triggered off the picking-orbit/pan/zoom-start events,
+ * which cover every mouse/trackpad path and are *not* fired by SpaceMouse
+ * navigation, so it never fights navlib mid-gesture.
+ */
+export function HorizonLock({ enabled }: { enabled: boolean }) {
+  const { camera, controls } = useThree();
+  const enabledRef = React.useRef(enabled);
+  enabledRef.current = enabled;
+
+  React.useEffect(() => {
+    const level = () => {
+      if (!enabledRef.current) return;
+      if (camera.up.distanceToSquared(WORLD_UP) < 1e-10) return;
+
+      camera.up.copy(WORLD_UP);
+      const target = orbitTargetOf(controls);
+      if (target) camera.lookAt(target);
+      camera.updateMatrixWorld();
+      if (controls && typeof controls === 'object' && 'update' in controls) {
+        (controls as { update?: () => void }).update?.();
+      }
+    };
+
+    window.addEventListener('picking-orbit-start', level);
+    window.addEventListener('picking-pan-start', level);
+    window.addEventListener('picking-zoom-start', level);
+    return () => {
+      window.removeEventListener('picking-orbit-start', level);
+      window.removeEventListener('picking-pan-start', level);
+      window.removeEventListener('picking-zoom-start', level);
+    };
+  }, [camera, controls]);
+
+  return null;
+}
+
 export function OrbitPivotIndicator({
   visible,
   color = '#58ff6a',

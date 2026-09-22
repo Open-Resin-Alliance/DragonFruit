@@ -105,6 +105,7 @@ import { ModelAttachedSupportLayer } from './ModelAttachedSupportLayer';
 import {
   CameraModeEntryFramingController,
   CameraProjectionController,
+  HorizonLock,
   OrthoFrustumSync,
   OrbitPivotIndicator,
 } from './SceneCanvasCameraControllers';
@@ -7315,6 +7316,7 @@ export function SceneCanvas({
           plateDepthMm={activeBuildVolumeSettings.depthMm}
           perspectiveFov={perspectiveFov}
         />
+        <HorizonLock enabled={cameraInteractionCycleEnabled} />
         <CameraControlsRecovery />
         <CameraFocusController selectedIslandId={overlaySelectedIslandId ?? null} islandMarkers={islandMarkers ?? []} onClearSelection={onClearSelection} />
         {mode === 'support' && supportPathfindingDebugState.enabled && (
