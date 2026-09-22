@@ -14,7 +14,13 @@ import {
   type NativeCameraInput,
   type NativeNavOutput,
 } from './nativeSpaceMouseBridge';
-import { ORTHO_MAX_RADIUS, ORTHO_MIN_RADIUS, applyOrthoFrustum, orthoAspectOf } from './orthoDolly';
+import {
+  ORTHO_MAX_RADIUS,
+  ORTHO_MIN_RADIUS,
+  applyOrthoFrustum,
+  orthoAspectOf,
+  resolveOrthoNavRadius,
+} from './orthoDolly';
 
 type OrbitLikeControls = {
   target: THREE.Vector3;
@@ -101,6 +107,8 @@ export function NativeSpaceMouseController({
   const navRadiusRef = React.useRef(50);
   const navPrevAxialRef = React.useRef(0);
   const navHasAxialRef = React.useRef(false);
+  const navPrevFwdRef = React.useRef(new THREE.Vector3(0, 0, -1));
+  const navPrevEyeRef = React.useRef(new THREE.Vector3());
   // Cached model extents + refresh counter.
   const modelBoxRef = React.useRef(new THREE.Box3());
   const modelBoxAgeRef = React.useRef(MODEL_EXTENTS_REFRESH_FRAMES);
@@ -200,18 +208,22 @@ export function NativeSpaceMouseController({
       const fwd = tmpDir.current.set(0, 0, -1).applyQuaternion(tmpQuat.current).normalize();
       const pivot = getTarget(tmpTarget.current);
       const axial = tmpPan.current.copy(tmpPos.current).sub(pivot).dot(fwd);
-      // Integrate navlib's own axial delta. Under orbit fwd tracks the pivot, so
-      // axial is the (constant) orbit distance and only a real dolly moves it;
-      // lateral pan is perpendicular and contributes nothing.
-      if (navHasAxialRef.current) {
-        const delta = axial - navPrevAxialRef.current;
-        navRadiusRef.current = THREE.MathUtils.clamp(
-          navRadiusRef.current - delta,
-          ORTHO_MIN_RADIUS,
-          ORTHO_MAX_RADIUS,
-        );
-      }
+      // Resolve the new scale. Interactive frames integrate navlib's own axial
+      // delta; view commands (preset/fit) are handled in resolveOrthoNavRadius
+      // because navlib sizes their eye distance for a perspective projection.
+      const hasPrevious = navHasAxialRef.current;
+      navRadiusRef.current = resolveOrthoNavRadius({
+        currentRadius: navRadiusRef.current,
+        prevAxial: navPrevAxialRef.current,
+        axial,
+        hasPrevious,
+        turn: hasPrevious ? navPrevFwdRef.current.angleTo(fwd) : 0,
+        eyeJump: hasPrevious ? tmpPos.current.distanceTo(navPrevEyeRef.current) : 0,
+        sceneRadius,
+      });
       navPrevAxialRef.current = axial;
+      navPrevFwdRef.current.copy(fwd);
+      navPrevEyeRef.current.copy(tmpPos.current);
       navHasAxialRef.current = true;
 
       camera.position.copy(tmpPos.current);
@@ -333,7 +345,6 @@ export function NativeSpaceMouseController({
         prevMotionRef.current = false;
         onNavigationActiveChange?.(false);
       }
-      navHasAxialRef.current = false;
       handBackToOrbit();
       return;
     }
@@ -364,18 +375,29 @@ export function NativeSpaceMouseController({
       // Apply navlib's pose BEFORE handing back on the final frame, so hand-back
       // re-seats the pivot against the pose OrbitControls actually resumes from.
       //
-      // Only apply while navlib is actually navigating. Idle output is an echo of
-      // the pose we reported; applying it re-asserts navlib's up-vector, which
-      // leaves the regular mouse orbiting a rolled horizon from app start until the
-      // first SpaceMouse gesture re-arms the horizon reset.
-      if (out.seq !== lastAppliedSeqRef.current && (out.motion || motionEnding)) {
+      // Apply while navigating, and also for a view command (fit / preset) that
+      // arrives without motion — it moves the eye a long way. Idle output, by
+      // contrast, echoes the pose we reported; applying it re-asserts navlib's
+      // up-vector and leaves the regular mouse orbiting a rolled horizon.
+      const seqAdvanced = out.seq !== lastAppliedSeqRef.current;
+      const idleEyeJump = Math.hypot(
+        out.affine[12] - camera.position.x,
+        out.affine[13] - camera.position.y,
+        out.affine[14] - camera.position.z,
+      );
+      const idleViewCommand = seqAdvanced
+        && !out.motion
+        && !motionEnding
+        && idleEyeJump > Math.max(1, 0.05 * navRadiusRef.current);
+      if (seqAdvanced && (out.motion || motionEnding || idleViewCommand)) {
         lastAppliedSeqRef.current = out.seq;
         applyAffine(out.affine); // pan + orbit + dolly
         onNavigationFrame?.();
       }
 
       if (motionEnding) {
-        navHasAxialRef.current = false;
+        // Deliberately keep navHasAxialRef/prev refs: an idle view command (fit)
+        // after the gesture diffs against this final pose.
         focusDistRef.current = navRadiusRef.current;
         handBackToOrbit();
         onNavigationActiveChange?.(false);

@@ -9,10 +9,13 @@ import {
   ORTHO_REFERENCE_FOV_DEG,
   applyOrthoFrustum,
   dollyOrthoToCursor,
+  ORTHO_VIEW_TURN_RAD,
   orthoAspectOf,
+  orthoFitRadiusForScene,
   orthoHalfHeightForRadius,
   orthoRadiusForPerspectiveFraming,
   orthoWheelRadiusScale,
+  resolveOrthoNavRadius,
   syncOrthoFrustum,
 } from '../orthoDolly';
 
@@ -112,6 +115,72 @@ test('applyOrthoFrustum sizes the depth range from the scene radius', () => {
 test('orthoAspectOf reports the frustum aspect', () => {
   const camera = new THREE.OrthographicCamera(-2, 2, 1, -1, -50000, 50000);
   assert.ok(Math.abs(orthoAspectOf(camera) - 2) < 1e-9);
+});
+
+test('resolveOrthoNavRadius integrates a normal dolly frame', () => {
+  const next = resolveOrthoNavRadius({
+    currentRadius: 100,
+    prevAxial: -100,
+    axial: -95, // dollied in by 5
+    hasPrevious: true,
+    turn: 0,
+    eyeJump: 5,
+  });
+  assert.ok(Math.abs(next - 95) < 1e-9);
+});
+
+test('resolveOrthoNavRadius keeps the zoom on a reorientation preset', () => {
+  const next = resolveOrthoNavRadius({
+    currentRadius: 100,
+    prevAxial: -100,
+    axial: -20, // navlib would have moved the eye much closer
+    hasPrevious: true,
+    turn: ORTHO_VIEW_TURN_RAD + 0.1,
+    eyeJump: 80,
+  });
+  assert.equal(next, 100);
+});
+
+test('resolveOrthoNavRadius re-fits the scene on a pure distance jump (fit)', () => {
+  const next = resolveOrthoNavRadius({
+    currentRadius: 100,
+    prevAxial: -100,
+    axial: -20,
+    hasPrevious: true,
+    turn: 0,
+    eyeJump: 80,
+    sceneRadius: 300,
+  });
+  assert.ok(Math.abs(next - orthoFitRadiusForScene(300)) < 1e-9);
+});
+
+test('resolveOrthoNavRadius keeps the zoom on a fit with no scene radius', () => {
+  const next = resolveOrthoNavRadius({
+    currentRadius: 100,
+    prevAxial: -100,
+    axial: -20,
+    hasPrevious: true,
+    turn: 0,
+    eyeJump: 80,
+  });
+  assert.equal(next, 100);
+});
+
+test('resolveOrthoNavRadius passes the first frame through', () => {
+  const next = resolveOrthoNavRadius({
+    currentRadius: 100,
+    prevAxial: 0,
+    axial: -100,
+    hasPrevious: false,
+    turn: 0,
+    eyeJump: 0,
+  });
+  assert.equal(next, 100);
+});
+
+test('orthoFitRadiusForScene frames the sphere for the reference FOV', () => {
+  const radius = orthoFitRadiusForScene(200);
+  assert.ok(Math.abs(radius - (200 * 1.05) / Math.tan(degToRad(ORTHO_REFERENCE_FOV_DEG) / 2)) < 1e-9);
 });
 
 test('orthoRadiusForPerspectiveFraming preserves apparent size and round-trips', () => {

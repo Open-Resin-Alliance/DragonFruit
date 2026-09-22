@@ -101,11 +101,21 @@ takes back over. It must be that event, not a React drag counter: in
 prepare/transform mode the interaction state is deliberately not tracked, so a
 counter-driven reset would never fire and the roll would stick.
 
-The native controller only applies navlib's affine **while `out.motion` is true**
-(plus the final frame). Idle output is an echo of the pose we reported, and
-applying it re-asserts navlib's up-vector — which would leave the regular mouse
-orbiting a rolled horizon from app start, before the first gesture, with no
-pending re-level.
+The native controller applies navlib's affine while `out.motion` is true (plus
+the final frame) and for a **view command that arrives without motion** — a
+fit/preset, which moves the eye a long way. Plain idle output is an echo of the
+pose we reported, and applying it re-asserts navlib's up-vector, which would
+leave the regular mouse orbiting a rolled horizon from app start with no pending
+re-level.
+
+View commands need their scale handling too (`resolveOrthoNavRadius`): navlib
+chooses their eye distance for a *perspective* projection, and under the derived
+ortho frustum that distance *is* the scale — which is why a preset could land
+far too close and why Fit, which only changes the eye distance, was invisible.
+A frame that reorients by more than `ORTHO_VIEW_TURN_RAD` is treated as a preset
+and keeps the user's zoom; a pure distance jump (`ORTHO_VIEW_JUMP_FRACTION`) is
+treated as a fit and re-framed to the scene radius. Interactive frames still
+integrate navlib's axial delta as a real dolly.
 
 Because hover keeps updating, the **support trunk router must not run per
 frame** — it would pathfind continuously as the camera moves. `SceneCanvas` sets

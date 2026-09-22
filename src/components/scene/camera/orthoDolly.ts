@@ -132,6 +132,75 @@ export function orthoWheelRadiusScale(deltaY: number, zoomSpeed: number): number
   return deltaY < 0 ? step : 1 / step;
 }
 
+/** Radius that frames a sphere of `sceneRadius` for the reference FOV. */
+export function orthoFitRadiusForScene(
+  sceneRadius: number,
+  fovDeg = ORTHO_REFERENCE_FOV_DEG,
+  margin = 1.05,
+): number {
+  return (Math.max(EPSILON, sceneRadius) * margin) / Math.max(EPSILON, Math.tan(THREE.MathUtils.degToRad(fovDeg) * 0.5));
+}
+
+/** A navlib frame that reorients by more than this is a view preset, not a drag. */
+export const ORTHO_VIEW_TURN_RAD = THREE.MathUtils.degToRad(25);
+/** An eye jump above this fraction of the radius is a view command, not a dolly. */
+export const ORTHO_VIEW_JUMP_FRACTION = 0.3;
+
+export type OrthoNavFrame = {
+  currentRadius: number;
+  prevAxial: number;
+  axial: number;
+  /** False on the first applied frame of a gesture (no previous to diff against). */
+  hasPrevious: boolean;
+  /** Rotation from the previous applied forward, radians. */
+  turn: number;
+  /** World-space eye movement since the previous applied frame. */
+  eyeJump: number;
+  sceneRadius?: number;
+  minRadius?: number;
+  maxRadius?: number;
+};
+
+/**
+ * The next ortho dolly radius for one navlib frame.
+ *
+ * Interactive frames integrate navlib's own axial delta (a real dolly). View
+ * commands do not: navlib picks their eye distance for a perspective projection,
+ * so under the derived ortho frustum that distance is the scale and can land far
+ * too close. A reorientation (preset) keeps the user's zoom; a pure distance jump
+ * (fit) re-fits the scene when its radius is known.
+ */
+export function resolveOrthoNavRadius(frame: OrthoNavFrame): number {
+  const {
+    currentRadius,
+    prevAxial,
+    axial,
+    hasPrevious,
+    turn,
+    eyeJump,
+    sceneRadius,
+    minRadius = ORTHO_MIN_RADIUS,
+    maxRadius = ORTHO_MAX_RADIUS,
+  } = frame;
+
+  if (!hasPrevious) return currentRadius;
+
+  if (turn > ORTHO_VIEW_TURN_RAD) {
+    // Preset: reorient, keep the on-screen scale.
+    return currentRadius;
+  }
+
+  if (eyeJump > ORTHO_VIEW_JUMP_FRACTION * Math.max(EPSILON, currentRadius)) {
+    // Fit: frame the scene if we know its radius, else keep the scale.
+    if (sceneRadius != null && sceneRadius > 0) {
+      return THREE.MathUtils.clamp(orthoFitRadiusForScene(sceneRadius), minRadius, maxRadius);
+    }
+    return currentRadius;
+  }
+
+  return THREE.MathUtils.clamp(currentRadius - (axial - prevAxial), minRadius, maxRadius);
+}
+
 export type OrthoDollyParams = {
   camera: THREE.OrthographicCamera;
   target: THREE.Vector3;
