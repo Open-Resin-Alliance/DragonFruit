@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
-import { Group, Matrix4, Object3D, Quaternion, Vector3 } from 'three';
+import { BufferGeometry, DoubleSide, Float32BufferAttribute, Group, Matrix4, Object3D, Quaternion, Vector3 } from 'three';
 import type { OrthographicCamera as ThreeOrthographicCamera } from 'three';
 import { Edges, GizmoHelperProps, Hud, OrthographicCamera } from '@react-three/drei';
 
@@ -98,9 +98,28 @@ function assignControlsEnabled(controls: unknown, enabled: boolean): void {
 
 /** How far the quarter-turn arrows sit from the widget centre (cube half is 0.5). */
 const ARROW_DISTANCE = 0.74;
-/** Arrowhead size in gizmo units (cube half is 0.5). */
-const ARROW_RADIUS = 0.085;
-const ARROW_HEIGHT = 0.22;
+/** Arrowhead: a flat, near-equilateral triangle in gizmo units (cube half is 0.5). */
+const ARROW_WIDTH = 0.2;
+const ARROW_HEIGHT = 0.17;
+
+/**
+ * Flat triangle pointing +Y, apex at the top. A flat primitive (rather than a
+ * cone) has no interior faces, so its `Edges` outline is a clean triangle — a
+ * cone's base cap fans edges through the middle of the silhouette.
+ */
+const arrowTriangle = new BufferGeometry();
+arrowTriangle.setAttribute(
+  'position',
+  new Float32BufferAttribute(
+    [
+      0, ARROW_HEIGHT * 0.5, 0,
+      -ARROW_WIDTH * 0.5, -ARROW_HEIGHT * 0.5, 0,
+      ARROW_WIDTH * 0.5, -ARROW_HEIGHT * 0.5, 0,
+    ],
+    3,
+  ),
+);
+arrowTriangle.computeVertexNormals();
 
 function RotationArrow({
   direction,
@@ -122,6 +141,7 @@ function RotationArrow({
 
   return (
     <mesh
+      geometry={arrowTriangle}
       position={position}
       rotation={[0, 0, rotation]}
       onPointerOver={(e) => {
@@ -137,8 +157,12 @@ function RotationArrow({
         quarterTurn(direction);
       }}
     >
-      <coneGeometry args={[ARROW_RADIUS, ARROW_HEIGHT, 4]} />
-      <meshBasicMaterial color={hover ? hoverColor : color} transparent opacity={hover ? 0.95 : 0.8} />
+      <meshBasicMaterial
+        color={hover ? hoverColor : color}
+        transparent
+        opacity={hover ? 0.95 : 0.8}
+        side={DoubleSide}
+      />
       {/* Same secondary outline the cube faces carry. */}
       <Edges color={strokeColor} />
     </mesh>
