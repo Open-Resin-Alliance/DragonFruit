@@ -98,9 +98,9 @@ function assignControlsEnabled(controls: unknown, enabled: boolean): void {
 
 /** How far the quarter-turn arrows sit from the widget centre (cube half is 0.5). */
 const ARROW_DISTANCE = 0.74;
-/** Arrowhead: a flat, near-equilateral triangle in gizmo units (cube half is 0.5). */
-const ARROW_WIDTH = 0.2;
-const ARROW_HEIGHT = 0.17;
+/** Arrowhead: a flat, shallow triangle in gizmo units (cube half is 0.5). */
+const ARROW_WIDTH = 0.22;
+const ARROW_HEIGHT = 0.12;
 /**
  * Only show the quarter-turn arrows when the view is within this many degrees of
  * a face — a quarter turn is only meaningful from a face-on (FRONT/TOP/…) view.
