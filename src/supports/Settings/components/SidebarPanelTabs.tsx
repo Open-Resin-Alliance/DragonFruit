@@ -89,7 +89,7 @@ export function SidebarPanelTabs({
                         key={tab.tab}
                         type="button"
                         onClick={() => onChange(tab.tab)}
-                        className={`flex h-8 cursor-pointer items-center justify-center rounded-md border px-2 transition-all duration-150 hover:brightness-110 hover:shadow-[0_8px_18px_rgba(0,0,0,0.18)] ${showIcons ? 'gap-2' : 'gap-0'}`}
+                        className={`flex h-[34px] cursor-pointer items-center justify-center rounded-md border px-2 transition-all duration-150 hover:brightness-110 hover:shadow-[0_8px_18px_rgba(0,0,0,0.18)] ${showIcons ? 'gap-2' : 'gap-0'}`}
                         style={isActive
                             ? {
                                 background: 'color-mix(in srgb, var(--accent), var(--surface-0) 78%)',
@@ -107,7 +107,7 @@ export function SidebarPanelTabs({
                         title={_(tab.label)}
                     >
                         {showIcons && <Icon className="h-4 w-4 shrink-0" />}
-                        <span className="text-[15px] font-semibold">{_(tab.label)}</span>
+                        <span className="text-[14px] font-semibold">{_(tab.label)}</span>
                     </button>
                 );
             })}
