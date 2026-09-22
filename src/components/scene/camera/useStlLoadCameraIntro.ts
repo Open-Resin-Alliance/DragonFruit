@@ -29,7 +29,10 @@ export function useStlLoadCameraIntro(
 ): StlLoadCameraIntroState {
   const [cameraIntroRunId, setCameraIntroRunId] = React.useState(0);
   const [cameraHomeResetRunId, setCameraHomeResetRunId] = React.useState(0);
-  const prevModelCountRef = React.useRef(0);
+  // Seed with the current count: a remount with models already loaded (hot
+  // reload, StrictMode double-invoke) is not a fresh load and must not replay
+  // the intro, which would yank the camera to a framed position.
+  const prevModelCountRef = React.useRef(models.length);
   const lastAppliedIntroRunIdRef = React.useRef(0);
   const lastFallbackTargetRef = React.useRef<THREE.Vector3 | null>(null);
   const pendingDeferredIntroRef = React.useRef(false);
@@ -69,15 +72,15 @@ export function useStlLoadCameraIntro(
   }, [defaultOrbitTarget, models.length]);
 
   React.useEffect(() => {
-    if (models.length > 0) {
-      lastFallbackTargetRef.current = defaultOrbitTarget.clone();
-      return;
-    }
-
     const previous = lastFallbackTargetRef.current;
-    if (previous && previous.distanceToSquared(defaultOrbitTarget) < 1e-8) return;
-
     lastFallbackTargetRef.current = defaultOrbitTarget.clone();
+
+    if (models.length > 0) return;
+    // First run only seeds the reference: a remount must not look like a
+    // fallback-target change and fire a home reset.
+    if (!previous) return;
+    if (previous.distanceToSquared(defaultOrbitTarget) < 1e-8) return;
+
     setCameraHomeResetRunId((id) => id + 1);
   }, [defaultOrbitTarget, models.length]);
 
