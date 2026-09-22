@@ -14,12 +14,16 @@
     "createUpdaterArtifacts": true,
     "fileAssociations": [
       {
-        "ext": [
-          "voxl"
-        ],
+        "ext": ["voxl"],
         "name": "DragonFruit Scene File",
-        "description": "DragonFruit scene",
+        "description": "DragonFruit Scene",
         "mimeType": "application/vnd.dragonfruit.voxl+json"
+      },
+      {
+        "ext": ["lumen"],
+        "name": "ORA LUMEN File",
+        "description": "LUMEN Print File",
+        "mimeType": "application/vnd.openresin.lumen"
       }
     ],
     "icon": [
@@ -85,10 +89,7 @@
     ],
     "security": {
       "csp": null,
-      "capabilities": [
-        "default",
-        "logging"
-      ]
+      "capabilities": ["default", "logging"]
     }
   }
 }

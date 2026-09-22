@@ -64,7 +64,7 @@ overhang region above `gridAreaThresholdMm2` gets the same treatment in
 - **Grid infill** — a lattice over the footprint bbox at `computeRegionSpacing`
   (angle + suction curve), skipped for slivers and for footprints thinner than
   one lattice cell (`Math.min(width, height) < spacing`), where the rows would
-  land a fraction of a millimetre apart and double the density of a rib the
+  land a fraction of a millimeter apart and double the density of a rib the
   ring already carries end to end. The lattice spans the region with integer
   rows/columns, inset by the contact radius.
 - **Shape handles degenerate cases**: below the area threshold the region keeps

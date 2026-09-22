@@ -9,7 +9,7 @@
  * content process.
  *
  * Two floats in a shared buffer cost eight bytes and nothing for the collector
- * to trace. Coordinates are millimetres in world space, well inside the range
+ * to trace. Coordinates are millimeters in world space, well inside the range
  * where `Float32Array` keeps sub-micron precision.
  */
 export interface VoxelFootprint {

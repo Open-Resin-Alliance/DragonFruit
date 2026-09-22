@@ -646,7 +646,7 @@ export function buildConsolidationBranch(args: {
     // Steepest eligible host sample (≤ the branch-angle rule from vertical —
     // the leaf fan's cap is looser). Steepest, not nearest: the contact cone
     // is clamped to the surface normal, so the shaft loses its last couple of
-    // millimetres of rise to the cone bend and a link picked at the angle cap
+    // millimeters of rise to the cone bend and a link picked at the angle cap
     // always leaves the host a few degrees too flat. Reaching further down the
     // shaft buys that rise back; the angle cap keeps the link short anyway.
     let best: FanShaftPoint | null = null;

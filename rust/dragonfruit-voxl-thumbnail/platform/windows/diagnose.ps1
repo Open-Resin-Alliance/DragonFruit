@@ -1,11 +1,11 @@
-# Diagnose Windows VOXL thumbnail handler registration.
+# Diagnose Windows DragonFruit thumbnail handler registration.
 #
 # Usage:
-#   .\diagnose.ps1 [-DllPath <path>] [-VoxlPath <path>]
+#   .\diagnose.ps1 [-DllPath <path>] [-Path <sample.voxl|sample.lumen>]
 
 param(
     [string]$DllPath,
-    [string]$VoxlPath
+    [string]$Path
 )
 
 $ErrorActionPreference = 'Continue'
@@ -155,7 +155,7 @@ namespace VoxlShellProbe {
         return @{ Ok = $false; Detail = ('Shell probe compilation failed: ' + $_.Exception.Message) }
     }
 
-    $out = Join-Path $env:TEMP 'voxl_shell_probe.png'
+    $out = Join-Path $env:TEMP 'dragonfruit_shell_probe.png'
     $detail = ''
     $hr = [VoxlShellProbe.Native]::Probe($Path, $Size, $out, [ref]$detail)
     if ($hr -eq 0) {
@@ -170,25 +170,25 @@ if (-not $DllPath) {
     $DllPath = Resolve-DllPath -ScriptDir $ScriptDir
 }
 
-Write-Host "=== VOXL Thumbnail Handler Diagnostics ==="
+Write-Host "=== DragonFruit Thumbnail Handler Diagnostics ==="
 
 $hasDll = $DllPath -and (Test-Path $DllPath)
 Print-Check -Label 'COM DLL exists' -Ok $hasDll -Detail (Coalesce -Value $DllPath -Fallback '<not found>')
 
 $inprocKey = "HKCU:\Software\Classes\CLSID\$CLSID\InProcServer32"
-$shellExDotKey = "HKCU:\Software\Classes\.voxl\ShellEx\$ThumbnailHandlerCATID"
-$shellExSystemKey = "HKCU:\Software\Classes\SystemFileAssociations\.voxl\ShellEx\$ThumbnailHandlerCATID"
 $shellExLegacyKey = "HKCU:\Software\Classes\VoxlFile\shellex\$ThumbnailHandlerCATID"
 $approvedKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved'
 
 $inprocExists = Test-Path $inprocKey
 Print-Check -Label 'CLSID InProcServer32 key exists (HKCU)' -Ok $inprocExists -Detail $inprocKey
 
-$shellExDotExists = Test-Path $shellExDotKey
-Print-Check -Label '.voxl ShellEx key exists (HKCU)' -Ok $shellExDotExists -Detail $shellExDotKey
+foreach ($Extension in @('.voxl', '.lumen')) {
+    $shellExDotKey = "HKCU:\Software\Classes\$Extension\ShellEx\$ThumbnailHandlerCATID"
+    Print-Check -Label "$Extension ShellEx key exists (HKCU)" -Ok (Test-Path $shellExDotKey) -Detail $shellExDotKey
 
-$shellExSystemExists = Test-Path $shellExSystemKey
-Print-Check -Label 'SystemFileAssociations .voxl ShellEx key exists (HKCU)' -Ok $shellExSystemExists -Detail $shellExSystemKey
+    $shellExSystemKey = "HKCU:\Software\Classes\SystemFileAssociations\$Extension\ShellEx\$ThumbnailHandlerCATID"
+    Print-Check -Label "SystemFileAssociations $Extension ShellEx key exists (HKCU)" -Ok (Test-Path $shellExSystemKey) -Detail $shellExSystemKey
+}
 
 $shellExLegacyExists = Test-Path $shellExLegacyKey
 Print-Check -Label ('Legacy VoxlFile ShellEx key (optional): ' + ($(if ($shellExLegacyExists) { 'present' } else { 'missing' }))) -Ok $true -Detail $shellExLegacyKey
@@ -210,12 +210,12 @@ if ($inprocExists) {
     Print-Check -Label 'ThreadingModel is Apartment' -Ok ($threadingModel -eq 'Apartment') -Detail (Coalesce -Value $threadingModel -Fallback '<missing>')
 }
 
-if ($VoxlPath) {
-    $exists = Test-Path $VoxlPath
-    Print-Check -Label 'Sample VOXL path exists' -Ok $exists -Detail $VoxlPath
+if ($Path) {
+    $exists = Test-Path $Path
+    Print-Check -Label 'Sample file exists' -Ok $exists -Detail $Path
 
     if ($exists) {
-        $probe = Invoke-ShellThumbnailProbe -Path $VoxlPath -Size 256
+        $probe = Invoke-ShellThumbnailProbe -Path $Path -Size 256
         Print-Check -Label 'Shell thumbnail probe via IShellItemImageFactory' -Ok ([bool]$probe.Ok) -Detail $probe.Detail
     }
 }
@@ -223,5 +223,5 @@ if ($VoxlPath) {
 Write-Host ""
 Write-Host "If all checks are OK but Explorer still shows icons:"
 Write-Host "  1) ie4uinit.exe -show"
-Write-Host "  2) Remove-Item \"$env:LOCALAPPDATA\Microsoft\Windows\Explorer\thumbcache_*.db\" -Force -ErrorAction SilentlyContinue"
+Write-Host '  2) Remove-Item "$env:LOCALAPPDATA\Microsoft\Windows\Explorer\thumbcache_*.db" -Force -ErrorAction SilentlyContinue'
 Write-Host "  3) Restart Explorer (or sign out/in)"

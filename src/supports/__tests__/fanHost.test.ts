@@ -164,7 +164,7 @@ test('buildConsolidationBranch attaches a routed branch to a host shaft', () => 
 /**
  * A tip further off the host axis is refused rather than linked: the contact
  * cone is clamped to the surface normal, so the shaft loses its last couple of
- * millimetres of rise to the cone bend and would leave the host too flat. The
+ * millimeters of rise to the cone bend and would leave the host too flat. The
  * pillar stays standalone instead.
  */
 test('buildConsolidationBranch refuses a link whose shaft would leave too flat', () => {

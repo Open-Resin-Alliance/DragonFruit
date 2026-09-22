@@ -41,7 +41,9 @@ function optionalHttpUrl(value: unknown): string | undefined {
 }
 
 function parseOutputFormat(value: unknown): string {
-  return normalizeOutputFormat(value);
+  // A manifest that declares no usable format declares no format; the caller
+  // renders it as an unresolved one rather than as someone else's format.
+  return normalizeOutputFormat(value) ?? '';
 }
 
 function parseNetworkSupport(value: unknown): string | undefined {

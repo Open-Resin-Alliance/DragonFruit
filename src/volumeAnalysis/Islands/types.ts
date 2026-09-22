@@ -6,7 +6,7 @@ import type * as THREE from 'three';
  *
  * Two detectors feed this shape — the rebuilt voxel/slice scanner (`detect.ts`)
  * and the mesh-minima scanner (`useMeshMinima.ts`). All coordinates are in
- * world / build-plate space (Z-up, millimetres) so both detectors, the
+ * world / build-plate space (Z-up, millimeters) so both detectors, the
  * intersection step, and the camera math share a single frame.
  */
 

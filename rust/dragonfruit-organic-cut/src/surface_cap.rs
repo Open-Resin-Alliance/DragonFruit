@@ -9,7 +9,7 @@
 //! seam — but spanned across the CUT'S OWN edges, not across the polyline the seam
 //! was drawn as. That distinction is the whole module. The two are within a
 //! triangle of each other and look identical on screen; sewing to the second one
-//! leaves every rim vertex a fraction of a millimetre away from the surface it is
+//! leaves every rim vertex a fraction of a millimeter away from the surface it is
 //! supposed to close, which is a rim of cracks. So the cap's boundary ring is the
 //! chain of cut edges, vertex for vertex, and [`membrane::build_membrane_on_ring`]
 //! exists to promise exactly that.
@@ -329,7 +329,7 @@ fn rims_between_pieces(mesh: &IndexedMesh, piece_of_face: &[u32]) -> Result<Vec<
         // with; inventing a lid for it is a change nobody asked for. Asked BEFORE
         // the loop is judged too short, because a torn model's holes are exactly
         // where two-vertex loops live — this model carries one 0.01 mm wide, a
-        // hundred and fifty millimetres from any seam, and refusing the whole cut
+        // hundred and fifty millimeters from any seam, and refusing the whole cut
         // over it turned away every cut on it.
         if others.is_empty() {
             continue;
@@ -528,7 +528,7 @@ mod tests {
 
     // The point of the module: the cap is sewn to the cut's OWN edges. If it were
     // spanned across the seam polyline instead, its rim would sit a fraction of a
-    // millimetre off and the solid would not close — so this is the same assertion
+    // millimeter off and the solid would not close — so this is the same assertion
     // as "closed", read the other way round.
     #[test]
     fn the_cap_rim_is_the_cut_s_own_edge_chain() {

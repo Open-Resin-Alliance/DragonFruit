@@ -7,7 +7,7 @@
  *
  * The rise is normally the edge's horizontal span, but never less than
  * minRiseMm: a pair of nearly coincident trunks spans almost nothing, and
- * stepping by that span stacked one 45° stub per fraction of a millimetre —
+ * stepping by that span stacked one 45° stub per fraction of a millimeter —
  * the ultra-dense ladder that used to fill the gap. A floored link simply
  * steepens, and still begins where the previous one ended.
  */

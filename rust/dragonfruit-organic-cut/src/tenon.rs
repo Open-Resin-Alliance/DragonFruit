@@ -440,7 +440,7 @@ impl TenonTilt {
     }
 }
 
-/// Where the tenon sits ON the cut face, as millimetres along the frame's own `u`
+/// Where the tenon sits ON the cut face, as millimeters along the frame's own `u`
 /// and `v` axes from the natural anchor (the centroid of the cut).
 ///
 /// Where the tenon sits on the cut face: a point in MODEL-LOCAL space, or `None`
@@ -1962,7 +1962,7 @@ mod tests {
     // a POINT: ask for a place on the cut face and that is the place you get, with
     // no basis to agree on and no displacement to re-derive.
     //
-    // It used to be an offset in millimetres from the centroid, measured in one
+    // It used to be an offset in millimeters from the centroid, measured in one
     // basis by the handle and applied in another by this function — on a warped
     // seam those are tens of degrees apart, so the tenon appeared somewhere neither
     // had asked for, and small drags could jump it clear across the patch.

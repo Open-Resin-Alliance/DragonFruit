@@ -24,6 +24,7 @@ import {
     getProfileLocalMaterialSettingsAdapter,
     type ProfileLocalMaterialSettingsAdapter,
 } from '@/features/plugins/pluginRegistry';
+import type { LocalMaterialFieldSchema } from '@/features/plugins/complexPluginContracts';
 import { calculateTipOffset } from '@/supports/rendering/calculateTipOffset';
 
 // ─── Shared Types ─────────────────────────────────────────────────────────────
@@ -340,6 +341,7 @@ export function LabeledNumberInput({ label, helpText, tag, color, disabled = fal
 type LabeledTwoStageNumberInputProps = {
     label: string;
     helpText?: string;
+    disabled?: boolean;
     firstValue: number;
     secondValue: number;
     firstMin?: number;
@@ -359,6 +361,7 @@ type LabeledTwoStageNumberInputProps = {
 export function LabeledTwoStageNumberInput({
     label,
     helpText,
+    disabled = false,
     firstValue,
     secondValue,
     firstMin,
@@ -397,6 +400,7 @@ export function LabeledTwoStageNumberInput({
                         min={firstMin}
                         max={firstMax}
                         step={firstStep}
+                        disabled={disabled}
                         showStepper
                         aria-label={`${label} stage 1`}
                         className={`ui-input w-full h-[36px] px-2.5 ${firstTag ? 'pr-24' : 'pr-2.5'} text-sm leading-tight`}
@@ -415,6 +419,7 @@ export function LabeledTwoStageNumberInput({
                         min={secondMin}
                         max={secondMax}
                         step={secondStep}
+                        disabled={disabled}
                         showStepper
                         aria-label={`${label} stage 2`}
                         className={`ui-input w-full h-[36px] px-2.5 ${secondTag ? 'pr-24' : 'pr-2.5'} text-sm leading-tight`}
@@ -2228,7 +2233,7 @@ export function PluginLocalMaterialSettingsSections({
                     No custom settings are available for this tab.
                 </div>
             ) : (
-                <div className="space-y-2">
+                <div className="space-y-2.5">
                     {sectionGroups.map((section) => {
                         const cardGroups = new Map<string, typeof section.fields>();
                         section.fields.forEach((field) => {
@@ -2251,7 +2256,7 @@ export function PluginLocalMaterialSettingsSections({
                             .sort((a, b) => a.cardOrder - b.cardOrder || a.cardTitle.localeCompare(b.cardTitle));
 
                         return (
-                            <div key={section.sectionId} className="space-y-1.5">
+                            <div key={section.sectionId} className="space-y-2.5">
                                 {!replacementMode && (
                                     <div className="ui-meta font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
                                         {section.sectionTitle}
@@ -2259,6 +2264,124 @@ export function PluginLocalMaterialSettingsSections({
                                 )}
                                 {cards.map((card) => {
                                     const renderedKeys = new Set<string>();
+
+                                    /** One plugin field's control, drawn the way its kind asks for. */
+                                    const renderFieldControl = (field: LocalMaterialFieldSchema) => {
+                                        const fieldValue = Object.prototype.hasOwnProperty.call(valuesForOutput, field.key)
+                                            ? valuesForOutput[field.key]
+                                            : field.defaultValue;
+                                        const sanitizedFieldValue = (field.kind === 'number' || field.kind === 'integer')
+                                            ? sanitizePluginNumericValue(field as PluginNumericFieldSchema, Number(fieldValue))
+                                            : fieldValue;
+
+                                        if (field.splitWithKey) {
+                                            const pairedField = card.fields.find((candidate) => candidate.key === field.splitWithKey);
+                                            if (pairedField) {
+                                                const pairedValue = Object.prototype.hasOwnProperty.call(valuesForOutput, pairedField.key)
+                                                    ? valuesForOutput[pairedField.key]
+                                                    : pairedField.defaultValue;
+                                                const sanitizedPairedValue = (pairedField.kind === 'number' || pairedField.kind === 'integer')
+                                                    ? sanitizePluginNumericValue(pairedField as PluginNumericFieldSchema, Number(pairedValue))
+                                                    : pairedValue;
+                                                renderedKeys.add(field.key);
+                                                renderedKeys.add(pairedField.key);
+                                                return (
+                                                    <LabeledTwoStageNumberInput
+                                                        key={field.key}
+                                                        label={field.label}
+                                                        helpText={field.description}
+                                                        disabled={field.disabled}
+                                                        firstValue={Number(sanitizedFieldValue)}
+                                                        secondValue={Number(sanitizedPairedValue)}
+                                                        firstMin={field.min}
+                                                        firstMax={field.max}
+                                                        firstStep={field.step}
+                                                        firstTag={field.tag}
+                                                        firstColor={field.color}
+                                                        secondMin={pairedField.min}
+                                                        secondMax={pairedField.max}
+                                                        secondStep={pairedField.step}
+                                                        secondTag={pairedField.tag}
+                                                        secondColor={pairedField.color}
+                                                        onFirstChange={(next) => {
+                                                            const clamped = sanitizePluginNumericValue(field as PluginNumericFieldSchema, next);
+                                                            setFieldValue(field.key, clamped);
+                                                        }}
+                                                        onSecondChange={(next) => {
+                                                            const clamped = sanitizePluginNumericValue(pairedField as PluginNumericFieldSchema, next);
+                                                            setFieldValue(pairedField.key, clamped);
+                                                        }}
+                                                    />
+                                                );
+                                            }
+                                        }
+
+                                        if (field.kind === 'spacer') {
+                                            return <div key={field.key} />;
+                                        }
+
+                                        if (field.kind === 'boolean') {
+                                            return (
+                                                <LabeledToggleInput
+                                                    key={field.key}
+                                                    label={field.label}
+                                                    helpText={field.description}
+                                                    checked={Boolean(fieldValue)}
+                                                    disabled={field.disabled}
+                                                    onChange={(next) => setFieldValue(field.key, next)}
+                                                />
+                                            );
+                                        }
+
+                                        if (field.kind === 'select' && Array.isArray(field.options) && field.options.length > 0) {
+                                            return (
+                                                <SelectDropdown
+                                                    key={field.key}
+                                                    label={field.label}
+                                                    value={String(fieldValue)}
+                                                    disabled={field.disabled}
+                                                    onChange={(nextValue) => setFieldValue(field.key, nextValue)}
+                                                    options={field.options.map((option) => ({
+                                                        value: option.value,
+                                                        label: option.label,
+                                                    }))}
+                                                    className="space-y-1 block"
+                                                    labelClassName="font-medium"
+                                                    selectClassName="w-full h-[36px] px-2.5 pr-10 leading-tight text-sm"
+                                                />
+                                            );
+                                        }
+
+                                        if (field.kind === 'number' || field.kind === 'integer') {
+                                            return (
+                                                <LabeledNumberInput
+                                                    key={field.key}
+                                                    label={field.label}
+                                                    helpText={field.description}
+                                                    tag={field.tag}
+                                                    color={field.color}
+                                                    disabled={field.disabled}
+                                                    value={Number(sanitizedFieldValue)}
+                                                    onChange={(next) => {
+                                                        const clamped = sanitizePluginNumericValue(field as PluginNumericFieldSchema, next);
+                                                        setFieldValue(field.key, clamped);
+                                                    }}
+                                                />
+                                            );
+                                        }
+
+                                        return (
+                                            <LabeledInput
+                                                key={field.key}
+                                                label={field.label}
+                                                helpText={field.description}
+                                                disabled={field.disabled}
+                                                value={String(fieldValue)}
+                                                onChange={(next) => setFieldValue(field.key, next)}
+                                            />
+                                        );
+                                    };
+
                                     return (
                                         <div
                                             key={`${section.sectionId}-${card.cardId}`}
@@ -2270,112 +2393,35 @@ export function PluginLocalMaterialSettingsSections({
                                                 {card.fields.map((field) => {
                                                     if (renderedKeys.has(field.key)) return null;
 
-                                                    const fieldValue = Object.prototype.hasOwnProperty.call(valuesForOutput, field.key)
-                                                        ? valuesForOutput[field.key]
-                                                        : field.defaultValue;
-                                                    const sanitizedFieldValue = (field.kind === 'number' || field.kind === 'integer')
-                                                        ? sanitizePluginNumericValue(field as PluginNumericFieldSchema, Number(fieldValue))
-                                                        : fieldValue;
+                                                    // A field with a `rowKey` claims one row for every field
+                                                    // of the card sharing it: one column per member, taken
+                                                    // across the card rather than inside the two-column grid,
+                                                    // its width the member's `rowWeight`. Each member is marked
+                                                    // rendered here, so a pair a member collapses claims its
+                                                    // partner's column too.
+                                                    const rowMembers = field.rowKey
+                                                        ? card.fields.filter((candidate) => candidate.rowKey === field.rowKey)
+                                                        : null;
 
-                                                    if (field.splitWithKey) {
-                                                        const pairedField = card.fields.find((candidate) => candidate.key === field.splitWithKey);
-                                                        if (pairedField) {
-                                                            const pairedValue = Object.prototype.hasOwnProperty.call(valuesForOutput, pairedField.key)
-                                                                ? valuesForOutput[pairedField.key]
-                                                                : pairedField.defaultValue;
-                                                            const sanitizedPairedValue = (pairedField.kind === 'number' || pairedField.kind === 'integer')
-                                                                ? sanitizePluginNumericValue(pairedField as PluginNumericFieldSchema, Number(pairedValue))
-                                                                : pairedValue;
-                                                            renderedKeys.add(field.key);
-                                                            renderedKeys.add(pairedField.key);
-                                                            return (
-                                                                <LabeledTwoStageNumberInput
-                                                                    key={field.key}
-                                                                    label={field.label}
-                                                                    helpText={field.description}
-                                                                    firstValue={Number(sanitizedFieldValue)}
-                                                                    secondValue={Number(sanitizedPairedValue)}
-                                                                    firstMin={field.min}
-                                                                    firstMax={field.max}
-                                                                    firstStep={field.step}
-                                                                    firstTag={field.tag}
-                                                                    firstColor={field.color}
-                                                                    secondMin={pairedField.min}
-                                                                    secondMax={pairedField.max}
-                                                                    secondStep={pairedField.step}
-                                                                    secondTag={pairedField.tag}
-                                                                    secondColor={pairedField.color}
-                                                                    onFirstChange={(next) => {
-                                                                        const clamped = sanitizePluginNumericValue(field as PluginNumericFieldSchema, next);
-                                                                        setFieldValue(field.key, clamped);
-                                                                    }}
-                                                                    onSecondChange={(next) => {
-                                                                        const clamped = sanitizePluginNumericValue(pairedField as PluginNumericFieldSchema, next);
-                                                                        setFieldValue(pairedField.key, clamped);
-                                                                    }}
-                                                                />
-                                                            );
-                                                        }
-                                                    }
+                                                    const cells: React.ReactNode[] = [];
+                                                    const weights: number[] = [];
+                                                    (rowMembers ?? [field]).forEach((member) => {
+                                                        if (renderedKeys.has(member.key)) return;
+                                                        renderedKeys.add(member.key);
+                                                        cells.push(renderFieldControl(member));
+                                                        weights.push(member.rowWeight ?? 1);
+                                                    });
 
-                                                    if (field.kind === 'spacer') {
-                                                        return <div key={field.key} />;
-                                                    }
-
-                                                    if (field.kind === 'boolean') {
-                                                        return (
-                                                            <LabeledToggleInput
-                                                                key={field.key}
-                                                                label={field.label}
-                                                                checked={Boolean(fieldValue)}
-                                                                onChange={(next) => setFieldValue(field.key, next)}
-                                                            />
-                                                        );
-                                                    }
-
-                                                    if (field.kind === 'select' && Array.isArray(field.options) && field.options.length > 0) {
-                                                        return (
-                                                            <SelectDropdown
-                                                                key={field.key}
-                                                                label={field.label}
-                                                                value={String(fieldValue)}
-                                                                onChange={(nextValue) => setFieldValue(field.key, nextValue)}
-                                                                options={field.options.map((option) => ({
-                                                                    value: option.value,
-                                                                    label: option.label,
-                                                                }))}
-                                                                className="space-y-1 block"
-                                                                labelClassName="font-medium"
-                                                                selectClassName="w-full h-[36px] px-2.5 pr-10 leading-tight text-sm"
-                                                            />
-                                                        );
-                                                    }
-
-                                                    if (field.kind === 'number' || field.kind === 'integer') {
-                                                        return (
-                                                            <LabeledNumberInput
-                                                                key={field.key}
-                                                                label={field.label}
-                                                                helpText={field.description}
-                                                                tag={field.tag}
-                                                                color={field.color}
-                                                                value={Number(sanitizedFieldValue)}
-                                                                onChange={(next) => {
-                                                                    const clamped = sanitizePluginNumericValue(field as PluginNumericFieldSchema, next);
-                                                                    setFieldValue(field.key, clamped);
-                                                                }}
-                                                            />
-                                                        );
-                                                    }
+                                                    if (!rowMembers) return cells[0];
 
                                                     return (
-                                                        <LabeledInput
+                                                        <div
                                                             key={field.key}
-                                                            label={field.label}
-                                                            helpText={field.description}
-                                                            value={String(fieldValue)}
-                                                            onChange={(next) => setFieldValue(field.key, next)}
-                                                        />
+                                                            className="grid gap-2 md:col-span-2"
+                                                            style={{ gridTemplateColumns: weights.map((weight) => `${weight}fr`).join(' ') }}
+                                                        >
+                                                            {cells}
+                                                        </div>
                                                     );
                                                 })}
                                             </div>
@@ -2545,7 +2591,7 @@ export function ReplacementMaterialEditorShell({
             </div>
 
             <div className="relative" style={minBodyHeight ? { minHeight: `${minBodyHeight}px` } : undefined}>
-                <div className="space-y-3" data-measure-tab-body>
+                <div className="space-y-2.5" data-measure-tab-body>
                     {renderTabBody(activeTabId)}
                 </div>
 

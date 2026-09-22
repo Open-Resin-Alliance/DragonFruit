@@ -205,7 +205,7 @@ export function OrganicCutTenonGizmo({
       anchorW,
       axisW,
       // Kept for the base handle's drag: the pointer lands in WORLD space and the
-      // offsets are LOCAL millimetres, so the hit has to come back through this.
+      // offsets are LOCAL millimeters, so the hit has to come back through this.
       worldToLocal: new THREE.Matrix4().copy(localToWorld).invert(),
       uL,
       vL,

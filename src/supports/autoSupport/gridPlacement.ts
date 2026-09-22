@@ -520,7 +520,7 @@ export function generateGridCandidates(
 
         // Sliver test: nothing survives footprint erosion → ring only. A rib
         // thinner than one lattice cell is treated the same way — infilling it
-        // would stack a second line of supports a millimetre from the edge.
+        // would stack a second line of supports a millimeter from the edge.
         const eroded = erodeFootprint(voxelPoints);
         const isSliver = eroded.length === 0;
 
@@ -551,7 +551,7 @@ export function generateGridCandidates(
         // radius so a support never hangs half its disc past the edge.
         const lattice: Array<{ x: number; y: number; z: number }> = [];
         // A footprint thinner than one lattice cell gets no infill: the rows
-        // would land a fraction of a millimetre apart, doubling the density on
+        // would land a fraction of a millimeter apart, doubling the density on
         // a rib the ring already carries end to end.
         if (!isSliver && Math.min(width, height) >= spacing) {
             for (let i = 0; i <= nx; i += stride) {

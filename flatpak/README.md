@@ -22,7 +22,7 @@ install path alongside the existing `.deb`, `.rpm`, and `.AppImage` bundles.
 | `org.openresinalliance.dragonfruit.yml` | flatpak-builder manifest (fast path — consumes pre-built binary) |
 | `org.openresinalliance.dragonfruit.metainfo.xml` | AppStream metadata |
 | `org.openresinalliance.dragonfruit.desktop` | Desktop entry |
-| `dragonfruit-voxl-mime.xml` | MIME type registration for `.voxl` files |
+| `staging/dragonfruit-mime.xml` | MIME registrations for every declared file type (staged from the generated payload) |
 | `launcher.sh` | `/app/bin/dragonfruit` wrapper — sets CEF flags and `LD_LIBRARY_PATH` |
 | `FLATHUB.md` | Flathub submission checklist (blocked on GPL-3.0 LICENCE publication) |
 | `THUMBNAILER.md` | Thumbnailer-in-Flatpak investigation notes |
