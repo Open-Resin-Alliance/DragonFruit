@@ -310,7 +310,7 @@ registerSupportDetailRenderer('trunk', (ctx) => ({
         const root = ctx.roots[trunk.rootId];
         return root ? { root } : null;
     },
-    skip: ({ isSelected }) => !isSelected || detailSkippedInSimpleView(ctx),
+    skip: ({ isSelected }) => !isSelected || detailSkippedInSimpleView(ctx, isSelected),
     noClipping: () => true,
     extraProps: ({ entity, isSelected }) => ({
         deferStraightShaftsToSceneBatch: !isSelected,

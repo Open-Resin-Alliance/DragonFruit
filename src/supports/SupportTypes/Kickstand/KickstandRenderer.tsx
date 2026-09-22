@@ -186,10 +186,10 @@ registerSupportDetailRenderer('kickstand', (ctx) => ({
         const hostKnot = ctx.renderKnotsById[kickstand.hostKnotId];
         return root && hostKnot ? { root, hostKnot } : null;
     },
-    skip: ({ isSelected, isBatchable }) => (!isSelected && isBatchable) || detailSkippedInSimpleView(ctx),
+    skip: ({ isSelected, isBatchable }) => (!isSelected && isBatchable) || detailSkippedInSimpleView(ctx, isSelected),
     noClipping: ({ isSelected }) => isSelected,
     extraProps: ({ isSelected, isBatchable }) => ({
-        showKnot: detailSkippedInSimpleView(ctx) ? false : (!ctx.hideUnselectedKnots || isSelected),
+        showKnot: detailSkippedInSimpleView(ctx, isSelected) ? false : (!ctx.hideUnselectedKnots || isSelected),
         deferStraightShaftsToSceneBatch: !isSelected && isBatchable,
         deferInteractionToSceneBatch: !isSelected && isBatchable,
         hidePlateContactPrimitives: ctx.hidePlateContactPrimitivesEffective,

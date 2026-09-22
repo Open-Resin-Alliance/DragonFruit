@@ -252,10 +252,10 @@ registerSupportDetailRenderer('branch', (ctx) => ({
         const parentKnot = ctx.renderKnotsById[branch.parentKnotId];
         return parentKnot ? { parentKnot } : null;
     },
-    skip: ({ isSelected }) => !isSelected || detailSkippedInSimpleView(ctx),
+    skip: ({ isSelected }) => !isSelected || detailSkippedInSimpleView(ctx, isSelected),
     noClipping: () => true,
     extraProps: ({ entity, isSelected }) => ({
-        showKnots: detailSkippedInSimpleView(ctx) ? false : (!ctx.hideUnselectedKnots || isSelected),
+        showKnots: detailSkippedInSimpleView(ctx, isSelected) ? false : (!ctx.hideUnselectedKnots || isSelected),
         deferStraightShaftsToSceneBatch: !isSelected,
         deferInteractionToSceneBatch: !isSelected,
         deferContactConesToSceneBatch: !isSelected && !!(entity as Branch).contactCone,

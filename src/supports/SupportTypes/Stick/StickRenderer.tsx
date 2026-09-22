@@ -243,7 +243,7 @@ StickRenderer.displayName = 'StickRenderer';
 
 registerSupportDetailRenderer('stick', (ctx) => ({
     component: StickRenderer as never,
-    skip: ({ isSelected, isBatchable }) => (!isSelected && isBatchable) || detailSkippedInSimpleView(ctx),
+    skip: ({ isSelected, isBatchable }) => (!isSelected && isBatchable) || detailSkippedInSimpleView(ctx, isSelected),
     noClipping: ({ isSelected }) => isSelected,
     extraProps: ({ isSelected, isBatchable }) => ({
         deferStraightShaftsToSceneBatch: !isSelected && isBatchable,

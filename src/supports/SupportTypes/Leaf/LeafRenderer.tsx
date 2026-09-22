@@ -209,7 +209,7 @@ registerSupportDetailRenderer('leaf', (ctx) => ({
     skip: ({ isSelected }) => !isSelected,
     noClipping: () => true,
     extraProps: ({ entity, isSelected }) => ({
-        showKnots: !detailSkippedInSimpleView(ctx),
+        showKnots: !detailSkippedInSimpleView(ctx, isSelected),
         deferContactConesToSceneBatch: !isSelected && !!(entity as Leaf).contactCone,
     }),
 }));
