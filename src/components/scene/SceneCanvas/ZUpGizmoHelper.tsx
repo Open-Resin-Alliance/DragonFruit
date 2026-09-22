@@ -129,6 +129,10 @@ arrowTriangle.setAttribute(
 );
 arrowTriangle.computeVertexNormals();
 
+/** Shown (dimmed) when a quarter turn would not be meaningful. */
+const ARROW_DISABLED_COLOR = '#8b9095';
+const ARROW_DISABLED_OPACITY = 0.4;
+
 function RotationArrow({
   direction,
   position,
@@ -136,6 +140,7 @@ function RotationArrow({
   color,
   hoverColor,
   strokeColor,
+  disabled = false,
 }: {
   direction: QuarterTurnDirection;
   position: [number, number, number];
@@ -143,36 +148,44 @@ function RotationArrow({
   color: string;
   hoverColor: string;
   strokeColor: string;
+  disabled?: boolean;
 }) {
   const { quarterTurn } = React.useContext(Context);
   const [hover, setHover] = React.useState(false);
+
+  const tone = disabled ? ARROW_DISABLED_COLOR : hover ? hoverColor : color;
+  const outline = disabled ? ARROW_DISABLED_COLOR : strokeColor;
 
   return (
     <mesh
       geometry={arrowTriangle}
       position={position}
       rotation={[0, 0, rotation]}
+      // Dimmed rather than removed, but inert while unavailable.
       onPointerOver={(e) => {
         e.stopPropagation();
+        if (disabled) return;
         setHover(true);
       }}
       onPointerOut={(e) => {
         e.stopPropagation();
+        if (disabled) return;
         setHover(false);
       }}
       onClick={(e) => {
         e.stopPropagation();
+        if (disabled) return;
         quarterTurn(direction);
       }}
     >
       <meshBasicMaterial
-        color={hover ? hoverColor : color}
+        color={tone}
         transparent
-        opacity={hover ? 0.95 : 0.8}
+        opacity={disabled ? ARROW_DISABLED_OPACITY : hover ? 0.95 : 0.8}
         side={DoubleSide}
       />
       {/* Same secondary outline the cube faces carry. */}
-      <Edges color={strokeColor} />
+      <Edges color={outline} />
     </mesh>
   );
 }
@@ -436,18 +449,15 @@ export function ZUpGizmoHelper({
           {children}
         </group>
         {/* Quarter-turn arrows live outside the rotating group, so they stay
-            screen-aligned: the top arrow is always "turn up from here". Only
-            rendered from a face-on view — a quarter turn is meaningless from an
-            arbitrary angle. Conditional render (not `visible`) so hidden arrows
-            cannot be hit. */}
-        {showArrows && (
-          <group position={[x, y, 0]} scale={[60, 60, 60]}>
-            <RotationArrow direction="up" position={[0, ARROW_DISTANCE, 0]} rotation={Math.PI} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} />
-            <RotationArrow direction="down" position={[0, -ARROW_DISTANCE, 0]} rotation={0} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} />
-            <RotationArrow direction="left" position={[-ARROW_DISTANCE, 0, 0]} rotation={-Math.PI / 2} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} />
-            <RotationArrow direction="right" position={[ARROW_DISTANCE, 0, 0]} rotation={Math.PI / 2} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} />
-          </group>
-        )}
+            screen-aligned: the top arrow is always "turn up from here". They are
+            dimmed and non-interactive unless the view is face-on, where a quarter
+            turn is meaningful. */}
+        <group position={[x, y, 0]} scale={[60, 60, 60]}>
+          <RotationArrow direction="up" position={[0, ARROW_DISTANCE, 0]} rotation={Math.PI} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} disabled={!showArrows} />
+          <RotationArrow direction="down" position={[0, -ARROW_DISTANCE, 0]} rotation={0} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} disabled={!showArrows} />
+          <RotationArrow direction="left" position={[-ARROW_DISTANCE, 0, 0]} rotation={-Math.PI / 2} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} disabled={!showArrows} />
+          <RotationArrow direction="right" position={[ARROW_DISTANCE, 0, 0]} rotation={Math.PI / 2} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} disabled={!showArrows} />
+        </group>
         {/* Home is useful from any angle, so it is always shown (the quarter-turn
             arrows are not). */}
         <group position={[x, y, 0]} scale={[60, 60, 60]}>
