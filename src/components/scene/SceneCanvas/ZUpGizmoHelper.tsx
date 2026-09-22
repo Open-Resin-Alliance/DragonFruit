@@ -101,6 +101,13 @@ const ARROW_DISTANCE = 0.74;
 /** Arrowhead: a flat, near-equilateral triangle in gizmo units (cube half is 0.5). */
 const ARROW_WIDTH = 0.2;
 const ARROW_HEIGHT = 0.17;
+/**
+ * Only show the quarter-turn arrows when the view is within this many degrees of
+ * a face — a quarter turn is only meaningful from a face-on (FRONT/TOP/…) view.
+ */
+const ARROW_FACE_ON_DEGREES = 10;
+const ARROW_FACE_ON_COS = Math.cos((ARROW_FACE_ON_DEGREES * Math.PI) / 180);
+const arrowViewDirection = new Vector3();
 
 /**
  * Flat triangle pointing +Y, apex at the top. A flat primitive (rather than a
@@ -190,6 +197,8 @@ export function ZUpGizmoHelper({
   const radius = React.useRef(0);
   const focusPoint = React.useRef(new Vector3(0, 0, 0));
   const savedControlsEnabled = React.useRef<boolean | null>(null);
+  const [showArrows, setShowArrows] = React.useState(false);
+  const showArrowsRef = React.useRef(false);
 
   const restoreControls = React.useCallback(() => {
     if (isOrbitControls(defaultControls) || isCameraControls(defaultControls)) {
@@ -285,6 +294,19 @@ export function ZUpGizmoHelper({
       matrix.copy(mainCamera.matrix).invert();
       gizmoRef.current.quaternion.setFromRotationMatrix(matrix);
     }
+
+    // Show the quarter-turn arrows only from a face-on view. Re-render only when
+    // the state flips, not every frame.
+    mainCamera.getWorldDirection(arrowViewDirection);
+    const faceOn = Math.max(
+      Math.abs(arrowViewDirection.x),
+      Math.abs(arrowViewDirection.y),
+      Math.abs(arrowViewDirection.z),
+    ) > ARROW_FACE_ON_COS;
+    if (faceOn !== showArrowsRef.current) {
+      showArrowsRef.current = faceOn;
+      setShowArrows(faceOn);
+    }
   });
 
   // Never leave OrbitControls disabled if this unmounts mid-tween (thumbnail
@@ -330,13 +352,18 @@ export function ZUpGizmoHelper({
           {children}
         </group>
         {/* Quarter-turn arrows live outside the rotating group, so they stay
-            screen-aligned: the top arrow is always "turn up from here". */}
-        <group position={[x, y, 0]} scale={[60, 60, 60]}>
-          <RotationArrow direction="up" position={[0, ARROW_DISTANCE, 0]} rotation={Math.PI} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} />
-          <RotationArrow direction="down" position={[0, -ARROW_DISTANCE, 0]} rotation={0} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} />
-          <RotationArrow direction="left" position={[-ARROW_DISTANCE, 0, 0]} rotation={-Math.PI / 2} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} />
-          <RotationArrow direction="right" position={[ARROW_DISTANCE, 0, 0]} rotation={Math.PI / 2} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} />
-        </group>
+            screen-aligned: the top arrow is always "turn up from here". Only
+            rendered from a face-on view — a quarter turn is meaningless from an
+            arbitrary angle. Conditional render (not `visible`) so hidden arrows
+            cannot be hit. */}
+        {showArrows && (
+          <group position={[x, y, 0]} scale={[60, 60, 60]}>
+            <RotationArrow direction="up" position={[0, ARROW_DISTANCE, 0]} rotation={Math.PI} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} />
+            <RotationArrow direction="down" position={[0, -ARROW_DISTANCE, 0]} rotation={0} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} />
+            <RotationArrow direction="left" position={[-ARROW_DISTANCE, 0, 0]} rotation={-Math.PI / 2} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} />
+            <RotationArrow direction="right" position={[ARROW_DISTANCE, 0, 0]} rotation={Math.PI / 2} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} />
+          </group>
+        )}
       </Context.Provider>
     </Hud>
   );
