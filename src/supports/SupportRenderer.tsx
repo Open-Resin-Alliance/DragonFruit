@@ -2779,7 +2779,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         // baked into each instance. An instance count in the key would remount
         // the mesh and reallocate its buffers on every edit.
         return groups.map((group) => (
-            <group key={`scene-${typeId}-batch:${group.color}`}>
+            <group key={`scene-${typeId}-batch:${group.color}:${simpleRender ? 'simple' : 'full'}`}>
                 {simpleRender ? (
                     <>
                         <SimpleShaftLines shafts={group.shafts} color={group.color} />
@@ -3089,7 +3089,6 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         renderKnotsById,
         braceRenderKnotsById,
         simpleRender,
-        navigationView: discsOnly,
         hideUnselectedKnots,
         hidePlateContactPrimitivesEffective,
         ghostedBraceIdSet,
@@ -3103,7 +3102,6 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         renderKnotsById,
         braceRenderKnotsById,
         simpleRender,
-        discsOnly,
         hideUnselectedKnots,
         hidePlateContactPrimitivesEffective,
         ghostedBraceIdSet,
@@ -3178,13 +3176,17 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             <KnotGizmo />
             <BezierGizmoManager />
 
-            {sceneBatchedJointGroups.map((group) => (
+            {/* Joints are solids with no line form, so a simple view does not draw
+                them at all. Unmounted, not faded: a zero-alpha batch left mounted
+                for picking is what kept showing joint spheres after a mode switch,
+                because the fade is a material prop on an already-built mesh. */}
+            {!simpleRender && sceneBatchedJointGroups.map((group) => (
                 <group key={`scene-joint-batch:${group.color}`}>
                     <InstancedJointGroup
                         joints={group.joints}
                         color={group.color}
-                        transparent={ghostTransparent || discsOnly}
-                        opacity={discsOnly ? 0 : ghostOpacityClamped}
+                        transparent={ghostTransparent}
+                        opacity={ghostOpacityClamped}
                         widthSegments={BATCHED_JOINT_WIDTH_SEGMENTS}
                         heightSegments={BATCHED_JOINT_HEIGHT_SEGMENTS}
                         onJointClick={isPointerInteractable ? handleSceneBatchedJointClick : undefined}
@@ -3197,7 +3199,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 <group key={`scene-${typeId}-root-batch:${group.color}`}>
                     <InstancedRootsGroup
                         roots={group.roots}
-                        diskOnly={discsOnly}
+                        diskOnly={simpleRender}
                         discColor={discsOnly ? NAVIGATION_CONTACT_COLOR : undefined}
                         color={group.color}
                         transparent={ghostTransparent}
@@ -3215,7 +3217,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 </group>
             )))}
             {sceneBatchedContactConeGroups.map((group) => (
-                <group key={`scene-cone-batch:${group.color}`}>
+                <group key={`scene-cone-batch:${group.color}:${discsOnly ? 'discs' : 'full'}`}>
                     <InstancedContactConeGroup
                         cones={group.cones}
                         discsOnly={discsOnly}

@@ -208,7 +208,7 @@ function RootBucketMesh({
                 />
             </instancedMesh>
 
-            {bucket.coneHeight > 0 && (
+            {!diskOnly && bucket.coneHeight > 0 && (
                 <instancedMesh
                     key={`root-cone:${bucket.roots.length}`}
                     ref={coneRef}
@@ -225,15 +225,15 @@ function RootBucketMesh({
                         color={color}
                         emissive={emissive}
                         emissiveIntensity={emissiveIntensity}
-                        transparent={diskOnly || transparent}
-                        opacity={diskOnly ? 0 : opacity}
-                        depthWrite={!diskOnly && !transparent}
+                        transparent={transparent}
+                        opacity={opacity}
+                        depthWrite={!transparent}
                         clippingPlanes={clippingPlanes ?? undefined}
                     />
                 </instancedMesh>
             )}
 
-            {bucket.coneHeight > 0 && (
+            {!diskOnly && bucket.coneHeight > 0 && (
                 <instancedMesh
                     key={`root-sphere:${bucket.roots.length}`}
                     ref={sphereRef}
@@ -250,9 +250,9 @@ function RootBucketMesh({
                         color={color}
                         emissive={emissive}
                         emissiveIntensity={emissiveIntensity}
-                        transparent={diskOnly || transparent}
-                        opacity={diskOnly ? 0 : opacity}
-                        depthWrite={!diskOnly && !transparent}
+                        transparent={transparent}
+                        opacity={opacity}
+                        depthWrite={!transparent}
                         clippingPlanes={clippingPlanes ?? undefined}
                     />
                 </instancedMesh>

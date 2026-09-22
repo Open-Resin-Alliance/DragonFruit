@@ -20,7 +20,6 @@ const EMPTY_CONTEXT: DetailRendererContext = {
     renderKnotsById: {},
     braceRenderKnotsById: {},
     simpleRender: false,
-    navigationView: false,
     hideUnselectedKnots: false,
     hidePlateContactPrimitivesEffective: false,
     ghostedBraceIdSet: new Set(),

@@ -328,51 +328,57 @@ function ConeBucketMesh({
                 </instancedMesh>
             )}
 
-            {/* In the discs-only view the body stays mounted at zero alpha:
-                the caller draws its axis as a line, and the body is what the
-                pointer hits, exactly as in the full render. */}
-            <instancedMesh
-                key={`cone-body:${bucket.cones.length}`}
-                ref={bodyRef}
-                args={[undefined, undefined, bucket.cones.length]}
-                frustumCulled={false}
-                renderOrder={100000}
-                {...sharedHandlers}
-            >
-                <cylinderGeometry args={[bucket.contactRadius, bucket.bodyRadius, bucket.length, 10]} />
-                <meshStandardMaterial
-                    color={color}
-                    emissive={emissive}
-                    emissiveIntensity={emissiveIntensity}
-                    transparent={discsOnly || transparent}
-                    opacity={discsOnly ? 0 : opacity}
-                    depthWrite={!discsOnly && !transparent}
-                    clippingPlanes={clippingPlanes ?? undefined}
-                />
-            </instancedMesh>
+            {/* The body is a solid with a line form, so the discs-only view drops it
+                and the caller draws its axis instead. Unmounted rather than faded:
+                a zero-alpha batch left mounted for picking is what kept showing
+                cone bodies after a mode switch, because the fade is a material prop
+                on an already-built mesh. */}
+            {!discsOnly && (
+                <instancedMesh
+                    key={`cone-body:${bucket.cones.length}`}
+                    ref={bodyRef}
+                    args={[undefined, undefined, bucket.cones.length]}
+                    frustumCulled={false}
+                    renderOrder={100000}
+                    {...sharedHandlers}
+                >
+                    <cylinderGeometry args={[bucket.contactRadius, bucket.bodyRadius, bucket.length, 10]} />
+                    <meshStandardMaterial
+                        color={color}
+                        emissive={emissive}
+                        emissiveIntensity={emissiveIntensity}
+                        transparent={transparent}
+                        opacity={opacity}
+                        depthWrite={!transparent}
+                        clippingPlanes={clippingPlanes ?? undefined}
+                    />
+                </instancedMesh>
+            )}
 
-            {/* The tip sphere is a sphere profile's contact primitive, so it
-                stays visible there; a disk profile draws the disk instead, and
-                the sphere goes to zero alpha rather than away. */}
-            <instancedMesh
-                key={`cone-tip:${bucket.cones.length}`}
-                ref={tipSphereRef}
-                args={[undefined, undefined, bucket.cones.length]}
-                frustumCulled={false}
-                renderOrder={100000}
-                {...sharedHandlers}
-            >
-                <sphereGeometry args={[bucket.contactRadius, 10, 8]} />
-                <meshStandardMaterial
-                    color={discColor ?? color}
-                    emissive={emissive}
-                    emissiveIntensity={emissiveIntensity}
-                    transparent={(discsOnly && bucket.profileType === 'disk') || transparent}
-                    opacity={discsOnly && bucket.profileType === 'disk' ? 0 : opacity}
-                    depthWrite={!((discsOnly && bucket.profileType === 'disk') || transparent)}
-                    clippingPlanes={clippingPlanes ?? undefined}
-                />
-            </instancedMesh>
+            {/* The tip sphere is a sphere profile's contact primitive, so it stays
+                visible there; a disk profile draws the disk instead, so this copy
+                is not mounted in the discs-only view. */}
+            {!(discsOnly && bucket.profileType === 'disk') && (
+                <instancedMesh
+                    key={`cone-tip:${bucket.cones.length}`}
+                    ref={tipSphereRef}
+                    args={[undefined, undefined, bucket.cones.length]}
+                    frustumCulled={false}
+                    renderOrder={100000}
+                    {...sharedHandlers}
+                >
+                    <sphereGeometry args={[bucket.contactRadius, 10, 8]} />
+                    <meshStandardMaterial
+                        color={discColor ?? color}
+                        emissive={emissive}
+                        emissiveIntensity={emissiveIntensity}
+                        transparent={transparent}
+                        opacity={opacity}
+                        depthWrite={!transparent}
+                        clippingPlanes={clippingPlanes ?? undefined}
+                    />
+                </instancedMesh>
+            )}
 
             {outOfBoundsMaterial && (
                 <>

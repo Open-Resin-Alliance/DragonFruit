@@ -275,6 +275,15 @@ export function useTrunkPlacementV2() {
         setPreviewError((prev) => (prev === null ? prev : null));
         setPreviewWarning((prev) => (prev === null ? prev : null));
         cavityPreviewCacheRef.current = null;
+        // A click can leave the pointer exactly where it was after a commit. Cancel
+        // the queued hover and forget its stored hit so that a scheduled frame
+        // cannot rebuild the same preview before the pointer moves again.
+        if (hoverFrameRef.current !== null) {
+            cancelAnimationFrame(hoverFrameRef.current);
+            hoverFrameRef.current = null;
+        }
+        latestHoverRef.current = null;
+        lastProcessedHoverRef.current = null;
         if (getSupportPathfindingDebugEnabled()) {
             setSupportPathfindingDebugSnapshot(null);
         }

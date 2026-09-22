@@ -28,12 +28,6 @@ export interface DetailRendererContext {
     renderKnotsById: Record<string, Knot>;
     braceRenderKnotsById: Record<string, Knot>;
     simpleRender: boolean;
-    /**
-     * The eye button's navigation view: the batches draw lines and contact
-     * discs, and a SELECTED support is still drawn in full by its detail
-     * renderer, so it can be inspected while the forest around it is light.
-     */
-    navigationView: boolean;
     hideUnselectedKnots: boolean;
     hidePlateContactPrimitivesEffective: boolean;
     ghostedBraceIdSet: ReadonlySet<string>;
@@ -61,12 +55,17 @@ export function registerSupportDetailRenderer(typeId: SupportTypeId, factory: De
 }
 
 /**
- * Whether the simple/navigation view hides this member. The navigation view is
- * the exception that keeps a selected support whole, so its detail renderer is
- * the only one still drawn for it.
+ * Whether the simple/navigation view hides this member.
+ *
+ * The view is authoritative: no member draws detail in it, a selected one
+ * included. A selection exception here is what left a just-placed support
+ * showing its contact cone, joints and root cone while the rest of the forest
+ * was lines, because being selected is not a state the view can be trusted to
+ * notice and undo on its own. Detail appears in this view only through the
+ * hover overlay, which mounts while the pointer is on a member.
  */
-export function detailSkippedInSimpleView(context: DetailRendererContext, isSelected: boolean): boolean {
-    return context.simpleRender && !(context.navigationView && isSelected);
+export function detailSkippedInSimpleView(context: DetailRendererContext): boolean {
+    return context.simpleRender;
 }
 
 /** The detail renderer table for this frame, keyed by type id. */
