@@ -11,12 +11,14 @@ type TweenCamera = (direction: Vector3) => void;
 type OrbitControlsLike = {
   minPolarAngle: number;
   target: Vector3;
+  enabled?: boolean;
   update: (delta?: number) => void;
 };
 
 type CameraControlsLike = {
   getTarget: (out: Vector3) => Vector3;
   setPosition: (x: number, y: number, z: number) => void;
+  enabled?: boolean;
   update: (delta?: number) => void;
 };
 
@@ -34,33 +36,27 @@ const q2 = new Quaternion();
 const targetDirection = new Vector3();
 const targetPosition = new Vector3();
 const worldUp = new Vector3(0, 0, 1);
-const startDirection = new Vector3(0, 1, 0);
-const poleHeading = new Vector3();
-const poleRight = new Vector3();
-const poleUp = new Vector3();
+/** Screen-up chosen for the poles, where world Z cannot serve (it is the view axis). */
+const polarScreenUp = new Vector3(0, 1, 0);
+/** Off-pole tilt (~0.5°) that keeps OrbitControls' spherical away from its singularity. */
+const polarTilt = 0.0087;
 
-function getStableLookUp(direction: Vector3): Vector3 {
-  const normalizedDirection = direction.clone().normalize();
-  if (Math.abs(normalizedDirection.dot(worldUp)) < 0.999) {
-    return worldUp;
-  }
+/**
+ * A view direction pointing straight along ±worldUp is a singularity for
+ * OrbitControls: the camera's up-vector is the view axis, so the azimuth is
+ * undefined and the roll snaps to a canonical value instead of animating. Tilt
+ * such a direction a fraction of a degree off the pole toward the side that puts
+ * `polarScreenUp` up on screen, so the whole tween (and the state it lands in) is
+ * well-defined. Visually it is still a top/bottom view.
+ */
+function stabilizeDirection(direction: Vector3): Vector3 {
+  const stabilized = direction.clone().normalize();
+  const upDot = stabilized.dot(worldUp);
+  if (Math.abs(upDot) < 0.999) return stabilized;
 
-  poleHeading.copy(startDirection);
-  poleHeading.z = 0;
-  if (poleHeading.lengthSq() < 1e-8) {
-    poleHeading.set(1, 0, 0);
-  } else {
-    poleHeading.normalize();
-  }
-
-  poleRight.crossVectors(worldUp, poleHeading);
-  if (poleRight.lengthSq() < 1e-8) {
-    poleRight.set(1, 0, 0);
-  } else {
-    poleRight.normalize();
-  }
-
-  return poleUp.crossVectors(normalizedDirection, poleRight).normalize();
+  const sign = upDot > 0 ? -1 : 1;
+  stabilized.addScaledVector(polarScreenUp, Math.tan(polarTilt) * sign);
+  return stabilized.normalize();
 }
 
 function isOrbitControls(
@@ -104,6 +100,20 @@ export function ZUpGizmoHelper({
   const animating = React.useRef(false);
   const radius = React.useRef(0);
   const focusPoint = React.useRef(new Vector3(0, 0, 0));
+  const savedControlsEnabled = React.useRef<boolean | null>(null);
+
+  const restoreControls = React.useCallback(() => {
+    if (isOrbitControls(defaultControls) || isCameraControls(defaultControls)) {
+      if (savedControlsEnabled.current !== null && typeof defaultControls.enabled === 'boolean') {
+        defaultControls.enabled = savedControlsEnabled.current;
+      }
+      if (isCameraControls(defaultControls)) {
+        defaultControls.setPosition(mainCamera.position.x, mainCamera.position.y, mainCamera.position.z);
+      }
+      defaultControls.update();
+    }
+    savedControlsEnabled.current = null;
+  }, [defaultControls, mainCamera]);
 
   const tweenCamera = React.useCallback<TweenCamera>(
     (direction) => {
@@ -115,15 +125,26 @@ export function ZUpGizmoHelper({
       } else if (isOrbitControls(defaultControls)) {
         focusPoint.current.copy(defaultControls.target);
       }
-      startDirection.copy(mainCamera.position).sub(focusPoint.current).normalize();
       radius.current = mainCamera.position.distanceTo(focusPoint.current);
       q1.copy(mainCamera.quaternion);
-      targetDirection.copy(direction).normalize();
+      targetDirection.copy(stabilizeDirection(direction));
       targetPosition.copy(targetDirection).multiplyScalar(radius.current).add(focusPoint.current);
-      dummy.up.copy(getStableLookUp(targetDirection));
+      dummy.up.copy(worldUp);
       dummy.position.copy(focusPoint.current);
       dummy.lookAt(targetPosition);
       q2.copy(dummy.quaternion);
+
+      // Take the camera out of OrbitControls' hands for the tween: its update()
+      // rebuilds the orientation from position+up, which is singular near the
+      // poles and would snap the roll instead of letting the slerp animate it.
+      if (
+        savedControlsEnabled.current === null
+        && (isOrbitControls(defaultControls) || isCameraControls(defaultControls))
+        && typeof defaultControls.enabled === 'boolean'
+      ) {
+        savedControlsEnabled.current = defaultControls.enabled;
+        defaultControls.enabled = false;
+      }
       invalidate();
     },
     [defaultControls, mainCamera, onTarget, invalidate],
@@ -137,18 +158,14 @@ export function ZUpGizmoHelper({
           mainCamera.quaternion.copy(q2);
           mainCamera.up.copy(worldUp);
           animating.current = false;
+          restoreControls();
         } else {
           const step = delta * turnRate;
           q1.rotateTowards(q2, step);
           mainCamera.position.set(0, 0, 1).applyQuaternion(q1).multiplyScalar(radius.current).add(focusPoint.current);
-          targetDirection.copy(mainCamera.position).sub(focusPoint.current).normalize();
-          mainCamera.up.copy(worldUp);
           mainCamera.quaternion.copy(q1);
-          if (isCameraControls(defaultControls)) {
-            defaultControls.setPosition(mainCamera.position.x, mainCamera.position.y, mainCamera.position.z);
-          }
+          mainCamera.up.copy(worldUp);
           if (onUpdate) onUpdate();
-          else if (isOrbitControls(defaultControls) || isCameraControls(defaultControls)) defaultControls.update(delta);
           invalidate();
         }
       }
@@ -157,6 +174,21 @@ export function ZUpGizmoHelper({
       gizmoRef.current.quaternion.setFromRotationMatrix(matrix);
     }
   });
+
+  // Never leave OrbitControls disabled if this unmounts mid-tween (thumbnail
+  // capture does exactly that).
+  React.useEffect(() => {
+    return () => {
+      if (
+        savedControlsEnabled.current !== null
+        && (isOrbitControls(defaultControls) || isCameraControls(defaultControls))
+        && typeof defaultControls.enabled === 'boolean'
+      ) {
+        defaultControls.enabled = savedControlsEnabled.current;
+      }
+      savedControlsEnabled.current = null;
+    };
+  }, [defaultControls]);
 
   const gizmoHelperContext = React.useMemo(
     () => ({
