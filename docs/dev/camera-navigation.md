@@ -87,6 +87,13 @@ look target, so using it directly would jump at gesture start).
 `controls.target` along the view axis at the current radius, so the resumed sync
 derives the same frustum with no pop.
 
+SpaceMouse navigation keeps GPU picking live — unlike mouse orbit/pan/zoom, the
+pointer is free during a SpaceMouse gesture, so hover should keep following the
+camera. It therefore does **not** fire the `picking-pan-*` events (those pause
+the picker and disable mesh raycast). Instead it fires
+`spacemouse-navigation-start` / `-change` / `-end`, which only `useSceneAutosave`
+listens to so saving still defers until the camera settles.
+
 ## Tests
 
 `src/components/scene/camera/__tests__/orthoDolly.test.ts` covers the frustum

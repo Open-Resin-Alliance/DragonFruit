@@ -4980,7 +4980,11 @@ export function SceneCanvas({
     if (!cameraInteractionCycleEnabled) return;
     updateCameraBelowBuildPlate();
     onCameraChange?.();
-    window.dispatchEvent(new Event('picking-pan-change'));
+    // SpaceMouse navigation deliberately does NOT fire the picking-pan-* events:
+    // those pause GPU picking and disable mesh raycast (they assume the pointer is
+    // the input). With a SpaceMouse the mouse is free, so hover picking should keep
+    // following the camera. Autosave is told via the spacemouse-navigation-* events.
+    window.dispatchEvent(new Event('spacemouse-navigation-change'));
   }, [cameraInteractionCycleEnabled, onCameraChange, updateCameraBelowBuildPlate]);
 
   React.useEffect(() => {
@@ -5339,14 +5343,14 @@ export function SceneCanvas({
 
   React.useEffect(() => {
     if (cameraInteractionCycleEnabled && spaceMouseNavigationActive) {
-      window.dispatchEvent(new Event('picking-pan-start'));
+      // See handleSpaceMouseNavigationFrame: SpaceMouse navigation keeps picking
+      // live, so it signals autosave on its own channel instead of picking-pan-*.
+      window.dispatchEvent(new Event('spacemouse-navigation-start'));
       return;
     }
 
-    window.dispatchEvent(new CustomEvent('picking-pan-end', {
-      detail: { resumeAfterMs: navigationResumeDelayMs },
-    }));
-  }, [cameraInteractionCycleEnabled, navigationResumeDelayMs, spaceMouseNavigationActive]);
+    window.dispatchEvent(new Event('spacemouse-navigation-end'));
+  }, [cameraInteractionCycleEnabled, spaceMouseNavigationActive]);
 
   const {
     thumbnailCaptureActive,
@@ -5938,7 +5942,7 @@ export function SceneCanvas({
                 const isActive = isCaptureTintModel || model.id === activeModelId;
                 const isSelectedModel = isCaptureTintModel || selectedModelIdSet.has(model.id);
                 const isMarqueeCandidate = isMarqueeSelecting && marqueeCandidateIdSet.has(model.id);
-                const suppressModelInteraction = !modelPickerEnabled || !cameraInteractionCycleEnabled || isGizmoDragging || isPostGizmoInteractionGuardActive || supportGizmoInteractionActive || isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive;
+                const suppressModelInteraction = !modelPickerEnabled || !cameraInteractionCycleEnabled || isGizmoDragging || isPostGizmoInteractionGuardActive || supportGizmoInteractionActive || isOrbitInteracting || isWheelZoomInteracting;
                 const interactionLodEnabled = (isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive) && !isActive;
                 const supportNonSelectedOpacity = mode === 'support' && !!activeModelId && !isActive ? 0.5 : undefined;
                 const shouldHideDuplicateSourceModel = Boolean(
