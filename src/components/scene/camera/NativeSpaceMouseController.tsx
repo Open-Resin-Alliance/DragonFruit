@@ -38,13 +38,13 @@ const MODEL_EXTENTS_REFRESH_FRAMES = 30;
 // design — in an orthographic view the driver produces zero motion (it expects
 // a perspective projection to translate the eye). Our scene is usually ortho, so
 // to let those modes drive an ortho camera we deliberately report
-// `view.perspective = true` to navlib even when the live camera is orthographic.
-// navlib then drives everything through `view.affine`: lateral eye translation =
-// pan and eye rotation = orbit (both correct for ortho as-is), while its "zoom"
-// dollies the eye forward — which is a no-op for an ortho projection. `applyAffine`
-// intercepts that forward dolly and converts it into `camera.zoom` instead.
-// Object mode still works in ortho with this on (navlib treats it as perspective
-// object mode). Flip to `false` to restore the native extents-based ortho path.
+// `view.perspective = true` and a synthetic `view.focusDistance` to navlib even
+// when the live camera is orthographic (see `buildCameraInput`). navlib then
+// drives everything through `view.affine`: lateral eye translation = pan, eye
+// rotation = orbit, and its "zoom" dollies the eye forward. `applyAffine` turns
+// that forward dolly into the ortho dolly radius (the scale source). Object mode
+// still works in ortho with this on (navlib treats it as perspective object
+// mode). Flip to `false` to restore the native extents-based ortho path.
 const FORCE_PERSPECTIVE_IN_ORTHO = true;
 
 /**
