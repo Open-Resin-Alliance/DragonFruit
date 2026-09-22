@@ -94,6 +94,7 @@ export function NativeSpaceMouseController({
   const latestOutRef = React.useRef<NativeNavOutput | null>(null);
   const inFlightRef = React.useRef(false);
   const lastAppliedSeqRef = React.useRef(0);
+  const lastAppliedExtentsSeqRef = React.useRef(0);
   const prevMotionRef = React.useRef(false);
   const weDisabledOrbitRef = React.useRef(false);
   // Camera→target distance captured when navlib takes over, so handback can
@@ -177,6 +178,18 @@ export function NativeSpaceMouseController({
         return;
       }
 
+      // Seed the "previous pose" from the camera on the first applied frame, so an
+      // idle view command (Fit) that arrives before any gesture is still measured
+      // as a jump rather than passing through as a no-op.
+      if (!navHasAxialRef.current) {
+        const seedPivot = getTarget(tmpTarget.current);
+        const seedForward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+        navPrevEyeRef.current.copy(camera.position);
+        navPrevFwdRef.current.copy(seedForward);
+        navPrevAxialRef.current = new THREE.Vector3().copy(camera.position).sub(seedPivot).dot(seedForward);
+        navHasAxialRef.current = true;
+      }
+
       // ── Ortho + forced-perspective lie ──
       // navlib thinks it is driving a perspective camera: it trucks the eye
       // laterally for pan, rotates it for orbit, and dollies it forward for
@@ -217,6 +230,49 @@ export function NativeSpaceMouseController({
       focusDistRef.current = navRadiusRef.current;
     },
     [camera, fovDeg, getTarget, sceneRadius],
+  );
+
+  /**
+   * Apply a navlib-written ortho view box.
+   *
+   * In the ortho modes navlib drives pan and "zoom" through `view.extents`: the
+   * box height is the world height it wants visible and its centre offset is an
+   * incremental pan (we send a camera-centred box each frame). That is how a Fit
+   * command can arrive without a usable affine, so map the height onto the dolly
+   * radius instead of dropping it.
+   */
+  const applyNavlibOrthoExtents = React.useCallback(
+    (min: [number, number, number], max: [number, number, number]) => {
+      const ortho = camera as THREE.OrthographicCamera;
+      if (ortho.isOrthographicCamera !== true) return;
+
+      const height = Math.abs(max[1] - min[1]);
+      if (!Number.isFinite(height) || height <= 1e-3) return;
+
+      const fov = THREE.MathUtils.degToRad(fovDeg ?? ORTHO_REFERENCE_FOV_DEG);
+      navRadiusRef.current = THREE.MathUtils.clamp(
+        height / (2 * Math.tan(fov * 0.5)),
+        ORTHO_MIN_RADIUS,
+        ORTHO_MAX_RADIUS,
+      );
+
+      const centreX = (min[0] + max[0]) * 0.5;
+      const centreY = (min[1] + max[1]) * 0.5;
+      if (Math.abs(centreX) > 1e-6 || Math.abs(centreY) > 1e-6) {
+        camera.updateMatrixWorld();
+        const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+        const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1).normalize();
+        const pan = new THREE.Vector3()
+          .addScaledVector(right, centreX)
+          .addScaledVector(up, centreY);
+        camera.position.add(pan);
+        if (isOrbitLikeControls(controls)) controls.target.add(pan);
+      }
+
+      applyOrthoFrustum(ortho, navRadiusRef.current, orthoAspectOf(ortho), { sceneRadius, fovDeg });
+      camera.updateMatrixWorld();
+    },
+    [camera, controls, fovDeg, sceneRadius],
   );
 
   const handBackToOrbit = React.useCallback(() => {
@@ -308,6 +364,8 @@ export function NativeSpaceMouseController({
       modelMax: [box.max.x, box.max.y, box.max.z],
       orthoMin: extents.min,
       orthoMax: extents.max,
+      lastAppliedSeq: lastAppliedSeqRef.current,
+      lastAppliedExtentsSeq: lastAppliedExtentsSeqRef.current,
     };
   }, [camera, computeOrthoExtents, getTarget, refreshModelExtents]);
 
@@ -374,6 +432,14 @@ export function NativeSpaceMouseController({
       if (seqAdvanced && (out.motion || motionEnding || idleViewCommand)) {
         lastAppliedSeqRef.current = out.seq;
         applyAffine(out.affine); // pan + orbit + dolly
+        onNavigationFrame?.();
+      }
+
+      // A view box write is a pan/zoom/Fit command (navlib only writes extents
+      // when it is driving them, not as an echo of what we sent).
+      if (out.extentsSeq !== lastAppliedExtentsSeqRef.current) {
+        lastAppliedExtentsSeqRef.current = out.extentsSeq;
+        applyNavlibOrthoExtents(out.orthoMin, out.orthoMax);
         onNavigationFrame?.();
       }
 

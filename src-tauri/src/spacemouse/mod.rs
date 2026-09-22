@@ -73,6 +73,11 @@ pub struct CameraInput {
     /// false; ignored in perspective mode. Sent as the current camera frustum.
     pub ortho_min: [f64; 3],
     pub ortho_max: [f64; 3],
+    /// The `NavOutput::seq` JS last applied. navlib owns the pose while this
+    /// differs from `NavState::seq`; when they match, JS owns it.
+    pub last_applied_seq: u64,
+    /// As `last_applied_seq`, for `NavOutput::extents_seq`.
+    pub last_applied_extents_seq: u64,
 }
 
 /// navlib's latest camera output, returned to JS each frame.
@@ -628,12 +633,19 @@ mod nav {
         s.focus_distance = cam.focus_distance;
         s.perspective = cam.perspective;
 
-        // Camera pose + ortho extents: JS owns them only while navlib is idle;
-        // during motion navlib owns them (pan/orient via affine, zoom via extents).
+        // Camera pose + ortho extents: during motion navlib owns them (pan/orient
+        // via affine, zoom via extents). While idle JS owns them — but only once it
+        // has consumed navlib's latest write. Without the handshake an idle command
+        // (a Fit that does not set `motion`) is overwritten here by JS's pushed pose
+        // before JS ever sees it, so the command silently does nothing.
         if !s.motion {
-            s.affine = cam.affine;
-            s.ortho_min = PointT { x: cam.ortho_min[0], y: cam.ortho_min[1], z: cam.ortho_min[2] };
-            s.ortho_max = PointT { x: cam.ortho_max[0], y: cam.ortho_max[1], z: cam.ortho_max[2] };
+            if s.seq == cam.last_applied_seq {
+                s.affine = cam.affine;
+            }
+            if s.extents_seq == cam.last_applied_extents_seq {
+                s.ortho_min = PointT { x: cam.ortho_min[0], y: cam.ortho_min[1], z: cam.ortho_min[2] };
+                s.ortho_max = PointT { x: cam.ortho_max[0], y: cam.ortho_max[1], z: cam.ortho_max[2] };
+            }
         }
 
         NavOutput {

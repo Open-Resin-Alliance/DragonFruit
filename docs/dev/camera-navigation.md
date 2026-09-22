@@ -108,6 +108,14 @@ pose we reported, and applying it re-asserts navlib's up-vector, which would
 leave the regular mouse orbiting a rolled horizon from app start with no pending
 re-level.
 
+A view command can arrive **without `motion`** (a Fit is not a drag). The Rust
+bridge owns the pose shadow, and while idle it used to overwrite navlib's write
+with JS's pushed pose before JS ever saw it — so such a command did nothing. JS
+now sends back the `seq` / `extentsSeq` it has applied (`lastAppliedSeq`,
+`lastAppliedExtentsSeq`); the bridge only lets JS overwrite once it has consumed
+navlib's latest write. An extents write is handled as a pan/zoom by
+`applyNavlibOrthoExtents` (box height → dolly radius, box centre → pan).
+
 View commands need their scale handling too (`resolveOrthoNavRadius`): navlib
 chooses their eye distance for a *perspective* projection, and under the derived
 ortho frustum that distance *is* the scale — which is why a preset could land
