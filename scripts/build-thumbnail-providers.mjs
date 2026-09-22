@@ -15,7 +15,7 @@
  */
 
 import { execSync, spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 const platform = process.env.TAURI_ENV_PLATFORM
@@ -74,6 +74,86 @@ function run(cmd, args, cwd) {
 }
 
 // ---------------------------------------------------------------------------
+// Windows — replacing the packaged COM DLL while the shell has it loaded
+// ---------------------------------------------------------------------------
+// Once register.ps1 has run, the shell keeps the registered DLL mapped inside a
+// DllHost surrogate, and a mapped image cannot be overwritten: the copy fails with
+// EPERM and, on the crate's own target dir, cargo fails on the same file with
+// "Access is denied". Identical bytes mean the loaded copy is current, so the write
+// is simply skipped; otherwise the surrogate holding it is evicted and the copy
+// retried once. Evicting DllHost is safe — the surrogate is created on demand, and
+// the other providers co-hosted in it re-register on their next request.
+const COM_DLL_NAME = 'dragonfruit_voxl_thumbnail_com.dll';
+const LOCKED_FILE_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
+
+/** PIDs of DllHost surrogates that currently have the provider DLL mapped. */
+function dllHolderPids() {
+      // Filtering on the executable keeps the eviction away from anything else that
+      // happens to have the DLL mapped (a debugger, a file-open handle with no sharing).
+      const listed = spawnSync(
+            'tasklist',
+            ['/fi', 'imagename eq dllhost.exe', '/m', COM_DLL_NAME, '/fo', 'csv', '/nh'],
+            { encoding: 'utf8' },
+      );
+      return (listed.stdout ?? '')
+            .split('\n')
+            .flatMap((line) => /^"dllhost\.exe","(\d+)"/i.exec(line.trim())?.[1] ?? []);
+}
+
+/** True when both files exist and hold the same bytes; an unreadable file is "not same". */
+function sameBytes(a, b) {
+      try {
+            return readFileSync(a).equals(readFileSync(b));
+      } catch {
+            return false;
+      }
+}
+
+function installComDll(src, dst) {
+      const shown = path.relative(projectRoot, dst);
+
+      if (existsSync(dst) && sameBytes(src, dst)) {
+            console.log(`[build-thumbnail-providers] DLL unchanged → ${shown}`);
+            return;
+      }
+
+      try {
+            copyFileSync(src, dst);
+      } catch (error) {
+            if (!LOCKED_FILE_CODES.has(error.code)) throw error;
+
+            const holders = dllHolderPids();
+            if (holders.length === 0) {
+                  console.error(
+                        `[build-thumbnail-providers] Cannot replace ${shown} (${error.code}), and no DllHost has ` +
+                              `${COM_DLL_NAME} loaded — check for a read-only attribute, an ACL denying write, or a ` +
+                              'scanner holding the file.',
+                  );
+                  process.exit(1);
+            }
+
+            console.log(
+                  `[build-thumbnail-providers] ${shown} is loaded by DllHost (pid ${holders.join(', ')}) — evicting`,
+            );
+            for (const pid of holders) {
+                  spawnSync('taskkill', ['/f', '/pid', pid], { stdio: 'inherit' });
+            }
+
+            try {
+                  copyFileSync(src, dst);
+            } catch (retryError) {
+                  console.error(
+                        `[build-thumbnail-providers] DllHost was evicted but ${shown} is still locked ` +
+                              `(${retryError.code}). Close DragonFruit and retry.`,
+                  );
+                  process.exit(1);
+            }
+      }
+
+      console.log(`[build-thumbnail-providers] DLL → ${shown}`);
+}
+
+// ---------------------------------------------------------------------------
 // macOS universal — build both Apple arches as thin per-arch sidecars
 // ---------------------------------------------------------------------------
 // Tauri resolves externalBin using the target triple suffix. For the universal
@@ -115,11 +195,9 @@ if (isUniversal) {
 if (platform === 'windows') {
       run('cargo', ['build', '--release', ...targetArgs], comCrateDir);
 
-      const dllSrc = path.join(comCrateDir, releaseSuffix, 'dragonfruit_voxl_thumbnail_com.dll');
+      const dllSrc = path.join(comCrateDir, releaseSuffix, COM_DLL_NAME);
       mkdirSync(winResourcesDir, { recursive: true });
-      const dllDst = path.join(winResourcesDir, 'dragonfruit_voxl_thumbnail_com.dll');
-      copyFileSync(dllSrc, dllDst);
-      console.log(`[build-thumbnail-providers] DLL → ${path.relative(projectRoot, dllDst)}`);
+      installComDll(dllSrc, path.join(winResourcesDir, COM_DLL_NAME));
 }
 
 // ---------------------------------------------------------------------------

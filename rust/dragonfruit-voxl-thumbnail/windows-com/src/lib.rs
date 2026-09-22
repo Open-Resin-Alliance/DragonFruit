@@ -9,11 +9,12 @@
 //! Build:
 //!   cargo build --release -p dragonfruit-voxl-thumbnail-com
 //!
-//! Register (elevated):
-//!   regsvr32 target\release\dragonfruit_voxl_thumbnail_com.dll
+//! Register the packaged copy, not the build output cargo relinks — see
+//! platform/windows/register.ps1:
+//!   regsvr32 ..\..\..\src-tauri\windows-resources\dragonfruit_voxl_thumbnail_com.dll
 //!
 //! Unregister:
-//!   regsvr32 /u target\release\dragonfruit_voxl_thumbnail_com.dll
+//!   regsvr32 /u ..\..\..\src-tauri\windows-resources\dragonfruit_voxl_thumbnail_com.dll
 
 #![allow(non_snake_case)]
 

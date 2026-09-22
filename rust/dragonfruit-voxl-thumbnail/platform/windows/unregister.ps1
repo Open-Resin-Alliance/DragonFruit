@@ -17,11 +17,12 @@ function Resolve-DllPath {
     param([string]$ScriptDir)
 
     $crateRoot = Split-Path -Parent (Split-Path -Parent $ScriptDir)
+    # Same order as register.ps1: the packaged copy is what gets registered by default.
     $candidates = @(
+        (Join-Path $crateRoot '..\..\src-tauri\windows-resources\dragonfruit_voxl_thumbnail_com.dll'),
         (Join-Path $crateRoot 'windows-com\target\release\dragonfruit_voxl_thumbnail_com.dll'),
         (Join-Path $crateRoot ('windows-com\target\{0}\release\dragonfruit_voxl_thumbnail_com.dll' -f $env:TAURI_ENV_TARGET_TRIPLE)),
-        (Join-Path $crateRoot 'target\release\dragonfruit_voxl_thumbnail_com.dll'),
-        (Join-Path $crateRoot '..\..\src-tauri\windows-resources\dragonfruit_voxl_thumbnail_com.dll')
+        (Join-Path $crateRoot 'target\release\dragonfruit_voxl_thumbnail_com.dll')
     ) | Where-Object { $_ }
 
     foreach ($candidate in $candidates) {

@@ -115,11 +115,24 @@ sudo platform/linux/uninstall.sh
 Per-user (no admin required):
 
 ```powershell
-cd windows-com
-cargo build --release
-cd ..\platform\windows
+npm run build:thumbnail-providers
+cd rust\dragonfruit-voxl-thumbnail\platform\windows
 .\register.ps1 -PerUser
 ```
+
+`register.ps1` registers the packaged copy under `src-tauri\windows-resources`, not the
+`windows-com\target\release` output: cargo deletes and relinks its own output on every
+build, and the shell keeps whatever is registered mapped inside a DllHost surrogate, so a
+registration pointing at the build output makes the next build fail with "Access is
+denied". To register a raw `cargo build` output without packaging it, pass `-DllPath`:
+
+```powershell
+.\register.ps1 -DllPath ..\..\windows-com\target\release\dragonfruit_voxl_thumbnail_com.dll
+```
+
+Because the shell holds the packaged DLL loaded while it is registered,
+`npm run build:thumbnail-providers` skips the copy when the bytes are unchanged and
+evicts the DllHost surrogate holding it (re-created on demand) when they changed.
 
 System-wide (requires admin):
 
@@ -130,7 +143,7 @@ System-wide (requires admin):
 **Option B — regsvr32 (uses DLL self-registration)**
 
 ```cmd
-regsvr32 target\release\dragonfruit_voxl_thumbnail_com.dll
+regsvr32 src-tauri\windows-resources\dragonfruit_voxl_thumbnail_com.dll
 ```
 
 After registration, clear the thumbnail cache and restart Explorer:
@@ -150,7 +163,7 @@ Unregister:
 or
 
 ```cmd
-regsvr32 /u target\release\dragonfruit_voxl_thumbnail_com.dll
+regsvr32 /u src-tauri\windows-resources\dragonfruit_voxl_thumbnail_com.dll
 ```
 
 ### macOS

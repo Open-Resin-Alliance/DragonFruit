@@ -9,6 +9,8 @@
 # Notes:
 #   - Registration is per-user (HKCU) inside DllRegisterServer.
 #   - -PerUser is kept only for backwards compatibility.
+#   - The packaged copy under src-tauri\windows-resources is registered by default.
+#     Pass -DllPath to register a raw cargo build in windows-com\target instead.
 
 param(
     [string]$DllPath,
@@ -24,11 +26,16 @@ function Resolve-DllPath {
     param([string]$ScriptDir)
 
     $crateRoot = Split-Path -Parent (Split-Path -Parent $ScriptDir)
+    # The packaged copy comes first: cargo deletes and relinks its own output on every
+    # build, and the shell keeps whatever is registered mapped inside a DllHost
+    # surrogate, so registering the build output makes cargo's relink fail with
+    # "Access is denied". The build outputs stay as fallbacks for a raw `cargo build`
+    # that has not been packaged yet.
     $candidates = @(
+        (Join-Path $crateRoot '..\..\src-tauri\windows-resources\dragonfruit_voxl_thumbnail_com.dll'),
         (Join-Path $crateRoot 'windows-com\target\release\dragonfruit_voxl_thumbnail_com.dll'),
         (Join-Path $crateRoot ('windows-com\target\{0}\release\dragonfruit_voxl_thumbnail_com.dll' -f $env:TAURI_ENV_TARGET_TRIPLE)),
-        (Join-Path $crateRoot 'target\release\dragonfruit_voxl_thumbnail_com.dll'),
-        (Join-Path $crateRoot '..\..\src-tauri\windows-resources\dragonfruit_voxl_thumbnail_com.dll')
+        (Join-Path $crateRoot 'target\release\dragonfruit_voxl_thumbnail_com.dll')
     ) | Where-Object { $_ }
 
     foreach ($candidate in $candidates) {
