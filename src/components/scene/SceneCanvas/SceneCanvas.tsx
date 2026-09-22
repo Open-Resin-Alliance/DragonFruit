@@ -7244,9 +7244,7 @@ export function SceneCanvas({
           <ZUpGizmoHelper
             alignment="bottom-right"
             margin={mode === 'printing' ? [72, 72] : [nonPrintingViewCubeRightMargin, 72]}
-            arrowColor={gizmoColors.face}
-            arrowHoverColor={gizmoColors.accent}
-            arrowStrokeColor={gizmoColors.accent}
+            accentColor={gizmoColors.accent}
             onHome={resetCameraHome}
           >
             <ZUpGizmoViewcube

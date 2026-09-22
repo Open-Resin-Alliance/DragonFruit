@@ -4,7 +4,7 @@ import * as React from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { BufferGeometry, CanvasTexture, DoubleSide, Float32BufferAttribute, Group, MathUtils, Matrix4, Object3D, Quaternion, Vector3 } from 'three';
 import type { OrthographicCamera as ThreeOrthographicCamera } from 'three';
-import { Edges, GizmoHelperProps, Hud, OrthographicCamera } from '@react-three/drei';
+import { GizmoHelperProps, Hud, OrthographicCamera } from '@react-three/drei';
 import { __iconNode as houseIconNode } from 'lucide-react/dist/esm/icons/house.js';
 
 type TweenCamera = (direction: Vector3) => void;
@@ -100,8 +100,8 @@ function assignControlsEnabled(controls: unknown, enabled: boolean): void {
 /** How far the quarter-turn arrows sit from the widget centre (cube half is 0.5). */
 const ARROW_DISTANCE = 0.74;
 /** Arrowhead: a flat, shallow triangle in gizmo units (cube half is 0.5). */
-const ARROW_WIDTH = 0.22;
-const ARROW_HEIGHT = 0.12;
+const ARROW_WIDTH = 0.26;
+const ARROW_HEIGHT = 0.15;
 /**
  * Quarter-turn arrows fade with how face-on the view is: fully opaque within
  * ARROW_FADE_FULL_DEGREES of a face, gone by ARROW_FADE_ZERO_DEGREES. A quarter
@@ -114,9 +114,9 @@ const ARROW_FADE_ZERO_COS = Math.cos((ARROW_FADE_ZERO_DEGREES * Math.PI) / 180);
 const arrowViewDirection = new Vector3();
 
 /**
- * Flat triangle pointing +Y, apex at the top. A flat primitive (rather than a
- * cone) has no interior faces, so its `Edges` outline is a clean triangle — a
- * cone's base cap fans edges through the middle of the silhouette.
+ * Flat, shallow triangle pointing +Y, apex at the top. A flat primitive (rather
+ * than a cone) has no interior faces, so it reads as a clean filled triangle —
+ * a cone's base cap fans edges through the middle of the silhouette.
  */
 const arrowTriangle = new BufferGeometry();
 arrowTriangle.setAttribute(
@@ -138,16 +138,12 @@ function RotationArrow({
   rotation,
   fade,
   color,
-  hoverColor,
-  strokeColor,
 }: {
   direction: QuarterTurnDirection;
   position: [number, number, number];
   rotation: number;
   fade: number;
   color: string;
-  hoverColor: string;
-  strokeColor: string;
 }) {
   const { quarterTurn } = React.useContext(Context);
   const [hover, setHover] = React.useState(false);
@@ -157,6 +153,7 @@ function RotationArrow({
       geometry={arrowTriangle}
       position={position}
       rotation={[0, 0, rotation]}
+      scale={hover ? 1.18 : 1}
       onPointerOver={(e) => {
         e.stopPropagation();
         setHover(true);
@@ -170,14 +167,13 @@ function RotationArrow({
         quarterTurn(direction);
       }}
     >
+      {/* Filled, like the home icon — hover brightens and scales it slightly. */}
       <meshBasicMaterial
-        color={hover ? hoverColor : color}
+        color={color}
         transparent
-        opacity={(hover ? 0.95 : 0.8) * fade}
+        opacity={(hover ? 1 : 0.9) * fade}
         side={DoubleSide}
       />
-      {/* Same secondary outline the cube faces carry. */}
-      <Edges color={strokeColor} transparent opacity={0.9 * fade} />
     </mesh>
   );
 }
@@ -272,17 +268,13 @@ export function ZUpGizmoHelper({
   alignment = 'bottom-right',
   margin = [80, 80],
   renderPriority = 1,
-  arrowColor = '#f0f0f0',
-  arrowHoverColor = '#999999',
-  arrowStrokeColor = '#baf72e',
+  accentColor = '#baf72e',
   onHome,
   onUpdate,
   onTarget,
   children,
 }: GizmoHelperProps & {
-  arrowColor?: string;
-  arrowHoverColor?: string;
-  arrowStrokeColor?: string;
+  accentColor?: string;
   onHome?: () => void;
 }) {
   const size = useThree((state) => state.size);
@@ -463,10 +455,10 @@ export function ZUpGizmoHelper({
             `visible`), so the faded arrows cannot be hit. */}
         {arrowFade > 0 && (
           <group position={[x, y, 0]} scale={[60, 60, 60]}>
-            <RotationArrow direction="up" position={[0, ARROW_DISTANCE, 0]} rotation={Math.PI} fade={arrowFade} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} />
-            <RotationArrow direction="down" position={[0, -ARROW_DISTANCE, 0]} rotation={0} fade={arrowFade} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} />
-            <RotationArrow direction="left" position={[-ARROW_DISTANCE, 0, 0]} rotation={-Math.PI / 2} fade={arrowFade} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} />
-            <RotationArrow direction="right" position={[ARROW_DISTANCE, 0, 0]} rotation={Math.PI / 2} fade={arrowFade} color={arrowColor} hoverColor={arrowHoverColor} strokeColor={arrowStrokeColor} />
+            <RotationArrow direction="up" position={[0, ARROW_DISTANCE, 0]} rotation={Math.PI} fade={arrowFade} color={accentColor} />
+            <RotationArrow direction="down" position={[0, -ARROW_DISTANCE, 0]} rotation={0} fade={arrowFade} color={accentColor} />
+            <RotationArrow direction="left" position={[-ARROW_DISTANCE, 0, 0]} rotation={-Math.PI / 2} fade={arrowFade} color={accentColor} />
+            <RotationArrow direction="right" position={[ARROW_DISTANCE, 0, 0]} rotation={Math.PI / 2} fade={arrowFade} color={accentColor} />
           </group>
         )}
         {/* Home is useful from any angle, so it is always shown (the quarter-turn
@@ -474,7 +466,7 @@ export function ZUpGizmoHelper({
         <group position={[x, y, 0]} scale={[60, 60, 60]}>
           <HomeButton
             position={[HOME_OFFSET, -HOME_OFFSET, 0]}
-            strokeColor={arrowStrokeColor}
+            strokeColor={accentColor}
             onClick={onHome}
           />
         </group>
