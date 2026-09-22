@@ -3,6 +3,7 @@
 import React from 'react';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
+import { Trash2, WandSparkles } from 'lucide-react';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { Button, Toast, ToastViewport } from '@/components/atoms';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
@@ -100,7 +101,7 @@ export function AutoBracingSettingsCard({
                         label: pattern === 'singleDiagonal' ? 'Single Diagonal' : pattern === 'zigZag' ? 'Zig Zag' : 'Cross Diagonal',
                     }))}
                     className="min-w-0 space-y-0"
-                    selectClassName="h-[36px] px-3 py-2 text-base"
+                    selectClassName="h-[36px] px-3 py-2 text-base !text-center"
                 />
             </label>
         );
@@ -215,25 +216,27 @@ export function AutoBracingSettingsCard({
                 <button
                     type="button"
                     onClick={onAutoBrace}
-                    className="ui-button flex-1 !h-8 text-[11px]"
+                    className="ui-button flex flex-1 items-center justify-center gap-1 !h-8 text-[11px]"
                     style={{
                         borderColor: 'var(--accent)',
                         background: 'color-mix(in srgb, var(--accent), var(--surface-0) 86%)',
                         color: 'var(--accent)',
                     }}
                 >
-                    {_(msg`Apply Bracing`)}
+                    <WandSparkles className="h-3.5 w-3.5 shrink-0" />
+                    {_(msg`Apply`)}
                 </button>
                 <button
                     type="button"
                     onClick={onClearBraces}
-                    className="ui-button flex-1 !h-8 text-[11px]"
+                    className="ui-button flex flex-1 items-center justify-center gap-1 !h-8 text-[11px]"
                     style={{
                         borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 40%)',
                         background: 'color-mix(in srgb, var(--danger), var(--surface-0) 88%)',
                         color: 'var(--danger)',
                     }}
                 >
+                    <Trash2 className="h-3.5 w-3.5 shrink-0" />
                     {_(msg`Clear All`)}
                 </button>
             </div>
