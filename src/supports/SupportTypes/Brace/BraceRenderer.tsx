@@ -309,7 +309,6 @@ registerSupportDetailRenderer('brace', (ctx) => ({
         return startKnot && endKnot ? { startKnot, endKnot } : null;
     },
     skip: ({ entity, isSelected, isBatchable }) => {
-        if (ctx.simpleRender) return true;
         const ghosted = ctx.ghostedBraceIdSet.has((entity as Brace).id);
         return !(isSelected || !isBatchable || ghosted);
     },

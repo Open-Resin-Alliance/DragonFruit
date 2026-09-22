@@ -3,6 +3,7 @@ import { calculateBezierControlPoints, getBezierPointAtT, toVector3, toVec3 } fr
 import { calculateKnotPositionOnSegmentFromT } from './SupportPrimitives/Knot/knotUtils';
 import type { SupportSelectionCategory } from './supportTypeRegistry';
 import {
+    parseInlineRootId,
     typesDeclaringOwnHistoryEntryWithoutUpdate,
     typesMissingContactOverride,
     typesMissingHostPromotion, removalShapeFor, type SupportRemovalResult } from './supportTypeRegistry';
@@ -3352,7 +3353,12 @@ export function resolveEditableSupportTarget(selectedId: string | null, selected
             .filter(Boolean);
 
     if (selectedCategory === 'root') {
-        return findOwner((entity) => entity.rootId === selectedId);
+        // A type owning a `Roots` row matches by id; one declaring an inline
+        // root carries the geometry itself, so its primitive id names the entity.
+        const inlineOwner = parseInlineRootId(selectedId);
+        return findOwner((entity, descriptor) =>
+            entity.rootId === selectedId
+            || (descriptor.lower.kind === 'inlineRoot' && entity.id === inlineOwner));
     }
 
     if (selectedCategory === 'segment') {
@@ -3504,6 +3510,15 @@ export function applySettingsToSupportTarget(target: EditableSupportTarget, sett
     }
     // Only a root-owning type records its shaft width on the entity.
     if (descriptor.ownsRoot) next.baseDiameterMm = settings.shaft.diameterMm;
+
+    // An inline root is geometry on the entity, so the same settings land on the
+    // fields it declares rather than on a shared `Roots` row.
+    if (descriptor.lower.kind === 'inlineRoot') {
+        const { radiusField, topRadiusField, heightField } = descriptor.lower;
+        if (radiusField) next[radiusField] = settings.roots.diameterMm;
+        if (topRadiusField) next[topRadiusField] = settings.roots.neckDiameterMm;
+        if (heightField) next[heightField] = settings.roots.coneHeightMm;
+    }
 
     setCachedSupportSettingsHex(descriptor.id, entity.id, nextHex);
 

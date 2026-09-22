@@ -13,6 +13,12 @@ export interface DetailRendererEntry {
     component: ComponentType<Record<string, unknown>>;
     hosts?: (entity: never) => Record<string, unknown> | null;
     skip?: (context: { entity: never; isSelected: boolean; isBatchable: boolean }) => boolean;
+    /**
+     * Draws its own simplified form, so the seam does not skip it when
+     * `simpleRender` is set. A type that leaves this off is skipped, and the
+     * batched pass draws whatever lines it contributes.
+     */
+    drawsSimplified?: boolean;
     extraProps?: (context: { entity: never; isSelected: boolean; isBatchable: boolean }) => Record<string, unknown>;
     noClipping?: (context: { entity: never; isSelected: boolean; isBatchable: boolean }) => boolean;
     /** Where "is this shaft batched" comes from, when not `plainShaftsOf`. */
@@ -54,12 +60,23 @@ export function registerSupportDetailRenderer(typeId: SupportTypeId, factory: De
     FACTORIES.set(typeId, factory);
 }
 
-/** The detail renderer table for this frame, keyed by type id. */
+/**
+ * The detail renderer table for this frame, keyed by type id.
+ *
+ * Under `simpleRender` an entry is skipped unless it declares
+ * `drawsSimplified`, so a type that draws only through its own renderer cannot
+ * keep drawing solid geometry by forgetting the flag.
+ */
 export function detailRenderersFor(context: DetailRendererContext): Partial<Record<SupportTypeId, DetailRendererEntry>> {
     const entries: Partial<Record<SupportTypeId, DetailRendererEntry>> = {};
     for (const descriptor of SUPPORT_TYPES) {
         const factory = FACTORIES.get(descriptor.id);
-        if (factory) entries[descriptor.id] = factory(context);
+        if (!factory) continue;
+
+        const entry = factory(context);
+        entries[descriptor.id] = context.simpleRender && !entry.drawsSimplified
+            ? { ...entry, skip: () => true }
+            : entry;
     }
     return entries;
 }

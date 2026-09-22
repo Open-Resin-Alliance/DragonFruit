@@ -186,7 +186,7 @@ registerSupportDetailRenderer('kickstand', (ctx) => ({
         const hostKnot = ctx.renderKnotsById[kickstand.hostKnotId];
         return root && hostKnot ? { root, hostKnot } : null;
     },
-    skip: ({ isSelected, isBatchable }) => !(isSelected || !isBatchable) || ctx.simpleRender,
+    skip: ({ isSelected, isBatchable }) => !(isSelected || !isBatchable),
     noClipping: ({ isSelected }) => isSelected,
     extraProps: ({ isSelected, isBatchable }) => ({
         showKnot: ctx.simpleRender ? false : (!ctx.hideUnselectedKnots || isSelected),

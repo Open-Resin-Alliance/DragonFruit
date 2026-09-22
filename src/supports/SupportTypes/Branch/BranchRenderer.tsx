@@ -252,7 +252,7 @@ registerSupportDetailRenderer('branch', (ctx) => ({
         const parentKnot = ctx.renderKnotsById[branch.parentKnotId];
         return parentKnot ? { parentKnot } : null;
     },
-    skip: ({ isSelected }) => !isSelected || ctx.simpleRender,
+    skip: ({ isSelected }) => !isSelected,
     noClipping: () => true,
     extraProps: ({ entity, isSelected }) => ({
         showKnots: ctx.simpleRender ? false : (!ctx.hideUnselectedKnots || isSelected),

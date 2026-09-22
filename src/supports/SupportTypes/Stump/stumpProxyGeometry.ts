@@ -1,4 +1,5 @@
 import { registerSupportProxyGeometry } from '../../proxyGeometry/seam';
+import { inlineRootId } from '../../supportTypeRegistry';
 import type { Stump } from '../../types';
 
 /**
@@ -8,7 +9,7 @@ import type { Stump } from '../../types';
  */
 registerSupportProxyGeometry<Stump>('stump', (stump, ctx) => {
   ctx.pushRoot({
-    id: `${stump.id}:root`,
+    id: inlineRootId(stump.id),
     supportId: stump.id,
     modelId: stump.modelId,
     basePos: stump.rootPos,

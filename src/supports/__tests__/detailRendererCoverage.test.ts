@@ -52,3 +52,30 @@ test('the entity prop is derived from the registry, not spelled per type', () =>
         'renderDetailFor must derive the entity prop from the registry',
     );
 });
+
+test('simplified render skips every type that does not draw its own simplified form', () => {
+    // A type drawn only by its detail renderer kept drawing solid geometry
+    // under simplified render by not checking the flag. The seam now decides,
+    // so a new type inherits the skip rather than having to remember it.
+    const entries = detailRenderersFor({ ...EMPTY_CONTEXT, simpleRender: true });
+    for (const descriptor of SUPPORT_TYPES) {
+        const entry = entries[descriptor.id];
+        assert.ok(entry, `${descriptor.id} resolves an entry`);
+        if (entry.drawsSimplified) continue;
+        assert.equal(
+            entry.skip?.({ entity: { id: 'probe' } as never, isSelected: true, isBatchable: false }),
+            true,
+            `${descriptor.id} must be skipped under simplified render`,
+        );
+    }
+});
+
+test('an entry keeps its own skip when simplified render is off', () => {
+    // The wrapper replaces `skip` outright, so this pins that it only does so
+    // under simplified render: a selected support still draws normally.
+    const entries = detailRenderersFor(EMPTY_CONTEXT);
+    const entity = { id: 'probe' } as never;
+    const drawsWhenSelected = SUPPORT_TYPES.filter((descriptor) =>
+        entries[descriptor.id]?.skip?.({ entity, isSelected: true, isBatchable: false }) === false);
+    assert.ok(drawsWhenSelected.length > 0, 'a selected support still draws when not simplified');
+});

@@ -55,5 +55,4 @@ registerSupportExportGroup<Stump>('stump', (stump) => {
     return group;
 });
 
-// No bespoke updater: stump declares `hasEditableSettings: false` and no knot
-// rides its segment, so the generic pass covers it.
+// No bespoke updater: no knot rides its segment, so the generic pass covers it.

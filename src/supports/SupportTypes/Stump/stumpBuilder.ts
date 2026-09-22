@@ -6,6 +6,7 @@ import type * as THREE from 'three';
 // React hooks, which a server route cannot import.
 import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk/ContactDiskInteraction';
 import { getSettings } from '../../Settings/state';
+import { inlineRootId } from '../../supportTypeRegistry';
 import { resolveConeAxisPolicy } from '../../PlacementLogic/ConeAxisPolicy';
 import { encodeSupportSettingsHex } from '../../Settings/supportSettingsCodec';
 import { v4 as uuidv4 } from 'uuid';
@@ -157,7 +158,7 @@ export function buildStumpData(input: StumpBuildInput): StumpBuildResult {
         // Synthetic Roots entity so the generic SupportBuilder preview renders
         // the root cone exactly like StumpRenderer does for placed stumps.
         roots: {
-            id: `${stumpId}:root`,
+            id: inlineRootId(stumpId),
             modelId,
             transform: { pos: rootPos, rot: { x: 0, y: 0, z: 0, w: 1 } },
             diameter: STUMP_ROOT_BASE_DIAMETER_MM,
