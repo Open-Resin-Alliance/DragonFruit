@@ -64,10 +64,20 @@ runs once per frame as a safety net for programmatic moves that skip
 - **Real dolly lives in `SceneCanvas`.** In ortho, OrbitControls' zoom is
   disabled (`enableZoom={cameraProjectionMode === 'perspective'}`) and the
   `onTrackpadWheel` handler calls `dollyOrthoToCursor`. Perspective keeps
-  OrbitControls' native dolly and `zoomToCursor`.
+  OrbitControls' native dolly and `zoomToCursor`. Because the ortho path bypasses
+  OrbitControls, it checks `controls.enabled` itself: a disabled OrbitControls is
+  how every other owner of the camera announces itself (a live SpaceMouse
+  gesture, the Home / focus / mode-framing animations), and the wheel must not
+  dolly against them — otherwise it fights the SpaceMouse over the same radius.
 - **Ortho near/far track the radius.** When the scene radius is known, the depth
   range is `±(radius + sceneRadius + ORTHO_DEPTH_MARGIN)`, so z precision improves
   as you dolly in. `ORTHO_NEAR`/`ORTHO_FAR` are the fallback when it is not.
+- **The radius reference is `controls.target`, never navlib's pivot.** The pivot a
+  SpaceMouse gesture orbits is a different point (the active model's centre), and
+  it is not where the frustum's scale comes from. Seeding the dolly radius from it
+  re-scales the view on the first frame of a gesture — most visibly right after a
+  Home reset, which puts the orbit target back on the home target and so maximises
+  the difference. Deltas stay pivot-relative; the absolute seed does not.
 
 ## SpaceMouse
 
@@ -76,7 +86,21 @@ Both SpaceMouse controllers (`NativeSpaceMouseController`,
 from the radius via `applyOrthoFrustum` — no `zoom` conversion. The native path
 integrates navlib's own per-frame axial delta onto the current radius (its
 absolute axial distance is offset by the pivot it orbits, which need not be the
-look target, so using it directly would jump at gesture start).
+look target, so using it directly would jump at gesture start). The seed that
+integration starts from is the frustum's own reference — the camera→orbit target
+distance — so the first frame of a gesture keeps the scale the user is looking at.
+
+The native path also **reports a perspective view to navlib while the camera is
+orthographic** (`FORCE_PERSPECTIVE_IN_ORTHO`, plus a synthetic `view.focusDistance`
+sized so navlib's perspective half-height equals the ortho view's). That is
+deliberate: navlib's Camera / Target-Camera / Fly / Walk modes are
+perspective-only, and reporting the truth left the driver producing no motion for
+them at all. The price is the conversion around it — navlib's "zoom" is an eye
+dolly that means nothing in ortho, its view commands are sized for a perspective
+projection, and its pan scale follows the focus distance we report. Those are
+maintained costs, not leftovers. `view.perspective = false` restores the native
+extents-based ortho path (`applyNavlibOrthoExtents`) if the trade is ever
+revisited.
 
 `OrthoFrustumSync` is suspended while a SpaceMouse owns the camera
 (`spaceMouseNavigationActive`); on hand-back the controller re-seats
@@ -135,6 +159,18 @@ frame** — it would pathfind continuously as the camera moves. `SceneCanvas` se
 It re-routes once navigation stops. Mouse navigation needs no such gate because
 its picking is paused, so no new hover arrives.
 
+### Session lifetime
+
+The navlib session belongs to the app, not to a render branch:
+`useNativeSpaceMouseLifecycle` (`src/components/scene/camera/`) is called at the
+app root beside `useSupportHistoryHandlers`, and it starts/stops the session with
+the SpaceMouse *setting*. Both controllers render under
+`cameraInteractionCycleEnabled` — false for the intro and for every Home reset —
+so a lifecycle bound to their mount tore the session down and created a fresh
+navlib client on each of those, resetting the driver's state and restarting the
+pose handshake. The bridge is a process-wide singleton; nothing that comes and
+goes with an animation may own it.
+
 ### Focus gating
 
 SpaceMouse input is ignored unless DragonFruit's window is the OS-active window —
@@ -152,15 +188,16 @@ hidden. Both paths gate on the same fact, and they must agree:
   session used to at `start` — leaves a backgrounded DragonFruit receiving motion
   it then has to ignore.
 
-A focus change also resets the pose handshake, because navlib keeps writing poses
-while nobody is applying them. `nav::set_focus` clears `motion` and re-claims the
-camera on return (`claim_pose`, the same mechanism a fresh session uses), and the
-controller consumes every output produced at or before its first sync after
-refocus without applying it (`resyncFromGenRef`), recording that output's `seq` /
-`extentsSeq` as consumed. Drop either half and the queued pose is replayed as a
-single jump the moment the window is refocused — and, because the ownership
-handshake keys off the last applied `seq`, JS then stops being able to re-assert
-its own camera while navlib is idle.
+A gap in the pose handshake follows from both of the above, because navlib keeps
+writing poses while nobody consumes them (while unfocused we stop syncing, and
+while a controller is unmounted for an animation there is no frame loop at all).
+`nav::set_focus` clears `motion` and re-claims the camera on return (`claim_pose`,
+the same mechanism a fresh session uses); the controller sets `discardNextOutRef`
+at mount and whenever the window regains focus, and the **first output received
+after that is recorded as consumed without being applied**. Applying it would
+replay the accumulated pose as a jump — and, because the ownership handshake keys
+off the last applied `seq`, leaving it unconsumed would stall the handshake so JS
+could never re-assert its own camera while navlib is idle.
 
 ## Tests
 

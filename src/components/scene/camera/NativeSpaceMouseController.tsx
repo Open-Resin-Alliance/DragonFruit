@@ -10,7 +10,6 @@ import {
 import {
   getNativeSpaceMouseActive,
   nativeSpaceMouseSync,
-  requestNativeSpaceMouse,
   type NativeCameraInput,
   type NativeNavOutput,
 } from './nativeSpaceMouseBridge';
@@ -113,14 +112,11 @@ export function NativeSpaceMouseController({
   const navPrevEyeRef = React.useRef(new THREE.Vector3());
   // Set when a frame looks like navlib's Fit; the app's focus is run for it.
   const fitRequestedRef = React.useRef(false);
-  // Pose-ownership generations. `syncGenRef` counts pushes; `latestOutGenRef`
-  // stamps the output they returned. `resyncFromGenRef` marks the first push
-  // after the window regained focus — outputs at or before it were produced while
-  // we were not listening, and are consumed without being applied (see the frame
-  // loop).
-  const syncGenRef = React.useRef(0);
-  const latestOutGenRef = React.useRef(0);
-  const resyncFromGenRef = React.useRef(0);
+  // Set at mount and whenever the window regains focus. The first output navlib
+  // returns after that is consumed without being applied: it was produced while
+  // nothing was consuming navlib's writes (the session now outlives this
+  // component, and while unfocused we deliberately stop syncing).
+  const discardNextOutRef = React.useRef(true);
   // Cached model extents + refresh counter.
   const modelBoxRef = React.useRef(new THREE.Box3());
   const modelBoxAgeRef = React.useRef(MODEL_EXTENTS_REFRESH_FRAMES);
@@ -134,17 +130,10 @@ export function NativeSpaceMouseController({
   const tmpDir = React.useRef(new THREE.Vector3());
   const tmpQuat = React.useRef(new THREE.Quaternion());
 
-  // ── Request the bridge on/off with the SpaceMouse enabled setting ──
-  // The reconciler in the bridge owns the async lifecycle (StrictMode-safe);
-  // the shared active flag it sets gates the frame loop below.
-  React.useEffect(() => {
-    requestNativeSpaceMouse(settings.enabled);
-    return () => {
-      requestNativeSpaceMouse(false);
-      prevMotionRef.current = false;
-      weDisabledOrbitRef.current = false;
-    };
-  }, [settings.enabled]);
+  // The navlib session itself is owned by `useNativeSpaceMouseLifecycle` at the
+  // app root: this component mounts and unmounts with the camera interaction
+  // cycle (the intro, every Home reset), which must not tear the session down.
+  // Only the shared active flag the reconciler publishes gates the frame loop.
 
   // The frame loop gates on the window's OS focus; keep it tracked while this
   // controller is mounted (released on unmount).
@@ -203,11 +192,15 @@ export function NativeSpaceMouseController({
         navPrevEyeRef.current.copy(camera.position);
         navPrevFwdRef.current.copy(seedForward);
         navPrevAxialRef.current = new THREE.Vector3().copy(camera.position).sub(seedPivot).dot(seedForward);
-        // Seed the dolly radius from the live camera too: it otherwise starts at a
-        // hardcoded value, so the first applied frame (e.g. an idle command after a
-        // bridge restart) would set the ortho scale to that wrong radius.
+        // Seed the dolly radius from the frustum's OWN reference — the orbit
+        // target that `syncOrthoFrustum` derives the scale from. The pivot navlib
+        // orbits is a different point whenever a model is active (its centre), and
+        // seeding the scale from it re-scaled the view on the first frame of every
+        // gesture; most visibly right after a Home reset, which re-seats the orbit
+        // target on the home target and so maximises the difference.
+        const radiusRef = isOrbitLikeControls(controls) ? controls.target : seedPivot;
         navRadiusRef.current = THREE.MathUtils.clamp(
-          camera.position.distanceTo(seedPivot),
+          camera.position.distanceTo(radiusRef),
           ORTHO_MIN_RADIUS,
           ORTHO_MAX_RADIUS,
         );
@@ -219,8 +212,9 @@ export function NativeSpaceMouseController({
       // laterally for pan, rotates it for orbit, and dollies it forward for
       // "zoom". We apply that absolute pose unchanged (so presets, which
       // reposition the eye in one reorientation, land where navlib framed them)
-      // and derive the ortho scale from the axial camera→pivot distance, which is
-      // the same radius the derived-frustum sync resumes from on hand-back.
+      // and carry the ortho scale in `navRadiusRef`, which hand-back re-seats the
+      // orbit target on — so the derived-frustum sync resumes from the same
+      // radius this gesture ended on.
       m.decompose(tmpPos.current, tmpQuat.current, tmpScale.current);
       const fwd = tmpDir.current.set(0, 0, -1).applyQuaternion(tmpQuat.current).normalize();
       const pivot = getTarget(tmpTarget.current);
@@ -256,7 +250,7 @@ export function NativeSpaceMouseController({
       applyOrthoFrustum(ortho, navRadiusRef.current, orthoAspectOf(ortho), { sceneRadius, fovDeg });
       focusDistRef.current = navRadiusRef.current;
     },
-    [camera, fovDeg, getTarget, sceneRadius],
+    [camera, controls, fovDeg, getTarget, sceneRadius],
   );
 
   /**
@@ -409,10 +403,9 @@ export function NativeSpaceMouseController({
     // unfocused we neither apply navlib's pose nor push ours to it, and we
     // cleanly hand orbit back.
     if (!getWindowFocused()) {
-      // Everything navlib writes from here until we are back is produced for a
-      // window that is not listening; the first sync after focus returns is
-      // consumed without being applied (see `resyncFromGenRef`).
-      resyncFromGenRef.current = syncGenRef.current + 1;
+      // The first output navlib returns once we are back is consumed without
+      // being applied (see `discardNextOutRef`).
+      discardNextOutRef.current = true;
       if (prevMotionRef.current) {
         prevMotionRef.current = false;
         onNavigationActiveChange?.(false);
@@ -423,19 +416,7 @@ export function NativeSpaceMouseController({
 
     // 1. Apply navlib's latest camera (from the previous frame's sync).
     const out = latestOutRef.current;
-    if (out && latestOutGenRef.current <= resyncFromGenRef.current) {
-      // Produced at or before the first sync after the window regained focus.
-      // navlib kept writing poses while we were not listening, and the Rust bridge
-      // dropped its ownership of them (see `nav::set_focus`). Record them as
-      // consumed without moving the camera: applying one would replay everything
-      // the puck did while another application was in front as a single jump, and
-      // — because the ownership handshake keys off the last applied `seq` —
-      // leaving it unconsumed would stop JS re-asserting its own camera while
-      // navlib is idle.
-      lastAppliedSeqRef.current = out.seq;
-      lastAppliedExtentsSeqRef.current = out.extentsSeq;
-      prevMotionRef.current = false;
-    } else if (out) {
+    if (out) {
       const motionStarting = out.motion && !prevMotionRef.current;
       const motionEnding = !out.motion && prevMotionRef.current;
 
@@ -508,13 +489,22 @@ export function NativeSpaceMouseController({
     if (!inFlightRef.current) {
       inFlightRef.current = true;
       const cam = buildCameraInput();
-      const gen = syncGenRef.current + 1;
-      syncGenRef.current = gen;
       nativeSpaceMouseSync(cam)
         .then((res) => {
           if (!res) return;
           latestOutRef.current = res;
-          latestOutGenRef.current = gen;
+          if (discardNextOutRef.current) {
+            // First output after mounting, or after the window regained focus.
+            // It carries whatever navlib accumulated while nobody was consuming
+            // its writes — its own pose, not ours — so record it as consumed
+            // without applying it. Applying would replay that pose as a jump;
+            // leaving it unconsumed would stall the ownership handshake and stop
+            // JS re-asserting its camera while navlib is idle.
+            discardNextOutRef.current = false;
+            lastAppliedSeqRef.current = res.seq;
+            lastAppliedExtentsSeqRef.current = res.extentsSeq;
+            prevMotionRef.current = false;
+          }
         })
         .finally(() => {
           inFlightRef.current = false;

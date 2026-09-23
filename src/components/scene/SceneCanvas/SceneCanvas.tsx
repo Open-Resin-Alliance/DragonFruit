@@ -5147,9 +5147,15 @@ export function SceneCanvas({
         if (action === null) {
           // Orthographic wheel is a real dolly: move the camera along its view
           // axis and let OrthoFrustumSync derive the frustum from the new
-          // radius. OrbitControls' zoom is disabled in ortho, so we own it.
+          // radius. OrbitControls' zoom is disabled in ortho, so we own it — and
+          // that is exactly why this path must check the idle signal itself.
+          // OrbitControls being disabled is how every other owner of the camera
+          // announces itself: a live SpaceMouse gesture, the Home / focus /
+          // mode-framing animations. Without the check the wheel dollies against
+          // them, fighting the SpaceMouse over the same dolly radius.
           const camera = cameraRef.current;
           const zoomControls = orbitControlsRef.current;
+          if (zoomControls && zoomControls.enabled === false) return;
           if (camera instanceof THREE.OrthographicCamera && zoomControls) {
             const rect = container.getBoundingClientRect();
             if (rect.width > 0 && rect.height > 0) {
