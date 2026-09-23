@@ -277,3 +277,56 @@ key … but the IPC call used a bytes payload"*). That is fine for this rule —
 geometry in, values out — but it means any option has to travel in a request
 header or stay a Rust constant. It cost a round trip to learn here, which is why
 it is in `dev/tauri-ipc-bridge.md` under *Conventions to respect* too.
+
+## Known: `computeAutoSupportPlan` is superlinear in support count, and runs on the main thread
+
+A run places supports at roughly 4–9 ms each on a lattice (measured with the
+plate fixture below), so a model that needs a few hundred supports is a couple of
+seconds of *synchronous* work and the UI is frozen for the duration — the
+"Generating Supports just hangs" report. The cost is not geometry kernels: a CPU
+profile of a 417-support run attributes it to TS bookkeeping that rebuilds a
+global structure per candidate or per host.
+
+Fixed so far (all output-preserving, verified by hashing the produced brace set
+before and after):
+
+- `computeRegionCoverage` / `findUncoveredClusters` tested every footprint voxel
+  against every tip — a 7000 mm² region is ~112k voxels. Now bucketed through
+  `TipIndex` (`coverage.ts`), which walks only the nine cells a disc can reach.
+- `buildGroupPairs` (`autoBracing/autoBrace.ts`) scanned *every* edge for every
+  support in the two-axis pass, building a sorted string key per edge per
+  support. Now indexed per support, with the redundancy sets cached.
+- Footprint mask probes (`erodeFootprint`, `buildBoundaryPoints`, the cluster
+  BFS) keyed cells with template-literal strings. Now `cellKey` in
+  `voxelFootprint.ts` — numeric, so a probe allocates nothing.
+- `collectFanShaftPoints` was rebuilt per candidate (up to three times) and per
+  host inside the consolidation loop. Now built once per candidate and once per
+  consolidation pass, filtered as pillars convert.
+
+Still open, in the order a profile says they pay:
+
+1. `generateGridCandidates` materialises the whole footprint as `{x,y,z}`
+   objects (`footprintToPoints`) before eroding and walking it — 112k objects
+   for a large region. The mask-native path is a typed-array API.
+2. `fanLeafToHost` / `buildConsolidationBranch` call `getSupportTypeDescriptor`
+   per candidate host sample, and their reach is a linear walk of the whole
+   shaft pool. Registry lookups want hoisting; the pool wants a spatial index.
+3. `computeForestDiameterProfile` deep-clones the forest with
+   `structuredClone` — most of that phase's cost.
+4. `isAutoBraceableShaftType` / `lateralStabiliserTypes` rebuild their
+   filter+map+Set on every call, and they are called per sample.
+
+**The responsiveness fix is architectural, not micro-optimisation.** The plan is
+already pure and store-free (`computeAutoSupportPlan(islands, modelId, settings,
+baseState?, mesh?)`, one commit at the end) precisely so it can move into a
+worker — see the header of `autoSupport/supportDraft.ts`. Do that before porting
+anything to Rust: the profile above is dominated by allocation and repeated
+walks of TS structures, which a Rust port would not remove, and the pipeline is
+entangled with `three` geometry, three-mesh-bvh and the support registry.
+
+**Reproducing the numbers:** a slab of `W × L` leaning 60° from horizontal, one
+hand-built `source: 'overhang'` island over its big face (plane, `triangleIds`,
+voxel footprint), then time `computeAutoSupportPlan` with
+`debugSkipAutoBracing: false`. 20×20 → 85 ms / 11 supports, 40×60 → 172 ms / 72,
+60×90 → 383 ms / 158, 100×140 → 1548 ms / 417. Before the fixes above the last
+row was 3593 ms; use the same fixture to check a further change pays.

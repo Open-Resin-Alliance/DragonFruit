@@ -2,7 +2,7 @@ import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
 import type { CandidatePoint } from './types';
 import type { AutoSupportSettings } from './settings';
 import type { SupportState } from '../types';
-import { footprintX, footprintY, footprintZ } from '@/volumeAnalysis/Islands/voxelFootprint';
+import { cellKey, footprintX, footprintY, footprintZ } from '@/volumeAnalysis/Islands/voxelFootprint';
 import { influenceRadiusMm } from './constants';
 
 /** A tip covers surface within this radius (mm) — mirrors ALREADY_SUPPORTED_RADIUS_MM. */
@@ -39,6 +39,59 @@ export function collectSupportTips(snapshot: SupportState): Array<{ x: number; y
     return tips;
 }
 
+/** A tip's coverage disc widens along the influence curve, which caps at 6 mm
+ *  — so the growth term never adds more than this to a disc's radius. */
+const MAX_INFLUENCE_GROWTH_MM = Math.max(
+    0,
+    influenceRadiusMm(Number.POSITIVE_INFINITY) - TIP_COVERAGE_RADIUS_MM,
+);
+
+/** Square of the disc a tip covers at a voxel `vz` above `tipZ`. */
+function coverRadiusSq(vz: number, tipZ: number, radiusMm: number): number {
+    const growth = influenceRadiusMm(vz - tipZ) - TIP_COVERAGE_RADIUS_MM;
+    const r = radiusMm + Math.max(0, growth);
+    return r * r;
+}
+
+type TipPos = { x: number; y: number; z: number };
+
+/**
+ * Tips bucketed on a uniform plan grid. A tip's disc never reaches past
+ * `radius + MAX_INFLUENCE_GROWTH_MM`, so a voxel only ever has to test the
+ * tips in its own cell and the eight around it — the coverage test used to be
+ * O(footprint voxels × tips), which on a large region is millions of distance
+ * tests per call and the single hottest loop in a run.
+ */
+class TipIndex {
+    private readonly buckets = new Map<number, TipPos[]>();
+    private readonly cell: number;
+
+    constructor(tips: TipPos[], radiusMm: number) {
+        this.cell = Math.max(0.5, radiusMm + MAX_INFLUENCE_GROWTH_MM);
+        for (const tip of tips) {
+            const key = cellKey(Math.floor(tip.x / this.cell), Math.floor(tip.y / this.cell));
+            const bucket = this.buckets.get(key);
+            if (bucket) bucket.push(tip);
+            else this.buckets.set(key, [tip]);
+        }
+    }
+
+    /** Visit tips that could reach (x, y); stops as soon as `visit` returns true. */
+    forEachNear(x: number, y: number, visit: (tip: TipPos) => boolean): void {
+        const cx = Math.floor(x / this.cell);
+        const cy = Math.floor(y / this.cell);
+        for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+                const bucket = this.buckets.get(cellKey(cx + dx, cy + dy));
+                if (!bucket) continue;
+                for (const tip of bucket) {
+                    if (visit(tip)) return;
+                }
+            }
+        }
+    }
+}
+
 /**
  * Fraction of an overhang region's projected footprint covered by tips.
  * Each tip's disc grows with the voxel height above it (support influence
@@ -56,25 +109,27 @@ export function computeRegionCoverage(
     if (!voxels || voxels.count === 0) return 0;
     if (tips.length === 0) return 0;
 
-    const growthAt = (vz: number, tipZ: number): number => {
-        const growth = influenceRadiusMm(vz - tipZ) - TIP_COVERAGE_RADIUS_MM;
-        const r = radiusMm + Math.max(0, growth);
-        return r * r;
+    const index = new TipIndex(tips, radiusMm);
+    // Hoisted probe: one closure per call, not one per voxel.
+    let vx = 0;
+    let vy = 0;
+    let vz = 0;
+    let hit = false;
+    const probe = (tip: TipPos): boolean => {
+        const dx = vx - tip.x;
+        const dy = vy - tip.y;
+        if (dx * dx + dy * dy > coverRadiusSq(vz, tip.z, radiusMm)) return false;
+        hit = true;
+        return true;
     };
+
     let covered = 0;
     for (let i = 0; i < voxels.count; i++) {
-        const vx = footprintX(voxels, i);
-        const vy = footprintY(voxels, i);
-        const vz = footprintZ(voxels, i) ?? 0;
-        let hit = false;
-        for (const tip of tips) {
-            const dx = vx - tip.x;
-            const dy = vy - tip.y;
-            if (dx * dx + dy * dy <= growthAt(vz, tip.z)) {
-                hit = true;
-                break;
-            }
-        }
+        vx = footprintX(voxels, i);
+        vy = footprintY(voxels, i);
+        vz = footprintZ(voxels, i) ?? 0;
+        hit = false;
+        index.forEachNear(vx, vy, probe);
         if (hit) covered++;
     }
     return covered / voxels.count;
@@ -99,44 +154,38 @@ export function findUncoveredClusters(
         return [];
     }
 
-    const growthAt = (vz: number | undefined, tipZ: number): number => {
-        const growth = influenceRadiusMm((vz ?? tipZ) - tipZ) - TIP_COVERAGE_RADIUS_MM;
-        const r = radiusMm + Math.max(0, growth);
-        return r * r;
-    };
-    const isCovered = (v: { x: number; y: number; z?: number }): boolean => {
-        for (const tip of tips) {
-            const dx = v.x - tip.x;
-            const dy = v.y - tip.y;
-            if (dx * dx + dy * dy <= growthAt(v.z, tip.z)) return true;
-        }
-        return false;
+    const index = new TipIndex(tips, radiusMm);
+    // Hoisted probe: one closure per call, not one per voxel.
+    let pvx = 0;
+    let pvy = 0;
+    let pvz: number | undefined;
+    let covered = false;
+    const probe = (tip: TipPos): boolean => {
+        const dx = pvx - tip.x;
+        const dy = pvy - tip.y;
+        if (dx * dx + dy * dy > coverRadiusSq(pvz ?? tip.z, tip.z, radiusMm)) return false;
+        covered = true;
+        return true;
     };
 
-    // Bucket uncovered voxels by coarse cell for neighbor search.
-    const cellSize = Math.max(0.5, radiusMm / 2);
-    const uncovered = new Map<string, Array<{ x: number; y: number; z?: number }>>();
     const cells: Array<{ x: number; y: number; z?: number }> = [];
     for (let i = 0; i < voxels.count; i++) {
-        const v = { x: footprintX(voxels, i), y: footprintY(voxels, i), z: footprintZ(voxels, i) ?? undefined };
-        if (isCovered(v)) continue;
-        const key = `${Math.floor(v.x / cellSize)},${Math.floor(v.y / cellSize)}`;
-        let bucket = uncovered.get(key);
-        if (!bucket) {
-            bucket = [];
-            uncovered.set(key, bucket);
-        }
-        bucket.push(v);
-        cells.push(v);
+        pvx = footprintX(voxels, i);
+        pvy = footprintY(voxels, i);
+        pvz = footprintZ(voxels, i) ?? undefined;
+        covered = false;
+        index.forEachNear(pvx, pvy, probe);
+        if (covered) continue;
+        cells.push({ x: pvx, y: pvy, z: pvz });
     }
 
     const visited = new Set<number>();
     const clusters: Array<{ x: number; y: number; z: number }> = [];
     // Voxels sit on a 0.25mm grid; exact integer cell key → index for O(1)
     // neighbor lookup (avoids indexOf-per-neighbor O(n²) on big regions).
-    const indexByKey = new Map<string, number>();
+    const indexByKey = new Map<number, number>();
     cells.forEach((v, i) => {
-        indexByKey.set(`${Math.round(v.x * 4)},${Math.round(v.y * 4)}`, i);
+        indexByKey.set(cellKey(Math.round(v.x * 4), Math.round(v.y * 4)), i);
     });
 
     for (let i = 0; i < cells.length; i++) {
@@ -155,7 +204,7 @@ export function findUncoveredClusters(
             for (let ddx = -1; ddx <= 1; ddx++) {
                 for (let ddy = -1; ddy <= 1; ddy++) {
                     if (ddx === 0 && ddy === 0) continue;
-                    const ni = indexByKey.get(`${kx + ddx},${ky + ddy}`);
+                    const ni = indexByKey.get(cellKey(kx + ddx, ky + ddy));
                     if (ni === undefined || visited.has(ni)) continue;
                     visited.add(ni);
                     stack.push(ni);

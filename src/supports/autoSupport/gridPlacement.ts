@@ -1,4 +1,4 @@
-import { footprintToPoints } from '@/volumeAnalysis/Islands/voxelFootprint';
+import { cellKey, footprintToPoints } from '@/volumeAnalysis/Islands/voxelFootprint';
 import * as THREE from 'three';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
 import type { CandidatePoint } from './types';
@@ -27,11 +27,11 @@ export function buildBoundaryPoints(
     fallbackZ: number,
 ): Array<{ x: number; y: number; z: number }> {
     if (voxels.length === 0) return [];
-    const set = new Set<string>();
+    const set = new Set<number>();
     let sumX = 0;
     let sumY = 0;
     for (const v of voxels) {
-        set.add(`${Math.round(v.x * 4)},${Math.round(v.y * 4)}`);
+        set.add(cellKey(Math.round(v.x * 4), Math.round(v.y * 4)));
         sumX += v.x;
         sumY += v.y;
     }
@@ -46,7 +46,7 @@ export function buildBoundaryPoints(
         for (let dx = -1; dx <= 1 && !onEdge; dx++) {
             for (let dy = -1; dy <= 1 && !onEdge; dy++) {
                 if (dx === 0 && dy === 0) continue;
-                if (!set.has(`${kx + dx},${ky + dy}`)) onEdge = true;
+                if (!set.has(cellKey(kx + dx, ky + dy))) onEdge = true;
             }
         }
         if (onEdge) boundary.push(v);
@@ -239,8 +239,8 @@ const PERIMETER_ERODE_PIXELS = 1;
  * fall back to the raw boundary.
  */
 export function erodeFootprint(voxels: Array<{ x: number; y: number; z?: number }>): Array<{ x: number; y: number; z?: number }> {
-    const set = new Set<string>();
-    for (const p of voxels) set.add(`${Math.round(p.x * 4)},${Math.round(p.y * 4)}`);
+    const set = new Set<number>();
+    for (const p of voxels) set.add(cellKey(Math.round(p.x * 4), Math.round(p.y * 4)));
     const interior: Array<{ x: number; y: number; z?: number }> = [];
     for (const p of voxels) {
         const kx = Math.round(p.x * 4);
@@ -249,7 +249,7 @@ export function erodeFootprint(voxels: Array<{ x: number; y: number; z?: number 
         for (let dx = -PERIMETER_ERODE_PIXELS; dx <= PERIMETER_ERODE_PIXELS && all; dx++) {
             for (let dy = -PERIMETER_ERODE_PIXELS; dy <= PERIMETER_ERODE_PIXELS && all; dy++) {
                 if (dx === 0 && dy === 0) continue;
-                if (!set.has(`${kx + dx},${ky + dy}`)) all = false;
+                if (!set.has(cellKey(kx + dx, ky + dy))) all = false;
             }
         }
         if (all) interior.push(p);

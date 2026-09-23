@@ -747,6 +747,13 @@ function placeOneCandidate(
     const area = candidate.islandAreaMm2;
     const preset = presetForArea(area);
 
+    // The fan pool is a walk of every host segment with its 10 samples, and
+    // this function asks for it up to three times (island fan, overhang fan,
+    // cavity fan) against an unchanged draft. Build it once, lazily — each
+    // attempt returns as soon as it succeeds, so nothing mutates in between.
+    let fanPool: FanShaftPoint[] | null = null;
+    const fanShaftPoints = (): FanShaftPoint[] => (fanPool ??= collectFanShaftPoints(draft));
+
     // ── Gridless merge check ──────────────────────────────────────
     // Density-grid points force standalone trunks (a flat region needs
     // independent supports, not a bush of branches off one shaft).
@@ -762,7 +769,7 @@ function placeOneCandidate(
         if (candidate.gridPoint && candidate.source === 'overhang' && gridHostIds
             && !candidate.id.startsWith('grid-')) {
             const auto = supportSettings.autoSupport ?? {};
-            const islandPool = collectFanShaftPoints(draft)
+            const islandPool = fanShaftPoints()
                 .filter((sp) => !gridHostIds.has(sp.hostId));
             if (islandPool.length > 0) {
                 const fan = fanLeafToHost(
@@ -798,7 +805,7 @@ function placeOneCandidate(
             const fan = fanLeafToHost(
                 tipPos,
                 candidate.modelId,
-                collectFanShaftPoints(draft),
+                fanShaftPoints(),
                 gridHostIds,
                 `auto-fan-${candidate.id}`,
                 Math.max(MIN_LEAF_FAN_RADIUS_MM, auto.leafFanRadiusMm ?? LEAF_FAN_RADIUS_MM),
@@ -1054,7 +1061,7 @@ function placeOneCandidate(
                 const fan = fanLeafToHost(
                     tipPos,
                     candidate.modelId,
-                    collectFanShaftPoints(draft),
+                    fanShaftPoints(),
                     gridHostIds ?? new Set<string>(),
                     `auto-cavity-fan-${candidate.id}`,
                     // The widest search in the pipeline, and the same for a grid
@@ -2737,6 +2744,12 @@ export function computeAutoSupportPlan(
     let consolidated = 0;
     for (let pass = 0; pass < 3; pass++) {
         let convertedThisPass = 0;
+        // One pool per pass, maintained as pillars convert. A conversion
+        // deletes the pillar it replaces, and `collectFanShaftPoints` walks
+        // every host segment with its 10 samples — rebuilding that per host
+        // made this loop O(n²) with an allocation per sample. The pool only
+        // ever loses the host being converted, so filter it out instead.
+        let pool = collectFanShaftPoints(draft);
         for (const { hostTypeId, hostId, entity } of collectHostEntities(draft)) {
             // Only this model's hosts are ours to convert (and to delete --
             // the conversion replaces the pillar with a leaf of ours).
@@ -2765,12 +2778,15 @@ export function computeAutoSupportPlan(
             };
             delete (pruned[hostKey] as unknown as Record<string, unknown>)[hostId];
             delete pruned.roots[entity.rootId ?? ''];
-            const pool = collectFanShaftPoints(pruned);
-            if (pool.length === 0) break;
+            // The maintained pool already excludes every host converted
+            // earlier this pass; this iteration's pillar is the only other
+            // one that must not be offered as its own host.
+            const hostPool = pool.filter((sp) => sp.hostId !== hostId);
+            if (hostPool.length === 0) break;
             const fan = fanLeafToHost(
                 tip,
                 modelId,
-                pool,
+                hostPool,
                 new Set(),
                 `auto-con-${hostId}-p${pass}`,
                 conFanRadiusMm,
@@ -2797,7 +2813,7 @@ export function computeAutoSupportPlan(
                         tip,
                         tipNormal,
                         modelId,
-                        pool,
+                        pool: hostPool,
                         pruned,
                         mesh: resolvedMesh ?? undefined,
                         radiusMm: conFanRadiusMm,
@@ -2807,6 +2823,7 @@ export function computeAutoSupportPlan(
                     : null;
                 if (branchResult) {
                     draft = branchResult.draft;
+                    pool = hostPool;
                     gridHostIds.delete(hostId);
                     const origin = originKind ?? 'standalone';
                     diagnostics.hostsByKind[origin]--;
@@ -2827,6 +2844,7 @@ export function computeAutoSupportPlan(
                 continue;
             }
             draft = fan.draft;
+            pool = hostPool;
             gridHostIds.delete(hostId);
             const origin = originKind ?? 'standalone';
             diagnostics.hostsByKind[origin]--;
