@@ -302,6 +302,17 @@ before and after):
 - `collectFanShaftPoints` was rebuilt per candidate (up to three times) and per
   host inside the consolidation loop. Now built once per candidate and once per
   consolidation pass, filtered as pillars convert.
+- The distance-field cell cache was a `Map`, and one placement asks it for
+  hundreds of thousands of cells (the router walks a ~100 mm column at the cell
+  floor and re-walks it for every step of its outward search). It is now a dense
+  `Float32Array` over the model bounds with the `Map` as the fallback: ~15% off
+  a long march, measured on a 120 mm column.
+- `isContactConeBlocked` stepped the cone at a fixed 0.1 mm with the *uncached*
+  exact query, and the router runs it for the straight cone plus up to 24
+  deviations. It now sphere-traces the axis on the 1-Lipschitz property, which
+  skips only points the fixed-step loop would also have found clear, so the
+  verdict is unchanged and a cone in the open costs an order of magnitude fewer
+  queries.
 
 Still open, in the order a profile says they pay:
 

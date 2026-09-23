@@ -173,22 +173,39 @@ export function isContactConeBlocked(sdf: SDFCache, cone: ContactConeSweep): boo
         cone.startRadius + CONTACT_CONE_COLLISION_SAFETY_MM + CONE_TIP_SDF_MARGIN_MM,
     );
     const startT = Math.min(1, tipIgnore / length);
-    const sampleCount = Math.max(1, Math.ceil(((1 - startT) * length) / minStep));
-
-    for (let i = 0; i <= sampleCount; i++) {
-        const t = startT + ((1 - startT) * i) / sampleCount;
+    // Sphere-trace the axis instead of stepping it at a fixed 0.1 mm.
+    //
+    // This gate cannot use the quantized cell cache (its margins are smaller
+    // than the grid's substitution error), so every sample is a fresh BVH
+    // query, and the router runs the gate for the straight cone plus up to 24
+    // deviations. The field is 1-Lipschitz, so from a sample with distance `d`
+    // every point within `d - r` of it is at least `r` from the mesh: advancing
+    // by `d - maxRadius` therefore skips only points the fixed-step loop would
+    // also have found clear, and the verdict is the same while the queries drop
+    // by an order of magnitude on a cone that is in the open.
+    //
+    // `maxRadius` is the largest radius over the remaining span, since the cone
+    // widens towards the socket; the socket itself is always sampled, because
+    // it is where the cone is widest.
+    const maxRadius = cone.endRadius + CONTACT_CONE_COLLISION_SAFETY_MM;
+    let t = startT;
+    for (;;) {
         const radius = cone.startRadius
             + (cone.endRadius - cone.startRadius) * t
             + CONTACT_CONE_COLLISION_SAFETY_MM;
         // Unbounded query, so interior samples still sign negative: a cone
         // through solid material must stay detected.
-        if (sdf.exactSignedDistanceAt(
+        const distance = sdf.exactSignedDistanceAt(
             cone.start.x + dx * t,
             cone.start.y + dy * t,
             cone.start.z + dz * t,
-        ) < radius) {
+        );
+        if (distance < radius) {
             return true;
         }
+        if (t >= 1) break;
+        const advanceMm = Math.max(distance - maxRadius, minStep);
+        t = Math.min(1, t + advanceMm / length);
     }
 
     return false;

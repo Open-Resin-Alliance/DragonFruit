@@ -34,6 +34,7 @@ import {
     type TrunkPlacementResult,
 } from '../PlacementLogic/StandardPlacement';
 import { getSettings } from '../Settings/state';
+import { perfMark, perfMeasure } from '../PlacementLogic/Pathfinding/pathfindingPerf';
 import { gridNodeKeyFromXY, gridSnappedXYFromKey } from '../PlacementLogic/Grid/gridMath';
 import { buildNearestCandidateNodeKeys } from '../PlacementLogic/Grid/nearestCandidateNodeKeys';
 import type { SDFCache } from '../PlacementLogic/Pathfinding/SDFCache';
@@ -60,6 +61,79 @@ import {
     getSupportPathfindingDebugEnabled,
     setSupportPathfindingDebugSnapshot,
 } from '../PlacementLogic/Pathfinding/pathfindingDebugState';
+
+/**
+ * What one placement asks the geometry, counted. The router's cost is the
+ * *number* of questions it puts to the distance field (each is a walk along a
+ * column, or a ring of samples around a root), not the cost of any one answer,
+ * so the run report needs the counts to say which stage to attack. Reset per
+ * run by `computeAutoSupportPlan`.
+ */
+export interface RouterStats {
+    placements: number;
+    /** Cones the straight-drop loop tested (the straight one plus deviations). */
+    conesTested: number;
+    /** Cone-vs-model checks that reached the distance field (memo misses). */
+    coneGates: number;
+    /** Sockets the routed fallback handed to the joint search. */
+    jointSearches: number;
+    /** SDF probes those searches spent, summed. */
+    jointProbes: number;
+    /** Root-volume checks that were not already memoized for their XY. */
+    rootsChecks: number;
+    /** SDF queries inside those checks (a slice centre plus its perimeter). */
+    rootsSamples: number;
+    /** Base positions the ring search tried. */
+    baseCandidates: number;
+    /**
+     * How the joint searches ended: `found`, `never-cleared` (no column inside
+     * the envelope) or `probe-budget` (the walk ran out of probes first). Which
+     * one dominates says whether the reach is the limit or the model simply has
+     * no route from that socket.
+     */
+    jointOutcomes: Record<string, number>;
+    /**
+     * Probes the searches that *found* a joint actually needed, bucketed by
+     * powers of two (index 0 = up to 64 probes, 1 = up to 128, ...). This is
+     * what a smaller probe budget would cost: everything to the right of the
+     * bucket you cut at turns into a pillar instead of a routed support, and
+     * nothing else changes.
+     */
+    foundProbeBuckets: number[];
+    /**
+     * The largest probe count any *successful* search spent, against the search's
+     * hard budget. The buckets above are powers of two, so they cannot say how
+     * much headroom the budget actually has; this can, and it is the number to
+     * watch before raising `MAX_PROBES` or cutting it further.
+     */
+    maxFoundProbes: number;
+}
+
+const routerStats: RouterStats = {
+    placements: 0,
+    conesTested: 0,
+    coneGates: 0,
+    jointSearches: 0,
+    jointProbes: 0,
+    rootsChecks: 0,
+    rootsSamples: 0,
+    baseCandidates: 0,
+    jointOutcomes: {},
+    foundProbeBuckets: [0, 0, 0, 0, 0],
+    maxFoundProbes: 0,
+};
+
+export function getRouterStats(): RouterStats {
+    return { ...routerStats };
+}
+
+export function resetRouterStats(): void {
+    for (const key of Object.keys(routerStats) as Array<keyof RouterStats>) {
+        if (key === 'jointOutcomes') routerStats.jointOutcomes = {};
+        else if (key === 'foundProbeBuckets') routerStats.foundProbeBuckets = [0, 0, 0, 0, 0];
+        else routerStats[key] = 0;
+    }
+}
 
 export interface SmartPlacementV3Input extends TrunkPlacementInput {
     mesh: THREE.Mesh;
@@ -144,6 +218,7 @@ function rootsVolumeBlocked(
     rootsRadius: number,
     shaftRadius: number,
 ): boolean {
+    routerStats.rootsChecks++;
     const rootTopZ = diskHeight + coneHeight;
     const zSlices = Math.max(4, Math.ceil(rootTopZ / sdf.cellSize));
     for (let slice = 0; slice <= zSlices; slice++) {
@@ -152,12 +227,14 @@ function rootsVolumeBlocked(
             ? rootsRadius
             : rootsRadius + ((z - diskHeight) / Math.max(coneHeight, 1e-6)) * (shaftRadius - rootsRadius);
 
+        routerStats.rootsSamples++;
         const centerDist = sdf.distanceAt(centerX, centerY, z);
         if (centerDist >= radiusAtZ + ROOTS_DISK_SAFETY_MM) continue;
         if (centerDist < ROOTS_DISK_SAFETY_MM) return true;
 
         for (let i = 0; i < ROOTS_DISK_PERIMETER_SAMPLES; i++) {
             const angle = (i / ROOTS_DISK_PERIMETER_SAMPLES) * Math.PI * 2;
+            routerStats.rootsSamples++;
             if (sdf.distanceAt(
                 centerX + Math.cos(angle) * radiusAtZ,
                 centerY + Math.sin(angle) * radiusAtZ,
@@ -315,6 +392,7 @@ function resolveBase(args: {
 
     let best: { basePos: Vec3; rootTopTarget: Vec3; nodeKey: string | null; lateralMm: number } | null = null;
     for (const nodeKey of nodeKeys) {
+        routerStats.baseCandidates++;
         const xy = args.gridEnabled
             ? gridSnappedXYFromKey(nodeKey, args.spacingMm)
             : args.preferredXY;
@@ -374,7 +452,10 @@ export function calculateSmartPlacementV3(
     input: SmartPlacementV3Input,
     context?: SmartPlacementV3Context,
 ): TrunkPlacementResult {
+    routerStats.placements++;
+    perfMark('router:standard');
     const standard = calculateStandardPlacement(input);
+    perfMeasure('router:standard', 'router:standard');
     if (standard.error) return standard;
 
     const settings = getSettings();
@@ -399,19 +480,25 @@ export function calculateSmartPlacementV3(
         const key = `${Math.round(x / 0.05)}|${Math.round(y / 0.05)}`;
         const cached = rootsMemo.get(key);
         if (cached !== undefined) return cached;
+        perfMark('router:roots');
         const blocked = rootsVolumeBlocked(sdf, x, y, diskHeight, coneHeight, rootsRadius, shaftRadius);
+        perfMeasure('router:roots', 'router:roots');
         rootsMemo.set(key, blocked);
         return blocked;
     };
-    const segmentMemo = new Map<string, boolean>();
-    const segmentBlockedBetween = (from: Vec3, to: Vec3): boolean => {
-        const key = [from.x, from.y, from.z, to.x, to.y, to.z].map((v) => Math.round(v * 100)).join(',');
-        const cached = segmentMemo.get(key);
-        if (cached !== undefined) return cached;
-        const blocked = sdf.segmentBlocked(from.x, from.y, from.z, to.x, to.y, to.z, clearanceMm);
-        segmentMemo.set(key, blocked);
-        return blocked;
-    };
+    /**
+     * Deliberately not memoized.
+     *
+     * It was, keyed by a six-number string, and the escape search calls it
+     * twice per probe — 36M times on a part like the Titan. Measured: the key
+     * plus the map lookup costs 356 ns, while `segmentBlocked` itself costs
+     * 87 ns (the cell cache makes it ~2 reads per call). A memo has to be
+     * cheaper than the call it memoizes, and this one was four times dearer, so
+     * it was pure overhead on the run's hot path.
+     */
+    const segmentBlockedBetween = (from: Vec3, to: Vec3): boolean => (
+        sdf.segmentBlocked(from.x, from.y, from.z, to.x, to.y, to.z, clearanceMm)
+    );
     const coneBlockedAt = (socketPos: Vec3): boolean => (
         sdf.distanceAt(socketPos.x, socketPos.y, socketPos.z) < clearanceMm
     );
@@ -419,15 +506,32 @@ export function calculateSmartPlacementV3(
      * The cone body, not just the socket point: a cone can lean sideways into
      * geometry the socket itself clears, and the builder renders exactly the
      * cone the router blessed.
+     *
+     * Memoized per placement, like the roots and the segments: the cone gate is
+     * the one check here that cannot use the quantized cell cache (its margins
+     * are finer than the grid's error), and the router tests the *same* cone
+     * geometry twice — once looking for a straight drop and again as a socket
+     * candidate for the joint search — so half of these calls are repeats.
      */
-    const contactConeBlockedAt = (coneStartPos: Vec3, socketPos: Vec3): boolean => (
-        isContactConeBlocked(sdf, {
+    const coneGateMemo = new Map<string, boolean>();
+    const contactConeBlockedAt = (coneStartPos: Vec3, socketPos: Vec3): boolean => {
+        const key = [coneStartPos.x, coneStartPos.y, coneStartPos.z, socketPos.x, socketPos.y, socketPos.z]
+            .map((value) => Math.round(value * 100))
+            .join(',');
+        const cached = coneGateMemo.get(key);
+        if (cached !== undefined) return cached;
+        routerStats.coneGates++;
+        perfMark('router:cone-gate');
+        const blocked = isContactConeBlocked(sdf, {
             start: coneStartPos,
             end: socketPos,
             startRadius: input.tipProfile.contactDiameterMm / 2,
             endRadius: input.tipProfile.bodyDiameterMm / 2,
-        })
-    );
+        });
+        perfMeasure('router:cone-gate', 'router:cone-gate');
+        coneGateMemo.set(key, blocked);
+        return blocked;
+    };
     /** The same cone start, a different axis: the socket follows the axis. */
     const coneAtAxis = (coneStartPos: Vec3, axis: Vec3) => ({
         socketPos: getSocketPosition(coneStartPos, axis, input.tipProfile),
@@ -508,10 +612,12 @@ export function calculateSmartPlacementV3(
         segmentBlockedBetween,
     });
     for (const candidate of [straightCone, ...getDeviationCones(straightCone.coneStartPos)]) {
+        routerStats.conesTested++;
         if (contactConeBlockedAt(candidate.coneStartPos, candidate.socketPos)) continue;
         const columnEnd = { x: candidate.socketPos.x, y: candidate.socketPos.y, z: rootTopZ };
         if (segmentBlockedBetween(candidate.socketPos, columnEnd)) continue;
         if (rootsBlockedAt(candidate.socketPos.x, candidate.socketPos.y)) continue;
+        perfMark('router:base');
         const base = resolveBase({
             preferredXY: { x: candidate.socketPos.x, y: candidate.socketPos.y },
             lastSegmentStart: candidate.socketPos,
@@ -528,6 +634,7 @@ export function calculateSmartPlacementV3(
             baseFitsAt: (x, y) => !rootsBlockedAt(x, y),
             segmentBlockedBetween,
         });
+        perfMeasure('router:base', 'router:base');
         // "Straight" means the column under the socket, and the grid is allowed to
         // move the base off it. That is not a straight drop any more: the builder
         // draws it as a vertical leg plus a short closing member, and with a low
@@ -606,11 +713,13 @@ export function calculateSmartPlacementV3(
     let refusalProbes = 0;
     for (const socketCandidate of socketCandidates) {
         const startSocket = socketCandidate.socketPos;
+        routerStats.conesTested++;
         if (contactConeBlockedAt(socketCandidate.coneStartPos, startSocket)) continue;
 
         // Grid mode searches the lattice: the drop has to land on a node, so the
         // node is chosen first and the joint derived from it. Every other mode
         // drops at the first column that clears.
+        perfMark('router:joint-search');
         const found = gridEnabled
             ? findGridJoint(sdf, startSocket, rootTopZ, {
                 ...jointSearchShared,
@@ -628,6 +737,18 @@ export function calculateSmartPlacementV3(
                     DIRECTION_COUNT,
                 ),
             });
+        perfMeasure('router:joint-search', 'router:joint-search');
+        routerStats.jointSearches++;
+        routerStats.jointProbes += found.probes;
+        routerStats.jointOutcomes[found.outcome] = (routerStats.jointOutcomes[found.outcome] ?? 0) + 1;
+        if (found.joint) {
+            const bucket = Math.min(
+                routerStats.foundProbeBuckets.length - 1,
+                Math.max(0, Math.floor(Math.log2(Math.max(1, found.probes))) - 6),
+            );
+            if (found.probes > routerStats.maxFoundProbes) routerStats.maxFoundProbes = found.probes;
+            routerStats.foundProbeBuckets[bucket]++;
+        }
         if (!found.joint) {
             // The grid could not serve this contact: no node left room for the drop
             // at a lean the shape rule allows. That is the case the grid is dropped
@@ -670,6 +791,7 @@ export function calculateSmartPlacementV3(
         if (segmentBlockedBetween(cone.socketPos, jointPos)) continue;
         if (!diagonalWithinCeiling(socketCandidate.deviated)) continue;
 
+        perfMark('router:base');
         const base = resolveBase({
             preferredXY: { x: jointPos.x, y: jointPos.y },
             lastSegmentStart: jointPos,
@@ -686,6 +808,7 @@ export function calculateSmartPlacementV3(
             baseFitsAt: (x, y) => !rootsBlockedAt(x, y),
             segmentBlockedBetween,
         });
+        perfMeasure('router:base', 'router:base');
         if (!base) {
             refusalReason = 'no committed base under the joint';
             refusalProbes = found.probes;

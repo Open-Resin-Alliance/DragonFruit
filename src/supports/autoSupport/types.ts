@@ -199,6 +199,38 @@ export interface AutoPlaceTimings {
     detail: Array<{ label: string; durationMs: number; calls: number }>;
     /** Phases that exceeded the perf module's thresholds. */
     spikes: Array<{ label: string; durationMs: number; thresholdMs: number }>;
+    /**
+     * What the distance field did during the run. `cellReads` is the router's
+     * probe volume and `bvhQueries` the part of it that was new geometry work:
+     * the pair says whether the next win is fewer probes or a faster field.
+     */
+    sdf?: {
+        cellReads: number;
+        bvhQueries: number;
+        cachedCells: number;
+        /** Which cell store answered: the open-addressed table, or its Map fallback. */
+        store?: string;
+    };
+    /**
+     * What the router asked for. The cost of a placement is the number of
+     * questions, not the cost of one answer, so these counts say which stage to
+     * attack: cones tested, joint searches and their probes, root-volume checks
+     * and their samples, base candidates.
+     */
+    router?: {
+        placements: number;
+        conesTested: number;
+        coneGates: number;
+        jointSearches: number;
+        jointProbes: number;
+        rootsChecks: number;
+        rootsSamples: number;
+        baseCandidates: number;
+        jointOutcomes: Record<string, number>;
+        foundProbeBuckets: number[];
+        /** Worst *successful* search's probe count, against the search budget. */
+        maxFoundProbes: number;
+    };
 }
 
 /** Why a fan-leaf attempt was refused. */

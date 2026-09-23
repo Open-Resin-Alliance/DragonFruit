@@ -32,6 +32,8 @@ import { generateCandidates, deduplicateCandidates } from './candidateGeneration
 import { generateGridCandidates, shouldUseDensityGrid } from './gridPlacement';
 import { computeStabilizationAnchors } from './stabilization';
 import { perfEndFrame, perfMark, perfMeasure, type PerfFrame } from '../PlacementLogic/Pathfinding/pathfindingPerf';
+import { getOrCreateSDFCache } from '../PlacementLogic/Pathfinding/SDFCachePool';
+import { getRouterStats, resetRouterStats } from '../PlacementLogicV3/SmartPlacementV3';
 import {
     MAX_GAP_FILL_PASSES,
     buildGapFillCandidates,
@@ -730,6 +732,11 @@ function timingEnd(phase: string): void {
 
 const round1 = (value: number): number => Math.round(value * 10) / 10;
 
+/** 1234567 -> "1.2M", 45000 -> "45k". */
+const compactCount = (value: number): string => (
+    value >= 1e6 ? `${(value / 1e6).toFixed(1)}M` : value >= 1e3 ? `${(value / 1e3).toFixed(0)}k` : String(value)
+);
+
 /**
  * Turn the perf frame into the run's timing summary. Coarse phases keep their
  * order; the inner labels are summed and sorted by cost, because the question
@@ -791,6 +798,36 @@ export function logAutoPlaceTimings(timings: AutoPlaceTimings | null | undefined
             .map((entry) => `${entry.label} ${entry.durationMs.toFixed(0)}ms/${entry.calls}x`)
             .join(' · ');
         console.log(LOG_PREFIX, `Timing detail: ${detail}`);
+    }
+    if (timings.router) {
+        const router = timings.router;
+        const per = (value: number) => (value / Math.max(1, router.placements)).toFixed(1);
+        console.log(LOG_PREFIX,
+            `Timing router: ${router.placements} placements · per placement ` +
+            `${per(router.conesTested)} cones (${per(router.coneGates)} gated) · ` +
+            `${per(router.jointSearches)} joint searches (${per(router.jointProbes)} probes) · ` +
+            `${per(router.rootsChecks)} roots checks (${per(router.rootsSamples)} samples) · ` +
+            `${per(router.baseCandidates)} base candidates` +
+            (Object.keys(router.jointOutcomes).length > 0
+                ? ` — joint searches: ${Object.entries(router.jointOutcomes)
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([outcome, count]) => `${outcome} ${count}`)
+                    .join(' · ')}`
+                : '') +
+            (router.foundProbeBuckets.some((count) => count > 0)
+                ? ` — found within: ${router.foundProbeBuckets
+                    .map((count, index) => (count > 0 ? `≤${64 << index} probes ${count}` : null))
+                    .filter(Boolean)
+                    .join(' · ')}` +
+                (router.maxFoundProbes > 0 ? ` (worst success ${router.maxFoundProbes} probes)` : '')
+                : ''));
+    }
+    if (timings.sdf) {
+        console.log(LOG_PREFIX,
+            `Timing field: ${compactCount(timings.sdf.cellReads)} cell reads · ` +
+            `${compactCount(timings.sdf.bvhQueries)} BVH queries · ` +
+            `${compactCount(timings.sdf.cachedCells)} cells cached` +
+            (timings.sdf.store ? ` (${timings.sdf.store})` : ''));
     }
     if (timings.spikes.length > 0) {
         // Summarized, not listed: a big model produces hundreds of these and the
@@ -2579,6 +2616,7 @@ export function computeAutoSupportPlan(
     // ------------------------------------------------------------------
 
     console.log(LOG_PREFIX, `Input: ${islands.length} islands from scan`);
+    resetRouterStats();
     timingStart('candidates');
 
     let candidates = generateCandidates(islands, autoSettings, { mesh: resolvedMesh, modelId });
@@ -3562,7 +3600,22 @@ export function computeAutoSupportPlan(
 
     timingEnd('bracing');
     const timings = collectTimings(perfEndFrame());
-    if (timings) analytics.timings = timings;
+    if (timings) {
+        // The distance field's own counters: the router's probes are most of a
+        // run, and this says how much of that was cached.
+        if (resolvedMesh) {
+            const sdf = getOrCreateSDFCache(resolvedMesh);
+            timings.sdf = {
+                cellReads: sdf.stats.cellReads,
+                bvhQueries: sdf.stats.bvhQueries,
+                cachedCells: sdf.size,
+                store: sdf.store.kind,
+            };
+        }
+        const router = getRouterStats();
+        if (router.placements > 0) timings.router = router;
+        analytics.timings = timings;
+    }
     logAutoPlaceTimings(timings);
 
     const result: AutoPlaceResult = {

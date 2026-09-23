@@ -152,6 +152,53 @@ Every run logs where its time went, one line plus a detail line:
   (`trunk:v3-placement`, `branch:cone-search`, `grid:collision-check`, …), summed
   by label with its call count. Those nest inside the coarse phases, so the two
   do not add up to the total between them.
+- The detail line also carries the router's own stages (`router:standard`,
+  `router:cone-gate`, `router:roots`, `router:base`, `router:joint-search`), so a
+  placement that is slow overall is attributed to the stage that spent it.
+- A third line reports what the *router* asked for, which is where a
+  routing-heavy run spends its placement time. The cost of a placement is the
+  number of questions, not the cost of one answer:
+
+  ```
+  [AutoSupport] Timing router: 2073 placements · per placement 50.0 cones (25.0 gated) ·
+    0.1 joint searches (6.0 probes) · 1.0 roots checks (1.0 samples) · 0.0 base candidates
+  ```
+
+  `cones` are the straight drop plus its deviations, tested once for a straight
+  drop and again as socket candidates for the joint search; `gated` is how many
+  of those reached the distance field, so a ratio near 2:1 means the memo is
+  doing its job. `joint probes` are the escape search's SDF probes, the unit it
+  is held to, and the outcome tally after the dash says how those searches ended
+  (`never-cleared` means no column inside the envelope, `probe-budget` that the
+  walk ran out first — the two call for opposite fixes). A `found within` tally
+  follows when any search succeeded: how many probes those actually needed,
+  bucketed by powers of two. Everything to the right of a bucket you cut at
+  turns into a pillar instead of a routed support, and nothing else changes, so
+  that tally is the price of a smaller budget. `roots checks` are the
+  root-volume fit tests (`samples` are the SDF queries inside them; 1.0 means
+  the bounding-ball early-out settled each slice).
+- A fourth line reports the distance field itself:
+
+  ```
+  [AutoSupport] Timing field: 12.3M cell reads · 480k BVH queries · 660k cells cached
+  ```
+
+  `cell reads` is the router's probe volume (it walks a long column per probe),
+  `BVH queries` is the part of that which was new geometry work rather than a
+  cached answer. A high query count with a high per-query cost is the shape to
+  watch: `cells cached` names the store that answered (`table`, or
+  `table+map` once the table filled), and the query count is the one to attack —
+  a run's first-time cell computations dominate everything else. The march
+  bounds its BVH query at `MARCH_DISTANCE_BOUND_MM` (see
+  `SDFCache`), and an unbounded traversal on a sculpted part measured 17 us per
+  cell against 0.2 us bounded. A cached value at or beyond that bound means "at
+  least that much" rather than an exact distance — every caller compares against
+  a clearance of a few tenths of a millimetre, so the cap never changes a
+  verdict, and caching it is what keeps far cells from being re-queried on every
+  visit (4.5M queries against 1.6M for one run). A high read-to-query ratio means the cache is doing its job and
+  the cost is the walking; a low one means the field itself is being computed
+  over and over, and the near-field gates (`isContactConeBlocked`, which cannot
+  use the quantized cache) are the place to look.
 - The same data is on `result.analytics.timings` (`AutoPlaceTimings`), which is
   what the worker path logs: the worker's own `console` output never reaches the
   log bridge, so the client prints the timing it got back.
