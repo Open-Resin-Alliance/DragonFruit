@@ -230,6 +230,62 @@ test('runAutoPlace places grid trunks on a rotated mesh via the region normal', 
     disposeHandlers();
 });
 
+test('runAutoPlace grids a huge steep flat the self-support angle calls self-supporting', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+    initializeBVH();
+
+    // Box rotated 60° about X: the face is steeper than the 45° self-support
+    // angle, so the angle rule alone leaves it bare. The Rust steep-flat pass
+    // is what hands a patch this size over as an `overhang` region — a leaning
+    // plate's whole face, the lever the part topples on. From there the
+    // pipeline must grid it like any other region.
+    const deg = 60;
+    const geometry = new THREE.BoxGeometry(20, 20, 20);
+    geometry.rotateX(THREE.MathUtils.degToRad(deg));
+    geometry.translate(0, 0, 20);
+    accelerateGeometry(geometry);
+    const mesh = new THREE.Mesh(geometry);
+    mesh.updateMatrixWorld();
+    setModelMesh('model-a', mesh);
+
+    const rad = THREE.MathUtils.degToRad(deg);
+    const normal = { x: 0, y: Math.sin(rad), z: -Math.cos(rad) };
+    const yMin = -10 * Math.cos(rad) + 10 * Math.sin(rad);
+    const yMax = 10 * Math.cos(rad) + 10 * Math.sin(rad);
+    const zAt = (y: number) => Math.tan(rad) * y;
+    const contactVoxels: { x: number; y: number; z?: number }[] = [];
+    for (let x = -10; x <= 10; x += 0.25) {
+        for (let y = yMin; y <= yMax; y += 0.25) {
+            contactVoxels.push({ x, y, z: zAt(y) });
+        }
+    }
+    const facet: DetectedIsland = {
+        id: 'o0',
+        source: 'overhang',
+        contact: new THREE.Vector3(0, (yMin + yMax) / 2, zAt((yMin + yMax) / 2)),
+        baseZ: zAt(yMin),
+        areaMm2: 400 * Math.cos(rad),
+        surfaceNormal: normal,
+        overhangAngleDeg: deg,
+        // BoxGeometry group 5 (local −Z) → the 60° face after rotateX.
+        triangleIds: [10, 11],
+        contactVoxels: footprintFromPoints(contactVoxels),
+    };
+
+    const result = runAutoPlace([facet], 'model-a', { debugSkipAutoBracing: true, stabilizationEnabled: false });
+
+    assert.ok(result.placed.trunk >= 15,
+        `placed ${result.placed.trunk} grid trunks on the 60° face`);
+    assert.equal(result.rejectedCandidates, 0,
+        'the region normal keeps the cone clear at 60°');
+
+    setModelMesh('model-a', null);
+    disposeHandlers();
+});
+
 test('elevated small overhang routes a trunk around the body instead of a culled pillar', () => {
     const cleanup = elevatedJawScenario(false);
     cleanup();

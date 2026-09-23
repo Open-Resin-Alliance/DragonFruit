@@ -15,12 +15,40 @@
 //! is overhang when `θ < self_support_angle_deg`, i.e.
 //! `normal.z < -cos(self_support_angle_deg)`. Only genuinely down-facing
 //! triangles are eligible (the formula implies normal.z < 0).
+//!
+//! A steep face is not the end of the story: a LARGE planar face at θ between
+//! the self-support angle and [`STEEP_FLAT_MAX_ANGLE_DEG`] is the lever a tall
+//! part topples on. Resin peels off a 60° face without anything under it, but
+//! the drag on several square centimetres of face rotates the whole part about
+//! its bearing edge, and the only thing that resists is contact along that
+//! face — the "huge flat plastered as if it were an overhang" shape a
+//! professional support pass produces on a leaning plate. Those patches are
+//! classified as overhang regions too, so the density grid covers them like
+//! any other; see [`classify_steep_flats`].
 
 use dragonfruit_mesh_repair::{core::mesh::Vec3, IndexedMesh};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use rayon::prelude::*;
+
+/// Steepest face a steep-flat patch may have (deg from horizontal) and still be
+/// classified. Past this the face is a wall: a support rises vertically to meet
+/// it and would only graze the surface, so there is no contact to place.
+const STEEP_FLAT_MAX_ANGLE_DEG: f32 = 80.0;
+/// 3D area (mm²) a steep planar patch must reach before it counts as a
+/// topple lever rather than a facet. Comfortably above the 25 mm² density-grid
+/// threshold, and tunable: too low and every chamfer on a sculpted model gets
+/// a patch.
+const STEEP_FLAT_MIN_AREA_MM2: f32 = 150.0;
+/// How far a triangle's normal may sit from the growing patch's running mean
+/// normal (deg). This is what keeps a patch to ONE face: a crease splits it,
+/// so a sculpted face contributes its own flat parts instead of dragging every
+/// steep triangle that touches it into one giant patch. It bounds curvature,
+/// it does not reject it — a smooth curved surface chains until its curvature
+/// outruns the running mean (the accepted false positive in
+/// `docs/dev/auto-supports.md`).
+const STEEP_FLAT_NORMAL_TOL_DEG: f32 = 20.0;
 
 /// Binary raster of a region's XY-projected footprint — the containment test
 /// the density grid stage uses to place supports only inside the region.
@@ -131,7 +159,11 @@ pub fn classify_overhangs(
             || HashMap::<(u32, u32), Vec<u32>>::new(),
             |mut acc, (fi, tri)| {
                 for pair in [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
-                    let key = if pair.0 < pair.1 { pair } else { (pair.1, pair.0) };
+                    let key = if pair.0 < pair.1 {
+                        pair
+                    } else {
+                        (pair.1, pair.0)
+                    };
                     acc.entry(key).or_default().push(fi as u32);
                 }
                 acc
@@ -193,10 +225,124 @@ pub fn classify_overhangs(
     let mut groups: Vec<(u32, Vec<u32>)> = by_root.into_iter().collect();
     groups.sort_by_key(|(root, _)| *root);
 
-    groups
+    let mut regions: Vec<OverhangRegion> = groups
         .into_par_iter()
         .map(|(_, triangle_ids)| build_region(mesh, &normal, triangle_ids, px_mm))
-        .collect()
+        .collect();
+
+    // Steep flats ride the same region shape, so the density grid, the surface
+    // sampler and the perimeter ring all treat them as ordinary overhangs.
+    regions.extend(classify_steep_flats(
+        mesh, &normal, &edge_tris, threshold, px_mm,
+    ));
+    regions
+}
+
+/// Large planar faces just past the self-support angle — the topple levers
+/// (see the module docs). Grown per patch: a seed triangle claims its
+/// neighbours while their normals stay within [`STEEP_FLAT_NORMAL_TOL_DEG`] of
+/// the patch's running area-weighted mean, so the growth follows one flat face
+/// and stops at a crease. Patches under [`STEEP_FLAT_MIN_AREA_MM2`] are
+/// dropped — the classifier's answer for a steep face that is *not* huge stays
+/// "self-supporting".
+///
+/// Deterministic: seeds ascend by triangle id, neighbours are sorted before
+/// the walk, and the queue is FIFO, so the running mean sees a fixed order.
+fn classify_steep_flats(
+    mesh: &IndexedMesh,
+    normal: &[Vec3],
+    edge_tris: &HashMap<(u32, u32), Vec<u32>>,
+    self_support_threshold: f32,
+    px_mm: f32,
+) -> Vec<OverhangRegion> {
+    let tri_count = mesh.triangle_count();
+    if tri_count == 0 {
+        return Vec::new();
+    }
+    // Band: θ ∈ [self-support, STEEP_FLAT_MAX_ANGLE_DEG]. normal.z = -cos(θ),
+    // so θ ≥ self-support ⟺ nz ≥ threshold, and θ ≤ max ⟺ nz ≤ -cos(max).
+    let steep_ceiling = -STEEP_FLAT_MAX_ANGLE_DEG.to_radians().cos();
+    let cos_tol = STEEP_FLAT_NORMAL_TOL_DEG.to_radians().cos();
+    let in_band = |fi: usize| {
+        let nz = normal[fi].z;
+        nz >= self_support_threshold && nz <= steep_ceiling
+    };
+
+    let mut claimed = vec![false; tri_count];
+    let mut out: Vec<OverhangRegion> = Vec::new();
+    let mut neighbors: Vec<u32> = Vec::with_capacity(8);
+    let mut queue: VecDeque<u32> = VecDeque::new();
+
+    for seed in 0..tri_count as u32 {
+        if claimed[seed as usize] || !in_band(seed as usize) {
+            continue;
+        }
+        claimed[seed as usize] = true;
+        let mut acc = [0f32; 3];
+        let mut area = 0f32;
+        let mut members: Vec<u32> = vec![seed];
+        queue.clear();
+        queue.push_back(seed);
+        let seed_area = mesh.tri_area(seed);
+        accumulate_normal(&mut acc, normal[seed as usize], seed_area);
+        area += seed_area;
+
+        while let Some(fi) = queue.pop_front() {
+            // Area-weighted mean so far — the plane the patch is fitting.
+            let len = (acc[0] * acc[0] + acc[1] * acc[1] + acc[2] * acc[2]).sqrt();
+            let (mx, my, mz) = if len > 1e-9 {
+                (acc[0] / len, acc[1] / len, acc[2] / len)
+            } else {
+                (0.0, 0.0, -1.0)
+            };
+
+            neighbors.clear();
+            let tri = mesh.triangles[fi as usize];
+            for pair in [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
+                let key = if pair.0 < pair.1 {
+                    pair
+                } else {
+                    (pair.1, pair.0)
+                };
+                if let Some(ts) = edge_tris.get(&key) {
+                    neighbors.extend_from_slice(ts);
+                }
+            }
+            neighbors.sort_unstable();
+            neighbors.dedup();
+
+            for &nb in neighbors.iter() {
+                if nb == fi || claimed[nb as usize] || !in_band(nb as usize) {
+                    continue;
+                }
+                let n = normal[nb as usize];
+                if mx * n.x + my * n.y + mz * n.z < cos_tol {
+                    continue;
+                }
+                claimed[nb as usize] = true;
+                members.push(nb);
+                let tri_area = mesh.tri_area(nb);
+                area += tri_area;
+                accumulate_normal(&mut acc, n, tri_area);
+                queue.push_back(nb);
+            }
+        }
+
+        if area < STEEP_FLAT_MIN_AREA_MM2 {
+            continue;
+        }
+        // build_region's footprint raster keeps the first triangle per pixel,
+        // so a stable triangle order keeps the mask stable too.
+        members.sort_unstable();
+        out.push(build_region(mesh, normal, members, px_mm));
+    }
+    out
+}
+
+fn accumulate_normal(acc: &mut [f32; 3], n: Vec3, area: f32) {
+    acc[0] += n.x * area;
+    acc[1] += n.y * area;
+    acc[2] += n.z * area;
 }
 
 fn build_region(
@@ -582,13 +728,7 @@ fn barycentric_z(px: f32, py: f32, a: Vec3, b: Vec3, c: Vec3) -> f32 {
 }
 
 /// Point-in-triangle test (2D, half-plane method).
-fn point_in_triangle_2d(
-    px: f32,
-    py: f32,
-    a: (f32, f32),
-    b: (f32, f32),
-    c: (f32, f32),
-) -> bool {
+fn point_in_triangle_2d(px: f32, py: f32, a: (f32, f32), b: (f32, f32), c: (f32, f32)) -> bool {
     let sign = |x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32| {
         (x1 - x3) * (y2 - y3) - (x2 - x3) * (y1 - y3)
     };
@@ -680,11 +820,7 @@ mod tests {
         out
     }
 
-    fn assert_region(
-        regions: &[OverhangRegion],
-        expected_angle_deg: f32,
-        expected_area_mm2: f32,
-    ) {
+    fn assert_region(regions: &[OverhangRegion], expected_angle_deg: f32, expected_area_mm2: f32) {
         assert_eq!(regions.len(), 1, "expected exactly one region: {regions:?}");
         let r = &regions[0];
         assert!(
@@ -747,7 +883,10 @@ mod tests {
         let f = &regions[0].footprint;
         assert!((f.width as f32 - 40.0).abs() <= 1.0, "width {}", f.width);
         assert!((f.height as f32 - 35.0).abs() <= 1.0, "height {}", f.height);
-        assert!(f.data.iter().all(|&v| v == 1), "projection is a solid rectangle");
+        assert!(
+            f.data.iter().all(|&v| v == 1),
+            "projection is a solid rectangle"
+        );
         let mask_area = f.data.len() as f32 * 0.25 * 0.25;
         assert!(
             (mask_area - 86.6).abs() < 10.0,
@@ -761,8 +900,16 @@ mod tests {
             let row = (((y + 0.125) / 0.25) - 0.5).round() as usize;
             f.surface_z[row * f.width as usize + col]
         };
-        assert!((z_at(5.0, 0.5) - 0.0).abs() < 0.6, "low edge z {}", z_at(5.0, 0.5));
-        assert!((z_at(5.0, 8.0) - 4.6).abs() < 0.6, "high edge z {}", z_at(5.0, 8.0));
+        assert!(
+            (z_at(5.0, 0.5) - 0.0).abs() < 0.6,
+            "low edge z {}",
+            z_at(5.0, 0.5)
+        );
+        assert!(
+            (z_at(5.0, 8.0) - 4.6).abs() < 0.6,
+            "high edge z {}",
+            z_at(5.0, 8.0)
+        );
 
         // Region normal: the 30°-rotated bottom face has normal (0, 0.5, -0.866).
         let n = regions[0].normal;
@@ -789,14 +936,25 @@ mod tests {
             let row = (((y + 0.125) / 0.25) - 0.5).round() as usize;
             row * f.width as usize + col
         };
-        assert_eq!(f.data[idx(2.0, 1.0)], 1, "(2,1) is inside the triangle (y ≤ x)");
-        assert_eq!(f.data[idx(1.0, 2.0)], 0, "(1,2) is outside the triangle (y > x)");
+        assert_eq!(
+            f.data[idx(2.0, 1.0)],
+            1,
+            "(2,1) is inside the triangle (y ≤ x)"
+        );
+        assert_eq!(
+            f.data[idx(1.0, 2.0)],
+            0,
+            "(1,2) is outside the triangle (y > x)"
+        );
     }
 
     #[test]
     fn vertical_wall_is_not_overhang() {
         let regions = classify_overhangs_from_soup(&quad_at(90.0), 45.0, 0.25);
-        assert!(regions.is_empty(), "no overhang on a vertical wall: {regions:?}");
+        assert!(
+            regions.is_empty(),
+            "no overhang on a vertical wall: {regions:?}"
+        );
     }
 
     #[test]
@@ -804,10 +962,127 @@ mod tests {
         // 60° slope: self-supporting at the 45° threshold, flagged at 70°.
         let soup60 = quad_at(60.0);
         let regions = classify_overhangs_from_soup(&soup60, 45.0, 0.25);
-        assert!(regions.is_empty(), "60° slope must be self-supporting at 45°: {regions:?}");
+        assert!(
+            regions.is_empty(),
+            "60° slope must be self-supporting at 45°: {regions:?}"
+        );
         let regions70 = classify_overhangs_from_soup(&soup60, 70.0, 0.25);
         assert_eq!(regions70.len(), 1, "60° slope flagged at 70° threshold");
         assert!((regions70[0].angle_deg - 60.0).abs() < 1.5);
+    }
+
+    /// Horizontal `size`×`size` quad (normal −Z) rotated `angle_deg` about X.
+    fn big_quad_at(size: f32, angle_deg: f32) -> Vec<f32> {
+        let s = size;
+        let soup: Vec<f32> = vec![
+            0.0, 0.0, 0.0, s, s, 0.0, s, 0.0, 0.0, // tri 0 (normal -Z)
+            0.0, 0.0, 0.0, 0.0, s, 0.0, s, s, 0.0, // tri 1 (normal -Z)
+        ];
+        rotate_x(&soup, angle_deg)
+    }
+
+    /// Two `width`×`len` faces folded along a shared X-axis edge, each at its
+    /// own angle from horizontal — a crease, so the two normals differ by
+    /// `angle_b - angle_a` exactly.
+    fn folded_quads(width: f32, len: f32, angle_a: f32, angle_b: f32) -> Vec<f32> {
+        let dir = |deg: f32| {
+            let r = deg.to_radians();
+            (0.0f32, -r.cos() * len, -r.sin() * len)
+        };
+        let mut out = Vec::new();
+        for deg in [angle_a, angle_b] {
+            let (_, y, z) = dir(deg);
+            // Winding p0,p1,p2 / p0,p2,p3 gives normal (0, sin α, −cos α).
+            out.extend_from_slice(&[0.0, 0.0, 0.0, width, 0.0, 0.0, width, y, z]);
+            out.extend_from_slice(&[0.0, 0.0, 0.0, width, y, z, 0.0, y, z]);
+        }
+        out
+    }
+
+    #[test]
+    fn large_steep_flat_is_classified_as_overhang() {
+        // A 30×30 mm face at 60° from horizontal: 900 mm² of down-facing
+        // surface the angle rule calls self-supporting. It is the topple lever
+        // the steep-flat pass exists for, so it must come back as a region.
+        let regions = classify_overhangs_from_soup(&big_quad_at(30.0, 60.0), 45.0, 0.25);
+        assert_region(&regions, 60.0, 900.0);
+    }
+
+    #[test]
+    fn steep_flat_region_carries_a_usable_footprint() {
+        // The density grid places only inside the region's projected footprint
+        // and takes each point's Z from its surface raster, so the mask must
+        // cover the projection (900 × cos 60° = 450 mm²) and follow the slope.
+        let regions = classify_overhangs_from_soup(&big_quad_at(30.0, 60.0), 45.0, 0.25);
+        assert_eq!(regions.len(), 1, "one region: {regions:?}");
+        let f = &regions[0].footprint;
+        let inside = f.data.iter().filter(|&&v| v == 1).count() as f32;
+        let mask_area = inside * f.px_mm * f.px_mm;
+        assert!(
+            (mask_area - 450.0).abs() < 20.0,
+            "mask covers the projected face: {mask_area} vs 450"
+        );
+        // Surface Z rises with y at tan(60°) across the face (y spans 0..15).
+        let col = (f.width / 2) as usize;
+        let row_of = |y: f32| (((y - f.origin_y) / f.px_mm) - 0.5).round() as usize;
+        let z_lo = f.surface_z[row_of(1.0) * f.width as usize + col];
+        let z_hi = f.surface_z[row_of(14.0) * f.width as usize + col];
+        assert!(
+            (z_hi - z_lo - 13.0 * 60f32.to_radians().tan()).abs() < 1.0,
+            "surface raster follows the slope: {z_lo} → {z_hi}"
+        );
+    }
+
+    #[test]
+    fn small_steep_facet_is_not_classified() {
+        // Half the area gate at 60° is a facet, not a lever — it stays
+        // unsupported. Derived from the constant so tuning the gate does not
+        // silently turn this into a test of something else.
+        let side = (STEEP_FLAT_MIN_AREA_MM2 * 0.5).sqrt();
+        let regions = classify_overhangs_from_soup(&big_quad_at(side, 60.0), 45.0, 0.25);
+        assert!(
+            regions.is_empty(),
+            "{} mm² facet: {regions:?}",
+            side * side
+        );
+    }
+
+    #[test]
+    fn steep_flat_past_the_ceiling_is_not_classified() {
+        // Past the ceiling the face is a wall: a support rises vertically to
+        // meet it and only grazes the surface, so there is no contact to
+        // place. Clamped below vertical, which is the other end of the band.
+        let angle = (STEEP_FLAT_MAX_ANGLE_DEG + 5.0).min(89.0);
+        let regions = classify_overhangs_from_soup(&big_quad_at(30.0, angle), 45.0, 0.25);
+        assert!(
+            regions.is_empty(),
+            "no contact on a wall at {angle}°: {regions:?}"
+        );
+    }
+
+    #[test]
+    fn crease_splits_a_patch_that_would_be_huge_only_together() {
+        // Two faces just under the area gate, more than the growth tolerance
+        // apart: neither is a lever on its own, and the growth must not fuse
+        // them into one that is — a patch is one flat face, not every steep
+        // triangle that happens to touch it.
+        let tolerance = STEEP_FLAT_NORMAL_TOL_DEG;
+        let angle_a = 50.0;
+        let angle_b = angle_a + tolerance + 3.0;
+        assert!(
+            angle_b <= STEEP_FLAT_MAX_ANGLE_DEG,
+            "fixture needs both angles inside [{}, {}]",
+            45.0,
+            STEEP_FLAT_MAX_ANGLE_DEG
+        );
+        let width = 15.0;
+        let len = STEEP_FLAT_MIN_AREA_MM2 * 0.6 / width;
+        let regions =
+            classify_overhangs_from_soup(&folded_quads(width, len, angle_a, angle_b), 45.0, 0.25);
+        assert!(
+            regions.is_empty(),
+            "crease held the patches apart: {regions:?}"
+        );
     }
 
     #[test]
@@ -847,7 +1122,10 @@ mod tests {
                 triangles.push([a, d, c]); // −Z normal
             }
         }
-        IndexedMesh { positions, triangles }
+        IndexedMesh {
+            positions,
+            triangles,
+        }
     }
 
     #[test]
@@ -889,7 +1167,10 @@ mod tests {
                 triangles.push([base, base + 3, base + 2]); // −Z
             }
         }
-        IndexedMesh { positions, triangles }
+        IndexedMesh {
+            positions,
+            triangles,
+        }
     }
 
     #[test]
