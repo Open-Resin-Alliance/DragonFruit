@@ -9,6 +9,7 @@ import {
   type SpaceMouseSettings,
 } from '@/components/settings/spacemousePreferences';
 import { ORTHO_MAX_RADIUS, ORTHO_MIN_RADIUS, applyOrthoFrustum, orthoAspectOf } from './orthoDolly';
+import { getWindowFocused, retainWindowFocus } from './windowFocus';
 
 type OrbitLikeControls = {
   target: THREE.Vector3;
@@ -256,6 +257,10 @@ export function SpaceMouseController({
     [camera, defaultPivot, pivotCandidates, pivotPoint, settings.pivotMode],
   );
 
+  // The frame loop gates on the window's OS focus; keep it tracked while this
+  // controller is mounted (released on unmount).
+  React.useEffect(() => retainWindowFocus(), []);
+
   // When SpaceMouse is turned off, ensure OrbitControls is re-enabled.
   React.useEffect(() => {
     if (settings.enabled) return;
@@ -295,10 +300,10 @@ export function SpaceMouseController({
     // Ignore SpaceMouse input unless our window is the active/focused window.
     // The Gamepad API keeps reporting axis values for background windows on
     // Windows, macOS, and Linux, which would otherwise let the SpaceMouse drive
-    // the camera while another app is in front. document.hasFocus() (unlike
-    // document.hidden / visibilitychange) is false whenever the window is not
-    // active, even while it remains visible.
-    if (typeof document !== 'undefined' && typeof document.hasFocus === 'function' && !document.hasFocus()) {
+    // the camera while another app is in front. `windowFocus` follows the OS
+    // window event, so it is false for as long as another application is active,
+    // even while this window stays visible.
+    if (!getWindowFocused()) {
       if (isNavigatingRef.current) {
         isNavigatingRef.current = false;
         onNavigationActiveChange?.(false);

@@ -4338,6 +4338,9 @@ fn main() {
                         }
                     }
                     window_state::track(&window);
+                    // Keep navlib's `active` / `focus` in step with the window, so
+                    // the driver stops routing the puck to a backgrounded app.
+                    spacemouse::track_window_focus(&window);
 
                     // On macOS, reveal immediately so a frontend startup hiccup
                     // can't leave the app invisible when created as hidden.

@@ -216,6 +216,11 @@ mod nav {
         extents_seq: u64,
         /// navlib exclusive-control signal.
         motion: bool,
+        /// Whether the main window is the OS-active window, as reported by the
+        /// window event loop (`track_window_focus`). Mirrored into navlib's
+        /// `active` / `focus`, which decide whether the driver routes the puck to
+        /// this application at all.
+        focused: bool,
         /// Set when a session starts. The next idle sync takes JS's pushed pose
         /// unconditionally, so a fresh client owns the camera instead of inheriting
         /// the previous session's affine (which snapped the camera on remount).
@@ -237,6 +242,7 @@ mod nav {
                 ortho_max: PointT { x: 10.0, y: 10.0, z: 1000.0 },
                 extents_seq: 0,
                 motion: false,
+                focused: true,
                 claim_pose: false,
             }
         }
@@ -588,10 +594,15 @@ mod nav {
             return Err(format!("NlCreate failed rc=0x{rc:X}"));
         }
 
-        // Mark this instance as the active 3D-mouse target with keyboard focus.
+        // Mark this instance as the 3D-mouse target with keyboard focus, as far as
+        // the driver is concerned: `active` / `focus` are how it decides which
+        // application the puck drives. Report the window's real state (kept by
+        // `set_focus`) rather than claiming both unconditionally — a backgrounded
+        // DragonFruit that still claims them keeps receiving motion it must ignore.
+        let focused = nav_state().lock().map(|s| s.focused).unwrap_or(true);
         unsafe {
-            write_bool(&navlib, handle, P_ACTIVE, true);
-            write_bool(&navlib, handle, P_FOCUS, true);
+            write_bool(&navlib, handle, P_ACTIVE, focused);
+            write_bool(&navlib, handle, P_FOCUS, focused);
         }
 
         // A new session is a new client. The shadow is process-wide and keeps the
@@ -622,6 +633,51 @@ mod nav {
             .map_err(|_| "session lock poisoned".to_string())?;
         *guard = None; // Drop closes the navlib handle.
         Ok(())
+    }
+
+    /// Tell navlib whether DragonFruit is the OS-active window.
+    ///
+    /// `active` / `focus` are how the 3Dconnexion driver decides which
+    /// application the puck drives. They used to be written once at [`start`] and
+    /// never updated, so a backgrounded DragonFruit stayed the 3D-mouse target:
+    /// the driver kept writing motion into this shadow while JS (correctly)
+    /// refused to apply it, and the whole queued pose was replayed as one jump the
+    /// moment the window was refocused.
+    ///
+    /// A focus change also resets the pose handshake in `sync`: the queued pose is
+    /// dropped (`motion = false`) and, on return, JS re-claims the camera
+    /// (`claim_pose`) — navlib then composes its next motion onto the pose the
+    /// user actually sees instead of the one it accumulated in the background.
+    pub fn set_focus(focused: bool) {
+        let mut guard = match session_slot().lock() {
+            Ok(guard) => guard,
+            Err(_) => return,
+        };
+        let Some(session) = guard.as_mut() else {
+            // No session yet: record it so the next `start` reports the truth.
+            if let Ok(mut s) = nav_state().lock() {
+                s.focused = focused;
+            }
+            return;
+        };
+        match nav_state().lock() {
+            Ok(mut s) => {
+                if s.focused == focused {
+                    return;
+                }
+                s.focused = focused;
+                s.motion = false;
+                if focused {
+                    s.claim_pose = true;
+                }
+            }
+            Err(_) => return,
+        }
+        unsafe {
+            write_bool(&session.navlib, session.handle, P_ACTIVE, focused);
+            write_bool(&session.navlib, session.handle, P_FOCUS, focused);
+        }
+        nav_log!("[spacemouse] window focus -> {focused}");
     }
 
     /// One frame of the bridge: fold in JS's current camera, then return navlib's
@@ -706,6 +762,23 @@ pub fn spacemouse_native_stop() -> Result<(), String> {
     {
         Ok(())
     }
+}
+
+/// Forward the main window's focus changes to the navlib bridge.
+///
+/// Registered once at startup beside `window_state::track` — the runtime keeps
+/// window-event listeners in a map, so a second `on_window_event` is fine. A
+/// no-op where navlib does not exist (see [`nav::set_focus`] for why the driver
+/// needs to know).
+pub fn track_window_focus<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    window.on_window_event(|event| {
+        if let tauri::WindowEvent::Focused(focused) = event {
+            nav::set_focus(*focused);
+        }
+    });
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let _ = window;
 }
 
 /// One frame of the JS<->navlib camera bridge: push the current three.js camera,

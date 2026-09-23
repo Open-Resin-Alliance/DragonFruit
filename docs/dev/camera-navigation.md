@@ -135,6 +135,33 @@ frame** — it would pathfind continuously as the camera moves. `SceneCanvas` se
 It re-routes once navigation stops. Mouse navigation needs no such gate because
 its picking is paused, so no new hover arrives.
 
+### Focus gating
+
+SpaceMouse input is ignored unless DragonFruit's window is the OS-active window —
+for as long as another application is in front, not merely while the window is
+hidden. Both paths gate on the same fact, and they must agree:
+
+- `src/components/scene/camera/windowFocus.ts` is the frontend's source
+  (`getWindowFocused`), fed by Tauri's `onFocusChanged` — the OS window event —
+  with the webview's own focus/blur as the fallback outside the shell. Both
+  controllers retain it while mounted and return early on it in their frame loop.
+- The native bridge tells navlib the same thing: `spacemouse::track_window_focus`
+  forwards `WindowEvent::Focused` to `nav::set_focus`, which writes navlib's
+  `active` / `focus` properties. Those are how the driver decides which
+  application the puck drives at all, so claiming them unconditionally — as the
+  session used to at `start` — leaves a backgrounded DragonFruit receiving motion
+  it then has to ignore.
+
+A focus change also resets the pose handshake, because navlib keeps writing poses
+while nobody is applying them. `nav::set_focus` clears `motion` and re-claims the
+camera on return (`claim_pose`, the same mechanism a fresh session uses), and the
+controller consumes every output produced at or before its first sync after
+refocus without applying it (`resyncFromGenRef`), recording that output's `seq` /
+`extentsSeq` as consumed. Drop either half and the queued pose is replayed as a
+single jump the moment the window is refocused — and, because the ownership
+handshake keys off the last applied `seq`, JS then stops being able to re-assert
+its own camera while navlib is idle.
+
 ## Tests
 
 `src/components/scene/camera/__tests__/orthoDolly.test.ts` covers the frustum

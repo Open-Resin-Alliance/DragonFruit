@@ -23,6 +23,7 @@ import {
   orthoAspectOf,
   resolveOrthoNavRadius,
 } from './orthoDolly';
+import { getWindowFocused, retainWindowFocus } from './windowFocus';
 
 type OrbitLikeControls = {
   target: THREE.Vector3;
@@ -112,6 +113,14 @@ export function NativeSpaceMouseController({
   const navPrevEyeRef = React.useRef(new THREE.Vector3());
   // Set when a frame looks like navlib's Fit; the app's focus is run for it.
   const fitRequestedRef = React.useRef(false);
+  // Pose-ownership generations. `syncGenRef` counts pushes; `latestOutGenRef`
+  // stamps the output they returned. `resyncFromGenRef` marks the first push
+  // after the window regained focus — outputs at or before it were produced while
+  // we were not listening, and are consumed without being applied (see the frame
+  // loop).
+  const syncGenRef = React.useRef(0);
+  const latestOutGenRef = React.useRef(0);
+  const resyncFromGenRef = React.useRef(0);
   // Cached model extents + refresh counter.
   const modelBoxRef = React.useRef(new THREE.Box3());
   const modelBoxAgeRef = React.useRef(MODEL_EXTENTS_REFRESH_FRAMES);
@@ -136,6 +145,10 @@ export function NativeSpaceMouseController({
       weDisabledOrbitRef.current = false;
     };
   }, [settings.enabled]);
+
+  // The frame loop gates on the window's OS focus; keep it tracked while this
+  // controller is mounted (released on unmount).
+  React.useEffect(() => retainWindowFocus(), []);
 
   const getTarget = React.useCallback(
     (out: THREE.Vector3): THREE.Vector3 => {
@@ -387,14 +400,19 @@ export function NativeSpaceMouseController({
     if (!getNativeSpaceMouseActive() || !settings.enabled) return;
     if (!isOrbitLikeControls(controls)) return;
 
-    // Ignore SpaceMouse input unless our window is the active/focused window —
-    // mirrors SpaceMouseController's Gamepad-path guard. The 3Dconnexion driver
-    // keeps tracking the puck for background windows, so without this navlib
-    // would drive our camera while another app is in front. document.hasFocus()
-    // (unlike document.hidden / visibilitychange) is false whenever the window
-    // is not active, even while it stays visible. While unfocused we neither
-    // apply navlib's pose nor push ours to it, and we cleanly hand orbit back.
-    if (typeof document !== 'undefined' && typeof document.hasFocus === 'function' && !document.hasFocus()) {
+    // Ignore SpaceMouse input unless our window is the active/focused window.
+    // The 3Dconnexion driver keeps tracking the puck for background windows, so
+    // without this navlib would drive our camera while another app is in front.
+    // `windowFocus` follows the OS window event (the same one the Rust bridge
+    // mirrors into navlib's `active`/`focus`), so it is false for as long as
+    // another application is active, even while this window stays visible. While
+    // unfocused we neither apply navlib's pose nor push ours to it, and we
+    // cleanly hand orbit back.
+    if (!getWindowFocused()) {
+      // Everything navlib writes from here until we are back is produced for a
+      // window that is not listening; the first sync after focus returns is
+      // consumed without being applied (see `resyncFromGenRef`).
+      resyncFromGenRef.current = syncGenRef.current + 1;
       if (prevMotionRef.current) {
         prevMotionRef.current = false;
         onNavigationActiveChange?.(false);
@@ -405,7 +423,19 @@ export function NativeSpaceMouseController({
 
     // 1. Apply navlib's latest camera (from the previous frame's sync).
     const out = latestOutRef.current;
-    if (out) {
+    if (out && latestOutGenRef.current <= resyncFromGenRef.current) {
+      // Produced at or before the first sync after the window regained focus.
+      // navlib kept writing poses while we were not listening, and the Rust bridge
+      // dropped its ownership of them (see `nav::set_focus`). Record them as
+      // consumed without moving the camera: applying one would replay everything
+      // the puck did while another application was in front as a single jump, and
+      // — because the ownership handshake keys off the last applied `seq` —
+      // leaving it unconsumed would stop JS re-asserting its own camera while
+      // navlib is idle.
+      lastAppliedSeqRef.current = out.seq;
+      lastAppliedExtentsSeqRef.current = out.extentsSeq;
+      prevMotionRef.current = false;
+    } else if (out) {
       const motionStarting = out.motion && !prevMotionRef.current;
       const motionEnding = !out.motion && prevMotionRef.current;
 
@@ -478,9 +508,13 @@ export function NativeSpaceMouseController({
     if (!inFlightRef.current) {
       inFlightRef.current = true;
       const cam = buildCameraInput();
+      const gen = syncGenRef.current + 1;
+      syncGenRef.current = gen;
       nativeSpaceMouseSync(cam)
         .then((res) => {
-          if (res) latestOutRef.current = res;
+          if (!res) return;
+          latestOutRef.current = res;
+          latestOutGenRef.current = gen;
         })
         .finally(() => {
           inFlightRef.current = false;
