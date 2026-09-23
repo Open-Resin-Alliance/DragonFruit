@@ -158,7 +158,17 @@ test('the worker produces the same plan as an in-process run', () => {
     assert.deepEqual(inWorker.result.placed, inProcess.result.placed, 'per-type counts match');
     assert.deepEqual(inWorker.result.rejectedCandidates, inProcess.result.rejectedCandidates);
     assert.equal(shape(inWorker.support), shape(inProcess.support), 'the committed support state is identical');
-    assert.equal(shape(inWorker.analytics), shape(inProcess.analytics), 'analytics match, coverage included');
+
+    // Timings are wall-clock, so they never match between two runs: compare the
+    // analytics without them, and the phase list separately.
+    const withoutTimings = ({ timings: _timings, ...rest }: typeof inProcess.analytics) => rest;
+    assert.equal(shape(withoutTimings(inWorker.analytics)), shape(withoutTimings(inProcess.analytics)),
+        'analytics match, coverage included');
+    assert.deepEqual(
+        inWorker.analytics.timings?.phases.map((phase) => phase.label),
+        inProcess.analytics.timings?.phases.map((phase) => phase.label),
+        'both paths time the same phases',
+    );
 });
 
 test('the worker plan survives the wire: cloned payload, plain-object islands', () => {

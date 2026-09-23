@@ -286,6 +286,69 @@ test('runAutoPlace grids a huge steep flat the self-support angle calls self-sup
     disposeHandlers();
 });
 
+test('a run reports where its time went', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+    initializeBVH();
+
+    const geometry = new THREE.BoxGeometry(20, 20, 20);
+    geometry.rotateX(THREE.MathUtils.degToRad(30));
+    geometry.translate(0, 0, 20);
+    accelerateGeometry(geometry);
+    const mesh = new THREE.Mesh(geometry);
+    mesh.updateMatrixWorld();
+    setModelMesh('model-a', mesh);
+
+    const contactVoxels: { x: number; y: number; z?: number }[] = [];
+    for (let x = -10; x <= 10; x += 0.25) {
+        for (let y = -3.66; y <= 13.66; y += 0.25) {
+            contactVoxels.push({ x, y, z: 0.577 * y + 8.45 });
+        }
+    }
+    const facet: DetectedIsland = {
+        id: 'o0',
+        source: 'overhang',
+        contact: new THREE.Vector3(0, 5, 11.33),
+        baseZ: 6.34,
+        areaMm2: 400 * (Math.sqrt(3) / 2),
+        surfaceNormal: { x: 0, y: 0.5, z: -Math.sqrt(3) / 2 },
+        triangleIds: [10, 11],
+        contactVoxels: footprintFromPoints(contactVoxels),
+    };
+
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => { logs.push(args.join(' ')); };
+    let result: ReturnType<typeof runAutoPlace>;
+    try {
+        result = runAutoPlace([facet], 'model-a', { debugSkipAutoBracing: true, stabilizationEnabled: false });
+    } finally {
+        console.log = originalLog;
+    }
+
+    const timings = result.analytics?.timings;
+    assert.ok(timings, 'the run reports timings');
+    assert.ok(timings.totalMs > 0, `total is measured (got ${timings.totalMs})`);
+
+    // The coarse breakdown, in the order the pipeline runs it.
+    const labels = timings.phases.map((phase) => phase.label);
+    const expected = [
+        'candidates', 'dedup', 'support-filter', 'placement', 'consolidation', 'gap-fill',
+        'analytics', 'fanning', 'surface-coverage', 'resize', 'report', 'bracing',
+    ];
+    assert.deepEqual(labels, expected, 'every phase is timed, in order');
+    assert.ok(timings.phases.every((phase) => phase.durationMs >= 0), 'durations are real numbers');
+
+    const line = logs.find((entry) => entry.includes('[AutoSupport] Timing:'));
+    assert.ok(line, `the breakdown reaches the log (got ${logs.filter((l) => l.includes('Timing')).length} timing lines)`);
+    assert.ok(line.includes('placement'), 'and it names the phases');
+
+    setModelMesh('model-a', null);
+    disposeHandlers();
+});
+
 test('elevated small overhang routes a trunk around the body instead of a culled pillar', () => {
     const cleanup = elevatedJawScenario(false);
     cleanup();

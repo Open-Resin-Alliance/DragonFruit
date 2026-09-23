@@ -133,6 +133,42 @@ Every builder the run calls takes the band through `SizeOverrides` — trunk, br
 - **Gridless runs still merge**: candidates within `GRIDLESS_MERGE_RADIUS_MM` (4 mm) of an existing trunk join it. Among in-radius hosts, `findMergeHost` ranks by distance plus `MERGE_HOST_LOAD_WEIGHT` (0.5) × longest already-hosted member span — nearer wins, but merges avoid piling long members onto one plate anchor (Dumas gain shape). No hosted members → pure nearest-first.
 - **Trunk routing is one diagonal and one drop, and the cone follows the shaft.** Placement goes through `calculateSmartPlacementV3` (`PlacementLogicV3/SmartPlacementV3.ts`), whose entire search is `EscapeJointSearch`: walk outward from the socket along a 45° ray in each candidate direction until the column below clears and the roots volume fits, then stop, so the trunk is a single diagonal, a single joint, and a vertical load-bearing span. The lean is 45° from vertical and does not escalate: a flatter leg cleared a wide obstacle below the tip by laying a flat member across the gap, which is a strut rather than a support, so a contact the shape cannot serve takes a pillar instead. The joint count stays at one. Multi-joint chains, lattice searches and contour-following routes are gone and should not come back: a vertical pillar is the strongest support, so the router's only job is to find the earliest point where vertical becomes possible and get there in one move. `resolveConeSocketAndAxis` resolves the socket and the cone axis as one decision, so the builder renders the direction the router picked instead of deriving its own, and the socket is placed on that axis. See [Support Pathfinding V3](support-pathfinding-v3.md).
 
+## Timing a run
+
+Every run logs where its time went, one line plus a detail line:
+
+```
+[AutoSupport] Timing: 241ms total — candidates 38ms · dedup 5ms · support-filter 1ms ·
+  placement 67ms · consolidation 70ms · gap-fill 0ms · analytics 15ms · fanning 0ms ·
+  surface-coverage 0ms · resize 15ms · report 1ms · bracing 29ms
+[AutoSupport] Timing detail: trunk:v3-placement 38ms/100x · branch:cone-search 17ms/28x
+```
+
+- Grep `[AutoSupport] Timing:` in `dragonfruit.log`. The phases are the pipeline's
+  own boundaries, in order, so a surprising number is read the same way a
+  profile is: `placement` is the per-candidate loop, `consolidation` is the
+  chunk-tree pass, `bracing` is `buildAutoBracedSnapshot`, and so on.
+- The detail line is the *inner* work the perf module already measures
+  (`trunk:v3-placement`, `branch:cone-search`, `grid:collision-check`, …), summed
+  by label with its call count. Those nest inside the coarse phases, so the two
+  do not add up to the total between them.
+- The same data is on `result.analytics.timings` (`AutoPlaceTimings`), which is
+  what the worker path logs: the worker's own `console` output never reaches the
+  log bridge, so the client prints the timing it got back.
+- A spike line appears when an *inner* operation exceeds its threshold, and it is
+  a *summary*: count, worst, median, top five. On a big model hundreds of
+  placements exceed any per-call threshold, and listing them buried the lines
+  above. The coarse phases are excluded for the same reason; `trunk:v3-placement`
+  carries a 120 ms threshold because a placement is tens of milliseconds by
+  nature, so what is worth seeing is the outlier.
+- In the app, `window.__dfPerf` exposes the same frames interactively
+  (`__dfPerf.summary()`, `__dfPerf.dump()`), installed by `page.tsx`; see
+  [Auto-Support Worker](auto-support-worker.md) for why it is not installed by
+  `pathfindingPerf` itself.
+- One caveat: `perfEndFrame()` closes the frame at the end of a run, so inner
+  measurements taken outside a run (a manual placement) are attributed to the
+  next run's detail line.
+
 ## Settings and reporting
 
 `settings.ts` declares roughly twenty knobs with `AUTO_SUPPORT_CONSTRAINTS` giving each a min/max/step/default — including two debug switches (`debugSupportOriginColors`, `debugSkipAutoBracing`, the latter for faster iteration). Use `normalizeAutoSupportSettings` / `applyAutoSupportSettingsPatch` rather than building the object by hand.

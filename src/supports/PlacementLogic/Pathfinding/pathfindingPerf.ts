@@ -81,7 +81,10 @@ const DEFAULT_CONFIG: PerfConfig = {
     maxHistoryFrames: 120,
     thresholds: {
         'trunk:build': 70,
-        'trunk:v3-placement': 20,
+        // A placement is tens of milliseconds by nature (it walks the model's
+        // distance field); 20 flagged every one of them and buried the run
+        // report under thousands of lines. What is worth seeing is the outlier.
+        'trunk:v3-placement': 120,
         'trunk:build-from-placement': 10,
         'branch:cone-search': 18,
         'grid:attach-search': 15,

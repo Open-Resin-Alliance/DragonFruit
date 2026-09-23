@@ -13,7 +13,7 @@
 import type { DetectedIsland } from '@/volumeAnalysis/Islands/types';
 import { getSettings } from '../Settings/state';
 import { getSnapshot } from '../state';
-import { commitAutoPlacePlan, runAutoPlace } from './autoPlace';
+import { commitAutoPlacePlan, logAutoPlaceTimings, runAutoPlace } from './autoPlace';
 import { getModelMesh } from './meshStore';
 import type { AutoSupportSettings } from './settings';
 import type { AutoPlaceResult, AutoSupportPlan } from './types';
@@ -194,5 +194,11 @@ export async function runAutoPlaceInWorker(
         return runAutoPlace(islands, modelId, settingsOverride);
     }
 
+    // The worker's own logs do not reach `dragonfruit.log`, and the run's
+    // timing breakdown is the whole point of having it: log it here, where the
+    // log bridge can see it.
+    logAutoPlaceTimings(plan?.analytics.timings);
+
     return commitAutoPlacePlan(plan);
 }
+

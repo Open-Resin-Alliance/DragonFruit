@@ -25,11 +25,13 @@ import type { AttachmentKind, CandidatePoint, AutoPlaceResult, AutoPlaceStatus, 
 import { isLedgerKind } from './types';
 import type { Branch, Segment, SupportState, SupportOrigin, Vec3 } from '../types';
 import type { AutoSupportSettings } from './settings';
+import type { AutoPlaceTimings } from './types';
 import { normalizeAutoSupportSettings } from './settings';
 import { activeSizingBand } from './parameterSizing';
 import { generateCandidates, deduplicateCandidates } from './candidateGeneration';
 import { generateGridCandidates, shouldUseDensityGrid } from './gridPlacement';
 import { computeStabilizationAnchors } from './stabilization';
+import { perfEndFrame, perfMark, perfMeasure, type PerfFrame } from '../PlacementLogic/Pathfinding/pathfindingPerf';
 import {
     MAX_GAP_FILL_PASSES,
     buildGapFillCandidates,
@@ -708,6 +710,104 @@ export function buildConsolidationBranch(args: {
 // ---------------------------------------------------------------------------
 // Pipeline helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Phase labels for the run's own timing breakdown. The `auto:` prefix keeps
+ * them apart from the inner placement measurements the perf module already
+ * collects, so one frame carries both the coarse breakdown and the detail.
+ */
+const TIMING_PREFIX = 'auto:';
+
+/** Start timing one of the run's phases. */
+function timingStart(phase: string): void {
+    perfMark(TIMING_PREFIX + phase);
+}
+
+/** End timing one of the run's phases. */
+function timingEnd(phase: string): void {
+    perfMeasure(TIMING_PREFIX + phase, TIMING_PREFIX + phase);
+}
+
+const round1 = (value: number): number => Math.round(value * 10) / 10;
+
+/**
+ * Turn the perf frame into the run's timing summary. Coarse phases keep their
+ * order; the inner labels are summed and sorted by cost, because the question
+ * they answer is "what should I look at first".
+ */
+function collectTimings(frame: PerfFrame | null): AutoPlaceTimings | null {
+    if (!frame) return null;
+
+    const phases: AutoPlaceTimings['phases'] = [];
+    const detailTotals = new Map<string, { durationMs: number; calls: number }>();
+    for (const phase of frame.phases) {
+        if (phase.label.startsWith(TIMING_PREFIX)) {
+            phases.push({ label: phase.label.slice(TIMING_PREFIX.length), durationMs: round1(phase.durationMs) });
+            continue;
+        }
+        const entry = detailTotals.get(phase.label) ?? { durationMs: 0, calls: 0 };
+        entry.durationMs += phase.durationMs;
+        entry.calls += 1;
+        detailTotals.set(phase.label, entry);
+    }
+
+    return {
+        totalMs: round1(frame.totalMs),
+        phases,
+        detail: [...detailTotals]
+            .map(([label, entry]) => ({ label, durationMs: round1(entry.durationMs), calls: entry.calls }))
+            .sort((a, b) => b.durationMs - a.durationMs),
+        // Inner operations only. The coarse phases are tens to hundreds of
+        // milliseconds by nature and would every one of them trip the perf
+        // module's default threshold, which is a spike detector for the inner
+        // work; the summary line is their report.
+        spikes: frame.spikes
+            .filter((spike) => !spike.phase.startsWith(TIMING_PREFIX))
+            .map((spike) => ({
+                label: spike.phase,
+                durationMs: round1(spike.durationMs),
+                thresholdMs: spike.thresholdMs,
+            })),
+    };
+}
+
+/**
+ * One line per run, plus a detail line when the perf module measured anything
+ * inside it. Greppable as `[AutoSupport] Timing:` in `dragonfruit.log`.
+ *
+ * Exported because the worker's own logs do not reach the log bridge: the client
+ * prints the timing the worker returned, with this same formatter.
+ */
+export function logAutoPlaceTimings(timings: AutoPlaceTimings | null | undefined): void {
+    if (!timings) return;
+    const phases = timings.phases
+        .map((phase) => `${phase.label} ${phase.durationMs.toFixed(0)}ms`)
+        .join(' · ');
+    console.log(LOG_PREFIX, `Timing: ${timings.totalMs.toFixed(0)}ms total — ${phases}`);
+
+    if (timings.detail.length > 0) {
+        const detail = timings.detail
+            .slice(0, 8)
+            .map((entry) => `${entry.label} ${entry.durationMs.toFixed(0)}ms/${entry.calls}x`)
+            .join(' · ');
+        console.log(LOG_PREFIX, `Timing detail: ${detail}`);
+    }
+    if (timings.spikes.length > 0) {
+        // Summarized, not listed: a big model produces hundreds of these and the
+        // list buries the lines above it. The distribution is the signal.
+        const worst = timings.spikes.reduce((a, b) => (b.durationMs > a.durationMs ? b : a));
+        const durations = timings.spikes.map((spike) => spike.durationMs).sort((a, b) => a - b);
+        const median = durations[Math.floor(durations.length / 2)];
+        const top = [...timings.spikes]
+            .sort((a, b) => b.durationMs - a.durationMs)
+            .slice(0, 5)
+            .map((spike) => `${spike.label} ${spike.durationMs.toFixed(0)}ms`);
+        console.warn(LOG_PREFIX,
+            `Timing spikes: ${timings.spikes.length} over threshold — worst ${worst.label} ` +
+            `${worst.durationMs.toFixed(0)}ms (threshold ${worst.thresholdMs}ms), median ${median.toFixed(0)}ms · ` +
+            `top: ${top.join(' · ')}`);
+    }
+}
 
 /**
  * Run a single candidate through the standard placement pipeline:
@@ -2479,6 +2579,7 @@ export function computeAutoSupportPlan(
     // ------------------------------------------------------------------
 
     console.log(LOG_PREFIX, `Input: ${islands.length} islands from scan`);
+    timingStart('candidates');
 
     let candidates = generateCandidates(islands, autoSettings, { mesh: resolvedMesh, modelId });
     candidates = candidates.map((c): CandidatePoint => ({ ...c, modelId }));
@@ -2542,6 +2643,8 @@ export function computeAutoSupportPlan(
         return noopPlan(makeResult(emptyPlacedCounts(), 0, false, 'no-candidates'));
     }
 
+    timingEnd('candidates');
+    timingStart('dedup');
     // ------------------------------------------------------------------
     // 2. Deduplicate
     // ------------------------------------------------------------------
@@ -2562,6 +2665,8 @@ export function computeAutoSupportPlan(
     // 2b. Filter out already-supported positions
     // ------------------------------------------------------------------
 
+    timingEnd('dedup');
+    timingStart('support-filter');
     const beforeSupportFilter = candidates.length;
     candidates = filterAlreadySupported(candidates, draft);
     const filteredCandidates = candidates.length;
@@ -2644,6 +2749,9 @@ export function computeAutoSupportPlan(
     // Per-candidate placement, shared by the main pass and the coverage
     // convergence (gap-fill) passes. Each placement advances the local draft
     // (no store commit) so later candidates see earlier supports.
+    timingEnd('support-filter');
+    timingStart('placement');
+
     const placeOne = (candidate: CandidatePoint): string => {
         try {
             const result = placeOneCandidate(candidate, draft, settingsOverride, gridHostIds, resolvedMesh);
@@ -2725,6 +2833,9 @@ export function computeAutoSupportPlan(
     for (const candidate of candidates) {
         placeOne(candidate);
     }
+
+    timingEnd('placement');
+    timingStart('consolidation');
 
     // ── Overhang→tree consolidation (order-independent) ──────────────
     // A BARE overhang-origin trunk (organic Poisson, coverage fill,
@@ -2878,6 +2989,9 @@ export function computeAutoSupportPlan(
         `| fan refusals: ${fmtRefusals(diagnostics.fanRefusals)} | merge refusals: ${fmtRefusals(diagnostics.mergeRefusals)} ` +
         `| consolidation refusals: ${fmtRefusals(conRefusals)}`);
 
+    timingEnd('consolidation');
+    timingStart('gap-fill');
+
     // ── Coverage convergence (gap-fill) ─────────────────────────────
     // Footprint-aware: an overhang region is covered when its projected
     // footprint is covered by tips, not just its centroid. Under-covered
@@ -2910,6 +3024,9 @@ export function computeAutoSupportPlan(
     console.log(LOG_PREFIX,
         `Step 3/3: ${SUPPORT_TYPES.map((d) => `${placed[d.id]}${typeWord(d.id).charAt(0)}`).join(' ')} — ${rejectedCount} rejected ` +
         `| presets: detail=${presets.detail} structure=${presets.structure} anchor=${presets.anchor}`);
+
+    timingEnd('gap-fill');
+    timingStart('analytics');
 
     // ── Coverage analytics ────────────────────────────────────────
     const snapshot = draft;
@@ -3007,6 +3124,9 @@ export function computeAutoSupportPlan(
         `Coverage: ${analytics.islandsCovered}/${islands.length} islands (${(analytics.areaCoverage * 100).toFixed(0)}% of area). ` +
         `${analytics.islandsUncovered} islands uncovered.`);
 
+    timingEnd('analytics');
+    timingStart('fanning');
+
     // ── Post-placement leaf fanning (iterative convergence) ──────────
     const fanRadiusMm = Math.max(MIN_LEAF_FAN_RADIUS_MM, autoSettings.leafFanRadiusMm ?? LEAF_FAN_RADIUS_MM);
     const fanMaxAngleDeg = Math.min(
@@ -3094,6 +3214,9 @@ export function computeAutoSupportPlan(
             break;
         }
     }
+
+    timingEnd('fanning');
+    timingStart('surface-coverage');
 
     // ── Overhang surface coverage ──────────────────────────────────
     // Large flat overhangs need more than one support to distribute
@@ -3252,6 +3375,9 @@ export function computeAutoSupportPlan(
 
     const changed = Object.values(placed).some((count) => count > 0);
 
+    timingEnd('surface-coverage');
+    timingStart('resize');
+
     // ------------------------------------------------------------------
     // 4. Forest resize pass — re-derive every trunk's stepwise diameter
     //    profile from its final attachment tree (a trunk carrying four
@@ -3359,6 +3485,9 @@ export function computeAutoSupportPlan(
                 console.log(LOG_PREFIX, 'Contact cone sync: matched cone bodies to their host shafts.');
             }
 
+            timingEnd('resize');
+            timingStart('report');
+
             // ── Forest Report ───────────────────────────────────────
             // Structured per-run summary: every placed support's id, size,
             // and sizing reasoning, plus the fan-out groups. Shown in the
@@ -3407,6 +3536,9 @@ export function computeAutoSupportPlan(
         }
     }
 
+    timingEnd('report');
+    timingStart('bracing');
+
     // ------------------------------------------------------------------
     // 5. Auto-bracing (draft-only, folded into the plan)
     // ------------------------------------------------------------------
@@ -3427,6 +3559,11 @@ export function computeAutoSupportPlan(
     } else if (changed) {
         console.log(LOG_PREFIX, 'Auto-brace skipped (debug setting).');
     }
+
+    timingEnd('bracing');
+    const timings = collectTimings(perfEndFrame());
+    if (timings) analytics.timings = timings;
+    logAutoPlaceTimings(timings);
 
     const result: AutoPlaceResult = {
         ...makeResult(placed, rejectedCount, changed, 'placed'),
