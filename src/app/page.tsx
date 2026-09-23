@@ -10153,6 +10153,11 @@ export default function Home() {
                 ? islandsPoc.islandMarkers
                 : (islands.overlayEnabled ? islands.islandMarkers : [])
             }
+            islandInstances={
+              scene.mode === 'support'
+                ? islandsPoc.islandInstances
+                : (islands.overlayEnabled ? islands.islandInstances : null)
+            }
             overhangIslands={
               scene.mode === 'support' ? islandsPoc.overhangIslands : []
             }

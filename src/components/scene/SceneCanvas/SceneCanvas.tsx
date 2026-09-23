@@ -17,7 +17,8 @@ import {
   type CrossSectionStencilCapEntry,
 } from '@/components/scene/CrossSectionStencilCap';
 import { IslandOverlay } from '@/components/scene/IslandOverlay';
-import IslandSurfaceDotsOverlay from '@/components/scene/IslandSurfaceDotsOverlay';
+import IslandInstancesOverlay from '@/components/scene/IslandInstancesOverlay';
+import type { IslandInstances } from '@/volumeAnalysis/Islands/islandInstances';
 import { IslandOverhangOverlay } from '@/components/scene/IslandOverhangOverlay';
 import { SupportBlockerOverlay } from '@/features/support-blockers/SupportBlockerOverlay';
 import { useSupportBlockerSceneBindings } from '@/features/support-blockers/useSupportBlockerSceneBindings';
@@ -454,6 +455,7 @@ export function SceneCanvas({
   onCameraChange,
   onCameraEnd,
   islandMarkers,
+  islandInstances,
   overhangIslands,
   overlayBrushRadius,
   overlayColor,
@@ -563,6 +565,8 @@ export function SceneCanvas({
   onCameraChange?: () => void;
   onCameraEnd?: () => void;
   islandMarkers?: IslandMarker[];
+  /** World-space contact footprints to draw as instanced discs. */
+  islandInstances?: IslandInstances | null;
   overhangIslands?: DetectedIsland[];
   overlayBrushRadius?: number;
   overlayColor?: string;
@@ -6142,19 +6146,6 @@ export function SceneCanvas({
                         </group>
                       )}
 
-                      {isActive && (mode === 'support' || mode === 'analysis') && islandMarkers && islandMarkers.length > 0 && (
-                        <IslandSurfaceDotsOverlay
-                          geometry={model.geometry.geometry}
-                          islandMarkers={islandMarkers}
-                          scanBBox={scanBBox || null}
-                          selectedIslandId={overlaySelectedIslandId}
-                          clipLower={clipLower}
-                          clipUpper={clipUpper}
-                          opacity={overlayOpacity ?? 0.9}
-                          transform={transformToUse}
-                        />
-                      )}
-
                       {isActive && (mode === 'support' || mode === 'analysis') && showOverhangs && overhangIslands && overhangIslands.length > 0 && (
                         <IslandOverhangOverlay
                           geometry={model.geometry.geometry}
@@ -7115,6 +7106,20 @@ export function SceneCanvas({
                   selectedIslandId={overlaySelectedIslandId}
                   clipLower={clipLower}
                   clipUpper={clipUpper}
+                />
+              )}
+
+              {/* Island contact footprints. The instance positions are world-space
+                  (the frame the detectors emit), so this must stay OUTSIDE the
+                  model group — mounting it inside would apply the model
+                  transform twice. */}
+              {islandInstances && islandInstances.count > 0 && (mode === 'support' || mode === 'analysis') && (
+                <IslandInstancesOverlay
+                  instances={islandInstances}
+                  selectedIslandId={overlaySelectedIslandId}
+                  clipLower={clipLower}
+                  clipUpper={clipUpper}
+                  opacity={overlayOpacity ?? 0.9}
                 />
               )}
 

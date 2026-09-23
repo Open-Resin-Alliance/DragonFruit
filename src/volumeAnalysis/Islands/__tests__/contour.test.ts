@@ -2,7 +2,7 @@ import { footprintFromPoints } from '@/volumeAnalysis/Islands/voxelFootprint';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { determineContourThreshold, generateContourMarkers, consolidateVoxelIslands } from '../useIslands';
+import { determineContourThreshold, consolidateVoxelIslands } from '../useIslands';
 import type { DetectedIsland } from '../types';
 
 function mockVoxelIsland(id: string, areaMm2: number, contactVoxels?: { x: number; y: number }[]): DetectedIsland {
@@ -16,58 +16,6 @@ function mockVoxelIsland(id: string, areaMm2: number, contactVoxels?: { x: numbe
     contactVoxels: contactVoxels ? footprintFromPoints(contactVoxels) : undefined,
   };
 }
-
-test('generateContourMarkers: returns empty for empty voxels', () => {
-  const markers = generateContourMarkers(footprintFromPoints([]), 0.05, 1, 1.0, 3);
-  assert.equal(markers.length, 0);
-});
-
-test('generateContourMarkers: returns 1 marker for a single voxel', () => {
-  const voxels = [{ x: 0, y: 0 }];
-  const markers = generateContourMarkers(footprintFromPoints(voxels), 0.05, 1, 1.0, 3);
-  assert.equal(markers.length, 1);
-  assert.equal(markers[0].centerX, 0);
-  assert.equal(markers[0].centerY, 0);
-  assert.equal(markers[0].radius, 0.12); // Math.max(0.12, 0.05 * 1.5)
-});
-
-test('generateContourMarkers: covers multiple close voxels with 1 marker', () => {
-  const voxels = [
-    { x: 0, y: 0 },
-    { x: 0.02, y: 0.02 },
-    { x: -0.02, y: -0.02 },
-  ];
-  const markers = generateContourMarkers(footprintFromPoints(voxels), 0.05, 1, 1.0, 3);
-  assert.equal(markers.length, 1);
-});
-
-test('generateContourMarkers: covers distant voxels with multiple markers', () => {
-  const voxels = [
-    { x: 0, y: 0 },
-    { x: 10, y: 10 },
-  ];
-  const markers = generateContourMarkers(footprintFromPoints(voxels), 0.05, 1, 1.0, 3);
-  assert.equal(markers.length, 2);
-});
-
-test('generateContourMarkers: uses large radius for interior core and small radius for boundaries', () => {
-  // Create a 7x7 grid of voxels, centered at 0,0 with spacing 0.05 mm
-  const voxels = [];
-  const px = 0.05;
-  for (let x = -3; x <= 3; x++) {
-    for (let y = -3; y <= 3; y++) {
-      voxels.push({ x: x * px, y: y * px });
-    }
-  }
-
-  const markers = generateContourMarkers(footprintFromPoints(voxels), px, 1, 1.0, 3);
-  // There should be a mix of R_large and R_small markers
-  assert.ok(markers.length > 0);
-  const hasLarge = markers.some(m => m.radius === px * 3.5);
-  const hasSmall = markers.some(m => m.radius === Math.max(0.12, px * 1.5));
-  assert.ok(hasLarge, 'Should place large circles in the interior core');
-  assert.ok(hasSmall, 'Should place small circles on the boundaries');
-});
 
 test('determineContourThreshold: returns empty for no candidate islands', () => {
   const contoured = determineContourThreshold([], 0.05, 20);

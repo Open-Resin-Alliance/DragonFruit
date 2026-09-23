@@ -12,6 +12,8 @@ import {
 } from './filtering';
 import { clusterWalkOrder } from './ordering';
 import { buildIslandPucks, markerIdFor } from './islandPuckMarkers';
+import { buildIslandInstances, VOXEL_DISC_RADIUS_FACTOR, type IslandVisual } from './islandInstances';
+import type { IslandMarker } from '@/volumeAnalysis/IslandScan/islandOverlayLogic';
 import { scanMeshMinima } from './meshMinima';
 import { type DetectedIsland, type TipInfo, type OverhangRegion, type Vec3Loop, SUPPORTED_RADIUS_MM } from './types';
 import { classifyIntersection } from './intersection';
@@ -781,8 +783,10 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     return merged;
   }, [voxelOnlyPucks, minimaOnlyPucks, intersectionPucks, showIntersection, showVoxelOnly]);
 
-  const islandMarkers = useMemo(() => timed('islandMarkers', () => {
-    const markers: any[] = [];
+  // One entry per visible island, shared by the marker list (selection, camera
+  // focus) and the instance buffer (rendering) so the two cannot drift apart.
+  const islandVisuals = useMemo(() => timed('islandVisuals', () => {
+    const visuals: IslandVisual[] = [];
 
     voxelOnlyPucks.markers.forEach(m => {
       const island = voxelOnlyPucks.byMarkerId.get(m.id);
@@ -795,16 +799,29 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
         ? 0.1
         : (scaleMarkersWithArea && area > 0 ? Math.max(0.1, Math.sqrt(area / Math.PI)) : 0.1);
 
-      if (island && !isOverhang && contouredIds.has(island.id) && !isEmptyFootprint(island.contactVoxels)) {
-        const contour = generateContourMarkers(island.contactVoxels!, pxMm, m.id, m.baseZ, consolidateVoxel ? 3 : 0);
-        markers.push(...contour);
-      } else {
-        markers.push({ ...m, radius, type: consolidateVoxel ? 3 : 0, islandId: m.id });
-      }
+      visuals.push({
+        markerId: m.id,
+        type: consolidateVoxel ? 3 : 0,
+        centerX: m.centerX,
+        centerY: m.centerY,
+        baseZ: m.baseZ,
+        radius,
+        // A footprint plate under an overhang would double-render the region
+        // the surface overlay already draws.
+        footprint: isOverhang ? null : island?.contactVoxels ?? null,
+      });
     });
 
     minimaOnlyPucks.markers.forEach(m => {
-      markers.push({ ...m, radius: 0.1, type: 1, islandId: m.id });
+      visuals.push({
+        markerId: m.id,
+        type: 1,
+        centerX: m.centerX,
+        centerY: m.centerY,
+        baseZ: m.baseZ,
+        radius: 0.1,
+        footprint: null,
+      });
     });
 
     intersectionPucks.markers.forEach(m => {
@@ -812,35 +829,62 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
       const area = island?.areaMm2 ?? 0;
       const radius = scaleMarkersWithArea && area > 0 ? Math.max(0.1, Math.sqrt(area / Math.PI)) : 0.1;
 
-      // 1. Generate and push the blue voxel blob (either contoured if binned or a single dot if not) as type 3 if showVoxelOnly is enabled
+      // 1. Blue voxel blob (type 3) when voxel-only display is enabled
       if (showVoxelOnly) {
-        if (island && contouredIds.has(island.id) && !isEmptyFootprint(island.contactVoxels)) {
-          const contourBlue = generateContourMarkers(island.contactVoxels!, pxMm, m.id, m.baseZ, 3);
-          markers.push(...contourBlue);
-        } else {
-          markers.push({ ...m, radius, type: 3, islandId: m.id });
-        }
+        visuals.push({
+          markerId: m.id,
+          type: 3,
+          centerX: m.centerX,
+          centerY: m.centerY,
+          baseZ: m.baseZ,
+          radius,
+          footprint: island?.contactVoxels ?? null,
+        });
       }
 
       // 2. Coincident red dot — only when showIntersection is enabled
       if (showIntersection && island && (!island.supported || filterToggles.showAlreadySupported)) {
-        markers.push({ ...m, radius: 0.1, type: 2, islandId: m.id });
+        visuals.push({
+          markerId: m.id,
+          type: 2,
+          centerX: m.centerX,
+          centerY: m.centerY,
+          baseZ: m.baseZ,
+          radius: 0.1,
+          footprint: null,
+        });
       }
     });
 
-    return markers;
+    return visuals;
   }), [
     voxelOnlyPucks,
     minimaOnlyPucks,
     intersectionPucks,
     consolidateVoxel,
     scaleMarkersWithArea,
-    contouredIds,
     filterToggles,
-    pxMm,
     showVoxelOnly,
     showIntersection,
   ]);
+
+  const islandMarkers = useMemo<IslandMarker[]>(() => timed('islandMarkers', () => (
+    islandVisuals.map(v => ({
+      id: v.markerId,
+      islandId: v.markerId,
+      type: v.type,
+      centerX: v.centerX,
+      centerY: v.centerY,
+      baseZ: v.baseZ,
+      pixelCount: 1,
+      radius: v.radius,
+    }))
+  )), [islandVisuals]);
+
+  const islandInstances = useMemo(
+    () => timed('islandInstances', () => buildIslandInstances(islandVisuals, pxMm * VOXEL_DISC_RADIUS_FACTOR)),
+    [islandVisuals, pxMm],
+  );
 
   const clear = useCallback(() => {
     setVoxelIslands([]);
@@ -1018,6 +1062,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     minimaOnlyPucks,
     intersectionPucks,
     islandMarkers,
+    islandInstances,
     byMarkerId,
     stats,
     pxMm,
@@ -1332,307 +1377,6 @@ export function determineContourThreshold(
   }
 
   return contouredIds;
-}
-
-interface ContourMarker {
-  id: number;
-  centerX: number;
-  centerY: number;
-  baseZ: number;
-  pixelCount: number;
-  radius: number;
-  type: number;
-  islandId: number;
-}
-
-/**
- * Contours are a pure function of an island's own voxels and the four scalars
- * below — never of the support tips, the visibility toggles or the other
- * islands. But they were being regenerated inside the marker memo, so flipping
- * any island checkbox re-contoured every island from scratch.
- *
- * Keyed by the voxel array's identity so a rescan invalidates naturally: a new
- * scan produces new arrays, and the old entries die with them. Island ids alone
- * would be unsafe, since a rescan reuses them for different geometry.
- */
-const contourCache = new WeakMap<VoxelFootprint, Map<string, ContourMarker[]>>();
-
-export function generateContourMarkers(
-  voxels: VoxelFootprint,
-  pxMm: number,
-  islandId: number,
-  baseZ: number,
-  type: number
-): ContourMarker[] {
-  if (voxels.count === 0) return [];
-
-  const variantKey = `${pxMm}|${islandId}|${baseZ}|${type}`;
-  let variants = contourCache.get(voxels);
-  const cached = variants?.get(variantKey);
-  // Copied out: at most 30 markers, and callers are free to mutate what they
-  // get without corrupting the cache.
-  if (cached) return cached.map((marker) => ({ ...marker }));
-
-  const markers = computeContourMarkers(voxels, pxMm, islandId, baseZ, type);
-
-  if (!variants) {
-    variants = new Map();
-    contourCache.set(voxels, variants);
-  }
-  variants.set(variantKey, markers);
-
-  return markers.map((marker) => ({ ...marker }));
-}
-
-function computeContourMarkers(
-  voxels: VoxelFootprint,
-  pxMm: number,
-  islandId: number,
-  baseZ: number,
-  type: number
-): ContourMarker[] {
-  const markers: ContourMarker[] = [];
-
-  const R_small = Math.max(0.12, pxMm * 1.5);
-  const R_large = pxMm * 3.5;
-  const R_small2 = R_small * R_small;
-  const R_large2 = R_large * R_large;
-
-  // Map voxels to a coordinate lookup Set for classification. Numeric keys, not
-  // `"gx,gy"` strings: this Set is probed nine times per voxel just below, and
-  // each template literal would allocate a rope string destined straight for the
-  // garbage collector.
-  const voxelSet = new Set<number>();
-  for (let i = 0; i < voxels.count; i++) {
-    voxelSet.add(cellKey(Math.round(footprintX(voxels, i) / pxMm), Math.round(footprintY(voxels, i) / pxMm)));
-  }
-
-  // Classify into interior vs boundary
-  const classified = Array.from({ length: voxels.count }, (_, i) => {
-    const vx = footprintX(voxels, i);
-    const vy = footprintY(voxels, i);
-    const gx = Math.round(vx / pxMm);
-    const gy = Math.round(vy / pxMm);
-    let isInterior = true;
-    for (let dx = -1; dx <= 1; dx++) {
-      for (let dy = -1; dy <= 1; dy++) {
-        if (dx === 0 && dy === 0) continue;
-        if (!voxelSet.has(cellKey(gx + dx, gy + dy))) {
-          isInterior = false;
-          break;
-        }
-      }
-      if (!isInterior) break;
-    }
-    return {
-      x: vx,
-      y: vy,
-      isInterior,
-      covered: false,
-      // Filled in with the bucket keys below, so marking a voxel covered can
-      // decrement the per-bucket tallies instead of forcing a rescan.
-      largeKey: 0,
-      smallKey: 0,
-    };
-  });
-
-  // Build spatial grid with cell size = R_small for O(1) coverage marking
-  const cellSize = R_small;
-  const grid = new Map<number, typeof classified[number][]>();
-  for (const v of classified) {
-    const cx = Math.floor(v.x / cellSize);
-    const cy = Math.floor(v.y / cellSize);
-    const key = cellKey(cx, cy);
-    let list = grid.get(key);
-    if (!list) {
-      list = [];
-      grid.set(key, list);
-    }
-    list.push(v);
-  }
-
-  /**
-   * Uncovered voxels per placement bucket, kept current as coverage spreads.
-   *
-   * Choosing where to put the next marker means finding the bucket with the
-   * most uncovered voxels. Recomputing that by walking every voxel on every
-   * step cost up to forty-five full passes over the island — 11 seconds of
-   * frozen UI across a model's islands. Maintaining the tallies turns each
-   * step into a walk over buckets, of which there are orders of magnitude
-   * fewer.
-   */
-  const largeUncovered = new Map<number, number>();
-  const smallUncovered = new Map<number, number>();
-
-  function decrementBucket(tally: Map<number, number>, key: number): void {
-    const count = tally.get(key);
-    if (count === undefined) return;
-    if (count <= 1) tally.delete(key);
-    else tally.set(key, count - 1);
-  }
-
-  /** Bucket key with the highest tally, or null when everything is covered. */
-  function bestBucket(tally: Map<number, number>): { key: number; count: number } | null {
-    let bestKey: number | null = null;
-    let bestCount = 0;
-    for (const [key, count] of tally) {
-      if (count > bestCount) {
-        bestCount = count;
-        bestKey = key;
-      }
-    }
-    return bestKey === null ? null : { key: bestKey, count: bestCount };
-  }
-
-  // Helper to mark voxels as covered within a radius in O(1) time
-  function markCovered(centerX: number, centerY: number, radius: number): number {
-    const r2 = radius * radius;
-    const cxStart = Math.floor((centerX - radius) / cellSize);
-    const cxEnd = Math.floor((centerX + radius) / cellSize);
-    const cyStart = Math.floor((centerY - radius) / cellSize);
-    const cyEnd = Math.floor((centerY + radius) / cellSize);
-
-    let newlyCovered = 0;
-    for (let cx = cxStart; cx <= cxEnd; cx++) {
-      for (let cy = cyStart; cy <= cyEnd; cy++) {
-        const list = grid.get(cellKey(cx, cy));
-        if (!list) continue;
-        for (const v of list) {
-          if (v.covered) continue;
-          const dx = v.x - centerX;
-          const dy = v.y - centerY;
-          if (dx * dx + dy * dy <= r2) {
-            v.covered = true;
-            newlyCovered++;
-            decrementBucket(largeUncovered, v.largeKey);
-            decrementBucket(smallUncovered, v.smallKey);
-          }
-        }
-      }
-    }
-    return newlyCovered;
-  }
-
-  let uncoveredCount = classified.length;
-  let subId = 0;
-  const maxTotalMarkers = 30;
-  const maxLargeMarkers = 15;
-
-  // Pass 1: Place large circles centered on uncovered interior voxels using large cells
-  const largeGrid = new Map<number, typeof classified[number][]>();
-  for (const v of classified) {
-    if (!v.isInterior) continue;
-    const cx = Math.floor(v.x / R_large);
-    const cy = Math.floor(v.y / R_large);
-    const key = cellKey(cx, cy);
-    let list = largeGrid.get(key);
-    if (!list) {
-      list = [];
-      largeGrid.set(key, list);
-    }
-    list.push(v);
-    v.largeKey = key;
-    largeUncovered.set(key, (largeUncovered.get(key) ?? 0) + 1);
-  }
-
-  for (let step = 0; step < maxLargeMarkers; step++) {
-    const best = bestBucket(largeUncovered);
-    if (best === null) {
-      break;
-    }
-
-    const list = largeGrid.get(best.key)!;
-    let sumX = 0;
-    let sumY = 0;
-    let count = 0;
-    for (const v of list) {
-      if (!v.covered) {
-        sumX += v.x;
-        sumY += v.y;
-        count++;
-      }
-    }
-
-    const centerX = sumX / count;
-    const centerY = sumY / count;
-
-    markers.push({
-      id: islandId + subId / 10000.0,
-      centerX,
-      centerY,
-      baseZ,
-      pixelCount: 1,
-      radius: R_large,
-      type,
-      islandId,
-    });
-    subId++;
-
-    const coveredNum = markCovered(centerX, centerY, R_large);
-    uncoveredCount -= coveredNum;
-    if (uncoveredCount <= 0) break;
-  }
-
-  // Pass 2: Place small circles centered on uncovered voxels using small cells
-  const smallGrid = new Map<number, typeof classified[number][]>();
-  for (const v of classified) {
-    const cx = Math.floor(v.x / R_small);
-    const cy = Math.floor(v.y / R_small);
-    const key = cellKey(cx, cy);
-    let list = smallGrid.get(key);
-    if (!list) {
-      list = [];
-      smallGrid.set(key, list);
-    }
-    list.push(v);
-    v.smallKey = key;
-    // Built after the large pass has already covered part of the island, so
-    // only voxels still uncovered may count towards the tally.
-    if (!v.covered) {
-      smallUncovered.set(key, (smallUncovered.get(key) ?? 0) + 1);
-    }
-  }
-
-  const maxSmallSteps = maxTotalMarkers - markers.length;
-  for (let step = 0; step < maxSmallSteps; step++) {
-    const best = bestBucket(smallUncovered);
-    if (best === null) {
-      break;
-    }
-
-    const list = smallGrid.get(best.key)!;
-    let sumX = 0;
-    let sumY = 0;
-    let count = 0;
-    for (const v of list) {
-      if (!v.covered) {
-        sumX += v.x;
-        sumY += v.y;
-        count++;
-      }
-    }
-
-    const centerX = sumX / count;
-    const centerY = sumY / count;
-
-    markers.push({
-      id: islandId + subId / 10000.0,
-      centerX,
-      centerY,
-      baseZ,
-      pixelCount: 1,
-      radius: R_small,
-      type,
-      islandId,
-    });
-    subId++;
-
-    const coveredNum = markCovered(centerX, centerY, R_small);
-    uncoveredCount -= coveredNum;
-    if (uncoveredCount <= 0) break;
-  }
-
-  return markers;
 }
 
 interface IslandGridEntry {

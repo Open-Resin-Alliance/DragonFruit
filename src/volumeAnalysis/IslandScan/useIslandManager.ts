@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { runIslandScan, runScanlineScan, type ScanResults } from './ScanOrchestrator';
 import { runIslandScanNative } from './nativeIslandScan';
 import { computeIslandMarkers, type IslandMarker } from './islandOverlayLogic';
+import { buildIslandInstances, VOXEL_DISC_RADIUS_FACTOR } from '@/volumeAnalysis/Islands/islandInstances';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 
@@ -200,9 +201,28 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
     return raw.map(m => {
       const area = m.pixelCount * pxMm * pxMm;
       const radius = area > 0 ? Math.max(0.1, Math.sqrt(area / Math.PI)) : 0.1;
-      return { ...m, radius, type: 0, islandId: m.id } as any;
+      return { ...m, radius, type: 0, islandId: m.id };
     });
   }, [scanData, scanBBox, layerHeightMm, overlayTaper, pxMm]);
+
+  // Drawable form of the same set for the instanced overlay. This scan keeps
+  // its islands as markers rather than contact footprints, so each island is
+  // one disc at its contact point.
+  const islandInstances = useMemo(
+    () => buildIslandInstances(
+      islandMarkers.map((m) => ({
+        markerId: m.id,
+        type: 0,
+        centerX: m.centerX,
+        centerY: m.centerY,
+        baseZ: m.baseZ,
+        radius: m.radius ?? 0.1,
+        footprint: null,
+      })),
+      pxMm * VOXEL_DISC_RADIUS_FACTOR,
+    ),
+    [islandMarkers, pxMm],
+  );
 
   // Clear scan data (e.g. on rotation)
   const clearScanData = useCallback(() => {
@@ -240,6 +260,7 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
     voxelShowMerged, setVoxelShowMerged,
     voxelShowTerritory, setVoxelShowTerritory,
     islandMarkers,
+    islandInstances,
     onRunIslandScan,
     onRunScanlineScan,
     onRunNativeIslandScan,
