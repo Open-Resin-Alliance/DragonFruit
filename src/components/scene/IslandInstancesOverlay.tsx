@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
-import { useFrame } from '@react-three/fiber';
+import { useFrame, useThree } from '@react-three/fiber';
 import { useHoveredIslandId } from '@/volumeAnalysis/Islands/hoverStore';
 import { type IslandInstances } from '@/volumeAnalysis/Islands/islandInstances';
 
@@ -16,6 +16,11 @@ import { type IslandInstances } from '@/volumeAnalysis/Islands/islandInstances';
  * in the fragment shader. The whole island set is one draw call, nothing is
  * capped, and the per-fragment cost is constant regardless of how many islands
  * are on screen.
+ *
+ * A disc never draws smaller than `MIN_SCREEN_RADIUS_CSS_PX`: a contact voxel is
+ * a fraction of a millimetre across, so zooming out walks it under a pixel and
+ * a quad that covers no fragment centre draws nothing at all, dropping whole
+ * islands out of the frame instead of shrinking them.
  *
  * The instance positions are world-space (the frame the detectors emit and
  * `StlMesh` places the model in), so this MUST be mounted at the scene root
@@ -41,6 +46,8 @@ const VERTEX_SHADER = `
   attribute vec2 aMeta;         // markerId, type
 
   uniform float uSelectedIslandId;
+  uniform vec2 uViewportPx;     // drawing buffer size, device pixels
+  uniform float uMinScreenRadiusPx;
 
   varying vec2 vDisc;
   varying float vMarkerId;
@@ -61,8 +68,30 @@ const VERTEX_SHADER = `
     }
     #endif
 
-    vec3 center = aCenterRadius.xyz + vec3(position.xy * aCenterRadius.w, 0.0);
-    vec4 mvPosition = viewMatrix * modelMatrix * vec4(center, 1.0);
+    vec3 center = aCenterRadius.xyz;
+    float radius = aCenterRadius.w;
+
+    vec4 centerClip = projectionMatrix * viewMatrix * modelMatrix * vec4(center, 1.0);
+
+    // Keep a disc on screen once its world radius projects below a couple of
+    // pixels. A contact voxel is a fraction of a millimetre across, so zooming
+    // out walks it under a pixel, and a quad that covers no fragment centre
+    // draws nothing at all: the island pops out entirely rather than shrinking.
+    //
+    // The probe offset is the camera's right axis rather than the disc's own
+    // plane. It is always perpendicular to the view, so the measured
+    // pixels-per-mm cannot collapse to zero and the grow factor stays bounded —
+    // measured in the disc's plane, an edge-on plate would divide by ~0 and
+    // inflate the quad across the screen.
+    vec3 cameraRight = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
+    vec4 probeClip = projectionMatrix * viewMatrix * modelMatrix * vec4(center + cameraRight * radius, 1.0);
+    vec2 centerNdc = centerClip.xy / centerClip.w;
+    vec2 probeNdc = probeClip.xy / probeClip.w;
+    float radiusPx = length(probeNdc - centerNdc) * 0.5 * uViewportPx.y;
+    float grow = max(1.0, uMinScreenRadiusPx / max(radiusPx, 1e-6));
+
+    vec4 worldPos = modelMatrix * vec4(center + vec3(position.xy * radius * grow, 0.0), 1.0);
+    vec4 mvPosition = viewMatrix * worldPos;
     gl_Position = projectionMatrix * mvPosition;
 
     #include <clipping_planes_vertex>
@@ -127,6 +156,19 @@ const FRAGMENT_SHADER = `
   }
 `;
 
+/**
+ * On-screen radius, in CSS pixels, that a contact voxel's disc never shrinks
+ * below. A footprint disc is a fraction of a millimetre across (half the scan
+ * pixel size), so at anything but a close view it projects under a pixel and the
+ * quad covers no fragment centre: the island does not get smaller, it drops out
+ * of the frame entirely as the camera pulls back.
+ *
+ * Two pixels keeps a dot legible and gives the fragment stage enough samples for
+ * its own antialiasing to resolve, while staying small enough that islands keep
+ * reading as their detected area where they are big enough to.
+ */
+const MIN_SCREEN_RADIUS_CSS_PX = 2;
+
 /** World bounds of the whole instance set, so frustum culling can drop it. */
 function instanceBounds(instances: IslandInstances): THREE.Sphere {
   const data = instances.centerRadius;
@@ -166,6 +208,7 @@ export function IslandInstancesOverlay({
   clipUpper,
   opacity = 0.9,
 }: IslandInstancesOverlayProps) {
+  const gl = useThree((state) => state.gl);
   const hoveredIslandId = useHoveredIslandId();
 
   const clippingPlanes = useMemo(() => {
@@ -200,6 +243,8 @@ export function IslandInstancesOverlay({
       uTime: { value: 0 },
       uSelectedIslandId: { value: selectedIslandId ?? -1 },
       uHoveredIslandId: { value: hoveredIslandId ?? -1 },
+      uViewportPx: { value: new THREE.Vector2(1, 1) },
+      uMinScreenRadiusPx: { value: MIN_SCREEN_RADIUS_CSS_PX },
     }),
     // Mutated in place below; a stable identity keeps the materials compiled.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -211,6 +256,18 @@ export function IslandInstancesOverlay({
     uniforms.uSelectedIslandId.value = selectedIslandId ?? -1;
     uniforms.uHoveredIslandId.value = hoveredIslandId ?? -1;
   }, [uniforms, opacity, selectedIslandId, hoveredIslandId]);
+
+  // Device pixels, because that is what rasterization coverage is counted in.
+  // The floor itself is expressed in CSS pixels so it renders the same size at
+  // any device pixel ratio.
+  const dpr = useThree((state) => state.viewport.dpr);
+  const size = useThree((state) => state.size);
+  useLayoutEffect(() => {
+    const drawingBuffer = new THREE.Vector2();
+    gl.getDrawingBufferSize(drawingBuffer);
+    uniforms.uViewportPx.value.copy(drawingBuffer);
+    uniforms.uMinScreenRadiusPx.value = MIN_SCREEN_RADIUS_CSS_PX * dpr;
+  }, [gl, size, dpr, uniforms]);
 
   const timerRef = useRef(new THREE.Timer());
   useFrame(() => {
