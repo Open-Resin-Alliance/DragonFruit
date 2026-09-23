@@ -21,6 +21,7 @@ import {
 } from './jointDragRuntime';
 import { commitJointDragSupport, computeJointDragSupportPreview, JOINT_DRAG_COMMIT_TYPES, JOINT_DRAG_HOSTED_SHAFT_TYPES, publishJointDragSupportPreview, shouldCommitJointDrag } from './jointDragController';
 import { subscribeSupportInteractionReset } from '../../interaction/supportInteractionReset';
+import { setPickRayFromCamera } from '@/components/scene/camera/pickRay';
 
 /**
  * Hook to handle joint interaction (dragging/moving).
@@ -433,7 +434,7 @@ export function useJointInteraction(enabled: boolean = true) {
                 dragPlane.current.setFromNormalAndCoplanarPoint(normal, jointVec);
 
                 // Calculate offset (where we clicked relative to joint center)
-                raycaster.setFromCamera(pointer, camera);
+                setPickRayFromCamera(raycaster, pointer, camera);
                 const intersection = new THREE.Vector3();
                 const intersected = raycaster.ray.intersectPlane(dragPlane.current, intersection);
 
@@ -605,7 +606,7 @@ export function useJointInteraction(enabled: boolean = true) {
         jointDragUpdatePendingRef.current = false;
 
         if (activeJointId.current && activeSupport.current) {
-            raycaster.setFromCamera(pointer, camera);
+            setPickRayFromCamera(raycaster, pointer, camera);
             const intersection = planeIntersectionRef.current;
             const intersected = raycaster.ray.intersectPlane(dragPlane.current, intersection);
 

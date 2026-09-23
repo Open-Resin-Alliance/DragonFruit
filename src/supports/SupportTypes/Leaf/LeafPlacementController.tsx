@@ -28,6 +28,7 @@ import { previewVecKey, previewNormalKey, quantizePreviewValue } from '../shared
 import { getClipBounds } from '@/components/scene/SceneCanvas/clipBoundsStore';
 import { findClosestMeshToPoint, calculateSmoothedNormal } from '../../PlacementLogic/PlacementUtils';
 import { markPlacementSurface } from '../../PlacementLogic/placementSurface';
+import { setPickRayFromCamera } from '@/components/scene/camera/pickRay';
 
 interface ShaftHoverDetail {
     segmentId?: string | null;
@@ -198,7 +199,7 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
             return;
         }
 
-        raycaster.setFromCamera(pointer, camera);
+        setPickRayFromCamera(raycaster, pointer, camera);
 
         let currentTipPos = tipPosition;
         let currentNormal = surfaceNormal;

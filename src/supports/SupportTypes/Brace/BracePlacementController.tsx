@@ -30,6 +30,7 @@ import { isSupportEditInteractionActive } from '../../interaction/gizmoInteracti
 import { previewVecKey, quantizePreviewValue } from '../shared/previewSignature';
 import type { BracePreviewData } from './bracePlacementState';
 import { resolveTwigDiameterAtSegmentT, twigJointDiameterForLocalDiameter } from '../Twig/twigTaper';
+import { setPickRayFromCamera } from '@/components/scene/camera/pickRay';
 
 interface ShaftHoverDetail {
     segmentId?: string | null;
@@ -562,7 +563,7 @@ export function BracePlacementController() {
         }
 
         // Free-space end: follow the mouse at approximately the same depth as the start.
-        raycaster.setFromCamera(pointer, camera);
+        setPickRayFromCamera(raycaster, pointer, camera);
         const ray = raycaster.ray;
         const startVec = new THREE.Vector3(start.snappedPos.x, start.snappedPos.y, start.snappedPos.z);
         const depth = ray.direction.dot(startVec.clone().sub(ray.origin));

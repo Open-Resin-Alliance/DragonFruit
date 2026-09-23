@@ -108,6 +108,7 @@ import {
   CameraProjectionController,
   HorizonLock,
   OrthoFrustumSync,
+  OrthoPickRayAlignment,
   OrbitPivotIndicator,
 } from './SceneCanvasCameraControllers';
 import {
@@ -194,6 +195,7 @@ import { applyScaleFactor } from '@/components/gizmo/scale/applyScaleFactor';
 import { createWheelDeviceClassifier, type WheelDevice } from '@/components/scene/SceneCanvas/wheelDeviceClassifier';
 import { getSelectionGizmoCenter } from '@/features/scene/selectionPosition';
 import { DEFAULT_LIFT_DISTANCE_MM } from '@/features/transform/liftDefaults';
+import { setPickRayFromCamera } from '@/components/scene/camera/pickRay';
 
 const Canvas = dynamic(() => import('@react-three/fiber').then(m => m.Canvas), { ssr: false });
 
@@ -5568,14 +5570,10 @@ export function SceneCanvas({
     );
 
     const raycaster = selectDragRaycasterRef.current;
-    raycaster.setFromCamera(ndc, camera);
+    setPickRayFromCamera(raycaster, ndc, camera);
 
-    // Orthographic cameras: same origin push-back GizmoCenter uses so the drag
-    // plane always yields a forward (t>0) intersection (see GizmoCenter).
-    if ('isOrthographicCamera' in camera) {
-      raycaster.ray.origin.addScaledVector(raycaster.ray.direction, -100000);
-    }
-
+    // Starts at the near plane, so the drag plane always yields a forward
+    // (t>0) intersection whatever the camera has dollied past.
     const hit = raycaster.ray.intersectPlane(plane, selectDragIntersectionRef.current);
     return hit ? selectDragIntersectionRef.current.clone() : null;
   }, []);
@@ -5924,6 +5922,7 @@ export function SceneCanvas({
           fovDeg={perspectiveFov}
         />
         <CameraClipPlaneStabilizer />
+        <OrthoPickRayAlignment />
         {/* GPU Picking Provider - wraps all pickable content when enabled */}
         <PickingProviderWrapper
           enabled={gpuPickingTest}

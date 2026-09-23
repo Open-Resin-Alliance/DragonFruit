@@ -43,6 +43,7 @@ import { projectPointToSnapTargetPath, projectRayToSnapTargetPath, selectNearest
 import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
 import { previewNormalKey, previewVecKey, quantizePreviewValue } from '../shared/previewSignature';
 import { markPlacementSurface } from '../../PlacementLogic/placementSurface';
+import { setPickRayFromCamera } from '@/components/scene/camera/pickRay';
 
 interface ShaftHoverDetail {
     segmentId?: string | null;
@@ -355,7 +356,7 @@ export function BranchPlacementController() {
         }
 
         // Update raycaster for mouse position
-        raycaster.setFromCamera(pointer, camera);
+        setPickRayFromCamera(raycaster, pointer, camera);
 
         // Fast path: when shaft-hover already provides a concrete segment+point,
         // skip the heavier global snapping pass for this frame.

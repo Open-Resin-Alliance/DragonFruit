@@ -18,14 +18,30 @@ import { DEFAULT_FOV_DEG } from '@/components/settings/cameraFovPreferences';
 export const ORTHO_REFERENCE_FOV_DEG = DEFAULT_FOV_DEG;
 
 /**
- * Fallback symmetric depth range when the scene radius is unknown. Orthographic
- * cameras need a negative near so geometry behind the camera's position stays
- * visible; ±50000 at 24-bit depth is ~0.006 mm resolution.
+ * Fallback symmetric depth range when the scene radius is unknown.
+ *
+ * The near plane sits *behind* the camera, and that is load-bearing. An
+ * orthographic image does not depend on where the camera sits along its view
+ * axis, so the camera dollies through space while the visible set stays put: the
+ * view reads as if the camera were far away and zoomed, whatever it has just
+ * moved past.
+ *
+ * A near plane in front of the camera looks tidier but cannot work here. The
+ * camera's distance is the zoom (`halfHeight = tan(fov/2) · radius`), so a wide
+ * FOV parks the camera inside the model while the view is still zoomed out:
+ * at FOV 70 and a model 60 mm from the orbit target, the camera is already at
+ * the model's surface when the view is still 84% of the model's height, and a
+ * near plane there starts slicing it. Only the symmetric range keeps the whole
+ * scene drawn at every FOV.
+ *
+ * The price is that a pick ray, which starts at the camera plane and walks
+ * forward, cannot reach geometry the camera has moved past — see `pickRay.ts`,
+ * which every surface-aimed ray has to go through.
  */
 export const ORTHO_NEAR = -50000;
 export const ORTHO_FAR = 50000;
 
-/** Extra slack beyond `radius + sceneRadius` so edges never clip. */
+/** Extra slack past the scene radius so its far edge never clips. */
 export const ORTHO_DEPTH_MARGIN = 500;
 
 /** Bounds on the dolly radius, so the wheel cannot collapse or run away. */
@@ -79,14 +95,13 @@ export function applyOrthoFrustum(
   camera.bottom = -halfH;
   camera.zoom = 1;
 
-  if (options.sceneRadius != null && options.sceneRadius > 0) {
-    const depth = Math.max(EPSILON, radius) + options.sceneRadius + ORTHO_DEPTH_MARGIN;
-    camera.near = -depth;
-    camera.far = depth;
-  } else {
-    camera.near = ORTHO_NEAR;
-    camera.far = ORTHO_FAR;
-  }
+  // Symmetric about the camera, so the scene stays whole however close the
+  // camera has dollied and whatever FOV the zoom is expressed in.
+  const depth = options.sceneRadius != null && options.sceneRadius > 0
+    ? Math.max(EPSILON, radius) + options.sceneRadius + ORTHO_DEPTH_MARGIN
+    : Math.abs(ORTHO_NEAR);
+  camera.near = -depth;
+  camera.far = depth;
   camera.updateProjectionMatrix();
 }
 

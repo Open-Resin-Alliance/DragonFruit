@@ -20,6 +20,7 @@ import { usePlacementSnappingSession } from '../../interaction/shared/placement/
 import { buildKickstandSnapTargetMetaIndex, type KickstandSnapTargetMeta } from '../../interaction/shared/placement/snapping/kickstandSnapTargets';
 import { getSnapPathPointAtT, projectPointToSnapPath } from '../../interaction/shared/placement/snapping/pathProjection';
 import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
+import { setPickRayFromCamera } from '@/components/scene/camera/pickRay';
 
 type DesiredBand = 'left' | 'right' | 'front';
 
@@ -90,7 +91,7 @@ function getPreferredPointFromPointerRay(
     pointer: THREE.Vector2,
     raycaster: THREE.Raycaster,
 ): Vec3 {
-    raycaster.setFromCamera(pointer, camera);
+    setPickRayFromCamera(raycaster, pointer, camera);
     const ray = raycaster.ray;
     const axisPointVec = toVector3(axisPoint);
     const toAxis = axisPointVec.clone().sub(ray.origin);

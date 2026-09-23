@@ -7,6 +7,40 @@ import {
   ORTHO_NEAR,
   syncOrthoFrustum,
 } from '@/components/scene/camera/orthoDolly';
+import { extendPickRayToNearPlane } from '@/components/scene/camera/pickRay';
+
+/**
+ * Teach R3F's pointer picking the orthographic depth range.
+ *
+ * Every R3F pointer event resolves through one shared raycaster
+ * (`state.raycaster`), and that is how the model reports hover points, support
+ * clicks and placement hover — the entire surface-aimed interaction set. R3F's
+ * own intersection pass is what calls `setFromCamera`, so patching that one
+ * instance is the only seam available; the alternative is reimplementing the
+ * pass behind the documented `events.compute` override.
+ *
+ * `pickRay.ts` has the why: the scene ortho camera draws behind itself on
+ * purpose, and three's origin lands on the camera's own plane, so without this
+ * the ray can never reach the geometry the camera has dollied past even though
+ * it is on screen.
+ */
+export function OrthoPickRayAlignment() {
+  const raycaster = useThree((state) => state.raycaster);
+
+  React.useEffect(() => {
+    const original = raycaster.setFromCamera.bind(raycaster);
+    raycaster.setFromCamera = (coords, camera) => {
+      original(coords, camera);
+      extendPickRayToNearPlane(raycaster.ray, camera);
+      return raycaster;
+    };
+    return () => {
+      raycaster.setFromCamera = original;
+    };
+  }, [raycaster]);
+
+  return null;
+}
 
 function orbitTargetOf(controls: unknown): THREE.Vector3 | null {
   if (!controls || typeof controls !== 'object') return null;

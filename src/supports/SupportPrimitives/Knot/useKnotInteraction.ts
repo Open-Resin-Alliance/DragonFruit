@@ -24,6 +24,7 @@ import { resolveTwigDiameterAtSegmentT } from '../../SupportTypes/Twig/twigTaper
 import { coneKnotHostType, isConeKnotHost, resolveKnotDiameter, SUPPORT_TYPES, type SupportTypeId } from '../../supportTypeRegistry';
 import { shouldCommitJointDrag } from '../Joint/jointDragController';
 import { knotMoveDescription, type KnotHostType } from './knotUtils';
+import { setPickRayFromCamera } from '@/components/scene/camera/pickRay';
 
 
 /** The type whose knots ride a contact cone rather than a span. */
@@ -855,7 +856,7 @@ export function useKnotInteraction(enabled: boolean = true) {
 
         // Leaf-cone knots (brace endpoints) slide along the cone axis.
         if (host.ridesCone && host.leafId) {
-            raycaster.setFromCamera(pointer, camera);
+            setPickRayFromCamera(raycaster, pointer, camera);
             const projected = projectOntoSegment(raycaster.ray, host.start, host.end);
 
             const leaf = getSupportEntities<Leaf>(host.containerType).find(l => l.id === host.leafId);
@@ -900,7 +901,7 @@ export function useKnotInteraction(enabled: boolean = true) {
             return;
         }
 
-        raycaster.setFromCamera(pointer, camera);
+        setPickRayFromCamera(raycaster, pointer, camera);
 
         const quickProjected = projectOntoSegment(raycaster.ray, host.start, host.end);
         const quickProjectedVec = snapVec3(new THREE.Vector3(quickProjected.point.x, quickProjected.point.y, quickProjected.point.z));

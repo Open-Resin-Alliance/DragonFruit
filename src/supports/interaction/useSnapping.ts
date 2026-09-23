@@ -4,6 +4,7 @@ import { usePicking } from '@/components/picking';
 import { SnappingManager, SnapResult, SnapTarget } from './SnappingManager';
 import { resolveSnapState } from './shared/placement/snapping/snappingResolver';
 import { snappingSessionStore } from './shared/placement/snapping/snappingSession';
+import { setPickRayFromCamera } from '@/components/scene/camera/pickRay';
 
 export function useSnapping(
     getTargetCallback: (id: string) => SnapTarget | null,
@@ -26,7 +27,7 @@ export function useSnapping(
 
     const updateSnapping = useCallback(() => {
         // Update raycaster with current pointer
-        raycaster.setFromCamera(pointer, camera);
+        setPickRayFromCamera(raycaster, pointer, camera);
         
         const potential = getPotentialTargets ? getPotentialTargets() : [];
         const result = manager.current.update(raycaster.ray, hit, getTargetCallback, potential);

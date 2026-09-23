@@ -26,7 +26,25 @@ as the navigation state and converted it to and from distance in every framing
 path, which is where the cursor-zoom displacement, drag stalls, and runaway
 SpaceMouse zoom came from.
 
-The camera system now has a single ortho scale source: the dolly radius.
+The camera still *moves* through space, and what it has dollied past stays
+drawn: the depth range is symmetric about the camera and deeply negative
+(`ORTHO_NEAR`). That is not a leftover. Because the camera's distance **is** the
+zoom, a near plane in front of it cannot work at a wide FOV: at FOV 70 with a
+model 60 mm from the orbit target, the camera is already at the model's surface
+while the view still shows ~84% of it, so a near plane there starts slicing the
+model long before the view looks zoomed in. Symmetric depth is the only range
+that keeps the whole scene drawn at every FOV.
+
+The price is that the renderer and a stock raycast disagree by construction: a
+pick ray starts at the camera plane and walks forward, so geometry the camera has
+moved past is drawn but unreachable under the cursor, and support placement stops
+working exactly where the user zoomed in to work. `src/components/scene/camera/pickRay.ts`
+pays it: `setPickRayFromCamera` starts a ray at the near plane instead, so a pick
+covers the same volume as the render. Every surface-aimed ray goes through it,
+and R3F's shared event raycaster is patched to match (`OrthoPickRayAlignment`),
+because that is how model hover, support clicks and placement hover resolve.
+
+The camera system has a single ortho scale source: the dolly radius.
 
 ```
 halfHeight = tan(fov / 2) * radius
@@ -79,9 +97,20 @@ runs once per frame as a safety net for programmatic moves that skip
   pivot a full dolly distance off whatever the user was orbiting, on every wheel
   step. The camera staying put and the pivot running forward is the symptom; a
   centred cursor must leave the pivot exactly where it is.
-- **Ortho near/far track the radius.** When the scene radius is known, the depth
-  range is `±(radius + sceneRadius + ORTHO_DEPTH_MARGIN)`, so z precision improves
-  as you dolly in. `ORTHO_NEAR`/`ORTHO_FAR` are the fallback when it is not.
+- **Ortho near/far stay symmetric about the camera.** `near = -far =
+  -(radius + sceneRadius + ORTHO_DEPTH_MARGIN)`, so geometry behind the camera is
+  still drawn; `ORTHO_NEAR`/`ORTHO_FAR` are the fallback when the scene radius is
+  unknown. Do not move the near in front of the camera to make picking simpler: at
+  a wide FOV the camera sits at the model's surface while the view is still
+  zoomed out, so it would slice the model. Picking is handled on top of it
+  instead, by `pickRay.ts`.
+- **Every surface-aimed ray goes through `setPickRayFromCamera`.** It is
+  `Raycaster.setFromCamera` plus the jump back to the near plane, which is what
+  lets a ray reach what the camera has dollied past. A plain
+  `raycaster.setFromCamera` is correct only for cameras that clip in front of
+  themselves, and it fails silently: the cursor simply stops hitting anything on
+  that surface. R3F's own event raycaster is patched for the same reason, so
+  do not assume R3F's `e.point`/`e.ray` are uncorrected.
 - **The radius reference is `controls.target`, never navlib's pivot.** The pivot a
   SpaceMouse gesture orbits is a different point (the active model's centre), and
   it is not where the frustum's scale comes from. Seeding the dolly radius from it

@@ -144,15 +144,27 @@ test('dollyOrthoToCursor clamps the radius to the configured bounds', () => {
   assert.ok(Math.abs(camera.position.distanceTo(nextTarget) - 10) < 1e-4);
 });
 
-test('applyOrthoFrustum sizes the depth range from the scene radius', () => {
-  const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -50000, 50000);
+test('applyOrthoFrustum keeps the whole scene drawn behind the camera too', () => {
+  const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 2000);
+  camera.position.set(0, 0, 60);
+  camera.lookAt(0, 0, 0);
+  camera.updateMatrixWorld();
 
-  applyOrthoFrustum(camera, 100, 1, { sceneRadius: 300 });
-  const expectedDepth = 100 + 300 + ORTHO_DEPTH_MARGIN;
-  assert.ok(Math.abs(camera.near + expectedDepth) < 1e-6);
-  assert.ok(Math.abs(camera.far - expectedDepth) < 1e-6);
+  applyOrthoFrustum(camera, 60, 1, { sceneRadius: 300 });
+  const expectedDepth = 60 + 300 + ORTHO_DEPTH_MARGIN;
+  assert.equal(camera.near, -expectedDepth);
+  assert.equal(camera.far, expectedDepth);
 
-  applyOrthoFrustum(camera, 100, 1);
+  // At FOV 70 the camera is already at the model's surface while the view still
+  // shows most of it, so a near plane in front would start slicing the model
+  // there. Everything at or behind the camera has to stay inside the depth range.
+  const behindCamera = new THREE.Vector3(0, 0, 120).project(camera);
+  assert.ok(
+    Math.abs(behindCamera.z) <= 1,
+    `a point behind the camera projected to z=${behindCamera.z}, outside the depth range`,
+  );
+
+  applyOrthoFrustum(camera, 60, 1);
   assert.equal(camera.near, ORTHO_NEAR);
   assert.equal(camera.far, ORTHO_FAR);
 });

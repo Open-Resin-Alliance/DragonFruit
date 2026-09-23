@@ -7,6 +7,7 @@ import { GIZMO_COLORS, GIZMO_SIZES, GIZMO_LIGHTING } from '../constants';
 import { getCachedCircleGeometry, getCachedRingGeometry, getCachedSphereGeometry } from '../gizmoGeometryCache';
 import { usePicking } from '@/components/picking';
 import type { GizmoHandleType } from '@/components/picking/types';
+import { setPickRayFromCamera } from '@/components/scene/camera/pickRay';
 
 interface GizmoCenterProps {
   isHovered?: boolean;
@@ -127,20 +128,10 @@ export function GizmoCenter({
     );
 
     const raycaster = raycasterRef.current;
-    raycaster.setFromCamera(ndc, camera);
+    setPickRayFromCamera(raycaster, ndc, camera);
 
-    // For orthographic cameras the ray origin sits on the camera's mid-plane
-    // (eye-space z=0).  In an isometric view whose intro animation brought the
-    // camera close to the model, the origin's world-space z varies across the
-    // frustum and can drop BELOW the drag plane z for "towards-camera" mouse
-    // positions.  Three.js Ray.intersectPlane rejects t<0 (plane behind the
-    // origin), silently stalling the drag.  Pulling the origin far backwards
-    // along its direction keeps the same infinite ray line but guarantees the
-    // drag plane always yields t>0.
-    if ('isOrthographicCamera' in camera) {
-      raycaster.ray.origin.addScaledVector(raycaster.ray.direction, -100000);
-    }
-
+    // Starts at the near plane, so the drag plane always yields t>0 however
+    // close the intro animation brought the camera to the model.
     // Intersect with drag plane
     const intersection = intersectionRef.current;
     const hit = raycaster.ray.intersectPlane(dragPlane.current, intersection);

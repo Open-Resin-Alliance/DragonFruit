@@ -13,6 +13,7 @@ import { ElasticChainInitialState, solveElasticChain } from '../../PlacementLogi
 import { getSettings } from '../../Settings/state';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 import { clearKnotDragPreview, emitKnotDragPreview, useActiveKnotDragPreview } from '../../interaction/knotDragPreview';
+import { setPickRayFromCamera } from '@/components/scene/camera/pickRay';
 
 type KnotGizmoWindowState = Window & {
     __knotGizmoDragging?: boolean;
@@ -164,7 +165,7 @@ export function KnotGizmo() {
     useFrame(() => {
         if (!isDraggingRef.current || !result) return;
 
-        raycaster.setFromCamera(pointer, camera);
+        setPickRayFromCamera(raycaster, pointer, camera);
         const projected = projectOntoSegment(
             raycaster.ray,
             shaftStartRef.current,
@@ -285,7 +286,7 @@ export function KnotGizmo() {
         // Preserve click offset so the knot doesn't snap to the raw pointer projection on first drag frame.
         const currentKnotPos = new THREE.Vector3(result.knot.pos.x, result.knot.pos.y, result.knot.pos.z);
         const currentT = computeTOnSegment(currentKnotPos, result.start, result.end);
-        raycaster.setFromCamera(pointer, camera);
+        setPickRayFromCamera(raycaster, pointer, camera);
         const projectedAtStart = projectOntoSegment(raycaster.ray, result.start, result.end);
         dragProjectionOffsetTRef.current = currentT - projectedAtStart.t;
 
