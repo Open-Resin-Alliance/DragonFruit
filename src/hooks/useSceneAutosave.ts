@@ -750,6 +750,10 @@ export function useSceneAutosave({
     window.addEventListener('picking-zoom-start', markNavigationActive);
     window.addEventListener('picking-zoom-change', markNavigationActive);
     window.addEventListener('picking-zoom-end', markNavigationSettling);
+    // SpaceMouse navigation keeps picking live, so it reports on its own channel.
+    window.addEventListener('spacemouse-navigation-start', markNavigationActive);
+    window.addEventListener('spacemouse-navigation-change', markNavigationActive);
+    window.addEventListener('spacemouse-navigation-end', markNavigationSettling);
     window.addEventListener('blur', markNavigationSettling);
 
     return () => {
@@ -762,6 +766,9 @@ export function useSceneAutosave({
       window.removeEventListener('picking-zoom-start', markNavigationActive);
       window.removeEventListener('picking-zoom-change', markNavigationActive);
       window.removeEventListener('picking-zoom-end', markNavigationSettling);
+      window.removeEventListener('spacemouse-navigation-start', markNavigationActive);
+      window.removeEventListener('spacemouse-navigation-change', markNavigationActive);
+      window.removeEventListener('spacemouse-navigation-end', markNavigationSettling);
       window.removeEventListener('blur', markNavigationSettling);
       if (navigationSettleRef.current !== null) {
         clearTimeout(navigationSettleRef.current);

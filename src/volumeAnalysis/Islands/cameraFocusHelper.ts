@@ -11,7 +11,6 @@ export interface AnimateFocusOptions {
   animatingRef: React.MutableRefObject<boolean>;
   preFocusPositionRef: React.MutableRefObject<THREE.Vector3 | null>;
   preFocusTargetRef: React.MutableRefObject<THREE.Vector3 | null>;
-  preFocusZoomRef: React.MutableRefObject<number | null>;
 }
 
 export interface AnimateRestoreOptions {
@@ -20,7 +19,6 @@ export interface AnimateRestoreOptions {
   animatingRef: React.MutableRefObject<boolean>;
   preFocusPositionRef: React.MutableRefObject<THREE.Vector3 | null>;
   preFocusTargetRef: React.MutableRefObject<THREE.Vector3 | null>;
-  preFocusZoomRef: React.MutableRefObject<number | null>;
   wasManual: boolean;
 }
 
@@ -33,14 +31,12 @@ export function animateRestoreCamera({
   animatingRef,
   preFocusPositionRef,
   preFocusTargetRef,
-  preFocusZoomRef,
   wasManual,
 }: AnimateRestoreOptions) {
   if (wasManual || !preFocusPositionRef.current || !preFocusTargetRef.current || !controls) {
     // Clear cached refs and do not animate back if selection was cleared manually
     preFocusPositionRef.current = null;
     preFocusTargetRef.current = null;
-    preFocusZoomRef.current = null;
     return;
   }
 
@@ -49,12 +45,9 @@ export function animateRestoreCamera({
 
   const startPos = camera.position.clone();
   const startTarget = orbitControls.target.clone();
-  const isOrthographic = camera instanceof THREE.OrthographicCamera;
-  const startZoom = isOrthographic ? (camera as THREE.OrthographicCamera).zoom : 1;
 
   const endPos = preFocusPositionRef.current.clone();
   const endTarget = preFocusTargetRef.current.clone();
-  const endZoom = isOrthographic ? (preFocusZoomRef.current ?? 1) : 1;
 
   const duration = 800; // ms
   const startTime = performance.now();
@@ -95,12 +88,6 @@ export function animateRestoreCamera({
 
     camera.position.set(x, y, z);
 
-    if (isOrthographic) {
-      const ortho = camera as THREE.OrthographicCamera;
-      ortho.zoom = THREE.MathUtils.lerp(startZoom, endZoom, eased);
-      ortho.updateProjectionMatrix();
-    }
-
     orbitControls.target.lerpVectors(startTarget, endTarget, eased);
     orbitControls.update();
 
@@ -110,7 +97,6 @@ export function animateRestoreCamera({
       animatingRef.current = false;
       preFocusPositionRef.current = null;
       preFocusTargetRef.current = null;
-      preFocusZoomRef.current = null;
     }
   };
 
@@ -129,7 +115,6 @@ export function animateFocusToIsland({
   animatingRef,
   preFocusPositionRef,
   preFocusTargetRef,
-  preFocusZoomRef,
 }: AnimateFocusOptions) {
   const orbitControls = controls as unknown as OrbitControlsImpl;
   if (!orbitControls.target) return;
@@ -138,9 +123,6 @@ export function animateFocusToIsland({
   if (preFocusPositionRef.current === null) {
     preFocusPositionRef.current = camera.position.clone();
     preFocusTargetRef.current = orbitControls.target.clone();
-    if (camera instanceof THREE.OrthographicCamera) {
-      preFocusZoomRef.current = camera.zoom;
-    }
   }
 
   // Find the selected island marker
@@ -186,7 +168,9 @@ export function animateFocusToIsland({
   const thetaStart = Math.atan2(startRel.y, startRel.x);
 
   const isOrthographic = camera instanceof THREE.OrthographicCamera;
-  const testDistance = isOrthographic ? Math.max(rStart, 100) : optimalDistance;
+  // The candidate distance is the framing distance for both projections: for an
+  // orthographic camera the frustum is derived from it, so it also sets scale.
+  const testDistance = optimalDistance;
 
   // Try multiple viewing angles to find the best one
   const candidateDirections: THREE.Vector3[] = [];
@@ -301,16 +285,6 @@ export function animateFocusToIsland({
   let thetaDiff = thetaTarget - thetaStart;
   thetaDiff = Math.atan2(Math.sin(thetaDiff), Math.cos(thetaDiff));
 
-  // Orthographic camera zoom tracking
-  const startZoom = isOrthographic ? (camera as THREE.OrthographicCamera).zoom : 1;
-  let targetZoom = startZoom;
-  
-  if (isOrthographic) {
-    const ortho = camera as THREE.OrthographicCamera;
-    const targetHalfHeight = optimalDistance * Math.tan(THREE.MathUtils.degToRad(50 * 0.5)); // 50 degrees fov equivalent
-    targetZoom = THREE.MathUtils.clamp(ortho.top / Math.max(1e-6, targetHalfHeight), 0.0001, 200);
-  }
-
   // Animate camera and controls
   animatingRef.current = true;
   
@@ -341,13 +315,6 @@ export function animateFocusToIsland({
     
     camera.position.set(x, y, z);
 
-    // Interpolate zoom for Orthographic camera
-    if (isOrthographic) {
-      const ortho = camera as THREE.OrthographicCamera;
-      ortho.zoom = THREE.MathUtils.lerp(startZoom, targetZoom, eased);
-      ortho.updateProjectionMatrix();
-    }
-    
     // Interpolate controls target
     orbitControls.target.lerpVectors(startTarget, islandCenter, eased);
     orbitControls.update();

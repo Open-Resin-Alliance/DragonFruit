@@ -28,6 +28,7 @@ type CameraFocusHotkeyControllerProps = {
   orbitTarget: [number, number, number];
   cameraRef: React.MutableRefObject<THREE.Camera | null>;
   orbitControlsRef: React.MutableRefObject<{ target: THREE.Vector3; update: () => void } | null>;
+  perspectiveFov?: number;
 };
 
 type FocusTransition = {
@@ -35,17 +36,10 @@ type FocusTransition = {
   endPos: THREE.Vector3;
   startTarget: THREE.Vector3;
   endTarget: THREE.Vector3;
-  startZoom: number;
-  endZoom: number;
-  isOrthographic: boolean;
   startTime: number | null;
   durationMs: number;
   prevDamping: boolean | undefined;
   prevEnabled: boolean | undefined;
-};
-
-type FocusPointOptions = {
-  preserveCameraPosition?: boolean;
 };
 
 function computeModelWorldCenter(model: LoadedModel): THREE.Vector3 {
@@ -91,6 +85,7 @@ export function CameraFocusHotkeyController({
   orbitTarget,
   cameraRef,
   orbitControlsRef,
+  perspectiveFov = 50,
 }: CameraFocusHotkeyControllerProps) {
   const { size } = useThree();
   const sizeRef = React.useRef(size);
@@ -112,20 +107,11 @@ export function CameraFocusHotkeyController({
     camera.position.lerpVectors(transition.startPos, transition.endPos, eased);
     controls.target.lerpVectors(transition.startTarget, transition.endTarget, eased);
 
-    if (transition.isOrthographic && camera instanceof THREE.OrthographicCamera) {
-      camera.zoom = THREE.MathUtils.lerp(transition.startZoom, transition.endZoom, eased);
-      camera.updateProjectionMatrix();
-    }
-
     controls.update();
 
     if (t >= 1) {
       camera.position.copy(transition.endPos);
       controls.target.copy(transition.endTarget);
-      if (transition.isOrthographic && camera instanceof THREE.OrthographicCamera) {
-        camera.zoom = transition.endZoom;
-        camera.updateProjectionMatrix();
-      }
       controls.update();
 
       if (typeof transition.prevDamping === 'boolean') controls.enableDamping = transition.prevDamping;
@@ -137,7 +123,6 @@ export function CameraFocusHotkeyController({
   const snapCameraToPoint = React.useCallback((
     point: THREE.Vector3,
     modelRadius?: number,
-    options?: FocusPointOptions,
   ) => {
     const camera = cameraRef.current;
     const controls = orbitControlsRef.current;
@@ -163,42 +148,32 @@ export function CameraFocusHotkeyController({
 
     const currentViewVector = camera.position.clone().sub(controls.target);
     const hasValidView = currentViewVector.lengthSq() > 1e-8;
+    // Read the radius before normalising: Vector3.normalize() mutates in place,
+    // so length() afterwards would always be 1.
+    const currentRadius = currentViewVector.length();
     const viewDir = hasValidView
       ? currentViewVector.normalize()
       : new THREE.Vector3(-0.5, -0.7, 1).normalize();
 
     // FOV-aware fit distance — identical formula to CameraIntroController prepare mode
-    let fitDistance = hasValidView ? currentViewVector.length() : 400;
-    let fitOrthoZoom: number | null = null;
+    let fitDistance = hasValidView ? currentRadius : 400;
     if (modelRadius != null && modelRadius > 0) {
       const isPerspective = camera instanceof THREE.PerspectiveCamera;
       const vFov = isPerspective
         ? THREE.MathUtils.degToRad((camera as THREE.PerspectiveCamera).fov)
-        : THREE.MathUtils.degToRad(50);
+        : THREE.MathUtils.degToRad(perspectiveFov);
       const { width, height } = sizeRef.current;
       const aspect = width / Math.max(1, height);
       const hFov = 2 * Math.atan(Math.tan(vFov * 0.5) * aspect);
       const minFov = Math.max(0.0001, Math.min(vFov, hFov));
       fitDistance = (modelRadius / Math.tan(minFov * 0.5)) * 1.05;
-
-      // Orthographic cameras must fit via zoom, not distance.
-      if (camera instanceof THREE.OrthographicCamera) {
-        const ortho = camera as THREE.OrthographicCamera;
-        const frustumHeight = Math.max(1e-6, ortho.top - ortho.bottom);
-        const requiredWorldHeight = (modelRadius * 2) * 1.08;
-        fitOrthoZoom = THREE.MathUtils.clamp(
-          frustumHeight / Math.max(1e-6, requiredWorldHeight),
-          0.0001,
-          200,
-        );
-      }
     }
 
     const endTarget = point.clone();
-    const preserveCameraPosition = !!options?.preserveCameraPosition;
-    const endPos = preserveCameraPosition
-      ? camera.position.clone()
-      : endTarget.clone().add(viewDir.clone().multiplyScalar(fitDistance));
+    // Keeping the camera at the fit distance (rather than its current position)
+    // preserves the on-screen scale while re-targeting the pivot — for an
+    // orthographic camera the frustum is derived from that distance.
+    const endPos = endTarget.clone().add(viewDir.clone().multiplyScalar(fitDistance));
 
     // Disable damping so no pending velocity is applied during update()
     const prevDamping = controls.enableDamping;
@@ -206,26 +181,19 @@ export function CameraFocusHotkeyController({
     if (typeof prevDamping === 'boolean') controls.enableDamping = false;
     if (typeof prevEnabled === 'boolean') controls.enabled = false;
 
-    const isOrthographic = camera instanceof THREE.OrthographicCamera;
-    const startZoom = isOrthographic ? camera.zoom : 1;
-    const endZoom = fitOrthoZoom ?? startZoom;
-
     transitionRef.current = {
       startPos: camera.position.clone(),
       endPos,
       startTarget: controls.target.clone(),
       endTarget,
-      startZoom,
-      endZoom,
-      isOrthographic,
       startTime: null,
       durationMs: 260,
       prevDamping,
       prevEnabled,
     };
-  }, [cameraRef, orbitControlsRef, setOrbitTargetFromPoint]);
+  }, [cameraRef, orbitControlsRef, perspectiveFov, setOrbitTargetFromPoint]);
 
-  useCameraFocusHotkey(() => {
+  const runFocus = React.useCallback(() => {
     const visibleModels = models.filter((model) => model.visible);
     const visibleById = new Map(visibleModels.map((model) => [model.id, model] as const));
     const hoverPoint = hoverPointRef.current;
@@ -237,14 +205,15 @@ export function CameraFocusHotkeyController({
       );
 
     // Hovering a selected model: re-target the orbit pivot to the hovered
-    // surface point but keep the current zoom / camera position unchanged.
+    // surface point while keeping the current on-screen scale (the camera stays
+    // at the same distance from the new pivot).
     if (hoverPoint && hoveredSelectedModel) {
-      snapCameraToPoint(hoverPoint, undefined, { preserveCameraPosition: true });
+      snapCameraToPoint(hoverPoint);
       return;
     }
 
     if (visibleModels.length === 0) {
-      if (hoverPoint) snapCameraToPoint(hoverPoint, undefined, { preserveCameraPosition: true });
+      if (hoverPoint) snapCameraToPoint(hoverPoint);
       return;
     }
 
@@ -282,7 +251,17 @@ export function CameraFocusHotkeyController({
 
     const bestSphere = computeModelWorldBoundingSphere(bestModel);
     snapCameraToPoint(bestSphere.center, bestSphere.radius);
-  });
+  }, [activeModelId, hoveredModelId, models, orbitTarget, selectedModelIds, snapCameraToPoint]);
+
+  useCameraFocusHotkey(runFocus);
+
+  // The SpaceMouse's Fit button is delivered through navlib, whose fit distance is
+  // sized for a perspective projection and lands too close in ortho. Run the same
+  // focus the F key does instead — it frames the model properly.
+  React.useEffect(() => {
+    window.addEventListener('camera-fit-request', runFocus);
+    return () => window.removeEventListener('camera-fit-request', runFocus);
+  }, [runFocus]);
 
   return null;
 }

@@ -8,6 +8,8 @@ import {
   subscribeToSpaceMouseSettings,
   type SpaceMouseSettings,
 } from '@/components/settings/spacemousePreferences';
+import { ORTHO_MAX_RADIUS, ORTHO_MIN_RADIUS, applyOrthoFrustum, orthoAspectOf } from './orthoDolly';
+import { getWindowFocused, retainWindowFocus } from './windowFocus';
 
 type OrbitLikeControls = {
   target: THREE.Vector3;
@@ -21,12 +23,6 @@ function isOrbitLikeControls(value: unknown): value is OrbitLikeControls {
   if (!value || typeof value !== 'object') return false;
   const maybe = value as Partial<OrbitLikeControls>;
   return !!maybe.target && typeof maybe.update === 'function';
-}
-
-function alignCameraToHorizon(camera: THREE.Camera, target: THREE.Vector3, worldUp: THREE.Vector3) {
-  camera.up.copy(worldUp);
-  camera.lookAt(target);
-  camera.updateMatrixWorld();
 }
 
 function deadzoneAxis(value: number, deadzone: number) {
@@ -97,7 +93,8 @@ export function SpaceMouseController({
   pivotPoint,
   pivotCandidates,
   fallbackPivot,
-  mouseOrbitDragRunId,
+  sceneRadius,
+  fovDeg,
   onNavigationActiveChange,
   onNavigationFrame,
   onNewDeviceDetected,
@@ -105,14 +102,14 @@ export function SpaceMouseController({
   pivotPoint?: THREE.Vector3 | null;
   pivotCandidates?: THREE.Vector3[];
   fallbackPivot?: THREE.Vector3 | null;
-  mouseOrbitDragRunId?: number;
+  sceneRadius?: number;
+  fovDeg?: number;
   onNavigationActiveChange?: (active: boolean) => void;
   onNavigationFrame?: () => void;
   onNewDeviceDetected?: (deviceId: string) => void;
 }) {
   const { camera, controls, scene } = useThree();
 
-  const worldUp = React.useMemo(() => new THREE.Vector3(0, 0, 1), []);
   const defaultPivot = React.useMemo(
     () => fallbackPivot?.clone() ?? new THREE.Vector3(0, 0, 0),
     [fallbackPivot?.x, fallbackPivot?.y, fallbackPivot?.z],
@@ -126,8 +123,6 @@ export function SpaceMouseController({
 
   // Track whether *we* disabled OrbitControls so we can restore it.
   const weDisabledOrbitRef = React.useRef(false);
-  // If true, reset any SpaceMouse-induced tilt on next regular mouse orbit start.
-  const pendingHorizonResetRef = React.useRef(false);
   // Persistent pivot — survives across idle gaps (Fusion 360 style).
   // Once established, pan accumulates onto it; only reset on explicit selection change.
   const activePivotRef = React.useRef<THREE.Vector3>(defaultPivot.clone());
@@ -200,16 +195,6 @@ export function SpaceMouseController({
   }, [camera, scene, settings.pivotMode]);
 
   React.useEffect(() => {
-    if (!pendingHorizonResetRef.current) return;
-    if (!mouseOrbitDragRunId || mouseOrbitDragRunId <= 0) return;
-    if (!isOrbitLikeControls(controls)) return;
-
-    alignCameraToHorizon(camera, controls.target, worldUp);
-    controls.update();
-    pendingHorizonResetRef.current = false;
-  }, [camera, controls, mouseOrbitDragRunId, worldUp]);
-
-  React.useEffect(() => {
     return () => {
       if (isNavigatingRef.current) {
         isNavigatingRef.current = false;
@@ -272,6 +257,10 @@ export function SpaceMouseController({
     [camera, defaultPivot, pivotCandidates, pivotPoint, settings.pivotMode],
   );
 
+  // The frame loop gates on the window's OS focus; keep it tracked while this
+  // controller is mounted (released on unmount).
+  React.useEffect(() => retainWindowFocus(), []);
+
   // When SpaceMouse is turned off, ensure OrbitControls is re-enabled.
   React.useEffect(() => {
     if (settings.enabled) return;
@@ -285,7 +274,6 @@ export function SpaceMouseController({
       controls.enabled = true;
       controls.update();
       weDisabledOrbitRef.current = false;
-      pendingHorizonResetRef.current = true;
     }
 
     hasActivePivotRef.current = false;
@@ -312,10 +300,10 @@ export function SpaceMouseController({
     // Ignore SpaceMouse input unless our window is the active/focused window.
     // The Gamepad API keeps reporting axis values for background windows on
     // Windows, macOS, and Linux, which would otherwise let the SpaceMouse drive
-    // the camera while another app is in front. document.hasFocus() (unlike
-    // document.hidden / visibilitychange) is false whenever the window is not
-    // active, even while it remains visible.
-    if (typeof document !== 'undefined' && typeof document.hasFocus === 'function' && !document.hasFocus()) {
+    // the camera while another app is in front. `windowFocus` follows the OS
+    // window event, so it is false for as long as another application is active,
+    // even while this window stays visible.
+    if (!getWindowFocused()) {
       if (isNavigatingRef.current) {
         isNavigatingRef.current = false;
         onNavigationActiveChange?.(false);
@@ -326,7 +314,6 @@ export function SpaceMouseController({
         controls.enabled = true;
         controls.update();
         weDisabledOrbitRef.current = false;
-        pendingHorizonResetRef.current = true;
       }
       return;
     }
@@ -364,7 +351,6 @@ export function SpaceMouseController({
         controls.enabled = true;
         controls.update();
         weDisabledOrbitRef.current = false;
-        pendingHorizonResetRef.current = true;
       }
       return;
     }
@@ -407,7 +393,6 @@ export function SpaceMouseController({
         controls.enabled = true;
         controls.update();
         weDisabledOrbitRef.current = false;
-        pendingHorizonResetRef.current = true;
       }
       return;
     }
@@ -472,14 +457,9 @@ export function SpaceMouseController({
       camera.position.add(panOffset);
       lookTarget.add(panOffset);
 
-      if (orthoCamera) {
-        // Orthographic zoom should change camera.zoom, not dolly camera position.
-        const zoomFactor = Math.exp(dolly * settings.zoomSensitivity * 2.0 * dt);
-        orthoCamera.zoom = THREE.MathUtils.clamp(orthoCamera.zoom * zoomFactor, 0.0001, 2000);
-        orthoCamera.updateProjectionMatrix();
-      } else {
-        camera.position.addScaledVector(forward, dolly * zoomScale);
-      }
+      // Real dolly in both projections: move the camera along its view axis. For
+      // ortho the derived frustum (below) turns that into scale.
+      camera.position.addScaledVector(forward, dolly * zoomScale);
     }
 
     // ── Rotation (orbit around pivot with free orientation) ──
@@ -527,6 +507,19 @@ export function SpaceMouseController({
 
     camera.lookAt(lookTarget);
     camera.updateMatrixWorld();
+
+    if (orthoCamera) {
+      // The camera now looks at lookTarget, so the axial dolly radius is simply
+      // the distance to it. Set the derived frustum directly; the shared sync is
+      // suspended while this controller owns the camera.
+      const radius = THREE.MathUtils.clamp(
+        camera.position.distanceTo(lookTarget),
+        ORTHO_MIN_RADIUS,
+        ORTHO_MAX_RADIUS,
+      );
+      applyOrthoFrustum(orthoCamera, radius, orthoAspectOf(orthoCamera), { sceneRadius, fovDeg });
+    }
+
     onNavigationFrame?.();
   });
 

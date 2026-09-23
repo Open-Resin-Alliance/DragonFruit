@@ -105,8 +105,16 @@ import { ModelAttachedSupportLayer } from './ModelAttachedSupportLayer';
 import {
   CameraModeEntryFramingController,
   CameraProjectionController,
+  HorizonLock,
+  OrthoFrustumSync,
   OrbitPivotIndicator,
 } from './SceneCanvasCameraControllers';
+import {
+  ORTHO_MAX_RADIUS,
+  ORTHO_MIN_RADIUS,
+  dollyOrthoToCursor,
+  orthoWheelRadiusScale,
+} from '@/components/scene/camera/orthoDolly';
 import { useMarqueeSelectionHandlers } from './useMarqueeSelectionHandlers';
 import {
   marqueeModeForDrag,
@@ -125,6 +133,7 @@ import { StlMesh } from './StlMesh';
 import { setClipBounds } from './clipBoundsStore';
 import { setSupportPlacementGuideZ, useSupportPlacementGuideActive } from './supportPlacementGuideStore';
 import { setModelMesh } from '@/supports/autoSupport/meshStore';
+import { setSupportNavigationActive } from '@/supports/interaction/navigationActiveStore';
 import { useIsLinux } from '@/hooks/usePlatform';
 import {
   DEFAULT_CAMERA_PROJECTION_SETTINGS,
@@ -1272,7 +1281,6 @@ export function SceneCanvas({
       return state !== 2 && state !== 4 && state !== 5;
     }, []);
 
-  const [mouseOrbitDragRunId, setMouseOrbitDragRunId] = React.useState(0);
   // When the native 3DxWare/navlib bridge is driving the camera, the Gamepad-API
   // SpaceMouseController is unmounted entirely so the two never fight over the
   // same physical puck.
@@ -1295,7 +1303,7 @@ export function SceneCanvas({
     activeBuildVolumeSettings.widthMm,
   ]);
 
-  const { defaultCamera, orbitTarget, setOrbitTargetFromPoint, introBoundsSnapshot, cameraIntroRunId, cameraHomeResetRunId } =
+  const { defaultCamera, orbitTarget, setOrbitTargetFromPoint, introBoundsSnapshot, cameraIntroRunId, cameraHomeResetRunId, resetCameraHome } =
     useStlLoadCameraIntro(models, buildVolumeCenterTarget, { deferIntro: deferCameraIntro });
   const [cameraIntroCompletedRunId, setCameraIntroCompletedRunId] = React.useState(0);
   const [cameraHomeResetCompletedRunId, setCameraHomeResetCompletedRunId] = React.useState(0);
@@ -3859,6 +3867,26 @@ export function SceneCanvas({
 
   const introControllerRunId = cameraIntroRunId;
 
+  // Radius of the scene around the orbit target, used to size the orthographic
+  // depth range so it tracks the dolly radius instead of a blanket constant.
+  const orthoSceneRadiusMm = React.useMemo(() => {
+    let radius = 0;
+    if (introBoundsSnapshot && !introBoundsSnapshot.isEmpty()) {
+      radius = introBoundsSnapshot.getBoundingSphere(new THREE.Sphere()).radius;
+    }
+    const buildRadius = 0.5 * Math.hypot(
+      activeBuildVolumeSettings.widthMm,
+      activeBuildVolumeSettings.depthMm,
+      activeBuildVolumeSettings.maxZMm,
+    );
+    return Math.max(radius, buildRadius) + 200;
+  }, [
+    activeBuildVolumeSettings.depthMm,
+    activeBuildVolumeSettings.maxZMm,
+    activeBuildVolumeSettings.widthMm,
+    introBoundsSnapshot,
+  ]);
+
   const selectedSpaceMousePivotPoint = React.useMemo(() => {
     if (!activeModel?.visible) return null;
 
@@ -4953,7 +4981,11 @@ export function SceneCanvas({
     if (!cameraInteractionCycleEnabled) return;
     updateCameraBelowBuildPlate();
     onCameraChange?.();
-    window.dispatchEvent(new Event('picking-pan-change'));
+    // SpaceMouse navigation deliberately does NOT fire the picking-pan-* events:
+    // those pause GPU picking and disable mesh raycast (they assume the pointer is
+    // the input). With a SpaceMouse the mouse is free, so hover picking should keep
+    // following the camera. Autosave is told via the spacemouse-navigation-* events.
+    window.dispatchEvent(new Event('spacemouse-navigation-change'));
   }, [cameraInteractionCycleEnabled, onCameraChange, updateCameraBelowBuildPlate]);
 
   React.useEffect(() => {
@@ -5030,7 +5062,6 @@ export function SceneCanvas({
     if (useReactOrbitInteractionState) {
       setIsOrbitRotating(isRotateInteraction);
       setIsOrbitInteracting(true);
-      setMouseOrbitDragRunId((id) => id + 1);
     }
     window.dispatchEvent(new Event('picking-orbit-start'));
     if (!isRotateInteraction) {
@@ -5113,7 +5144,42 @@ export function SceneCanvas({
           cameraTrackpadSettings,
           cameraTrackpadModifierKey,
         );
-        if (action === null) return;
+        if (action === null) {
+          // Orthographic wheel is a real dolly: move the camera along its view
+          // axis and let OrthoFrustumSync derive the frustum from the new
+          // radius. OrbitControls' zoom is disabled in ortho, so we own it — and
+          // that is exactly why this path must check the idle signal itself.
+          // OrbitControls being disabled is how every other owner of the camera
+          // announces itself: a live SpaceMouse gesture, the Home / focus /
+          // mode-framing animations. Without the check the wheel dollies against
+          // them, fighting the SpaceMouse over the same dolly radius.
+          const camera = cameraRef.current;
+          const zoomControls = orbitControlsRef.current;
+          if (zoomControls && zoomControls.enabled === false) return;
+          if (camera instanceof THREE.OrthographicCamera && zoomControls) {
+            const rect = container.getBoundingClientRect();
+            if (rect.width > 0 && rect.height > 0) {
+              event.preventDefault();
+              const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+              const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+              const aspect = (camera.right - camera.left) / Math.max(1e-6, camera.top - camera.bottom);
+              const nextTarget = dollyOrthoToCursor({
+                camera,
+                target: zoomControls.target,
+                ndcX,
+                ndcY,
+                radiusScale: orthoWheelRadiusScale(event.deltaY, zoomControls.zoomSpeed),
+                minRadius: ORTHO_MIN_RADIUS,
+                maxRadius: ORTHO_MAX_RADIUS,
+                aspect,
+                options: { sceneRadius: orthoSceneRadiusMm, fovDeg: perspectiveFov },
+              });
+              zoomControls.target.copy(nextTarget);
+              zoomControls.update();
+            }
+          }
+          return;
+        }
 
         const controls = orbitControlsRef.current;
         if (!controls || controls.enabled === false) return;
@@ -5168,6 +5234,8 @@ export function SceneCanvas({
     handleOrbitChange,
     handleOrbitEnd,
     handleOrbitStart,
+    orthoSceneRadiusMm,
+    perspectiveFov,
     scheduleTrackpadGestureEnd,
   ]);
 
@@ -5281,15 +5349,20 @@ export function SceneCanvas({
   }, [freezeViewportActive, frozenViewportDataUrl]);
 
   React.useEffect(() => {
-    if (cameraInteractionCycleEnabled && spaceMouseNavigationActive) {
-      window.dispatchEvent(new Event('picking-pan-start'));
+    const navigating = cameraInteractionCycleEnabled && spaceMouseNavigationActive;
+    // Placement previews freeze while navigating, so the trunk router does not run
+    // per frame now that SpaceMouse navigation keeps picking live.
+    setSupportNavigationActive(navigating);
+
+    if (navigating) {
+      // See handleSpaceMouseNavigationFrame: SpaceMouse navigation keeps picking
+      // live, so it signals autosave on its own channel instead of picking-pan-*.
+      window.dispatchEvent(new Event('spacemouse-navigation-start'));
       return;
     }
 
-    window.dispatchEvent(new CustomEvent('picking-pan-end', {
-      detail: { resumeAfterMs: navigationResumeDelayMs },
-    }));
-  }, [cameraInteractionCycleEnabled, navigationResumeDelayMs, spaceMouseNavigationActive]);
+    window.dispatchEvent(new Event('spacemouse-navigation-end'));
+  }, [cameraInteractionCycleEnabled, spaceMouseNavigationActive]);
 
   const {
     thumbnailCaptureActive,
@@ -5839,7 +5912,13 @@ export function SceneCanvas({
         />
         <EnableLocalClipping enabled={clipLower != null || clipUpper != null || indicatorPlaneZ != null || !!organicCutKeyGizmo} />
         <CameraProvider cameraRef={cameraRef} />
-        <CameraProjectionController mode={cameraProjectionMode} perspectiveFov={perspectiveFov} />
+        <CameraProjectionController mode={cameraProjectionMode} perspectiveFov={perspectiveFov} sceneRadius={orthoSceneRadiusMm} />
+        <OrthoFrustumSync
+          mode={cameraProjectionMode}
+          suspended={spaceMouseNavigationActive}
+          sceneRadius={orthoSceneRadiusMm}
+          fovDeg={perspectiveFov}
+        />
         <CameraClipPlaneStabilizer />
         {/* GPU Picking Provider - wraps all pickable content when enabled */}
         <PickingProviderWrapper
@@ -5880,7 +5959,7 @@ export function SceneCanvas({
                 const isActive = isCaptureTintModel || model.id === activeModelId;
                 const isSelectedModel = isCaptureTintModel || selectedModelIdSet.has(model.id);
                 const isMarqueeCandidate = isMarqueeSelecting && marqueeCandidateIdSet.has(model.id);
-                const suppressModelInteraction = !modelPickerEnabled || !cameraInteractionCycleEnabled || isGizmoDragging || isPostGizmoInteractionGuardActive || supportGizmoInteractionActive || isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive;
+                const suppressModelInteraction = !modelPickerEnabled || !cameraInteractionCycleEnabled || isGizmoDragging || isPostGizmoInteractionGuardActive || supportGizmoInteractionActive || isOrbitInteracting || isWheelZoomInteracting;
                 const interactionLodEnabled = (isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive) && !isActive;
                 const supportNonSelectedOpacity = mode === 'support' && !!activeModelId && !isActive ? 0.5 : undefined;
                 const shouldHideDuplicateSourceModel = Boolean(
@@ -7150,6 +7229,9 @@ export function SceneCanvas({
           screenSpacePanning
           zoomToCursor
           enablePan
+          // Orthographic wheel is a real dolly handled in onTrackpadWheel; letting
+          // OrbitControls also zoom would fight the derived frustum.
+          enableZoom={cameraProjectionMode === 'perspective'}
           enabled={
             cameraInteractionCycleEnabled
             && !((mode === 'prepare' || mode === 'support') && transformMode === 'supportBlockers' && blockerStrokeActive)
@@ -7168,6 +7250,8 @@ export function SceneCanvas({
           <ZUpGizmoHelper
             alignment="bottom-right"
             margin={mode === 'printing' ? [72, 72] : [nonPrintingViewCubeRightMargin, 72]}
+            accentColor={gizmoColors.accent}
+            onHome={resetCameraHome}
           >
             <ZUpGizmoViewcube
               font="600 24px Inter, system-ui, sans-serif"
@@ -7185,6 +7269,8 @@ export function SceneCanvas({
           <NativeSpaceMouseController
             pivotPoint={selectedSpaceMousePivotPoint}
             fallbackPivot={buildVolumeCenterTarget}
+            sceneRadius={orthoSceneRadiusMm}
+            fovDeg={perspectiveFov}
             onNavigationActiveChange={setSpaceMouseNavigationActive}
             onNavigationFrame={handleSpaceMouseNavigationFrame}
           />
@@ -7194,7 +7280,8 @@ export function SceneCanvas({
             pivotPoint={selectedSpaceMousePivotPoint}
             pivotCandidates={spaceMousePivotCandidates}
             fallbackPivot={buildVolumeCenterTarget}
-            mouseOrbitDragRunId={mouseOrbitDragRunId}
+            sceneRadius={orthoSceneRadiusMm}
+            fovDeg={perspectiveFov}
             onNavigationActiveChange={setSpaceMouseNavigationActive}
             onNavigationFrame={handleSpaceMouseNavigationFrame}
             onNewDeviceDetected={onNewDeviceDetected}
@@ -7211,6 +7298,7 @@ export function SceneCanvas({
             orbitTarget={orbitTarget}
             cameraRef={cameraRef}
             orbitControlsRef={orbitControlsRef as React.MutableRefObject<{ target: THREE.Vector3; update: () => void } | null>}
+            perspectiveFov={perspectiveFov}
           />
         )}
         <CameraIntroController
@@ -7220,12 +7308,12 @@ export function SceneCanvas({
           mode={mode}
           plateWidthMm={activeBuildVolumeSettings.widthMm}
           plateDepthMm={activeBuildVolumeSettings.depthMm}
+          perspectiveFov={perspectiveFov}
         />
         <CameraHomeResetController
           runId={cameraHomeResetRunId}
           homePosition={defaultCamera.position}
           homeTarget={[buildVolumeCenterTarget.x, buildVolumeCenterTarget.y, buildVolumeCenterTarget.z]}
-          homeFovDeg={defaultCamera.fov}
           onComplete={setCameraHomeResetCompletedRunId}
         />
         <CameraModeEntryFramingController
@@ -7234,7 +7322,9 @@ export function SceneCanvas({
           target={buildVolumeCenterTarget}
           plateWidthMm={activeBuildVolumeSettings.widthMm}
           plateDepthMm={activeBuildVolumeSettings.depthMm}
+          perspectiveFov={perspectiveFov}
         />
+        <HorizonLock enabled={cameraInteractionCycleEnabled} />
         <CameraControlsRecovery />
         <CameraFocusController selectedIslandId={overlaySelectedIslandId ?? null} islandMarkers={islandMarkers ?? []} onClearSelection={onClearSelection} />
         {mode === 'support' && supportPathfindingDebugState.enabled && (

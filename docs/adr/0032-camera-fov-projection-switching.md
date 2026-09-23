@@ -48,9 +48,20 @@ adjusting the FOV to match the orthographic extent at a fixed distance.
 - The introductory camera position depends on viewport dimensions, so resize
   handlers must not cache the initial distance.
 
+## Update (superseded)
+
+Decision 3 — ortho framing on a fixed default FOV — was superseded when the
+ortho camera moved to a derived frustum. Both projections now use the app's live
+FOV setting, so the FOV slider scales the orthographic view too and switching
+projection is the identity (no distance solve). See
+`docs/dev/camera-navigation.md`. Decisions 1, 2, 4, and 5 still hold in spirit:
+the FOV is user-configurable, projection switches preserve apparent framing, and
+framing is projection-aware.
+
 ## References
 
 - Key commits: `feb15bae` (keep perspective FOV), `1178fc21` (default FOV for
   ortho framing), `189b44c6` (solve distance not FOV), `1ad29bf9` (adjustable
   FOV setting)
 - Camera focus helper: `src/features/*/cameraFocusHelper.ts`
+- Superseding design: `docs/dev/camera-navigation.md`

@@ -8,7 +8,6 @@ type CameraHomeResetControllerProps = {
   runId: number;
   homePosition: [number, number, number];
   homeTarget?: [number, number, number];
-  homeFovDeg?: number;
   onComplete?: (runId: number) => void;
 };
 
@@ -40,7 +39,6 @@ export function CameraHomeResetController({
   runId,
   homePosition,
   homeTarget = [0, 0, 0],
-  homeFovDeg = 50,
   onComplete,
 }: CameraHomeResetControllerProps) {
   const { camera, controls } = useThree();
@@ -59,13 +57,17 @@ export function CameraHomeResetController({
     activeRunIdRef.current = runId;
 
     const startPos = camera.position.clone();
+    const startTarget = controls.target.clone();
     const endPos = new THREE.Vector3(homePosition[0], homePosition[1], homePosition[2]);
     const endTarget = new THREE.Vector3(homeTarget[0], homeTarget[1], homeTarget[2]);
     const worldUp = new THREE.Vector3(0, 0, 1);
 
     // Keep reset motion above the plate/horizon to avoid under-plate flips.
     const minDirectionZ = 0.08;
-    const startOffset = startPos.clone().sub(endTarget);
+    // Offsets are measured against each end's own target and the target is
+    // interpolated too, so the orbit pivot eases across instead of snapping to
+    // the destination on the first frame.
+    const startOffset = startPos.clone().sub(startTarget);
     const endOffset = endPos.clone().sub(endTarget);
     const startDistance = Math.max(0.001, startOffset.length());
     const endDistance = Math.max(0.001, endOffset.length());
@@ -88,18 +90,7 @@ export function CameraHomeResetController({
     const directionArc = new THREE.Quaternion().setFromUnitVectors(startDirection, endDirection);
     const directionQuat = new THREE.Quaternion();
     const currentDirection = new THREE.Vector3();
-
-    const isOrthographic = camera instanceof THREE.OrthographicCamera;
-    const startZoom = isOrthographic ? (camera as THREE.OrthographicCamera).zoom : 1;
-    let endZoom = 1;
-
-    if (isOrthographic) {
-      const ortho = camera as THREE.OrthographicCamera;
-      const frustumHeight = Math.max(1e-6, ortho.top - ortho.bottom);
-      const homeDistance = Math.max(0.001, endPos.distanceTo(endTarget));
-      const homeWorldHeight = Math.max(1e-6, 2 * Math.tan(THREE.MathUtils.degToRad(homeFovDeg) * 0.5) * homeDistance);
-      endZoom = THREE.MathUtils.clamp(frustumHeight / homeWorldHeight, 0.0001, 200);
-    }
+    const currentTarget = new THREE.Vector3();
 
     animatingRef.current = true;
     const prevEnableDamping = controls.enableDamping;
@@ -139,7 +130,8 @@ export function CameraHomeResetController({
       const t = Math.min(elapsed / duration, 1);
       const eased = THREE.MathUtils.smootherstep(t, 0, 1);
 
-      controls.target.copy(endTarget);
+      currentTarget.lerpVectors(startTarget, endTarget, eased);
+      controls.target.copy(currentTarget);
 
       directionQuat.identity().slerp(directionArc, eased);
       currentDirection.copy(startDirection).applyQuaternion(directionQuat).normalize();
@@ -149,15 +141,9 @@ export function CameraHomeResetController({
       }
 
       const currentDistance = THREE.MathUtils.lerp(startDistance, endDistance, eased);
-      camera.position.copy(endTarget).addScaledVector(currentDirection, currentDistance);
+      camera.position.copy(currentTarget).addScaledVector(currentDirection, currentDistance);
 
       camera.up.copy(worldUp);
-
-      if (isOrthographic) {
-        const ortho = camera as THREE.OrthographicCamera;
-        ortho.zoom = THREE.MathUtils.lerp(startZoom, endZoom, eased);
-        ortho.updateProjectionMatrix();
-      }
 
       controls.update();
 
@@ -220,7 +206,7 @@ export function CameraHomeResetController({
         activeRunIdRef.current = 0;
       }
     };
-  }, [camera, controls, homeFovDeg, homePosition, homeTarget, onComplete, runId]);
+  }, [camera, controls, homePosition, homeTarget, onComplete, runId]);
 
   return null;
 }

@@ -53,6 +53,16 @@ chunk that carries the image.
 
 ## Building
 
+The providers read a table compiled from the container declarations
+(`generated_output_file_types.json`, listed above), and it is gitignored: a fresh
+checkout does not have it and `cargo build` fails on the `include_str!` in
+`src/locator.rs`. Generate it first — `npm run build:thumbnail-providers` and
+`npm run macos:thumbnails` do it for you, and a raw `cargo build` needs it once:
+
+```bash
+npm run generate:plugin-registry
+```
+
 ### Core library + CLI (all platforms)
 
 ```bash

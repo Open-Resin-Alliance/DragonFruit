@@ -112,6 +112,7 @@ nav:
           - History and Undo/Redo: dev/history-and-undo-redo.md
           - Registration Seams: dev/registration-seams.md
           - State and Stores: dev/state-and-stores.md
+          - Camera Navigation: dev/camera-navigation.md
           - Config Schemas: dev/config-schemas.md
           - Tauri IPC and Native Bridge: dev/tauri-ipc-bridge.md
           - Hotkeys: dev/hotkeys.md

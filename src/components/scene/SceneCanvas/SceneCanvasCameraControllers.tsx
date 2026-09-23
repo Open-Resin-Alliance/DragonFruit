@@ -2,34 +2,38 @@ import React from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import type { CameraProjectionMode } from '@/components/settings/cameraProjectionPreferences';
-import { DEFAULT_FOV_DEG } from '@/components/settings/cameraFovPreferences';
+import {
+  ORTHO_FAR,
+  ORTHO_NEAR,
+  syncOrthoFrustum,
+} from '@/components/scene/camera/orthoDolly';
 
-export function CameraProjectionController({ mode, perspectiveFov = 50 }: { mode: CameraProjectionMode; perspectiveFov?: number }) {
+function orbitTargetOf(controls: unknown): THREE.Vector3 | null {
+  if (!controls || typeof controls !== 'object') return null;
+  const target = (controls as { target?: unknown }).target;
+  return target instanceof THREE.Vector3 ? target : null;
+}
+
+export function CameraProjectionController({
+  mode,
+  perspectiveFov = 50,
+  sceneRadius,
+}: {
+  mode: CameraProjectionMode;
+  perspectiveFov?: number;
+  sceneRadius?: number;
+}) {
   const { camera, controls, set, size } = useThree();
-  // Orthographic cameras require a negative near so that geometry behind the
-  // camera's position (in its local +Z direction) remains visible. When the
-  // ortho camera inherits the intro animation's close-up position the build
-  // volume back/top corners can sit behind a positive near plane and get
-  // permanently clipped regardless of zoom. Using ±50000 gives a symmetric
-  // depth range; at 24-bit z-buffer that is ~0.006 mm resolution, sufficient
-  // for this scene's 100–600 mm working volume.
-  const ORTHO_NEAR = -50000;
-  const ORTHO_FAR = 50000;
   const PERSPECTIVE_NEAR = 0.005;
   const PERSPECTIVE_FAR = 50000;
 
   React.useEffect(() => {
     const aspect = size.width / Math.max(1, size.height);
     if (mode === 'orthographic' && camera instanceof THREE.OrthographicCamera) {
-      // Preserve vertical world-space extent (camera.top) and zoom; only
-      // update horizontal bounds for the new aspect ratio.  This keeps the
-      // currently-visible world region stable across window resizes.
-      const halfH = camera.top;
-      camera.left = -halfH * aspect;
-      camera.right = halfH * aspect;
-      camera.near = ORTHO_NEAR;
-      camera.far = ORTHO_FAR;
-      camera.updateProjectionMatrix();
+      // The frustum is derived from the dolly radius (see orthoDolly.ts), so a
+      // resize only needs to re-derive it at the new aspect ratio.
+      const target = orbitTargetOf(controls) ?? new THREE.Vector3();
+      syncOrthoFrustum(camera, target, aspect, { sceneRadius, fovDeg: perspectiveFov });
       // NOTE: Do NOT call controls.update() here. If we do, and the user
       // hasn't interacted with the camera since the intro animation,
       // OrbitControls may apply internal constraints that cause the view
@@ -51,49 +55,25 @@ export function CameraProjectionController({ mode, perspectiveFov = 50 }: { mode
       : new THREE.Vector3(0, 0, 0);
 
     if (mode === 'orthographic') {
-      // Use world-scale frustum bounds (per Three.js docs canonical example:
-      //   new THREE.OrthographicCamera(w/-2, w/2, h/2, h/-2, near, far)
-      // ) so that zoom=1 represents the natural 1:1 view at the current
-      // orbit distance. This avoids the very large/tiny zoom values that the
-      // old normalised-frustum approach produced, which degraded GPU pick
-      // precision via setViewOffset floating-point arithmetic.
-      let worldHalfH: number;
-      let preserveZoom = 1;
-      if (camera instanceof THREE.PerspectiveCamera) {
-        const distance = Math.max(0.001, camera.position.distanceTo(target));
-        // Ortho framing uses a fixed reference FOV (the default) rather than the
-        // user's perspective FOV setting, so the FOV slider never changes the
-        // orthographic zoom (FOV is a perspective-only property).
-        const fov = THREE.MathUtils.degToRad(DEFAULT_FOV_DEG);
-        worldHalfH = Math.max(1, Math.tan(fov * 0.5) * distance);
-        // At the reference FOV, preserveZoom is worldHalfH / the same frustum, i.e.
-        // 1 — ortho zoom stays at the natural 1:1 projection of the reference frustum.
-        preserveZoom = Math.max(0.0001, worldHalfH / Math.max(1, Math.tan(fov * 0.5) * distance));
-      } else {
-        // Already ortho (type mismatch shouldn't happen, but be safe)
-        worldHalfH = Math.max(1, camera.top);
-        // Preserve existing zoom when already in ortho mode
-        preserveZoom = (camera as THREE.OrthographicCamera).zoom;
-      }
-      const worldHalfW = worldHalfH * aspect;
+      // The frustum is derived from the dolly radius: halfHeight =
+      // tan(DEFAULT_FOV/2) * |position - target|, zoom pinned to 1. Keeping the
+      // camera's position means the ortho view frames the same world region the
+      // perspective view did at the reference FOV (see orthoDolly.ts). The
+      // reference FOV is the default, not the user's, so the FOV slider never
+      // changes the orthographic scale (ADR-0032).
       const next = new THREE.OrthographicCamera(
-        -worldHalfW, worldHalfW, worldHalfH, -worldHalfH,
+        -1, 1, 1, -1,
         ORTHO_NEAR, ORTHO_FAR,
       );
       // Prevent R3F's internal updateCamera() from overwriting camera.top with
       // size.height/2 (pixel units) on the first window resize.  Our frustum
       // uses world-space mm, so R3F's pixel-mapped values would cause a sudden
       // scale jump that makes the build plate appear to zoom far out.  With
-      // manual=true R3F skips updateCamera entirely and our resize handler in
-      // this same effect is the sole authority on left/right/top/bottom.
+      // manual=true R3F skips updateCamera entirely and OrthoFrustumSync is the
+      // sole authority on left/right/top/bottom.
       (next as any).manual = true;
-      next.zoom = preserveZoom;
-      next.position.copy(camera.position);
-      // Preserve view direction. Without copying quaternion, the new camera has identity
-      // rotation (looking down -Z) until OrbitControls.update() corrects it. At initial
-      // app load controls is null, so update() is never called — the camera stays
-      // mis-oriented for every pick frame until the first gl.render().
-      next.quaternion.copy(camera.quaternion);
+      // Ortho and perspective now share the live FOV, so keeping the position
+      // preserves the apparent size — the switch is the identity.
       next.position.copy(camera.position);
       // Preserve view direction. Without copying quaternion, the new camera has identity
       // rotation (looking down -Z) until OrbitControls.update() corrects it. At initial
@@ -102,7 +82,7 @@ export function CameraProjectionController({ mode, perspectiveFov = 50 }: { mode
       next.quaternion.copy(camera.quaternion);
       next.up.copy(camera.up);
 
-      next.updateProjectionMatrix();
+      syncOrthoFrustum(next, target, aspect, { sceneRadius, fovDeg: perspectiveFov });
       // Force matrixWorld to be set from position+quaternion immediately so the
       // PickingRenderer (which runs in useFrame, before gl.render) gets a valid
       // camera matrix on the very first frame after the switch.
@@ -154,7 +134,107 @@ export function CameraProjectionController({ mode, perspectiveFov = 50 }: { mode
       (controls as any).update?.();
       next.updateMatrixWorld();
     }
-  }, [camera, controls, mode, perspectiveFov, set, size.height, size.width]);
+  }, [camera, controls, mode, perspectiveFov, sceneRadius, set, size.height, size.width]);
+
+  return null;
+}
+
+/**
+ * Keeps the orthographic frustum derived from the dolly radius.
+ *
+ * Runs on OrbitControls' `change` (so the frustum is fresh the moment a
+ * rotation/pan/dolly settles, before picking or render), on resize, and once
+ * per frame as a safety net for programmatic moves that skip `controls.update`.
+ *
+ * While a SpaceMouse owns the camera (`suspended`) its existing zoom path runs
+ * unopposed; on hand-back we bake that zoom into the radius so the derived
+ * frustum matches the last visible scale, then resume deriving.
+ */
+export function OrthoFrustumSync({
+  mode,
+  suspended,
+  sceneRadius,
+  fovDeg,
+}: {
+  mode: CameraProjectionMode;
+  suspended: boolean;
+  sceneRadius?: number;
+  fovDeg?: number;
+}) {
+  const { camera, controls, size } = useThree();
+  const aspect = size.width / Math.max(1, size.height);
+
+  const sync = React.useCallback(() => {
+    if (suspended) return;
+    if (mode !== 'orthographic') return;
+    if (!(camera instanceof THREE.OrthographicCamera)) return;
+    syncOrthoFrustum(camera, orbitTargetOf(controls) ?? new THREE.Vector3(), aspect, { sceneRadius, fovDeg });
+  }, [aspect, camera, controls, fovDeg, mode, sceneRadius, suspended]);
+
+  React.useLayoutEffect(() => {
+    sync();
+  }, [sync]);
+
+  React.useEffect(() => {
+    if (!controls || typeof controls !== 'object') return;
+    const orbit = controls as {
+      addEventListener?: (type: string, listener: () => void) => void;
+      removeEventListener?: (type: string, listener: () => void) => void;
+    };
+    if (typeof orbit.addEventListener !== 'function') return;
+    const onChange = () => sync();
+    orbit.addEventListener('change', onChange);
+    return () => orbit.removeEventListener?.('change', onChange);
+  }, [controls, sync]);
+
+  useFrame(() => {
+    sync();
+  });
+
+  return null;
+}
+
+const WORLD_UP = new THREE.Vector3(0, 0, 1);
+
+/**
+ * Re-levels the orbit horizon to world Z-up the moment the regular mouse (or
+ * trackpad) starts driving the camera.
+ *
+ * A SpaceMouse gesture may leave navlib's roll in place — that is deliberate, so
+ * a rolled view can be inspected after release. The roll is not a valid orbit
+ * basis, though, so the first mouse camera input afterwards must snap the
+ * up-vector back to Z. Triggered off the picking-orbit/pan/zoom-start events,
+ * which cover every mouse/trackpad path and are *not* fired by SpaceMouse
+ * navigation, so it never fights navlib mid-gesture.
+ */
+export function HorizonLock({ enabled }: { enabled: boolean }) {
+  const { camera, controls } = useThree();
+  const enabledRef = React.useRef(enabled);
+  enabledRef.current = enabled;
+
+  React.useEffect(() => {
+    const level = () => {
+      if (!enabledRef.current) return;
+      if (camera.up.distanceToSquared(WORLD_UP) < 1e-10) return;
+
+      camera.up.copy(WORLD_UP);
+      const target = orbitTargetOf(controls);
+      if (target) camera.lookAt(target);
+      camera.updateMatrixWorld();
+      if (controls && typeof controls === 'object' && 'update' in controls) {
+        (controls as { update?: () => void }).update?.();
+      }
+    };
+
+    window.addEventListener('picking-orbit-start', level);
+    window.addEventListener('picking-pan-start', level);
+    window.addEventListener('picking-zoom-start', level);
+    return () => {
+      window.removeEventListener('picking-orbit-start', level);
+      window.removeEventListener('picking-pan-start', level);
+      window.removeEventListener('picking-zoom-start', level);
+    };
+  }, [camera, controls]);
 
   return null;
 }
@@ -234,12 +314,14 @@ export function CameraModeEntryFramingController({
   target,
   plateWidthMm,
   plateDepthMm,
+  perspectiveFov = 50,
 }: {
   runId: number;
   restoreRunId: number;
   target: THREE.Vector3;
   plateWidthMm: number;
   plateDepthMm: number;
+  perspectiveFov?: number;
 }) {
   const { camera, controls, size } = useThree();
   const sizeRef = React.useRef(size);
@@ -257,7 +339,6 @@ export function CameraModeEntryFramingController({
   const cameraSnapshotRef = React.useRef<{
     position: THREE.Vector3;
     target: THREE.Vector3;
-    zoom: number | null;
   } | null>(null);
 
   React.useEffect(() => {
@@ -277,9 +358,6 @@ export function CameraModeEntryFramingController({
     endPos: THREE.Vector3;
     startTarget: THREE.Vector3;
     endTarget: THREE.Vector3;
-    startZoom: number;
-    endZoom: number;
-    isOrthographic: boolean;
     durationMs: number;
     onComplete?: () => void;
   }) => {
@@ -288,9 +366,6 @@ export function CameraModeEntryFramingController({
       endPos,
       startTarget,
       endTarget,
-      startZoom,
-      endZoom,
-      isOrthographic,
       durationMs,
       onComplete,
     } = params;
@@ -339,12 +414,6 @@ export function CameraModeEntryFramingController({
 
       camera.position.lerpVectors(startPos, endPos, eased);
       orbit.target.lerpVectors(startTarget, endTarget, eased);
-
-      if (isOrthographic) {
-        const ortho = camera as THREE.OrthographicCamera;
-        ortho.zoom = THREE.MathUtils.lerp(startZoom, endZoom, eased);
-        ortho.updateProjectionMatrix();
-      }
 
       orbit.update();
 
@@ -399,13 +468,12 @@ export function CameraModeEntryFramingController({
     cameraSnapshotRef.current = {
       position: startPos.clone(),
       target: startTarget.clone(),
-      zoom: camera instanceof THREE.OrthographicCamera ? camera.zoom : null,
     };
 
     const padding = 1.04;
     const fov = camera instanceof THREE.PerspectiveCamera
       ? THREE.MathUtils.degToRad(camera.fov)
-      : THREE.MathUtils.degToRad(50);
+      : THREE.MathUtils.degToRad(perspectiveFov);
     const viewport = sizeRef.current;
     const aspect = viewport.width / Math.max(1, viewport.height);
     const hFov = 2 * Math.atan(Math.tan(fov * 0.5) * aspect);
@@ -417,25 +485,11 @@ export function CameraModeEntryFramingController({
     const endTarget = target.clone().add(new THREE.Vector3(0, -plateDepthMm * 0.055, 0));
     const endPos = endTarget.clone().addScaledVector(viewDir, distance);
 
-    const isOrthographic = camera instanceof THREE.OrthographicCamera;
-    const startZoom = isOrthographic ? (camera as THREE.OrthographicCamera).zoom : 1;
-    let endZoom = startZoom;
-
-    if (isOrthographic) {
-      const ortho = camera as THREE.OrthographicCamera;
-      const frustumHeight = Math.max(1e-6, ortho.top - ortho.bottom);
-      const requiredWorldHeight = Math.max(plateWidthMm, plateDepthMm) * padding;
-      endZoom = THREE.MathUtils.clamp(frustumHeight / Math.max(1e-6, requiredWorldHeight), 0.0001, 200);
-    }
-
     animateTo({
       startPos,
       endPos,
       startTarget,
       endTarget,
-      startZoom,
-      endZoom,
-      isOrthographic,
       durationMs: 700,
       onComplete: () => {
         activeRunIdRef.current = null;
@@ -448,7 +502,7 @@ export function CameraModeEntryFramingController({
         activeRunIdRef.current = null;
       }
     };
-  }, [animateTo, camera, controls, plateDepthMm, plateWidthMm, runId, target]);
+  }, [animateTo, camera, controls, perspectiveFov, plateDepthMm, plateWidthMm, runId, target]);
 
   React.useLayoutEffect(() => {
     if (!restoreRunId) return;
@@ -469,22 +523,16 @@ export function CameraModeEntryFramingController({
 
     activeRunIdRef.current = restoreRunId;
 
-    const isOrthographic = camera instanceof THREE.OrthographicCamera;
     const startPos = camera.position.clone();
     const endPos = snapshot.position.clone();
     const startTarget = orbit.target.clone();
     const endTarget = snapshot.target.clone();
-    const startZoom = isOrthographic ? (camera as THREE.OrthographicCamera).zoom : 1;
-    const endZoom = (isOrthographic && snapshot.zoom != null) ? snapshot.zoom : startZoom;
 
     animateTo({
       startPos,
       endPos,
       startTarget,
       endTarget,
-      startZoom,
-      endZoom,
-      isOrthographic,
       durationMs: 520,
       onComplete: () => {
         activeRunIdRef.current = null;

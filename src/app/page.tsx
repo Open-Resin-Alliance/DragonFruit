@@ -230,6 +230,7 @@ import {
 // Domain Features
 import { useSceneCollectionManager, SCENE_SLICED, pushSceneSlicedMarker, getSceneSnapshotRegistryBytes } from '@/features/scene/useSceneCollectionManager';
 import { useSupportHistoryHandlers } from '@/supports/history/useSupportHistoryHandlers';
+import { useNativeSpaceMouseLifecycle } from '@/components/scene/camera/useNativeSpaceMouseLifecycle';
 import { useSlicingManager } from '@/features/slicing/useSlicingManager';
 import { useTransformManager } from '@/features/transform/useTransformManager';
 import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
@@ -611,6 +612,9 @@ export default function Home() {
   // for the lifetime of a scene renderer. Otherwise Ctrl+Z depends on which
   // render branch happens to be mounted.
   useSupportHistoryHandlers();
+  // The navlib session is process-wide and must outlive the camera controllers
+  // (which unmount for the intro and every Home reset) — see the hook.
+  useNativeSpaceMouseLifecycle();
   // Applies the user's saved UI scale via native webview zoom (no-op in browser).
   useUiScale();
   // 1. Scene & Geometry (Multi-Model)
