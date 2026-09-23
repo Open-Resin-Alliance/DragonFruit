@@ -24,7 +24,10 @@ function makeOrthoCamera(distance = 100, aspect = 1): {
   const target = new THREE.Vector3(0, 0, 0);
   const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -50000, 50000);
   camera.position.set(0, 0, distance);
-  camera.up.set(0, 0, 1);
+  // Not the scene's Z-up: looking down -Z with `up = +Z` is parallel, which
+  // makes `Matrix4.lookAt` fall back to a nudged, almost-degenerate basis. The
+  // residuals that fallback leaves are ~1e-2, far above the tolerances here.
+  camera.up.set(0, 1, 0);
   camera.lookAt(target);
   camera.updateMatrixWorld();
   syncOrthoFrustum(camera, target, aspect);
@@ -74,10 +77,56 @@ test('dollyOrthoToCursor keeps the anchored point under the cursor and scales th
   assert.ok(Math.abs(camera.position.distanceTo(nextTarget) - 50) < 1e-4);
   assert.equal(camera.zoom, 1);
 
+  // The contract: the world point the cursor was over is still under the cursor.
+  // Comparing world x/y of the two unprojections would only hold while both
+  // points happen to share a camera plane, which is what made the pivot drift
+  // invisible; projecting the original point back is frame-independent.
   camera.updateMatrixWorld();
-  const anchorAfter = new THREE.Vector3(ndcX, ndcY, 0).unproject(camera);
-  assert.ok(Math.abs(anchorAfter.x - anchorBefore.x) < 1e-4);
-  assert.ok(Math.abs(anchorAfter.y - anchorBefore.y) < 1e-4);
+  const anchorNdc = anchorBefore.clone().project(camera);
+  assert.ok(Math.abs(anchorNdc.x - ndcX) < 1e-4);
+  assert.ok(Math.abs(anchorNdc.y - ndcY) < 1e-4);
+});
+
+test('dollyOrthoToCursor never moves the orbit pivot along the view axis', () => {
+  // The regression: the anchor correction used to be built from two unprojected
+  // cursor points, taken on the camera plane before and after the move. Their
+  // difference includes the dolly's axial travel, so applying it cancelled the
+  // dolly already made and pushed the whole displacement onto the next target.
+  // The camera stayed put and the pivot walked a full dolly distance away, which
+  // is exactly what the user was orbiting around.
+  for (const [radiusScale, ndcX, ndcY] of [
+    [2, 0, 0],
+    [2, 0.5, 0.25],
+    [0.5, 0.5, 0.25],
+    [3, -0.9, 0.8],
+  ] as const) {
+    const { camera, target } = makeOrthoCamera(100, 1.5);
+    const before = target.clone();
+
+    const nextTarget = dollyOrthoToCursor({ camera, target, ndcX, ndcY, radiusScale, aspect: 1.5 });
+
+    const viewDirection = camera.getWorldDirection(new THREE.Vector3());
+    const axialDrift = nextTarget.clone().sub(before).dot(viewDirection);
+    assert.ok(
+      Math.abs(axialDrift) < 1e-6,
+      `radiusScale ${radiusScale} @ (${ndcX}, ${ndcY}) drifted the pivot ${axialDrift} mm along the view axis`,
+    );
+    // The camera, not the pivot, absorbs the dolly.
+    assert.ok(
+      Math.abs(camera.position.distanceTo(nextTarget) - 100 * radiusScale) < 1e-4,
+      'the camera should sit on the new radius from the returned pivot',
+    );
+  }
+});
+
+test('dollyOrthoToCursor pins a centred cursor to a stationary pivot', () => {
+  const { camera, target } = makeOrthoCamera(100, 1);
+  const before = target.clone();
+
+  const nextTarget = dollyOrthoToCursor({ camera, target, ndcX: 0, ndcY: 0, radiusScale: 2, aspect: 1 });
+
+  assert.ok(nextTarget.distanceTo(before) < 1e-6, 'a centred dolly must not move the pivot at all');
+  assert.ok(Math.abs(camera.position.z - 200) < 1e-4, 'the camera takes the full dolly');
 });
 
 test('dollyOrthoToCursor clamps the radius to the configured bounds', () => {

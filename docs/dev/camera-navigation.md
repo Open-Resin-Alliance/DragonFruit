@@ -69,6 +69,16 @@ runs once per frame as a safety net for programmatic moves that skip
   how every other owner of the camera announces itself (a live SpaceMouse
   gesture, the Home / focus / mode-framing animations), and the wheel must not
   dolly against them — otherwise it fights the SpaceMouse over the same radius.
+- **The cursor dolly slides the camera sideways, never along the view axis.** In
+  `dollyOrthoToCursor` the anchoring correction is computed in the camera's own
+  basis (`anchorInView - ndc * halfExtent`) and applied on the right/up axes. It
+  must not be built from two unprojected cursor points: taken before and after
+  the move they sit on different camera planes, so their difference contains the
+  dolly's own axial travel. Applying that as a translation cancels the dolly and
+  hands the whole displacement to the returned target, which walks the orbit
+  pivot a full dolly distance off whatever the user was orbiting, on every wheel
+  step. The camera staying put and the pivot running forward is the symptom; a
+  centred cursor must leave the pivot exactly where it is.
 - **Ortho near/far track the radius.** When the scene radius is known, the depth
   range is `±(radius + sceneRadius + ORTHO_DEPTH_MARGIN)`, so z precision improves
   as you dolly in. `ORTHO_NEAR`/`ORTHO_FAR` are the fallback when it is not.

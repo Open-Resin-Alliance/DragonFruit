@@ -218,7 +218,10 @@ export function dollyOrthoToCursor(params: OrthoDollyParams): THREE.Vector3 {
   } = params;
 
   camera.updateMatrixWorld();
-  const mouseBefore = new THREE.Vector3(ndcX, ndcY, 0).unproject(camera);
+  // The world point under the cursor. Any point along the cursor's ray projects
+  // to the same NDC, so anchoring the ray's origin on the camera plane anchors
+  // the whole ray.
+  const anchored = new THREE.Vector3(ndcX, ndcY, 0).unproject(camera);
 
   const radius = orthoRadius(camera, target);
   const nextRadius = THREE.MathUtils.clamp(radius * radiusScale, minRadius, maxRadius);
@@ -229,9 +232,23 @@ export function dollyOrthoToCursor(params: OrthoDollyParams): THREE.Vector3 {
   applyOrthoFrustum(camera, nextRadius, aspect, options);
   camera.updateMatrixWorld();
 
-  // Shift laterally so the anchored point keeps its screen position.
-  const mouseAfter = new THREE.Vector3(ndcX, ndcY, 0).unproject(camera);
-  camera.position.sub(mouseAfter).add(mouseBefore);
+  // Slide the camera sideways so the anchored point keeps its screen position,
+  // and only sideways. Re-unprojecting the cursor after the move and subtracting
+  // the two world points mixes in the dolly's own travel: the two points were
+  // taken on different camera planes, so their difference is the lateral anchor
+  // offset *plus* the axial distance the camera just moved. Applying it as a
+  // translation cancels the dolly outright (the camera lands back where it
+  // started) and hands the whole displacement to the next target, which walks the
+  // orbit pivot a full dolly distance away from whatever the user was orbiting.
+  // Work in the camera's own basis instead, where the correction is a pure
+  // in-plane offset by construction.
+  const anchoredInView = anchored.applyMatrix4(camera.matrixWorldInverse);
+  const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
+  const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
+  const halfWidth = (camera.right - camera.left) * 0.5;
+  const halfHeight = (camera.top - camera.bottom) * 0.5;
+  camera.position.addScaledVector(right, anchoredInView.x - ndcX * halfWidth);
+  camera.position.addScaledVector(up, anchoredInView.y - ndcY * halfHeight);
 
   const nextTarget = camera.position.clone().addScaledVector(direction, nextRadius);
   camera.updateMatrixWorld();
