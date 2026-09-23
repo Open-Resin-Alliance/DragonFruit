@@ -9,7 +9,7 @@ import { Card, CardHeader, IconButton } from '@/components/atoms';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 import type { UseIslandsReturn } from '@/volumeAnalysis/Islands/useIslands';
-import { runAutoPlace, forestReportToText } from '@/supports/autoSupport';
+import { forestReportToText, runAutoPlaceInWorker } from '@/supports/autoSupport';
 import { DETAIL_PRESET, STRUCTURE_PRESET, ANCHOR_PRESET } from '@/supports/Settings/presets';
 import type { SizingDebugInfo, AutoSupportSettings, ForestReport } from '@/supports/autoSupport';
 import { getSettings, updateAutoSupportSettings, subscribeToSettings, updateDebugSimpleSupportRender } from '@/supports/Settings/state';
@@ -186,10 +186,12 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, onBefore
   const islandsRef = React.useRef(islands);
   islandsRef.current = islands;
 
-  const runAutoSupports = React.useCallback((list: UseIslandsReturn['filteredIslands']) => {
+  // Runs on a worker thread: the plan is seconds of work on a big model, and
+  // the panel used to block the main thread (and the modal) for all of it.
+  const runAutoSupports = React.useCallback(async (list: UseIslandsReturn['filteredIslands']) => {
     if (!activeModelId) return;
     try {
-      const result = runAutoPlace(list, activeModelId, getSettings().autoSupport);
+      const result = await runAutoPlaceInWorker(list, activeModelId, getSettings().autoSupport);
       if (result.analytics?.sizingDebug) setSizingDebugState(result.analytics.sizingDebug);
       if (result.analytics?.forestReport) setForestReportState(result.analytics.forestReport);
     } catch (e) {
@@ -207,12 +209,10 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, onBefore
     autoSupportDrivingScan = false;
     const list = islands.filteredIslands;
     if (list.length > 0 && getSettings().autoSupport.enabled) {
-      try {
-        runAutoSupports(list);
-      } finally {
+      void runAutoSupports(list).finally(() => {
         setAutoSupportBusy(false);
         setBusy(false);
-      }
+      });
     } else {
       setAutoSupportBusy(false);
       setBusy(false);
@@ -345,13 +345,20 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, onBefore
                 return;
               }
               if (list.length > 0 && getSettings().autoSupport.enabled) {
-                runAutoSupports(list);
-              }
-            } finally {
-              if (!pendingRef.current) {
+                void runAutoSupports(list).finally(() => {
+                  if (!pendingRef.current) {
+                    setAutoSupportBusy(false);
+                    setBusy(false);
+                  }
+                });
+              } else {
                 setAutoSupportBusy(false);
                 setBusy(false);
               }
+            } catch (e) {
+              console.error('[AutoSupport] run failed:', e);
+              setAutoSupportBusy(false);
+              setBusy(false);
             }
           }, 0);
         });
@@ -372,11 +379,12 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, onBefore
     // before the heavy synchronous work blocks the main thread.
     requestAnimationFrame(() => {
       setTimeout(() => {
-        try {
-          if (list.length > 0 && getSettings().autoSupport.enabled) {
-            runAutoSupports(list);
-          }
-        } finally {
+        if (list.length > 0 && getSettings().autoSupport.enabled) {
+          void runAutoSupports(list).finally(() => {
+            setAutoSupportBusy(false);
+            setBusy(false);
+          });
+        } else {
           setAutoSupportBusy(false);
           setBusy(false);
         }

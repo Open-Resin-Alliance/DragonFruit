@@ -30,11 +30,12 @@ import { mergeSettingsWithDefaults, type SupportSettings } from './Settings/type
 import { createDefaultSettings } from './Settings/types';
 import { decodeSupportSettingsHex, encodeSupportSettingsHex } from './Settings/supportSettingsCodec';
 import { resolveTwigDiameterAtSegmentT, twigJointDiameterForLocalDiameter } from './SupportTypes/Twig/twigTaper';
+import { hasWindow } from '@/utils/dom';
 
 export type { SupportState } from './types';
 
 function isSupportSettingsDebugEnabled(): boolean {
-    if (typeof window === 'undefined') return false;
+    if (!hasWindow()) return false;
     try {
         return window.localStorage.getItem('df-debug-support-settings') === '1';
     } catch {

@@ -18,6 +18,7 @@ import {
 } from './hoverTypes';
 import type { Vec3 } from '@/supports/types';
 import { resolveHoverSource, resolveSupportHover } from './supportHoverResolver';
+import { hasWindow } from '@/utils/dom';
 
 const listeners = new Set<() => void>();
 
@@ -59,7 +60,7 @@ function setMarqueeActive(next: boolean) {
 }
 
 function ensureInitialized() {
-    if (initialized || typeof window === 'undefined') return;
+    if (initialized || !hasWindow()) return;
     initialized = true;
 
     unsubscribeSupport = subscribe(notify);
@@ -76,7 +77,7 @@ function ensureInitialized() {
 }
 
 function teardownInitializedResources() {
-    if (typeof window !== 'undefined') {
+    if (hasWindow()) {
         window.removeEventListener('picking-orbit-start', handleOrbitStart);
         window.removeEventListener('picking-orbit-change', handleOrbitStart);
         window.removeEventListener('picking-orbit-end', handleOrbitEnd);

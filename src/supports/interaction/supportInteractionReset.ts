@@ -1,3 +1,5 @@
+import { hasWindow } from '@/utils/dom';
+
 const EVENT_NAME = 'dragonfruit-support-interaction-reset';
 
 export interface SupportInteractionResetPayload {
@@ -6,7 +8,8 @@ export interface SupportInteractionResetPayload {
 }
 
 export function emitSupportInteractionReset(reason = 'support-store-replaced') {
-  if (typeof window === 'undefined') return;
+  // hasWindow, not `typeof window`: the worker shim throws on any window access.
+  if (!hasWindow()) return;
 
   const w = window as any;
   // Ensure interaction lock cannot survive scene/store replacement.
@@ -22,7 +25,7 @@ export function emitSupportInteractionReset(reason = 'support-store-replaced') {
 }
 
 export function subscribeSupportInteractionReset(listener: (payload: SupportInteractionResetPayload) => void) {
-  if (typeof window === 'undefined') return () => {};
+  if (!hasWindow()) return () => {};
 
   const handle = (event: Event) => {
     const detail = (event as CustomEvent<SupportInteractionResetPayload>).detail;

@@ -1,5 +1,6 @@
 import type { RaftBottomMode, RaftSettings } from '@/supports/Rafts/Crenelated/RaftTypes';
 import type { DragonfruitImportFormat, Trunk } from '@/supports/types';
+import { hasWindow } from '@/utils/dom';
 
 export type ImportDefaultsSettings = {
   raftBottomMode: RaftBottomMode;
@@ -54,7 +55,7 @@ export function normalizeImportDefaultsSettings(value: unknown): ImportDefaultsS
 }
 
 export function getSavedImportDefaultsSettings(): ImportDefaultsSettings {
-  if (typeof window === 'undefined') {
+  if (!hasWindow()) {
     return { ...DEFAULT_IMPORT_DEFAULTS_SETTINGS };
   }
 
@@ -70,7 +71,7 @@ export function getSavedImportDefaultsSettings(): ImportDefaultsSettings {
 }
 
 export function saveImportDefaultsSettings(settings: ImportDefaultsSettings): void {
-  if (typeof window === 'undefined') return;
+  if (!hasWindow()) return;
   try {
     const normalized = normalizeImportDefaultsSettings(settings);
     window.localStorage.setItem(IMPORT_DEFAULTS_STORAGE_KEY, JSON.stringify(normalized));

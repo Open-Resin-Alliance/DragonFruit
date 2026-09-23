@@ -727,11 +727,11 @@ function placeOneCandidate(
     draft: SupportState,
     _settingsOverride: Partial<AutoSupportSettings> | undefined,
     gridHostIds?: ReadonlySet<string>,
+    mesh?: THREE.Mesh,
 ): { kind: PlacementOutcomeKind; draft: SupportState; rejectedReason?: RejectReason; preset?: 'detail' | 'structure' | 'anchor'; entityId?: string; stickCount?: number; fanRefusal?: FanLeafRefusal; mergeRefusal?: 'noHost' | 'rejected'; cavityFanRefusal?: string } {
     const supportSettings = getSettings();
     const snapshot = draft;
     let d = draft;
-    const mesh = getModelMesh(candidate.modelId) ?? undefined;
 
     // Grid points carry the region's exact surface position and normal (from
     // the classifier's own triangles, world space). Re-resolving via a
@@ -2646,7 +2646,7 @@ export function computeAutoSupportPlan(
     // (no store commit) so later candidates see earlier supports.
     const placeOne = (candidate: CandidatePoint): string => {
         try {
-            const result = placeOneCandidate(candidate, draft, settingsOverride, gridHostIds);
+            const result = placeOneCandidate(candidate, draft, settingsOverride, gridHostIds, resolvedMesh);
             draft = result.draft;
             // A fan host is a type whose shaft the pool offers, which is what
             // `canBeGridHost` declares. Recorded so later candidates fan to a
@@ -2886,6 +2886,11 @@ export function computeAutoSupportPlan(
     // iterating until the coverage target is met or nothing more places.
     let gapFilledTrunks = 0;
     for (let pass = 0; pass < MAX_GAP_FILL_PASSES; pass++) {
+        // Reads the committed store, not the draft: the run's own supports are
+        // not counted here. Left as-is deliberately (a worker seeds the store
+        // with the pre-run state so it matches the main thread); switching to
+        // `draft` converges properly and moves placement by one twig on the
+        // signature fixture. See docs/dev/backlog.md.
         const tips = collectSupportTips(getSnapshot());
         const gapCandidates = buildGapFillCandidates(overhangIslands, autoSettings, tips)
             .map((c): CandidatePoint => ({ ...c, modelId }));
@@ -3300,7 +3305,7 @@ export function computeAutoSupportPlan(
                                 priority: 0,
                             };
                             try {
-                                const result = placeOneCandidate(recandidate, draft, undefined, gridHostIds);
+                                const result = placeOneCandidate(recandidate, draft, undefined, gridHostIds, resolvedMesh);
                                 draft = result.draft;
                                 if (result.kind === 'reject') rejectedCount++;
                                 else placed[result.kind]++;
@@ -3443,16 +3448,12 @@ export function computeAutoSupportPlan(
 }
 
 /**
- * Run auto-support end-to-end: compute the plan, then commit it as ONE
- * atomic store update + ONE undoable history entry (supports + braces +
- * kickstands together).
+ * Commit a computed plan: one store write and one history entry (supports +
+ * braces + kickstands together). Split out so the worker path commits exactly
+ * what the in-process path does, and so a `null` plan (auto-support disabled)
+ * reports the same result either way.
  */
-export function runAutoPlace(
-    islands: DetectedIsland[],
-    modelId: string,
-    settingsOverride?: Partial<AutoSupportSettings>,
-): AutoPlaceResult {
-    const plan = computeAutoSupportPlan(islands, modelId, settingsOverride);
+export function commitAutoPlacePlan(plan: AutoSupportPlan | null): AutoPlaceResult {
     if (!plan) {
         return makeResult(emptyPlacedCounts(), 0, false, 'disabled');
     }
@@ -3476,4 +3477,12 @@ export function runAutoPlace(
     }
 
     return plan.result;
+}
+
+export function runAutoPlace(
+    islands: DetectedIsland[],
+    modelId: string,
+    settingsOverride?: Partial<AutoSupportSettings>,
+): AutoPlaceResult {
+    return commitAutoPlacePlan(computeAutoSupportPlan(islands, modelId, settingsOverride));
 }

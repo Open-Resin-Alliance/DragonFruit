@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import type { ResolvedModelHoverHit } from './hoverTypes';
+import { hasWindow } from '@/utils/dom';
 
 const immediateModelHoverListeners = new Set<() => void>();
 let immediateModelHoverId: string | null = null;
@@ -20,7 +21,7 @@ function clearImmediateModelHover() {
 }
 
 function initializeImmediateModelHoverStore() {
-    if (immediateModelHoverStoreInitialized || typeof window === 'undefined') return;
+    if (immediateModelHoverStoreInitialized || !hasWindow()) return;
     immediateModelHoverStoreInitialized = true;
 
     const handleModelHover = (event: Event) => {

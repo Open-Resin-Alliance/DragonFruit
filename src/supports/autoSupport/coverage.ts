@@ -32,10 +32,12 @@ export function collectSupportTips(snapshot: SupportState): Array<{ x: number; y
     const push = (pos?: { x: number; y: number; z: number }) => {
         if (pos) tips.push(pos);
     };
-    for (const t of Object.values(snapshot.trunks)) push(t.contactCone?.pos);
-    for (const b of Object.values(snapshot.branches)) push(b.contactCone?.pos);
-    for (const l of Object.values(snapshot.leaves)) push(l.contactCone?.pos);
-    for (const a of Object.values(snapshot.stumps)) push(a.contactCone?.pos);
+    // A collection may be absent on a partially built state (tests, drafts),
+    // the same tolerance `collectContactPositions` keeps.
+    for (const t of Object.values(snapshot.trunks ?? {})) push(t.contactCone?.pos);
+    for (const b of Object.values(snapshot.branches ?? {})) push(b.contactCone?.pos);
+    for (const l of Object.values(snapshot.leaves ?? {})) push(l.contactCone?.pos);
+    for (const a of Object.values(snapshot.stumps ?? {})) push(a.contactCone?.pos);
     return tips;
 }
 

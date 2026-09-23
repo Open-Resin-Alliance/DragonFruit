@@ -316,13 +316,19 @@ Still open, in the order a profile says they pay:
 4. `isAutoBraceableShaftType` / `lateralStabiliserTypes` rebuild their
    filter+map+Set on every call, and they are called per sample.
 
-**The responsiveness fix is architectural, not micro-optimisation.** The plan is
-already pure and store-free (`computeAutoSupportPlan(islands, modelId, settings,
-baseState?, mesh?)`, one commit at the end) precisely so it can move into a
-worker — see the header of `autoSupport/supportDraft.ts`. Do that before porting
-anything to Rust: the profile above is dominated by allocation and repeated
-walks of TS structures, which a Rust port would not remove, and the pipeline is
-entangled with `three` geometry, three-mesh-bvh and the support registry.
+**The responsiveness fix was architectural, not micro-optimisation.** The plan is
+pure with respect to the stores it *writes* (one commit at the end), which is
+what let it move to a worker thread; see
+[Auto-Support Worker](auto-support-worker.md) for the protocol, the seeding
+contract that keeps the two threads in agreement, and the cost of the mesh
+transfer. What is still missing there is the progress/cancel surface: the run
+no longer blocks the main thread, but the modal over it is indeterminate, so
+the perceived freeze needs a percentage and a cancel action before it is gone.
+
+Porting to Rust is not the next step: the profile above is dominated by
+allocation and repeated walks of TS structures, which a Rust port would not
+remove, and the pipeline is entangled with `three` geometry, three-mesh-bvh and
+the support registry.
 
 **Reproducing the numbers:** a slab of `W × L` leaning 60° from horizontal, one
 hand-built `source: 'overhang'` island over its big face (plane, `triangleIds`,

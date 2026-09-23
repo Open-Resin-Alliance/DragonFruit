@@ -1,3 +1,5 @@
+import { hasWindow } from '@/utils/dom';
+
 type SupportInteractionWindow = Window & {
     __jointGizmoDragging?: boolean;
     __knotGizmoDragging?: boolean;
@@ -8,7 +10,7 @@ type SupportInteractionWindow = Window & {
 };
 
 function getSupportInteractionWindow(): SupportInteractionWindow | null {
-    if (typeof window === 'undefined') return null;
+    if (!hasWindow()) return null;
     return window as SupportInteractionWindow;
 }
 

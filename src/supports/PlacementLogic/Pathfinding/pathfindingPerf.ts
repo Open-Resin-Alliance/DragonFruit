@@ -16,6 +16,8 @@
  *   if (report.hasSpikes) console.warn(report);
  */
 
+import { hasWindow } from '@/utils/dom';
+
 // ---------- Types ----------
 
 export interface PerfPhase {
@@ -318,7 +320,7 @@ export { configurePerf as setPathfindingPerfConfig };
  *   __dfPerf.reset()         // clear history
  */
 export function installPerfConsoleAPI(): void {
-    if (typeof window === 'undefined') return;
+    if (!hasWindow()) return;
     (window as any).__dfPerf = {
         summary: (recentFrames?: number) => {
             console.log(getPerfSummary(recentFrames));
@@ -355,6 +357,7 @@ export function installPerfConsoleAPI(): void {
     };
 }
 
-// Auto-install the console API on first import — no DevTools needed.
-// The `installPerfConsoleAPI` guard handles SSR (window === undefined).
-installPerfConsoleAPI();
+// No auto-install here on purpose. This module is in the auto-support worker's
+// import graph, and a module-scope side effect on `window` kills the worker
+// during module evaluation, before it can receive a request. The app root
+// installs the API instead (see `page.tsx`).

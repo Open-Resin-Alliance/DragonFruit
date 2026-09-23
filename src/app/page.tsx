@@ -239,6 +239,7 @@ import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
 import { useIslands } from '@/volumeAnalysis/Islands/useIslands';
 import { IslandsPanel } from '@/components/controls/IslandsPanel';
 import { AutoSupportPanel, getAutoSupportBusy, subscribeAutoSupportBusy, autoSupportDrivingScan } from '@/components/controls/AutoSupportPanel';
+import { installPerfConsoleAPI } from '@/supports/PlacementLogic/Pathfinding/pathfindingPerf';
 import { getUnappliedModifiers } from '@/features/mesh-modifiers/unappliedModifiers';
 import type { UnappliedModifierAction } from '@/components/organisms/modals/ModifierModals';
 import { AutoRotationPanel, getOrientationBusy, subscribeOrientationBusy, OrientElapsed } from '@/components/controls/AutoRotationPanel';
@@ -969,6 +970,14 @@ export default function Home() {
     (window as unknown as Record<string, unknown>).__df_flushAutosave = flushAutosave;
     return () => { delete (window as unknown as Record<string, unknown>).__df_flushAutosave; };
   }, [flushAutosave]);
+
+  // `window.__dfPerf` for support-pathfinding timings. Installed here, not from
+  // `pathfindingPerf` itself: that module is in the auto-support worker's import
+  // graph, and a module-scope DOM side effect kills the worker before it can
+  // receive a request.
+  React.useEffect(() => {
+    installPerfConsoleAPI();
+  }, []);
 
   /**
    * User-facing scene-save failure (Ph0.1 sub-phase D).

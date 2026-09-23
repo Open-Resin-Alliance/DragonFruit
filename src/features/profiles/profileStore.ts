@@ -18,6 +18,7 @@ import {
     normalizeWebcamRotationDeg,
     DEFAULT_WEBCAM_ROTATION_DEG,
 } from '@/features/profiles/outputFormatUtils';
+import { hasWindow } from '@/utils/dom';
 
 export type PrinterOutputFormat = string;
 export type PrinterNetworkSupport = string;
@@ -603,7 +604,7 @@ function readActiveMaterialByPrinterProfileFromStorage(): Record<string, string>
         return { ...activeMaterialByPrinterProfileCache };
     }
 
-    if (typeof window === 'undefined') return {};
+    if (!hasWindow()) return {};
 
     const raw = window.localStorage.getItem(ACTIVE_MATERIAL_BY_PRINTER_PROFILE_STORAGE_KEY)
         ?? window.sessionStorage.getItem(ACTIVE_MATERIAL_BY_PRINTER_PROFILE_STORAGE_KEY);
@@ -631,7 +632,7 @@ function readActiveMaterialByPrinterProfileFromStorage(): Record<string, string>
 }
 
 function writeActiveMaterialByPrinterProfileToStorage(next: Record<string, string>): void {
-    if (typeof window === 'undefined') return;
+    if (!hasWindow()) return;
 
     const sanitized: Record<string, string> = {};
     Object.entries(next).forEach(([printerId, materialId]) => {
@@ -1304,7 +1305,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
 }
 
 function persist(next: ProfileStoreState): void {
-    if (typeof window === 'undefined') return;
+    if (!hasWindow()) return;
     try {
         const payload: PersistedProfileStoreEnvelope = {
             version: PROFILE_STORE_SCHEMA_VERSION,
@@ -1338,14 +1339,14 @@ function parsePersistedState(raw: string | null): Partial<ProfileStoreState> | n
 }
 
 function ensureHydrated(): void {
-    if (typeof window === 'undefined') return;
+    if (!hasWindow()) return;
     if (isHydrated) return;
     hydratePluginRegistry();
     hydrateProfilesFromStorage();
 }
 
 export function hydrateProfilesFromStorage(): void {
-    if (typeof window === 'undefined') return;
+    if (!hasWindow()) return;
     if (isHydrated) return;
 
     isHydrated = true;
