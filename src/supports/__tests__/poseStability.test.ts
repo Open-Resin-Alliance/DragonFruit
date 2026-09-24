@@ -102,8 +102,18 @@ test('a part standing comfortably needs no anti-topple coverage', () => {
     assert.ok(tool.adhesionRatio > CONSERVATIVE_P_SIGMA, 'comfortably above the conservative bound');
     assert.equal(needsToppleCoverage(tool), false, 'so the steep wall stays uncovered');
 
-    // The same part leaning, or with its mass outside the base, does need it.
+    // Leaning with the centroid OUTSIDE the patch is not a reason on its own.
+    // The static test is the FDM frame's rule; the part hangs from the plate
+    // here, gravity's share of the peel is 4e-5 MPa, and the adhesion ratio
+    // already says whether it lifts.
+    const leaning = { ...tool, centroidDepthMm: -8.36, contactDepthMm: 4.62, bearingAreaMm2: 310.2, adhesionRatio: 0.067 };
+    assert.equal(needsToppleCoverage(leaning), false, 'the pose the tool came back in stays uncovered');
+
+    // What does fire: a ratio at or below the conservative bound, which is also
+    // what a point or edge contact produces (almost no area to restore with).
     assert.equal(needsToppleCoverage({ ...tool, adhesionRatio: 0.001 }), true, 'marginal lifts');
-    assert.equal(needsToppleCoverage({ ...tool, centroidDepthMm: -3 }), true, 'mass outside the base');
-    assert.equal(needsToppleCoverage({ ...tool, bearingEdges: 0 }), true, 'no bearing polygon');
+    assert.equal(needsToppleCoverage({ ...tool, adhesionRatio: CONSERVATIVE_P_SIGMA - 0.001 }), true, 'just under');
+    assert.equal(needsToppleCoverage({ ...tool, adhesionRatio: CONSERVATIVE_P_SIGMA }), false, 'the bound itself is safe');
+    const pointContact = { ...tool, bearingAreaMm2: 0.2, bearingEdges: 0, adhesionRatio: 0.0004 };
+    assert.equal(needsToppleCoverage(pointContact), true, 'a point contact still fires');
 });

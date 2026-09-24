@@ -123,16 +123,19 @@ export const CONSERVATIVE_P_SIGMA = 0.05;
 /**
  * Does this pose need anti-topple contact at all?
  *
- * The constant-free half (no bearing polygon, or the mass outside the base) and
- * the conservative half of the adhesion verdict, in one place, because two
- * passes need the same answer: the stabilization anchors and the steep-flat
- * coverage. A part that stands on a wide patch, with its centroid well inside
- * it, and an adhesion ratio far above `p/σ`, does not need contact on a
- * self-supporting wall just because the wall is steep — that is a forest of
- * supports on a part that was never going to move.
+ * The adhesion verdict alone, in one place, because two passes need the same
+ * answer: the stabilization anchors and the steep-flat coverage.
+ *
+ * NOT the static "is the centroid over the base" test, which is the FDM frame's
+ * rule and over-fires badly here. A bottom-up printer hangs the part from the
+ * plate, so the failure is peel, and gravity's share of the peel is tiny: on a
+ * 97 cm³ part leaning with its centroid 8.4 mm outside a 310 mm² patch, gravity
+ * contributes 4e-5 MPa against a peel of tens of kPa. What actually resists is
+ * plate adhesion, and the ratio already covers every case the static test was
+ * standing in for: a point or edge contact has almost no area, so its ratio
+ * collapses toward zero and it still fires.
  */
 export function needsToppleCoverage(s: PoseStability): boolean {
-    if (isStaticallyUnstable(s)) return true;
     return s.adhesionRatio < CONSERVATIVE_P_SIGMA;
 }
 

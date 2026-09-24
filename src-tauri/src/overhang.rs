@@ -940,12 +940,15 @@ pub struct StabilityReport {
     /// so in the model frame gravity points +z, away from the plate: it PEELS,
     /// and it adds to the drag rather than opposing it. See `gravity_peel_mpa`.
     pub margin_mm: f32,
-    /// The gravity term as a pressure (MPa): `ρg·V·d_e / M_e`. In a bottom-up
-    /// machine the peel has to beat gravity as well as the plate adhesion, so
-    /// this belongs on the driving side and is directly comparable to `p`
-    /// (10–50 kPa at the film). Measured at ~1.9e-5 MPa on a 79 cm³ part, i.e.
-    /// ~0.06 % of a 30 kPa peel — negligible next to the drag, but not zero and
-    /// not restoring.
+    /// The gravity term as a pressure (MPa): `ρg·V·d_e / M_e`, about the worst
+    /// edge. In a bottom-up machine the part hangs from the plate, so gravity
+    /// pulls it off rather than holding it on: this belongs on the driving side
+    /// and is directly comparable to `p` (10–50 kPa at the film). Sign is
+    /// meaningful — positive drives the peel about that edge, negative opposes
+    /// it (the centroid sitting outside the edge, so the pull holds that side
+    /// down). Magnitude is what matters: ~4e-5 MPa on a 97 cm³ part, three
+    /// orders below a real peel, which is why the static "is the centroid over
+    /// the base" test is the wrong trigger for anti-topple coverage.
     pub gravity_peel_mpa: f64,
     /// `A_contact · d̄_e / M_e` (dimensionless): the bearing patch's first
     /// moment about the worst edge over the drag moment. The pose lifts off the
@@ -1016,8 +1019,13 @@ impl StabilityReport {
         let margin = if self.bearing_edges == 0 {
             "gravity lever 0.00mm (no bearing polygon — point/edge contact)".to_string()
         } else if self.margin_mm.is_finite() {
+            let sense = if self.gravity_peel_mpa >= 0.0 {
+                "driving the peel"
+            } else {
+                "opposing it"
+            };
             format!(
-                "gravity lever {:.2}mm · peel {:.1}e-5MPa (driving, not restoring)",
+                "gravity lever {:.2}mm · peel {:+.1}e-5MPa (gravity, {sense})",
                 self.margin_mm,
                 self.gravity_peel_mpa * 1e5
             )
@@ -2197,7 +2205,7 @@ mod tests {
         // can be read against p.
         assert!(
             line.starts_with(
-                "gravity lever 23.39mm · peel 25.2e-5MPa (driving, not restoring) · \
+                "gravity lever 23.39mm · peel +25.2e-5MPa (gravity, driving the peel) · \
                  adhesion 6.667 (lifts iff p/σ > it) · volume 580.0mm³"
             ),
             "{line}"
