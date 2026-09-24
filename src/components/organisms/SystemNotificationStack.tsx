@@ -14,9 +14,9 @@ function toneStyles(tone?: SystemNotification['tone']) {
   switch (tone) {
     case 'error':
       return {
-        border: 'color-mix(in srgb, #ef4444, var(--border-subtle) 40%)',
-        bg: 'color-mix(in srgb, #ef4444, var(--surface-1) 85%)',
-        color: '#ef4444',
+        border: 'color-mix(in srgb, var(--danger), var(--border-subtle) 40%)',
+        bg: 'color-mix(in srgb, var(--danger), var(--surface-1) 85%)',
+        color: 'var(--danger)',
         icon: <AlertTriangle className="h-4 w-4" />,
       };
     case 'warning':
@@ -28,9 +28,9 @@ function toneStyles(tone?: SystemNotification['tone']) {
       };
     case 'success':
       return {
-        border: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 40%)',
-        bg: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 85%)',
-        color: 'var(--accent-secondary)',
+        border: 'color-mix(in srgb, var(--success), var(--border-subtle) 40%)',
+        bg: 'color-mix(in srgb, var(--success), var(--surface-1) 85%)',
+        color: 'var(--success)',
         icon: <CheckCircle2 className="h-4 w-4" />,
       };
     case 'accent':
@@ -230,7 +230,7 @@ export function SystemNotificationStack() {
                     </span>
                   )}
                   <div className="min-w-0">
-                    <div className="text-base font-bold leading-tight" style={{ color: n.tone === 'accent-secondary' || n.tone === 'success' ? 'var(--accent-secondary)' : 'var(--text-strong)' }}>
+                    <div className="text-base font-bold leading-tight" style={{ color: n.tone === 'success' ? 'var(--success)' : n.tone === 'accent-secondary' ? 'var(--accent-secondary)' : 'var(--text-strong)' }}>
                       {n.title}
                     </div>
                     {n.subtitle && (
