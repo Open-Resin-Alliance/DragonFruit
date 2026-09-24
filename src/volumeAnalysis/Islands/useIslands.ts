@@ -104,6 +104,9 @@ export function overhangRegionToIsland(region: OverhangRegion, i: number): Detec
     baseZ: contactZ,
     areaMm2: region.projectedAreaMm2,
     overhangAngleDeg: region.angleDeg,
+    dragMomentMm3: region.dragMomentMm3,
+    dragDirDeg: region.dragDirDeg,
+    steepFlat: region.steepFlat,
     triangleIds: region.triangleIds,
     surfaceNormal: { x: region.normal[0], y: region.normal[1], z: region.normal[2] },
     contactVoxels: contactVoxels.build(),
@@ -451,6 +454,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
                 getSettings().autoSupport?.overhangSelfSupportAngleDeg ??
                 OVERHANG_SELF_SUPPORT_ANGLE_DEG,
               pxMm: OVERHANG_FOOTPRINT_PX_MM,
+              label: sourcePath ?? null,
             });
             if (scanEpochRef.current !== epoch) return;
             mappedOverhangs = regions.map(overhangRegionToIsland);
@@ -500,6 +504,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
           selfSupportAngleDeg: getSettings().autoSupport?.overhangSelfSupportAngleDeg
             ?? OVERHANG_SELF_SUPPORT_ANGLE_DEG,
           pxMm: OVERHANG_FOOTPRINT_PX_MM,
+          label: sourcePath ?? null,
         });
         if (scanEpochRef.current !== epoch) return;
         mappedOverhangs = regions.map(overhangRegionToIsland);

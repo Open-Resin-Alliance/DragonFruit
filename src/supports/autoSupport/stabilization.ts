@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { convexHull2d } from '@/supports/Rafts/Crenelated/geometry/convexHull2d';
+import { measurePoseStability } from './poseStability';
 
 /**
  * Stabilization: a model that prints fine on its own can still fail because
@@ -12,6 +13,10 @@ import { convexHull2d } from '@/supports/Rafts/Crenelated/geometry/convexHull2d'
  * Pure geometry, deterministic: welded edge graph + bearing hull + surface
  * centroid, then teeth sampled along every low edge at fixed spacing. No RNG,
  * no slicing.
+ *
+ * The verdict is also logged (see `logVerdict`) so it can be diffed against
+ * the Rust topple report on real models — that report computes the moment the
+ * thresholds here stand in for.
  */
 
 /** Low surface within this height of the minimum counts as the bearing locus. */
@@ -42,6 +47,17 @@ const BUTTRESS_HEIGHT_FRACTION = 0.35;
 const MAX_RISE_MM = 30.0;
 /** Above this many vertices, skip the pass entirely (memory/latency guard). */
 const VERT_CAP = 3_000_000;
+/** Spacing (mm) between buttress teeth along a rising edge. A buttress is a
+ *  structural member, not a contact line: the base line needs the dense 2.5mm
+ *  to be continuous, a brace only needs to be there. Without this a 50mm face
+ *  gets twenty teeth a side and reads as a carpet. */
+const BUTTRESS_SPACING_MM = 8.0;
+/** Conservative `p/σ` for the adhesion verdict: brace whenever the pose would
+ *  lift below this, i.e. whenever it is even close to marginal. The report's
+ *  ratio is computed from the model's own bearing patch, which is smaller than
+ *  the printed contact whenever a raft is used, so the true ratio is larger and
+ *  this errs toward bracing. Calibration will replace it. */
+const CONSERVATIVE_P_SIGMA = 0.05;
 
 export interface StabilizationAnchor {
     x: number;
@@ -103,6 +119,26 @@ export function computeStabilizationAnchors(mesh: THREE.Mesh): StabilizationAnch
         const ia = (index ? index[t * 3] : t * 3) * 3;
         const ib = (index ? index[t * 3 + 1] : t * 3 + 1) * 3;
         const ic = (index ? index[t * 3 + 2] : t * 3 + 2) * 3;
+
+        // Zero-area triangles are a mesh defect — a stray vertex on collapsed
+        // faces — and they must not join the vertex set: one stray vertex
+        // below the model otherwise defines zMin, empties the bearing band and
+        // turns its own degenerate edges into climb edges, so the anchors climb
+        // the defect instead of the part's base. Tested in the RAW frame, where
+        // it costs one cross product: an affine world transform maps collinear
+        // points to collinear points, so degeneracy is preserved. No-op for any
+        // mesh without such triangles. Mirrors `compute_stability_report`.
+        const rx = positions[ib] - positions[ia];
+        const ry = positions[ib + 1] - positions[ia + 1];
+        const rz = positions[ib + 2] - positions[ia + 2];
+        const sx = positions[ic] - positions[ia];
+        const sy = positions[ic + 1] - positions[ia + 1];
+        const sz = positions[ic + 2] - positions[ia + 2];
+        const nx = ry * sz - rz * sy;
+        const ny = rz * sx - rx * sz;
+        const nz = rx * sy - ry * sx;
+        if (nx * nx + ny * ny + nz * nz <= 0) continue;
+
         const a = vertexAt(ia);
         const b = vertexAt(ib);
         const c = vertexAt(ic);
@@ -116,6 +152,8 @@ export function computeStabilizationAnchors(mesh: THREE.Mesh): StabilizationAnch
         const by = toY(positions[ib], positions[ib + 1], positions[ib + 2]);
         const cx = toX(positions[ic], positions[ic + 1], positions[ic + 2]);
         const cy = toY(positions[ic], positions[ic + 1], positions[ic + 2]);
+        // A vertical face projects to zero XY area and is legitimate — it is
+        // skipped for the footprint centroid only, not for the vertex set.
         const area = Math.abs((bx - ax) * (cy - ay) - (by - ay) * (cx - ax)) / 2;
         if (area <= 0) continue;
         totalArea += area;
@@ -141,10 +179,37 @@ export function computeStabilizationAnchors(mesh: THREE.Mesh): StabilizationAnch
         if (vz[i] - zMin <= BEARING_BAND_MM) bearing.push(new THREE.Vector2(vx[i], vy[i]));
     }
     const hull = convexHull2d(bearing);
+    const bearingAreaMm2 = hull.length >= 3 ? hullArea(hull) : 0;
+    const depthMm = centroidDepth(comX, comY, hull);
 
     // Stable = enough bearing area AND the centroid over (or within a margin
-    // of) that area. Either failing means the part can tip.
-    if (hull.length >= 3 && hullArea(hull) >= MIN_BEARING_AREA_MM2 && insideOrNear(comX, comY, hull)) {
+    // of) that area. Either failing means the part can tip — and so does the
+    // adhesion verdict: a part can stand on its base and still lift off it when
+    // the peel drag outweighs the plate adhesion. That comparison needs one
+    // constant, so it is run conservatively (see CONSERVATIVE_P_SIGMA) and its
+    // geometry comes from the same report the log line prints.
+    // The measurement must see the POSE, not the authored geometry: this pass
+    // applies `matrixWorld` to every vertex itself (toX/toY/toZ), and a model
+    // whose transform carries the orientation is upright in its own frame — so
+    // measuring the raw attribute array reported a flat-topped part with no
+    // drag, and the brace reach fell back to a fraction of the height.
+    const local = positions as ArrayLike<number>;
+    const worldPositions = new Float32Array(local.length);
+    for (let i = 0; i + 2 < local.length; i += 3) {
+        worldPositions[i] = toX(local[i], local[i + 1], local[i + 2]);
+        worldPositions[i + 1] = toY(local[i], local[i + 1], local[i + 2]);
+        worldPositions[i + 2] = toZ(local[i], local[i + 1], local[i + 2]);
+    }
+    const poseStability = measurePoseStability(
+        worldPositions,
+        (indexAttr ? (indexAttr.array as ArrayLike<number>) : null),
+        0,
+        0,
+    );
+    const standsOnBase = hull.length >= 3 && bearingAreaMm2 >= MIN_BEARING_AREA_MM2 && depthMm >= -MARGIN_MM;
+    const liftsOff = poseStability.adhesionRatio < CONSERVATIVE_P_SIGMA;
+    if (standsOnBase && !liftsOff) {
+        logVerdict('stable', 0, bearingAreaMm2, depthMm);
         return [];
     }
 
@@ -165,24 +230,54 @@ export function computeStabilizationAnchors(mesh: THREE.Mesh): StabilizationAnch
         else if (ba || bb) climbEdges.push([a, b]);
     }
 
-    // Climb a fraction of the part's height up the rising edges — a short
-    // cube keeps short flanks, a tall blade gets buttresses partway up its
-    // faces. The dense bottom line still sorts first under the anchor cap.
+    // Climb the rising edges to where the moment actually acts. The report's
+    // moment-weighted drag height is the lever the toppling turns on, and a
+    // brace only resists once it reaches that height — so the old
+    // "0.35 × height, capped at 30mm" guess is replaced by the measured reach
+    // when the pose leans hard enough to have one. A short cube keeps short
+    // flanks, a tall blade gets buttresses up to its drag.
     const partHeight = zMax - zMin;
     const baseRise = bearingEdges.length > 0 ? FLANK_RISE_MM : CORNER_RISE_MM;
-    const riseCap = Math.min(MAX_RISE_MM, Math.max(baseRise, partHeight * BUTTRESS_HEIGHT_FRACTION));
+    // Measured reach wins when the pose drags: the moment peaks at the top of
+    // the highest dragging face, so a brace that stops short of it resists
+    // nothing there. The old fraction-and-cap only stands in when there is no
+    // drag to measure.
+    const riseCap =
+        poseStability.dragTopMm > 0
+            ? Math.min(partHeight, Math.max(baseRise, poseStability.dragTopMm))
+            : Math.min(MAX_RISE_MM, Math.max(baseRise, partHeight * BUTTRESS_HEIGHT_FRACTION));
 
     // Half-spacing XY cell: teeth on a 45° climb edge sit ~1.77mm apart in XY
     // (2.5mm along the edge), so a full-spacing cell would merge consecutive
     // teeth on the SAME edge, not just the near-duplicates from parallel edges.
     const cell = SPACING_MM * 0.5;
-    const best = new Map<string, StabilizationAnchor>();
-    const put = (x: number, y: number, z: number): void => {
+    // Rank, then keep: 0 = the bearing line (the stance — always first, it is
+    // what broadens the base), 1 = a brace on the side the part lifts (the
+    // longest lever from the tipping edge), 2 = the rest. The anchor cap then
+    // spends its budget where the toppling is actually resisted instead of
+    // spreading it evenly around the part.
+    interface Tooth extends StabilizationAnchor {
+        tier: number;
+    }
+    const best = new Map<string, Tooth>();
+    const put = (x: number, y: number, z: number, tier: number): void => {
         const key = `${Math.round(x / cell)},${Math.round(y / cell)}`;
         const existing = best.get(key);
-        if (!existing || z < existing.z) best.set(key, { x, y, z });
+        const tooth = { x, y, z, tier };
+        // One contact per XY cell: the placement cannot put two trunks in the
+        // same spot, so the cell keeps whichever tooth is worth more — and
+        // "lowest wins" would hand every cell to the base line and leave a
+        // leaning part braced only at its foot.
+        if (!existing || betterThan(tooth, existing)) best.set(key, tooth);
     };
-    const emitEdge = (a: number, b: number, riseCap: number): void => {
+    // The drag pushes the part over the edge on `pushDirDeg`; the material that
+    // lifts is on the far side. Azimuth 0 = +X, 90 = +Y.
+    const tensionRad = ((poseStability.pushDirDeg + 180) * Math.PI) / 180;
+    const tensionX = Math.cos(tensionRad);
+    const tensionY = Math.sin(tensionRad);
+    const tensionSide = (id: number): boolean =>
+        (vx[id] - comX) * tensionX + (vy[id] - comY) * tensionY > 0;
+    const emitEdge = (a: number, b: number, cap: number, spacing: number, tier: number): void => {
         const lo = vz[a] <= vz[b] ? a : b;
         const hi = lo === a ? b : a;
         const lx = vx[lo];
@@ -191,36 +286,74 @@ export function computeStabilizationAnchors(mesh: THREE.Mesh): StabilizationAnch
         const hx = vx[hi];
         const hy = vy[hi];
         const hz = vz[hi];
-        if (lz - zMin > riseCap) return;
+        if (lz - zMin > cap) return;
         const len = Math.hypot(hx - lx, hy - ly, hz - lz);
         if (len <= 1e-9) return;
-        const steps = Math.floor(len / SPACING_MM);
+        const steps = Math.floor(len / spacing);
         for (let k = 0; k <= steps; k++) {
-            const t = (k * SPACING_MM) / len;
+            const t = (k * spacing) / len;
             const z = lz + (hz - lz) * t;
-            if (z - zMin > riseCap + 1e-9) break;
-            put(lx + (hx - lx) * t, ly + (hy - ly) * t, z);
+            if (z - zMin > cap + 1e-9) break;
+            put(lx + (hx - lx) * t, ly + (hy - ly) * t, z, tier);
         }
     };
+    // What a tooth is worth. A support's resistance is its tip: a tip at 38mm
+    // holds the part at every height below it, a tip at 8mm holds nothing above
+    // 8mm — so among braces, higher is better. The tension side beats the far
+    // side, and a brace beats a base-line tooth, because on a thin part they
+    // compete for the same XY cells (every contact on a 2mm-thick plank is
+    // within the placement's own 3mm "already supported" radius) and only one
+    // of them can exist there. The base line is a continuous contact, so losing
+    // a tooth to a brace costs it nothing; losing a brace to a tooth costs the
+    // part its reach.
+    const worth = (t: Tooth): number => (t.tier === 1 ? 0 : t.tier === 0 ? 1 : 2);
+    const byRank = (a: Tooth, b: Tooth): number =>
+        worth(a) - worth(b) || (a.tier === 0 ? a.z - b.z : b.z - a.z);
+    const betterThan = (a: Tooth, b: Tooth): boolean => byRank(a, b) < 0;
 
     if (bearingEdges.length > 0) {
-        // Edge/face contact: the bearing line is the stance; flanks (or
-        // buttresses for a tippy part) climb the adjacent faces.
-        for (const e of bearingEdges) emitEdge(e[0], e[1], Infinity);
-        for (const e of climbEdges) emitEdge(e[0], e[1], riseCap);
-        const all = [...best.values()].sort((a, b) => a.z - b.z);
-        return all.slice(0, MAX_ANCHORS);
+        // Edge/face contact: the bearing line is the stance; braces climb the
+        // adjacent faces, tension side first.
+        for (const e of bearingEdges) emitEdge(e[0], e[1], Infinity, SPACING_MM, 0);
+        for (const e of climbEdges) {
+            const tier = tensionSide(e[0]) || tensionSide(e[1]) ? 1 : 2;
+            emitEdge(e[0], e[1], riseCap, BUTTRESS_SPACING_MM, tier);
+        }
+        const capped = [...best.values()].sort(byRank).slice(0, MAX_ANCHORS);
+        logVerdict('unstable (edge contact)', capped.length, bearingAreaMm2, depthMm);
+        return capped.map(({ x, y, z }) => ({ x, y, z }));
     }
     // Lone point: climb the radiating edges for a wide tripod, spreading the
-    // cap across the z range so the widest vertices are reached.
-    for (const e of climbEdges) emitEdge(e[0], e[1], riseCap);
-    const all = [...best.values()].sort((a, b) => a.z - b.z);
-    if (all.length <= MAX_ANCHORS) return all;
+    // cap across the z range so the widest vertices are reached. Deliberately
+    // NOT biased to the tension side: a point contact has no static margin in
+    // any direction, so the tripod has to cover all of them.
+    for (const e of climbEdges) emitEdge(e[0], e[1], riseCap, SPACING_MM, 1);
+    const all = [...best.values()].sort(byRank);
+    if (all.length <= MAX_ANCHORS) {
+        logVerdict('unstable (point contact)', all.length, bearingAreaMm2, depthMm);
+        return all.map(({ x, y, z }) => ({ x, y, z }));
+    }
     const anchors: StabilizationAnchor[] = [];
     for (let i = 0; i < MAX_ANCHORS; i++) {
-        anchors.push(all[Math.floor((i * (all.length - 1)) / (MAX_ANCHORS - 1))]);
+        const { x, y, z } = all[Math.floor((i * (all.length - 1)) / (MAX_ANCHORS - 1))];
+        anchors.push({ x, y, z });
     }
+    logVerdict('unstable (point contact)', anchors.length, bearingAreaMm2, depthMm);
     return anchors;
+}
+
+/**
+ * Calibration diagnostics, not behaviour: `compute_stability_report`
+ * (`src-tauri/src/overhang.rs`) logs the same pose as a moment margin. Both
+ * lines exist so this gate's verdict can be diffed against that margin on real
+ * models before the fixed thresholds here are replaced by it.
+ */
+function logVerdict(verdict: string, anchors: number, bearingAreaMm2: number, depthMm: number): void {
+    const depth = Number.isFinite(depthMm) ? `${depthMm.toFixed(2)}mm` : 'n/a';
+    console.log(
+        '[Stabilization]',
+        `${verdict}${anchors > 0 ? ` → ${anchors} anchors` : ''} · bearing ${bearingAreaMm2.toFixed(1)}mm² · centroid depth ${depth}`,
+    );
 }
 
 function hullArea(hull: THREE.Vector2[]): number {
@@ -233,8 +366,12 @@ function hullArea(hull: THREE.Vector2[]): number {
     return Math.abs(area) / 2;
 }
 
-/** True when (px,py) is inside the CCW hull or within MARGIN of its edge. */
-function insideOrNear(px: number, py: number, hull: THREE.Vector2[]): boolean {
+/**
+ * Signed distance from (px,py) to the hull's nearest edge, positive inside —
+ * the same depth the Rust topple report measures, so the two logs compare.
+ * `Infinity` for a hull with no edges (a point or line contact).
+ */
+function centroidDepth(px: number, py: number, hull: THREE.Vector2[]): number {
     let minDepth = Infinity;
     for (let i = 0; i < hull.length; i++) {
         const a = hull[i];
@@ -247,5 +384,5 @@ function insideOrNear(px: number, py: number, hull: THREE.Vector2[]): boolean {
         const depth = (px - a.x) * nx + (py - a.y) * ny;
         if (depth < minDepth) minDepth = depth;
     }
-    return minDepth >= -MARGIN_MM;
+    return minDepth;
 }

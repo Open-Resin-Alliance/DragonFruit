@@ -42,6 +42,18 @@ export interface OverhangRegion {
   minZ: number;
   maxZ: number;
   footprint: FootprintMask;
+  /** Peel-drag moment this patch carries (mm³): `Σ A·sinθ·z` above the part's
+   *  own base — the same sum the stability report totals for the pose. A steep
+   *  face is self-supporting for formation, so contact on it only resists
+   *  toppling, and this share is the constant-free measure of how much of that
+   *  job the patch owns. */
+  dragMomentMm3?: number;
+  /** XY direction the patch's drag pushes the part toward (deg, 0 = +X,
+   *  90 = +Y) — the side that lifts. */
+  dragDirDeg?: number;
+  /** True when the patch came from `classify_steep_flats`: a large planar face
+   *  past the self-support angle, classified for toppling, not formation. */
+  steepFlat?: boolean;
   /** Triangle-accurate perimeter loops, inset by 0.25 mm (world mm, each loop closed). */
   perimeterLoops?: Vec3Loop[];
 }
@@ -69,6 +81,14 @@ export interface DetectedIsland {
   // --- overhang-detector extras (undefined for others) ---
   /** Mean surface angle from horizontal (degrees) — set by the overhang detector. */
   overhangAngleDeg?: number;
+  /** Peel-drag moment this overhang patch carries (mm³) — see OverhangRegion. */
+  dragMomentMm3?: number;
+  /** Direction its drag pushes the part (deg) — the side that lifts. */
+  dragDirDeg?: number;
+  /** True when the patch is a large planar face past the self-support angle:
+   *  it forms fine on its own, so it is a toppling patch, not a formation one,
+   *  and the stabilization braces own it instead of the density grid. */
+  steepFlat?: boolean;
   /** Model-triangle indices of the overhang region (for surface highlighting). */
   triangleIds?: number[];
   /** Region mean surface normal (world space, away from the model) — lets the

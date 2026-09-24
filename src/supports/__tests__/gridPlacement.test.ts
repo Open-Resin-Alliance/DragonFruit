@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
 
-import { generateGridCandidates, computeRegionSpacing, GRID_SPACING_FLOOR_MM, MAX_GRID_CANDIDATES_PER_REGION, shouldUseDensityGrid } from '../autoSupport/gridPlacement';
+import { generateGridCandidates, computeRegionSpacing, GRID_SPACING_FLOOR_MM, MAX_GRID_CANDIDATES_PER_REGION, STEEP_FLAT_SPACING_MULTIPLIER, shouldUseDensityGrid } from '../autoSupport/gridPlacement';
 import { createDefaultAutoSupportSettings } from '../autoSupport/settings';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
 
@@ -270,6 +270,32 @@ test('a long thin rib under the area threshold gets its edge supported', () => {
     // ...and a compact patch stays on the single-candidate path.
     const patch = rectRegion('p1', -2, 2, -2, 2, 16);
     assert.equal(shouldUseDensityGrid(patch, settings), false, 'small patches keep the pillar path');
+});
+
+/**
+ * A steep flat forms fine on its own, so the density curve — tuned for
+ * formation, densest on flat ceilings — overstates what it needs. It still gets
+ * a field of contacts (a huge face left bare overhangs its own weight), just a
+ * sparse one: the multiplier is the difference between a carpet and a brace
+ * field on a low-poly model, where the patch IS the whole face.
+ */
+test('a steep flat is covered sparsely, not carpeted', () => {
+    const settings = createDefaultAutoSupportSettings();
+    const face = { ...rectRegion('s0', -20, 20, -20, 20, 100), steepFlat: true };
+    const formation = { ...rectRegion('s1', -20, 20, -20, 20, 100), steepFlat: false };
+
+    assert.equal(shouldUseDensityGrid(face, settings), true, 'a big steep face still needs coverage');
+    const sparse = generateGridCandidates([face], settings);
+    const dense = generateGridCandidates([formation], settings);
+    assert.ok(sparse.length > 0, 'not left bare');
+    assert.ok(
+        sparse.length * 4 < dense.length,
+        `much sparser than a formation overhang (${sparse.length} vs ${dense.length})`,
+    );
+    assert.ok(
+        sparse.length >= dense.length / (STEEP_FLAT_SPACING_MULTIPLIER ** 2) - 2,
+        `and sparser by about the squared multiplier (${sparse.length} vs ${dense.length})`,
+    );
 });
 
 /**

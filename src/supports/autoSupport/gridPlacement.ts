@@ -402,6 +402,19 @@ export function sampleBoundary2D(
  * (`ISLAND_TWO_POINT_MAX_MM`, which already splits 1.5–6 mm islands into a
  * symmetric pair) is long enough to want its perimeter sampled.
  */
+/**
+ * Spacing multiplier for a steep flat. Such a face forms fine on its own, so
+ * the density curve — which is tuned for formation, densest on flat ceilings —
+ * overstates what it needs: the only thing contact on it buys is toppling
+ * resistance, and that wants a sparse field of contacts spread over the face,
+ * not a lattice. On a low-poly model the face IS the patch (a 12-triangle
+ * plank's 81° side is 500 mm², a big model's 64° shoulder is 11000 mm²), so
+ * this multiplier is the difference between a carpet and a brace field.
+ * Removing the coverage outright was wrong: a huge face left bare overhangs its
+ * own weight and peel.
+ */
+export const STEEP_FLAT_SPACING_MULTIPLIER = 2.5;
+
 export function shouldUseDensityGrid(
     island: DetectedIsland,
     settings: AutoSupportSettings,
@@ -469,7 +482,9 @@ export function generateGridCandidates(
 
     for (const island of overhangIslands) {
         if (!shouldUseDensityGrid(island, settings)) continue;
-        const spacing = computeRegionSpacing(island, settings);
+        const spacing =
+            computeRegionSpacing(island, settings) *
+            (island.steepFlat ? STEEP_FLAT_SPACING_MULTIPLIER : 1);
 
         const voxels = island.contactVoxels;
         if (!voxels || voxels.count === 0) continue;

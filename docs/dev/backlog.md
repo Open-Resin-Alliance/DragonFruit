@@ -517,3 +517,42 @@ turns it on in `calculateSmartPlacementV3`. It can never say `clear`: proving
 nothing is within clearance needs completeness, and vertices are not complete.
 
 
+
+## Steep-flat coverage: from carpet to brace
+
+**Direction.** A steep flat (45–`STEEP_FLAT_MAX_ANGLE_DEG`, ≥ `STEEP_FLAT_MIN_AREA_MM2`)
+is classified as an overhang region and then gets the same treatment as a
+formation overhang: boundary ring plus grid infill, which carpets the whole
+face. It prints fine by itself — the only thing contact on it buys is
+**toppling resistance** — so a carpet is the wrong tool and a *brace* is the
+right one. Measured on a cam-seal tool (58 mm tall, 97 % of its drag in the
+steep band): a wall of supports climbed the sloped right face to ~40 mm, while
+the pose's moment is dominated by a single patch near the top.
+
+**Inputs, already shipped.** `OverhangRegion.drag_moment_mm3` (the patch's
+`Σ A·sinθ·z`), `drag_dir_deg` (which way its drag pushes the part — the side
+that lifts), `steep_flat`, and the pose totals from `compute_stability_report`
+(`drag_moment_mm3`, `adhesion_ratio`, `margin_mm`). `scan_overhangs` logs the
+top four regions by moment, so a placement rule can be judged against real
+models before it ships.
+
+**Shipped: brace instead of carpet** (rule 3). A `steepFlat` island keeps the
+density grid at `STEEP_FLAT_SPACING_MULTIPLIER` (2.5) times the spacing — a
+sparse field, not a carpet, and not bare either (removing the coverage outright
+left a huge shoulder unsupported) — and `computeStabilizationAnchors` self-steers from the
+report it measures: braces rank above the rest when they sit on the side the
+part lifts (opposite `pushDirDeg`, the longest lever from the tipping edge),
+they climb to `dragTopMm`, and a buttress is spaced `BUTTRESS_SPACING_MM`
+(8 mm) rather than the 2.5 mm the continuous base line needs. The gate also
+fires on the adhesion verdict with a deliberately conservative
+`CONSERVATIVE_P_SIGMA = 0.05`.
+
+Still open from the list below: sizing the braces by the *deficit* rather than
+by rank, and the two constants it needs.
+
+**Blocker for anything sized rather than ranked.** `p/σ` is still uncalibrated,
+and the adhesion side measures the *bare* part's bearing patch (151 mm² at
+3.10 mm for the tool) — it does not model the braces themselves, and it does
+not know about a raft, which would replace the model's own contact patch with
+the raft footprint. Resolve the raft question before using any logged ratio as
+a bound.

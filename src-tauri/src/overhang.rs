@@ -25,6 +25,13 @@
 //! professional support pass produces on a leaning plate. Those patches are
 //! classified as overhang regions too, so the density grid covers them like
 //! any other; see [`classify_steep_flats`].
+//!
+//! The angle band and the area floor are both stand-ins for the quantity that
+//! actually decides this — the moment the drag puts on the part versus the
+//! moment gravity restores. [`compute_stability_report`] computes that moment
+//! from the same posed mesh and logs it; it is not consumed yet, because
+//! replacing the thresholds means calibrating one peel-pressure constant
+//! against real models first.
 
 use dragonfruit_mesh_repair::{core::mesh::Vec3, IndexedMesh};
 use serde::{Deserialize, Serialize};
@@ -35,7 +42,7 @@ use rayon::prelude::*;
 /// Steepest face a steep-flat patch may have (deg from horizontal) and still be
 /// classified. Past this the face is a wall: a support rises vertically to meet
 /// it and would only graze the surface, so there is no contact to place.
-const STEEP_FLAT_MAX_ANGLE_DEG: f32 = 80.0;
+const STEEP_FLAT_MAX_ANGLE_DEG: f32 = 85.0;
 /// 3D area (mm²) a steep planar patch must reach before it counts as a
 /// topple lever rather than a facet. Comfortably above the 25 mm² density-grid
 /// threshold, and tunable: too low and every chamfer on a sculpted model gets
@@ -98,6 +105,21 @@ pub struct OverhangRegion {
     pub max_z: f32,
     /// Projected-footprint mask at the requested resolution.
     pub footprint: FootprintMask,
+    /// The peel-drag moment this patch carries (mm³): `Σ A·sinθ·z` over its
+    /// triangles, with `z` the height above the part's own base — the same sum
+    /// `compute_stability_report` totals for the whole pose. This is what
+    /// decides whether the patch is worth covering: a steep face is
+    /// self-supporting for formation, so contact on it only resists toppling,
+    /// and the patch's share of the total is the constant-free measure of how
+    /// much of that job it owns. Zero for a patch that does not lean at all.
+    pub drag_moment_mm3: f32,
+    /// XY direction the patch's drag pushes the part toward (deg, 0 = +X,
+    /// 90 = +Y) — the side that lifts, and so the side a brace must hold down.
+    pub drag_dir_deg: f32,
+    /// True when this patch came from `classify_steep_flats`: a large planar
+    /// face past the self-support angle. Those are the anti-topple patches —
+    /// formation never needed them.
+    pub steep_flat: bool,
     /// Triangle-accurate perimeter loops (world mm, each loop closed).
     /// Outer + hole boundaries extracted from region triangle adjacency,
     /// inset by `PERIMETER_CONTACT_INSET_MM` (0.25 mm) so a support's
@@ -108,15 +130,20 @@ pub struct OverhangRegion {
     pub perimeter_loops: Vec<Vec<[f32; 3]>>,
 }
 
-/// Weld a world-space triangle soup (9 floats per triangle) and classify
-/// overhang regions. Mirrors `scan_mesh_minima`'s stateless IPC shape.
-pub fn classify_overhangs_from_soup(
+/// Weld a world-space triangle soup (9 floats per triangle), classify overhang
+/// regions, and compute the topple report from the same mesh. One weld serves
+/// both, which is why they share an entry point: the soup for a dense model is
+/// tens of megabytes and welding it twice is a second full hash pass. Mirrors
+/// `scan_mesh_minima`'s stateless IPC shape.
+pub fn overhang_and_stability_from_soup(
     positions: &[f32],
     self_support_angle_deg: f32,
     px_mm: f32,
-) -> Vec<OverhangRegion> {
+) -> (Vec<OverhangRegion>, Option<StabilityReport>) {
     let mesh = IndexedMesh::from_triangle_soup(positions, 1e-5);
-    classify_overhangs(&mesh, self_support_angle_deg, px_mm)
+    let regions = classify_overhangs(&mesh, self_support_angle_deg, px_mm);
+    let report = compute_stability_report(&mesh, self_support_angle_deg);
+    (regions, report)
 }
 
 /// Classify overhang regions on an already-welded mesh.
@@ -225,15 +252,27 @@ pub fn classify_overhangs(
     let mut groups: Vec<(u32, Vec<u32>)> = by_root.into_iter().collect();
     groups.sort_by_key(|(root, _)| *root);
 
+    // The part's own base plane: the drag moment is measured from it, exactly
+    // as `compute_stability_report` does, so a region's share is comparable
+    // with the pose total.
+    let base_z = mesh
+        .positions
+        .iter()
+        .map(|p| p.z)
+        .fold(f32::INFINITY, f32::min);
+    if !base_z.is_finite() {
+        return Vec::new();
+    }
+
     let mut regions: Vec<OverhangRegion> = groups
         .into_par_iter()
-        .map(|(_, triangle_ids)| build_region(mesh, &normal, triangle_ids, px_mm))
+        .map(|(_, triangle_ids)| build_region(mesh, &normal, triangle_ids, px_mm, base_z, false))
         .collect();
 
     // Steep flats ride the same region shape, so the density grid, the surface
     // sampler and the perimeter ring all treat them as ordinary overhangs.
     regions.extend(classify_steep_flats(
-        mesh, &normal, &edge_tris, threshold, px_mm,
+        mesh, &normal, &edge_tris, threshold, px_mm, base_z,
     ));
     regions
 }
@@ -254,6 +293,7 @@ fn classify_steep_flats(
     edge_tris: &HashMap<(u32, u32), Vec<u32>>,
     self_support_threshold: f32,
     px_mm: f32,
+    base_z: f32,
 ) -> Vec<OverhangRegion> {
     let tri_count = mesh.triangle_count();
     if tri_count == 0 {
@@ -334,9 +374,47 @@ fn classify_steep_flats(
         // build_region's footprint raster keeps the first triangle per pixel,
         // so a stable triangle order keeps the mask stable too.
         members.sort_unstable();
-        out.push(build_region(mesh, normal, members, px_mm));
+        out.push(build_region(mesh, normal, members, px_mm, base_z, true));
     }
     out
+}
+
+/// One line ranking the regions by the peel-drag moment they carry, largest
+/// first — which patches own the toppling job. A steep face is self-supporting
+/// for formation, so contact on it only resists toppling; a patch whose share
+/// is negligible is decoration, and this is the number that says so. Shares are
+/// against the pose total, so they need no calibrated constant.
+pub fn region_moment_ranking(regions: &[OverhangRegion], total_mm3: f64, limit: usize) -> String {
+    let mut ranked: Vec<(usize, &OverhangRegion)> = regions.iter().enumerate().collect();
+    ranked.sort_by(|a, b| {
+        b.1.drag_moment_mm3
+            .total_cmp(&a.1.drag_moment_mm3)
+            .then(a.0.cmp(&b.0))
+    });
+    let denominator = if total_mm3 > 1e-9 { total_mm3 } else { 0.0 };
+    ranked
+        .iter()
+        .take(limit)
+        .map(|(i, r)| {
+            let share = if denominator > 0.0 {
+                (r.drag_moment_mm3 as f64 / denominator) * 100.0
+            } else {
+                0.0
+            };
+            format!(
+                "#{i} {} {:.0}° {:.0}mm² z {:.1}-{:.1} M {:.0} ({:.0}%) dir {:.0}°",
+                if r.steep_flat { "steep" } else { "overhang" },
+                r.angle_deg,
+                r.area_mm2,
+                r.min_z,
+                r.max_z,
+                r.drag_moment_mm3,
+                share,
+                r.drag_dir_deg,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" · ")
 }
 
 fn accumulate_normal(acc: &mut [f32; 3], n: Vec3, area: f32) {
@@ -350,10 +428,13 @@ fn build_region(
     normal: &[Vec3],
     triangle_ids: Vec<u32>,
     px_mm: f32,
+    base_z: f32,
+    steep_flat: bool,
 ) -> OverhangRegion {
     let mut area_mm2 = 0.0f32;
     let mut projected_area_mm2 = 0.0f32;
     let mut angle_weighted = 0.0f32;
+    let mut drag_moment_mm3 = 0.0f32;
     let mut min_z = f32::INFINITY;
     let mut max_z = f32::NEG_INFINITY;
     let mut xy_min = [f32::INFINITY; 2];
@@ -378,6 +459,15 @@ fn build_region(
         // Surface angle from horizontal: normal.z = -cos(θ) → θ = acos(-nz).
         let angle = (-nz).acos().to_degrees();
         angle_weighted += area * angle;
+
+        // Drag moment, the same sum `compute_stability_report` totals: the
+        // lateral component of a face's peel force (`A·sinθ`) at its height
+        // above the part's own base. `sinθ = |n_xy|`.
+        let sin_t = (n.x * n.x + n.y * n.y).sqrt();
+        let face_z = (a.z + b.z + c.z) / 3.0 - base_z;
+        if sin_t > 1e-6 && face_z > 0.0 {
+            drag_moment_mm3 += area * sin_t * face_z;
+        }
 
         for v in [a, b, c] {
             min_z = min_z.min(v.z);
@@ -422,6 +512,13 @@ fn build_region(
         min_z,
         max_z,
         footprint,
+        drag_moment_mm3,
+        drag_dir_deg: if normal[0].abs() > 1e-9 || normal[1].abs() > 1e-9 {
+            normal[1].atan2(normal[0]).to_degrees().rem_euclid(360.0)
+        } else {
+            0.0
+        },
+        steep_flat,
         perimeter_loops,
     }
 }
@@ -740,17 +837,588 @@ fn point_in_triangle_2d(px: f32, py: f32, a: (f32, f32), b: (f32, f32), c: (f32,
     !(has_neg && has_pos)
 }
 
+// ---------------------------------------------------------------------------
+// Topple analysis — logged, not yet consumed
+// ---------------------------------------------------------------------------
+
+/// Resin weight density (N/mm³) — 1.1 g/cm³ under gravity. Used to put the
+/// gravity term in the same units as the peel pressure, so the two can be read
+/// against each other.
+const RESIN_WEIGHT_DENSITY_N_PER_MM3: f64 = 1.079e-5;
+/// Plate-contact band (mm) the bearing hull is measured over. Matches the TS
+/// stabilization pass's `BEARING_BAND_MM`, so both describe the same locus.
+const STABILITY_BEARING_BAND_MM: f32 = 2.0;
+/// Largest-moment faces the report names.
+const STABILITY_MAX_DRIVERS: usize = 3;
+
+/// Model-level topple analysis: the shape terms the fixed angle and area
+/// thresholds cannot see.
+///
+/// A part fails by rotating about its bearing edge, so the quantity is a
+/// MOMENT, not an area. Driving moment about a bearing-hull edge `e` whose
+/// outward XY normal is `u`:
+///
+/// ```text
+/// M_e = Σ_faces  A · sinθ · z · max(0, u · n̂_xy)      [mm³]
+/// ```
+///
+/// with `A` the 3D face area, `θ` its angle from horizontal, `z` its centroid
+/// height above the plate, `n̂_xy` the horizontal part of its normal. The
+/// restoring moment is gravity, `ρ g V d_e`, where `d_e` is how far the volume
+/// centroid sits inside edge `e`.
+///
+/// Both sides carry one unknown constant — the peel/suction pressure `p` and
+/// the resin's weight density `ρ g` — so the ratio collapses to a single
+/// LENGTH:
+///
+/// ```text
+/// S_e = margin / L*     margin = V · d_e / M_e  [mm]     L* = p / (ρ g)  [mm]
+/// ```
+///
+/// The pose topples iff `L* > margin`, so the report's job is to print
+/// `margin` for real models: the distribution of that number over real prints
+/// is what calibrates `L*`, and `L*` is the only constant a shape-aware
+/// replacement for [`STEEP_FLAT_MIN_AREA_MM2`] and the TS stabilization gate
+/// needs. See `docs/dev/auto-supports.md`.
+///
+/// Nothing consumes this yet. `margin` is infinite when no down-facing face
+/// leans (`M_e = 0` — a part with no lateral drag cannot be rotated by it),
+/// and `0` in the two cases where a static margin does not exist at all: a
+/// bearing locus with no polygon (a point or edge contact), or a mesh that
+/// encloses no volume (an open shell has no mass to restore anything).
+#[derive(Debug, Clone)]
+pub struct StabilityReport {
+    /// Plate-contact band the bearing hull was measured over (mm).
+    pub bearing_band_mm: f32,
+    /// Absolute model volume (mm³) via the divergence theorem.
+    pub volume_mm3: f64,
+    /// Raw signed volume (mm³). Near zero means an open shell — the volume and
+    /// centroid are then meaningless and `margin` collapses to 0.
+    pub signed_volume_mm3: f64,
+    /// Volume centroid in world space (mm); the bounding-box center when the
+    /// mesh has no enclosed volume. Note this is WORLD z, not height above the
+    /// plate — a rotated part's centroid z is not comparable to `height_mm/2`
+    /// without `plate_z_mm`, which is exactly how one real reading got
+    /// misdiagnosed as a mesh defect.
+    pub centroid_mm: [f32; 3],
+    /// World Z of the part's lowest point (mm) — the plane the bearing locus is
+    /// measured from. Not necessarily the build plate: a part can be lifted
+    /// above it, and then nothing touches the plate at all.
+    pub plate_z_mm: f32,
+    /// Part height above the bearing plane (mm).
+    pub height_mm: f32,
+    /// XY area of the bearing hull (mm²).
+    pub bearing_area_mm2: f32,
+    /// Bearing hull edge count; 0 = no bearing polygon (point/edge/sliver).
+    pub bearing_edges: usize,
+    /// Worst hull edge: outward normal angle in XY (deg, 0 = +X, 90 = +Y,
+    /// wrapped to [0, 360)).
+    pub worst_edge_dir_deg: f32,
+    /// Worst hull edge: how far the centroid sits inside it (mm). Negative
+    /// means the centroid is already outside the bearing polygon.
+    pub centroid_depth_mm: f32,
+    /// Worst hull edge: how far the bearing patch's own centroid sits inside
+    /// it (mm). Always positive — a hull centroid is inside its hull by
+    /// construction. This is the lever the plate adhesion works on.
+    pub contact_depth_mm: f32,
+    /// Drag moment summed over every down-facing face, unprojected — how much
+    /// lateral drag the pose carries in total (mm³).
+    pub drag_moment_mm3: f64,
+    /// That moment projected onto the worst bearing edge — the divisor the
+    /// margin was computed from (mm³). Zero when there is no bearing polygon.
+    pub worst_edge_drag_mm3: f64,
+    /// Share of that sum from faces at or above the self-support angle — what
+    /// the steep-flat classifier can see today.
+    pub steep_band_share: f32,
+    /// Moment-weighted drag height (mm) **above the part's own base** — the
+    /// lever arm of the total moment, `Σ A·sinθ·z² / Σ A·sinθ·z`. Biased above
+    /// the faces' arithmetic mean height because the drag on a face grows with
+    /// its height.
+    pub drag_height_mm: f32,
+    /// `V · d_e / M_e` (mm) — the gravity term's geometry. **This is not a
+    /// restoring margin.** A bottom-up printer hangs the part from the plate,
+    /// so in the model frame gravity points +z, away from the plate: it PEELS,
+    /// and it adds to the drag rather than opposing it. See `gravity_peel_mpa`.
+    pub margin_mm: f32,
+    /// The gravity term as a pressure (MPa): `ρg·V·d_e / M_e`. In a bottom-up
+    /// machine the peel has to beat gravity as well as the plate adhesion, so
+    /// this belongs on the driving side and is directly comparable to `p`
+    /// (10–50 kPa at the film). Measured at ~1.9e-5 MPa on a 79 cm³ part, i.e.
+    /// ~0.06 % of a 30 kPa peel — negligible next to the drag, but not zero and
+    /// not restoring.
+    pub gravity_peel_mpa: f64,
+    /// `A_contact · d̄_e / M_e` (dimensionless): the bearing patch's first
+    /// moment about the worst edge over the drag moment. The pose lifts off the
+    /// plate iff `p/σ > adhesion_ratio`, where `σ` is the plate adhesion — a
+    /// dimensionless constant of order 0.005–0.05, unlike the metres-long `L*`.
+    /// This is the comparison that means something in a bottom-up machine:
+    /// gravity is 2–3 orders of magnitude too weak to be the restoring force.
+    pub adhesion_ratio: f64,
+    /// Heights of the largest-moment faces (mm, ascending, deduped within
+    /// 1 mm) — which patch drives the moment.
+    pub driver_heights_mm: Vec<f32>,
+    /// Down-facing faces with a lateral normal component.
+    pub drag_faces: usize,
+    /// Zero-area triangles in the mesh. They are excluded from the plate plane
+    /// and the bearing locus, and a nonzero count means the file is defective.
+    pub degenerate_faces: usize,
+}
+
+impl StabilityReport {
+    /// One greppable line. Every field the calibration reads appears here.
+    pub fn to_log_line(&self) -> String {
+        // The centroid is world-absolute, so it is paired with its height above
+        // the part's own lowest point — the number `height_mm / 2` is
+        // comparable to, and the one whose absence made a tilted cube look like
+        // a defective mesh.
+        let centroid = format!(
+            "({:.1}, {:.1}, {:.1}) [{:.1} above the part's base]",
+            self.centroid_mm[0],
+            self.centroid_mm[1],
+            self.centroid_mm[2],
+            self.centroid_mm[2] - self.plate_z_mm,
+        );
+        // Only when it says something the absolute volume does not: an inverted
+        // winding (negative) or an open shell (no enclosed volume at all, in
+        // which case the centroid is the bounding-box center).
+        let volume = if self.signed_volume_mm3 < 0.0 || self.volume_mm3 < 1e-6 {
+            format!(
+                "{:.1}mm³ (signed {:.1} — inverted or open shell)",
+                self.volume_mm3, self.signed_volume_mm3
+            )
+        } else {
+            format!("{:.1}mm³", self.volume_mm3)
+        };
+        // A defective mesh explains numbers that would otherwise look wrong.
+        let defects = if self.degenerate_faces > 0 {
+            format!(
+                " · {} degenerate faces ignored (defective mesh)",
+                self.degenerate_faces
+            )
+        } else {
+            String::new()
+        };
+        if self.drag_faces == 0 {
+            return format!(
+                "margin ∞ · adhesion ∞ (no down-facing drag) · volume {volume} · centroid {} · height {:.1}mm · \
+                 bearing {:.1}mm² over {} edges (band {:.1}mm){defects}",
+                centroid,
+                self.height_mm,
+                self.bearing_area_mm2,
+                self.bearing_edges,
+                self.bearing_band_mm,
+            );
+        }
+        // A pose with no bearing polygon has no static margin at all, whatever
+        // the drag — say that instead of printing a zeroed direction.
+        // In a bottom-up machine the part hangs from the plate, so this is the
+        // gravity term's geometry, not a restoring margin: gravity peels too.
+        let margin = if self.bearing_edges == 0 {
+            "gravity lever 0.00mm (no bearing polygon — point/edge contact)".to_string()
+        } else if self.margin_mm.is_finite() {
+            format!(
+                "gravity lever {:.2}mm · peel {:.1}e-5MPa (driving, not restoring)",
+                self.margin_mm,
+                self.gravity_peel_mpa * 1e5
+            )
+        } else {
+            "gravity lever ∞ (no drag on the worst edge)".to_string()
+        };
+        // The comparison that means something in a bottom-up machine: gravity
+        // is 2-3 orders of magnitude too weak to restore anything, the plate's
+        // adhesion is not. Same drag moment, different lever.
+        let adhesion = if self.bearing_edges == 0 {
+            "adhesion — (no bearing polygon to lift from)".to_string()
+        } else if self.adhesion_ratio.is_finite() {
+            format!("adhesion {:.3} (lifts iff p/σ > it)", self.adhesion_ratio)
+        } else {
+            "adhesion ∞ (no drag on the worst edge)".to_string()
+        };
+        let worst_edge = if self.bearing_edges == 0 {
+            String::new()
+        } else {
+            format!(
+                " · worst edge {:.0}mm³ dir {:.0}° depth {:.2}mm (contact {:.2}mm)",
+                self.worst_edge_drag_mm3,
+                self.worst_edge_dir_deg,
+                self.centroid_depth_mm,
+                self.contact_depth_mm,
+            )
+        };
+        let drivers = self
+            .driver_heights_mm
+            .iter()
+            .map(|z| format!("{z:.1}"))
+            .collect::<Vec<_>>()
+            .join("/");
+        format!(
+            "{margin} · {adhesion} · volume {volume} · centroid {} · height {:.1}mm · bearing {:.1}mm² over {} edges \
+             (band {:.1}mm){worst_edge} · drag {:.0}mm³ over {} faces (steep share {:.0}%, z* {:.1}mm) · \
+             drivers z {drivers}mm{defects}",
+            centroid,
+            self.height_mm,
+            self.bearing_area_mm2,
+            self.bearing_edges,
+            self.bearing_band_mm,
+            self.drag_moment_mm3,
+            self.drag_faces,
+            self.steep_band_share * 100.0,
+            self.drag_height_mm,
+        )
+    }
+}
+
+/// Compute the topple report for a posed mesh (world space, plate at the
+/// model's minimum Z). Returns `None` for a mesh with no triangles.
+///
+/// Deterministic: faces are visited in id order, the bearing points are sorted,
+/// and the sums are accumulated in that order — no parallelism, so the floats
+/// are reproducible run to run. Cost is one face pass with an inner loop over
+/// the bearing hull's edges (a handful in practice), so it stays linear in the
+/// triangle count. It recomputes the face normals `classify_overhangs` already
+/// has rather than taking them as an argument: sharing them would change that
+/// function's signature and every one of its callers for a diagnostic, and
+/// folding the two into one pass is the right move only once this report
+/// actually replaces a threshold.
+pub fn compute_stability_report(
+    mesh: &IndexedMesh,
+    self_support_angle_deg: f32,
+) -> Option<StabilityReport> {
+    let tri_count = mesh.triangle_count();
+    if tri_count == 0 {
+        return None;
+    }
+    // The plate plane and the bearing locus come from NON-degenerate triangles
+    // only. A zero-area triangle is a mesh defect (a stray vertex, a collapsed
+    // face), and letting one define z_min empties the bearing band: a single
+    // stray vertex 10 mm below a 20 mm cube made the report describe a pose
+    // with no contact at all, at a height 10 mm too tall. Measured on a real
+    // model whose bbox was 30.75 × 23.5 × 30.8 mm for a volume of exactly
+    // 20³ mm³ — the giveaway that the extent was defect, not geometry.
+    let mut z_min = f32::INFINITY;
+    let mut z_max = f32::NEG_INFINITY;
+    let mut degenerate_faces = 0usize;
+    for fi in 0..tri_count as u32 {
+        if mesh.tri_area(fi) <= 0.0 {
+            degenerate_faces += 1;
+            continue;
+        }
+        for v in mesh.tri_positions(fi) {
+            if v.z < z_min {
+                z_min = v.z;
+            }
+            if v.z > z_max {
+                z_max = v.z;
+            }
+        }
+    }
+    if !z_min.is_finite() {
+        return None;
+    }
+
+    // Bearing locus: hull of everything within the contact band of the plate.
+    let mut bearing: Vec<(f32, f32)> = Vec::new();
+    for fi in 0..tri_count as u32 {
+        if mesh.tri_area(fi) <= 0.0 {
+            continue;
+        }
+        for v in mesh.tri_positions(fi) {
+            if v.z - z_min <= STABILITY_BEARING_BAND_MM {
+                bearing.push((v.x, v.y));
+            }
+        }
+    }
+    let hull = convex_hull_2d(&mut bearing);
+    let bearing_area_mm2 = polygon_area_2d(&hull);
+    // The patch's own centroid — the lever the plate adhesion works on, which
+    // is a different point from the volume centroid a leaning part carries.
+    let contact_centroid = polygon_centroid_2d(&hull);
+
+    // Bearing edges, as (outward normal xy, a point on the edge). The hull is
+    // CCW, so the outward normal is the edge direction rotated -90°. Degenerate
+    // edges are dropped here rather than skipped later.
+    let edges: Vec<(f64, f64, f64, f64)> = (0..hull.len())
+        .filter_map(|i| {
+            let a = hull[i];
+            let b = hull[(i + 1) % hull.len()];
+            let (ex, ey) = ((b.0 - a.0) as f64, (b.1 - a.1) as f64);
+            let len = (ex * ex + ey * ey).sqrt();
+            if len <= 1e-9 {
+                return None;
+            }
+            Some((ey / len, -ex / len, a.0 as f64, a.1 as f64))
+        })
+        .collect();
+    let mut edge_sums = vec![0.0f64; edges.len()];
+
+    // Volume, volume centroid and the drag moment per bearing edge: one pass.
+    let steep_threshold = -self_support_angle_deg.to_radians().cos();
+    let mut vol6 = 0.0f64;
+    let mut com = [0.0f64; 3];
+    let mut drag_total = 0.0f64;
+    let mut drag_steep = 0.0f64;
+    let mut drag_z = 0.0f64;
+    let mut drag_faces = 0usize;
+    let mut drivers: Vec<(f64, f32)> = Vec::with_capacity(STABILITY_MAX_DRIVERS + 1);
+
+    for fi in 0..tri_count as u32 {
+        let [a, b, c] = mesh.tri_positions(fi);
+        let (ax, ay, az) = (a.x as f64, a.y as f64, a.z as f64);
+        let (bx, by, bz) = (b.x as f64, b.y as f64, b.z as f64);
+        let (gx, gy, gz) = (c.x as f64, c.y as f64, c.z as f64);
+
+        // Signed tetra volume about the origin; the centroid is the same sum
+        // weighted by the tetra centroid (a+b+c)/4.
+        let det = ax * (by * gz - bz * gy) - ay * (bx * gz - bz * gx) + az * (bx * gy - by * gx);
+        vol6 += det;
+        com[0] += det * (ax + bx + gx) * 0.25;
+        com[1] += det * (ay + by + gy) * 0.25;
+        com[2] += det * (az + bz + gz) * 0.25;
+
+        let n = mesh.tri_normal(fi);
+        if n.z >= 0.0 {
+            continue; // up-facing or vertical: peel drag pulls it onto the part
+        }
+        // |n_xy| = sinθ. A flat ceiling's drag is purely vertical, and a
+        // vertical wall has no contact to place — neither rotates the part.
+        let sin_t = ((n.x * n.x + n.y * n.y) as f64).sqrt();
+        if sin_t <= 1e-6 {
+            continue;
+        }
+        // The arm is the height above the part's OWN base, not the world Z: a
+        // pose lifted off the plate would otherwise inflate every moment by the
+        // lift. Matches `measurePoseStability` in the orientation advisor.
+        let z = (az + bz + gz) / 3.0 - z_min as f64;
+        if z <= 0.0 {
+            continue;
+        }
+        let area = mesh.tri_area(fi) as f64;
+        let moment = area * sin_t * z;
+        drag_faces += 1;
+        drag_total += moment;
+        drag_z += moment * z;
+        if n.z >= steep_threshold {
+            drag_steep += moment;
+        }
+
+        // Per-edge moment, projected exactly: the horizontal normal is
+        // `n_xy` (length sinθ), so `A · (n_xy · u) · z` needs no re-normalizing
+        // and no direction binning — a binned distribution leaks moment onto
+        // edges the face does not push on at all.
+        let (nhx, nhy) = (n.x as f64, n.y as f64);
+        for (ei, e) in edges.iter().enumerate() {
+            let proj = nhx * e.0 + nhy * e.1;
+            if proj > 0.0 {
+                edge_sums[ei] += area * proj * z;
+            }
+        }
+
+        if drivers.len() < STABILITY_MAX_DRIVERS || drivers.last().is_some_and(|d| moment > d.0) {
+            drivers.push((moment, z as f32));
+            drivers.sort_by(|p, q| q.0.total_cmp(&p.0));
+            drivers.truncate(STABILITY_MAX_DRIVERS);
+        }
+    }
+
+    let signed_volume_mm3 = vol6 / 6.0;
+    let volume_mm3 = signed_volume_mm3.abs();
+    let centroid_mm = if vol6.abs() > 1e-9 {
+        [
+            (com[0] / vol6) as f32,
+            (com[1] / vol6) as f32,
+            (com[2] / vol6) as f32,
+        ]
+    } else {
+        // Open or degenerate shell: no enclosed volume, so no mass. The
+        // bounding-box center still orients the report.
+        let c = mesh.bbox().center();
+        [c.x, c.y, c.z]
+    };
+
+    let mut driver_heights_mm: Vec<f32> = drivers.iter().map(|d| d.1).collect();
+    driver_heights_mm.sort_by(f32::total_cmp);
+    driver_heights_mm.dedup_by(|a, b| (*a - *b).abs() < 1.0);
+
+    // Worst bearing edge: the least margin. The centroid's depth is measured
+    // INWARD, so it is positive while the mass is still over the edge. A mesh
+    // with no enclosed volume has no restoring moment at all, so its margin is
+    // 0 (least stable) rather than infinite — the drag never even enters.
+    let mut worst: Option<(f32, f32, f32, f32, f64)> = None;
+    for (ei, e) in edges.iter().enumerate() {
+        let depth = (e.2 - centroid_mm[0] as f64) * e.0 + (e.3 - centroid_mm[1] as f64) * e.1;
+        let contact_depth = contact_centroid
+            .map(|c| (e.2 - c.0) * e.0 + (e.3 - c.1) * e.1)
+            .unwrap_or(0.0);
+        let sum = edge_sums[ei];
+        let margin = if volume_mm3 <= 1e-9 {
+            0.0
+        } else if sum > 1e-9 {
+            (volume_mm3 * depth / sum) as f32
+        } else {
+            f32::INFINITY
+        };
+        // Wrapped to [0, 360): atan2 of a negative-zero normal component
+        // otherwise reports -180 for the same edge as +180.
+        let dir_deg = e.1.atan2(e.0).to_degrees().rem_euclid(360.0) as f32;
+        if worst.is_none_or(|w| margin < w.0) {
+            worst = Some((margin, dir_deg, depth as f32, contact_depth as f32, sum));
+        }
+    }
+    let (margin_mm, worst_edge_dir_deg, centroid_depth_mm, contact_depth_mm, worst_edge_drag_mm3) =
+        match worst {
+            // A point or edge contact has no bearing polygon: no static margin.
+            Some((margin, dir, depth, contact_depth, sum)) => {
+                (margin, dir, depth, contact_depth, sum)
+            }
+            None => (0.0, 0.0, 0.0, 0.0, 0.0),
+        };
+    let adhesion_ratio = if worst_edge_drag_mm3 > 1e-9 {
+        (bearing_area_mm2 as f64 * contact_depth_mm as f64) / worst_edge_drag_mm3
+    } else {
+        f64::INFINITY
+    };
+
+    Some(StabilityReport {
+        bearing_band_mm: STABILITY_BEARING_BAND_MM,
+        volume_mm3,
+        signed_volume_mm3,
+        centroid_mm,
+        plate_z_mm: z_min,
+        height_mm: z_max - z_min,
+        bearing_area_mm2,
+        bearing_edges: edges.len(),
+        worst_edge_dir_deg,
+        centroid_depth_mm,
+        contact_depth_mm,
+        drag_moment_mm3: drag_total,
+        worst_edge_drag_mm3,
+        steep_band_share: if drag_total > 1e-9 {
+            (drag_steep / drag_total) as f32
+        } else {
+            0.0
+        },
+        drag_height_mm: if drag_total > 1e-9 {
+            (drag_z / drag_total) as f32
+        } else {
+            0.0
+        },
+        margin_mm,
+        gravity_peel_mpa: if worst_edge_drag_mm3 > 1e-9 {
+            RESIN_WEIGHT_DENSITY_N_PER_MM3 * volume_mm3 * centroid_depth_mm as f64
+                / worst_edge_drag_mm3
+        } else {
+            0.0
+        },
+        adhesion_ratio,
+        driver_heights_mm,
+        drag_faces,
+        degenerate_faces,
+    })
+}
+
+/// Andrew monotone chain, CCW, collinear points dropped. Sorts in place and
+/// returns an empty vec for fewer than three non-collinear points — the
+/// caller reads that as "no bearing polygon".
+fn convex_hull_2d(points: &mut Vec<(f32, f32)>) -> Vec<(f32, f32)> {
+    points.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    points.dedup();
+    if points.len() < 3 {
+        return Vec::new();
+    }
+    let cross = |o: (f32, f32), a: (f32, f32), b: (f32, f32)| -> f32 {
+        (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
+    };
+    let mut hull: Vec<(f32, f32)> = Vec::with_capacity(points.len() * 2);
+    for &p in points.iter() {
+        while hull.len() >= 2 && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0.0 {
+            hull.pop();
+        }
+        hull.push(p);
+    }
+    let lower_len = hull.len();
+    for &p in points[..points.len() - 1].iter().rev() {
+        while hull.len() > lower_len && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0.0
+        {
+            hull.pop();
+        }
+        hull.push(p);
+    }
+    hull.pop(); // the walk closes back on the first point
+    if hull.len() < 3 {
+        Vec::new()
+    } else {
+        hull
+    }
+}
+
+fn polygon_area_2d(points: &[(f32, f32)]) -> f32 {
+    if points.len() < 3 {
+        return 0.0;
+    }
+    let mut area = 0.0f64;
+    for i in 0..points.len() {
+        let p = points[i];
+        let q = points[(i + 1) % points.len()];
+        area += p.0 as f64 * q.1 as f64 - q.0 as f64 * p.1 as f64;
+    }
+    (area.abs() / 2.0) as f32
+}
+
+/// Area centroid of a simple polygon (shoelace), `None` for a degenerate one.
+fn polygon_centroid_2d(points: &[(f32, f32)]) -> Option<(f64, f64)> {
+    if points.len() < 3 {
+        return None;
+    }
+    let mut area2 = 0.0f64;
+    let mut cx = 0.0f64;
+    let mut cy = 0.0f64;
+    for i in 0..points.len() {
+        let p = points[i];
+        let q = points[(i + 1) % points.len()];
+        let cross = p.0 as f64 * q.1 as f64 - q.0 as f64 * p.1 as f64;
+        area2 += cross;
+        cx += (p.0 as f64 + q.0 as f64) * cross;
+        cy += (p.1 as f64 + q.1 as f64) * cross;
+    }
+    if area2.abs() <= 1e-9 {
+        return None;
+    }
+    Some((cx / (3.0 * area2), cy / (3.0 * area2)))
+}
+
 /// Tauri IPC command: weld a world-space triangle soup (9 floats per triangle)
 /// and classify overhang regions with projected-footprint masks. Stateless —
 /// no model cache. Mirrors `scan_mesh_minima`'s shape.
+///
+/// Also emits the topple report ([`compute_stability_report`]) on the same
+/// welded soup. This command is the one every model passes through — the
+/// sideload path re-classifies here because its triangle ids do not match the
+/// rendered geometry, and the client-side fallback has nowhere else to run —
+/// so the report is logged here rather than from `scan_islands_from_path`.
 #[tauri::command]
 pub async fn scan_overhangs(
     positions: Vec<f32>,
     self_support_angle_deg: f32,
     px_mm: f32,
+    label: Option<String>,
 ) -> Result<Vec<OverhangRegion>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let regions = classify_overhangs_from_soup(&positions, self_support_angle_deg, px_mm);
+        let (regions, report) =
+            overhang_and_stability_from_soup(&positions, self_support_angle_deg, px_mm);
+        if let Some(report) = &report {
+            log::info!(
+                "[stability] {}: {}",
+                label.as_deref().unwrap_or("world soup"),
+                report.to_log_line(),
+            );
+            if !regions.is_empty() {
+                log::info!(
+                    "[stability] regions by drag moment (pose total {:.0}mm³): {}",
+                    report.drag_moment_mm3,
+                    region_moment_ranking(&regions, report.drag_moment_mm3, 4),
+                );
+            }
+        }
         log::info!(
             "[overhang] scan complete: {} regions from {} triangles",
             regions.len(),
@@ -850,7 +1518,7 @@ mod tests {
     #[test]
     fn flat_ceiling_is_overhang() {
         let soup = unit_cube_soup();
-        let regions = classify_overhangs_from_soup(&soup, 45.0, 0.25);
+        let regions = overhang_and_stability_from_soup(&soup, 45.0, 0.25).0;
         // Only the bottom face (2 triangles, 100 mm², angle 0°) is flagged.
         assert_region(&regions, 0.0, 100.0);
         assert_eq!(regions[0].triangle_ids.len(), 2);
@@ -866,7 +1534,7 @@ mod tests {
         // one overhang region covering the WHOLE face, not just the lowest
         // vertex (which is all the minima detector would catch).
         let soup = rotate_x(&unit_cube_soup(), 30.0);
-        let regions = classify_overhangs_from_soup(&soup, 45.0, 0.25);
+        let regions = overhang_and_stability_from_soup(&soup, 45.0, 0.25).0;
         assert_region(&regions, 30.0, 100.0);
         assert_eq!(regions[0].triangle_ids.len(), 2, "whole face, not an edge");
         // Projected footprint of a 30° face: 100 × cos(30°) ≈ 86.6 mm².
@@ -925,7 +1593,7 @@ mod tests {
         let soup: Vec<f32> = vec![
             0.0, 0.0, 0.0, 10.0, 10.0, 0.0, 10.0, 0.0, 0.0, // normal -Z
         ];
-        let regions = classify_overhangs_from_soup(&soup, 45.0, 0.25);
+        let regions = overhang_and_stability_from_soup(&soup, 45.0, 0.25).0;
         assert_eq!(regions.len(), 1);
         assert!((regions[0].projected_area_mm2 - 50.0).abs() < 1.0);
 
@@ -950,7 +1618,7 @@ mod tests {
 
     #[test]
     fn vertical_wall_is_not_overhang() {
-        let regions = classify_overhangs_from_soup(&quad_at(90.0), 45.0, 0.25);
+        let regions = overhang_and_stability_from_soup(&quad_at(90.0), 45.0, 0.25).0;
         assert!(
             regions.is_empty(),
             "no overhang on a vertical wall: {regions:?}"
@@ -961,12 +1629,12 @@ mod tests {
     fn slope_steeper_than_threshold_is_self_supporting() {
         // 60° slope: self-supporting at the 45° threshold, flagged at 70°.
         let soup60 = quad_at(60.0);
-        let regions = classify_overhangs_from_soup(&soup60, 45.0, 0.25);
+        let regions = overhang_and_stability_from_soup(&soup60, 45.0, 0.25).0;
         assert!(
             regions.is_empty(),
             "60° slope must be self-supporting at 45°: {regions:?}"
         );
-        let regions70 = classify_overhangs_from_soup(&soup60, 70.0, 0.25);
+        let regions70 = overhang_and_stability_from_soup(&soup60, 70.0, 0.25).0;
         assert_eq!(regions70.len(), 1, "60° slope flagged at 70° threshold");
         assert!((regions70[0].angle_deg - 60.0).abs() < 1.5);
     }
@@ -1004,7 +1672,7 @@ mod tests {
         // A 30×30 mm face at 60° from horizontal: 900 mm² of down-facing
         // surface the angle rule calls self-supporting. It is the topple lever
         // the steep-flat pass exists for, so it must come back as a region.
-        let regions = classify_overhangs_from_soup(&big_quad_at(30.0, 60.0), 45.0, 0.25);
+        let regions = overhang_and_stability_from_soup(&big_quad_at(30.0, 60.0), 45.0, 0.25).0;
         assert_region(&regions, 60.0, 900.0);
     }
 
@@ -1013,7 +1681,7 @@ mod tests {
         // The density grid places only inside the region's projected footprint
         // and takes each point's Z from its surface raster, so the mask must
         // cover the projection (900 × cos 60° = 450 mm²) and follow the slope.
-        let regions = classify_overhangs_from_soup(&big_quad_at(30.0, 60.0), 45.0, 0.25);
+        let regions = overhang_and_stability_from_soup(&big_quad_at(30.0, 60.0), 45.0, 0.25).0;
         assert_eq!(regions.len(), 1, "one region: {regions:?}");
         let f = &regions[0].footprint;
         let inside = f.data.iter().filter(|&&v| v == 1).count() as f32;
@@ -1039,12 +1707,8 @@ mod tests {
         // unsupported. Derived from the constant so tuning the gate does not
         // silently turn this into a test of something else.
         let side = (STEEP_FLAT_MIN_AREA_MM2 * 0.5).sqrt();
-        let regions = classify_overhangs_from_soup(&big_quad_at(side, 60.0), 45.0, 0.25);
-        assert!(
-            regions.is_empty(),
-            "{} mm² facet: {regions:?}",
-            side * side
-        );
+        let regions = overhang_and_stability_from_soup(&big_quad_at(side, 60.0), 45.0, 0.25).0;
+        assert!(regions.is_empty(), "{} mm² facet: {regions:?}", side * side);
     }
 
     #[test]
@@ -1053,7 +1717,7 @@ mod tests {
         // meet it and only grazes the surface, so there is no contact to
         // place. Clamped below vertical, which is the other end of the band.
         let angle = (STEEP_FLAT_MAX_ANGLE_DEG + 5.0).min(89.0);
-        let regions = classify_overhangs_from_soup(&big_quad_at(30.0, angle), 45.0, 0.25);
+        let regions = overhang_and_stability_from_soup(&big_quad_at(30.0, angle), 45.0, 0.25).0;
         assert!(
             regions.is_empty(),
             "no contact on a wall at {angle}°: {regions:?}"
@@ -1078,7 +1742,7 @@ mod tests {
         let width = 15.0;
         let len = STEEP_FLAT_MIN_AREA_MM2 * 0.6 / width;
         let regions =
-            classify_overhangs_from_soup(&folded_quads(width, len, angle_a, angle_b), 45.0, 0.25);
+            overhang_and_stability_from_soup(&folded_quads(width, len, angle_a, angle_b), 45.0, 0.25).0;
         assert!(
             regions.is_empty(),
             "crease held the patches apart: {regions:?}"
@@ -1093,7 +1757,7 @@ mod tests {
         for v in second.chunks_exact(3) {
             soup.extend_from_slice(&[v[0] + 100.0, v[1], v[2]]);
         }
-        let regions = classify_overhangs_from_soup(&soup, 45.0, 0.25);
+        let regions = overhang_and_stability_from_soup(&soup, 45.0, 0.25).0;
         assert_eq!(regions.len(), 2, "two disjoint slopes: {regions:?}");
         assert!((regions[0].angle_deg - 20.0).abs() < 1.5);
         assert!((regions[1].angle_deg - 20.0).abs() < 1.5);
@@ -1193,5 +1857,366 @@ mod tests {
             rayon::current_num_threads(),
         );
         assert_eq!(regions.len(), 490_000, "one region per quad");
+    }
+
+    // ---- topple report -------------------------------------------------
+
+    /// Extrude a CCW polygon in the XZ plane along +Y, outward-wound.
+    fn prism(section: &[(f32, f32)], width: f32) -> Vec<f32> {
+        let mut out: Vec<f32> = Vec::new();
+        for i in 0..section.len() {
+            let p = section[i];
+            let q = section[(i + 1) % section.len()];
+            let a = [p.0, 0.0, p.1];
+            let b = [q.0, 0.0, q.1];
+            let c = [q.0, width, q.1];
+            let d = [p.0, width, p.1];
+            for v in [a, c, b, a, d, c] {
+                out.extend_from_slice(&v);
+            }
+        }
+        // Caps: fan from the first vertex, +Y cap reversed.
+        for i in 1..section.len() - 1 {
+            let p0 = section[0];
+            let pi = section[i];
+            let pj = section[i + 1];
+            for v in [
+                [p0.0, 0.0, p0.1],
+                [pi.0, 0.0, pi.1],
+                [pj.0, 0.0, pj.1],
+                [p0.0, width, p0.1],
+                [pj.0, width, pj.1],
+                [pi.0, width, pi.1],
+            ] {
+                out.extend_from_slice(&v);
+            }
+        }
+        out
+    }
+
+    /// A slab of thickness `thickness` leaning `lean_deg` from horizontal,
+    /// rising `h`, standing on a flat foot `[0, f] × [0, t]`. The slab's
+    /// underside is a down-facing face at exactly `lean_deg`.
+    fn leaning_tower(f: f32, t: f32, thickness: f32, h: f32, lean_deg: f32) -> Vec<f32> {
+        let d = h / lean_deg.to_radians().tan();
+        let section = [
+            (0.0, 0.0),
+            (f, 0.0),
+            (f, t),
+            (f - d, t + h),
+            (f - d - thickness, t + h),
+            (f - thickness, t),
+            (0.0, t),
+        ];
+        prism(&section, 10.0)
+    }
+
+    fn report_for(soup: &[f32], angle_deg: f32) -> StabilityReport {
+        let mesh = IndexedMesh::from_triangle_soup(soup, 1e-5);
+        compute_stability_report(&mesh, angle_deg).expect("report")
+    }
+
+    #[test]
+    fn flat_base_cube_has_no_drag_and_no_margin_limit() {
+        let r = report_for(&unit_cube_soup(), 45.0);
+        // The only down-facing face is the bottom, whose drag is vertical.
+        assert_eq!(r.drag_faces, 0);
+        assert!(r.margin_mm.is_infinite(), "margin {}", r.margin_mm);
+        assert!(
+            (r.volume_mm3 - 1000.0).abs() < 1.0,
+            "volume {}",
+            r.volume_mm3
+        );
+        assert!(r.signed_volume_mm3 > 0.0, "outward winding");
+        assert!((r.centroid_mm[0] - 5.0).abs() < 0.01);
+        assert!((r.centroid_mm[1] - 5.0).abs() < 0.01);
+        assert!((r.centroid_mm[2] - 5.0).abs() < 0.01);
+        assert!((r.height_mm - 10.0).abs() < 0.01);
+        assert_eq!(r.bearing_edges, 4);
+        assert!((r.bearing_area_mm2 - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn edge_down_pose_has_no_bearing_polygon() {
+        // A cube on an edge: the bearing locus is a line, so there is no
+        // static margin whatever the drag — the same verdict the TS
+        // stabilization gate reaches through its 4 mm² hull-area floor.
+        let r = report_for(&rotate_x(&unit_cube_soup(), 30.0), 45.0);
+        assert_eq!(r.bearing_edges, 0);
+        assert_eq!(r.bearing_area_mm2, 0.0);
+        assert_eq!(r.margin_mm, 0.0);
+        // Underside facet (30°) plus the now-down-facing former -Y face (60°).
+        assert_eq!(r.drag_faces, 4);
+        assert!(
+            (r.steep_band_share - 0.75).abs() < 0.05,
+            "steep share {}",
+            r.steep_band_share
+        );
+        // The pose carries real drag (100·0.5·2.5 + 100·0.866·4.33 ≈ 500 mm³)
+        // but there is no edge to project it onto, so the worst-edge figure is
+        // zero and the log must not read as "no drag".
+        assert!((r.drag_moment_mm3 - 500.0).abs() < 2.0, "total {}", r.drag_moment_mm3);
+        assert_eq!(r.worst_edge_drag_mm3, 0.0);
+        let line = r.to_log_line();
+        assert!(line.contains("no bearing polygon"), "{line}");
+        assert!(line.contains("drag 500mm³ over 4 faces"), "{line}");
+        assert!(!line.contains("worst edge"), "{line}");
+    }
+
+    #[test]
+    fn steeper_lean_is_all_steep_band_and_flatter_is_none() {
+        let steep = report_for(&leaning_tower(20.0, 2.0, 3.0, 6.0, 60.0), 45.0);
+        assert_eq!(steep.drag_faces, 2, "the slab underside only");
+        assert!((steep.steep_band_share - 1.0).abs() < 1e-6);
+        // The moment-weighted height sits above the faces' arithmetic mean
+        // (t + h/2 = 5) and no higher than the top of the face (t + h = 8);
+        // the underside is one quad split at z = t+h/3 and t+2h/3.
+        assert!(
+            steep.drag_height_mm > 5.0 && steep.drag_height_mm <= 6.0,
+            "z* {}",
+            steep.drag_height_mm
+        );
+        assert_eq!(steep.driver_heights_mm, vec![4.0, 6.0]);
+
+        let flat = report_for(&leaning_tower(20.0, 2.0, 3.0, 6.0, 30.0), 45.0);
+        assert_eq!(flat.drag_faces, 2);
+        assert_eq!(
+            flat.steep_band_share, 0.0,
+            "30° is below the self-support angle"
+        );
+        assert!(flat.drag_moment_mm3 > 0.0);
+    }
+
+    #[test]
+    fn same_footprint_taller_part_has_less_margin() {
+        // The whole point of the report: the same drag face on a taller part
+        // is a longer lever. The area threshold cannot tell these apart.
+        // Analytic values for both, from the section (foot 20×2, slab 3 thick)
+        // and the 60° underside: V = 580 / 760 mm³, d = 12.10 / 12.39 mm,
+        // M = 300 / 960 mm³ → margin 23.4 / 9.8 mm.
+        let short = report_for(&leaning_tower(20.0, 2.0, 3.0, 6.0, 60.0), 45.0);
+        let tall = report_for(&leaning_tower(20.0, 2.0, 3.0, 12.0, 60.0), 45.0);
+        assert!(
+            (short.volume_mm3 - 580.0).abs() < 2.0,
+            "volume {}",
+            short.volume_mm3
+        );
+        assert!(
+            (tall.volume_mm3 - 760.0).abs() < 2.0,
+            "volume {}",
+            tall.volume_mm3
+        );
+        // The worst edge is the one the drag pushes toward (−X), not the
+        // nearest edge — the mass sits 12.1 mm inside it.
+        assert!(
+            (short.centroid_depth_mm - 12.10).abs() < 0.05,
+            "{}",
+            short.centroid_depth_mm
+        );
+        assert!(
+            (tall.centroid_depth_mm - 12.39).abs() < 0.05,
+            "{}",
+            tall.centroid_depth_mm
+        );
+        assert!(
+            (short.worst_edge_dir_deg - 180.0).abs() < 0.01,
+            "{}",
+            short.worst_edge_dir_deg
+        );
+        assert!(
+            (short.drag_moment_mm3 - 300.0).abs() < 1.0,
+            "{}",
+            short.drag_moment_mm3
+        );
+        assert!(
+            (tall.drag_moment_mm3 - 960.0).abs() < 1.0,
+            "{}",
+            tall.drag_moment_mm3
+        );
+        // The whole drag pushes one way and the worst edge faces it, so the
+        // projected figure equals the total here.
+        assert!(
+            (short.worst_edge_drag_mm3 - 300.0).abs() < 1.0,
+            "{}",
+            short.worst_edge_drag_mm3
+        );
+        assert!(
+            (tall.worst_edge_drag_mm3 - 960.0).abs() < 1.0,
+            "{}",
+            tall.worst_edge_drag_mm3
+        );
+        assert!(
+            (short.margin_mm - 23.39).abs() < 0.3,
+            "margin {}",
+            short.margin_mm
+        );
+        // The adhesion side of the same pose: the patch's first moment about
+        // the worst edge over the drag moment, A·d̄/M = 200·10/300. It is the
+        // comparison that survives a leaning pose, where the gravity margin
+        // goes negative: the patch centroid is always inside its own hull.
+        assert!((short.contact_depth_mm - 10.0).abs() < 0.01, "{}", short.contact_depth_mm);
+        assert!((tall.contact_depth_mm - 10.0).abs() < 0.01, "{}", tall.contact_depth_mm);
+        assert!(
+            (short.adhesion_ratio - 6.6667).abs() < 0.01,
+            "ratio {}",
+            short.adhesion_ratio
+        );
+        assert!(
+            (tall.adhesion_ratio - 2.0833).abs() < 0.01,
+            "ratio {}",
+            tall.adhesion_ratio
+        );
+        assert!(tall.adhesion_ratio < short.adhesion_ratio);
+        assert!(
+            (tall.margin_mm - 9.81).abs() < 0.3,
+            "margin {}",
+            tall.margin_mm
+        );
+        assert!(tall.margin_mm < short.margin_mm);
+        // Height is the live term: both carry the identical underside face.
+        assert!(tall.drag_height_mm > short.drag_height_mm);
+    }
+
+    #[test]
+    fn centroid_past_the_bearing_edge_has_negative_margin() {
+        // Leaned far enough that the mass is no longer over the foot.
+        let r = report_for(&leaning_tower(20.0, 2.0, 3.0, 100.0, 60.0), 45.0);
+        assert!(r.centroid_mm[0] < 0.0, "centroid x {}", r.centroid_mm[0]);
+        assert!(r.centroid_depth_mm < 0.0, "depth {}", r.centroid_depth_mm);
+        assert!(r.margin_mm < 0.0, "margin {}", r.margin_mm);
+    }
+
+    #[test]
+    fn steep_flat_region_carries_its_drag_moment_and_direction() {
+        // A 60° quad, sized past the steep-flat area floor: it is a steep flat,
+        // it leans, and its drag pushes along its own normal's XY direction.
+        let side = STEEP_FLAT_MIN_AREA_MM2 * 0.6;
+        let soup = big_quad_at(side, 60.0);
+        let (regions, report) = overhang_and_stability_from_soup(&soup, 45.0, 0.25);
+        let report = report.expect("report");
+        assert_eq!(regions.len(), 1, "{regions:?}");
+        let r = &regions[0];
+        assert!(r.steep_flat, "came from the steep-flat pass");
+        assert!(r.drag_moment_mm3 > 0.0, "moment {}", r.drag_moment_mm3);
+        // The quad starts facing -Z and is rotated 60° about X, so its mean
+        // normal's XY part points +Y (90°), not -Y.
+        assert!((r.drag_dir_deg - 90.0).abs() < 1.0, "dir {}", r.drag_dir_deg);
+        // The region's moment is the pose's whole moment here: one patch.
+        // The region sums in f32, so the tolerance is set by its magnitude.
+        assert!(
+            (r.drag_moment_mm3 as f64 - report.drag_moment_mm3).abs() < 0.5,
+            "region {} vs pose {}",
+            r.drag_moment_mm3,
+            report.drag_moment_mm3,
+        );
+        let line = region_moment_ranking(&regions, report.drag_moment_mm3, 4);
+        assert!(line.starts_with("#0 steep 60°"), "{line}");
+        assert!(line.contains("(100%)"), "{line}");
+    }
+
+    #[test]
+    fn a_region_that_does_not_lean_carries_no_moment() {
+        // A 30° quad is a plain overhang below the steep-flat band, and its
+        // moment is what the pose total says it is.
+        let (regions, report) = overhang_and_stability_from_soup(&quad_at(30.0), 45.0, 0.25);
+        assert_eq!(regions.len(), 1);
+        assert!(!regions[0].steep_flat, "30° is below the band");
+        assert!(regions[0].drag_moment_mm3 > 0.0);
+        assert!(
+            (regions[0].drag_moment_mm3 as f64 - report.expect("report").drag_moment_mm3).abs()
+                < 0.5
+        );
+    }
+
+    #[test]
+    fn empty_mesh_has_no_report() {
+        assert!(compute_stability_report(&IndexedMesh::new(), 45.0).is_none());
+    }
+
+    #[test]
+    fn stray_vertex_does_not_define_the_plate_plane() {
+        // The signature of a real defective file: a 20 mm cube with two
+        // zero-area triangles referencing one vertex 10 mm below it. The bbox
+        // then reads 30.75 × 23.5 × 30.8 for a volume of exactly 20³, and the
+        // contact band lands on the stray vertex alone — reporting a pose with
+        // no contact at all. Degenerate faces must not decide where the part
+        // touches the plate.
+        let mut soup = unit_cube_soup();
+        let stray = [40.0f32, 33.5, -10.0];
+        for _ in 0..2 {
+            // [v0, stray, stray] — zero area, zero volume, one new vertex.
+            soup.extend_from_slice(&[0.0, 0.0, 0.0]);
+            soup.extend_from_slice(&stray);
+            soup.extend_from_slice(&stray);
+        }
+        let r = report_for(&soup, 45.0);
+        assert_eq!(r.degenerate_faces, 2);
+        assert!((r.volume_mm3 - 1000.0).abs() < 1e-3, "volume {}", r.volume_mm3);
+        assert!((r.height_mm - 10.0).abs() < 1e-3, "height {}", r.height_mm);
+        assert!((r.centroid_mm[2] - 5.0).abs() < 1e-3, "cz {}", r.centroid_mm[2]);
+        // The cube's flat base is the bearing locus, not the stray vertex.
+        assert_eq!(r.bearing_edges, 4);
+        assert!((r.bearing_area_mm2 - 100.0).abs() < 0.01, "{}", r.bearing_area_mm2);
+        assert!(r.margin_mm.is_infinite(), "margin {}", r.margin_mm);
+        assert!(r.to_log_line().contains("2 degenerate faces ignored"), "{}", r.to_log_line());
+    }
+
+    #[test]
+    fn open_shell_reports_no_volume_and_no_margin() {
+        // A bare quad: nothing encloses a volume, so there is no mass to
+        // restore anything. The centroid falls back to the bounding-box center
+        // and the log says the shell is open rather than printing a number
+        // that looks physical.
+        let r = report_for(&quad_at(0.0), 45.0);
+        assert!(
+            r.signed_volume_mm3.abs() < 1e-6,
+            "signed {}",
+            r.signed_volume_mm3
+        );
+        assert_eq!(r.volume_mm3, 0.0);
+        assert_eq!(r.margin_mm, 0.0);
+        assert!((r.centroid_mm[0] - 5.0).abs() < 0.01);
+        assert!((r.centroid_mm[1] - 5.0).abs() < 0.01);
+        assert!(
+            r.to_log_line().contains("inverted or open shell"),
+            "{}",
+            r.to_log_line()
+        );
+    }
+
+    #[test]
+    fn stability_log_line_names_the_margin_and_the_driver() {
+        let r = report_for(&leaning_tower(20.0, 2.0, 3.0, 6.0, 60.0), 45.0);
+        let line = r.to_log_line();
+        // The whole line, so the calibration numbers stay where a reader of the
+        // log expects them. Both verdicts carry their own constant: the gravity
+        // margin its length L*, the adhesion ratio the dimensionless p/σ. Both
+        // divisors are printed so the arithmetic can be checked by hand.
+        // Gravity is labelled for what it is in a bottom-up machine — a
+        // driving term, not a restoring margin — and carries its pressure so it
+        // can be read against p.
+        assert!(
+            line.starts_with(
+                "gravity lever 23.39mm · peel 25.2e-5MPa (driving, not restoring) · \
+                 adhesion 6.667 (lifts iff p/σ > it) · volume 580.0mm³"
+            ),
+            "{line}"
+        );
+        assert!(line.contains("bearing 200.0mm² over 4 edges"), "{line}");
+        // The centroid is world-absolute, so its height above the part's own
+        // base is printed with it — the number to compare against height/2.
+        // The tower's volume centroid sits at 2.2mm of its 8.0mm height (the
+        // foot is heavy and low), so the pairing is readable without arithmetic.
+        assert!(line.contains("[2.2 above the part's base]"), "{line}");
+        assert!(line.contains("height 8.0mm"), "{line}");
+        assert!(
+            line.contains("worst edge 300mm³ dir 180° depth 12.10mm (contact 10.00mm)"),
+            "{line}"
+        );
+        assert!(line.contains("drag 300mm³ over 2 faces (steep share 100%, z* 5.2mm)"), "{line}");
+        assert!(line.contains("drivers z 4.0/6.0mm"), "{line}");
+        // A part with no drag says so rather than printing a bogus margin.
+        let flat = report_for(&unit_cube_soup(), 45.0).to_log_line();
+        assert!(flat.contains("no down-facing drag"), "{flat}");
     }
 }
