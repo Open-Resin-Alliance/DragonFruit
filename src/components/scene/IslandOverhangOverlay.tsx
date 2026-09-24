@@ -14,6 +14,9 @@ import type { DetectedIsland } from '@/volumeAnalysis/Islands/types';
 
 const OVERHANG_COLOR = '#ffa500';
 const OVERHANG_OPACITY = 0.4;
+/** ...and what a patch gets when the pose needs no topple coverage: visible
+ *  enough to read the classification, quiet enough not to promise support. */
+const MUTED_OPACITY = 0.12;
 /** A topple patch carrying little of the pose's drag moment: light amber, so it
  *  stays clearly visible on the model. The ramp encodes the share in
  *  saturation, never in brightness — a dim end reads as "the overlay is broken"
@@ -125,9 +128,18 @@ interface IslandOverhangOverlayProps {
   geometry: THREE.BufferGeometry;
   /** Overhang islands for this model (source 'overhang', with triangleIds). */
   regions: DetectedIsland[];
+  /** False when the pose needs no anti-topple contact. The steep-flat patches
+   *  are then muted rather than drawn as if they were about to be covered:
+   *  showing everything that was classified reads as "this will be supported",
+   *  and it is not. */
+  toppleCoverage?: boolean;
 }
 
-export function IslandOverhangOverlay({ geometry, regions }: IslandOverhangOverlayProps) {
+export function IslandOverhangOverlay({
+  geometry,
+  regions,
+  toppleCoverage = true,
+}: IslandOverhangOverlayProps) {
   const centerOffset = useMemo(() => {
     if (!geometry) return new THREE.Vector3();
     const bbox = geometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(
@@ -208,13 +220,13 @@ export function IslandOverhangOverlay({ geometry, regions }: IslandOverhangOverl
   const toppleMaterial = useMemo(() => {
     const material = new THREE.MeshBasicMaterial({
       transparent: true,
-      opacity: OVERHANG_OPACITY,
+      opacity: toppleCoverage ? OVERHANG_OPACITY : MUTED_OPACITY,
       side: THREE.DoubleSide,
       depthWrite: false,
     });
     applyOverhangShader(material, true);
     return material;
-  }, []);
+  }, [toppleCoverage]);
 
   const formationMaterial = useMemo(() => {
     const material = new THREE.MeshBasicMaterial({

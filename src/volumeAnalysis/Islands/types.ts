@@ -60,6 +60,28 @@ export interface OverhangRegion {
 
 export type Vec3Loop = Array<[number, number, number]>;
 
+/** The `scan_overhangs` answer: the regions, plus the topple report for the
+ *  pose they were classified in. The overlay needs the verdict to show what the
+ *  placement will actually cover, rather than everything it classified. */
+export interface OverhangScan {
+  regions: OverhangRegion[];
+  stability?: PoseStabilityWire | null;
+}
+
+/** Wire shape of the Rust `StabilityReport` (camelCase). */
+export interface PoseStabilityWire {
+  bearingAreaMm2: number;
+  bearingEdges: number;
+  centroidDepthMm: number;
+  contactDepthMm: number;
+  dragMomentMm3: number;
+  marginMm: number;
+  adhesionRatio: number;
+  pushDirDeg: number;
+  dragTopMm: number;
+  bearingIsRaft: boolean;
+}
+
 /** Classification once the voxel and minima sets are intersected (Part C). */
 export type IslandClass = 'intersection' | 'voxelOnly' | 'minimaOnly';
 

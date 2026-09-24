@@ -890,7 +890,8 @@ const STABILITY_MAX_DRIVERS: usize = 3;
 /// and `0` in the two cases where a static margin does not exist at all: a
 /// bearing locus with no polygon (a point or edge contact), or a mesh that
 /// encloses no volume (an open shell has no mass to restore anything).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StabilityReport {
     /// Plate-contact band the bearing hull was measured over (mm).
     pub bearing_band_mm: f32,
@@ -1444,6 +1445,17 @@ fn polygon_centroid_2d(points: &[(f32, f32)]) -> Option<(f64, f64)> {
     Some((cx / (3.0 * area2), cy / (3.0 * area2)))
 }
 
+/// One scan's answer: the regions, and the topple report for the pose they were
+/// classified in. The report travels with them because the overlay has to show
+/// what the placement will actually cover, and that depends on the verdict.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OverhangScan {
+    pub regions: Vec<OverhangRegion>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stability: Option<StabilityReport>,
+}
+
 /// Tauri IPC command: weld a world-space triangle soup (9 floats per triangle)
 /// and classify overhang regions with projected-footprint masks. Stateless —
 /// no model cache. Mirrors `scan_mesh_minima`'s shape.
@@ -1460,7 +1472,7 @@ pub async fn scan_overhangs(
     px_mm: f32,
     label: Option<String>,
     has_raft: Option<bool>,
-) -> Result<Vec<OverhangRegion>, String> {
+) -> Result<OverhangScan, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let (regions, report) = overhang_and_stability_from_soup(
             &positions,
@@ -1487,7 +1499,10 @@ pub async fn scan_overhangs(
             regions.len(),
             positions.len() / 9,
         );
-        Ok(regions)
+        Ok(OverhangScan {
+            regions,
+            stability: report,
+        })
     })
     .await
     .map_err(|e| format!("Overhang scan task panicked: {e}"))?
