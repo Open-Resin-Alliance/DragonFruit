@@ -6,6 +6,7 @@ export type SceneAutosaveSettings = {
   enabled: boolean;
   recoveryPromptEnabled: boolean;
   debounceMs: number;
+  cooldownMs: number;
   capMs: number;
 };
 
@@ -15,8 +16,9 @@ export const SCENE_AUTOSAVE_SETTINGS_CHANGE_EVENT = 'dragonfruit://scene-autosav
 export const DEFAULT_SCENE_AUTOSAVE_SETTINGS: SceneAutosaveSettings = {
   enabled: true,
   recoveryPromptEnabled: true,
-  debounceMs: 30_000,
-  capMs: 2 * 60_000,
+  debounceMs: 45_000,
+  cooldownMs: 180_000,
+  capMs: 5 * 60_000,
 };
 
 let cachedRawSettingsValue: string | null | undefined;
@@ -27,19 +29,24 @@ function normalizeSceneAutosaveSettings(
   value: Partial<SceneAutosaveSettings> | null | undefined,
 ): SceneAutosaveSettings {
   const rawDebounce = Number(value?.debounceMs);
+  const rawCooldown = Number(value?.cooldownMs);
   const rawCap = Number(value?.capMs);
   const debounceMs = Number.isFinite(rawDebounce)
     ? clamp(Math.round(rawDebounce), 15_000, 15 * 60_000)
     : DEFAULT_SCENE_AUTOSAVE_SETTINGS.debounceMs;
+  const cooldownMs = Number.isFinite(rawCooldown)
+    ? clamp(Math.round(rawCooldown), 15_000, 15 * 60_000)
+    : DEFAULT_SCENE_AUTOSAVE_SETTINGS.cooldownMs;
   const capMsCandidate = Number.isFinite(rawCap)
     ? clamp(Math.round(rawCap), 60_000, 60 * 60_000)
     : DEFAULT_SCENE_AUTOSAVE_SETTINGS.capMs;
-  const capMs = Math.max(capMsCandidate, debounceMs);
+  const capMs = Math.max(capMsCandidate, debounceMs, cooldownMs);
 
   return {
     enabled: value?.enabled !== false,
     recoveryPromptEnabled: value?.recoveryPromptEnabled !== false,
     debounceMs,
+    cooldownMs,
     capMs,
   };
 }
@@ -48,6 +55,7 @@ function areSceneAutosaveSettingsEqual(a: SceneAutosaveSettings, b: SceneAutosav
   return a.enabled === b.enabled
     && a.recoveryPromptEnabled === b.recoveryPromptEnabled
     && a.debounceMs === b.debounceMs
+    && a.cooldownMs === b.cooldownMs
     && a.capMs === b.capMs;
 }
 

@@ -10,8 +10,9 @@ import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 // Config
 // ---------------------------------------------------------------------------
 
-const AUTOSAVE_DEBOUNCE_MS = 30_000;  // 30 s of quiet → write
-const AUTOSAVE_CAP_MS = 2 * 60_000;  // write at most every 2 min even under churn
+const AUTOSAVE_DEBOUNCE_MS = 45_000;  // 45 s of quiet → write
+const AUTOSAVE_COOLDOWN_MS = 180_000;
+const AUTOSAVE_CAP_MS = 5 * 60_000;  // write at most every 5 min even under churn
 const AUTOSAVE_NAVIGATION_SETTLE_MS = 900;
 
 // ---------------------------------------------------------------------------
@@ -193,6 +194,8 @@ export type AutosaveGateInput = {
   desktop: boolean;
   /** Epoch ms until which `suppressSceneAutosave` holds ticks off. */
   suppressedUntil: number;
+  /** Epoch ms until which automatic autosaves must wait after a write attempt. */
+  cooldownUntil: number;
   now: number;
   modelCount: number;
   navigationBusy: boolean;
@@ -212,7 +215,7 @@ export type AutosaveGateInput = {
 
 export type AutosaveGateDecision =
   | { action: 'run' }
-  | { action: 'defer'; reason: 'navigation' | 'suppressed'; retainDirty: true }
+  | { action: 'defer'; reason: 'navigation' | 'suppressed' | 'cooldown'; retainDirty: true }
   | { action: 'skip'; reason: 'disabled' | 'not-desktop' | 'empty-scene' | 'unchanged'; retainDirty: boolean };
 
 /**
@@ -230,7 +233,7 @@ export type AutosaveGateDecision =
  * dirty; only "there is genuinely nothing to save" (an empty scene) and "this
  * build cannot save" (browser) drop it.
  *
- * A forced flush overrides both defer reasons: it is the quit path and the
+ * A forced flush overrides all defer reasons: it is the quit path and the
  * explicit hand-off, where waiting means losing the work outright.
  */
 export function decideAutosaveGate(input: AutosaveGateInput): AutosaveGateDecision {
@@ -251,6 +254,9 @@ export function decideAutosaveGate(input: AutosaveGateInput): AutosaveGateDecisi
     // the quit/hand-off path always reaches disk.
     if (input.revision === input.lastPersistedRevision) {
       return { action: 'skip', reason: 'unchanged', retainDirty: false };
+    }
+    if (input.now < input.cooldownUntil) {
+      return { action: 'defer', reason: 'cooldown', retainDirty: true };
     }
   }
 
@@ -336,6 +342,7 @@ export type UseSceneAutosaveOptions = {
   selectedModelIds: string[];
   enabled?: boolean;
   debounceMs?: number;
+  cooldownMs?: number;
   capMs?: number;
   preferredSavePath?: string | null;
   /**
@@ -375,6 +382,7 @@ export function useSceneAutosave({
   selectedModelIds,
   enabled = true,
   debounceMs = AUTOSAVE_DEBOUNCE_MS,
+  cooldownMs = AUTOSAVE_COOLDOWN_MS,
   capMs = AUTOSAVE_CAP_MS,
   preferredSavePath = null,
   sceneFormatChunked = true,
@@ -396,6 +404,8 @@ export function useSceneAutosave({
   enabledRef.current = enabled;
   const debounceMsRef = React.useRef(debounceMs);
   debounceMsRef.current = debounceMs;
+  const cooldownMsRef = React.useRef(cooldownMs);
+  cooldownMsRef.current = cooldownMs;
   const capMsRef = React.useRef(capMs);
   capMsRef.current = capMs;
   const preferredSavePathRef = React.useRef(preferredSavePath);
@@ -411,9 +421,11 @@ export function useSceneAutosave({
   const navigationSettleRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const navigationActiveRef = React.useRef(false);
   const navigationQuietUntilRef = React.useRef(0);
+  const cooldownUntilRef = React.useRef(0);
   const inFlightRef = React.useRef(false);
   const autosavePromiseRef = React.useRef<Promise<void> | null>(null);
   const dirtyRef = React.useRef(false);
+  const mountedRef = React.useRef(false);
 
   // Monotonic scene-content revision: bumped by `scheduleSave` on every autosave
   // trigger, and snapshotted into `lastPersistedRevisionRef` only when a write
@@ -444,9 +456,7 @@ export function useSceneAutosave({
   const scheduleDeferredAutosave = React.useCallback((perform: () => void, notBeforeMs = 0) => {
     clearDeferredAutosave();
 
-    // `notBeforeMs` lets a suppression-deferred tick wake when the window
-    // actually closes instead of re-checking every settle interval for the whole
-    // length of a long import or hollow (D4).
+    // `notBeforeMs` holds a deferred tick until suppression and cooldown end.
     const delay = Math.max(
       AUTOSAVE_NAVIGATION_SETTLE_MS,
       navigationQuietUntilRef.current - Date.now(),
@@ -462,9 +472,9 @@ export function useSceneAutosave({
   }, [clearDeferredAutosave]);
 
   const performAutosave = React.useCallback(async (options?: { force?: boolean }) => {
-    if (autosavePromiseRef.current) {
+    while (autosavePromiseRef.current) {
       await autosavePromiseRef.current;
-      return;
+      if (!options?.force) return;
     }
 
     const run = async () => {
@@ -482,6 +492,7 @@ export function useSceneAutosave({
         enabled: enabledRef.current,
         desktop: isDesktopRuntime(),
         suppressedUntil: sceneAutosaveSuppressRef.current,
+        cooldownUntil: cooldownUntilRef.current,
         now: Date.now(),
         modelCount: currentModels.length,
         navigationBusy: shouldDeferAutosaveForNavigation(),
@@ -497,13 +508,21 @@ export function useSceneAutosave({
           // scene is not dirty, so this cannot spin on a clean scene.
           scheduleDeferredAutosave(
             () => { void performAutosave(); },
-            decision.reason === 'suppressed' ? sceneAutosaveSuppressRef.current : 0,
+            Math.max(sceneAutosaveSuppressRef.current, cooldownUntilRef.current),
           );
         }
         return;
       }
 
       clearDeferredAutosave();
+      if (debounceRef.current !== null) {
+        clearTimeout(debounceRef.current);
+        debounceRef.current = null;
+      }
+      if (capRef.current !== null) {
+        clearTimeout(capRef.current);
+        capRef.current = null;
+      }
       inFlightRef.current = true;
       dirtyRef.current = false;
       setIsAutosaving(true);
@@ -632,6 +651,18 @@ export function useSceneAutosave({
           }));
         }
       } finally {
+        cooldownUntilRef.current = Date.now() + cooldownMsRef.current;
+        if (dirtyRef.current && enabledRef.current && mountedRef.current) {
+          if (debounceRef.current !== null) {
+            clearTimeout(debounceRef.current);
+            debounceRef.current = null;
+          }
+          if (capRef.current !== null) {
+            clearTimeout(capRef.current);
+            capRef.current = null;
+          }
+          scheduleDeferredAutosave(() => { void performAutosave(); }, cooldownUntilRef.current);
+        }
         inFlightRef.current = false;
         setIsAutosaving(false);
       }
@@ -646,7 +677,7 @@ export function useSceneAutosave({
         autosavePromiseRef.current = null;
       }
     }
-  }, []);
+  }, [clearDeferredAutosave, scheduleDeferredAutosave, shouldDeferAutosaveForNavigation]);
 
   const scheduleSave = React.useCallback(() => {
     if (!isDesktopRuntime()) return;
@@ -661,6 +692,18 @@ export function useSceneAutosave({
     // revision of the last committed write to skip idle/duplicate ticks.
     revisionRef.current += 1;
     if (!enabledRef.current) return;
+    if (Date.now() < cooldownUntilRef.current) {
+      if (debounceRef.current !== null) {
+        clearTimeout(debounceRef.current);
+        debounceRef.current = null;
+      }
+      if (capRef.current !== null) {
+        clearTimeout(capRef.current);
+        capRef.current = null;
+      }
+      scheduleDeferredAutosave(() => { void performAutosave(); }, cooldownUntilRef.current);
+      return;
+    }
 
     // Reset the debounce window
     if (debounceRef.current !== null) {
@@ -684,7 +727,7 @@ export function useSceneAutosave({
         }
       }, capMsRef.current);
     }
-  }, [performAutosave]);
+  }, [performAutosave, scheduleDeferredAutosave]);
 
   // Subscribe to history events (push / undo / redo)
   React.useEffect(() => {
@@ -779,7 +822,9 @@ export function useSceneAutosave({
 
   // Cleanup on unmount
   React.useEffect(() => {
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
       if (debounceRef.current !== null) clearTimeout(debounceRef.current);
       if (capRef.current !== null) clearTimeout(capRef.current);
       if (deferredAutosaveRef.current !== null) clearTimeout(deferredAutosaveRef.current);

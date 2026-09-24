@@ -947,6 +947,7 @@ export default function Home() {
     selectedModelIds: scene.selectedModelIds,
     enabled: sceneAutosaveEnabled,
     debounceMs: sceneAutosaveSettings.debounceMs,
+    cooldownMs: sceneAutosaveSettings.cooldownMs,
     capMs: sceneAutosaveSettings.capMs,
     // **Finding N3.** This used to read `preferredOverwriteScenePathRef.current`
     // — a ref, read during render. Mutating a ref does not re-render, so the

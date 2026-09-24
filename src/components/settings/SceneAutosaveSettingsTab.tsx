@@ -152,6 +152,7 @@ export function SceneAutosaveSettingsTab() {
   }, [desktopAvailable, resolvedAutosavePath, _]);
 
   const debounceSeconds = Math.round(settings.debounceMs / 1000);
+  const cooldownSeconds = Math.round(settings.cooldownMs / 1000);
   const capMinutes = Math.round(settings.capMs / 60_000);
 
   return (
@@ -239,6 +240,40 @@ export function SceneAutosaveSettingsTab() {
             }}
           >
             <div>
+              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>{_(msg`Autosave cooldown`)}</div>
+              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{_(msg`After an autosave, defer further automatic saves until this interval ends.`)}</div>
+            </div>
+            <div className="inline-flex items-center gap-2">
+              <NumberInput
+                min={15}
+                max={900}
+                step={5}
+                value={cooldownSeconds}
+                onChange={(next) => {
+                  if (!Number.isFinite(next)) return;
+                  const nextSeconds = Math.max(15, Math.min(900, Math.round(next)));
+                  setSettings((prev) => ({
+                    ...prev,
+                    cooldownMs: nextSeconds * 1000,
+                    capMs: Math.max(prev.capMs, nextSeconds * 1000),
+                  }));
+                }}
+                className="ui-input h-[34px] w-[120px] pl-2.5 pr-5 py-1.5 text-sm"
+                disabled={!settings.enabled}
+              />
+              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{_(msg({ message: 'sec', comment: 'Unit suffix after a seconds input box. Keep it abbreviated.' }))}</span>
+            </div>
+          </div>
+
+          <div
+            className="rounded-md border px-2.5 py-2 flex items-center justify-between gap-3"
+            style={{
+              borderColor: 'var(--border-subtle)',
+              background: 'var(--surface-0)',
+              opacity: settings.enabled ? 1 : 0.68,
+            }}
+          >
+            <div>
               <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>{_(msg`Maximum autosave interval`)}</div>
               <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{_(msg`For continuous edits, save at least this often.`)}</div>
             </div>
@@ -253,7 +288,7 @@ export function SceneAutosaveSettingsTab() {
                   const nextMinutes = Math.max(1, Math.min(60, Math.round(next)));
                   setSettings((prev) => ({
                     ...prev,
-                    capMs: Math.max(nextMinutes * 60_000, prev.debounceMs),
+                    capMs: Math.max(nextMinutes * 60_000, prev.debounceMs, prev.cooldownMs),
                   }));
                 }}
                 className="ui-input h-[34px] w-[120px] pl-2.5 pr-5 py-1.5 text-sm"
