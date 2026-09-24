@@ -16,9 +16,9 @@ export const SCENE_AUTOSAVE_SETTINGS_CHANGE_EVENT = 'dragonfruit://scene-autosav
 export const DEFAULT_SCENE_AUTOSAVE_SETTINGS: SceneAutosaveSettings = {
   enabled: true,
   recoveryPromptEnabled: true,
-  debounceMs: 30_000,
-  cooldownMs: 30_000,
-  capMs: 2 * 60_000,
+  debounceMs: 45_000,
+  cooldownMs: 180_000,
+  capMs: 5 * 60_000,
 };
 
 let cachedRawSettingsValue: string | null | undefined;

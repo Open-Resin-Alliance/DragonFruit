@@ -83,7 +83,7 @@ pointer turns into a trash can there, from the `body.preset-drag-delete` rule in
 | `import-defaults-v1`                     | localStorage | Default import behavior (raft mode, wall/root defaults) |
 | `dragonfruit-scene-autosave:settings-v1` | localStorage | Scene autosave enable, debounce, cooldown, cap and recovery prompt settings |
 
-The autosave setting `cooldownMs` is stored in milliseconds (default `30_000`, allowed `15_000`–`900_000`) and displayed in seconds. After a save attempt, automatic requests wait until the cooldown expires; explicit flushes do not. The maximum interval (`capMs`) is normalized to at least the debounce and cooldown durations.
+Autosave timing is stored in milliseconds: `debounceMs` defaults to `45_000` (45 seconds), `cooldownMs` to `180_000` (180 seconds; allowed `15_000`–`900_000`), and the maximum interval `capMs` to `300_000` (5 minutes). The settings UI displays debounce and cooldown in seconds and cap in minutes. After a save attempt, automatic requests wait until the cooldown expires; explicit flushes do not. Existing saved values remain in effect; a missing cooldown gets the new default, and `capMs` is normalized to at least the debounce and cooldown durations.
 
 ## UI/theme/layout keys
 

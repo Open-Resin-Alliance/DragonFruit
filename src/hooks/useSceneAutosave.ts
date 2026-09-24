@@ -10,9 +10,9 @@ import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 // Config
 // ---------------------------------------------------------------------------
 
-const AUTOSAVE_DEBOUNCE_MS = 30_000;  // 30 s of quiet → write
-const AUTOSAVE_COOLDOWN_MS = 30_000;
-const AUTOSAVE_CAP_MS = 2 * 60_000;  // write at most every 2 min even under churn
+const AUTOSAVE_DEBOUNCE_MS = 45_000;  // 45 s of quiet → write
+const AUTOSAVE_COOLDOWN_MS = 180_000;
+const AUTOSAVE_CAP_MS = 5 * 60_000;  // write at most every 5 min even under churn
 const AUTOSAVE_NAVIGATION_SETTLE_MS = 900;
 
 // ---------------------------------------------------------------------------

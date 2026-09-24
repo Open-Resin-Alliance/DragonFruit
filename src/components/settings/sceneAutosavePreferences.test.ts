@@ -33,9 +33,26 @@ afterEach(() => {
 });
 
 describe('scene autosave cooldown preferences', () => {
-  it('defaults legacy settings to a 30 second cooldown', () => {
+  it('uses 45 second debounce, 180 second cooldown and 5 minute cap for fresh settings', () => {
+    const settings = getSceneAutosaveSettingsSnapshot();
+    assert.deepEqual(
+      [settings.debounceMs, settings.cooldownMs, settings.capMs],
+      [45_000, 180_000, 300_000],
+    );
+  });
+
+  it('fills a missing legacy cooldown without changing its saved debounce', () => {
     raw = JSON.stringify({ enabled: true, recoveryPromptEnabled: true, debounceMs: 30_000, capMs: 120_000 });
-    assert.equal(getSceneAutosaveSettingsSnapshot().cooldownMs, 30_000);
+    const settings = getSceneAutosaveSettingsSnapshot();
+    assert.equal(settings.debounceMs, 30_000);
+    assert.equal(settings.cooldownMs, 180_000);
+    assert.equal(settings.capMs, 180_000);
+  });
+
+  it('preserves existing customized timing values', () => {
+    raw = JSON.stringify({ debounceMs: 25_000, cooldownMs: 200_000, capMs: 420_000 });
+    const settings = getSceneAutosaveSettingsSnapshot();
+    assert.deepEqual([settings.debounceMs, settings.cooldownMs, settings.capMs], [25_000, 200_000, 420_000]);
   });
 
   it('persists a configured cooldown in milliseconds and reloads it', () => {
