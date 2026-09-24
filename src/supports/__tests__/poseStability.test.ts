@@ -101,6 +101,7 @@ test('a part standing comfortably needs no anti-topple coverage', () => {
         adhesionRatio: 0.79,
         pushDirDeg: 211,
         heightMm: 66.6,
+        thicknessMm: 33.3,
         slenderness: 2.0,
         dragTopMm: 35.2,
         restingContact: { overhangAreaMm2: 0, cupAreaMm2: 0, scarAreaMm2: 0, blockedAreaMm2: 0 },

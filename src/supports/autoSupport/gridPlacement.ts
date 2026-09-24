@@ -433,10 +433,18 @@ export const STEEP_FLAT_ANCHOR_BAND_MM = 6.0;
  */
 export function steepFlatSpacingMultiplier(
     island: { steepFlat?: boolean },
-    slenderPart = false,
+    baseSpacingMm: number,
+    partThicknessMm = 0,
 ): number {
     if (!island.steepFlat) return 1;
-    return slenderPart ? 1 : STEEP_FLAT_SPACING_MULTIPLIER;
+    // The rung spacing up a face is a beam span: the sag between two contacts
+    // goes as the span to the fourth power, so it has to stay under the part's
+    // own thickness whatever the sparse field would like to do. That makes the
+    // density a function of the part rather than a switch on its shape: a 7mm
+    // wall lands at 7mm and a 30mm-thick one keeps the full sparse field.
+    const sparse = STEEP_FLAT_SPACING_MULTIPLIER;
+    if (!(partThicknessMm > 0) || !(baseSpacingMm > 0)) return sparse;
+    return Math.max(1, Math.min(sparse, partThicknessMm / baseSpacingMm));
 }
 
 /**
@@ -524,6 +532,10 @@ export function generateGridCandidates(
     /** The part is tall and thin enough that sway matters, so anchoring
      *  contacts ladder up a steep flat instead of banding low. */
     slenderPart = false,
+    /** The part's average thickness (mm), which caps the spacing between those
+     *  contacts: the sag between two of them goes as the span to the fourth
+     *  power. */
+    partThicknessMm = 0,
 ): CandidatePoint[] {
     const baseSpacing = Math.sqrt(Math.max(settings.areaPerSupportMm2, 0.5));
     if (baseSpacing <= 0) return [];
@@ -532,7 +544,8 @@ export function generateGridCandidates(
 
     for (const island of overhangIslands) {
         if (!shouldUseDensityGrid(island, settings)) continue;
-        const spacing = computeRegionSpacing(island, settings) * steepFlatSpacingMultiplier(island, slenderPart);
+        const baseSpacing = computeRegionSpacing(island, settings);
+        const spacing = baseSpacing * steepFlatSpacingMultiplier(island, baseSpacing, partThicknessMm);
 
         const voxels = island.contactVoxels;
         if (!voxels || voxels.count === 0) continue;

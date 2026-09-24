@@ -365,14 +365,25 @@ test('a steep flat is anchored low, a formation overhang is not banded', () => {
     assert.equal(steepFlatAnchorBandTop({ steepFlat: true, baseZ: 5 }), 11);
 });
 
-test('a slender part gets its steep flats at formation density', () => {
-    // The 505k-triangle wall: 126mm tall, 11mm thick. Its problem is sway, and
-    // the sag between contacts goes as the span to the fourth power, so the
-    // spacing is the knob. A squat part keeps the sparse field.
+test('the anchoring spacing follows the part thickness, not a switch', () => {
+    // The rung spacing up a face is a beam span: sag goes as the span to the
+    // fourth power, so it stays under the part's own thickness.
     const face = { steepFlat: true };
-    assert.equal(steepFlatSpacingMultiplier(face, false), STEEP_FLAT_SPACING_MULTIPLIER);
-    assert.equal(steepFlatSpacingMultiplier(face, true), 1, 'a wall gets formation density');
-    // Formation overhangs are unaffected either way.
-    assert.equal(steepFlatSpacingMultiplier({ steepFlat: false }, false), 1);
-    assert.equal(steepFlatSpacingMultiplier({ steepFlat: false }, true), 1);
+    const base = 3.0;
+
+    // A 7mm wall: the sparse field would give 7.5mm, the thickness caps it at 7.
+    assert.equal(steepFlatSpacingMultiplier(face, base, 7), 7 / base);
+    // A 30mm-thick part: the thickness is no constraint, so the full sparse.
+    assert.equal(steepFlatSpacingMultiplier(face, base, 30), STEEP_FLAT_SPACING_MULTIPLIER);
+    // Thinner than the formation spacing: it never goes below formation density.
+    assert.equal(steepFlatSpacingMultiplier(face, base, 2), 1, 'floored at formation');
+    // And the ramp is continuous, which is the point: a part at 3.9x and one at
+    // 4.1x get densities in proportion to their thickness instead of a jump.
+    const thin = steepFlatSpacingMultiplier(face, base, 5);
+    const thick = steepFlatSpacingMultiplier(face, base, 7);
+    assert.ok(thin < thick, `monotone in thickness (${thin} vs ${thick})`);
+
+    // Formation overhangs and unmeasured parts are unaffected.
+    assert.equal(steepFlatSpacingMultiplier({ steepFlat: false }, base, 7), 1);
+    assert.equal(steepFlatSpacingMultiplier(face, base, 0), STEEP_FLAT_SPACING_MULTIPLIER);
 });

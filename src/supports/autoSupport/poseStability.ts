@@ -66,10 +66,15 @@ export interface PoseStability {
     adhesionRatio: number;
     /** Part height above the bearing plane (mm). */
     heightMm: number;
-    /** How many times taller the part is than thick: `height / (volume /
-     *  footprint)`. A wall over `SLENDER_RATIO` sways under the peel's lateral
-     *  load while it prints, which is a different failure from toppling and
-     *  needs contact up its height rather than a band at the bottom. */
+    /** How thick the part is on average: `volume / footprint` (mm). The spacing
+     *  between anchoring contacts up a face is a beam span, and the sag between
+     *  two of them goes as the span to the fourth power, so this is the length
+     *  that spacing has to stay under. */
+    thicknessMm: number;
+    /** How many times taller the part is than thick: `height / thicknessMm`. A
+     *  wall over `SLENDER_RATIO` sways under the peel's lateral load while it
+     *  prints, which is a different failure from toppling and needs contact up
+     *  its height rather than a band at the bottom. */
     slenderness: number;
     /** Height (mm, above the part's own base) of the TOP of the highest face
      *  that drags — not its centroid. The moment grows with height, so the
@@ -315,6 +320,7 @@ export function measurePoseStability(
             adhesionRatio: 0,
             pushDirDeg: 0,
             heightMm: 0,
+            thicknessMm: 0,
             slenderness: 0,
             dragTopMm: 0,
             restingContact: EMPTY_RESTING,
@@ -484,6 +490,7 @@ export function measurePoseStability(
             worstSum > 1e-9 ? (bearingAreaMm2 * worstContactDepth) / worstSum : Infinity,
         pushDirDeg: (worstDirDeg + 360) % 360,
         heightMm: Number.isFinite(zMax) ? zMax - zMin : 0,
+        thicknessMm: bearingAreaMm2 > 0 ? volumeMm3 / bearingAreaMm2 : 0,
         slenderness:
             bearingAreaMm2 > 0 && volumeMm3 > 0
                 ? (Number.isFinite(zMax) ? zMax - zMin : 0) / (volumeMm3 / bearingAreaMm2)

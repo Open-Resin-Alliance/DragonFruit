@@ -2662,8 +2662,9 @@ export function computeAutoSupportPlan(
     const slenderPart = poseStability ? isSlenderPart(poseStability) : false;
     if (slenderPart) {
         console.log(LOG_PREFIX,
-            `Slender part (${poseStability?.slenderness.toFixed(1)}x taller than thick) — ` +
-            `anchoring contacts ladder up steep flats instead of banding low`);
+            `Slender part (${poseStability?.slenderness.toFixed(1)}x taller than thick, ` +
+            `${poseStability?.thicknessMm.toFixed(1)}mm thick) — anchoring contacts ladder up ` +
+            `steep flats instead of banding low, spaced no wider than the thickness`);
     }
     const steepFlats = islands.filter((i) => i.steepFlat).length;
     const dropped = steepFlats - islandsToCover.filter((i) => i.steepFlat).length;
@@ -2717,7 +2718,14 @@ export function computeAutoSupportPlan(
     if (eligible.length > 0) {
         let generated: CandidatePoint[] = [];
         try {
-            generated = generateGridCandidates(eligible, autoSettings, resolvedMesh, modelId, slenderPart)
+            generated = generateGridCandidates(
+                eligible,
+                autoSettings,
+                resolvedMesh,
+                modelId,
+                slenderPart,
+                poseStability?.thicknessMm ?? 0,
+            )
                 .map((c): CandidatePoint => ({ ...c, modelId }));
         } catch (e) {
             console.error(LOG_PREFIX,
