@@ -62,7 +62,7 @@ pointer turns into a trash can there, from the `body.preset-drag-delete` rule in
 | `dragonfruit.material.activeByPrinterProfile.v1` | localStorage + sessionStorage | Active material selection per printer profile      |
 | `dragonfruit-plugins-v1`                         | localStorage                  | Installed plugin registry + trust/install metadata |
 
-`MaterialProfile.antiAliasingSettings.supportTipShrinkPercent` lives inside the existing `dragonfruit-profiles-v1` material envelope, not a new key. `src/features/profiles/profileStore.ts` defaults missing values to `10` and clamps whole percentages to `0`–`90`; `src/components/settings/profileFormAtoms.tsx` exposes the entire Support Adjustments card in Material → Anti-Aliasing even with Custom Settings and Override Auto off. To set 25% for an editable material:
+`MaterialProfile.antiAliasingSettings.supportTipShrinkPercent` lives inside the existing `dragonfruit-profiles-v1` material envelope, not a new key. `src/features/profiles/profileStore.ts` defaults missing values to `10` and clamps whole percentages to `0`–`90`; `src/components/settings/profileFormAtoms.tsx` exposes the full-width Support Adjustments card in Material → Anti-Aliasing even with Custom Settings and Override Auto off. To set 25% for an editable material:
 
 ```ts
 updateMaterialProfile(customMaterial.id, {

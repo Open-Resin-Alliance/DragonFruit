@@ -1414,6 +1414,7 @@ export function MaterialAntiAliasingSection({ draft, onChange, lockActivationTog
                 </>
             )}
             <AaCard
+                className="md:col-span-2"
                 title="Support Adjustments"
                 description="Controls support AA, penetration offsets, and 3DAA sliced contact size."
             >
