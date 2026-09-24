@@ -31,6 +31,7 @@ import { activeSizingBand } from './parameterSizing';
 import { generateCandidates, deduplicateCandidates } from './candidateGeneration';
 import { generateGridCandidates, shouldUseDensityGrid } from './gridPlacement';
 import { computeStabilizationAnchors } from './stabilization';
+import { measurePoseStability, needsToppleCoverage, posedPositions } from './poseStability';
 import { perfEndFrame, perfMark, perfMeasure, type PerfFrame } from '../PlacementLogic/Pathfinding/pathfindingPerf';
 import { getOrCreateSDFCache } from '../PlacementLogic/Pathfinding/SDFCachePool';
 import { getRouterStats, resetRouterStats } from '../PlacementLogicV3/SmartPlacementV3';
@@ -2620,11 +2621,36 @@ export function computeAutoSupportPlan(
     // 1. Generate candidates
     // ------------------------------------------------------------------
 
+    // Does this pose need anti-topple contact at all? The same rule the
+    // stabilization anchors use: no bearing polygon, the mass outside the base,
+    // or an adhesion ratio below the conservative p/sigma. A part that stands
+    // on a wide patch with its centroid well inside it does not need contact on
+    // a self-supporting wall just because the wall is steep, and covering it
+    // anyway is how a squat cylinder came back wrapped in a support forest.
+    const poseStability = resolvedMesh
+        ? measurePoseStability(
+              posedPositions(resolvedMesh),
+              resolvedMesh.geometry.index?.array ?? null,
+              0,
+              0,
+          )
+        : null;
+    const toppleCoverageNeeded = poseStability === null || needsToppleCoverage(poseStability);
+    const steepFlats = islands.filter((i) => i.steepFlat).length;
+    const islandsToCover = toppleCoverageNeeded ? islands : islands.filter((i) => !i.steepFlat);
+    if (!toppleCoverageNeeded && steepFlats > 0) {
+        console.log(LOG_PREFIX,
+            `Topple coverage not needed — ${steepFlats} steep flats left uncovered ` +
+            `(adhesion ${poseStability?.adhesionRatio.toFixed(3)}, ` +
+            `centroid depth ${poseStability?.centroidDepthMm.toFixed(2)}mm, ` +
+            `bearing ${poseStability?.bearingAreaMm2.toFixed(1)}mm²)`);
+    }
+
     console.log(LOG_PREFIX, `Input: ${islands.length} islands from scan`);
     resetRouterStats();
     timingStart('candidates');
 
-    let candidates = generateCandidates(islands, autoSettings, { mesh: resolvedMesh, modelId });
+    let candidates = generateCandidates(islandsToCover, autoSettings, { mesh: resolvedMesh, modelId });
     candidates = candidates.map((c): CandidatePoint => ({ ...c, modelId }));
 
     // Stabilization pass: when the oriented mesh bears on a point or edge,
@@ -2656,7 +2682,7 @@ export function computeAutoSupportPlan(
     // only, small patches stay on the single-candidate path below. A
     // generation failure must not kill the whole run — fall back to the
     // region's single candidate.
-    const overhangIslands = islands.filter((i) => i.source === 'overhang');
+    const overhangIslands = islandsToCover.filter((i) => i.source === 'overhang');
     const eligible = overhangIslands.filter((i) => shouldUseDensityGrid(i, autoSettings));
     if (eligible.length > 0) {
         let generated: CandidatePoint[] = [];

@@ -112,6 +112,52 @@ const EMPTY_RESTING: RestingContact = {
     blockedAreaMm2: 0,
 };
 
+/** Conservative `p/σ` for the adhesion verdict: treat a pose as needing
+ *  anti-topple contact whenever it would lift below this, i.e. whenever it is
+ *  even close to marginal. The report's ratio is computed from the model's own
+ *  bearing patch, which is smaller than the printed contact whenever a raft is
+ *  used, so the true ratio is larger and this errs toward bracing. Calibration
+ *  will replace it. */
+export const CONSERVATIVE_P_SIGMA = 0.05;
+
+/**
+ * Does this pose need anti-topple contact at all?
+ *
+ * The constant-free half (no bearing polygon, or the mass outside the base) and
+ * the conservative half of the adhesion verdict, in one place, because two
+ * passes need the same answer: the stabilization anchors and the steep-flat
+ * coverage. A part that stands on a wide patch, with its centroid well inside
+ * it, and an adhesion ratio far above `p/σ`, does not need contact on a
+ * self-supporting wall just because the wall is steep — that is a forest of
+ * supports on a part that was never going to move.
+ */
+export function needsToppleCoverage(s: PoseStability): boolean {
+    if (isStaticallyUnstable(s)) return true;
+    return s.adhesionRatio < CONSERVATIVE_P_SIGMA;
+}
+
+/**
+ * The mesh's vertices in world space, which is the frame every stability
+ * measurement has to happen in: a model whose transform carries its
+ * orientation is upright in its own frame, so measuring the raw attribute
+ * array reports a part with no drag and a flat top.
+ */
+export function posedPositions(mesh: { geometry: { getAttribute(name: string): unknown }; matrixWorld: { elements: ArrayLike<number> } }): Float32Array {
+    const attribute = mesh.geometry.getAttribute('position') as { array: ArrayLike<number> } | undefined;
+    const local = attribute?.array ?? new Float32Array(0);
+    const e = mesh.matrixWorld.elements;
+    const out = new Float32Array(local.length);
+    for (let i = 0; i + 2 < local.length; i += 3) {
+        const x = local[i];
+        const y = local[i + 1];
+        const z = local[i + 2];
+        out[i] = e[0] * x + e[4] * y + e[8] * z + e[12];
+        out[i + 1] = e[1] * x + e[5] * y + e[9] * z + e[13];
+        out[i + 2] = e[2] * x + e[6] * y + e[10] * z + e[14];
+    }
+    return out;
+}
+
 /** A pose with no bearing polygon, or with its mass outside the base, cannot
  *  stand on the plate whatever the drag: no constant has to be calibrated to
  *  say so. This is the only part of the report the advisor gates on.

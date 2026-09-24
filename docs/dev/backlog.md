@@ -547,8 +547,13 @@ they climb to `dragTopMm`, and a buttress is spaced `BUTTRESS_SPACING_MM`
 fires on the adhesion verdict with a deliberately conservative
 `CONSERVATIVE_P_SIGMA = 0.05`.
 
-Still open from the list below: sizing the braces by the *deficit* rather than
-by rank, and the two constants it needs.
+Coverage is now gated on the pose's verdict rather than on the classification
+alone (`needsToppleCoverage`): a steep wall on a part that stands on a wide
+patch with its centroid well inside it gets nothing, which is what stopped a
+squat cylinder coming back wrapped in a forest.
+
+Still open: sizing the braces by the *deficit* rather than by rank, and the two
+constants it needs.
 
 **Blocker for anything sized rather than ranked.** `p/σ` is still uncalibrated,
 and the adhesion side measures the *bare* part's bearing patch (151 mm² at

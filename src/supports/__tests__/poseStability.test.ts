@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { isStaticallyUnstable, measurePoseStability } from '../autoSupport/poseStability';
+import {
+    CONSERVATIVE_P_SIGMA,
+    isStaticallyUnstable,
+    measurePoseStability,
+    needsToppleCoverage,
+} from '../autoSupport/poseStability';
 
 /** 10 mm cube with outward winding, centred on the origin — the same fixture
  *  the Rust report's tests use, so both sides are pinned to one ground truth. */
@@ -73,4 +78,32 @@ test('a stray vertex does not define the plate plane', () => {
     assert.equal(s.bearingEdges, 4);
     assert.ok(Math.abs(s.plateZMm - -5) < 1e-9, `plate ${s.plateZMm}`);
     assert.equal(isStaticallyUnstable(s), false);
+});
+
+test('a part standing comfortably needs no anti-topple coverage', () => {
+    // The cam seal tool's numbers: a wide bearing patch, the centroid 23.6mm
+    // inside it, and an adhesion ratio far above the conservative p/sigma. It
+    // was wrapped in a support forest anyway, because the steep-flat coverage
+    // never asked this question.
+    const tool = {
+        plateZMm: 0,
+        volumeMm3: 97159,
+        bearingAreaMm2: 1755.7,
+        bearingEdges: 85,
+        centroidDepthMm: 23.63,
+        contactDepthMm: 23.63,
+        dragMomentMm3: 52524,
+        marginMm: 43.72,
+        adhesionRatio: 0.79,
+        pushDirDeg: 211,
+        dragTopMm: 35.2,
+        restingContact: { overhangAreaMm2: 0, cupAreaMm2: 0, scarAreaMm2: 0, blockedAreaMm2: 0 },
+    };
+    assert.ok(tool.adhesionRatio > CONSERVATIVE_P_SIGMA, 'comfortably above the conservative bound');
+    assert.equal(needsToppleCoverage(tool), false, 'so the steep wall stays uncovered');
+
+    // The same part leaning, or with its mass outside the base, does need it.
+    assert.equal(needsToppleCoverage({ ...tool, adhesionRatio: 0.001 }), true, 'marginal lifts');
+    assert.equal(needsToppleCoverage({ ...tool, centroidDepthMm: -3 }), true, 'mass outside the base');
+    assert.equal(needsToppleCoverage({ ...tool, bearingEdges: 0 }), true, 'no bearing polygon');
 });

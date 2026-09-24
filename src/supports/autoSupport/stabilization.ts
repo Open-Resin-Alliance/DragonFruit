@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { convexHull2d } from '@/supports/Rafts/Crenelated/geometry/convexHull2d';
-import { measurePoseStability } from './poseStability';
+import { measurePoseStability, needsToppleCoverage, posedPositions } from './poseStability';
 
 /**
  * Stabilization: a model that prints fine on its own can still fail because
@@ -52,12 +52,6 @@ const VERT_CAP = 3_000_000;
  *  to be continuous, a brace only needs to be there. Without this a 50mm face
  *  gets twenty teeth a side and reads as a carpet. */
 const BUTTRESS_SPACING_MM = 8.0;
-/** Conservative `p/σ` for the adhesion verdict: brace whenever the pose would
- *  lift below this, i.e. whenever it is even close to marginal. The report's
- *  ratio is computed from the model's own bearing patch, which is smaller than
- *  the printed contact whenever a raft is used, so the true ratio is larger and
- *  this errs toward bracing. Calibration will replace it. */
-const CONSERVATIVE_P_SIGMA = 0.05;
 
 export interface StabilizationAnchor {
     x: number;
@@ -193,13 +187,7 @@ export function computeStabilizationAnchors(mesh: THREE.Mesh): StabilizationAnch
     // whose transform carries the orientation is upright in its own frame — so
     // measuring the raw attribute array reported a flat-topped part with no
     // drag, and the brace reach fell back to a fraction of the height.
-    const local = positions as ArrayLike<number>;
-    const worldPositions = new Float32Array(local.length);
-    for (let i = 0; i + 2 < local.length; i += 3) {
-        worldPositions[i] = toX(local[i], local[i + 1], local[i + 2]);
-        worldPositions[i + 1] = toY(local[i], local[i + 1], local[i + 2]);
-        worldPositions[i + 2] = toZ(local[i], local[i + 1], local[i + 2]);
-    }
+    const worldPositions = posedPositions(mesh);
     const poseStability = measurePoseStability(
         worldPositions,
         (indexAttr ? (indexAttr.array as ArrayLike<number>) : null),
@@ -207,8 +195,7 @@ export function computeStabilizationAnchors(mesh: THREE.Mesh): StabilizationAnch
         0,
     );
     const standsOnBase = hull.length >= 3 && bearingAreaMm2 >= MIN_BEARING_AREA_MM2 && depthMm >= -MARGIN_MM;
-    const liftsOff = poseStability.adhesionRatio < CONSERVATIVE_P_SIGMA;
-    if (standsOnBase && !liftsOff) {
+    if (standsOnBase && !needsToppleCoverage(poseStability)) {
         logVerdict('stable', 0, bearingAreaMm2, depthMm);
         return [];
     }
