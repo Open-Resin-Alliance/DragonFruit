@@ -54,6 +54,16 @@ import { sizeParameters, presetForArea } from './parameterSizing';
 import type { ModelSizingContext } from './parameterSizing';
 import { getSettings } from '../Settings/state';
 import { memberDepartureAngleFromVerticalDeg } from '../PlacementLogic/smartPlacementSearchUtils';
+
+/**
+ * Steepest lean from vertical a contact's rendered cone may take. Past this the
+ * cone lies within 15° of flat: it pushes the model sideways rather than holding
+ * it up, and it reads as a near-horizontal whisker off the model.
+ */
+import {
+    isSideWallContact,
+    MAX_SIDE_WALL_CONTACT_LEAN_DEG,
+} from '../PlacementLogic/ConeAxisPolicy';
 import { DEFAULT_GRID_MIN_BRANCH_ANGLE_DEG } from '../Settings/defaults';
 import { cloneSupportState, getSnapshot, setSnapshot } from '../state';
 import { draftAddEntity, draftAddPrimitive, draftCommitSupport } from './supportDraft';
@@ -1283,18 +1293,20 @@ function placeOneCandidate(
     // Side-wall guard at placement time: do not build a trunk whose contact
     // points sideways. Previously this was a post-resize cull that orphaned
     // leaves; rejecting at placement prevents the trunk and its leaves from
-    // ever being created. Applies to all sources — even minima side-walls at
-    // 80.8° are now kept (threshold 85°) while true 90° horizontal cones are
-    // rejected.
+    // ever being created.
+    //
+    // Measured on the cone the contact will render, not on the raw normal, and
+    // held to one bound: a cone leaning past 75° from vertical lies within 15°
+    // of flat, which is the "near-horizontal cone" this refuses. Minima used to
+    // get 85° and kept contacts at 80.8° whose cones render sideways; under
+    // `adaptive` those same contacts now measure ~69° (the policy tilts the axis
+    // toward the plate) and stay.
     {
         const n = trunkResult.trunk.contactCone?.normal ?? trunkResult.trunk.contactCone?.surfaceNormal;
         if (n) {
-            const hz = Math.hypot(n.x, n.y);
-            const angleDeg = (Math.atan2(hz, Math.max(0.001, Math.abs(n.z))) * 180) / Math.PI;
-            const isMinima = candidate.source === 'minima' || candidate.source === 'intersection';
-            const threshold = isMinima ? 85 : 75;
-            if (angleDeg > threshold) {
-                logPlacement(`Rejected ${candidate.id}: side-wall trunk too shallow ${angleDeg.toFixed(1)}° > ${threshold}°`);
+            const settings = getSettings();
+            if (isSideWallContact(n, settings.tip.coneAngleMode ?? 'normal', settings.tip.adaptiveConeAngleOffsetDeg)) {
+                logPlacement(`Rejected ${candidate.id}: side-wall trunk too shallow (cone within ${90 - MAX_SIDE_WALL_CONTACT_LEAN_DEG}° of flat)`);
                 return { kind: 'reject', rejectedReason: 'trunk_build_error', preset, draft: d };
             }
         }

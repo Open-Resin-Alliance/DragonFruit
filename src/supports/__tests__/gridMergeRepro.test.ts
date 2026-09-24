@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { decideGridPlacement } from '../PlacementLogic/Grid/gridPlacement';
-import { memberDepartureAngleFromVerticalDeg } from '../PlacementLogic/smartPlacementSearchUtils';
+import {
+    memberDepartureAngleFromVerticalDeg,
+    SHORT_SPAN_DETOUR_MAX_ANGLE_FROM_VERTICAL_DEG,
+} from '../PlacementLogic/smartPlacementSearchUtils';
 import { setSettings } from '../Settings/state';
 import { createDefaultSettings } from '../Settings/types';
 import type { Branch, Knot, SupportState } from '../types';
@@ -103,4 +106,47 @@ test('a tip offset from its host grafts under the host top, not down the shaft',
     // The search samples every `attachSearchStepMm` (2mm), so the highest knot
     // it can take sits at most one step below the tip.
     assert.ok(dropMm <= 2.5, `graft landed ${dropMm.toFixed(2)}mm below the host's top`);
+});
+
+test('no grid attachment leaves its host past the short-span allowance', () => {
+    // The junction is where a member meets its host, and an occupied node used
+    // to add the socket elbow on top of the allowance (75° from vertical, 15°
+    // above flat). The member that produced was the near-horizontal whisker at
+    // a junction, so every tip around a host's top is swept here and each
+    // placed attachment held to the allowance it earned.
+    const settings = makeSettings();
+    setSettings(settings);
+    const host = straight(0, 0, 20, 19);
+    const snapshot = hostSnapshot(host);
+    let placed = 0;
+
+    for (let lateral = 0.5; lateral <= 3.5; lateral += 0.5) {
+        for (let rise = 0.1; rise <= 3.0; rise += 0.5) {
+            const tipPos = { x: lateral, y: 0, z: 19 + rise };
+            const d = decideGridPlacement({
+                settings, snapshot, candidate: host,
+                tipPos,
+                tipNormal: { x: 0, y: 0, z: 1 },
+                modelId: MODEL_ID,
+            });
+            if (d.kind !== 'place') continue;
+            placed++;
+            const knot = d.placed.supplied.parentKnotId as Knot | undefined;
+            assert.ok(knot, 'the member names the knot it hangs from');
+            if (!knot) return;
+            // The gate's own quantity: a leaf is one tapered cone, so its chord
+            // is the member; a branch's opening segment is where it leaves.
+            const member = d.placed.entity as Branch;
+            const firstJoint = member.segments?.[0]?.topJoint?.pos;
+            const departureDeg = d.placed.typeId === 'leaf'
+                ? memberDepartureAngleFromVerticalDeg(knot.pos, tipPos)
+                : memberDepartureAngleFromVerticalDeg(knot.pos, firstJoint ?? tipPos);
+            assert.ok(
+                departureDeg <= SHORT_SPAN_DETOUR_MAX_ANGLE_FROM_VERTICAL_DEG + 0.05,
+                `tip ${lateral}mm out and ${rise.toFixed(1)}mm up leaves at `
+                + `${departureDeg.toFixed(1)}deg, past the allowance`,
+            );
+        }
+    }
+    assert.ok(placed >= 10, `the sweep places members to check (${placed})`);
 });
