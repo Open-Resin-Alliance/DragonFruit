@@ -39,10 +39,6 @@ import { formatTopbarPrinterAriaLabel, formatTopbarPrinterTitle } from '@/compon
 interface TopBarProps {
   meshColor: string;
   onMeshColorChange: (color: string) => void;
-  selectionColor: string;
-  onSelectionColorChange: (color: string) => void;
-  hoverColor: string;
-  onHoverColorChange: (color: string) => void;
   /** The type the Mesh tab in Settings is configuring. */
   configuredShaderType: MeshShaderType;
   onConfiguredShaderTypeChange: (shaderType: MeshShaderType) => void;
@@ -110,10 +106,6 @@ interface TopBarProps {
 export function TopBar({
   meshColor,
   onMeshColorChange,
-  selectionColor,
-  onSelectionColorChange,
-  hoverColor,
-  onHoverColorChange,
   configuredShaderType,
   onConfiguredShaderTypeChange,
   matcapVariant,
@@ -1327,10 +1319,6 @@ export function TopBar({
         initialTab={settingsInitialTab}
         meshColor={meshColor}
         onMeshColorChange={onMeshColorChange}
-        selectionColor={selectionColor}
-        onSelectionColorChange={onSelectionColorChange}
-        hoverColor={hoverColor}
-        onHoverColorChange={onHoverColorChange}
         configuredShaderType={configuredShaderType}
         onConfiguredShaderTypeChange={onConfiguredShaderTypeChange}
         matcapVariant={matcapVariant}

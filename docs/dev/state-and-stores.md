@@ -116,6 +116,19 @@ export function subscribeToMySettings(listener: () => void): () => void { /* 'st
 The Experiments registry (`src/features/experiments/experimentsRegistry.ts`)
 follows this pattern with a JSON-value envelope.
 
+## Theme colors
+
+`src/components/settings/themeCustomizations.ts` owns the theme palette.
+`applyThemeCustomColors` writes it to the document as CSS variables, so DOM
+styling needs no subscription. Consumers that cannot read CSS variables — the
+3D viewport's mesh selection/hover tint — subscribe to the applied palette with
+`subscribeToThemeMeshHighlightColors` / `getThemeMeshHighlightColors` and
+`useSyncExternalStore`; `src/app/page.tsx` is the only reader and forwards the
+colors to the canvas. Both are theme entries (`meshSelectionColor`,
+`meshHoverColor`), edited from the UI & Theme tab's **Mesh Highlights** sub-tab
+and from the Mesh tab's Selection & Hover section, which mirrors them rather
+than holding an override.
+
 ## Which pattern to use
 
 - **Transient cross-module state** (hover, reachability, selection) → module

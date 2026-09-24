@@ -132,7 +132,7 @@ export function SceneMoodOverlay() {
         aria-hidden
         className="pointer-events-none absolute inset-0"
         style={{
-          background: 'linear-gradient(180deg, color-mix(in srgb, var(--scene-gradient-linear-start, #ff37aa), transparent 92%) 0%, color-mix(in srgb, var(--scene-gradient-linear-mid, #6f33ff), transparent 95%) 40%, rgba(0,0,0,0) 100%)',
+          background: 'linear-gradient(180deg, color-mix(in srgb, var(--scene-gradient-linear-start, #ff37aa), transparent 90%) 0%, color-mix(in srgb, var(--scene-gradient-linear-mid, #6f33ff), transparent 94%) 40%, rgba(0,0,0,0) 100%)',
           mixBlendMode: 'screen',
           opacity: 0.8,
         }}

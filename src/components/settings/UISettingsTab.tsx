@@ -88,6 +88,13 @@ const THEME_COLOR_SECTIONS: ThemeColorSection[] = [
 	},
 ];
 
+// Mesh selection/hover tint, on their own sub-tab: they are theme entries (so
+// presets can set them individually) rather than part of the core UI token set.
+const MESH_HIGHLIGHT_COLOR_FIELDS: ThemeColorField[] = [
+	{ key: 'meshSelectionColor', label: 'Selection color', description: 'Tint applied to selected models.', placeholder: '#ec2a77' },
+	{ key: 'meshHoverColor', label: 'Hover color', description: 'Tint applied to hovered models.', placeholder: '#ec2a77' },
+];
+
 interface UISettingsTabProps {
 	themeProfiles: ThemeProfile[];
 	themePreset: ThemePreset;
@@ -129,7 +136,7 @@ export function UISettingsTab({
 }: UISettingsTabProps) {
 	const importInputRef = React.useRef<HTMLInputElement | null>(null);
 	const [pendingPickerColors, setPendingPickerColors] = React.useState<Partial<Record<keyof ThemeCustomColors, string>>>({});
-	const [themeTab, setThemeTab] = React.useState<'general' | 'cut'>('general');
+	const [themeTab, setThemeTab] = React.useState<'general' | 'mesh' | 'cut'>('general');
 
 	const builtInProfiles = themeProfiles.filter((profile) => profile.isBuiltIn);
 	const customProfiles = themeProfiles.filter((profile) => !profile.isBuiltIn);
@@ -415,6 +422,16 @@ export function UISettingsTab({
 				</button>
 				<button
 					type="button"
+					onClick={() => setThemeTab('mesh')}
+					className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-xs rounded-md"
+					style={themeTab === 'mesh'
+						? { color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)' }
+						: { color: 'var(--text-muted)' }}
+				>
+					Mesh Highlights
+				</button>
+				<button
+					type="button"
 					onClick={() => setThemeTab('cut')}
 					className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-xs rounded-md"
 					style={themeTab === 'cut'
@@ -450,6 +467,28 @@ export function UISettingsTab({
 					</section>
 				))}
 			</div>
+			</div>
+
+			<div style={{ display: themeTab === 'mesh' ? undefined : 'none' }}>
+				<section
+					className="rounded-xl border p-2.5"
+					style={{
+						borderColor: 'var(--border-subtle)',
+						background: 'var(--surface-1)',
+					}}
+				>
+					<div className="mb-2">
+						<h4 className="text-[12px] font-semibold" style={{ color: 'var(--text-strong)' }}>
+							Mesh Highlights
+						</h4>
+						<p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+							Selection and hover tint for models in the 3D view. Also editable from the Mesh tab, which mirrors these two theme colors.
+						</p>
+					</div>
+					<div className="grid gap-1.5 md:grid-cols-2">
+						{MESH_HIGHLIGHT_COLOR_FIELDS.map(renderColorField)}
+					</div>
+				</section>
 			</div>
 
 			<div style={{ display: themeTab === 'cut' ? undefined : 'none' }}>

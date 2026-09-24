@@ -8,7 +8,6 @@ import { MeshShaderPreviewSlot } from '@/components/settings/meshSettings/MeshSh
 import { MeshShaderPreviewCanvas } from '@/components/settings/meshSettings/MeshShaderPreviewCanvas';
 import { ColorSwatchInput, Input, Select } from '@/components/atoms';
 import { Layers, MousePointer2, RotateCcw, SlidersHorizontal } from 'lucide-react';
-import { DEFAULT_HOVER_COLOR, DEFAULT_SELECTION_COLOR } from '@/features/scene/useSceneCollectionManager';
 
 type PreviewModelConfig = {
   label: string;
@@ -46,16 +45,21 @@ type MeshSettingsTabProps = {
   onHeatmapMaxAngleChange: (value: number) => void;
   heatmapColors: string[];
   onHeatmapColorChange: (index: number, color: string) => void;
-  selectionColor: string;
-  onSelectionColorChange: (color: string) => void;
-  hoverColor: string;
-  onHoverColorChange: (color: string) => void;
+  /**
+   * Selection/hover tint, owned by the active theme — these are
+   * `ThemeCustomColors.meshSelectionColor` / `meshHoverColor` mirrored into this
+   * tab, not separate appearance overrides.
+   */
+  meshSelectionColor: string;
+  onMeshSelectionColorChange: (color: string) => void;
+  meshHoverColor: string;
+  onMeshHoverColorChange: (color: string) => void;
   hoverTintStrength: number;
   onHoverTintStrengthChange: (value: number) => void;
   selectedTintStrength: number;
   onSelectedTintStrengthChange: (value: number) => void;
-  defaultSelectionColor?: string;
-  defaultHoverColor?: string;
+  defaultMeshSelectionColor: string;
+  defaultMeshHoverColor: string;
 };
 export function MeshSettingsTab({
   configuredShaderType,
@@ -82,16 +86,16 @@ export function MeshSettingsTab({
   onHeatmapMaxAngleChange,
   heatmapColors,
   onHeatmapColorChange,
-  selectionColor,
-  onSelectionColorChange,
-  hoverColor,
-  onHoverColorChange,
+  meshSelectionColor,
+  onMeshSelectionColorChange,
+  meshHoverColor,
+  onMeshHoverColorChange,
   hoverTintStrength,
   onHoverTintStrengthChange,
   selectedTintStrength,
   onSelectedTintStrengthChange,
-  defaultSelectionColor = DEFAULT_SELECTION_COLOR,
-  defaultHoverColor = DEFAULT_HOVER_COLOR,
+  defaultMeshSelectionColor,
+  defaultMeshHoverColor,
 }: MeshSettingsTabProps) {
   const { _ } = useLingui();
   const [previewModel, setPreviewModel] = React.useState<string>('knot');
@@ -124,7 +128,7 @@ export function MeshSettingsTab({
   const totalLight = ambientIntensity + directionalIntensity;
   const lightness = Math.min(4, Math.max(0, totalLight));
   const contrast = totalLight > 0 ? directionalIntensity / totalLight : 0.5;
-  const previewSelectedTintColor = selectionColor;
+  const previewSelectedTintColor = meshSelectionColor;
   const previewSelectedTintStrength = selectedTintStrength;
 
   const showLighting = configuredShaderType === 'soft_clay' || configuredShaderType === 'xray';
@@ -158,9 +162,9 @@ export function MeshSettingsTab({
   }, [lightness, onAmbientIntensityChange, onDirectionalIntensityChange]);
 
   const handleResetColors = React.useCallback(() => {
-    onSelectionColorChange(defaultSelectionColor);
-    onHoverColorChange(defaultHoverColor);
-  }, [onSelectionColorChange, onHoverColorChange, defaultSelectionColor, defaultHoverColor]);
+    onMeshSelectionColorChange(defaultMeshSelectionColor);
+    onMeshHoverColorChange(defaultMeshHoverColor);
+  }, [onMeshSelectionColorChange, onMeshHoverColorChange, defaultMeshSelectionColor, defaultMeshHoverColor]);
   return (
     <div className="space-y-3">
 
@@ -493,7 +497,8 @@ export function MeshSettingsTab({
               Selection &amp; Hover
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              How selected and hovered models are emphasized throughout the app.
+              How selected and hovered models are emphasized throughout the app. These two colors come from the
+              current theme — editing them here changes the theme, exactly like UI &amp; Theme › Mesh Highlights.
             </p>
           </div>
         </div>
@@ -518,14 +523,14 @@ export function MeshSettingsTab({
                   <div className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Selection Color</div>
                   <div className="flex items-center gap-2">
                     <ColorSwatchInput
-                      value={selectionColor}
-                      onChange={onSelectionColorChange}
+                      value={meshSelectionColor}
+                      onChange={onMeshSelectionColorChange}
                       className="h-8 w-10"
                     />
                     <input
                       type="text"
-                      value={selectionColor}
-                      onChange={(e) => onSelectionColorChange(e.target.value)}
+                      value={meshSelectionColor}
+                      onChange={(e) => onMeshSelectionColorChange(e.target.value)}
                       className="ui-input h-8 w-[7.5rem] min-w-0"
                       placeholder="#ec2a77"
                     />
@@ -535,14 +540,14 @@ export function MeshSettingsTab({
                   <div className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Hover Color</div>
                   <div className="flex items-center gap-2">
                     <ColorSwatchInput
-                      value={hoverColor}
-                      onChange={onHoverColorChange}
+                      value={meshHoverColor}
+                      onChange={onMeshHoverColorChange}
                       className="h-8 w-10"
                     />
                     <input
                       type="text"
-                      value={hoverColor}
-                      onChange={(e) => onHoverColorChange(e.target.value)}
+                      value={meshHoverColor}
+                      onChange={(e) => onMeshHoverColorChange(e.target.value)}
                       className="ui-input h-8 w-[7.5rem] min-w-0"
                       placeholder="#ec2a77"
                     />
@@ -636,7 +641,7 @@ export function MeshSettingsTab({
                 xrayOpacity={0.25}
                 heatmapMinAngle={0}
                 heatmapMaxAngle={45}
-                hoverTintColor={hoverColor}
+                hoverTintColor={meshHoverColor}
                 selectedTintColor={previewSelectedTintColor}
                 hoverTintStrength={hoverTintStrength}
                 selectedTintStrength={previewSelectedTintStrength}

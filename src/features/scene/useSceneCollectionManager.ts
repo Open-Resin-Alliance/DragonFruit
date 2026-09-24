@@ -55,7 +55,6 @@ import {
 import { registerMeshForAutoBrace, unregisterMeshForAutoBrace } from '@/supports/autoBracing/meshGeometryStore';
 import { buildModelEdgeGeometry } from '@/hooks/useStlGeometry';
 import { MESH_SHADER_TYPES, type MatcapVariant, type MeshShaderType } from '@/features/shaders/mesh';
-import { getSavedThemeCustomColors } from '@/components/settings/themeCustomizations';
 import {
   getSavedWorkspaceCameraSettings,
   getWorkspaceCameraSettingsServerSnapshot,
@@ -108,8 +107,6 @@ type PersistedMeshAppearance = {
   heatmapMaxAngle: number;
   heatmapColors: string[];
   meshColor: string;
-  selectionColor: string;
-  hoverColor: string;
   hoverTintStrength: number;
   selectedTintStrength: number;
 };
@@ -138,24 +135,6 @@ export const DEFAULT_HEATMAP_COLORS = ['#E55959', '#E5A559', '#D9D959', '#73D973
 const DEFAULT_SHADER_TYPE: MeshShaderType = 'soft_clay';
 const DEFAULT_MATCAP_VARIANT: MatcapVariant = 'neutral';
 const DEFAULT_FLAT_USE_VERTEX_COLORS = true;
-export const DEFAULT_SELECTION_COLOR = '#ec2a77';
-export const DEFAULT_HOVER_COLOR = '#ec2a77';
-export function getThemedDefaultSelectionColor(): string {
-  try {
-    if (typeof window === 'undefined') return DEFAULT_SELECTION_COLOR;
-    const c = getSavedThemeCustomColors()?.accent;
-    if (typeof c === 'string' && /^#[0-9a-fA-F]{6}$/.test(c)) return c.toLowerCase();
-  } catch {}
-  return DEFAULT_SELECTION_COLOR;
-}
-export function getThemedDefaultHoverColor(): string {
-  try {
-    if (typeof window === 'undefined') return DEFAULT_HOVER_COLOR;
-    const c = getSavedThemeCustomColors()?.accent;
-    if (typeof c === 'string' && /^#[0-9a-fA-F]{6}$/.test(c)) return c.toLowerCase();
-  } catch {}
-  return DEFAULT_HOVER_COLOR;
-}
 export const DEFAULT_HOVER_TINT_STRENGTH = 0.5;
 export const DEFAULT_SELECTED_TINT_STRENGTH = 0.70;
 const RECENT_OPENED_FILES_STORAGE_KEY = 'app-recent-opened-files';
@@ -472,8 +451,6 @@ function readMeshAppearanceFromLocalStorage(): PersistedMeshAppearance | null {
       heatmapMaxAngle: clampNumber(parsed.heatmapMaxAngle, 0, 90, DEFAULT_HEATMAP_MAX_ANGLE),
       heatmapColors: Array.isArray(parsed.heatmapColors) && parsed.heatmapColors.length === 5 ? parsed.heatmapColors : DEFAULT_HEATMAP_COLORS,
       meshColor: clampHexColor(parsed.meshColor, DEFAULT_MESH_COLOR),
-      selectionColor: clampHexColor(parsed.selectionColor, getThemedDefaultSelectionColor()),
-      hoverColor: clampHexColor(parsed.hoverColor, getThemedDefaultHoverColor()),
       hoverTintStrength: clampNumber(parsed.hoverTintStrength, 0, 1, DEFAULT_HOVER_TINT_STRENGTH),
       selectedTintStrength: clampNumber(parsed.selectedTintStrength, 0, 1, DEFAULT_SELECTED_TINT_STRENGTH),
     };
@@ -1588,8 +1565,6 @@ export function useSceneCollectionManager() {
   const [heatmapMaxAngle, setHeatmapMaxAngle] = useState<number>(DEFAULT_HEATMAP_MAX_ANGLE);
   const [heatmapColors, setHeatmapColors] = useState<string[]>(DEFAULT_HEATMAP_COLORS);
   const [preferredMeshColor, setPreferredMeshColor] = useState<string>(DEFAULT_MESH_COLOR);
-  const [selectionColor, setSelectionColor] = useState<string>(() => getThemedDefaultSelectionColor());
-  const [hoverColor, setHoverColor] = useState<string>(() => getThemedDefaultHoverColor());
   const [hoverTintStrength, setHoverTintStrength] = useState<number>(DEFAULT_HOVER_TINT_STRENGTH);
   const [selectedTintStrength, setSelectedTintStrength] = useState<number>(DEFAULT_SELECTED_TINT_STRENGTH);
   const [storedView3dSettings, setView3dSettingsState] = useState<View3DSettings>(() => DEFAULT_VIEW3D_SETTINGS);
@@ -1635,8 +1610,6 @@ export function useSceneCollectionManager() {
       setHeatmapMaxAngle(persistedAppearance.heatmapMaxAngle ?? DEFAULT_HEATMAP_MAX_ANGLE);
       setHeatmapColors(persistedAppearance.heatmapColors ?? DEFAULT_HEATMAP_COLORS);
       setPreferredMeshColor(persistedAppearance.meshColor);
-      setSelectionColor(persistedAppearance.selectionColor ?? getThemedDefaultSelectionColor());
-      setHoverColor(persistedAppearance.hoverColor ?? getThemedDefaultHoverColor());
       setHoverTintStrength(persistedAppearance.hoverTintStrength);
       setSelectedTintStrength(persistedAppearance.selectedTintStrength);
     }
@@ -1667,8 +1640,6 @@ export function useSceneCollectionManager() {
       meshColor: preferredMeshColor,
       hoverTintStrength,
       selectedTintStrength,
-      selectionColor,
-      hoverColor,
     });
   }, [
     shaderType,
@@ -1687,8 +1658,6 @@ export function useSceneCollectionManager() {
     preferredMeshColor,
     hoverTintStrength,
     selectedTintStrength,
-    selectionColor,
-    hoverColor,
   ]);
 
   const setView3dSettings = useCallback((next: View3DSettings) => {
@@ -6037,10 +6006,6 @@ export function useSceneCollectionManager() {
     setMatcapVariant,
     flatUseVertexColors,
     setFlatUseVertexColors,
-    selectionColor,
-    setSelectionColor,
-    hoverColor,
-    setHoverColor,
     hoverTintStrength,
     setHoverTintStrength,
     selectedTintStrength,
