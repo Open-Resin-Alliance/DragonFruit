@@ -32,3 +32,16 @@ export function translateScanPhase(phase: string | undefined, translate: Transla
   const descriptor = PHASE_LABELS[phase];
   return descriptor ? translate(descriptor) : phase;
 }
+
+/**
+ * "Step 2 of 3" for the bar's phase counter.
+ *
+ * The scan is a sequence of passes and each restarts at zero, so the bar has to
+ * say which pass it is on or it looks like it is going backwards. A bare
+ * "(2/3)" does not: two numbers with no noun read as debug output. Module level
+ * because the message interpolates, and React Compiler renames locals inside
+ * components before the Lingui macro derives the id.
+ */
+export function formatPhaseStep(phaseNumber: number, phaseCount: number, translate: Translate): string {
+  return translate(msg`Step ${phaseNumber} of ${phaseCount}`);
+}

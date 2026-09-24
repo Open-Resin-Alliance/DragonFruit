@@ -4065,6 +4065,10 @@ msgstr "Empezar a usar DragonFruit"
 msgid "Starting"
 msgstr "Empezando"
 
+#: src/components/scene/scanProgressMessages.ts:46
+msgid "Step {phaseNumber} of {phaseCount}"
+msgstr ""
+
 #: src/volumeAnalysis/IslandScan/workflow/IslandScanWorkflowCard.tsx:39
 msgid "Step 1: Run Scanline Scan"
 msgstr "Paso 1: ejecutar el escaneo por líneas"

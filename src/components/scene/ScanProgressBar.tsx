@@ -1,7 +1,7 @@
 import React from 'react';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
-import { translateScanPhase } from '@/components/scene/scanProgressMessages';
+import { formatPhaseStep, translateScanPhase } from '@/components/scene/scanProgressMessages';
 
 export type ScanProgress = {
   done: number;
@@ -35,7 +35,7 @@ export function ScanProgressBar({ progress }: { progress: ScanProgress | null })
         <span>
           {translateScanPhase(progress?.phase, _)}
           {progress?.phaseNumber && progress?.phaseCount
-            ? ` (${progress.phaseNumber}/${progress.phaseCount})`
+            ? ` · ${formatPhaseStep(progress.phaseNumber, progress.phaseCount, _)}`
             : ''}
         </span>
         <span style={{ fontVariantNumeric: 'tabular-nums' }}>
