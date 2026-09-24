@@ -554,7 +554,7 @@ function sanitizeMaterialTemplate(input: unknown): Omit<MaterialProfile, 'id' | 
         zaaDuplicateZ: true,
         blurGraySourceMode: 'lut',
         zBlendResinType: 'opaque',
-        tipOffsetMode: 'disabled',
+        tipOffsetMode: 'auto',
         tipOffsetMm: 0.05,
         tipOffsetDisplayInUi: false,
         supportTipShrinkPercent: 10,

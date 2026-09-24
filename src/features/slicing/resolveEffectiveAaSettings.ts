@@ -59,7 +59,7 @@ export function resolveEffectiveAaSettings(
             zBlendLookBack: autoCfg.zBlendLookBack,
             aaOnSupports: Boolean(settings.aaOnSupports),
             tipOffsetMm: settings.tipOffsetMode === 'manual' ? settings.tipOffsetMm : autoTipOffset,
-            tipOffsetMode: settings.tipOffsetMode ?? 'disabled',
+            tipOffsetMode: settings.tipOffsetMode ?? 'auto',
         };
     }
 
@@ -114,6 +114,6 @@ export function resolveEffectiveAaSettings(
         zBlendLookBack,
         aaOnSupports: Boolean(settings.aaOnSupports),
         tipOffsetMm: effectiveTipOffset,
-        tipOffsetMode: settings.tipOffsetMode ?? 'disabled',
+        tipOffsetMode: settings.tipOffsetMode ?? 'auto',
     };
 }

@@ -284,7 +284,7 @@ export const DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS: MaterialAntiAliasingSettin
     ditherEnabled: false,
     ditherBitDepth: 8,
     ditherDeviceGamma: 2.2,
-    tipOffsetMode: 'disabled',
+    tipOffsetMode: 'auto',
     tipOffsetMm: 0.05,
     tipOffsetDisplayInUi: false,
     supportTipShrinkPercent: 10,
@@ -367,8 +367,8 @@ function sanitizeMaterialAntiAliasingSettings(input: unknown): MaterialAntiAlias
     const levelRaw = typeof source.level === 'string' ? source.level.trim().toLowerCase() : defaults.level;
     const levelSteps = Number(levelRaw.endsWith('x') ? levelRaw.slice(0, -1) : levelRaw);
     const level = `${Math.max(2, Math.min(64, Number.isFinite(levelSteps) ? Math.round(levelSteps) : 4))}x`;
-    const tipOffsetMode = source.tipOffsetMode === 'auto' || source.tipOffsetMode === 'manual' 
-        ? source.tipOffsetMode 
+    const tipOffsetMode = source.tipOffsetMode === 'auto' || source.tipOffsetMode === 'manual' || source.tipOffsetMode === 'disabled'
+        ? source.tipOffsetMode
         : defaults.tipOffsetMode;
 
     const enableCustomSettings = typeof source.enableCustomSettings === 'boolean'

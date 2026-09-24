@@ -980,9 +980,7 @@ export function SlicingPanel({
     ...(activeMaterialProfile?.antiAliasingSettings ?? {}),
     ...(sessionAaOverrideDraft?.antiAliasingSettings ?? {}),
   }), [activeMaterialProfile?.antiAliasingSettings, sessionAaOverrideDraft?.antiAliasingSettings]);
-  const aaOnSupportsEnabled = profileAntiAliasingSettings.enableOverride === true
-    ? profileAntiAliasingSettings.aaOnSupports
-    : getSavedSlicingPerformanceSettings().aaOnSupportsExperimental === true;
+  const aaOnSupportsEnabled = profileAntiAliasingSettings.aaOnSupports === true;
   const effectiveMaterialProfile = useMemo(() => {
     if (!activeMaterialProfile) return null;
     if (!activePrinterProfile) return activeMaterialProfile;
