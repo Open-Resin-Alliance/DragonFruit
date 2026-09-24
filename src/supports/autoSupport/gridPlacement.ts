@@ -423,6 +423,23 @@ export const STEEP_FLAT_ANCHOR_BAND_FRACTION = 0.35;
 export const STEEP_FLAT_ANCHOR_BAND_MM = 6.0;
 
 /**
+ * Spacing multiplier for a steep flat.
+ *
+ * The 2.5x exists because a steep face needs no formation contact: it forms on
+ * its own, so a sparse field is enough for anchoring. A SLENDER part is the
+ * exception, and for the opposite reason: its problem is sway, and the sag
+ * between two contacts goes as the span to the fourth power, so the spacing is
+ * the whole knob. There the flat gets the formation density.
+ */
+export function steepFlatSpacingMultiplier(
+    island: { steepFlat?: boolean },
+    slenderPart = false,
+): number {
+    if (!island.steepFlat) return 1;
+    return slenderPart ? 1 : STEEP_FLAT_SPACING_MULTIPLIER;
+}
+
+/**
  * Top of the band a steep flat's anchoring contacts may occupy (mm), or
  * `Infinity` for anything that is not a steep flat. The lowest third of the
  * face, or 6mm, whichever is more, so a thin region still gets a line and a
@@ -515,9 +532,7 @@ export function generateGridCandidates(
 
     for (const island of overhangIslands) {
         if (!shouldUseDensityGrid(island, settings)) continue;
-        const spacing =
-            computeRegionSpacing(island, settings) *
-            (island.steepFlat ? STEEP_FLAT_SPACING_MULTIPLIER : 1);
+        const spacing = computeRegionSpacing(island, settings) * steepFlatSpacingMultiplier(island, slenderPart);
 
         const voxels = island.contactVoxels;
         if (!voxels || voxels.count === 0) continue;

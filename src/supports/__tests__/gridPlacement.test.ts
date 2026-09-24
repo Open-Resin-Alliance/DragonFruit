@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
 
-import { generateGridCandidates, computeRegionSpacing, GRID_SPACING_FLOOR_MM, MAX_GRID_CANDIDATES_PER_REGION, steepFlatAnchorBandTop, STEEP_FLAT_SPACING_MULTIPLIER, shouldUseDensityGrid } from '../autoSupport/gridPlacement';
+import { generateGridCandidates, computeRegionSpacing, GRID_SPACING_FLOOR_MM, MAX_GRID_CANDIDATES_PER_REGION, steepFlatAnchorBandTop, steepFlatSpacingMultiplier, STEEP_FLAT_SPACING_MULTIPLIER, shouldUseDensityGrid } from '../autoSupport/gridPlacement';
 import { createDefaultAutoSupportSettings } from '../autoSupport/settings';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
 
@@ -363,4 +363,16 @@ test('a steep flat is anchored low, a formation overhang is not banded', () => {
     assert.equal(steepFlatAnchorBandTop({ steepFlat: false, baseZ: 5, maxZ: 55 }), Infinity);
     // A flat with no recorded top still gets the floor rather than nothing.
     assert.equal(steepFlatAnchorBandTop({ steepFlat: true, baseZ: 5 }), 11);
+});
+
+test('a slender part gets its steep flats at formation density', () => {
+    // The 505k-triangle wall: 126mm tall, 11mm thick. Its problem is sway, and
+    // the sag between contacts goes as the span to the fourth power, so the
+    // spacing is the knob. A squat part keeps the sparse field.
+    const face = { steepFlat: true };
+    assert.equal(steepFlatSpacingMultiplier(face, false), STEEP_FLAT_SPACING_MULTIPLIER);
+    assert.equal(steepFlatSpacingMultiplier(face, true), 1, 'a wall gets formation density');
+    // Formation overhangs are unaffected either way.
+    assert.equal(steepFlatSpacingMultiplier({ steepFlat: false }, false), 1);
+    assert.equal(steepFlatSpacingMultiplier({ steepFlat: false }, true), 1);
 });
