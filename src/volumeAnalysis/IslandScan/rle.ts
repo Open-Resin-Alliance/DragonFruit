@@ -28,6 +28,45 @@ export type RleMask = {
 // Labeled RLE Row: [start, length, id, start, length, id, ...]
 export type RleLabelRow = Int32Array;
 
+/**
+ * The candidate (unsupported) voxels of one layer, as flat `[col, row]` pairs.
+ *
+ * The per-layer label RLE exists only to identify these — the caller throws it
+ * away once it has them — so extracting here keeps the work on the worker and
+ * leaves a payload proportional to the voxels instead of to the layer's area.
+ * Shipping the RLE instead meant structured-cloning thousands of small
+ * `Int32Array`s per layer on the receiving thread, ~2525 times a scan, which is
+ * what starved the main thread for most of a 23 s scan.
+ *
+ * Two passes over the runs (count, then fill) so the result is one exact-sized
+ * buffer rather than a growable array.
+ */
+export function candidateVoxelPairs(labels: RleLabels): Int32Array {
+    let count = 0;
+    for (const row of labels.rows) {
+        if (!row) continue;
+        for (let i = 0; i < row.length; i += 3) {
+            if (row[i + 2] > 0) count += row[i + 1];
+        }
+    }
+    const out = new Int32Array(count * 2);
+    let at = 0;
+    for (let y = 0; y < labels.rows.length; y++) {
+        const row = labels.rows[y];
+        if (!row) continue;
+        for (let i = 0; i < row.length; i += 3) {
+            if (row[i + 2] <= 0) continue;
+            const start = row[i];
+            const end = start + row[i + 1];
+            for (let col = start; col < end; col++) {
+                out[at++] = col;
+                out[at++] = y;
+            }
+        }
+    }
+    return out;
+}
+
 export type RleLabels = {
     rows: RleLabelRow[];
     width: number;

@@ -5,9 +5,8 @@ import { type DetectedIsland } from './types';
 import { VoxelFootprintBuilder } from './voxelFootprint';
 // PORTABILITY: analysis-domain dependencies are confined to this file — the
 // scanline island worker (the fast RLE engine the Analysis-tab voxel rescan
-// uses) and the RleLabels type. If that infra is removed, this is the one
-// Islands/ module to re-home; everything else is independent.
-import type { RleLabels } from '@/volumeAnalysis/IslandScan/rle';
+// uses). If that infra is removed, this is the one Islands/ module to re-home;
+// everything else is independent.
 
 // Pixel-centre offsets — mirror ScanOrchestrator's VOXEL_OFFSET_{X,Y} so contact
 // points land in the same world frame as the legacy overlay.
@@ -142,31 +141,23 @@ export async function detectVoxelIslands(
       reportProgress(() => onProgress?.(L, numLayers, 'Collecting voxels', phaseNumber('Collecting voxels'), PHASES.length));
       await yieldToEventLoop();
     }
-    const labels = candidateLayers[L];
-    if (!labels) continue;
-    for (let y = 0; y < labels.height; y++) {
-      const row = labels.rows[y];
-      for (let i = 0; i < row.length; i += 3) {
-        const start = row[i];
-        const len = row[i + 1];
-        const id = row[i + 2];
-        if (id > 0) {
-          for (let c = 0; c < len; c++) candidates.add(codec.pack(start + c, y, L));
-        }
-      }
+    // The workers already extracted these; see `candidateVoxelPairs`. This used
+    // to walk every layer's label RLE here, on the thread that has to keep the
+    // UI alive.
+    const pairs = candidateLayers[L];
+    if (!pairs) continue;
+    for (let i = 0; i < pairs.length; i += 2) {
+      candidates.add(codec.pack(pairs[i], pairs[i + 1], L));
     }
   }
   console.timeEnd('[Islands] slice + candidate extraction');
   console.log(`[Islands] candidate (unsupported) voxels: ${candidates.size.toLocaleString()}`);
 
-  // What the per-layer RLE actually costs. `rows` is one Int32Array per row per
-  // layer, so a tall model holds millions of small typed arrays, each with its
-  // own object and buffer overhead — memory that lives outside the GC heap and
-  // never showed up in the object counts we were chasing.
-  // Release them before the flood fill. The union above is their last reader,
-  // but the binding stays in scope for the rest of the function, so without
-  // this the whole per-layer set is still reachable — and therefore still
-  // resident — while the 3D walk builds its own structures on top.
+  // Release the per-layer payloads before the flood fill. The union above is
+  // their last reader, but the binding stays in scope for the rest of the
+  // function, so without this they are still reachable — and therefore still
+  // resident — while the 3D walk builds its own structures on top. These are
+  // flat pair arrays now, not the per-row `Int32Array` sets they used to be.
   candidateLayers.length = 0;
 
   await logToFile('[Islands] phase=flood-start');
@@ -211,8 +202,8 @@ async function sliceCandidateLayers(
   layerHeightMm: number,
   opts: { px_mm: number; support_buffer_mm: number; connectivity: 4 | 8 },
   onProgress?: ScanProgressCallback,
-): Promise<RleLabels[]> {
-  const candidateLayers: RleLabels[] = new Array(numLayers);
+): Promise<Int32Array[]> {
+  const candidateLayers: Int32Array[] = new Array(numLayers);
 
   const cores = typeof navigator !== 'undefined' ? (navigator.hardwareConcurrency || 4) : 4;
   const concurrency = Math.min(Math.max(2, cores), numLayers);
@@ -241,10 +232,10 @@ async function sliceCandidateLayers(
             const zTop = minZ + (idx + 1) * layerHeightMm + 1e-6;
 
             const onMessage = (e: MessageEvent) => {
-              const msg = e.data as { type?: string; result?: { islandLabelsRle: RleLabels } };
+              const msg = e.data as { type?: string; result?: { candidatePairs: Int32Array } };
               if (msg?.type !== 'done') return;
               w.removeEventListener('message', onMessage);
-              candidateLayers[idx] = msg.result!.islandLabelsRle;
+              candidateLayers[idx] = msg.result!.candidatePairs;
               done++;
               reportSliceProgress(() => onProgress?.(done, numLayers, 'Slicing', phaseNumber('Slicing'), PHASES.length));
               runNext();
