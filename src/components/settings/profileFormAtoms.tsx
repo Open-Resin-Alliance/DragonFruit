@@ -1417,7 +1417,7 @@ export function MaterialAntiAliasingSection({ draft, onChange, lockActivationTog
                 title="Support Adjustments"
                 description="Controls support AA, penetration offsets, and 3DAA sliced contact size."
             >
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 items-end">
                     <LabeledToggleInput
                         label="Apply AA to Support Geometry"
                         helpText="Disabled keeps supports crisp and binary. Enabled allows anti-aliased support edges too."
@@ -1450,15 +1450,14 @@ export function MaterialAntiAliasingSection({ draft, onChange, lockActivationTog
                             { value: 'manual', label: 'Manual' },
                         ]}
                     />
-                    {settings.tipOffsetMode !== 'disabled' && (
+                    {settings.tipOffsetMode === 'manual' && (
                         <LabeledNumberInput
                             label="Compensation Distance (mm)"
                             helpText="Penetration depth of support tips into the model to compensate for grayscale AA curing softness."
-                            disabled={settings.tipOffsetMode === 'auto'}
                             precision={3}
                             step={0.001}
-                            value={settings.tipOffsetMode === 'auto' ? calculatedOffset : settings.tipOffsetMm}
-                            onChange={(val) => updateAaSettings({ tipOffsetMm: val, tipOffsetMode: 'manual' })}
+                            value={settings.tipOffsetMm}
+                            onChange={(val) => updateAaSettings({ tipOffsetMm: val })}
                         />
                     )}
                     {settings.tipOffsetMode !== 'disabled' && (

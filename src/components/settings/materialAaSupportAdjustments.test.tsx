@@ -23,3 +23,23 @@ test('Support Adjustments stay available with Custom Settings and Override Auto 
     assert.ok(html.includes('Automatic'), 'tip compensation defaults to Auto');
   }
 });
+
+test('Compensation Distance is editable only in Manual mode', () => {
+  const render = (tipOffsetMode: 'auto' | 'disabled' | 'manual') => {
+    const draft = {
+      antiAliasingSettings: {
+        ...DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
+        tipOffsetMode,
+        tipOffsetMm: 0.125,
+      },
+      layerHeightMm: 0.05,
+    } as MaterialDraft;
+    return renderToStaticMarkup(<MaterialAntiAliasingSection draft={draft} onChange={() => {}} />);
+  };
+
+  assert.ok(!render('auto').includes('Compensation Distance (mm)'));
+  assert.ok(!render('disabled').includes('Compensation Distance (mm)'));
+  const manual = render('manual');
+  assert.ok(manual.includes('Compensation Distance (mm)'));
+  assert.ok(manual.includes('value="0.125"'), 'manual input shows the saved distance');
+});
