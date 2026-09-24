@@ -1434,8 +1434,9 @@ export function MaterialAntiAliasingSection({ draft, onChange, lockActivationTog
                     />
                     <AaSelectDropdown
                         label="Tip Compensation Offset Mode"
-                        value={settings.tipOffsetMode}
-                        helpText="Automatic derives penetration offset from Z blur radius and layer height. Manual uses explicit distance."
+                        value={overrideEnabled ? settings.tipOffsetMode : 'auto'}
+                        disabled={!overrideEnabled}
+                        helpText="Automatic derives penetration offset from Z blur radius and layer height. Enable Override Auto to change the mode."
                         onChange={(value) => {
                             const nextMode = value as 'disabled' | 'auto' | 'manual';
                             if (nextMode === 'manual' && settings.tipOffsetMode === 'auto') {
@@ -1450,7 +1451,7 @@ export function MaterialAntiAliasingSection({ draft, onChange, lockActivationTog
                             { value: 'manual', label: 'Manual' },
                         ]}
                     />
-                    {settings.tipOffsetMode === 'manual' && (
+                    {overrideEnabled && settings.tipOffsetMode === 'manual' && (
                         <LabeledNumberInput
                             label="Compensation Distance (mm)"
                             helpText="Penetration depth of support tips into the model to compensate for grayscale AA curing softness."
@@ -1460,7 +1461,7 @@ export function MaterialAntiAliasingSection({ draft, onChange, lockActivationTog
                             onChange={(val) => updateAaSettings({ tipOffsetMm: val })}
                         />
                     )}
-                    {settings.tipOffsetMode !== 'disabled' && (
+                    {(!overrideEnabled || settings.tipOffsetMode !== 'disabled') && (
                         <LabeledToggleInput
                             label="Display Offset in Viewport"
                             helpText="Show calculated penetration distance indicator on support tips in 3D viewport."
