@@ -10871,9 +10871,7 @@ export default function Home() {
               {islandsPoc.scanning ? <>Elapsed: {islandsPoc.elapsedLabel}</> : <OrientElapsed />}
             </div>
             <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              {autoSupportProgress
-                ? `${autoSupportProgress.done} of ${autoSupportProgress.total} candidates`
-                : 'Processing 1 model'}
+              Processing 1 model
             </div>
             <ScanProgressBar progress={islandsPoc.scanning ? islandsPoc.scanProgress : autoSupportProgress} />
           </div>

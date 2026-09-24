@@ -2881,7 +2881,7 @@ export function computeAutoSupportPlan(
     for (const candidate of candidates) {
         if (onProgress !== undefined
             && (placementIndex % 16 === 0 || placementIndex + 1 === placementTotal)) {
-            onProgress({ phase: 'placing', done: placementIndex + 1, total: placementTotal });
+            onProgress({ phase: 'Placing supports', done: placementIndex + 1, total: placementTotal });
         }
         placementIndex++;
         placeOne(candidate);
