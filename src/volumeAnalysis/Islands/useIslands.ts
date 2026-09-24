@@ -234,6 +234,9 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
   /** Whether this scan's pose needs anti-topple contact. The overlay uses it to
    *  show what will be covered, not everything that was classified. */
   const [toppleCoverage, setToppleCoverage] = useState(true);
+  /** The pose's total drag moment, so the overlay can weigh a patch's share of
+   *  it exactly as the placement does. */
+  const [dragTotalMm3, setDragTotalMm3] = useState(0);
   
   const [elapsedSec, setElapsedSec] = useState(0);
 
@@ -477,6 +480,8 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
             });
             if (scanEpochRef.current !== epoch) return;
             setToppleCoverage(scanNeedsCoverage(scan.stability));
+        setDragTotalMm3(scan.stability?.dragMomentMm3 ?? 0);
+            setDragTotalMm3(scan.stability?.dragMomentMm3 ?? 0);
             mappedOverhangs = scan.regions.map(overhangRegionToIsland);
           } else {
             mappedOverhangs = (combined.overhangIslands ?? []).map(overhangRegionToIsland);
@@ -529,6 +534,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
         });
         if (scanEpochRef.current !== epoch) return;
         setToppleCoverage(scanNeedsCoverage(scan.stability));
+        setDragTotalMm3(scan.stability?.dragMomentMm3 ?? 0);
         mappedOverhangs = scan.regions.map(overhangRegionToIsland);
         setOverhangIslands(mappedOverhangs);
       } catch (err) {
@@ -1084,6 +1090,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     minimaIslands,
     overhangIslands,
     toppleCoverage,
+    dragTotalMm3,
     filteredIslands,
     orderedIslands,
     voxelOnlyPucks,

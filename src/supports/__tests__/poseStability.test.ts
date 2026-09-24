@@ -6,6 +6,8 @@ import {
     isStaticallyUnstable,
     measurePoseStability,
     needsToppleCoverage,
+    STEEP_FLAT_SHARE_FLOOR,
+    steepFlatNeedsCoverage,
 } from '../autoSupport/poseStability';
 
 /** 10 mm cube with outward winding, centred on the origin — the same fixture
@@ -136,4 +138,22 @@ test('with a raft the patch is the shadow, not the wandering contact cap', () =>
     );
     const raftFlat = measurePoseStability(m.positions, m.index, 0, 0, undefined, true);
     assert.ok(Math.abs(raftFlat.bearingAreaMm2 - 100) < 1, 'flat, the shadow is the base');
+});
+
+test('a flat carrying a real share of the drag keeps its anchoring contacts', () => {
+    // The cam seal tool's leaning pose: the verdict is safe (adhesion 1.719, so
+    // no rescuing needed today), but one 2752mm² flat carries 33% of the drag.
+    // That is the best anchoring surface the part has, and leaving it bare is
+    // what read as wrong.
+    const total = 174441;
+    assert.equal(steepFlatNeedsCoverage(65423, total, false), true, 'a third of the drag anchors');
+    assert.equal(steepFlatNeedsCoverage(5059, total, false), false, '3% is not worth contacts');
+    assert.equal(
+        steepFlatNeedsCoverage(total * STEEP_FLAT_SHARE_FLOOR, total, false),
+        true,
+        'the floor itself anchors',
+    );
+    assert.equal(steepFlatNeedsCoverage(100, total, true), true, 'a rescue covers everything');
+    assert.equal(steepFlatNeedsCoverage(100, 0, false), false, 'no total, nothing to weigh');
+    assert.equal(steepFlatNeedsCoverage(undefined, total, false), false, 'no moment, no claim');
 });

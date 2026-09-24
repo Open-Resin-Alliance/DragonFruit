@@ -122,6 +122,37 @@ const EMPTY_RESTING: RestingContact = {
  *  will replace it. */
 export const CONSERVATIVE_P_SIGMA = 0.05;
 
+/** A patch carrying at least this share of the pose's drag moment keeps its
+ *  contacts even when the pose's verdict is safe. A patch with a third of the
+ *  drag is a big lever, and a few contacts on it are cheap insurance; the rule
+ *  is relative, so it needs no calibrated constant. */
+export const STEEP_FLAT_SHARE_FLOOR = 0.1;
+
+/**
+ * Should this steep flat be covered, given the pose's verdict?
+ *
+ * The verdict alone is all-or-nothing: a part the raft holds comfortably gets
+ * no contact anywhere, even on the one face carrying a third of its drag, and
+ * that reads as wrong on screen because it is.
+ *
+ * A large flat is also the best ANCHORING surface a part has. It is planar, so
+ * a contact on it has a well-defined normal and no risk of grazing; it is
+ * large, so contacts spread across it instead of crowding one edge; and it
+ * faces the direction the part would move, so holding it holds the part. That
+ * is why the share is the rule rather than the verdict: a flat that carries a
+ * real part of the load is the place to anchor, whether or not the pose needs
+ * rescuing today.
+ */
+export function steepFlatNeedsCoverage(
+    momentMm3: number | undefined,
+    totalMm3: number | undefined,
+    verdictNeedsCoverage: boolean,
+): boolean {
+    if (verdictNeedsCoverage) return true;
+    if (!totalMm3 || totalMm3 <= 0) return false;
+    return (momentMm3 ?? 0) / totalMm3 >= STEEP_FLAT_SHARE_FLOOR;
+}
+
 /**
  * Does this pose need anti-topple contact at all?
  *

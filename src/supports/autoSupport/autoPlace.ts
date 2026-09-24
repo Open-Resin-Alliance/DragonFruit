@@ -31,7 +31,13 @@ import { activeSizingBand } from './parameterSizing';
 import { generateCandidates, deduplicateCandidates } from './candidateGeneration';
 import { generateGridCandidates, shouldUseDensityGrid } from './gridPlacement';
 import { computeStabilizationAnchors } from './stabilization';
-import { measurePoseStability, needsToppleCoverage, posedPositions } from './poseStability';
+import {
+    measurePoseStability,
+    needsToppleCoverage,
+    posedPositions,
+    STEEP_FLAT_SHARE_FLOOR,
+    steepFlatNeedsCoverage,
+} from './poseStability';
 import { getRaftSettingsForModel } from '../Rafts/Crenelated/RaftState';
 import { perfEndFrame, perfMark, perfMeasure, type PerfFrame } from '../PlacementLogic/Pathfinding/pathfindingPerf';
 import { getOrCreateSDFCache } from '../PlacementLogic/Pathfinding/SDFCachePool';
@@ -2644,14 +2650,21 @@ export function computeAutoSupportPlan(
           )
         : null;
     const toppleCoverageNeeded = poseStability === null || needsToppleCoverage(poseStability);
+    const islandsToCover = islands.filter(
+        (i) =>
+            !i.steepFlat ||
+            steepFlatNeedsCoverage(i.dragMomentMm3, poseStability?.dragMomentMm3, toppleCoverageNeeded),
+    );
     const steepFlats = islands.filter((i) => i.steepFlat).length;
-    const islandsToCover = toppleCoverageNeeded ? islands : islands.filter((i) => !i.steepFlat);
-    if (!toppleCoverageNeeded && steepFlats > 0) {
+    const dropped = steepFlats - islandsToCover.filter((i) => i.steepFlat).length;
+    if (dropped > 0) {
         console.log(LOG_PREFIX,
-            `Topple coverage not needed — ${steepFlats} steep flats left uncovered ` +
+            `Topple coverage not needed — ${dropped} of ${steepFlats} steep flats left uncovered ` +
             `(adhesion ${poseStability?.adhesionRatio.toFixed(3)}, ` +
             `centroid depth ${poseStability?.centroidDepthMm.toFixed(2)}mm, ` +
-            `bearing ${poseStability?.bearingAreaMm2.toFixed(1)}mm²)`);
+            `bearing ${poseStability?.bearingAreaMm2.toFixed(1)}mm²; ` +
+            `any flat over ${(STEEP_FLAT_SHARE_FLOOR * 100).toFixed(0)}% of the drag moment keeps its ` +
+            `anchoring contacts)`);
     }
 
     console.log(LOG_PREFIX, `Input: ${islands.length} islands from scan`);

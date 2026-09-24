@@ -10173,6 +10173,7 @@ export default function Home() {
               scene.mode === 'support' ? islandsPoc.overhangIslands : []
             }
             toppleCoverage={islandsPoc.toppleCoverage}
+            dragTotalMm3={islandsPoc.dragTotalMm3}
             overlayBrushRadius={islands.overlayBrushRadius}
             overlayColor={islands.overlayColor}
             overlayOpacity={islands.overlayOpacity}
