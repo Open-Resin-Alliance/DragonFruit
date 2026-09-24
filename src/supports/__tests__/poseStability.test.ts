@@ -6,6 +6,8 @@ import {
     isStaticallyUnstable,
     measurePoseStability,
     needsToppleCoverage,
+    isSlenderPart,
+    SLENDER_RATIO,
     STEEP_FLAT_ANCHOR_MIN_AREA_MM2,
     steepFlatNeedsCoverage,
 } from '../autoSupport/poseStability';
@@ -98,6 +100,8 @@ test('a part standing comfortably needs no anti-topple coverage', () => {
         marginMm: 43.72,
         adhesionRatio: 0.79,
         pushDirDeg: 211,
+        heightMm: 66.6,
+        slenderness: 2.0,
         dragTopMm: 35.2,
         restingContact: { overhangAreaMm2: 0, cupAreaMm2: 0, scarAreaMm2: 0, blockedAreaMm2: 0 },
     };
@@ -155,4 +159,21 @@ test('a big flat anchors, a small one is not a surface to put anything on', () =
     assert.equal(steepFlatNeedsCoverage(undefined, false), false, 'no area, no claim');
     // A pose that needs rescuing covers every steep flat, big or small.
     assert.equal(steepFlatNeedsCoverage(400, true), true, 'a rescue covers everything');
+});
+
+test('a wall counts as slender, a cube does not', () => {
+    // The 505k-triangle part: 126mm tall, 79cm³, a 7107mm² raft footprint, so
+    // about 11mm thick. It prints, but it wiggles, and the Z lines are the
+    // evidence.
+    const wall = { heightMm: 126.2, volumeMm3: 79064.2, bearingAreaMm2: 7107.2 };
+    assert.ok(isSlenderPart(wall), `wall is slender (${(126.2 / (79064.2 / 7107.2)).toFixed(1)}x)`);
+
+    // A 20mm cube on its raft: barely taller than thick.
+    const cube = { heightMm: 22.1, volumeMm3: 8000, bearingAreaMm2: 442.8 };
+    assert.equal(isSlenderPart(cube), false, 'a cube is not a wall');
+
+    // Degenerate measurements never claim slenderness.
+    assert.equal(isSlenderPart({ heightMm: 100, volumeMm3: 0, bearingAreaMm2: 10 }), false);
+    assert.equal(isSlenderPart({ heightMm: 100, volumeMm3: 100, bearingAreaMm2: 0 }), false);
+    assert.equal(SLENDER_RATIO, 4);
 });

@@ -428,12 +428,16 @@ export const STEEP_FLAT_ANCHOR_BAND_MM = 6.0;
  * face, or 6mm, whichever is more, so a thin region still gets a line and a
  * tall one does not sprout supports up to where the print is nearly finished.
  */
-export function steepFlatAnchorBandTop(island: {
-    steepFlat?: boolean;
-    baseZ: number;
-    maxZ?: number;
-}): number {
+export function steepFlatAnchorBandTop(
+    island: { steepFlat?: boolean; baseZ: number; maxZ?: number },
+    slenderPart = false,
+): number {
     if (!island.steepFlat) return Infinity;
+    // A slender part sways under the peel's lateral load, and a contact only
+    // stops the sway at its own height. Anchoring a wall therefore wants a
+    // ladder up its face, not a band at the bottom: the band is for parts whose
+    // problem is rigid-body motion.
+    if (slenderPart) return Infinity;
     const top = island.maxZ ?? island.baseZ;
     return (
         island.baseZ +
@@ -500,6 +504,9 @@ export function generateGridCandidates(
     settings: AutoSupportSettings,
     mesh?: THREE.Mesh,
     modelId?: string,
+    /** The part is tall and thin enough that sway matters, so anchoring
+     *  contacts ladder up a steep flat instead of banding low. */
+    slenderPart = false,
 ): CandidatePoint[] {
     const baseSpacing = Math.sqrt(Math.max(settings.areaPerSupportMm2, 0.5));
     if (baseSpacing <= 0) return [];
@@ -545,7 +552,7 @@ export function generateGridCandidates(
         // topple moment is the stabilization braces' job. Left alone the grid
         // climbs the face, because a near-vertical patch has a thin XY
         // footprint whose cells map up its height.
-        const anchorBandTop = steepFlatAnchorBandTop(island);
+        const anchorBandTop = steepFlatAnchorBandTop(island, slenderPart);
 
         const emitPoint = (x: number, y: number, z: number, kind: 'grid' | 'fill', faceIndex?: number | null) => {
             if (z > anchorBandTop) return;

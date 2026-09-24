@@ -915,6 +915,11 @@ pub struct StabilityReport {
     pub plate_z_mm: f32,
     /// Part height above the bearing plane (mm).
     pub height_mm: f32,
+    /// How many times taller the part is than thick: `height / (volume /
+    /// bearing area)`. Past ~4 it is a wall, and a wall sways under the peel's
+    /// lateral load while it prints, which is a different failure from
+    /// toppling: anchoring it needs contacts up its height, not a low band.
+    pub slenderness: f32,
     /// XY area of the bearing hull (mm²).
     pub bearing_area_mm2: f32,
     /// Bearing hull edge count; 0 = no bearing polygon (point/edge/sliver).
@@ -1072,11 +1077,12 @@ impl StabilityReport {
             .collect::<Vec<_>>()
             .join("/");
         format!(
-            "{margin} · {adhesion} · volume {volume} · centroid {} · height {:.1}mm · bearing {:.1}mm² over {} edges \
+            "{margin} · {adhesion} · volume {volume} · centroid {} · height {:.1}mm ({:.1}x) · bearing {:.1}mm² over {} edges \
              ({}){worst_edge} · drag {:.0}mm³ over {} faces (steep share {:.0}%, z* {:.1}mm) · \
              drivers z {drivers}mm{defects}",
             centroid,
             self.height_mm,
+            self.slenderness,
             self.bearing_area_mm2,
             self.bearing_edges,
             if self.bearing_is_raft {
@@ -1344,6 +1350,11 @@ pub fn compute_stability_report(
         centroid_mm,
         plate_z_mm: z_min,
         height_mm: z_max - z_min,
+        slenderness: if bearing_area_mm2 > 0.0 && volume_mm3 > 0.0 {
+            ((z_max - z_min) / (volume_mm3 as f32 / bearing_area_mm2)) as f32
+        } else {
+            0.0
+        },
         bearing_area_mm2,
         bearing_edges: edges.len(),
         worst_edge_dir_deg,

@@ -64,6 +64,13 @@ export interface PoseStability {
     marginMm: number;
     /** `A_contact·d̄_e/M_e` (dimensionless) — the adhesion verdict's geometry. */
     adhesionRatio: number;
+    /** Part height above the bearing plane (mm). */
+    heightMm: number;
+    /** How many times taller the part is than thick: `height / (volume /
+     *  footprint)`. A wall over `SLENDER_RATIO` sways under the peel's lateral
+     *  load while it prints, which is a different failure from toppling and
+     *  needs contact up its height rather than a band at the bottom. */
+    slenderness: number;
     /** Height (mm, above the part's own base) of the TOP of the highest face
      *  that drags — not its centroid. The moment grows with height, so the
      *  load is at the top edge of that face and a brace only resists once it
@@ -121,6 +128,24 @@ const EMPTY_RESTING: RestingContact = {
  *  used, so the true ratio is larger and this errs toward bracing. Calibration
  *  will replace it. */
 export const CONSERVATIVE_P_SIGMA = 0.05;
+
+/** How many times taller than thick a part may be before it counts as slender.
+ *  A wall past this sways under the peel's lateral load while it prints, which
+ *  is a different failure from toppling: anchoring it needs contacts up its
+ *  height, because a contact only stops the sway at its own height. Below the
+ *  ratio, anchoring wants the low band instead, since a squat part's problem is
+ *  rigid-body motion and low contacts are short, stiff and cheap. */
+export const SLENDER_RATIO = 4;
+
+/** Is this part tall enough that sway matters? */
+export function isSlenderPart(s: {
+    heightMm: number;
+    volumeMm3: number;
+    bearingAreaMm2: number;
+}): boolean {
+    if (!(s.bearingAreaMm2 > 0) || !(s.volumeMm3 > 0)) return false;
+    return s.heightMm / (s.volumeMm3 / s.bearingAreaMm2) >= SLENDER_RATIO;
+}
 
 /** A flat at least this big (mm², 3D) is worth anchoring a part with, whether
  *  or not the pose needs rescuing today. It is a SIZE and not a share of the
@@ -259,6 +284,7 @@ export function measurePoseStability(
 
     // Pass 1 — plate plane, enclosed volume, volume centroid.
     let zMin = Infinity;
+    let zMax = -Infinity;
     let vol6 = 0;
     let cx = 0;
     let cy = 0;
@@ -266,6 +292,7 @@ export function measurePoseStability(
         if (load(t)) continue;
         for (let k = 0; k < 3; k++) {
             if (vz[k] < zMin) zMin = vz[k];
+            if (vz[k] > zMax) zMax = vz[k];
         }
         const det =
             vx[0] * (vy[1] * vz[2] - vz[1] * vy[2]) -
@@ -287,6 +314,8 @@ export function measurePoseStability(
             marginMm: 0,
             adhesionRatio: 0,
             pushDirDeg: 0,
+            heightMm: 0,
+            slenderness: 0,
             dragTopMm: 0,
             restingContact: EMPTY_RESTING,
         };
@@ -454,6 +483,11 @@ export function measurePoseStability(
         adhesionRatio:
             worstSum > 1e-9 ? (bearingAreaMm2 * worstContactDepth) / worstSum : Infinity,
         pushDirDeg: (worstDirDeg + 360) % 360,
+        heightMm: Number.isFinite(zMax) ? zMax - zMin : 0,
+        slenderness:
+            bearingAreaMm2 > 0 && volumeMm3 > 0
+                ? (Number.isFinite(zMax) ? zMax - zMin : 0) / (volumeMm3 / bearingAreaMm2)
+                : 0,
         dragTopMm,
         restingContact: resting,
     };

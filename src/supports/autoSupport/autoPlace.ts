@@ -32,6 +32,7 @@ import { generateCandidates, deduplicateCandidates } from './candidateGeneration
 import { generateGridCandidates, shouldUseDensityGrid } from './gridPlacement';
 import { computeStabilizationAnchors } from './stabilization';
 import {
+    isSlenderPart,
     measurePoseStability,
     needsToppleCoverage,
     posedPositions,
@@ -2655,6 +2656,15 @@ export function computeAutoSupportPlan(
             !i.steepFlat ||
             steepFlatNeedsCoverage(i.surfaceAreaMm2, toppleCoverageNeeded),
     );
+    // A wall sways under the peel's lateral load while it prints, and a contact
+    // only stops the sway at its own height, so a slender part's anchoring
+    // ladder climbs its face instead of sitting in a band at the bottom.
+    const slenderPart = poseStability ? isSlenderPart(poseStability) : false;
+    if (slenderPart) {
+        console.log(LOG_PREFIX,
+            `Slender part (${poseStability?.slenderness.toFixed(1)}x taller than thick) — ` +
+            `anchoring contacts ladder up steep flats instead of banding low`);
+    }
     const steepFlats = islands.filter((i) => i.steepFlat).length;
     const dropped = steepFlats - islandsToCover.filter((i) => i.steepFlat).length;
     if (dropped > 0) {
@@ -2707,7 +2717,7 @@ export function computeAutoSupportPlan(
     if (eligible.length > 0) {
         let generated: CandidatePoint[] = [];
         try {
-            generated = generateGridCandidates(eligible, autoSettings, resolvedMesh, modelId)
+            generated = generateGridCandidates(eligible, autoSettings, resolvedMesh, modelId, slenderPart)
                 .map((c): CandidatePoint => ({ ...c, modelId }));
         } catch (e) {
             console.error(LOG_PREFIX,
