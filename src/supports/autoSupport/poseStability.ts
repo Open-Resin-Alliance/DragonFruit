@@ -39,6 +39,8 @@ const BEARING_BAND_MM = 2.0;
 /** Band points are quantized to this XY cell before hulling, so a finely
  *  tessellated base costs one hull point per cell instead of per vertex. */
 const BAND_CELL_MM = 0.5;
+/** ...and so is the XY shadow, for the same reason. */
+const SHADOW_CELL_MM = 0.5;
 /** Below this enclosed volume there is no mass to restore anything. */
 const MIN_VOLUME_MM3 = 1e-9;
 
@@ -179,6 +181,7 @@ export function measurePoseStability(
     rotXRad: number,
     rotYRad: number,
     terms?: SupportTerms,
+    hasRaft = false,
 ): PoseStability {
     const sa = Math.sin(rotXRad);
     const ca = Math.cos(rotXRad);
@@ -263,13 +266,22 @@ export function measurePoseStability(
     const comX = vol6 !== 0 ? cx / vol6 : 0;
     const comY = vol6 !== 0 ? cy / vol6 : 0;
 
-    // Pass 2 — bearing locus: the hull of the low band, quantized.
+    // Pass 2 — bearing locus, quantized.
+    //
+    // Without a raft: the hull of the low band. That band makes the patch a
+    // spherical cap on a domed base, and the cap's centre WANDERS with the
+    // tilt, so the depth is measured from a patch that slides under the part.
+    //
+    // With a raft: the printed contact is the raft's footprint, not that cap.
+    // The raft is built around supports that do not exist yet, so this uses the
+    // model's XY shadow as a lower bound on it: smooth under rotation, and it
+    // under-estimates the adhesion, which errs toward covering.
     const band = new Map<number, THREE.Vector2>();
-    const cell = BAND_CELL_MM;
+    const cell = hasRaft ? SHADOW_CELL_MM : BAND_CELL_MM;
     for (let t = 0; t < triCount; t++) {
         if (load(t)) continue;
         for (let k = 0; k < 3; k++) {
-            if (vz[k] - zMin > BEARING_BAND_MM) continue;
+            if (!hasRaft && vz[k] - zMin > BEARING_BAND_MM) continue;
             const qx = Math.round(vx[k] / cell);
             const qy = Math.round(vy[k] / cell);
             const key = qx * 1e7 + qy;

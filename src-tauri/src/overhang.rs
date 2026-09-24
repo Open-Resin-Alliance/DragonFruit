@@ -139,10 +139,11 @@ pub fn overhang_and_stability_from_soup(
     positions: &[f32],
     self_support_angle_deg: f32,
     px_mm: f32,
+    has_raft: bool,
 ) -> (Vec<OverhangRegion>, Option<StabilityReport>) {
     let mesh = IndexedMesh::from_triangle_soup(positions, 1e-5);
     let regions = classify_overhangs(&mesh, self_support_angle_deg, px_mm);
-    let report = compute_stability_report(&mesh, self_support_angle_deg);
+    let report = compute_stability_report(&mesh, self_support_angle_deg, has_raft);
     (regions, report)
 }
 
@@ -845,6 +846,9 @@ fn point_in_triangle_2d(px: f32, py: f32, a: (f32, f32), b: (f32, f32), c: (f32,
 /// gravity term in the same units as the peel pressure, so the two can be read
 /// against each other.
 const RESIN_WEIGHT_DENSITY_N_PER_MM3: f64 = 1.079e-5;
+/// XY cell (mm) the shadow is quantized to before hulling. The hull's extremes
+/// survive decimation; only the cost does not.
+const SHADOW_CELL_MM: f32 = 0.5;
 /// Plate-contact band (mm) the bearing hull is measured over. Matches the TS
 /// stabilization pass's `BEARING_BAND_MM`, so both describe the same locus.
 const STABILITY_BEARING_BAND_MM: f32 = 2.0;
@@ -890,6 +894,9 @@ const STABILITY_MAX_DRIVERS: usize = 3;
 pub struct StabilityReport {
     /// Plate-contact band the bearing hull was measured over (mm).
     pub bearing_band_mm: f32,
+    /// True when the bearing patch is the model's XY shadow rather than its own
+    /// contact band, i.e. the print has a raft under it.
+    pub bearing_is_raft: bool,
     /// Absolute model volume (mm³) via the divergence theorem.
     pub volume_mm3: f64,
     /// Raw signed volume (mm³). Near zero means an open shell — the volume and
@@ -1004,12 +1011,16 @@ impl StabilityReport {
         if self.drag_faces == 0 {
             return format!(
                 "margin ∞ · adhesion ∞ (no down-facing drag) · volume {volume} · centroid {} · height {:.1}mm · \
-                 bearing {:.1}mm² over {} edges (band {:.1}mm){defects}",
+                 bearing {:.1}mm² over {} edges ({}){defects}",
                 centroid,
                 self.height_mm,
                 self.bearing_area_mm2,
                 self.bearing_edges,
-                self.bearing_band_mm,
+                if self.bearing_is_raft {
+                    "raft footprint".to_string()
+                } else {
+                    format!("band {:.1}mm", self.bearing_band_mm)
+                },
             );
         }
         // A pose with no bearing polygon has no static margin at all, whatever
@@ -1061,13 +1072,17 @@ impl StabilityReport {
             .join("/");
         format!(
             "{margin} · {adhesion} · volume {volume} · centroid {} · height {:.1}mm · bearing {:.1}mm² over {} edges \
-             (band {:.1}mm){worst_edge} · drag {:.0}mm³ over {} faces (steep share {:.0}%, z* {:.1}mm) · \
+             ({}){worst_edge} · drag {:.0}mm³ over {} faces (steep share {:.0}%, z* {:.1}mm) · \
              drivers z {drivers}mm{defects}",
             centroid,
             self.height_mm,
             self.bearing_area_mm2,
             self.bearing_edges,
-            self.bearing_band_mm,
+            if self.bearing_is_raft {
+                "raft footprint".to_string()
+            } else {
+                format!("band {:.1}mm", self.bearing_band_mm)
+            },
             self.drag_moment_mm3,
             self.drag_faces,
             self.steep_band_share * 100.0,
@@ -1091,6 +1106,7 @@ impl StabilityReport {
 pub fn compute_stability_report(
     mesh: &IndexedMesh,
     self_support_angle_deg: f32,
+    has_raft: bool,
 ) -> Option<StabilityReport> {
     let tri_count = mesh.triangle_count();
     if tri_count == 0 {
@@ -1124,15 +1140,48 @@ pub fn compute_stability_report(
         return None;
     }
 
-    // Bearing locus: hull of everything within the contact band of the plate.
+    // Bearing locus.
+    //
+    // Without a raft the part stands on its own bottom, so the locus is the
+    // hull of what lies within the contact band. That band makes the patch a
+    // spherical cap on a domed base, and the cap's CENTRE WANDERS with the
+    // tilt while the centroid stays on the axis, so the depth is measured from
+    // a patch that slides under the part: a fraction of a degree flips the
+    // sign of the verdict.
+    //
+    // With a raft the printed contact is not that cap at all, it is the raft's
+    // footprint, centred under the part. The raft itself is built around the
+    // supports, which do not exist yet, so this uses the model's XY shadow as a
+    // lower bound on it: smooth under rotation, and it under-estimates the
+    // adhesion, which errs toward covering.
     let mut bearing: Vec<(f32, f32)> = Vec::new();
-    for fi in 0..tri_count as u32 {
-        if mesh.tri_area(fi) <= 0.0 {
-            continue;
+    if has_raft {
+        // Quantized, because a hull over a fine mesh's every vertex costs more
+        // than the answer is worth.
+        let mut seen: std::collections::HashSet<(i32, i32)> = std::collections::HashSet::new();
+        for fi in 0..tri_count as u32 {
+            if mesh.tri_area(fi) <= 0.0 {
+                continue;
+            }
+            for v in mesh.tri_positions(fi) {
+                let key = (
+                    (v.x / SHADOW_CELL_MM).round() as i32,
+                    (v.y / SHADOW_CELL_MM).round() as i32,
+                );
+                if seen.insert(key) {
+                    bearing.push((v.x, v.y));
+                }
+            }
         }
-        for v in mesh.tri_positions(fi) {
-            if v.z - z_min <= STABILITY_BEARING_BAND_MM {
-                bearing.push((v.x, v.y));
+    } else {
+        for fi in 0..tri_count as u32 {
+            if mesh.tri_area(fi) <= 0.0 {
+                continue;
+            }
+            for v in mesh.tri_positions(fi) {
+                if v.z - z_min <= STABILITY_BEARING_BAND_MM {
+                    bearing.push((v.x, v.y));
+                }
             }
         }
     }
@@ -1288,6 +1337,7 @@ pub fn compute_stability_report(
 
     Some(StabilityReport {
         bearing_band_mm: STABILITY_BEARING_BAND_MM,
+        bearing_is_raft: has_raft,
         volume_mm3,
         signed_volume_mm3,
         centroid_mm,
@@ -1409,10 +1459,15 @@ pub async fn scan_overhangs(
     self_support_angle_deg: f32,
     px_mm: f32,
     label: Option<String>,
+    has_raft: Option<bool>,
 ) -> Result<Vec<OverhangRegion>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let (regions, report) =
-            overhang_and_stability_from_soup(&positions, self_support_angle_deg, px_mm);
+        let (regions, report) = overhang_and_stability_from_soup(
+            &positions,
+            self_support_angle_deg,
+            px_mm,
+            has_raft.unwrap_or(false),
+        );
         if let Some(report) = &report {
             log::info!(
                 "[stability] {}: {}",
@@ -1526,7 +1581,7 @@ mod tests {
     #[test]
     fn flat_ceiling_is_overhang() {
         let soup = unit_cube_soup();
-        let regions = overhang_and_stability_from_soup(&soup, 45.0, 0.25).0;
+        let regions = overhang_and_stability_from_soup(&soup, 45.0, 0.25, false).0;
         // Only the bottom face (2 triangles, 100 mm², angle 0°) is flagged.
         assert_region(&regions, 0.0, 100.0);
         assert_eq!(regions[0].triangle_ids.len(), 2);
@@ -1542,7 +1597,7 @@ mod tests {
         // one overhang region covering the WHOLE face, not just the lowest
         // vertex (which is all the minima detector would catch).
         let soup = rotate_x(&unit_cube_soup(), 30.0);
-        let regions = overhang_and_stability_from_soup(&soup, 45.0, 0.25).0;
+        let regions = overhang_and_stability_from_soup(&soup, 45.0, 0.25, false).0;
         assert_region(&regions, 30.0, 100.0);
         assert_eq!(regions[0].triangle_ids.len(), 2, "whole face, not an edge");
         // Projected footprint of a 30° face: 100 × cos(30°) ≈ 86.6 mm².
@@ -1601,7 +1656,7 @@ mod tests {
         let soup: Vec<f32> = vec![
             0.0, 0.0, 0.0, 10.0, 10.0, 0.0, 10.0, 0.0, 0.0, // normal -Z
         ];
-        let regions = overhang_and_stability_from_soup(&soup, 45.0, 0.25).0;
+        let regions = overhang_and_stability_from_soup(&soup, 45.0, 0.25, false).0;
         assert_eq!(regions.len(), 1);
         assert!((regions[0].projected_area_mm2 - 50.0).abs() < 1.0);
 
@@ -1626,7 +1681,7 @@ mod tests {
 
     #[test]
     fn vertical_wall_is_not_overhang() {
-        let regions = overhang_and_stability_from_soup(&quad_at(90.0), 45.0, 0.25).0;
+        let regions = overhang_and_stability_from_soup(&quad_at(90.0), 45.0, 0.25, false).0;
         assert!(
             regions.is_empty(),
             "no overhang on a vertical wall: {regions:?}"
@@ -1637,12 +1692,12 @@ mod tests {
     fn slope_steeper_than_threshold_is_self_supporting() {
         // 60° slope: self-supporting at the 45° threshold, flagged at 70°.
         let soup60 = quad_at(60.0);
-        let regions = overhang_and_stability_from_soup(&soup60, 45.0, 0.25).0;
+        let regions = overhang_and_stability_from_soup(&soup60, 45.0, 0.25, false).0;
         assert!(
             regions.is_empty(),
             "60° slope must be self-supporting at 45°: {regions:?}"
         );
-        let regions70 = overhang_and_stability_from_soup(&soup60, 70.0, 0.25).0;
+        let regions70 = overhang_and_stability_from_soup(&soup60, 70.0, 0.25, false).0;
         assert_eq!(regions70.len(), 1, "60° slope flagged at 70° threshold");
         assert!((regions70[0].angle_deg - 60.0).abs() < 1.5);
     }
@@ -1680,7 +1735,7 @@ mod tests {
         // A 30×30 mm face at 60° from horizontal: 900 mm² of down-facing
         // surface the angle rule calls self-supporting. It is the topple lever
         // the steep-flat pass exists for, so it must come back as a region.
-        let regions = overhang_and_stability_from_soup(&big_quad_at(30.0, 60.0), 45.0, 0.25).0;
+        let regions = overhang_and_stability_from_soup(&big_quad_at(30.0, 60.0), 45.0, 0.25, false).0;
         assert_region(&regions, 60.0, 900.0);
     }
 
@@ -1689,7 +1744,7 @@ mod tests {
         // The density grid places only inside the region's projected footprint
         // and takes each point's Z from its surface raster, so the mask must
         // cover the projection (900 × cos 60° = 450 mm²) and follow the slope.
-        let regions = overhang_and_stability_from_soup(&big_quad_at(30.0, 60.0), 45.0, 0.25).0;
+        let regions = overhang_and_stability_from_soup(&big_quad_at(30.0, 60.0), 45.0, 0.25, false).0;
         assert_eq!(regions.len(), 1, "one region: {regions:?}");
         let f = &regions[0].footprint;
         let inside = f.data.iter().filter(|&&v| v == 1).count() as f32;
@@ -1715,7 +1770,7 @@ mod tests {
         // unsupported. Derived from the constant so tuning the gate does not
         // silently turn this into a test of something else.
         let side = (STEEP_FLAT_MIN_AREA_MM2 * 0.5).sqrt();
-        let regions = overhang_and_stability_from_soup(&big_quad_at(side, 60.0), 45.0, 0.25).0;
+        let regions = overhang_and_stability_from_soup(&big_quad_at(side, 60.0), 45.0, 0.25, false).0;
         assert!(regions.is_empty(), "{} mm² facet: {regions:?}", side * side);
     }
 
@@ -1725,7 +1780,7 @@ mod tests {
         // meet it and only grazes the surface, so there is no contact to
         // place. Clamped below vertical, which is the other end of the band.
         let angle = (STEEP_FLAT_MAX_ANGLE_DEG + 5.0).min(89.0);
-        let regions = overhang_and_stability_from_soup(&big_quad_at(30.0, angle), 45.0, 0.25).0;
+        let regions = overhang_and_stability_from_soup(&big_quad_at(30.0, angle), 45.0, 0.25, false).0;
         assert!(
             regions.is_empty(),
             "no contact on a wall at {angle}°: {regions:?}"
@@ -1750,7 +1805,7 @@ mod tests {
         let width = 15.0;
         let len = STEEP_FLAT_MIN_AREA_MM2 * 0.6 / width;
         let regions =
-            overhang_and_stability_from_soup(&folded_quads(width, len, angle_a, angle_b), 45.0, 0.25).0;
+            overhang_and_stability_from_soup(&folded_quads(width, len, angle_a, angle_b), 45.0, 0.25, false).0;
         assert!(
             regions.is_empty(),
             "crease held the patches apart: {regions:?}"
@@ -1765,7 +1820,7 @@ mod tests {
         for v in second.chunks_exact(3) {
             soup.extend_from_slice(&[v[0] + 100.0, v[1], v[2]]);
         }
-        let regions = overhang_and_stability_from_soup(&soup, 45.0, 0.25).0;
+        let regions = overhang_and_stability_from_soup(&soup, 45.0, 0.25, false).0;
         assert_eq!(regions.len(), 2, "two disjoint slopes: {regions:?}");
         assert!((regions[0].angle_deg - 20.0).abs() < 1.5);
         assert!((regions[1].angle_deg - 20.0).abs() < 1.5);
@@ -1921,7 +1976,29 @@ mod tests {
 
     fn report_for(soup: &[f32], angle_deg: f32) -> StabilityReport {
         let mesh = IndexedMesh::from_triangle_soup(soup, 1e-5);
-        compute_stability_report(&mesh, angle_deg).expect("report")
+        compute_stability_report(&mesh, angle_deg, false).expect("report")
+    }
+
+    fn report_for_raft(soup: &[f32], angle_deg: f32) -> StabilityReport {
+        let mesh = IndexedMesh::from_triangle_soup(soup, 1e-5);
+        compute_stability_report(&mesh, angle_deg, true).expect("report")
+    }
+
+    #[test]
+    fn a_raft_measures_the_shadow_not_the_contact_cap() {
+        // The same leaning tower, with a raft under it: the patch becomes the
+        // model's XY shadow, so its area and depth stop depending on where the
+        // lowest point of a curved bottom happens to be.
+        let soup = leaning_tower(20.0, 2.0, 3.0, 6.0, 60.0);
+        let cap = report_for(&soup, 45.0);
+        let raft = report_for_raft(&soup, 45.0);
+        assert!(!cap.bearing_is_raft);
+        assert!(raft.bearing_is_raft);
+        // The tower's own contact is the 20 x 10 foot; the shadow is the same
+        // rectangle, so the areas agree here while the label does not.
+        assert!((raft.bearing_area_mm2 - cap.bearing_area_mm2).abs() < 1.0);
+        assert!(raft.to_log_line().contains("raft footprint"), "{}", raft.to_log_line());
+        assert!(cap.to_log_line().contains("band 2.0mm"), "{}", cap.to_log_line());
     }
 
     #[test]
@@ -2100,7 +2177,7 @@ mod tests {
         // it leans, and its drag pushes along its own normal's XY direction.
         let side = STEEP_FLAT_MIN_AREA_MM2 * 0.6;
         let soup = big_quad_at(side, 60.0);
-        let (regions, report) = overhang_and_stability_from_soup(&soup, 45.0, 0.25);
+        let (regions, report) = overhang_and_stability_from_soup(&soup, 45.0, 0.25, false);
         let report = report.expect("report");
         assert_eq!(regions.len(), 1, "{regions:?}");
         let r = &regions[0];
@@ -2126,7 +2203,7 @@ mod tests {
     fn a_region_that_does_not_lean_carries_no_moment() {
         // A 30° quad is a plain overhang below the steep-flat band, and its
         // moment is what the pose total says it is.
-        let (regions, report) = overhang_and_stability_from_soup(&quad_at(30.0), 45.0, 0.25);
+        let (regions, report) = overhang_and_stability_from_soup(&quad_at(30.0), 45.0, 0.25, false);
         assert_eq!(regions.len(), 1);
         assert!(!regions[0].steep_flat, "30° is below the band");
         assert!(regions[0].drag_moment_mm3 > 0.0);
@@ -2138,7 +2215,7 @@ mod tests {
 
     #[test]
     fn empty_mesh_has_no_report() {
-        assert!(compute_stability_report(&IndexedMesh::new(), 45.0).is_none());
+        assert!(compute_stability_report(&IndexedMesh::new(), 45.0, false).is_none());
     }
 
     #[test]

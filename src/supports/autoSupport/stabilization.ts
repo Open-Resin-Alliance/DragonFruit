@@ -64,7 +64,10 @@ export interface StabilizationAnchor {
  * Returns an empty array when the pose is stable — the common case, so a
  * flat-printed model changes nothing.
  */
-export function computeStabilizationAnchors(mesh: THREE.Mesh): StabilizationAnchor[] {
+export function computeStabilizationAnchors(
+    mesh: THREE.Mesh,
+    options: { hasRaft?: boolean } = {},
+): StabilizationAnchor[] {
     const geometry = mesh.geometry as THREE.BufferGeometry;
     const posAttr = geometry.getAttribute('position');
     if (!posAttr || posAttr.itemSize !== 3 || posAttr.count < 3 || posAttr.count > VERT_CAP) return [];
@@ -193,6 +196,8 @@ export function computeStabilizationAnchors(mesh: THREE.Mesh): StabilizationAnch
         (indexAttr ? (indexAttr.array as ArrayLike<number>) : null),
         0,
         0,
+        undefined,
+        options.hasRaft === true,
     );
     const standsOnBase = hull.length >= 3 && bearingAreaMm2 >= MIN_BEARING_AREA_MM2 && depthMm >= -MARGIN_MM;
     if (standsOnBase && !needsToppleCoverage(poseStability)) {

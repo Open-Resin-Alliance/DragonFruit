@@ -117,3 +117,23 @@ test('a part standing comfortably needs no anti-topple coverage', () => {
     const pointContact = { ...tool, bearingAreaMm2: 0.2, bearingEdges: 0, adhesionRatio: 0.0004 };
     assert.equal(needsToppleCoverage(pointContact), true, 'a point contact still fires');
 });
+
+test('with a raft the patch is the shadow, not the wandering contact cap', () => {
+    // A dome-ish body: a tilted 10mm cube stands in for the wandering cap. The
+    // shadow is the whole projection, so its area and depth stop depending on
+    // which point happens to be lowest.
+    const m = cube();
+    const cap = measurePoseStability(m.positions, m.index, 20 * (Math.PI / 180), 0);
+    const raft = measurePoseStability(m.positions, m.index, 20 * (Math.PI / 180), 0, undefined, true);
+
+    assert.ok(raft.bearingAreaMm2 > cap.bearingAreaMm2, 'the shadow is larger than the cap');
+    // Analytic: a 10mm cube tilted 20 degrees about X projects to a 10 by
+    // (10cos20 + 10sin20) rectangle, and the shadow is that whole silhouette.
+    const expected = 10 * (10 * Math.cos(0.3490658503988659) + 10 * Math.sin(0.3490658503988659));
+    assert.ok(
+        Math.abs(raft.bearingAreaMm2 - expected) < 1,
+        `shadow is the projected silhouette (got ${raft.bearingAreaMm2}, want ${expected})`,
+    );
+    const raftFlat = measurePoseStability(m.positions, m.index, 0, 0, undefined, true);
+    assert.ok(Math.abs(raftFlat.bearingAreaMm2 - 100) < 1, 'flat, the shadow is the base');
+});

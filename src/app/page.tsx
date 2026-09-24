@@ -350,7 +350,7 @@ function applyJointSplitKnotRemaps(remaps: KnotSplitRemap[]) {
         updateKnot({ ...knot, parentShaftId: remap.parentShaftId, t: remap.t });
     }
 }
-import { getRaftSettings, subscribeToRaftStore } from '@/supports/Rafts/Crenelated/RaftState';
+import { getRaftSettings, getRaftSettingsForModel, subscribeToRaftStore } from '@/supports/Rafts/Crenelated/RaftState';
 import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
 import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/computeRaftOuterBoundary';
 import type { SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
@@ -6950,6 +6950,7 @@ export default function Home() {
     plateZ: 0,
     sourcePath: scene.activeModel?.sourcePath,
     activeTab: scene.mode,
+    hasRaft: getRaftSettingsForModel(scene.activeModel?.id).bottomMode !== 'off',
   });
 
   // Blocking progress overlays are modal: while one is up it owns Escape, so

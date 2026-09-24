@@ -32,6 +32,7 @@ import { generateCandidates, deduplicateCandidates } from './candidateGeneration
 import { generateGridCandidates, shouldUseDensityGrid } from './gridPlacement';
 import { computeStabilizationAnchors } from './stabilization';
 import { measurePoseStability, needsToppleCoverage, posedPositions } from './poseStability';
+import { getRaftSettingsForModel } from '../Rafts/Crenelated/RaftState';
 import { perfEndFrame, perfMark, perfMeasure, type PerfFrame } from '../PlacementLogic/Pathfinding/pathfindingPerf';
 import { getOrCreateSDFCache } from '../PlacementLogic/Pathfinding/SDFCachePool';
 import { getRouterStats, resetRouterStats } from '../PlacementLogicV3/SmartPlacementV3';
@@ -2627,12 +2628,19 @@ export function computeAutoSupportPlan(
     // on a wide patch with its centroid well inside it does not need contact on
     // a self-supporting wall just because the wall is steep, and covering it
     // anyway is how a squat cylinder came back wrapped in a support forest.
+    // A raft under the part changes what the contact IS, so the report has to
+    // know: with one, the patch is the model's XY shadow rather than the 2mm
+    // cap on its own bottom, which is the cap whose centre wanders with the
+    // tilt and flips the verdict on a fraction of a degree.
+    const hasRaft = getRaftSettingsForModel(modelId).bottomMode !== 'off';
     const poseStability = resolvedMesh
         ? measurePoseStability(
               posedPositions(resolvedMesh),
               resolvedMesh.geometry.index?.array ?? null,
               0,
               0,
+              undefined,
+              hasRaft,
           )
         : null;
     const toppleCoverageNeeded = poseStability === null || needsToppleCoverage(poseStability);
@@ -2659,7 +2667,7 @@ export function computeAutoSupportPlan(
     // they never fan/merge onto a nearby host (the source gates that below).
     let stabilizationAnchors = 0;
     if (autoSettings.stabilizationEnabled !== false && resolvedMesh) {
-        const anchors = computeStabilizationAnchors(resolvedMesh);
+        const anchors = computeStabilizationAnchors(resolvedMesh, { hasRaft });
         if (anchors.length > 0) {
             const stabilizationCandidates: CandidatePoint[] = anchors.map((a, i) => ({
                 id: `stab-${i}`,

@@ -171,6 +171,11 @@ export interface UseIslandsInput {
   plateZ?: number;
   /** File path of the loaded model. */
   sourcePath?: string | null;
+  /** True when the print gets a raft under it. The stability report then
+   *  measures the contact as the model's XY shadow rather than its own contact
+   *  band: the raft is what actually holds the part, and a band on a domed
+   *  bottom is a cap whose centre wanders with the tilt. */
+  hasRaft?: boolean;
   /** Active mode / tab. */
   activeTab?: string;
 }
@@ -210,7 +215,7 @@ async function reportSlowStep(label: string, elapsedMs: number): Promise<void> {
   }
 }
 
-export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ = 0, sourcePath, activeTab }: UseIslandsInput) {
+export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ = 0, sourcePath, activeTab, hasRaft = false }: UseIslandsInput) {
   const [scanning, setScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState<{ done: number; total: number; phase?: string; phaseNumber?: number; phaseCount?: number } | null>(null);
   const [voxelIslands, setVoxelIslands] = useState<DetectedIsland[]>([]);
@@ -455,6 +460,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
                 OVERHANG_SELF_SUPPORT_ANGLE_DEG,
               pxMm: OVERHANG_FOOTPRINT_PX_MM,
               label: sourcePath ?? null,
+              hasRaft,
             });
             if (scanEpochRef.current !== epoch) return;
             mappedOverhangs = regions.map(overhangRegionToIsland);
@@ -505,6 +511,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
             ?? OVERHANG_SELF_SUPPORT_ANGLE_DEG,
           pxMm: OVERHANG_FOOTPRINT_PX_MM,
           label: sourcePath ?? null,
+          hasRaft,
         });
         if (scanEpochRef.current !== epoch) return;
         mappedOverhangs = regions.map(overhangRegionToIsland);
@@ -558,7 +565,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     } else {
       setScanning(false);
     }
-  }, [geom, transform, sourcePath, prepareWorldGeom, layerHeightMm, pxMm, supportBufMm, connectivity, minAreaMm2, minimaK]);
+  }, [geom, transform, sourcePath, prepareWorldGeom, layerHeightMm, pxMm, supportBufMm, connectivity, minAreaMm2, minimaK, hasRaft]);
 
   // Pass 1: Proposed consolidation & classification
   const proposedConsolidated = useMemo(() => timed('proposedConsolidated', () => {
