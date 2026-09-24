@@ -82,6 +82,7 @@ describe('autosave contention policy (D4)', () => {
     enabled: true,
     desktop: true,
     suppressedUntil: 0,
+    cooldownUntil: 0,
     now: 1_000,
     modelCount: 3,
     navigationBusy: false,
@@ -100,6 +101,15 @@ describe('autosave contention policy (D4)', () => {
     assert.equal(decision.action, 'skip');
     assert.equal(decision.reason, 'unchanged');
     assert.equal(decision.retainDirty, false);
+  });
+
+  test('automatic requests during cooldown stay dirty until the boundary', () => {
+    const waiting = decideAutosaveGate({ ...base, now: 19_999, cooldownUntil: 20_000 });
+    assert.deepEqual(waiting, { action: 'defer', reason: 'cooldown', retainDirty: true });
+    assert.deepEqual(decideAutosaveGate({ ...base, now: 20_000, cooldownUntil: 20_000 }), { action: 'run' });
+    assert.deepEqual(decideAutosaveGate({
+      ...base, now: 19_999, cooldownUntil: 20_000, revision: 4, lastPersistedRevision: 4,
+    }), { action: 'skip', reason: 'unchanged', retainDirty: false });
   });
 
   test('a forced flush writes even when the revision is unchanged', () => {
@@ -130,13 +140,16 @@ describe('autosave contention policy (D4)', () => {
     assert.equal(decision.retainDirty, true);
   });
 
-  test('a forced flush overrides navigation but never suppression', () => {
+  test('a forced flush overrides navigation, suppression and cooldown', () => {
     assert.equal(decideAutosaveGate({ ...base, navigationBusy: true, forced: true }).action, 'run');
     assert.equal(
       decideAutosaveGate({ ...base, suppressedUntil: 5_000, forced: true }).action,
       'run',
       'an explicit flush (quit, Ctrl+S handoff) must not be blocked by a suppression window',
     );
+    assert.deepEqual(decideAutosaveGate({
+      ...base, now: 19_999, cooldownUntil: 20_000, forced: true,
+    }), { action: 'run' });
   });
 
   test('an empty scene skips and drops the dirtiness — there is nothing to lose', () => {
