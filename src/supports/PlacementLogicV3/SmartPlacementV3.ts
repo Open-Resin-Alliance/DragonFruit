@@ -496,6 +496,12 @@ export function calculateSmartPlacementV3(
      * cheaper than the call it memoizes, and this one was four times dearer, so
      * it was pure overhead on the run's hot path.
      */
+    // The router's columns are the bulk of this run's distance-field reads, and
+    // the exact column map answers them from one scalar per XY cell. Idempotent
+    // and clearance-specific, so calling it here (on a per-placement path) only
+    // builds once; see `SDFCache.enableColumnMap`.
+    sdf.enableColumnMap(clearanceMm, 0.2);
+
     const segmentBlockedBetween = (from: Vec3, to: Vec3): boolean => (
         sdf.segmentBlocked(from.x, from.y, from.z, to.x, to.y, to.z, clearanceMm)
     );

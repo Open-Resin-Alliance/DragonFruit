@@ -18,6 +18,7 @@
 
 import * as THREE from 'three';
 import { quantizeToCell } from '@/utils/math';
+import { ColumnClearanceMap } from './ColumnClearanceMap';
 
 // ---------- Types ----------
 
@@ -124,6 +125,9 @@ export class SDFCache {
     private readonly cellKeys = new Float64Array(CELL_TABLE_SLOTS).fill(-1);
     private readonly cellValues = new Float32Array(CELL_TABLE_SLOTS);
     private cellCount = 0;
+    /** Opt-in exact fast path for vertical segments; see `enableColumnMap`. */
+    private _columnMap: ColumnClearanceMap | null = null;
+    private _columnMapClearance = 0;
 
     // Reusable temporaries — avoids per-query allocation
     private readonly _localPoint = new THREE.Vector3();
@@ -681,6 +685,78 @@ export class SDFCache {
     }
 
     /**
+     * Exact signed distance at a world-space point, bounded.
+     *
+     * Used by the march where the cached value is too coarse to decide: the
+     * cache answers for the nearest lattice point, so its value bounds the
+     * sample's distance but cannot resolve it. A bounded point query prunes to
+     * a small neighbourhood and costs ~0.2 µs, so this is only worth asking
+     * where the lattice bound actually lands near the clearance.
+     */
+    private _exactBoundedDistanceAt(wx: number, wy: number, wz: number, boundMm: number): number {
+        this._localPoint.set(wx, wy, wz).applyMatrix4(this.inverseMatrix);
+        const dist = this._signedDistanceAtLocalPoint(boundMm);
+        return dist === Infinity ? boundMm : Math.min(dist, boundMm);
+    }
+
+    /**
+     * Turn on the exact column fast path for one clearance.
+     *
+     * The router asks "is this column clear down to the root?" once per walk
+     * step and per direction, and that vertical march is the bulk of a run's
+     * distance-field reads. `ColumnClearanceMap` answers a column from one
+     * scalar per XY cell, built from the mesh's own vertices.
+     *
+     * Opt-in and clearance-specific: the map is built for one clearance and its
+     * verdicts only mean anything for that one, and a caller that uses several
+     * (the router's shaft clearance, then a shaft radius) would otherwise
+     * silently get the wrong answer. Idempotent, because callers sit on a
+     * per-placement path and the build is tens of milliseconds. Returns false
+     * when the grid would be too large, in which case nothing changes.
+     */
+    enableColumnMap(clearanceMm: number, cellMm: number): boolean {
+        if (this._columnMap !== null && Math.abs(clearanceMm - this._columnMapClearance) < 1e-9) return true;
+        const map = ColumnClearanceMap.build(this.mesh, clearanceMm, cellMm);
+        if (!map) return false;
+        this._columnMap = map;
+        this._columnMapClearance = clearanceMm;
+        return true;
+    }
+
+    /**
+     * How far a sample's true distance can be below the cached value: the cache
+     * answers for the nearest lattice point (`quantizeToCell` rounds), so this
+     * is the sample's distance to it.
+     */
+    private _latticeGap(px: number, py: number, pz: number): number {
+        const cs = this.cellSize;
+        const lx = Math.round(px / cs) * cs - px;
+        const ly = Math.round(py / cs) * cs - py;
+        const lz = Math.round(pz / cs) * cs - pz;
+        return Math.sqrt(lx * lx + ly * ly + lz * lz);
+    }
+
+    /**
+     * One march sample, as the distance it can safely advance.
+     *
+     * Returns -1 when the sample is inside `clearance`. The cached value bounds
+     * the sample's true distance to `[base - gap, base + gap]`, so above the
+     * band it settles `clear` without another query, below it settles `blocked`,
+     * and only the band itself is asked exactly. A method rather than a closure
+     * because this runs once per sample of 18M calls, where allocating a
+     * function per call is measurable.
+     */
+    private _marchSample(px: number, py: number, pz: number, clearance: number): number {
+        const d = this.boundedDistanceAt(px, py, pz, MARCH_DISTANCE_BOUND_MM);
+        const base = d === Infinity ? MARCH_DISTANCE_BOUND_MM : d;
+        const gap = this._latticeGap(px, py, pz);
+        if (base + gap < clearance) return -1;
+        if (base - gap >= clearance) return base - gap - clearance;
+        const exact = this._exactBoundedDistanceAt(px, py, pz, clearance + 0.001);
+        return exact < clearance ? -1 : exact - clearance;
+    }
+
+    /**
      * Checks an entire line segment (A→B) for clearance using **adaptive
      * sphere tracing** driven by the signed distance field.
      *
@@ -702,11 +778,21 @@ export class SDFCache {
         bx: number, by: number, bz: number,
         clearance: number,
     ): boolean {
+        // Exact fast path, vertical segments only: it answers `blocked` only
+        // when a mesh vertex is provably within `clearance` of the segment, so
+        // it can only settle what the march below would have settled anyway.
+        if (this._columnMap !== null
+            && ax === bx && ay === by
+            && Math.abs(clearance - this._columnMapClearance) < 1e-9
+            && this._columnMap.columnVerdict(ax, ay, az, bz) === 'blocked') {
+            return true;
+        }
+
         const dx = bx - ax;
         const dy = by - ay;
         const dz = bz - az;
         const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        if (len < 0.01) return this.boundedDistanceAt(ax, ay, az, MARCH_DISTANCE_BOUND_MM) < clearance;
+        if (len < 0.01) return this._marchSample(ax, ay, az, clearance) < 0;
         if (!this._segmentIntersectsExpandedWorldBounds(ax, ay, az, bx, by, bz, clearance)) {
             return false;
         }
@@ -727,22 +813,14 @@ export class SDFCache {
         // prevents progress — shouldn't happen with the minStep floor but cheap.
         const maxIter = Math.max(8, Math.ceil(len / minStep) + 2);
         for (let iter = 0; iter < maxIter; iter++) {
-            const px = ax + ux * t;
-            const py = ay + uy * t;
-            const pz = az + uz * t;
-            // Bounded query: see MARCH_DISTANCE_BOUND_MM. Infinity means "at
-            // least the bound away", which clamps to the bound below.
-            const d = this.boundedDistanceAt(px, py, pz, MARCH_DISTANCE_BOUND_MM);
-            if (d < clearance) return true;
-            const reach = d === Infinity ? MARCH_DISTANCE_BOUND_MM : d;
-            const safeAdvance = reach - clearance;
-            const step = safeAdvance > minStep ? safeAdvance : minStep;
-            t += step;
+            const advance = this._marchSample(ax + ux * t, ay + uy * t, az + uz * t, clearance);
+            if (advance < 0) return true;
+            t += advance > minStep ? advance : minStep;
             if (t >= len) break;
         }
         // Always check the exact endpoint — the adaptive loop may exit with
         // t > len before sampling the terminal cell.
-        return this.boundedDistanceAt(bx, by, bz, MARCH_DISTANCE_BOUND_MM) < clearance;
+        return this._marchSample(bx, by, bz, clearance) < 0;
     }
 
     /** Number of cached cells (for diagnostics). */
