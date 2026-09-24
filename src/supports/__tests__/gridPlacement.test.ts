@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
 
-import { generateGridCandidates, computeRegionSpacing, GRID_SPACING_FLOOR_MM, MAX_GRID_CANDIDATES_PER_REGION, STEEP_FLAT_SPACING_MULTIPLIER, shouldUseDensityGrid } from '../autoSupport/gridPlacement';
+import { generateGridCandidates, computeRegionSpacing, GRID_SPACING_FLOOR_MM, MAX_GRID_CANDIDATES_PER_REGION, steepFlatAnchorBandTop, STEEP_FLAT_SPACING_MULTIPLIER, shouldUseDensityGrid } from '../autoSupport/gridPlacement';
 import { createDefaultAutoSupportSettings } from '../autoSupport/settings';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
 
@@ -343,4 +343,24 @@ test('each grid contact takes the normal of the face it lands on', () => {
         'cells on the sloped facets lean with the facet, not with the region');
     assert.ok(candidates.every((c) => Math.abs(Math.hypot(c.tipNormal.x, c.tipNormal.y, c.tipNormal.z) - 1) < 1e-6),
         'every emitted normal is a unit vector');
+});
+
+/**
+ * A steep flat is self-supporting, so its contacts anchor the part rather than
+ * hold up forming material, and anchoring wants the low band: short, stiff,
+ * cheap. Left alone the grid climbs the face, because a near-vertical patch has
+ * a thin XY footprint whose cells map up its height.
+ */
+test('a steep flat is anchored low, a formation overhang is not banded', () => {
+    // The tool's face: 50mm tall, so the band is the lowest 17.5mm of it.
+    assert.equal(steepFlatAnchorBandTop({ steepFlat: true, baseZ: 5, maxZ: 55 }), 22.5);
+    // A 20mm cube's face: a third of its 19.9mm is under the 6mm floor, so the
+    // band lands near 12mm, i.e. contacts in the bottom half rather than two
+    // thirds of the way up a part that is nearly finished.
+    const shortFace = steepFlatAnchorBandTop({ steepFlat: true, baseZ: 5, maxZ: 24.9 });
+    assert.ok(shortFace < 12.5, `short face band is low (got ${shortFace.toFixed(2)})`);
+    // Formation coverage has to hold material at height, so it is unbounded.
+    assert.equal(steepFlatAnchorBandTop({ steepFlat: false, baseZ: 5, maxZ: 55 }), Infinity);
+    // A flat with no recorded top still gets the floor rather than nothing.
+    assert.equal(steepFlatAnchorBandTop({ steepFlat: true, baseZ: 5 }), 11);
 });

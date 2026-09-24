@@ -6,7 +6,7 @@ import {
     isStaticallyUnstable,
     measurePoseStability,
     needsToppleCoverage,
-    STEEP_FLAT_SHARE_FLOOR,
+    STEEP_FLAT_ANCHOR_MIN_AREA_MM2,
     steepFlatNeedsCoverage,
 } from '../autoSupport/poseStability';
 
@@ -140,20 +140,19 @@ test('with a raft the patch is the shadow, not the wandering contact cap', () =>
     assert.ok(Math.abs(raftFlat.bearingAreaMm2 - 100) < 1, 'flat, the shadow is the base');
 });
 
-test('a flat carrying a real share of the drag keeps its anchoring contacts', () => {
-    // The cam seal tool's leaning pose: the verdict is safe (adhesion 1.719, so
-    // no rescuing needed today), but one 2752mm² flat carries 33% of the drag.
-    // That is the best anchoring surface the part has, and leaving it bare is
-    // what read as wrong.
-    const total = 174441;
-    assert.equal(steepFlatNeedsCoverage(65423, total, false), true, 'a third of the drag anchors');
-    assert.equal(steepFlatNeedsCoverage(5059, total, false), false, '3% is not worth contacts');
+test('a big flat anchors, a small one is not a surface to put anything on', () => {
+    // The cam seal tool's 2752mm² face is worth anchoring: planar, room to
+    // spread, facing the way the part would move.
+    assert.equal(steepFlatNeedsCoverage(2752, false), true, 'the tool anchors on its big face');
     assert.equal(
-        steepFlatNeedsCoverage(total * STEEP_FLAT_SHARE_FLOOR, total, false),
+        steepFlatNeedsCoverage(STEEP_FLAT_ANCHOR_MIN_AREA_MM2, false),
         true,
         'the floor itself anchors',
     );
-    assert.equal(steepFlatNeedsCoverage(100, total, true), true, 'a rescue covers everything');
-    assert.equal(steepFlatNeedsCoverage(100, 0, false), false, 'no total, nothing to weigh');
-    assert.equal(steepFlatNeedsCoverage(undefined, total, false), false, 'no moment, no claim');
+    // A 20mm cube's face is 400mm² and 99% of that part's drag, and covering it
+    // sprouted tall supports two thirds of the way up a part nearly finished.
+    assert.equal(steepFlatNeedsCoverage(400, false), false, 'a small face gets nothing');
+    assert.equal(steepFlatNeedsCoverage(undefined, false), false, 'no area, no claim');
+    // A pose that needs rescuing covers every steep flat, big or small.
+    assert.equal(steepFlatNeedsCoverage(400, true), true, 'a rescue covers everything');
 });

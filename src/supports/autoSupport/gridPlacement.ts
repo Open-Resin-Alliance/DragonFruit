@@ -415,6 +415,32 @@ export function sampleBoundary2D(
  */
 export const STEEP_FLAT_SPACING_MULTIPLIER = 2.5;
 
+/** How much of a steep flat's height its anchoring contacts may occupy: the
+ *  lowest third, or 6mm, whichever is more, so a thin region still gets a line
+ *  and a tall one does not sprout supports up to where the print is nearly
+ *  finished. */
+export const STEEP_FLAT_ANCHOR_BAND_FRACTION = 0.35;
+export const STEEP_FLAT_ANCHOR_BAND_MM = 6.0;
+
+/**
+ * Top of the band a steep flat's anchoring contacts may occupy (mm), or
+ * `Infinity` for anything that is not a steep flat. The lowest third of the
+ * face, or 6mm, whichever is more, so a thin region still gets a line and a
+ * tall one does not sprout supports up to where the print is nearly finished.
+ */
+export function steepFlatAnchorBandTop(island: {
+    steepFlat?: boolean;
+    baseZ: number;
+    maxZ?: number;
+}): number {
+    if (!island.steepFlat) return Infinity;
+    const top = island.maxZ ?? island.baseZ;
+    return (
+        island.baseZ +
+        Math.max(STEEP_FLAT_ANCHOR_BAND_MM, (top - island.baseZ) * STEEP_FLAT_ANCHOR_BAND_FRACTION)
+    );
+}
+
 export function shouldUseDensityGrid(
     island: DetectedIsland,
     settings: AutoSupportSettings,
@@ -506,13 +532,23 @@ export function generateGridCandidates(
 
         const surfaceNormal = island.surfaceNormal ?? { x: 0, y: 0, z: -1 };
 
+
         // Triangle-accurate surface resolution when the mesh + region
         // triangles are available; voxel nearest-neighbor is the fallback.
         const surfaceAt = createTriangleSurfaceAt(island, mesh)
             ?? createVoxelSurfaceAt(voxelPoints, cellSize, island.baseZ);
         const minZ = island.baseZ;
+        // A steep flat is self-supporting, so its contacts are there to ANCHOR
+        // the part, not to hold up material that is still forming. Anchoring
+        // wants the low band: a tip's job is to stop the part moving, and low
+        // contacts are short, stiff and cheap, while the reach that resists a
+        // topple moment is the stabilization braces' job. Left alone the grid
+        // climbs the face, because a near-vertical patch has a thin XY
+        // footprint whose cells map up its height.
+        const anchorBandTop = steepFlatAnchorBandTop(island);
 
         const emitPoint = (x: number, y: number, z: number, kind: 'grid' | 'fill', faceIndex?: number | null) => {
+            if (z > anchorBandTop) return;
             // The contact leans into the face it actually lands on; the
             // region-wide normal is only the fallback (voxel sampler, blockers).
             const tipNormal = (mesh && faceIndex != null ? faceNormalAt(mesh, faceIndex) : null) ?? surfaceNormal;

@@ -199,7 +199,7 @@ export function IslandOverhangOverlay({
       if (region.steepFlat) {
         const arr = copyRegion(region);
         const share = maxMomentMm3 > 0 ? Math.min(1, Math.max(0, (region.dragMomentMm3 ?? 0) / maxMomentMm3)) : 0;
-        const covered = steepFlatNeedsCoverage(region.dragMomentMm3, dragTotalMm3, toppleCoverage);
+        const covered = steepFlatNeedsCoverage(region.surfaceAreaMm2, toppleCoverage);
         const into = covered ? topplePositions : mutedPositions;
         const shares = covered ? toppleShares : mutedShares;
         into.push(...arr);

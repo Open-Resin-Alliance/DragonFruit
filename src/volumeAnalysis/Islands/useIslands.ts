@@ -114,6 +114,8 @@ export function overhangRegionToIsland(region: OverhangRegion, i: number): Detec
     baseZ: contactZ,
     areaMm2: region.projectedAreaMm2,
     overhangAngleDeg: region.angleDeg,
+    surfaceAreaMm2: region.areaMm2,
+    maxZ: region.maxZ,
     dragMomentMm3: region.dragMomentMm3,
     dragDirDeg: region.dragDirDeg,
     steepFlat: region.steepFlat,

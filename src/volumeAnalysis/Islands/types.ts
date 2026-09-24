@@ -107,6 +107,12 @@ export interface DetectedIsland {
   dragMomentMm3?: number;
   /** Direction its drag pushes the part (deg) — the side that lifts. */
   dragDirDeg?: number;
+  /** 3D surface area of the patch (mm²). A steep face's PROJECTED area is a
+   *  thin strip, so anything asking how big the flat is has to use this one. */
+  surfaceAreaMm2?: number;
+  /** Highest point of the patch (mm). The anchoring band on a steep flat is
+   *  measured from `baseZ` up to a fraction of this. */
+  maxZ?: number;
   /** True when the patch is a large planar face past the self-support angle:
    *  it forms fine on its own, so it is a toppling patch, not a formation one,
    *  and the stabilization braces own it instead of the density grid. */

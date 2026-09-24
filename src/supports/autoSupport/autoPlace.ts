@@ -35,7 +35,7 @@ import {
     measurePoseStability,
     needsToppleCoverage,
     posedPositions,
-    STEEP_FLAT_SHARE_FLOOR,
+    STEEP_FLAT_ANCHOR_MIN_AREA_MM2,
     steepFlatNeedsCoverage,
 } from './poseStability';
 import { getRaftSettingsForModel } from '../Rafts/Crenelated/RaftState';
@@ -2653,7 +2653,7 @@ export function computeAutoSupportPlan(
     const islandsToCover = islands.filter(
         (i) =>
             !i.steepFlat ||
-            steepFlatNeedsCoverage(i.dragMomentMm3, poseStability?.dragMomentMm3, toppleCoverageNeeded),
+            steepFlatNeedsCoverage(i.surfaceAreaMm2, toppleCoverageNeeded),
     );
     const steepFlats = islands.filter((i) => i.steepFlat).length;
     const dropped = steepFlats - islandsToCover.filter((i) => i.steepFlat).length;
@@ -2663,8 +2663,7 @@ export function computeAutoSupportPlan(
             `(adhesion ${poseStability?.adhesionRatio.toFixed(3)}, ` +
             `centroid depth ${poseStability?.centroidDepthMm.toFixed(2)}mm, ` +
             `bearing ${poseStability?.bearingAreaMm2.toFixed(1)}mm²; ` +
-            `any flat over ${(STEEP_FLAT_SHARE_FLOOR * 100).toFixed(0)}% of the drag moment keeps its ` +
-            `anchoring contacts)`);
+            `any flat at least ${STEEP_FLAT_ANCHOR_MIN_AREA_MM2.toFixed(0)}mm² keeps its anchoring contacts)`);
     }
 
     console.log(LOG_PREFIX, `Input: ${islands.length} islands from scan`);
