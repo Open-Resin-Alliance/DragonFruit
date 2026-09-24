@@ -2141,6 +2141,7 @@ export function SlicingPanel({
         outputPath: resolvedOutputPath.length > 0 ? resolvedOutputPath : null,
         antiAliasingLevel: effectiveAntiAliasingLevel,
         antiAliasingMode: effectiveAntiAliasingMode,
+        supportTipShrinkPercent: profileAntiAliasingSettings.supportTipShrinkPercent,
         blurBrushRadiusPx: resolvedBlurBrushRadiusPx,
         blurBrushKernel: resolvedBlurBrushKernel,
         blurBrushSigmaX: resolvedBlurBrushSigmaX,

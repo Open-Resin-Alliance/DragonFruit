@@ -1413,7 +1413,7 @@ export function MaterialAntiAliasingSection({ draft, onChange, lockActivationTog
 
                     <AaCard
                         title="Support Adjustments"
-                        description="Controls anti-aliasing and penetration offsets applied to support and raft geometry."
+                        description="Controls support AA, penetration offsets, and 3DAA sliced contact size."
                     >
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                             <LabeledToggleInput
@@ -1421,6 +1421,14 @@ export function MaterialAntiAliasingSection({ draft, onChange, lockActivationTog
                                 helpText="Disabled keeps supports crisp and binary. Enabled allows anti-aliased support edges too."
                                 checked={settings.aaOnSupports}
                                 onChange={(value) => updateAaSettings({ aaOnSupports: value })}
+                            />
+                            <LabeledNumberInput
+                                label="3DAA tip shrink (%)"
+                                helpText="Reduces contact footprints only in 3DAA sliced output. Viewport supports and mesh exports keep their original dimensions."
+                                step={1}
+                                precision={0}
+                                value={settings.supportTipShrinkPercent}
+                                onChange={(value) => updateAaSettings({ supportTipShrinkPercent: Math.round(clampAaNumber(value, 10, 0, 90)) })}
                             />
                             <AaSelectDropdown
                                 label="Tip Compensation Offset Mode"

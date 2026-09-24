@@ -557,6 +557,7 @@ function sanitizeMaterialTemplate(input: unknown): Omit<MaterialProfile, 'id' | 
         tipOffsetMode: 'disabled',
         tipOffsetMm: 0.05,
         tipOffsetDisplayInUi: false,
+        supportTipShrinkPercent: 10,
         selectedLutCurveId: 'default',
         aaOnSupports: false,
         ditherEnabled: false,

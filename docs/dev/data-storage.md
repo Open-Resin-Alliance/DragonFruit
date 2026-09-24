@@ -62,6 +62,19 @@ pointer turns into a trash can there, from the `body.preset-drag-delete` rule in
 | `dragonfruit.material.activeByPrinterProfile.v1` | localStorage + sessionStorage | Active material selection per printer profile      |
 | `dragonfruit-plugins-v1`                         | localStorage                  | Installed plugin registry + trust/install metadata |
 
+`MaterialProfile.antiAliasingSettings.supportTipShrinkPercent` lives inside the existing `dragonfruit-profiles-v1` material envelope, not a new key. `src/features/profiles/profileStore.ts` defaults missing values to `10` and clamps whole percentages to `0`–`90`; `src/components/settings/profileFormAtoms.tsx` exposes it in Material → Anti-Aliasing → Support Adjustments. To set 25% for an editable material:
+
+```ts
+updateMaterialProfile(customMaterial.id, {
+  antiAliasingSettings: {
+    ...customMaterial.antiAliasingSettings,
+    supportTipShrinkPercent: 25,
+  },
+});
+```
+
+`src/features/slicing/components/SlicingPanel.tsx` merges material and session AA settings. `src/features/slicing/sliceExportOrchestrator.ts` applies shrink only for effective 3DAA (`Vertical2` or `3DAA`, AA level not `Off`) while `src/features/slicing/rasterLayerZipExport.ts` assembles transient support triangles. It narrows contact-cone faces and twig disk footprints, including when AA on supports is disabled; it does not change support state, viewport geometry, projected cross sections, or STL/3MF/VOXL mesh exports. A session AA override can temporarily supply a different percentage without modifying the material.
+
 ## Slicing and printing keys
 
 | Key                                                 | Medium                        | Purpose                                                                |

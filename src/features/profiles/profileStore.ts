@@ -254,6 +254,7 @@ export type MaterialAntiAliasingSettings = {
     tipOffsetMode: 'disabled' | 'auto' | 'manual';
     tipOffsetMm: number;
     tipOffsetDisplayInUi: boolean;
+    supportTipShrinkPercent: number;
 };
 
 export const DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS: MaterialAntiAliasingSettings = {
@@ -286,6 +287,7 @@ export const DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS: MaterialAntiAliasingSettin
     tipOffsetMode: 'disabled',
     tipOffsetMm: 0.05,
     tipOffsetDisplayInUi: false,
+    supportTipShrinkPercent: 10,
 };
 
 const MATERIAL_PROFILE_LOCAL_OVERRIDE_KEYS = new Set<keyof MaterialProfile>([
@@ -405,6 +407,9 @@ function sanitizeMaterialAntiAliasingSettings(input: unknown): MaterialAntiAlias
         tipOffsetMode,
         tipOffsetMm: Number.isFinite(Number(source.tipOffsetMm)) ? Number(source.tipOffsetMm) : defaults.tipOffsetMm,
         tipOffsetDisplayInUi: Boolean(source.tipOffsetDisplayInUi ?? defaults.tipOffsetDisplayInUi),
+        supportTipShrinkPercent: source.supportTipShrinkPercent == null
+            ? defaults.supportTipShrinkPercent
+            : Math.round(clampNumber(source.supportTipShrinkPercent, defaults.supportTipShrinkPercent, 0, 90)),
     };
 }
 

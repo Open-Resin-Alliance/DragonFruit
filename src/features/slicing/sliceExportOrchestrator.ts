@@ -1,4 +1,4 @@
-import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profileStore';
+import { DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS, type MaterialProfile, type PrinterProfile } from '@/features/profiles/profileStore';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { buildSolidSliceMeshForWasm } from './rasterLayerZipExport';
 import { attachJobMetadataPayloads, getJobMetadataPayloadDeclarations } from './jobMetadataPayloads';
@@ -168,6 +168,7 @@ export type SliceExportOrchestratorOptions = {
     outputPath?: string | null;
     antiAliasingLevel?: AntiAliasingLevel;
     antiAliasingMode?: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage';
+    supportTipShrinkPercent?: number;
     blurBrushRadiusPx?: number;
     blurBrushKernel?: 'box' | 'gaussian';
     blurBrushSigma?: number;
@@ -609,6 +610,17 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         modifiedModelCount: preparedModelsForOutput.modifiedModelCount,
         modifierBakeMs,
     });
+    const requestedTipShrinkPercent = options.supportTipShrinkPercent
+        ?? options.materialProfile.antiAliasingSettings?.supportTipShrinkPercent
+        ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportTipShrinkPercent;
+    const supportTipShrinkPercent = (
+        (options.antiAliasingMode === 'Vertical2' || options.antiAliasingMode === '3DAA')
+        && (options.antiAliasingLevel ?? 'Off') !== 'Off'
+    ) ? Math.round(Math.max(0, Math.min(90,
+        Number.isFinite(requestedTipShrinkPercent)
+            ? requestedTipShrinkPercent
+            : DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportTipShrinkPercent,
+    ))) : 0;
     const meshPrepStartMs = performance.now();
     let solidMesh: Awaited<ReturnType<typeof buildSolidSliceMeshForWasm>>;
     try {
@@ -635,6 +647,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
             printerProfile: options.printerProfile,
             materialProfile: options.materialProfile,
             filenameBase: options.filenameBase,
+            supportTipShrinkPercent,
             flushBinaryMeshChunk: meshTransferMode === 'streamed'
                 ? handleMeshChunk
                 : meshTransferMode === 'file-backed'
