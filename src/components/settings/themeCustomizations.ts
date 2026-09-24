@@ -139,7 +139,10 @@ export const DRAGONFRUIT_LIGHT_THEME_COLORS: ThemeCustomColors = {
   meshSelectionColor: DEFAULT_ACCENT,
   meshHoverColor: DEFAULT_ACCENT,
   danger: '#c9302c',
-  success: '#2eb67d',
+  // Darkened for light surfaces the same way danger is: the dark palettes'
+  // #2eb67d only reaches 1.3:1 on these ones, which is unreadable as an icon or
+  // status label.
+  success: '#146b46',
 };
 
 // Two sponsor themes; the preset id is ours, as are the tones noted here.
