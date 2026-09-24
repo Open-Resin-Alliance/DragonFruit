@@ -25,11 +25,24 @@ import type { AttachmentKind, CandidatePoint, AutoPlaceResult, AutoPlaceStatus, 
 import { isLedgerKind } from './types';
 import type { Branch, Segment, SupportState, SupportOrigin, Vec3 } from '../types';
 import type { AutoSupportSettings } from './settings';
+import type { AutoPlaceTimings } from './types';
 import { normalizeAutoSupportSettings } from './settings';
 import { activeSizingBand } from './parameterSizing';
 import { generateCandidates, deduplicateCandidates } from './candidateGeneration';
 import { generateGridCandidates, shouldUseDensityGrid } from './gridPlacement';
 import { computeStabilizationAnchors } from './stabilization';
+import {
+    isSlenderPart,
+    measurePoseStability,
+    needsToppleCoverage,
+    posedPositions,
+    STEEP_FLAT_ANCHOR_MIN_AREA_MM2,
+    steepFlatNeedsCoverage,
+} from './poseStability';
+import { getRaftSettingsForModel } from '../Rafts/Crenelated/RaftState';
+import { perfEndFrame, perfMark, perfMeasure, type PerfFrame } from '../PlacementLogic/Pathfinding/pathfindingPerf';
+import { getOrCreateSDFCache } from '../PlacementLogic/Pathfinding/SDFCachePool';
+import { getRouterStats, resetRouterStats } from '../PlacementLogicV3/SmartPlacementV3';
 import {
     MAX_GAP_FILL_PASSES,
     buildGapFillCandidates,
@@ -41,6 +54,16 @@ import { sizeParameters, presetForArea } from './parameterSizing';
 import type { ModelSizingContext } from './parameterSizing';
 import { getSettings } from '../Settings/state';
 import { memberDepartureAngleFromVerticalDeg } from '../PlacementLogic/smartPlacementSearchUtils';
+
+/**
+ * Steepest lean from vertical a contact's rendered cone may take. Past this the
+ * cone lies within 15° of flat: it pushes the model sideways rather than holding
+ * it up, and it reads as a near-horizontal whisker off the model.
+ */
+import {
+    isSideWallContact,
+    MAX_SIDE_WALL_CONTACT_LEAN_DEG,
+} from '../PlacementLogic/ConeAxisPolicy';
 import { DEFAULT_GRID_MIN_BRANCH_ANGLE_DEG } from '../Settings/defaults';
 import { cloneSupportState, getSnapshot, setSnapshot } from '../state';
 import { draftAddEntity, draftAddPrimitive, draftCommitSupport } from './supportDraft';
@@ -710,6 +733,139 @@ export function buildConsolidationBranch(args: {
 // ---------------------------------------------------------------------------
 
 /**
+ * Phase labels for the run's own timing breakdown. The `auto:` prefix keeps
+ * them apart from the inner placement measurements the perf module already
+ * collects, so one frame carries both the coarse breakdown and the detail.
+ */
+const TIMING_PREFIX = 'auto:';
+
+/** Start timing one of the run's phases. */
+function timingStart(phase: string): void {
+    perfMark(TIMING_PREFIX + phase);
+}
+
+/** End timing one of the run's phases. */
+function timingEnd(phase: string): void {
+    perfMeasure(TIMING_PREFIX + phase, TIMING_PREFIX + phase);
+}
+
+const round1 = (value: number): number => Math.round(value * 10) / 10;
+
+/** 1234567 -> "1.2M", 45000 -> "45k". */
+const compactCount = (value: number): string => (
+    value >= 1e6 ? `${(value / 1e6).toFixed(1)}M` : value >= 1e3 ? `${(value / 1e3).toFixed(0)}k` : String(value)
+);
+
+/**
+ * Turn the perf frame into the run's timing summary. Coarse phases keep their
+ * order; the inner labels are summed and sorted by cost, because the question
+ * they answer is "what should I look at first".
+ */
+function collectTimings(frame: PerfFrame | null): AutoPlaceTimings | null {
+    if (!frame) return null;
+
+    const phases: AutoPlaceTimings['phases'] = [];
+    const detailTotals = new Map<string, { durationMs: number; calls: number }>();
+    for (const phase of frame.phases) {
+        if (phase.label.startsWith(TIMING_PREFIX)) {
+            phases.push({ label: phase.label.slice(TIMING_PREFIX.length), durationMs: round1(phase.durationMs) });
+            continue;
+        }
+        const entry = detailTotals.get(phase.label) ?? { durationMs: 0, calls: 0 };
+        entry.durationMs += phase.durationMs;
+        entry.calls += 1;
+        detailTotals.set(phase.label, entry);
+    }
+
+    return {
+        totalMs: round1(frame.totalMs),
+        phases,
+        detail: [...detailTotals]
+            .map(([label, entry]) => ({ label, durationMs: round1(entry.durationMs), calls: entry.calls }))
+            .sort((a, b) => b.durationMs - a.durationMs),
+        // Inner operations only. The coarse phases are tens to hundreds of
+        // milliseconds by nature and would every one of them trip the perf
+        // module's default threshold, which is a spike detector for the inner
+        // work; the summary line is their report.
+        spikes: frame.spikes
+            .filter((spike) => !spike.phase.startsWith(TIMING_PREFIX))
+            .map((spike) => ({
+                label: spike.phase,
+                durationMs: round1(spike.durationMs),
+                thresholdMs: spike.thresholdMs,
+            })),
+    };
+}
+
+/**
+ * One line per run, plus a detail line when the perf module measured anything
+ * inside it. Greppable as `[AutoSupport] Timing:` in `dragonfruit.log`.
+ *
+ * Exported because the worker's own logs do not reach the log bridge: the client
+ * prints the timing the worker returned, with this same formatter.
+ */
+export function logAutoPlaceTimings(timings: AutoPlaceTimings | null | undefined): void {
+    if (!timings) return;
+    const phases = timings.phases
+        .map((phase) => `${phase.label} ${phase.durationMs.toFixed(0)}ms`)
+        .join(' · ');
+    console.log(LOG_PREFIX, `Timing: ${timings.totalMs.toFixed(0)}ms total — ${phases}`);
+
+    if (timings.detail.length > 0) {
+        const detail = timings.detail
+            .slice(0, 8)
+            .map((entry) => `${entry.label} ${entry.durationMs.toFixed(0)}ms/${entry.calls}x`)
+            .join(' · ');
+        console.log(LOG_PREFIX, `Timing detail: ${detail}`);
+    }
+    if (timings.router) {
+        const router = timings.router;
+        const per = (value: number) => (value / Math.max(1, router.placements)).toFixed(1);
+        console.log(LOG_PREFIX,
+            `Timing router: ${router.placements} placements · per placement ` +
+            `${per(router.conesTested)} cones (${per(router.coneGates)} gated) · ` +
+            `${per(router.jointSearches)} joint searches (${per(router.jointProbes)} probes) · ` +
+            `${per(router.rootsChecks)} roots checks (${per(router.rootsSamples)} samples) · ` +
+            `${per(router.baseCandidates)} base candidates` +
+            (Object.keys(router.jointOutcomes).length > 0
+                ? ` — joint searches: ${Object.entries(router.jointOutcomes)
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([outcome, count]) => `${outcome} ${count}`)
+                    .join(' · ')}`
+                : '') +
+            (router.foundProbeBuckets.some((count) => count > 0)
+                ? ` — found within: ${router.foundProbeBuckets
+                    .map((count, index) => (count > 0 ? `≤${64 << index} probes ${count}` : null))
+                    .filter(Boolean)
+                    .join(' · ')}` +
+                (router.maxFoundProbes > 0 ? ` (worst success ${router.maxFoundProbes} probes)` : '')
+                : ''));
+    }
+    if (timings.sdf) {
+        console.log(LOG_PREFIX,
+            `Timing field: ${compactCount(timings.sdf.cellReads)} cell reads · ` +
+            `${compactCount(timings.sdf.bvhQueries)} BVH queries · ` +
+            `${compactCount(timings.sdf.cachedCells)} cells cached` +
+            (timings.sdf.store ? ` (${timings.sdf.store})` : ''));
+    }
+    if (timings.spikes.length > 0) {
+        // Summarized, not listed: a big model produces hundreds of these and the
+        // list buries the lines above it. The distribution is the signal.
+        const worst = timings.spikes.reduce((a, b) => (b.durationMs > a.durationMs ? b : a));
+        const durations = timings.spikes.map((spike) => spike.durationMs).sort((a, b) => a - b);
+        const median = durations[Math.floor(durations.length / 2)];
+        const top = [...timings.spikes]
+            .sort((a, b) => b.durationMs - a.durationMs)
+            .slice(0, 5)
+            .map((spike) => `${spike.label} ${spike.durationMs.toFixed(0)}ms`);
+        console.warn(LOG_PREFIX,
+            `Timing spikes: ${timings.spikes.length} over threshold — worst ${worst.label} ` +
+            `${worst.durationMs.toFixed(0)}ms (threshold ${worst.thresholdMs}ms), median ${median.toFixed(0)}ms · ` +
+            `top: ${top.join(' · ')}`);
+    }
+}
+
+/**
  * Run a single candidate through the standard placement pipeline:
  * resolve surface normal → buildTrunkData → decideGridPlacement → commit.
  *
@@ -727,11 +883,11 @@ function placeOneCandidate(
     draft: SupportState,
     _settingsOverride: Partial<AutoSupportSettings> | undefined,
     gridHostIds?: ReadonlySet<string>,
+    mesh?: THREE.Mesh,
 ): { kind: PlacementOutcomeKind; draft: SupportState; rejectedReason?: RejectReason; preset?: 'detail' | 'structure' | 'anchor'; entityId?: string; stickCount?: number; fanRefusal?: FanLeafRefusal; mergeRefusal?: 'noHost' | 'rejected'; cavityFanRefusal?: string } {
     const supportSettings = getSettings();
     const snapshot = draft;
     let d = draft;
-    const mesh = getModelMesh(candidate.modelId) ?? undefined;
 
     // Grid points carry the region's exact surface position and normal (from
     // the classifier's own triangles, world space). Re-resolving via a
@@ -746,6 +902,13 @@ function placeOneCandidate(
     // Determine preset band for analytics + empirical sizing.
     const area = candidate.islandAreaMm2;
     const preset = presetForArea(area);
+
+    // The fan pool is a walk of every host segment with its 10 samples, and
+    // this function asks for it up to three times (island fan, overhang fan,
+    // cavity fan) against an unchanged draft. Build it once, lazily — each
+    // attempt returns as soon as it succeeds, so nothing mutates in between.
+    let fanPool: FanShaftPoint[] | null = null;
+    const fanShaftPoints = (): FanShaftPoint[] => (fanPool ??= collectFanShaftPoints(draft));
 
     // ── Gridless merge check ──────────────────────────────────────
     // Density-grid points force standalone trunks (a flat region needs
@@ -762,7 +925,7 @@ function placeOneCandidate(
         if (candidate.gridPoint && candidate.source === 'overhang' && gridHostIds
             && !candidate.id.startsWith('grid-')) {
             const auto = supportSettings.autoSupport ?? {};
-            const islandPool = collectFanShaftPoints(draft)
+            const islandPool = fanShaftPoints()
                 .filter((sp) => !gridHostIds.has(sp.hostId));
             if (islandPool.length > 0) {
                 const fan = fanLeafToHost(
@@ -798,7 +961,7 @@ function placeOneCandidate(
             const fan = fanLeafToHost(
                 tipPos,
                 candidate.modelId,
-                collectFanShaftPoints(draft),
+                fanShaftPoints(),
                 gridHostIds,
                 `auto-fan-${candidate.id}`,
                 Math.max(MIN_LEAF_FAN_RADIUS_MM, auto.leafFanRadiusMm ?? LEAF_FAN_RADIUS_MM),
@@ -1054,7 +1217,7 @@ function placeOneCandidate(
                 const fan = fanLeafToHost(
                     tipPos,
                     candidate.modelId,
-                    collectFanShaftPoints(draft),
+                    fanShaftPoints(),
                     gridHostIds ?? new Set<string>(),
                     `auto-cavity-fan-${candidate.id}`,
                     // The widest search in the pipeline, and the same for a grid
@@ -1130,18 +1293,20 @@ function placeOneCandidate(
     // Side-wall guard at placement time: do not build a trunk whose contact
     // points sideways. Previously this was a post-resize cull that orphaned
     // leaves; rejecting at placement prevents the trunk and its leaves from
-    // ever being created. Applies to all sources — even minima side-walls at
-    // 80.8° are now kept (threshold 85°) while true 90° horizontal cones are
-    // rejected.
+    // ever being created.
+    //
+    // Measured on the cone the contact will render, not on the raw normal, and
+    // held to one bound: a cone leaning past 75° from vertical lies within 15°
+    // of flat, which is the "near-horizontal cone" this refuses. Minima used to
+    // get 85° and kept contacts at 80.8° whose cones render sideways; under
+    // `adaptive` those same contacts now measure ~69° (the policy tilts the axis
+    // toward the plate) and stay.
     {
         const n = trunkResult.trunk.contactCone?.normal ?? trunkResult.trunk.contactCone?.surfaceNormal;
         if (n) {
-            const hz = Math.hypot(n.x, n.y);
-            const angleDeg = (Math.atan2(hz, Math.max(0.001, Math.abs(n.z))) * 180) / Math.PI;
-            const isMinima = candidate.source === 'minima' || candidate.source === 'intersection';
-            const threshold = isMinima ? 85 : 75;
-            if (angleDeg > threshold) {
-                logPlacement(`Rejected ${candidate.id}: side-wall trunk too shallow ${angleDeg.toFixed(1)}° > ${threshold}°`);
+            const settings = getSettings();
+            if (isSideWallContact(n, settings.tip.coneAngleMode ?? 'normal', settings.tip.adaptiveConeAngleOffsetDeg)) {
+                logPlacement(`Rejected ${candidate.id}: side-wall trunk too shallow (cone within ${90 - MAX_SIDE_WALL_CONTACT_LEAN_DEG}° of flat)`);
                 return { kind: 'reject', rejectedReason: 'trunk_build_error', preset, draft: d };
             }
         }
@@ -2424,12 +2589,17 @@ export function forestReportToText(report: ForestReport): string {
     return lines.join('\n');
 }
 
+/** Progress the pipeline reports while it runs; see `computeAutoSupportPlan`. */
+export type AutoPlaceProgress = { phase: string; done: number; total: number };
+export type AutoPlaceProgressCallback = (progress: AutoPlaceProgress) => void;
+
 export function computeAutoSupportPlan(
     islands: DetectedIsland[],
     modelId: string,
     settingsOverride?: Partial<AutoSupportSettings>,
     baseState?: SupportState,
     mesh?: THREE.Mesh,
+    onProgress?: AutoPlaceProgressCallback,
 ): AutoSupportPlan | null {
     // ------------------------------------------------------------------
     // 0. Settings
@@ -2471,9 +2641,59 @@ export function computeAutoSupportPlan(
     // 1. Generate candidates
     // ------------------------------------------------------------------
 
-    console.log(LOG_PREFIX, `Input: ${islands.length} islands from scan`);
+    // Does this pose need anti-topple contact at all? The same rule the
+    // stabilization anchors use: no bearing polygon, the mass outside the base,
+    // or an adhesion ratio below the conservative p/sigma. A part that stands
+    // on a wide patch with its centroid well inside it does not need contact on
+    // a self-supporting wall just because the wall is steep, and covering it
+    // anyway is how a squat cylinder came back wrapped in a support forest.
+    // A raft under the part changes what the contact IS, so the report has to
+    // know: with one, the patch is the model's XY shadow rather than the 2mm
+    // cap on its own bottom, which is the cap whose centre wanders with the
+    // tilt and flips the verdict on a fraction of a degree.
+    const hasRaft = getRaftSettingsForModel(modelId).bottomMode !== 'off';
+    const poseStability = resolvedMesh
+        ? measurePoseStability(
+              posedPositions(resolvedMesh),
+              resolvedMesh.geometry.index?.array ?? null,
+              0,
+              0,
+              undefined,
+              hasRaft,
+          )
+        : null;
+    const toppleCoverageNeeded = poseStability === null || needsToppleCoverage(poseStability);
+    const islandsToCover = islands.filter(
+        (i) =>
+            !i.steepFlat ||
+            steepFlatNeedsCoverage(i.surfaceAreaMm2, toppleCoverageNeeded),
+    );
+    // A wall sways under the peel's lateral load while it prints, and a contact
+    // only stops the sway at its own height, so a slender part's anchoring
+    // ladder climbs its face instead of sitting in a band at the bottom.
+    const slenderPart = poseStability ? isSlenderPart(poseStability) : false;
+    if (slenderPart) {
+        console.log(LOG_PREFIX,
+            `Slender part (${poseStability?.slenderness.toFixed(1)}x taller than thick, ` +
+            `${poseStability?.thicknessMm.toFixed(1)}mm thick) — anchoring contacts ladder up ` +
+            `steep flats instead of banding low, spaced no wider than the thickness`);
+    }
+    const steepFlats = islands.filter((i) => i.steepFlat).length;
+    const dropped = steepFlats - islandsToCover.filter((i) => i.steepFlat).length;
+    if (dropped > 0) {
+        console.log(LOG_PREFIX,
+            `Topple coverage not needed — ${dropped} of ${steepFlats} steep flats left uncovered ` +
+            `(adhesion ${poseStability?.adhesionRatio.toFixed(3)}, ` +
+            `centroid depth ${poseStability?.centroidDepthMm.toFixed(2)}mm, ` +
+            `bearing ${poseStability?.bearingAreaMm2.toFixed(1)}mm²; ` +
+            `any flat at least ${STEEP_FLAT_ANCHOR_MIN_AREA_MM2.toFixed(0)}mm² keeps its anchoring contacts)`);
+    }
 
-    let candidates = generateCandidates(islands, autoSettings, { mesh: resolvedMesh, modelId });
+    console.log(LOG_PREFIX, `Input: ${islands.length} islands from scan`);
+    resetRouterStats();
+    timingStart('candidates');
+
+    let candidates = generateCandidates(islandsToCover, autoSettings, { mesh: resolvedMesh, modelId });
     candidates = candidates.map((c): CandidatePoint => ({ ...c, modelId }));
 
     // Stabilization pass: when the oriented mesh bears on a point or edge,
@@ -2482,7 +2702,7 @@ export function computeAutoSupportPlan(
     // they never fan/merge onto a nearby host (the source gates that below).
     let stabilizationAnchors = 0;
     if (autoSettings.stabilizationEnabled !== false && resolvedMesh) {
-        const anchors = computeStabilizationAnchors(resolvedMesh);
+        const anchors = computeStabilizationAnchors(resolvedMesh, { hasRaft });
         if (anchors.length > 0) {
             const stabilizationCandidates: CandidatePoint[] = anchors.map((a, i) => ({
                 id: `stab-${i}`,
@@ -2505,12 +2725,19 @@ export function computeAutoSupportPlan(
     // only, small patches stay on the single-candidate path below. A
     // generation failure must not kill the whole run — fall back to the
     // region's single candidate.
-    const overhangIslands = islands.filter((i) => i.source === 'overhang');
+    const overhangIslands = islandsToCover.filter((i) => i.source === 'overhang');
     const eligible = overhangIslands.filter((i) => shouldUseDensityGrid(i, autoSettings));
     if (eligible.length > 0) {
         let generated: CandidatePoint[] = [];
         try {
-            generated = generateGridCandidates(eligible, autoSettings, resolvedMesh, modelId)
+            generated = generateGridCandidates(
+                eligible,
+                autoSettings,
+                resolvedMesh,
+                modelId,
+                slenderPart,
+                poseStability?.thicknessMm ?? 0,
+            )
                 .map((c): CandidatePoint => ({ ...c, modelId }));
         } catch (e) {
             console.error(LOG_PREFIX,
@@ -2535,6 +2762,8 @@ export function computeAutoSupportPlan(
         return noopPlan(makeResult(emptyPlacedCounts(), 0, false, 'no-candidates'));
     }
 
+    timingEnd('candidates');
+    timingStart('dedup');
     // ------------------------------------------------------------------
     // 2. Deduplicate
     // ------------------------------------------------------------------
@@ -2555,6 +2784,8 @@ export function computeAutoSupportPlan(
     // 2b. Filter out already-supported positions
     // ------------------------------------------------------------------
 
+    timingEnd('dedup');
+    timingStart('support-filter');
     const beforeSupportFilter = candidates.length;
     candidates = filterAlreadySupported(candidates, draft);
     const filteredCandidates = candidates.length;
@@ -2637,9 +2868,12 @@ export function computeAutoSupportPlan(
     // Per-candidate placement, shared by the main pass and the coverage
     // convergence (gap-fill) passes. Each placement advances the local draft
     // (no store commit) so later candidates see earlier supports.
+    timingEnd('support-filter');
+    timingStart('placement');
+
     const placeOne = (candidate: CandidatePoint): string => {
         try {
-            const result = placeOneCandidate(candidate, draft, settingsOverride, gridHostIds);
+            const result = placeOneCandidate(candidate, draft, settingsOverride, gridHostIds, resolvedMesh);
             draft = result.draft;
             // A fan host is a type whose shaft the pool offers, which is what
             // `canBeGridHost` declares. Recorded so later candidates fan to a
@@ -2715,9 +2949,22 @@ export function computeAutoSupportPlan(
         }
     };
 
+    // The placement pass is most of a run's wall clock, so it is what the
+    // modal's progress bar follows. Reported in batches: one postMessage per
+    // candidate would cost more than the placement does.
+    let placementIndex = 0;
+    const placementTotal = candidates.length;
     for (const candidate of candidates) {
+        if (onProgress !== undefined
+            && (placementIndex % 16 === 0 || placementIndex + 1 === placementTotal)) {
+            onProgress({ phase: 'Placing supports', done: placementIndex + 1, total: placementTotal });
+        }
+        placementIndex++;
         placeOne(candidate);
     }
+
+    timingEnd('placement');
+    timingStart('consolidation');
 
     // ── Overhang→tree consolidation (order-independent) ──────────────
     // A BARE overhang-origin trunk (organic Poisson, coverage fill,
@@ -2737,6 +2984,12 @@ export function computeAutoSupportPlan(
     let consolidated = 0;
     for (let pass = 0; pass < 3; pass++) {
         let convertedThisPass = 0;
+        // One pool per pass, maintained as pillars convert. A conversion
+        // deletes the pillar it replaces, and `collectFanShaftPoints` walks
+        // every host segment with its 10 samples — rebuilding that per host
+        // made this loop O(n²) with an allocation per sample. The pool only
+        // ever loses the host being converted, so filter it out instead.
+        let pool = collectFanShaftPoints(draft);
         for (const { hostTypeId, hostId, entity } of collectHostEntities(draft)) {
             // Only this model's hosts are ours to convert (and to delete --
             // the conversion replaces the pillar with a leaf of ours).
@@ -2765,12 +3018,15 @@ export function computeAutoSupportPlan(
             };
             delete (pruned[hostKey] as unknown as Record<string, unknown>)[hostId];
             delete pruned.roots[entity.rootId ?? ''];
-            const pool = collectFanShaftPoints(pruned);
-            if (pool.length === 0) break;
+            // The maintained pool already excludes every host converted
+            // earlier this pass; this iteration's pillar is the only other
+            // one that must not be offered as its own host.
+            const hostPool = pool.filter((sp) => sp.hostId !== hostId);
+            if (hostPool.length === 0) break;
             const fan = fanLeafToHost(
                 tip,
                 modelId,
-                pool,
+                hostPool,
                 new Set(),
                 `auto-con-${hostId}-p${pass}`,
                 conFanRadiusMm,
@@ -2797,7 +3053,7 @@ export function computeAutoSupportPlan(
                         tip,
                         tipNormal,
                         modelId,
-                        pool,
+                        pool: hostPool,
                         pruned,
                         mesh: resolvedMesh ?? undefined,
                         radiusMm: conFanRadiusMm,
@@ -2807,6 +3063,7 @@ export function computeAutoSupportPlan(
                     : null;
                 if (branchResult) {
                     draft = branchResult.draft;
+                    pool = hostPool;
                     gridHostIds.delete(hostId);
                     const origin = originKind ?? 'standalone';
                     diagnostics.hostsByKind[origin]--;
@@ -2827,6 +3084,7 @@ export function computeAutoSupportPlan(
                 continue;
             }
             draft = fan.draft;
+            pool = hostPool;
             gridHostIds.delete(hostId);
             const origin = originKind ?? 'standalone';
             diagnostics.hostsByKind[origin]--;
@@ -2860,6 +3118,9 @@ export function computeAutoSupportPlan(
         `| fan refusals: ${fmtRefusals(diagnostics.fanRefusals)} | merge refusals: ${fmtRefusals(diagnostics.mergeRefusals)} ` +
         `| consolidation refusals: ${fmtRefusals(conRefusals)}`);
 
+    timingEnd('consolidation');
+    timingStart('gap-fill');
+
     // ── Coverage convergence (gap-fill) ─────────────────────────────
     // Footprint-aware: an overhang region is covered when its projected
     // footprint is covered by tips, not just its centroid. Under-covered
@@ -2868,6 +3129,11 @@ export function computeAutoSupportPlan(
     // iterating until the coverage target is met or nothing more places.
     let gapFilledTrunks = 0;
     for (let pass = 0; pass < MAX_GAP_FILL_PASSES; pass++) {
+        // Reads the committed store, not the draft: the run's own supports are
+        // not counted here. Left as-is deliberately (a worker seeds the store
+        // with the pre-run state so it matches the main thread); switching to
+        // `draft` converges properly and moves placement by one twig on the
+        // signature fixture. See docs/dev/backlog.md.
         const tips = collectSupportTips(getSnapshot());
         const gapCandidates = buildGapFillCandidates(overhangIslands, autoSettings, tips)
             .map((c): CandidatePoint => ({ ...c, modelId }));
@@ -2887,6 +3153,9 @@ export function computeAutoSupportPlan(
     console.log(LOG_PREFIX,
         `Step 3/3: ${SUPPORT_TYPES.map((d) => `${placed[d.id]}${typeWord(d.id).charAt(0)}`).join(' ')} — ${rejectedCount} rejected ` +
         `| presets: detail=${presets.detail} structure=${presets.structure} anchor=${presets.anchor}`);
+
+    timingEnd('gap-fill');
+    timingStart('analytics');
 
     // ── Coverage analytics ────────────────────────────────────────
     const snapshot = draft;
@@ -2984,6 +3253,9 @@ export function computeAutoSupportPlan(
         `Coverage: ${analytics.islandsCovered}/${islands.length} islands (${(analytics.areaCoverage * 100).toFixed(0)}% of area). ` +
         `${analytics.islandsUncovered} islands uncovered.`);
 
+    timingEnd('analytics');
+    timingStart('fanning');
+
     // ── Post-placement leaf fanning (iterative convergence) ──────────
     const fanRadiusMm = Math.max(MIN_LEAF_FAN_RADIUS_MM, autoSettings.leafFanRadiusMm ?? LEAF_FAN_RADIUS_MM);
     const fanMaxAngleDeg = Math.min(
@@ -3071,6 +3343,9 @@ export function computeAutoSupportPlan(
             break;
         }
     }
+
+    timingEnd('fanning');
+    timingStart('surface-coverage');
 
     // ── Overhang surface coverage ──────────────────────────────────
     // Large flat overhangs need more than one support to distribute
@@ -3229,6 +3504,9 @@ export function computeAutoSupportPlan(
 
     const changed = Object.values(placed).some((count) => count > 0);
 
+    timingEnd('surface-coverage');
+    timingStart('resize');
+
     // ------------------------------------------------------------------
     // 4. Forest resize pass — re-derive every trunk's stepwise diameter
     //    profile from its final attachment tree (a trunk carrying four
@@ -3282,7 +3560,7 @@ export function computeAutoSupportPlan(
                                 priority: 0,
                             };
                             try {
-                                const result = placeOneCandidate(recandidate, draft, undefined, gridHostIds);
+                                const result = placeOneCandidate(recandidate, draft, undefined, gridHostIds, resolvedMesh);
                                 draft = result.draft;
                                 if (result.kind === 'reject') rejectedCount++;
                                 else placed[result.kind]++;
@@ -3336,6 +3614,9 @@ export function computeAutoSupportPlan(
                 console.log(LOG_PREFIX, 'Contact cone sync: matched cone bodies to their host shafts.');
             }
 
+            timingEnd('resize');
+            timingStart('report');
+
             // ── Forest Report ───────────────────────────────────────
             // Structured per-run summary: every placed support's id, size,
             // and sizing reasoning, plus the fan-out groups. Shown in the
@@ -3384,6 +3665,9 @@ export function computeAutoSupportPlan(
         }
     }
 
+    timingEnd('report');
+    timingStart('bracing');
+
     // ------------------------------------------------------------------
     // 5. Auto-bracing (draft-only, folded into the plan)
     // ------------------------------------------------------------------
@@ -3405,6 +3689,26 @@ export function computeAutoSupportPlan(
         console.log(LOG_PREFIX, 'Auto-brace skipped (debug setting).');
     }
 
+    timingEnd('bracing');
+    const timings = collectTimings(perfEndFrame());
+    if (timings) {
+        // The distance field's own counters: the router's probes are most of a
+        // run, and this says how much of that was cached.
+        if (resolvedMesh) {
+            const sdf = getOrCreateSDFCache(resolvedMesh);
+            timings.sdf = {
+                cellReads: sdf.stats.cellReads,
+                bvhQueries: sdf.stats.bvhQueries,
+                cachedCells: sdf.size,
+                store: sdf.store.kind,
+            };
+        }
+        const router = getRouterStats();
+        if (router.placements > 0) timings.router = router;
+        analytics.timings = timings;
+    }
+    logAutoPlaceTimings(timings);
+
     const result: AutoPlaceResult = {
         ...makeResult(placed, rejectedCount, changed, 'placed'),
         analytics,
@@ -3425,16 +3729,12 @@ export function computeAutoSupportPlan(
 }
 
 /**
- * Run auto-support end-to-end: compute the plan, then commit it as ONE
- * atomic store update + ONE undoable history entry (supports + braces +
- * kickstands together).
+ * Commit a computed plan: one store write and one history entry (supports +
+ * braces + kickstands together). Split out so the worker path commits exactly
+ * what the in-process path does, and so a `null` plan (auto-support disabled)
+ * reports the same result either way.
  */
-export function runAutoPlace(
-    islands: DetectedIsland[],
-    modelId: string,
-    settingsOverride?: Partial<AutoSupportSettings>,
-): AutoPlaceResult {
-    const plan = computeAutoSupportPlan(islands, modelId, settingsOverride);
+export function commitAutoPlacePlan(plan: AutoSupportPlan | null): AutoPlaceResult {
     if (!plan) {
         return makeResult(emptyPlacedCounts(), 0, false, 'disabled');
     }
@@ -3458,4 +3758,12 @@ export function runAutoPlace(
     }
 
     return plan.result;
+}
+
+export function runAutoPlace(
+    islands: DetectedIsland[],
+    modelId: string,
+    settingsOverride?: Partial<AutoSupportSettings>,
+): AutoPlaceResult {
+    return commitAutoPlacePlan(computeAutoSupportPlan(islands, modelId, settingsOverride));
 }

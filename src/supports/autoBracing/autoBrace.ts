@@ -323,12 +323,15 @@ function buildGroupPairs(
     const gridCardinalOnly = Boolean(gridSettings?.enabled);
     const axisToleranceMm = Math.max(0.1, (gridSettings?.spacingMm ?? 1) * 0.05);
 
+    // Grid-correlated plan points once per support, not once per pair: this is
+    // the inner call of an O(n²) loop.
+    const points = group.map((s) => getGridCorrelatedPoint(s, gridSettings));
+
     const edges: Edge[] = [];
     for (let i = 0; i < group.length; i++) {
+        const aPoint = points[i];
         for (let j = i + 1; j < group.length; j++) {
-            const a = group[i], b = group[j];
-            const aPoint = getGridCorrelatedPoint(a, gridSettings);
-            const bPoint = getGridCorrelatedPoint(b, gridSettings);
+            const bPoint = points[j];
             const dx = bPoint.x - aPoint.x;
             const dy = bPoint.y - aPoint.y;
 
@@ -340,7 +343,7 @@ function buildGroupPairs(
             // below minSpanMm the two supports are one post: bracing between
             // them is material with no stiffness to show for it
             if (hDist < Math.max(0.001, minSpanMm) || hDist > maxRun) continue;
-            edges.push({ a, b, hDist, angleRad: normalizeAxisAngleRad(Math.atan2(dy, dx)) });
+            edges.push({ a: group[i], b: group[j], hDist, angleRad: normalizeAxisAngleRad(Math.atan2(dy, dx)) });
         }
     }
     edges.sort((x, y) => x.hDist - y.hDist);
@@ -349,21 +352,57 @@ function buildGroupPairs(
     const adjacency = new Map<string, Edge[]>();
     for (const s of group) adjacency.set(s.supportId, []);
 
+    // Incident edges per support, in `edges` order. The two-axis pass below
+    // walks one support's own edges instead of scanning the whole list per
+    // support (O(n·E), and it built a sorted string key for every edge it
+    // looked at) — on a few hundred supports that scan was the run's second
+    // biggest cost.
+    const edgesBySupport = new Map<string, number[]>();
+    for (let ei = 0; ei < edges.length; ei++) {
+        for (const id of [edges[ei].a.supportId, edges[ei].b.supportId]) {
+            const list = edgesBySupport.get(id);
+            if (list) list.push(ei);
+            else edgesBySupport.set(id, [ei]);
+        }
+    }
+    const addedEdges = new Set<number>();
+
+    // Braced neighbours per support, rebuilt only when that support gains an
+    // edge — the redundancy rule needs them for both endpoints of every
+    // candidate edge.
+    const neighbourCache = new Map<string, Set<string>>();
+    const neighboursOf = (id: string): Set<string> => {
+        let set = neighbourCache.get(id);
+        if (!set) {
+            set = new Set<string>();
+            for (const e of adjacency.get(id) ?? []) {
+                set.add(e.a.supportId === id ? e.b.supportId : e.a.supportId);
+            }
+            neighbourCache.set(id, set);
+        }
+        return set;
+    };
+
+    const link = (ei: number): void => {
+        const e = edges[ei];
+        result.push(e);
+        addedEdges.add(ei);
+        adjacency.get(e.a.supportId)!.push(e);
+        adjacency.get(e.b.supportId)!.push(e);
+        neighbourCache.delete(e.a.supportId);
+        neighbourCache.delete(e.b.supportId);
+    };
+
     // 1. Minimum Spanning Tree (MST)
     const parent = new Map<string, string>();
     const find = (id: string): string => (parent.get(id) === id ? id : find(parent.get(id)!));
     for (const s of group) parent.set(s.supportId, s.supportId);
 
-    const addedSet = new Set<string>();
-    const getEdgeId = (e: Edge) => [e.a.supportId, e.b.supportId].sort().join(':');
-
-    for (const e of edges) {
+    for (let ei = 0; ei < edges.length; ei++) {
+        const e = edges[ei];
         if (find(e.a.supportId) !== find(e.b.supportId)) {
-            result.push(e);
-            addedSet.add(getEdgeId(e));
             parent.set(find(e.a.supportId), find(e.b.supportId));
-            adjacency.get(e.a.supportId)!.push(e);
-            adjacency.get(e.b.supportId)!.push(e);
+            link(ei);
         }
     }
 
@@ -384,19 +423,24 @@ function buildGroupPairs(
         if (isQualified()) continue;
 
         // Find nearest best axial fallback
-        let bestCandidate: Edge | null = null;
+        let bestCandidate = -1;
         let bestScore = -1; // Higher is better (closer to 90)
 
-        for (const e of edges) {
-            if (addedSet.has(getEdgeId(e))) continue;
-            const other = e.a.supportId === s.supportId ? e.b : e.b.supportId === s.supportId ? e.a : null;
-            if (!other) continue;
+        const ownNeighbours = neighboursOf(s.supportId);
+        for (const ei of edgesBySupport.get(s.supportId) ?? []) {
+            if (addedEdges.has(ei)) continue;
+            const e = edges[ei];
+            const otherId = e.a.supportId === s.supportId ? e.b.supportId : e.a.supportId;
 
             // Rule: Skip if they already share a braced neighbor to reduce redundancy
-            const nA = adjacency.get(s.supportId)!.map(oe => oe.a.supportId === s.supportId ? oe.b.supportId : oe.a.supportId);
-            const nB = adjacency.get(other.supportId)!.map(oe => oe.a.supportId === other.supportId ? oe.b.supportId : oe.a.supportId);
-            const setA = new Set(nA);
-            if (nB.some(id => setA.has(id))) continue;
+            let sharesNeighbour = false;
+            for (const id of neighboursOf(otherId)) {
+                if (ownNeighbours.has(id)) {
+                    sharesNeighbour = true;
+                    break;
+                }
+            }
+            if (sharesNeighbour) continue;
 
             for (const existing of axes) {
                 const sep = axisSeparationDeg(existing, e.angleRad);
@@ -404,18 +448,13 @@ function buildGroupPairs(
                     const score = 90 - Math.abs(90 - sep);
                     if (score > bestScore) {
                         bestScore = score;
-                        bestCandidate = e;
+                        bestCandidate = ei;
                     }
                 }
             }
         }
 
-        if (bestCandidate) {
-            result.push(bestCandidate);
-            addedSet.add(getEdgeId(bestCandidate));
-            adjacency.get(s.supportId)!.push(bestCandidate);
-            adjacency.get(bestCandidate.a.supportId === s.supportId ? bestCandidate.b.supportId : bestCandidate.a.supportId)!.push(bestCandidate);
-        }
+        if (bestCandidate >= 0) link(bestCandidate);
     }
 
     return result;

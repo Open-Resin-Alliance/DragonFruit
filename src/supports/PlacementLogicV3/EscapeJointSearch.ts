@@ -84,7 +84,17 @@ export interface EscapeJointSearchResult {
     outcome: 'found' | 'no-direction' | 'never-cleared' | 'probe-budget';
 }
 
-/** Hard ceiling on SDF probes for one placement. */
+/**
+ * Hard ceiling on SDF probes for one search.
+ *
+ * It was briefly cut to 600 on the strength of one run's histogram (every
+ * success in the <=512 bucket). The next run of the *same* model reported
+ * `worst success 601 probes`, so that cut clipped a search that would have
+ * found a joint and turned its support into a pillar. The distribution moves
+ * between runs, which means a single run cannot set this: keep the ceiling
+ * clear of the worst success and let `router.maxFoundProbes` report what the
+ * margin actually is, rather than assuming one.
+ */
 const MAX_PROBES = 900;
 
 const DEG = Math.PI / 180;

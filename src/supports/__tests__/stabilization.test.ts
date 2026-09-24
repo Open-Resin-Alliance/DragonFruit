@@ -78,3 +78,31 @@ test('a small part below the bearing minimum is still covered', () => {
     const anchors = computeStabilizationAnchors(mesh);
     assert.deepEqual(anchors, [], 'tiny but flat is stable');
 });
+
+/** A face-down 20mm box plus two collapsed triangles on one vertex 10mm below it. */
+function boxWithStrayVertex(): THREE.Mesh {
+    const base = new THREE.BoxGeometry(20, 20, 20);
+    const positions = Array.from(base.getAttribute('position').array as ArrayLike<number>);
+    // The box's bottom face is at z = -10; the defect sits 10mm under it.
+    const stray = [40, 33.5, -20];
+    for (let i = 0; i < 2; i++) {
+        positions.push(0, 0, 0, ...stray, ...stray);
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    const mesh = new THREE.Mesh(geometry);
+    mesh.updateMatrixWorld(true);
+    return mesh;
+}
+
+test('a stray vertex does not decide where the part touches the plate', () => {
+    // The defect (one vertex 10mm below the model on zero-area faces) must not
+    // define the bearing locus: it used to empty the contact band, declare a
+    // flat base unstable and climb the defect's own edges instead of the base.
+    // A face-down box is stable either way once the defect is ignored.
+    assert.deepEqual(
+        computeStabilizationAnchors(boxWithStrayVertex()),
+        [],
+        'flat base stays stable despite the defect',
+    );
+});

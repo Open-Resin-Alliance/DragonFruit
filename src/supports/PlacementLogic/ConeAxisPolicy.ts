@@ -152,6 +152,52 @@ export function resolveConeAxisPolicy(input: ConeAxisPolicyInput): ConeAxisPolic
 }
 
 /**
+ * How far the cone a contact will actually render leans from vertical, in
+ * degrees: 0 is a cone pointing straight at the plate, 90 one lying flat
+ * sideways.
+ *
+ * Measured on the resolved axis, not on the surface normal, because the policy
+ * can rotate the axis away from the normal — `adaptive` ramps it further out
+ * past 90° and `locked` forces 110/140 — so a guard reading the normal accepts
+ * contacts whose cone renders sideways, and refuses contacts whose cone does not.
+ */
+export function coneAxisLeanFromVerticalDeg(
+    surfaceNormal: Vec3,
+    coneAngleMode: 'normal' | 'locked' | 'adaptive',
+    adaptiveConeAngleOffsetDeg?: number,
+): number {
+    const { coneAxis } = resolveConeAxisPolicy({
+        surfaceNormal,
+        coneAngleMode,
+        adaptiveConeAngleOffsetDeg,
+    });
+    const horizontal = Math.sqrt(coneAxis.x * coneAxis.x + coneAxis.y * coneAxis.y);
+    return (Math.atan2(horizontal, Math.max(0.001, Math.abs(coneAxis.z))) * 180) / Math.PI;
+}
+
+/**
+ * Steepest lean from vertical a contact's rendered cone may take. Past this the
+ * cone lies within 15° of flat: it pushes the model sideways rather than holding
+ * it up, and it reads as a near-horizontal whisker off the model.
+ */
+export const MAX_SIDE_WALL_CONTACT_LEAN_DEG = 75;
+
+/**
+ * Whether a contact's cone renders too close to flat to place on. The contact
+ * disk stays on the surface, so a near-vertical face forces a near-horizontal
+ * cone whichever way the shaft leaves — the member cannot hold the part up, and
+ * the shaft reads as a whisker off the model.
+ */
+export function isSideWallContact(
+    surfaceNormal: Vec3,
+    coneAngleMode: 'normal' | 'locked' | 'adaptive',
+    adaptiveConeAngleOffsetDeg?: number,
+): boolean {
+    return coneAxisLeanFromVerticalDeg(surfaceNormal, coneAngleMode, adaptiveConeAngleOffsetDeg)
+        > MAX_SIDE_WALL_CONTACT_LEAN_DEG;
+}
+
+/**
  * Ensures a cone axis never points upward (positive Z).
  * Projects upward-pointing axes to horizontal with a 5° downward tilt.
  */

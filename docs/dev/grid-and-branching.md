@@ -37,9 +37,10 @@ Grid support logic ensures deterministic trunk ownership and efficient branch re
    node centre, measured to whichever end is nearer, the trunk standing there takes the
    merge (branch or leaf); grid mode never replaces a trunk, and a second pillar beside
    the first is a preview that gets refused rather than a placement. A short graft into
-   a trunk on an occupied node may lean like a socket elbow (≤3mm, ≤75° from vertical) —
-   the bound the rest of the system gives a short member under a contact — because
-   refusing it leaves the tip unplaced with no second pillar to fall back to.
+   a trunk on an occupied node may lean like a socket elbow, because refusing it leaves
+   the tip unplaced with no second pillar to fall back to — but the elbow is no looser
+   than the general short-span allowance (≤3mm, ≤60° from vertical). The 75° it used to
+   grant is what put a near-horizontal member at a junction.
 
 ## Branch support contract
 
@@ -56,6 +57,28 @@ Grid support logic ensures deterministic trunk ownership and efficient branch re
 - This used to be a promote path that tore the host trunk out and rebuilt the node
   around the new contact. The code for it is gone: rehosting dependents onto a
   replacement pillar was more ways to lose supports than the shape it bought.
+
+## Cone direction
+
+A contact's cone is the member's last stretch into the surface, and it is what reads as
+a support or as a whisker:
+
+- **A contact whose cone renders within 15° of flat is refused** (`isSideWallContact`,
+  `MAX_SIDE_WALL_CONTACT_LEAN_DEG` 75°). The contact disk stays on the surface, so a
+  near-vertical face forces a near-horizontal cone whichever way the shaft leaves: the
+  member pushes the model sideways instead of holding it up. The guard measures the
+  **rendered axis** (`coneAxisLeanFromVerticalDeg`), not the surface normal, because the
+  cone policy rotates one away from the other — under `adaptive` a contact on an 80.8°
+  face measures 55° and stays, while under `normal` the same contact measures 80.8° and
+  is refused. The 85° exemption minima used to get is gone.
+- **The branch cone search prefers a steeper cone over a nearer one.** Scored on socket
+  proximity alone it took the flattest candidate that cleared the mesh — measured at
+  89.4° from vertical on a blocked 80° overhang, a cone 0.6° off lying flat, with the
+  shaft bending into it at the socket. It now takes the steepest that clears (71.6° on
+  the same fixture) and falls back to a flat one only when nothing steeper clears, which
+  is what "if possible" means for a contact in a pocket.
+- Cone axis policy (mode, the 30° clamp, the downward clamp) is in
+  [Support Pathfinding V3](support-pathfinding-v3.md#cone-axis-policy).
 
 ## Known risk areas
 

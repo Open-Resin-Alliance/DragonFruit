@@ -13,6 +13,7 @@ import type {
 import { getBuiltinComplexPluginDefinitions } from '@/features/plugins/builtinComplexPlugins';
 import { BUILTIN_SIMPLE_PLUGIN_MANIFESTS } from '@/features/plugins/builtinSimplePlugins';
 import { normalizeOutputFormat, normalizeFormatVersion, normalizeSettingsMode, normalizeWebcamRotationDeg, DEFAULT_WEBCAM_ROTATION_DEG } from '@/features/profiles/outputFormatUtils';
+import { hasWindow } from '@/utils/dom';
 
 export type PluginSource = 'builtin' | 'github';
 export type PluginInstallTrust = 'allowlisted' | 'unverified-user-approved';
@@ -244,7 +245,7 @@ const MAX_MATERIAL_TEMPLATES = 512;
 const MAX_MATERIAL_PRESETS = 2048;
 
 function shouldUseBundledAssetPaths(): boolean {
-  if (typeof window === 'undefined') return false;
+  if (!hasWindow()) return false;
   if (process.env.NODE_ENV !== 'production') return false;
   const protocol = window.location?.protocol ?? '';
   const hostname = window.location?.hostname ?? '';
@@ -669,7 +670,7 @@ function sanitizeInstalledPlugin(input: unknown): InstalledProfilePlugin | null 
 }
 
 function save() {
-  if (typeof window === 'undefined') return;
+  if (!hasWindow()) return;
   try {
     const envelope: PersistedPluginEnvelope = {
       version: STORAGE_VERSION,
@@ -684,7 +685,7 @@ function save() {
 export function hydratePluginRegistry() {
   if (hydrated) return;
   hydrated = true;
-  if (typeof window === 'undefined') return;
+  if (!hasWindow()) return;
 
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);

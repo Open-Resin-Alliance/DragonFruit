@@ -72,6 +72,45 @@ cheap geometric proxies computed once per candidate:
 All terms are weighted; weights start calibrated, exposed as advanced
 sliders later only if the calibration proves insufficient.
 
+### Pose stability, and why the plate contact is not an overhang
+
+The sweep ranks by support contact. Two things it was getting wrong, and both
+showed up as a cube coming back oriented onto a corner:
+
+- **The plate contact was double-charged.** A face-down cube's base is
+  down-facing area, so it counted as overhang *and* as a cup — 300 mm² for a
+  pose needing the least support of any — while a corner-down pose keeps every
+  face just above the self-support angle and scored 0. The search was therefore
+  paid to balance parts on a corner, which is exactly the pose the
+  stabilization pass then has to patch. The base stays charged as overhang,
+  scar and blocked contact: the app auto-lifts models off the plate by a few
+  millimetres, so that face really does need supports bridging the gap (the
+  island scan reports it — a face-down cube: one overhang region, its base).
+  What it is not is a suction cup: resin flows under a sparse support forest,
+  and there is no enclosed pocket to trap it. `measurePoseStability` reports
+  the down-facing area inside the 2 mm contact band and `netSupportAreas`
+  subtracts it from the **cup** term only.
+- **Nothing scored whether the pose could stand at all.** `stabilityWeight`
+  (default 1, `AdvisorOptions`) charges an unstable pose its whole footprint —
+  the contact the stabilization pass would otherwise have to manufacture.
+  Unstable is the constant-free part of the report: no bearing polygon (a point
+  or edge contact), or the volume centroid outside the base. Finite on purpose,
+  so the search still returns the least bad pose when every candidate is
+  unstable, and `stabilityWeight: 0` restores ranking on contact area alone.
+
+`measurePoseStability` is the same model `compute_stability_report`
+(`src-tauri/src/overhang.rs`) logs for the placed pose — driving moment
+`Σ A·(n_xy·u)·z` about a bearing-hull edge, restoring `ρg·V·d_e` and
+`σ·A_contact·d̄_e` — reported as geometry so the two constants stay in the
+report. The implementations are separate on purpose: the report is Rust, on the
+posed mesh the scan already holds, and the advisor is a synchronous pure
+function over triangle soup that must stay testable without IPC. They are
+pinned to the same closed-form fixtures — a flat 10 mm cube reads
+`bearing 100 mm² over 4 edges, depth 5` on both sides. `OrientationCost`
+carries the terms (`bearingAreaMm2`, `bearingEdges`, `centroidDepthMm`,
+`marginMm`, `adhesionRatio`, `stabilityPenaltyMm2`) so the suggestion surface
+can show why a pose lost.
+
 ### "No supports" painted faces (shipped as support blockers)
 
 Users paint surface regions that must never carry supports — a figurine's

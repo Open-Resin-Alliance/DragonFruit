@@ -230,6 +230,125 @@ test('runAutoPlace places grid trunks on a rotated mesh via the region normal', 
     disposeHandlers();
 });
 
+test('runAutoPlace grids a huge steep flat the self-support angle calls self-supporting', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+    initializeBVH();
+
+    // Box rotated 60° about X: the face is steeper than the 45° self-support
+    // angle, so the angle rule alone leaves it bare. The Rust steep-flat pass
+    // is what hands a patch this size over as an `overhang` region — a leaning
+    // plate's whole face, the lever the part topples on. From there the
+    // pipeline must grid it like any other region.
+    const deg = 60;
+    const geometry = new THREE.BoxGeometry(20, 20, 20);
+    geometry.rotateX(THREE.MathUtils.degToRad(deg));
+    geometry.translate(0, 0, 20);
+    accelerateGeometry(geometry);
+    const mesh = new THREE.Mesh(geometry);
+    mesh.updateMatrixWorld();
+    setModelMesh('model-a', mesh);
+
+    const rad = THREE.MathUtils.degToRad(deg);
+    const normal = { x: 0, y: Math.sin(rad), z: -Math.cos(rad) };
+    const yMin = -10 * Math.cos(rad) + 10 * Math.sin(rad);
+    const yMax = 10 * Math.cos(rad) + 10 * Math.sin(rad);
+    const zAt = (y: number) => Math.tan(rad) * y;
+    const contactVoxels: { x: number; y: number; z?: number }[] = [];
+    for (let x = -10; x <= 10; x += 0.25) {
+        for (let y = yMin; y <= yMax; y += 0.25) {
+            contactVoxels.push({ x, y, z: zAt(y) });
+        }
+    }
+    const facet: DetectedIsland = {
+        id: 'o0',
+        source: 'overhang',
+        contact: new THREE.Vector3(0, (yMin + yMax) / 2, zAt((yMin + yMax) / 2)),
+        baseZ: zAt(yMin),
+        areaMm2: 400 * Math.cos(rad),
+        surfaceNormal: normal,
+        overhangAngleDeg: deg,
+        // BoxGeometry group 5 (local −Z) → the 60° face after rotateX.
+        triangleIds: [10, 11],
+        contactVoxels: footprintFromPoints(contactVoxels),
+    };
+
+    const result = runAutoPlace([facet], 'model-a', { debugSkipAutoBracing: true, stabilizationEnabled: false });
+
+    assert.ok(result.placed.trunk >= 15,
+        `placed ${result.placed.trunk} grid trunks on the 60° face`);
+    assert.equal(result.rejectedCandidates, 0,
+        'the region normal keeps the cone clear at 60°');
+
+    setModelMesh('model-a', null);
+    disposeHandlers();
+});
+
+test('a run reports where its time went', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+    initializeBVH();
+
+    const geometry = new THREE.BoxGeometry(20, 20, 20);
+    geometry.rotateX(THREE.MathUtils.degToRad(30));
+    geometry.translate(0, 0, 20);
+    accelerateGeometry(geometry);
+    const mesh = new THREE.Mesh(geometry);
+    mesh.updateMatrixWorld();
+    setModelMesh('model-a', mesh);
+
+    const contactVoxels: { x: number; y: number; z?: number }[] = [];
+    for (let x = -10; x <= 10; x += 0.25) {
+        for (let y = -3.66; y <= 13.66; y += 0.25) {
+            contactVoxels.push({ x, y, z: 0.577 * y + 8.45 });
+        }
+    }
+    const facet: DetectedIsland = {
+        id: 'o0',
+        source: 'overhang',
+        contact: new THREE.Vector3(0, 5, 11.33),
+        baseZ: 6.34,
+        areaMm2: 400 * (Math.sqrt(3) / 2),
+        surfaceNormal: { x: 0, y: 0.5, z: -Math.sqrt(3) / 2 },
+        triangleIds: [10, 11],
+        contactVoxels: footprintFromPoints(contactVoxels),
+    };
+
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => { logs.push(args.join(' ')); };
+    let result: ReturnType<typeof runAutoPlace>;
+    try {
+        result = runAutoPlace([facet], 'model-a', { debugSkipAutoBracing: true, stabilizationEnabled: false });
+    } finally {
+        console.log = originalLog;
+    }
+
+    const timings = result.analytics?.timings;
+    assert.ok(timings, 'the run reports timings');
+    assert.ok(timings.totalMs > 0, `total is measured (got ${timings.totalMs})`);
+
+    // The coarse breakdown, in the order the pipeline runs it.
+    const labels = timings.phases.map((phase) => phase.label);
+    const expected = [
+        'candidates', 'dedup', 'support-filter', 'placement', 'consolidation', 'gap-fill',
+        'analytics', 'fanning', 'surface-coverage', 'resize', 'report', 'bracing',
+    ];
+    assert.deepEqual(labels, expected, 'every phase is timed, in order');
+    assert.ok(timings.phases.every((phase) => phase.durationMs >= 0), 'durations are real numbers');
+
+    const line = logs.find((entry) => entry.includes('[AutoSupport] Timing:'));
+    assert.ok(line, `the breakdown reaches the log (got ${logs.filter((l) => l.includes('Timing')).length} timing lines)`);
+    assert.ok(line.includes('placement'), 'and it names the phases');
+
+    setModelMesh('model-a', null);
+    disposeHandlers();
+});
+
 test('elevated small overhang routes a trunk around the body instead of a culled pillar', () => {
     const cleanup = elevatedJawScenario(false);
     cleanup();

@@ -27,6 +27,7 @@
 import * as THREE from 'three';
 import { ConvexHull } from 'three-stdlib';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { isStaticallyUnstable, measurePoseStability, type PoseStability, type RestingContact } from './poseStability';
 
 export interface AdvisorMesh {
     /** Flat XYZ positions (mm, model space). */
@@ -49,6 +50,19 @@ export interface OrientationCost {
     scarAreaMm2: number;
     /** Down-facing support-blocked area (mm²): contact the generator must refuse. Weighted into cost under every objective. */
     blockedAreaMm2: number;
+    /** Bearing-hull area under this pose (mm²); 0 = no bearing polygon. */
+    bearingAreaMm2: number;
+    /** Bearing-hull edge count; 0 = the pose touches on a point or an edge. */
+    bearingEdges: number;
+    /** How far the volume centroid sits inside the worst bearing edge (mm).
+     *  Negative means the mass is already outside the base. */
+    centroidDepthMm: number;
+    /** Gravity verdict geometry: `V·d/M` (mm), infinite with no lateral drag. */
+    marginMm: number;
+    /** Plate-adhesion verdict geometry: `A_contact·d̄/M` (dimensionless). */
+    adhesionRatio: number;
+    /** What an unstable pose was charged, in area-equivalent (mm²). */
+    stabilityPenaltyMm2: number;
     /** Weighted total the search minimizes: the objective's primary plus cup and blocked terms. */
     cost: number;
 }
@@ -69,6 +83,14 @@ export interface AdvisorOptions {
     blockedTriangleIndices?: ArrayLike<number> | Set<number> | null;
     /** Extra weight per mm² of down-facing blocked area. Default 10: blocked contact is refused, so poses needing it lose hard — while staying finite so the result never regresses. */
     blockedWeight?: number;
+    /** Extra weight per mm² of footprint charged to a pose that cannot stand on
+     *  the plate at all — no bearing polygon, or its mass outside the base
+     *  (`isStaticallyUnstable`). Default 1: an unstable pose is charged its
+     *  whole footprint, the contact the stabilization pass will have to
+     *  manufacture. Finite on purpose, so the search still returns the least
+     *  bad pose when every candidate is unstable. Set 0 to rank on contact
+     *  area alone, as before. */
+    stabilityWeight?: number;
     /** Fibonacci-sphere candidate count. Default 120. */
     candidateCount?: number;
     /** Max convex-hull resting poses folded into the sweep. Default 12. */
@@ -97,6 +119,7 @@ const CUP_FLAT_COS = 0.95;
 /** Detail weight default; detail itself is 0 (flat) to 1 (≥90° crease). */
 const DEFAULT_SCAR_WEIGHT = 3;
 const DEFAULT_BLOCKED_WEIGHT = 10;
+const DEFAULT_STABILITY_WEIGHT = 1;
 const DEFAULT_FIBONACCI_COUNT = 120;
 const DEFAULT_RESTING_POSES = 12;
 const DEFAULT_REFINE_TOP_K = 5;
@@ -242,6 +265,33 @@ function toBlockedSet(blocked: ArrayLike<number> | Set<number> | null | undefine
     return out;
 }
 
+/**
+ * The plate contact, subtracted from the CUP term only.
+ *
+ * The app auto-lifts models off the plate (a few mm, deliberately), so a
+ * down-facing base really does need supports bridging that gap and stays
+ * charged as overhang, scar and blocked contact — which is also what the
+ * island scan does (a face-down cube reports one overhang region: its base).
+ *
+ * A flat base is not a suction cup, though: with a sparse support forest
+ * under it the resin has room to flow, and there is no enclosed pocket to
+ * trap it. Charging `cupWeight` for it (default 2) is what made a flat pose
+ * cost 300 mm² while a corner-down pose — every face just above the
+ * self-support angle, and needing a stabilization anchor at every edge —
+ * scored 0. The search was being paid to balance parts on a corner.
+ */
+function netSupportAreas(
+    raw: { overhang: number; cup: number; scarArea: number; blockedArea: number },
+    resting: RestingContact,
+): { overhang: number; cup: number; scarArea: number; blockedArea: number } {
+    return {
+        overhang: raw.overhang,
+        cup: Math.max(0, raw.cup - resting.cupAreaMm2),
+        scarArea: raw.scarArea,
+        blockedArea: raw.blockedArea,
+    };
+}
+
 function scoreParts(
     prep: PreparedTriangles,
     threshold: number,
@@ -321,6 +371,7 @@ export function evaluateOrientationCost(
     const cupWeight = opts.cupWeight ?? 2;
     const scarWeight = opts.scarWeight ?? DEFAULT_SCAR_WEIGHT;
     const blockedWeight = opts.blockedWeight ?? DEFAULT_BLOCKED_WEIGHT;
+    const stabilityWeight = opts.stabilityWeight ?? DEFAULT_STABILITY_WEIGHT;
     const objective = opts.objective ?? 'supports';
     const blocked = toBlockedSet(opts.blockedTriangleIndices);
     const prep = prepareTriangles(mesh);
@@ -330,10 +381,35 @@ export function evaluateOrientationCost(
     const cb = Math.cos(rotYRad);
     const { overhang, cup, scarArea, blockedArea } = scoreParts(prep, threshold, sa, ca, sb, cb, blocked);
     const { heightMm, footprintMm2 } = measureBoundingBox(mesh.positions, sa, ca, sb, cb);
-    const scar = overhang + scarWeight * scarArea;
-    const base = objective === 'scarring' ? scar + cupWeight * cup : overhang + cupWeight * cup;
-    const cost = base + blockedWeight * blockedArea;
-    return { overhangAreaMm2: overhang, cupAreaMm2: cup, scarAreaMm2: scar, blockedAreaMm2: blockedArea, heightMm, footprintMm2, cost };
+    const stability = measurePoseStability(mesh.positions, mesh.index, rotXRad, rotYRad, {
+        normals: prep.normals,
+        areas: prep.areas,
+        details: prep.details,
+        blocked,
+        threshold,
+        cupCos: CUP_FLAT_COS,
+    });
+    const net = netSupportAreas({ overhang, cup, scarArea, blockedArea }, stability.restingContact);
+    const stabilityPenaltyMm2 = isStaticallyUnstable(stability) ? stabilityWeight * footprintMm2 : 0;
+    const scar = net.overhang + scarWeight * net.scarArea;
+    const base =
+        objective === 'scarring' ? scar + cupWeight * net.cup : net.overhang + cupWeight * net.cup;
+    const cost = base + blockedWeight * net.blockedArea + stabilityPenaltyMm2;
+    return {
+        overhangAreaMm2: net.overhang,
+        cupAreaMm2: net.cup,
+        scarAreaMm2: scar,
+        blockedAreaMm2: net.blockedArea,
+        bearingAreaMm2: stability.bearingAreaMm2,
+        bearingEdges: stability.bearingEdges,
+        centroidDepthMm: stability.centroidDepthMm,
+        marginMm: stability.marginMm,
+        adhesionRatio: stability.adhesionRatio,
+        stabilityPenaltyMm2,
+        heightMm,
+        footprintMm2,
+        cost,
+    };
 }
 
 /**
@@ -483,6 +559,8 @@ interface ScoredOrientation extends OrientationCandidate {
     blocked: number;
     heightMm: number;
     footprintMm2: number;
+    stability: PoseStability;
+    stabilityPenalty: number;
 }
 
 /** Epsilons for rank comparisons, scaled to the baseline so tiny meshes and huge ones behave alike. */
@@ -539,6 +617,7 @@ export function suggestOrientation(mesh: AdvisorMesh, opts: AdvisorOptions = {})
     const cupWeight = opts.cupWeight ?? 2;
     const scarWeight = opts.scarWeight ?? DEFAULT_SCAR_WEIGHT;
     const blockedWeight = opts.blockedWeight ?? DEFAULT_BLOCKED_WEIGHT;
+    const stabilityWeight = opts.stabilityWeight ?? DEFAULT_STABILITY_WEIGHT;
     const objective = opts.objective ?? 'supports';
     const blocked = toBlockedSet(opts.blockedTriangleIndices);
     const prep = prepareTriangles(mesh);
@@ -551,9 +630,22 @@ export function suggestOrientation(mesh: AdvisorMesh, opts: AdvisorOptions = {})
         const cb = Math.cos(c.rotYRad);
         const { overhang, cup, scarArea, blockedArea } = scoreParts(prep, threshold, sa, ca, sb, cb, blocked);
         const { heightMm, footprintMm2 } = measureBoundingBox(mesh.positions, sa, ca, sb, cb);
-        const scar = overhang + scarWeight * scarArea;
-        const primary = (objective === 'scarring' ? scar + cupWeight * cup : overhang + cupWeight * cup) + blockedWeight * blockedArea;
-        return { ...c, primary, overhang, cup, scar, blocked: blockedArea, heightMm, footprintMm2 };
+        const stability = measurePoseStability(mesh.positions, mesh.index, c.rotXRad, c.rotYRad, {
+            normals: prep.normals,
+            areas: prep.areas,
+            details: prep.details,
+            blocked,
+            threshold,
+            cupCos: CUP_FLAT_COS,
+        });
+        const net = netSupportAreas({ overhang, cup, scarArea, blockedArea }, stability.restingContact);
+        const stabilityPenalty = isStaticallyUnstable(stability) ? stabilityWeight * footprintMm2 : 0;
+        const scar = net.overhang + scarWeight * net.scarArea;
+        const primary =
+            (objective === 'scarring' ? scar + cupWeight * net.cup : net.overhang + cupWeight * net.cup) +
+            blockedWeight * net.blockedArea +
+            stabilityPenalty;
+        return { ...c, primary, overhang: net.overhang, cup: net.cup, scar, blocked: net.blockedArea, heightMm, footprintMm2, stability, stabilityPenalty };
     };
     const descend = (start: ScoredOrientation, eps: RankEps, obj: OrientationObjective, preferFootprint: boolean): ScoredOrientation => {
         let cur = start;
@@ -608,6 +700,12 @@ export function suggestOrientation(mesh: AdvisorMesh, opts: AdvisorOptions = {})
         cupAreaMm2: s.cup,
         scarAreaMm2: s.scar,
         blockedAreaMm2: s.blocked,
+        bearingAreaMm2: s.stability.bearingAreaMm2,
+        bearingEdges: s.stability.bearingEdges,
+        centroidDepthMm: s.stability.centroidDepthMm,
+        marginMm: s.stability.marginMm,
+        adhesionRatio: s.stability.adhesionRatio,
+        stabilityPenaltyMm2: s.stabilityPenalty,
         heightMm: s.heightMm,
         footprintMm2: s.footprintMm2,
         cost: s.primary,

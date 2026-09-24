@@ -238,7 +238,8 @@ import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
 // agents/Claude/20260613-1404-Implementation-dev-islands-islands-panel-...md.
 import { useIslands } from '@/volumeAnalysis/Islands/useIslands';
 import { IslandsPanel } from '@/components/controls/IslandsPanel';
-import { AutoSupportPanel, getAutoSupportBusy, subscribeAutoSupportBusy, autoSupportDrivingScan } from '@/components/controls/AutoSupportPanel';
+import { AutoSupportPanel, getAutoSupportBusy, subscribeAutoSupportBusy, autoSupportDrivingScan, getAutoSupportProgress, subscribeAutoSupportProgress } from '@/components/controls/AutoSupportPanel';
+import { installPerfConsoleAPI } from '@/supports/PlacementLogic/Pathfinding/pathfindingPerf';
 import { getUnappliedModifiers } from '@/features/mesh-modifiers/unappliedModifiers';
 import type { UnappliedModifierAction } from '@/components/organisms/modals/ModifierModals';
 import { AutoRotationPanel, getOrientationBusy, subscribeOrientationBusy, OrientElapsed } from '@/components/controls/AutoRotationPanel';
@@ -349,7 +350,7 @@ function applyJointSplitKnotRemaps(remaps: KnotSplitRemap[]) {
         updateKnot({ ...knot, parentShaftId: remap.parentShaftId, t: remap.t });
     }
 }
-import { getRaftSettings, subscribeToRaftStore } from '@/supports/Rafts/Crenelated/RaftState';
+import { getRaftSettings, getRaftSettingsForModel, subscribeToRaftStore } from '@/supports/Rafts/Crenelated/RaftState';
 import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
 import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/computeRaftOuterBoundary';
 import type { SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
@@ -969,6 +970,14 @@ export default function Home() {
     (window as unknown as Record<string, unknown>).__df_flushAutosave = flushAutosave;
     return () => { delete (window as unknown as Record<string, unknown>).__df_flushAutosave; };
   }, [flushAutosave]);
+
+  // `window.__dfPerf` for support-pathfinding timings. Installed here, not from
+  // `pathfindingPerf` itself: that module is in the auto-support worker's import
+  // graph, and a module-scope DOM side effect kills the worker before it can
+  // receive a request.
+  React.useEffect(() => {
+    installPerfConsoleAPI();
+  }, []);
 
   /**
    * User-facing scene-save failure (Ph0.1 sub-phase D).
@@ -6930,6 +6939,7 @@ export default function Home() {
   // identity changes, so the Generating modal keeps working across HMR —
   // a `useEffect(..., [])` closure stays bound to the dead listener set.
   const autoSupportBusy = React.useSyncExternalStore(subscribeAutoSupportBusy, getAutoSupportBusy, getAutoSupportBusy);
+  const autoSupportProgress = React.useSyncExternalStore(subscribeAutoSupportProgress, getAutoSupportProgress, getAutoSupportProgress);
   const orientationBusy = React.useSyncExternalStore(subscribeOrientationBusy, getOrientationBusy, getOrientationBusy);
 
   const islandsPoc = useIslands({
@@ -6940,6 +6950,7 @@ export default function Home() {
     plateZ: 0,
     sourcePath: scene.activeModel?.sourcePath,
     activeTab: scene.mode,
+    hasRaft: getRaftSettingsForModel(scene.activeModel?.id).bottomMode !== 'off',
   });
 
   // Blocking progress overlays are modal: while one is up it owns Escape, so
@@ -10161,6 +10172,8 @@ export default function Home() {
             overhangIslands={
               scene.mode === 'support' ? islandsPoc.overhangIslands : []
             }
+            toppleCoverage={islandsPoc.toppleCoverage}
+            dragTotalMm3={islandsPoc.dragTotalMm3}
             overlayBrushRadius={islands.overlayBrushRadius}
             overlayColor={islands.overlayColor}
             overlayOpacity={islands.overlayOpacity}
@@ -10858,12 +10871,12 @@ export default function Home() {
               <p>{islandsPoc.scanning ? 'Scanning islands & minima…' : 'Placing and bracing supports…'}</p>
             </div>
             <div className="mt-2 text-[11px] font-medium tracking-wide" style={{ color: 'var(--accent)' }}>
-              Elapsed: {islandsPoc.scanning ? islandsPoc.elapsedLabel : '…'}
+              {islandsPoc.scanning ? <>Elapsed: {islandsPoc.elapsedLabel}</> : <OrientElapsed />}
             </div>
             <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
               Processing 1 model
             </div>
-            <ScanProgressBar progress={islandsPoc.scanning ? islandsPoc.scanProgress : null} />
+            <ScanProgressBar progress={islandsPoc.scanning ? islandsPoc.scanProgress : autoSupportProgress} />
           </div>
         </div>
       )}

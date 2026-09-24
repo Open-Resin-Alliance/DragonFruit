@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
+import { CONSERVATIVE_P_SIGMA } from '@/supports/autoSupport/poseStability';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { detectVoxelIslands, type VoxelDetectParams } from './detect';
 import { contactEndpointsFor, SUPPORT_TYPES } from '@/supports/supportTypeRegistry';
@@ -15,7 +16,7 @@ import { buildIslandPucks, markerIdFor } from './islandPuckMarkers';
 import { buildIslandInstances, VOXEL_DISC_RADIUS_FACTOR, type IslandVisual } from './islandInstances';
 import type { IslandMarker } from '@/volumeAnalysis/IslandScan/islandOverlayLogic';
 import { scanMeshMinima } from './meshMinima';
-import { type DetectedIsland, type TipInfo, type OverhangRegion, type Vec3Loop, SUPPORTED_RADIUS_MM } from './types';
+import { type DetectedIsland, type TipInfo, type OverhangRegion, type OverhangScan, type PoseStabilityWire, type Vec3Loop, SUPPORTED_RADIUS_MM } from './types';
 import { classifyIntersection } from './intersection';
 import { getSnapshot } from '@/supports/state';
 import { getSettings } from '@/supports/Settings/state';
@@ -43,6 +44,15 @@ const OVERHANG_FOOTPRINT_PX_MM = 0.25;
  * favor of the surface-accurate region. Overhang regions without a voxel
  * counterpart (e.g. lettering ledges below the growth buffer) are appended.
  */
+/** Does this scan's pose need anti-topple contact? The same rule the placement
+ *  asks (`needsToppleCoverage`), reduced to the wire shape the scan returns, so
+ *  the overlay can show what will actually be covered rather than everything
+ *  that was classified. */
+export function scanNeedsCoverage(stability: PoseStabilityWire | null | undefined): boolean {
+  if (!stability) return true;
+  return stability.adhesionRatio < CONSERVATIVE_P_SIGMA;
+}
+
 export function mergeOverhangRegions(
   classified: DetectedIsland[],
   overhang: DetectedIsland[],
@@ -104,6 +114,11 @@ export function overhangRegionToIsland(region: OverhangRegion, i: number): Detec
     baseZ: contactZ,
     areaMm2: region.projectedAreaMm2,
     overhangAngleDeg: region.angleDeg,
+    surfaceAreaMm2: region.areaMm2,
+    maxZ: region.maxZ,
+    dragMomentMm3: region.dragMomentMm3,
+    dragDirDeg: region.dragDirDeg,
+    steepFlat: region.steepFlat,
     triangleIds: region.triangleIds,
     surfaceNormal: { x: region.normal[0], y: region.normal[1], z: region.normal[2] },
     contactVoxels: contactVoxels.build(),
@@ -168,6 +183,11 @@ export interface UseIslandsInput {
   plateZ?: number;
   /** File path of the loaded model. */
   sourcePath?: string | null;
+  /** True when the print gets a raft under it. The stability report then
+   *  measures the contact as the model's XY shadow rather than its own contact
+   *  band: the raft is what actually holds the part, and a band on a domed
+   *  bottom is a cap whose centre wanders with the tilt. */
+  hasRaft?: boolean;
   /** Active mode / tab. */
   activeTab?: string;
 }
@@ -207,12 +227,18 @@ async function reportSlowStep(label: string, elapsedMs: number): Promise<void> {
   }
 }
 
-export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ = 0, sourcePath, activeTab }: UseIslandsInput) {
+export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ = 0, sourcePath, activeTab, hasRaft = false }: UseIslandsInput) {
   const [scanning, setScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState<{ done: number; total: number; phase?: string; phaseNumber?: number; phaseCount?: number } | null>(null);
   const [voxelIslands, setVoxelIslands] = useState<DetectedIsland[]>([]);
   const [minimaIslands, setMinimaIslands] = useState<DetectedIsland[]>([]);
   const [overhangIslands, setOverhangIslands] = useState<DetectedIsland[]>([]);
+  /** Whether this scan's pose needs anti-topple contact. The overlay uses it to
+   *  show what will be covered, not everything that was classified. */
+  const [toppleCoverage, setToppleCoverage] = useState(true);
+  /** The pose's total drag moment, so the overlay can weigh a patch's share of
+   *  it exactly as the placement does. */
+  const [dragTotalMm3, setDragTotalMm3] = useState(0);
   
   const [elapsedSec, setElapsedSec] = useState(0);
 
@@ -445,15 +471,20 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
           if (world) {
             // Tauri invoke not available in plain browser, so dynamic import is required.
             const { invoke } = await import('@tauri-apps/api/core');
-            const regions = await invoke<OverhangRegion[]>('scan_overhangs', {
+            const scan = await invoke<OverhangScan>('scan_overhangs', {
               positions: Array.from(world.positions),
               selfSupportAngleDeg:
                 getSettings().autoSupport?.overhangSelfSupportAngleDeg ??
                 OVERHANG_SELF_SUPPORT_ANGLE_DEG,
               pxMm: OVERHANG_FOOTPRINT_PX_MM,
+              label: sourcePath ?? null,
+              hasRaft,
             });
             if (scanEpochRef.current !== epoch) return;
-            mappedOverhangs = regions.map(overhangRegionToIsland);
+            setToppleCoverage(scanNeedsCoverage(scan.stability));
+        setDragTotalMm3(scan.stability?.dragMomentMm3 ?? 0);
+            setDragTotalMm3(scan.stability?.dragMomentMm3 ?? 0);
+            mappedOverhangs = scan.regions.map(overhangRegionToIsland);
           } else {
             mappedOverhangs = (combined.overhangIslands ?? []).map(overhangRegionToIsland);
           }
@@ -495,14 +526,18 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
       // geometry, so no double mesh prep.
       try {
         const { invoke } = await import('@tauri-apps/api/core');
-        const regions = await invoke<OverhangRegion[]>('scan_overhangs', {
+        const scan = await invoke<OverhangScan>('scan_overhangs', {
           positions: Array.from(world.positions),
           selfSupportAngleDeg: getSettings().autoSupport?.overhangSelfSupportAngleDeg
             ?? OVERHANG_SELF_SUPPORT_ANGLE_DEG,
           pxMm: OVERHANG_FOOTPRINT_PX_MM,
+          label: sourcePath ?? null,
+          hasRaft,
         });
         if (scanEpochRef.current !== epoch) return;
-        mappedOverhangs = regions.map(overhangRegionToIsland);
+        setToppleCoverage(scanNeedsCoverage(scan.stability));
+        setDragTotalMm3(scan.stability?.dragMomentMm3 ?? 0);
+        mappedOverhangs = scan.regions.map(overhangRegionToIsland);
         setOverhangIslands(mappedOverhangs);
       } catch (err) {
         console.warn('[Islands] overhang scan failed (non-fatal)', err);
@@ -553,7 +588,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     } else {
       setScanning(false);
     }
-  }, [geom, transform, sourcePath, prepareWorldGeom, layerHeightMm, pxMm, supportBufMm, connectivity, minAreaMm2, minimaK]);
+  }, [geom, transform, sourcePath, prepareWorldGeom, layerHeightMm, pxMm, supportBufMm, connectivity, minAreaMm2, minimaK, hasRaft]);
 
   // Pass 1: Proposed consolidation & classification
   const proposedConsolidated = useMemo(() => timed('proposedConsolidated', () => {
@@ -1056,6 +1091,8 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     voxelIslands,
     minimaIslands,
     overhangIslands,
+    toppleCoverage,
+    dragTotalMm3,
     filteredIslands,
     orderedIslands,
     voxelOnlyPucks,

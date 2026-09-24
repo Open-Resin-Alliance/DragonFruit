@@ -200,3 +200,30 @@ test('frustum cone collision checks catch wide-end clips that a narrow start-rad
     assert.equal(narrowStartBlocked, false);
     assert.equal(frustumBlocked, true);
 });
+
+test('buildBranchData prefers a steeper cone over one lying along the surface', () => {
+    // A steep overhang with a blocker under the direct exit: the search has to
+    // pick a tilted socket, and the tilted ones run from steep to flat. Scored
+    // on socket proximity alone it took the flattest that cleared — measured
+    // 89.4° from vertical on this fixture, a cone 0.6° off lying flat, with the
+    // shaft bending into it at the socket. It now takes the steepest that
+    // clears (71.6°), and only falls back to a flat one when nothing steeper
+    // clears at all.
+    const tipPos = { x: 0, y: 0, z: 0 };
+    const leanRad = (80 * Math.PI) / 180;
+    const tipNormal = { x: Math.sin(leanRad), y: 0, z: -Math.cos(leanRad) };
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5), new THREE.MeshBasicMaterial());
+    mesh.position.set(tipNormal.x * 1.6, tipNormal.y * 1.6, tipNormal.z * 1.6);
+    mesh.updateMatrixWorld(true);
+    const parentKnot: Knot = { id: 'knot-cone', parentShaftId: 'trunk-1', pos: { x: 6, y: 0, z: 4 } };
+
+    const branch = buildBranchData({ tipPos, tipNormal, modelId: 'model-1', parentKnot, mesh }).branch;
+    const socket = getFinalSocketPosition(branch.contactCone!);
+    const horizontal = Math.hypot(socket.x - tipPos.x, socket.y - tipPos.y);
+    const coneLeanDeg = (Math.atan2(horizontal, Math.max(0.001, Math.abs(socket.z - tipPos.z))) * 180) / Math.PI;
+
+    assert.ok(
+        coneLeanDeg <= 75,
+        `expected a cone within 75° of vertical, got ${coneLeanDeg.toFixed(1)}°`,
+    );
+});

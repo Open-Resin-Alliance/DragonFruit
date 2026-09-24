@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
 
-import { generateGridCandidates, computeRegionSpacing, GRID_SPACING_FLOOR_MM, MAX_GRID_CANDIDATES_PER_REGION, shouldUseDensityGrid } from '../autoSupport/gridPlacement';
+import { generateGridCandidates, computeRegionSpacing, GRID_SPACING_FLOOR_MM, MAX_GRID_CANDIDATES_PER_REGION, steepFlatAnchorBandTop, steepFlatSpacingMultiplier, STEEP_FLAT_SPACING_MULTIPLIER, shouldUseDensityGrid } from '../autoSupport/gridPlacement';
 import { createDefaultAutoSupportSettings } from '../autoSupport/settings';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
 
@@ -273,6 +273,32 @@ test('a long thin rib under the area threshold gets its edge supported', () => {
 });
 
 /**
+ * A steep flat forms fine on its own, so the density curve — tuned for
+ * formation, densest on flat ceilings — overstates what it needs. It still gets
+ * a field of contacts (a huge face left bare overhangs its own weight), just a
+ * sparse one: the multiplier is the difference between a carpet and a brace
+ * field on a low-poly model, where the patch IS the whole face.
+ */
+test('a steep flat is covered sparsely, not carpeted', () => {
+    const settings = createDefaultAutoSupportSettings();
+    const face = { ...rectRegion('s0', -20, 20, -20, 20, 100), steepFlat: true };
+    const formation = { ...rectRegion('s1', -20, 20, -20, 20, 100), steepFlat: false };
+
+    assert.equal(shouldUseDensityGrid(face, settings), true, 'a big steep face still needs coverage');
+    const sparse = generateGridCandidates([face], settings);
+    const dense = generateGridCandidates([formation], settings);
+    assert.ok(sparse.length > 0, 'not left bare');
+    assert.ok(
+        sparse.length * 4 < dense.length,
+        `much sparser than a formation overhang (${sparse.length} vs ${dense.length})`,
+    );
+    assert.ok(
+        sparse.length >= dense.length / (STEEP_FLAT_SPACING_MULTIPLIER ** 2) - 2,
+        `and sparser by about the squared multiplier (${sparse.length} vs ${dense.length})`,
+    );
+});
+
+/**
  * A region carries ONE surface normal, but its cells land on a surface that
  * curves or bends underneath it. Measured on a cylinder underside, every
  * contact's axis sat a median 26° (worst 41°) from the surface it touched, so
@@ -317,4 +343,47 @@ test('each grid contact takes the normal of the face it lands on', () => {
         'cells on the sloped facets lean with the facet, not with the region');
     assert.ok(candidates.every((c) => Math.abs(Math.hypot(c.tipNormal.x, c.tipNormal.y, c.tipNormal.z) - 1) < 1e-6),
         'every emitted normal is a unit vector');
+});
+
+/**
+ * A steep flat is self-supporting, so its contacts anchor the part rather than
+ * hold up forming material, and anchoring wants the low band: short, stiff,
+ * cheap. Left alone the grid climbs the face, because a near-vertical patch has
+ * a thin XY footprint whose cells map up its height.
+ */
+test('a steep flat is anchored low, a formation overhang is not banded', () => {
+    // The tool's face: 50mm tall, so the band is the lowest 17.5mm of it.
+    assert.equal(steepFlatAnchorBandTop({ steepFlat: true, baseZ: 5, maxZ: 55 }), 22.5);
+    // A 20mm cube's face: a third of its 19.9mm is under the 6mm floor, so the
+    // band lands near 12mm, i.e. contacts in the bottom half rather than two
+    // thirds of the way up a part that is nearly finished.
+    const shortFace = steepFlatAnchorBandTop({ steepFlat: true, baseZ: 5, maxZ: 24.9 });
+    assert.ok(shortFace < 12.5, `short face band is low (got ${shortFace.toFixed(2)})`);
+    // Formation coverage has to hold material at height, so it is unbounded.
+    assert.equal(steepFlatAnchorBandTop({ steepFlat: false, baseZ: 5, maxZ: 55 }), Infinity);
+    // A flat with no recorded top still gets the floor rather than nothing.
+    assert.equal(steepFlatAnchorBandTop({ steepFlat: true, baseZ: 5 }), 11);
+});
+
+test('the anchoring spacing follows the part thickness, not a switch', () => {
+    // The rung spacing up a face is a beam span: sag goes as the span to the
+    // fourth power, so it stays under the part's own thickness.
+    const face = { steepFlat: true };
+    const base = 3.0;
+
+    // A 7mm wall: the sparse field would give 7.5mm, the thickness caps it at 7.
+    assert.equal(steepFlatSpacingMultiplier(face, base, 7), 7 / base);
+    // A 30mm-thick part: the thickness is no constraint, so the full sparse.
+    assert.equal(steepFlatSpacingMultiplier(face, base, 30), STEEP_FLAT_SPACING_MULTIPLIER);
+    // Thinner than the formation spacing: it never goes below formation density.
+    assert.equal(steepFlatSpacingMultiplier(face, base, 2), 1, 'floored at formation');
+    // And the ramp is continuous, which is the point: a part at 3.9x and one at
+    // 4.1x get densities in proportion to their thickness instead of a jump.
+    const thin = steepFlatSpacingMultiplier(face, base, 5);
+    const thick = steepFlatSpacingMultiplier(face, base, 7);
+    assert.ok(thin < thick, `monotone in thickness (${thin} vs ${thick})`);
+
+    // Formation overhangs and unmeasured parts are unaffected.
+    assert.equal(steepFlatSpacingMultiplier({ steepFlat: false }, base, 7), 1);
+    assert.equal(steepFlatSpacingMultiplier(face, base, 0), STEEP_FLAT_SPACING_MULTIPLIER);
 });

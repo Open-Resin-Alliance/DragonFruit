@@ -42,11 +42,45 @@ export interface OverhangRegion {
   minZ: number;
   maxZ: number;
   footprint: FootprintMask;
+  /** Peel-drag moment this patch carries (mm³): `Σ A·sinθ·z` above the part's
+   *  own base — the same sum the stability report totals for the pose. A steep
+   *  face is self-supporting for formation, so contact on it only resists
+   *  toppling, and this share is the constant-free measure of how much of that
+   *  job the patch owns. */
+  dragMomentMm3?: number;
+  /** XY direction the patch's drag pushes the part toward (deg, 0 = +X,
+   *  90 = +Y) — the side that lifts. */
+  dragDirDeg?: number;
+  /** True when the patch came from `classify_steep_flats`: a large planar face
+   *  past the self-support angle, classified for toppling, not formation. */
+  steepFlat?: boolean;
   /** Triangle-accurate perimeter loops, inset by 0.25 mm (world mm, each loop closed). */
   perimeterLoops?: Vec3Loop[];
 }
 
 export type Vec3Loop = Array<[number, number, number]>;
+
+/** The `scan_overhangs` answer: the regions, plus the topple report for the
+ *  pose they were classified in. The overlay needs the verdict to show what the
+ *  placement will actually cover, rather than everything it classified. */
+export interface OverhangScan {
+  regions: OverhangRegion[];
+  stability?: PoseStabilityWire | null;
+}
+
+/** Wire shape of the Rust `StabilityReport` (camelCase). */
+export interface PoseStabilityWire {
+  bearingAreaMm2: number;
+  bearingEdges: number;
+  centroidDepthMm: number;
+  contactDepthMm: number;
+  dragMomentMm3: number;
+  marginMm: number;
+  adhesionRatio: number;
+  pushDirDeg: number;
+  dragTopMm: number;
+  bearingIsRaft: boolean;
+}
 
 /** Classification once the voxel and minima sets are intersected (Part C). */
 export type IslandClass = 'intersection' | 'voxelOnly' | 'minimaOnly';
@@ -69,6 +103,20 @@ export interface DetectedIsland {
   // --- overhang-detector extras (undefined for others) ---
   /** Mean surface angle from horizontal (degrees) — set by the overhang detector. */
   overhangAngleDeg?: number;
+  /** Peel-drag moment this overhang patch carries (mm³) — see OverhangRegion. */
+  dragMomentMm3?: number;
+  /** Direction its drag pushes the part (deg) — the side that lifts. */
+  dragDirDeg?: number;
+  /** 3D surface area of the patch (mm²). A steep face's PROJECTED area is a
+   *  thin strip, so anything asking how big the flat is has to use this one. */
+  surfaceAreaMm2?: number;
+  /** Highest point of the patch (mm). The anchoring band on a steep flat is
+   *  measured from `baseZ` up to a fraction of this. */
+  maxZ?: number;
+  /** True when the patch is a large planar face past the self-support angle:
+   *  it forms fine on its own, so it is a toppling patch, not a formation one,
+   *  and the stabilization braces own it instead of the density grid. */
+  steepFlat?: boolean;
   /** Model-triangle indices of the overhang region (for surface highlighting). */
   triangleIds?: number[];
   /** Region mean surface normal (world space, away from the model) — lets the

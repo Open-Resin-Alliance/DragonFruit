@@ -45,13 +45,56 @@ function tallBox(): { positions: number[]; index: number[] } {
     return { positions, index: c.index };
 }
 
-test('down-facing square counts fully at identity', () => {
+/** 10 mm cube with outward winding — the scale the Rust report's fixtures use. */
+function tenMmCube(): { positions: number[]; index: number[] } {
+    const s = 5;
+    return {
+        positions: [
+            -s, -s, -s, s, -s, -s, s, s, -s, -s, s, -s,
+            -s, -s, s, s, -s, s, s, s, s, -s, s, s,
+        ],
+        index: [
+            0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4, 2, 3, 7, 2, 7, 6, 0, 4, 7, 0, 7, 3, 1, 2, 6,
+            1, 6, 5,
+        ],
+    };
+}
+
+/** 10×10×1 mm plate with outward winding. */
+function flatPlate(): { positions: number[]; index: number[] } {
+    const m = tenMmCube();
+    const positions = [...m.positions];
+    for (let i = 2; i < positions.length; i += 3) positions[i] *= 0.1;
+    return { positions, index: m.index };
+}
+
+test('the plate contact is charged as overhang but never as a cup', () => {
+    // Auto-lift floats the model a few mm above the plate, so its base really
+    // does need supports bridging the gap — the island scan reports exactly
+    // that (a face-down cube: one overhang region, its base). It is not a
+    // suction cup though: resin flows under a sparse support forest, so the
+    // cup term must not double-charge it. Charging it was what made a flat
+    // pose cost 300 mm² while a corner-down pose scored 0.
     const c = evaluateOrientationCost(downSquare(), 0, 0);
-    assert.equal(c.overhangAreaMm2, 1, 'full area is overhang');
-    assert.equal(c.cupAreaMm2, 1, 'flat-down area is cup');
-    assert.equal(c.cost, 1 + 2 * 1, 'cost = overhang + cupWeight × cup');
+    assert.equal(c.overhangAreaMm2, 1, 'the base still needs support');
+    assert.equal(c.cupAreaMm2, 0, 'but it is not a cup');
+    assert.equal(c.cost, 1);
     assert.equal(c.heightMm, 0, 'planar square has no height');
     assert.equal(c.footprintMm2, 1, '1×1 footprint');
+    assert.equal(c.bearingAreaMm2, 1, 'and it bears on the plate');
+});
+
+test('a down-facing face above the contact band is still charged', () => {
+    // The same face tilted 20° off the plate: still down-facing, so still
+    // charged in full — the contact band only exempts it from the cup term.
+    const c = evaluateOrientationCost(tenMmCube(), (20 * Math.PI) / 180, 0);
+    assert.equal(c.overhangAreaMm2, 100, 'the whole 10×10 underside is charged');
+    assert.equal(c.cupAreaMm2, 0, 'and none of it is a cup');
+    // A coarse flat base carries no vertices between its corners, so past
+    // ~11.5° the 2mm band holds only the lowest edge's two: the pose rests on a
+    // line and the stability term says so.
+    assert.equal(c.bearingEdges, 0);
+    assert.ok(c.stabilityPenaltyMm2 > 0, 'and the pose pays for it');
 });
 
 test('up-facing square costs nothing', () => {
@@ -66,10 +109,16 @@ test('flipping over removes the cost', () => {
     assert.equal(c.overhangAreaMm2, 0, 'rotX 180° turns the face up');
 });
 
-test('sweep eliminates a fully down-facing plate', () => {
-    const s = suggestOrientation(downSquare());
-    assert.ok(s.deltaPercent < -90, `near-total improvement (got ${s.deltaPercent}%)`);
-    assert.equal(s.suggested.overhangAreaMm2, 0);
+test('a flat plate pays for its base once, not twice', () => {
+    // Auto-lift floats the model, so the base is real support contact and is
+    // charged as overhang — but it is not a cup, so the cupWeight (default 2)
+    // must not double it. That double charge is what made a flat pose cost
+    // 300 mm² while a corner-down pose scored 0.
+    const c = evaluateOrientationCost(flatPlate(), 0, 0);
+    assert.equal(c.overhangAreaMm2, 100, 'the 10×10 base is charged once');
+    assert.equal(c.cupAreaMm2, 0, 'and never as a cup');
+    assert.equal(c.cost, 100);
+    assert.equal(c.bearingEdges, 4, 'lying flat it bears on a polygon');
 });
 
 test('sweep is deterministic across calls', () => {
@@ -119,14 +168,67 @@ test('geometry adapter rejects empty geometry and accepts soup', () => {
         attributes: { position: { array: downSquare().positions } },
         index: downSquare().index,
     });
-    assert.ok(s && s.deltaPercent < -90, 'indexed soup solves like the raw mesh');
+    assert.ok(s && s.suggested.cost === 0, 'indexed soup solves like the raw mesh');
 });
 
-test('supports objective beats naive upright on a tower', () => {
+test('a cube baked onto its edge is offered a pose that can stand', () => {
+    // The reported bug: a cube came back oriented onto a corner, which then
+    // needs a stabilization anchor at every edge. Identity here IS the edge
+    // pose, and the suggestion has to leave it.
+    const m = tenMmCube();
+    const a = (45 * Math.PI) / 180;
+    const ca = Math.cos(a);
+    const sa = Math.sin(a);
+    const positions = [...m.positions];
+    for (let i = 0; i < positions.length; i += 3) {
+        const y = positions[i + 1];
+        const z = positions[i + 2];
+        positions[i + 1] = y * ca - z * sa;
+        positions[i + 2] = y * sa + z * ca;
+    }
+    const mesh = { positions, index: m.index };
+    const s = suggestOrientation(mesh, { candidateCount: 64 });
+    assert.equal(s.baseline.bearingEdges, 0, 'identity balances on an edge');
+    assert.ok(s.baseline.stabilityPenaltyMm2 > 0, 'and is charged for it');
+    assert.ok(s.suggested.bearingEdges > 0, 'the suggestion bears on a polygon');
+    assert.equal(s.suggested.stabilityPenaltyMm2, 0, 'so it pays nothing');
+    assert.ok(s.suggested.cost < s.baseline.cost, 'and wins on cost');
+    assert.ok(s.rotXDeg !== 0 || s.rotYDeg !== 0, 'a real rotation is offered');
+});
+
+test('the stability term can be turned off', () => {
+    // Same mesh, weight 0: the edge pose is no longer charged, so the search
+    // ranks on contact area alone — the behaviour before this term existed.
+    const m = tenMmCube();
+    const a = (45 * Math.PI) / 180;
+    const ca = Math.cos(a);
+    const sa = Math.sin(a);
+    const positions = [...m.positions];
+    for (let i = 0; i < positions.length; i += 3) {
+        const y = positions[i + 1];
+        const z = positions[i + 2];
+        positions[i + 1] = y * ca - z * sa;
+        positions[i + 2] = y * sa + z * ca;
+    }
+    const mesh = { positions, index: m.index };
+    const s = suggestOrientation(mesh, { candidateCount: 64, stabilityWeight: 0 });
+    assert.equal(s.baseline.stabilityPenaltyMm2, 0);
+    assert.equal(s.suggested.stabilityPenaltyMm2, 0);
+});
+
+test('a plain tower stays upright: a knife-edge pose is not cheaper', () => {
+    // This used to "improve" by laying the tower down, because the upright
+    // pose was charged its own base twice (overhang plus the cup term) while a
+    // knife-edge pose scored 0 by keeping every face just above the
+    // self-support angle. The base is charged once now (auto-lift means it does
+    // need support) and the cup term is gone; the edge pose has no bearing
+    // polygon and pays the stability penalty — so upright wins.
     const s = suggestOrientation(tallBox(), { objective: 'supports', candidateCount: 48 });
-    assert.ok(s.suggested.cost < s.baseline.cost, `improves on upright (got ${s.suggested.cost} vs ${s.baseline.cost})`);
-    assert.ok(s.deltaPercent <= -50, `substantial contact cut (got ${s.deltaPercent}%)`);
-    assert.ok(Number.isFinite(s.rotXDeg) && Number.isFinite(s.rotYDeg), 'finite angles');
+    assert.equal(s.baseline.cost, 4, 'an upright box pays for its 2×2 base only');
+    assert.equal(s.suggested.cost, 4);
+    assert.equal(s.rotXDeg, 0);
+    assert.equal(s.rotYDeg, 0);
+    assert.equal(s.suggested.bearingEdges, 4, 'and it still bears on its base');
 });
 
 test('height objective lays the tower down', () => {
@@ -261,12 +363,15 @@ test('composed orientation renders canonically at the scored pose', () => {
 });
 
 test('blocked down-facing area is measured and weighted into cost', () => {
-    const mesh = downSquare();
-    const plain = evaluateOrientationCost(mesh, 0, 0);
+    // A tilted cube: part of its underside is contact, the rest is a real
+    // overhang, so there is area for a nogo mask to land on.
+    const mesh = tenMmCube();
+    const tilt = (20 * Math.PI) / 180;
+    const plain = evaluateOrientationCost(mesh, tilt, 0);
     assert.equal(plain.blockedAreaMm2, 0);
-    const blocked = evaluateOrientationCost(mesh, 0, 0, { blockedTriangleIndices: [0, 1] });
+    const blocked = evaluateOrientationCost(mesh, tilt, 0, { blockedTriangleIndices: [0, 1, 2, 3] });
     assert.equal(blocked.blockedAreaMm2, blocked.overhangAreaMm2);
-    assert.ok(blocked.blockedAreaMm2 > 0, 'down-facing plate is blocked contact');
+    assert.ok(blocked.blockedAreaMm2 > 0, 'tilted underside is blocked contact');
     assert.ok(blocked.cost > plain.cost, 'blocked poses cost more');
     // Up-facing square: blocked paint is irrelevant, no supports needed there.
     const up = evaluateOrientationCost(upSquare(), 0, 0, { blockedTriangleIndices: [0, 1] });
