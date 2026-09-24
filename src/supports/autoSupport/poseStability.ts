@@ -152,12 +152,19 @@ export function isSlenderPart(s: {
     return s.heightMm / (s.volumeMm3 / s.bearingAreaMm2) >= SLENDER_RATIO;
 }
 
-/** A flat at least this big (mm², 3D) is worth anchoring a part with, whether
- *  or not the pose needs rescuing today. It is a SIZE and not a share of the
- *  drag, because anchoring value is about room: a 400mm² face on a 22mm cube is
- *  99% of that part's drag and still not a surface worth spreading contacts
- *  over, while a 2752mm² face is. */
-export const STEEP_FLAT_ANCHOR_MIN_AREA_MM2 = 1000;
+/**
+ * A flat at least this big (mm², 3D) is worth anchoring a part with, whether or
+ * not the pose needs rescuing today.
+ *
+ * A SIZE and not a share of the drag, because anchoring value is about room.
+ * The floor is where a flat stops having room for contacts at all: a tip covers
+ * about 3mm of surface, so a handful of them want on the order of a hundred mm²
+ * before spreading anything across it means anything. Above that it is a
+ * judgement about the part, which the band and the spacing already make: a
+ * 465mm² face on a 42mm figurine gets a low band, and so does a 400mm² face on
+ * a 22mm cube, which is the pair that killed an earlier 1000mm² floor.
+ */
+export const STEEP_FLAT_ANCHOR_MIN_AREA_MM2 = 150;
 
 /**
  * Should this steep flat be covered, given the pose's verdict?

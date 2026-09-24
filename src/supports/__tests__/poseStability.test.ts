@@ -145,7 +145,7 @@ test('with a raft the patch is the shadow, not the wandering contact cap', () =>
     assert.ok(Math.abs(raftFlat.bearingAreaMm2 - 100) < 1, 'flat, the shadow is the base');
 });
 
-test('a big flat anchors, a small one is not a surface to put anything on', () => {
+test('a flat anchors if it has room for contacts, and the band keeps it low', () => {
     // The cam seal tool's 2752mm² face is worth anchoring: planar, room to
     // spread, facing the way the part would move.
     assert.equal(steepFlatNeedsCoverage(2752, false), true, 'the tool anchors on its big face');
@@ -154,9 +154,14 @@ test('a big flat anchors, a small one is not a surface to put anything on', () =
         true,
         'the floor itself anchors',
     );
-    // A 20mm cube's face is 400mm² and 99% of that part's drag, and covering it
-    // sprouted tall supports two thirds of the way up a part nearly finished.
-    assert.equal(steepFlatNeedsCoverage(400, false), false, 'a small face gets nothing');
+    // A 42mm figurine's 465mm² face, on a part whose whole footprint is 738mm².
+    // Worth a low band, which is what the band rule then keeps it to.
+    assert.equal(steepFlatNeedsCoverage(465, false), true, 'a figurine face anchors');
+    // A 20mm cube's 400mm² face likewise: covering it low is fine, and the
+    // complaint about it was the height, not the contact.
+    assert.equal(steepFlatNeedsCoverage(400, false), true, 'and so does a small cube face');
+    // Below the floor there is no room to spread anything across.
+    assert.equal(steepFlatNeedsCoverage(120, false), false, 'a speck gets nothing');
     assert.equal(steepFlatNeedsCoverage(undefined, false), false, 'no area, no claim');
     // A pose that needs rescuing covers every steep flat, big or small.
     assert.equal(steepFlatNeedsCoverage(400, true), true, 'a rescue covers everything');
