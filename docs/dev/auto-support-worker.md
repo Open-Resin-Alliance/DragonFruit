@@ -119,10 +119,12 @@ Two details that are not obvious:
   client gives up if no ack arrives within
   `AUTO_PLACE_WORKER_STARTUP_TIMEOUT_MS` (10 s). Without it, a worker that died
   loading its graph left the caller waiting forever. The plan blocks its own
-  thread, so a heartbeat from *inside* the run is impossible without progress
-  callbacks in the pipeline: a worker that dies mid-run is still
-  indistinguishable from a slow one, and the timeout deliberately does not cover
-  that.
+  thread, so the run reports progress from *inside* it: `computeAutoSupportPlan`
+  takes an optional `AutoPlaceProgressCallback`, the shell posts
+  `{type:'progress', phase, done, total}` for each one, and the client forwards
+  them to the panel's store. A worker that dies mid-run is still
+  indistinguishable from a slow one, though — the timeout deliberately does not
+  cover that.
 - **A worker failure falls back to the in-process run**, loudly and one-way:
   `runAutoPlaceInWorker` logs the failure (with the worker's own stack, which is
   what names the module) and retries on the main thread, and the client retires
@@ -133,11 +135,14 @@ Two details that are not obvious:
 
 ## Not done yet
 
-- **Progress and cancel.** The run is off-thread, but the modal that covers the
-  UI is still indeterminate ("Elapsed: …") and has no cancel button, so the
-  *perceived* freeze only goes away once a percentage (or a ticking elapsed
-  counter) and a cancel action are wired. A cancel is safe by construction:
-  terminate the worker, reject the pending request, and the store is untouched.
+- **Cancel.** Progress is wired: the placement pass reports every 16th
+  candidate through `computeAutoSupportPlan`'s callback, the shell posts it as
+  `{type:'progress'}`, the client forwards it to the panel's store
+  (`setAutoSupportProgress`), and the modal shows a ticking elapsed counter
+  (`OrientElapsed`) plus the candidate fraction. The store clears when the run
+  ends. Cancel is still missing, and the modal is still modal — there is no way
+  out of a long run but to wait. It is safe by construction: terminate the
+  worker, reject the pending request, and the store is untouched.
 - **A failed run is only reported in the console.** The panel logs the error and
   the busy overlay clears, but nothing in the UI says the run failed, so a
   failure still looks like "it did nothing". A toast needs a new message

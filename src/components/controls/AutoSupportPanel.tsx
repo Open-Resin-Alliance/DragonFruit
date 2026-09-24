@@ -30,8 +30,26 @@ export function subscribeAutoSupportBusy(fn: () => void): () => void {
 function setAutoSupportBusy(v: boolean) {
   if (_autoSupportBusy !== v) {
     _autoSupportBusy = v;
+    // The progress belongs to the run, so it goes when the run does.
+    if (!v) setAutoSupportProgress(null);
     for (const fn of _busyListeners) fn();
   }
+}
+
+/** What the worker last reported, for the modal's progress bar. `null` while
+ *  nothing is known (before the run starts, or after it ends). */
+export type AutoSupportProgress = { phase: string; done: number; total: number };
+let _autoSupportProgress: AutoSupportProgress | null = null;
+const _progressListeners = new Set<() => void>();
+
+export function getAutoSupportProgress(): AutoSupportProgress | null { return _autoSupportProgress; }
+export function subscribeAutoSupportProgress(fn: () => void): () => void {
+  _progressListeners.add(fn);
+  return () => _progressListeners.delete(fn);
+}
+export function setAutoSupportProgress(p: AutoSupportProgress | null) {
+  _autoSupportProgress = p;
+  for (const fn of _progressListeners) fn();
 }
 
 /** Set to true while auto-support is driving its own scan, so the
@@ -191,7 +209,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, onBefore
   const runAutoSupports = React.useCallback(async (list: UseIslandsReturn['filteredIslands']) => {
     if (!activeModelId) return;
     try {
-      const result = await runAutoPlaceInWorker(list, activeModelId, getSettings().autoSupport);
+      const result = await runAutoPlaceInWorker(list, activeModelId, getSettings().autoSupport, setAutoSupportProgress);
       if (result.analytics?.sizingDebug) setSizingDebugState(result.analytics.sizingDebug);
       if (result.analytics?.forestReport) setForestReportState(result.analytics.forestReport);
     } catch (e) {

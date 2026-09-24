@@ -2568,12 +2568,17 @@ export function forestReportToText(report: ForestReport): string {
     return lines.join('\n');
 }
 
+/** Progress the pipeline reports while it runs; see `computeAutoSupportPlan`. */
+export type AutoPlaceProgress = { phase: string; done: number; total: number };
+export type AutoPlaceProgressCallback = (progress: AutoPlaceProgress) => void;
+
 export function computeAutoSupportPlan(
     islands: DetectedIsland[],
     modelId: string,
     settingsOverride?: Partial<AutoSupportSettings>,
     baseState?: SupportState,
     mesh?: THREE.Mesh,
+    onProgress?: AutoPlaceProgressCallback,
 ): AutoSupportPlan | null {
     // ------------------------------------------------------------------
     // 0. Settings
@@ -2868,7 +2873,17 @@ export function computeAutoSupportPlan(
         }
     };
 
+    // The placement pass is most of a run's wall clock, so it is what the
+    // modal's progress bar follows. Reported in batches: one postMessage per
+    // candidate would cost more than the placement does.
+    let placementIndex = 0;
+    const placementTotal = candidates.length;
     for (const candidate of candidates) {
+        if (onProgress !== undefined
+            && (placementIndex % 16 === 0 || placementIndex + 1 === placementTotal)) {
+            onProgress({ phase: 'placing', done: placementIndex + 1, total: placementTotal });
+        }
+        placementIndex++;
         placeOne(candidate);
     }
 

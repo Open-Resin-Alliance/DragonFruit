@@ -18,6 +18,7 @@ import { accelerateGeometry, initializeBVH } from '@/utils/bvh';
 import type { DetectedIsland } from '@/volumeAnalysis/Islands/types';
 import { setSnapshot } from '../state';
 import { setSettings } from '../Settings/state';
+import type { AutoPlaceProgressCallback } from './autoPlace';
 import type { SupportSettings } from '../Settings/types';
 import type { SupportState } from '../types';
 import { registerMeshForAutoBrace } from '../autoBracing/meshGeometryStore';
@@ -76,6 +77,7 @@ export type AutoPlaceWorkerRequest = {
 
 export type AutoPlaceWorkerResponse =
     | { type: 'started'; requestId: number }
+    | { type: 'progress'; requestId: number; phase: string; done: number; total: number }
     | { type: 'result'; requestId: number; plan: AutoSupportPlan | null }
     | { type: 'error'; requestId: number; error: string; stack?: string };
 
@@ -193,11 +195,14 @@ export function seedAutoPlaceEnvironment(payload: AutoPlaceWorkerPayload): THREE
 }
 
 /** The worker's whole job: seed this thread, then plan. */
-export function runAutoPlaceRequest(payload: AutoPlaceWorkerPayload): AutoSupportPlan | null {
+export function runAutoPlaceRequest(
+    payload: AutoPlaceWorkerPayload,
+    onProgress?: AutoPlaceProgressCallback,
+): AutoSupportPlan | null {
     const mesh = seedAutoPlaceEnvironment(payload);
     const islands: DetectedIsland[] = payload.islands.map((island) => ({
         ...island,
         contact: new THREE.Vector3(island.contact.x, island.contact.y, island.contact.z),
     }));
-    return computeAutoSupportPlan(islands, payload.modelId, payload.settingsOverride, payload.baseState, mesh);
+    return computeAutoSupportPlan(islands, payload.modelId, payload.settingsOverride, payload.baseState, mesh, onProgress);
 }

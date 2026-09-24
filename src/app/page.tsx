@@ -238,7 +238,7 @@ import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
 // agents/Claude/20260613-1404-Implementation-dev-islands-islands-panel-...md.
 import { useIslands } from '@/volumeAnalysis/Islands/useIslands';
 import { IslandsPanel } from '@/components/controls/IslandsPanel';
-import { AutoSupportPanel, getAutoSupportBusy, subscribeAutoSupportBusy, autoSupportDrivingScan } from '@/components/controls/AutoSupportPanel';
+import { AutoSupportPanel, getAutoSupportBusy, subscribeAutoSupportBusy, autoSupportDrivingScan, getAutoSupportProgress, subscribeAutoSupportProgress } from '@/components/controls/AutoSupportPanel';
 import { installPerfConsoleAPI } from '@/supports/PlacementLogic/Pathfinding/pathfindingPerf';
 import { getUnappliedModifiers } from '@/features/mesh-modifiers/unappliedModifiers';
 import type { UnappliedModifierAction } from '@/components/organisms/modals/ModifierModals';
@@ -6939,6 +6939,7 @@ export default function Home() {
   // identity changes, so the Generating modal keeps working across HMR —
   // a `useEffect(..., [])` closure stays bound to the dead listener set.
   const autoSupportBusy = React.useSyncExternalStore(subscribeAutoSupportBusy, getAutoSupportBusy, getAutoSupportBusy);
+  const autoSupportProgress = React.useSyncExternalStore(subscribeAutoSupportProgress, getAutoSupportProgress, getAutoSupportProgress);
   const orientationBusy = React.useSyncExternalStore(subscribeOrientationBusy, getOrientationBusy, getOrientationBusy);
 
   const islandsPoc = useIslands({
@@ -10867,12 +10868,14 @@ export default function Home() {
               <p>{islandsPoc.scanning ? 'Scanning islands & minima…' : 'Placing and bracing supports…'}</p>
             </div>
             <div className="mt-2 text-[11px] font-medium tracking-wide" style={{ color: 'var(--accent)' }}>
-              Elapsed: {islandsPoc.scanning ? islandsPoc.elapsedLabel : '…'}
+              {islandsPoc.scanning ? <>Elapsed: {islandsPoc.elapsedLabel}</> : <OrientElapsed />}
             </div>
             <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              Processing 1 model
+              {autoSupportProgress
+                ? `${autoSupportProgress.done} of ${autoSupportProgress.total} candidates`
+                : 'Processing 1 model'}
             </div>
-            <ScanProgressBar progress={islandsPoc.scanning ? islandsPoc.scanProgress : null} />
+            <ScanProgressBar progress={islandsPoc.scanning ? islandsPoc.scanProgress : autoSupportProgress} />
           </div>
         </div>
       )}

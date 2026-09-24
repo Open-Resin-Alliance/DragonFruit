@@ -16,13 +16,26 @@ self.onmessage = (event: MessageEvent<AutoPlaceWorkerRequest>) => {
     // Ack before planning. Module evaluation happens before this handler
     // exists, so a worker whose import graph threw while loading never acks —
     // and that silence is the only signal the client has that no answer is
-    // coming. (The plan itself blocks this thread, so a heartbeat from inside
-    // the run is not possible without progress callbacks in the pipeline.)
+    // coming.
     self.postMessage({ type: 'started', requestId: msg.requestId } satisfies AutoPlaceWorkerResponse);
 
     let out: AutoPlaceWorkerResponse;
     try {
-        out = { type: 'result', requestId: msg.requestId, plan: runAutoPlaceRequest(msg.payload) };
+        out = {
+            type: 'result',
+            requestId: msg.requestId,
+            plan: runAutoPlaceRequest(msg.payload, (progress) => {
+                // The plan blocks this thread, so this is the only signal the
+                // modal can get that the run is alive and how far along it is.
+                self.postMessage({
+                    type: 'progress',
+                    requestId: msg.requestId,
+                    phase: progress.phase,
+                    done: progress.done,
+                    total: progress.total,
+                } satisfies AutoPlaceWorkerResponse);
+            }),
+        };
     } catch (error) {
         // The stack matters more than the message here: the failure is usually
         // a module reaching for something the realm does not have, and only the

@@ -33,6 +33,8 @@ const pending = new Map<number, {
     reject: (error: Error) => void;
     /** Cleared by the worker's ack; fires if the worker never gets that far. */
     startupTimer: ReturnType<typeof setTimeout>;
+    /** Called for each progress message the run posts. */
+    onProgress?: (progress: { phase: string; done: number; total: number }) => void;
 }>();
 
 /**
@@ -86,6 +88,10 @@ const ensureWorker = (): Worker | null => {
                 clearTimeout(entry.startupTimer);
                 return;
             }
+            if (msg.type === 'progress') {
+                entry.onProgress?.(msg);
+                return;
+            }
             pending.delete(msg.requestId);
             clearTimeout(entry.startupTimer);
             if (msg.type === 'error') {
@@ -134,7 +140,11 @@ const serializeMeshForModel = (modelId: string): { mesh?: SerializedModelMesh; m
     return { mesh: serialized, meshKey: key };
 };
 
-const requestPlan = (target: Worker, payload: AutoPlaceWorkerPayload): Promise<AutoSupportPlan | null> => {
+const requestPlan = (
+    target: Worker,
+    payload: AutoPlaceWorkerPayload,
+    onProgress?: (progress: { phase: string; done: number; total: number }) => void,
+): Promise<AutoSupportPlan | null> => {
     const requestId = requestSeq++;
     return new Promise((resolve, reject) => {
         const startupTimer = setTimeout(() => {
@@ -148,7 +158,7 @@ const requestPlan = (target: Worker, payload: AutoPlaceWorkerPayload): Promise<A
             ));
         }, AUTO_PLACE_WORKER_STARTUP_TIMEOUT_MS);
 
-        pending.set(requestId, { resolve, reject, startupTimer });
+        pending.set(requestId, { resolve, reject, startupTimer, onProgress });
         target.postMessage({ type: 'run', requestId, payload });
     });
 };
@@ -167,6 +177,7 @@ export async function runAutoPlaceInWorker(
     islands: DetectedIsland[],
     modelId: string,
     settingsOverride?: Partial<AutoSupportSettings>,
+    onProgress?: (progress: { phase: string; done: number; total: number }) => void,
 ): Promise<AutoPlaceResult> {
     const target = ensureWorker();
     if (!target) {
@@ -184,7 +195,7 @@ export async function runAutoPlaceInWorker(
             appSettings: getSettings(),
             baseState: getSnapshot(),
             ...serializeMeshForModel(modelId),
-        });
+        }, onProgress);
     } catch (error) {
         console.error(
             '[AutoSupport] worker run failed, falling back to the in-process run. ' +
