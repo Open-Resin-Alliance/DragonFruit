@@ -68,41 +68,6 @@ export function toppleVertexWeights(
   return out;
 }
 
-/**
- * Keys (quantized positions, see `vertexKey`) of the painted vertices that also
- * belong to an unpainted face — the painted set's boundary.
- *
- * Blending the colour only fixes the seams *inside* the painted set. Where the
- * set ends, the overlay stops dead, and that edge runs along triangle edges
- * exactly like the seams did, so it still reads as a staircase. The boundary
- * vertices are what the shader fades out: the outermost ring of triangles then
- * ramps to transparent instead of cutting off.
- *
- * `paintedFace` is one flag per face of the whole mesh, `paintedKeys` the keys
- * of every painted face's corners.
- */
-export function paintedBoundaryKeys(
-  positions: ArrayLike<number>,
-  index: ArrayLike<number> | null | undefined,
-  paintedFace: Uint8Array,
-  paintedKeys: Set<string>,
-): Set<string> {
-  const boundary = new Set<string>();
-  const hasIndex = !!index && index.length > 0;
-  const faceCount = hasIndex
-    ? Math.floor((index as ArrayLike<number>).length / 3)
-    : Math.floor(positions.length / 9);
-  for (let f = 0; f < faceCount; f++) {
-    if (paintedFace[f]) continue;
-    for (let c = 0; c < 3; c++) {
-      const i = (hasIndex ? (index as ArrayLike<number>)[f * 3 + c] : f * 3 + c) * 3;
-      const key = vertexKey(positions[i], positions[i + 1], positions[i + 2]);
-      if (paintedKeys.has(key)) boundary.add(key);
-    }
-  }
-  return boundary;
-}
-
 /** Quantized position key. Shared by the weight field and the boundary test, so
  *  the two agree on what "the same vertex" means. */
 export function vertexKey(x: number, y: number, z: number): string {
@@ -112,9 +77,9 @@ export function vertexKey(x: number, y: number, z: number): string {
 /**
  * Shader injection for an overlay material.
  *
- * `aFade` ramps the alpha to zero over the outermost ring of the painted set,
- * which is what removes the staircase where the overlay ends. `aWeight`, when
- * ramped, blends the colour across the seams inside it.
+ * `aWeight`, when ramped, blends the colour across the seams inside the
+ * painted set. An alpha feather at the set's outer edge was tried and removed:
+ * semi-transparent overlay triangles glitch against the model.
  *
  * The colours travel as uniforms, not as a vertex colour attribute: three
  * converts a uniform Color exactly as it converts material.color, so the ramp
@@ -126,26 +91,20 @@ function applyOverhangShader(material: THREE.MeshBasicMaterial, ramped: boolean)
     shader.vertexShader = shader.vertexShader
       .replace(
         '#include <common>',
-        `#include <common>\nattribute float aFade;\nvarying float vFade;\n${
-          ramped ? 'attribute float aWeight;\nvarying float vWeight;' : ''
-        }`,
+        `#include <common>\n${ramped ? 'attribute float aWeight;\nvarying float vWeight;' : ''}`,
       )
       .replace(
         '#include <begin_vertex>',
-        `#include <begin_vertex>\nvFade = aFade;\n${ramped ? 'vWeight = aWeight;' : ''}`,
+        `#include <begin_vertex>\n${ramped ? 'vWeight = aWeight;' : ''}`,
       );
     shader.fragmentShader = shader.fragmentShader
       .replace(
         '#include <common>',
-        `#include <common>\nvarying float vFade;\n${
-          ramped ? 'varying float vWeight;\nuniform vec3 uCool;\nuniform vec3 uHot;' : ''
-        }`,
+        `#include <common>\n${ramped ? 'varying float vWeight;\nuniform vec3 uCool;\nuniform vec3 uHot;' : ''}`,
       )
       .replace(
         '#include <color_fragment>',
-        `diffuseColor.a *= clamp( vFade, 0.0, 1.0 );\n${
-          ramped ? 'diffuseColor.rgb = mix( uCool, uHot, clamp( vWeight, 0.0, 1.0 ) );' : ''
-        }`,
+        `${ramped ? 'diffuseColor.rgb = mix( uCool, uHot, clamp( vWeight, 0.0, 1.0 ) );' : ''}`,
       );
     if (ramped) {
       shader.uniforms.uCool = { value: TOPPLE_COOL };
@@ -185,31 +144,6 @@ export function IslandOverhangOverlay({ geometry, regions }: IslandOverhangOverl
     // The ramp is normalised by the largest patch in the scan, so it needs no
     // calibrated constant and every scan shows its own relative loads.
     const maxMomentMm3 = regions.reduce((m, r) => Math.max(m, r.dragMomentMm3 ?? 0), 0);
-    const faceCount = index ? Math.floor(index.count / 3) : Math.floor(pos.count / 3);
-    const paintedFace = new Uint8Array(faceCount);
-    const paintedKeys = new Set<string>();
-    const cornerAt = (ti: number, c: number): number =>
-      (index ? index.getX(ti * 3 + c) : ti * 3 + c) * 3;
-    for (const region of regions) {
-      for (const ti of region.triangleIds ?? []) {
-        if (ti >= faceCount) continue;
-        paintedFace[ti] = 1;
-        for (let c = 0; c < 3; c++) {
-          const i = cornerAt(ti, c);
-          paintedKeys.add(vertexKey(pos.getX(i), pos.getY(i), pos.getZ(i)));
-        }
-      }
-    }
-    const boundary = paintedBoundaryKeys(pos.array, index?.array ?? null, paintedFace, paintedKeys);
-    // One ring of triangles ramps to transparent at the painted set's edge, so
-    // the overlay does not stop dead along a triangle edge.
-    const fadeFor = (arr: ArrayLike<number>): Float32Array => {
-      const out = new Float32Array(Math.floor(arr.length / 3));
-      for (let v = 0; v < out.length; v++) {
-        out[v] = boundary.has(vertexKey(arr[v * 3], arr[v * 3 + 1], arr[v * 3 + 2])) ? 0 : 1;
-      }
-      return out;
-    };
 
     // Topple patches go into ONE mesh so a shared boundary vertex can carry the
     // average of both sides: per-region meshes cannot blend across an edge.
@@ -248,10 +182,8 @@ export function IslandOverhangOverlay({ geometry, regions }: IslandOverhangOverl
         continue;
       }
 
-      const arr = copyRegion(region);
       const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.BufferAttribute(arr, 3));
-      g.setAttribute('aFade', new THREE.BufferAttribute(fadeFor(arr), 1));
+      g.setAttribute('position', new THREE.BufferAttribute(copyRegion(region), 3));
       g.computeVertexNormals();
       meshes.push({ id: region.id, geometry: g, color: formationOverhangColor() });
     }
@@ -264,7 +196,6 @@ export function IslandOverhangOverlay({ geometry, regions }: IslandOverhangOverl
         'aWeight',
         new THREE.BufferAttribute(toppleVertexWeights(topplePositions, toppleShares), 1),
       );
-      toppleGeometry.setAttribute('aFade', new THREE.BufferAttribute(fadeFor(topplePositions), 1));
       toppleGeometry.computeVertexNormals();
     }
     return { meshes, toppleGeometry };

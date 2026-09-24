@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { formationOverhangColor, paintedBoundaryKeys, toppleVertexWeights, vertexKey } from '../IslandOverhangOverlay';
+import { formationOverhangColor, toppleVertexWeights } from '../IslandOverhangOverlay';
 
 const FORMATION_ORANGE = '#ffa500';
 
@@ -35,29 +35,6 @@ test('an unshared vertex keeps its own share', () => {
     const lone = [0, 0, 0, 1, 0, 0, 0, 1, 0];
     const w = toppleVertexWeights(lone, [0.75]);
     assert.deepEqual([...w], [0.75, 0.75, 0.75]);
-});
-
-test('the painted set boundary is where an unpainted face touches it', () => {
-    // Three triangles in a row; the first two are painted. The two corners they
-    // share with the unpainted third have to fade out, the two on the far side
-    // are interior and stay solid.
-    const positions = [
-        0, 0, 0, 1, 0, 0, 0, 1, 0, // face 0, painted
-        1, 0, 0, 1, 1, 0, 0, 1, 0, // face 1, painted
-        1, 0, 0, 2, 0, 0, 1, 1, 0, // face 2, unpainted
-    ];
-    const paintedKeys = new Set([
-        vertexKey(0, 0, 0),
-        vertexKey(1, 0, 0),
-        vertexKey(0, 1, 0),
-        vertexKey(1, 1, 0),
-    ]);
-    const boundary = paintedBoundaryKeys(positions, null, new Uint8Array([1, 1, 0]), paintedKeys);
-
-    assert.ok(boundary.has(vertexKey(1, 0, 0)), 'touches the unpainted face');
-    assert.ok(boundary.has(vertexKey(1, 1, 0)), 'and so does this one');
-    assert.equal(boundary.has(vertexKey(0, 0, 0)), false, 'this one is interior');
-    assert.equal(boundary.has(vertexKey(0, 1, 0)), false, 'and this one');
 });
 
 test('the field stays finite and in range', () => {
