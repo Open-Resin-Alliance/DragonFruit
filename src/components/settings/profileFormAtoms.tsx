@@ -1411,58 +1411,67 @@ export function MaterialAntiAliasingSection({ draft, onChange, lockActivationTog
                         </div>
                     </AaCard>
 
-                    <AaCard
-                        title="Support Adjustments"
-                        description="Controls anti-aliasing and penetration offsets applied to support and raft geometry."
-                    >
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                            <LabeledToggleInput
-                                label="Apply AA to Support Geometry"
-                                helpText="Disabled keeps supports crisp and binary. Enabled allows anti-aliased support edges too."
-                                checked={settings.aaOnSupports}
-                                onChange={(value) => updateAaSettings({ aaOnSupports: value })}
-                            />
-                            <AaSelectDropdown
-                                label="Tip Compensation Offset Mode"
-                                value={settings.tipOffsetMode}
-                                helpText="Automatic derives penetration offset from Z blur radius and layer height. Manual uses explicit distance."
-                                onChange={(value) => {
-                                    const nextMode = value as 'disabled' | 'auto' | 'manual';
-                                    if (nextMode === 'manual' && settings.tipOffsetMode === 'auto') {
-                                        updateAaSettings({ tipOffsetMode: 'manual', tipOffsetMm: calculatedOffset });
-                                    } else {
-                                        updateAaSettings({ tipOffsetMode: nextMode });
-                                    }
-                                }}
-                                options={[
-                                    { value: 'disabled', label: 'Disabled' },
-                                    { value: 'auto', label: 'Automatic' },
-                                    { value: 'manual', label: 'Manual' },
-                                ]}
-                            />
-                            {settings.tipOffsetMode !== 'disabled' && (
-                                <LabeledNumberInput
-                                    label="Compensation Distance (mm)"
-                                    helpText="Penetration depth of support tips into the model to compensate for grayscale AA curing softness."
-                                    disabled={settings.tipOffsetMode === 'auto'}
-                                    precision={3}
-                                    step={0.001}
-                                    value={settings.tipOffsetMode === 'auto' ? calculatedOffset : settings.tipOffsetMm}
-                                    onChange={(val) => updateAaSettings({ tipOffsetMm: val, tipOffsetMode: 'manual' })}
-                                />
-                            )}
-                            {settings.tipOffsetMode !== 'disabled' && (
-                                <LabeledToggleInput
-                                    label="Display Offset in Viewport"
-                                    helpText="Show calculated penetration distance indicator on support tips in 3D viewport."
-                                    checked={settings.tipOffsetDisplayInUi}
-                                    onChange={(value) => updateAaSettings({ tipOffsetDisplayInUi: value })}
-                                />
-                            )}
-                        </div>
-                    </AaCard>
                 </>
             )}
+            <AaCard
+                className="md:col-span-2"
+                title="Support Adjustments"
+                description="Controls support AA, penetration offsets, and 3DAA sliced contact size."
+            >
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 items-end">
+                    <LabeledToggleInput
+                        label="Apply AA to Support Geometry"
+                        helpText="Disabled keeps supports crisp and binary. Enabled allows anti-aliased support edges too."
+                        checked={settings.aaOnSupports}
+                        onChange={(value) => updateAaSettings({ aaOnSupports: value })}
+                    />
+                    <LabeledNumberInput
+                        label="3DAA tip shrink (%)"
+                        helpText="Reduces contact footprints only in 3DAA sliced output. Viewport supports and mesh exports keep their original dimensions."
+                        step={1}
+                        precision={0}
+                        value={settings.supportTipShrinkPercent}
+                        onChange={(value) => updateAaSettings({ supportTipShrinkPercent: Math.round(clampAaNumber(value, 10, 0, 90)) })}
+                    />
+                    <AaSelectDropdown
+                        label="Tip Compensation Offset Mode"
+                        value={overrideEnabled ? settings.tipOffsetMode : 'auto'}
+                        disabled={!overrideEnabled}
+                        helpText="Automatic derives penetration offset from Z blur radius and layer height. Enable Override Auto to change the mode."
+                        onChange={(value) => {
+                            const nextMode = value as 'disabled' | 'auto' | 'manual';
+                            if (nextMode === 'manual' && settings.tipOffsetMode === 'auto') {
+                                updateAaSettings({ tipOffsetMode: 'manual', tipOffsetMm: calculatedOffset });
+                            } else {
+                                updateAaSettings({ tipOffsetMode: nextMode });
+                            }
+                        }}
+                        options={[
+                            { value: 'disabled', label: 'Disabled' },
+                            { value: 'auto', label: 'Automatic' },
+                            { value: 'manual', label: 'Manual' },
+                        ]}
+                    />
+                    {overrideEnabled && settings.tipOffsetMode === 'manual' && (
+                        <LabeledNumberInput
+                            label="Compensation Distance (mm)"
+                            helpText="Penetration depth of support tips into the model to compensate for grayscale AA curing softness."
+                            precision={3}
+                            step={0.001}
+                            value={settings.tipOffsetMm}
+                            onChange={(val) => updateAaSettings({ tipOffsetMm: val })}
+                        />
+                    )}
+                    {(!overrideEnabled || settings.tipOffsetMode !== 'disabled') && (
+                        <LabeledToggleInput
+                            label="Display Offset in Viewport"
+                            helpText="Show calculated penetration distance indicator on support tips in 3D viewport."
+                            checked={settings.tipOffsetDisplayInUi}
+                            onChange={(value) => updateAaSettings({ tipOffsetDisplayInUi: value })}
+                        />
+                    )}
+                </div>
+            </AaCard>
         </div>
     );
 }

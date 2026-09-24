@@ -36,6 +36,7 @@ export type RasterLayerZipExportOptions = {
   printerProfile: PrinterProfile;
   materialProfile: MaterialProfile;
   filenameBase: string;
+  supportTipShrinkPercent?: number;
   outputMode?: 'download' | 'return';
   abortSignal?: AbortSignal;
   onProgress?: (done: number, total: number, phase: string) => void;
@@ -791,6 +792,7 @@ function appendContactConePrimitive(
   },
   radialSegments = 12,
   penetrationMm = 0,
+  tipScale = 1,
 ): void {
   const socket = getFinalSocketPosition(cone as any);
   const effectiveNormal = cone.surfaceNormal ?? cone.normal;
@@ -803,7 +805,7 @@ function appendContactConePrimitive(
   const g = createFrustumGeometryBetween(
     start,
     end,
-    Math.max(0.05, cone.profile.contactDiameterMm * 0.5),
+    Math.max(0.05, cone.profile.contactDiameterMm * 0.5 * tipScale),
     Math.max(0.05, cone.profile.bodyDiameterMm * 0.5),
     Math.max(4, Math.floor(radialSegments)),
   );
@@ -817,9 +819,10 @@ function appendContactDiskPrimitive(
   disk: ContactDisk,
   radialSegments: number,
   penetrationMm = 0.05,
+  tipScale = 1,
 ): void {
   const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile);
-  const radius = Math.max(0.01, disk.contactDiameterMm * 0.5);
+  const radius = Math.max(0.01, disk.contactDiameterMm * 0.5 * tipScale);
 
   const center = getDiskCenter(disk.pos, disk.surfaceNormal, thickness);
   const rotation = getDiskRotation(disk.surfaceNormal);
@@ -853,12 +856,14 @@ function appendContactDiskPrimitive(
 export function buildSupportAndRaftWorldTriangles(
   visibleModelIds: Set<string>,
   collector?: TriangleFloatCollector,
+  supportTipShrinkPercent = 0,
 ): WorldTriangle[] {
   if (visibleModelIds.size === 0) return [];
 
   const out: WorldTriangle[] = [];
   const supportState = getSupportSnapshot();
   const sink: TriangleSink = collector ?? out;
+  const tipScale = 1 - supportTipShrinkPercent / 100;
   const raftSettings = getRaftSettings();
   const hasSolidBottom = raftSettings.bottomMode === 'solid';
   const raftThickness = raftSettings.thickness;
@@ -1056,9 +1061,9 @@ export function buildSupportAndRaftWorldTriangles(
         if (!contact) continue;
         const kind = field === descriptor.lower.field ? descriptor.lower.kind : descriptor.upper.kind;
         if (kind === 'disk') {
-          appendContactDiskPrimitive(sink, contact as ContactDisk, tessellation.contactConeRadialSegments, tipPenetrationMm);
+          appendContactDiskPrimitive(sink, contact as ContactDisk, tessellation.contactConeRadialSegments, tipPenetrationMm, tipScale);
         } else {
-          appendContactConePrimitive(sink, contact as any, tessellation.contactConeRadialSegments, tipPenetrationMm);
+          appendContactConePrimitive(sink, contact as any, tessellation.contactConeRadialSegments, tipPenetrationMm, tipScale);
         }
       }
     }
@@ -2310,7 +2315,7 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
   });
 
   const visibleModelIds = new Set(visibleModels.map((model) => model.id));
-  buildSupportAndRaftWorldTriangles(visibleModelIds, collector);
+  buildSupportAndRaftWorldTriangles(visibleModelIds, collector, options.supportTipShrinkPercent ?? 0);
   emitMeshPrepDiagnostic('Mesh prep: supports', 2, 4, {
     triangleCountAfterSupports: collector.triangleCount,
   });

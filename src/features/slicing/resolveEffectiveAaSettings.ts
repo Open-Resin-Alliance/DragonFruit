@@ -40,12 +40,7 @@ export function resolveEffectiveAaSettings(
 
     // If override is NOT active, return physics-derived auto defaults
     if (!enableOverride) {
-        const effZBlur = typeof settings.zBlurRadiusLayers === 'number'
-            ? Math.max(0, Math.round(settings.zBlurRadiusLayers))
-            : autoCfg.zBlurRadiusLayers;
-        const autoTipOffset = settings.tipOffsetMode === 'disabled'
-            ? 0.05
-            : Number(((2 * effZBlur + 1) * safeLayerH).toFixed(3));
+        const autoTipOffset = Number(((2 * autoCfg.zBlurRadiusLayers + 1) * safeLayerH).toFixed(3));
         return {
             mode: autoCfg.aaMode,
             aaSteps: autoCfg.aaSteps,
@@ -58,8 +53,8 @@ export function resolveEffectiveAaSettings(
             zBlurSigma: 0.5,
             zBlendLookBack: autoCfg.zBlendLookBack,
             aaOnSupports: Boolean(settings.aaOnSupports),
-            tipOffsetMm: settings.tipOffsetMode === 'manual' ? settings.tipOffsetMm : autoTipOffset,
-            tipOffsetMode: settings.tipOffsetMode ?? 'disabled',
+            tipOffsetMm: autoTipOffset,
+            tipOffsetMode: 'auto',
         };
     }
 
@@ -114,6 +109,6 @@ export function resolveEffectiveAaSettings(
         zBlendLookBack,
         aaOnSupports: Boolean(settings.aaOnSupports),
         tipOffsetMm: effectiveTipOffset,
-        tipOffsetMode: settings.tipOffsetMode ?? 'disabled',
+        tipOffsetMode: settings.tipOffsetMode ?? 'auto',
     };
 }
