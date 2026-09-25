@@ -162,6 +162,7 @@ function quantizeMeshChunkToUint16(chunk: Uint8Array, bounds: ReturnType<typeof 
 
 export type SliceExportOrchestratorOptions = {
     models: LoadedModel[];
+    excludedModelIds?: readonly string[];
     printerProfile: PrinterProfile;
     materialProfile: MaterialProfile;
     filenameBase: string;
@@ -452,6 +453,14 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         }));
     };
 
+    const excludedModelIdSet = new Set(options.excludedModelIds ?? []);
+    const visibleModels = options.models.filter(
+        (model) => model.visible && !excludedModelIdSet.has(model.id),
+    );
+    if (visibleModels.length === 0) {
+        throw new Error('No in-bounds visible models available for slicing.');
+    }
+
     const format = resolveSlicingFormatDefinition({
         printerProfile: options.printerProfile,
         materialProfile: options.materialProfile,
@@ -472,6 +481,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         printer: options.printerProfile.name,
         material: options.materialProfile.name,
         modelCount: options.models.length,
+        excludedModelCount: excludedModelIdSet.size,
     });
 
     throwIfAborted(options.abortSignal);
@@ -483,10 +493,10 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     options.onProgress?.(0, 1, 'Preparing');
     emitDiagnosticProgress('Preparing mesh', 0, 1, {
         format: format.outputFormat,
-        modelCount: options.models.length,
+        modelCount: visibleModels.length,
     });
 
-    const initialMeshStagingBytes = estimateInitialMeshStagingBytes(options.models);
+    const initialMeshStagingBytes = estimateInitialMeshStagingBytes(visibleModels);
     const meshTransportBytesEstimate = Math.ceil(initialMeshStagingBytes / 2);
     const meshTransportEncoding: 'raw_f32' | 'quantized_u16' = MESH_TRANSPORT_ENCODING;
     const meshTransportQuantization = resolveMeshTransportQuantizationBounds(options.printerProfile);
@@ -579,7 +589,6 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         }
     };
 
-    const visibleModels = options.models.filter((model) => model.visible);
     const modifierBakeStartMs = performance.now();
     options.onProgress?.(0, 1, 'Baking Modifiers');
     const preparedModelsForOutput = await prepareLoadedModelsForOutput(visibleModels);

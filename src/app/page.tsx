@@ -6372,6 +6372,17 @@ export default function Home() {
     return SUPPORT_COLLECTION_KEYS.some((key) => hasAnyEntries(supportStateSnapshot[key]));
   }, [hasAnyEntries, raftSettingsSnapshot.bottomMode, supportStateSnapshot]);
 
+  const slicingModels = React.useMemo(
+    () => scene.models.filter((model) => model.visible && resinInBoundsModelIdSet.has(model.id)),
+    [resinInBoundsModelIdSet, scene.models],
+  );
+  const excludedSliceModelIds = React.useMemo(
+    () => scene.models
+      .filter((model) => model.visible && !resinInBoundsModelIdSet.has(model.id))
+      .map((model) => model.id),
+    [resinInBoundsModelIdSet, scene.models],
+  );
+
   // For non-printing workflows, avoid expensive world-triangle projection work by default.
   // Keep layer floor at 0 when support/raft geometry exists so layer-1 alignment is correct.
   //
@@ -6380,8 +6391,7 @@ export default function Home() {
   // Box3.applyMatrix4 which overestimates the envelope for rotated models.
   const accurateMaxZ = React.useMemo(() => {
     let maxZ = 0;
-    for (const model of scene.models) {
-      if (!model.visible) continue;
+    for (const model of slicingModels) {
       const position = model.geometry.geometry.getAttribute('position');
       if (!position) continue;
       const center = model.geometry.center;
@@ -6405,12 +6415,12 @@ export default function Home() {
       }
     }
     return maxZ;
-  }, [scene.models]);
+  }, [slicingModels]);
 
   const fallbackZRange = React.useMemo(() => ({
     min: hasSupportOrRaftGeometry ? 0 : (scene.sceneBounds?.min.z ?? 0),
-    max: accurateMaxZ > 0 ? accurateMaxZ : (scene.sceneBounds?.max.z ?? 100),
-  }), [hasSupportOrRaftGeometry, scene.sceneBounds, accurateMaxZ]);
+    max: slicingModels.length > 0 ? accurateMaxZ : 0,
+  }), [hasSupportOrRaftGeometry, slicingModels.length, scene.sceneBounds, accurateMaxZ]);
 
   const normalizeToSlicerZRange = React.useCallback((range: { min: number; max: number }) => {
     const maxZMm = Math.max(0, Number(range.max) || 0);
@@ -6438,8 +6448,7 @@ export default function Home() {
 
   const projectedZRangeCacheRef = React.useRef<Map<string, { min: number; max: number }>>(new Map());
   const buildProjectedZRangeCacheKey = React.useCallback(() => {
-    const visibleSignature = scene.models
-      .filter((model) => model.visible)
+    const visibleSignature = slicingModels
       .map((model) => {
         const t = model.transform;
         return [
@@ -6470,7 +6479,7 @@ export default function Home() {
     ].join('||');
   }, [
     raftSettingsSnapshot.bottomMode,
-    scene.models,
+    slicingModels,
     supportRenderRefreshNonce,
     supportStateSnapshot,
   ]);
@@ -6498,7 +6507,7 @@ export default function Home() {
 
       const run = () => {
         if (cancelled) return;
-        const projected = buildProjectedCrossSectionZRange(scene.models);
+        const projected = buildProjectedCrossSectionZRange(slicingModels);
         const baseRange = projected ?? fallbackZRange;
         const nextRange = shouldUseSlicerAlignedRange
           ? normalizeToSlicerZRange(baseRange)
@@ -6542,18 +6551,18 @@ export default function Home() {
     fallbackZRange,
     printingArtifact,
     scene.mode,
-    scene.models,
+    slicingModels,
     setSceneZRangeIfChanged,
   ]);
 
   const slicing = useSlicingManager({
-    hasGeometry: scene.models.length > 0,
+    hasGeometry: slicingModels.length > 0,
     zRange: sceneZRange,
     layerHeightMm: crossSectionLayerHeightMm,
   });
 
   const estimatedSlicerLayerCount = React.useMemo(() => {
-    if (scene.models.length === 0) return 0;
+    if (slicingModels.length === 0) return 0;
 
     const layerHeightMm = Math.max(0.001, crossSectionLayerHeightMm || 0.05);
     const printableMaxZMm = Math.max(0, Number(sceneZRange.max) || 0);
@@ -6563,13 +6572,12 @@ export default function Home() {
       : printableMaxZMm;
 
     return Math.max(0, Math.ceil(slicerHeightMm / layerHeightMm));
-  }, [activePrinterProfile?.buildVolumeMm.height, crossSectionLayerHeightMm, scene.models.length, sceneZRange.max]);
+  }, [activePrinterProfile?.buildVolumeMm.height, crossSectionLayerHeightMm, sceneZRange.max, slicingModels.length]);
 
   const modelStatsEstimatedPrintTimeLabel = React.useMemo(() => {
     if (!activeMaterialProfile) return '—';
 
-    const visibleModels = scene.models.filter((model) => model.visible);
-    if (visibleModels.length === 0) return '—';
+    if (slicingModels.length === 0) return '—';
 
     const totalLayers = estimatedSlicerLayerCount;
     if (totalLayers <= 0) return '—';
@@ -6591,7 +6599,7 @@ export default function Home() {
     );
 
     return formatEstimatedPrintTimeLabel(_, totalSec);
-  }, [_, activeMaterialProfile, estimatedSlicerLayerCount, scene.models]);
+  }, [_, activeMaterialProfile, estimatedSlicerLayerCount, slicingModels.length]);
 
   const printingCurrentHeightMm = React.useMemo(() => {
     if (scene.mode !== 'printing') return null;
@@ -9915,6 +9923,7 @@ export default function Home() {
               handleExportSuccess: handleExportSuccess,
               showOperationError: showOperationError,
               estimatedSlicerLayerCount: estimatedSlicerLayerCount,
+              excludedSliceModelIds: excludedSliceModelIds,
               crossSectionLayerHeightMm: crossSectionLayerHeightMm,
               estimatedVolumeMlLabel: estimatedVolumeMlLabel,
               handleSliceRunStartedForPrinting: handleSliceRunStartedForPrinting,
