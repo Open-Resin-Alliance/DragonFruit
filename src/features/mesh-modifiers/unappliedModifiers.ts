@@ -1,14 +1,19 @@
 import type { ModelMeshModifiers } from './types';
 
+/** Panel-only hollowing metadata is not geometry waiting to be baked. */
+export function hasHollowingToBake(modifiers: ModelMeshModifiers | undefined): boolean {
+    const hollowing = modifiers?.hollowing;
+    return Boolean(
+        hollowing?.enabled && !hollowing.bakedIntoGeometry
+        && hollowing.sourcePositionsBase64
+        && Number.isInteger(hollowing.sourcePositionCount)
+        && (hollowing.sourcePositionCount ?? 0) > 0,
+    );
+}
+
 /**
- * Which of a model's modifiers are still unapplied — the state the UI is about
- * to change its mind about.
- *
- * Hole punches and hollowing are baked into the mesh at different moments:
- * slicing/export applies both (`prepareModelGeometry`), while support
- * generation runs against the mesh as it stands right now. So a model with
- * unapplied holes or unapplied hollowing can have supports generated across
- * geometry that is about to be cut away or hollowed out.
+ * Warn before support generation about unapplied holes and source-backed hollowing.
+ * A flags-only panel draft has no hollowing source to bake at slice time.
  */
 export function getUnappliedModifiers(modifiers: ModelMeshModifiers | undefined): {
     holePunches: boolean;
@@ -17,6 +22,6 @@ export function getUnappliedModifiers(modifiers: ModelMeshModifiers | undefined)
     const punches = modifiers?.holePunches;
     return {
         holePunches: Boolean(punches && punches.length > 0 && !modifiers?.holePunchesBakedIntoGeometry),
-        hollowing: Boolean(modifiers?.hollowing?.enabled && !modifiers.hollowing.bakedIntoGeometry),
+        hollowing: hasHollowingToBake(modifiers),
     };
 }

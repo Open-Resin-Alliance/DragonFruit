@@ -18,6 +18,8 @@ const HOLLOWING_MODIFIERS: ModelMeshModifiers = {
     mode: 'cavity',
     voxelSizeMm: 0.65,
     shellThicknessMm: 1.2,
+    sourcePositionsBase64: Buffer.from(new Float32Array([0, 0, 0, 10, 0, 0, 0, 10, 0]).buffer).toString('base64'),
+    sourcePositionCount: 3,
     openFace: 'z_max',
   },
 };

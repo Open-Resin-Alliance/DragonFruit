@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
+import { snapshotGeometryPositions } from '@/utils/geometrySnapshot';
 import { clearPreparedGeometryCacheForModel, prepareModelGeometryForOutput } from '../prepareModelGeometry';
 import { deleteStoredMeshModifiers, storeModelMeshModifiers } from '../meshModifierStore';
 
@@ -68,6 +69,7 @@ function buildHollowedModel(
       hollowing: {
         enabled: true,
         bakedIntoGeometry: false,
+        ...snapshotGeometryPositions(geometry),
         blockedVoxelIndices,
         mode: 'cavity',
         voxelSizeMm: 0.5,
@@ -77,6 +79,28 @@ function buildHollowedModel(
     },
   } as unknown as LoadedModel;
 }
+
+test('flags-only hollowing leaves the restored model solid at output', async () => {
+  const calls = installFakeTauri();
+  const model = buildHollowedModel(new THREE.Euler(), []);
+  const source = model.meshModifiers?.hollowing;
+  assert.ok(source);
+  model.meshModifiers = undefined;
+  try {
+    storeModelMeshModifiers(model.id, {
+      hollowing: { ...source, sourcePositionsBase64: undefined, sourcePositionCount: undefined },
+    });
+    const prepared = await prepareModelGeometryForOutput(model);
+    assert.equal(prepared.geometry, model.geometry.geometry);
+    assert.equal(prepared.disposeAfterUse, false);
+    assert.equal(calls.filter(({ cmd }) => cmd === 'mesh_hollow_staged').length, 0);
+  } finally {
+    clearPreparedGeometryCacheForModel(model.id);
+    deleteStoredMeshModifiers(model.id);
+    model.geometry.geometry.dispose();
+    delete (globalThis as { window?: unknown }).window;
+  }
+});
 
 test('slice-time hollowing forwards painted blocked voxel indices', async () => {
   const calls = installFakeTauri();

@@ -33,7 +33,12 @@ test('streamed slice input excludes raw hollowing output and preserves the model
   // The transport planner uses this estimate. Force streaming without allocating
   // a multi-million-triangle fixture; the collector reads the actual geometry.
   model.polygonCount = 16_000_000;
-  const hollowing = { enabled: true, bakedIntoGeometry: false, mode: 'cavity', voxelSizeMm: 0.5, shellThicknessMm: 1, openFace: 'z_max' } as const;
+  const hollowing = {
+    enabled: true, bakedIntoGeometry: false, mode: 'cavity', voxelSizeMm: 0.5,
+    shellThicknessMm: 1, openFace: 'z_max',
+    sourcePositionsBase64: Buffer.from(original.buffer).toString('base64'),
+    sourcePositionCount: original.length / 3,
+  } as const;
   storeModelMeshModifiers(model.id, { hollowing });
   const redoneModel = modelFromPositions(model.id, hollowed);
   redoneModel.polygonCount = model.polygonCount;
@@ -152,6 +157,13 @@ test('streamed slice input excludes raw hollowing output and preserves the model
     const removed = await stage(model);
     assert.deepEqual(new Uint16Array(removed.bytes.buffer, removed.bytes.byteOffset, removed.bytes.byteLength / 2), originalEncoded);
     assert.equal(hollowCalls, 1, 'Remove Hollowing must not rebake the shell');
+
+    storeModelMeshModifiers(model.id, {
+      hollowing: { ...hollowing, sourcePositionsBase64: undefined, sourcePositionCount: undefined },
+    });
+    const flagsOnly = await stage(model);
+    assert.deepEqual(new Uint16Array(flagsOnly.bytes.buffer, flagsOnly.bytes.byteOffset, flagsOnly.bytes.byteLength / 2), originalEncoded);
+    assert.equal(hollowCalls, 1, 'enabled/unbaked flags without a source must not invoke native hollowing');
   } finally {
     if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow);
     else Reflect.deleteProperty(globalThis, 'window');

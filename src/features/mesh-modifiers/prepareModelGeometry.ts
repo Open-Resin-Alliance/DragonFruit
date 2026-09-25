@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import type { ModelHolePunchPlacement, ModelHollowingModifier } from './types';
 import { resolveModelMeshModifiers } from './meshModifierStore';
+import { hasHollowingToBake } from './unappliedModifiers';
 import {
   buildRotationSignature,
   computeVoxelResolution,
@@ -69,9 +70,7 @@ function getEffectiveBlockedVoxelIndices(
 
 function buildModifierSignature(model: LoadedModel): string | null {
   const modifiers = resolveModelMeshModifiers(model);
-  const hollowing = modifiers?.hollowing?.enabled && !modifiers.hollowing.bakedIntoGeometry
-    ? modifiers.hollowing
-    : null;
+  const hollowing = hasHollowingToBake(modifiers) ? modifiers?.hollowing : null;
   const shouldApplyPunches = !modifiers?.holePunchesBakedIntoGeometry;
   const punches = shouldApplyPunches
     ? (modifiers?.holePunches ?? []).filter((placement) => placement.radiusMm > 0 && placement.depthMm > 0)
@@ -264,7 +263,7 @@ export async function prepareModelGeometryForOutput(model: LoadedModel): Promise
   // silently skipped at slice/export time.
   const modifiers = resolveModelMeshModifiers(model);
   const hollowing = modifiers?.hollowing;
-  const shouldApplyHollowing = Boolean(hollowing?.enabled && !hollowing.bakedIntoGeometry);
+  const shouldApplyHollowing = hasHollowingToBake(modifiers);
   // Hole punches are never auto-applied during slice/export — the user must
   // explicitly bake them first (via the hole-punch panel's Apply button or a
   // pre-slice confirmation dialog). This prevents unapplied LYS-imported holes
