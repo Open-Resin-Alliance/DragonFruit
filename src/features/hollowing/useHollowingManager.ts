@@ -388,18 +388,10 @@ export function useHollowingManager({
 
         const previousBaked = bakedHollowingBeforeDraftRef.current.get(activeModel.id)
           ?? (persistedHollowing?.bakedIntoGeometry ? persistedHollowing : undefined);
-        const beforeModifiers: ModelMeshModifiers = {
-          ...(activeModel.meshModifiers ?? {}),
-          hollowing: previousBaked ?? (persistedHollowing ? {
-            ...persistedHollowing,
-            enabled: false,
-            bakedIntoGeometry: false,
-            sourcePositionsBase64: undefined,
-            sourcePositionCount: undefined,
-            cavityPositionsBase64: undefined,
-            cavityPositionCount: undefined,
-          } : undefined),
-        };
+        const beforeModifiers: ModelMeshModifiers = { ...(activeModel.meshModifiers ?? {}) };
+        if (previousBaked) beforeModifiers.hollowing = previousBaked;
+        else delete beforeModifiers.hollowing;
+
         const modeLabel = hollowingState.mode === 'shell_open_face'
           ? 'Shell Hollowing'
           : hollowingState.mode === 'infill'
@@ -465,24 +457,6 @@ export function useHollowingManager({
     }
     const nextModifiers: ModelMeshModifiers = {
       ...(activeModel.meshModifiers ?? {}),
-      hollowing: {
-        enabled: false,
-        bakedIntoGeometry: false,
-        // Clear the source snapshot — hollowing was reset so the snapshot is
-        // stale (it may contain holes that have since been removed).
-        sourcePositionsBase64: undefined,
-        sourcePositionCount: undefined,
-        blockedVoxelIndices: [],
-        blockedVoxelRotationQuat: undefined,
-        mode: defaultHollowingState.mode,
-        voxelSizeMm: defaultHollowingState.voxelSizeMm,
-        shellThicknessMm: defaultHollowingState.shellThicknessMm,
-        infillMode: defaultHollowingState.infillMode,
-        infillCellMm: defaultHollowingState.infillCellMm,
-        infillBeamRadiusMm: defaultHollowingState.infillBeamRadiusMm,
-        openFace: defaultHollowingState.openFace,
-        openFaceSelected: true,
-      },
       // Preserve hole punch baked state — the geometry restored from the
       // hollowing source still contains any pre-baked holes, so the system
       // must not lose track of them.
@@ -491,6 +465,8 @@ export function useHollowingManager({
       holePunchSourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
       holePunchSourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
     };
+    delete nextModifiers.hollowing;
+
     const restoredGeometry = sourceEntry.geometry.clone();
     const restored = scene.replaceModelGeometry(activeModel.id, restoredGeometry, 'Reset Hollowing', {
       meshModifiersAfter: nextModifiers,
@@ -500,6 +476,7 @@ export function useHollowingManager({
       return;
     }
     releaseHollowingCachesForModel(activeModel.id);
+    deps.current.setPendingBlockerResetState(null);
     deps.current.setInteriorView(false);
     setHollowingState(defaultHollowingState);
     setIsShellOpenFaceSelected(true);
@@ -528,30 +505,13 @@ export function useHollowingManager({
     }
     const nextModifiers: ModelMeshModifiers = {
       ...(activeModel.meshModifiers ?? {}),
-      hollowing: {
-        enabled: false,
-        bakedIntoGeometry: false,
-        sourcePositionsBase64: undefined,
-        sourcePositionCount: undefined,
-        blockedVoxelIndices: [],
-        blockedVoxelRotationQuat: undefined,
-        // Keep current settings — don't reset to defaults.
-        mode: hollowingState.mode,
-        voxelSizeMm: hollowingState.voxelSizeMm,
-        shellThicknessMm: hollowingState.shellThicknessMm,
-        infillMode: hollowingState.infillMode,
-        infillCellMm: hollowingState.infillCellMm,
-        infillBeamRadiusMm: hollowingState.infillBeamRadiusMm,
-        openFace: hollowingState.openFace,
-        openFaceSelected: hollowingState.mode === 'shell_open_face'
-          ? isShellOpenFaceSelected
-          : true,
-      },
       holePunchAppliedPlacements: activeModel.meshModifiers?.holePunches ?? [],
       holePunchesBakedIntoGeometry: activeModel.meshModifiers?.holePunchesBakedIntoGeometry === true,
       holePunchSourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
       holePunchSourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
     };
+    delete nextModifiers.hollowing;
+
     const restoredGeometry = sourceEntry.geometry.clone();
     const restored = scene.replaceModelGeometry(activeModel.id, restoredGeometry, 'Clear Hollowing', {
       meshModifiersAfter: nextModifiers,
@@ -561,12 +521,13 @@ export function useHollowingManager({
       return;
     }
     releaseHollowingCachesForModel(activeModel.id);
+    deps.current.setPendingBlockerResetState(null);
     deps.current.setInteriorView(false);
     setHollowingDraftEnabled(false);
     setHollowingEditMode(false);
     setBlockedHollowVoxelIndices([]);
     setEditingBlockedHollowVoxelIndices([]);
-  }, [hollowingState, isShellOpenFaceSelected, releaseHollowingCachesForModel, scene.activeModel]);
+  }, [releaseHollowingCachesForModel, scene.activeModel]);
 
   const handleResetHollowingSettings = React.useCallback(() => {
     setHollowingState(defaultHollowingState);
@@ -613,7 +574,7 @@ export function useHollowingManager({
     }
 
     const activeModel = scene.activeModel;
-    if (!activeModel) return;
+    if (!activeModel?.meshModifiers?.hollowing) return;
 
     deps.current.persistActiveModelModifiers({
       ...(activeModel.meshModifiers ?? {}),
@@ -827,6 +788,7 @@ export function useHollowingManager({
 
     setBlockedHollowVoxelIndices(nextIndices);
     setHollowingDraftEnabled(true);
+    if (!activeModel.meshModifiers?.hollowing) return;
     deps.current.persistActiveModelModifiers({
       ...(activeModel.meshModifiers ?? {}),
       hollowing: {

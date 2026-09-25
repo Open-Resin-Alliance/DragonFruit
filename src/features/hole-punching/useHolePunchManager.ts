@@ -474,6 +474,7 @@ export function useHolePunchManager({
       setSelectedHolePunchPlacementIds([]);
       setHoveredHolePunchPlacementId(null);
       setHolePunchHoverPlacement(null);
+      if (!activeModel.meshModifiers?.hollowing) return;
 
       persistActiveModelModifiers({
         ...(activeModel.meshModifiers ?? {}),

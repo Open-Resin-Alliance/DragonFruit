@@ -3,7 +3,7 @@ import test from 'node:test';
 import * as THREE from 'three';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profileStore';
-import { storeModelMeshModifiers, deleteStoredMeshModifiers } from '@/features/mesh-modifiers/meshModifierStore';
+import { storeModelMeshModifiers, getStoredMeshModifiers, deleteStoredMeshModifiers } from '@/features/mesh-modifiers/meshModifierStore';
 import { clearPreparedGeometryCacheForModel } from '@/features/mesh-modifiers/prepareModelGeometry';
 import { runSliceExportOrchestrator } from '../sliceExportOrchestrator';
 
@@ -128,7 +128,8 @@ test('streamed slice input excludes raw hollowing output and preserves the model
     assert.deepEqual(received.subarray(0, split), expected.subarray(0, split), 'model coordinates remain in the model partition');
     assert.deepEqual(received.subarray(split), expected.subarray(split), 'only support coordinates enter the support partition');
 
-    storeModelMeshModifiers(model.id, { hollowing: { ...hollowing, enabled: false, bakedIntoGeometry: false } });
+    storeModelMeshModifiers(model.id, {});
+    assert.equal(getStoredMeshModifiers(model.id)?.hollowing, undefined);
     clearPreparedGeometryCacheForModel(model.id);
     const restored = await stage(model);
     const originalEncoded = Uint16Array.from([...original, ...support], (value, i) =>
@@ -143,7 +144,11 @@ test('streamed slice input excludes raw hollowing output and preserves the model
     assert.deepEqual(new Uint16Array(redone.bytes.buffer, redone.bytes.byteOffset, redone.bytes.byteLength / 2), expected);
     assert.equal(hollowCalls, 1, 'redo uses the previously baked model geometry');
 
-    storeModelMeshModifiers(model.id, { hollowing: { ...hollowing, enabled: false } });
+    storeModelMeshModifiers(model.id, {
+      holePunches: [{ id: 'unbaked-hole', centerNorm: [0.5, 0.5, 0.5], radiusMm: 1, depthMm: 2, direction: [0, 0, 1] }],
+      holePunchesBakedIntoGeometry: false,
+    });
+    assert.equal(getStoredMeshModifiers(model.id)?.hollowing, undefined);
     const removed = await stage(model);
     assert.deepEqual(new Uint16Array(removed.bytes.buffer, removed.bytes.byteOffset, removed.bytes.byteLength / 2), originalEncoded);
     assert.equal(hollowCalls, 1, 'Remove Hollowing must not rebake the shell');
