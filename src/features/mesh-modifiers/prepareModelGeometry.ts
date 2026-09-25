@@ -30,6 +30,13 @@ export type PreparedLoadedModelsForOutput = {
 const PREPARED_GEOMETRY_CACHE_LIMIT = 8;
 const preparedGeometryCache = new Map<string, Float32Array>();
 
+export function clearPreparedGeometryCacheForModel(modelId: string): void {
+  const prefix = `${modelId}:`;
+  for (const key of preparedGeometryCache.keys()) {
+    if (key.startsWith(prefix)) preparedGeometryCache.delete(key);
+  }
+}
+
 function computeGeometrySignature(geometry: THREE.BufferGeometry): string {
   const position = geometry.getAttribute('position');
   const index = geometry.getIndex();
