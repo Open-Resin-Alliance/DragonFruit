@@ -81,6 +81,7 @@ import {
   getStoredMeshModifiers,
   storeModelMeshModifiers,
 } from '@/features/mesh-modifiers/meshModifierStore';
+import { clearPreparedGeometryCacheForModel } from '@/features/mesh-modifiers/prepareModelGeometry';
 import { splitClassifiedSupportGeometry } from '@/features/scene/splitClassifiedSupports';
 import {
   applyModelGrouping,
@@ -163,7 +164,7 @@ const RECENT_OPENED_FILES_LIMIT = 10;
 const RECENT_FILES_DB_NAME = 'dragonfruit-recent-files';
 const RECENT_FILES_DB_VERSION = 1;
 const RECENT_FILES_STORE_NAME = 'files';
-const SCENE_MODELS_SNAPSHOT_APPLY = 'scene_models_snapshot_apply' as const;
+export const SCENE_MODELS_SNAPSHOT_APPLY = 'scene_models_snapshot_apply' as const;
 // A marker pushed after a slice so change-detection can tell whether the scene
 // was edited since. It carries no undo behaviour, but it still lands on the undo
 // stack, so it must have a (pass-through) handler — otherwise undoing onto it
@@ -176,7 +177,7 @@ const SCENE_HISTORY_MAX_SNAPSHOTS = 200;
 // flat count cap alone can leave a lot of stale geometry pinned alive.
 const SCENE_HISTORY_MAX_ESTIMATED_GEOMETRY_BYTES = 300 * 1024 * 1024;
 
-type SceneSnapshotPayload = { key: string };
+type SceneSnapshotPayload = { key: string; modelId?: string };
 
 /** Action→payload map for the scene history domain. */
 type SceneHistoryPayloadMap = {
@@ -195,6 +196,7 @@ type SceneSnapshot = {
   activeModelId: string | null;
   selectedModelIds: string[];
   supportState?: SupportState;
+  modifierRecord?: { modelId: string; modifiers: ModelMeshModifiers | undefined };
 };
 
 type SceneSnapshotCaptureOptions = {
@@ -260,6 +262,26 @@ function cloneMeshModifiersShallow(modifiers: ModelMeshModifiers): ModelMeshModi
     holePunchAppliedPlacements: modifiers.holePunchAppliedPlacements
       ? modifiers.holePunchAppliedPlacements.map((p) => ({ ...p }))
       : undefined,
+  };
+}
+
+function cloneMeshModifiersForHistory(modifiers: ModelMeshModifiers | null | undefined): ModelMeshModifiers | undefined {
+  if (!modifiers) return undefined;
+  const hollowing = modifiers.hollowing;
+  const clonePlacements = (placements: typeof modifiers.holePunches) => placements?.map((placement) => ({
+    ...placement,
+    centerNorm: placement.centerNorm.slice() as typeof placement.centerNorm,
+    direction: placement.direction.slice() as typeof placement.direction,
+  }));
+  return {
+    ...modifiers,
+    hollowing: hollowing ? {
+      ...hollowing,
+      blockedVoxelIndices: hollowing.blockedVoxelIndices?.slice(),
+      blockedVoxelRotationQuat: hollowing.blockedVoxelRotationQuat?.slice() as typeof hollowing.blockedVoxelRotationQuat,
+    } : hollowing,
+    holePunches: clonePlacements(modifiers.holePunches),
+    holePunchAppliedPlacements: clonePlacements(modifiers.holePunchAppliedPlacements),
   };
 }
 
@@ -1928,6 +1950,10 @@ export function useSceneCollectionManager() {
   }, [buildMeshPlacementOffsets, defaultImportCenterXY.x, defaultImportCenterXY.y, estimateSupportBoundsForModel, intersectsRect, isRectInsidePlate, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
 
   const applySceneSnapshot = useCallback((snapshot: SceneSnapshot) => {
+    if (snapshot.modifierRecord) {
+      storeModelMeshModifiers(snapshot.modifierRecord.modelId, cloneMeshModifiersForHistory(snapshot.modifierRecord.modifiers));
+      clearPreparedGeometryCacheForModel(snapshot.modifierRecord.modelId);
+    }
     setModels(snapshot.models.map(cloneLoadedModel));
     setActiveModelId(snapshot.activeModelId);
     setSelectedModelIds([...snapshot.selectedModelIds]);
@@ -1965,12 +1991,12 @@ export function useSceneCollectionManager() {
     };
   }, [applySceneSnapshot]);
 
-  const pushSceneSnapshotHistory = useCallback((before: SceneSnapshot, after: SceneSnapshot, description?: string) => {
+  const pushSceneSnapshotHistory = useCallback((before: SceneSnapshot, after: SceneSnapshot, description?: string, modelId?: string) => {
     const key = storeSceneSnapshotPair({ before, after });
     sceneHistory.push({
       type: SCENE_MODELS_SNAPSHOT_APPLY,
       description,
-      payload: { key },
+      payload: { key, ...(modelId ? { modelId } : {}) },
     });
   }, []);
 
@@ -2908,7 +2934,7 @@ export function useSceneCollectionManager() {
     id: string,
     nextBufferGeometry: THREE.BufferGeometry,
     historyDescription: string,
-    options?: { includeSupportState?: boolean; deferPostProcessing?: boolean },
+    options?: { includeSupportState?: boolean; deferPostProcessing?: boolean; meshModifiersAfter?: ModelMeshModifiers | null; meshModifiersBefore?: ModelMeshModifiers | null },
   ) => {
     const currentModels = modelsRef.current;
     const currentActiveModelId = activeModelIdRef.current;
@@ -2972,12 +2998,19 @@ export function useSceneCollectionManager() {
       return pos ? Math.floor(pos.count / 3) : target.polygonCount;
     })();
 
-    const includeSupportHistory = options?.includeSupportState
-      ?? hasSupportsForModel(id, getSnapshot());
-
-    const before = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, {
-      includeSupportState: includeSupportHistory,
-    });
+    const modifierAfter = options?.meshModifiersAfter;
+    const includeSupportHistory = modifierAfter !== undefined
+      ? (options?.includeSupportState ?? hasSupportsForModel(id, getSnapshot()))
+      : false;
+    const before = modifierAfter !== undefined
+      ? captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, { includeSupportState: includeSupportHistory })
+      : null;
+    if (before) {
+      before.modifierRecord = {
+        modelId: id,
+        modifiers: cloneMeshModifiersForHistory(options?.meshModifiersBefore !== undefined ? options.meshModifiersBefore : getStoredMeshModifiers(id)),
+      };
+    }
 
     const nextModels = currentModels.map((m) => (
       m.id === id
@@ -2990,11 +3023,19 @@ export function useSceneCollectionManager() {
           }
         : m
     ));
+    if (modifierAfter !== undefined) {
+      storeModelMeshModifiers(id, modifierAfter);
+      clearPreparedGeometryCacheForModel(id);
+    }
     setModels(nextModels);
 
-    const after = captureSceneSnapshot(nextModels, currentActiveModelId, currentSelectedModelIds, {
-      includeSupportState: includeSupportHistory,
-    });
+    if (before) {
+      const after = captureSceneSnapshot(nextModels, currentActiveModelId, currentSelectedModelIds, {
+        includeSupportState: includeSupportHistory,
+      });
+      after.modifierRecord = { modelId: id, modifiers: cloneMeshModifiersForHistory(modifierAfter) };
+      pushSceneSnapshotHistory(before, after, historyDescription, id);
+    }
     // COW chunk-store bake (Ph0.1 sub-phase C3). This is the VERIFIED sole
     // finalization point for hollow, hole-punch, mirror and repair, so baking
     // here moves the encode+SHA+zlib-6 onto the operation the user is already

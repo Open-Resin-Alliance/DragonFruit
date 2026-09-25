@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
-import { prepareModelGeometryForOutput } from '../prepareModelGeometry';
+import { snapshotGeometryPositions } from '@/utils/geometrySnapshot';
+import { clearPreparedGeometryCacheForModel, prepareModelGeometryForOutput } from '../prepareModelGeometry';
+import { deleteStoredMeshModifiers, storeModelMeshModifiers } from '../meshModifierStore';
 
 type InvokeCall = { cmd: string; args: unknown };
 
@@ -67,6 +69,7 @@ function buildHollowedModel(
       hollowing: {
         enabled: true,
         bakedIntoGeometry: false,
+        ...snapshotGeometryPositions(geometry),
         blockedVoxelIndices,
         mode: 'cavity',
         voxelSizeMm: 0.5,
@@ -76,6 +79,28 @@ function buildHollowedModel(
     },
   } as unknown as LoadedModel;
 }
+
+test('flags-only hollowing leaves the restored model solid at output', async () => {
+  const calls = installFakeTauri();
+  const model = buildHollowedModel(new THREE.Euler(), []);
+  const source = model.meshModifiers?.hollowing;
+  assert.ok(source);
+  model.meshModifiers = undefined;
+  try {
+    storeModelMeshModifiers(model.id, {
+      hollowing: { ...source, sourcePositionsBase64: undefined, sourcePositionCount: undefined },
+    });
+    const prepared = await prepareModelGeometryForOutput(model);
+    assert.equal(prepared.geometry, model.geometry.geometry);
+    assert.equal(prepared.disposeAfterUse, false);
+    assert.equal(calls.filter(({ cmd }) => cmd === 'mesh_hollow_staged').length, 0);
+  } finally {
+    clearPreparedGeometryCacheForModel(model.id);
+    deleteStoredMeshModifiers(model.id);
+    model.geometry.geometry.dispose();
+    delete (globalThis as { window?: unknown }).window;
+  }
+});
 
 test('slice-time hollowing forwards painted blocked voxel indices', async () => {
   const calls = installFakeTauri();
@@ -192,6 +217,54 @@ test('slice-time hollow converts world-mm params to local-mm on scaled models', 
       `scaled-model shell must be world→local converted (expected 1, got ${options.shellThicknessMm})`,
     );
   } finally {
+    delete (globalThis as { window?: unknown }).window;
+  }
+});
+
+test('undo releases only the reversed model\'s prepared shell before another bake', async () => {
+  const calls = installFakeTauri();
+  const model = buildHollowedModel(new THREE.Euler(), []);
+  const other = { ...buildHollowedModel(new THREE.Euler(), []), id: 'other-hollow-model' } as LoadedModel;
+  const hollowing = model.meshModifiers?.hollowing;
+  assert.ok(hollowing);
+  model.meshModifiers = undefined;
+  other.meshModifiers = undefined;
+  storeModelMeshModifiers(model.id, { hollowing });
+  storeModelMeshModifiers(other.id, { hollowing });
+  const bake = async (target: LoadedModel) => {
+    const result = await prepareModelGeometryForOutput(target);
+    const attribute = result.geometry.getAttribute('position');
+    assert.ok(attribute);
+    const positions = Array.from(attribute.array);
+    if (result.disposeAfterUse) result.geometry.dispose();
+    return positions;
+  };
+  const hollowCalls = () => calls.filter(({ cmd }) => cmd === 'mesh_hollow_staged').length;
+  try {
+    const shell = await bake(model);
+    assert.deepEqual(shell, [0, 0, 0, 1, 0, 0, 0, 1, 0]);
+    await bake(other);
+    assert.equal(hollowCalls(), 2);
+
+    storeModelMeshModifiers(model.id, { hollowing: { ...hollowing, enabled: false, bakedIntoGeometry: false } });
+    clearPreparedGeometryCacheForModel(model.id);
+    const originalPositions = model.geometry.geometry.getAttribute('position');
+    assert.ok(originalPositions);
+    assert.deepEqual(await bake(model), Array.from(originalPositions.array));
+    assert.equal(hollowCalls(), 2, 'restored solid must not be baked');
+
+    storeModelMeshModifiers(model.id, { hollowing });
+    assert.deepEqual(await bake(model), shell);
+    assert.equal(hollowCalls(), 3, 're-enabled hollow must not reuse the discarded shell');
+    assert.deepEqual(await bake(other), shell);
+    assert.equal(hollowCalls(), 3, 'other model cache remains valid');
+  } finally {
+    clearPreparedGeometryCacheForModel(model.id);
+    clearPreparedGeometryCacheForModel(other.id);
+    deleteStoredMeshModifiers(model.id);
+    deleteStoredMeshModifiers(other.id);
+    model.geometry.geometry.dispose();
+    other.geometry.geometry.dispose();
     delete (globalThis as { window?: unknown }).window;
   }
 });

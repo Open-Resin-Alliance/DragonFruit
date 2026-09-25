@@ -18,7 +18,7 @@ test('unapplied modifier detection', () => {
   assert.deepEqual(getUnappliedModifiers(undefined), { holePunches: false, hollowing: false });
   assert.deepEqual(getUnappliedModifiers({} as ModelMeshModifiers), { holePunches: false, hollowing: false });
 
-  // Draft punches / hollowing count; baked ones do not.
+  // Draft punches count; flags-only hollowing has no source-backed work.
   assert.deepEqual(
     getUnappliedModifiers({ holePunches: [punch] } as ModelMeshModifiers),
     { holePunches: true, hollowing: false },
@@ -29,6 +29,15 @@ test('unapplied modifier detection', () => {
   );
   assert.deepEqual(
     getUnappliedModifiers({ hollowing: { enabled: true } } as ModelMeshModifiers),
+    { holePunches: false, hollowing: false },
+  );
+  assert.deepEqual(
+    getUnappliedModifiers({ hollowing: {
+      enabled: true, bakedIntoGeometry: false, mode: 'cavity', voxelSizeMm: 0.5,
+      shellThicknessMm: 2, openFace: 'z_max',
+      sourcePositionsBase64: Buffer.from(new Float32Array(9).buffer).toString('base64'),
+      sourcePositionCount: 3,
+    } }),
     { holePunches: false, hollowing: true },
   );
   assert.deepEqual(

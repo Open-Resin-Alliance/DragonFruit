@@ -166,6 +166,19 @@ Three payload patterns exist:
   `sceneSnapshotRegistry` (in `useSceneCollectionManager.ts`), which stores the
   heavy `{ before, after }` pairs with a 200-entry + ~300 MB-eviction budget.
 
+### Geometry replacements with external modifiers
+
+`scene.replaceModelGeometry` in `src/features/scene/useSceneCollectionManager.ts` accepts `{ meshModifiersAfter, meshModifiersBefore? }` for hollowing operations that must undo geometry and externally stored `ModelMeshModifiers` together. Pass the complete modifier value as `meshModifiersAfter` (or `null` to delete it); omit the option for geometry replacements that should not create this history entry. The optional `meshModifiersBefore` overrides the history before-state when Apply follows an unbaked draft: restoring that draft verbatim would bake the hollow again at slice time.
+
+```ts
+scene.replaceModelGeometry(modelId, hollowedGeometry, 'Apply Hollowing', {
+  meshModifiersAfter: appliedModifiers,
+  meshModifiersBefore: previousBakedOrUnhollowedModifiers,
+});
+```
+
+The scene history handler restores the modifier store before the corresponding model snapshot. A first Apply records no hollowing modifier as its before-state, and Remove Hollowing deletes the hollowing field while retaining unrelated modifiers. Later panel edits can create a new unbaked hollowing draft; Apply commits that draft as baked geometry. Snapshot geometry remains available for redo; `useHollowingManager` and `prepareModelGeometry` discard only derived source, cavity, preview, and slice-preparation caches on reversal.
+
 ## Keyboard wiring
 
 `src/hotkeys/useUndoRedoHotkeys.ts` is the only keyboard entry point. Keydown

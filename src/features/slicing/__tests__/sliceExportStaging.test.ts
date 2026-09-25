@@ -3,6 +3,8 @@ import test from 'node:test';
 import * as THREE from 'three';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profileStore';
+import { storeModelMeshModifiers, getStoredMeshModifiers, deleteStoredMeshModifiers } from '@/features/mesh-modifiers/meshModifierStore';
+import { clearPreparedGeometryCacheForModel } from '@/features/mesh-modifiers/prepareModelGeometry';
 import { runSliceExportOrchestrator } from '../sliceExportOrchestrator';
 
 function modelFromPositions(id: string, positions: Float32Array): LoadedModel {
@@ -31,14 +33,21 @@ test('streamed slice input excludes raw hollowing output and preserves the model
   // The transport planner uses this estimate. Force streaming without allocating
   // a multi-million-triangle fixture; the collector reads the actual geometry.
   model.polygonCount = 16_000_000;
-  model.meshModifiers = {
-    hollowing: { enabled: true, bakedIntoGeometry: false, mode: 'cavity', voxelSizeMm: 0.5, shellThicknessMm: 1, openFace: 'z_max' },
-  };
+  const hollowing = {
+    enabled: true, bakedIntoGeometry: false, mode: 'cavity', voxelSizeMm: 0.5,
+    shellThicknessMm: 1, openFace: 'z_max',
+    sourcePositionsBase64: Buffer.from(original.buffer).toString('base64'),
+    sourcePositionCount: original.length / 3,
+  } as const;
+  storeModelMeshModifiers(model.id, { hollowing });
+  const redoneModel = modelFromPositions(model.id, hollowed);
+  redoneModel.polygonCount = model.polygonCount;
   const supportModel = modelFromPositions('support', support);
   supportModel.isSupportGeometry = true;
 
   let staged = new Uint8Array(0);
   let streamedChunks = 0;
+  let hollowCalls = 0;
   let captured: { bytes: Uint8Array; modelCount: number } | undefined;
   const reachedSlicer = new Error('captured native slice input');
   const invoke = async (command: string, args?: unknown): Promise<unknown> => {
@@ -50,6 +59,7 @@ test('streamed slice input excludes raw hollowing output and preserves the model
         staged = new Uint8Array(args as Uint8Array);
         return {};
       case 'mesh_hollow_staged':
+        hollowCalls += 1;
         // Native hollowing replaces the shared stage with raw f32 output.
         staged = new Uint8Array(hollowed.buffer.slice(0));
         return JSON.stringify({ removedVoxels: 1 });
@@ -90,9 +100,9 @@ test('streamed slice input excludes raw hollowing output and preserves the model
       __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
     },
   });
-  try {
+  const stage = async (currentModel: LoadedModel) => {
     await assert.rejects(runSliceExportOrchestrator({
-      models: [model, supportModel],
+      models: [currentModel, supportModel],
       printerProfile: {
         id: 'staging-printer', name: 'Staging printer',
         buildVolumeMm: { width: 20, depth: 20, height: 20 },
@@ -105,22 +115,62 @@ test('streamed slice input excludes raw hollowing output and preserves the model
       antiAliasingLevel: '8x',
       aaOnSupports: false,
     }), reachedSlicer);
+    assert.ok(captured);
+    return captured;
+  };
+  try {
+    const first = await stage(model);
 
     assert.ok(streamedChunks > 0, 'exercise the streamed transport, not single-shot replacement');
-    assert.ok(captured);
-    assert.equal(captured.modelCount, hollowed.length / 9);
-    assert.equal(captured.bytes.length / 18, (hollowed.length + support.length) / 9,
+    assert.equal(hollowCalls, 1);
+    assert.equal(first.modelCount, hollowed.length / 9);
+    assert.equal(first.bytes.length / 18, (hollowed.length + support.length) / 9,
       'native input must contain only the prepared scene, not a raw-f32 prefix');
     const expected = Uint16Array.from([...hollowed, ...support], (value, i) =>
       Math.round((value - (i % 3 === 2 ? 0 : -10)) / 20 * 65535));
-    const received = new Uint16Array(captured.bytes.buffer, captured.bytes.byteOffset, captured.bytes.byteLength / 2);
-    const split = captured.modelCount * 9;
+    const received = new Uint16Array(first.bytes.buffer, first.bytes.byteOffset, first.bytes.byteLength / 2);
+    const split = first.modelCount * 9;
     assert.deepEqual(received.subarray(0, split), expected.subarray(0, split), 'model coordinates remain in the model partition');
     assert.deepEqual(received.subarray(split), expected.subarray(split), 'only support coordinates enter the support partition');
+
+    storeModelMeshModifiers(model.id, {});
+    assert.equal(getStoredMeshModifiers(model.id)?.hollowing, undefined);
+    clearPreparedGeometryCacheForModel(model.id);
+    const restored = await stage(model);
+    const originalEncoded = Uint16Array.from([...original, ...support], (value, i) =>
+      Math.round((value - (i % 3 === 2 ? 0 : -10)) / 20 * 65535));
+    assert.equal(restored.modelCount, original.length / 9);
+    assert.deepEqual(new Uint16Array(restored.bytes.buffer, restored.bytes.byteOffset, restored.bytes.byteLength / 2), originalEncoded);
+    assert.equal(hollowCalls, 1, 'undo must not rebake the removed shell');
+
+    storeModelMeshModifiers(model.id, { hollowing: { ...hollowing, bakedIntoGeometry: true } });
+    const redone = await stage(redoneModel);
+    assert.equal(redone.modelCount, hollowed.length / 9);
+    assert.deepEqual(new Uint16Array(redone.bytes.buffer, redone.bytes.byteOffset, redone.bytes.byteLength / 2), expected);
+    assert.equal(hollowCalls, 1, 'redo uses the previously baked model geometry');
+
+    storeModelMeshModifiers(model.id, {
+      holePunches: [{ id: 'unbaked-hole', centerNorm: [0.5, 0.5, 0.5], radiusMm: 1, depthMm: 2, direction: [0, 0, 1] }],
+      holePunchesBakedIntoGeometry: false,
+    });
+    assert.equal(getStoredMeshModifiers(model.id)?.hollowing, undefined);
+    const removed = await stage(model);
+    assert.deepEqual(new Uint16Array(removed.bytes.buffer, removed.bytes.byteOffset, removed.bytes.byteLength / 2), originalEncoded);
+    assert.equal(hollowCalls, 1, 'Remove Hollowing must not rebake the shell');
+
+    storeModelMeshModifiers(model.id, {
+      hollowing: { ...hollowing, sourcePositionsBase64: undefined, sourcePositionCount: undefined },
+    });
+    const flagsOnly = await stage(model);
+    assert.deepEqual(new Uint16Array(flagsOnly.bytes.buffer, flagsOnly.bytes.byteOffset, flagsOnly.bytes.byteLength / 2), originalEncoded);
+    assert.equal(hollowCalls, 1, 'enabled/unbaked flags without a source must not invoke native hollowing');
   } finally {
     if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow);
     else Reflect.deleteProperty(globalThis, 'window');
     model.geometry.geometry.dispose();
     supportModel.geometry.geometry.dispose();
+    redoneModel.geometry.geometry.dispose();
+    clearPreparedGeometryCacheForModel(model.id);
+    deleteStoredMeshModifiers(model.id);
   }
 });
