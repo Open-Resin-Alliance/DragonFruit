@@ -9297,7 +9297,7 @@ export default function Home() {
     setEditingBlockedHollowVoxelIndices(blockedVoxelIndices);
     // Persist like handleHollowingStateChange does
     const activeModel = scene.activeModel;
-    if (!activeModel?.meshModifiers?.hollowing) return;
+    if (!activeModel) return;
     persistActiveModelModifiers({
       ...(activeModel.meshModifiers ?? {}),
       hollowing: {

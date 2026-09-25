@@ -177,7 +177,7 @@ scene.replaceModelGeometry(modelId, hollowedGeometry, 'Apply Hollowing', {
 });
 ```
 
-The scene history handler restores the modifier store before the corresponding model snapshot. A first Apply records no hollowing modifier as its before-state, and Remove Hollowing deletes the hollowing field while retaining unrelated modifiers. Panel edits after removal remain local until Apply creates a new baked modifier. Snapshot geometry remains available for redo; `useHollowingManager` and `prepareModelGeometry` discard only derived source, cavity, preview, and slice-preparation caches on reversal.
+The scene history handler restores the modifier store before the corresponding model snapshot. A first Apply records no hollowing modifier as its before-state, and Remove Hollowing deletes the hollowing field while retaining unrelated modifiers. Later panel edits can create a new unbaked hollowing draft; Apply commits that draft as baked geometry. Snapshot geometry remains available for redo; `useHollowingManager` and `prepareModelGeometry` discard only derived source, cavity, preview, and slice-preparation caches on reversal.
 
 ## Keyboard wiring
 

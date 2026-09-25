@@ -574,7 +574,7 @@ export function useHollowingManager({
     }
 
     const activeModel = scene.activeModel;
-    if (!activeModel?.meshModifiers?.hollowing) return;
+    if (!activeModel) return;
 
     deps.current.persistActiveModelModifiers({
       ...(activeModel.meshModifiers ?? {}),
@@ -788,7 +788,6 @@ export function useHollowingManager({
 
     setBlockedHollowVoxelIndices(nextIndices);
     setHollowingDraftEnabled(true);
-    if (!activeModel.meshModifiers?.hollowing) return;
     deps.current.persistActiveModelModifiers({
       ...(activeModel.meshModifiers ?? {}),
       hollowing: {
