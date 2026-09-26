@@ -110,6 +110,7 @@ import {
   OrthoFrustumSync,
   OrthoPickRayAlignment,
   OrbitPivotIndicator,
+  TrackpadGesturePoseApplier,
 } from './SceneCanvasCameraControllers';
 import {
   ORTHO_MAX_RADIUS,
@@ -196,6 +197,15 @@ import { createWheelDeviceClassifier, type WheelDevice } from '@/components/scen
 import { getSelectionGizmoCenter } from '@/features/scene/selectionPosition';
 import { DEFAULT_LIFT_DISTANCE_MM } from '@/features/transform/liftDefaults';
 import { setPickRayFromCamera } from '@/components/scene/camera/pickRay';
+import {
+  TRACKPAD_POSE_RELEASE_MS,
+  applyTrackpadOrbitToPose,
+  applyTrackpadPanToPose,
+  createTrackpadGesturePose,
+  seedTrackpadGesturePose,
+  type TrackpadGestureAction,
+  type TrackpadGesturePose,
+} from '@/components/scene/camera/trackpadGesturePose';
 
 const Canvas = dynamic(() => import('@react-three/fiber').then(m => m.Canvas), { ssr: false });
 
@@ -204,8 +214,6 @@ type GhostPreviewTransform = {
   rotation: THREE.Euler;
   scale: THREE.Vector3;
 };
-
-type TrackpadGestureAction = 'pan' | 'orbit';
 
 // Interpolated and pluralized, so it follows the house rule: a static ICU
 // pattern in a module-level formatter with the value passed to `translate`.
@@ -1256,6 +1264,12 @@ export function SceneCanvas({
   const wheelZoomInteractionActiveRef = React.useRef(false);
   const trackpadGestureEndTimeoutRef = React.useRef<number | null>(null);
   const trackpadGestureActionRef = React.useRef<TrackpadGestureAction | null>(null);
+  // Where a trackpad gesture wants the camera, and when it last asked. The
+  // camera is eased onto the pose by `TrackpadGesturePoseApplier`, which owns
+  // the pose's lifetime off `trackpadPoseLastEventAtRef` — not off the orbit
+  // interaction, which can end in the middle of a gesture.
+  const trackpadPoseRef = React.useRef<TrackpadGesturePose | null>(null);
+  const trackpadPoseLastEventAtRef = React.useRef(0);
   // One classifier for both wheel handlers: they see the same events, and its
   // verdict is only stable if it watches the whole stream.
   const wheelDeviceClassifierRef = React.useRef(createWheelDeviceClassifier());
@@ -4455,6 +4469,20 @@ export function SceneCanvas({
     return 220;
   }, [cameraFeelPreset]);
 
+  // How long the camera takes to cover most of the distance to the trackpad
+  // gesture's pose. Zero for `raw`, which applies the pose the frame it is read
+  // — the same discrete motion the trackpad had before the pose existed. The
+  // other presets mirror the damping OrbitControls applies to a mouse drag, so
+  // both input devices land on the same feel. Well inside
+  // `TRACKPAD_POSE_RELEASE_MS`, so the residual is sub-pixel by the time the
+  // pose is released and no travel is truncated.
+  const cameraTrackpadPoseTauMs = React.useMemo(() => {
+    if (cameraFeelPreset === 'raw') return 0;
+    if (cameraFeelPreset === 'precise') return 70;
+    if (cameraFeelPreset === 'fast') return 40;
+    return 55;
+  }, [cameraFeelPreset]);
+
   React.useEffect(() => {
     navigationResumeDelayRef.current = navigationResumeDelayMs;
   }, [navigationResumeDelayMs]);
@@ -4490,65 +4518,30 @@ export function SceneCanvas({
     if (!camera || !controls || controls.enabled === false || !container) return false;
 
     const rect = container.getBoundingClientRect();
-    const viewportHeight = Math.max(1, rect.height);
+
+    // The camera is *not* moved here. Each event is folded into the pose the
+    // gesture is asking for, and `TrackpadGesturePoseApplier` eases the camera
+    // onto it once per frame, so trackpad motion arrives at frame cadence
+    // instead of as one discrete step per wheel event. Seeding happens after
+    // `handleOrbitStart` has fired `picking-orbit-start`, so the pose inherits
+    // the re-levelled up-vector rather than a SpaceMouse roll.
+    const now = performance.now();
+    let pose = trackpadPoseRef.current;
+    if (!pose || now - trackpadPoseLastEventAtRef.current > TRACKPAD_POSE_RELEASE_MS) {
+      pose = createTrackpadGesturePose();
+      seedTrackpadGesturePose(pose, camera, controls.target);
+      trackpadPoseRef.current = pose;
+    }
+    trackpadPoseLastEventAtRef.current = now;
 
     if (action === 'pan') {
-      const RAW_TRACKPAD_PAN_SPEED = 1.0;
-      const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
-      const up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion).normalize();
-
-      let worldUnitsPerPixel = 0;
-      if (camera instanceof THREE.OrthographicCamera) {
-        worldUnitsPerPixel = ((camera.top - camera.bottom) / Math.max(1e-6, camera.zoom)) / viewportHeight;
-      } else if (camera instanceof THREE.PerspectiveCamera) {
-        const distanceToTarget = Math.max(0.001, camera.position.distanceTo(controls.target));
-        const worldHeight = 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5) * distanceToTarget;
-        worldUnitsPerPixel = worldHeight / viewportHeight;
-      } else {
+      if (!applyTrackpadPanToPose(pose, camera, event.deltaX, event.deltaY, rect.height, cameraTrackpadPanAcceleration)) {
         return false;
       }
-
-      const panOffset = new THREE.Vector3()
-        .addScaledVector(right, event.deltaX * worldUnitsPerPixel * RAW_TRACKPAD_PAN_SPEED * cameraTrackpadPanAcceleration)
-        .addScaledVector(up, -event.deltaY * worldUnitsPerPixel * RAW_TRACKPAD_PAN_SPEED * cameraTrackpadPanAcceleration);
-
-      camera.position.add(panOffset);
-      controls.target.add(panOffset);
-      camera.updateMatrixWorld();
-      controls.update();
       return true;
     }
 
-    const worldUp = camera.up.clone().normalize();
-    const offset = camera.position.clone().sub(controls.target);
-    const offsetLength = Math.max(0.001, offset.length());
-    const RAW_TRACKPAD_ROTATE_SPEED = 1.0;
-    const rotateScale = 0.0022 * RAW_TRACKPAD_ROTATE_SPEED * cameraTrackpadOrbitAcceleration;
-    const yawAngle = event.deltaX * rotateScale;
-
-    offset.applyQuaternion(new THREE.Quaternion().setFromAxisAngle(worldUp, yawAngle));
-
-    const normalizedOffset = offset.clone().normalize();
-    const currentPolar = Math.acos(THREE.MathUtils.clamp(normalizedOffset.dot(worldUp), -1, 1));
-    const nextPolar = THREE.MathUtils.clamp(currentPolar + (event.deltaY * rotateScale), 0.08, Math.PI - 0.08);
-    const pitchAngle = nextPolar - currentPolar;
-
-    const forward = normalizedOffset.clone().negate();
-    const rightAxis = new THREE.Vector3().crossVectors(forward, worldUp).normalize();
-    if (rightAxis.lengthSq() < 1e-8) {
-      rightAxis.set(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
-    }
-
-    offset
-      .normalize()
-      .multiplyScalar(offsetLength)
-      .applyQuaternion(new THREE.Quaternion().setFromAxisAngle(rightAxis, pitchAngle));
-
-    camera.position.copy(controls.target).add(offset);
-    camera.up.copy(worldUp);
-    camera.lookAt(controls.target);
-    camera.updateMatrixWorld();
-    controls.update();
+    applyTrackpadOrbitToPose(pose, event.deltaX, event.deltaY, cameraTrackpadOrbitAcceleration);
     return true;
   }, [cameraTrackpadOrbitAcceleration, cameraTrackpadPanAcceleration]);
 
@@ -5062,6 +5055,10 @@ export function SceneCanvas({
   }, []);
 
   const handleOrbitStart = React.useCallback(() => {
+    // Anything that is not a trackpad gesture — a mouse drag, OrbitControls'
+    // own wheel start — takes the camera, so drop the pose instead of letting
+    // the applier pull the camera back toward it mid-drag.
+    if (trackpadGestureActionRef.current === null) trackpadPoseRef.current = null;
     orbitInteractionActiveRef.current = true;
     orbitInteractionMovedRef.current = false;
     const isRotateInteraction = isOrbitInRotateState();
@@ -5230,7 +5227,14 @@ export function SceneCanvas({
       container.removeEventListener('wheel', onTrackpadWheel, true);
       window.removeEventListener('blur', forceTrackpadGestureEnd);
       document.removeEventListener('visibilitychange', forceTrackpadGestureEnd);
-      forceTrackpadGestureEnd();
+      // Deliberately NOT forceTrackpadGestureEnd(): this effect re-runs whenever
+      // one of the callbacks it closes over gets a new identity, which happens
+      // mid-gesture (the first wheel event calls onCameraChange, that updates
+      // page state, and the changed callbacks rebuild this effect). Ending the
+      // gesture there killed the interaction on every event — the camera only
+      // moved because the old code moved it synchronously, inside the wheel
+      // handler. The gesture's own ends are the idle timeout, blur /
+      // visibilitychange, and unmount.
     };
   }, [
     applyTrackpadGesture,
@@ -7329,6 +7333,11 @@ export function SceneCanvas({
           perspectiveFov={perspectiveFov}
         />
         <HorizonLock enabled={cameraInteractionCycleEnabled} />
+        <TrackpadGesturePoseApplier
+          poseRef={trackpadPoseRef}
+          lastEventAtRef={trackpadPoseLastEventAtRef}
+          tauMs={cameraTrackpadPoseTauMs}
+        />
         <CameraControlsRecovery />
         <CameraFocusController selectedIslandId={overlaySelectedIslandId ?? null} islandMarkers={islandMarkers ?? []} onClearSelection={onClearSelection} />
         {mode === 'support' && supportPathfindingDebugState.enabled && (

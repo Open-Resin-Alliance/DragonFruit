@@ -118,6 +118,67 @@ runs once per frame as a safety net for programmatic moves that skip
   Home reset, which puts the orbit target back on the home target and so maximises
   the difference. Deltas stay pivot-relative; the absolute seed does not.
 
+## Trackpad gestures
+
+A two-finger drag does not go through OrbitControls. `SceneCanvas`'s capture-phase
+`wheel` listener resolves it to a `pan` or `orbit` (per the trackpad settings,
+with the alternate modifier flipping between them), and the math for both lives
+in `src/components/scene/camera/trackpadGesturePose.ts` — the module that used to
+be inline in `SceneCanvas.applyTrackpadGesture`.
+
+**The gesture never writes to the camera.** Each wheel event is folded into a
+`TrackpadGesturePose` — the pose the gesture is *asking* for — and
+`TrackpadGesturePoseApplier` (rendered inside the `<Canvas>`, beside
+`HorizonLock`) eases `camera.position` and `controls.target` onto it once per
+frame:
+
+```
+alpha = 1 - exp(-deltaMs / tau)      // tau from the camera-feel preset
+```
+
+`tau` is 0 for the `raw` preset (the pose is applied the frame it is read) and
+40–70 ms otherwise, mirroring the damping OrbitControls already applies to a
+mouse drag so both input devices land on the same feel. This is the fix for
+trackpad motion arriving as one discrete step per wheel event while a mouse drag
+glided: macOS hands over integral, frame-cadence deltas, so a 1:1 mapping of
+delta → camera offset is visibly steppier than the damped mouse. Measured, in
+the real app, a three-event pan moves the camera over 23 frames at
+`precise` against 3 frames at `raw`, with the same total displacement.
+
+Things worth knowing before touching it:
+
+- **Never move the camera inside the wheel handler again.** The pose exists so
+  that the applier is the only writer; a second writer reintroduces the stepping
+  and races the applier for the same frame.
+- **The pose's lifetime is `TRACKPAD_POSE_RELEASE_MS` of wheel silence, not the
+  orbit interaction.** `handleOrbitStart` / `handleOrbitEnd` describe which
+  subsystem owns *picking*, and they can fire in the middle of a gesture — the
+  wheel-listener effect re-runs whenever one of the callbacks it closes over
+  gets a new identity, which the first wheel event itself causes (it calls
+  `onCameraChange`, that updates page state, and the changed callbacks rebuild
+  the effect). Ending the gesture in that effect's cleanup killed the
+  interaction on every event; the camera survived only because it was moved
+  synchronously in the handler. The pose is therefore keyed on the wheel stream:
+  the applier drops it once the events stop, and the seeding path re-seeds a
+  fresh one if the last event is older than the same window.
+- **Anything that is not a trackpad gesture takes the camera outright.**
+  `handleOrbitStart` drops the pose when `trackpadGestureActionRef` is null (a
+  mouse drag, OrbitControls' own wheel start), and the applier drops it when
+  `controls.enabled === false` (a SpaceMouse gesture, the Home / focus /
+  mode-framing animations), so nothing drags the camera back mid-drag.
+- **Orientation can come from the pose.** A pan translates `position` and
+  `target` by the same vector, so `lookAt` on the interpolated target reproduces
+  the orbit basis exactly; an orbit recomputes `pose.quaternion` from its own
+  basis. The applier always orients, which is what keeps a rolled SpaceMouse
+  view re-levelled by `HorizonLock` from drifting back.
+- **Seeding happens after `picking-orbit-start`**, because `HorizonLock`
+  re-levels `camera.up` on that event and the pose must inherit the levelled
+  up-vector rather than a SpaceMouse roll.
+
+See `src/components/scene/camera/__tests__/trackpadGesturePose.test.ts` for the
+radius, polar-clamp, screen-scale and blend properties, replayed over the
+recorded captures in `src/components/scene/__tests__/wheelCaptures.fixture.ts`.
+
 ## SpaceMouse
 
 Both SpaceMouse controllers (`NativeSpaceMouseController`,

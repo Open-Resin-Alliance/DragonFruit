@@ -8,6 +8,12 @@ import {
   syncOrthoFrustum,
 } from '@/components/scene/camera/orthoDolly';
 import { extendPickRayToNearPlane } from '@/components/scene/camera/pickRay';
+import {
+  TRACKPAD_POSE_RELEASE_MS,
+  blendCameraTowardTrackpadPose,
+  trackpadPoseBlendFactor,
+  type TrackpadGesturePose,
+} from '@/components/scene/camera/trackpadGesturePose';
 
 /**
  * Teach R3F's pointer picking the orthographic depth range.
@@ -46,6 +52,16 @@ function orbitTargetOf(controls: unknown): THREE.Vector3 | null {
   if (!controls || typeof controls !== 'object') return null;
   const target = (controls as { target?: unknown }).target;
   return target instanceof THREE.Vector3 ? target : null;
+}
+
+/**
+ * Whether OrbitControls has been switched off by another owner of the camera.
+ * It is the app-wide "someone else is driving" signal, so every path that moves
+ * the camera has to read it before it moves anything.
+ */
+function controlsAreDisabled(controls: unknown): boolean {
+  if (!controls || typeof controls !== 'object' || !('enabled' in controls)) return false;
+  return controls.enabled === false;
 }
 
 export function CameraProjectionController({
@@ -614,6 +630,68 @@ export function CameraModeEntryFramingController({
       }
     };
   }, [cancelAnimation, controls]);
+
+  return null;
+}
+
+/**
+ * Eases the camera toward the pose a trackpad gesture is asking for, once per
+ * frame.
+ *
+ * The gesture writes into `trackpadGesturePose.ts`'s pose instead of onto the
+ * camera, so this is the only thing that moves the camera along that path —
+ * which is what turns per-event deltas into motion at frame cadence, the way
+ * OrbitControls' damping does for a mouse drag. `tauMs` 0 snaps, which is the
+ * `raw` camera-feel preset.
+ *
+ * The pose lives for `TRACKPAD_POSE_RELEASE_MS` after the last wheel event, so
+ * a gesture that has stopped feeding it still finishes arriving. Nothing here
+ * consults the orbit interaction's start/end: those describe picking ownership
+ * and can fire in the middle of a gesture.
+ *
+ * Runs at the default frame priority, after drei's OrbitControls (priority -1)
+ * has called `controls.update()`, so the round-trip in `update()` has already
+ * happened and this step is the last word on the pose for the frame.
+ */
+export function TrackpadGesturePoseApplier({
+  poseRef,
+  lastEventAtRef,
+  tauMs,
+}: {
+  poseRef: React.RefObject<TrackpadGesturePose | null>;
+  lastEventAtRef: React.RefObject<number>;
+  tauMs: number;
+}) {
+  const { camera, controls } = useThree();
+
+  useFrame((_state, delta) => {
+    const pose = poseRef.current;
+    if (!pose) return;
+
+    // Only the wheel events keep a pose alive; see TRACKPAD_POSE_RELEASE_MS for
+    // why this is not the interaction's start/end.
+    if (performance.now() - lastEventAtRef.current > TRACKPAD_POSE_RELEASE_MS) {
+      poseRef.current = null;
+      return;
+    }
+
+    // `controls.enabled === false` is how every other owner of the camera — a
+    // live SpaceMouse gesture, the Home / focus / mode-framing animations —
+    // announces itself, and this path must not fight them for the pose.
+    if (controlsAreDisabled(controls)) {
+      poseRef.current = null;
+      return;
+    }
+
+    const target = orbitTargetOf(controls);
+    if (!target) return;
+
+    // Orientation always comes from the pose: a pan translates position and
+    // target together, so pointing at the interpolated target reproduces the
+    // orbit basis exactly, and an orbit has recomputed `pose.quaternion` from
+    // its own basis.
+    blendCameraTowardTrackpadPose(pose, camera, target, trackpadPoseBlendFactor(delta * 1000, tauMs), true);
+  });
 
   return null;
 }
