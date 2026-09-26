@@ -18,8 +18,7 @@ const BUILT_IN_THEME_PRESET_IDS = [
 export type BuiltInThemePreset = (typeof BUILT_IN_THEME_PRESET_IDS)[number];
 export type ThemePreset = BuiltInThemePreset | string;
 
-const LEGACY_DEFAULT_ACCENT = '#d946ef';
-const NEW_DEFAULT_ACCENT = '#ec2a77';
+const DEFAULT_ACCENT = '#ec2a77';
 
 export type ThemeCustomColors = {
   background: string;
@@ -44,6 +43,10 @@ export type ThemeCustomColors = {
   sceneGradientRadial: string;
   sceneGradientLinearStart: string;
   sceneGradientLinearMid: string;
+  /** Tint applied to a selected model in the 3D view. */
+  meshSelectionColor: string;
+  /** Tint applied to a hovered model in the 3D view. */
+  meshHoverColor: string;
   danger: string;
   success: string;
 };
@@ -92,7 +95,7 @@ export const DEFAULT_THEME_CUSTOM_COLORS: ThemeCustomColors = {
   indicator: '#c3c7cf',
   borderSubtle: '#272a33',
   borderStrong: '#353944',
-  accent: NEW_DEFAULT_ACCENT,
+  accent: DEFAULT_ACCENT,
   accentHover: '#d81d67',
   primaryButtonSurface: '#c11f61',
   accentContrast: '#fff6ff',
@@ -100,10 +103,12 @@ export const DEFAULT_THEME_CUSTOM_COLORS: ThemeCustomColors = {
   accentSecondaryHover: '#a6df29',
   secondaryButtonSurface: '#9bcc26',
   accentSecondaryContrast: '#182106',
-  topbarAccent: NEW_DEFAULT_ACCENT,
+  topbarAccent: DEFAULT_ACCENT,
   sceneGradientRadial: '#ff37aa',
   sceneGradientLinearStart: '#ff37aa',
   sceneGradientLinearMid: '#6f33ff',
+  meshSelectionColor: DEFAULT_ACCENT,
+  meshHoverColor: DEFAULT_ACCENT,
   danger: '#e45454',
   success: '#2eb67d',
 };
@@ -119,7 +124,7 @@ export const DRAGONFRUIT_LIGHT_THEME_COLORS: ThemeCustomColors = {
   indicator: '#585c70',
   borderSubtle: '#a4a8b8',
   borderStrong: '#9195a6',
-  accent: NEW_DEFAULT_ACCENT,
+  accent: DEFAULT_ACCENT,
   accentHover: '#d81d67',
   primaryButtonSurface: '#c11f61',
   accentContrast: '#fff0f7',
@@ -127,27 +132,38 @@ export const DRAGONFRUIT_LIGHT_THEME_COLORS: ThemeCustomColors = {
   accentSecondaryHover: '#5fa309',
   secondaryButtonSurface: '#4e8900',
   accentSecondaryContrast: '#f0fff4',
-  topbarAccent: NEW_DEFAULT_ACCENT,
+  topbarAccent: DEFAULT_ACCENT,
   sceneGradientRadial: '#ff37aa',
   sceneGradientLinearStart: '#ff37aa',
   sceneGradientLinearMid: '#6f33ff',
+  meshSelectionColor: DEFAULT_ACCENT,
+  meshHoverColor: DEFAULT_ACCENT,
   danger: '#c9302c',
-  success: '#2eb67d',
+  // Darkened for light surfaces the same way danger is: the dark palettes'
+  // #2eb67d only reaches 1.3:1 on these ones, which is unreadable as an icon or
+  // status label.
+  success: '#146b46',
 };
 
-// Two sponsor themes, shipped as authored in their own exports (name and
-// colours as exported; only the preset id is ours).
+// Two sponsor themes; the preset id is ours, as are the tones noted here.
+// Concepts 3D keeps the sponsor's two brand colours for the UI (gold #f0ad4e,
+// blue #8ab4f8); its neutrals are a darker, warmer brown ladder tinted to the
+// gold's hue (15-20° at ~13-16% saturation — its own export was near-grey and
+// read washed out) that still holds off-white text at 13.9:1 or better, with the
+// panel steps carried by the borders. The backdrop runs brown into the accent's
+// orange, and the model highlight is a deeper cut of the secondary blue
+// (#487dd5) so a selected model separates from the gold chrome.
 const CONCEPTS_3D_THEME_COLORS: ThemeCustomColors = {
-  background: '#161515',
+  background: '#100d0c',
   foreground: '#f8f6f1',
-  surface0: '#221f1e',
-  surface1: '#2c2928',
-  surface2: '#373331',
+  surface0: '#191412',
+  surface1: '#211c1a',
+  surface2: '#2c2522',
   textStrong: '#f8f6f1',
   textMuted: '#cbc5ba',
   indicator: '#cbc5ba',
-  borderSubtle: '#3f3a36',
-  borderStrong: '#4f4945',
+  borderSubtle: '#403530',
+  borderStrong: '#51443d',
   accent: '#f0ad4e',
   accentHover: '#e59c36',
   primaryButtonSurface: '#f0ad4e',
@@ -157,18 +173,32 @@ const CONCEPTS_3D_THEME_COLORS: ThemeCustomColors = {
   secondaryButtonSurface: '#8ab4f8',
   accentSecondaryContrast: '#161515',
   topbarAccent: '#f0ad4e',
+  // Backdrop runs warm: brown at the top, its accent's orange through the middle.
   sceneGradientRadial: '#b18f67',
   sceneGradientLinearStart: '#9a7854',
-  sceneGradientLinearMid: '#6b5640',
+  sceneGradientLinearMid: '#d4862c',
+  // Model highlight is a deeper cut of the secondary blue, not the gold that
+  // colours the UI: a selected model reads as its own family against the chrome.
+  meshSelectionColor: '#487dd5',
+  meshHoverColor: '#487dd5',
   danger: '#e45454',
   success: '#2eb67d',
 };
 
 // The two brand colours are the sponsor's own (teal #0a667c, green #86c232); the
 // neutrals are tinted to that teal so the surfaces read as one family instead of
-// the default blue-greys with a teal accent dropped in. Contrast is unchanged:
-// light text 17.9:1 on the background, muted text 11.9:1, and the same within a
-// tenth of the previous ratios on every surface.
+// the default blue-greys with a teal accent dropped in. Light text is 17.9:1 on
+// the background and muted text 11.9:1, the same within a tenth of the previous
+// ratios on every surface.
+//
+// The brand teal only reaches 2.9:1 on this background and 2.3:1 on surface 2, so
+// as UI chrome (icons, focus, active labels) it was too dark to read: the chrome
+// is that same hue and saturation at 40% lightness (5.8:1 on the background,
+// 4.6:1 on surface 2), and the green is lifted to 52% so it keeps pace with the
+// brighter teal instead of reading as the duller of the two. Both filled buttons
+// still carry dark ink, which gains contrast as their fills lighten — except the
+// primary one, whose deeper fill is what keeps its white label readable. The mesh
+// selection/hover highlight keeps the brand teal exactly.
 const ATLAS_3DSS_THEME_COLORS: ThemeCustomColors = {
   background: '#0c1112',
   foreground: '#f5f9fa',
@@ -180,18 +210,24 @@ const ATLAS_3DSS_THEME_COLORS: ThemeCustomColors = {
   indicator: '#c0cfd3',
   borderSubtle: '#273134',
   borderStrong: '#374448',
-  accent: '#0a667c',
-  accentHover: '#085466',
+  accent: '#0f9bbd',
+  accentHover: '#0e8caa',
+  // Kept dark: the filled primary button carries a white label (8.7:1) and an
+  // 11px extension list line mixed 16% toward black (6.0:1). Lifting this fill
+  // to the new accent drops that second line under 4:1, so the button keeps the
+  // brand-tone depth and only the chrome above it brightens.
   primaryButtonSurface: '#085061',
   accentContrast: '#f8fbfc',
-  accentSecondary: '#86c232',
-  accentSecondaryHover: '#73a72b',
-  secondaryButtonSurface: '#6b9b28',
+  accentSecondary: '#91cd3c',
+  accentSecondaryHover: '#7db034',
+  secondaryButtonSurface: '#74a430',
   accentSecondaryContrast: '#0e1415',
-  topbarAccent: '#0a667c',
+  topbarAccent: '#0f9bbd',
   sceneGradientRadial: '#123e49',
   sceneGradientLinearStart: '#122e36',
   sceneGradientLinearMid: '#1b3c2b',
+  meshSelectionColor: '#0a667c',
+  meshHoverColor: '#0a667c',
   danger: '#e45454',
   success: '#36ba78',
 };
@@ -249,11 +285,8 @@ function normalizeThemePreference(value: unknown, fallback: ThemePreference): Th
 function normalizeThemeCustomColors(parsed: Partial<ThemeCustomColors> | undefined, defaults: ThemeCustomColors): ThemeCustomColors {
   const d = defaults;
 
-  let accent = normalizeHex(parsed?.accent ?? d.accent, d.accent);
-  let topbarAccent = normalizeHex(parsed?.topbarAccent ?? d.topbarAccent, d.topbarAccent);
-
-  if (accent === LEGACY_DEFAULT_ACCENT) accent = NEW_DEFAULT_ACCENT;
-  if (topbarAccent === LEGACY_DEFAULT_ACCENT) topbarAccent = NEW_DEFAULT_ACCENT;
+  const accent = normalizeHex(parsed?.accent ?? d.accent, d.accent);
+  const topbarAccent = normalizeHex(parsed?.topbarAccent ?? d.topbarAccent, d.topbarAccent);
 
   return {
     background: normalizeHex(parsed?.background ?? d.background, d.background),
@@ -278,6 +311,8 @@ function normalizeThemeCustomColors(parsed: Partial<ThemeCustomColors> | undefin
     sceneGradientRadial: normalizeHex(parsed?.sceneGradientRadial ?? d.sceneGradientRadial, d.sceneGradientRadial),
     sceneGradientLinearStart: normalizeHex(parsed?.sceneGradientLinearStart ?? d.sceneGradientLinearStart, d.sceneGradientLinearStart),
     sceneGradientLinearMid: normalizeHex(parsed?.sceneGradientLinearMid ?? d.sceneGradientLinearMid, d.sceneGradientLinearMid),
+    meshSelectionColor: normalizeHex(parsed?.meshSelectionColor ?? d.meshSelectionColor, d.meshSelectionColor),
+    meshHoverColor: normalizeHex(parsed?.meshHoverColor ?? d.meshHoverColor, d.meshHoverColor),
     danger: normalizeHex(parsed?.danger ?? d.danger, d.danger),
     success: normalizeHex(parsed?.success ?? d.success, d.success),
   };
@@ -527,6 +562,8 @@ export function deriveThemeCustomColorsFromBranding(params: {
     sceneGradientRadial: primary,
     sceneGradientLinearStart: primary,
     sceneGradientLinearMid: blendHex(primary, secondary, resolvedPreference === 'light' ? 0.52 : 0.46),
+    meshSelectionColor: primary,
+    meshHoverColor: primary,
   };
 }
 
@@ -619,6 +656,45 @@ export function getSavedThemeCustomColors(): ThemeCustomColors {
   }
 }
 
+/**
+ * Mesh selection/hover tint, resolved from the theme and published by
+ * {@link applyThemeCustomColors}. The 3D viewport is not a DOM consumer — it
+ * cannot read these off the CSS variables the rest of the theme is applied
+ * through — so it subscribes here instead. Both colors live in the theme
+ * (`ThemeCustomColors.meshSelectionColor` / `meshHoverColor`), which is also
+ * what the Mesh tab's Selection & Hover section edits.
+ */
+export type ThemeMeshHighlightColors = {
+  selection: string;
+  hover: string;
+};
+
+const themeMeshHighlightListeners = new Set<() => void>();
+let appliedMeshHighlightColors: ThemeMeshHighlightColors | null = null;
+
+export function subscribeToThemeMeshHighlightColors(listener: () => void): () => void {
+  themeMeshHighlightListeners.add(listener);
+  return () => {
+    themeMeshHighlightListeners.delete(listener);
+  };
+}
+
+/**
+ * The applied tint. Resolves from the saved theme on first read so the viewport
+ * paints the saved theme rather than the built-in default until the app bar
+ * re-applies it on mount.
+ */
+export function getThemeMeshHighlightColors(): ThemeMeshHighlightColors {
+  if (!appliedMeshHighlightColors) {
+    const saved = getSavedThemeCustomColors();
+    appliedMeshHighlightColors = {
+      selection: saved.meshSelectionColor,
+      hover: saved.meshHoverColor,
+    };
+  }
+  return appliedMeshHighlightColors;
+}
+
 export function applyThemeCustomColors(themeColors: ThemeCustomColors) {
   if (typeof document === 'undefined') return;
 
@@ -645,8 +721,19 @@ export function applyThemeCustomColors(themeColors: ThemeCustomColors) {
   const sceneGradientRadial = normalizeHex(themeColors.sceneGradientRadial, d.sceneGradientRadial);
   const sceneGradientLinearStart = normalizeHex(themeColors.sceneGradientLinearStart, d.sceneGradientLinearStart);
   const sceneGradientLinearMid = normalizeHex(themeColors.sceneGradientLinearMid, d.sceneGradientLinearMid);
+  const meshSelectionColor = normalizeHex(themeColors.meshSelectionColor, d.meshSelectionColor);
+  const meshHoverColor = normalizeHex(themeColors.meshHoverColor, d.meshHoverColor);
   const danger = normalizeHex(themeColors.danger, d.danger);
   const success = normalizeHex(themeColors.success, d.success);
+
+  if (
+    !appliedMeshHighlightColors
+    || appliedMeshHighlightColors.selection !== meshSelectionColor
+    || appliedMeshHighlightColors.hover !== meshHoverColor
+  ) {
+    appliedMeshHighlightColors = { selection: meshSelectionColor, hover: meshHoverColor };
+    for (const listener of themeMeshHighlightListeners) listener();
+  }
 
   const rootStyle = document.documentElement.style;
   rootStyle.setProperty('--background', background);

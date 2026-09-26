@@ -79,21 +79,21 @@ pointer turns into a trash can there, from the `body.preset-drag-delete` rule in
 | Key                                      | Medium       | Purpose                                                 |
 | ---------------------------------------- | ------------ | ------------------------------------------------------- |
 | `app-recent-opened-files`                | localStorage | Recent files index (metadata only)                      |
-| `mesh-appearance-settings`               | localStorage | Shader, color, and mesh appearance preferences          |
+| `mesh-appearance-settings`               | localStorage | Shader, mesh color, and tint-strength preferences       |
 | `import-defaults-v1`                     | localStorage | Default import behavior (raft mode, wall/root defaults) |
 | `dragonfruit-scene-autosave:settings-v1` | localStorage | Scene autosave settings                                 |
 
 ## UI/theme/layout keys
 
-| Key                                    | Medium       | Purpose                                    |
-| -------------------------------------- | ------------ | ------------------------------------------ |
-| `app-theme-preference`                 | localStorage | Theme mode preference                      |
-| `app-theme-colors`                     | localStorage | Active theme color overrides               |
-| `app-theme-preset`                     | localStorage | Selected theme preset                      |
-| `app-theme-custom-profiles`            | localStorage | User custom theme profiles                 |
-| `lumenslicer:floating-panel-layout:v4` | localStorage | Floating panel coordinates/sizing          |
-| `app-floating-layout-persistence`      | localStorage | Enable/disable floating layout persistence |
-| `app-debug-primitives-panel-visible`   | localStorage | Debug panel visibility (non-user-critical) |
+| Key                                    | Medium       | Purpose                                                   |
+| -------------------------------------- | ------------ | --------------------------------------------------------- |
+| `app-theme-preference`                 | localStorage | Theme mode preference                                     |
+| `app-theme-colors`                     | localStorage | Active theme color overrides (incl. mesh selection/hover) |
+| `app-theme-preset`                     | localStorage | Selected theme preset                                     |
+| `app-theme-custom-profiles`            | localStorage | User custom theme profiles                                |
+| `lumenslicer:floating-panel-layout:v4` | localStorage | Floating panel coordinates/sizing                         |
+| `app-floating-layout-persistence`      | localStorage | Enable/disable floating layout persistence                |
+| `app-debug-primitives-panel-visible`   | localStorage | Debug panel visibility (non-user-critical)                |
 
 ## Camera and view keys
 

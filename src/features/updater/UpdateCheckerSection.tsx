@@ -125,15 +125,15 @@ function UpToDateState({ onCheck }: { onCheck: () => void }) {
         <span
           className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border"
           style={{
-            borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 40%)',
-            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 82%)',
-            color: 'var(--accent-secondary)',
+            borderColor: 'color-mix(in srgb, var(--success), var(--border-subtle) 40%)',
+            background: 'color-mix(in srgb, var(--success), var(--surface-1) 82%)',
+            color: 'var(--success)',
           }}
         >
           <Check className="h-6 w-6" />
         </span>
         <span className="min-w-0">
-          <span className="block text-lg font-bold" style={{ color: 'var(--accent-secondary)' }}>
+          <span className="block text-lg font-bold" style={{ color: 'var(--success)' }}>
             <Trans>Up to date</Trans>
           </span>
           <span className="block text-sm mt-1.5 font-medium" style={{ color: 'var(--text-muted)' }}>

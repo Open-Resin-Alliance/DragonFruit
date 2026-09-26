@@ -28,6 +28,10 @@ import { PrintingModals } from '@/components/organisms/modals/PrintingModals';
 import { SceneFileModals } from '@/components/organisms/modals/SceneFileModals';
 import { ModifierModals } from '@/components/organisms/modals/ModifierModals';
 import { MeshRepairModals } from '@/components/organisms/modals/MeshRepairModals';
+import {
+  getThemeMeshHighlightColors,
+  subscribeToThemeMeshHighlightColors,
+} from '@/components/settings/themeCustomizations';
 import { useMirrorManager } from '@/features/mirror/useMirrorManager';
 import { useArrangeManager } from '@/features/scene/arrange/useArrangeManager';
 import { useHolePunchManager } from '@/features/hole-punching/useHolePunchManager';
@@ -664,6 +668,13 @@ export default function Home() {
     subscribeToWorkspaceCameraSettings,
     getWorkspaceCameraSettingsSnapshot,
     getWorkspaceCameraSettingsServerSnapshot,
+  );
+  // Selection/hover tint is a theme setting now, so the viewport follows the
+  // applied theme instead of a scene-level appearance override.
+  const themeMeshHighlightColors = React.useSyncExternalStore(
+    subscribeToThemeMeshHighlightColors,
+    getThemeMeshHighlightColors,
+    getThemeMeshHighlightColors,
   );
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
   const activeMaterialProfile = React.useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
@@ -9780,10 +9791,6 @@ export default function Home() {
       <TopBar
         meshColor={scene.meshColor}
         onMeshColorChange={scene.setMeshColor}
-        selectionColor={scene.selectionColor}
-        onSelectionColorChange={scene.setSelectionColor}
-        hoverColor={scene.hoverColor}
-        onHoverColorChange={scene.setHoverColor}
         configuredShaderType={scene.configuredShaderType}
         onConfiguredShaderTypeChange={scene.setConfiguredShaderType}
         matcapVariant={scene.matcapVariant}
@@ -10243,8 +10250,8 @@ export default function Home() {
             selectionHighlightMode={effectiveSelectionHighlightMode}
             higherContrastModelEdges={workspaceCameraSettings.higherContrastModelEdges}
             blockerEditMode={hollowingEditMode}
-            selectionColor={scene.selectionColor}
-            hoverColor={scene.hoverColor}
+            selectionColor={themeMeshHighlightColors.selection}
+            hoverColor={themeMeshHighlightColors.hover}
             hoverTintStrength={effectiveHoverTintStrengthForScene}
             selectedTintStrength={effectiveSelectedTintStrengthForScene}
             supportsRef={supportsRef}
@@ -10335,7 +10342,7 @@ export default function Home() {
             deferCameraIntro={holdEmptyStateSceneImportUi}
             freezeViewportActive={isSlicingBusy && scene.mode === 'export'}
             indicatorPlaneZ={scene.mode === 'printing' ? printingCurrentHeightMm : null}
-            indicatorPlaneColor={scene.selectionColor || '#ec2a77'}
+            indicatorPlaneColor={themeMeshHighlightColors.selection || '#ec2a77'}
             onNewDeviceDetected={handleNewDeviceDetected}
           >
             {scene.mode === 'prepare' && transformMgr.transformMode === 'smoothing' && (

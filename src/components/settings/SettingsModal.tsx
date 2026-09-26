@@ -52,7 +52,6 @@ import {
   type ThemePreset,
   type SavedCustomThemeProfile,
 } from '@/components/settings/themeCustomizations';
-import { DEFAULT_HOVER_COLOR, DEFAULT_SELECTION_COLOR } from '@/features/scene/useSceneCollectionManager';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { Tooltip } from '@/components/ui/Tooltip';
@@ -174,10 +173,6 @@ type SettingsModalProps = {
   onClose: () => void;
   meshColor: string;
   onMeshColorChange: (color: string) => void;
-  selectionColor: string;
-  onSelectionColorChange: (color: string) => void;
-  hoverColor: string;
-  onHoverColorChange: (color: string) => void;
   /** The type the Mesh tab is configuring. Does not change what the viewport renders. */
   configuredShaderType: MeshShaderType;
   onConfiguredShaderTypeChange: (shaderType: MeshShaderType) => void;
@@ -295,10 +290,6 @@ export function SettingsModal({
   onClose,
   meshColor,
   onMeshColorChange,
-  selectionColor,
-  onSelectionColorChange,
-  hoverColor,
-  onHoverColorChange,
   configuredShaderType,
   onConfiguredShaderTypeChange,
   matcapVariant,
@@ -406,8 +397,6 @@ export function SettingsModal({
   const [draftHeatmapColors, setDraftHeatmapColors] = useState(heatmapColors);
   const [draftHoverTintStrength, setDraftHoverTintStrength] = useState(hoverTintStrength);
   const [draftSelectedTintStrength, setDraftSelectedTintStrength] = useState(selectedTintStrength);
-  const [draftSelectionColor, setDraftSelectionColor] = useState(selectionColor);
-  const [draftHoverColor, setDraftHoverColor] = useState(hoverColor);
   const [draftCameraProjectionMode, setDraftCameraProjectionMode] = useState<CameraProjectionMode>(() => getSavedCameraProjectionSettings().mode);
   const [draftCameraFeelPreset, setDraftCameraFeelPreset] = useState<CameraFeelPreset>(() => getSavedCameraFeelSettings().preset);
   const [draftCameraTrackpadPrimaryAction, setDraftCameraTrackpadPrimaryAction] = useState<CameraTrackpadPrimaryAction>(() => getSavedCameraTrackpadSettings().primaryAction);
@@ -461,6 +450,15 @@ export function SettingsModal({
   const didCommitThemeDraftRef = React.useRef(false);
   const showPngCompressionControls = outputFormatUsesPngLayers(activeOutputFormat ?? undefined);
 
+  // The Mesh tab's Selection & Hover section edits the theme's mesh highlight
+  // colors (not a separate appearance override), so its Reset restores the
+  // values stored on the selected profile — the same source the UI tab's Reset
+  // uses.
+  const draftThemeProfileColors = React.useMemo(
+    () => getThemeProfile(draftThemePreset, draftThemeProfiles).colors,
+    [draftThemePreset, draftThemeProfiles],
+  );
+
   // Load saved update channel preference.
   React.useEffect(() => {
     getUpdateChannel().then(setUpdateChannel);
@@ -508,8 +506,6 @@ export function SettingsModal({
     setDraftHeatmapColors(heatmapColors);
     setDraftHoverTintStrength(hoverTintStrength);
     setDraftSelectedTintStrength(selectedTintStrength);
-    setDraftSelectionColor(selectionColor);
-    setDraftHoverColor(hoverColor);
     setDraftCameraProjectionMode(getSavedCameraProjectionSettings().mode);
     setDraftCameraFeelPreset(getSavedCameraFeelSettings().preset);
     setDraftCameraTrackpadPrimaryAction(getSavedCameraTrackpadSettings().primaryAction);
@@ -548,8 +544,6 @@ export function SettingsModal({
     heatmapColors,
     hoverTintStrength,
     selectedTintStrength,
-    selectionColor,
-    hoverColor,
     debugPrimitivesPanelVisible,
     view3dSettings,
     slicingThumbnailRenderSettings,
@@ -561,42 +555,26 @@ export function SettingsModal({
   ]);
 
   const handleThemeColorChange = React.useCallback((key: keyof ThemeCustomColors, value: string) => {
-    if (key === 'accent' && typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value)) {
-      const oldAccent = draftThemeColors.accent?.toLowerCase();
-      const newAccent = value.toLowerCase();
-      if (oldAccent && newAccent && oldAccent !== newAccent) {
-        const selLower = draftSelectionColor.toLowerCase();
-        const hovLower = draftHoverColor.toLowerCase();
-        if (selLower === oldAccent) setDraftSelectionColor(value);
-        if (hovLower === oldAccent) setDraftHoverColor(value);
-      }
-    }
     setDraftThemeColors((prev) => ({
       ...prev,
       [key]: value,
     }));
-  }, [draftThemeColors.accent, draftSelectionColor, draftHoverColor]);
+  }, []);
+  // The Mesh tab edits these two theme colors, so both surfaces write the same
+  // draft entry.
+  const handleMeshSelectionColorChange = React.useCallback((color: string) => {
+    handleThemeColorChange('meshSelectionColor', color);
+  }, [handleThemeColorChange]);
+  const handleMeshHoverColorChange = React.useCallback((color: string) => {
+    handleThemeColorChange('meshHoverColor', color);
+  }, [handleThemeColorChange]);
   const restoreSavedThemePreview = React.useCallback(() => {
     applyThemePreference(getSavedThemePreference());
     applyThemeCustomColors(getSavedThemeCustomColors());
   }, []);
   const handleThemePresetChange = React.useCallback((preset: ThemePreset) => {
-    const oldProfile = getThemeProfile(draftThemePreset, draftThemeProfiles);
-    const newProfile = getThemeProfile(preset, draftThemeProfiles);
-    const oldAccent = oldProfile.colors.accent?.toLowerCase();
-    const newAccent = newProfile.colors.accent?.toLowerCase();
-    if (oldAccent && newAccent && oldAccent !== newAccent) {
-      const selLower = draftSelectionColor.toLowerCase();
-      const hovLower = draftHoverColor.toLowerCase();
-      const defSel = DEFAULT_SELECTION_COLOR.toLowerCase();
-      const defHov = DEFAULT_HOVER_COLOR.toLowerCase();
-      const isSelDefault = selLower === oldAccent || selLower === defSel;
-      const isHovDefault = hovLower === oldAccent || hovLower === defHov;
-      if (isSelDefault) setDraftSelectionColor(newProfile.colors.accent);
-      if (isHovDefault) setDraftHoverColor(newProfile.colors.accent);
-    }
     setThemeDraftFromProfile(preset, draftThemeProfiles);
-  }, [draftThemePreset, draftThemeProfiles, draftSelectionColor, draftHoverColor, setThemeDraftFromProfile]);
+  }, [draftThemeProfiles, setThemeDraftFromProfile]);
 
   const handleDraftHeatmapColorChange = React.useCallback((index: number, color: string) => {
     setDraftHeatmapColors((prev) => {
@@ -869,8 +847,6 @@ export function SettingsModal({
     setDraftHeatmapMaxAngle(DEFAULT_HEATMAP_MAX_ANGLE);
     setDraftHoverTintStrength(DEFAULT_HOVER_TINT_STRENGTH);
     setDraftSelectedTintStrength(DEFAULT_SELECTED_TINT_STRENGTH);
-    setDraftSelectionColor(DEFAULT_THEME_CUSTOM_COLORS.accent);
-    setDraftHoverColor(DEFAULT_THEME_CUSTOM_COLORS.accentHover);
     setDraftCameraProjectionMode(DEFAULT_CAMERA_PROJECTION_SETTINGS.mode);
     setDraftCameraFeelPreset(DEFAULT_CAMERA_FEEL_SETTINGS.preset);
     setDraftCameraTrackpadPrimaryAction(DEFAULT_CAMERA_TRACKPAD_SETTINGS.primaryAction);
@@ -952,27 +928,6 @@ export function SettingsModal({
     draftHeatmapColors.forEach((color, i) => onHeatmapColorChange(i, color));
     onHoverTintStrengthChange(draftHoverTintStrength);
     onSelectedTintStrengthChange(draftSelectedTintStrength);
-    // Auto-apply theme accent to selection/hover if not user-overridden (theme changed and selection still at old default)
-    let finalSelectionColor = draftSelectionColor;
-    let finalHoverColor = draftHoverColor;
-    try {
-      const savedThemeAccent = getSavedThemeCustomColors().accent?.toLowerCase();
-      const draftAccent = draftThemeColors.accent?.toLowerCase();
-      if (savedThemeAccent && draftAccent && savedThemeAccent !== draftAccent) {
-        const savedSel = selectionColor.toLowerCase();
-        const defSel = DEFAULT_SELECTION_COLOR.toLowerCase();
-        const isSavedSelDefault = savedSel === savedThemeAccent || savedSel === defSel;
-        const isDraftSelUnchanged = draftSelectionColor.toLowerCase() === savedSel;
-        if (isSavedSelDefault && isDraftSelUnchanged) finalSelectionColor = draftThemeColors.accent;
-        const savedHov = hoverColor.toLowerCase();
-        const defHov = DEFAULT_HOVER_COLOR.toLowerCase();
-        const isSavedHovDefault = savedHov === savedThemeAccent || savedHov === defHov;
-        const isDraftHovUnchanged = draftHoverColor.toLowerCase() === savedHov;
-        if (isSavedHovDefault && isDraftHovUnchanged) finalHoverColor = draftThemeColors.accent;
-      }
-    } catch {}
-    onSelectionColorChange(finalSelectionColor);
-    onHoverColorChange(finalHoverColor);
     applyThemePreference(draftThemePreference);
     applyThemeCustomColors(draftThemeColors);
     setFloatingLayoutPersistenceEnabled(draftFloatingLayoutPersistence);
@@ -1028,10 +983,6 @@ export function SettingsModal({
     draftMeshColor,
     draftHoverTintStrength,
     draftSelectedTintStrength,
-    draftSelectionColor,
-    draftHoverColor,
-    selectionColor,
-    hoverColor,
     draftCameraScope,
     draftHigherContrastModelEdges,
     draftThemePreset,
@@ -1071,8 +1022,6 @@ export function SettingsModal({
     onMeshColorChange,
     onHoverTintStrengthChange,
     onSelectedTintStrengthChange,
-    onSelectionColorChange,
-    onHoverColorChange,
     onDebugPrimitivesPanelVisibleChange,
     onSlicingThumbnailRenderSettingsChange,
     onView3dSettingsChange,
@@ -1574,16 +1523,16 @@ export function SettingsModal({
                   onHeatmapMaxAngleChange={setDraftHeatmapMaxAngle}
                   heatmapColors={draftHeatmapColors}
                   onHeatmapColorChange={handleDraftHeatmapColorChange}
-                  selectionColor={draftSelectionColor}
-                  onSelectionColorChange={setDraftSelectionColor}
-                  hoverColor={draftHoverColor}
-                  onHoverColorChange={setDraftHoverColor}
+                  meshSelectionColor={draftThemeColors.meshSelectionColor}
+                  onMeshSelectionColorChange={handleMeshSelectionColorChange}
+                  meshHoverColor={draftThemeColors.meshHoverColor}
+                  onMeshHoverColorChange={handleMeshHoverColorChange}
                   hoverTintStrength={draftHoverTintStrength}
                   onHoverTintStrengthChange={setDraftHoverTintStrength}
                   selectedTintStrength={draftSelectedTintStrength}
                   onSelectedTintStrengthChange={setDraftSelectedTintStrength}
-                  defaultSelectionColor={draftThemeColors.accent}
-                  defaultHoverColor={draftThemeColors.accent}
+                  defaultMeshSelectionColor={draftThemeProfileColors.meshSelectionColor}
+                  defaultMeshHoverColor={draftThemeProfileColors.meshHoverColor}
                 />
               )}
               {activeTab === 'performance' && (
