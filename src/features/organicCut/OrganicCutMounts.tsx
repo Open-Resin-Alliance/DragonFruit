@@ -8,6 +8,7 @@ import { MouseTooltip } from '@/components/ui/MouseTooltip';
 import { OrganicCutTool } from './OrganicCutTool';
 import { OrganicCutTenonGizmo } from './OrganicCutTenonGizmo';
 import type { OrganicCutSession } from './useOrganicCutSession';
+import { Trans } from '@lingui/react/macro';
 
 /**
  * What every cut mount needs from the scene, and all it needs: which models are
@@ -146,7 +147,7 @@ export function OrganicCutOverlay({
             boxShadow: '0 6px 32px 0 rgba(0,0,0,0.44), 0 1.5px 8px 0 rgba(0,0,0,0.28)',
           }}
         >
-          Double-click to lock this waypoint from snapping.
+          <Trans>Double-click to lock this waypoint from snapping.</Trans>
         </div>
       </MouseTooltip>
     </>

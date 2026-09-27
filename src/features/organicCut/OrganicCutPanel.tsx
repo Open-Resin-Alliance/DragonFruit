@@ -1,4 +1,7 @@
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
 import { CircleHelp, Eye, EyeOff, Link2, Link2Off, Loader2, RotateCcw, Trash2, TriangleAlert } from 'lucide-react';
 import { Card, CardHeader, IconButton } from '@/components/atoms';
 import { CompactNumberField } from '@/components/ui/compactNumberField';
@@ -242,6 +245,7 @@ export function OrganicCutPanel({
   cutError = null,
   tenonDetail = '',
 }: OrganicCutPanelProps) {
+  const { _ } = useLingui();
   const [expanded, setExpanded] = React.useState(true);
 
   const clampFloat = React.useCallback((value: number, min: number, max: number, decimals = 1) => {
@@ -388,7 +392,7 @@ export function OrganicCutPanel({
                 type="button"
                 className="inline-flex cursor-help items-center justify-center p-0.5 transition-colors"
                 style={{ color: 'var(--text-muted)' }}
-                aria-label="How to use Cut"
+                aria-label={_(msg`How to use Cut`)}
               >
                 <CircleHelp className="h-4 w-4" />
               </button>
@@ -408,7 +412,7 @@ export function OrganicCutPanel({
               onClick={() => setState({ showPreview: !state.showPreview })}
               disabled={disabled || isApplying}
               title={state.showPreview ? 'Hide the cut preview' : 'Show the cut preview'}
-              aria-label="Toggle cut preview"
+              aria-label={_(msg`Toggle cut preview`)}
             >
               {state.showPreview ? (
                 <Eye className="h-3.5 w-3.5" style={{ color: 'var(--accent)' }} />
@@ -419,8 +423,8 @@ export function OrganicCutPanel({
             <AnimatedResetButton
               onClick={() => setState({ ...DEFAULT_CUT_SETTINGS })}
               disabled={disabled || isApplying || !cutSettingsDirty}
-              title="Put the cut settings back to their defaults: cut mode, thickness, both smoothings and resolution. Your drawn loops and tenon settings are untouched."
-              ariaLabel="Reset cut settings to defaults"
+              title={_(msg`Put the cut settings back to their defaults: cut mode, thickness, both smoothings and resolution. Your drawn loops and tenon settings are untouched.`)}
+              ariaLabel={_(msg`Reset cut settings to defaults`)}
             />
           </div>
         ) : null}
@@ -433,7 +437,7 @@ export function OrganicCutPanel({
         <div className="px-2 space-y-2 sm:px-2.5 overflow-y-auto custom-scrollbar flex-1 min-h-0">
           {/* Cut mode: flat plane vs curved contour seam */}
           <div className="rounded-md border p-2 space-y-1.5" style={accentCardStyle}>
-            <div className="ui-meta" style={{ color: 'var(--text-muted)' }}>Cut Mode</div>
+            <div className="ui-meta" style={{ color: 'var(--text-muted)' }}>{_(msg`Cut Mode`)}</div>
             <div className="grid grid-cols-2 gap-1">
               <button
                 type="button"
@@ -441,9 +445,9 @@ export function OrganicCutPanel({
                 onClick={() => setState({ cutMode: 'contour' })}
                 disabled={disabled || isApplying}
                 style={state.cutMode === 'contour' ? activeModeStyle : undefined}
-                title="Split along a curved seam that follows your drawn loop (zero-thickness mate)."
+                title={_(msg`Split along a curved seam that follows your drawn loop (zero-thickness mate).`)}
               >
-                Contour
+                <Trans>Contour</Trans>
               </button>
               <button
                 type="button"
@@ -451,9 +455,9 @@ export function OrganicCutPanel({
                 onClick={() => setState({ cutMode: 'plane' })}
                 disabled={disabled || isApplying}
                 style={state.cutMode === 'plane' ? activeModeStyle : undefined}
-                title="Slice along a single flat plane derived from your points."
+                title={_(msg`Slice along a single flat plane derived from your points.`)}
               >
-                Flat
+                <Trans>Flat</Trans>
               </button>
             </div>
           </div>
@@ -469,19 +473,19 @@ export function OrganicCutPanel({
             <div className="grid grid-cols-2 gap-x-2 gap-y-1.5">
               {isContour && (
                 <CompactNumberField
-                  label="Seam Smoothing"
+                  label={_(msg`Seam Smoothing`)}
                   value={state.smoothing}
                   onChange={(value) => setState({ smoothing: clampFloat(value, 0, 2, 2) })}
                   min={0}
                   max={2}
                   step={0.05}
                   disabled={disabled || isApplying}
-                  ariaLabel="Seam line smoothing strength"
-                  title="Rounds the seam line through the waypoints. A flat cut's seam is the plane ∩ mesh, so this only affects contour cuts."
+                  ariaLabel={_(msg`Seam line smoothing strength`)}
+                  title={_(msg`Rounds the seam line through the waypoints. A flat cut's seam is the plane ∩ mesh, so this only affects contour cuts.`)}
                 />
               )}
               <CompactNumberField
-                label="Joint Clearance"
+                label={_(msg`Joint Clearance`)}
                 value={state.jointClearanceMm}
                 onChange={(value) => setState({ jointClearanceMm: clampFloat(value, 0, 1.5, 2) })}
                 min={0}
@@ -489,7 +493,7 @@ export function OrganicCutPanel({
                 step={0.05}
                 unit="mm"
                 disabled={disabled || isApplying}
-                ariaLabel="Joint clearance in millimeters"
+                ariaLabel={_(msg`Joint clearance in millimeters`)}
                 // The cut-settings grid is two columns, but in flat mode this is the
                 // only field that survives (smoothing/resolution are contour-only), so
                 // stretch it across the empty second column instead of leaving a hole.
@@ -497,20 +501,20 @@ export function OrganicCutPanel({
               />
               {isContour && (
                 <CompactNumberField
-                  label="Cut Smoothing"
+                  label={_(msg`Cut Smoothing`)}
                   value={state.membraneSmoothing}
                   onChange={(value) => setState({ membraneSmoothing: clampFloat(value, 0, 2, 2) })}
                   min={0}
                   max={2}
                   step={0.05}
                   disabled={disabled || isApplying}
-                  ariaLabel="Cut surface smoothing strength"
-                  title="How smooth/taut the curved cutter surface is — contour cut only."
+                  ariaLabel={_(msg`Cut surface smoothing strength`)}
+                  title={_(msg`How smooth/taut the curved cutter surface is — contour cut only.`)}
                 />
               )}
               {isContour && (
                 <CompactNumberField
-                  label="Cut Resolution"
+                  label={_(msg`Cut Resolution`)}
                   value={state.density}
                   onChange={(value) => setState({ density: clampFloat(value, 1, 4, 2) })}
                   min={1}
@@ -518,8 +522,8 @@ export function OrganicCutPanel({
                   step={0.5}
                   unit="×"
                   disabled={disabled || isApplying}
-                  ariaLabel="Cut mesh resolution multiplier (applied at cut)"
-                  title="Cutter poly count — higher is a denser cut mesh. Contour cut only."
+                  ariaLabel={_(msg`Cut mesh resolution multiplier (applied at cut)`)}
+                  title={_(msg`Cutter poly count — higher is a denser cut mesh. Contour cut only.`)}
                 />
               )}
             </div>
@@ -539,9 +543,9 @@ export function OrganicCutPanel({
                   onClick={() => setState({ generateTenon: false })}
                   disabled={disabled || isApplying}
                   style={!state.generateTenon ? activeModeStyle : undefined}
-                  title="Don't add a registration tenon — the halves are cut apart with no way to index them back together."
+                  title={_(msg`Don't add a registration tenon — the halves are cut apart with no way to index them back together.`)}
                 >
-                  No Tenon
+                  <Trans>No Tenon</Trans>
                 </button>
                 <button
                   type="button"
@@ -564,9 +568,9 @@ export function OrganicCutPanel({
                   }
                   disabled={disabled || isApplying || !canApply}
                   style={state.generateTenon && state.tenonShape === 'frustum' ? activeModeStyle : undefined}
-                  title="Tapered rectangular tenon — locks the parts against rotation."
+                  title={_(msg`Tapered rectangular tenon — locks the parts against rotation.`)}
                 >
-                  Frustum
+                  <Trans>Frustum</Trans>
                 </button>
                 <button
                   type="button"
@@ -586,9 +590,9 @@ export function OrganicCutPanel({
                   }
                   disabled={disabled || isApplying || !canApply}
                   style={state.generateTenon && state.tenonShape === 'dome' ? activeModeStyle : undefined}
-                  title="Half-sphere tenon — locates the parts but allows rotation."
+                  title={_(msg`Half-sphere tenon — locates the parts but allows rotation.`)}
                 >
-                  Dome
+                  <Trans>Dome</Trans>
                 </button>
               </div>
               {state.generateTenon && (
@@ -604,16 +608,16 @@ export function OrganicCutPanel({
                     return (
                       <div className="flex items-center justify-between gap-2">
                         <span className="ui-meta" style={{ color: 'var(--text-muted)' }}>
-                          Moved off centre
+                          <Trans>Moved off centre</Trans>
                         </span>
                         <button
                           type="button"
                           className="ui-button ui-button-secondary !h-6 whitespace-nowrap px-1.5 text-[10px]"
                           onClick={() => setState({ tenonAnchor: null })}
                           disabled={disabled || isApplying}
-                          title="Put the tenon back in the middle of the cut."
+                          title={_(msg`Put the tenon back in the middle of the cut.`)}
                         >
-                          Center
+                          <Trans>Center</Trans>
                         </button>
                       </div>
                     );
@@ -623,7 +627,7 @@ export function OrganicCutPanel({
                   <div className="grid grid-cols-2 gap-x-2 gap-y-1.5">
                     <div className={`col-span-2 grid items-start gap-x-2 ${state.tenonShape === 'dome' ? 'grid-cols-[1fr_auto_1fr]' : 'grid-cols-2'}`}>
                       <CompactNumberField
-                        label="Tenon Width"
+                        label={_(msg`Tenon Width`)}
                         value={state.tenonWidthMm}
                         onChange={(value) =>
                           state.tenonShape === 'dome'
@@ -635,7 +639,7 @@ export function OrganicCutPanel({
                         step={0.5}
                         unit="mm"
                         disabled={disabled || isApplying}
-                        ariaLabel="Tenon width in millimeters"
+                        ariaLabel={_(msg`Tenon width in millimeters`)}
                       />
                       {/* Dome only: link width:depth so the dome resizes as a
                           unit (keeps its shape); unlink for free oblong control.
@@ -654,7 +658,7 @@ export function OrganicCutPanel({
                               title={state.tenonUniformScale
                                 ? 'Unlink width and depth — resize them independently.'
                                 : 'Link width and depth together so the dome keeps its shape.'}
-                              aria-label="Toggle linked width and depth"
+                              aria-label={_(msg`Toggle linked width and depth`)}
                             >
                               {state.tenonUniformScale
                                 ? <Link2 className="h-4.5 w-4.5" />
@@ -664,7 +668,7 @@ export function OrganicCutPanel({
                         </div>
                       )}
                       <CompactNumberField
-                        label="Tenon Depth"
+                        label={_(msg`Tenon Depth`)}
                         value={state.tenonDepthMm}
                         onChange={(value) =>
                           state.tenonShape === 'dome'
@@ -676,12 +680,12 @@ export function OrganicCutPanel({
                         step={0.5}
                         unit="mm"
                         disabled={disabled || isApplying}
-                        ariaLabel="Tenon depth in millimeters"
+                        ariaLabel={_(msg`Tenon depth in millimeters`)}
                       />
                     </div>
                     {state.tenonShape === 'frustum' && (
                       <CompactNumberField
-                        label="Edge Fillet"
+                        label={_(msg`Edge Fillet`)}
                         value={state.tenonFilletMm}
                         onChange={(value) => setState({ tenonFilletMm: clampFloat(value, 0, tenonFilletMaxMm, 2) })}
                         min={0}
@@ -689,12 +693,12 @@ export function OrganicCutPanel({
                         step={TENON_FILLET_STEP_MM}
                         unit="mm"
                         disabled={disabled || isApplying}
-                        ariaLabel="Tenon edge fillet radius in millimeters (0 = sharp)"
+                        ariaLabel={_(msg`Tenon edge fillet radius in millimeters (0 = sharp)`)}
                         title={`Rounds the tenon's corners and tip. On this tenon the geometry accepts up to ${tenonFilletMaxMm}mm — a wider or deeper tenon raises that ceiling.`}
                       />
                     )}
                     <CompactNumberField
-                      label="Fit Tolerance"
+                      label={_(msg`Fit Tolerance`)}
                       value={state.tenonToleranceMm}
                       onChange={(value) =>
                         setState({ tenonToleranceMm: clampFloat(value, 0, TENON_TOLERANCE_MAX_MM, 2) })
@@ -704,8 +708,8 @@ export function OrganicCutPanel({
                       step={0.05}
                       unit="mm"
                       disabled={disabled || isApplying}
-                      ariaLabel="Tenon to mortise fit tolerance in millimeters (0 = press fit)"
-                      title="Slack between tenon and mortise, on every face. 0 = press fit (needs force). 0.1mm is a slide fit on a well-calibrated printer; raise it if the halves won't go together."
+                      ariaLabel={_(msg`Tenon to mortise fit tolerance in millimeters (0 = press fit)`)}
+                      title={_(msg`Slack between tenon and mortise, on every face. 0 = press fit (needs force). 0.1mm is a slide fit on a well-calibrated printer; raise it if the halves won't go together.`)}
                       className={state.tenonShape === 'frustum' ? undefined : 'col-span-2'}
                     />
                   </div>
@@ -717,21 +721,21 @@ export function OrganicCutPanel({
                       className="ui-button ui-button-secondary flex-1 !min-h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px] disabled:opacity-60"
                       onClick={() => setState({ tenonSwapSides: !state.tenonSwapSides })}
                       disabled={disabled || isApplying}
-                      title="Swap which cut half receives the tenon and which receives the mortise."
+                      title={_(msg`Swap which cut half receives the tenon and which receives the mortise.`)}
                       style={disabled || isApplying ? undefined : {
                         borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 62%)',
                         color: 'color-mix(in srgb, var(--accent-secondary), var(--text-strong) 55%)',
                         background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 95%)',
                       }}
                     >
-                      Flip Tenon
+                      <Trans>Flip Tenon</Trans>
                     </button>
                     <button
                       type="button"
                       className="ui-button ui-button-secondary flex-1 !min-h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px] disabled:opacity-60"
                       onClick={() => setState({ ...DEFAULT_TENON_SETTINGS, generateTenon: state.generateTenon })}
                       disabled={disabled || isApplying || !tenonSettingsDirty}
-                      title="Put every tenon setting back to its default: shape, width, depth, fillet, fit tolerance, uniform scale, side and aim."
+                      title={_(msg`Put every tenon setting back to its default: shape, width, depth, fillet, fit tolerance, uniform scale, side and aim.`)}
                       style={disabled || isApplying || !tenonSettingsDirty ? undefined : {
                         borderColor: 'color-mix(in srgb, #f87171, var(--border-subtle) 45%)',
                         color: 'color-mix(in srgb, #f87171, var(--text-strong) 30%)',
@@ -817,7 +821,7 @@ export function OrganicCutPanel({
                   className="ui-button ui-button-secondary !h-7 !min-w-7 whitespace-nowrap px-1.5 text-[11px] disabled:opacity-60"
                   onClick={onAddLoop}
                   disabled={disabled || isApplying || !canAddLoop}
-                  title="Add another loop and start drawing it. On Cut, every loop is cut together — use it to free a part attached in several places (e.g. a tail joined at two posts)."
+                  title={_(msg`Add another loop and start drawing it. On Cut, every loop is cut together — use it to free a part attached in several places (e.g. a tail joined at two posts).`)}
                 >
                   +
                 </button>
@@ -833,9 +837,9 @@ export function OrganicCutPanel({
             className="ui-button ui-button-secondary w-full !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
             onClick={onSnapToEdges}
             disabled={disabled || isApplying || !canSnapToEdges}
-            title="Nudge every waypoint onto the model's nearest sharp edge (crease or boundary), preferring a corner where several edges meet — for points placed roughly in a crease or corner. Does nothing on a smooth model with no sharp edges. Double-click a waypoint to lock it (white cage) so snap leaves it where it is."
+            title={_(msg`Nudge every waypoint onto the model's nearest sharp edge (crease or boundary), preferring a corner where several edges meet — for points placed roughly in a crease or corner. Does nothing on a smooth model with no sharp edges. Double-click a waypoint to lock it (white cage) so snap leaves it where it is.`)}
           >
-            Snap to Edges
+            <Trans>Snap to Edges</Trans>
           </button>
         </div>
 
@@ -866,9 +870,9 @@ export function OrganicCutPanel({
               className="ui-button ui-button-secondary flex-1 !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
               onClick={onClearLoop}
               disabled={disabled || isApplying || !loopSummaries.some((s) => s.pointCount > 0)}
-              title="Discard every loop in this cut, not just the active one."
+              title={_(msg`Discard every loop in this cut, not just the active one.`)}
             >
-              Clear All
+              <Trans>Clear All</Trans>
             </button>
             <button
               type="button"

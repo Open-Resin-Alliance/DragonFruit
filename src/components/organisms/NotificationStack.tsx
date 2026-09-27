@@ -1,13 +1,26 @@
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
+import type { MessageDescriptor } from '@lingui/core';
 import { AlertTriangle, CheckCircle2, Info, RefreshCw, Redo2, Undo2 } from 'lucide-react';
 import { Toast, ToastViewport } from '@/components/atoms';
 import type { SceneImportReport } from '@/features/scene/useSceneCollectionManager';
 import type { OrientationToastReport } from '@/features/notifications/useEditorToasts';
 
 /** Module-level labels (React Compiler must not rename Lingui locals). */
-const ORIENTED_PREFIX = msg`Successfully oriented`;
 const ALREADY_OPTIMAL = msg`Already optimal for this goal.`;
+
+// Static ICU pattern in a module-level formatter (see page.tsx): inline
+// interpolation loses its placeholder names to the React Compiler in production
+// builds. Concatenating a prefix instead would hard-code English word order.
+function formatOrientedLabel(
+  translate: (descriptor: MessageDescriptor, values?: Record<string, unknown>) => string,
+  modelName: string,
+): string {
+  return translate(msg({
+    message: 'Successfully oriented {modelName}',
+    comment: '{modelName} is the display name of the model that was reoriented.',
+  }), { modelName });
+}
 
 type IdText = { id: number; text: string };
 
@@ -182,7 +195,7 @@ export function NotificationStack({
               <Info className="h-4 w-4" />
             )}
             {orientationToast.status === 'applied'
-              ? `${_(ORIENTED_PREFIX)} ${orientationToast.modelName}`
+              ? formatOrientedLabel(_, orientationToast.modelName)
               : _(ALREADY_OPTIMAL)}
           </Toast>
         </ToastViewport>

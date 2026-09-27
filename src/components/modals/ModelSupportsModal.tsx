@@ -1,6 +1,10 @@
 'use client';
 
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
+import type { MessageDescriptor } from '@lingui/core';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { ChevronDown, ChevronRight, X } from 'lucide-react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
@@ -27,7 +31,30 @@ function sortIds(ids: string[]): string[] {
   return [...ids].sort((a, b) => a.localeCompare(b));
 }
 
+// Static ICU patterns in module-level formatters (see page.tsx): inline
+// interpolation loses its placeholder names to the React Compiler in production.
+function formatSupportEntityCount(
+  translate: (descriptor: MessageDescriptor, values?: Record<string, unknown>) => string,
+  count: number,
+): string {
+  return translate(msg({
+    message: '{count, plural, one {# support entity} other {# support entities}}',
+    comment: 'Total number of support entities on the model.',
+  }), { count });
+}
+
+function formatEmptyGroup(
+  translate: (descriptor: MessageDescriptor, values?: Record<string, unknown>) => string,
+  groupLabel: string,
+): string {
+  return translate(msg({
+    message: 'No {groupLabel} for this model.',
+    comment: '{groupLabel} is a support type name (Trunks, Branches, Knots, …), lowercased by the caller in English.',
+  }), { groupLabel });
+}
+
 export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModalProps) {
+  const { _ } = useLingui();
   const supportSnapshot = React.useSyncExternalStore(subscribeSupportState, getSupportSnapshot, getSupportSnapshot);
   const [collapsedGroups, setCollapsedGroups] = React.useState<Record<string, boolean>>({});
 
@@ -106,15 +133,15 @@ export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModa
         }}
         role="dialog"
         aria-modal="true"
-        aria-label="Model supports"
+        aria-label={_(msg`Model supports`)}
       >
         <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
           <div>
             <h2 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Model Supports
+              <Trans>Model Supports</Trans>
             </h2>
             <p className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              {model ? model.name : 'No model selected'}
+              {model ? model.name : _(msg`No model selected`)}
             </p>
           </div>
           <button
@@ -125,7 +152,7 @@ export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModa
               background: 'var(--surface-1)',
               color: 'var(--text-muted)',
             }}
-            aria-label="Close supports modal"
+            aria-label={_(msg`Close supports modal`)}
             onClick={onClose}
           >
             <X className="w-4 h-4" />
@@ -141,10 +168,10 @@ export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModa
             }}
           >
             <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-              Total
+              <Trans>Total</Trans>
             </div>
             <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-              {totalSupportEntities === 1 ? '1 support entity' : `${totalSupportEntities.toLocaleString()} support entities`}
+              {formatSupportEntityCount(_, totalSupportEntities)}
             </div>
           </div>
 
@@ -168,7 +195,7 @@ export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModa
 
           <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
             <div className="px-1 pb-1 text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-              Support IDs by type
+              <Trans>Support IDs by type</Trans>
             </div>
 
             <div className="space-y-1">
@@ -200,7 +227,7 @@ export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModa
                       <div className="border-t px-2 py-1.5" style={{ borderColor: 'var(--border-subtle)' }}>
                         {isEmpty ? (
                           <div className="text-[11px] italic" style={{ color: 'var(--text-muted)' }}>
-                            No {group.label.toLowerCase()} for this model.
+                            {formatEmptyGroup(_, group.label.toLowerCase())}
                           </div>
                         ) : (
                           <div className="flex flex-wrap gap-1">

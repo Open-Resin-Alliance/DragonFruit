@@ -4,6 +4,7 @@ import React from 'react';
 import * as THREE from 'three';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
 import { Card, CardHeader, IconButton, Select } from '@/components/atoms';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 import { getModelMesh } from '@/supports/autoSupport/meshStore';
@@ -73,8 +74,7 @@ const DONE_BLOCKERS = msg`Done`;
 const PAINT_LEAD = msg`Paint areas to keep support-free. Orientation avoids them.`;
 const BLOCKERS_HINT = msg`Paint nogo areas for supports. Blocked contact is refused when generating supports and avoided when orienting.`;
 const PAINT_TITLE = msg`Blocker Painting Mode`;
-const PAINT_MID = msg`to reset all,`;
-const PAINT_TAIL = msg`to apply.`;
+const BLOCKER_ACTION_TEXT = { color: 'var(--accent-secondary-action-color)', fontWeight: 600 } as const;
 const BRUSH_SIZE = msg`Brush Size`;
 
 export interface AutoRotationPanelProps {
@@ -100,6 +100,10 @@ export interface AutoRotationPanelProps {
 }
 export function AutoRotationPanel({ activeModelId, activeModelName, currentRotation, onApplyRotation, onOrientationReport, onBeforeOrientApply, blockersActive, onToggleBlockers }: AutoRotationPanelProps) {
   const { _ } = useLingui();
+  // Named exactly as the ICU placeholders in the blocker hint below: the Trans
+  // macro takes the placeholder names from these identifiers.
+  const clearLabel = _(CLEAR_BLOCKERS);
+  const doneLabel = _(DONE_BLOCKERS);
   const [expanded, setExpanded] = useFloatingPanelCollapse(true);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -222,10 +226,13 @@ export function AutoRotationPanel({ activeModelId, activeModelName, currentRotat
                 background: 'var(--accent-secondary-action-bg-92)',
               }}
             >
-              <div className="ui-meta font-semibold" style={{ color: 'var(--accent-secondary-action-color)' }}>{_(PAINT_TITLE)}</div>
+              <div className="ui-meta font-semibold" style={BLOCKER_ACTION_TEXT}>{_(PAINT_TITLE)}</div>
               <div className="flex items-start justify-center min-h-8">
                 <p className="text-[10px] leading-snug line-clamp-2" style={{ color: 'var(--text-muted)' }}>
-                  {_(PAINT_LEAD)}<br /><span style={{ color: 'var(--accent-secondary-action-color)', fontWeight: 600 }}>{_(CLEAR_BLOCKERS)}</span> {_(PAINT_MID)} <span style={{ color: 'var(--accent-secondary-action-color)', fontWeight: 600 }}>{_(DONE_BLOCKERS)}</span> {_(PAINT_TAIL)}
+                  {_(PAINT_LEAD)}<br />
+                  <Trans comment="Sits under the Blocker Painting Mode heading. {clearLabel} and {doneLabel} are the Clear and Done button labels; keep them as placeholders so the two always match the buttons.">
+                    Press <span style={BLOCKER_ACTION_TEXT}>{clearLabel}</span> to reset all, or <span style={BLOCKER_ACTION_TEXT}>{doneLabel}</span> to apply.
+                  </Trans>
                 </p>
               </div>
             </div>

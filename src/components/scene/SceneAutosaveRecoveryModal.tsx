@@ -38,6 +38,24 @@ export function SceneAutosaveRecoveryModal({ savedAt, voxlPath, origin, onRestor
     return sameDay ? d.toLocaleTimeString(i18n.locale) : d.toLocaleString(i18n.locale);
   }, [savedAt, i18n.locale]);
 
+  // Where recovery actually found the payload. Silent when the origin is
+  // unknown: an empty subtitle beats inventing a location the user can't check.
+  const originLabel = React.useMemo(() => {
+    if (origin === 'sidecar') {
+      return _(msg({
+        message: 'Recovered from beside your project file',
+        comment: 'Subtitle of the autosave recovery dialog: the copy DragonFruit writes next to the saved project.',
+      }));
+    }
+    if (origin === 'recovery-dir') {
+      return _(msg({
+        message: 'Recovered from the app data folder',
+        comment: 'Subtitle of the autosave recovery dialog: the fallback location used when no project file was saved yet.',
+      }));
+    }
+    return null;
+  }, [origin, _]);
+
   const handleRestore = async () => {
     setBusy('restore');
     try {
@@ -91,9 +109,11 @@ export function SceneAutosaveRecoveryModal({ savedAt, voxlPath, origin, onRestor
               <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
                 <Trans>Unsaved Scene Found</Trans>
               </h2>
-              <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-                <Trans>DragonFruit autosaved a scene at {formattedDate}</Trans>
-              </p>
+              {originLabel ? (
+                <p className="mt-0.5 truncate text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }} title={voxlPath ?? undefined}>
+                  {originLabel}
+                </p>
+              ) : null}
             </div>
           </div>
         </div>

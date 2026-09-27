@@ -1,6 +1,9 @@
 'use client';
 
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
 import { AlertTriangle } from 'lucide-react';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 
@@ -17,16 +20,17 @@ export function AaSupportWarningModal({
   onCancel,
   onProceed,
 }: AaSupportWarningModalProps) {
+  const { _ } = useLingui();
   return (
     <StructuredDialogModal
       open={isOpen}
-      ariaLabel="Anti-aliasing with possible support geometry"
-      title="Anti-Aliasing Warning"
-      subtitle="Possible unclassified support geometry"
+      ariaLabel={_(msg`Anti-aliasing with possible support geometry`)}
+      title={_(msg`Anti-Aliasing Warning`)}
+      subtitle={_(msg`Possible unclassified support geometry`)}
       icon={<AlertTriangle className="h-4 w-4" />}
       iconTone="warning"
       zIndexClassName="z-[130]"
-      closeAriaLabel="Close modal"
+      closeAriaLabel={_(msg`Close modal`)}
       onClose={onCancel}
       onBackdropClick={onCancel}
       actions={(
@@ -36,7 +40,7 @@ export function AaSupportWarningModal({
             className="ui-button ui-button-secondary !h-9 px-3 text-xs"
             onClick={onCancel}
           >
-            Cancel
+            <Trans>Cancel</Trans>
           </button>
           <button
             type="button"
@@ -48,20 +52,24 @@ export function AaSupportWarningModal({
             }}
             onClick={onProceed}
           >
-            Use Anyway
+            <Trans>Use Anyway</Trans>
           </button>
         </>
       )}
     >
       <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-        <strong className="text-sm font-medium" style={{ color: 'var(--text-strong)' }}>{modelName}</strong>{' '}
-        was imported as an STL file. Our analysis could not determine whether this model contains
-        support geometry baked into the mesh.
+        <Trans comment="{modelName} is the imported model's file name; it is shown in bold.">
+          <strong className="text-sm font-medium" style={{ color: 'var(--text-strong)' }}>{modelName}</strong>{' '}
+          was imported as an STL file. Our analysis could not determine whether this model contains
+          support geometry baked into the mesh.
+        </Trans>
       </p>
       <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-        When anti-aliasing is enabled, we disable it for identified support geometry to preserve
-        fine support structure detail. Since we were unable to identify support geometry in this
-        model, we cannot guarantee print quality.
+        <Trans>
+          When anti-aliasing is enabled, we disable it for identified support geometry to preserve
+          fine support structure detail. Since we were unable to identify support geometry in this
+          model, we cannot guarantee print quality.
+        </Trans>
       </p>
     </StructuredDialogModal>
   );
