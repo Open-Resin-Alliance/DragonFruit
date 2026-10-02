@@ -25,6 +25,7 @@ import { resolveSegmentEndpoints, type ShaftEntity } from '@/supports/SupportPri
 import {
   buildSliceJobManifestNodes,
   describeSliceJobModel,
+  resolveSliceLayerCount,
   resolveSliceRasterSettings,
   type SliceJobManifestModel,
   type SliceRasterSettings,
@@ -1901,10 +1902,11 @@ async function rasterizeLayerStack(options: RasterLayerZipExportOptions): Promis
     maxZ = Math.max(maxZ, triangles[i].zMax);
   }
 
-  const buildHeight = Math.max(0, maxZ);
-  const maxBuildHeight = Math.max(0, Number(options.printerProfile.buildVolumeMm.height) || 0);
-  const tallestObjectHeightMm = Math.min(buildHeight, maxBuildHeight);
-  const totalLayers = Math.max(1, Math.ceil(tallestObjectHeightMm / settings.layerHeightMm));
+  const { totalLayers, tallestObjectHeightMm } = resolveSliceLayerCount({
+    maxZMm: maxZ,
+    printerProfile: options.printerProfile,
+    layerHeightMm: settings.layerHeightMm,
+  });
 
   const rasterWidthPx = settings.sourceResolutionX;
   const rasterHeightPx = settings.sourceResolutionY;
@@ -2156,10 +2158,11 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
     ? Math.max(0, collector.maxZ)
     : 0;
 
-  const buildHeight = maxZ;
-  const maxBuildHeight = Math.max(0, Number(options.printerProfile.buildVolumeMm.height) || 0);
-  const tallestObjectHeightMm = Math.min(buildHeight, maxBuildHeight);
-  const totalLayers = Math.max(1, Math.ceil(tallestObjectHeightMm / settings.layerHeightMm));
+  const { totalLayers, tallestObjectHeightMm } = resolveSliceLayerCount({
+    maxZMm: maxZ,
+    printerProfile: options.printerProfile,
+    layerHeightMm: settings.layerHeightMm,
+  });
 
   const trianglesXYZ = await collector.finalize();
   console.warn('[SupportAA] collector finalized', {

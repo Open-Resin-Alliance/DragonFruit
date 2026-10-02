@@ -272,6 +272,22 @@ export function mergeMetadataOverridesIntoMetadata(
   }
 }
 
+/**
+ * Layer count for a scene whose highest point is `maxZMm`, clipped to the
+ * printer's build height.
+ */
+export function resolveSliceLayerCount(options: {
+  maxZMm: number;
+  printerProfile: PrinterProfile;
+  layerHeightMm: number;
+}): { totalLayers: number; tallestObjectHeightMm: number } {
+  const buildHeight = Math.max(0, options.maxZMm);
+  const maxBuildHeight = Math.max(0, Number(options.printerProfile.buildVolumeMm.height) || 0);
+  const tallestObjectHeightMm = Math.min(buildHeight, maxBuildHeight);
+  const totalLayers = Math.max(1, Math.ceil(tallestObjectHeightMm / options.layerHeightMm));
+  return { totalLayers, tallestObjectHeightMm };
+}
+
 type Vec3Like = { x: number; y: number; z: number };
 
 /** A model as the job metadata names it. Plain numbers, so callers without THREE can build one. */
