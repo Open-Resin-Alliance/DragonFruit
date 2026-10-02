@@ -22,18 +22,10 @@ import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone
 import { calculateDiskThickness, getDiskCenter, getDiskRotation } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
 import { getBezierPointAtT } from '@/supports/Curves/BezierUtils';
 import { resolveSegmentEndpoints, type ShaftEntity } from '@/supports/SupportPrimitives/Knot/segmentEndpoints';
-import { resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
+import { SLICER_IDENTITY, resolveSliceRasterSettings, type SliceRasterSettings } from '@/features/slicing/sliceJobAssembly';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { JOINT_DIAMETER_OFFSET_MM } from '@/supports/constants';
 
-// The app, not the engine: format encoders stamp this as the slicer that made the
-// file. Left out when unknown (e.g. under tests) so no encoder writes a guess.
-const SLICER_IDENTITY = {
-  name: 'DragonFruit',
-  version: process.env.NEXT_PUBLIC_APP_VERSION || undefined,
-};
-
-const MAX_CANVAS_PIXELS = 24_000_000;
 const DEFAULT_MESH_CHUNK_TARGET_BYTES = 64 * 1024 * 1024;
 const MIN_MESH_CHUNK_TARGET_BYTES = 16 * 1024 * 1024;
 const MAX_MESH_CHUNK_TARGET_BYTES = 256 * 1024 * 1024;
@@ -108,7 +100,7 @@ type RasterizedLayerEntry = {
 };
 
 type RasterizationResult = {
-  settings: EffectiveSettings;
+  settings: SliceRasterSettings;
   totalLayers: number;
   tallestObjectHeightMm: number;
   visibleModels: LoadedModel[];
@@ -197,95 +189,6 @@ type SliceSegment2D = {
   yMax: number;
   wind: number;
 };
-
-type EffectiveSettings = {
-  widthPx: number;
-  heightPx: number;
-  sourceResolutionX: number;
-  sourceResolutionY: number;
-  xPackingMode: 'none' | 'rgb8_div3' | 'gray3_div2';
-  mirrorX: boolean;
-  mirrorY: boolean;
-  layerHeightMm: number;
-  totalLayers: number;
-  tallestObjectHeightMm: number;
-};
-
-function resolvePluginPackedWidth(printerProfile: PrinterProfile): {
-  widthPx: number;
-  sourceResolutionX: number;
-  sourceResolutionY: number;
-  xPackingMode: 'none' | 'rgb8_div3' | 'gray3_div2';
-} {
-  const sourceResolutionX = Math.max(1, Math.round(printerProfile.display.resolutionX));
-  const sourceResolutionY = Math.max(1, Math.round(printerProfile.display.resolutionY));
-
-  const explicitBitDepth = Number(printerProfile.bitDepth?.bits);
-  let bitDepth = Number.isFinite(explicitBitDepth) && explicitBitDepth > 0
-    ? Math.round(explicitBitDepth)
-    : 0;
-
-  if (bitDepth <= 0) {
-    const fingerprint = [
-      printerProfile.name,
-      printerProfile.manufacturer,
-      printerProfile.officialPresetId,
-      printerProfile.id,
-    ]
-      .filter((value): value is string => typeof value === 'string' && value.length > 0)
-      .join(' ')
-      .toLowerCase();
-
-    if (/\b3\s*[-_ ]?bit\b|\b3b\b|16k3b|gray3/.test(fingerprint)) {
-      bitDepth = 3;
-    } else if (/\b8\s*[-_ ]?bit\b|\b8b\b|rgb8/.test(fingerprint)) {
-      bitDepth = 8;
-    } else {
-      const divisibleBy2 = sourceResolutionX % 2 === 0;
-      const divisibleBy3 = sourceResolutionX % 3 === 0;
-
-      if (divisibleBy2 && !divisibleBy3) {
-        bitDepth = 3;
-      } else if (divisibleBy3 && !divisibleBy2) {
-        bitDepth = 8;
-      } else if (divisibleBy2 && divisibleBy3) {
-        // Ambiguous resolution: prefer Mono/3-bit path for Athena-class NanoDLP printers.
-        bitDepth = /rgb|color/.test(fingerprint) ? 8 : 3;
-      } else {
-        // Failsafe: NanoDLP path should remain packed; default to 3-bit packing.
-        bitDepth = 3;
-      }
-    }
-  }
-
-  if (bitDepth === 8) {
-    // NanoDLP RGB 8-bit path packs 3 subpixels into 1 RGB output pixel on X.
-    return {
-      widthPx: Math.max(1, Math.floor(sourceResolutionX / 3)),
-      sourceResolutionX,
-      sourceResolutionY,
-      xPackingMode: 'rgb8_div3',
-    };
-  }
-
-  if (bitDepth === 3) {
-    // NanoDLP 3-bit path packs 2 source subpixels into 1 grayscale output pixel on X.
-    return {
-      widthPx: Math.max(1, Math.floor(sourceResolutionX / 2)),
-      sourceResolutionX,
-      sourceResolutionY,
-      xPackingMode: 'gray3_div2',
-    };
-  }
-
-  // Unknown/unsupported bit-depth values still default to 3-bit packed path for NanoDLP.
-  return {
-    widthPx: Math.max(1, Math.floor(sourceResolutionX / 2)),
-    sourceResolutionX,
-    sourceResolutionY,
-    xPackingMode: 'gray3_div2',
-  };
-}
 
 function clampLayerIndex(index: number, totalLayers: number): number {
   if (index < 0) return 0;
@@ -858,7 +761,6 @@ function appendContactDiskPrimitive(
   sphereGeom.dispose();
 }
 
-
 /** Exported for `local-only/slice-goldens/`; not part of the public surface. */
 export function buildSupportAndRaftWorldTriangles(
   visibleModelIds: Set<string>,
@@ -1076,7 +978,6 @@ export function buildSupportAndRaftWorldTriangles(
     }
   }
 
-
   // raftSettings already resolved at top of function; reuse it.
   const raft = raftSettings;
   if (raft.bottomMode !== 'off') {
@@ -1231,7 +1132,7 @@ async function nanodlpPackRgbaToPngBlob(
   sourceWidthPx: number,
   sourceHeightPx: number,
   outputWidthPx: number,
-  packingMode: EffectiveSettings['xPackingMode'],
+  packingMode: SliceRasterSettings['xPackingMode'],
 ): Promise<Blob> {
   const outCanvas = getCanvas(outputWidthPx, sourceHeightPx);
   const outCtx = outCanvas.getContext('2d', { willReadFrequently: false }) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
@@ -1321,7 +1222,7 @@ async function canvasToPngBlob(canvas: OffscreenCanvas | HTMLCanvasElement): Pro
 
 function buildTriangles(
   models: LoadedModel[],
-  settings: EffectiveSettings,
+  settings: SliceRasterSettings,
   printer: PrinterProfile,
 ): RasterTriangle[] {
   const widthMm = Math.max(1, printer.buildVolumeMm.width);
@@ -1817,7 +1718,7 @@ function buildLayerSegmentsFromWorldTriangles(
   triangles: WorldTriangle[],
   triangleIndices: number[],
   zMm: number,
-  settings: EffectiveSettings,
+  settings: SliceRasterSettings,
   printer: PrinterProfile,
 ): SliceSegment2D[] {
   const widthMm = Math.max(1, printer.buildVolumeMm.width);
@@ -1975,59 +1876,6 @@ function rasterizeSolidSegmentsToImage(
   }
 }
 
-function resolveEffectiveSettings(options: RasterLayerZipExportOptions): EffectiveSettings {
-  const sourceResolutionX = Math.max(1, Math.round(options.printerProfile.display.resolutionX));
-  const sourceResolutionY = Math.max(1, Math.round(options.printerProfile.display.resolutionY));
-
-  const resolvedFormat = resolveSlicingFormatDefinition({
-    printerProfile: options.printerProfile,
-    materialProfile: options.materialProfile,
-  });
-  // Same rule as the orchestrator: an unresolved format is an error, never another
-  // format's settings. `resolveEffectiveSettings` is reached from the same export.
-  if (!resolvedFormat) {
-    throw new Error(
-      `No encoder is installed for "${options.printerProfile.display.outputFormat}".`,
-    );
-  }
-  const usesPluginOwnedEncoding = resolvedFormat.ownership === 'plugin';
-  const xPackingStrategy = resolvedFormat.xPackingStrategy ?? 'none';
-
-  const packed = xPackingStrategy === 'bitdepth-packed-x'
-    ? resolvePluginPackedWidth(options.printerProfile)
-    : {
-      widthPx: sourceResolutionX,
-      sourceResolutionX,
-      sourceResolutionY,
-      xPackingMode: 'none' as const,
-    };
-
-  let widthPx = packed.widthPx;
-  let heightPx = packed.sourceResolutionY;
-
-  const pixelCount = widthPx * heightPx;
-  if (pixelCount > MAX_CANVAS_PIXELS && !usesPluginOwnedEncoding) {
-    const scale = Math.sqrt(MAX_CANVAS_PIXELS / pixelCount);
-    widthPx = Math.max(1, Math.floor(widthPx * scale));
-    heightPx = Math.max(1, Math.floor(heightPx * scale));
-  }
-
-  const layerHeightMm = Math.max(0.001, Number(options.materialProfile.layerHeightMm) || 0.05);
-
-  return {
-    widthPx,
-    heightPx,
-    sourceResolutionX: packed.sourceResolutionX,
-    sourceResolutionY: packed.sourceResolutionY,
-    xPackingMode: packed.xPackingMode,
-    mirrorX: options.printerProfile.display.mirrorX === true,
-    mirrorY: options.printerProfile.display.mirrorY === true,
-    layerHeightMm,
-    totalLayers: 1,
-    tallestObjectHeightMm: layerHeightMm,
-  };
-}
-
 async function rasterizeLayerStack(options: RasterLayerZipExportOptions): Promise<RasterizationResult> {
   throwIfAborted(options.abortSignal);
   const visibleModels = options.models.filter((model) => model.visible);
@@ -2035,7 +1883,7 @@ async function rasterizeLayerStack(options: RasterLayerZipExportOptions): Promis
     throw new Error('No visible models available for slicing.');
   }
 
-  const settings = resolveEffectiveSettings(options);
+  const settings = resolveSliceRasterSettings(options);
   const triangles = buildWorldTriangles(visibleModels);
   if (triangles.length === 0) {
     throw new Error('Unable to prepare world-space triangles from visible models.');
@@ -2271,7 +2119,7 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
     visibleModelCount: visibleModels.length,
   });
 
-  const settings = resolveEffectiveSettings(options);
+  const settings = resolveSliceRasterSettings(options);
   const perfSettings = getSavedSlicingPerformanceSettings();
 
   const modelTriangleEstimate = countModelWorldTriangles(visibleModels);

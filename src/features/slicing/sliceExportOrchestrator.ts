@@ -17,7 +17,7 @@ import {
     type NativeSlicerRuntimeMetrics,
 } from './tauri/nativeSlicerBridge';
 import { invoke } from '@tauri-apps/api/core';
-import { getProfileLocalMaterialSettingsAdapter } from '@/features/plugins/pluginRegistry';
+import { mergeMetadataOverridesIntoMetadata } from './sliceJobAssembly';
 
 function resolvePngCompressionStrategy(
     mode: PngCompressionStrategy,
@@ -285,108 +285,6 @@ function safeFilenameBase(raw: string): string {
     if (!trimmed) return 'slice_export';
     const cleaned = trimmed.replace(/[^a-z0-9-_]+/gi, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
     return cleaned || 'slice_export';
-}
-
-function setMetadataPathValue(target: Record<string, unknown>, path: string, value: unknown): void {
-    const segments = path
-        .split('.')
-        .map((segment) => segment.trim())
-        .filter((segment) => segment.length > 0);
-
-    if (segments.length === 0) return;
-
-    let cursor: Record<string, unknown> = target;
-    for (let i = 0; i < segments.length - 1; i += 1) {
-        const segment = segments[i];
-        const existing = cursor[segment];
-        if (!existing || typeof existing !== 'object' || Array.isArray(existing)) {
-            cursor[segment] = {};
-        }
-        cursor = cursor[segment] as Record<string, unknown>;
-    }
-
-    cursor[segments[segments.length - 1]] = value;
-}
-
-function coerceLocalMaterialSettingValue(
-    rawValue: string | number | boolean,
-    kind: 'number' | 'integer' | 'text' | 'boolean' | 'select',
-): string | number | boolean {
-    if (kind === 'boolean') {
-        if (typeof rawValue === 'boolean') return rawValue;
-        if (typeof rawValue === 'string') {
-            const normalized = rawValue.trim().toLowerCase();
-            if (normalized === 'true') return true;
-            if (normalized === 'false') return false;
-        }
-        return Boolean(rawValue);
-    }
-
-    if (kind === 'number' || kind === 'integer') {
-        const parsed = Number(rawValue);
-        if (!Number.isFinite(parsed)) return kind === 'integer' ? 0 : 0;
-        return kind === 'integer' ? Math.round(parsed) : parsed;
-    }
-
-    return String(rawValue);
-}
-
-function mergeMetadataOverridesIntoMetadata(
-    metadataJson: string,
-    outputFormat: string,
-    materialProfile: MaterialProfile,
-    settingsMode?: string,
-    printerOutputFormat?: string,
-): string {
-    try {
-        const parsed = JSON.parse(metadataJson) as Record<string, unknown>;
-
-        if (settingsMode) {
-            const printer = (parsed.printer ?? {}) as Record<string, unknown>;
-            parsed.printer = {
-                ...printer,
-                settingsMode,
-            };
-
-            const exportNode = (parsed.export ?? {}) as Record<string, unknown>;
-            const formatKey = outputFormat.replace(/^\./, '').toLowerCase();
-            const formatNode = (exportNode[formatKey] ?? {}) as Record<string, unknown>;
-            exportNode[formatKey] = {
-                ...formatNode,
-                settingsMode,
-            };
-            parsed.export = exportNode;
-        }
-
-        const adapter = getProfileLocalMaterialSettingsAdapter(printerOutputFormat ?? outputFormat, settingsMode)
-            ?? getProfileLocalMaterialSettingsAdapter(outputFormat, settingsMode);
-        const fieldSchema = adapter?.fields ?? [];
-        if (fieldSchema.length > 0) {
-            const localForOutput = materialProfile.localSettingsByOutput?.[printerOutputFormat ?? outputFormat]
-                ?? materialProfile.localSettingsByOutput?.[outputFormat]
-                ?? {};
-
-            fieldSchema.forEach((field) => {
-                if (field.kind === 'spacer') return;
-
-                const fieldValue = Object.prototype.hasOwnProperty.call(localForOutput, field.key)
-                    ? localForOutput[field.key]
-                    : field.defaultValue;
-
-                const coercedValue = coerceLocalMaterialSettingValue(
-                    fieldValue,
-                    field.kind,
-                );
-
-                const targetPath = (field.metadataPath?.trim() || `material.${field.key}`);
-                setMetadataPathValue(parsed, targetPath, coercedValue);
-            });
-        }
-
-        return JSON.stringify(parsed);
-    } catch {
-        return metadataJson;
-    }
 }
 
 /**
