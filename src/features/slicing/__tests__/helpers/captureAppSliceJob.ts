@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profileStore';
-import { runSliceExportOrchestrator } from '../../sliceExportOrchestrator';
+import { runSliceExportOrchestrator, type SliceExportOrchestratorOptions } from '../../sliceExportOrchestrator';
 import { installFakeWindow } from '@/utils/__tests__/helpers/fakeWindow';
 
 /**
@@ -47,6 +47,8 @@ export async function captureAppSliceJob(options: {
   models: LoadedModel[];
   printerProfile: PrinterProfile;
   materialProfile: MaterialProfile;
+  /** Anything else the panel would pass, such as the anti-aliasing settings. */
+  extraOptions?: Partial<SliceExportOrchestratorOptions>;
 }): Promise<CapturedSliceJob> {
   let captured: CapturedSliceJob | undefined;
   const reachedSlicer = new Error('captured native slice job');
@@ -73,6 +75,7 @@ export async function captureAppSliceJob(options: {
   });
   try {
     await runSliceExportOrchestrator({
+      ...options.extraOptions,
       models: options.models,
       printerProfile: options.printerProfile,
       materialProfile: options.materialProfile,

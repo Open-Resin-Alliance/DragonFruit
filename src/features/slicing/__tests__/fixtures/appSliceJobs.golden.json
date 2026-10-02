@@ -1,0 +1,3445 @@
+{
+  "Saturn 4 (.goo, undeclared depth), material dithering on": {
+    "output_format": ".goo",
+    "format_version": "v1.2",
+    "output_path": null,
+    "source_width_px": 11520,
+    "source_height_px": 5120,
+    "width_px": 11520,
+    "height_px": 5120,
+    "x_packing_mode": "none",
+    "png_compression_strategy": "fastest",
+    "anti_aliasing_level": "Off",
+    "anti_aliasing_mode": "Blur",
+    "blur_brush_radius_px": 1,
+    "blur_brush_kernel": "gaussian",
+    "blur_brush_sigma_x": 0.5,
+    "blur_brush_sigma_y": 0.5,
+    "z_blur_radius_layers": 0,
+    "z_blur_kernel": "box",
+    "z_blur_sigma": 0.5,
+    "aa_on_supports": false,
+    "minimum_aa_alpha_percent": 35,
+    "mirror_x": true,
+    "mirror_y": false,
+    "z_blend_look_back": 2,
+    "z_blend_minimum_alpha_percent": 0,
+    "z_blend_max_alpha_percent": 90,
+    "model_triangle_count": 12,
+    "container_compression_level": 1,
+    "build_width_mm": 218.88,
+    "build_depth_mm": 122.88,
+    "layer_height_mm": 0.03,
+    "total_layers": 334,
+    "export_thumbnail_png_base64": null,
+    "mesh_encoding": "raw_f32",
+    "mesh_quantization": null,
+    "metadata_json": {
+      "version": 2,
+      "mode": "wasm_solid_slice_v0",
+      "notes": [
+        "Solid cross-sections are generated in Rust/WASM from transformed triangle meshes.",
+        "Container packaging is encoded by plugin-owned format encoders."
+      ],
+      "slicer": {
+        "name": "DragonFruit"
+      },
+      "printer": {
+        "name": "Saturn 4",
+        "resolutionX": 11520,
+        "resolutionY": 5120,
+        "buildVolumeMm": {
+          "width": 218.88,
+          "depth": 122.88,
+          "height": 220
+        },
+        "outputFormat": ".goo",
+        "mirrorX": true,
+        "mirrorY": false,
+        "settingsMode": "twostage"
+      },
+      "material": {
+        "name": "Parity resin",
+        "layerHeightMm": 0.05,
+        "normalExposureSec": 2,
+        "bottomExposureSec": 25,
+        "bottomLayerCount": 5,
+        "liftDistanceMm": 1,
+        "liftSpeedMmMin": 60,
+        "retractSpeedMmMin": 240
+      },
+      "effective": {
+        "widthPx": 11520,
+        "heightPx": 5120,
+        "sourceResolutionX": 11520,
+        "sourceResolutionY": 5120,
+        "xPackingMode": "none",
+        "mirrorX": true,
+        "mirrorY": false,
+        "layerHeightMm": 0.03,
+        "totalLayers": 334,
+        "tallestObjectHeightMm": 10
+      },
+      "models": [
+        {
+          "id": "golden-cube",
+          "name": "golden-cube",
+          "polygonCount": 12,
+          "transform": {
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 5
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          }
+        }
+      ],
+      "export": {
+        "goo": {
+          "settingsMode": "twostage"
+        }
+      },
+      "goo": {
+        "transitionLayerCount": 0,
+        "bottomLiftDistanceMm": 3,
+        "bottomLiftSpeedMmMin": 60,
+        "bottomRetractSpeedMmMin": 180,
+        "waitTimeBeforeCureSec": 0,
+        "waitTimeAfterCureSec": 0,
+        "waitTimeAfterLiftSec": 0,
+        "projectorPwmPercent": 100,
+        "bottomLayerProjectorPwmPercent": 100,
+        "bottomLiftDistance2Mm": 4,
+        "bottomLiftSpeed2MmMin": 180,
+        "bottomRetractSpeed2MmMin": 60,
+        "liftDistance2Mm": 4,
+        "liftSpeed2MmMin": 240,
+        "retractSpeed2MmMin": 60
+      }
+    },
+    "dither_enabled": true,
+    "dither_bit_depth": 4,
+    "dither_device_gamma": 2.2
+  },
+  "Saturn 4 (.goo, undeclared depth), material dithering off": {
+    "output_format": ".goo",
+    "format_version": "v1.2",
+    "output_path": null,
+    "source_width_px": 11520,
+    "source_height_px": 5120,
+    "width_px": 11520,
+    "height_px": 5120,
+    "x_packing_mode": "none",
+    "png_compression_strategy": "fastest",
+    "anti_aliasing_level": "Off",
+    "anti_aliasing_mode": "Blur",
+    "blur_brush_radius_px": 1,
+    "blur_brush_kernel": "gaussian",
+    "blur_brush_sigma_x": 0.5,
+    "blur_brush_sigma_y": 0.5,
+    "z_blur_radius_layers": 0,
+    "z_blur_kernel": "box",
+    "z_blur_sigma": 0.5,
+    "aa_on_supports": false,
+    "minimum_aa_alpha_percent": 35,
+    "mirror_x": true,
+    "mirror_y": false,
+    "z_blend_look_back": 2,
+    "z_blend_minimum_alpha_percent": 0,
+    "z_blend_max_alpha_percent": 90,
+    "model_triangle_count": 12,
+    "container_compression_level": 1,
+    "build_width_mm": 218.88,
+    "build_depth_mm": 122.88,
+    "layer_height_mm": 0.03,
+    "total_layers": 334,
+    "export_thumbnail_png_base64": null,
+    "mesh_encoding": "raw_f32",
+    "mesh_quantization": null,
+    "metadata_json": {
+      "version": 2,
+      "mode": "wasm_solid_slice_v0",
+      "notes": [
+        "Solid cross-sections are generated in Rust/WASM from transformed triangle meshes.",
+        "Container packaging is encoded by plugin-owned format encoders."
+      ],
+      "slicer": {
+        "name": "DragonFruit"
+      },
+      "printer": {
+        "name": "Saturn 4",
+        "resolutionX": 11520,
+        "resolutionY": 5120,
+        "buildVolumeMm": {
+          "width": 218.88,
+          "depth": 122.88,
+          "height": 220
+        },
+        "outputFormat": ".goo",
+        "mirrorX": true,
+        "mirrorY": false,
+        "settingsMode": "twostage"
+      },
+      "material": {
+        "name": "Parity resin",
+        "layerHeightMm": 0.05,
+        "normalExposureSec": 2,
+        "bottomExposureSec": 25,
+        "bottomLayerCount": 5,
+        "liftDistanceMm": 1,
+        "liftSpeedMmMin": 60,
+        "retractSpeedMmMin": 240
+      },
+      "effective": {
+        "widthPx": 11520,
+        "heightPx": 5120,
+        "sourceResolutionX": 11520,
+        "sourceResolutionY": 5120,
+        "xPackingMode": "none",
+        "mirrorX": true,
+        "mirrorY": false,
+        "layerHeightMm": 0.03,
+        "totalLayers": 334,
+        "tallestObjectHeightMm": 10
+      },
+      "models": [
+        {
+          "id": "golden-cube",
+          "name": "golden-cube",
+          "polygonCount": 12,
+          "transform": {
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 5
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          }
+        }
+      ],
+      "export": {
+        "goo": {
+          "settingsMode": "twostage"
+        }
+      },
+      "goo": {
+        "transitionLayerCount": 0,
+        "bottomLiftDistanceMm": 3,
+        "bottomLiftSpeedMmMin": 60,
+        "bottomRetractSpeedMmMin": 180,
+        "waitTimeBeforeCureSec": 0,
+        "waitTimeAfterCureSec": 0,
+        "waitTimeAfterLiftSec": 0,
+        "projectorPwmPercent": 100,
+        "bottomLayerProjectorPwmPercent": 100,
+        "bottomLiftDistance2Mm": 4,
+        "bottomLiftSpeed2MmMin": 180,
+        "bottomRetractSpeed2MmMin": 60,
+        "liftDistance2Mm": 4,
+        "liftSpeed2MmMin": 240,
+        "retractSpeed2MmMin": 60
+      }
+    },
+    "dither_enabled": false,
+    "dither_bit_depth": 4,
+    "dither_device_gamma": 2.2
+  },
+  "Saturn 4 (.goo, undeclared depth), material per-format settings stored": {
+    "output_format": ".goo",
+    "format_version": "v1.2",
+    "output_path": null,
+    "source_width_px": 11520,
+    "source_height_px": 5120,
+    "width_px": 11520,
+    "height_px": 5120,
+    "x_packing_mode": "none",
+    "png_compression_strategy": "fastest",
+    "anti_aliasing_level": "Off",
+    "anti_aliasing_mode": "Blur",
+    "blur_brush_radius_px": 1,
+    "blur_brush_kernel": "gaussian",
+    "blur_brush_sigma_x": 0.5,
+    "blur_brush_sigma_y": 0.5,
+    "z_blur_radius_layers": 0,
+    "z_blur_kernel": "box",
+    "z_blur_sigma": 0.5,
+    "aa_on_supports": false,
+    "minimum_aa_alpha_percent": 35,
+    "mirror_x": true,
+    "mirror_y": false,
+    "z_blend_look_back": 2,
+    "z_blend_minimum_alpha_percent": 0,
+    "z_blend_max_alpha_percent": 90,
+    "model_triangle_count": 12,
+    "container_compression_level": 1,
+    "build_width_mm": 218.88,
+    "build_depth_mm": 122.88,
+    "layer_height_mm": 0.04,
+    "total_layers": 250,
+    "export_thumbnail_png_base64": null,
+    "mesh_encoding": "raw_f32",
+    "mesh_quantization": null,
+    "metadata_json": {
+      "version": 2,
+      "mode": "wasm_solid_slice_v0",
+      "notes": [
+        "Solid cross-sections are generated in Rust/WASM from transformed triangle meshes.",
+        "Container packaging is encoded by plugin-owned format encoders."
+      ],
+      "slicer": {
+        "name": "DragonFruit"
+      },
+      "printer": {
+        "name": "Saturn 4",
+        "resolutionX": 11520,
+        "resolutionY": 5120,
+        "buildVolumeMm": {
+          "width": 218.88,
+          "depth": 122.88,
+          "height": 220
+        },
+        "outputFormat": ".goo",
+        "mirrorX": true,
+        "mirrorY": false,
+        "settingsMode": "twostage"
+      },
+      "material": {
+        "name": "Parity resin",
+        "layerHeightMm": 0.04,
+        "normalExposureSec": 3.3,
+        "bottomExposureSec": 41,
+        "bottomLayerCount": 7,
+        "liftDistanceMm": 1,
+        "liftSpeedMmMin": 60,
+        "retractSpeedMmMin": 240
+      },
+      "effective": {
+        "widthPx": 11520,
+        "heightPx": 5120,
+        "sourceResolutionX": 11520,
+        "sourceResolutionY": 5120,
+        "xPackingMode": "none",
+        "mirrorX": true,
+        "mirrorY": false,
+        "layerHeightMm": 0.04,
+        "totalLayers": 250,
+        "tallestObjectHeightMm": 10
+      },
+      "models": [
+        {
+          "id": "golden-cube",
+          "name": "golden-cube",
+          "polygonCount": 12,
+          "transform": {
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 5
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          }
+        }
+      ],
+      "export": {
+        "goo": {
+          "settingsMode": "twostage"
+        }
+      },
+      "goo": {
+        "transitionLayerCount": 0,
+        "bottomLiftDistanceMm": 3,
+        "bottomLiftSpeedMmMin": 60,
+        "bottomRetractSpeedMmMin": 180,
+        "waitTimeBeforeCureSec": 0,
+        "waitTimeAfterCureSec": 0,
+        "waitTimeAfterLiftSec": 0,
+        "projectorPwmPercent": 100,
+        "bottomLayerProjectorPwmPercent": 100,
+        "bottomLiftDistance2Mm": 4,
+        "bottomLiftSpeed2MmMin": 180,
+        "bottomRetractSpeed2MmMin": 60,
+        "liftDistance2Mm": 4,
+        "liftSpeed2MmMin": 240,
+        "retractSpeed2MmMin": 60
+      }
+    },
+    "dither_enabled": false,
+    "dither_bit_depth": 4,
+    "dither_device_gamma": 2.2
+  },
+  "Saturn 3 (.ctb v5enc, undeclared depth), material dithering on": {
+    "output_format": ".ctb",
+    "format_version": "v5enc",
+    "output_path": null,
+    "source_width_px": 11520,
+    "source_height_px": 5120,
+    "width_px": 11520,
+    "height_px": 5120,
+    "x_packing_mode": "none",
+    "png_compression_strategy": "fastest",
+    "anti_aliasing_level": "Off",
+    "anti_aliasing_mode": "Blur",
+    "blur_brush_radius_px": 1,
+    "blur_brush_kernel": "gaussian",
+    "blur_brush_sigma_x": 0.5,
+    "blur_brush_sigma_y": 0.5,
+    "z_blur_radius_layers": 0,
+    "z_blur_kernel": "box",
+    "z_blur_sigma": 0.5,
+    "aa_on_supports": false,
+    "minimum_aa_alpha_percent": 35,
+    "mirror_x": true,
+    "mirror_y": false,
+    "z_blend_look_back": 2,
+    "z_blend_minimum_alpha_percent": 0,
+    "z_blend_max_alpha_percent": 90,
+    "model_triangle_count": 12,
+    "container_compression_level": 1,
+    "build_width_mm": 218.88,
+    "build_depth_mm": 122.88,
+    "layer_height_mm": 0.03,
+    "total_layers": 334,
+    "export_thumbnail_png_base64": null,
+    "mesh_encoding": "raw_f32",
+    "mesh_quantization": null,
+    "metadata_json": {
+      "version": 2,
+      "mode": "wasm_solid_slice_v0",
+      "notes": [
+        "Solid cross-sections are generated in Rust/WASM from transformed triangle meshes.",
+        "Container packaging is encoded by plugin-owned format encoders."
+      ],
+      "slicer": {
+        "name": "DragonFruit"
+      },
+      "printer": {
+        "name": "Saturn 3",
+        "resolutionX": 11520,
+        "resolutionY": 5120,
+        "buildVolumeMm": {
+          "width": 218.88,
+          "depth": 122.88,
+          "height": 249.7
+        },
+        "outputFormat": ".ctb",
+        "formatVersion": "v5enc",
+        "mirrorX": true,
+        "mirrorY": false,
+        "settingsMode": "twostage"
+      },
+      "material": {
+        "name": "Parity resin",
+        "layerHeightMm": 0.05,
+        "normalExposureSec": 2,
+        "bottomExposureSec": 25,
+        "bottomLayerCount": 5,
+        "liftDistanceMm": 1,
+        "liftSpeedMmMin": 60,
+        "retractSpeedMmMin": 240
+      },
+      "effective": {
+        "widthPx": 11520,
+        "heightPx": 5120,
+        "sourceResolutionX": 11520,
+        "sourceResolutionY": 5120,
+        "xPackingMode": "none",
+        "mirrorX": true,
+        "mirrorY": false,
+        "layerHeightMm": 0.03,
+        "totalLayers": 334,
+        "tallestObjectHeightMm": 10
+      },
+      "models": [
+        {
+          "id": "golden-cube",
+          "name": "golden-cube",
+          "polygonCount": 12,
+          "transform": {
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 5
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          }
+        }
+      ],
+      "export": {
+        "ctb": {
+          "settingsMode": "twostage"
+        }
+      },
+      "ctb": {
+        "transitionLayerCount": 0,
+        "bottomLiftDistanceMm": 3,
+        "bottomLiftSpeedMmMin": 60,
+        "bottomRetractSpeedMmMin": 180,
+        "waitTimeBeforeCureSec": 0,
+        "waitTimeAfterCureSec": 0,
+        "waitTimeAfterLiftSec": 0,
+        "projectorPwmPercent": 100,
+        "bottomLayerProjectorPwmPercent": 100,
+        "bottomLiftDistance2Mm": 4,
+        "bottomLiftSpeed2MmMin": 180,
+        "bottomRetractSpeed2MmMin": 60,
+        "liftDistance2Mm": 4,
+        "liftSpeed2MmMin": 240,
+        "retractSpeed2MmMin": 60
+      }
+    },
+    "dither_enabled": true,
+    "dither_bit_depth": 4,
+    "dither_device_gamma": 2.2
+  },
+  "Saturn 3 (.ctb v5enc, undeclared depth), material dithering off": {
+    "output_format": ".ctb",
+    "format_version": "v5enc",
+    "output_path": null,
+    "source_width_px": 11520,
+    "source_height_px": 5120,
+    "width_px": 11520,
+    "height_px": 5120,
+    "x_packing_mode": "none",
+    "png_compression_strategy": "fastest",
+    "anti_aliasing_level": "Off",
+    "anti_aliasing_mode": "Blur",
+    "blur_brush_radius_px": 1,
+    "blur_brush_kernel": "gaussian",
+    "blur_brush_sigma_x": 0.5,
+    "blur_brush_sigma_y": 0.5,
+    "z_blur_radius_layers": 0,
+    "z_blur_kernel": "box",
+    "z_blur_sigma": 0.5,
+    "aa_on_supports": false,
+    "minimum_aa_alpha_percent": 35,
+    "mirror_x": true,
+    "mirror_y": false,
+    "z_blend_look_back": 2,
+    "z_blend_minimum_alpha_percent": 0,
+    "z_blend_max_alpha_percent": 90,
+    "model_triangle_count": 12,
+    "container_compression_level": 1,
+    "build_width_mm": 218.88,
+    "build_depth_mm": 122.88,
+    "layer_height_mm": 0.03,
+    "total_layers": 334,
+    "export_thumbnail_png_base64": null,
+    "mesh_encoding": "raw_f32",
+    "mesh_quantization": null,
+    "metadata_json": {
+      "version": 2,
+      "mode": "wasm_solid_slice_v0",
+      "notes": [
+        "Solid cross-sections are generated in Rust/WASM from transformed triangle meshes.",
+        "Container packaging is encoded by plugin-owned format encoders."
+      ],
+      "slicer": {
+        "name": "DragonFruit"
+      },
+      "printer": {
+        "name": "Saturn 3",
+        "resolutionX": 11520,
+        "resolutionY": 5120,
+        "buildVolumeMm": {
+          "width": 218.88,
+          "depth": 122.88,
+          "height": 249.7
+        },
+        "outputFormat": ".ctb",
+        "formatVersion": "v5enc",
+        "mirrorX": true,
+        "mirrorY": false,
+        "settingsMode": "twostage"
+      },
+      "material": {
+        "name": "Parity resin",
+        "layerHeightMm": 0.05,
+        "normalExposureSec": 2,
+        "bottomExposureSec": 25,
+        "bottomLayerCount": 5,
+        "liftDistanceMm": 1,
+        "liftSpeedMmMin": 60,
+        "retractSpeedMmMin": 240
+      },
+      "effective": {
+        "widthPx": 11520,
+        "heightPx": 5120,
+        "sourceResolutionX": 11520,
+        "sourceResolutionY": 5120,
+        "xPackingMode": "none",
+        "mirrorX": true,
+        "mirrorY": false,
+        "layerHeightMm": 0.03,
+        "totalLayers": 334,
+        "tallestObjectHeightMm": 10
+      },
+      "models": [
+        {
+          "id": "golden-cube",
+          "name": "golden-cube",
+          "polygonCount": 12,
+          "transform": {
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 5
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          }
+        }
+      ],
+      "export": {
+        "ctb": {
+          "settingsMode": "twostage"
+        }
+      },
+      "ctb": {
+        "transitionLayerCount": 0,
+        "bottomLiftDistanceMm": 3,
+        "bottomLiftSpeedMmMin": 60,
+        "bottomRetractSpeedMmMin": 180,
+        "waitTimeBeforeCureSec": 0,
+        "waitTimeAfterCureSec": 0,
+        "waitTimeAfterLiftSec": 0,
+        "projectorPwmPercent": 100,
+        "bottomLayerProjectorPwmPercent": 100,
+        "bottomLiftDistance2Mm": 4,
+        "bottomLiftSpeed2MmMin": 180,
+        "bottomRetractSpeed2MmMin": 60,
+        "liftDistance2Mm": 4,
+        "liftSpeed2MmMin": 240,
+        "retractSpeed2MmMin": 60
+      }
+    },
+    "dither_enabled": false,
+    "dither_bit_depth": 4,
+    "dither_device_gamma": 2.2
+  },
+  "Saturn 3 (.ctb v5enc, undeclared depth), material per-format settings stored": {
+    "output_format": ".ctb",
+    "format_version": "v5enc",
+    "output_path": null,
+    "source_width_px": 11520,
+    "source_height_px": 5120,
+    "width_px": 11520,
+    "height_px": 5120,
+    "x_packing_mode": "none",
+    "png_compression_strategy": "fastest",
+    "anti_aliasing_level": "Off",
+    "anti_aliasing_mode": "Blur",
+    "blur_brush_radius_px": 1,
+    "blur_brush_kernel": "gaussian",
+    "blur_brush_sigma_x": 0.5,
+    "blur_brush_sigma_y": 0.5,
+    "z_blur_radius_layers": 0,
+    "z_blur_kernel": "box",
+    "z_blur_sigma": 0.5,
+    "aa_on_supports": false,
+    "minimum_aa_alpha_percent": 35,
+    "mirror_x": true,
+    "mirror_y": false,
+    "z_blend_look_back": 2,
+    "z_blend_minimum_alpha_percent": 0,
+    "z_blend_max_alpha_percent": 90,
+    "model_triangle_count": 12,
+    "container_compression_level": 1,
+    "build_width_mm": 218.88,
+    "build_depth_mm": 122.88,
+    "layer_height_mm": 0.04,
+    "total_layers": 250,
+    "export_thumbnail_png_base64": null,
+    "mesh_encoding": "raw_f32",
+    "mesh_quantization": null,
+    "metadata_json": {
+      "version": 2,
+      "mode": "wasm_solid_slice_v0",
+      "notes": [
+        "Solid cross-sections are generated in Rust/WASM from transformed triangle meshes.",
+        "Container packaging is encoded by plugin-owned format encoders."
+      ],
+      "slicer": {
+        "name": "DragonFruit"
+      },
+      "printer": {
+        "name": "Saturn 3",
+        "resolutionX": 11520,
+        "resolutionY": 5120,
+        "buildVolumeMm": {
+          "width": 218.88,
+          "depth": 122.88,
+          "height": 249.7
+        },
+        "outputFormat": ".ctb",
+        "formatVersion": "v5enc",
+        "mirrorX": true,
+        "mirrorY": false,
+        "settingsMode": "twostage"
+      },
+      "material": {
+        "name": "Parity resin",
+        "layerHeightMm": 0.04,
+        "normalExposureSec": 3.3,
+        "bottomExposureSec": 41,
+        "bottomLayerCount": 7,
+        "liftDistanceMm": 1,
+        "liftSpeedMmMin": 60,
+        "retractSpeedMmMin": 240
+      },
+      "effective": {
+        "widthPx": 11520,
+        "heightPx": 5120,
+        "sourceResolutionX": 11520,
+        "sourceResolutionY": 5120,
+        "xPackingMode": "none",
+        "mirrorX": true,
+        "mirrorY": false,
+        "layerHeightMm": 0.04,
+        "totalLayers": 250,
+        "tallestObjectHeightMm": 10
+      },
+      "models": [
+        {
+          "id": "golden-cube",
+          "name": "golden-cube",
+          "polygonCount": 12,
+          "transform": {
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 5
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          }
+        }
+      ],
+      "export": {
+        "ctb": {
+          "settingsMode": "twostage"
+        }
+      },
+      "ctb": {
+        "transitionLayerCount": 0,
+        "bottomLiftDistanceMm": 3,
+        "bottomLiftSpeedMmMin": 60,
+        "bottomRetractSpeedMmMin": 180,
+        "waitTimeBeforeCureSec": 0,
+        "waitTimeAfterCureSec": 0,
+        "waitTimeAfterLiftSec": 0,
+        "projectorPwmPercent": 100,
+        "bottomLayerProjectorPwmPercent": 100,
+        "bottomLiftDistance2Mm": 4,
+        "bottomLiftSpeed2MmMin": 180,
+        "bottomRetractSpeed2MmMin": 60,
+        "liftDistance2Mm": 4,
+        "liftSpeed2MmMin": 240,
+        "retractSpeed2MmMin": 60
+      }
+    },
+    "dither_enabled": false,
+    "dither_bit_depth": 4,
+    "dither_device_gamma": 2.2
+  },
+  "Saturn 4 Ultra 16K (.ctb, 3-bit, tilting), material dithering on": {
+    "output_format": ".ctb",
+    "format_version": "v5enc",
+    "output_path": null,
+    "source_width_px": 15120,
+    "source_height_px": 6230,
+    "width_px": 15120,
+    "height_px": 6230,
+    "x_packing_mode": "none",
+    "png_compression_strategy": "fastest",
+    "anti_aliasing_level": "Off",
+    "anti_aliasing_mode": "Blur",
+    "blur_brush_radius_px": 1,
+    "blur_brush_kernel": "gaussian",
+    "blur_brush_sigma_x": 0.5,
+    "blur_brush_sigma_y": 0.5,
+    "z_blur_radius_layers": 0,
+    "z_blur_kernel": "box",
+    "z_blur_sigma": 0.5,
+    "aa_on_supports": false,
+    "minimum_aa_alpha_percent": 35,
+    "mirror_x": true,
+    "mirror_y": false,
+    "z_blend_look_back": 2,
+    "z_blend_minimum_alpha_percent": 0,
+    "z_blend_max_alpha_percent": 90,
+    "model_triangle_count": 12,
+    "container_compression_level": 1,
+    "build_width_mm": 211.68,
+    "build_depth_mm": 118.37,
+    "layer_height_mm": 0.03,
+    "total_layers": 334,
+    "export_thumbnail_png_base64": null,
+    "mesh_encoding": "raw_f32",
+    "mesh_quantization": null,
+    "metadata_json": {
+      "version": 2,
+      "mode": "wasm_solid_slice_v0",
+      "notes": [
+        "Solid cross-sections are generated in Rust/WASM from transformed triangle meshes.",
+        "Container packaging is encoded by plugin-owned format encoders."
+      ],
+      "slicer": {
+        "name": "DragonFruit"
+      },
+      "printer": {
+        "name": "Saturn 4 Ultra 16K",
+        "resolutionX": 15120,
+        "resolutionY": 6230,
+        "buildVolumeMm": {
+          "width": 211.68,
+          "depth": 118.37,
+          "height": 220
+        },
+        "bitDepth": {
+          "bits": 3,
+          "description": "3-bit color depth, suboptimal for grayscale"
+        },
+        "outputFormat": ".ctb",
+        "formatVersion": "v5enc",
+        "mirrorX": true,
+        "mirrorY": false,
+        "settingsMode": "tilting"
+      },
+      "material": {
+        "name": "Parity resin",
+        "layerHeightMm": 0.05,
+        "normalExposureSec": 2,
+        "bottomExposureSec": 25,
+        "bottomLayerCount": 5,
+        "liftDistanceMm": 6,
+        "liftSpeedMmMin": 60,
+        "retractSpeedMmMin": 150
+      },
+      "effective": {
+        "widthPx": 15120,
+        "heightPx": 6230,
+        "sourceResolutionX": 15120,
+        "sourceResolutionY": 6230,
+        "xPackingMode": "none",
+        "mirrorX": true,
+        "mirrorY": false,
+        "layerHeightMm": 0.03,
+        "totalLayers": 334,
+        "tallestObjectHeightMm": 10
+      },
+      "models": [
+        {
+          "id": "golden-cube",
+          "name": "golden-cube",
+          "polygonCount": 12,
+          "transform": {
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 5
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          }
+        }
+      ],
+      "export": {
+        "ctb": {
+          "settingsMode": "tilting"
+        }
+      },
+      "ctb": {
+        "transitionLayerCount": 5,
+        "waitTimeBeforeCureSec": 0,
+        "waitTimeAfterCureSec": 0,
+        "waitTimeAfterLiftSec": 0,
+        "projectorPwmPercent": 100
+      }
+    },
+    "dither_enabled": true,
+    "dither_bit_depth": 3,
+    "dither_device_gamma": 2.2
+  },
+  "Saturn 4 Ultra 16K (.ctb, 3-bit, tilting), material dithering off": {
+    "output_format": ".ctb",
+    "format_version": "v5enc",
+    "output_path": null,
+    "source_width_px": 15120,
+    "source_height_px": 6230,
+    "width_px": 15120,
+    "height_px": 6230,
+    "x_packing_mode": "none",
+    "png_compression_strategy": "fastest",
+    "anti_aliasing_level": "Off",
+    "anti_aliasing_mode": "Blur",
+    "blur_brush_radius_px": 1,
+    "blur_brush_kernel": "gaussian",
+    "blur_brush_sigma_x": 0.5,
+    "blur_brush_sigma_y": 0.5,
+    "z_blur_radius_layers": 0,
+    "z_blur_kernel": "box",
+    "z_blur_sigma": 0.5,
+    "aa_on_supports": false,
+    "minimum_aa_alpha_percent": 35,
+    "mirror_x": true,
+    "mirror_y": false,
+    "z_blend_look_back": 2,
+    "z_blend_minimum_alpha_percent": 0,
+    "z_blend_max_alpha_percent": 90,
+    "model_triangle_count": 12,
+    "container_compression_level": 1,
+    "build_width_mm": 211.68,
+    "build_depth_mm": 118.37,
+    "layer_height_mm": 0.03,
+    "total_layers": 334,
+    "export_thumbnail_png_base64": null,
+    "mesh_encoding": "raw_f32",
+    "mesh_quantization": null,
+    "metadata_json": {
+      "version": 2,
+      "mode": "wasm_solid_slice_v0",
+      "notes": [
+        "Solid cross-sections are generated in Rust/WASM from transformed triangle meshes.",
+        "Container packaging is encoded by plugin-owned format encoders."
+      ],
+      "slicer": {
+        "name": "DragonFruit"
+      },
+      "printer": {
+        "name": "Saturn 4 Ultra 16K",
+        "resolutionX": 15120,
+        "resolutionY": 6230,
+        "buildVolumeMm": {
+          "width": 211.68,
+          "depth": 118.37,
+          "height": 220
+        },
+        "bitDepth": {
+          "bits": 3,
+          "description": "3-bit color depth, suboptimal for grayscale"
+        },
+        "outputFormat": ".ctb",
+        "formatVersion": "v5enc",
+        "mirrorX": true,
+        "mirrorY": false,
+        "settingsMode": "tilting"
+      },
+      "material": {
+        "name": "Parity resin",
+        "layerHeightMm": 0.05,
+        "normalExposureSec": 2,
+        "bottomExposureSec": 25,
+        "bottomLayerCount": 5,
+        "liftDistanceMm": 6,
+        "liftSpeedMmMin": 60,
+        "retractSpeedMmMin": 150
+      },
+      "effective": {
+        "widthPx": 15120,
+        "heightPx": 6230,
+        "sourceResolutionX": 15120,
+        "sourceResolutionY": 6230,
+        "xPackingMode": "none",
+        "mirrorX": true,
+        "mirrorY": false,
+        "layerHeightMm": 0.03,
+        "totalLayers": 334,
+        "tallestObjectHeightMm": 10
+      },
+      "models": [
+        {
+          "id": "golden-cube",
+          "name": "golden-cube",
+          "polygonCount": 12,
+          "transform": {
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 5
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          }
+        }
+      ],
+      "export": {
+        "ctb": {
+          "settingsMode": "tilting"
+        }
+      },
+      "ctb": {
+        "transitionLayerCount": 5,
+        "waitTimeBeforeCureSec": 0,
+        "waitTimeAfterCureSec": 0,
+        "waitTimeAfterLiftSec": 0,
+        "projectorPwmPercent": 100
+      }
+    },
+    "dither_enabled": true,
+    "dither_bit_depth": 3,
+    "dither_device_gamma": 2.2
+  },
+  "Saturn 4 Ultra 16K (.ctb, 3-bit, tilting), material per-format settings stored": {
+    "output_format": ".ctb",
+    "format_version": "v5enc",
+    "output_path": null,
+    "source_width_px": 15120,
+    "source_height_px": 6230,
+    "width_px": 15120,
+    "height_px": 6230,
+    "x_packing_mode": "none",
+    "png_compression_strategy": "fastest",
+    "anti_aliasing_level": "Off",
+    "anti_aliasing_mode": "Blur",
+    "blur_brush_radius_px": 1,
+    "blur_brush_kernel": "gaussian",
+    "blur_brush_sigma_x": 0.5,
+    "blur_brush_sigma_y": 0.5,
+    "z_blur_radius_layers": 0,
+    "z_blur_kernel": "box",
+    "z_blur_sigma": 0.5,
+    "aa_on_supports": false,
+    "minimum_aa_alpha_percent": 35,
+    "mirror_x": true,
+    "mirror_y": false,
+    "z_blend_look_back": 2,
+    "z_blend_minimum_alpha_percent": 0,
+    "z_blend_max_alpha_percent": 90,
+    "model_triangle_count": 12,
+    "container_compression_level": 1,
+    "build_width_mm": 211.68,
+    "build_depth_mm": 118.37,
+    "layer_height_mm": 0.04,
+    "total_layers": 250,
+    "export_thumbnail_png_base64": null,
+    "mesh_encoding": "raw_f32",
+    "mesh_quantization": null,
+    "metadata_json": {
+      "version": 2,
+      "mode": "wasm_solid_slice_v0",
+      "notes": [
+        "Solid cross-sections are generated in Rust/WASM from transformed triangle meshes.",
+        "Container packaging is encoded by plugin-owned format encoders."
+      ],
+      "slicer": {
+        "name": "DragonFruit"
+      },
+      "printer": {
+        "name": "Saturn 4 Ultra 16K",
+        "resolutionX": 15120,
+        "resolutionY": 6230,
+        "buildVolumeMm": {
+          "width": 211.68,
+          "depth": 118.37,
+          "height": 220
+        },
+        "bitDepth": {
+          "bits": 3,
+          "description": "3-bit color depth, suboptimal for grayscale"
+        },
+        "outputFormat": ".ctb",
+        "formatVersion": "v5enc",
+        "mirrorX": true,
+        "mirrorY": false,
+        "settingsMode": "tilting"
+      },
+      "material": {
+        "name": "Parity resin",
+        "layerHeightMm": 0.04,
+        "normalExposureSec": 3.3,
+        "bottomExposureSec": 41,
+        "bottomLayerCount": 7,
+        "liftDistanceMm": 6,
+        "liftSpeedMmMin": 60,
+        "retractSpeedMmMin": 150
+      },
+      "effective": {
+        "widthPx": 15120,
+        "heightPx": 6230,
+        "sourceResolutionX": 15120,
+        "sourceResolutionY": 6230,
+        "xPackingMode": "none",
+        "mirrorX": true,
+        "mirrorY": false,
+        "layerHeightMm": 0.04,
+        "totalLayers": 250,
+        "tallestObjectHeightMm": 10
+      },
+      "models": [
+        {
+          "id": "golden-cube",
+          "name": "golden-cube",
+          "polygonCount": 12,
+          "transform": {
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 5
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          }
+        }
+      ],
+      "export": {
+        "ctb": {
+          "settingsMode": "tilting"
+        }
+      },
+      "ctb": {
+        "transitionLayerCount": 5,
+        "waitTimeBeforeCureSec": 0,
+        "waitTimeAfterCureSec": 0,
+        "waitTimeAfterLiftSec": 0,
+        "projectorPwmPercent": 100
+      }
+    },
+    "dither_enabled": true,
+    "dither_bit_depth": 3,
+    "dither_device_gamma": 2.2
+  },
+  "Mars 2 Pro (.ctb v2, 4-bit, simple), material dithering on": {
+    "output_format": ".ctb",
+    "format_version": "v2",
+    "output_path": null,
+    "source_width_px": 2560,
+    "source_height_px": 1620,
+    "width_px": 2560,
+    "height_px": 1620,
+    "x_packing_mode": "none",
+    "png_compression_strategy": "fastest",
+    "anti_aliasing_level": "Off",
+    "anti_aliasing_mode": "Blur",
+    "blur_brush_radius_px": 1,
+    "blur_brush_kernel": "gaussian",
+    "blur_brush_sigma_x": 0.5,
+    "blur_brush_sigma_y": 0.5,
+    "z_blur_radius_layers": 0,
+    "z_blur_kernel": "box",
+    "z_blur_sigma": 0.5,
+    "aa_on_supports": false,
+    "minimum_aa_alpha_percent": 35,
+    "mirror_x": false,
+    "mirror_y": false,
+    "z_blend_look_back": 2,
+    "z_blend_minimum_alpha_percent": 0,
+    "z_blend_max_alpha_percent": 90,
+    "model_triangle_count": 12,
+    "container_compression_level": 1,
+    "build_width_mm": 130.56,
+    "build_depth_mm": 82.62,
+    "layer_height_mm": 0.03,
+    "total_layers": 334,
+    "export_thumbnail_png_base64": null,
+    "mesh_encoding": "raw_f32",
+    "mesh_quantization": null,
+    "metadata_json": {
+      "version": 2,
+      "mode": "wasm_solid_slice_v0",
+      "notes": [
+        "Solid cross-sections are generated in Rust/WASM from transformed triangle meshes.",
+        "Container packaging is encoded by plugin-owned format encoders."
+      ],
+      "slicer": {
+        "name": "DragonFruit"
+      },
+      "printer": {
+        "name": "Mars 2 Pro",
+        "resolutionX": 2560,
+        "resolutionY": 1620,
+        "buildVolumeMm": {
+          "width": 130.56,
+          "depth": 82.62,
+          "height": 160
+        },
+        "bitDepth": {
+          "bits": 4,
+          "description": "4-bit color depth, 16 grayscale levels for anti-aliasing"
+        },
+        "outputFormat": ".ctb",
+        "formatVersion": "v2",
+        "mirrorX": false,
+        "mirrorY": false,
+        "settingsMode": "simple"
+      },
+      "material": {
+        "name": "Parity resin",
+        "layerHeightMm": 0.05,
+        "normalExposureSec": 2,
+        "bottomExposureSec": 25,
+        "bottomLayerCount": 5,
+        "liftDistanceMm": 6,
+        "liftSpeedMmMin": 60,
+        "retractSpeedMmMin": 150,
+        "bottomLiftDistanceMm": 6,
+        "bottomLiftSpeedMmMin": 30,
+        "bottomRetractSpeedMmMin": 90
+      },
+      "effective": {
+        "widthPx": 2560,
+        "heightPx": 1620,
+        "sourceResolutionX": 2560,
+        "sourceResolutionY": 1620,
+        "xPackingMode": "none",
+        "mirrorX": false,
+        "mirrorY": false,
+        "layerHeightMm": 0.03,
+        "totalLayers": 334,
+        "tallestObjectHeightMm": 10
+      },
+      "models": [
+        {
+          "id": "golden-cube",
+          "name": "golden-cube",
+          "polygonCount": 12,
+          "transform": {
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 5
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          }
+        }
+      ],
+      "export": {
+        "ctb": {
+          "settingsMode": "simple"
+        }
+      },
+      "ctb": {
+        "transitionLayerCount": 5,
+        "waitTimeBeforeCureSec": 0,
+        "waitTimeAfterCureSec": 0,
+        "waitTimeAfterLiftSec": 0,
+        "projectorPwmPercent": 100
+      }
+    },
+    "dither_enabled": true,
+    "dither_bit_depth": 4,
+    "dither_device_gamma": 2.2
+  },
+  "Mars 2 Pro (.ctb v2, 4-bit, simple), material dithering off": {
+    "output_format": ".ctb",
+    "format_version": "v2",
+    "output_path": null,
+    "source_width_px": 2560,
+    "source_height_px": 1620,
+    "width_px": 2560,
+    "height_px": 1620,
+    "x_packing_mode": "none",
+    "png_compression_strategy": "fastest",
+    "anti_aliasing_level": "Off",
+    "anti_aliasing_mode": "Blur",
+    "blur_brush_radius_px": 1,
+    "blur_brush_kernel": "gaussian",
+    "blur_brush_sigma_x": 0.5,
+    "blur_brush_sigma_y": 0.5,
+    "z_blur_radius_layers": 0,
+    "z_blur_kernel": "box",
+    "z_blur_sigma": 0.5,
+    "aa_on_supports": false,
+    "minimum_aa_alpha_percent": 35,
+    "mirror_x": false,
+    "mirror_y": false,
+    "z_blend_look_back": 2,
+    "z_blend_minimum_alpha_percent": 0,
+    "z_blend_max_alpha_percent": 90,
+    "model_triangle_count": 12,
+    "container_compression_level": 1,
+    "build_width_mm": 130.56,
+    "build_depth_mm": 82.62,
+    "layer_height_mm": 0.03,
+    "total_layers": 334,
+    "export_thumbnail_png_base64": null,
+    "mesh_encoding": "raw_f32",
+    "mesh_quantization": null,
+    "metadata_json": {
+      "version": 2,
+      "mode": "wasm_solid_slice_v0",
+      "notes": [
+        "Solid cross-sections are generated in Rust/WASM from transformed triangle meshes.",
+        "Container packaging is encoded by plugin-owned format encoders."
+      ],
+      "slicer": {
+        "name": "DragonFruit"
+      },
+      "printer": {
+        "name": "Mars 2 Pro",
+        "resolutionX": 2560,
+        "resolutionY": 1620,
+        "buildVolumeMm": {
+          "width": 130.56,
+          "depth": 82.62,
+          "height": 160
+        },
+        "bitDepth": {
+          "bits": 4,
+          "description": "4-bit color depth, 16 grayscale levels for anti-aliasing"
+        },
+        "outputFormat": ".ctb",
+        "formatVersion": "v2",
+        "mirrorX": false,
+        "mirrorY": false,
+        "settingsMode": "simple"
+      },
+      "material": {
+        "name": "Parity resin",
+        "layerHeightMm": 0.05,
+        "normalExposureSec": 2,
+        "bottomExposureSec": 25,
+        "bottomLayerCount": 5,
+        "liftDistanceMm": 6,
+        "liftSpeedMmMin": 60,
+        "retractSpeedMmMin": 150,
+        "bottomLiftDistanceMm": 6,
+        "bottomLiftSpeedMmMin": 30,
+        "bottomRetractSpeedMmMin": 90
+      },
+      "effective": {
+        "widthPx": 2560,
+        "heightPx": 1620,
+        "sourceResolutionX": 2560,
+        "sourceResolutionY": 1620,
+        "xPackingMode": "none",
+        "mirrorX": false,
+        "mirrorY": false,
+        "layerHeightMm": 0.03,
+        "totalLayers": 334,
+        "tallestObjectHeightMm": 10
+      },
+      "models": [
+        {
+          "id": "golden-cube",
+          "name": "golden-cube",
+          "polygonCount": 12,
+          "transform": {
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 5
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          }
+        }
+      ],
+      "export": {
+        "ctb": {
+          "settingsMode": "simple"
+        }
+      },
+      "ctb": {
+        "transitionLayerCount": 5,
+        "waitTimeBeforeCureSec": 0,
+        "waitTimeAfterCureSec": 0,
+        "waitTimeAfterLiftSec": 0,
+        "projectorPwmPercent": 100
+      }
+    },
+    "dither_enabled": true,
+    "dither_bit_depth": 4,
+    "dither_device_gamma": 2.2
+  },
+  "Mars 2 Pro (.ctb v2, 4-bit, simple), material per-format settings stored": {
+    "output_format": ".ctb",
+    "format_version": "v2",
+    "output_path": null,
+    "source_width_px": 2560,
+    "source_height_px": 1620,
+    "width_px": 2560,
+    "height_px": 1620,
+    "x_packing_mode": "none",
+    "png_compression_strategy": "fastest",
+    "anti_aliasing_level": "Off",
+    "anti_aliasing_mode": "Blur",
+    "blur_brush_radius_px": 1,
+    "blur_brush_kernel": "gaussian",
+    "blur_brush_sigma_x": 0.5,
+    "blur_brush_sigma_y": 0.5,
+    "z_blur_radius_layers": 0,
+    "z_blur_kernel": "box",
+    "z_blur_sigma": 0.5,
+    "aa_on_supports": false,
+    "minimum_aa_alpha_percent": 35,
+    "mirror_x": false,
+    "mirror_y": false,
+    "z_blend_look_back": 2,
+    "z_blend_minimum_alpha_percent": 0,
+    "z_blend_max_alpha_percent": 90,
+    "model_triangle_count": 12,
+    "container_compression_level": 1,
+    "build_width_mm": 130.56,
+    "build_depth_mm": 82.62,
+    "layer_height_mm": 0.04,
+    "total_layers": 250,
+    "export_thumbnail_png_base64": null,
+    "mesh_encoding": "raw_f32",
+    "mesh_quantization": null,
+    "metadata_json": {
+      "version": 2,
+      "mode": "wasm_solid_slice_v0",
+      "notes": [
+        "Solid cross-sections are generated in Rust/WASM from transformed triangle meshes.",
+        "Container packaging is encoded by plugin-owned format encoders."
+      ],
+      "slicer": {
+        "name": "DragonFruit"
+      },
+      "printer": {
+        "name": "Mars 2 Pro",
+        "resolutionX": 2560,
+        "resolutionY": 1620,
+        "buildVolumeMm": {
+          "width": 130.56,
+          "depth": 82.62,
+          "height": 160
+        },
+        "bitDepth": {
+          "bits": 4,
+          "description": "4-bit color depth, 16 grayscale levels for anti-aliasing"
+        },
+        "outputFormat": ".ctb",
+        "formatVersion": "v2",
+        "mirrorX": false,
+        "mirrorY": false,
+        "settingsMode": "simple"
+      },
+      "material": {
+        "name": "Parity resin",
+        "layerHeightMm": 0.04,
+        "normalExposureSec": 3.3,
+        "bottomExposureSec": 41,
+        "bottomLayerCount": 7,
+        "liftDistanceMm": 6,
+        "liftSpeedMmMin": 60,
+        "retractSpeedMmMin": 150,
+        "bottomLiftDistanceMm": 6,
+        "bottomLiftSpeedMmMin": 30,
+        "bottomRetractSpeedMmMin": 90
+      },
+      "effective": {
+        "widthPx": 2560,
+        "heightPx": 1620,
+        "sourceResolutionX": 2560,
+        "sourceResolutionY": 1620,
+        "xPackingMode": "none",
+        "mirrorX": false,
+        "mirrorY": false,
+        "layerHeightMm": 0.04,
+        "totalLayers": 250,
+        "tallestObjectHeightMm": 10
+      },
+      "models": [
+        {
+          "id": "golden-cube",
+          "name": "golden-cube",
+          "polygonCount": 12,
+          "transform": {
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 5
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          }
+        }
+      ],
+      "export": {
+        "ctb": {
+          "settingsMode": "simple"
+        }
+      },
+      "ctb": {
+        "transitionLayerCount": 5,
+        "waitTimeBeforeCureSec": 0,
+        "waitTimeAfterCureSec": 0,
+        "waitTimeAfterLiftSec": 0,
+        "projectorPwmPercent": 100
+      }
+    },
+    "dither_enabled": true,
+    "dither_bit_depth": 4,
+    "dither_device_gamma": 2.2
+  },
+  "Athena II 16K (.lumen, 8-bit), material dithering on": {
+    "output_format": ".lumen",
+    "format_version": "v1",
+    "output_path": null,
+    "source_width_px": 15120,
+    "source_height_px": 6230,
+    "width_px": 15120,
+    "height_px": 6230,
+    "x_packing_mode": "none",
+    "png_compression_strategy": "fastest",
+    "anti_aliasing_level": "Off",
+    "anti_aliasing_mode": "Blur",
+    "blur_brush_radius_px": 1,
+    "blur_brush_kernel": "gaussian",
+    "blur_brush_sigma_x": 0.5,
+    "blur_brush_sigma_y": 0.5,
+    "z_blur_radius_layers": 0,
+    "z_blur_kernel": "box",
+    "z_blur_sigma": 0.5,
+    "aa_on_supports": false,
+    "minimum_aa_alpha_percent": 35,
+    "mirror_x": true,
+    "mirror_y": false,
+    "z_blend_look_back": 2,
+    "z_blend_minimum_alpha_percent": 0,
+    "z_blend_max_alpha_percent": 90,
+    "model_triangle_count": 12,
+    "container_compression_level": 1,
+    "build_width_mm": 211.68,
+    "build_depth_mm": 118.37,
+    "layer_height_mm": 0.03,
+    "total_layers": 334,
+    "export_thumbnail_png_base64": null,
+    "mesh_encoding": "raw_f32",
+    "mesh_quantization": null,
+    "metadata_json": {
+      "version": 2,
+      "mode": "wasm_solid_slice_v0",
+      "notes": [
+        "Solid cross-sections are generated in Rust/WASM from transformed triangle meshes.",
+        "Container packaging is encoded by plugin-owned format encoders."
+      ],
+      "slicer": {
+        "name": "DragonFruit"
+      },
+      "printer": {
+        "name": "Athena II 16K",
+        "resolutionX": 15120,
+        "resolutionY": 6230,
+        "buildVolumeMm": {
+          "width": 211.68,
+          "depth": 118.37,
+          "height": 235
+        },
+        "bitDepth": {
+          "bits": 8,
+          "description": "8-bit color depth for enhanced grayscale precision"
+        },
+        "outputFormat": ".lumen",
+        "mirrorX": true,
+        "mirrorY": false,
+        "settingsMode": "standard"
+      },
+      "material": {
+        "name": "Parity resin",
+        "layerHeightMm": 0.05,
+        "normalExposureSec": 2,
+        "bottomExposureSec": 25,
+        "bottomLayerCount": 5,
+        "liftDistanceMm": 1,
+        "liftSpeedMmMin": 60,
+        "retractSpeedMmMin": 240,
+        "elephantFootCompensation": false
+      },
+      "effective": {
+        "widthPx": 15120,
+        "heightPx": 6230,
+        "sourceResolutionX": 15120,
+        "sourceResolutionY": 6230,
+        "xPackingMode": "none",
+        "mirrorX": true,
+        "mirrorY": false,
+        "layerHeightMm": 0.03,
+        "totalLayers": 334,
+        "tallestObjectHeightMm": 10
+      },
+      "models": [
+        {
+          "id": "golden-cube",
+          "name": "golden-cube",
+          "polygonCount": 12,
+          "transform": {
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 5
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          }
+        }
+      ],
+      "export": {
+        "lumen": {
+          "settingsMode": "standard"
+        }
+      },
+      "lumen": {
+        "zstdLevel": "6",
+        "tagProbe": true,
+        "transitionLayerCount": 0,
+        "waitTimeBeforeCureSec": 0,
+        "waitTimeAfterCureSec": 0,
+        "waitTimeAfterLiftSec": 0,
+        "projectorPwmPercent": 100,
+        "bottomProjectorPwmPercent": 100,
+        "scaleCompensationXPct": 0,
+        "scaleCompensationYPct": 0,
+        "scaleCompensationZPct": 0,
+        "bottomLiftDistanceMm": 3,
+        "bottomLiftDistance2Mm": 4,
+        "bottomLiftSpeedMmMin": 60,
+        "bottomLiftSpeed2MmMin": 180,
+        "bottomRetractSpeedMmMin": 180,
+        "bottomRetractSpeed2MmMin": 60,
+        "liftDistance2Mm": 4,
+        "liftSpeed2MmMin": 240,
+        "retractSpeed2MmMin": 60,
+        "bottomWaitTimeBeforeCureSec": 0,
+        "bottomWaitTimeAfterCureSec": 0,
+        "bottomWaitTimeAfterLiftSec": 0,
+        "chamberTemperatureC": 0,
+        "vatTemperatureC": 0,
+        "embedVoxlScene": false
+      }
+    },
+    "dither_enabled": false,
+    "dither_bit_depth": 4,
+    "dither_device_gamma": 2.2
+  },
+  "Athena II 16K (.lumen, 8-bit), material dithering off": {
+    "output_format": ".lumen",
+    "format_version": "v1",
+    "output_path": null,
+    "source_width_px": 15120,
+    "source_height_px": 6230,
+    "width_px": 15120,
+    "height_px": 6230,
+    "x_packing_mode": "none",
+    "png_compression_strategy": "fastest",
+    "anti_aliasing_level": "Off",
+    "anti_aliasing_mode": "Blur",
+    "blur_brush_radius_px": 1,
+    "blur_brush_kernel": "gaussian",
+    "blur_brush_sigma_x": 0.5,
+    "blur_brush_sigma_y": 0.5,
+    "z_blur_radius_layers": 0,
+    "z_blur_kernel": "box",
+    "z_blur_sigma": 0.5,
+    "aa_on_supports": false,
+    "minimum_aa_alpha_percent": 35,
+    "mirror_x": true,
+    "mirror_y": false,
+    "z_blend_look_back": 2,
+    "z_blend_minimum_alpha_percent": 0,
+    "z_blend_max_alpha_percent": 90,
+    "model_triangle_count": 12,
+    "container_compression_level": 1,
+    "build_width_mm": 211.68,
+    "build_depth_mm": 118.37,
+    "layer_height_mm": 0.03,
+    "total_layers": 334,
+    "export_thumbnail_png_base64": null,
+    "mesh_encoding": "raw_f32",
+    "mesh_quantization": null,
+    "metadata_json": {
+      "version": 2,
+      "mode": "wasm_solid_slice_v0",
+      "notes": [
+        "Solid cross-sections are generated in Rust/WASM from transformed triangle meshes.",
+        "Container packaging is encoded by plugin-owned format encoders."
+      ],
+      "slicer": {
+        "name": "DragonFruit"
+      },
+      "printer": {
+        "name": "Athena II 16K",
+        "resolutionX": 15120,
+        "resolutionY": 6230,
+        "buildVolumeMm": {
+          "width": 211.68,
+          "depth": 118.37,
+          "height": 235
+        },
+        "bitDepth": {
+          "bits": 8,
+          "description": "8-bit color depth for enhanced grayscale precision"
+        },
+        "outputFormat": ".lumen",
+        "mirrorX": true,
+        "mirrorY": false,
+        "settingsMode": "standard"
+      },
+      "material": {
+        "name": "Parity resin",
+        "layerHeightMm": 0.05,
+        "normalExposureSec": 2,
+        "bottomExposureSec": 25,
+        "bottomLayerCount": 5,
+        "liftDistanceMm": 1,
+        "liftSpeedMmMin": 60,
+        "retractSpeedMmMin": 240,
+        "elephantFootCompensation": false
+      },
+      "effective": {
+        "widthPx": 15120,
+        "heightPx": 6230,
+        "sourceResolutionX": 15120,
+        "sourceResolutionY": 6230,
+        "xPackingMode": "none",
+        "mirrorX": true,
+        "mirrorY": false,
+        "layerHeightMm": 0.03,
+        "totalLayers": 334,
+        "tallestObjectHeightMm": 10
+      },
+      "models": [
+        {
+          "id": "golden-cube",
+          "name": "golden-cube",
+          "polygonCount": 12,
+          "transform": {
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 5
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          }
+        }
+      ],
+      "export": {
+        "lumen": {
+          "settingsMode": "standard"
+        }
+      },
+      "lumen": {
+        "zstdLevel": "6",
+        "tagProbe": true,
+        "transitionLayerCount": 0,
+        "waitTimeBeforeCureSec": 0,
+        "waitTimeAfterCureSec": 0,
+        "waitTimeAfterLiftSec": 0,
+        "projectorPwmPercent": 100,
+        "bottomProjectorPwmPercent": 100,
+        "scaleCompensationXPct": 0,
+        "scaleCompensationYPct": 0,
+        "scaleCompensationZPct": 0,
+        "bottomLiftDistanceMm": 3,
+        "bottomLiftDistance2Mm": 4,
+        "bottomLiftSpeedMmMin": 60,
+        "bottomLiftSpeed2MmMin": 180,
+        "bottomRetractSpeedMmMin": 180,
+        "bottomRetractSpeed2MmMin": 60,
+        "liftDistance2Mm": 4,
+        "liftSpeed2MmMin": 240,
+        "retractSpeed2MmMin": 60,
+        "bottomWaitTimeBeforeCureSec": 0,
+        "bottomWaitTimeAfterCureSec": 0,
+        "bottomWaitTimeAfterLiftSec": 0,
+        "chamberTemperatureC": 0,
+        "vatTemperatureC": 0,
+        "embedVoxlScene": false
+      }
+    },
+    "dither_enabled": false,
+    "dither_bit_depth": 4,
+    "dither_device_gamma": 2.2
+  },
+  "Athena II 16K (.lumen, 8-bit), material per-format settings stored": {
+    "output_format": ".lumen",
+    "format_version": "v1",
+    "output_path": null,
+    "source_width_px": 15120,
+    "source_height_px": 6230,
+    "width_px": 15120,
+    "height_px": 6230,
+    "x_packing_mode": "none",
+    "png_compression_strategy": "fastest",
+    "anti_aliasing_level": "Off",
+    "anti_aliasing_mode": "Blur",
+    "blur_brush_radius_px": 1,
+    "blur_brush_kernel": "gaussian",
+    "blur_brush_sigma_x": 0.5,
+    "blur_brush_sigma_y": 0.5,
+    "z_blur_radius_layers": 0,
+    "z_blur_kernel": "box",
+    "z_blur_sigma": 0.5,
+    "aa_on_supports": false,
+    "minimum_aa_alpha_percent": 35,
+    "mirror_x": true,
+    "mirror_y": false,
+    "z_blend_look_back": 2,
+    "z_blend_minimum_alpha_percent": 0,
+    "z_blend_max_alpha_percent": 90,
+    "model_triangle_count": 12,
+    "container_compression_level": 1,
+    "build_width_mm": 211.68,
+    "build_depth_mm": 118.37,
+    "layer_height_mm": 0.04,
+    "total_layers": 250,
+    "export_thumbnail_png_base64": null,
+    "mesh_encoding": "raw_f32",
+    "mesh_quantization": null,
+    "metadata_json": {
+      "version": 2,
+      "mode": "wasm_solid_slice_v0",
+      "notes": [
+        "Solid cross-sections are generated in Rust/WASM from transformed triangle meshes.",
+        "Container packaging is encoded by plugin-owned format encoders."
+      ],
+      "slicer": {
+        "name": "DragonFruit"
+      },
+      "printer": {
+        "name": "Athena II 16K",
+        "resolutionX": 15120,
+        "resolutionY": 6230,
+        "buildVolumeMm": {
+          "width": 211.68,
+          "depth": 118.37,
+          "height": 235
+        },
+        "bitDepth": {
+          "bits": 8,
+          "description": "8-bit color depth for enhanced grayscale precision"
+        },
+        "outputFormat": ".lumen",
+        "mirrorX": true,
+        "mirrorY": false,
+        "settingsMode": "standard"
+      },
+      "material": {
+        "name": "Parity resin",
+        "layerHeightMm": 0.04,
+        "normalExposureSec": 3.3,
+        "bottomExposureSec": 41,
+        "bottomLayerCount": 7,
+        "liftDistanceMm": 1,
+        "liftSpeedMmMin": 60,
+        "retractSpeedMmMin": 240,
+        "elephantFootCompensation": false
+      },
+      "effective": {
+        "widthPx": 15120,
+        "heightPx": 6230,
+        "sourceResolutionX": 15120,
+        "sourceResolutionY": 6230,
+        "xPackingMode": "none",
+        "mirrorX": true,
+        "mirrorY": false,
+        "layerHeightMm": 0.04,
+        "totalLayers": 250,
+        "tallestObjectHeightMm": 10
+      },
+      "models": [
+        {
+          "id": "golden-cube",
+          "name": "golden-cube",
+          "polygonCount": 12,
+          "transform": {
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 5
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          }
+        }
+      ],
+      "export": {
+        "lumen": {
+          "settingsMode": "standard"
+        }
+      },
+      "lumen": {
+        "zstdLevel": "6",
+        "tagProbe": true,
+        "transitionLayerCount": 0,
+        "waitTimeBeforeCureSec": 0,
+        "waitTimeAfterCureSec": 0,
+        "waitTimeAfterLiftSec": 0,
+        "projectorPwmPercent": 100,
+        "bottomProjectorPwmPercent": 100,
+        "scaleCompensationXPct": 0,
+        "scaleCompensationYPct": 0,
+        "scaleCompensationZPct": 0,
+        "bottomLiftDistanceMm": 3,
+        "bottomLiftDistance2Mm": 4,
+        "bottomLiftSpeedMmMin": 60,
+        "bottomLiftSpeed2MmMin": 180,
+        "bottomRetractSpeedMmMin": 180,
+        "bottomRetractSpeed2MmMin": 60,
+        "liftDistance2Mm": 4,
+        "liftSpeed2MmMin": 240,
+        "retractSpeed2MmMin": 60,
+        "bottomWaitTimeBeforeCureSec": 0,
+        "bottomWaitTimeAfterCureSec": 0,
+        "bottomWaitTimeAfterLiftSec": 0,
+        "chamberTemperatureC": 0,
+        "vatTemperatureC": 0,
+        "embedVoxlScene": false
+      }
+    },
+    "dither_enabled": false,
+    "dither_bit_depth": 4,
+    "dither_device_gamma": 2.2
+  },
+  "Athena II 16K 8-bit (.nanodlp), material dithering on": {
+    "output_format": ".nanodlp",
+    "format_version": null,
+    "output_path": null,
+    "source_width_px": 15120,
+    "source_height_px": 6230,
+    "width_px": 5040,
+    "height_px": 6230,
+    "x_packing_mode": "rgb8_div3",
+    "png_compression_strategy": "fastest",
+    "anti_aliasing_level": "Off",
+    "anti_aliasing_mode": "Blur",
+    "blur_brush_radius_px": 1,
+    "blur_brush_kernel": "gaussian",
+    "blur_brush_sigma_x": 0.5,
+    "blur_brush_sigma_y": 0.5,
+    "z_blur_radius_layers": 0,
+    "z_blur_kernel": "box",
+    "z_blur_sigma": 0.5,
+    "aa_on_supports": false,
+    "minimum_aa_alpha_percent": 35,
+    "mirror_x": true,
+    "mirror_y": false,
+    "z_blend_look_back": 2,
+    "z_blend_minimum_alpha_percent": 0,
+    "z_blend_max_alpha_percent": 90,
+    "model_triangle_count": 12,
+    "container_compression_level": 1,
+    "build_width_mm": 211.68,
+    "build_depth_mm": 118.37,
+    "layer_height_mm": 0.03,
+    "total_layers": 334,
+    "export_thumbnail_png_base64": null,
+    "mesh_encoding": "raw_f32",
+    "mesh_quantization": null,
+    "metadata_json": {
+      "version": 2,
+      "mode": "wasm_solid_slice_v0",
+      "notes": [
+        "Solid cross-sections are generated in Rust/WASM from transformed triangle meshes.",
+        "Container packaging is encoded by plugin-owned format encoders."
+      ],
+      "slicer": {
+        "name": "DragonFruit"
+      },
+      "printer": {
+        "name": "Athena II 16K · 8-bit",
+        "resolutionX": 15120,
+        "resolutionY": 6230,
+        "buildVolumeMm": {
+          "width": 211.68,
+          "depth": 118.37,
+          "height": 235
+        },
+        "bitDepth": {
+          "bits": 8,
+          "description": "8-bit screen on newer Athena II 16K units"
+        },
+        "outputFormat": ".nanodlp",
+        "mirrorX": true,
+        "mirrorY": false
+      },
+      "material": {
+        "name": "Parity resin",
+        "layerHeightMm": 0.03,
+        "normalExposureSec": 2.3,
+        "bottomExposureSec": 31,
+        "bottomLayerCount": 6,
+        "liftDistanceMm": 6,
+        "liftSpeedMmMin": 60,
+        "retractSpeedMmMin": 150
+      },
+      "effective": {
+        "widthPx": 5040,
+        "heightPx": 6230,
+        "sourceResolutionX": 15120,
+        "sourceResolutionY": 6230,
+        "xPackingMode": "rgb8_div3",
+        "mirrorX": true,
+        "mirrorY": false,
+        "layerHeightMm": 0.03,
+        "totalLayers": 334,
+        "tallestObjectHeightMm": 10
+      },
+      "models": [
+        {
+          "id": "golden-cube",
+          "name": "golden-cube",
+          "polygonCount": 12,
+          "transform": {
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 5
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          }
+        }
+      ]
+    },
+    "dither_enabled": false,
+    "dither_bit_depth": 4,
+    "dither_device_gamma": 2.2
+  },
+  "Athena II 16K 8-bit (.nanodlp), material dithering off": {
+    "output_format": ".nanodlp",
+    "format_version": null,
+    "output_path": null,
+    "source_width_px": 15120,
+    "source_height_px": 6230,
+    "width_px": 5040,
+    "height_px": 6230,
+    "x_packing_mode": "rgb8_div3",
+    "png_compression_strategy": "fastest",
+    "anti_aliasing_level": "Off",
+    "anti_aliasing_mode": "Blur",
+    "blur_brush_radius_px": 1,
+    "blur_brush_kernel": "gaussian",
+    "blur_brush_sigma_x": 0.5,
+    "blur_brush_sigma_y": 0.5,
+    "z_blur_radius_layers": 0,
+    "z_blur_kernel": "box",
+    "z_blur_sigma": 0.5,
+    "aa_on_supports": false,
+    "minimum_aa_alpha_percent": 35,
+    "mirror_x": true,
+    "mirror_y": false,
+    "z_blend_look_back": 2,
+    "z_blend_minimum_alpha_percent": 0,
+    "z_blend_max_alpha_percent": 90,
+    "model_triangle_count": 12,
+    "container_compression_level": 1,
+    "build_width_mm": 211.68,
+    "build_depth_mm": 118.37,
+    "layer_height_mm": 0.03,
+    "total_layers": 334,
+    "export_thumbnail_png_base64": null,
+    "mesh_encoding": "raw_f32",
+    "mesh_quantization": null,
+    "metadata_json": {
+      "version": 2,
+      "mode": "wasm_solid_slice_v0",
+      "notes": [
+        "Solid cross-sections are generated in Rust/WASM from transformed triangle meshes.",
+        "Container packaging is encoded by plugin-owned format encoders."
+      ],
+      "slicer": {
+        "name": "DragonFruit"
+      },
+      "printer": {
+        "name": "Athena II 16K · 8-bit",
+        "resolutionX": 15120,
+        "resolutionY": 6230,
+        "buildVolumeMm": {
+          "width": 211.68,
+          "depth": 118.37,
+          "height": 235
+        },
+        "bitDepth": {
+          "bits": 8,
+          "description": "8-bit screen on newer Athena II 16K units"
+        },
+        "outputFormat": ".nanodlp",
+        "mirrorX": true,
+        "mirrorY": false
+      },
+      "material": {
+        "name": "Parity resin",
+        "layerHeightMm": 0.03,
+        "normalExposureSec": 2.3,
+        "bottomExposureSec": 31,
+        "bottomLayerCount": 6,
+        "liftDistanceMm": 6,
+        "liftSpeedMmMin": 60,
+        "retractSpeedMmMin": 150
+      },
+      "effective": {
+        "widthPx": 5040,
+        "heightPx": 6230,
+        "sourceResolutionX": 15120,
+        "sourceResolutionY": 6230,
+        "xPackingMode": "rgb8_div3",
+        "mirrorX": true,
+        "mirrorY": false,
+        "layerHeightMm": 0.03,
+        "totalLayers": 334,
+        "tallestObjectHeightMm": 10
+      },
+      "models": [
+        {
+          "id": "golden-cube",
+          "name": "golden-cube",
+          "polygonCount": 12,
+          "transform": {
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 5
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          }
+        }
+      ]
+    },
+    "dither_enabled": false,
+    "dither_bit_depth": 4,
+    "dither_device_gamma": 2.2
+  },
+  "Athena II 16K 8-bit (.nanodlp), material per-format settings stored": {
+    "output_format": ".nanodlp",
+    "format_version": null,
+    "output_path": null,
+    "source_width_px": 15120,
+    "source_height_px": 6230,
+    "width_px": 5040,
+    "height_px": 6230,
+    "x_packing_mode": "rgb8_div3",
+    "png_compression_strategy": "fastest",
+    "anti_aliasing_level": "Off",
+    "anti_aliasing_mode": "Blur",
+    "blur_brush_radius_px": 1,
+    "blur_brush_kernel": "gaussian",
+    "blur_brush_sigma_x": 0.5,
+    "blur_brush_sigma_y": 0.5,
+    "z_blur_radius_layers": 0,
+    "z_blur_kernel": "box",
+    "z_blur_sigma": 0.5,
+    "aa_on_supports": false,
+    "minimum_aa_alpha_percent": 35,
+    "mirror_x": true,
+    "mirror_y": false,
+    "z_blend_look_back": 2,
+    "z_blend_minimum_alpha_percent": 0,
+    "z_blend_max_alpha_percent": 90,
+    "model_triangle_count": 12,
+    "container_compression_level": 1,
+    "build_width_mm": 211.68,
+    "build_depth_mm": 118.37,
+    "layer_height_mm": 0.03,
+    "total_layers": 334,
+    "export_thumbnail_png_base64": null,
+    "mesh_encoding": "raw_f32",
+    "mesh_quantization": null,
+    "metadata_json": {
+      "version": 2,
+      "mode": "wasm_solid_slice_v0",
+      "notes": [
+        "Solid cross-sections are generated in Rust/WASM from transformed triangle meshes.",
+        "Container packaging is encoded by plugin-owned format encoders."
+      ],
+      "slicer": {
+        "name": "DragonFruit"
+      },
+      "printer": {
+        "name": "Athena II 16K · 8-bit",
+        "resolutionX": 15120,
+        "resolutionY": 6230,
+        "buildVolumeMm": {
+          "width": 211.68,
+          "depth": 118.37,
+          "height": 235
+        },
+        "bitDepth": {
+          "bits": 8,
+          "description": "8-bit screen on newer Athena II 16K units"
+        },
+        "outputFormat": ".nanodlp",
+        "mirrorX": true,
+        "mirrorY": false
+      },
+      "material": {
+        "name": "Parity resin",
+        "layerHeightMm": 0.03,
+        "normalExposureSec": 2.3,
+        "bottomExposureSec": 31,
+        "bottomLayerCount": 6,
+        "liftDistanceMm": 6,
+        "liftSpeedMmMin": 60,
+        "retractSpeedMmMin": 150
+      },
+      "effective": {
+        "widthPx": 5040,
+        "heightPx": 6230,
+        "sourceResolutionX": 15120,
+        "sourceResolutionY": 6230,
+        "xPackingMode": "rgb8_div3",
+        "mirrorX": true,
+        "mirrorY": false,
+        "layerHeightMm": 0.03,
+        "totalLayers": 334,
+        "tallestObjectHeightMm": 10
+      },
+      "models": [
+        {
+          "id": "golden-cube",
+          "name": "golden-cube",
+          "polygonCount": 12,
+          "transform": {
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 5
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          }
+        }
+      ]
+    },
+    "dither_enabled": false,
+    "dither_bit_depth": 4,
+    "dither_device_gamma": 2.2
+  },
+  "Athena II 16K 3-bit (.nanodlp), material dithering on": {
+    "output_format": ".nanodlp",
+    "format_version": null,
+    "output_path": null,
+    "source_width_px": 15136,
+    "source_height_px": 6230,
+    "width_px": 7568,
+    "height_px": 6230,
+    "x_packing_mode": "gray3_div2",
+    "png_compression_strategy": "fastest",
+    "anti_aliasing_level": "Off",
+    "anti_aliasing_mode": "Blur",
+    "blur_brush_radius_px": 1,
+    "blur_brush_kernel": "gaussian",
+    "blur_brush_sigma_x": 0.5,
+    "blur_brush_sigma_y": 0.5,
+    "z_blur_radius_layers": 0,
+    "z_blur_kernel": "box",
+    "z_blur_sigma": 0.5,
+    "aa_on_supports": false,
+    "minimum_aa_alpha_percent": 35,
+    "mirror_x": true,
+    "mirror_y": false,
+    "z_blend_look_back": 2,
+    "z_blend_minimum_alpha_percent": 0,
+    "z_blend_max_alpha_percent": 90,
+    "model_triangle_count": 12,
+    "container_compression_level": 1,
+    "build_width_mm": 211.904,
+    "build_depth_mm": 118.37,
+    "layer_height_mm": 0.03,
+    "total_layers": 334,
+    "export_thumbnail_png_base64": null,
+    "mesh_encoding": "raw_f32",
+    "mesh_quantization": null,
+    "metadata_json": {
+      "version": 2,
+      "mode": "wasm_solid_slice_v0",
+      "notes": [
+        "Solid cross-sections are generated in Rust/WASM from transformed triangle meshes.",
+        "Container packaging is encoded by plugin-owned format encoders."
+      ],
+      "slicer": {
+        "name": "DragonFruit"
+      },
+      "printer": {
+        "name": "Athena II 16K · 3-bit",
+        "resolutionX": 15136,
+        "resolutionY": 6230,
+        "buildVolumeMm": {
+          "width": 211.904,
+          "depth": 118.37,
+          "height": 235
+        },
+        "bitDepth": {
+          "bits": 3,
+          "description": "3-bit screen on early Athena II 16K units"
+        },
+        "outputFormat": ".nanodlp",
+        "mirrorX": true,
+        "mirrorY": false
+      },
+      "material": {
+        "name": "Parity resin",
+        "layerHeightMm": 0.03,
+        "normalExposureSec": 2.3,
+        "bottomExposureSec": 31,
+        "bottomLayerCount": 6,
+        "liftDistanceMm": 6,
+        "liftSpeedMmMin": 60,
+        "retractSpeedMmMin": 150
+      },
+      "effective": {
+        "widthPx": 7568,
+        "heightPx": 6230,
+        "sourceResolutionX": 15136,
+        "sourceResolutionY": 6230,
+        "xPackingMode": "gray3_div2",
+        "mirrorX": true,
+        "mirrorY": false,
+        "layerHeightMm": 0.03,
+        "totalLayers": 334,
+        "tallestObjectHeightMm": 10
+      },
+      "models": [
+        {
+          "id": "golden-cube",
+          "name": "golden-cube",
+          "polygonCount": 12,
+          "transform": {
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 5
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          }
+        }
+      ]
+    },
+    "dither_enabled": true,
+    "dither_bit_depth": 3,
+    "dither_device_gamma": 2.2
+  },
+  "Athena II 16K 3-bit (.nanodlp), material dithering off": {
+    "output_format": ".nanodlp",
+    "format_version": null,
+    "output_path": null,
+    "source_width_px": 15136,
+    "source_height_px": 6230,
+    "width_px": 7568,
+    "height_px": 6230,
+    "x_packing_mode": "gray3_div2",
+    "png_compression_strategy": "fastest",
+    "anti_aliasing_level": "Off",
+    "anti_aliasing_mode": "Blur",
+    "blur_brush_radius_px": 1,
+    "blur_brush_kernel": "gaussian",
+    "blur_brush_sigma_x": 0.5,
+    "blur_brush_sigma_y": 0.5,
+    "z_blur_radius_layers": 0,
+    "z_blur_kernel": "box",
+    "z_blur_sigma": 0.5,
+    "aa_on_supports": false,
+    "minimum_aa_alpha_percent": 35,
+    "mirror_x": true,
+    "mirror_y": false,
+    "z_blend_look_back": 2,
+    "z_blend_minimum_alpha_percent": 0,
+    "z_blend_max_alpha_percent": 90,
+    "model_triangle_count": 12,
+    "container_compression_level": 1,
+    "build_width_mm": 211.904,
+    "build_depth_mm": 118.37,
+    "layer_height_mm": 0.03,
+    "total_layers": 334,
+    "export_thumbnail_png_base64": null,
+    "mesh_encoding": "raw_f32",
+    "mesh_quantization": null,
+    "metadata_json": {
+      "version": 2,
+      "mode": "wasm_solid_slice_v0",
+      "notes": [
+        "Solid cross-sections are generated in Rust/WASM from transformed triangle meshes.",
+        "Container packaging is encoded by plugin-owned format encoders."
+      ],
+      "slicer": {
+        "name": "DragonFruit"
+      },
+      "printer": {
+        "name": "Athena II 16K · 3-bit",
+        "resolutionX": 15136,
+        "resolutionY": 6230,
+        "buildVolumeMm": {
+          "width": 211.904,
+          "depth": 118.37,
+          "height": 235
+        },
+        "bitDepth": {
+          "bits": 3,
+          "description": "3-bit screen on early Athena II 16K units"
+        },
+        "outputFormat": ".nanodlp",
+        "mirrorX": true,
+        "mirrorY": false
+      },
+      "material": {
+        "name": "Parity resin",
+        "layerHeightMm": 0.03,
+        "normalExposureSec": 2.3,
+        "bottomExposureSec": 31,
+        "bottomLayerCount": 6,
+        "liftDistanceMm": 6,
+        "liftSpeedMmMin": 60,
+        "retractSpeedMmMin": 150
+      },
+      "effective": {
+        "widthPx": 7568,
+        "heightPx": 6230,
+        "sourceResolutionX": 15136,
+        "sourceResolutionY": 6230,
+        "xPackingMode": "gray3_div2",
+        "mirrorX": true,
+        "mirrorY": false,
+        "layerHeightMm": 0.03,
+        "totalLayers": 334,
+        "tallestObjectHeightMm": 10
+      },
+      "models": [
+        {
+          "id": "golden-cube",
+          "name": "golden-cube",
+          "polygonCount": 12,
+          "transform": {
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 5
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          }
+        }
+      ]
+    },
+    "dither_enabled": true,
+    "dither_bit_depth": 3,
+    "dither_device_gamma": 2.2
+  },
+  "Athena II 16K 3-bit (.nanodlp), material per-format settings stored": {
+    "output_format": ".nanodlp",
+    "format_version": null,
+    "output_path": null,
+    "source_width_px": 15136,
+    "source_height_px": 6230,
+    "width_px": 7568,
+    "height_px": 6230,
+    "x_packing_mode": "gray3_div2",
+    "png_compression_strategy": "fastest",
+    "anti_aliasing_level": "Off",
+    "anti_aliasing_mode": "Blur",
+    "blur_brush_radius_px": 1,
+    "blur_brush_kernel": "gaussian",
+    "blur_brush_sigma_x": 0.5,
+    "blur_brush_sigma_y": 0.5,
+    "z_blur_radius_layers": 0,
+    "z_blur_kernel": "box",
+    "z_blur_sigma": 0.5,
+    "aa_on_supports": false,
+    "minimum_aa_alpha_percent": 35,
+    "mirror_x": true,
+    "mirror_y": false,
+    "z_blend_look_back": 2,
+    "z_blend_minimum_alpha_percent": 0,
+    "z_blend_max_alpha_percent": 90,
+    "model_triangle_count": 12,
+    "container_compression_level": 1,
+    "build_width_mm": 211.904,
+    "build_depth_mm": 118.37,
+    "layer_height_mm": 0.03,
+    "total_layers": 334,
+    "export_thumbnail_png_base64": null,
+    "mesh_encoding": "raw_f32",
+    "mesh_quantization": null,
+    "metadata_json": {
+      "version": 2,
+      "mode": "wasm_solid_slice_v0",
+      "notes": [
+        "Solid cross-sections are generated in Rust/WASM from transformed triangle meshes.",
+        "Container packaging is encoded by plugin-owned format encoders."
+      ],
+      "slicer": {
+        "name": "DragonFruit"
+      },
+      "printer": {
+        "name": "Athena II 16K · 3-bit",
+        "resolutionX": 15136,
+        "resolutionY": 6230,
+        "buildVolumeMm": {
+          "width": 211.904,
+          "depth": 118.37,
+          "height": 235
+        },
+        "bitDepth": {
+          "bits": 3,
+          "description": "3-bit screen on early Athena II 16K units"
+        },
+        "outputFormat": ".nanodlp",
+        "mirrorX": true,
+        "mirrorY": false
+      },
+      "material": {
+        "name": "Parity resin",
+        "layerHeightMm": 0.03,
+        "normalExposureSec": 2.3,
+        "bottomExposureSec": 31,
+        "bottomLayerCount": 6,
+        "liftDistanceMm": 6,
+        "liftSpeedMmMin": 60,
+        "retractSpeedMmMin": 150
+      },
+      "effective": {
+        "widthPx": 7568,
+        "heightPx": 6230,
+        "sourceResolutionX": 15136,
+        "sourceResolutionY": 6230,
+        "xPackingMode": "gray3_div2",
+        "mirrorX": true,
+        "mirrorY": false,
+        "layerHeightMm": 0.03,
+        "totalLayers": 334,
+        "tallestObjectHeightMm": 10
+      },
+      "models": [
+        {
+          "id": "golden-cube",
+          "name": "golden-cube",
+          "polygonCount": 12,
+          "transform": {
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 5
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          }
+        }
+      ]
+    },
+    "dither_enabled": true,
+    "dither_bit_depth": 3,
+    "dither_device_gamma": 2.2
+  },
+  "Saturn 4 Ultra 16K bundle (declared build volume), material dithering on": {
+    "output_format": ".ctb",
+    "format_version": "v5enc",
+    "output_path": null,
+    "source_width_px": 15120,
+    "source_height_px": 6230,
+    "width_px": 15120,
+    "height_px": 6230,
+    "x_packing_mode": "none",
+    "png_compression_strategy": "fastest",
+    "anti_aliasing_level": "Off",
+    "anti_aliasing_mode": "Blur",
+    "blur_brush_radius_px": 1,
+    "blur_brush_kernel": "gaussian",
+    "blur_brush_sigma_x": 0.5,
+    "blur_brush_sigma_y": 0.5,
+    "z_blur_radius_layers": 0,
+    "z_blur_kernel": "box",
+    "z_blur_sigma": 0.5,
+    "aa_on_supports": false,
+    "minimum_aa_alpha_percent": 35,
+    "mirror_x": true,
+    "mirror_y": false,
+    "z_blend_look_back": 2,
+    "z_blend_minimum_alpha_percent": 0,
+    "z_blend_max_alpha_percent": 90,
+    "model_triangle_count": 12,
+    "container_compression_level": 1,
+    "build_width_mm": 211.68,
+    "build_depth_mm": 118.37,
+    "layer_height_mm": 0.03,
+    "total_layers": 334,
+    "export_thumbnail_png_base64": null,
+    "mesh_encoding": "raw_f32",
+    "mesh_quantization": null,
+    "metadata_json": {
+      "version": 2,
+      "mode": "wasm_solid_slice_v0",
+      "notes": [
+        "Solid cross-sections are generated in Rust/WASM from transformed triangle meshes.",
+        "Container packaging is encoded by plugin-owned format encoders."
+      ],
+      "slicer": {
+        "name": "DragonFruit"
+      },
+      "printer": {
+        "name": "Saturn 4 Ultra 16K",
+        "resolutionX": 15120,
+        "resolutionY": 6230,
+        "buildVolumeMm": {
+          "width": 211.68,
+          "depth": 118.37,
+          "height": 220
+        },
+        "bitDepth": {
+          "bits": 3,
+          "description": "3-bit color depth, suboptimal for grayscale"
+        },
+        "outputFormat": ".ctb",
+        "formatVersion": "v5enc",
+        "mirrorX": true,
+        "mirrorY": false,
+        "settingsMode": "tilting"
+      },
+      "material": {
+        "name": "Parity resin",
+        "layerHeightMm": 0.05,
+        "normalExposureSec": 2,
+        "bottomExposureSec": 25,
+        "bottomLayerCount": 5,
+        "liftDistanceMm": 6,
+        "liftSpeedMmMin": 60,
+        "retractSpeedMmMin": 150
+      },
+      "effective": {
+        "widthPx": 15120,
+        "heightPx": 6230,
+        "sourceResolutionX": 15120,
+        "sourceResolutionY": 6230,
+        "xPackingMode": "none",
+        "mirrorX": true,
+        "mirrorY": false,
+        "layerHeightMm": 0.03,
+        "totalLayers": 334,
+        "tallestObjectHeightMm": 10
+      },
+      "models": [
+        {
+          "id": "golden-cube",
+          "name": "golden-cube",
+          "polygonCount": 12,
+          "transform": {
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 5
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          }
+        }
+      ],
+      "export": {
+        "ctb": {
+          "settingsMode": "tilting"
+        }
+      },
+      "ctb": {
+        "transitionLayerCount": 5,
+        "waitTimeBeforeCureSec": 0,
+        "waitTimeAfterCureSec": 0,
+        "waitTimeAfterLiftSec": 0,
+        "projectorPwmPercent": 100
+      }
+    },
+    "dither_enabled": true,
+    "dither_bit_depth": 3,
+    "dither_device_gamma": 2.2
+  },
+  "Saturn 4 Ultra 16K bundle (declared build volume), material dithering off": {
+    "output_format": ".ctb",
+    "format_version": "v5enc",
+    "output_path": null,
+    "source_width_px": 15120,
+    "source_height_px": 6230,
+    "width_px": 15120,
+    "height_px": 6230,
+    "x_packing_mode": "none",
+    "png_compression_strategy": "fastest",
+    "anti_aliasing_level": "Off",
+    "anti_aliasing_mode": "Blur",
+    "blur_brush_radius_px": 1,
+    "blur_brush_kernel": "gaussian",
+    "blur_brush_sigma_x": 0.5,
+    "blur_brush_sigma_y": 0.5,
+    "z_blur_radius_layers": 0,
+    "z_blur_kernel": "box",
+    "z_blur_sigma": 0.5,
+    "aa_on_supports": false,
+    "minimum_aa_alpha_percent": 35,
+    "mirror_x": true,
+    "mirror_y": false,
+    "z_blend_look_back": 2,
+    "z_blend_minimum_alpha_percent": 0,
+    "z_blend_max_alpha_percent": 90,
+    "model_triangle_count": 12,
+    "container_compression_level": 1,
+    "build_width_mm": 211.68,
+    "build_depth_mm": 118.37,
+    "layer_height_mm": 0.03,
+    "total_layers": 334,
+    "export_thumbnail_png_base64": null,
+    "mesh_encoding": "raw_f32",
+    "mesh_quantization": null,
+    "metadata_json": {
+      "version": 2,
+      "mode": "wasm_solid_slice_v0",
+      "notes": [
+        "Solid cross-sections are generated in Rust/WASM from transformed triangle meshes.",
+        "Container packaging is encoded by plugin-owned format encoders."
+      ],
+      "slicer": {
+        "name": "DragonFruit"
+      },
+      "printer": {
+        "name": "Saturn 4 Ultra 16K",
+        "resolutionX": 15120,
+        "resolutionY": 6230,
+        "buildVolumeMm": {
+          "width": 211.68,
+          "depth": 118.37,
+          "height": 220
+        },
+        "bitDepth": {
+          "bits": 3,
+          "description": "3-bit color depth, suboptimal for grayscale"
+        },
+        "outputFormat": ".ctb",
+        "formatVersion": "v5enc",
+        "mirrorX": true,
+        "mirrorY": false,
+        "settingsMode": "tilting"
+      },
+      "material": {
+        "name": "Parity resin",
+        "layerHeightMm": 0.05,
+        "normalExposureSec": 2,
+        "bottomExposureSec": 25,
+        "bottomLayerCount": 5,
+        "liftDistanceMm": 6,
+        "liftSpeedMmMin": 60,
+        "retractSpeedMmMin": 150
+      },
+      "effective": {
+        "widthPx": 15120,
+        "heightPx": 6230,
+        "sourceResolutionX": 15120,
+        "sourceResolutionY": 6230,
+        "xPackingMode": "none",
+        "mirrorX": true,
+        "mirrorY": false,
+        "layerHeightMm": 0.03,
+        "totalLayers": 334,
+        "tallestObjectHeightMm": 10
+      },
+      "models": [
+        {
+          "id": "golden-cube",
+          "name": "golden-cube",
+          "polygonCount": 12,
+          "transform": {
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 5
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          }
+        }
+      ],
+      "export": {
+        "ctb": {
+          "settingsMode": "tilting"
+        }
+      },
+      "ctb": {
+        "transitionLayerCount": 5,
+        "waitTimeBeforeCureSec": 0,
+        "waitTimeAfterCureSec": 0,
+        "waitTimeAfterLiftSec": 0,
+        "projectorPwmPercent": 100
+      }
+    },
+    "dither_enabled": true,
+    "dither_bit_depth": 3,
+    "dither_device_gamma": 2.2
+  },
+  "Saturn 4 Ultra 16K bundle (declared build volume), material per-format settings stored": {
+    "output_format": ".ctb",
+    "format_version": "v5enc",
+    "output_path": null,
+    "source_width_px": 15120,
+    "source_height_px": 6230,
+    "width_px": 15120,
+    "height_px": 6230,
+    "x_packing_mode": "none",
+    "png_compression_strategy": "fastest",
+    "anti_aliasing_level": "Off",
+    "anti_aliasing_mode": "Blur",
+    "blur_brush_radius_px": 1,
+    "blur_brush_kernel": "gaussian",
+    "blur_brush_sigma_x": 0.5,
+    "blur_brush_sigma_y": 0.5,
+    "z_blur_radius_layers": 0,
+    "z_blur_kernel": "box",
+    "z_blur_sigma": 0.5,
+    "aa_on_supports": false,
+    "minimum_aa_alpha_percent": 35,
+    "mirror_x": true,
+    "mirror_y": false,
+    "z_blend_look_back": 2,
+    "z_blend_minimum_alpha_percent": 0,
+    "z_blend_max_alpha_percent": 90,
+    "model_triangle_count": 12,
+    "container_compression_level": 1,
+    "build_width_mm": 211.68,
+    "build_depth_mm": 118.37,
+    "layer_height_mm": 0.04,
+    "total_layers": 250,
+    "export_thumbnail_png_base64": null,
+    "mesh_encoding": "raw_f32",
+    "mesh_quantization": null,
+    "metadata_json": {
+      "version": 2,
+      "mode": "wasm_solid_slice_v0",
+      "notes": [
+        "Solid cross-sections are generated in Rust/WASM from transformed triangle meshes.",
+        "Container packaging is encoded by plugin-owned format encoders."
+      ],
+      "slicer": {
+        "name": "DragonFruit"
+      },
+      "printer": {
+        "name": "Saturn 4 Ultra 16K",
+        "resolutionX": 15120,
+        "resolutionY": 6230,
+        "buildVolumeMm": {
+          "width": 211.68,
+          "depth": 118.37,
+          "height": 220
+        },
+        "bitDepth": {
+          "bits": 3,
+          "description": "3-bit color depth, suboptimal for grayscale"
+        },
+        "outputFormat": ".ctb",
+        "formatVersion": "v5enc",
+        "mirrorX": true,
+        "mirrorY": false,
+        "settingsMode": "tilting"
+      },
+      "material": {
+        "name": "Parity resin",
+        "layerHeightMm": 0.04,
+        "normalExposureSec": 3.3,
+        "bottomExposureSec": 41,
+        "bottomLayerCount": 7,
+        "liftDistanceMm": 6,
+        "liftSpeedMmMin": 60,
+        "retractSpeedMmMin": 150
+      },
+      "effective": {
+        "widthPx": 15120,
+        "heightPx": 6230,
+        "sourceResolutionX": 15120,
+        "sourceResolutionY": 6230,
+        "xPackingMode": "none",
+        "mirrorX": true,
+        "mirrorY": false,
+        "layerHeightMm": 0.04,
+        "totalLayers": 250,
+        "tallestObjectHeightMm": 10
+      },
+      "models": [
+        {
+          "id": "golden-cube",
+          "name": "golden-cube",
+          "polygonCount": 12,
+          "transform": {
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 5
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          }
+        }
+      ],
+      "export": {
+        "ctb": {
+          "settingsMode": "tilting"
+        }
+      },
+      "ctb": {
+        "transitionLayerCount": 5,
+        "waitTimeBeforeCureSec": 0,
+        "waitTimeAfterCureSec": 0,
+        "waitTimeAfterLiftSec": 0,
+        "projectorPwmPercent": 100
+      }
+    },
+    "dither_enabled": true,
+    "dither_bit_depth": 3,
+    "dither_device_gamma": 2.2
+  },
+  "3DAA with support tip shrink, Saturn 4 Ultra 16K": {
+    "output_format": ".ctb",
+    "format_version": "v5enc",
+    "output_path": null,
+    "source_width_px": 15120,
+    "source_height_px": 6230,
+    "width_px": 15120,
+    "height_px": 6230,
+    "x_packing_mode": "none",
+    "png_compression_strategy": "fastest",
+    "anti_aliasing_level": "8x",
+    "anti_aliasing_mode": "Vertical2",
+    "blur_brush_radius_px": 1,
+    "blur_brush_kernel": "gaussian",
+    "blur_brush_sigma_x": 0.5,
+    "blur_brush_sigma_y": 0.5,
+    "z_blur_radius_layers": 0,
+    "z_blur_kernel": "box",
+    "z_blur_sigma": 0.5,
+    "aa_on_supports": false,
+    "minimum_aa_alpha_percent": 0,
+    "mirror_x": true,
+    "mirror_y": false,
+    "z_blend_look_back": 3,
+    "z_blend_minimum_alpha_percent": 10,
+    "z_blend_max_alpha_percent": 80,
+    "zaa_kernel": "perturb",
+    "zaa_pattern": "halton",
+    "model_triangle_count": 12,
+    "container_compression_level": 1,
+    "build_width_mm": 211.68,
+    "build_depth_mm": 118.37,
+    "layer_height_mm": 0.03,
+    "total_layers": 334,
+    "export_thumbnail_png_base64": null,
+    "mesh_encoding": "raw_f32",
+    "mesh_quantization": null,
+    "metadata_json": {
+      "version": 2,
+      "mode": "wasm_solid_slice_v0",
+      "notes": [
+        "Solid cross-sections are generated in Rust/WASM from transformed triangle meshes.",
+        "Container packaging is encoded by plugin-owned format encoders."
+      ],
+      "slicer": {
+        "name": "DragonFruit"
+      },
+      "printer": {
+        "name": "Saturn 4 Ultra 16K",
+        "resolutionX": 15120,
+        "resolutionY": 6230,
+        "buildVolumeMm": {
+          "width": 211.68,
+          "depth": 118.37,
+          "height": 220
+        },
+        "bitDepth": {
+          "bits": 3,
+          "description": "3-bit color depth, suboptimal for grayscale"
+        },
+        "outputFormat": ".ctb",
+        "formatVersion": "v5enc",
+        "mirrorX": true,
+        "mirrorY": false,
+        "settingsMode": "tilting"
+      },
+      "material": {
+        "name": "Parity resin",
+        "layerHeightMm": 0.05,
+        "normalExposureSec": 2,
+        "bottomExposureSec": 25,
+        "bottomLayerCount": 5,
+        "liftDistanceMm": 6,
+        "liftSpeedMmMin": 60,
+        "retractSpeedMmMin": 150
+      },
+      "effective": {
+        "widthPx": 15120,
+        "heightPx": 6230,
+        "sourceResolutionX": 15120,
+        "sourceResolutionY": 6230,
+        "xPackingMode": "none",
+        "mirrorX": true,
+        "mirrorY": false,
+        "layerHeightMm": 0.03,
+        "totalLayers": 334,
+        "tallestObjectHeightMm": 10
+      },
+      "models": [
+        {
+          "id": "golden-cube",
+          "name": "golden-cube",
+          "polygonCount": 12,
+          "transform": {
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 5
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          }
+        }
+      ],
+      "export": {
+        "ctb": {
+          "settingsMode": "tilting"
+        }
+      },
+      "ctb": {
+        "transitionLayerCount": 5,
+        "waitTimeBeforeCureSec": 0,
+        "waitTimeAfterCureSec": 0,
+        "waitTimeAfterLiftSec": 0,
+        "projectorPwmPercent": 100
+      }
+    },
+    "dither_enabled": true,
+    "dither_bit_depth": 3,
+    "dither_device_gamma": 2.2
+  },
+  "Blur with a thumbnail, Athena II 16K 8-bit": {
+    "output_format": ".nanodlp",
+    "format_version": null,
+    "output_path": null,
+    "source_width_px": 15120,
+    "source_height_px": 6230,
+    "width_px": 5040,
+    "height_px": 6230,
+    "x_packing_mode": "rgb8_div3",
+    "png_compression_strategy": "balanced",
+    "anti_aliasing_level": "4x",
+    "anti_aliasing_mode": "Blur",
+    "blur_brush_radius_px": 2,
+    "blur_brush_kernel": "box",
+    "blur_brush_sigma_x": 0.5,
+    "blur_brush_sigma_y": 0.5,
+    "z_blur_radius_layers": 0,
+    "z_blur_kernel": "box",
+    "z_blur_sigma": 0.5,
+    "aa_on_supports": false,
+    "minimum_aa_alpha_percent": 35,
+    "mirror_x": true,
+    "mirror_y": false,
+    "z_blend_look_back": 2,
+    "z_blend_minimum_alpha_percent": 0,
+    "z_blend_max_alpha_percent": 90,
+    "model_triangle_count": 12,
+    "container_compression_level": 3,
+    "build_width_mm": 211.68,
+    "build_depth_mm": 118.37,
+    "layer_height_mm": 0.03,
+    "total_layers": 334,
+    "export_thumbnail_png_base64": "iVBORw==",
+    "mesh_encoding": "raw_f32",
+    "mesh_quantization": null,
+    "metadata_json": {
+      "version": 2,
+      "mode": "wasm_solid_slice_v0",
+      "notes": [
+        "Solid cross-sections are generated in Rust/WASM from transformed triangle meshes.",
+        "Container packaging is encoded by plugin-owned format encoders."
+      ],
+      "slicer": {
+        "name": "DragonFruit"
+      },
+      "printer": {
+        "name": "Athena II 16K · 8-bit",
+        "resolutionX": 15120,
+        "resolutionY": 6230,
+        "buildVolumeMm": {
+          "width": 211.68,
+          "depth": 118.37,
+          "height": 235
+        },
+        "bitDepth": {
+          "bits": 8,
+          "description": "8-bit screen on newer Athena II 16K units"
+        },
+        "outputFormat": ".nanodlp",
+        "mirrorX": true,
+        "mirrorY": false
+      },
+      "material": {
+        "name": "Parity resin",
+        "layerHeightMm": 0.03,
+        "normalExposureSec": 2.3,
+        "bottomExposureSec": 31,
+        "bottomLayerCount": 6,
+        "liftDistanceMm": 6,
+        "liftSpeedMmMin": 60,
+        "retractSpeedMmMin": 150
+      },
+      "effective": {
+        "widthPx": 5040,
+        "heightPx": 6230,
+        "sourceResolutionX": 15120,
+        "sourceResolutionY": 6230,
+        "xPackingMode": "rgb8_div3",
+        "mirrorX": true,
+        "mirrorY": false,
+        "layerHeightMm": 0.03,
+        "totalLayers": 334,
+        "tallestObjectHeightMm": 10
+      },
+      "models": [
+        {
+          "id": "golden-cube",
+          "name": "golden-cube",
+          "polygonCount": 12,
+          "transform": {
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 5
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          }
+        }
+      ]
+    },
+    "dither_enabled": false,
+    "dither_bit_depth": 4,
+    "dither_device_gamma": 2.2
+  },
+  "panel dithering override, Saturn 4": {
+    "output_format": ".goo",
+    "format_version": "v1.2",
+    "output_path": null,
+    "source_width_px": 11520,
+    "source_height_px": 5120,
+    "width_px": 11520,
+    "height_px": 5120,
+    "x_packing_mode": "none",
+    "png_compression_strategy": "fastest",
+    "anti_aliasing_level": "Off",
+    "anti_aliasing_mode": "Blur",
+    "blur_brush_radius_px": 1,
+    "blur_brush_kernel": "gaussian",
+    "blur_brush_sigma_x": 0.5,
+    "blur_brush_sigma_y": 0.5,
+    "z_blur_radius_layers": 0,
+    "z_blur_kernel": "box",
+    "z_blur_sigma": 0.5,
+    "aa_on_supports": false,
+    "minimum_aa_alpha_percent": 35,
+    "mirror_x": true,
+    "mirror_y": false,
+    "z_blend_look_back": 2,
+    "z_blend_minimum_alpha_percent": 0,
+    "z_blend_max_alpha_percent": 90,
+    "model_triangle_count": 12,
+    "container_compression_level": 1,
+    "build_width_mm": 218.88,
+    "build_depth_mm": 122.88,
+    "layer_height_mm": 0.03,
+    "total_layers": 334,
+    "export_thumbnail_png_base64": null,
+    "mesh_encoding": "raw_f32",
+    "mesh_quantization": null,
+    "metadata_json": {
+      "version": 2,
+      "mode": "wasm_solid_slice_v0",
+      "notes": [
+        "Solid cross-sections are generated in Rust/WASM from transformed triangle meshes.",
+        "Container packaging is encoded by plugin-owned format encoders."
+      ],
+      "slicer": {
+        "name": "DragonFruit"
+      },
+      "printer": {
+        "name": "Saturn 4",
+        "resolutionX": 11520,
+        "resolutionY": 5120,
+        "buildVolumeMm": {
+          "width": 218.88,
+          "depth": 122.88,
+          "height": 220
+        },
+        "outputFormat": ".goo",
+        "mirrorX": true,
+        "mirrorY": false,
+        "settingsMode": "twostage"
+      },
+      "material": {
+        "name": "Parity resin",
+        "layerHeightMm": 0.05,
+        "normalExposureSec": 2,
+        "bottomExposureSec": 25,
+        "bottomLayerCount": 5,
+        "liftDistanceMm": 1,
+        "liftSpeedMmMin": 60,
+        "retractSpeedMmMin": 240
+      },
+      "effective": {
+        "widthPx": 11520,
+        "heightPx": 5120,
+        "sourceResolutionX": 11520,
+        "sourceResolutionY": 5120,
+        "xPackingMode": "none",
+        "mirrorX": true,
+        "mirrorY": false,
+        "layerHeightMm": 0.03,
+        "totalLayers": 334,
+        "tallestObjectHeightMm": 10
+      },
+      "models": [
+        {
+          "id": "golden-cube",
+          "name": "golden-cube",
+          "polygonCount": 12,
+          "transform": {
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 5
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          }
+        }
+      ],
+      "export": {
+        "goo": {
+          "settingsMode": "twostage"
+        }
+      },
+      "goo": {
+        "transitionLayerCount": 0,
+        "bottomLiftDistanceMm": 3,
+        "bottomLiftSpeedMmMin": 60,
+        "bottomRetractSpeedMmMin": 180,
+        "waitTimeBeforeCureSec": 0,
+        "waitTimeAfterCureSec": 0,
+        "waitTimeAfterLiftSec": 0,
+        "projectorPwmPercent": 100,
+        "bottomLayerProjectorPwmPercent": 100,
+        "bottomLiftDistance2Mm": 4,
+        "bottomLiftSpeed2MmMin": 180,
+        "bottomRetractSpeed2MmMin": 60,
+        "liftDistance2Mm": 4,
+        "liftSpeed2MmMin": 240,
+        "retractSpeed2MmMin": 60
+      }
+    },
+    "dither_enabled": false,
+    "dither_bit_depth": 5,
+    "dither_device_gamma": 1.8
+  }
+}
