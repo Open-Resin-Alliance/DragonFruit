@@ -1,6 +1,11 @@
 import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profileStore';
 import { getProfileLocalMaterialSettingsAdapter } from '@/features/plugins/pluginRegistry';
-import { resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
+import {
+  resolveOutputFormatVersion,
+  resolveOutputSettingsMode,
+  resolveSlicingFormatDefinition,
+} from '@/features/slicing/formats/registry';
+import { resolveEffectiveDitherPolicy, type DitherPolicyInput } from '@/features/slicing/resolveEffectiveDitherPolicy';
 
 /**
  * Slice-job assembly: printer profile, material profile and scene facts in, the
@@ -265,4 +270,173 @@ export function mergeMetadataOverridesIntoMetadata(
   } catch {
     return metadataJson;
   }
+}
+
+type Vec3Like = { x: number; y: number; z: number };
+
+/** A model as the job metadata names it. Plain numbers, so callers without THREE can build one. */
+export type SliceJobManifestModel = {
+  id: string;
+  name: string;
+  polygonCount: number;
+  transform: { position: Vec3Like; rotation: Vec3Like; scale: Vec3Like };
+};
+
+export function describeSliceJobModel(model: {
+  id: string;
+  name: string;
+  polygonCount: number;
+  transform: { position: Vec3Like; rotation: Vec3Like; scale: Vec3Like };
+}): SliceJobManifestModel {
+  return {
+    id: model.id,
+    name: model.name,
+    polygonCount: model.polygonCount,
+    transform: {
+      position: { x: model.transform.position.x, y: model.transform.position.y, z: model.transform.position.z },
+      rotation: { x: model.transform.rotation.x, y: model.transform.rotation.y, z: model.transform.rotation.z },
+      scale: { x: model.transform.scale.x, y: model.transform.scale.y, z: model.transform.scale.z },
+    },
+  };
+}
+
+/** What the job needs to know about the scene, once its geometry has been prepared. */
+export type SliceJobScene = {
+  totalLayers: number;
+  tallestObjectHeightMm: number;
+  models: SliceJobManifestModel[];
+};
+
+/** The printer, material and scene nodes every slice-job manifest carries. */
+export function buildSliceJobManifestNodes(options: {
+  printerProfile: PrinterProfile;
+  materialProfile: MaterialProfile;
+  settings: SliceRasterSettings;
+  scene: SliceJobScene;
+}) {
+  const { printerProfile, materialProfile, settings, scene } = options;
+  return {
+    slicer: SLICER_IDENTITY,
+    printer: {
+      id: printerProfile.id,
+      name: printerProfile.name,
+      resolutionX: printerProfile.display.resolutionX,
+      resolutionY: printerProfile.display.resolutionY,
+      buildVolumeMm: printerProfile.buildVolumeMm,
+      bitDepth: printerProfile.bitDepth,
+      outputFormat: printerProfile.display.outputFormat,
+      formatVersion: printerProfile.display.formatVersion,
+      mirrorX: printerProfile.display.mirrorX === true,
+      mirrorY: printerProfile.display.mirrorY === true,
+    },
+    material: {
+      id: materialProfile.id,
+      name: materialProfile.name,
+      layerHeightMm: materialProfile.layerHeightMm,
+      normalExposureSec: materialProfile.normalExposureSec,
+      bottomExposureSec: materialProfile.bottomExposureSec,
+      bottomLayerCount: materialProfile.bottomLayerCount,
+      liftDistanceMm: materialProfile.liftDistanceMm,
+      liftSpeedMmMin: materialProfile.liftSpeedMmMin,
+      retractSpeedMmMin: materialProfile.retractSpeedMmMin,
+    },
+    effective: {
+      widthPx: settings.widthPx,
+      heightPx: settings.heightPx,
+      sourceResolutionX: settings.sourceResolutionX,
+      sourceResolutionY: settings.sourceResolutionY,
+      xPackingMode: settings.xPackingMode,
+      mirrorX: settings.mirrorX,
+      mirrorY: settings.mirrorY,
+      layerHeightMm: settings.layerHeightMm,
+      totalLayers: scene.totalLayers,
+      tallestObjectHeightMm: scene.tallestObjectHeightMm,
+    },
+    models: scene.models,
+  };
+}
+
+/** The slice-job fields decided by the profiles, plus the metadata the encoders read. */
+export type AssembledSliceJob = {
+  outputFormat: string;
+  formatVersion?: string;
+  settingsMode?: string;
+  sourceWidthPx: number;
+  sourceHeightPx: number;
+  widthPx: number;
+  heightPx: number;
+  xPackingMode: SliceRasterSettings['xPackingMode'];
+  mirrorX: boolean;
+  mirrorY: boolean;
+  buildWidthMm: number;
+  buildDepthMm: number;
+  layerHeightMm: number;
+  totalLayers: number;
+  ditherEnabled: boolean;
+  ditherBitDepth: number;
+  ditherDeviceGamma: number;
+  metadataJson: string;
+};
+
+/**
+ * Builds the profile-driven half of a native slice job.
+ *
+ * `printerProfile` must be resolved the way the profile store holds it (build
+ * volume filled in, for instance), not a raw preset. Anti-aliasing, mesh
+ * transport and plugin metadata payloads stay with the caller.
+ */
+export function assembleSliceJob(options: {
+  printerProfile: PrinterProfile;
+  materialProfile: MaterialProfile;
+  scene: SliceJobScene;
+  /** The user's dithering choice, when the caller has one; see `resolveEffectiveDitherPolicy`. */
+  dither?: Pick<DitherPolicyInput, 'ditherEnabled' | 'ditherBitDepth' | 'ditherDeviceGamma'>;
+  createdAt?: Date;
+}): AssembledSliceJob {
+  const { printerProfile, materialProfile, scene } = options;
+  const format = resolveSlicingFormatDefinition({ printerProfile, materialProfile });
+  if (!format) {
+    throw new Error(`No encoder is installed for "${printerProfile.display.outputFormat}".`);
+  }
+
+  const settings = resolveSliceRasterSettings({ printerProfile, materialProfile });
+  const settingsMode = resolveOutputSettingsMode(format.outputFormat, printerProfile.display.settingsMode);
+  const manifest = {
+    version: 2,
+    createdAt: (options.createdAt ?? new Date()).toISOString(),
+    mode: 'wasm_solid_slice_v0',
+    notes: [
+      'Solid cross-sections are generated in Rust/WASM from transformed triangle meshes.',
+      'Container packaging is encoded by plugin-owned format encoders.',
+    ],
+    ...buildSliceJobManifestNodes({ printerProfile, materialProfile, settings, scene }),
+  };
+  const dither = resolveEffectiveDitherPolicy({ printerProfile, materialProfile, ...options.dither });
+
+  return {
+    outputFormat: format.outputFormat,
+    formatVersion: resolveOutputFormatVersion(format.outputFormat, printerProfile.display.formatVersion),
+    settingsMode,
+    sourceWidthPx: settings.sourceResolutionX,
+    sourceHeightPx: settings.sourceResolutionY,
+    widthPx: settings.widthPx,
+    heightPx: settings.heightPx,
+    xPackingMode: settings.xPackingMode,
+    mirrorX: settings.mirrorX,
+    mirrorY: settings.mirrorY,
+    buildWidthMm: Math.max(1, printerProfile.buildVolumeMm.width),
+    buildDepthMm: Math.max(1, printerProfile.buildVolumeMm.depth),
+    layerHeightMm: settings.layerHeightMm,
+    totalLayers: scene.totalLayers,
+    ditherEnabled: dither.ditherEnabled,
+    ditherBitDepth: dither.ditherBitDepth,
+    ditherDeviceGamma: dither.ditherDeviceGamma,
+    metadataJson: mergeMetadataOverridesIntoMetadata(
+      JSON.stringify(manifest),
+      format.outputFormat,
+      materialProfile,
+      settingsMode,
+      printerProfile.display.outputFormat,
+    ),
+  };
 }

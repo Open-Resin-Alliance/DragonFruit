@@ -5,9 +5,8 @@ import { computeApproxModelWorldBounds, computePreciseModelWorldBounds, isBounds
 import { buildSolidSliceMeshForWasm } from './rasterLayerZipExport';
 import { attachJobMetadataPayloads, getJobMetadataPayloadDeclarations } from './jobMetadataPayloads';
 import { clampSliceJobNumber } from './sliceJobLimits';
-import { resolveEffectiveDitherPolicy } from './resolveEffectiveDitherPolicy';
 import { prepareLoadedModelsForOutput } from '@/features/mesh-modifiers/prepareModelGeometry';
-import { resolveOutputFileExtension, resolveOutputFormatVersion, resolveOutputSettingsMode, resolveSlicingFormatDefinition } from './formats/registry';
+import { resolveOutputFileExtension, resolveSlicingFormatDefinition } from './formats/registry';
 import { getSavedSlicingPerformanceSettings, type PngCompressionStrategy } from '@/components/settings/performancePreferences';
 import {
     isNativeSlicerAvailable,
@@ -17,7 +16,7 @@ import {
     type NativeSlicerRuntimeMetrics,
 } from './tauri/nativeSlicerBridge';
 import { invoke } from '@tauri-apps/api/core';
-import { mergeMetadataOverridesIntoMetadata } from './sliceJobAssembly';
+import { assembleSliceJob } from './sliceJobAssembly';
 
 function resolvePngCompressionStrategy(
     mode: PngCompressionStrategy,
@@ -598,23 +597,26 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         format.layerDataKind === 'png',
     );
 
-    const effectiveDitherPolicy = resolveEffectiveDitherPolicy(options);
+    const assembled = assembleSliceJob({
+        printerProfile: options.printerProfile,
+        materialProfile: options.materialProfile,
+        scene: {
+            totalLayers: solidMesh.totalLayers,
+            tallestObjectHeightMm: solidMesh.tallestObjectHeightMm,
+            models: solidMesh.models,
+        },
+        dither: options,
+    });
 
     const nativeJob = {
-        outputFormat: format.outputFormat,
-        formatVersion: resolveOutputFormatVersion(
-            format.outputFormat,
-            options.printerProfile.display.formatVersion,
-        ),
-        settingsMode: resolveOutputSettingsMode(
-            format.outputFormat,
-            options.printerProfile.display.settingsMode,
-        ),
-        sourceWidthPx: solidMesh.sourceWidthPx,
-        sourceHeightPx: solidMesh.sourceHeightPx,
-        widthPx: solidMesh.widthPx,
-        heightPx: solidMesh.heightPx,
-        xPackingMode: solidMesh.xPackingMode,
+        outputFormat: assembled.outputFormat,
+        formatVersion: assembled.formatVersion,
+        settingsMode: assembled.settingsMode,
+        sourceWidthPx: assembled.sourceWidthPx,
+        sourceHeightPx: assembled.sourceHeightPx,
+        widthPx: assembled.widthPx,
+        heightPx: assembled.heightPx,
+        xPackingMode: assembled.xPackingMode,
         pngCompressionStrategy: resolvedPngStrategy,
         antiAliasingLevel: options.antiAliasingLevel ?? 'Off',
         antiAliasingMode: options.antiAliasingMode ?? 'Blur',
@@ -639,17 +641,17 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
             ?? options.materialProfile.minimumAaAlphaPercent
             ?? 50,
         ),
-        mirrorX: solidMesh.mirrorX,
-        mirrorY: solidMesh.mirrorY,
-        ditherEnabled: effectiveDitherPolicy.ditherEnabled,
-        ditherBitDepth: effectiveDitherPolicy.ditherBitDepth,
-        ditherDeviceGamma: effectiveDitherPolicy.ditherDeviceGamma,
+        mirrorX: assembled.mirrorX,
+        mirrorY: assembled.mirrorY,
+        ditherEnabled: assembled.ditherEnabled,
+        ditherBitDepth: assembled.ditherBitDepth,
+        ditherDeviceGamma: assembled.ditherDeviceGamma,
         modelTriangleCount: solidMesh.modelTriangleCount,
         containerCompressionLevel: resolveContainerCompressionLevel(resolvedPngStrategy),
-        buildWidthMm: solidMesh.buildWidthMm,
-        buildDepthMm: solidMesh.buildDepthMm,
-        layerHeightMm: solidMesh.layerHeightMm,
-        totalLayers: solidMesh.totalLayers,
+        buildWidthMm: assembled.buildWidthMm,
+        buildDepthMm: assembled.buildDepthMm,
+        layerHeightMm: assembled.layerHeightMm,
+        totalLayers: assembled.totalLayers,
         exportThumbnailPngBase64: options.exportThumbnailPng && options.exportThumbnailPng.length > 0
             ? encodeBytesToBase64(options.exportThumbnailPng)
             : null,
@@ -658,13 +660,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         meshQuantization: meshTransportQuantization,
         outputPath: options.outputPath?.trim() || null,
         metadataJson: await attachJobMetadataPayloads(
-            mergeMetadataOverridesIntoMetadata(
-                solidMesh.metadataJson,
-                format.outputFormat,
-                options.materialProfile,
-                resolveOutputSettingsMode(format.outputFormat, options.printerProfile.display.settingsMode),
-                options.printerProfile.display.outputFormat,
-            ),
+            assembled.metadataJson,
             { models: visibleModels },
             getJobMetadataPayloadDeclarations(),
         ),

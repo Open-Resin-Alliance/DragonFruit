@@ -22,7 +22,13 @@ import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone
 import { calculateDiskThickness, getDiskCenter, getDiskRotation } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
 import { getBezierPointAtT } from '@/supports/Curves/BezierUtils';
 import { resolveSegmentEndpoints, type ShaftEntity } from '@/supports/SupportPrimitives/Knot/segmentEndpoints';
-import { SLICER_IDENTITY, resolveSliceRasterSettings, type SliceRasterSettings } from '@/features/slicing/sliceJobAssembly';
+import {
+  buildSliceJobManifestNodes,
+  describeSliceJobModel,
+  resolveSliceRasterSettings,
+  type SliceJobManifestModel,
+  type SliceRasterSettings,
+} from '@/features/slicing/sliceJobAssembly';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { JOINT_DIAMETER_OFFSET_MM } from '@/supports/constants';
 
@@ -142,7 +148,8 @@ export type SolidSliceMeshForWasm = {
     maxY: number;
     maxZ: number;
   };
-  metadataJson: string;
+  /** The sliced models as the job metadata names them. */
+  models: SliceJobManifestModel[];
 };
 
 type RasterTriangle = {
@@ -2026,52 +2033,12 @@ async function rasterizeLayerStack(options: RasterLayerZipExportOptions): Promis
       'JS fallback generates solid cross-sections via plane intersections and scanline fill.',
       'Used when plugin-owned WASM encoding path is unavailable or fails.',
     ],
-    slicer: SLICER_IDENTITY,
-    printer: {
-      id: options.printerProfile.id,
-      name: options.printerProfile.name,
-      resolutionX: options.printerProfile.display.resolutionX,
-      resolutionY: options.printerProfile.display.resolutionY,
-      buildVolumeMm: options.printerProfile.buildVolumeMm,
-      bitDepth: options.printerProfile.bitDepth,
-      outputFormat: options.printerProfile.display.outputFormat,
-      formatVersion: options.printerProfile.display.formatVersion,
-      mirrorX: options.printerProfile.display.mirrorX === true,
-      mirrorY: options.printerProfile.display.mirrorY === true,
-    },
-    material: {
-      id: options.materialProfile.id,
-      name: options.materialProfile.name,
-      layerHeightMm: options.materialProfile.layerHeightMm,
-      normalExposureSec: options.materialProfile.normalExposureSec,
-      bottomExposureSec: options.materialProfile.bottomExposureSec,
-      bottomLayerCount: options.materialProfile.bottomLayerCount,
-      liftDistanceMm: options.materialProfile.liftDistanceMm,
-      liftSpeedMmMin: options.materialProfile.liftSpeedMmMin,
-      retractSpeedMmMin: options.materialProfile.retractSpeedMmMin,
-    },
-    effective: {
-      widthPx: settings.widthPx,
-      heightPx: settings.heightPx,
-      sourceResolutionX: settings.sourceResolutionX,
-      sourceResolutionY: settings.sourceResolutionY,
-      xPackingMode: settings.xPackingMode,
-      mirrorX: settings.mirrorX,
-      mirrorY: settings.mirrorY,
-      layerHeightMm: settings.layerHeightMm,
-      totalLayers,
-      tallestObjectHeightMm,
-    },
-    models: visibleModels.map((model) => ({
-      id: model.id,
-      name: model.name,
-      polygonCount: model.polygonCount,
-      transform: {
-        position: { x: model.transform.position.x, y: model.transform.position.y, z: model.transform.position.z },
-        rotation: { x: model.transform.rotation.x, y: model.transform.rotation.y, z: model.transform.rotation.z },
-        scale: { x: model.transform.scale.x, y: model.transform.scale.y, z: model.transform.scale.z },
-      },
-    })),
+    ...buildSliceJobManifestNodes({
+      printerProfile: options.printerProfile,
+      materialProfile: options.materialProfile,
+      settings,
+      scene: { totalLayers, tallestObjectHeightMm, models: visibleModels.map(describeSliceJobModel) },
+    }),
   };
 
   emitMeshPrepDiagnostic('Mesh prep: complete', 4, 4, {
@@ -2231,62 +2198,6 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
     totalCollectorTris: collector.triangleCount,
   });
 
-  const manifest = {
-    version: 2,
-    createdAt: new Date().toISOString(),
-    mode: 'wasm_solid_slice_v0',
-    notes: [
-      'Solid cross-sections are generated in Rust/WASM from transformed triangle meshes.',
-      'Container packaging is encoded by plugin-owned format encoders.',
-    ],
-    slicer: SLICER_IDENTITY,
-    printer: {
-      id: options.printerProfile.id,
-      name: options.printerProfile.name,
-      resolutionX: options.printerProfile.display.resolutionX,
-      resolutionY: options.printerProfile.display.resolutionY,
-      buildVolumeMm: options.printerProfile.buildVolumeMm,
-      bitDepth: options.printerProfile.bitDepth,
-      outputFormat: options.printerProfile.display.outputFormat,
-      formatVersion: options.printerProfile.display.formatVersion,
-      mirrorX: options.printerProfile.display.mirrorX === true,
-      mirrorY: options.printerProfile.display.mirrorY === true,
-    },
-    material: {
-      id: options.materialProfile.id,
-      name: options.materialProfile.name,
-      layerHeightMm: options.materialProfile.layerHeightMm,
-      normalExposureSec: options.materialProfile.normalExposureSec,
-      bottomExposureSec: options.materialProfile.bottomExposureSec,
-      bottomLayerCount: options.materialProfile.bottomLayerCount,
-      liftDistanceMm: options.materialProfile.liftDistanceMm,
-      liftSpeedMmMin: options.materialProfile.liftSpeedMmMin,
-      retractSpeedMmMin: options.materialProfile.retractSpeedMmMin,
-    },
-    effective: {
-      widthPx: settings.widthPx,
-      heightPx: settings.heightPx,
-      sourceResolutionX: settings.sourceResolutionX,
-      sourceResolutionY: settings.sourceResolutionY,
-      xPackingMode: settings.xPackingMode,
-      mirrorX: settings.mirrorX,
-      mirrorY: settings.mirrorY,
-      layerHeightMm: settings.layerHeightMm,
-      totalLayers,
-      tallestObjectHeightMm,
-    },
-    models: visibleModels.map((model) => ({
-      id: model.id,
-      name: model.name,
-      polygonCount: model.polygonCount,
-      transform: {
-        position: { x: model.transform.position.x, y: model.transform.position.y, z: model.transform.position.z },
-        rotation: { x: model.transform.rotation.x, y: model.transform.rotation.y, z: model.transform.rotation.z },
-        scale: { x: model.transform.scale.x, y: model.transform.scale.y, z: model.transform.scale.z },
-      },
-    })),
-  };
-
   return {
     sourceWidthPx: settings.sourceResolutionX,
     sourceHeightPx: settings.sourceResolutionY,
@@ -2304,7 +2215,7 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
     tallestObjectHeightMm,
     trianglesXYZ,
     meshBounds: collector.meshBounds,
-    metadataJson: JSON.stringify(manifest),
+    models: visibleModels.map(describeSliceJobModel),
   };
 }
 
