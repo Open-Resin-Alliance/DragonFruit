@@ -2,178 +2,39 @@
  * Slice-job assembly for `scene slice`: printer profile, material and flags in,
  * the arguments for `dragonfruit-cli slice run` out.
  *
+ * The job comes from the app's own code, not from a copy of it: profiles go
+ * through the profile store the way the app adds them, and the job fields and
+ * `metadata_json` come from `assembleSliceJob`. See docs/dev/slice-job-assembly.md.
+ *
  * Kept apart from the CLI entry point so tests can import it without running
- * `main()`.
+ * `main()`, and so the CLI loads it (and the plugin registry it needs) only for
+ * `scene slice`.
  */
 
 import { computePhysicalAaConfig, type AaPreset } from '../../src/features/slicing/autoAaPhysics';
-
-// ---------------------------------------------------------------------------
-// NOTE: the functions below (packing, dither policy, pixel pitch) are ported
-// from the UI rather than imported. Reusing the originals directly is deferred
-// as a design decision — the app functions aren't currently exported and their
-// modules pull in the Tauri/THREE dependency chain. A future shared pure-module
-// extraction would let both the UI and this CLI import one source of truth.
-// ---------------------------------------------------------------------------
-// Printer-profile → slice-parameter mapping.
-// Mirrors the UI so `scene slice --printer` behaves like a user picking that
-// printer in the app:
-//   - bit-depth → x-packing : src/features/slicing/rasterLayerZipExport.ts:207
-//   - build volume → dims    : src/features/slicing/sliceExportOrchestrator.ts:111
-//   - pixel pitch            : src/features/slicing/components/SlicingPanel.tsx:1399
-// width_px itself is NOT passed: Rust `slice run` recomputes it from
-// source_width_px + x_packing_mode (main.rs), matching this mapping.
-// ---------------------------------------------------------------------------
-export type XPackingMode = 'none' | 'rgb8_div3' | 'gray3_div2';
-
-export interface PrinterSliceParams {
-  sourceWidthPx: number;
-  sourceHeightPx: number;
-  xPackingMode: XPackingMode;
-  buildWidthMm: number;
-  buildDepthMm: number;
-  mirrorX: boolean;
-  mirrorY: boolean;
-  outputExt: string;
-  formatVersion?: string;
-  /** Physical XY pixel pitch (mm), honoring non-square pixels. */
-  pitchXMm: number;
-  pitchYMm: number;
-  name: string;
-}
-
-export function resolvePrinterProfile(raw: unknown, wantId?: string): any {
-  // App-exported bundles wrap the profile as { version, printer, materials, … };
-  // unwrap so downstream reads (.display, .buildVolumeMm, .name, …) hit the real object.
-  const unwrap = (p: any) => (p && p.printer && p.display == null ? p.printer : p);
-  const list = (Array.isArray(raw) ? raw : [raw]).map(unwrap);
-  if (wantId) {
-    const hit = list.find(
-      (p) => p?.id === wantId || p?.name === wantId || p?.officialPresetId === wantId,
-    );
-    if (!hit) {
-      throw new Error(
-        `Printer '${wantId}' not found (have: ${list.map((p) => p?.id ?? p?.name).join(', ')})`,
-      );
-    }
-    return hit;
-  }
-  if (list.length !== 1) {
-    throw new Error(`Printer profile has ${list.length} entries; pass --printer-id to choose one`);
-  }
-  return list[0];
-}
-
-export function resolveBitDepth(printer: any): number {
-  const explicit = Number(printer?.bitDepth?.bits);
-  if (Number.isFinite(explicit) && explicit > 0) return Math.round(explicit);
-  // Fallback fingerprint / divisibility — mirrors rasterLayerZipExport.ts:221-251.
-  const fp = [printer?.name, printer?.manufacturer, printer?.officialPresetId, printer?.id]
-    .filter((v) => typeof v === 'string' && v.length)
-    .join(' ')
-    .toLowerCase();
-  if (/\b3\s*[-_ ]?bit\b|\b3b\b|16k3b|gray3/.test(fp)) return 3;
-  if (/\b8\s*[-_ ]?bit\b|\b8b\b|rgb8/.test(fp)) return 8;
-  const resX = Math.max(1, Math.round(Number(printer?.display?.resolutionX) || 0));
-  const by2 = resX % 2 === 0;
-  const by3 = resX % 3 === 0;
-  if (by2 && !by3) return 3;
-  if (by3 && !by2) return 8;
-  if (by2 && by3) return /rgb|color/.test(fp) ? 8 : 3;
-  return 3; // NanoDLP failsafe
-}
-
-export function outputFormatToExt(fmt: unknown): string {
-  const f = String(fmt ?? '').toLowerCase();
-  if (f.includes('ctb')) return '.ctb';
-  if (f.includes('nanodlp') || f === '') return '.nanodlp';
-  return f.startsWith('.') ? f : `.${f}`;
-}
-
-// Physical XY pixel pitch (mm). Prefers explicit pixelSize (µm) for non-square
-// pixels; falls back to buildVolume ÷ resolution. Matches SlicingPanel.tsx:1399.
-export function resolvePixelPitchMm(printer: any): { x: number; y: number } {
-  const pxX = Number(printer?.pixelSize?.x);
-  const pxY = Number(printer?.pixelSize?.y);
-  if (Number.isFinite(pxX) && Number.isFinite(pxY) && pxX > 0 && pxY > 0) {
-    return { x: pxX / 1000, y: pxY / 1000 }; // µm → mm
-  }
-  const resX = Number(printer?.display?.resolutionX);
-  const resY = Number(printer?.display?.resolutionY);
-  const buildW = Number(printer?.buildVolumeMm?.width);
-  const buildD = Number(printer?.buildVolumeMm?.depth);
-  const pitchX = Number.isFinite(resX) && Number.isFinite(buildW) && resX > 0 && buildW > 0 ? buildW / resX : null;
-  const pitchY = Number.isFinite(resY) && Number.isFinite(buildD) && resY > 0 && buildD > 0 ? buildD / resY : null;
-  return { x: pitchX ?? pitchY ?? 0.05, y: pitchY ?? pitchX ?? 0.05 };
-}
-
-export interface DitherPolicy {
-  enabled: boolean;
-  bitDepth: number;
-  deviceGamma: number;
-}
-
-// Faithful port of sliceExportOrchestrator.ts:resolveDitherPolicy (line ~443).
-// A known non-8-bit panel (e.g. 3-bit mono) FORCES dithering on, with the
-// panel bit depth as the target — this is why "some printers utilize dithering".
-// Material defaults / explicit overrides only apply when the panel isn't a
-// known low-bit-depth display.
-export function resolveDitherPolicy(
-  printer: any,
-  overrides: { enabled?: boolean; bitDepth?: number; gamma?: number; material?: any },
-): DitherPolicy {
-  const aa = overrides.material?.antiAliasingSettings ?? {};
-  const materialEnabled = aa.ditherEnabled ?? false;
-  const materialBitDepth = aa.ditherBitDepth ?? 3;
-  const materialGamma = aa.ditherDeviceGamma ?? 3.0;
-
-  const configuredEnabled = overrides.enabled ?? materialEnabled;
-  const configuredBitDepth = overrides.bitDepth ?? materialBitDepth;
-  const configuredGamma = overrides.gamma ?? materialGamma;
-
-  const raw = Number(printer?.bitDepth?.bits);
-  const printerBitDepth = Number.isFinite(raw) ? Math.round(raw) : null;
-  const hasKnownNon8BitDisplay = printerBitDepth != null && printerBitDepth > 0 && printerBitDepth !== 8;
-  const derivedBitDepth = printerBitDepth != null && printerBitDepth > 0
-    ? Math.max(2, Math.min(7, printerBitDepth))
-    : Math.max(2, Math.min(7, Math.round(configuredBitDepth)));
-
-  return {
-    enabled: hasKnownNon8BitDisplay ? true : configuredEnabled,
-    bitDepth: derivedBitDepth,
-    deviceGamma: Math.max(0.5, Math.min(4.0, Number(configuredGamma))),
-  };
-}
-
-export function derivePrinterSliceParams(printer: any): PrinterSliceParams {
-  const d = printer?.display ?? {};
-  const sourceWidthPx = Math.max(1, Math.round(Number(d.resolutionX)));
-  const sourceHeightPx = Math.max(1, Math.round(Number(d.resolutionY)));
-  const bitDepth = resolveBitDepth(printer);
-  const xPackingMode: XPackingMode = bitDepth === 8 ? 'rgb8_div3' : 'gray3_div2';
-  const bv = printer?.buildVolumeMm ?? {};
-  const pitch = resolvePixelPitchMm(printer);
-  return {
-    sourceWidthPx,
-    sourceHeightPx,
-    xPackingMode,
-    buildWidthMm: Math.max(1, Number(bv.width) || 218),
-    buildDepthMm: Math.max(1, Number(bv.depth) || 122),
-    mirrorX: Boolean(d.mirrorX),
-    mirrorY: Boolean(d.mirrorY),
-    outputExt: outputFormatToExt(d.outputFormat),
-    formatVersion: typeof d.formatVersion === 'string' ? d.formatVersion : undefined,
-    pitchXMm: pitch.x,
-    pitchYMm: pitch.y,
-    name: String(printer?.name ?? printer?.id ?? 'printer'),
-  };
-}
+import {
+  addMaterialProfile,
+  addPrinterProfileFromPreset,
+  getAvailablePrinterPresets,
+  getMaterialProfilesForPrinter,
+  getProfileStoreSnapshot,
+  importPrinterBundle,
+  type MaterialProfile,
+  type PrinterProfile,
+} from '../../src/features/profiles/profileStore';
+import {
+  assembleSliceJob,
+  resolveSliceLayerCount,
+  resolveSliceRasterSettings,
+  type AssembledSliceJob,
+  type SliceJobManifestModel,
+} from '../../src/features/slicing/sliceJobAssembly';
 
 export interface SceneSliceJobOptions {
-  /** Parsed printer JSON: a single profile, a list, or an app-exported bundle. */
+  /** Parsed printer JSON: an official preset, a custom profile, a list of either, or an app-exported bundle. */
   printer?: unknown;
   printerId?: string;
-  /** Parsed material JSON. Read only when a printer is given. */
+  /** Parsed material JSON. Without it, the bundle's first material or the printer's default is used. */
   material?: unknown;
   layerHeight?: string;
   buildWidthMm?: string;
@@ -185,84 +46,211 @@ export interface SceneSliceJobOptions {
 }
 
 export interface SceneSliceJob {
-  printer: PrinterSliceParams | null;
-  aa: ReturnType<typeof computePhysicalAaConfig> | null;
-  dither: DitherPolicy | null;
+  /** The printer as the profile store holds it, with `--build-*-mm` applied. */
+  printer: PrinterProfile | null;
+  /** The material as the profile store holds it, with `--layer-height` applied. */
+  material: MaterialProfile | null;
+  aaPreset?: AaPreset | 'raw';
+  dither: { ditherEnabled?: boolean; ditherBitDepth?: number; ditherDeviceGamma?: number };
+  /** Raw engine values, used only without a printer. */
   layerHeight: string;
   buildWidth: string;
   buildDepth: string;
 }
 
-export function resolveSceneSliceJob(options: SceneSliceJobOptions): SceneSliceJob {
-  const layerHeight = options.layerHeight ?? '0.05';
-  const aaPreset = options.aaPreset;
+type Profile = Record<string, unknown>;
 
-  // Printer profile drives resolution, packing, build dims, mirror, format, and
-  // pixel pitch — just like selecting that printer in the UI.
-  let p: PrinterSliceParams | null = null;
-  let printer: any = null;
-  if (options.printer !== undefined) {
-    printer = resolvePrinterProfile(options.printer, options.printerId);
-    p = derivePrinterSliceParams(printer);
-  }
-  const buildWidth = options.buildWidthMm ?? String(p?.buildWidthMm ?? 218.0);
-  const buildDepth = options.buildDepthMm ?? String(p?.buildDepthMm ?? 122.0);
+const isObject = (value: unknown): value is Profile => value !== null && typeof value === 'object' && !Array.isArray(value);
 
-  // Resolve AA from the named preset using the app's exact physics function.
-  let aa: ReturnType<typeof computePhysicalAaConfig> | null = null;
-  if (aaPreset && aaPreset !== 'raw') {
-    if (!p) throw new Error('--aa-preset requires --printer (pixel pitch comes from the printer profile)');
-    aa = computePhysicalAaConfig(aaPreset, p.pitchXMm, Number(layerHeight), p.pitchYMm);
-  }
+/** An app-exported bundle wraps the profile as `{ version, printer, materials, … }`. */
+const isBundle = (value: unknown): value is Profile & { printer: Profile } => (
+  isObject(value) && isObject(value.printer) && value.display == null
+);
 
-  // Resolve dithering the way the UI does — a low-bit-depth panel forces it on.
-  let dither: DitherPolicy | null = null;
-  if (printer) {
-    const ditherFlag = options.dither; // 'on' | 'off' | undefined
-    dither = resolveDitherPolicy(printer, {
-      enabled: ditherFlag === 'on' ? true : ditherFlag === 'off' ? false : undefined,
-      bitDepth: options.ditherBitDepth ? Number(options.ditherBitDepth) : undefined,
-      gamma: options.ditherDeviceGamma ? Number(options.ditherDeviceGamma) : undefined,
-      material: options.material,
+function pickPrinterEntry(raw: unknown, wantId?: string): unknown {
+  const list = Array.isArray(raw) ? raw : [raw];
+  const profileOf = (entry: unknown): Profile => (isBundle(entry) ? entry.printer : isObject(entry) ? entry : {});
+  if (wantId) {
+    const hit = list.find((entry) => {
+      const p = profileOf(entry);
+      return p.id === wantId || p.name === wantId || p.presetId === wantId || p.officialPresetId === wantId;
     });
+    if (!hit) {
+      throw new Error(
+        `Printer '${wantId}' not found (have: ${list.map((entry) => profileOf(entry).id ?? profileOf(entry).name).join(', ')})`,
+      );
+    }
+    return hit;
   }
-
-  return { printer: p, aa, dither, layerHeight, buildWidth, buildDepth };
+  if (list.length !== 1) {
+    throw new Error(`Printer profile has ${list.length} entries; pass --printer-id to choose one`);
+  }
+  return list[0];
 }
 
-/** Arguments for `dragonfruit-cli`, from `slice run` on (the binary path is the caller's). */
-export function sliceRunArgs(job: SceneSliceJob, inputPath: string, outputPath: string): string[] {
-  const p = job.printer;
-  const aa = job.aa;
-  const dither = job.dither;
-  const argv = [
+/** Adds the printer to the profile store the way the app would, and returns its store id. */
+function storePrinter(entry: unknown): string {
+  if (isBundle(entry)) return importPrinterBundle(entry);
+  if (!isObject(entry)) throw new Error('Printer profile must be a JSON object');
+  const presetId = typeof entry.presetId === 'string' ? entry.presetId : undefined;
+  if (presetId && getAvailablePrinterPresets().some((preset) => preset.presetId === presetId)) {
+    return addPrinterProfileFromPreset(presetId);
+  }
+  return importPrinterBundle({ printer: entry });
+}
+
+function storedMaterial(printerId: string, raw: unknown): MaterialProfile {
+  let materialId: string | undefined;
+  if (raw !== undefined) {
+    if (!isObject(raw)) throw new Error('Material profile must be a JSON object');
+    const partial = { ...raw };
+    delete partial.id;
+    delete partial.printerProfileId;
+    materialId = addMaterialProfile(printerId, partial as Partial<MaterialProfile>);
+  }
+  const materials = getMaterialProfilesForPrinter(printerId);
+  const material = materialId ? materials.find((entry) => entry.id === materialId) : materials[0];
+  if (material) return material;
+  // No material anywhere: the defaults a new material gets in the app.
+  const defaultId = addMaterialProfile(printerId);
+  return getMaterialProfilesForPrinter(printerId).find((entry) => entry.id === defaultId)!;
+}
+
+export function resolveSceneSliceJob(options: SceneSliceJobOptions): SceneSliceJob {
+  const ditherFlag = options.dither; // 'on' | 'off' | undefined
+  const dither = {
+    ditherEnabled: ditherFlag === 'on' ? true : ditherFlag === 'off' ? false : undefined,
+    ditherBitDepth: options.ditherBitDepth ? Number(options.ditherBitDepth) : undefined,
+    ditherDeviceGamma: options.ditherDeviceGamma ? Number(options.ditherDeviceGamma) : undefined,
+  };
+
+  let printer: PrinterProfile | null = null;
+  let material: MaterialProfile | null = null;
+  if (options.printer !== undefined) {
+    const printerId = storePrinter(pickPrinterEntry(options.printer, options.printerId));
+    const stored = getProfileStoreSnapshot().printerProfiles.find((entry) => entry.id === printerId)!;
+    printer = {
+      ...stored,
+      buildVolumeMm: {
+        ...stored.buildVolumeMm,
+        ...(options.buildWidthMm ? { width: Number(options.buildWidthMm) } : {}),
+        ...(options.buildDepthMm ? { depth: Number(options.buildDepthMm) } : {}),
+      },
+    };
+    const storedMat = storedMaterial(printerId, options.material);
+    material = options.layerHeight ? { ...storedMat, layerHeightMm: Number(options.layerHeight) } : storedMat;
+  }
+
+  if (options.aaPreset && options.aaPreset !== 'raw' && !printer) {
+    throw new Error('--aa-preset requires --printer (pixel pitch comes from the printer profile)');
+  }
+
+  return {
+    printer,
+    material,
+    aaPreset: options.aaPreset,
+    dither,
+    layerHeight: options.layerHeight ?? '0.05',
+    buildWidth: options.buildWidthMm ?? '218',
+    buildDepth: options.buildDepthMm ?? '122',
+  };
+}
+
+/** What the CLI knows about the scene once it has merged the models. */
+export type SceneSliceGeometry = {
+  maxZMm: number;
+  models: SliceJobManifestModel[];
+};
+
+export type SceneSliceRun = {
+  /** Arguments for `dragonfruit-cli`, from `slice run` on (the binary path is the caller's). */
+  args: string[];
+  /** The assembled job, when a printer was given. */
+  assembled: AssembledSliceJob | null;
+  aa: ReturnType<typeof computePhysicalAaConfig> | null;
+};
+
+// Physical XY pixel pitch (mm) for the AA preset. Prefers explicit pixelSize (µm)
+// for non-square pixels; falls back to build volume ÷ resolution, as the panel does.
+// Anti-aliasing is outside the shared job assembly, so this stays here.
+function resolvePixelPitchMm(printer: PrinterProfile): { x: number; y: number } {
+  const pxX = Number(printer.pixelSize?.x);
+  const pxY = Number(printer.pixelSize?.y);
+  if (Number.isFinite(pxX) && Number.isFinite(pxY) && pxX > 0 && pxY > 0) {
+    return { x: pxX / 1000, y: pxY / 1000 }; // µm → mm
+  }
+  const resX = Number(printer.display?.resolutionX);
+  const resY = Number(printer.display?.resolutionY);
+  const buildW = Number(printer.buildVolumeMm?.width);
+  const buildD = Number(printer.buildVolumeMm?.depth);
+  const pitchX = Number.isFinite(resX) && Number.isFinite(buildW) && resX > 0 && buildW > 0 ? buildW / resX : null;
+  const pitchY = Number.isFinite(resY) && Number.isFinite(buildD) && resY > 0 && buildD > 0 ? buildD / resY : null;
+  return { x: pitchX ?? pitchY ?? 0.05, y: pitchY ?? pitchX ?? 0.05 };
+}
+
+export function buildSceneSliceRun(
+  job: SceneSliceJob,
+  geometry: SceneSliceGeometry,
+  inputPath: string,
+  outputPath: string,
+): SceneSliceRun {
+  if (!job.printer || !job.material) {
+    // No printer: raw engine defaults, as `slice run` itself would use.
+    return {
+      args: [
+        'slice', 'run', inputPath, '-o', outputPath,
+        '--layer-height', job.layerHeight,
+        '--build-width-mm', job.buildWidth,
+        '--build-depth-mm', job.buildDepth,
+        '--json',
+      ],
+      assembled: null,
+      aa: null,
+    };
+  }
+
+  const { layerHeightMm } = resolveSliceRasterSettings({ printerProfile: job.printer, materialProfile: job.material });
+  const layers = resolveSliceLayerCount({ maxZMm: geometry.maxZMm, printerProfile: job.printer, layerHeightMm });
+  const assembled = assembleSliceJob({
+    printerProfile: job.printer,
+    materialProfile: job.material,
+    scene: { ...layers, models: geometry.models },
+    dither: job.dither,
+  });
+
+  let aa: ReturnType<typeof computePhysicalAaConfig> | null = null;
+  if (job.aaPreset && job.aaPreset !== 'raw') {
+    const pitch = resolvePixelPitchMm(job.printer);
+    aa = computePhysicalAaConfig(job.aaPreset, pitch.x, assembled.layerHeightMm, pitch.y);
+  }
+
+  const args = [
     'slice', 'run',
     inputPath,
     '-o', outputPath,
-    '--layer-height', job.layerHeight,
-    '--build-width-mm', job.buildWidth,
-    '--build-depth-mm', job.buildDepth,
+    '--layer-height', String(assembled.layerHeightMm),
+    '--build-width-mm', String(assembled.buildWidthMm),
+    '--build-depth-mm', String(assembled.buildDepthMm),
+    '--source-width-px', String(assembled.sourceWidthPx),
+    '--source-height-px', String(assembled.sourceHeightPx),
+    '--x-packing-mode', assembled.xPackingMode,
   ];
-  if (p) {
-    argv.push('--source-width-px', String(p.sourceWidthPx));
-    argv.push('--source-height-px', String(p.sourceHeightPx));
-    argv.push('--x-packing-mode', p.xPackingMode);
-    if (p.mirrorX) argv.push('--mirror-x');
-    if (p.mirrorY) argv.push('--mirror-y');
-    if (p.formatVersion) argv.push('--format-version', p.formatVersion);
-  }
+  if (assembled.mirrorX) args.push('--mirror-x');
+  if (assembled.mirrorY) args.push('--mirror-y');
+  if (assembled.formatVersion) args.push('--format-version', assembled.formatVersion);
   if (aa) {
-    argv.push('--anti-aliasing', `${aa.aaSteps}x`);
-    argv.push('--anti-aliasing-mode', aa.antiAliasingMode); // Coverage | Blur | Vertical2
-    argv.push('--blur-brush-radius-px', String(aa.blurBrushRadiusPx));
-    argv.push('--z-blur-radius-layers', String(aa.zBlurRadiusLayers));
-    argv.push('--z-blend-look-back', String(aa.zBlendLookBack));
+    args.push('--anti-aliasing', `${aa.aaSteps}x`);
+    args.push('--anti-aliasing-mode', aa.antiAliasingMode); // Coverage | Blur | Vertical2
+    args.push('--blur-brush-radius-px', String(aa.blurBrushRadiusPx));
+    args.push('--z-blur-radius-layers', String(aa.zBlurRadiusLayers));
+    args.push('--z-blend-look-back', String(aa.zBlendLookBack));
   }
-  if (dither?.enabled) {
-    argv.push('--dither');
-    argv.push('--dither-bit-depth', String(dither.bitDepth));
-    argv.push('--dither-device-gamma', String(dither.deviceGamma));
+  if (assembled.ditherEnabled) {
+    args.push('--dither');
+    args.push('--dither-bit-depth', String(assembled.ditherBitDepth));
+    args.push('--dither-device-gamma', String(assembled.ditherDeviceGamma));
   }
-  argv.push('--json');
-  return argv;
+  args.push('--metadata-json', assembled.metadataJson);
+  args.push('--json');
+  return { args, assembled, aa };
 }
