@@ -32,21 +32,20 @@ against a known-good reference.
 Each case is written in the format the printer profile asks for
 (`display.outputFormat`): `nanodlp`, `ctb`, `goo`, `aff`, `azf`, …. `nanodlp` is
 a zip of layer PNGs and is fully introspectable; the others are proprietary
-binary containers. The output extension is derived exactly like the app/TS CLI
-(`outputFormatToExt`), and each row records the resolved `format`.
+binary containers. Each row records the resolved `format`. The script names the
+file after `display.outputFormat`; the app's `resolveOutputFileExtension` names
+Anycubic files after their format version instead (`.pwmb`, …), which the
+script does not do.
 
 ## Fidelity to the UI
 
-`scene slice --printer <profile>` derives slice parameters the same way the app
-does when you pick that printer:
-
-| From the printer profile | Drives |
-|---|---|
-| `display.resolutionX/Y` | source raster resolution |
-| `bitDepth.bits` | X packing (`gray3_div2` for 3-bit, `rgb8_div3` for 8-bit) **and** dithering (a low-bit-depth panel forces dither on with the panel bit depth) |
-| `pixelSize.{x,y}` (µm) | physical XY pixel pitch — honors **non-square pixels** |
-| `buildVolumeMm.{width,depth}` | build plate dims |
-| `display.mirrorX/Y`, `display.outputFormat`/`formatVersion` | mirroring, archive format |
+`scene slice --printer <profile>` builds its job with the app's own code: the
+printer bundle goes through the profile store as the app imports it, and the job
+fields and `metadata_json` come from `assembleSliceJob`
+([Slice Job Assembly](slice-job-assembly.md)). The bundles here carry a material,
+so the files get its exposure and motion settings; `--layer-height` overrides the
+material's layer height. `cliJobParity.test.ts` checks the CLI's job against the
+app's.
 
 The named AA presets (`sharp`/`balanced`/`smooth`) are resolved through the
 app's own `computePhysicalAaConfig` (imported directly from
@@ -56,10 +55,12 @@ result row records the **preset name** (`aa_preset`, and `anti_aliasing.preset`)
 so cases are identified by the preset a user would pick, not the resolved
 engine mode.
 
-> Note: the printer-packing and dither-policy mappings are currently **ported**
-> into `scripts/dragonfruit-ts-cli.ts` rather than imported, because the app
-> originals aren't exported and their modules pull in the Tauri/THREE dependency
-> chain. Consolidating into a shared pure module is a deferred design decision.
+Switching the CLI to `assembleSliceJob` changed the container metadata (the
+exposure used to be 0 s) and nothing else: for both bundles, with `raw` and
+`balanced`, every layer hashed identically before and after. So `.nanodlp`
+goldens, which `--validate` compares layer by layer, stay valid; `.ctb` goldens
+made with an older CLI, compared as whole files, no longer match and must be
+regenerated. The new files are byte-deterministic under `--validate`.
 
 ## Layout
 

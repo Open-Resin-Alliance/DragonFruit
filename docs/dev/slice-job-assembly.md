@@ -6,9 +6,9 @@ grid, X-packing, build plate, layer height, dithering, format version and settin
 `metadata_json` that every format encoder reads its exposure and motion settings from.
 
 That is **job assembly**, and it lives in one pure module:
-`src/features/slicing/sliceJobAssembly.ts`. The app's export (`runSliceExportOrchestrator`) builds
-its job there, and it is written so that headless callers can do the same without React, Tauri,
-`window` or THREE.
+`src/features/slicing/sliceJobAssembly.ts`. The app's export (`runSliceExportOrchestrator`) and the
+`scene slice` CLI (`scripts/cli/sceneSliceJob.ts`) both build their job there; it imports nothing
+from React, Tauri, `window` or THREE.
 
 Reach for it whenever code needs "the job the app would build" for some profiles. Do not
 re-derive any of these fields elsewhere: a hand-written copy drifts, and a drifted copy writes print
@@ -76,7 +76,7 @@ const job = assembleSliceJob({
 - `src/features/slicing/__tests__/sliceJobAssembly.test.ts` checks that `assembleSliceJob` alone,
   without the orchestrator, gives the same fields.
 - `src/features/slicing/__tests__/cliJobParity.test.ts` compares the `scene slice` CLI's job with the
-  app's.
+  app's, field by field and including the whole metadata.
 
 ## Related pages
 
