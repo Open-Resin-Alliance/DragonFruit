@@ -145,6 +145,19 @@ export function buildKickstandData(input: KickstandBuildInput): KickstandBuildRe
         diameter: getKickstandKnotDiameterMm(input.host.diameterMm),
     };
 
+    // An authored column is already straight, so it keeps that shape: one column
+    // segment and one terminal. The derived joints exist to give a placed
+    // kickstand something to drag, and would bend it.
+    const columnTop = input.authoredColumn
+        ? createJoint(input.authoredColumn.topPos, jointDiameterMm)
+        : null;
+    const segments = columnTop
+        ? [
+            { id: uuidv4(), diameter: bodyDiameterMm, topJoint: columnTop },
+            { id: uuidv4(), diameter: bodyDiameterMm, bottomJoint: columnTop },
+        ]
+        : [segment1, segment2, upperSegment, terminalSegment];
+
     const kickstand = {
         id: kickstandId,
         modelId: input.modelId,
@@ -152,7 +165,7 @@ export function buildKickstandData(input: KickstandBuildInput): KickstandBuildRe
         hostKnotId,
         hostSegmentId: input.host.segmentId,
         hostMinT: input.host.minT ?? 0,
-        segments: [segment1, segment2, upperSegment, terminalSegment],
+        segments,
         profile: {
             bodyDiameterMm,
             terminalStartDiameterMm: bodyDiameterMm,

@@ -27,6 +27,8 @@ export interface KickstandBuildInput {
     rootPos: Vec3;
     host: KickstandHostTarget;
     layoutOverrides?: Partial<KickstandPlacementLayout>;
+    /** A column known end to end; without one the derived four-segment shape applies. */
+    authoredColumn?: { topPos: Vec3 };
 }
 
 export interface KickstandBuildResult {
