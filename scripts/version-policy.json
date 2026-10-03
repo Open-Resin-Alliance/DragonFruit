@@ -1,0 +1,30 @@
+{
+  "$comment": "Deliberate holds for scripts/check-versions.mjs. Anything newer than a hold is reported as 'held', not as an upgrade to do. Remove an entry when the reason stops applying.",
+  "node": {
+    "maxMajor": 22,
+    "reason": "Stay on 22 LTS until after 0.2.x; 24 (V8 13.6) deferred on purpose"
+  },
+  "tauriCef": {
+    "ceiling": "3.0.0-alpha.26",
+    "reason": "alpha.27 decouples the runtime; deferred until after 0.2.x. macos-fps stays vendored"
+  },
+  "npm": {
+    "$comment": "Per-package holds: { \"<name>\": { \"maxMajor\": N, \"reason\": \"...\" } }",
+    "@types/node": {
+      "maxMajor": 22,
+      "reason": "Types must follow the Node major we run (22)"
+    }
+  },
+  "runners": {
+    "ubuntu": {
+      "max": "24.04",
+      "reason": "The Flatpak binary is built on the runner and runs on the runtime's glibc, so runner glibc must not exceed the runtime's (22.04: 2.35, 24.04: 2.39; runtime 24.08 believed 2.40, 25.08 is 2.42). 26.04 only after the runtime moves up"
+    }
+  },
+  "actions": {
+    "$comment": "Per-action holds: { \"owner/repo\": { \"maxMajor\": N, \"reason\": \"...\" } }"
+  },
+  "flatpak": {
+    "$comment": "Hold the freedesktop runtime: { \"maxVersion\": \"24.08\", \"reason\": \"...\" }"
+  }
+}
