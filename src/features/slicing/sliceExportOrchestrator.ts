@@ -5,9 +5,8 @@ import { computeApproxModelWorldBounds, computePreciseModelWorldBounds, isBounds
 import { buildSolidSliceMeshForWasm } from './rasterLayerZipExport';
 import { attachJobMetadataPayloads, getJobMetadataPayloadDeclarations } from './jobMetadataPayloads';
 import { clampSliceJobNumber } from './sliceJobLimits';
-import { resolveEffectiveDitherPolicy } from './resolveEffectiveDitherPolicy';
 import { prepareLoadedModelsForOutput } from '@/features/mesh-modifiers/prepareModelGeometry';
-import { resolveOutputFileExtension, resolveOutputFormatVersion, resolveOutputSettingsMode, resolveSlicingFormatDefinition } from './formats/registry';
+import { resolveOutputFileExtension, resolveSlicingFormatDefinition } from './formats/registry';
 import { getSavedSlicingPerformanceSettings, type PngCompressionStrategy } from '@/components/settings/performancePreferences';
 import {
     isNativeSlicerAvailable,
@@ -17,7 +16,7 @@ import {
     type NativeSlicerRuntimeMetrics,
 } from './tauri/nativeSlicerBridge';
 import { invoke } from '@tauri-apps/api/core';
-import { getProfileLocalMaterialSettingsAdapter } from '@/features/plugins/pluginRegistry';
+import { assembleSliceJob } from './sliceJobAssembly';
 
 function resolvePngCompressionStrategy(
     mode: PngCompressionStrategy,
@@ -285,108 +284,6 @@ function safeFilenameBase(raw: string): string {
     if (!trimmed) return 'slice_export';
     const cleaned = trimmed.replace(/[^a-z0-9-_]+/gi, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
     return cleaned || 'slice_export';
-}
-
-function setMetadataPathValue(target: Record<string, unknown>, path: string, value: unknown): void {
-    const segments = path
-        .split('.')
-        .map((segment) => segment.trim())
-        .filter((segment) => segment.length > 0);
-
-    if (segments.length === 0) return;
-
-    let cursor: Record<string, unknown> = target;
-    for (let i = 0; i < segments.length - 1; i += 1) {
-        const segment = segments[i];
-        const existing = cursor[segment];
-        if (!existing || typeof existing !== 'object' || Array.isArray(existing)) {
-            cursor[segment] = {};
-        }
-        cursor = cursor[segment] as Record<string, unknown>;
-    }
-
-    cursor[segments[segments.length - 1]] = value;
-}
-
-function coerceLocalMaterialSettingValue(
-    rawValue: string | number | boolean,
-    kind: 'number' | 'integer' | 'text' | 'boolean' | 'select',
-): string | number | boolean {
-    if (kind === 'boolean') {
-        if (typeof rawValue === 'boolean') return rawValue;
-        if (typeof rawValue === 'string') {
-            const normalized = rawValue.trim().toLowerCase();
-            if (normalized === 'true') return true;
-            if (normalized === 'false') return false;
-        }
-        return Boolean(rawValue);
-    }
-
-    if (kind === 'number' || kind === 'integer') {
-        const parsed = Number(rawValue);
-        if (!Number.isFinite(parsed)) return kind === 'integer' ? 0 : 0;
-        return kind === 'integer' ? Math.round(parsed) : parsed;
-    }
-
-    return String(rawValue);
-}
-
-function mergeMetadataOverridesIntoMetadata(
-    metadataJson: string,
-    outputFormat: string,
-    materialProfile: MaterialProfile,
-    settingsMode?: string,
-    printerOutputFormat?: string,
-): string {
-    try {
-        const parsed = JSON.parse(metadataJson) as Record<string, unknown>;
-
-        if (settingsMode) {
-            const printer = (parsed.printer ?? {}) as Record<string, unknown>;
-            parsed.printer = {
-                ...printer,
-                settingsMode,
-            };
-
-            const exportNode = (parsed.export ?? {}) as Record<string, unknown>;
-            const formatKey = outputFormat.replace(/^\./, '').toLowerCase();
-            const formatNode = (exportNode[formatKey] ?? {}) as Record<string, unknown>;
-            exportNode[formatKey] = {
-                ...formatNode,
-                settingsMode,
-            };
-            parsed.export = exportNode;
-        }
-
-        const adapter = getProfileLocalMaterialSettingsAdapter(printerOutputFormat ?? outputFormat, settingsMode)
-            ?? getProfileLocalMaterialSettingsAdapter(outputFormat, settingsMode);
-        const fieldSchema = adapter?.fields ?? [];
-        if (fieldSchema.length > 0) {
-            const localForOutput = materialProfile.localSettingsByOutput?.[printerOutputFormat ?? outputFormat]
-                ?? materialProfile.localSettingsByOutput?.[outputFormat]
-                ?? {};
-
-            fieldSchema.forEach((field) => {
-                if (field.kind === 'spacer') return;
-
-                const fieldValue = Object.prototype.hasOwnProperty.call(localForOutput, field.key)
-                    ? localForOutput[field.key]
-                    : field.defaultValue;
-
-                const coercedValue = coerceLocalMaterialSettingValue(
-                    fieldValue,
-                    field.kind,
-                );
-
-                const targetPath = (field.metadataPath?.trim() || `material.${field.key}`);
-                setMetadataPathValue(parsed, targetPath, coercedValue);
-            });
-        }
-
-        return JSON.stringify(parsed);
-    } catch {
-        return metadataJson;
-    }
 }
 
 /**
@@ -700,23 +597,26 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         format.layerDataKind === 'png',
     );
 
-    const effectiveDitherPolicy = resolveEffectiveDitherPolicy(options);
+    const assembled = assembleSliceJob({
+        printerProfile: options.printerProfile,
+        materialProfile: options.materialProfile,
+        scene: {
+            totalLayers: solidMesh.totalLayers,
+            tallestObjectHeightMm: solidMesh.tallestObjectHeightMm,
+            models: solidMesh.models,
+        },
+        dither: options,
+    });
 
     const nativeJob = {
-        outputFormat: format.outputFormat,
-        formatVersion: resolveOutputFormatVersion(
-            format.outputFormat,
-            options.printerProfile.display.formatVersion,
-        ),
-        settingsMode: resolveOutputSettingsMode(
-            format.outputFormat,
-            options.printerProfile.display.settingsMode,
-        ),
-        sourceWidthPx: solidMesh.sourceWidthPx,
-        sourceHeightPx: solidMesh.sourceHeightPx,
-        widthPx: solidMesh.widthPx,
-        heightPx: solidMesh.heightPx,
-        xPackingMode: solidMesh.xPackingMode,
+        outputFormat: assembled.outputFormat,
+        formatVersion: assembled.formatVersion,
+        settingsMode: assembled.settingsMode,
+        sourceWidthPx: assembled.sourceWidthPx,
+        sourceHeightPx: assembled.sourceHeightPx,
+        widthPx: assembled.widthPx,
+        heightPx: assembled.heightPx,
+        xPackingMode: assembled.xPackingMode,
         pngCompressionStrategy: resolvedPngStrategy,
         antiAliasingLevel: options.antiAliasingLevel ?? 'Off',
         antiAliasingMode: options.antiAliasingMode ?? 'Blur',
@@ -741,17 +641,17 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
             ?? options.materialProfile.minimumAaAlphaPercent
             ?? 50,
         ),
-        mirrorX: solidMesh.mirrorX,
-        mirrorY: solidMesh.mirrorY,
-        ditherEnabled: effectiveDitherPolicy.ditherEnabled,
-        ditherBitDepth: effectiveDitherPolicy.ditherBitDepth,
-        ditherDeviceGamma: effectiveDitherPolicy.ditherDeviceGamma,
+        mirrorX: assembled.mirrorX,
+        mirrorY: assembled.mirrorY,
+        ditherEnabled: assembled.ditherEnabled,
+        ditherBitDepth: assembled.ditherBitDepth,
+        ditherDeviceGamma: assembled.ditherDeviceGamma,
         modelTriangleCount: solidMesh.modelTriangleCount,
         containerCompressionLevel: resolveContainerCompressionLevel(resolvedPngStrategy),
-        buildWidthMm: solidMesh.buildWidthMm,
-        buildDepthMm: solidMesh.buildDepthMm,
-        layerHeightMm: solidMesh.layerHeightMm,
-        totalLayers: solidMesh.totalLayers,
+        buildWidthMm: assembled.buildWidthMm,
+        buildDepthMm: assembled.buildDepthMm,
+        layerHeightMm: assembled.layerHeightMm,
+        totalLayers: assembled.totalLayers,
         exportThumbnailPngBase64: options.exportThumbnailPng && options.exportThumbnailPng.length > 0
             ? encodeBytesToBase64(options.exportThumbnailPng)
             : null,
@@ -760,13 +660,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         meshQuantization: meshTransportQuantization,
         outputPath: options.outputPath?.trim() || null,
         metadataJson: await attachJobMetadataPayloads(
-            mergeMetadataOverridesIntoMetadata(
-                solidMesh.metadataJson,
-                format.outputFormat,
-                options.materialProfile,
-                resolveOutputSettingsMode(format.outputFormat, options.printerProfile.display.settingsMode),
-                options.printerProfile.display.outputFormat,
-            ),
+            assembled.metadataJson,
             { models: visibleModels },
             getJobMetadataPayloadDeclarations(),
         ),

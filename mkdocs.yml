@@ -143,6 +143,7 @@ nav:
           - API: dev/slicing-engine/api.md
           - Encoders: dev/slicing-engine/encoders.md
           - Tauri Integration: dev/slicing-engine/tauri-integration.md
+          - Slice Job Assembly: dev/slice-job-assembly.md
           - Benchmarking: dev/slicing-engine/benchmarking.md
           - Benchmark Suite: dev/slicing-benchmarks.md
           - Development Guide: dev/slicing-engine/development-guide.md
