@@ -16,7 +16,8 @@
 
 import { readFileSync, writeFileSync, statSync } from 'fs';
 import { basename, resolve, dirname } from 'path';
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
+import { createRequire } from 'module';
 import { v4 as uuidv4 } from 'uuid';
 import {
   parseVoxlAuto,
@@ -41,7 +42,6 @@ import type {
   SupportEntity,
 } from '../src/supports/types';
 import type { AaPreset } from '../src/features/slicing/autoAaPhysics';
-import { resolveSceneSliceJob, sliceRunArgs } from './cli/sceneSliceJob';
 
 // ---------------------------------------------------------------------------
 // VOXL File I/O
@@ -1313,15 +1313,34 @@ function releaseHeap(): void {
   if (typeof g === 'function') g();
 }
 
+// `scene slice` builds its job with the app's own code, which reads the plugin
+// registry. Load it only for this command, so the others keep working on a
+// checkout where the registry has not been generated.
+function loadSceneSliceJob(): typeof import('./cli/sceneSliceJob') {
+  try {
+    return createRequire(import.meta.url)('./cli/sceneSliceJob');
+  } catch (err) {
+    if (/generated/i.test(String((err as Error).message))) {
+      throw new Error(
+        'scene slice needs the generated plugin registry. Run '
+        + '`npm run generate:plugin-registry && npm run generate:builtin-simple-plugins` first.\n'
+        + `(${(err as Error).message})`,
+      );
+    }
+    throw err;
+  }
+}
+
 function sceneSlice(args: ReturnType<typeof parseArgs>): void {
   const voxlPath = args.positional[0];
   if (!voxlPath) {
     throw new Error(
       'Usage: scene slice <scene.voxl> --o <output> [--mesh-dir <dir>]\n'
-      + '  [--printer <profile.json>] [--printer-id <id>]  drive resolution/packing/build/mirror/format/pitch\n'
+      + '  [--printer <profile.json>] [--printer-id <id>]  preset, profile or app-exported bundle; builds the job the app would\n'
+      + '  [--material <profile.json>]                      default: the bundle\'s first material, else the app\'s default\n'
       + '  [--aa-preset sharp|balanced|smooth|raw]          named AA (via computePhysicalAaConfig)\n'
-      + '  [--dither on|off] [--dither-bit-depth N] [--dither-device-gamma G] [--material <profile.json>]\n'
-      + '  [--layer-height 0.05] [--build-width-mm N] [--build-depth-mm N]',
+      + '  [--dither on|off] [--dither-bit-depth N] [--dither-device-gamma G]\n'
+      + '  [--layer-height N] [--build-width-mm N] [--build-depth-mm N]  override the material / printer',
     );
   }
 
@@ -1330,7 +1349,8 @@ function sceneSlice(args: ReturnType<typeof parseArgs>): void {
   const aaPreset = optionalFlag(args.flags, 'aa-preset') as AaPreset | 'raw' | undefined; // sharp|balanced|smooth|raw
   const printerPath = optionalFlag(args.flags, 'printer');
   const materialPath = printerPath ? optionalFlag(args.flags, 'material') : undefined;
-  const job = resolveSceneSliceJob({
+  const sliceJob = loadSceneSliceJob();
+  const job = sliceJob.resolveSceneSliceJob({
     printer: printerPath ? JSON.parse(readFileSync(resolve(printerPath), 'utf-8')) : undefined,
     printerId: optionalFlag(args.flags, 'printer-id'),
     material: materialPath ? JSON.parse(readFileSync(resolve(materialPath), 'utf-8')) : undefined,
@@ -1342,25 +1362,6 @@ function sceneSlice(args: ReturnType<typeof parseArgs>): void {
     ditherBitDepth: optionalFlag(args.flags, 'dither-bit-depth'),
     ditherDeviceGamma: optionalFlag(args.flags, 'dither-device-gamma'),
   });
-  const { printer: p, aa, dither } = job;
-  if (p) {
-    console.error(
-      `scene slice: printer '${p.name}' -> ${p.sourceWidthPx}x${p.sourceHeightPx} ${p.xPackingMode} `
-      + `build ${p.buildWidthMm}x${p.buildDepthMm}mm pitch ${p.pitchXMm.toFixed(4)}x${p.pitchYMm.toFixed(4)}mm fmt ${p.outputExt}`,
-    );
-  }
-  if (aa) {
-    console.error(
-      `scene slice: AA '${aaPreset}' -> ${aa.aaSteps}x ${aa.antiAliasingMode} `
-      + `blur=${aa.blurBrushRadiusPx}px zblur=${aa.zBlurRadiusLayers} lookback=${aa.zBlendLookBack}`,
-    );
-  }
-  if (dither) {
-    console.error(
-      `scene slice: dither ${dither.enabled ? `on (${dither.bitDepth}-bit, gamma ${dither.deviceGamma})` : 'off'}`,
-    );
-  }
-
   const doc = loadVoxl(voxlPath);
   const visibleModels = doc.models.filter((m) => m.visible);
 
@@ -1371,6 +1372,7 @@ function sceneSlice(args: ReturnType<typeof parseArgs>): void {
   // Phase 1: Load each model's STL, apply translation, collect all positions
   const allPositions: Float32Array[] = [];
   let totalTriangles = 0;
+  let maxZMm = 0;
 
   for (const model of visibleModels) {
     let positions: Float32Array;
@@ -1428,6 +1430,9 @@ function sceneSlice(args: ReturnType<typeof parseArgs>): void {
       console.error(`    transform: pos=(${t.position.x.toFixed(1)},${t.position.y.toFixed(1)},${t.position.z.toFixed(1)}) rot=(${t.rotation.x.toFixed(3)},${t.rotation.y.toFixed(3)},${t.rotation.z.toFixed(3)}) scale=(${t.scale.x},${t.scale.y},${t.scale.z})`);
     }
 
+    for (let i = 2; i < positions.length; i += 3) {
+      if (positions[i] > maxZMm) maxZMm = positions[i];
+    }
     allPositions.push(positions);
     totalTriangles += positions.length / 9;
   }
@@ -1465,11 +1470,37 @@ function sceneSlice(args: ReturnType<typeof parseArgs>): void {
 
   // Phase 4: Shell out to Rust slicer
   const rustCli = resolve(dirname(new URL(import.meta.url).pathname), '../rust/dragonfruit-cli/target/release/dragonfruit-cli');
-  const argv = [rustCli, ...sliceRunArgs(job, mergedPath, resolve(output))];
-  const sliceCmd = argv.join(' ');
+  const run = sliceJob.buildSceneSliceRun(job, {
+    maxZMm,
+    models: visibleModels.map((model) => ({
+      id: model.id,
+      name: model.name,
+      polygonCount: model.polygonCount,
+      transform: model.transform,
+    })),
+  }, mergedPath, resolve(output));
+  const { assembled, aa } = run;
+  if (assembled && job.printer) {
+    console.error(
+      `scene slice: printer '${job.printer.name}' -> ${assembled.sourceWidthPx}x${assembled.sourceHeightPx} ${assembled.xPackingMode} `
+      + `build ${assembled.buildWidthMm}x${assembled.buildDepthMm}mm layer ${assembled.layerHeightMm}mm fmt ${assembled.outputFormat}`
+      + `${assembled.formatVersion ? ` ${assembled.formatVersion}` : ''}, material '${job.material?.name}'`,
+    );
+    console.error(
+      `scene slice: dither ${assembled.ditherEnabled ? `on (${assembled.ditherBitDepth}-bit, gamma ${assembled.ditherDeviceGamma})` : 'off'}`,
+    );
+  }
+  if (aa) {
+    console.error(
+      `scene slice: AA '${aaPreset}' -> ${aa.aaSteps}x ${aa.antiAliasingMode} `
+      + `blur=${aa.blurBrushRadiusPx}px zblur=${aa.zBlurRadiusLayers} lookback=${aa.zBlendLookBack}`,
+    );
+  }
 
-  console.error(`  slicing: ${sliceCmd}`);
-  const result = execSync(sliceCmd, { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 });
+  const shown = run.args.map((arg, i) => (run.args[i - 1] === '--metadata-json' ? `<${arg.length} bytes>` : arg));
+  console.error(`  slicing: ${rustCli} ${shown.join(' ')}`);
+  // No shell: the metadata is JSON, and the paths may contain spaces.
+  const result = execFileSync(rustCli, run.args, { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 });
 
   // Cleanup temp
   execSync(`rm -rf ${tmpDir}`);

@@ -269,8 +269,9 @@ hw_prefix_for() { # <cpus-or-empty> <mem-or-empty> -> prints prefix tokens
   printf '%s' "$pre"
 }
 
-# Map a printer profile's output format to the archive extension the way the app /
-# TS CLI does (outputFormatToExt): ctb/nanodlp are named; anything else passes through.
+# Map a printer profile's output format to the archive extension: ctb/nanodlp are
+# named; anything else passes through. A simplification of the app's
+# resolveOutputFileExtension, which names Anycubic files after their format version.
 printer_ext() { # <printer.json>
   local fmt
   fmt="$(jq -r '((.printer.display.outputFormat // .display.outputFormat // .outputFormat // "") | tostring | ascii_downcase)' "$1" 2>/dev/null || echo "")"

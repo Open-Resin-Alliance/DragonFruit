@@ -22,28 +22,15 @@ const REPO_ROOT = join(__dirname, '../../../../..');
 
 export type PrinterFixture = {
   label: string;
-  traits: PrinterTraits;
   /** Where the CLI reads the printer from, as a user would pass it to `--printer`. */
   cliPrinter: () => unknown;
   /** The same printer as the app holds it after the user adds it. */
   appPrinter: () => PrinterProfile;
 };
 
-/** What sets this printer apart for the job assembly; drives the known divergences below. */
-export type PrinterTraits = {
-  /** The app packs X for this format (NanoDLP). */
-  packed?: boolean;
-  /** Width and depth come from resolution × pixel size, not from the profile. */
-  derivedBuildVolume?: boolean;
-  eightBitPanel?: boolean;
-  /** The profile names no format version and the app fills in the format's default. */
-  defaultFormatVersion?: boolean;
-};
-
-function presetFixture(label: string, file: string, presetId: string, traits: PrinterTraits): PrinterFixture {
+function presetFixture(label: string, file: string, presetId: string): PrinterFixture {
   return {
     label,
-    traits,
     cliPrinter: () => {
       const presets = JSON.parse(readFileSync(join(REPO_ROOT, file), 'utf-8')) as Array<{ presetId: string }>;
       const preset = presets.find((entry) => entry.presetId === presetId);
@@ -54,11 +41,10 @@ function presetFixture(label: string, file: string, presetId: string, traits: Pr
   };
 }
 
-function bundleFixture(label: string, file: string, traits: PrinterTraits): PrinterFixture {
+function bundleFixture(label: string, file: string): PrinterFixture {
   const read = () => JSON.parse(readFileSync(join(REPO_ROOT, file), 'utf-8')) as unknown;
   return {
     label,
-    traits,
     cliPrinter: read,
     appPrinter: () => storedPrinter(importPrinterBundle(read())),
   };
@@ -74,20 +60,14 @@ function storedPrinter(id: string): PrinterProfile {
 // not, panel bit depth (undeclared, 3, 4, 8), settings mode, and build volume
 // declared or derived from the pixel size.
 export const PRINTERS: PrinterFixture[] = [
-  presetFixture('Saturn 4 (.goo, undeclared depth)', 'plugins/elegoo/printers/saturn-series.json', 'elegoo-saturn-4-goo',
-    { derivedBuildVolume: true, defaultFormatVersion: true }),
-  presetFixture('Saturn 3 (.ctb v5enc, undeclared depth)', 'plugins/elegoo/printers/saturn-series.json', 'elegoo-saturn-3-ctb',
-    { derivedBuildVolume: true }),
-  presetFixture('Saturn 4 Ultra 16K (.ctb, 3-bit, tilting)', 'plugins/elegoo/printers/saturn-series.json', 'elegoo-saturn-4-ultra-16k-ctb',
-    { derivedBuildVolume: true }),
-  presetFixture('Mars 2 Pro (.ctb v2, 4-bit, simple)', 'plugins/elegoo/printers/mars-series.json', 'elegoo-mars-2-pro-ctb', {}),
-  presetFixture('Athena II 16K (.lumen, 8-bit)', 'plugins/athena/printers/printers.json', 'concepts3d-athena2-16k8b-odyssey',
-    { derivedBuildVolume: true, eightBitPanel: true, defaultFormatVersion: true }),
-  presetFixture('Athena II 16K 8-bit (.nanodlp)', 'plugins/athena/printers/printers.json', 'concepts3d-athena2-16k8b-nanodlp',
-    { packed: true, derivedBuildVolume: true, eightBitPanel: true }),
-  presetFixture('Athena II 16K 3-bit (.nanodlp)', 'plugins/athena/printers/printers.json', 'concepts3d-athena2-16k3b-nanodlp',
-    { packed: true, derivedBuildVolume: true }),
-  bundleFixture('Saturn 4 Ultra 16K bundle (declared build volume)', 'scripts/bench/printers/saturn_4_ultra_16k-bundle.json', {}),
+  presetFixture('Saturn 4 (.goo, undeclared depth)', 'plugins/elegoo/printers/saturn-series.json', 'elegoo-saturn-4-goo'),
+  presetFixture('Saturn 3 (.ctb v5enc, undeclared depth)', 'plugins/elegoo/printers/saturn-series.json', 'elegoo-saturn-3-ctb'),
+  presetFixture('Saturn 4 Ultra 16K (.ctb, 3-bit, tilting)', 'plugins/elegoo/printers/saturn-series.json', 'elegoo-saturn-4-ultra-16k-ctb'),
+  presetFixture('Mars 2 Pro (.ctb v2, 4-bit, simple)', 'plugins/elegoo/printers/mars-series.json', 'elegoo-mars-2-pro-ctb'),
+  presetFixture('Athena II 16K (.lumen, 8-bit)', 'plugins/athena/printers/printers.json', 'concepts3d-athena2-16k8b-odyssey'),
+  presetFixture('Athena II 16K 8-bit (.nanodlp)', 'plugins/athena/printers/printers.json', 'concepts3d-athena2-16k8b-nanodlp'),
+  presetFixture('Athena II 16K 3-bit (.nanodlp)', 'plugins/athena/printers/printers.json', 'concepts3d-athena2-16k3b-nanodlp'),
+  bundleFixture('Saturn 4 Ultra 16K bundle (declared build volume)', 'scripts/bench/printers/saturn_4_ultra_16k-bundle.json'),
 ];
 
 export type MaterialFixture = { label: string; ditherEnabled: boolean; perFormatSettings?: boolean };

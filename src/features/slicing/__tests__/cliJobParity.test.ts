@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { resolveSceneSliceJob, sliceRunArgs } from '../../../../scripts/cli/sceneSliceJob';
+import { buildSceneSliceRun, resolveSceneSliceJob } from '../../../../scripts/cli/sceneSliceJob';
+import { describeSliceJobModel } from '../sliceJobAssembly';
 import { captureAppSliceJob, cubeModel, type CapturedSliceJob } from './helpers/captureAppSliceJob';
-import { MATERIALS, PRINTERS, appMaterial, comparableMetadata, material, type PrinterTraits } from './helpers/sliceJobFixtures';
+import { MATERIALS, PRINTERS, appMaterial, comparableMetadata, material } from './helpers/sliceJobFixtures';
 
 /**
  * `scene slice` claims to build the job the app would. This compares the two on
@@ -43,8 +44,6 @@ function cliJob(argv: string[]): Record<string, unknown> {
 
 type Aspect = {
   name: string;
-  /** Why the CLI is known to differ from the app here; such cases run as `todo`. */
-  knownDivergence?: (traits: PrinterTraits, ditherEnabled: boolean) => string | undefined;
   compare: (app: CapturedSliceJob, cli: Record<string, unknown>) => void;
 };
 
@@ -59,23 +58,14 @@ const ASPECTS: Aspect[] = [
   },
   {
     name: 'format version',
-    knownDivergence: (traits) => (traits.defaultFormatVersion
-      ? 'the CLI passes the profile\'s format version as is and never resolves the format\'s default'
-      : undefined),
     compare: (app, cli) => assert.equal(cli.format_version, app.format_version),
   },
   {
     name: 'x-packing',
-    knownDivergence: (traits) => (traits.packed
-      ? undefined
-      : 'the CLI always packs X; the app packs only when the format declares it (NanoDLP)'),
     compare: (app, cli) => assert.equal(cli.x_packing_mode, app.x_packing_mode),
   },
   {
     name: 'build volume',
-    knownDivergence: (traits) => (traits.derivedBuildVolume
-      ? 'the CLI falls back to 218 × 122 mm where the app derives width and depth from resolution × pixel size'
-      : undefined),
     compare: (app, cli) => {
       assert.equal(cli.build_width_mm, app.build_width_mm, 'build_width_mm');
       assert.equal(cli.build_depth_mm, app.build_depth_mm, 'build_depth_mm');
@@ -83,14 +73,10 @@ const ASPECTS: Aspect[] = [
   },
   {
     name: 'layer height',
-    knownDivergence: () => 'the CLI defaults to 0.05 mm instead of the material\'s layer height',
     compare: (app, cli) => assert.equal(cli.layer_height_mm, app.layer_height_mm),
   },
   {
     name: 'dithering',
-    knownDivergence: (traits, ditherEnabled) => (traits.eightBitPanel && ditherEnabled
-      ? 'the CLI\'s copy of the dither policy predates #652 and dithers 8-bit panels to 7 bits'
-      : undefined),
     compare: (app, cli) => {
       assert.equal(cli.dither_enabled, app.dither_enabled, 'dither_enabled');
       if (app.dither_enabled) {
@@ -101,7 +87,6 @@ const ASPECTS: Aspect[] = [
   },
   {
     name: 'encoder metadata',
-    knownDivergence: () => 'the CLI never passes --metadata-json, so every encoder reads {}',
     compare: (app, cli) => assert.deepEqual(
       comparableMetadata(cli.metadata_json as string),
       comparableMetadata(app.metadata_json),
@@ -111,30 +96,30 @@ const ASPECTS: Aspect[] = [
 
 for (const printer of PRINTERS) {
   for (const materialFixture of MATERIALS) {
-    const { ditherEnabled } = materialFixture;
     const caseLabel = `${printer.label}, material ${materialFixture.label}`;
     let jobs: Promise<{ app: CapturedSliceJob; cli: Record<string, unknown> }> | undefined;
     const bothJobs = () => {
       jobs ??= (async () => {
+        const cube = cubeModel('parity-cube', 10);
         const appPrinter = printer.appPrinter();
         const app = await captureAppSliceJob({
-          models: [cubeModel('parity-cube', 10)],
+          models: [cube],
           printerProfile: appPrinter,
           materialProfile: appMaterial(appPrinter, material(materialFixture)),
         });
-        const cli = cliJob(sliceRunArgs(
+        const cli = cliJob(buildSceneSliceRun(
           resolveSceneSliceJob({ printer: printer.cliPrinter(), material: material(materialFixture) }),
+          { maxZMm: 10, models: [describeSliceJobModel(cube)] },
           'positions.bin',
           'out',
-        ));
+        ).args);
         return { app, cli };
       })();
       return jobs;
     };
 
     for (const aspect of ASPECTS) {
-      const todo = aspect.knownDivergence?.(printer.traits, ditherEnabled);
-      test(`scene slice matches the app: ${aspect.name} (${caseLabel})`, { todo }, async () => {
+      test(`scene slice matches the app: ${aspect.name} (${caseLabel})`, async () => {
         const { app, cli } = await bothJobs();
         aspect.compare(app, cli);
       });
