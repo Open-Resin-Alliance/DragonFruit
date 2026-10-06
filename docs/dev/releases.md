@@ -99,11 +99,12 @@ and prerelease identifier, so the tag doesn't need to encode it separately.
 # Thanks to scripts/sync-app-version.mjs, this bumps the version in:
 #  package-lock.json, package.json, src-tauri/Cargo.lock,
 #  src-tauri/Cargo.toml and src-tauri/tauri.conf.json
-npm version 0.1.10 --no-git-tag-version
+VER=0.1.10
+npm version $VER --no-git-tag-version
 # Generate the bitmap for the NSIS installer.
 ./scripts/gen_nsis_images.py
 
-git commit -a -m "chore: release 0.1.10"
+git commit -a -m "chore: release $VER"
 git push origin dev
 ```
 
