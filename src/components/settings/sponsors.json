@@ -6,25 +6,7 @@
     "website": null,
     "role": "BACKER",
     "tier": null,
-    "totalAmountDonated": 400
-  },
-  {
-    "name": "Atlas 3DSS",
-    "profile": "https://opencollective.com/atlas-3dss",
-    "image": "https://opencollective-production.s3.us-west-1.amazonaws.com/account-avatar/f479abfb-3b76-4f3f-87c1-9e6f7bfe29b8/_AtlasLogo_Large.png",
-    "website": null,
-    "role": "BACKER",
-    "tier": "Sponsor",
     "totalAmountDonated": 200
-  },
-  {
-    "name": "Gobbledygook Games",
-    "profile": "https://opencollective.com/gggames",
-    "image": "https://opencollective-production.s3.us-west-1.amazonaws.com/account-avatar/3b53c2e8-cfb3-4aad-aa05-a3b9c470ecce/GGGAvatar3.png",
-    "website": "https://gggames.nl/",
-    "role": "BACKER",
-    "tier": null,
-    "totalAmountDonated": 115
   },
   {
     "name": "WickedGrey",
@@ -36,15 +18,6 @@
     "totalAmountDonated": 100
   },
   {
-    "name": "ben",
-    "profile": "https://opencollective.com/guest-29653113",
-    "image": null,
-    "website": null,
-    "role": "BACKER",
-    "tier": "Patron",
-    "totalAmountDonated": 60
-  },
-  {
     "name": "jacobi",
     "profile": "https://opencollective.com/guest-29b90773",
     "image": null,
@@ -52,33 +25,6 @@
     "role": "BACKER",
     "tier": null,
     "totalAmountDonated": 50
-  },
-  {
-    "name": "Concepts 3D",
-    "profile": "https://opencollective.com/concepts3d",
-    "image": "https://opencollective-production.s3.us-west-1.amazonaws.com/account-avatar/e3e2aacc-4bb2-44d3-9504-551de34e9af7/Untitled%20design%20(1).png",
-    "website": "https://concepts3d.ca",
-    "role": "BACKER",
-    "tier": "Contributor",
-    "totalAmountDonated": 30
-  },
-  {
-    "name": "Kryz Slaughter",
-    "profile": "https://opencollective.com/kryz-slaughter",
-    "image": "https://opencollective-production.s3.us-west-1.amazonaws.com/account-avatar/5a9cb541-0082-4a40-8e0e-e9e3905b205b/judiciar-2.jpg",
-    "website": null,
-    "role": "BACKER",
-    "tier": "Contributor",
-    "totalAmountDonated": 30
-  },
-  {
-    "name": "Rob Skinner",
-    "profile": "https://opencollective.com/rob-skinner",
-    "image": "https://opencollective-production.s3.us-west-1.amazonaws.com/account-avatar/24d313ae-8019-42b5-bd80-6f4fe279d494/IMG20260829104728.jpg",
-    "website": null,
-    "role": "BACKER",
-    "tier": "Contributor",
-    "totalAmountDonated": 30
   },
   {
     "name": "foors",
@@ -90,9 +36,27 @@
     "totalAmountDonated": 20
   },
   {
-    "name": "Runklestiltskin",
-    "profile": "https://opencollective.com/guest-4717e1d9",
+    "name": "Concepts 3D",
+    "profile": "https://opencollective.com/concepts3d",
+    "image": "https://opencollective-production.s3.us-west-1.amazonaws.com/account-avatar/e3e2aacc-4bb2-44d3-9504-551de34e9af7/Untitled%20design%20(1).png",
+    "website": "https://concepts3d.ca",
+    "role": "BACKER",
+    "tier": "Contributor",
+    "totalAmountDonated": 15
+  },
+  {
+    "name": "Guest",
+    "profile": "https://opencollective.com/guest-dac84a7c",
     "image": null,
+    "website": null,
+    "role": "BACKER",
+    "tier": "Contributor",
+    "totalAmountDonated": 15
+  },
+  {
+    "name": "Kryz Slaughter",
+    "profile": "https://opencollective.com/kryz-slaughter",
+    "image": "https://opencollective-production.s3.us-west-1.amazonaws.com/account-avatar/5a9cb541-0082-4a40-8e0e-e9e3905b205b/judiciar-2.jpg",
     "website": null,
     "role": "BACKER",
     "tier": "Contributor",
@@ -104,25 +68,7 @@
     "image": "https://opencollective-production.s3.us-west-1.amazonaws.com/account-avatar/17078813-f0be-4bda-9c18-ee637e971fd3/CP_Icon_250.png",
     "website": null,
     "role": "BACKER",
-    "tier": "Backer",
-    "totalAmountDonated": 10
-  },
-  {
-    "name": "Tom",
-    "profile": "https://opencollective.com/tomb94",
-    "image": "https://opencollective-production.s3.us-west-1.amazonaws.com/account-avatar/2d59b7e9-9f09-4df5-bc98-0b06a0b3fcb0/IMG_2626.jpg",
-    "website": null,
-    "role": "BACKER",
-    "tier": "Backer",
+    "tier": "backer",
     "totalAmountDonated": 5
-  },
-  {
-    "name": "Sin",
-    "profile": "https://opencollective.com/sinxv",
-    "image": "https://opencollective-production.s3.us-west-1.amazonaws.com/account-avatar/4ae6c055-8efc-4f2f-8390-1848c1305111/HSQI5561.jpg",
-    "website": null,
-    "role": "BACKER",
-    "tier": null,
-    "totalAmountDonated": 1
   }
 ]
