@@ -13,6 +13,8 @@
 //!   dragonfruit-cli print read-layer /tmp/out.nanodlp --layer 1 -o /tmp/layer1.png
 //!   dragonfruit-cli info
 
+#![recursion_limit = "256"]
+
 use clap::{Parser, Subcommand};
 use std::io::Read as IoRead;
 use std::path::PathBuf;
@@ -1400,7 +1402,9 @@ fn cmd_slice_run(
             "cross_blend_ns": perf.cross_blend_ns,
             "cross_blend_touched_pixels": perf.cross_blend_touched_pixels,
             "cross_blend_contributing_layers": perf.cross_blend_contributing_layers,
-            "post_blur_ns": perf.post_blur_ns,
+            "post_blur_ns": perf.post_xy_blur_ns.saturating_add(perf.post_z_blur_ns),
+            "post_xy_blur_ns": perf.post_xy_blur_ns,
+            "post_z_blur_ns": perf.post_z_blur_ns,
             "support_merge_ns": perf.support_merge_ns,
             "daa_post_threads": perf.daa_post_threads,
             "daa_post_buffer_depth": perf.daa_post_buffer_depth,

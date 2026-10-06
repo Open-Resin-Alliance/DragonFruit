@@ -103,6 +103,30 @@ struct RowSpan {
     end: usize,
 }
 
+/// Emit the union of sorted inclusive spans, clipped to a column window.
+/// RleAccum merges adjacent equal values, including across row boundaries.
+#[inline]
+fn emit_binary_row_spans(
+    rle: &mut crate::rle::RleAccum,
+    spans: &[RowSpan],
+    window_start: usize,
+    window_width: usize,
+) {
+    let window_end = window_start + window_width;
+    let mut cursor = window_start;
+    for span in spans {
+        let start = span.start.max(window_start).max(cursor);
+        let end = span.end.saturating_add(1).min(window_end);
+        if start >= end {
+            continue;
+        }
+        rle.push_run((start - cursor) as u32, 0);
+        rle.push_run((end - start) as u32, 255);
+        cursor = end;
+    }
+    rle.push_run((window_end - cursor) as u32, 0);
+}
+
 #[derive(Debug)]
 struct ScanlineSegmentIndex {
     starts: Vec<ActiveEdge>,
@@ -1452,6 +1476,243 @@ fn weighted_blur_axis_denom(index: usize, max_index: usize, radius: usize, weigh
     denom.max(1)
 }
 
+// Function pointers are selected once per blur, outside both row loops. The
+// unsafe pointers permit AVX2 kernels without exposing unchecked dispatch.
+#[derive(Clone, Copy)]
+struct GaussianBlurKernels {
+    horizontal: unsafe fn(&[u8], usize, &[u32], &mut [u32]),
+    vertical: unsafe fn(
+        &std::collections::VecDeque<(usize, Vec<u32>)>,
+        &[u32],
+        usize,
+        &[u64],
+        u64,
+        u8,
+        &mut [u8],
+    ),
+}
+
+impl GaussianBlurKernels {
+    fn scalar() -> Self {
+        Self {
+            horizontal: gaussian_horizontal_row_scalar,
+            vertical: gaussian_vertical_row_scalar,
+        }
+    }
+
+    fn detected() -> Self {
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if std::arch::is_x86_feature_detected!("avx2") {
+            // SAFETY: both target-feature kernels require only AVX2.
+            return unsafe { Self::avx2() };
+        }
+        Self::scalar()
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    unsafe fn avx2() -> Self {
+        Self {
+            horizontal: gaussian_avx2::horizontal_row,
+            vertical: gaussian_avx2::vertical_row,
+        }
+    }
+}
+
+fn gaussian_horizontal_pixel(source: &[u8], x: usize, weights: &[u32]) -> u32 {
+    let mut accum = (weights[0] as u64).saturating_mul(source[x] as u64);
+    for (dist, &weight) in weights.iter().enumerate().skip(1) {
+        let w = weight as u64;
+        if let Some(left_x) = x.checked_sub(dist) {
+            accum = accum.saturating_add(w.saturating_mul(source[left_x] as u64));
+        }
+        if let Some(right_x) = x.checked_add(dist) {
+            if right_x < source.len() {
+                accum = accum.saturating_add(w.saturating_mul(source[right_x] as u64));
+            }
+        }
+    }
+    accum.min(u32::MAX as u64) as u32
+}
+
+fn gaussian_horizontal_row_scalar(
+    source: &[u8],
+    roi_min_x: usize,
+    weights: &[u32],
+    out: &mut [u32],
+) {
+    for (local_x, value) in out.iter_mut().enumerate() {
+        *value = gaussian_horizontal_pixel(source, roi_min_x + local_x, weights);
+    }
+}
+
+fn gaussian_vertical_accum_scalar(
+    ring: &std::collections::VecDeque<(usize, Vec<u32>)>,
+    weights: &[u32],
+    out_y: usize,
+    local_x: usize,
+) -> u64 {
+    let mut accum = 0u64;
+    for (row_y, hrow) in ring {
+        let dist = row_y.abs_diff(out_y);
+        if dist < weights.len() {
+            accum = accum.saturating_add((weights[dist] as u64).saturating_mul(hrow[local_x] as u64));
+        }
+    }
+    accum
+}
+
+fn gaussian_finish_pixel(accum: u64, denom: u64, min_alpha_u8: u8) -> u8 {
+    let blurred = ((accum + (denom / 2)) / denom).min(255) as u8;
+    if blurred < min_alpha_u8 { 0 } else { blurred }
+}
+
+fn gaussian_vertical_row_scalar(
+    ring: &std::collections::VecDeque<(usize, Vec<u32>)>,
+    weights: &[u32],
+    out_y: usize,
+    x_denoms: &[u64],
+    y_denom: u64,
+    min_alpha_u8: u8,
+    out: &mut [u8],
+) {
+    for (local_x, value) in out.iter_mut().enumerate() {
+        let denom = x_denoms[local_x].saturating_mul(y_denom).max(1);
+        let accum = gaussian_vertical_accum_scalar(ring, weights, out_y, local_x);
+        *value = gaussian_finish_pixel(accum, denom, min_alpha_u8);
+    }
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+mod gaussian_avx2 {
+    use super::{gaussian_finish_pixel, gaussian_horizontal_pixel, gaussian_vertical_accum_scalar};
+    #[cfg(target_arch = "x86")]
+    use std::arch::x86::*;
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::*;
+
+    #[inline]
+    #[target_feature(enable = "avx2")]
+    unsafe fn saturating_add(a: __m256i, b: __m256i) -> __m256i {
+        let sum = _mm256_add_epi64(a, b);
+        let sign = _mm256_set1_epi64x(i64::MIN);
+        // Flipping the sign bit lets a signed comparison detect unsigned carry.
+        let overflow = _mm256_cmpgt_epi64(
+            _mm256_xor_si256(a, sign), _mm256_xor_si256(sum, sign),
+        );
+        _mm256_or_si256(sum, overflow)
+    }
+
+    #[inline]
+    #[target_feature(enable = "avx2")]
+    unsafe fn weighted_bytes(source: &[u8], x: usize, weight: u32) -> __m256i {
+        // SAFETY: callers provide four adjacent pixels inside the source row;
+        // neither image rows nor cropped starting positions need alignment.
+        let bytes = unsafe { source.as_ptr().add(x).cast::<i32>().read_unaligned() };
+        let pixels = _mm256_cvtepu8_epi64(_mm_cvtsi32_si128(bytes));
+        _mm256_mul_epu32(pixels, _mm256_set1_epi64x(weight as i64))
+    }
+
+    #[target_feature(enable = "avx2")]
+    pub(super) unsafe fn horizontal_row(
+        source: &[u8],
+        roi_min_x: usize,
+        weights: &[u32],
+        out: &mut [u32],
+    ) {
+        let radius = weights.len() - 1;
+        let interior_start = radius.saturating_sub(roi_min_x).min(out.len());
+        let interior_end = source.len().saturating_sub(radius)
+            .saturating_sub(roi_min_x).min(out.len());
+        let mut local_x = 0;
+        while local_x < interior_start {
+            out[local_x] = gaussian_horizontal_pixel(source, roi_min_x + local_x, weights);
+            local_x += 1;
+        }
+        // Four u64 lanes retain the scalar accumulator's range, including
+        // arbitrary u32 weights; a 32-bit multiply/add path would truncate it.
+        while local_x + 4 <= interior_end {
+            let x = roi_min_x + local_x;
+            // SAFETY: the complete radius around all four pixels is in bounds.
+            let mut accum = unsafe { weighted_bytes(source, x, weights[0]) };
+            for (dist, &weight) in weights.iter().enumerate().skip(1) {
+                unsafe {
+                    accum = saturating_add(accum, weighted_bytes(source, x - dist, weight));
+                    accum = saturating_add(accum, weighted_bytes(source, x + dist, weight));
+                }
+            }
+            let mut sums = [0u64; 4];
+            // SAFETY: sums has exactly four u64 lanes; storeu accepts alignment 1.
+            unsafe { _mm256_storeu_si256(sums.as_mut_ptr().cast::<__m256i>(), accum) };
+            for lane in 0..4 {
+                out[local_x + lane] = sums[lane].min(u32::MAX as u64) as u32;
+            }
+            local_x += 4;
+        }
+        while local_x < out.len() {
+            out[local_x] = gaussian_horizontal_pixel(source, roi_min_x + local_x, weights);
+            local_x += 1;
+        }
+    }
+
+    #[inline]
+    #[target_feature(enable = "avx2")]
+    pub(super) unsafe fn vertical_accum_four(
+        ring: &std::collections::VecDeque<(usize, Vec<u32>)>,
+        weights: &[u32],
+        out_y: usize,
+        local_x: usize,
+    ) -> [u64; 4] {
+        let mut accum = _mm256_setzero_si256();
+        for (row_y, hrow) in ring {
+            let dist = row_y.abs_diff(out_y);
+            if dist < weights.len() {
+                // SAFETY: callers ensure four remaining elements in every hrow.
+                let pixels = unsafe {
+                    _mm_loadu_si128(hrow.as_ptr().add(local_x).cast::<__m128i>())
+                };
+                let pixels = _mm256_cvtepu32_epi64(pixels);
+                // Each u32 * u32 product fits u64, but their sum can saturate.
+                let weighted = _mm256_mul_epu32(
+                    pixels, _mm256_set1_epi64x(weights[dist] as i64),
+                );
+                accum = unsafe { saturating_add(accum, weighted) };
+            }
+        }
+        let mut sums = [0u64; 4];
+        unsafe { _mm256_storeu_si256(sums.as_mut_ptr().cast::<__m256i>(), accum) };
+        sums
+    }
+
+    #[target_feature(enable = "avx2")]
+    pub(super) unsafe fn vertical_row(
+        ring: &std::collections::VecDeque<(usize, Vec<u32>)>,
+        weights: &[u32],
+        out_y: usize,
+        x_denoms: &[u64],
+        y_denom: u64,
+        min_alpha_u8: u8,
+        out: &mut [u8],
+    ) {
+        let mut local_x = 0;
+        while local_x + 4 <= out.len() {
+            // SAFETY: every ring row has out.len() elements, and AVX2 was detected.
+            let sums = unsafe { vertical_accum_four(ring, weights, out_y, local_x) };
+            for lane in 0..4 {
+                let denom = x_denoms[local_x + lane].saturating_mul(y_denom).max(1);
+                // AVX2 has no exact u64 division; retain scalar integer rounding.
+                out[local_x + lane] = gaussian_finish_pixel(sums[lane], denom, min_alpha_u8);
+            }
+            local_x += 4;
+        }
+        while local_x < out.len() {
+            let denom = x_denoms[local_x].saturating_mul(y_denom).max(1);
+            let accum = gaussian_vertical_accum_scalar(ring, weights, out_y, local_x);
+            out[local_x] = gaussian_finish_pixel(accum, denom, min_alpha_u8);
+            local_x += 1;
+        }
+    }
+}
+
 fn apply_edge_gaussian_blur_to_mask_in_roi(
     mask: &mut [u8],
     width: usize,
@@ -1464,6 +1725,26 @@ fn apply_edge_gaussian_blur_to_mask_in_roi(
     roi_max_x: usize,
     roi_min_y: usize,
     roi_max_y: usize,
+) {
+    apply_edge_gaussian_blur_to_mask_in_roi_with_kernels(
+        mask, width, height, radius, sigma_x, sigma_y, min_alpha_u8,
+        roi_min_x, roi_max_x, roi_min_y, roi_max_y, GaussianBlurKernels::detected(),
+    );
+}
+
+fn apply_edge_gaussian_blur_to_mask_in_roi_with_kernels(
+    mask: &mut [u8],
+    width: usize,
+    height: usize,
+    radius: usize,
+    sigma_x: f64,
+    sigma_y: f64,
+    min_alpha_u8: u8,
+    roi_min_x: usize,
+    roi_max_x: usize,
+    roi_min_y: usize,
+    roi_max_y: usize,
+    kernels: GaussianBlurKernels,
 ) {
     if radius == 0
         || width == 0
@@ -1498,21 +1779,12 @@ fn apply_edge_gaussian_blur_to_mask_in_roi(
             let y = roi_min_y + add_row;
             let row_start = y * width;
             let mut hrow = vec![0u32; roi_w];
-            for local_x in 0..roi_w {
-                let x = roi_min_x + local_x;
-                let mut accum = (weights_x[0] as u64).saturating_mul(source[row_start + x] as u64);
-                for dist in 1..=radius {
-                    let w = weights_x[dist] as u64;
-                    if let Some(left_x) = x.checked_sub(dist) {
-                        accum = accum.saturating_add(w.saturating_mul(source[row_start + left_x] as u64));
-                    }
-                    if let Some(right_x) = x.checked_add(dist) {
-                        if right_x < width {
-                            accum = accum.saturating_add(w.saturating_mul(source[row_start + right_x] as u64));
-                        }
-                    }
-                }
-                hrow[local_x] = accum.min(u32::MAX as u64) as u32;
+            // SAFETY: dispatch checks AVX2 once; source is an entire image row
+            // and hrow spans the validated ROI within that row.
+            unsafe {
+                (kernels.horizontal)(
+                    &source[row_start..row_start + width], roi_min_x, &weights_x, &mut hrow,
+                );
             }
             ring.push_back((y, hrow));
         }
@@ -1521,20 +1793,13 @@ fn apply_edge_gaussian_blur_to_mask_in_roi(
             let out_y = roi_min_y + (add_row - radius);
             let y_denom = y_denoms[out_y - roi_min_y];
             let row_start = out_y * width;
-            for local_x in 0..roi_w {
-                let x_denom = x_denoms[local_x];
-                let denom = x_denom.saturating_mul(y_denom).max(1);
-                let mut accum = 0u64;
-                for (row_y, hrow) in &ring {
-                    let dist = row_y.abs_diff(out_y);
-                    if dist > radius {
-                        continue;
-                    }
-                    accum = accum.saturating_add((weights_y[dist] as u64).saturating_mul(hrow[local_x] as u64));
-                }
-
-                let blurred = ((accum + (denom / 2)) / denom).min(255) as u8;
-                out[row_start + roi_min_x + local_x] = if blurred < min_alpha_u8 { 0 } else { blurred };
+            // SAFETY: the ring rows and denominator slice have roi_w elements;
+            // dispatch selected only a kernel supported by this CPU.
+            unsafe {
+                (kernels.vertical)(
+                    &ring, &weights_y, out_y, &x_denoms, y_denom, min_alpha_u8,
+                    &mut out[row_start + roi_min_x..row_start + roi_min_x + roi_w],
+                );
             }
 
             if out_y >= radius {
@@ -2840,8 +3105,8 @@ pub fn rasterize_layer_rle(
     let mut active_edges: Vec<ActiveEdge> = Vec::with_capacity(segments.len().min(256));
     let mut merge_scratch: Vec<ActiveEdge> = Vec::with_capacity(segments.len().min(256));
 
-    // Single-row scratch buffer — width bytes max (7680 at 8 K).
-    let mut row_buf = vec![0u8; width];
+    // Keep the previous spans for winding repair/coherence and direct emission.
+    let mut prev_spans: Vec<RowSpan> = Vec::new();
     let mut current_physical_y = first_physical_y;
     // last_emitted_py: the most recent physical row fully committed to `rle`.
     // Starts at first_physical_y - 1 (we just emitted zeros 0..first_physical_y).
@@ -2852,8 +3117,7 @@ pub fn rasterize_layer_rle(
     // zero-rows for any skipped rows up to (but not including) `next_py`.
     macro_rules! flush_up_to {
         ($next_py:expr) => {{
-            emit_row(&mut rle, &row_buf);
-            row_buf.fill(0);
+            emit_binary_row_spans(&mut rle, &prev_spans, 0, width);
             last_emitted_py = current_physical_y;
 
             let next = $next_py;
@@ -2865,7 +3129,6 @@ pub fn rasterize_layer_rle(
         }};
     }
 
-    let mut prev_spans: Vec<RowSpan> = Vec::new();
     for y in y_start..y_end_exclusive {
         let physical_y = y;
 
@@ -2892,8 +3155,6 @@ pub fn rasterize_layer_rle(
         let spans = build_row_spans_nonzero_ctx(&active_edges, width, true, Some(&prev_spans));
 
         for span in spans.iter().copied() {
-            row_buf[span.start..=span.end].fill(255);
-
             let filled = (span.end - span.start + 1) as u32;
             stats.total_solid_pixels = stats.total_solid_pixels.saturating_add(filled);
             min_x = min_x.min(span.start as i32);
@@ -3362,15 +3623,17 @@ pub fn rasterize_layer_rle_block(
     let mut active_edges: Vec<ActiveEdge> = Vec::with_capacity(segments.len().min(256));
     let mut merge_scratch: Vec<ActiveEdge> = Vec::with_capacity(segments.len().min(256));
 
-    let mut row_buf = vec![0u8; wwidth];
+    let mut current_spans: Vec<RowSpan> = Vec::new();
     let mut current_physical_y = first_physical_y;
     #[allow(unused_assignments)]
     let mut last_emitted_py = first_physical_y.wrapping_sub(1);
 
     macro_rules! flush_up_to {
         ($next_py:expr) => {{
-            emit_row(&mut rle, &row_buf);
-            row_buf.fill(0);
+            emit_binary_row_spans(&mut rle, &current_spans, wstart, wwidth);
+            // The block path has no previous-row coherence dependency. Release
+            // these spans before building the next row, with no scratch buffer.
+            current_spans = Vec::new();
             last_emitted_py = current_physical_y;
 
             let next = $next_py;
@@ -3406,14 +3669,12 @@ pub fn rasterize_layer_rle_block(
 
         let spans = build_row_spans_nonzero_ctx(&active_edges, full_width, true, None);
 
-        for span in spans {
+        for span in spans.iter().copied() {
             let s = span.start.max(wstart);
             let e = span.end.min(wend - 1);
             if s > e {
                 continue;
             }
-            row_buf[s - wstart..=e - wstart].fill(255);
-
             let filled = (e - s + 1) as u32;
             stats.total_solid_pixels = stats.total_solid_pixels.saturating_add(filled);
             min_x = min_x.min(s as i32);
@@ -3421,6 +3682,7 @@ pub fn rasterize_layer_rle_block(
             min_y = min_y.min(physical_y as i32);
             max_y = max_y.max(physical_y as i32);
         }
+        current_spans = spans;
 
         for edge in &mut active_edges {
             edge.x += edge.dx_dy;
@@ -3835,6 +4097,94 @@ pub(crate) fn recompute_layer_stats_from_rle(
     stats
 }
 
+#[derive(Clone, Copy)]
+struct BoxBlurKernels {
+    horizontal: unsafe fn(&[u8], usize, &mut [u16], &mut [u32]),
+    subtract: unsafe fn(&mut [u32], &[u16]),
+}
+
+impl BoxBlurKernels {
+    fn scalar() -> Self {
+        Self { horizontal: box_horizontal_row::<true>, subtract: box_subtract_row }
+    }
+
+    fn detected(radius: usize) -> Self {
+        // Only these radii guarantee that every horizontal sum fits the ring's
+        // u16 storage. Retain the original scalar arithmetic for larger radii.
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if radius <= 127 && std::arch::is_x86_feature_detected!("avx2") {
+            return Self {
+                horizontal: box_blur_avx2::horizontal_row,
+                subtract: box_blur_avx2::update_columns::<true>,
+            };
+        }
+        let _ = radius;
+        Self::scalar()
+    }
+}
+
+fn box_horizontal_row<const ADD_COLUMNS: bool>(
+    source: &[u8], radius: usize, ring_row: &mut [u16], columns: &mut [u32],
+) {
+    debug_assert_eq!(source.len(), ring_row.len());
+    debug_assert_eq!(source.len(), columns.len());
+    let mut sum: u32 = source[..=radius.min(source.len() - 1)]
+        .iter().map(|&b| b as u32).sum();
+    for ix in 0..source.len() {
+        ring_row[ix] = sum as u16;
+        if ADD_COLUMNS { columns[ix] += sum; }
+        if ix >= radius { sum -= source[ix - radius] as u32; }
+        let right = ix + radius + 1;
+        if right < source.len() { sum += source[right] as u32; }
+    }
+}
+
+fn box_subtract_row(columns: &mut [u32], row: &[u16]) {
+    debug_assert_eq!(columns.len(), row.len());
+    for (column, &value) in columns.iter_mut().zip(row) { *column -= value as u32; }
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+mod box_blur_avx2 {
+    #[cfg(target_arch = "x86")]
+    use std::arch::x86::*;
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::*;
+
+    #[target_feature(enable = "avx2")]
+    pub(super) unsafe fn update_columns<const SUBTRACT: bool>(columns: &mut [u32], row: &[u16]) {
+        debug_assert_eq!(columns.len(), row.len());
+        let mut x = 0;
+        // SAFETY: full chunks contain eight u16 inputs and eight u32 outputs;
+        // unaligned loads/stores permit arbitrary ROI starts and row widths.
+        unsafe {
+            while x + 8 <= row.len() {
+                let values = _mm256_cvtepu16_epi32(_mm_loadu_si128(row.as_ptr().add(x).cast()));
+                let prior = _mm256_loadu_si256(columns.as_ptr().add(x).cast());
+                let next = if SUBTRACT { _mm256_sub_epi32(prior, values) }
+                    else { _mm256_add_epi32(prior, values) };
+                _mm256_storeu_si256(columns.as_mut_ptr().add(x).cast(), next);
+                x += 8;
+            }
+        }
+        for (column, &value) in columns[x..].iter_mut().zip(&row[x..]) {
+            if SUBTRACT { *column -= value as u32; } else { *column += value as u32; }
+        }
+    }
+
+    #[target_feature(enable = "avx2")]
+    pub(super) unsafe fn horizontal_row(
+        source: &[u8], radius: usize, ring_row: &mut [u16], columns: &mut [u32],
+    ) {
+        // The rolling horizontal sum has a dependency between pixels. Keep it
+        // scalar, then update eight independent vertical column sums at once.
+        super::box_horizontal_row::<false>(source, radius, ring_row, columns);
+        // SAFETY: dispatched only for AVX2 CPUs and radius <= 127, so the u16
+        // ring values equal the untruncated horizontal sums.
+        unsafe { update_columns::<false>(columns, ring_row) };
+    }
+}
+
 /// Streaming separable box blur operating directly on gray RLE runs.
 ///
 /// Matches the boundary-clamped denominator of `apply_blur_postprocess_inplace`
@@ -3869,6 +4219,19 @@ pub fn blur_gray_rle_streaming_with_bounds(
     Vec<crate::rle::RleRun>,
     Option<(usize, usize, usize, usize)>,
 ) {
+    blur_gray_rle_streaming_with_kernels(
+        runs, width, height, radius, min_alpha_u8, BoxBlurKernels::detected(radius),
+    )
+}
+
+fn blur_gray_rle_streaming_with_kernels(
+    runs: &[crate::rle::RleRun],
+    width: usize,
+    height: usize,
+    radius: usize,
+    min_alpha_u8: u8,
+    kernels: BoxBlurKernels,
+) -> (Vec<crate::rle::RleRun>, Option<(usize, usize, usize, usize)>) {
     use crate::rle::{emit_row, emit_zero_rows, RleAccum};
 
     if width == 0 || height == 0 {
@@ -3998,21 +4361,12 @@ pub fn blur_gray_rle_streaming_with_bounds(
             let new_slot = (ring_head + ring_len) % ring_cap;
             let slot_start = new_slot * roi_w;
 
-            let mut sum = 0u32;
-            let init_end = radius.min(roi_w - 1);
-            for &b in &decode_buf[..=init_end] {
-                sum += b as u32;
-            }
-            for ix in 0..roi_w {
-                ring[slot_start + ix] = sum as u16; // safe: max = 255×(2r+1) ≤ u16::MAX for r≤127
-                col_sums[ix] += sum;
-                if ix >= radius {
-                    sum -= decode_buf[ix - radius] as u32;
-                }
-                let r1 = ix + radius + 1;
-                if r1 < roi_w {
-                    sum += decode_buf[r1] as u32;
-                }
+            // SAFETY: detection occurs once per blur; every row slice has roi_w
+            // elements and the SIMD kernel's radius bound was checked there.
+            unsafe {
+                (kernels.horizontal)(
+                    &decode_buf, radius, &mut ring[slot_start..slot_start + roi_w], &mut col_sums,
+                );
             }
             ring_len += 1;
         }
@@ -4074,9 +4428,8 @@ pub fn blur_gray_rle_streaming_with_bounds(
             // Evict the oldest ring row once the full vertical window is in use.
             if out_row >= radius {
                 let evict_start = ring_head * roi_w;
-                for ix in 0..roi_w {
-                    col_sums[ix] -= ring[evict_start + ix] as u32;
-                }
+                // SAFETY: same detected kernel and equally sized row slices.
+                unsafe { (kernels.subtract)(&mut col_sums, &ring[evict_start..evict_start + roi_w]) };
                 ring_head = (ring_head + 1) % ring_cap;
                 ring_len -= 1;
             }
@@ -4087,6 +4440,201 @@ pub fn blur_gray_rle_streaming_with_bounds(
 
     let runs = out_rle.finish();
     (runs, out_bounds)
+}
+
+#[cfg(test)]
+mod gaussian_kernel_tests {
+    use super::*;
+
+    fn blur_mask(
+        input: &[u8],
+        width: usize,
+        height: usize,
+        radius: usize,
+        sigmas: (f64, f64),
+        min_alpha: u8,
+        bounds: (usize, usize, usize, usize),
+        kernels: GaussianBlurKernels,
+    ) -> Vec<u8> {
+        let mut mask = input.to_vec();
+        apply_edge_gaussian_blur_to_mask_in_roi_with_kernels(
+            &mut mask, width, height, radius, sigmas.0, sigmas.1, min_alpha,
+            bounds.0, bounds.1, bounds.2, bounds.3, kernels,
+        );
+        mask
+    }
+
+    #[test]
+    fn gaussian_scalar_rounding_and_crop_contract() {
+        let input = [0, 0, 0, 0, 255, 0, 0, 0, 0];
+        let sigmas = (f64::INFINITY, f64::INFINITY);
+        let kernels = GaussianBlurKernels::scalar();
+        assert_eq!(
+            blur_mask(&input, 3, 3, 1, sigmas, 0, (0, 2, 0, 2), kernels),
+            [64, 43, 64, 43, 28, 43, 64, 43, 64],
+        );
+        assert_eq!(
+            blur_mask(&input, 3, 3, 1, sigmas, 44, (0, 2, 0, 2), kernels),
+            [64, 0, 64, 0, 0, 0, 64, 0, 64],
+        );
+        // Horizontal neighbors outside a narrow ROI are read; vertical rows
+        // outside it are not. Pixels outside the ROI are cleared, not retained.
+        assert_eq!(
+            blur_mask(&input, 3, 3, 1, sigmas, 0, (1, 1, 0, 2), kernels),
+            [0, 43, 0, 0, 28, 0, 0, 43, 0],
+        );
+        assert_eq!(
+            blur_mask(&input, 3, 3, 1, sigmas, 0, (0, 2, 1, 1), kernels),
+            [0, 0, 0, 43, 28, 43, 0, 0, 0],
+        );
+        assert_eq!(
+            blur_mask(&input, 3, 3, 0, sigmas, 255, (0, 2, 0, 2), kernels),
+            input,
+        );
+        assert_eq!(gaussian_finish_pixel(1, 2, 0), 1);
+        assert_eq!(gaussian_finish_pixel(1, 3, 0), 0);
+        assert_eq!(gaussian_finish_pixel(255, 1, 255), 255);
+        assert_eq!(gaussian_finish_pixel(254, 1, 255), 0);
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    fn avx2_kernels() -> Option<GaussianBlurKernels> {
+        if std::arch::is_x86_feature_detected!("avx2") {
+            // SAFETY: forced dispatch is used only after checking the host CPU.
+            Some(unsafe { GaussianBlurKernels::avx2() })
+        } else {
+            None
+        }
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[test]
+    fn gaussian_avx2_horizontal_row_parity() {
+        let Some(kernels) = avx2_kernels() else { return };
+        for width in 1..=41 {
+            let storage: Vec<u8> = (0..width + 1)
+                .map(|x| ((x * 193 + x * x * 17 + width * 11) & 255) as u8)
+                .collect();
+            let source = &storage[1..]; // Deliberately unaligned four-byte loads.
+            for radius in 0..=12 {
+                let weight_sets = [
+                    gaussian_blur_weights(radius, 0.05),
+                    gaussian_blur_weights(radius, 0.7),
+                    gaussian_blur_weights(radius, 4.0),
+                    gaussian_blur_weights(radius, f64::INFINITY),
+                    vec![u32::MAX; radius + 1],
+                ];
+                for weights in &weight_sets {
+                    for min_x in [0, 1.min(width - 1), width / 2, width - 1] {
+                        for len in [1, (width - min_x).min(7), width - min_x] {
+                            let mut scalar = vec![0; len];
+                            let mut simd = vec![0; len];
+                            gaussian_horizontal_row_scalar(source, min_x, weights, &mut scalar);
+                            unsafe { (kernels.horizontal)(source, min_x, weights, &mut simd) };
+                            assert_eq!(simd, scalar, "width={width}, radius={radius}, min_x={min_x}, len={len}");
+                        }
+                    }
+                }
+            }
+        }
+        let mut clamped = [0; 8];
+        unsafe { (kernels.horizontal)(&[255; 8], 0, &[u32::MAX], &mut clamped) };
+        assert_eq!(clamped, [u32::MAX; 8]);
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[test]
+    fn gaussian_avx2_vertical_row_parity() {
+        let Some(kernels) = avx2_kernels() else { return };
+        for len in 1..=21 {
+            for extreme in [false, true] {
+                let ring: std::collections::VecDeque<_> = (0..7)
+                    .map(|y| {
+                        let row = (0..len).map(|x| {
+                            if extreme {
+                                [u32::MAX, 0, 1, u32::MAX - 1][(x + y) % 4]
+                            } else {
+                                ((x * 13 + y * 7) % 31) as u32
+                            }
+                        }).collect();
+                        (y, row)
+                    }).collect();
+                let weights = if extreme { vec![u32::MAX; 4] } else { vec![7, 3, 2, 1] };
+                // Denom 1 also exercises a saturated u64 sum without overflowing
+                // the original, deliberately unchanged rounding addition.
+                let denoms: Vec<u64> = (0..len)
+                    .map(|x| if extreme { 1 } else { [2, 3, 17, 257][x % 4] })
+                    .collect();
+                for out_y in [0, 1, 3, 6, 20] {
+                    for min_alpha in [0, 1, 64, 255] {
+                        let mut scalar = vec![0; len];
+                        let mut simd = vec![0; len];
+                        gaussian_vertical_row_scalar(&ring, &weights, out_y, &denoms, 1, min_alpha, &mut scalar);
+                        unsafe { (kernels.vertical)(&ring, &weights, out_y, &denoms, 1, min_alpha, &mut simd) };
+                        assert_eq!(simd, scalar, "len={len}, extreme={extreme}, out_y={out_y}");
+                    }
+                    for x in 0..len.saturating_sub(3) {
+                        let actual = unsafe { gaussian_avx2::vertical_accum_four(&ring, &weights, out_y, x) };
+                        let expected: [u64; 4] = std::array::from_fn(|lane| gaussian_vertical_accum_scalar(&ring, &weights, out_y, x + lane));
+                        assert_eq!(actual, expected);
+                    }
+                }
+            }
+        }
+        let m = u32::MAX;
+        let ring = std::collections::VecDeque::from([
+            (0, vec![m, 0, m, 1]),
+            (1, vec![m, 0, 1, m]),
+            (2, vec![0, 1, 0, m]),
+        ]);
+        let actual = unsafe { gaussian_avx2::vertical_accum_four(&ring, &[m, m], 1, 0) };
+        assert_eq!(actual, [u64::MAX, m as u64, (m as u64) * (m as u64) + m as u64, u64::MAX]);
+        let ring = std::collections::VecDeque::from([(0, vec![1, 2, 3, 4])]);
+        let denoms = [u64::MAX / 2 + 1, u64::MAX, u64::MAX - 1, 1];
+        let mut scalar = [0; 4];
+        let mut simd = [0; 4];
+        gaussian_vertical_row_scalar(&ring, &[1], 0, &denoms, 2, 0, &mut scalar);
+        unsafe { (kernels.vertical)(&ring, &[1], 0, &denoms, 2, 0, &mut simd) };
+        assert_eq!(scalar, [0, 0, 0, 2]);
+        assert_eq!(simd, scalar);
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[test]
+    fn gaussian_avx2_blur_parity() {
+        let Some(kernels) = avx2_kernels() else { return };
+        for width in [1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33] {
+            for height in [1, 2, 7] {
+                let input: Vec<u8> = (0..width * height)
+                    .map(|i| ((i * 73 + i * i * 19 + width * 11) & 255) as u8)
+                    .collect();
+                let crops = [
+                    (0, width - 1, 0, height - 1),
+                    (0, 0, 0, height - 1),
+                    (width - 1, width - 1, 0, height - 1),
+                    (width / 2, width / 2, height / 2, height - 1),
+                    (width / 3, width - 1, height / 2, height - 1),
+                ];
+                for radius in [1, 2, 5, 12] {
+                    for sigmas in [(0.05, 0.3), (0.7, 1.5), (4.0, 2.0), (f64::INFINITY, f64::INFINITY)] {
+                        for bounds in crops {
+                            for min_alpha in [0, 1, 64, 255] {
+                                let scalar = blur_mask(&input, width, height, radius, sigmas, min_alpha, bounds, GaussianBlurKernels::scalar());
+                                let simd = blur_mask(&input, width, height, radius, sigmas, min_alpha, bounds, kernels);
+                                assert_eq!(simd, scalar, "{width}x{height}, radius={radius}, sigmas={sigmas:?}, bounds={bounds:?}, min_alpha={min_alpha}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let input: Vec<u8> = (0..33 * 9).map(|i| (i * 79) as u8).collect();
+        let expected = blur_mask(&input, 33, 9, 3, (1.5, 2.5), 11, (1, 31, 1, 7), kernels);
+        let mut dispatched = input;
+        apply_edge_gaussian_blur_to_mask_in_roi(&mut dispatched, 33, 9, 3, 1.5, 2.5, 11, 1, 31, 1, 7);
+        assert_eq!(dispatched, expected);
+    }
+
 }
 
 #[cfg(test)]
@@ -4198,6 +4746,105 @@ mod tests {
             triangles_xyz: Vec::new(),
             metadata_json: "{}".to_string(),
             x_packing_mode: "none".to_string(),
+        }
+    }
+
+    #[test]
+    fn binary_span_emission_unions_clips_and_merges_across_rows() {
+        use crate::rle::{RleAccum, RleRun};
+        let spans: Vec<super::RowSpan> = [(0, 0), (1, 3), (2, 4), (7, 10), (15, 20)]
+            .into_iter()
+            .map(|(start, end)| super::RowSpan { a: start as f32, b: end as f32, start, end })
+            .collect();
+        let mut rle = RleAccum::new();
+        super::emit_binary_row_spans(&mut rle, &spans, 3, 8);
+        super::emit_binary_row_spans(&mut rle, &spans, 3, 8);
+        // The last solid run of one row joins the first solid run of the next.
+        assert_eq!(rle.finish(), vec![
+            RleRun { length: 2, value: 255 }, RleRun { length: 2, value: 0 },
+            RleRun { length: 6, value: 255 }, RleRun { length: 2, value: 0 },
+            RleRun { length: 4, value: 255 },
+        ]);
+        let mut empty = RleAccum::new();
+        super::emit_binary_row_spans(&mut empty, &spans, 16, 0);
+        super::emit_binary_row_spans(&mut empty, &[], 16, 5);
+        assert_eq!(empty.finish(), vec![RleRun { length: 5, value: 0 }]);
+    }
+
+    #[test]
+    fn binary_span_emission_matches_dense_rows_at_window_boundaries() {
+        use crate::rle::{emit_row, RleAccum};
+        for width in [1usize, 2, 7, 8, 31, 32, 33, 63, 64, 65] {
+            let spans: Vec<super::RowSpan> = [
+                (0, 0), (0, width / 3), (width / 4, width / 2),
+                (width.saturating_sub(2), width + 3),
+            ].into_iter()
+                .map(|(start, end)| super::RowSpan { a: start as f32, b: end as f32, start, end })
+                .collect();
+            let mut mask = vec![0u8; width];
+            for span in &spans {
+                let end = span.end.min(width - 1);
+                if span.start <= end { mask[span.start..=end].fill(255); }
+            }
+            for (start, len) in [(0, width), (0, 1), (width / 3, width / 2), (width - 1, 1), (width, 0)] {
+                let mut direct = RleAccum::new();
+                let mut dense = RleAccum::new();
+                // A preceding run and a following blank row also check boundary merging.
+                direct.push_run(3, 255);
+                dense.push_run(3, 255);
+                super::emit_binary_row_spans(&mut direct, &spans, start, len);
+                emit_row(&mut dense, &mask[start..start + len]);
+                super::emit_binary_row_spans(&mut direct, &[], start, len);
+                emit_row(&mut dense, &vec![0u8; len]);
+                assert_eq!(direct.finish(), dense.finish(), "width={width} start={start} len={len}");
+            }
+        }
+    }
+
+    #[test]
+    fn binary_direct_raster_preserves_pixels_statistics_and_clipped_blocks() {
+        let mut job = job_for_single_layer();
+        job.source_width_px = 33;
+        job.width_px = 33;
+        job.source_height_px = 19;
+        job.height_px = 19;
+        job.build_width_mm = 33.0;
+        job.build_depth_mm = 19.0;
+        job.anti_aliasing_mode = "Coverage".to_string();
+        job.blur_brush_radius_px = 0;
+        let mut xyz = Vec::new();
+        push_box_triangles(&mut xyz, -14.0, -5.0, 0.0, 2.0, 8.0, 2.0);
+        push_box_triangles(&mut xyz, 0.0, 0.0, 0.0, 2.0, 8.0, 4.0);
+        push_box_triangles(&mut xyz, 3.0, 0.0, 0.0, 2.0, 6.0, 4.0);
+        push_box_triangles(&mut xyz, 14.0, 6.0, 0.0, 2.0, 8.0, 2.0);
+        let mut triangles = parse_triangles(&xyz);
+        project_triangles_inplace(&mut triangles, &job);
+        let indices: Vec<usize> = (0..triangles.len()).collect();
+        let (mask, reference) = rasterize_layer_with_stats(&job, &triangles, &indices, 0, true);
+        let (runs, actual) = rasterize_layer_rle(&job, &triangles, &indices, 0, true);
+        assert_eq!(runs, encode_mask_to_rle(&mask, 33, 19));
+        assert_eq!(actual.total_solid_pixels, reference.total_solid_pixels);
+        assert_eq!((actual.min_x, actual.max_x, actual.min_y, actual.max_y),
+                   (reference.min_x, reference.max_x, reference.min_y, reference.max_y));
+        assert_eq!(actual.area_count, reference.area_count);
+        assert!((actual.total_solid_area_mm2 - reference.total_solid_area_mm2).abs() < 1e-9);
+        assert!((actual.largest_area_mm2 - reference.largest_area_mm2).abs() < 1e-9);
+        assert!((actual.smallest_area_mm2 - reference.smallest_area_mm2).abs() < 1e-9);
+        for (start, width) in [(0usize, 1usize), (0, 33), (14, 5), (32, 1)] {
+            let (block_runs, stats) = rasterize_layer_rle_block(
+                &job, &triangles, &indices, 0, true,
+                crate::rle::make_rle_block(start as u32, width as u32),
+            );
+            let cropped: Vec<u8> = mask.chunks_exact(33)
+                .flat_map(|row| row[start..start + width].iter().copied()).collect();
+            assert_eq!(block_runs, encode_mask_to_rle(&cropped, width, 19));
+            assert_eq!(stats.total_solid_pixels, cropped.iter().filter(|&&v| v == 255).count() as u32);
+            let (pixels, largest, smallest, components) =
+                super::compute_component_area_stats_8_connected(&cropped, width, 19, 0, width - 1, 0, 18, 1.0);
+            assert_eq!(stats.total_solid_pixels, pixels);
+            assert_eq!(stats.area_count, components);
+            assert!((stats.largest_area_mm2 - largest).abs() < 1e-9);
+            assert!((stats.smallest_area_mm2 - smallest).abs() < 1e-9);
         }
     }
 
@@ -5446,5 +6093,72 @@ mod tests {
         assert_eq!(ssaa_stats.max_x, base_stats.max_x);
         assert_eq!(ssaa_stats.min_y, base_stats.min_y);
         assert_eq!(ssaa_stats.max_y, base_stats.max_y);
+    }
+}
+
+#[cfg(test)]
+mod box_kernel_tests {
+    use super::*;
+
+    #[test]
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    fn box_avx2_rows_match_scalar_for_unaligned_tails() {
+        if !std::arch::is_x86_feature_detected!("avx2") { return; }
+        for width in 1..=65 {
+            for radius in [1, 2, 6, 127] {
+                let source: Vec<u8> = (0..width + 1).map(|x| (x * 73 + 19) as u8).collect();
+                let mut scalar_ring = vec![0u16; width + 1];
+                let mut avx_ring = scalar_ring.clone();
+                let mut scalar_columns = vec![100_000u32; width + 1];
+                let mut avx_columns = scalar_columns.clone();
+                box_horizontal_row::<true>(
+                    &source[1..], radius, &mut scalar_ring[1..], &mut scalar_columns[1..],
+                );
+                // SAFETY: AVX2 was detected, radius fits u16 sums, slices match.
+                unsafe { box_blur_avx2::horizontal_row(
+                    &source[1..], radius, &mut avx_ring[1..], &mut avx_columns[1..],
+                ) };
+                assert_eq!(avx_ring, scalar_ring);
+                assert_eq!(avx_columns, scalar_columns);
+                box_subtract_row(&mut scalar_columns[1..], &scalar_ring[1..]);
+                unsafe { box_blur_avx2::update_columns::<true>(
+                    &mut avx_columns[1..], &avx_ring[1..],
+                ) };
+                assert_eq!(avx_columns, scalar_columns);
+                assert!(avx_columns.iter().all(|&value| value == 100_000));
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    fn box_avx2_stream_matches_scalar_for_crops_edges_and_alpha() {
+        if !std::arch::is_x86_feature_detected!("avx2") { return; }
+        for width in [1, 7, 8, 9, 17, 31, 32, 33, 65] {
+            for height in [1, 2, 13] {
+                for inset in [0, width / 3] {
+                    let mask: Vec<u8> = (0..height).flat_map(|y| {
+                        (0..width).map(move |x| {
+                            if x < inset || x >= width - inset || (height > 2 && y % 3 == 0) {
+                                0
+                            } else { (x * 37 + y * 61 + 11) as u8 }
+                        })
+                    }).collect();
+                    let runs = encode_mask_to_rle(&mask, width, height);
+                    for radius in [1, 2, 6, 127] {
+                        for alpha in [0, 89, 255] {
+                            let scalar = blur_gray_rle_streaming_with_kernels(
+                                &runs, width, height, radius, alpha, BoxBlurKernels::scalar(),
+                            );
+                            let avx = blur_gray_rle_streaming_with_kernels(
+                                &runs, width, height, radius, alpha, BoxBlurKernels::detected(radius),
+                            );
+                            assert_eq!(avx, scalar,
+                                "width={width} height={height} inset={inset} radius={radius} alpha={alpha}");
+                        }
+                    }
+                }
+            }
+        }
     }
 }

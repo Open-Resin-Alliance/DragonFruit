@@ -79,7 +79,7 @@ if (dryRun) {
 
 const failures = [];
 
-// x86_64 codegen flags (+avx2,+fma) live in .cargo/config.toml now, so there is
+// x86_64 baseline flags (x86-64-v2) live in .cargo/config.toml, so there is
 // no RUSTFLAGS injection here — they apply to every cargo invocation, including
 // each arch of the universal build.
 

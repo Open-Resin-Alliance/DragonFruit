@@ -318,7 +318,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfruit-slicing-engine"
-version = "3.2.6"
+version = "3.2.9"
 dependencies = [
  "aes",
  "base64",

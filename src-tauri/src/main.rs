@@ -1738,7 +1738,7 @@ async fn slice_solid_native_to_temp_path(
                 cross_blend_ns: perf_raw.cross_blend_ns,
                 cross_blend_touched_pixels: perf_raw.cross_blend_touched_pixels,
                 cross_blend_contributing_layers: perf_raw.cross_blend_contributing_layers,
-                post_blur_ns: perf_raw.post_blur_ns,
+                post_blur_ns: perf_raw.post_xy_blur_ns.saturating_add(perf_raw.post_z_blur_ns),
                 support_merge_ns: perf_raw.support_merge_ns,
                 layers: perf_raw.layers,
             };

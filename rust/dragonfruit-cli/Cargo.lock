@@ -441,7 +441,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfruit-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64",
  "clap",
@@ -470,7 +470,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfruit-slicing-engine"
-version = "3.2.6"
+version = "3.2.9"
 dependencies = [
  "aes",
  "base64",

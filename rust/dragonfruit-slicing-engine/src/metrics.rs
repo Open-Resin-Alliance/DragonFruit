@@ -20,8 +20,12 @@ pub struct SlicingPerfV3 {
     pub cross_blend_touched_pixels: u64,
     /// Aggregate number of neighbor layers that contributed occupancy.
     pub cross_blend_contributing_layers: u64,
-    /// CPU time spent in post z-blend blur stages (model + debug channels).
-    pub post_blur_ns: u64,
+    /// Accumulated elapsed XY post-blur operation durations (model + debug channels).
+    /// Concurrent operations can overlap; this is not pure CPU or additive wall time.
+    pub post_xy_blur_ns: u64,
+    /// Accumulated elapsed inter-layer Z-blur operation durations.
+    /// Concurrent operations can overlap; this is not pure CPU or additive wall time.
+    pub post_z_blur_ns: u64,
     /// CPU time spent merging support mask back into model mask.
     pub support_merge_ns: u64,
     /// Effective 3DAA post-stage worker thread count selected by the engine.
@@ -50,8 +54,7 @@ pub struct SlicingPerfV3 {
     /// Wall time of the 3DAA encode thread, which is a *single* consumer: no
     /// number of post workers can push a job below this.
     pub encode_thread_wall_ns: u64,
-    /// CPU time spent in the tail-cure LUT remap, previously folded into
-    /// `post_blur_ns` together with the dither.
+    /// CPU time spent in the tail-cure LUT remap.
     pub tail_remap_ns: u64,
 }
 

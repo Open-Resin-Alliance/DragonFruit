@@ -356,6 +356,96 @@ fn merge_nonzero_bounds(current: &mut RleNonzeroBounds, next: RleNonzeroBounds) 
     }
 }
 
+type RleZBlurSource<'a> = (u32, &'a [crate::rle::RleRun], RleNonzeroBounds);
+type RleZBlurRowKernel = unsafe fn(&mut [u8], &[Vec<u8>], &[RleZBlurSource<'_>], u32);
+
+fn rle_z_blur_row_kernel() -> RleZBlurRowKernel {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    if std::arch::is_x86_feature_detected!("avx2") {
+        return blur_rle_z_row_avx2;
+    }
+    blur_rle_z_row_scalar
+}
+
+#[inline]
+fn blur_rle_z_pixel_scalar(
+    x: usize,
+    source_rows: &[Vec<u8>],
+    sources: &[RleZBlurSource<'_>],
+    denom: u32,
+) -> u8 {
+    let mut accum = 0u32;
+    for ((weight, _, _), row) in sources.iter().zip(source_rows) {
+        accum = accum.saturating_add((row[x] as u32).saturating_mul(*weight));
+    }
+    ((accum + denom / 2) / denom).min(255) as u8
+}
+
+fn blur_rle_z_row_scalar(
+    out_row: &mut [u8],
+    source_rows: &[Vec<u8>],
+    sources: &[RleZBlurSource<'_>],
+    denom: u32,
+) {
+    for (x, output) in out_row.iter_mut().enumerate() {
+        *output = blur_rle_z_pixel_scalar(x, source_rows, sources, denom);
+    }
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "avx2")]
+unsafe fn blur_rle_z_row_avx2(
+    out_row: &mut [u8],
+    source_rows: &[Vec<u8>],
+    sources: &[RleZBlurSource<'_>],
+    denom: u32,
+) {
+    #[cfg(target_arch = "x86")]
+    use std::arch::x86::*;
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::*;
+
+    debug_assert_eq!(sources.len(), source_rows.len());
+    debug_assert!(source_rows.iter().all(|row| row.len() == out_row.len()));
+    unsafe {
+        let unsigned_bias = _mm256_set1_epi32(i32::MIN);
+        let mut x = 0;
+        while x + 8 <= out_row.len() {
+            let mut accum = _mm256_setzero_si256();
+            for ((weight, _, _), row) in sources.iter().zip(source_rows) {
+                // Only eight bytes are loaded, including at the cropped right edge.
+                let samples = _mm_loadl_epi64(row.as_ptr().add(x).cast());
+                let values = _mm256_cvtepu8_epi32(samples);
+                let mut product = _mm256_mullo_epi32(values, _mm256_set1_epi32(*weight as i32));
+                if *weight > u32::MAX / 255 {
+                    // Samples are at most 255, so this signed comparison is exact.
+                    let max_sample = _mm256_set1_epi32((u32::MAX / *weight) as i32);
+                    product = _mm256_or_si256(product, _mm256_cmpgt_epi32(values, max_sample));
+                }
+                let sum = _mm256_add_epi32(accum, product);
+                // Flipping the sign bit makes signed comparison unsigned: a
+                // wrapped sum is below the previous accumulator. OR with the
+                // all-ones overflow mask implements u32::saturating_add.
+                let overflow = _mm256_cmpgt_epi32(
+                    _mm256_xor_si256(accum, unsigned_bias),
+                    _mm256_xor_si256(sum, unsigned_bias),
+                );
+                accum = _mm256_or_si256(sum, overflow);
+            }
+            let mut sums = [0u32; 8];
+            _mm256_storeu_si256(sums.as_mut_ptr().cast(), accum);
+            // Preserve the scalar integer rounding/division, not a float reciprocal.
+            for lane in 0..8 {
+                out_row[x + lane] = ((sums[lane] + denom / 2) / denom).min(255) as u8;
+            }
+            x += 8;
+        }
+        for (x, output) in out_row.iter_mut().enumerate().skip(x) {
+            *output = blur_rle_z_pixel_scalar(x, source_rows, sources, denom);
+        }
+    }
+}
+
 fn apply_z_weighted_blur_to_rle_layer(
     center: &PerturbRleModelLayer,
     history: &[Arc<PerturbRleModelLayer>],
@@ -365,13 +455,33 @@ fn apply_z_weighted_blur_to_rle_layer(
     width: usize,
     height: usize,
 ) -> Vec<crate::rle::RleRun> {
+    // Select once per layer; non-x86 and CPUs without AVX2 use the scalar row.
+    unsafe {
+        apply_z_weighted_blur_to_rle_layer_with_kernel(
+            center, history, future, radius, weights, width, height, rle_z_blur_row_kernel(),
+        )
+    }
+}
+
+// The caller must feature-detect before supplying an AVX2 kernel. Tests can
+// force either private kernel without adding a production config/API switch.
+unsafe fn apply_z_weighted_blur_to_rle_layer_with_kernel(
+    center: &PerturbRleModelLayer,
+    history: &[Arc<PerturbRleModelLayer>],
+    future: &[Arc<PerturbRleModelLayer>],
+    radius: usize,
+    weights: &[u32],
+    width: usize,
+    height: usize,
+    row_kernel: RleZBlurRowKernel,
+) -> Vec<crate::rle::RleRun> {
     use crate::rle::{emit_row, emit_zero_rows, RleAccum};
 
     if radius == 0 || width == 0 || height == 0 {
         return center.runs.clone();
     }
 
-    let mut sources: Vec<(u32, &[crate::rle::RleRun], RleNonzeroBounds)> =
+    let mut sources: Vec<RleZBlurSource<'_>> =
         Vec::with_capacity(radius.saturating_mul(2).saturating_add(1));
     sources.push((weights[0], center.runs.as_slice(), center.bounds));
 
@@ -428,15 +538,7 @@ fn apply_z_weighted_blur_to_rle_layer(
             decoder.decode_next_row_span(width, roi_min_x, row);
         }
 
-        for x in 0..roi_w {
-            let mut accum = 0u32;
-            for ((weight, _, _), row) in sources.iter().zip(source_rows.iter()) {
-                let value = row[x];
-                accum = accum.saturating_add((value as u32).saturating_mul(*weight));
-            }
-
-            out_row[x] = ((accum + denom / 2) / denom).min(255) as u8;
-        }
+        unsafe { row_kernel(&mut out_row, &source_rows, &sources, denom) };
 
         if out_row.iter().all(|&value| value == 0) {
             emit_zero_rows(&mut out, 1, width);
@@ -477,10 +579,12 @@ fn finalize_perturb_rle_post_layer(
         width,
         height,
     );
-    post.post_blur_ns.fetch_add(
-        z_blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
-        Ordering::Relaxed,
-    );
+    if z_blur_radius > 0 {
+        post.post_z_blur_ns.fetch_add(
+            z_blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+            Ordering::Relaxed,
+        );
+    }
 
     if let Some(palette) = dither_palette {
         let lut_start = std::time::Instant::now();
@@ -1001,13 +1105,14 @@ struct PostWorkerTask {
 
 /// The post-stage timers that travel together through the 3DAA pump.
 ///
-/// Every field is a sum of the wall time spent inside that stage, accumulated
-/// across the post workers.  With more workers than cores those sums overcount
-/// against process CPU time — a descheduled worker is still inside the stage —
-/// so read them against `daa_post_threads`, not as CPU.
+/// Every field accumulates elapsed operation durations across post workers,
+/// including time descheduled inside an operation. These are neither pure CPU
+/// time nor additive pipeline wall time; overlapping workers must not be summed
+/// to estimate end-to-end wall time.
 #[derive(Debug, Default)]
 struct PostStageCounters {
-    post_blur_ns: AtomicU64,
+    post_xy_blur_ns: AtomicU64,
+    post_z_blur_ns: AtomicU64,
     dither_ns: AtomicU64,
     tail_remap_ns: AtomicU64,
     support_merge_ns: AtomicU64,
@@ -1023,7 +1128,8 @@ struct PostProcessedLayer {
     cross_blend_ns: u64,
     cross_blend_touched_pixels: u64,
     cross_blend_contributing_layers: u64,
-    post_blur_ns: u64,
+    post_xy_blur_ns: u64,
+    post_z_blur_ns: u64,
     dither_ns: u64,
     tail_remap_ns: u64,
     support_merge_ns: u64,
@@ -1127,12 +1233,115 @@ fn blit_gray_mask_into_local(
     }
 }
 
+type ZBlurAccumulator = unsafe fn(&mut [u32], &mut [u8], &[u8], u32);
+
+fn z_blur_accumulator() -> ZBlurAccumulator {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    if std::arch::is_x86_feature_detected!("avx2") {
+        return accumulate_z_blur_avx2;
+    }
+    accumulate_z_blur_scalar
+}
+
+fn accumulate_z_blur_scalar(accum: &mut [u32], coverage: &mut [u8], row: &[u8], weight: u32) {
+    debug_assert_eq!(accum.len(), row.len());
+    debug_assert_eq!(coverage.len(), row.len());
+    for ((sum, hit), &value) in accum.iter_mut().zip(coverage).zip(row) {
+        *sum = sum.saturating_add((value as u32).saturating_mul(weight));
+        *hit |= value;
+    }
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "avx2")]
+unsafe fn accumulate_z_blur_avx2(
+    accum: &mut [u32],
+    coverage: &mut [u8],
+    row: &[u8],
+    weight: u32,
+) {
+    #[cfg(target_arch = "x86")]
+    use std::arch::x86::*;
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::*;
+
+    debug_assert_eq!(accum.len(), row.len());
+    debug_assert_eq!(coverage.len(), row.len());
+    // Eight u8 samples become eight u32 lanes. Large caller-provided weights
+    // need saturating multiplication too; normal blur weights cannot overflow.
+    unsafe {
+        let weights = _mm256_set1_epi32(weight as i32);
+        let unsigned_bias = _mm256_set1_epi32(i32::MIN);
+        let product_can_overflow = weight > u32::MAX / 255;
+        let max_sample = if product_can_overflow {
+            _mm256_set1_epi32((u32::MAX / weight) as i32)
+        } else {
+            _mm256_set1_epi32(255)
+        };
+        let mut x = 0;
+        while x + 8 <= row.len() {
+            let samples = _mm_loadl_epi64(row.as_ptr().add(x).cast());
+            let values = _mm256_cvtepu8_epi32(samples);
+            let mut product = _mm256_mullo_epi32(values, weights);
+            if product_can_overflow {
+                let overflow = _mm256_cmpgt_epi32(values, max_sample);
+                product = _mm256_or_si256(product, overflow);
+            }
+
+            let prior = _mm256_loadu_si256(accum.as_ptr().add(x).cast());
+            let sum = _mm256_add_epi32(prior, product);
+            // Signed comparison after flipping the sign bit is unsigned <.
+            let overflow = _mm256_cmpgt_epi32(
+                _mm256_xor_si256(prior, unsigned_bias),
+                _mm256_xor_si256(sum, unsigned_bias),
+            );
+            _mm256_storeu_si256(
+                accum.as_mut_ptr().add(x).cast(),
+                _mm256_or_si256(sum, overflow),
+            );
+            let prior_coverage = _mm_loadl_epi64(coverage.as_ptr().add(x).cast());
+            _mm_storel_epi64(
+                coverage.as_mut_ptr().add(x).cast(),
+                _mm_or_si128(prior_coverage, samples),
+            );
+            x += 8;
+        }
+        accumulate_z_blur_scalar(&mut accum[x..], &mut coverage[x..], &row[x..], weight);
+    }
+}
+
 fn apply_z_weighted_blur_to_processed_layer(
     center: &mut PostProcessedLayer,
     history: &VecDeque<ZBlurHistoryLayer>,
     future: &VecDeque<PostProcessedLayer>,
     radius: usize,
     weights: &[u32],
+) {
+    if radius == 0 {
+        return;
+    }
+    let z_blur_start = std::time::Instant::now();
+    // Detect once for the operation, never for individual rows or pixels.
+    apply_z_weighted_blur_with_accumulator(
+        center,
+        history,
+        future,
+        radius,
+        weights,
+        z_blur_accumulator(),
+    );
+    center.post_z_blur_ns = center.post_z_blur_ns.saturating_add(
+        z_blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+    );
+}
+
+fn apply_z_weighted_blur_with_accumulator(
+    center: &mut PostProcessedLayer,
+    history: &VecDeque<ZBlurHistoryLayer>,
+    future: &VecDeque<PostProcessedLayer>,
+    radius: usize,
+    weights: &[u32],
+    accumulate: ZBlurAccumulator,
 ) {
     if radius == 0 {
         return;
@@ -1175,52 +1384,39 @@ fn apply_z_weighted_blur_to_processed_layer(
     blit_gray_mask_into_local(&mut out, final_bounds, center_mask_view);
 
     let denom: u32 = sources.iter().map(|(w, _)| *w).sum::<u32>().max(1);
+    // Reuse row scratch for the whole operation, including offset source crops.
+    let blur_row_width = bounds_row_width(blur_bounds);
+    let mut accum = vec![0u32; blur_row_width];
+    let mut coverage = vec![0u8; blur_row_width];
     for y in blur_bounds.2..=blur_bounds.3 {
+        accum.fill(0);
+        coverage.fill(0);
         let mut row_min_x = usize::MAX;
         let mut row_max_x = 0usize;
-        let mut has_coverage = false;
-        for (_, mask) in &sources {
-            if let Some((row, start_x)) = mask.row_span(y, blur_bounds.0, blur_bounds.1) {
-                let mut first_non_zero = None;
-                let mut last_non_zero = None;
-                for (idx, &value) in row.iter().enumerate() {
-                    if value > 0 {
-                        if first_non_zero.is_none() {
-                            first_non_zero = Some(idx);
-                        }
-                        last_non_zero = Some(idx);
-                    }
-                }
-
-                if let (Some(first), Some(last)) = (first_non_zero, last_non_zero) {
-                    has_coverage = true;
-                    row_min_x = row_min_x.min(start_x + first);
-                    row_max_x = row_max_x.max(start_x + last);
-                }
-            }
+        for (weight, mask) in &sources {
+            let Some((row, start_x)) = mask.row_span(y, blur_bounds.0, blur_bounds.1) else {
+                continue;
+            };
+            row_min_x = row_min_x.min(start_x);
+            row_max_x = row_max_x.max(start_x + row.len() - 1);
+            let start = start_x - blur_bounds.0;
+            let end = start + row.len();
+            // The dispatcher supplies AVX2 only after feature detection; tests
+            // forcing a kernel must meet the same CPU feature precondition.
+            unsafe { accumulate(&mut accum[start..end], &mut coverage[start..end], row, *weight) };
         }
-        if !has_coverage || row_min_x > row_max_x {
+        if row_min_x > row_max_x {
             continue;
         }
 
+        let out_row_start = (y - final_bounds.2) * final_row_width;
         for x in row_min_x..=row_max_x {
-            let mut coverage_hit = false;
-            let mut accum = 0u32;
-            for (w, mask) in &sources {
-                let value = mask.sample(x, y);
-                if value > 0 {
-                    coverage_hit = true;
-                }
-                accum = accum.saturating_add((value as u32).saturating_mul(*w));
-            }
-            if !coverage_hit {
+            let local_x = x - blur_bounds.0;
+            if coverage[local_x] == 0 {
                 continue;
             }
-
-            let blurred = ((accum + (denom / 2)) / denom).min(255) as u8;
-            let local_y = y - final_bounds.2;
-            let local_x = x - final_bounds.0;
-            out[local_y * final_row_width + local_x] = blurred;
+            let blurred = ((accum[local_x] + (denom / 2)) / denom).min(255) as u8;
+            out[out_row_start + x - final_bounds.0] = blurred;
         }
     }
 
@@ -1437,7 +1633,8 @@ struct PumpStats {
     cross_blend_ns: u64,
     cross_blend_touched_pixels: u64,
     cross_blend_contributing_layers: u64,
-    post_blur_ns: u64,
+    post_xy_blur_ns: u64,
+    post_z_blur_ns: u64,
     dither_ns: u64,
     tail_remap_ns: u64,
     support_merge_ns: u64,
@@ -1583,7 +1780,8 @@ fn process_pending_layer_post(
             cross_blend_ns: 0,
             cross_blend_touched_pixels: 0,
             cross_blend_contributing_layers: 0,
-            post_blur_ns: 0,
+            post_xy_blur_ns: 0,
+            post_z_blur_ns: 0,
             dither_ns: 0,
             tail_remap_ns: 0,
             support_merge_ns: 0,
@@ -1613,11 +1811,10 @@ fn process_pending_layer_post(
         workspace,
     );
 
-    let mut post_blur_ns = 0u64;
+    let mut post_xy_blur_ns = 0u64;
     let support_merge_ns = 0u64;
 
     if should_blur_model {
-        let blur_start = std::time::Instant::now();
         if blur_radius > 0 {
             if let Some((min_x, max_x, min_y, max_y)) =
                 translate_bounds_to_local(blur_bounds, work_bounds)
@@ -1625,6 +1822,7 @@ fn process_pending_layer_post(
                 // Run the blur without an inline min-alpha floor. Cure floors
                 // are represented by the tail LUT after XY/Z blur so tiny
                 // grayscale contributions survive until the final remap.
+                let blur_start = std::time::Instant::now();
                 apply_blur_postprocess_inplace_with_roi(
                     &mut mask,
                     work_width,
@@ -1643,10 +1841,9 @@ fn process_pending_layer_post(
                         "box"
                     },
                 );
+                post_xy_blur_ns = blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
             }
         }
-        post_blur_ns = post_blur_ns
-            .saturating_add(blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64);
     }
 
     let mask = BoundedGrayMask::from_rows(work_bounds, mask);
@@ -1661,7 +1858,8 @@ fn process_pending_layer_post(
         cross_blend_ns: kernel_stats.cross_blend_ns,
         cross_blend_touched_pixels: kernel_stats.cross_blend_touched_pixels,
         cross_blend_contributing_layers: kernel_stats.cross_blend_contributing_layers,
-        post_blur_ns,
+        post_xy_blur_ns,
+        post_z_blur_ns: 0,
         dither_ns: 0,
         tail_remap_ns: 0,
         support_merge_ns,
@@ -1697,7 +1895,8 @@ fn forward_to_encode(
     cross_blend_touched_pixels.fetch_add(done.cross_blend_touched_pixels, Ordering::Relaxed);
     cross_blend_contributing_layers
         .fetch_add(done.cross_blend_contributing_layers, Ordering::Relaxed);
-    post.post_blur_ns.fetch_add(done.post_blur_ns, Ordering::Relaxed);
+    post.post_xy_blur_ns.fetch_add(done.post_xy_blur_ns, Ordering::Relaxed);
+    post.post_z_blur_ns.fetch_add(done.post_z_blur_ns, Ordering::Relaxed);
     post.dither_ns.fetch_add(done.dither_ns, Ordering::Relaxed);
     post.tail_remap_ns.fetch_add(done.tail_remap_ns, Ordering::Relaxed);
     post.support_merge_ns.fetch_add(done.support_merge_ns, Ordering::Relaxed);
@@ -1817,7 +2016,8 @@ fn rasterize_vertical_aa_streaming_v3(
     let mut on_processed_mask = on_processed_mask; // move into local for closure capture
 
     // Perf counters (z_blend_backward_ns, z_blend_forward_ns, cross_blend_ns,
-    // cross_blend_touched_pixels, cross_blend_contributing_layers, post_blur_ns,
+    // cross_blend_touched_pixels, cross_blend_contributing_layers,
+    // post_xy_blur_ns, post_z_blur_ns,
     // support_merge_ns, callback_sweep_ns, callback_drain_ns, callback_total_ns)
     // are declared inside the pump thread and returned via PumpStats after it
     // joins.  Only the two Arc<AtomicU64> counters that are also read by the
@@ -2960,7 +3160,8 @@ fn rasterize_vertical_aa_streaming_v3(
                 cross_blend_touched_pixels: cross_blend_touched_pixels.load(Ordering::Relaxed),
                 cross_blend_contributing_layers: cross_blend_contributing_layers
                     .load(Ordering::Relaxed),
-                post_blur_ns: post.post_blur_ns.load(Ordering::Relaxed),
+                post_xy_blur_ns: post.post_xy_blur_ns.load(Ordering::Relaxed),
+                post_z_blur_ns: post.post_z_blur_ns.load(Ordering::Relaxed),
                 dither_ns: post.dither_ns.load(Ordering::Relaxed),
                 tail_remap_ns: post.tail_remap_ns.load(Ordering::Relaxed),
                 support_merge_ns: post.support_merge_ns.load(Ordering::Relaxed),
@@ -3018,7 +3219,8 @@ fn rasterize_vertical_aa_streaming_v3(
     perf.cross_blend_ns = pump_stats.cross_blend_ns;
     perf.cross_blend_touched_pixels = pump_stats.cross_blend_touched_pixels;
     perf.cross_blend_contributing_layers = pump_stats.cross_blend_contributing_layers;
-    perf.post_blur_ns = pump_stats.post_blur_ns;
+    perf.post_xy_blur_ns = pump_stats.post_xy_blur_ns;
+    perf.post_z_blur_ns = pump_stats.post_z_blur_ns;
     perf.encode_dither_ns = pump_stats.dither_ns;
     perf.tail_remap_ns = pump_stats.tail_remap_ns;
     perf.support_merge_ns = pump_stats.support_merge_ns;
@@ -3036,7 +3238,8 @@ fn rasterize_vertical_aa_streaming_v3(
         let ms = |ns: u64| ns as f64 / 1_000_000.0;
         let backward_ms = ms(perf.z_blend_backward_ns);
         let forward_ms = ms(perf.z_blend_forward_ns);
-        let blur_ms = ms(perf.post_blur_ns);
+        let xy_blur_ms = ms(perf.post_xy_blur_ns);
+        let z_blur_ms = ms(perf.post_z_blur_ns);
         let support_ms = ms(perf.support_merge_ns);
         let raster_ms = ms(perf.render_ns);
         let wall_ms = elapsed_s * 1000.0;
@@ -3045,7 +3248,6 @@ fn rasterize_vertical_aa_streaming_v3(
         // Divide by workers to estimate per-layer wall-equivalent EDT time.
         let edt_cpu_per_layer = (backward_ms + forward_ms) / n;
         let edt_wall_per_layer = edt_cpu_per_layer / workers;
-        let sched_overhead = wall_per_layer - edt_wall_per_layer - blur_ms / n - support_ms / n;
         eprintln!(
             "[3DAA] done {:.2}s | {:.1} l/s | {:.1}ms/layer (wall)",
             elapsed_s,
@@ -3053,19 +3255,18 @@ fn rasterize_vertical_aa_streaming_v3(
             wall_per_layer,
         );
         eprintln!(
-            "[3DAA]   cpu/layer → backward={:.1}ms fwd={:.1}ms blur={:.1}ms support={:.1}ms",
+            "[3DAA]   accumulated elapsed/layer → backward={:.1}ms fwd={:.1}ms xy-blur={:.1}ms z-blur={:.1}ms support={:.1}ms",
             backward_ms / n,
             forward_ms / n,
-            blur_ms / n,
+            xy_blur_ms / n,
+            z_blur_ms / n,
             support_ms / n,
         );
         eprintln!(
-            "[3DAA]   workers={} | EDT wall≈{:.1}ms/layer | EDT cpu-util={:.0}% | \
-             scheduling+raster overhead≈{:.1}ms/layer",
+            "[3DAA]   workers={} | EDT wall≈{:.1}ms/layer | EDT cpu-util={:.0}%",
             workers as u32,
             edt_wall_per_layer,
             edt_wall_per_layer / wall_per_layer * 100.0,
-            sched_overhead.max(0.0),
         );
         eprintln!(
             "[3DAA]   raster/layer → cpu={:.1}ms render-wall={:.1}ms avg-parallelism≈{:.1}×",
@@ -3075,13 +3276,13 @@ fn rasterize_vertical_aa_streaming_v3(
         );
         let sweep_ms = ms(pump_stats.callback_sweep_ns);
         let drain_ms = ms(pump_stats.callback_drain_ns);
+        let pump_ms_per_layer = ms(pump_stats.callback_total_ns) / n;
         eprintln!(
             "[3DAA]   callback/layer → topo-sweep={:.1}ms fwd-to-enc={:.1}ms other={:.1}ms",
             sweep_ms / n,
             drain_ms / n,
-            (sched_overhead - sweep_ms / n - drain_ms / n).max(0.0),
+            (pump_ms_per_layer - sweep_ms / n - drain_ms / n).max(0.0),
         );
-        let pump_ms_per_layer = ms(pump_stats.callback_total_ns) / n;
         eprintln!(
             "[3DAA]   pump/layer ≈ {:.1}ms (3DAA pump thread; overlaps with raster)",
             pump_ms_per_layer,
@@ -4467,7 +4668,7 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
                             blur_radius,
                             0,
                         );
-                        post_counters_worker.post_blur_ns.fetch_add(
+                        post_counters_worker.post_xy_blur_ns.fetch_add(
                             xy_blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
                             Ordering::Relaxed,
                         );
@@ -4545,7 +4746,8 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
     )?;
 
     perf.index_build_ns = index_ns;
-    perf.post_blur_ns = post_counters.post_blur_ns.load(Ordering::Relaxed);
+    perf.post_xy_blur_ns = post_counters.post_xy_blur_ns.load(Ordering::Relaxed);
+    perf.post_z_blur_ns = post_counters.post_z_blur_ns.load(Ordering::Relaxed);
     perf.encode_dither_ns = post_counters.dither_ns.load(Ordering::Relaxed);
     perf.tail_remap_ns = post_counters.tail_remap_ns.load(Ordering::Relaxed);
     perf.support_merge_ns = post_counters.support_merge_ns.load(Ordering::Relaxed);
@@ -5821,6 +6023,463 @@ mod tests {
             "support-only layers should retain grayscale AA runs when support AA is enabled"
         );
     }
+
+    fn z_blur_test_layer(
+        mask: super::BoundedGrayMask,
+        active_bounds: super::TopologyBounds,
+    ) -> super::PostProcessedLayer {
+        super::PostProcessedLayer {
+            seq: 0,
+            layer: super::PendingLayer {
+                layer_index: 0,
+                mask: super::BoundedGrayMask::empty(),
+                mask_bounds: None,
+                topology: super::BoundedBinaryMask::empty(),
+                topology_bounds: None,
+                topology_non_empty: false,
+                model_non_empty: true,
+                backward_applied: false,
+                backward_seed_bounds: None,
+                support_mask: None,
+                apply_model_aa: true,
+            },
+            mask,
+            active_bounds,
+            z_blend_backward_ns: 0,
+            z_blend_forward_ns: 0,
+            cross_blend_ns: 0,
+            cross_blend_touched_pixels: 0,
+            cross_blend_contributing_layers: 0,
+            post_xy_blur_ns: 0,
+            post_z_blur_ns: 0,
+            dither_ns: 0,
+            tail_remap_ns: 0,
+            support_merge_ns: 0,
+        }
+    }
+
+    fn z_blur_reference(
+        center: &super::PostProcessedLayer,
+        history: &std::collections::VecDeque<super::ZBlurHistoryLayer>,
+        future: &std::collections::VecDeque<super::PostProcessedLayer>,
+        radius: usize,
+        weights: &[u32],
+    ) -> super::BoundedGrayMask {
+        let mut sources = vec![(weights[0], center.mask.as_view())];
+        for dist in 1..=radius {
+            if let Some(prior) = history.iter().rev().nth(dist - 1) {
+                sources.push((weights[dist], prior.mask.as_view()));
+            }
+            if let Some(next) = future.get(dist - 1) {
+                sources.push((weights[dist], next.mask.as_view()));
+            }
+        }
+        let bounds = sources
+            .iter()
+            .fold(center.active_bounds, |bounds, (_, mask)| {
+                super::merge_bounds(bounds, mask.bounds())
+            })
+            .unwrap();
+        let width = super::bounds_row_width(bounds);
+        let denom = sources.iter().map(|(weight, _)| *weight).sum::<u32>().max(1);
+        let mut pixels = vec![0; width * (bounds.3 - bounds.2 + 1)];
+        for y in bounds.2..=bounds.3 {
+            for x in bounds.0..=bounds.1 {
+                let mut sum = 0u32;
+                let mut hit = false;
+                for (weight, mask) in &sources {
+                    let value = mask.sample(x, y);
+                    hit |= value != 0;
+                    sum = sum.saturating_add((value as u32).saturating_mul(*weight));
+                }
+                pixels[(y - bounds.2) * width + x - bounds.0] = if hit {
+                    ((sum + denom / 2) / denom).min(255) as u8
+                } else {
+                    center.mask.as_view().sample(x, y)
+                };
+            }
+        }
+        super::BoundedGrayMask::from_rows(bounds, pixels)
+    }
+
+    fn assert_z_blur_masks_equal(actual: &super::BoundedGrayMask, expected: &super::BoundedGrayMask) {
+        assert_eq!(actual.bounds(), expected.bounds());
+        if let Some((_, _, min_y, max_y)) = expected.bounds() {
+            for y in min_y..=max_y {
+                assert_eq!(actual.as_view().row(y), expected.as_view().row(y), "row {y}");
+            }
+        }
+    }
+
+    #[test]
+    fn z_blur_scalar_accumulation_saturates_and_preserves_coverage() {
+        let mut accum = [u32::MAX - 500, u32::MAX - 1, 0, 1, 7];
+        let mut coverage = [0, 0, 0, 128, 0];
+        super::accumulate_z_blur_scalar(&mut accum, &mut coverage, &[255, 0, 2, 1, 0], u32::MAX);
+        assert_eq!(accum, [u32::MAX, u32::MAX - 1, u32::MAX, u32::MAX, 7]);
+        assert_eq!(coverage, [255, 0, 2, 129, 0]);
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[test]
+    fn z_blur_avx2_accumulation_matches_scalar_for_tails_alignment_and_saturation() {
+        if !std::arch::is_x86_feature_detected!("avx2") {
+            return;
+        }
+        let samples: Vec<u8> = (0..80)
+            .map(|x| [0, 1, 2, 127, 128, 254, 255][x % 7])
+            .collect();
+        for width in [0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 65] {
+            for src_offset in 0..8 {
+                for dst_offset in 0..8 {
+                    for weight in [
+                        0, 1, 1024, u32::MAX / 255, u32::MAX / 255 + 1, u32::MAX / 2, u32::MAX,
+                    ] {
+                        let mut scalar: Vec<u32> = (0..80)
+                            .map(|x| {
+                                [0, 1, i32::MAX as u32, u32::MAX - 500, u32::MAX][x % 5]
+                            })
+                            .collect();
+                        let mut vector = scalar.clone();
+                        let mut scalar_coverage = vec![128; 80];
+                        let mut vector_coverage = scalar_coverage.clone();
+                        let source = &samples[src_offset..src_offset + width];
+                        let dst = dst_offset..dst_offset + width;
+                        super::accumulate_z_blur_scalar(
+                            &mut scalar[dst.clone()],
+                            &mut scalar_coverage[dst.clone()],
+                            source,
+                            weight,
+                        );
+                        unsafe {
+                            super::accumulate_z_blur_avx2(
+                                &mut vector[dst.clone()],
+                                &mut vector_coverage[dst],
+                                source,
+                                weight,
+                            );
+                        }
+                        assert_eq!(
+                            vector, scalar,
+                            "width={width} src={src_offset} dst={dst_offset} weight={weight}"
+                        );
+                        assert_eq!(vector_coverage, scalar_coverage);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn z_weighted_blur_matches_reference_for_offsets_empty_rows_and_rounding() {
+        use super::BoundedGrayMask;
+        use std::collections::VecDeque;
+
+        for width in [1, 7, 8, 9, 15, 16, 17, 31, 33, 65] {
+            let bounds = (11, 10 + width, 4, 6);
+            let pixels = (0..width * 3)
+                .map(|x| if x % 4 == 0 { 0 } else { ((x * 37 + 1) % 256) as u8 })
+                .collect();
+            let mask = BoundedGrayMask::from_rows(bounds, pixels);
+            let active_bounds = Some((9, width + 20, 2, 10));
+            let history = VecDeque::from([
+                super::ZBlurHistoryLayer {
+                    mask: BoundedGrayMask::from_rows((2, 5, 1, 2), vec![3, 0, 5, 255, 0, 0, 0, 0]),
+                },
+                super::ZBlurHistoryLayer {
+                    mask: BoundedGrayMask::from_rows(
+                        (7, 18, 5, 7),
+                        (0..36).map(|x| if x % 3 == 0 { 0 } else { 99 }).collect(),
+                    ),
+                },
+            ]);
+            let future = VecDeque::from([
+                z_blur_test_layer(
+                    BoundedGrayMask::from_rows(
+                        (23, 39, 8, 9),
+                        (0..34).map(|x| if x % 2 == 0 { 255 } else { 0 }).collect(),
+                    ),
+                    None,
+                ),
+                z_blur_test_layer(BoundedGrayMask::from_rows((13, 13, 12, 12), vec![0]), None),
+            ]);
+            // Absent layers do not contribute the last weight; bounded zero
+            // layers still contribute to the denominator (nine here).
+            let weights = [3, 2, 1, 99];
+            let original = z_blur_test_layer(mask.clone(), active_bounds);
+            let expected = z_blur_reference(&original, &history, &future, 3, &weights);
+            let mut scalar = z_blur_test_layer(mask.clone(), active_bounds);
+            super::apply_z_weighted_blur_with_accumulator(
+                &mut scalar, &history, &future, 3, &weights, super::accumulate_z_blur_scalar,
+            );
+            assert_z_blur_masks_equal(&scalar.mask, &expected);
+            assert_eq!(scalar.active_bounds, expected.bounds());
+            let mut dispatched = z_blur_test_layer(mask.clone(), active_bounds);
+            super::apply_z_weighted_blur_to_processed_layer(
+                &mut dispatched, &history, &future, 3, &weights,
+            );
+            assert_z_blur_masks_equal(&dispatched.mask, &expected);
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            if std::arch::is_x86_feature_detected!("avx2") {
+                let mut vector = z_blur_test_layer(mask.clone(), active_bounds);
+                super::apply_z_weighted_blur_with_accumulator(
+                    &mut vector, &history, &future, 3, &weights, super::accumulate_z_blur_avx2,
+                );
+                assert_z_blur_masks_equal(&vector.mask, &expected);
+            }
+            assert_eq!(expected.as_view().sample(2, 1), 0);
+            assert_eq!(expected.as_view().sample(4, 1), 1); // (5 + 4) / 9 rounds up.
+            assert_eq!(expected.as_view().sample(5, 1), 28);
+            assert_eq!(expected.as_view().sample(13, 12), 0);
+        }
+    }
+
+    #[test]
+    fn z_weighted_blur_no_neighbors_or_zero_radius_preserves_center() {
+        let bounds = (3, 5, 7, 7);
+        let mask = super::BoundedGrayMask::from_rows(bounds, vec![1, 0, 255]);
+        let history = std::collections::VecDeque::new();
+        let future = std::collections::VecDeque::new();
+        for radius in [0, 1] {
+            let mut center = z_blur_test_layer(mask.clone(), Some(bounds));
+            super::apply_z_weighted_blur_to_processed_layer(
+                &mut center, &history, &future, radius, &[3, 2],
+            );
+            assert_z_blur_masks_equal(&center.mask, &mask);
+            assert_eq!(center.active_bounds, Some(bounds));
+        }
+    }
+
+    #[test]
+    fn z_weighted_blur_includes_empty_neighbors_and_zero_weight_coverage() {
+        let bounds = (3, 11, 7, 7);
+        let mask = super::BoundedGrayMask::from_rows(bounds, vec![1, 0, 255, 0, 1, 0, 255, 0, 255]);
+        let history = std::collections::VecDeque::new();
+        let future = std::collections::VecDeque::from([
+            z_blur_test_layer(super::BoundedGrayMask::empty(), None),
+        ]);
+        for (weights, pixels) in [
+            ([3, 2], vec![1, 0, 153, 0, 1, 0, 153, 0, 153]),
+            ([0, 0], vec![0; 9]),
+        ] {
+            let expected = super::BoundedGrayMask::from_rows(bounds, pixels);
+            let mut scalar = z_blur_test_layer(mask.clone(), Some(bounds));
+            super::apply_z_weighted_blur_with_accumulator(
+                &mut scalar, &history, &future, 1, &weights, super::accumulate_z_blur_scalar,
+            );
+            assert_z_blur_masks_equal(&scalar.mask, &expected);
+            let mut dispatched = z_blur_test_layer(mask.clone(), Some(bounds));
+            super::apply_z_weighted_blur_to_processed_layer(
+                &mut dispatched, &history, &future, 1, &weights,
+            );
+            assert_z_blur_masks_equal(&dispatched.mask, &expected);
+        }
+        let mut empty = z_blur_test_layer(super::BoundedGrayMask::empty(), Some(bounds));
+        super::apply_z_weighted_blur_to_processed_layer(&mut empty, &history, &future, 1, &[3, 2]);
+        assert_eq!(empty.mask.bounds(), None);
+        assert_eq!(empty.active_bounds, Some(bounds));
+    }
+
+    fn rle_z_test_layer(pixels: &[u8], width: usize, height: usize) -> super::PerturbRleModelLayer {
+        let mut out = crate::rle::RleAccum::new();
+        crate::rle::emit_row(&mut out, pixels);
+        let runs = out.finish();
+        let bounds = super::nonzero_bounds_from_rle_runs(&runs, width, height);
+        super::PerturbRleModelLayer { runs, bounds }
+    }
+
+    fn rle_z_reference(
+        center: &super::PerturbRleModelLayer,
+        history: &[super::Arc<super::PerturbRleModelLayer>],
+        future: &[super::Arc<super::PerturbRleModelLayer>],
+        radius: usize,
+        weights: &[u32],
+        width: usize,
+        height: usize,
+    ) -> Vec<u8> {
+        let mut sources = vec![(weights[0], expand_rle_to_mask(&center.runs, width * height))];
+        for (distance, layer) in history.iter().rev().take(radius).enumerate() {
+            sources.push((weights[distance + 1], expand_rle_to_mask(&layer.runs, width * height)));
+        }
+        for (distance, layer) in future.iter().take(radius).enumerate() {
+            sources.push((weights[distance + 1], expand_rle_to_mask(&layer.runs, width * height)));
+        }
+        if radius == 0 || sources.len() == 1 {
+            return sources.remove(0).1;
+        }
+        let denom = sources.iter().map(|(weight, _)| *weight).sum::<u32>().max(1);
+        (0..width * height)
+            .map(|pixel| {
+                let sum = sources.iter().fold(0u32, |sum, (weight, pixels)| {
+                    sum.saturating_add((pixels[pixel] as u32).saturating_mul(*weight))
+                });
+                ((sum + denom / 2) / denom).min(255) as u8
+            })
+            .collect()
+    }
+
+    fn assert_rle_z_kernels(
+        center: &super::PerturbRleModelLayer,
+        history: &[super::Arc<super::PerturbRleModelLayer>],
+        future: &[super::Arc<super::PerturbRleModelLayer>],
+        radius: usize,
+        weights: &[u32],
+        width: usize,
+        height: usize,
+        expected: &[u8],
+    ) {
+        let expected_runs = rle_z_test_layer(expected, width, height).runs;
+        // Calculate expected bounds from pixels independently of RLE scanning.
+        let mut expected_bounds = None;
+        for (pixel, &value) in expected.iter().enumerate() {
+            if value != 0 {
+                let (x, y) = (pixel % width, pixel / width);
+                let (min_x, max_x, min_y, max_y) = expected_bounds.unwrap_or((x, x, y, y));
+                expected_bounds = Some((min_x.min(x), max_x.max(x), min_y.min(y), max_y.max(y)));
+            }
+        }
+        let mut kernels: Vec<super::RleZBlurRowKernel> = vec![super::blur_rle_z_row_scalar];
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if std::arch::is_x86_feature_detected!("avx2") {
+            kernels.push(super::blur_rle_z_row_avx2);
+        }
+        let mut outputs = vec![super::apply_z_weighted_blur_to_rle_layer(
+            center, history, future, radius, weights, width, height,
+        )];
+        for kernel in kernels {
+            outputs.push(unsafe {
+                super::apply_z_weighted_blur_to_rle_layer_with_kernel(
+                    center, history, future, radius, weights, width, height, kernel,
+                )
+            });
+        }
+        for runs in outputs {
+            assert_eq!(runs, expected_runs, "width={width} radius={radius} weights={weights:?}");
+            assert_eq!(expand_rle_to_mask(&runs, width * height), expected);
+            assert_eq!(super::nonzero_bounds_from_rle_runs(&runs, width, height), expected_bounds);
+        }
+    }
+
+    #[test]
+    fn rle_z_blur_matches_reference_for_crops_nonoverlap_tails_and_radii() {
+        for crop_width in [1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 65] {
+            let width = crop_width + 7;
+            let height = 9;
+            let mut pixels = vec![0; width * height];
+            for y in 2..=3 {
+                for x in 3..3 + crop_width {
+                    pixels[y * width + x] = ((x * 37 + y * 53) % 255 + 1) as u8;
+                }
+            }
+            let center = rle_z_test_layer(&pixels, width, height);
+            let mut older = vec![0; width * height];
+            older[5 * width + 3] = 255;
+            let mut prior = vec![0; width * height];
+            for x in 3 + crop_width / 2..3 + crop_width {
+                prior[3 * width + x] = ((x * 71) % 256) as u8;
+            }
+            let history = [
+                super::Arc::new(rle_z_test_layer(&older, width, height)),
+                super::Arc::new(rle_z_test_layer(&prior, width, height)),
+            ];
+            let mut later = vec![0; width * height];
+            later[6 * width + 2 + crop_width] = 127;
+            let future = [
+                super::Arc::new(rle_z_test_layer(&[], width, height)),
+                super::Arc::new(rle_z_test_layer(&later, width, height)),
+            ];
+            for radius in [1, 2, 3] {
+                for weights in [[3, 2, 1, 99], [1024, 139, 1, 2], [0, 0, 0, 0]] {
+                    let expected = rle_z_reference(&center, &history, &future, radius, &weights, width, height);
+                    assert_rle_z_kernels(&center, &history, &future, radius, &weights, width, height, &expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rle_z_blur_fixed_rounding_empty_neighbors_and_missing_layers() {
+        let pixels = [1, 0, 255, 0, 1, 0, 255, 0, 255];
+        let center = rle_z_test_layer(&pixels, 9, 1);
+        let future = [super::Arc::new(rle_z_test_layer(&[], 9, 1))];
+        // Present-but-empty contributes weight 2; absent distances do not
+        // contribute weight 99. This fixed assertion also anchors scalar behavior.
+        assert_rle_z_kernels(&center, &[], &future, 2, &[3, 2, 99], 9, 1,
+            &[1, 0, 153, 0, 1, 0, 153, 0, 153]);
+        assert_rle_z_kernels(&center, &[], &[], 2, &[3, 2, 99], 9, 1, &pixels);
+        assert_rle_z_kernels(&center, &[], &future, 0, &[], 9, 1, &pixels);
+        let empty = rle_z_test_layer(&[], 9, 1);
+        assert_rle_z_kernels(&empty, &[], &future, 1, &[3, 2], 9, 1, &[0; 9]);
+        let future = [super::Arc::new(center)];
+        assert_rle_z_kernels(&empty, &[], &future, 1, &[3, 2], 9, 1,
+            &[0, 0, 102, 0, 0, 0, 102, 0, 102]);
+    }
+
+    #[test]
+    fn rle_z_blur_zero_dimensions_and_empty_bypasses_preserve_center_runs() {
+        let center = rle_z_test_layer(&[1, 0, 255], 3, 1);
+        for (width, height) in [(0, 1), (3, 0)] {
+            assert_eq!(super::apply_z_weighted_blur_to_rle_layer(
+                &center, &[], &[], 1, &[], width, height,
+            ), center.runs);
+        }
+        let empty = rle_z_test_layer(&[], 3, 1);
+        for radius in [0, 1] {
+            assert_eq!(super::apply_z_weighted_blur_to_rle_layer(
+                &empty, &[], &[], radius, &[3, 2], 3, 1,
+            ), empty.runs);
+        }
+    }
+
+    #[test]
+    fn rle_z_row_kernels_preserve_fixed_rounding_and_saturation() {
+        let mut kernels: Vec<super::RleZBlurRowKernel> = vec![super::blur_rle_z_row_scalar];
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if std::arch::is_x86_feature_detected!("avx2") {
+            kernels.push(super::blur_rle_z_row_avx2);
+        }
+        for kernel in kernels {
+            for width in [0, 1, 7, 8, 9, 15, 16, 17, 33] {
+                let rows = vec![vec![2; width], vec![1; width]];
+                let mut output = vec![0; width];
+                let products: [super::RleZBlurSource<'_>; 2] = [(1 << 31, &[], None), (0, &[], None)];
+                unsafe { kernel(&mut output, &rows, &products, 1) };
+                assert_eq!(output, vec![255; width]); // 2 * 2^31 saturates, not zero.
+                let sums: [super::RleZBlurSource<'_>; 2] = [(1 << 30, &[], None), (1 << 31, &[], None)];
+                unsafe { kernel(&mut output, &rows, &sums, 1) };
+                assert_eq!(output, vec![255; width]); // 2^31 + 2^31 saturates, not zero.
+                let weights: [super::RleZBlurSource<'_>; 2] = [(3, &[], None), (2, &[], None)];
+                unsafe { kernel(&mut output, &rows, &weights, 5) };
+                assert_eq!(output, vec![2; width]); // (2*3 + 1*2 + 2) / 5.
+            }
+        }
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[test]
+    fn rle_z_row_avx2_matches_scalar_for_weight_boundaries_and_tails() {
+        if !std::arch::is_x86_feature_detected!("avx2") {
+            return;
+        }
+        for width in [0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 65] {
+            let rows: Vec<Vec<u8>> = (0..3).map(|source| {
+                (0..width).map(|x| [0, 1, 2, 127, 128, 254, 255][(x + source) % 7]).collect()
+            }).collect();
+            for weight in [0, 1, 1024, u32::MAX / 255, u32::MAX / 255 + 1, u32::MAX / 2, u32::MAX] {
+                let sources: [super::RleZBlurSource<'_>; 3] = [
+                    (weight, &[], None), (weight, &[], None), (weight, &[], None),
+                ];
+                let mut scalar = vec![0; width];
+                let mut vector = vec![0; width];
+                // Denom 1 avoids overflow in the unchanged scalar rounding add
+                // while stressing saturating products and source accumulation.
+                super::blur_rle_z_row_scalar(&mut scalar, &rows, &sources, 1);
+                unsafe { super::blur_rle_z_row_avx2(&mut vector, &rows, &sources, 1) };
+                assert_eq!(vector, scalar, "width={width} weight={weight}");
+            }
+        }
+    }
+
 
     /// The RSS diagnostic used to read /proc/self/statm, so it silently reported
     /// 0 MB on macOS and Windows. Any running process has a non-zero resident

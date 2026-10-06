@@ -134,7 +134,7 @@ if (targetsLinux) {
   cmdArgs.push("--", "--no-default-features", "--features", "custom-protocol,tauri-cef");
 }
 
-// x86_64 codegen flags (+avx2,+fma) now live in .cargo/config.toml so they apply
+// x86_64 baseline flags (x86-64-v2) live in .cargo/config.toml so they apply
 // to every cargo invocation (including each arch of a universal build); no
 // RUSTFLAGS env injection here (env would clobber the config entries).
 console.log(`[tauri-build] ${npxCmd} ${cmdArgs.join(" ")} (target=${targetTriple ?? "unknown"})`);
