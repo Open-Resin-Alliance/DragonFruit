@@ -397,21 +397,21 @@ export function ExportPanel({
 
             {options.format !== 'voxl' && (
               <div className="space-y-1.5">
-                <SettingRow as="label" bordered label="Include Model Mesh">
+                <SettingRow as="label" bordered surface="raised" label="Include Model Mesh">
                   <Toggle
                     checked={options.includeModel}
                     onChange={(v) => setOptions(prev => ({ ...prev, includeModel: v }))}
                     size="md"
                   />
                 </SettingRow>
-                <SettingRow as="label" bordered label="Include Supports">
+                <SettingRow as="label" bordered surface="raised" label="Include Supports">
                   <Toggle
                     checked={options.includeSupports}
                     onChange={(v) => setOptions(prev => ({ ...prev, includeSupports: v }))}
                     size="md"
                   />
                 </SettingRow>
-                <SettingRow as="label" bordered label="Include Raft">
+                <SettingRow as="label" bordered surface="raised" label="Include Raft">
                   <Toggle
                     checked={options.includeRaft}
                     onChange={(v) => setOptions(prev => ({ ...prev, includeRaft: v }))}

@@ -1204,6 +1204,7 @@ export function BackupsSettingsTab() {
             <div className="mt-2 grid gap-2">
               <SettingRow
                 bordered
+                surface="raised"
                 label={<Trans>Enable automatic backups</Trans>}
                 description={<Trans>Automatically sync to your private GitHub backup on an interval.</Trans>}
               >
@@ -1220,6 +1221,7 @@ export function BackupsSettingsTab() {
 
               <SettingRow
                 bordered
+                surface="raised"
                 disabled={!autoSyncEnabled}
                 label={<Trans>Sync interval</Trans>}
                 description={<Trans>Minutes between automatic sync attempts.</Trans>}

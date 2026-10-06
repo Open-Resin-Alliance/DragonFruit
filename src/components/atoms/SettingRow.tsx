@@ -1,7 +1,7 @@
 import React from 'react';
 import { cn } from './cn';
 
-interface SettingRowProps extends React.HTMLAttributes<HTMLElement> {
+interface SettingRowProps extends Omit<React.HTMLAttributes<HTMLElement>, 'children'> {
   label: React.ReactNode;
   /** Secondary line under the label. */
   description?: React.ReactNode;
@@ -9,6 +9,12 @@ interface SettingRowProps extends React.HTMLAttributes<HTMLElement> {
   children: React.ReactNode;
   /** Wraps the row in the inset card used by the settings tabs. */
   bordered?: boolean;
+  /**
+   * The inset card's fill. `sunken` (`--surface-0`) belongs on a panel that
+   * already sits on `--surface-1`; `raised` (`--surface-1`) is for a row inside a
+   * surface-0 panel, where a sunken card would be invisible.
+   */
+  surface?: 'sunken' | 'raised';
   /** Render as `<label>` when the control inside is a native input. */
   as?: 'div' | 'label';
   /** Dims the row and its description, for a row whose control is off. */
@@ -16,22 +22,45 @@ interface SettingRowProps extends React.HTMLAttributes<HTMLElement> {
 }
 
 /**
- * Label + description on the left, control on the right, optionally in the
+ * Label and description on the left, control on the right, optionally in the
  * inset card the settings tabs use. This layout was re-declared ~55 times.
+ *
+ * The row layout lives on the root element, not on a wrapper inside it: rendered
+ * as a `<label>` the root would otherwise stay inline, and an inline box holding
+ * a block child lays out roughly twice as tall as the hand-written rows it
+ * replaces (78px against 42px for a label plus a switch).
  */
 export function SettingRow({
   label,
   description,
   children,
   bordered = false,
+  surface = 'sunken',
   as: Element = 'div',
   disabled = false,
   className,
   style,
   ...props
 }: SettingRowProps) {
-  const row = (
-    <div className="flex items-center justify-between gap-3">
+  return (
+    <Element
+      className={cn(
+        'flex items-center justify-between gap-3',
+        bordered && 'rounded-md border px-2.5 py-2',
+        className
+      )}
+      style={{
+        ...(bordered
+          ? {
+              borderColor: 'var(--border-subtle)',
+              background: surface === 'raised' ? 'var(--surface-1)' : 'var(--surface-0)',
+            }
+          : null),
+        opacity: disabled ? 0.68 : undefined,
+        ...style,
+      }}
+      {...props}
+    >
       <div className="min-w-0">
         <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
           {label}
@@ -43,29 +72,6 @@ export function SettingRow({
         ) : null}
       </div>
       <div className="inline-flex items-center gap-2">{children}</div>
-    </div>
-  );
-
-  if (!bordered) {
-    return (
-      <Element className={className} style={{ opacity: disabled ? 0.68 : undefined, ...style }} {...props}>
-        {row}
-      </Element>
-    );
-  }
-
-  return (
-    <Element
-      className={cn('rounded-md border px-2.5 py-2', className)}
-      style={{
-        borderColor: 'var(--border-subtle)',
-        background: 'var(--surface-0)',
-        opacity: disabled ? 0.68 : undefined,
-        ...style,
-      }}
-      {...props}
-    >
-      {row}
     </Element>
   );
 }

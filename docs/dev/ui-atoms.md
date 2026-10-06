@@ -94,6 +94,12 @@ private copy at the call site.
   action scale silently resized the 21 call sites that had already used them, so
   those were moved to `size="auto"` with their own classes in the same change.
   When a size's value changes, grep `<Button` for the old size first.
+- **A layout atom carries its layout on the root element.** `SettingRow`
+  rendered as a `<label>` stayed inline while the flex row lived on a wrapper
+  inside it, and an inline box holding a block child laid out 78px tall against
+  the 42px of the hand-written row it replaced. Same for the surface: the row's
+  fill is `--surface-0` by default, and a row inside a `--surface-0` panel needs
+  `surface="raised"` or the card disappears into the panel behind it.
 - **Atoms take content, not translations.** A label, title or `aria-label` is the
   caller's, so each file keeps its own i18n style (`<Trans>` or `msg` with `_`).
 - **A11y belongs to the atom.** `Toggle`, `PanelCollapseToggle` and
