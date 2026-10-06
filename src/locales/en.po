@@ -1072,7 +1072,7 @@ msgstr "Clustering"
 msgid "Coincident"
 msgstr "Coincident"
 
-#: src/components/atoms/PanelCollapseToggle.tsx:20
+#: src/components/atoms/PanelCollapseToggle.tsx:23
 msgid "Collapse card"
 msgstr "Collapse card"
 
@@ -1886,7 +1886,7 @@ msgstr "Existing supports detected"
 msgid "Existing Supports Detected"
 msgstr "Existing Supports Detected"
 
-#: src/components/atoms/PanelCollapseToggle.tsx:20
+#: src/components/atoms/PanelCollapseToggle.tsx:23
 msgid "Expand card"
 msgstr "Expand card"
 

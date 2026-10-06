@@ -1072,7 +1072,7 @@ msgstr "Agrupación"
 msgid "Coincident"
 msgstr "Coincidentes"
 
-#: src/components/atoms/PanelCollapseToggle.tsx:20
+#: src/components/atoms/PanelCollapseToggle.tsx:23
 msgid "Collapse card"
 msgstr "Plegar la tarjeta"
 
@@ -1886,7 +1886,7 @@ msgstr "Se han detectado soportes existentes"
 msgid "Existing Supports Detected"
 msgstr "Se han detectado soportes existentes"
 
-#: src/components/atoms/PanelCollapseToggle.tsx:20
+#: src/components/atoms/PanelCollapseToggle.tsx:23
 msgid "Expand card"
 msgstr "Desplegar la tarjeta"
 

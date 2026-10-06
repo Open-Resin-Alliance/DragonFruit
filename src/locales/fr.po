@@ -1072,7 +1072,7 @@ msgstr ""
 msgid "Coincident"
 msgstr ""
 
-#: src/components/atoms/PanelCollapseToggle.tsx:20
+#: src/components/atoms/PanelCollapseToggle.tsx:23
 msgid "Collapse card"
 msgstr ""
 
@@ -1886,7 +1886,7 @@ msgstr ""
 msgid "Existing Supports Detected"
 msgstr ""
 
-#: src/components/atoms/PanelCollapseToggle.tsx:20
+#: src/components/atoms/PanelCollapseToggle.tsx:23
 msgid "Expand card"
 msgstr ""
 
