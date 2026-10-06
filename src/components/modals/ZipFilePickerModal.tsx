@@ -3,6 +3,7 @@
 import React from 'react';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { ArchiveRestore, FileArchive, X } from 'lucide-react';
+import { Button, IconButton } from '@/components/atoms';
 import { getFileExtensionLower } from '@/utils/zipImport';
 import { SCENE_FILE_EXTENSIONS } from '@/features/plugins/pluginFileTypeExtensions';
 
@@ -231,19 +232,14 @@ export function ZipFilePickerModal({
             </div>
           </div>
 
-          <button
-            type="button"
-            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
-            style={{
-              borderColor: 'var(--border-subtle)',
-              background: 'var(--surface-1)',
-              color: 'var(--text-muted)',
-            }}
+          <IconButton
+            variant="surface"
+            size="md"
             aria-label="Cancel ZIP import"
             onClick={onCancel}
           >
             <X className="w-4 h-4" />
-          </button>
+          </IconButton>
         </div>
 
         <div className="space-y-4 p-5">
@@ -381,16 +377,17 @@ export function ZipFilePickerModal({
           </div>
 
           <div className="flex shrink-0 items-center justify-end gap-2 pt-1">
-            <button
+            <Button
               type="button"
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+              variant="secondary"
               onClick={onCancel}
             >
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center gap-1.5"
+              variant="secondary"
+              className="inline-flex items-center gap-1.5"
               style={{
                 borderColor: selectedIndices.size > 0
                   ? `color-mix(in srgb, ${isLightTheme ? '#16a34a' : '#22c55e'}, var(--border-subtle) 45%)`
@@ -412,7 +409,7 @@ export function ZipFilePickerModal({
               {selectedIndices.size > 0
                 ? `Import ${selectedIndices.size} file${selectedIndices.size !== 1 ? 's' : ''}`
                 : 'Import'}
-            </button>
+            </Button>
           </div>
         </div>
       </div>

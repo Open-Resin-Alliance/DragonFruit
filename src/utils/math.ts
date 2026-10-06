@@ -45,3 +45,36 @@ export function quantizeToScale(value: number, scale: number): number {
 export function round(value: number, decimals: number): number {
     return Number(value.toFixed(decimals));
 }
+
+export type ViewportSize = { width: number; height: number };
+
+/**
+ * Place a `size`-shaped box next to an anchor, keeping it inside the viewport.
+ *
+ * Every anchored surface used to inline this with its own margin (4, 8, 10) and
+ * its own flip rule, so the same edge case rendered differently depending on
+ * which popover you opened.
+ *
+ * Returns the clamped top-left corner. `fallbackEdge` reports whether the box
+ * could not be placed at the anchor at all (the anchor is too close to the
+ * bottom-right for the box to fit), which callers use to decide on a flip.
+ */
+export function clampToViewport(
+    anchor: { x: number; y: number },
+    size: ViewportSize,
+    options: { margin?: number; viewport?: ViewportSize } = {},
+): { left: number; top: number; overflowRight: boolean; overflowBottom: boolean } {
+    const margin = options.margin ?? 8;
+    const viewport = options.viewport
+        ?? (typeof window === 'undefined' ? { width: 1920, height: 1080 } : { width: window.innerWidth, height: window.innerHeight });
+
+    const maxLeft = Math.max(margin, viewport.width - size.width - margin);
+    const maxTop = Math.max(margin, viewport.height - size.height - margin);
+
+    return {
+        left: clamp(anchor.x, margin, maxLeft),
+        top: clamp(anchor.y, margin, maxTop),
+        overflowRight: anchor.x + size.width + margin > viewport.width,
+        overflowBottom: anchor.y + size.height + margin > viewport.height,
+    };
+}

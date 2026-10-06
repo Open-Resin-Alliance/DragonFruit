@@ -4,7 +4,8 @@ import React from 'react';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import { Settings, RotateCcw } from 'lucide-react';
-import { Card, CardHeader, IconButton } from '@/components/atoms';
+import { Button, Card, CardHeader, IconButton } from '@/components/atoms';
+import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
@@ -132,25 +133,7 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
         <CardHeader
           left={(
             <>
-              <IconButton
-                onClick={() => setExpanded(!expanded)}
-                className="!p-0.5"
-                title={expanded ? 'Collapse card' : 'Expand card'}
-              >
-                <svg
-                  className="w-3 h-3 transform transition-transform"
-                  style={{ color: expanded ? 'var(--accent)' : 'var(--text-muted)' }}
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  {expanded ? (
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  ) : (
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                  )}
-                </svg>
-              </IconButton>
+              <PanelCollapseToggle expanded={expanded} onToggle={() => setExpanded(!expanded)} />
               <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{_(msg`Islands`)}</h3>
             </>
           )}
@@ -186,11 +169,12 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
             )}
 
             {/* Scan button */}
-            <button
+            <Button
               type="button"
               onClick={() => { void islands.onRunScan(); }}
               disabled={!hasGeometry || scanning}
-              className="ui-button w-full !h-8 text-[11px] disabled:opacity-50"
+              size="auto"
+              className="w-full !h-8 text-[11px] disabled:opacity-50"
               style={{
                 borderColor: 'var(--accent)',
                 background: 'color-mix(in srgb, var(--accent), var(--surface-0) 86%)',
@@ -198,7 +182,7 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
               }}
             >
               {scanning ? 'Scanning…' : 'Scan Islands'}
-            </button>
+            </Button>
 
 
             {/* --- Post-scan content --- */}
@@ -311,25 +295,23 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
         onBackdropClick={() => setShowSettings(false)}
         actions={
           <>
-            <button
+            <Button
               type="button"
               onClick={() => setShowSettings(false)}
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+              variant="secondary"
+              size="md"
             >
               {_(msg`Cancel`)}
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
               onClick={() => { applySettings(); setShowSettings(false); }}
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-              style={{
-                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                color: 'var(--accent)',
-              }}
+              variant="tinted-accent"
+              size="md"
+              className="inline-flex items-center justify-center gap-1.5"
             >
               {_(msg`Apply`)}
-            </button>
+            </Button>
           </>
         }
       >
@@ -506,14 +488,16 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
             </div>
           </div>
 
-          <button
+          <Button
             type="button"
             onClick={resetSettings}
-            className="ui-button ui-button-secondary w-full !h-8 px-3 text-xs inline-flex items-center justify-center gap-1.5"
+            variant="secondary"
+            size="auto"
+            className="w-full !h-8 px-3 text-xs inline-flex items-center justify-center gap-1.5"
           >
             <RotateCcw className="w-3 h-3" />
             {_(msg`Reset defaults`)}
-          </button>
+          </Button>
         </div>
       </StructuredDialogModal>
     </>

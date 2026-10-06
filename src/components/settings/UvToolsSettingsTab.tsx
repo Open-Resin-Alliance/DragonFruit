@@ -1,7 +1,10 @@
 'use client';
 
 import React from 'react';
-import { ExternalLink, Search, CheckCircle2, Loader2 } from 'lucide-react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { ExternalLink, Search, CheckCircle2 } from 'lucide-react';
+import { Button, SegmentedControl, SettingRow, Spinner } from '@/components/atoms';
 import type { UvToolsSettings } from '@/components/settings/uvToolsPreferences';
 import { autoDiscoverUvToolsPath } from '@/components/settings/uvToolsPreferences';
 import { detectPlatform } from '@/hooks/usePlatform';
@@ -17,6 +20,7 @@ export function UvToolsSettingsTab({
   uvToolsSettings,
   onUvToolsSettingsChange,
 }: UvToolsSettingsTabProps) {
+  const { _ } = useLingui();
   const [discoveryBusy, setDiscoveryBusy] = React.useState(false);
   const [showFoundGlow, setShowFoundGlow] = React.useState(false);
   const [showNotFound, setShowNotFound] = React.useState(false);
@@ -102,53 +106,35 @@ export function UvToolsSettingsTab({
           </div>
         </div>
 
-        <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Enable UVTools Integration
-              </div>
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                Adds a &ldquo;Send to UVTools&rdquo; option in the slicing panel.
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => onUvToolsSettingsChange({ ...uvToolsSettings, enabled: !uvToolsSettings.enabled })}
-              className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-              style={uvToolsSettings.enabled
-                ? {
-                    borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                    color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                  }
-                : {
-                    borderColor: 'var(--border-subtle)',
-                    background: 'var(--surface-1)',
-                    color: 'var(--text-muted)',
-                  }}
-            >
-              {uvToolsSettings.enabled ? 'ON' : 'OFF'}
-            </button>
-          </div>
-        </div>
+        <SettingRow
+          bordered
+          className="mt-3"
+          label={_(msg`Enable UVTools Integration`)}
+          description={_(msg`Adds a “Send to UVTools” option in the slicing panel.`)}
+        >
+          <SegmentedControl
+            label={_(msg`Enable UVTools Integration`)}
+            options={[
+              { value: 'on', label: _(msg`ON`) },
+              { value: 'off', label: _(msg`OFF`) },
+            ]}
+            value={uvToolsSettings.enabled ? 'on' : 'off'}
+            onChange={(next) => onUvToolsSettingsChange({ ...uvToolsSettings, enabled: next === 'on' })}
+          />
+        </SettingRow>
 
         {uvToolsSettings.enabled && (
           <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  UVTools Executable Path
-                </div>
-                <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                  Use auto-discover or enter the path to {executableLabel} manually.
-                </div>
-              </div>
-              <button
-                type="button"
+            <SettingRow
+              label={_(msg`UVTools Executable Path`)}
+              description={_(msg`Use auto-discover or enter the path to ${executableLabel} manually.`)}
+            >
+              <Button
+                variant="secondary"
+                size="auto"
                 onClick={handleAutoDiscover}
                 disabled={discoveryBusy}
-                className="ui-button ui-button-secondary !h-9 !px-3 !py-0 text-sm inline-flex items-center gap-1.5 whitespace-nowrap disabled:opacity-50 transition-all duration-700"
+                className="!h-9 !px-3 !py-0 text-sm inline-flex items-center gap-1.5 whitespace-nowrap disabled:opacity-50 transition-all duration-700"
                 style={showFoundGlow
                   ? {
                       background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 88%)',
@@ -160,15 +146,15 @@ export function UvToolsSettingsTab({
                     : {}}
               >
                 {discoveryBusy ? (
-                  <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+                  <Spinner size="md" className="shrink-0" />
                 ) : showFoundGlow ? (
                   <CheckCircle2 className="h-4 w-4 shrink-0" style={{ color: 'var(--accent-secondary)' }} />
                 ) : (
                   <Search className="h-4 w-4 shrink-0" />
                 )}
                 {discoveryBusy ? 'Scanning…' : showFoundGlow ? 'Found!' : 'Auto-Discover'}
-              </button>
-            </div>
+              </Button>
+            </SettingRow>
 
             <div className="mt-2">
               <input

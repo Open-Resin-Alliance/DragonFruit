@@ -1,7 +1,10 @@
 'use client';
 
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
 import { Bug, ClipboardCopy, Database, HelpCircle, Languages, LayoutGrid, RotateCcw, ZoomIn } from 'lucide-react';
+import { Button, SegmentedControl, SettingRow } from '@/components/atoms';
 import { LanguageSwitcher } from '@/components/ui/LanguageSwitcher';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
@@ -50,6 +53,7 @@ export function GeneralSettingsTab({
   language,
   onLanguageChange,
 }: GeneralSettingsTabProps) {
+  const { _ } = useLingui();
   const [layoutDump, setLayoutDump] = React.useState<string>('');
   const [dumpStatus, setDumpStatus] = React.useState<string | null>(null);
   const rootsLockedByLineRaft = importDefaults.raftBottomMode === 'line';
@@ -156,19 +160,14 @@ export function GeneralSettingsTab({
           </div>
         </div>
 
-        <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Interface language
-              </div>
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                Applied immediately across the app.
-              </div>
-            </div>
-            <LanguageSwitcher value={language} onChange={onLanguageChange} />
-          </div>
-        </div>
+        <SettingRow
+          bordered
+          className="mt-3"
+          label={_(msg`Interface language`)}
+          description={_(msg`Applied immediately across the app.`)}
+        >
+          <LanguageSwitcher value={language} onChange={onLanguageChange} />
+        </SettingRow>
       </section>
 
       <section
@@ -199,15 +198,10 @@ export function GeneralSettingsTab({
         </div>
 
         <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Interface scale
-              </div>
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                Larger percentages magnify the whole UI.
-              </div>
-            </div>
+          <SettingRow
+            label={_(msg`Interface scale`)}
+            description={_(msg`Larger percentages magnify the whole UI.`)}
+          >
             <SelectDropdown<string>
               value={isCustomScale ? 'custom' : String(uiScale)}
               options={[
@@ -222,8 +216,7 @@ export function GeneralSettingsTab({
               leadingDisplay={<ZoomIn className="w-4 h-4" />}
               selectClassName="!text-[13px] !pr-9"
             />
-          </div>
-
+          </SettingRow>
           {isCustomScale && (
             <div className="mt-2.5 flex items-center justify-between gap-3">
               <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
@@ -272,88 +265,56 @@ export function GeneralSettingsTab({
           </div>
         </div>
 
-        <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Remember window positions
-              </div>
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                Persist dragged panel positions in local storage.
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => onFloatingLayoutPersistenceChange(!floatingLayoutPersistence)}
-              className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-              style={floatingLayoutPersistence
-                ? {
-                    borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                    color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                  }
-                : {
-                    borderColor: 'var(--border-subtle)',
-                    background: 'var(--surface-1)',
-                    color: 'var(--text-muted)',
-                  }}
-            >
-              {floatingLayoutPersistence ? 'ON' : 'OFF'}
-            </button>
-          </div>
-        </div>
+        <SettingRow
+          bordered
+          className="mt-3"
+          label={_(msg`Remember window positions`)}
+          description={_(msg`Persist dragged panel positions in local storage.`)}
+        >
+          <SegmentedControl
+            label={_(msg`Remember window positions`)}
+            options={[
+              { value: 'on', label: _(msg`ON`) },
+              { value: 'off', label: _(msg`OFF`) },
+            ]}
+            value={floatingLayoutPersistence ? 'on' : 'off'}
+            onChange={(next) => onFloatingLayoutPersistenceChange(next === 'on')}
+          />
+        </SettingRow>
 
-        <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Reset saved window layout
-              </div>
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                Forget all stored panel positions and return to seeded layout.
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={onResetFloatingLayout}
-              className="ui-button ui-button-secondary !h-10 !px-3 !py-0 text-sm inline-flex items-center gap-1.5 whitespace-nowrap"
-            >
-              <RotateCcw className="h-4 w-4 shrink-0" />
-              Reset
-            </button>
-          </div>
-        </div>
+        <SettingRow
+          bordered
+          className="mt-2"
+          label={_(msg`Reset saved window layout`)}
+          description={_(msg`Forget all stored panel positions and return to seeded layout.`)}
+        >
+          <Button
+            variant="secondary"
+            size="auto"
+            onClick={onResetFloatingLayout}
+            className="!h-10 !px-3 !py-0 text-sm inline-flex items-center gap-1.5 whitespace-nowrap"
+          >
+            <RotateCcw className="h-4 w-4 shrink-0" />
+            Reset
+          </Button>
+        </SettingRow>
 
-        <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Show Debug Primitives panel
-              </div>
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                Toggle visibility of the Prepare-mode debug primitive window.
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => onDebugPrimitivesPanelVisibleChange(!debugPrimitivesPanelVisible)}
-              className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-              style={debugPrimitivesPanelVisible
-                ? {
-                    borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                    color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                  }
-                : {
-                    borderColor: 'var(--border-subtle)',
-                    background: 'var(--surface-1)',
-                    color: 'var(--text-muted)',
-                  }}
-            >
-              {debugPrimitivesPanelVisible ? 'ON' : 'OFF'}
-            </button>
-          </div>
-        </div>
+        <SettingRow
+          bordered
+          className="mt-2"
+          label={_(msg`Show Debug Primitives panel`)}
+          description={_(msg`Toggle visibility of the Prepare-mode debug primitive window.`)}
+        >
+          <SegmentedControl
+            label={_(msg`Show Debug Primitives panel`)}
+            options={[
+              { value: 'on', label: _(msg`ON`) },
+              { value: 'off', label: _(msg`OFF`) },
+            ]}
+            value={debugPrimitivesPanelVisible ? 'on' : 'off'}
+            onChange={(next) => onDebugPrimitivesPanelVisibleChange(next === 'on')}
+          />
+        </SettingRow>
       </section>
       <section
         className="rounded-lg border p-3"
@@ -382,42 +343,26 @@ export function GeneralSettingsTab({
           </div>
         </div>
 
-        <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Show support tooltips
-              </div>
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                Shows &quot;Cannot Place Support&quot; and &quot;Stability Warning&quot; tooltips.
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                const next = !supportHelpEnabled;
-                setSupportPlacementHelpEnabled(next);
-                setSupportHelpEnabled(next);
-              }}
-              className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-              style={
-                supportHelpEnabled
-                  ? {
-                      borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                      color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                    }
-                  : {
-                      borderColor: 'var(--border-subtle)',
-                      background: 'var(--surface-1)',
-                      color: 'var(--text-muted)',
-                    }
-              }
-            >
-              {supportHelpEnabled ? 'ON' : 'OFF'}
-            </button>
-          </div>
-        </div>
+        <SettingRow
+          bordered
+          className="mt-3"
+          label={_(msg`Show support tooltips`)}
+          description={_(msg`Shows "Cannot Place Support" and "Stability Warning" tooltips.`)}
+        >
+          <SegmentedControl
+            label={_(msg`Show support tooltips`)}
+            options={[
+              { value: 'on', label: _(msg`ON`) },
+              { value: 'off', label: _(msg`OFF`) },
+            ]}
+            value={supportHelpEnabled ? 'on' : 'off'}
+            onChange={(next) => {
+              const enabled = next === 'on';
+              setSupportPlacementHelpEnabled(enabled);
+              setSupportHelpEnabled(enabled);
+            }}
+          />
+        </SettingRow>
       </section>
 
       <section
@@ -492,132 +437,76 @@ export function GeneralSettingsTab({
         </div>
 
         {importDefaults.raftBottomMode === 'solid' ? (
-          <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Default Raft Wall
-                </div>
-                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                  Enable perimeter wall for imported solid rafts.
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => onImportDefaultsChange({ ...importDefaults, raftWallEnabled: !importDefaults.raftWallEnabled })}
-                className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                style={importDefaults.raftWallEnabled
-                  ? {
-                      borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                      color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                    }
-                  : {
-                      borderColor: 'var(--border-subtle)',
-                      background: 'var(--surface-1)',
-                      color: 'var(--text-muted)',
-                    }}
-              >
-                {importDefaults.raftWallEnabled ? 'ON' : 'OFF'}
-              </button>
-            </div>
-          </div>
+          <SettingRow
+            bordered
+            className="mt-2"
+            label={_(msg`Default Raft Wall`)}
+            description={_(msg`Enable perimeter wall for imported solid rafts.`)}
+          >
+            <SegmentedControl
+              label={_(msg`Default Raft Wall`)}
+              options={[
+                { value: 'on', label: _(msg`ON`) },
+                { value: 'off', label: _(msg`OFF`) },
+              ]}
+              value={importDefaults.raftWallEnabled ? 'on' : 'off'}
+              onChange={(next) => onImportDefaultsChange({ ...importDefaults, raftWallEnabled: next === 'on' })}
+            />
+          </SettingRow>
         ) : null}
 
         {!rootsLockedByLineRaft ? (
-          <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Roots Enabled on Import
-                </div>
-                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                  OFF makes imported root diameter match trunk diameter.
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => onImportDefaultsChange({ ...importDefaults, rootsEnabled: !importDefaults.rootsEnabled })}
-                className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                style={importDefaults.rootsEnabled
-                  ? {
-                      borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                      color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                    }
-                  : {
-                      borderColor: 'var(--border-subtle)',
-                      background: 'var(--surface-1)',
-                      color: 'var(--text-muted)',
-                    }}
-              >
-                {importDefaults.rootsEnabled ? 'ON' : 'OFF'}
-              </button>
-            </div>
-          </div>
+          <SettingRow
+            bordered
+            className="mt-2"
+            label={_(msg`Roots Enabled on Import`)}
+            description={_(msg`OFF makes imported root diameter match trunk diameter.`)}
+          >
+            <SegmentedControl
+              label={_(msg`Roots Enabled on Import`)}
+              options={[
+                { value: 'on', label: _(msg`ON`) },
+                { value: 'off', label: _(msg`OFF`) },
+              ]}
+              value={importDefaults.rootsEnabled ? 'on' : 'off'}
+              onChange={(next) => onImportDefaultsChange({ ...importDefaults, rootsEnabled: next === 'on' })}
+            />
+          </SettingRow>
         ) : null}
 
-        <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Auto-Repair
-              </div>
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                Automatically runs native mesh auto-repair for standard mesh imports.
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => onImportDefaultsChange({ ...importDefaults, autoRepair: !importDefaults.autoRepair })}
-              className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-              style={importDefaults.autoRepair
-                ? {
-                    borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                    color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                  }
-                : {
-                    borderColor: 'var(--border-subtle)',
-                    background: 'var(--surface-1)',
-                    color: 'var(--text-muted)',
-                  }}
-            >
-              {importDefaults.autoRepair ? 'ON' : 'OFF'}
-            </button>
-          </div>
-        </div>
+        <SettingRow
+          bordered
+          className="mt-2"
+          label={_(msg`Auto-Repair`)}
+          description={_(msg`Automatically runs native mesh auto-repair for standard mesh imports.`)}
+        >
+          <SegmentedControl
+            label={_(msg`Auto-Repair`)}
+            options={[
+              { value: 'on', label: _(msg`ON`) },
+              { value: 'off', label: _(msg`OFF`) },
+            ]}
+            value={importDefaults.autoRepair ? 'on' : 'off'}
+            onChange={(next) => onImportDefaultsChange({ ...importDefaults, autoRepair: next === 'on' })}
+          />
+        </SettingRow>
 
-        <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Auto-Repair Scenes
-              </div>
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                Automatically runs native mesh auto-repair for scene-file imports.
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => onImportDefaultsChange({ ...importDefaults, autoRepairScenes: !importDefaults.autoRepairScenes })}
-              className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-              style={importDefaults.autoRepairScenes
-                ? {
-                    borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                    color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                  }
-                : {
-                    borderColor: 'var(--border-subtle)',
-                    background: 'var(--surface-1)',
-                    color: 'var(--text-muted)',
-                  }}
-            >
-              {importDefaults.autoRepairScenes ? 'ON' : 'OFF'}
-            </button>
-          </div>
-        </div>
+        <SettingRow
+          bordered
+          className="mt-2"
+          label={_(msg`Auto-Repair Scenes`)}
+          description={_(msg`Automatically runs native mesh auto-repair for scene-file imports.`)}
+        >
+          <SegmentedControl
+            label={_(msg`Auto-Repair Scenes`)}
+            options={[
+              { value: 'on', label: _(msg`ON`) },
+              { value: 'off', label: _(msg`OFF`) },
+            ]}
+            value={importDefaults.autoRepairScenes ? 'on' : 'off'}
+            onChange={(next) => onImportDefaultsChange({ ...importDefaults, autoRepairScenes: next === 'on' })}
+          />
+        </SettingRow>
       </section>
 
     </div>

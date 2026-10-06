@@ -1,6 +1,6 @@
 import React from 'react';
-import { Loader2 } from 'lucide-react';
-import { Card, CardHeader, IconButton } from '@/components/atoms';
+import { Button, Card, CardHeader, Spinner } from '@/components/atoms';
+import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 
 export interface HolePunchPanelState {
@@ -76,28 +76,13 @@ export function HolePunchPanel({
       <CardHeader
         left={(
           <>
-            <IconButton
-              onClick={() => {
+            <PanelCollapseToggle
+              expanded={expanded}
+              onToggle={() => {
                 if (disabled) return;
                 setExpanded((prev) => !prev);
               }}
-              className="!p-0.5"
-              title={expanded ? 'Collapse card' : 'Expand card'}
-            >
-              <svg
-                className="w-3 h-3 transform transition-transform"
-                style={{ color: expanded ? 'var(--accent)' : 'var(--text-muted)' }}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                {expanded ? (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                ) : (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                )}
-              </svg>
-            </IconButton>
+            />
             <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Hole Punching</h3>
           </>
         )}
@@ -124,25 +109,27 @@ export function HolePunchPanel({
           <div className="rounded-md border p-2 space-y-1.5" style={accentCardStyle}>
             <div className="ui-meta" style={{ color: 'var(--text-muted)' }}>Depth Mode</div>
             <div className="grid grid-cols-2 gap-1">
-              <button
-                type="button"
-                className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+              <Button
+                variant="secondary"
+                size="auto"
+                className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                 onClick={() => setState({ depthMode: 'auto' })}
                 disabled={disabled || isApplying || !canUseAutoDepth}
                 style={state.depthMode === 'auto' ? activeModeStyle : undefined}
                 title={!canUseAutoDepth ? 'Auto depth requires a hollowed model or hollow preview.' : undefined}
               >
                 Auto
-              </button>
-              <button
-                type="button"
-                className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+              </Button>
+              <Button
+                variant="secondary"
+                size="auto"
+                className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                 onClick={() => setState({ depthMode: 'manual' })}
                 disabled={disabled || isApplying}
                 style={state.depthMode === 'manual' ? activeModeStyle : undefined}
               >
                 Manual
-              </button>
+              </Button>
             </div>
           </div>
 
@@ -241,25 +228,27 @@ export function HolePunchPanel({
           </div>
 
           <div className="flex gap-2">
-            <button
-              type="button"
-              className="ui-button ui-button-secondary flex-1 !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
+            <Button
+              variant="secondary"
+              size="auto"
+              className="flex-1 !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
               onClick={onReset}
               disabled={disabled || isApplying || !canReset}
             >
               Reset
-            </button>
-            <button
-              type="button"
-              className="ui-button ui-button-accent flex-1 !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
+            </Button>
+            <Button
+              variant="accent"
+              size="auto"
+              className="flex-1 !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
               onClick={onApply}
               disabled={disabled || isApplying || !canApply}
             >
               <span className="inline-flex items-center justify-center gap-1.5">
-                {isApplying && <Loader2 className="h-3 w-3 animate-spin" />}
+                {isApplying && <Spinner size="xs" />}
                 <span>{isApplying ? 'Applying...' : 'Apply'}</span>
               </span>
-            </button>
+            </Button>
           </div>
         </div>
       )}

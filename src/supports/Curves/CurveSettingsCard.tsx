@@ -207,7 +207,7 @@ export function CurveSettingsCard({ embedded = false }: { embedded?: boolean }) 
                         type="button"
                         onClick={handleRemoveCurve}
                         variant="danger"
-                        size="md"
+                        size="auto"
                         className="w-full h-9 text-[12px] font-semibold"
                     >
                         {_(msg`Remove Curve`)}

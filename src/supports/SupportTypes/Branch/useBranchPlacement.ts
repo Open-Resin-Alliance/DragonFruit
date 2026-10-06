@@ -4,6 +4,7 @@ import { useInteractionStatus } from '../../interaction/useInteractionStatus';
 import { calculateSmoothedNormal } from '../../PlacementLogic/PlacementUtils';
 import { branchPlacementStore, useBranchPlacementState } from './branchPlacementState';
 import { useActionActive } from '@/hotkeys/hotkeyStore';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 
 /**
  * Branch Placement Hook
@@ -29,16 +30,10 @@ export function useBranchPlacement() {
     }, [branchHotkeyActive]);
 
     // Escape to cancel
-    useEffect(() => {
-        const handleEscape = (e: CustomEvent) => {
-            if (e.detail.key === 'Escape' && state.stage === 'awaitingBase') {
-                console.log('[BranchPlacement] Cancelled via Escape');
-                branchPlacementStore.reset();
-            }
-        };
-        window.addEventListener('app-hotkey-keydown', handleEscape as EventListener);
-        return () => window.removeEventListener('app-hotkey-keydown', handleEscape as EventListener);
-    }, [state.stage]);
+    useEscapeToClose(state.stage === 'awaitingBase', () => {
+        console.log('[BranchPlacement] Cancelled via Escape');
+        branchPlacementStore.reset();
+    });
 
     // Hover over model - track position for preview dot when Alt is held
     const onModelHover = useCallback((hit: THREE.Intersection | null) => {

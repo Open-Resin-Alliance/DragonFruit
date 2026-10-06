@@ -3,6 +3,7 @@
 import React from 'react';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { X } from 'lucide-react';
+import { IconButton } from '@/components/atoms';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { getSnapshot as getSupportSnapshot } from '@/supports/state';
 import { countSupportCollections, implicitSegmentCount, SUPPORT_COLLECTION_KEYS, SUPPORT_TYPES } from '@/supports/supportTypeRegistry';
@@ -427,18 +428,14 @@ export function DiagnosticsModal({
               Runtime telemetry for DragonFruit (toggle with Ctrl+Shift+D)
             </p>
           </div>
-          <button
+          <IconButton
+            variant="surface"
+            size="sm"
             onClick={onClose}
-            className="h-8 w-8 inline-flex items-center justify-center rounded-md border transition-colors"
-            style={{
-              borderColor: 'var(--border-subtle)',
-              background: 'var(--surface-1)',
-              color: 'var(--text-muted)',
-            }}
             aria-label="Close diagnostics"
           >
             <X className="w-4 h-4" />
-          </button>
+          </IconButton>
         </div>
 
         <div className="max-h-[calc(88vh-58px)] overflow-y-auto custom-scrollbar p-4 space-y-4">

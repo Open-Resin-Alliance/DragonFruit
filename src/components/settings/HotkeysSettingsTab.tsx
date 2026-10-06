@@ -8,6 +8,7 @@ import { getBindingTokens, toKeyLabel } from '@/hotkeys/hotkeyLabels';
 import { resumeHotkeyDispatch, suspendHotkeyDispatch } from '@/hotkeys/HotkeyRegistryManager';
 import { usePlatformModifier } from '@/hooks/usePlatformModifier';
 import { SECONDARY_DELETE_KEY } from '@/features/delete/useDeleteHotkey';
+import { Button, IconButton } from '@/components/atoms';
 
 const PINNED_SLOT_LABELS: Record<string, string> = {
   SLOT_1: 'Slot 1',
@@ -244,15 +245,15 @@ export function HotkeysSettingsTab() {
           </p>
         </div>
 
-        <button
+        <IconButton
           type="button"
           onClick={() => resetCategories(section.categories.map((category) => category.category))}
           title="Reset section to default shortcuts"
           aria-label={`Reset ${section.title} section to default shortcuts`}
-          className="ui-button ui-button-secondary !h-7 !w-7 !p-0 inline-flex shrink-0 items-center justify-center rounded-md"
+          className="!h-7 !w-7 !p-0 shrink-0 rounded-md"
         >
           <RotateCcw className="h-3.5 w-3.5" />
-        </button>
+        </IconButton>
       </div>
 
       <div className="mt-2 space-y-2">
@@ -327,13 +328,15 @@ export function HotkeysSettingsTab() {
             </p>
 
             <div className="mt-4 flex justify-end">
-              <button
+              <Button
                 type="button"
                 onClick={() => setRecordingKey(null)}
-                className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-md"
+                variant="secondary"
+                size="auto"
+                className="!h-8 !px-3 !py-0 text-xs rounded-md"
               >
                 Cancel
-              </button>
+              </Button>
             </div>
           </div>
         </div>

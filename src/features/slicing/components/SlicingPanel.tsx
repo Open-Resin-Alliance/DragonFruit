@@ -10,6 +10,7 @@ import { MouseTooltip } from '@/components/ui/MouseTooltip';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { KNOWN_SOURCE_EXTENSION_STRIP_RE } from '@/features/plugins/pluginFileTypeExtensions';
 import { Button, Card, CardHeader, IconButton } from '@/components/atoms';
+import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
@@ -2218,25 +2219,7 @@ export function SlicingPanel({
         <CardHeader
           left={(
             <>
-              <IconButton
-                onClick={() => setIsExpanded((prev) => !prev)}
-                className="!p-0.5"
-                title={isExpanded ? _(msg`Collapse card`) : _(msg`Expand card`)}
-              >
-                <svg
-                  className="w-3 h-3 transform transition-transform"
-                  style={{ color: isExpanded ? 'var(--accent)' : 'var(--text-muted)' }}
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  {isExpanded ? (
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  ) : (
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                  )}
-                </svg>
-              </IconButton>
+              <PanelCollapseToggle expanded={isExpanded} onToggle={() => setIsExpanded((prev) => !prev)} />
               <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Slicing</Trans></h3>
             </>
           )}
@@ -2255,25 +2238,7 @@ export function SlicingPanel({
       <CardHeader
         left={(
           <>
-            <IconButton
-              onClick={() => setIsExpanded((prev) => !prev)}
-              className="!p-0.5"
-              title={isExpanded ? _(msg`Collapse card`) : _(msg`Expand card`)}
-            >
-              <svg
-                className="w-3 h-3 transform transition-transform"
-                style={{ color: isExpanded ? 'var(--accent)' : 'var(--text-muted)' }}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                {isExpanded ? (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                ) : (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                )}
-              </svg>
-            </IconButton>
+            <PanelCollapseToggle expanded={isExpanded} onToggle={() => setIsExpanded((prev) => !prev)} />
             <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Slicing</Trans></h3>
           </>
         )}
@@ -3404,18 +3369,20 @@ export function SlicingPanel({
             return (
               <div ref={sliceIntentAnchorRef} className="relative w-full">
                 <div className="flex items-center gap-0.5">
-                  <button
-                    type="button"
+                  <Button
+                    variant="primary"
+                    size="auto"
                     onClick={() => { void handleSliceZipExport(); }}
                     disabled={isDisabled}
-                    className={`ui-button ui-button-primary flex-1 !h-9 text-sm inline-flex items-center justify-center gap-1.5 ${hasMenuOptions && !isShiftHeld ? 'rounded-r-none' : ''} ${isSlicingZip ? 'cursor-wait opacity-70' : ''}`}
+                    className={`flex-1 !h-9 text-sm inline-flex items-center justify-center gap-1.5 ${hasMenuOptions && !isShiftHeld ? 'rounded-r-none' : ''} ${isSlicingZip ? 'cursor-wait opacity-70' : ''}`}
                   >
                     <CurrentIcon className="w-4 h-4 shrink-0" />
                     {isSlicingZip ? _(msg`Slicing…`) : current.label}
-                  </button>
+                  </Button>
                   {hasMenuOptions && !isShiftHeld && (
-                    <button
-                      type="button"
+                    <Button
+                      variant="primary"
+                      size="auto"
                       onClick={() => {
                         const rect = sliceIntentAnchorRef.current?.getBoundingClientRect() ?? null;
                         setSliceIntentMenuRect(rect);
@@ -3423,12 +3390,12 @@ export function SlicingPanel({
                       }}
                       disabled={isDisabled}
                       aria-label={_(msg`Choose slice action`)}
-                      className="ui-button ui-button-primary !h-9 w-10 shrink-0 inline-flex items-center justify-center rounded-l-none border-l border-black/15"
+                      className="!h-9 w-10 shrink-0 inline-flex items-center justify-center rounded-l-none border-l border-black/15"
                     >
                       <ChevronDown
                         className={`h-6 w-6 transition-transform duration-200 ease-out ${sliceIntentMenuOpen ? 'rotate-180' : 'rotate-0'}`}
                       />
-                    </button>
+                    </Button>
                   )}
                 </div>
                 {sliceIntentMenuOpen && sliceIntentMenuRect && typeof document !== 'undefined' && createPortal(
@@ -3500,15 +3467,14 @@ export function SlicingPanel({
                   {activeMaterialProfile.name} · {activeMaterialProfile.brand}
                 </p>
               </div>
-              <button
-                type="button"
+              <IconButton
+                variant="surface"
+                size="sm"
                 onClick={() => setIsMaterialAaEditorOpen(false)}
-                className="h-8 w-8 inline-flex items-center justify-center rounded-md border"
-                style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
                 aria-label={_(msg`Close material anti-aliasing settings`)}
               >
                 <X className="w-4 h-4" />
-              </button>
+              </IconButton>
             </div>
             <div className="p-3 overflow-y-auto custom-scrollbar flex-1">
               <MaterialAntiAliasingSection
@@ -3524,17 +3490,19 @@ export function SlicingPanel({
               />
             </div>
             <div className="px-3 py-2 border-t flex items-center justify-end gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
-              <button
-                type="button"
+              <Button
+                variant="secondary"
+                size="auto"
                 onClick={() => setIsMaterialAaEditorOpen(false)}
-                className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-full"
+                className="!h-8 !px-3 !py-0 text-xs rounded-full"
               >
                 Cancel
-              </button>
-              <button
-                type="button"
+              </Button>
+              <Button
+                variant="secondary"
+                size="auto"
                 onClick={handleSaveMaterialAaEditor}
-                className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-full"
+                className="!h-8 !px-3 !py-0 text-xs rounded-full"
                 style={{
                   borderColor: 'var(--accent-secondary-action-border)',
                   background: 'var(--accent-secondary-action-bg-92)',
@@ -3542,7 +3510,7 @@ export function SlicingPanel({
                 }}
               >
                 <Trans>Save Material</Trans>
-              </button>
+              </Button>
             </div>
           </div>
         </div>,
@@ -3571,15 +3539,14 @@ export function SlicingPanel({
                   {activeMaterialProfile ? `${activeMaterialProfile.name} · ${activeMaterialProfile.brand}` : _(msg`Current material`)}
                 </p>
               </div>
-              <button
-                type="button"
+              <IconButton
+                variant="surface"
+                size="sm"
                 onClick={() => setIsSessionAaOverrideOpen(false)}
-                className="h-8 w-8 inline-flex items-center justify-center rounded-md border"
-                style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
                 aria-label={_(msg`Close session anti-aliasing override`)}
               >
                 <X className="w-4 h-4" />
-              </button>
+              </IconButton>
             </div>
             <div className="p-3 overflow-y-auto custom-scrollbar flex-1">
               <MaterialAntiAliasingSection
@@ -3596,8 +3563,9 @@ export function SlicingPanel({
               />
             </div>
             <div className="px-3 py-2 border-t flex items-center justify-between gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
-              <button
-                type="button"
+              <Button
+                variant="secondary"
+                size="auto"
                 onClick={() => {
                   if (activeMaterialProfile) {
                     clearSessionAaOverrideDraft(activeMaterialProfile.id);
@@ -3606,21 +3574,23 @@ export function SlicingPanel({
                   setEditingSessionAaOverrideDraft(null);
                   setIsSessionAaOverrideOpen(false);
                 }}
-                className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-full"
+                className="!h-8 !px-3 !py-0 text-xs rounded-full"
                 style={{ color: 'var(--text-muted)' }}
               >
                 <Trans>Clear Override</Trans>
-              </button>
+              </Button>
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
+                <Button
+                  variant="secondary"
+                  size="auto"
                   onClick={() => setIsSessionAaOverrideOpen(false)}
-                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-full"
+                  className="!h-8 !px-3 !py-0 text-xs rounded-full"
                 >
                   Cancel
-                </button>
-                <button
-                  type="button"
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="auto"
                   onClick={() => {
                     if (activeMaterialProfile) {
                       writeSessionAaOverrideDraft(activeMaterialProfile.id, editingSessionAaOverrideDraft);
@@ -3628,7 +3598,7 @@ export function SlicingPanel({
                     setSessionAaOverrideDraft(editingSessionAaOverrideDraft);
                     setIsSessionAaOverrideOpen(false);
                   }}
-                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-full"
+                  className="!h-8 !px-3 !py-0 text-xs rounded-full"
                   style={{
                     borderColor: 'var(--accent-secondary-action-border)',
                     background: 'var(--accent-secondary-action-bg-92)',
@@ -3636,7 +3606,7 @@ export function SlicingPanel({
                   }}
                 >
                   <Trans>Apply for Session</Trans>
-                </button>
+                </Button>
               </div>
             </div>
           </div>

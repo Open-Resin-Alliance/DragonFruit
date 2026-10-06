@@ -5,7 +5,8 @@ import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import type { MessageDescriptor } from '@lingui/core';
 import { Trans } from '@lingui/react/macro';
-import { AlertTriangle, HardDrive, Loader2, RefreshCw } from 'lucide-react';
+import { AlertTriangle, HardDrive, RefreshCw } from 'lucide-react';
+import { Button, IconChip, SegmentedControl, SettingRow, Spinner } from '@/components/atoms';
 import { NumberInput } from '@/components/ui/NumberInput';
 import {
   getSceneAutosaveSettingsSnapshot,
@@ -171,140 +172,104 @@ export function SceneAutosaveSettingsTab() {
         </div>
 
         <div className="mt-2 grid gap-2">
-          <div className="rounded-md border px-2.5 py-2 flex items-center justify-between gap-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>{_(msg`Enable scene autosave`)}</div>
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{_(msg`Creates recovery snapshots while editing.`)}</div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setSettings((prev) => ({ ...prev, enabled: !prev.enabled }))}
-              className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-              aria-pressed={settings.enabled}
-              style={settings.enabled
-                ? {
-                    borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                    color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                  }
-                : {
-                    borderColor: 'var(--border-subtle)',
-                    background: 'var(--surface-1)',
-                    color: 'var(--text-muted)',
-                  }}
-            >
-              {settings.enabled ? _(msg`ON`) : _(msg`OFF`)}
-            </button>
-          </div>
-
-          <div
-            className="rounded-md border px-2.5 py-2 flex items-center justify-between gap-3"
-            style={{
-              borderColor: 'var(--border-subtle)',
-              background: 'var(--surface-0)',
-              opacity: settings.enabled ? 1 : 0.68,
-            }}
+          <SettingRow
+            bordered
+            label={_(msg`Enable scene autosave`)}
+            description={_(msg`Creates recovery snapshots while editing.`)}
           >
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>{_(msg`Autosave idle delay`)}</div>
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{_(msg`Wait this long after edits before autosaving.`)}</div>
-            </div>
-            <div className="inline-flex items-center gap-2">
-              <NumberInput
-                min={15}
-                max={900}
-                step={5}
-                value={debounceSeconds}
-                onChange={(next) => {
-                  if (!Number.isFinite(next)) return;
-                  const nextSeconds = Math.max(15, Math.min(900, Math.round(next)));
-                  setSettings((prev) => ({
-                    ...prev,
-                    debounceMs: nextSeconds * 1000,
-                    capMs: Math.max(prev.capMs, nextSeconds * 1000),
-                  }));
-                }}
-                className="ui-input h-[34px] w-[120px] pl-2.5 pr-5 py-1.5 text-sm"
-                disabled={!settings.enabled}
-              />
-              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{_(msg({ message: 'sec', comment: 'Unit suffix after a seconds input box. Keep it abbreviated.' }))}</span>
-            </div>
-          </div>
+            <SegmentedControl
+              label={_(msg`Enable scene autosave`)}
+              options={[
+                { value: 'on', label: _(msg`ON`) },
+                { value: 'off', label: _(msg`OFF`) },
+              ]}
+              value={settings.enabled ? 'on' : 'off'}
+              onChange={(next) => setSettings((prev) => ({ ...prev, enabled: next === 'on' }))}
+            />
+          </SettingRow>
 
-          <div
-            className="rounded-md border px-2.5 py-2 flex items-center justify-between gap-3"
-            style={{
-              borderColor: 'var(--border-subtle)',
-              background: 'var(--surface-0)',
-              opacity: settings.enabled ? 1 : 0.68,
-            }}
+          <SettingRow
+            bordered
+            disabled={!settings.enabled}
+            label={_(msg`Autosave idle delay`)}
+            description={_(msg`Wait this long after edits before autosaving.`)}
           >
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>{_(msg`Autosave cooldown`)}</div>
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{_(msg`After an autosave, defer further automatic saves until this interval ends.`)}</div>
-            </div>
-            <div className="inline-flex items-center gap-2">
-              <NumberInput
-                min={15}
-                max={900}
-                step={5}
-                value={cooldownSeconds}
-                onChange={(next) => {
-                  if (!Number.isFinite(next)) return;
-                  const nextSeconds = Math.max(15, Math.min(900, Math.round(next)));
-                  setSettings((prev) => ({
-                    ...prev,
-                    cooldownMs: nextSeconds * 1000,
-                    capMs: Math.max(prev.capMs, nextSeconds * 1000),
-                  }));
-                }}
-                className="ui-input h-[34px] w-[120px] pl-2.5 pr-5 py-1.5 text-sm"
-                disabled={!settings.enabled}
-              />
-              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{_(msg({ message: 'sec', comment: 'Unit suffix after a seconds input box. Keep it abbreviated.' }))}</span>
-            </div>
-          </div>
+            <NumberInput
+              min={15}
+              max={900}
+              step={5}
+              value={debounceSeconds}
+              onChange={(next) => {
+                if (!Number.isFinite(next)) return;
+                const nextSeconds = Math.max(15, Math.min(900, Math.round(next)));
+                setSettings((prev) => ({
+                  ...prev,
+                  debounceMs: nextSeconds * 1000,
+                  capMs: Math.max(prev.capMs, nextSeconds * 1000),
+                }));
+              }}
+              className="ui-input h-[34px] w-[120px] pl-2.5 pr-5 py-1.5 text-sm"
+              disabled={!settings.enabled}
+            />
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{_(msg({ message: 'sec', comment: 'Unit suffix after a seconds input box. Keep it abbreviated.' }))}</span>
+          </SettingRow>
 
-          <div
-            className="rounded-md border px-2.5 py-2 flex items-center justify-between gap-3"
-            style={{
-              borderColor: 'var(--border-subtle)',
-              background: 'var(--surface-0)',
-              opacity: settings.enabled ? 1 : 0.68,
-            }}
+          <SettingRow
+            bordered
+            disabled={!settings.enabled}
+            label={_(msg`Autosave cooldown`)}
+            description={_(msg`After an autosave, defer further automatic saves until this interval ends.`)}
           >
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>{_(msg`Maximum autosave interval`)}</div>
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{_(msg`For continuous edits, save at least this often.`)}</div>
-            </div>
-            <div className="inline-flex items-center gap-2">
-              <NumberInput
-                min={1}
-                max={60}
-                step={1}
-                value={capMinutes}
-                onChange={(next) => {
-                  if (!Number.isFinite(next)) return;
-                  const nextMinutes = Math.max(1, Math.min(60, Math.round(next)));
-                  setSettings((prev) => ({
-                    ...prev,
-                    capMs: Math.max(nextMinutes * 60_000, prev.debounceMs, prev.cooldownMs),
-                  }));
-                }}
-                className="ui-input h-[34px] w-[120px] pl-2.5 pr-5 py-1.5 text-sm"
-                disabled={!settings.enabled}
-              />
-              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{_(msg({ message: 'min', comment: 'Unit suffix after a minutes input box. Keep it abbreviated.' }))}</span>
-            </div>
-          </div>
+            <NumberInput
+              min={15}
+              max={900}
+              step={5}
+              value={cooldownSeconds}
+              onChange={(next) => {
+                if (!Number.isFinite(next)) return;
+                const nextSeconds = Math.max(15, Math.min(900, Math.round(next)));
+                setSettings((prev) => ({
+                  ...prev,
+                  cooldownMs: nextSeconds * 1000,
+                  capMs: Math.max(prev.capMs, nextSeconds * 1000),
+                }));
+              }}
+              className="ui-input h-[34px] w-[120px] pl-2.5 pr-5 py-1.5 text-sm"
+              disabled={!settings.enabled}
+            />
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{_(msg({ message: 'sec', comment: 'Unit suffix after a seconds input box. Keep it abbreviated.' }))}</span>
+          </SettingRow>
+
+          <SettingRow
+            bordered
+            disabled={!settings.enabled}
+            label={_(msg`Maximum autosave interval`)}
+            description={_(msg`For continuous edits, save at least this often.`)}
+          >
+            <NumberInput
+              min={1}
+              max={60}
+              step={1}
+              value={capMinutes}
+              onChange={(next) => {
+                if (!Number.isFinite(next)) return;
+                const nextMinutes = Math.max(1, Math.min(60, Math.round(next)));
+                setSettings((prev) => ({
+                  ...prev,
+                  capMs: Math.max(nextMinutes * 60_000, prev.debounceMs, prev.cooldownMs),
+                }));
+              }}
+              className="ui-input h-[34px] w-[120px] pl-2.5 pr-5 py-1.5 text-sm"
+              disabled={!settings.enabled}
+            />
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{_(msg({ message: 'min', comment: 'Unit suffix after a minutes input box. Keep it abbreviated.' }))}</span>
+          </SettingRow>
         </div>
       </section>
 
       <section className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
         <div className="flex items-start gap-2">
-          <span className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0" style={{ borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)', background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)' }}>
-            <AlertTriangle className="h-4 w-4" style={{ color: '#d97706' }} />
-          </span>
+          <IconChip size="md" tone="warning" icon={AlertTriangle} />
           <div className="flex-1">
             <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{_(msg`Crash Recovery`)}</h4>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
@@ -313,28 +278,21 @@ export function SceneAutosaveSettingsTab() {
           </div>
         </div>
 
-        <div className="mt-2 rounded-md border px-2.5 py-2 flex items-center justify-between gap-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>{_(msg`Recovery prompt on startup`)}</div>
-          <button
-            type="button"
-            onClick={() => setSettings((prev) => ({ ...prev, recoveryPromptEnabled: !prev.recoveryPromptEnabled }))}
-            className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-            aria-pressed={settings.recoveryPromptEnabled}
-            style={settings.recoveryPromptEnabled
-              ? {
-                  borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                  background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                  color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                }
-              : {
-                  borderColor: 'var(--border-subtle)',
-                  background: 'var(--surface-1)',
-                  color: 'var(--text-muted)',
-                }}
-          >
-            {settings.recoveryPromptEnabled ? _(msg`ON`) : _(msg`OFF`)}
-          </button>
-        </div>
+        <SettingRow
+          bordered
+          className="mt-2"
+          label={_(msg`Recovery prompt on startup`)}
+        >
+          <SegmentedControl
+            label={_(msg`Recovery prompt on startup`)}
+            options={[
+              { value: 'on', label: _(msg`ON`) },
+              { value: 'off', label: _(msg`OFF`) },
+            ]}
+            value={settings.recoveryPromptEnabled ? 'on' : 'off'}
+            onChange={(next) => setSettings((prev) => ({ ...prev, recoveryPromptEnabled: next === 'on' }))}
+          />
+        </SettingRow>
       </section>
 
       <section className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
@@ -348,15 +306,17 @@ export function SceneAutosaveSettingsTab() {
               <Trans>Desktop-only diagnostics for autosave files and recovery state.</Trans>
             </p>
           </div>
-          <button
+          <Button
             type="button"
             onClick={() => { void handleRefresh(); }}
             disabled={!desktopAvailable || busy !== 'none'}
-            className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs inline-flex items-center gap-1.5 disabled:opacity-60 shrink-0"
+            variant="secondary"
+            size="auto"
+            className="!h-8 !px-2.5 !py-0 text-xs inline-flex items-center gap-1.5 disabled:opacity-60 shrink-0"
           >
-            {busy === 'refresh' || loadingStatus ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+            {busy === 'refresh' || loadingStatus ? <Spinner size="sm" /> : <RefreshCw className="h-3.5 w-3.5" />}
             <Trans>Refresh</Trans>
-          </button>
+          </Button>
         </div>
 
         {!desktopAvailable ? (
@@ -365,7 +325,7 @@ export function SceneAutosaveSettingsTab() {
           </div>
         ) : loadingStatus ? (
           <div className="mt-2 text-xs inline-flex items-center gap-1.5" style={{ color: 'var(--text-muted)' }}>
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <Spinner size="sm" />
             <Trans>Loading autosave status…</Trans>
           </div>
         ) : (
@@ -416,34 +376,28 @@ export function SceneAutosaveSettingsTab() {
         )}
 
         <div className="mt-2 grid gap-2 sm:grid-cols-2">
-          <button
+          <Button
             type="button"
             onClick={() => { void handleMarkClean(); }}
             disabled={!desktopAvailable || busy !== 'none'}
-            className="ui-button !h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
-            style={{
-              borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
-              background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
-              color: 'var(--danger)',
-            }}
+            variant="tinted-danger"
+            size="auto"
+            className="!h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
           >
-            {busy === 'mark-clean' ? <Loader2 className="h-4 w-4 animate-spin" /> : <AlertTriangle className="h-4 w-4" />}
+            {busy === 'mark-clean' ? <Spinner size="md" /> : <AlertTriangle className="h-4 w-4" />}
             <Trans>Mark Recovery Clean</Trans>
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
             onClick={() => { void handleRevealAutosave(); }}
             disabled={!desktopAvailable || !resolvedAutosavePath || busy !== 'none'}
-            className="ui-button !h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
-            style={{
-              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-              color: 'var(--accent)',
-            }}
+            variant="tinted-accent"
+            size="auto"
+            className="!h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
           >
-            {busy === 'reveal' ? <Loader2 className="h-4 w-4 animate-spin" /> : <HardDrive className="h-4 w-4" />}
+            {busy === 'reveal' ? <Spinner size="md" /> : <HardDrive className="h-4 w-4" />}
             <Trans>Open Autosave Location</Trans>
-          </button>
+          </Button>
         </div>
       </section>
 

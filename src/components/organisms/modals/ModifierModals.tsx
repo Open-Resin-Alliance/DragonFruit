@@ -1,4 +1,5 @@
 import { AlertTriangle, Trash2 } from 'lucide-react';
+import { BlockingOverlay, Button } from '@/components/atoms';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { DestructiveTransformModal } from '@/components/modals/DestructiveTransformModal';
@@ -72,38 +73,27 @@ export function ModifierModals({
         onClose={() => unappliedHolePunchResolveRef.current?.('skip')}
         actions={(
           <>
-            <button
-              type="button"
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+            <Button
+              variant="secondary"
               onClick={() => unappliedHolePunchResolveRef.current?.('skip')}
             >
               Continue Without
-            </button>
-            <button
-              type="button"
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-              style={{
-                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                color: 'var(--accent)',
-              }}
+            </Button>
+            <Button
+              variant="tinted-accent"
+              className="inline-flex items-center justify-center gap-1.5"
               onClick={() => unappliedHolePunchResolveRef.current?.('goto')}
             >
               Go to Hollow Tool
-            </button>
+            </Button>
             {unappliedModifierPrompt.showApplyAll && (
-              <button
-                type="button"
-                className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-                style={{
-                  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                  background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                  color: 'var(--accent)',
-                }}
+              <Button
+                variant="tinted-accent"
+                className="inline-flex items-center justify-center gap-1.5"
                 onClick={() => unappliedHolePunchResolveRef.current?.('apply')}
               >
                 Apply to All
-              </button>
+              </Button>
             )}
           </>
         )}
@@ -132,26 +122,20 @@ export function ModifierModals({
         onClose={() => setPendingModifierResetAction(null)}
         actions={(
           <>
-            <button
-              type="button"
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+            <Button
+              variant="secondary"
               onClick={() => setPendingModifierResetAction(null)}
             >
               Cancel
-            </button>
-            <button
-              type="button"
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-              style={{
-                borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
-                color: 'var(--danger)',
-              }}
+            </Button>
+            <Button
+              variant="tinted-danger"
+              className="inline-flex items-center justify-center gap-1.5"
               onClick={handleConfirmModifierReset}
             >
               <Trash2 className="w-3.5 h-3.5" />
               {pendingModifierResetAction === 'hollowing' ? 'Remove Hollowing' : 'Remove All Holes'}
-            </button>
+            </Button>
           </>
         )}
       >
@@ -180,26 +164,20 @@ export function ModifierModals({
         onClose={() => setPendingBlockerResetState(null)}
         actions={(
           <>
-            <button
-              type="button"
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+            <Button
+              variant="secondary"
               onClick={() => setPendingBlockerResetState(null)}
             >
               Cancel
-            </button>
-            <button
-              type="button"
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-              style={{
-                borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
-                color: 'var(--danger)',
-              }}
+            </Button>
+            <Button
+              variant="tinted-danger"
+              className="inline-flex items-center justify-center gap-1.5"
               onClick={handleConfirmBlockerReset}
             >
               <Trash2 className="w-3.5 h-3.5" />
               Reset Blockers
-            </button>
+            </Button>
           </>
         )}
       >
@@ -223,44 +201,15 @@ export function ModifierModals({
       />
 
       {showModifierApplyBlockingOverlay && (
-        <div className="absolute inset-0 z-[121] flex items-center justify-center bg-black/45 backdrop-blur-[1px]">
-          <div
-            className="w-[min(520px,92vw)] rounded-xl border px-5 py-4 shadow-xl"
-            style={{
-              background: 'color-mix(in srgb, var(--surface-0), black 10%)',
-              borderColor: 'var(--border-subtle)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-live="polite"
-          >
-            <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-              {modifierApplyOverlayContent.title}
-            </div>
-            <div className="mt-1 space-y-0.5 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-              {modifierApplyOverlayContent.detailLines.map((line) => (
-                <p key={line}>{line}</p>
-              ))}
-            </div>
-
-            <div className="mt-2 text-[11px] font-medium tracking-wide" style={{ color: 'var(--accent)' }}>
-              Elapsed: {modifierApplyOverlayElapsedLabel}
-            </div>
-            <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              {modifierApplyProcessingLabel}
-            </div>
-
-            <div
-              className="ui-loading-track mt-3 h-2.5 w-full rounded-full"
-              style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
-            >
-              <div
-                className="ui-loading-indicator"
-                style={{ background: 'linear-gradient(90deg, var(--accent), #ff79c6)' }}
-              />
-            </div>
-          </div>
-        </div>
+        <BlockingOverlay
+          zIndexClassName="z-[121]"
+          title={modifierApplyOverlayContent.title}
+          details={modifierApplyOverlayContent.detailLines}
+          elapsed={`Elapsed: ${modifierApplyOverlayElapsedLabel}`}
+          footnote={modifierApplyProcessingLabel}
+          progress={null}
+          progressLabel={modifierApplyOverlayContent.title}
+        />
       )}
     </>
   );

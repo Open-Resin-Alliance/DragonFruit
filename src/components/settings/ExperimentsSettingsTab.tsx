@@ -4,6 +4,7 @@ import React from 'react';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { createPortal } from 'react-dom';
 import { AlertTriangle, FlaskConical } from 'lucide-react';
+import { Button, IconChip, SegmentedControl } from '@/components/atoms';
 import {
   getExperimentDefinitions,
   isExperimentEnabled,
@@ -59,16 +60,7 @@ function ExperimentsDisclaimer({ onAcknowledge, onExit }: ExperimentsDisclaimerP
       >
         <div className="flex items-center gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
           <div className="flex min-w-0 items-center gap-3">
-            <span
-              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
-              style={{
-                borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
-                background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
-                color: '#d97706',
-              }}
-            >
-              <AlertTriangle className="h-4 w-4" />
-            </span>
+            <IconChip size="lg" tone="warning" icon={AlertTriangle} />
 
             <div className="min-w-0 pr-2">
               <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
@@ -93,25 +85,22 @@ function ExperimentsDisclaimer({ onAcknowledge, onExit }: ExperimentsDisclaimerP
             <Trans>Enable and use them at your own risk.</Trans>
           </p>
           <div className="grid grid-cols-2 gap-2 pt-1">
-            <button
-              type="button"
-              className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs inline-flex items-center justify-center gap-1.5"
+            <Button
+              variant="secondary"
+              size="md"
+              className="w-full gap-1.5"
               onClick={onExit}
             >
               <Trans>Take me back!</Trans>
-            </button>
-            <button
-              type="button"
-              className="ui-button !h-9 w-full px-3 text-xs inline-flex items-center justify-center gap-1.5"
-              style={{
-                borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 86%)',
-                color: '#fde68a',
-              }}
+            </Button>
+            <Button
+              variant="tinted-warning"
+              size="md"
+              className="w-full gap-1.5"
               onClick={onAcknowledge}
             >
               <Trans>I understand</Trans>
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -200,27 +189,22 @@ export function ExperimentsSettingsTab({ onExit }: { onExit: () => void }) {
                 <span className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>{translateExperimentName(experiment, _)}</span>
                 <div className="mt-0.5 text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>{translateExperimentDescription(experiment, _)}</div>
               </div>
-              <button
-                type="button"
-                onClick={() => handleToggle(experiment.id, !enabled)}
-                className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors shrink-0"
-                aria-pressed={enabled}
-                style={enabled
-                  ? {
-                      borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                      color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                    }
-                  : {
-                      borderColor: 'var(--border-subtle)',
-                      background: 'var(--surface-1)',
-                      color: 'var(--text-muted)',
-                    }}
-              >
-                {enabled
-                  ? _(msg({ message: 'ON', comment: 'Toggle state on a narrow uppercase button in the Experiments tab. Keep it short — the button is 92px wide.' }))
-                  : _(msg({ message: 'OFF', comment: 'Toggle state on a narrow uppercase button in the Experiments tab. Keep it short — the button is 92px wide.' }))}
-              </button>
+              <SegmentedControl
+                label={translateExperimentName(experiment, _)}
+                className="shrink-0"
+                value={enabled ? 'on' : 'off'}
+                onChange={(next) => handleToggle(experiment.id, next === 'on')}
+                options={[
+                  {
+                    value: 'on',
+                    label: _(msg({ message: 'ON', comment: 'Toggle state on a narrow uppercase button in the Experiments tab. Keep it short — the button is 92px wide.' })),
+                  },
+                  {
+                    value: 'off',
+                    label: _(msg({ message: 'OFF', comment: 'Toggle state on a narrow uppercase button in the Experiments tab. Keep it short — the button is 92px wide.' })),
+                  },
+                ]}
+              />
             </div>
           );
         })

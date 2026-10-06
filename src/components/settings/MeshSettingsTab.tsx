@@ -6,7 +6,7 @@ import { MATCAP_OPTIONS, MESH_SHADER_OPTIONS, type MatcapVariant, type MeshShade
 import { HexColorPicker } from 'react-colorful';
 import { MeshShaderPreviewSlot } from '@/components/settings/meshSettings/MeshShaderPreviewSlot';
 import { MeshShaderPreviewCanvas } from '@/components/settings/meshSettings/MeshShaderPreviewCanvas';
-import { ColorSwatchInput, Input, Select } from '@/components/atoms';
+import { Button, ColorSwatchInput, Input, Select } from '@/components/atoms';
 import { Layers, MousePointer2, RotateCcw, SlidersHorizontal } from 'lucide-react';
 
 type PreviewModelConfig = {
@@ -374,8 +374,7 @@ export function MeshSettingsTab({
                   type="range" min="0.0" max="1.0" step="0.05"
                   value={materialRoughness}
                   onChange={(e) => onMaterialRoughnessChange(parseFloat(e.target.value))}
-                  className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-                  style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+                  className="ui-range w-full"
                 />
               </div>
             )}
@@ -391,8 +390,7 @@ export function MeshSettingsTab({
                   type="range" min="0.2" max="3.0" step="0.05"
                   value={lightness}
                   onChange={(e) => onLightnessChange(parseFloat(e.target.value))}
-                  className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-                  style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+                  className="ui-range w-full"
                 />
               </div>
             )}
@@ -407,8 +405,7 @@ export function MeshSettingsTab({
                   type="range" min="0.05" max="0.95" step="0.01"
                   value={contrast}
                   onChange={(e) => onContrastChange(parseFloat(e.target.value))}
-                  className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-                  style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+                  className="ui-range w-full"
                 />
               </div>
             )}
@@ -423,8 +420,7 @@ export function MeshSettingsTab({
                   type="range" min="0.0" max="2.0" step="0.05"
                   value={bakedAoIntensity}
                   onChange={(e) => onBakedAoIntensityChange(parseFloat(e.target.value))}
-                  className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-                  style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+                  className="ui-range w-full"
                 />
               </div>
             )}
@@ -439,8 +435,7 @@ export function MeshSettingsTab({
                   type="range" min="0.02" max="0.85" step="0.01"
                   value={xrayOpacity}
                   onChange={(e) => onXrayOpacityChange(parseFloat(e.target.value))}
-                  className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-                  style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+                  className="ui-range w-full"
                 />
               </div>
             )}
@@ -456,8 +451,7 @@ export function MeshSettingsTab({
                     type="range" min="0" max="90" step="1"
                     value={heatmapMinAngle}
                     onChange={(e) => onHeatmapMinAngleChange(Math.min(parseFloat(e.target.value), heatmapMaxAngle))}
-                    className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-                    style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+                    className="ui-range w-full"
                   />
                 </div>
                 <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
@@ -469,8 +463,7 @@ export function MeshSettingsTab({
                     type="range" min="0" max="90" step="1"
                     value={heatmapMaxAngle}
                     onChange={(e) => onHeatmapMaxAngleChange(Math.max(parseFloat(e.target.value), heatmapMinAngle))}
-                    className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-                    style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+                    className="ui-range w-full"
                   />
                 </div>
               </>
@@ -508,15 +501,16 @@ export function MeshSettingsTab({
             <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
               <div className="flex items-center justify-between mb-2">
                 <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>Colors</div>
-                <button
-                  type="button"
+                <Button
+                  variant="secondary"
+                  size="auto"
                   onClick={handleResetColors}
                   title="Reset colors to default"
                   aria-label="Reset selection and hover colors to default"
-                  className="ui-button ui-button-secondary !h-6 !w-6 !p-0 inline-flex shrink-0 items-center justify-center rounded-md"
+                  className="!h-6 !w-6 !p-0 inline-flex shrink-0 items-center justify-center rounded-md"
                 >
                   <RotateCcw className="h-3 w-3" />
-                </button>
+                </Button>
               </div>
               <div className="grid gap-2 sm:grid-cols-2">
                 <div className="space-y-1">
@@ -568,8 +562,7 @@ export function MeshSettingsTab({
                     type="range" min="0" max="1" step="0.01"
                     value={hoverTintStrength}
                     onChange={(e) => onHoverTintStrengthChange(parseFloat(e.target.value))}
-                    className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-                    style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+                    className="ui-range w-full"
                   />
                 </div>
                 <div>
@@ -581,8 +574,7 @@ export function MeshSettingsTab({
                     type="range" min="0" max="1" step="0.01"
                     value={selectedTintStrength}
                     onChange={(e) => onSelectedTintStrengthChange(parseFloat(e.target.value))}
-                    className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-                    style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+                    className="ui-range w-full"
                   />
                 </div>
               </div>

@@ -7,6 +7,7 @@ import { Trans } from '@lingui/react/macro';
 import type { MessageDescriptor } from '@lingui/core';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { ChevronDown, ChevronRight, X } from 'lucide-react';
+import { IconButton } from '@/components/atoms';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { getSnapshot as getSupportSnapshot, subscribe as subscribeSupportState } from '@/supports/state';
 import { getSupportsForModel, modelIdOfParentShaft } from '@/supports/PlacementLogic/SupportModelLinker';
@@ -144,19 +145,14 @@ export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModa
               {model ? model.name : _(msg`No model selected`)}
             </p>
           </div>
-          <button
-            type="button"
-            className="h-8 w-8 inline-flex items-center justify-center rounded-md border transition-colors"
-            style={{
-              borderColor: 'var(--border-subtle)',
-              background: 'var(--surface-1)',
-              color: 'var(--text-muted)',
-            }}
+          <IconButton
+            variant="surface"
+            size="sm"
             aria-label={_(msg`Close supports modal`)}
             onClick={onClose}
           >
             <X className="w-4 h-4" />
-          </button>
+          </IconButton>
         </div>
 
         <div className="p-4 space-y-3 max-h-[68vh] overflow-y-auto custom-scrollbar">

@@ -1,6 +1,7 @@
 import React from 'react';
-import { ChevronDown, Download, ExternalLink, FolderOpen, Loader2, Printer, RotateCcw, X } from 'lucide-react';
-import { Button, Card, CardHeader, IconButton } from '@/components/atoms';
+import { ChevronDown, Download, ExternalLink, FolderOpen, Printer, RotateCcw, X } from 'lucide-react';
+import { Button, Card, CardHeader, Spinner } from '@/components/atoms';
+import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 type PrintingPanelProps = {
@@ -85,25 +86,10 @@ export function PrintingPanel({
       <CardHeader
         left={(
           <>
-            <IconButton
-              onClick={() => setIsExpanded((prev) => !prev)}
-              className="!p-0.5"
-              title={isExpanded ? 'Collapse card' : 'Expand card'}
-            >
-              <svg
-                className="w-3 h-3 transform transition-transform"
-                style={{ color: isExpanded ? 'var(--accent)' : 'var(--text-muted)' }}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                {isExpanded ? (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                ) : (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                )}
-              </svg>
-            </IconButton>
+            <PanelCollapseToggle
+              expanded={isExpanded}
+              onToggle={() => setIsExpanded((prev) => !prev)}
+            />
             <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Printing</h3>
           </>
         )}
@@ -184,7 +170,7 @@ export function PrintingPanel({
                     background: 'var(--surface-2)',
                   }}
                 >
-                  {revealingSavedPath ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FolderOpen className="h-3.5 w-3.5" />}
+                  {revealingSavedPath ? <Spinner size="sm" /> : <FolderOpen className="h-3.5 w-3.5" />}
                 </button>
               </div>
               {revealSavedPathError && (
@@ -214,9 +200,10 @@ export function PrintingPanel({
                   </span>
                 </Button>
                 {showSendActionButton && (
-                  <button
-                    type="button"
-                    className="ui-button ui-button-secondary !h-9 px-2.5 shrink-0 inline-flex items-center justify-center gap-1"
+                  <Button
+                    variant="secondary"
+                    size="auto"
+                    className="!h-9 px-2.5 shrink-0 inline-flex items-center justify-center gap-1"
                     onClick={sendActionHandler}
                     disabled={!sendActionHandler}
                     title={sendActionTitle}
@@ -224,18 +211,19 @@ export function PrintingPanel({
                   >
                     {sendBusy ? <X className="h-3.5 w-3.5" /> : <RotateCcw className="h-3.5 w-3.5" />}
                     <span className="text-[11px]">{sendActionLabel}</span>
-                  </button>
+                  </Button>
                 )}
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-9 w-10 shrink-0 inline-flex items-center justify-center rounded-md"
+                <Button
+                  variant="secondary"
+                  size="auto"
+                  className="!h-9 w-10 shrink-0 inline-flex items-center justify-center rounded-md"
                   onClick={onOpenSendTargetPicker}
                   disabled={!canSendToPrinter || sendBusy}
                   title="Choose upload target printer"
                   aria-label="Choose upload target printer"
                 >
                   <ChevronDown className="h-4.5 w-4.5" />
-                </button>
+                </Button>
               </div>
             ) : (
               <div className="flex items-center gap-1.5">
@@ -254,9 +242,10 @@ export function PrintingPanel({
                   </span>
                 </Button>
                 {showSendActionButton && (
-                  <button
-                    type="button"
-                    className="ui-button ui-button-secondary !h-9 px-2.5 shrink-0 inline-flex items-center justify-center gap-1"
+                  <Button
+                    variant="secondary"
+                    size="auto"
+                    className="!h-9 px-2.5 shrink-0 inline-flex items-center justify-center gap-1"
                     onClick={sendActionHandler}
                     disabled={!sendActionHandler}
                     title={sendActionTitle}
@@ -264,7 +253,7 @@ export function PrintingPanel({
                   >
                     {sendBusy ? <X className="h-3.5 w-3.5" /> : <RotateCcw className="h-3.5 w-3.5" />}
                     <span className="text-[11px]">{sendActionLabel}</span>
-                  </button>
+                  </Button>
                 )}
               </div>
             )

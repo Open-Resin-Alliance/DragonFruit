@@ -1,7 +1,8 @@
 "use client";
 
 import React from 'react';
-import { FolderInput, Loader2, Upload, Printer, Wrench } from 'lucide-react';
+import { FolderInput, Upload, Printer, Wrench } from 'lucide-react';
+import { ProgressBar, Spinner } from '@/components/atoms';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import type { MessageDescriptor } from '@lingui/core';
@@ -493,21 +494,13 @@ export function EmptySceneState({
             }}
           >
             <div className="flex items-center gap-2 text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-              <Loader2 className="h-4 w-4 animate-spin" style={{ color: 'var(--accent)' }} />
+              <Spinner size="md" style={{ color: 'var(--accent)' }} />
               <span>{loadingLabel ?? _(msg`Importing your file…`)}</span>
             </div>
             <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
               {loadingDetail ?? _(msg`Please hang tight while we prepare your scene.`)}
             </div>
-            <div
-              className="ui-loading-track mt-3 h-2 w-full rounded-full"
-              style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
-            >
-              <div
-                className="ui-loading-indicator"
-                style={{ background: 'linear-gradient(90deg, var(--accent), #ff79c6)' }}
-              />
-            </div>
+            <ProgressBar indeterminate size="sm" className="mt-3" />
           </div>
         ) : shouldShowFirstTimeOnboarding ? (
           <>

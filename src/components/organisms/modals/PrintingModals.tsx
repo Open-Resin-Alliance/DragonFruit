@@ -3,7 +3,8 @@ import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { msg } from '@lingui/core/macro';
 import { useLingui } from '@lingui/react';
 import { AlertTriangle, CheckCircle2, ChevronDown, Download, LayoutGrid, Maximize2, Minimize2, Play, Printer, RefreshCw, Trash2, X } from 'lucide-react';
-import { IconButton } from '@/components/atoms';
+import { Button, IconButton, ProgressBar, Spinner } from '@/components/atoms';
+import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { SliceCompletedModal } from '@/components/modals/SliceCompletedModal';
 import { UvToolsLaunchingModal } from '@/components/modals/UvToolsLaunchingModal';
 import { PrintingResliceModal } from '@/components/modals/PrintingResliceModal';
@@ -421,79 +422,39 @@ export function PrintingModals({
       />
 
       {printingMonitorPendingConfirmation && (
-        <div
-          className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setPrintingMonitorPendingConfirmation(null);
-            }
-          }}
+        <StructuredDialogModal
+          open
+          zIndexClassName="z-[220]"
+          ariaLabel={
+            printingMonitorPendingConfirmation.kind === 'control'
+              ? (printingMonitorPendingConfirmation.action === 'cancel' ? 'Confirm cancel print' : 'Confirm emergency stop')
+              : (printingMonitorPendingConfirmation.action === 'start' ? 'Confirm start recent file' : 'Confirm delete recent file')
+          }
+          title={
+            printingMonitorPendingConfirmation.kind === 'control'
+              ? (printingMonitorPendingConfirmation.action === 'cancel' ? 'Cancel Print Job' : 'Emergency Stop')
+              : (printingMonitorPendingConfirmation.action === 'start' ? 'Start Recent Print File' : 'Delete Recent Print File')
+          }
+          subtitle={
+            printingMonitorPendingConfirmation.kind === 'control'
+              ? (
+                printingMonitorPendingConfirmation.action === 'cancel'
+                  ? 'This action cannot be undone.'
+                  : 'This will immediately halt the printer.'
+              )
+              : (
+                printingMonitorPendingConfirmation.action === 'start'
+                  ? 'Start this recent file on the selected printer now?'
+                  : 'This will remove the file from the printer.'
+              )
+          }
+          icon={<AlertTriangle className="h-4 w-4" />}
+          iconTone="warning"
+          closeAriaLabel="Close monitor confirmation modal"
+          onClose={() => setPrintingMonitorPendingConfirmation(null)}
+          onBackdropClick={() => setPrintingMonitorPendingConfirmation(null)}
+          bodyClassName="p-4 space-y-3"
         >
-          <div
-            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
-            style={{
-              background: 'var(--surface-0)',
-              borderColor: 'var(--border-subtle)',
-              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-label={
-              printingMonitorPendingConfirmation.kind === 'control'
-                ? (printingMonitorPendingConfirmation.action === 'cancel' ? 'Confirm cancel print' : 'Confirm emergency stop')
-                : (printingMonitorPendingConfirmation.action === 'start' ? 'Confirm start recent file' : 'Confirm delete recent file')
-            }
-          >
-            <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="flex items-center gap-2.5">
-                <span
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
-                  style={{
-                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
-                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
-                    color: '#d97706',
-                  }}
-                >
-                  <AlertTriangle className="h-4 w-4" />
-                </span>
-                <div>
-                  <h2 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
-                    {printingMonitorPendingConfirmation.kind === 'control'
-                      ? (printingMonitorPendingConfirmation.action === 'cancel' ? 'Cancel Print Job' : 'Emergency Stop')
-                      : (printingMonitorPendingConfirmation.action === 'start' ? 'Start Recent Print File' : 'Delete Recent Print File')}
-                  </h2>
-                  <p className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                    {printingMonitorPendingConfirmation.kind === 'control'
-                      ? (
-                        printingMonitorPendingConfirmation.action === 'cancel'
-                          ? 'This action cannot be undone.'
-                          : 'This will immediately halt the printer.'
-                      )
-                      : (
-                        printingMonitorPendingConfirmation.action === 'start'
-                          ? 'Start this recent file on the selected printer now?'
-                          : 'This will remove the file from the printer.'
-                      )}
-                  </p>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                className="h-8 w-8 inline-flex items-center justify-center rounded-md border transition-colors"
-                style={{
-                  borderColor: 'var(--border-subtle)',
-                  background: 'var(--surface-1)',
-                  color: 'var(--text-muted)',
-                }}
-                aria-label="Close monitor confirmation modal"
-                onClick={() => setPrintingMonitorPendingConfirmation(null)}
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="p-4 space-y-3">
               {printingMonitorPendingConfirmation.kind === 'plate' && (
                 <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                   <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>File</div>
@@ -525,16 +486,15 @@ export function PrintingModals({
               </p>
 
               <div className="grid grid-cols-2 gap-2 pt-1">
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
+                <Button
+                  variant="secondary"
+                  className="w-full"
                   onClick={() => setPrintingMonitorPendingConfirmation(null)}
                 >
                   {printingMonitorPendingConfirmation.kind === 'plate' ? 'Keep File' : 'Keep Printing'}
-                </button>
-                <button
-                  type="button"
-                  className="ui-button !h-9 w-full px-3 text-xs"
+                </Button>
+                <Button
+                  className="w-full"
                   style={
                     printingMonitorPendingConfirmation.kind === 'plate'
                       ? (
@@ -582,11 +542,9 @@ export function PrintingModals({
                   {printingMonitorPendingConfirmation.kind === 'plate'
                     ? (printingMonitorPendingConfirmation.action === 'start' ? 'Confirm Start' : 'Confirm Delete')
                     : (printingMonitorPendingConfirmation.action === 'cancel' ? 'Confirm Cancel' : 'Confirm Emergency Stop')}
-                </button>
+                </Button>
               </div>
-            </div>
-          </div>
-        </div>
+        </StructuredDialogModal>
       )}
 
       <PrintingResliceModal
@@ -604,70 +562,25 @@ export function PrintingModals({
       />
 
       {preSlicePrintConfirmOpen && (
-        <div
-          className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              cancelPreSlicePrintConfirm();
-            }
-          }}
+        <StructuredDialogModal
+          open
+          zIndexClassName="z-[220]"
+          ariaLabel="Print readiness confirmation"
+          title={(
+            <>
+              <span className="block text-[11px] font-normal uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                Safety Check
+              </span>
+              Confirm printer is ready to print
+            </>
+          )}
+          icon={<AlertTriangle className="h-4 w-4" />}
+          iconTone="warning"
+          closeAriaLabel="Close print readiness confirmation"
+          onClose={cancelPreSlicePrintConfirm}
+          onBackdropClick={cancelPreSlicePrintConfirm}
+          actionsClassName="flex items-center justify-end gap-2 pt-1"
         >
-          <div
-            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
-            style={{
-              background: 'var(--surface-0)',
-              borderColor: 'var(--border-subtle)',
-              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Print readiness confirmation"
-          >
-            <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="flex min-w-0 items-center gap-3">
-                <span
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
-                  style={{
-                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
-                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
-                    color: '#d97706',
-                  }}
-                >
-                  <AlertTriangle className="h-4 w-4" />
-                </span>
-
-                <div className="min-w-0 pr-2">
-                  <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                    Safety Check
-                  </div>
-                  <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                    Confirm printer is ready to print
-                  </h2>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
-                style={{
-                  borderColor: 'var(--border-subtle)',
-                  background: 'var(--surface-1)',
-                  color: 'var(--text-muted)',
-                }}
-                aria-label="Close print readiness confirmation"
-                onClick={() => {
-                  setPreSlicePrintConfirmOpen(false);
-                  if (preSlicePrintConfirmResolverRef.current) {
-                    preSlicePrintConfirmResolverRef.current(false);
-                    preSlicePrintConfirmResolverRef.current = null;
-                  }
-                }}
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="space-y-4 p-5">
               <div className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
                 Please verify before continuing:
               </div>
@@ -687,27 +600,15 @@ export function PrintingModals({
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-1">
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-9 px-3 text-xs"
-                  onClick={() => {
-                    setPreSlicePrintConfirmOpen(false);
-                    if (preSlicePrintConfirmResolverRef.current) {
-                      preSlicePrintConfirmResolverRef.current(false);
-                      preSlicePrintConfirmResolverRef.current = null;
-                    }
-                  }}
+                <Button
+                  variant="secondary"
+                  onClick={cancelPreSlicePrintConfirm}
                 >
                   Cancel
-                </button>
-                <button
-                  type="button"
-                  className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-                  style={{
-                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                    color: 'var(--accent)',
-                  }}
+                </Button>
+                <Button
+                  variant="tinted-accent"
+                  className="gap-1.5"
                   onClick={() => {
                     setPreSlicePrintConfirmOpen(false);
                     if (preSlicePrintConfirmResolverRef.current) {
@@ -717,11 +618,9 @@ export function PrintingModals({
                   }}
                 >
                   Continue to Slicing
-                </button>
+                </Button>
               </div>
-            </div>
-          </div>
-        </div>
+        </StructuredDialogModal>
       )}
 
       {printingTargetPickerOpen && (
@@ -942,22 +841,16 @@ export function PrintingModals({
               )}
 
               <div className="flex items-center justify-end gap-2 pt-1">
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                <Button
+                  variant="secondary"
                   onClick={cancelPrintingTargetPicker}
                   disabled={printingSendBusy}
                 >
                   Cancel
-                </button>
-                <button
-                  type="button"
-                  className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-                  style={{
-                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                    color: 'var(--accent)',
-                  }}
+                </Button>
+                <Button
+                  variant="tinted-accent"
+                  className="gap-1.5"
                   disabled={
                     printingSendBusy
                     || isPrintingTargetMaterialsLoading
@@ -987,7 +880,7 @@ export function PrintingModals({
                   }}
                 >
                   {isPreSliceTargetPicker ? 'Continue to Slicing' : 'Upload to Selected Printer'}
-                </button>
+                </Button>
               </div>
             </div>
           </div>
@@ -1097,15 +990,7 @@ export function PrintingModals({
 
               {printingDialogIsIndeterminate ? (
                 <>
-                  <div
-                    className="ui-loading-track h-2.5 w-full rounded-full"
-                    style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
-                  >
-                    <div
-                      className="ui-loading-indicator"
-                      style={{ background: 'linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent), #ffffff 28%))' }}
-                    />
-                  </div>
+                  <ProgressBar indeterminate />
                   <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
                     Processing on {activeNetworkUiAdapter?.displayName ?? 'printer backend'}… elapsed {printingProcessingElapsedLabel}
                   </div>
@@ -1145,61 +1030,45 @@ export function PrintingModals({
 
               <div className="pt-1 flex items-center justify-end gap-2">
                 {(printingUploadDialogStage === 'failed' || printingUploadDialogStage === 'started' || printingUploadDialogStage === 'ready') && (
-                  <button
-                    type="button"
-                    className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                  <Button
+                    variant="secondary"
                     onClick={() => setPrintingUploadDialogOpen(false)}
                     disabled={printingSendBusy || printingPrintNowBusy}
                   >
                     Close
-                  </button>
+                  </Button>
                 )}
 
                 {printingUploadDialogStage === 'failed' && (
-                  <button
-                    type="button"
-                    className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-                    style={{
-                      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                      color: 'var(--accent)',
-                    }}
+                  <Button
+                    variant="tinted-accent"
+                    className="gap-1.5"
                     onClick={() => { void handleSendToPrinter(); }}
                     disabled={printingSendBusy || printingPrintNowBusy || !canSendToPrinter}
                   >
                     Retry Upload
-                  </button>
+                  </Button>
                 )}
                 {printingUploadDialogStage === 'ready' && (
-                  <button
-                    type="button"
-                    className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-                    style={{
-                      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                      color: 'var(--accent)',
-                    }}
+                  <Button
+                    variant="tinted-accent"
+                    className="gap-1.5"
                     onClick={handlePrintNow}
                     disabled={!canPrintNow || printingPrintNowBusy || printingSendBusy}
                   >
                     {printingPrintNowBusy ? 'Starting print…' : 'Start Print'}
-                  </button>
+                  </Button>
                 )}
 
                 {printingUploadDialogStage === 'started' && (
-                  <button
-                    type="button"
-                    className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-                    style={{
-                      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                      color: 'var(--accent)',
-                    }}
+                  <Button
+                    variant="tinted-accent"
+                    className="gap-1.5"
                     onClick={() => openPrintingMonitorForTargetDevice(printingTargetDevice?.id ?? null)}
                     disabled={printingSendBusy || printingPrintNowBusy}
                   >
                     Open Monitor
-                  </button>
+                  </Button>
                 )}
               </div>
             </div>
@@ -1408,9 +1277,10 @@ export function PrintingModals({
               )}
               <div className="flex items-center gap-1.5">
                 {hasPrintingMonitorFleet && (
-                  <button
-                    type="button"
-                    className="ui-button ui-button-secondary !h-8 px-2.5 text-[11px] inline-flex items-center gap-1"
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="gap-1"
                     onClick={() => {
                       setIsPrintingMonitorPrinterMenuOpen(false);
                       setPrintingMonitorViewMode((previous) => {
@@ -1422,17 +1292,18 @@ export function PrintingModals({
                   >
                     <LayoutGrid className="w-3.5 h-3.5" />
                     {printingMonitorViewMode === 'dashboard' ? 'Detail View' : 'Dashboard View'}
-                  </button>
+                  </Button>
                 )}
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary inline-flex items-center justify-center leading-none !h-8 !w-8 !p-0"
+                <IconButton
+                  variant="solid"
+                  size="sm"
+                  className="leading-none"
                   onClick={() => setPrintingMonitorModalOpen(false)}
                   aria-label="Close printer monitor"
                   title="Close monitor"
                 >
                   <X className="w-4 h-4" />
-                </button>
+                </IconButton>
               </div>
             </div>
 
@@ -1679,7 +1550,7 @@ export function PrintingModals({
                         background: 'color-mix(in srgb, #f59e0b, transparent 84%)',
                         color: 'color-mix(in srgb, #f59e0b, var(--text-strong) 20%)',
                       }}>
-                        <RefreshCw className="h-5 w-5 animate-spin" />
+                        <Spinner size="lg" icon={RefreshCw} />
                       </div>
                       <h3 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
                         Printer is responding slowly
@@ -1688,15 +1559,7 @@ export function PrintingModals({
                         We will keep trying to reconnect for another {printingMonitorSlowResponseGraceRemainingSec}s. If reconnection fails, please verify the network configuration and confirm the printer is online.
                       </p>
                       <div className="mt-4 mx-auto w-[78%]">
-                        <div
-                          className="ui-loading-track h-2.5 w-full rounded-full"
-                          style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
-                        >
-                          <div
-                            className="ui-loading-indicator"
-                            style={{ background: 'linear-gradient(90deg, #f59e0b, color-mix(in srgb, #f59e0b, #fde68a 28%))' }}
-                          />
-                        </div>
+                        <ProgressBar indeterminate />
                       </div>
                     </div>
                   </div>
@@ -1730,16 +1593,15 @@ export function PrintingModals({
                         Reconnect this printer in Network Settings, or choose a different online printer from the selector above.
                       </p>
                       <div className="mt-4 flex items-center justify-center">
-                        <button
-                          type="button"
-                          className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                        <Button
+                          variant="secondary"
                           onClick={() => {
                             setPrintingMonitorModalOpen(false);
                             openProfileSettingsModal('printer', { openNetworkSettings: true });
                           }}
                         >
                           Open Network Settings
-                        </button>
+                        </Button>
                       </div>
                     </div>
                   </div>
@@ -1829,15 +1691,7 @@ export function PrintingModals({
                           {!isPrintingMonitorThumbnailLoaded && (
                             <div className="absolute inset-0 flex items-center justify-center px-3 text-[11px]" style={{ color: 'var(--text-muted)' }}>
                               <div className="w-[74%]">
-                                <div
-                                  className="ui-loading-track h-2.5 w-full rounded-full"
-                                  style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
-                                >
-                                  <div
-                                    className="ui-loading-indicator"
-                                    style={{ background: 'linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent), #ffffff 28%))' }}
-                                  />
-                                </div>
+                                <ProgressBar indeterminate />
                                 <div className="mt-2 text-center">Loading thumbnail…</div>
                               </div>
                             </div>
@@ -1945,9 +1799,10 @@ export function PrintingModals({
                               ) : (
                                 <div className="flex flex-col items-center gap-2 text-center">
                                   <span className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>No Files Found</span>
-                                  <button
-                                    type="button"
-                                    className="ui-button ui-button-secondary !h-8 !px-3 !py-0 !text-[11px] !font-semibold inline-flex items-center justify-center gap-1"
+                                  <Button
+                                    variant="secondary"
+                                    size="auto"
+                                    className="!h-8 !px-3 !py-0 !text-[11px] !font-semibold gap-1"
                                     onClick={() => {
                                       void refreshPrintingMonitorRecentPlates();
                                     }}
@@ -1955,7 +1810,7 @@ export function PrintingModals({
                                   >
                                     <RefreshCw className="w-3.5 h-3.5" />
                                     Refresh
-                                  </button>
+                                  </Button>
                                 </div>
                               )}
                             </div>
@@ -2027,9 +1882,7 @@ export function PrintingModals({
                   </div>
 
                   <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      className="ui-button !h-9 px-3 text-xs"
+                    <Button
                       style={!printingMonitorPauseButtonDisabled
                         ? {
                             borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
@@ -2050,7 +1903,7 @@ export function PrintingModals({
                       {printingMonitorPauseButtonAnimating
                         ? (
                           <span className="inline-flex items-center gap-1.5">
-                            <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                            <Spinner size="sm" icon={RefreshCw} />
                             <span>
                               {printingMonitorControlPendingAction === 'resume'
                                 ? 'Resuming…'
@@ -2061,11 +1914,9 @@ export function PrintingModals({
                           </span>
                         )
                         : (printingMonitorSnapshot?.isPaused ? 'Resume' : 'Pause')}
-                    </button>
+                    </Button>
 
-                    <button
-                      type="button"
-                      className="ui-button !h-9 px-3 text-xs"
+                    <Button
                       style={!printingMonitorCancelButtonDisabled
                         ? {
                             borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 48%)',
@@ -2086,16 +1937,15 @@ export function PrintingModals({
                       {printingMonitorCancelButtonAnimating
                         ? (
                           <span className="inline-flex items-center gap-1.5">
-                            <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                            <Spinner size="sm" icon={RefreshCw} />
                             <span>Canceling…</span>
                           </span>
                         )
                         : 'Cancel'}
-                    </button>
+                    </Button>
 
-                    <button
-                      type="button"
-                      className="ui-button !h-9 px-3 text-xs col-span-2"
+                    <Button
+                      className="col-span-2"
                       style={{
                         borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 40%)',
                         background: 'color-mix(in srgb, #ef4444, var(--surface-1) 78%)',
@@ -2109,7 +1959,7 @@ export function PrintingModals({
                       {(printingMonitorControlPendingAction === 'emergency-stop' || printingMonitorActionBusy === 'emergency-stop')
                         ? 'Stopping…'
                         : 'Emergency Stop'}
-                    </button>
+                    </Button>
                   </div>
 
                 </div>
@@ -2152,7 +2002,7 @@ export function PrintingModals({
                       aria-label="Save webcam snapshot"
                     >
                       {isPrintingMonitorWebcamSnapshotSaving
-                        ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        ? <Spinner size="sm" icon={RefreshCw} />
                         : <Download className="w-3.5 h-3.5" />}
                     </IconButton>
                   </div>
@@ -2181,9 +2031,10 @@ export function PrintingModals({
 
                           <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
                             {printingMonitorWebcamCanResetStreamSlot && (
-                              <button
-                                type="button"
-                                className="ui-button ui-button-secondary !h-8 px-2.5 text-[10px]"
+                              <Button
+                                variant="secondary"
+                                size="auto"
+                                className="!h-8 px-2.5 text-[10px]"
                                 onClick={() => {
                                   void handleResetPrintingMonitorWebcamStreamSlot();
                                 }}
@@ -2191,19 +2042,20 @@ export function PrintingModals({
                                 title="Ask the printer to disable any stale webcam stream before retrying"
                               >
                                 {isPrintingMonitorWebcamResetBusy ? 'Resetting stream…' : 'Reset stream slot'}
-                              </button>
+                              </Button>
                             )}
 
-                            <button
-                              type="button"
-                              className="ui-button ui-button-secondary !h-8 px-2.5 text-[10px]"
+                            <Button
+                              variant="secondary"
+                              size="auto"
+                              className="!h-8 px-2.5 text-[10px]"
                               onClick={() => {
                                 triggerPrintingMonitorWebcamRetry();
                               }}
                               disabled={isPrintingMonitorWebcamResetBusy}
                             >
                               Retry
-                            </button>
+                            </Button>
                           </div>
                         </div>
                       </div>
@@ -2221,15 +2073,7 @@ export function PrintingModals({
                         {!isPrintingMonitorWebcamLoaded && (
                           <div className="absolute inset-0 z-[1] flex items-center justify-center px-3 text-[11px]" style={{ color: 'var(--text-muted)' }}>
                             <div className="w-[74%]">
-                              <div
-                                className="ui-loading-track h-2.5 w-full rounded-full"
-                                style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
-                              >
-                                <div
-                                  className="ui-loading-indicator"
-                                  style={{ background: 'linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent), #ffffff 28%))' }}
-                                />
-                              </div>
+                              <ProgressBar indeterminate />
                               <div className="mt-2 text-center">Loading camera feed…</div>
                             </div>
                           </div>
@@ -2370,9 +2214,10 @@ export function PrintingModals({
 
                       <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
                       {printingMonitorWebcamCanResetStreamSlot && (
-                        <button
-                          type="button"
-                          className="ui-button ui-button-secondary !h-8 px-2.5 text-[10px]"
+                        <Button
+                          variant="secondary"
+                          size="auto"
+                          className="!h-8 px-2.5 text-[10px]"
                           onClick={() => {
                             void handleResetPrintingMonitorWebcamStreamSlot();
                           }}
@@ -2380,19 +2225,20 @@ export function PrintingModals({
                           title="Ask the printer to disable any stale webcam stream before retrying"
                         >
                           {isPrintingMonitorWebcamResetBusy ? 'Resetting stream…' : 'Reset stream slot'}
-                        </button>
+                        </Button>
                       )}
 
-                      <button
-                        type="button"
-                        className="ui-button ui-button-secondary !h-8 px-2.5 text-[10px]"
+                      <Button
+                        variant="secondary"
+                        size="auto"
+                        className="!h-8 px-2.5 text-[10px]"
                         onClick={() => {
                           triggerPrintingMonitorWebcamRetry();
                         }}
                         disabled={isPrintingMonitorWebcamResetBusy}
                       >
                         Retry
-                      </button>
+                      </Button>
                     </div>
                     </div>
                   </div>

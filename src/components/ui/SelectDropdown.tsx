@@ -1,5 +1,6 @@
 import React from 'react';
-import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
+import { useOutsideDismiss } from '@/hooks/useOutsideDismiss';
+import { clampToViewport } from '@/utils/math';
 import { ChevronDown } from 'lucide-react';
 import { createPortal } from 'react-dom';
 
@@ -135,26 +136,20 @@ export function SelectDropdown<T extends string | number = string>({
     triggerRef.current?.blur();
   }, []);
 
-  React.useEffect(() => {
-    if (!isOpen) return;
+  const closeMenu = React.useCallback(() => setIsOpen(false), []);
 
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (containerRef.current?.contains(target)) return;
-      if (menuRef.current?.contains(target)) return;
-      setIsOpen(false);
-    };
-
-    window.addEventListener('pointerdown', onPointerDown);
-
-    return () => {
-      window.removeEventListener('pointerdown', onPointerDown);
-    };
-  }, [isOpen]);
-
-  // An open menu takes Escape ahead of the dialog it sits in, so the first
-  // press closes the menu and not the whole modal.
-  useEscapeToClose(isOpen, () => setIsOpen(false));
+  // Escape and outside pointer down close the menu. The trigger lives inside
+  // containerRef, so its own click never counts as outside. The portal menu is
+  // not a descendant of containerRef, so it stops pointerdown propagation
+  // itself (below) and never reaches the dismiss listener.
+  //
+  // Resize/scroll keep the menu open and reposition it instead (see
+  // updateMenuPosition), so both dismiss-on-layout listeners are disabled.
+  useOutsideDismiss(isOpen, closeMenu, {
+    ignoreRef: containerRef,
+    dismissOnResize: false,
+    dismissOnScroll: false,
+  });
 
   const updateMenuPosition = React.useCallback((measureMenu: boolean) => {
     const trigger = containerRef.current;
@@ -185,7 +180,12 @@ export function SelectDropdown<T extends string | number = string>({
       left = rect.right - measuredMenuWidth;
     }
 
-    left = Math.max(margin, Math.min(left, viewportWidth - margin - measuredMenuWidth));
+    // Keep the menu inside the viewport horizontally, via the shared edge clamp.
+    left = clampToViewport(
+      { x: left, y: rect.bottom + gap },
+      { width: measuredMenuWidth, height: measuredMenuHeight },
+      { margin, viewport: { width: viewportWidth, height: viewportHeight } },
+    ).left;
 
     const belowSpace = viewportHeight - (rect.bottom + gap) - margin;
     const aboveSpace = rect.top - gap - margin;
@@ -342,6 +342,7 @@ export function SelectDropdown<T extends string | number = string>({
           <div
             ref={menuRef}
             role="listbox"
+            onPointerDown={(event) => event.stopPropagation()}
             className={`fixed z-[9999] rounded-[4px] border shadow-xl ${menuClassName}`}
             style={{
               top: menuPosition?.top ?? 0,

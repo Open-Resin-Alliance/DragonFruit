@@ -3,7 +3,8 @@ import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import { Trans } from '@lingui/react/macro';
 import type { MessageDescriptor } from '@lingui/core';
-import { Check, Loader2, Plus, Printer, RefreshCw, Search, Trash2, Unplug, X } from 'lucide-react';
+import { Check, Plus, Printer, RefreshCw, Search, Trash2, Unplug, X } from 'lucide-react';
+import { Button, IconButton, Spinner } from '@/components/atoms';
 import { ManualIpEntryCard, SetupMethodChooser, SetupModeButton } from '@/components/printers/SetupMethodChooser';
 import type { PrinterNetworkDevice } from '@/features/profiles/profileStore';
 
@@ -106,15 +107,14 @@ export function FleetManagement({
           </h3>
           <p className="ui-meta truncate">{printerName}</p>
         </div>
-        <button
-          type="button"
+        <IconButton
+          variant="surface"
+          size="sm"
           onClick={onClose}
-          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition-colors"
-          style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
           aria-label={_(msg`Close network settings`)}
         >
           <X className="h-4 w-4" />
-        </button>
+        </IconButton>
       </div>
 
       <div className="custom-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
@@ -200,14 +200,15 @@ export function FleetManagement({
 
                         <div className="flex shrink-0 items-center gap-1">
                           {!isActive && (
-                            <button
-                              type="button"
+                            <Button
+                              variant="secondary"
+                              size="auto"
                               onClick={() => onSelectManagedPrinter(device)}
-                              className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-xs rounded-full"
+                              className="!h-7 !px-2.5 !py-0 text-xs rounded-full"
                               style={{ color: 'var(--text-strong)' }}
                             >
                               <Trans>Select</Trans>
-                            </button>
+                            </Button>
                           )}
                           <button
                             type="button"
@@ -257,25 +258,27 @@ export function FleetManagement({
               {activePrinterSummary}
             </div>
             {!showAddPrinterFlow ? (
-              <button
-                type="button"
+              <Button
+                variant="secondary"
+                size="auto"
                 onClick={onEnterAddPrinterFlow}
-                className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-full"
+                className="!h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-full"
                 style={{ color: 'var(--accent-secondary)' }}
               >
                 <Plus className="h-3.5 w-3.5" />
                 <Trans>Add Printer</Trans>
-              </button>
+              </Button>
             ) : (
               managedPrinters.length > 0 && (
-                <button
-                  type="button"
+                <Button
+                  variant="secondary"
+                  size="auto"
                   onClick={onExitAddPrinterFlow}
-                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-full"
+                  className="!h-8 !px-3 !py-0 text-xs rounded-full"
                   style={{ color: 'var(--text-muted)' }}
                 >
                   <Trans>Done Adding</Trans>
-                </button>
+                </Button>
               )
             )}
           </div>
@@ -326,15 +329,16 @@ export function FleetManagement({
                           ? `${discoveredPrinters.length} printer${discoveredPrinters.length !== 1 ? 's' : ''} found`
                           : _(msg`No printers found.`)}
                       </span>
-                      <button
-                        type="button"
+                      <Button
+                        variant="secondary"
+                        size="auto"
                         onClick={onRunDiscovery}
-                        className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-xs inline-flex items-center gap-1 rounded-full"
+                        className="!h-7 !px-2.5 !py-0 text-xs inline-flex items-center gap-1 rounded-full"
                         style={{ color: 'var(--accent-secondary)' }}
                       >
                         <Search className="h-3 w-3" />
                         {_(msg`Scan again`)}
-                      </button>
+                      </Button>
                     </div>
                   )}
                 </div>
@@ -382,16 +386,17 @@ export function FleetManagement({
                                 <Trans>Connected</Trans>
                               </span>
                             ) : (
-                              <button
-                                type="button"
+                              <Button
+                                variant="secondary"
+                                size="auto"
                                 onClick={() => onConnectDiscovered(entry)}
                                 disabled={isNetworkConnecting}
-                                className="ui-button ui-button-secondary !h-7 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-full disabled:opacity-60"
+                                className="!h-7 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-full disabled:opacity-60"
                                 style={{ color: 'var(--accent-secondary)' }}
                               >
-                                {isNetworkConnecting ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                                {isNetworkConnecting ? <Spinner size="xs" /> : null}
                                 {isNetworkConnecting ? _(msg`Connecting…`) : _(msg`Connect`)}
-                              </button>
+                              </Button>
                             )}
                           </div>
                         );
@@ -428,13 +433,14 @@ export function FleetManagement({
               }
             }}
           />
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            size="auto"
             onClick={onClose}
-            className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-full"
+            className="!h-8 !px-3 !py-0 text-xs rounded-full"
           >
             <Trans>Cancel</Trans>
-          </button>
+          </Button>
         </div>
       )}
     </div>

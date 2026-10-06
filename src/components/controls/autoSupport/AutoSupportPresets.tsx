@@ -52,6 +52,7 @@ import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import type { MessageDescriptor } from '@lingui/core';
 import { Check, Copy, Download, PenLine, Plus, RotateCcw, Trash2, Upload } from 'lucide-react';
+import { Button } from '@/components/atoms';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import type { AutoSupportSettings } from '@/supports/autoSupport';
@@ -97,10 +98,10 @@ const NEW_PRESET_NAME = msg`New Preset`;
 const NEW_PRESET_ENTRY = msg`New preset…`;
 
 /** The strip's buttons: the LUT editor's quiet outline row button. */
-const STRIP_BUTTON = 'ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px] inline-flex items-center gap-1 disabled:opacity-45 disabled:cursor-not-allowed';
+const STRIP_BUTTON = '!h-8 !px-2.5 !py-0 text-[11px] inline-flex items-center gap-1 disabled:opacity-45 disabled:cursor-not-allowed';
 
 /** The footer's buttons: the LUT editor's footer treatment. */
-const FOOTER_BUTTON = 'ui-button ui-button-secondary inline-flex items-center gap-1.5 !h-9 px-3 text-[12px] disabled:opacity-45 disabled:cursor-not-allowed';
+const FOOTER_BUTTON = 'inline-flex items-center gap-1.5 !h-9 px-3 text-[12px] disabled:opacity-45 disabled:cursor-not-allowed';
 
 /** The LUT's `Save`: the accent-secondary action token, filled. */
 const SAVE_STYLE = {
@@ -111,7 +112,7 @@ const SAVE_STYLE = {
 
 /**
  * The save's acknowledgement: the app's success treatment, as the updater's
- * up-to-date banner and the notification stack tint theirs. `.ui-button` already
+ * up-to-date banner and the notification stack tint theirs. The button already
  * transitions background, border and colour over 140ms, so the swap animates
  * without anything extra here.
  */
@@ -119,21 +120,6 @@ const SAVED_STYLE = {
   borderColor: 'color-mix(in srgb, var(--success), var(--border-subtle) 40%)',
   background: 'color-mix(in srgb, var(--success), var(--surface-1) 85%)',
   color: 'var(--success)',
-} as const;
-
-/**
- * The LUT's `Delete Curve`: a filled danger action. It is applied only while the
- * button can act — an inline background/border/colour wins over the stylesheet, so
- * leaving it on a disabled button keeps it red and it reads as clickable. Disabled,
- * the button falls back to `.ui-button:disabled` (the app's muted treatment:
- * `color-mix(surface-1, black 8%)` fill, `color-mix(border-subtle, black 10%)`
- * border, `color-mix(text-muted, surface-2 18%)` text), the way the material
- * editor's own destructive action does.
- */
-const DANGER_DELETE_STYLE = {
-  borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
-  background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
-  color: 'var(--danger)',
 } as const;
 
 /**
@@ -374,14 +360,15 @@ export function AutoSupportPresetSelector({ draft, setDraft }: AutoSupportPreset
           />
         </div>
 
-        <button
-          type="button"
+        <Button
           onClick={() => {
             if (activePreset && !activePreset.isBuiltIn) {
               setNameDialog({ mode: 'rename', name: activePreset.name });
             }
           }}
           disabled={!activePreset || isBuiltIn}
+          variant="secondary"
+          size="auto"
           className={STRIP_BUTTON}
           title={isBuiltIn
             ? _(msg`A built-in's name is translated and cannot be renamed`)
@@ -389,21 +376,21 @@ export function AutoSupportPresetSelector({ draft, setDraft }: AutoSupportPreset
         >
           <PenLine className="h-3.5 w-3.5" />
           {_(msg`Rename`)}
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
           onClick={() => {
             if (activeId) duplicateAutoSupportPreset(activeId);
           }}
           disabled={!activeId}
+          variant="secondary"
+          size="auto"
           className={STRIP_BUTTON}
           title={_(msg`Copy the selected preset under a new name`)}
         >
           <Copy className="h-3.5 w-3.5" />
           {_(msg`Duplicate`)}
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
           onClick={() => {
             if (!activeId) return;
             void exportPresetToFile(activeId).catch((error: unknown) => {
@@ -411,14 +398,15 @@ export function AutoSupportPresetSelector({ draft, setDraft }: AutoSupportPreset
             });
           }}
           disabled={!activeId}
+          variant="secondary"
+          size="auto"
           className={STRIP_BUTTON}
           title={_(msg`Export the selected preset as a JSON file`)}
         >
           <Download className="h-3.5 w-3.5" />
           {_(msg`Export`)}
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
           onClick={() => {
             if (isTauriRuntime()) {
               void importFromNativeDialog();
@@ -426,12 +414,14 @@ export function AutoSupportPresetSelector({ draft, setDraft }: AutoSupportPreset
             }
             importInputRef.current?.click();
           }}
+          variant="secondary"
+          size="auto"
           className={STRIP_BUTTON}
           title={_(msg`Import a preset from a JSON file, and apply it`)}
         >
           <Upload className="h-3.5 w-3.5" />
           {_(msg`Import`)}
-        </button>
+        </Button>
         <input
           ref={importInputRef}
           type="file"
@@ -469,19 +459,19 @@ export function AutoSupportPresetSelector({ draft, setDraft }: AutoSupportPreset
         onBackdropClick={() => setNameDialog(null)}
         actions={
           <>
-            <button
-              type="button"
+            <Button
               onClick={() => setNameDialog(null)}
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+              variant="secondary"
+              size="md"
               title={_(msg`Leave the collection as it is`)}
             >
               {_(msg`Cancel`)}
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
               onClick={confirmNameDialog}
               disabled={(nameDialog?.name.trim().length ?? 0) === 0}
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 disabled:opacity-40"
+              size="md"
+              className="inline-flex items-center justify-center gap-1.5 disabled:opacity-40"
               style={SAVE_STYLE}
               title={nameDialog?.mode === 'create'
                 ? _(msg`Create the preset and select it`)
@@ -489,7 +479,7 @@ export function AutoSupportPresetSelector({ draft, setDraft }: AutoSupportPreset
             >
               <Check className="h-3.5 w-3.5" />
               {nameDialog?.mode === 'create' ? _(msg`Create`) : _(msg`Save Name`)}
-            </button>
+            </Button>
           </>
         }
       >
@@ -606,39 +596,40 @@ export function AutoSupportSettingsFooterActions({
           background: 'color-mix(in srgb, var(--surface-1), transparent 10%)',
         }}
       >
-        <button
-          type="button"
+        <Button
           onClick={() => setPendingDelete(true)}
           disabled={!activePreset || isBuiltIn}
-          className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 disabled:cursor-not-allowed"
-          style={!activePreset || isBuiltIn ? undefined : DANGER_DELETE_STYLE}
+          variant="tinted-danger"
+          size="md"
+          className="inline-flex items-center justify-center gap-1.5 disabled:cursor-not-allowed"
           title={isBuiltIn
             ? _(msg`Built-in presets cannot be deleted`)
             : _(msg`Delete the selected preset`)}
         >
           <Trash2 className="h-3.5 w-3.5" />
           {_(msg`Delete`)}
-        </button>
+        </Button>
 
         <div className="flex items-center gap-2">
-          <button
-            type="button"
+          <Button
             onClick={() => {
               resetToActivePreset();
               setDraft(getSettings().autoSupport);
             }}
             disabled={!hasChanges}
+            variant="secondary"
+            size="auto"
             className={FOOTER_BUTTON}
             title={_(msg`Discard the edits made in this dialog and reload the selected preset`)}
           >
             <RotateCcw className="h-3.5 w-3.5" />
             {_(msg`Reset`)}
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
             onClick={handleSave}
             disabled={!hasChanges || isBuiltIn}
-            className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 disabled:cursor-not-allowed"
+            size="md"
+            className="inline-flex items-center justify-center gap-1.5 disabled:cursor-not-allowed"
             style={saved ? SAVED_STYLE : (!hasChanges || isBuiltIn ? undefined : SAVE_STYLE)}
             title={saved
               ? _(msg`Saved`)
@@ -650,7 +641,7 @@ export function AutoSupportSettingsFooterActions({
           >
             {saved && <Check className="h-3.5 w-3.5" />}
             {saved ? _(msg`Saved!`) : _(msg`Save`)}
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -664,21 +655,20 @@ export function AutoSupportSettingsFooterActions({
         onBackdropClick={() => setPendingDelete(false)}
         actions={
           <>
-            <button
-              type="button"
+            <Button
               onClick={() => setPendingDelete(false)}
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+              variant="secondary"
+              size="md"
               title={_(msg`Keep the preset`)}
             >
               {_(msg`Cancel`)}
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
               onClick={() => {
                 deleteActiveAutoSupportPreset(setDraft);
                 setPendingDelete(false);
               }}
-              className="ui-button !h-9 px-3 text-xs"
+              size="md"
               style={{
                 borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 45%)',
                 background: 'color-mix(in srgb, var(--danger), var(--surface-1) 88%)',
@@ -687,7 +677,7 @@ export function AutoSupportSettingsFooterActions({
               title={_(msg`Delete the preset`)}
             >
               {_(msg`Delete`)}
-            </button>
+            </Button>
           </>
         }
       >

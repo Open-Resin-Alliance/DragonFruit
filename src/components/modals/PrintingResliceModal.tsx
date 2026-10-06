@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { AlertTriangle } from 'lucide-react';
+import { Button } from '@/components/atoms';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 
 type PrintingResliceModalProps = {
@@ -29,25 +30,16 @@ export function PrintingResliceModal({
       onBackdropClick={onCancel}
       actions={(
         <>
-          <button
-            type="button"
-            className="ui-button ui-button-secondary !h-9 px-3 text-xs"
-            onClick={onCancel}
-          >
+          <Button variant="secondary" onClick={onCancel}>
             Back
-          </button>
-          <button
-            type="button"
-            className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-            style={{
-              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-              color: 'var(--accent)',
-            }}
+          </Button>
+          <Button
+            variant="tinted-accent"
+            className="inline-flex items-center justify-center gap-1.5"
             onClick={onResliceNow}
           >
             Re-Slice Now
-          </button>
+          </Button>
         </>
       )}
     >

@@ -6,7 +6,8 @@ import { msg } from '@lingui/core/macro';
 import { Trans } from '@lingui/react/macro';
 import type { MessageDescriptor } from '@lingui/core';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
-import { AlertTriangle, ArchiveRestore, CheckCircle2, Eye, FolderOpen, HardDrive, Loader2, RefreshCcw, Trash2, UploadCloud, X } from 'lucide-react';
+import { AlertTriangle, ArchiveRestore, CheckCircle2, Eye, FolderOpen, HardDrive, RefreshCcw, Trash2, UploadCloud, X } from 'lucide-react';
+import { Button, IconButton, SegmentedControl, SettingRow, Spinner } from '@/components/atoms';
 import { getProfileStoreSnapshot } from '@/features/profiles/profileStore';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
@@ -362,7 +363,6 @@ export function LocalBackupsSettingsTab() {
   const [showSnapshotModal, setShowSnapshotModal] = React.useState(false);
   useEscapeToClose(showSnapshotModal, () => setShowSnapshotModal(false));
   const [confirmRestoreId, setConfirmRestoreId] = React.useState<string | null>(null);
-  useEscapeToClose(confirmRestoreId !== null, () => setConfirmRestoreId(null));
   const [confirmDeleteId, setConfirmDeleteId] = React.useState<string | null>(null);
   const [snapshotModalTab, setSnapshotModalTab] = React.useState<SnapshotModalTab>('overview');
   const [selectedStorageKey, setSelectedStorageKey] = React.useState<string | null>(null);
@@ -723,7 +723,7 @@ export function LocalBackupsSettingsTab() {
 
         {loadingStatus ? (
           <div className="mt-2 text-xs inline-flex items-center gap-1.5" style={{ color: 'var(--text-muted)' }}>
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <Spinner size="sm" />
             <Trans>Loading backup status…</Trans>
           </div>
         ) : (
@@ -760,46 +760,44 @@ export function LocalBackupsSettingsTab() {
 
         <div className={isUsingDefault ? 'mt-2 grid gap-2 sm:grid-cols-2' : 'mt-2 grid gap-2 sm:grid-cols-3'}>
           {!isUsingDefault && defaultDirectory ? (
-            <button
-              type="button"
-              onClick={() => { void handleUseDefaultDirectory(); }}
+            <Button
+              variant="secondary"
+              size="auto"
+              className="!h-9 !px-3 !py-0 text-sm gap-1.5 disabled:opacity-60"
               disabled={busy !== 'none'}
-              className="ui-button ui-button-secondary !h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
+              onClick={() => { void handleUseDefaultDirectory(); }}
             >
               <CheckCircle2 className="h-4 w-4" style={{ color: 'var(--text-muted)' }} />
               <Trans>Use Default Path</Trans>
-            </button>
+            </Button>
           ) : null}
 
-          <button
-            type="button"
-            onClick={() => { void handleChooseDirectory(); }}
+          <Button
+            variant="tinted-accent"
+            size="auto"
+            className="!h-9 !px-3 !py-0 text-sm gap-1.5 disabled:opacity-60"
             disabled={busy !== 'none'}
-            className="ui-button !h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
-            style={{
-              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-              color: 'var(--accent)',
-            }}
+            onClick={() => { void handleChooseDirectory(); }}
           >
-            {busy === 'choose-directory' ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderOpen className="h-4 w-4" />}
+            {busy === 'choose-directory' ? <Spinner size="md" /> : <FolderOpen className="h-4 w-4" />}
             <Trans>Choose Folder</Trans>
-          </button>
+          </Button>
 
-          <button
-            type="button"
-            onClick={() => { void handleRevealDirectory(); }}
-            disabled={!selectedDirectory || busy !== 'none'}
-            className="ui-button !h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
+          <Button
+            variant="secondary"
+            size="auto"
+            className="!h-9 !px-3 !py-0 text-sm gap-1.5 disabled:opacity-60"
             style={{
               borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
               background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 86%)',
               color: 'var(--accent-secondary)',
             }}
+            disabled={!selectedDirectory || busy !== 'none'}
+            onClick={() => { void handleRevealDirectory(); }}
           >
-            {busy === 'reveal' ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderOpen className="h-4 w-4" />}
+            {busy === 'reveal' ? <Spinner size="md" /> : <FolderOpen className="h-4 w-4" />}
             <Trans>Open Folder</Trans>
-          </button>
+          </Button>
         </div>
       </section>
 
@@ -825,90 +823,71 @@ export function LocalBackupsSettingsTab() {
             <Trans>Create a snapshot now and refresh history.</Trans>
           </div>
           <div className="mt-2 grid gap-2 sm:grid-cols-2">
-            <button
-              type="button"
-              onClick={() => { void runSync(); }}
+            <Button
+              variant="tinted-accent"
+              size="auto"
+              className="!h-9 !px-3 !py-0 text-sm gap-1.5 disabled:opacity-60"
               disabled={busy !== 'none' || !selectedDirectory}
-              className="ui-button !h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
-              style={{
-                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                color: 'var(--accent)',
-              }}
+              onClick={() => { void runSync(); }}
             >
-              {busy === 'sync' ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
+              {busy === 'sync' ? <Spinner size="md" /> : <UploadCloud className="h-4 w-4" />}
               <Trans>Backup Now</Trans>
-            </button>
+            </Button>
 
-            <button
-              type="button"
-              onClick={() => { void loadHistory(); }}
+            <Button
+              variant="secondary"
+              size="auto"
+              className="!h-9 !px-3 !py-0 text-sm gap-1.5 disabled:opacity-60"
               disabled={busy !== 'none' || historyLoading || !selectedDirectory}
-              className="ui-button ui-button-secondary !h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
+              onClick={() => { void loadHistory(); }}
             >
-              {historyLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
+              {historyLoading ? <Spinner size="md" /> : <RefreshCcw className="h-4 w-4" />}
               <Trans>Refresh History</Trans>
-            </button>
+            </Button>
           </div>
         </div>
 
         <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
           <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}><Trans>Automation</Trans></div>
           <div className="mt-2 grid gap-2">
-            <div className="rounded-md border px-2.5 py-2 flex items-center justify-between gap-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-              <div>
-                <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Enable automatic backups</Trans></div>
-                <div className="text-xs" style={{ color: 'var(--text-muted)' }}><Trans>Automatically write snapshots to local disk on an interval.</Trans></div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setAutoSyncEnabled((prev) => !prev)}
-                className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                aria-pressed={autoSyncEnabled}
-                style={autoSyncEnabled
-                  ? {
-                      borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                      color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                    }
-                  : {
-                      borderColor: 'var(--border-subtle)',
-                      background: 'var(--surface-1)',
-                      color: 'var(--text-muted)',
-                    }}
-              >
-                {autoSyncEnabled ? <Trans>ON</Trans> : <Trans>OFF</Trans>}
-              </button>
-            </div>
-
-            <div
-              className="rounded-md border px-2.5 py-2 flex items-center justify-between gap-3"
-              style={{
-                borderColor: 'var(--border-subtle)',
-                background: 'var(--surface-1)',
-                opacity: autoSyncEnabled ? 1 : 0.68,
-              }}
+            <SettingRow
+              bordered
+              surface="raised"
+              label={<Trans>Enable automatic backups</Trans>}
+              description={<Trans>Automatically write snapshots to local disk on an interval.</Trans>}
             >
-              <div>
-                <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Sync interval</Trans></div>
-                <div className="text-xs" style={{ color: 'var(--text-muted)' }}><Trans>Minutes between automatic local backups.</Trans></div>
-              </div>
-              <div className="inline-flex items-center gap-2">
-                <NumberInput
-                  min={1}
-                  max={240}
-                  step={1}
-                  value={autoSyncMinutes}
-                  onChange={(next) => {
-                    if (!Number.isFinite(next)) return;
-                    setAutoSyncMinutes(Math.max(1, Math.min(240, Math.round(next))));
-                  }}
-                  className="ui-input h-[34px] w-[120px] pl-2.5 pr-5 py-1.5 text-sm"
-                  disabled={!autoSyncEnabled}
-                />
-                <span className="text-xs" style={{ color: 'var(--text-muted)' }}><Trans>min</Trans></span>
-              </div>
-            </div>
+              <SegmentedControl
+                label={_(msg`Enable automatic backups`)}
+                options={[
+                  { value: 'on', label: <Trans>ON</Trans> },
+                  { value: 'off', label: <Trans>OFF</Trans> },
+                ]}
+                value={autoSyncEnabled ? 'on' : 'off'}
+                onChange={(next) => setAutoSyncEnabled(next === 'on')}
+              />
+            </SettingRow>
+
+            <SettingRow
+              bordered
+              surface="raised"
+              disabled={!autoSyncEnabled}
+              label={<Trans>Sync interval</Trans>}
+              description={<Trans>Minutes between automatic local backups.</Trans>}
+            >
+              <NumberInput
+                min={1}
+                max={240}
+                step={1}
+                value={autoSyncMinutes}
+                onChange={(next) => {
+                  if (!Number.isFinite(next)) return;
+                  setAutoSyncMinutes(Math.max(1, Math.min(240, Math.round(next))));
+                }}
+                className="ui-input h-[34px] w-[120px] pl-2.5 pr-5 py-1.5 text-sm"
+                disabled={!autoSyncEnabled}
+              />
+              <span className="text-xs" style={{ color: 'var(--text-muted)' }}><Trans>min</Trans></span>
+            </SettingRow>
           </div>
 
           <div className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
@@ -922,15 +901,16 @@ export function LocalBackupsSettingsTab() {
               <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}><Trans>Manage Backups</Trans></div>
               <div className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}><Trans>View, restore, or delete older snapshots from disk.</Trans></div>
             </div>
-            <button
-              type="button"
-              onClick={() => { void loadHistory(); }}
+            <Button
+              variant="secondary"
+              size="auto"
+              className="!h-8 !px-2.5 !py-0 text-xs gap-1.5 disabled:opacity-60"
               disabled={historyLoading || !selectedDirectory}
-              className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs inline-flex items-center gap-1.5 disabled:opacity-60"
+              onClick={() => { void loadHistory(); }}
             >
-              {historyLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCcw className="h-3.5 w-3.5" />}
+              {historyLoading ? <Spinner size="sm" /> : <RefreshCcw className="h-3.5 w-3.5" />}
               <Trans>Refresh</Trans>
-            </button>
+            </Button>
           </div>
 
           <div className="mt-2 max-h-64 overflow-auto custom-scrollbar">
@@ -996,21 +976,17 @@ export function LocalBackupsSettingsTab() {
         closeAriaLabel={_(msg`Cancel delete`)}
         actions={(
           <>
-            <button
-              type="button"
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+            <Button
+              variant="secondary"
+              size="md"
               onClick={() => { setConfirmDeleteId(null); }}
             >
               <Trans>Cancel</Trans>
-            </button>
-            <button
-              type="button"
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-              style={{
-                borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
-                color: 'var(--danger)',
-              }}
+            </Button>
+            <Button
+              variant="tinted-danger"
+              size="md"
+              className="gap-1.5"
               disabled={busy !== 'none'}
               onClick={() => {
                 const id = confirmDeleteId;
@@ -1021,7 +997,7 @@ export function LocalBackupsSettingsTab() {
             >
               <Trash2 className="h-3.5 w-3.5" />
               <Trans>Delete</Trans>
-            </button>
+            </Button>
           </>
         )}
       >
@@ -1032,94 +1008,47 @@ export function LocalBackupsSettingsTab() {
         </p>
       </StructuredDialogModal>
 
-      {confirmRestoreId && (
-        <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setConfirmRestoreId(null);
-            }
-          }}
-        >
-          <div
-            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
-            style={{
-              background: 'var(--surface-0)',
-              borderColor: 'var(--border-subtle)',
-              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-label={_(msg`Confirm restore snapshot`)}
-          >
-            <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="flex min-w-0 items-center gap-3">
-                <span
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
-                  style={{
-                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
-                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
-                    color: '#d97706',
-                  }}
-                >
-                  <AlertTriangle className="h-4 w-4" />
-                </span>
-                <div className="min-w-0 pr-2">
-                  <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                    <Trans>Restore Snapshot</Trans>
-                  </h2>
-                  <p className="mt-0.5 text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
-                    <Trans>Snapshot from {confirmRestoreId ? new Date(Number(confirmRestoreId)).toLocaleString() : ''}</Trans>
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
-                style={{
-                  borderColor: 'var(--border-subtle)',
-                  background: 'var(--surface-1)',
-                  color: 'var(--text-muted)',
-                }}
-                aria-label={_(msg`Cancel restore`)}
-                onClick={() => { setConfirmRestoreId(null); }}
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="space-y-4 p-5">
-              <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
-                <Trans>This will overwrite your current app settings and profiles with the data from this snapshot, then reload the app. This action cannot be undone.</Trans>
-              </p>
-              <div className="flex shrink-0 items-center justify-end gap-2 pt-1">
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-9 px-3 text-xs"
-                  onClick={() => { setConfirmRestoreId(null); }}
-                >
-                  <Trans>Cancel</Trans>
-                </button>
-                <button
-                  type="button"
-                  className="ui-button !h-9 px-3 text-xs inline-flex items-center gap-1.5"
-                  style={accentSecondaryActionStyle92}
-                  disabled={busy !== 'none'}
-                  onClick={() => {
-                    const id = confirmRestoreId;
-                    setConfirmRestoreId(null);
-                    if (!id) return;
-                    void handleRestoreHistory(id);
-                  }}
-                >
-                  <ArchiveRestore className="h-3.5 w-3.5" />
-                  <Trans>Yes, restore</Trans>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <StructuredDialogModal
+        open={Boolean(confirmRestoreId)}
+        ariaLabel={_(msg`Confirm restore snapshot`)}
+        title={<Trans>Restore Snapshot</Trans>}
+        subtitle={<Trans>Snapshot from {confirmRestoreId ? new Date(Number(confirmRestoreId)).toLocaleString() : ''}</Trans>}
+        icon={<AlertTriangle className="h-4 w-4" />}
+        iconTone="warning"
+        closeAriaLabel={_(msg`Cancel restore`)}
+        onClose={() => { setConfirmRestoreId(null); }}
+        actions={(
+          <>
+            <Button
+              variant="secondary"
+              size="md"
+              onClick={() => { setConfirmRestoreId(null); }}
+            >
+              <Trans>Cancel</Trans>
+            </Button>
+            <Button
+              variant="secondary"
+              size="md"
+              className="gap-1.5"
+              style={accentSecondaryActionStyle92}
+              disabled={busy !== 'none'}
+              onClick={() => {
+                const id = confirmRestoreId;
+                setConfirmRestoreId(null);
+                if (!id) return;
+                void handleRestoreHistory(id);
+              }}
+            >
+              <ArchiveRestore className="h-3.5 w-3.5" />
+              <Trans>Yes, restore</Trans>
+            </Button>
+          </>
+        )}
+      >
+        <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
+          <Trans>This will overwrite your current app settings and profiles with the data from this snapshot, then reload the app. This action cannot be undone.</Trans>
+        </p>
+      </StructuredDialogModal>
 
       {showSnapshotModal && (
         <div
@@ -1146,26 +1075,26 @@ export function LocalBackupsSettingsTab() {
               </div>
               <div className="flex items-center gap-2">
                 {selectedHistoryId && (
-                  <button
-                    type="button"
-                    onClick={() => { setConfirmRestoreId(selectedHistoryId); }}
-                    disabled={busy !== 'none'}
-                    className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs inline-flex items-center gap-1.5 disabled:opacity-60"
+                  <Button
+                    variant="secondary"
+                    size="auto"
+                    className="!h-8 !px-2.5 !py-0 text-xs gap-1.5 disabled:opacity-60"
                     style={accentSecondaryActionStyle92}
+                    disabled={busy !== 'none'}
+                    onClick={() => { setConfirmRestoreId(selectedHistoryId); }}
                   >
                     <ArchiveRestore className="h-3.5 w-3.5" />
                     <Trans>Restore to App</Trans>
-                  </button>
+                  </Button>
                 )}
-                <button
-                  type="button"
-                  onClick={() => setShowSnapshotModal(false)}
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border transition-colors"
-                  style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-1)' }}
+                <IconButton
+                  variant="surface"
+                  size="sm"
                   aria-label={_(msg`Close snapshot details`)}
+                  onClick={() => setShowSnapshotModal(false)}
                 >
                   <X className="h-4 w-4" />
-                </button>
+                </IconButton>
               </div>
             </div>
 
@@ -1173,7 +1102,7 @@ export function LocalBackupsSettingsTab() {
               {!selectedHistoryId || !selectedHistoryDocument ? (
                 <div className="h-full min-h-0 flex items-center justify-center">
                   <div className="inline-flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <Spinner size="sm" />
                     <Trans>Loading snapshot content…</Trans>
                   </div>
                 </div>

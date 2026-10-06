@@ -1,7 +1,6 @@
 import * as React from 'react';
 import * as THREE from 'three';
 import type { EditorMenuAction } from '@/components/ui/EditorContextMenu';
-import { hotkeyStore } from '@/hotkeys/hotkeyStore';
 import {
   useOrganicCutHotkeys,
   useOrganicCutPreviewHotkey,
@@ -72,6 +71,8 @@ export interface OrganicCutInteraction {
    */
   tryOpenContextMenu: (event: { clientX: number; clientY: number }) => boolean;
   onContextMenuAction: (action: EditorMenuAction) => void;
+  /** Dismissal for the cut's menu — outside click, Escape, resize, or a chosen row. */
+  closeContextMenu: () => void;
 }
 
 export interface UseOrganicCutInteractionArgs {
@@ -242,29 +243,8 @@ export function useOrganicCutInteraction({
     [contextMenu, insertPoint, removePoint],
   );
 
-  // Dismiss the cut menu on outside click / Escape, like the editor context menu.
-  React.useEffect(() => {
-    if (!contextMenu) return;
-    const onDown = () => setContextMenu(null);
-    // Escape comes from the central hotkey store (no direct key listeners —
-    // docs/reference/hotkeys.md); the rising edge is what dismisses the menu.
-    let wasEscapeActive = hotkeyStore.getState().activeKeys.has('escape');
-    let unsubscribeEscape: (() => void) | null = null;
-    // Defer so the opening right-click doesn't immediately close it.
-    const id = window.setTimeout(() => {
-      window.addEventListener('pointerdown', onDown);
-      unsubscribeEscape = hotkeyStore.subscribe(() => {
-        const isEscapeActive = hotkeyStore.getState().activeKeys.has('escape');
-        if (isEscapeActive && !wasEscapeActive) setContextMenu(null);
-        wasEscapeActive = isEscapeActive;
-      });
-    }, 0);
-    return () => {
-      window.clearTimeout(id);
-      window.removeEventListener('pointerdown', onDown);
-      unsubscribeEscape?.();
-    };
-  }, [contextMenu]);
+  // The cut's menu dismisses itself: `EditorContextMenu` owns outside click,
+  // Escape, scroll and resize for every menu in the app.
 
   // Cut-tool session state read by useOrganicCutHotkeys, kept in a ref so the
   // hotkey subscription survives the per-click churn of waypoint editing.
@@ -296,5 +276,6 @@ export function useOrganicCutInteraction({
     contextMenu,
     tryOpenContextMenu,
     onContextMenuAction,
+    closeContextMenu: () => setContextMenu(null),
   };
 }

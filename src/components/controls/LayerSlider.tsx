@@ -2,6 +2,11 @@
 
 import React from 'react';
 import { Tooltip } from '@/components/ui/Tooltip';
+import { useOutsideDismiss } from '@/hooks/useOutsideDismiss';
+import { clampToViewport } from '@/utils/math';
+
+/** min-width 136px + 10px offset + margin. */
+const THUMB_EDIT_POPOVER_WIDTH = 156;
 
 type LayerSliderProps = {
   min: number;
@@ -203,9 +208,11 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     // sliders docked at the right screen edge would otherwise clip it off-screen.
     const rect = containerRef.current?.getBoundingClientRect();
     if (rect) {
-      const popoverSpace = 156; // min-width 136px + 10px offset + margin
-      const spaceRight = window.innerWidth - rect.right;
-      setEditPopoverSide(spaceRight >= popoverSpace || spaceRight >= rect.left ? 'right' : 'left');
+      const { overflowRight } = clampToViewport(
+        { x: rect.right + 10, y: rect.top },
+        { width: THUMB_EDIT_POPOVER_WIDTH, height: 0 },
+      );
+      setEditPopoverSide(overflowRight ? 'left' : 'right');
     }
     setEditMode('layer');
     setEditRawValue(String(Math.round(currentLayer)));
@@ -255,16 +262,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
   }, [editingThumb]);
 
   // Dismiss + commit when clicking outside the popover
-  React.useEffect(() => {
-    if (!editingThumb) return;
-    const handleOutsideClick = (e: MouseEvent) => {
-      if (editPopoverRef.current && !editPopoverRef.current.contains(e.target as Node)) {
-        commitThumbEdit();
-      }
-    };
-    document.addEventListener('mousedown', handleOutsideClick);
-    return () => document.removeEventListener('mousedown', handleOutsideClick);
-  }, [editingThumb, commitThumbEdit]);
+  useOutsideDismiss(editingThumb !== null, commitThumbEdit, { ignoreRef: editPopoverRef });
   const onPointerDown = React.useCallback((e: React.MouseEvent) => {
     // Right-click: open the thumb popover if near a thumb, then let onContextMenu handle the rest
     if (e.button === 2) {

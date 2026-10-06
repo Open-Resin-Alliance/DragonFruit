@@ -9,6 +9,7 @@ import {
 } from '@/features/profiles/profileStore';
 import { Layers3 } from 'lucide-react';
 import { NumberInput } from '@/components/ui/NumberInput';
+import { SegmentedControl } from '@/components/atoms';
 import type { View3DSettings } from '@/components/settings/view3dPreferences';
 
 interface WorkspacesSettingsTabProps {
@@ -75,24 +76,15 @@ export function WorkspacesSettingsTab({
                     Shows a faint printer volume outline and enables out-of-bounds checks.
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => patchView3dSettings({ enabled: !view3dSettings.enabled })}
-                  className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                  style={view3dSettings.enabled
-                    ? {
-                        borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                        color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                      }
-                    : {
-                        borderColor: 'var(--border-subtle)',
-                        background: 'var(--surface-1)',
-                        color: 'var(--text-muted)',
-                      }}
-                >
-                  {view3dSettings.enabled ? 'ON' : 'OFF'}
-                </button>
+                <SegmentedControl
+                  label="Enable build volume bounds"
+                  value={view3dSettings.enabled ? 'on' : 'off'}
+                  onChange={(next) => patchView3dSettings({ enabled: next === 'on' })}
+                  options={[
+                    { value: 'on', label: 'ON' },
+                    { value: 'off', label: 'OFF' },
+                  ]}
+                />
               </div>
 
               {view3dSettings.enabled && (
@@ -226,24 +218,15 @@ export function WorkspacesSettingsTab({
                 Warn when any visible model extends beyond the configured build volume.
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => patchView3dSettings({ showViolationWarning: !view3dSettings.showViolationWarning })}
-              className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-              style={view3dSettings.showViolationWarning
-                ? {
-                    borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                    color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                  }
-                : {
-                    borderColor: 'var(--border-subtle)',
-                    background: 'var(--surface-1)',
-                    color: 'var(--text-muted)',
-                  }}
-            >
-              {view3dSettings.showViolationWarning ? 'ON' : 'OFF'}
-            </button>
+            <SegmentedControl
+              label="Show out-of-bounds warnings"
+              value={view3dSettings.showViolationWarning ? 'on' : 'off'}
+              onChange={(next) => patchView3dSettings({ showViolationWarning: next === 'on' })}
+              options={[
+                { value: 'on', label: 'ON' },
+                { value: 'off', label: 'OFF' },
+              ]}
+            />
           </div>
 
           <div className="mt-2 flex items-center justify-between gap-3 rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
@@ -255,24 +238,15 @@ export function WorkspacesSettingsTab({
                 Debug overlay: draws world-space bounds for each visible model (red if out-of-bounds).
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => patchView3dSettings({ showModelBoundingBoxes: !view3dSettings.showModelBoundingBoxes })}
-              className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-              style={view3dSettings.showModelBoundingBoxes
-                ? {
-                    borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                    color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                  }
-                : {
-                    borderColor: 'var(--border-subtle)',
-                    background: 'var(--surface-1)',
-                    color: 'var(--text-muted)',
-                  }}
-            >
-              {view3dSettings.showModelBoundingBoxes ? 'ON' : 'OFF'}
-            </button>
+            <SegmentedControl
+              label="Show model bounding boxes"
+              value={view3dSettings.showModelBoundingBoxes ? 'on' : 'off'}
+              onChange={(next) => patchView3dSettings({ showModelBoundingBoxes: next === 'on' })}
+              options={[
+                { value: 'on', label: 'ON' },
+                { value: 'off', label: 'OFF' },
+              ]}
+            />
           </div>
 
           <div className="mt-2 flex items-center justify-between gap-3 rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
@@ -284,24 +258,15 @@ export function WorkspacesSettingsTab({
                 SAT debug overlay for nesting and diagnostics.
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => patchView3dSettings({ showSliceSatBoundingMesh: !view3dSettings.showSliceSatBoundingMesh })}
-              className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-              style={view3dSettings.showSliceSatBoundingMesh
-                ? {
-                    borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                    color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                  }
-                : {
-                    borderColor: 'var(--border-subtle)',
-                    background: 'var(--surface-1)',
-                    color: 'var(--text-muted)',
-                  }}
-            >
-              {view3dSettings.showSliceSatBoundingMesh ? 'ON' : 'OFF'}
-            </button>
+            <SegmentedControl
+              label="Show slice SAT bounding mesh"
+              value={view3dSettings.showSliceSatBoundingMesh ? 'on' : 'off'}
+              onChange={(next) => patchView3dSettings({ showSliceSatBoundingMesh: next === 'on' })}
+              options={[
+                { value: 'on', label: 'ON' },
+                { value: 'off', label: 'OFF' },
+              ]}
+            />
           </div>
 
           {view3dSettings.showSliceSatBoundingMesh && (

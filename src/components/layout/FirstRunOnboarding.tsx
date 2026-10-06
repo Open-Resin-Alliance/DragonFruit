@@ -4,6 +4,7 @@ import React from 'react';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import { Check, ChevronLeft, Moon, Sun } from 'lucide-react';
+import { Button, IconChip } from '@/components/atoms';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import {
   applyThemeCustomColors,
@@ -179,13 +180,14 @@ export function FirstRunOnboarding({ onExit }: FirstRunOnboardingProps) {
                   </p>
                 </div>
                 <div className="mt-6 flex justify-center">
-                  <button
-                    type="button"
+                  <Button
+                    variant="primary"
+                    size="auto"
                     onClick={() => goToStep('theme', 'forward')}
-                    className="ui-button ui-button-primary !h-10 !px-7 text-[15px]"
+                    className="!h-10 !px-7 text-[15px]"
                   >
                     {_(msg`Get Started`)}
-                  </button>
+                  </Button>
                 </div>
               </div>
             )}
@@ -212,12 +214,13 @@ export function FirstRunOnboarding({ onExit }: FirstRunOnboardingProps) {
                           : 'var(--surface-1)',
                       }}
                     >
-                      <span
-                        className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
+                      <IconChip
+                        size="lg"
+                        className="mt-0.5"
                         style={{ background: 'var(--surface-2)', borderColor: 'var(--border-subtle)' }}
                       >
                         <Moon className="h-4 w-4" style={{ color: 'var(--accent)' }} />
-                      </span>
+                      </IconChip>
                       <span className="min-w-0 flex-1">
                         <span className="flex items-center justify-between gap-2">
                           <span className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
@@ -242,12 +245,13 @@ export function FirstRunOnboarding({ onExit }: FirstRunOnboardingProps) {
                           : 'var(--surface-1)',
                       }}
                     >
-                      <span
-                        className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
+                      <IconChip
+                        size="lg"
+                        className="mt-0.5"
                         style={{ background: 'var(--surface-2)', borderColor: 'var(--border-subtle)' }}
                       >
                         <Sun className="h-4 w-4" style={{ color: 'var(--accent)' }} />
-                      </span>
+                      </IconChip>
                       <span className="min-w-0 flex-1">
                         <span className="flex items-center justify-between gap-2">
                           <span className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
@@ -264,21 +268,23 @@ export function FirstRunOnboarding({ onExit }: FirstRunOnboardingProps) {
                 </div>
 
                 <div className="mt-6 flex items-center justify-between">
-                  <button
-                    type="button"
+                  <Button
+                    variant="secondary"
+                    size="auto"
                     onClick={() => goToStep('welcome', 'backward')}
-                    className="ui-button ui-button-secondary !h-9 !px-3.5 text-sm"
+                    className="!h-9 !px-3.5 text-sm"
                   >
                     <ChevronLeft className="mr-1 h-4 w-4" />
                     {_(msg`Back`)}
-                  </button>
-                  <button
-                    type="button"
+                  </Button>
+                  <Button
+                    variant="primary"
+                    size="auto"
                     onClick={() => goToStep('printer', 'forward')}
-                    className="ui-button ui-button-primary !h-9 !px-5 text-sm"
+                    className="!h-9 !px-5 text-sm"
                   >
                     {_(msg`Continue`)}
-                  </button>
+                  </Button>
                 </div>
               </div>
             )}
@@ -312,13 +318,14 @@ export function FirstRunOnboarding({ onExit }: FirstRunOnboardingProps) {
                   </p>
                 </div>
                 <div className="mt-6 flex justify-center">
-                  <button
-                    type="button"
+                  <Button
+                    variant="primary"
+                    size="auto"
                     onClick={startReveal}
-                    className="ui-onboarding-success-action ui-button ui-button-primary !h-10 !px-7 text-[15px]"
+                    className="ui-onboarding-success-action !h-10 !px-7 text-[15px]"
                   >
                     {_(msg`Start using DragonFruit`)}
-                  </button>
+                  </Button>
                 </div>
               </div>
             )}

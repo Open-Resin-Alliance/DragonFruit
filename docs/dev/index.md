@@ -10,6 +10,8 @@ Internals of DragonFruit, for people changing them. Start with [Architecture Ove
 | Add a UI feature with state | [State and Stores](state-and-stores.md), [Registration Seams](registration-seams.md) |
 | Make something undoable | [History and Undo/Redo](history-and-undo-redo.md) |
 | Show the user a message | [Notifications and Toasts](notifications.md) |
+| Show a right-click or dropdown menu | [Context Menu](context-menu.md) |
+| Build a button, field, row or badge | [UI Atoms](ui-atoms.md) |
 | Bind a key | [Hotkeys](hotkeys.md), [Support Placement Modifiers](../reference/support-placement-modifiers.md) |
 | Move or frame the 3D camera | [Camera Navigation](camera-navigation.md) |
 | Call native code | [Tauri IPC and Native Bridge](tauri-ipc-bridge.md) |

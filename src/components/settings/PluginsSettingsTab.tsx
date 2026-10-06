@@ -1,7 +1,8 @@
 'use client';
 
 import React from 'react';
-import { AlertTriangle, CheckCircle2, Download, ExternalLink, Github, Loader2, PackageCheck, Plug, ShieldCheck, Trash2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Download, ExternalLink, Github, PackageCheck, Plug, ShieldCheck, Trash2 } from 'lucide-react';
+import { Button, Spinner } from '@/components/atoms';
 import { Tooltip } from '@/components/ui/Tooltip';
 import {
   getInstalledPlugins,
@@ -372,16 +373,18 @@ export function PluginsSettingsTab() {
             placeholder="https://github.com/<owner>/<repo> or df://debug_plugin_official"
             className="ui-input h-[34px] px-2.5 py-1.5 text-sm"
           />
-          <button
+          <Button
             type="button"
             onClick={() => { void handleInstall(); }}
             disabled={isInstalling}
-            className="ui-button ui-button-secondary !h-[34px] !px-3 !py-0 text-xs inline-flex items-center gap-1.5 disabled:opacity-60"
+            variant="secondary"
+            size="auto"
+            className="!h-[34px] !px-3 !py-0 text-xs inline-flex items-center gap-1.5 disabled:opacity-60"
             style={accentSecondaryActionStyle92}
           >
-            {isInstalling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+            {isInstalling ? <Spinner size="sm" /> : <Download className="h-3.5 w-3.5" />}
             {isInstalling ? 'Installing…' : 'Install Plugin'}
-          </button>
+          </Button>
         </div>
 
         {status.kind !== 'idle' && (
@@ -429,23 +432,27 @@ export function PluginsSettingsTab() {
             </div>
 
             <div className="mt-4 flex items-center justify-end gap-2">
-              <button
+              <Button
                 type="button"
-                className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs"
+                variant="secondary"
+                size="auto"
+                className="!h-8 !px-3 !py-0 text-xs"
                 disabled={isInstalling}
                 onClick={() => setPendingLiabilityInstall(null)}
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
-                className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs"
+                variant="secondary"
+                size="auto"
+                className="!h-8 !px-3 !py-0 text-xs"
                 style={{ color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)' }}
                 disabled={isInstalling}
                 onClick={() => { void handleConfirmLiabilityInstall(); }}
               >
                 {isInstalling ? 'Installing…' : 'I Understand, Install Anyway'}
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -546,23 +553,27 @@ export function PluginsSettingsTab() {
             )}
 
             <div className="mt-4 flex items-center justify-end gap-2">
-              <button
+              <Button
                 type="button"
-                className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs"
+                variant="secondary"
+                size="auto"
+                className="!h-8 !px-3 !py-0 text-xs"
                 disabled={isInstalling}
                 onClick={() => setPendingInstallPreview(null)}
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
-                className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs"
+                variant="secondary"
+                size="auto"
+                className="!h-8 !px-3 !py-0 text-xs"
                 style={{ color: 'var(--accent-secondary)' }}
                 disabled={isInstalling}
                 onClick={handleInstallFromPreview}
               >
                 {isInstalling ? 'Installing…' : 'Install'}
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -594,22 +605,26 @@ export function PluginsSettingsTab() {
             </div>
 
             <div className="mt-4 flex items-center justify-end gap-2">
-              <button
+              <Button
                 type="button"
-                className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs"
+                variant="secondary"
+                size="auto"
+                className="!h-8 !px-3 !py-0 text-xs"
                 onClick={() => setPendingRemovePlugin(null)}
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
-                className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1"
+                variant="secondary"
+                size="auto"
+                className="!h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1"
                 style={{ color: '#fca5a5' }}
                 onClick={handleConfirmUninstall}
               >
                 <Trash2 className="h-3.5 w-3.5" />
                 Remove
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -716,15 +731,17 @@ export function PluginsSettingsTab() {
                       </Tooltip>
                     ) : null}
                     {!isBuiltin && (
-                      <button
+                      <Button
                         type="button"
+                        variant="secondary"
+                        size="auto"
                         onClick={() => handleUninstall(manifest.id, manifest.name)}
-                        className="ui-button ui-button-secondary !h-7 !px-2 !py-0 text-xs inline-flex items-center gap-1"
+                        className="!h-7 !px-2 !py-0 text-xs inline-flex items-center gap-1"
                         style={{ color: '#fca5a5' }}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                         Remove
-                      </button>
+                      </Button>
                     )}
                   </div>
                 </div>

@@ -107,7 +107,7 @@ import { buildMirrorSupportTransforms, reflectTransformAcrossWorldAxis } from '@
 import type { MirrorAxis } from '@/features/mirror/types';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { RtspRelayCanvasPlayer } from '@/components/monitoring/RtspRelayCanvasPlayer';
-import { IconButton, Toast, ToastViewport } from '@/components/atoms';
+import { BlockingOverlay, IconButton, Toast, ToastViewport } from '@/components/atoms';
 import { EditorContextMenu, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
@@ -926,6 +926,8 @@ export default function Home() {
   } | null>(null);
   const [showCloseUnsavedChangesModal, setShowCloseUnsavedChangesModal] = React.useState(false);
   const [closeUnsavedChangesBusy, setCloseUnsavedChangesBusy] = React.useState<'none' | 'save_and_close' | 'discard_and_close'>('none');
+  const [showNewSceneUnsavedChangesModal, setShowNewSceneUnsavedChangesModal] = React.useState(false);
+  const [newSceneBusy, setNewSceneBusy] = React.useState<'none' | 'save_and_new' | 'discard_and_new'>('none');
   const [hasUnsavedSceneChanges, setHasUnsavedSceneChanges] = React.useState(false);
   const pluginImportWarningPendingResolveRef = React.useRef<((proceed: boolean) => void) | null>(null);
   const sceneSaveChoiceResolveRef = React.useRef<((choice: 'overwrite' | 'save_as' | 'cancel') => void) | null>(null);
@@ -4537,6 +4539,8 @@ export default function Home() {
     setSceneFormatChunked(true);
     setShowCloseUnsavedChangesModal(false);
     setCloseUnsavedChangesBusy('none');
+    setShowNewSceneUnsavedChangesModal(false);
+    setNewSceneBusy('none');
     if (sceneSaveChoiceResolveRef.current) {
       sceneSaveChoiceResolveRef.current('cancel');
       sceneSaveChoiceResolveRef.current = null;
@@ -4694,6 +4698,53 @@ export default function Home() {
       }
     })();
   }, [closeDesktopWindowNow, saveCurrentSceneNow]);
+
+  /**
+   * Start a fresh scene. Deleting every model is what the editor already treats
+   * as "no scene": the empty-scene effect above drops the save target, the
+   * autosave sidecar and the save baseline, and the viewport falls back to the
+   * empty state. It goes through `deleteModels`, so the wipe is a single
+   * undoable history entry rather than an unrecoverable one.
+   */
+  const startNewScene = React.useCallback(() => {
+    const ids = scene.models.map((model) => model.id);
+    if (ids.length === 0) return;
+    void scene.deleteModels(ids);
+  }, [scene.deleteModels, scene.models]);
+
+  const handleRequestNewScene = React.useCallback(() => {
+    if (hasUnsavedSceneChangesRef.current) {
+      setShowNewSceneUnsavedChangesModal(true);
+      return;
+    }
+    startNewScene();
+  }, [startNewScene]);
+
+  const handleDiscardAndNewScene = React.useCallback(() => {
+    setNewSceneBusy('discard_and_new');
+    try {
+      setShowNewSceneUnsavedChangesModal(false);
+      startNewScene();
+    } finally {
+      setNewSceneBusy('none');
+    }
+  }, [startNewScene]);
+
+  const handleSaveAndNewScene = React.useCallback(() => {
+    void (async () => {
+      setNewSceneBusy('save_and_new');
+      try {
+        const saved = await saveCurrentSceneNow();
+        if (!saved) return;
+        setShowNewSceneUnsavedChangesModal(false);
+        startNewScene();
+      } catch (error) {
+        console.error('[SceneSave] Save-and-new-scene failed.', error);
+      } finally {
+        setNewSceneBusy('none');
+      }
+    })();
+  }, [saveCurrentSceneNow, startNewScene]);
 
   // Web runtime only. The desktop build has its own close flow (the
   // onCloseRequested effect below), which can actually save rather than just
@@ -6158,34 +6209,6 @@ export default function Home() {
     },
     [],
   );
-
-  React.useEffect(() => {
-    if (!editorContextMenuPos) return;
-
-    const handlePointerDown = () => closeEditorContextMenu();
-    const handleScrollOrResize = () => closeEditorContextMenu();
-
-    window.addEventListener('pointerdown', handlePointerDown);
-    window.addEventListener('resize', handleScrollOrResize);
-    window.addEventListener('scroll', handleScrollOrResize, true);
-
-    let wasEscapePressed = false;
-    const unsubscribe = hotkeyStore.subscribe((state) => {
-      const active = state.activeKeys;
-      const isEscapePressed = active.has('escape');
-      if (isEscapePressed && !wasEscapePressed) {
-        closeEditorContextMenu();
-      }
-      wasEscapePressed = isEscapePressed;
-    });
-
-    return () => {
-      window.removeEventListener('pointerdown', handlePointerDown);
-      window.removeEventListener('resize', handleScrollOrResize);
-      window.removeEventListener('scroll', handleScrollOrResize, true);
-      unsubscribe();
-    };
-  }, [editorContextMenuPos, closeEditorContextMenu]);
 
   React.useEffect(() => {
     setDebugPrimitivesPanelVisible(isDebugPrimitivesPanelVisibleEnabled());
@@ -9758,6 +9781,7 @@ export default function Home() {
         isSlicingBusy={isSlicingBusy}
         onLoadMeshChange={handleLoadMeshChangeWithZip}
         onImportSceneChange={handleImportSceneChangeWithZip}
+        onNewScene={handleRequestNewScene}
         onSaveScene={() => { void handleTopBarSaveScene(); }}
         onSaveSceneAs={() => { handleTopBarSaveSceneAs(); }}
         onOpenScene={handleTopBarOpenScene}
@@ -10315,34 +10339,14 @@ export default function Home() {
           )}
 
           {showSceneImportOverlay && (
-            <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/35 backdrop-blur-[1px]">
-              <div
-                className="w-[min(460px,90vw)] rounded-xl border px-5 py-4 shadow-xl"
-                style={{
-                  background: 'color-mix(in srgb, var(--surface-0), black 8%)',
-                  borderColor: 'var(--border-subtle)',
-                }}
-              >
-                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  {importOverlayState.label}
-                </div>
-                {importOverlayState.detail && (
-                  <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-                    {importOverlayState.detail}
-                  </div>
-                )}
-
-                <div
-                  className="ui-loading-track mt-3 h-2.5 w-full rounded-full"
-                  style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
-                >
-                  <div
-                    className="ui-loading-indicator"
-                    style={{ background: 'linear-gradient(90deg, var(--accent), #ff79c6)' }}
-                  />
-                </div>
-              </div>
-            </div>
+            <BlockingOverlay
+              title={importOverlayState.label}
+              details={importOverlayState.detail ? [importOverlayState.detail] : undefined}
+              progress={null}
+              zIndexClassName="z-50"
+              widthClassName="w-[min(460px,90vw)]"
+              backdropClassName="bg-black/35 backdrop-blur-[1px]"
+            />
           )}
 
         </div>
@@ -10390,6 +10394,7 @@ export default function Home() {
       <EditorContextMenu
         position={editorContextMenuPos}
         onAction={handleEditorMenuAction}
+        onClose={closeEditorContextMenu}
         title={editorContextMenuTitle}
         items={editorContextMenuItems}
         disabledActions={editorContextMenuDisabledActions}
@@ -10592,12 +10597,15 @@ export default function Home() {
         arrangeOverlayModelCount={arrangeOverlayModelCount}
         autosaveRecovery={autosaveRecovery}
         closeUnsavedChangesBusy={closeUnsavedChangesBusy}
+        newSceneBusy={newSceneBusy}
         handleAutosaveDiscard={handleAutosaveDiscard}
         handleAutosaveRestore={handleAutosaveRestore}
         handleCancelPluginImportWarning={handleCancelPluginImportWarning}
         handleContinuePluginImportWarning={handleContinuePluginImportWarning}
         handleDiscardAndCloseProgram={handleDiscardAndCloseProgram}
+        handleDiscardAndNewScene={handleDiscardAndNewScene}
         handleSaveAndCloseProgram={handleSaveAndCloseProgram}
+        handleSaveAndNewScene={handleSaveAndNewScene}
         hasUnsavedSceneChanges={hasUnsavedSceneChanges}
         pluginImportWarningSkipFuture={pluginImportWarningSkipFuture}
         pluginImportWarningTitle={activePluginImportWarning?.title ?? null}
@@ -10608,10 +10616,12 @@ export default function Home() {
         sceneSaveChoicePath={sceneSaveChoicePath}
         setPluginImportWarningSkipFuture={setPluginImportWarningSkipFuture}
         setShowCloseUnsavedChangesModal={setShowCloseUnsavedChangesModal}
+        setShowNewSceneUnsavedChangesModal={setShowNewSceneUnsavedChangesModal}
         setSupportsInfoModelId={setSupportsInfoModelId}
         setZipPickerState={setZipPickerState}
         showArrangeBlockingOverlay={showArrangeBlockingOverlay}
         showCloseUnsavedChangesModal={showCloseUnsavedChangesModal}
+        showNewSceneUnsavedChangesModal={showNewSceneUnsavedChangesModal}
         showPluginImportWarningModal={showPluginImportWarningModal}
         showSceneSaveChoiceModal={showSceneSaveChoiceModal}
         supportsInfoModelId={supportsInfoModelId}
@@ -10678,102 +10688,45 @@ export default function Home() {
       <SystemNotificationStack />
 
       {islandsPoc.scanning && !autoSupportDrivingScan && (
-        <div className="absolute inset-0 z-[121] flex items-center justify-center bg-black/45 backdrop-blur-[1px]">
-          <div
-            className="w-[min(520px,92vw)] rounded-xl border px-5 py-4 shadow-xl"
-            style={{
-              background: 'color-mix(in srgb, var(--surface-0), black 10%)',
-              borderColor: 'var(--border-subtle)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-live="polite"
-          >
-            <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Analyzing Model Islands & Minima
-            </div>
-            <div className="mt-1 space-y-0.5 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-              <p>Slicing and analysis in progress...</p>
-            </div>
-
-            <div className="mt-2 text-[11px] font-medium tracking-wide" style={{ color: 'var(--accent)' }}>
-              Elapsed: {islandsPoc.elapsedLabel}
-            </div>
-            <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              Processing 1 model
-            </div>
-
-            <ScanProgressBar progress={islandsPoc.scanProgress} />
-          </div>
-        </div>
+        <BlockingOverlay
+          title="Analyzing Model Islands & Minima"
+          details={['Slicing and analysis in progress...']}
+          elapsed={<>Elapsed: {islandsPoc.elapsedLabel}</>}
+          footnote="Processing 1 model"
+          zIndexClassName="z-[121]"
+        >
+          <ScanProgressBar progress={islandsPoc.scanProgress} />
+        </BlockingOverlay>
       )}
 
       {autoSupportBusy && (
-        <div className="absolute inset-0 z-[122] flex items-center justify-center bg-black/45 backdrop-blur-[1px]">
-          <div
-            className="w-[min(520px,92vw)] rounded-xl border px-5 py-4 shadow-xl"
-            style={{ background: 'color-mix(in srgb, var(--surface-0), black 10%)', borderColor: 'var(--border-subtle)' }}
-            role="dialog" aria-modal="true" aria-live="polite"
-          >
-            <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Generating Supports
-            </div>
-            <div className="mt-1 space-y-0.5 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-              <p>{islandsPoc.scanning ? 'Scanning islands & minima…' : 'Placing and bracing supports…'}</p>
-            </div>
-            <div className="mt-2 text-[11px] font-medium tracking-wide" style={{ color: 'var(--accent)' }}>
-              {islandsPoc.scanning ? <>Elapsed: {islandsPoc.elapsedLabel}</> : <OrientElapsed />}
-            </div>
-            <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              Processing 1 model
-            </div>
-            <ScanProgressBar progress={islandsPoc.scanning ? islandsPoc.scanProgress : autoSupportProgress} />
-          </div>
-        </div>
+        <BlockingOverlay
+          title="Generating Supports"
+          details={[islandsPoc.scanning ? 'Scanning islands & minima…' : 'Placing and bracing supports…']}
+          elapsed={islandsPoc.scanning ? <>Elapsed: {islandsPoc.elapsedLabel}</> : <OrientElapsed />}
+          footnote="Processing 1 model"
+          zIndexClassName="z-[122]"
+        >
+          <ScanProgressBar progress={islandsPoc.scanning ? islandsPoc.scanProgress : autoSupportProgress} />
+        </BlockingOverlay>
       )}
       {orientationBusy && (
-        <div className="absolute inset-0 z-[123] flex items-center justify-center bg-black/45 backdrop-blur-[1px]">
-          <div
-            className="w-[min(520px,92vw)] rounded-xl border px-5 py-4 shadow-xl"
-            style={{ background: 'color-mix(in srgb, var(--surface-0), black 10%)', borderColor: 'var(--border-subtle)' }}
-            role="dialog" aria-modal="true" aria-live="polite"
-          >
-            <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Orienting Model
-            </div>
-            <div className="mt-1 space-y-0.5 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-              <p>Sweeping orientations…</p>
-            </div>
-            <div className="mt-2 text-[11px] font-medium tracking-wide" style={{ color: 'var(--accent)' }}>
-              <OrientElapsed />
-            </div>
-            <div className="ui-loading-track mt-3 h-2.5 w-full rounded-full" style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}>
-              <div className="ui-loading-indicator" style={{ background: 'linear-gradient(90deg, var(--accent), #ff79c6)' }} />
-            </div>
-          </div>
-        </div>
+        <BlockingOverlay
+          title="Orienting Model"
+          details={['Sweeping orientations…']}
+          elapsed={<OrientElapsed />}
+          progress={null}
+          zIndexClassName="z-[123]"
+        />
       )}
 
       {isExporting && (
-        <div className="absolute inset-0 z-[120] flex items-center justify-center bg-black/45 backdrop-blur-[1px]">
-          <div
-            className="w-[min(520px,92vw)] rounded-xl border px-5 py-4 shadow-xl"
-            style={{ background: 'color-mix(in srgb, var(--surface-0), black 10%)', borderColor: 'var(--border-subtle)' }}
-            role="dialog"
-            aria-modal="true"
-            aria-live="polite"
-          >
-            <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Exporting…
-            </div>
-            <div className="mt-1 space-y-0.5 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-              <p>Writing mesh geometry and support data to file…</p>
-            </div>
-            <div className="ui-loading-track mt-3 h-2.5 w-full rounded-full" style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}>
-              <div className="ui-loading-indicator" style={{ background: 'linear-gradient(90deg, var(--accent), #ff79c6)' }} />
-            </div>
-          </div>
-        </div>
+        <BlockingOverlay
+          title="Exporting…"
+          details={['Writing mesh geometry and support data to file…']}
+          progress={null}
+          zIndexClassName="z-[120]"
+        />
       )}
 
       {newDeviceToast && (

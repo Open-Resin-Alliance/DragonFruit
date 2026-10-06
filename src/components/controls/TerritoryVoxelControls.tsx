@@ -1,7 +1,8 @@
 "use client";
 
 import React from 'react';
-import { Card, CardHeader, IconButton } from '@/components/atoms';
+import { Card, CardHeader, Toggle } from '@/components/atoms';
+import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 interface TerritoryVoxelControlsProps {
@@ -35,25 +36,7 @@ export function TerritoryVoxelControls({
             <CardHeader
                 left={(
                     <>
-                        <IconButton
-                            onClick={() => setExpanded(!expanded)}
-                            className="!p-0.5"
-                            title={expanded ? 'Collapse card' : 'Expand card'}
-                        >
-                            <svg
-                                className="w-3 h-3 transform transition-transform"
-                                style={{ color: expanded ? 'var(--accent)' : 'var(--text-muted)' }}
-                                fill="none"
-                                stroke="currentColor"
-                                viewBox="0 0 24 24"
-                            >
-                                {expanded ? (
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                                ) : (
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                                )}
-                            </svg>
-                        </IconButton>
+                        <PanelCollapseToggle expanded={expanded} onToggle={() => setExpanded(!expanded)} />
                         <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Territory Voxels</h3>
                     </>
                 )}
@@ -115,26 +98,21 @@ export function TerritoryVoxelControls({
                     <div className="pt-1.5 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
                         <div className="flex items-center justify-between">
                             <label className="ui-meta" title="Prioritize surface connectivity to prevent internal tunneling">Surface Priority Mode</label>
-                            <button
-                                type="button"
-                                onClick={() => {
+                            <Toggle
+                                size="sm"
+                                checked={useSurfaceContiguity}
+                                disabled={!onUseSurfaceContiguityChange || !enabled}
+                                className={(!onUseSurfaceContiguityChange || !enabled) ? 'opacity-50 cursor-not-allowed' : undefined}
+                                onChange={(checked) => {
                                     if (onUseSurfaceContiguityChange) {
-                                        onUseSurfaceContiguityChange(!useSurfaceContiguity);
+                                        onUseSurfaceContiguityChange(checked);
                                         // Trigger re-scan immediately if provided
                                         if (onRescan && enabled) {
                                             setTimeout(() => onRescan(), 50);
                                         }
                                     }
                                 }}
-                                disabled={!onUseSurfaceContiguityChange || !enabled}
-                                className={`w-9 h-5 rounded-full flex items-center px-0.5 transition-colors ${(!onUseSurfaceContiguityChange || !enabled) ? 'opacity-50 cursor-not-allowed' : ''}`}
-                                style={{ background: useSurfaceContiguity ? 'var(--accent)' : 'var(--surface-2)' }}
-                            >
-                                <span
-                                    className={`w-4 h-4 rounded-full bg-white shadow transform transition-transform ${useSurfaceContiguity ? 'translate-x-4' : 'translate-x-0'
-                                        }`}
-                                />
-                            </button>
+                            />
                         </div>
                         <div className="mt-1 text-[10px] leading-snug" style={{ color: 'color-mix(in srgb, var(--text-muted), black 20%)' }}>
                             {onRescan ? 'Automatically recalculates territory when toggled.' : 'Toggles between internal centroid (OFF) and surface neighbor (ON) logic. Requires Re-Scan.'}

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { IconButton, cn } from '@/components/atoms';
 import { Minus, Plus } from 'lucide-react';
 import { wheelStepDirection } from '@/components/ui/wheelStepDirection';
+import { clamp } from '@/utils/math';
 
 interface ScrollableNumberFieldProps {
   value: number;
@@ -45,7 +46,7 @@ export function ScrollableNumberField({
   const clampValue = useCallback((candidate: number): number => {
     const boundedMin = Number.isFinite(min) ? min : Number.NEGATIVE_INFINITY;
     const boundedMax = Number.isFinite(max) ? max : Number.POSITIVE_INFINITY;
-    return Math.max(boundedMin, Math.min(boundedMax, candidate));
+    return clamp(candidate, boundedMin, boundedMax);
   }, [max, min]);
 
   const normalizeStep = Number.isFinite(step) && step > 0 ? step : 1;

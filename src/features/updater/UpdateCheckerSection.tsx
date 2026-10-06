@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { FLATPAK_APP_ID, LINUX_RELEASES_URL } from '@/features/updater/updateBridge';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import { Button } from '@/components/atoms';
 import { useUpdateChecker } from '@/features/updater/useUpdateChecker';
 import type { UpdateState } from '@/features/updater/useUpdateChecker';
 import { isAllowSameVersionEnabled, enableAllowSameVersionForSession } from '@/features/updater/debugForceSession';
@@ -70,23 +71,25 @@ function IdleState({ onCheck }: { onCheck: () => void }) {
   const { _ } = useLingui();
   return (
     <div className="grid grid-cols-2 gap-2">
-      <button
-        type="button"
+      <Button
+        variant="secondary"
+        size="md"
         onClick={onCheck}
-        className="ui-button ui-button-secondary !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
+        className="inline-flex items-center justify-center gap-1.5"
       >
         <RotateCcw className="h-3.5 w-3.5" />
         <Trans>Check for Updates</Trans>
-      </button>
-      <button
-        type="button"
+      </Button>
+      <Button
+        variant="secondary"
+        size="md"
         disabled
-        className="ui-button ui-button-secondary !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 opacity-50 cursor-not-allowed"
+        className="inline-flex items-center justify-center gap-1.5 opacity-50 cursor-not-allowed"
         title={_(msg`No update available`)}
       >
         <Download className="h-3.5 w-3.5" />
         <Trans>Install</Trans>
-      </button>
+      </Button>
     </div>
   );
 }
@@ -141,14 +144,15 @@ function UpToDateState({ onCheck }: { onCheck: () => void }) {
           </span>
         </span>
       </div>
-      <button
-        type="button"
+      <Button
+        variant="secondary"
+        size="auto"
         onClick={onCheck}
-        className="ui-button ui-button-secondary !h-10 px-8 text-sm inline-flex items-center justify-center gap-1.5"
+        className="!h-10 px-8 text-sm inline-flex items-center justify-center gap-1.5"
       >
         <RotateCcw className="h-4 w-4" />
         <Trans>Check Again</Trans>
-      </button>
+      </Button>
     </div>
   );
 }
@@ -207,20 +211,22 @@ function AvailableState({
       )}
 
       <div className="grid grid-cols-3 gap-2">
-        <button
-          type="button"
+        <Button
+          variant="secondary"
+          size="md"
           onClick={onCheck}
-          className="ui-button ui-button-secondary !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
+          className="inline-flex items-center justify-center gap-1.5"
         >
           <RotateCcw className="h-3.5 w-3.5" />
           <Trans>Check for Updates</Trans>
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="secondary"
+          size="md"
+          className="inline-flex items-center justify-center gap-1.5"
           onClick={() => {
             void openExternal(`https://github.com/Open-Resin-Alliance/DragonFruit/releases/tag/v${info.version}`);
           }}
-          className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
           style={{
             borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
             background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 86%)',
@@ -229,20 +235,16 @@ function AvailableState({
         >
           <ExternalLink className="h-3.5 w-3.5" />
           <Trans>View on GitHub</Trans>
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="tinted-accent"
+          size="md"
           onClick={() => setShowWarning(true)}
-          className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-          style={{
-            borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-            background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-            color: 'var(--accent)',
-          }}
+          className="inline-flex items-center justify-center gap-1.5"
         >
           <Download className="h-3.5 w-3.5" />
           <Trans>Install</Trans>
-        </button>
+        </Button>
       </div>
       <StructuredDialogModal
         open={showWarning}
@@ -255,8 +257,8 @@ function AvailableState({
         onBackdropClick={() => setShowWarning(false)}
         actions={
           <>
-            <button type="button" onClick={() => setShowWarning(false)} className="ui-button ui-button-secondary !h-9 px-4 text-xs">{_(msg`Cancel`)}</button>
-            <button type="button" onClick={async () => { setShowWarning(false); try { await (window as unknown as { __df_flushAutosave?: () => Promise<void> }).__df_flushAutosave?.(); } catch {} try { await new Promise<void>((r) => setTimeout(r, 400)); } catch {} onDownload(); }} className="ui-button !h-9 px-4 text-xs inline-flex items-center justify-center gap-1.5" style={{ borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)', background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)', color: 'var(--accent)' }}>{_(msg`Update & Restart`)}</button>
+            <Button variant="secondary" size="auto" className="!h-9 px-4 text-xs" onClick={() => setShowWarning(false)}>{_(msg`Cancel`)}</Button>
+            <Button variant="tinted-accent" size="auto" className="!h-9 px-4 text-xs inline-flex items-center justify-center gap-1.5" onClick={async () => { setShowWarning(false); try { await (window as unknown as { __df_flushAutosave?: () => Promise<void> }).__df_flushAutosave?.(); } catch {} try { await new Promise<void>((r) => setTimeout(r, 400)); } catch {} onDownload(); }}>{_(msg`Update & Restart`)}</Button>
           </>
         }
       >

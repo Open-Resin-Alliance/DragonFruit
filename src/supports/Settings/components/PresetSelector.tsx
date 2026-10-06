@@ -2,8 +2,10 @@
 
 import React, { useState, useEffect, useRef, useSyncExternalStore } from 'react';
 import ReactDOM from 'react-dom';
-import { PenLine, Pencil, Trash2, Save, Pin, PinOff } from 'lucide-react';
+import { PenLine, Pencil, Trash2, Save, Pin, PinOff, RotateCcw } from 'lucide-react';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import { Button } from '@/components/atoms';
+import { ContextMenu, type ContextMenuEntry } from '@/components/ui/ContextMenu';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import { Trans } from '@lingui/react/macro';
@@ -88,23 +90,7 @@ export function PresetSelector({
     const [tempDescription, setTempDescription] = useState('');
     const [newPresetName, setNewPresetName] = useState(() => _(msg`My Preset`));
     const [contextMenu, setContextMenu] = useState<{ x: number; y: number; presetId: string } | null>(null);
-    const [pinSubmenuOpen, setPinSubmenuOpen] = useState(false);
     const [restoreConfirmOpen, setRestoreConfirmOpen] = useState(false);
-    const contextMenuRef = useRef<HTMLDivElement | null>(null);
-    const pinSubmenuTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-    // Global click listener to dismiss the context menu
-    useEffect(() => {
-        if (!contextMenu) return;
-        const handleClick = (e: MouseEvent) => {
-            if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
-                setContextMenu(null);
-            }
-        };
-        // Delay attachment so the right-click event doesn't immediately dismiss it
-        requestAnimationFrame(() => window.addEventListener('click', handleClick));
-        return () => window.removeEventListener('click', handleClick);
-    }, [contextMenu]);
 
     useEffect(() => {
         const unsubscribe = subscribeToPresets(() => {
@@ -580,26 +566,10 @@ export function PresetSelector({
 
     const handleContextMenu = (e: React.MouseEvent, presetId: string) => {
         const preset = presets.find((p) => p.id === presetId);
-        if (!preset || preset.isBuiltIn) return;
+        if (!preset) return;
         e.preventDefault();
         e.stopPropagation();
-        // Dismiss any other open context menus (e.g. the floating panel's "Reset this window" menu)
-        window.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
-
-        const menuWidth = 192; // w-48
-        const menuEstimatedHeight = 300;
-        const margin = 10;
-        let x = e.clientX;
-        let y = e.clientY;
-        if (x + menuWidth + margin > window.innerWidth) {
-            x = window.innerWidth - menuWidth - margin;
-        }
-        if (y + menuEstimatedHeight + margin > window.innerHeight) {
-            y = window.innerHeight - menuEstimatedHeight - margin;
-        }
-
-        setContextMenu({ x, y, presetId: preset.id });
-        setPinSubmenuOpen(false);
+        setContextMenu({ x: e.clientX, y: e.clientY, presetId: preset.id });
     };
 
     const handleCreateNewClick = () => {
@@ -615,6 +585,120 @@ export function PresetSelector({
             renameInputRef.current?.focus();
             renameInputRef.current?.select();
         });
+    };
+
+    // Rebuilt per render: the dirty, pinned and selection-dependent rows change
+    // with the right-clicked preset. Placement and dismissal belong to ContextMenu.
+    const contextMenuPreset = contextMenu ? presets.find((p) => p.id === contextMenu.presetId) : undefined;
+    const contextMenuPresetPinned = contextMenuPreset?.pinnedSlot != null;
+    const contextMenuEntries: ContextMenuEntry[] = [];
+    if (contextMenu) {
+        contextMenuEntries.push(
+            { id: 'new-preset', label: <Trans>New Preset</Trans>, icon: Save },
+            { id: 'rename', label: <Trans>Rename</Trans>, icon: Pencil },
+        );
+        if (contextMenuPreset && isPresetDirtyForSettings(contextMenuPreset.id, settings)) {
+            contextMenuEntries.push(
+                // The right-clicked preset is the target. It is not selected first:
+                // selecting applies that preset's settings, replacing the ones this
+                // save captures.
+                { id: 'save-changes', label: <Trans>Save Changes</Trans>, icon: Save },
+                { id: 'revert-changes', label: <Trans>Revert Changes</Trans>, icon: RotateCcw },
+            );
+        }
+        if (contextMenuPreset) {
+            if (contextMenuPresetPinned) {
+                contextMenuEntries.push({ id: 'unpin', label: <Trans>Unpin</Trans>, icon: PinOff, startsGroup: true });
+            }
+            const pinnedSlot = contextMenuPreset.pinnedSlot;
+            contextMenuEntries.push({
+                id: 'move-slot',
+                label: contextMenuPresetPinned ? <Trans>Move Slot</Trans> : <Trans>Pin to Slot</Trans>,
+                icon: Pin,
+                startsGroup: !contextMenuPresetPinned,
+                children: [1, 2, 3, 4, 5, 6]
+                    .filter((slot) => slot !== pinnedSlot)
+                    .map((slot) => {
+                        const occupied = pinnedPresets.some((p) => p.pinnedSlot === slot);
+                        return {
+                            id: `slot-${slot}`,
+                            label: formatPresetSlotLabel(slot, _),
+                            iconNode: (
+                                <span
+                                    className="inline-flex h-4 w-4 items-center justify-center rounded-[3px] text-[10px] font-bold tabular-nums leading-none"
+                                    style={{
+                                        background: occupied
+                                            ? 'color-mix(in srgb, var(--text-muted), transparent 80%)'
+                                            : 'color-mix(in srgb, var(--accent), transparent 78%)',
+                                        color: occupied ? 'var(--text-muted)' : 'var(--accent)',
+                                    }}
+                                >
+                                    {slot}
+                                </span>
+                            ),
+                            trailing: occupied ? (
+                                <span className="text-[10px] opacity-40">{_(msg({ message: 'occupied', comment: 'Marks a pin slot already taken by another preset. Lowercase, shown small and dimmed at the end of the row.' }))}</span>
+                            ) : undefined,
+                        };
+                    }),
+            });
+        }
+        contextMenuEntries.push(
+            { id: 'restore-defaults', label: <Trans>Restore Defaults</Trans>, icon: RotateCcw, startsGroup: true },
+            {
+                id: 'delete',
+                // Right-clicking inside a multi-selection acts on the selection,
+                // the way a file list does.
+                label: contextMenuPreset && presetSelection.includes(contextMenuPreset.id) && presetSelection.length > 1
+                    ? formatBulkDeletePresetsAction(presetSelection.length, _)
+                    : <Trans>Delete</Trans>,
+                icon: Trash2,
+                danger: true,
+                startsGroup: true,
+            },
+        );
+    }
+
+    const handleContextMenuSelect = (id: string) => {
+        const preset = contextMenuPreset;
+        switch (id) {
+            case 'new-preset':
+                handleCreateNewClick();
+                break;
+            case 'rename':
+                if (!preset) break;
+                handlePresetSelect(preset.id);
+                startInlineRename(preset.id);
+                break;
+            case 'save-changes':
+                if (preset) setConfirmId(preset.id);
+                break;
+            case 'revert-changes':
+                if (preset) handlePresetSelect(preset.id);
+                break;
+            case 'unpin':
+                if (preset) setPresetPinnedSlot(preset.id, null);
+                break;
+            case 'restore-defaults':
+                setRestoreConfirmOpen(true);
+                break;
+            case 'delete':
+                if (!preset) break;
+                setIsEditingName(false);
+                if (presetSelection.includes(preset.id) && presetSelection.length > 1) {
+                    setBulkDeleteOpen(true);
+                    break;
+                }
+                // Only the delete is asked for: selecting the preset first would
+                // apply its settings on the way out.
+                setDeleteConfirmId(preset.id);
+                break;
+            default:
+                if (preset && id.startsWith('slot-')) {
+                    setPresetPinnedSlot(preset.id, Number(id.slice('slot-'.length)));
+                }
+                break;
+        }
     };
 
     return (
@@ -737,21 +821,18 @@ export function PresetSelector({
                 onClose={() => setConfirmId(null)}
                 actions={(
                     <>
-                        <button
-                            type="button"
-                            className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
+                        <Button
+                            variant="secondary"
+                            size="md"
+                            className="w-full"
                             onClick={() => setConfirmId(null)}
                         >
                             <Trans>Cancel</Trans>
-                        </button>
-                        <button
-                            type="button"
-                            className="ui-button !h-9 w-full px-3 text-xs inline-flex items-center justify-center gap-1.5"
-                            style={{
-                                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                                color: 'var(--accent)',
-                            }}
+                        </Button>
+                        <Button
+                            variant="tinted-accent"
+                            size="md"
+                            className="w-full gap-1.5"
                             onClick={() => {
                                 if (confirmPreset) {
                                     savePreset(confirmPreset.id);
@@ -761,7 +842,7 @@ export function PresetSelector({
                         >
                             <Save className="h-3.5 w-3.5" />
                             <Trans>Save</Trans>
-                        </button>
+                        </Button>
                     </>
                 )}
             >
@@ -783,21 +864,18 @@ export function PresetSelector({
                 onClose={() => setDeleteConfirmId(null)}
                 actions={(
                     <>
-                        <button
-                            type="button"
-                            className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
+                        <Button
+                            variant="secondary"
+                            size="md"
+                            className="w-full"
                             onClick={() => setDeleteConfirmId(null)}
                         >
                             <Trans>Cancel</Trans>
-                        </button>
-                        <button
-                            type="button"
-                            className="ui-button !h-9 w-full px-3 text-xs inline-flex items-center justify-center gap-1.5"
-                            style={{
-                                borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
-                                background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
-                                color: 'var(--danger)',
-                            }}
+                        </Button>
+                        <Button
+                            variant="tinted-danger"
+                            size="md"
+                            className="w-full gap-1.5"
                             onClick={() => {
                                 if (deleteConfirmPreset) {
                                     deletePreset(deleteConfirmPreset.id);
@@ -808,7 +886,7 @@ export function PresetSelector({
                         >
                             <Trash2 className="h-3.5 w-3.5" />
                             <Trans>Delete</Trans>
-                        </button>
+                        </Button>
                     </>
                 )}
             >
@@ -835,21 +913,18 @@ export function PresetSelector({
                 onClose={() => setRestoreConfirmOpen(false)}
                 actions={(
                     <>
-                        <button
-                            type="button"
-                            className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
+                        <Button
+                            variant="secondary"
+                            size="md"
+                            className="w-full"
                             onClick={() => setRestoreConfirmOpen(false)}
                         >
                             <Trans>Cancel</Trans>
-                        </button>
-                        <button
-                            type="button"
-                            className="ui-button !h-9 w-full px-3 text-xs inline-flex items-center justify-center gap-1.5"
-                            style={{
-                                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                                color: 'var(--accent)',
-                            }}
+                        </Button>
+                        <Button
+                            variant="tinted-accent"
+                            size="md"
+                            className="w-full gap-1.5"
                             onClick={() => {
                                 restoreFactoryDefaults();
                                 setRestoreConfirmOpen(false);
@@ -860,7 +935,7 @@ export function PresetSelector({
                                 <path d="M3 3v5h5" />
                             </svg>
                             <Trans>Restore</Trans>
-                        </button>
+                        </Button>
                     </>
                 )}
             >
@@ -882,21 +957,18 @@ export function PresetSelector({
                 onClose={() => setBulkDeleteOpen(false)}
                 actions={(
                     <>
-                        <button
-                            type="button"
-                            className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
+                        <Button
+                            variant="secondary"
+                            size="md"
+                            className="w-full"
                             onClick={() => setBulkDeleteOpen(false)}
                         >
                             <Trans>Cancel</Trans>
-                        </button>
-                        <button
-                            type="button"
-                            className="ui-button !h-9 w-full px-3 text-xs inline-flex items-center justify-center gap-1.5"
-                            style={{
-                                borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
-                                background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
-                                color: 'var(--danger)',
-                            }}
+                        </Button>
+                        <Button
+                            variant="tinted-danger"
+                            size="md"
+                            className="w-full gap-1.5"
                             onClick={() => {
                                 deletePresets(selectedPresets.map((preset) => preset.id));
                                 setPresetSelection([]);
@@ -905,7 +977,7 @@ export function PresetSelector({
                         >
                             <Trash2 className="h-3.5 w-3.5" />
                             <Trans>Delete</Trans>
-                        </button>
+                        </Button>
                     </>
                 )}
             >
@@ -938,259 +1010,14 @@ export function PresetSelector({
             ) : null}
 
             {/* ── Right-click Context Menu ──────────────────────────────── */}
-            {contextMenu ? ReactDOM.createPortal(
-                <div
-                    ref={contextMenuRef}
-                    className="fixed z-[140] pointer-events-auto w-48 rounded-lg border p-1.5 shadow-xl"
-                    style={{
-                        left: contextMenu.x,
-                        top: contextMenu.y,
-                        borderColor: 'var(--border-subtle)',
-                        background: 'color-mix(in srgb, var(--surface-0), #000 10%)',
-                    }}
-                    onPointerDown={(e) => e.stopPropagation()}
-                >
-                    <button
-                        type="button"
-                        className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13px] font-medium transition-colors"
-                        style={{ color: 'var(--text-strong)' }}
-                        onMouseEnter={(e) => { e.currentTarget.style.background = 'color-mix(in srgb, var(--accent), var(--surface-1) 84%)'; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                        onClick={() => {
-                            setContextMenu(null);
-                            handleCreateNewClick();
-                        }}
-                    >
-                        <Save className="h-3.5 w-3.5" />
-                        <Trans>New Preset</Trans>
-                    </button>
-
-                    <button
-                        type="button"
-                        className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13px] font-medium transition-colors"
-                        style={{ color: 'var(--text-strong)' }}
-                        onMouseEnter={(e) => { e.currentTarget.style.background = 'color-mix(in srgb, var(--accent), var(--surface-1) 84%)'; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                        onClick={() => {
-                            const preset = presets.find((p) => p.id === contextMenu.presetId);
-                            if (!preset) return;
-                            handlePresetSelect(preset.id);
-                            setContextMenu(null);
-                            startInlineRename(preset.id);
-                        }}
-                    >
-                        <Pencil className="h-3.5 w-3.5" />
-                        <Trans>Rename</Trans>
-                    </button>
-
-                    {(() => {
-                        const menuPreset = presets.find((p) => p.id === contextMenu.presetId);
-                        if (!menuPreset) return null;
-                        const isDirty = isPresetDirtyForSettings(menuPreset.id, settings);
-                        if (!isDirty) return null;
-                        return (
-                            <button
-                                type="button"
-                                className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13px] font-medium transition-colors"
-                                style={{ color: 'var(--text-strong)' }}
-                                onMouseEnter={(e) => { e.currentTarget.style.background = 'color-mix(in srgb, var(--accent), var(--surface-1) 84%)'; }}
-                                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                                onClick={() => {
-                                    setContextMenu(null);
-                                    // The right-clicked preset is the target. It is not
-                                    // selected first: selecting applies that preset's
-                                    // settings, replacing the ones this save captures.
-                                    setConfirmId(menuPreset.id);
-                                }}
-                            >
-                                <Save className="h-3.5 w-3.5" />
-                                <Trans>Save Changes</Trans>
-                            </button>
-                        );
-                    })()}
-
-                    {(() => {
-                        const menuPreset = presets.find((p) => p.id === contextMenu.presetId);
-                        if (!menuPreset) return null;
-                        const isDirty = isPresetDirtyForSettings(menuPreset.id, settings);
-                        if (!isDirty) return null;
-                        return (
-                            <button
-                                type="button"
-                                className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13px] font-medium transition-colors"
-                                style={{ color: 'var(--text-strong)' }}
-                                onMouseEnter={(e) => { e.currentTarget.style.background = 'color-mix(in srgb, var(--accent), var(--surface-1) 84%)'; }}
-                                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                                onClick={() => {
-                                    setContextMenu(null);
-                                    handlePresetSelect(menuPreset.id);
-                                }}
-                            >
-                                <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                    <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-                                    <path d="M3 3v5h5" />
-                                </svg>
-                                <Trans>Revert Changes</Trans>
-                            </button>
-                        );
-                    })()}
-
-                    <div className="my-1 border-t" style={{ borderColor: 'var(--border-subtle)' }} />
-
-                    {(() => {
-                        const menuPreset = presets.find((p) => p.id === contextMenu.presetId);
-                        if (!menuPreset) return null;
-                        const isPinned = menuPreset.pinnedSlot != null;
-                        const submenuWidth = 160; // w-40 = 10rem ≈ 160px
-                        const contextMenuWidth = 192; // w-48 = 12rem ≈ 192px
-                        const rightEdge = contextMenu.x + contextMenuWidth + submenuWidth + 12;
-                        const openLeft = rightEdge > window.innerWidth;
-                        return (
-                            <>
-                                {isPinned ? (
-                                    <button
-                                        type="button"
-                                        className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13px] font-medium transition-colors"
-                                        style={{ color: 'var(--text-strong)' }}
-                                        onMouseEnter={(e) => { e.currentTarget.style.background = 'color-mix(in srgb, var(--accent), var(--surface-1) 84%)'; }}
-                                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                                        onClick={() => {
-                                            setPresetPinnedSlot(menuPreset.id, null);
-                                            setContextMenu(null);
-                                        }}
-                                    >
-                                        <PinOff className="h-3.5 w-3.5" />
-                                        <Trans>Unpin</Trans>
-                                    </button>
-                                ) : null}
-                                <div
-                                    className="relative"
-                                    onMouseEnter={() => {
-                                        if (pinSubmenuTimerRef.current) clearTimeout(pinSubmenuTimerRef.current);
-                                        setPinSubmenuOpen(true);
-                                    }}
-                                    onMouseLeave={() => {
-                                        pinSubmenuTimerRef.current = setTimeout(() => setPinSubmenuOpen(false), 100);
-                                    }}
-                                >
-                                    <button
-                                        type="button"
-                                        className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13px] font-medium transition-colors"
-                                        style={{ color: 'var(--text-strong)' }}
-                                        onMouseEnter={(e) => { e.currentTarget.style.background = 'color-mix(in srgb, var(--accent), var(--surface-1) 84%)'; }}
-                                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                                    >
-                                        <Pin className="h-3.5 w-3.5" />
-                                        <span className="flex-1">{isPinned ? _(msg`Move Slot`) : _(msg`Pin to Slot`)}</span>
-                                        <span className="text-[10px] opacity-50">{openLeft ? '◂' : '▸'}</span>
-                                    </button>
-                                    {pinSubmenuOpen ? (
-                                        <div
-                                            className={`absolute top-0 z-[141] w-40 rounded-lg border p-1.5 shadow-xl ${openLeft ? 'right-full mr-1' : 'left-full ml-1'}`}
-                                            style={{
-                                                borderColor: 'var(--border-subtle)',
-                                                background: 'color-mix(in srgb, var(--surface-0), #000 10%)',
-                                            }}
-                                            onMouseEnter={() => {
-                                                if (pinSubmenuTimerRef.current) clearTimeout(pinSubmenuTimerRef.current);
-                                                setPinSubmenuOpen(true);
-                                            }}
-                                            onMouseLeave={() => {
-                                                pinSubmenuTimerRef.current = setTimeout(() => setPinSubmenuOpen(false), 100);
-                                            }}
-                                        >
-                                            {[1, 2, 3, 4, 5, 6].map((slot) => {
-                                                const alreadyPinned = pinnedPresets.some((p) => p.pinnedSlot === slot);
-                                                if (isPinned && menuPreset.pinnedSlot === slot) return null;
-                                                return (
-                                                    <button
-                                                        key={slot}
-                                                        type="button"
-                                                        className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13px] font-medium transition-colors"
-                                                        style={{ color: 'var(--text-strong)' }}
-                                                        onMouseEnter={(e) => { e.currentTarget.style.background = 'color-mix(in srgb, var(--accent), var(--surface-1) 84%)'; }}
-                                                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                                                        onClick={() => {
-                                                            setPresetPinnedSlot(menuPreset.id, slot);
-                                                            setContextMenu(null);
-                                                        }}
-                                                    >
-                                                        <span className="inline-flex h-4 w-4 items-center justify-center rounded-[3px] text-[10px] font-bold tabular-nums leading-none"
-                                                            style={{
-                                                                background: alreadyPinned
-                                                                    ? 'color-mix(in srgb, var(--text-muted), transparent 80%)'
-                                                                    : 'color-mix(in srgb, var(--accent), transparent 78%)',
-                                                                color: alreadyPinned ? 'var(--text-muted)' : 'var(--accent)',
-                                                            }}
-                                                        >
-                                                            {slot}
-                                                        </span>
-                                                        <span className="flex-1">{formatPresetSlotLabel(slot, _)}</span>
-                                                        {alreadyPinned ? (
-                                                            <span className="text-[10px] opacity-40">{_(msg({ message: 'occupied', comment: 'Marks a pin slot already taken by another preset. Lowercase, shown small and dimmed at the end of the row.' }))}</span>
-                                                        ) : null}
-                                                    </button>
-                                                );
-                                            })}
-                                        </div>
-                                    ) : null}
-                                </div>
-                            </>
-                        );
-                    })()}
-
-                    <div className="my-1 border-t" style={{ borderColor: 'var(--border-subtle)' }} />
-
-                    <button
-                        type="button"
-                        className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13px] font-medium transition-colors"
-                        style={{ color: 'var(--text-strong)' }}
-                        onMouseEnter={(e) => { e.currentTarget.style.background = 'color-mix(in srgb, var(--accent), var(--surface-1) 84%)'; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                        onClick={() => {
-                            setContextMenu(null);
-                            setRestoreConfirmOpen(true);
-                        }}
-                    >
-                        <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-                            <path d="M3 3v5h5" />
-                        </svg>
-                        <Trans>Restore Defaults</Trans>
-                    </button>
-
-                    <div className="my-1 border-t" style={{ borderColor: 'var(--border-subtle)' }} />
-
-                    <button
-                        type="button"
-                        className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13px] font-medium transition-colors"
-                        style={{ color: 'var(--danger)' }}
-                        onMouseEnter={(e) => { e.currentTarget.style.background = 'color-mix(in srgb, var(--danger), var(--surface-1) 90%)'; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                        onClick={() => {
-                            const preset = presets.find((p) => p.id === contextMenu.presetId);
-                            if (!preset) return;
-                            setIsEditingName(false);
-                            setContextMenu(null);
-                            // Right-clicking inside a multi-selection acts on the
-                            // selection, the way a file list does.
-                            if (presetSelection.includes(preset.id) && presetSelection.length > 1) {
-                                setBulkDeleteOpen(true);
-                                return;
-                            }
-                            // Only the delete is asked for: selecting the preset
-                            // first would apply its settings on the way out.
-                            setDeleteConfirmId(preset.id);
-                        }}
-                    >
-                        <Trash2 className="h-3.5 w-3.5" />
-                        {presetSelection.includes(contextMenu.presetId) && presetSelection.length > 1
-                            ? formatBulkDeletePresetsAction(presetSelection.length, _)
-                            : <Trans>Delete</Trans>}
-                    </button>
-                </div>,
-                document.body
-            ) : null}
+            <ContextMenu
+                position={contextMenu}
+                entries={contextMenuEntries}
+                onSelect={handleContextMenuSelect}
+                onClose={() => setContextMenu(null)}
+                title={_(msg({ message: 'Presets', comment: 'Heading of the support preset right-click menu in the Support Studio.' }))}
+                ariaLabel={_(msg({ message: 'Preset context menu', comment: 'Accessible name of the support preset right-click menu in the Support Studio.' }))}
+            />
         </div>
     );
 }

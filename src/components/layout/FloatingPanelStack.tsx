@@ -1,5 +1,7 @@
 import { clamp } from '@/utils/math';
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
 import windowLayouts from '@/config/window-layouts.json';
 import {
   type FloatingLayoutDebugRequestDetail,
@@ -9,6 +11,7 @@ import {
   FLOATING_LAYOUT_STORAGE_KEY,
   isFloatingLayoutPersistenceEnabled,
 } from '@/components/layout/floatingLayoutPreferences';
+import { ContextMenu } from '@/components/ui/ContextMenu';
 
 type PanelPosition = {
   x: number;
@@ -224,6 +227,10 @@ function findNearestFreePosition(
 function isDragBlockedByTarget(target: EventTarget | null) {
   if (!(target instanceof Element)) return false;
   return Boolean(
+    // Only `data-no-drag` opts a control out of a panel drag. `data-no-window-drag`
+    // is deliberately NOT honoured here: the app shell carries it on its root, so
+    // `closest` would match every element in the window and no panel could be
+    // dragged at all. The two attributes mean different things — see ui-atoms.md.
     target.closest('button, input, select, textarea, label, a, [role="button"], [data-no-drag], [data-no-drag="true"], .react-colorful'),
   );
 }
@@ -748,6 +755,7 @@ function FloatingPanelItem({
  * Allows clicking through empty spaces to the canvas below.
  */
 export function FloatingPanelStack({ children }: { children: React.ReactNode }) {
+  const { _ } = useLingui();
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const panelSizesRef = React.useRef<Record<string, PanelSize>>({});
   const expandedPanelSizesRef = React.useRef<Record<string, PanelSize>>({});
@@ -1633,23 +1641,6 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
   }, [closeWindowContextMenu, seededPositions]);
 
   React.useEffect(() => {
-    if (!windowContextMenu) return;
-
-    const handlePointerDown = () => closeWindowContextMenu();
-    const handleEscape = (e: CustomEvent) => {
-      if (e.detail.key === 'Escape') closeWindowContextMenu();
-    };
-
-    window.addEventListener('pointerdown', handlePointerDown);
-    window.addEventListener('app-hotkey-keydown', handleEscape as EventListener);
-
-    return () => {
-      window.removeEventListener('pointerdown', handlePointerDown);
-      window.removeEventListener('app-hotkey-keydown', handleEscape as EventListener);
-    };
-  }, [windowContextMenu, closeWindowContextMenu]);
-
-  React.useEffect(() => {
     if (typeof window === 'undefined') return;
 
     const handleDebugDumpRequest = (event: Event) => {
@@ -1684,9 +1675,6 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
       window.removeEventListener(FLOATING_LAYOUT_DEBUG_REQUEST_EVENT, handleDebugDumpRequest as EventListener);
     };
   }, [persistLayout, seededPositions]);
-
-  const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1920;
-  const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 1080;
 
   return (
     <FloatingPanelStackContext.Provider value={floatingPanelStackContext}>
@@ -1739,47 +1727,21 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
         />
       ) : null}
 
-      {windowContextMenu ? (
-        <div
-          className="fixed z-[140] pointer-events-auto w-56 rounded-lg border p-1.5 shadow-xl"
-          style={{
-            left: Math.max(8, Math.min(windowContextMenu.x, viewportWidth - 232)),
-            top: Math.max(8, Math.min(windowContextMenu.y, viewportHeight - 120)),
-            borderColor: 'var(--border-subtle)',
-            background: 'color-mix(in srgb, var(--surface-0), #000 10%)',
-          }}
-          onPointerDown={(e) => e.stopPropagation()}
-        >
-          <button
-            type="button"
-            className="w-full rounded-md px-2.5 py-2 text-left text-[13px] font-medium transition-colors"
-            style={{ color: 'var(--text-strong)' }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'color-mix(in srgb, var(--accent), var(--surface-1) 84%)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'transparent';
-            }}
-            onClick={() => resetSingleWindow(windowContextMenu.panelId)}
-          >
-            Reset this window
-          </button>
-          <button
-            type="button"
-            className="w-full rounded-md px-2.5 py-2 text-left text-[13px] font-medium transition-colors"
-            style={{ color: 'var(--text-strong)' }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'color-mix(in srgb, var(--accent), var(--surface-1) 84%)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'transparent';
-            }}
-            onClick={resetAllWindows}
-          >
-            Reset all windows layout
-          </button>
-        </div>
-      ) : null}
+      <ContextMenu
+        position={windowContextMenu}
+        entries={[
+          { id: 'reset-window', label: _(msg`Reset this window`) },
+          { id: 'reset-all-windows', label: _(msg`Reset all windows layout`) },
+        ]}
+        onSelect={(id) => {
+          if (!windowContextMenu) return;
+          if (id === 'reset-window') resetSingleWindow(windowContextMenu.panelId);
+          if (id === 'reset-all-windows') resetAllWindows();
+        }}
+        onClose={closeWindowContextMenu}
+        title={_(msg({ message: 'Window', comment: 'Heading of the floating panel right-click menu that resets panel positions.' }))}
+        ariaLabel={_(msg({ message: 'Window context menu', comment: 'Accessible name of the floating panel right-click menu that resets panel positions.' }))}
+      />
       </div>
     </FloatingPanelStackContext.Provider>
   );

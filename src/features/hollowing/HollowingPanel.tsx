@@ -1,7 +1,8 @@
 import React from 'react';
 import { Droplets } from 'lucide-react';
 import type { HollowMode, InfillMode, OpenFace } from '@/utils/meshHollowing';
-import { Card, CardHeader, IconButton, Select } from '@/components/atoms';
+import { Button, Card, CardHeader, Select } from '@/components/atoms';
+import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 
 export interface HollowingPanelState {
@@ -102,25 +103,7 @@ export function HollowingPanel({
       <CardHeader
         left={(
           <>
-            <IconButton
-              onClick={() => setExpanded((prev) => !prev)}
-              className="!p-0.5"
-              title={expanded ? 'Collapse card' : 'Expand card'}
-            >
-              <svg
-                className="w-3 h-3 transform transition-transform"
-                style={{ color: expanded ? 'var(--accent)' : 'var(--text-muted)' }}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                {expanded ? (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                ) : (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                )}
-              </svg>
-            </IconButton>
+            <PanelCollapseToggle expanded={expanded} onToggle={() => setExpanded((prev) => !prev)} />
             <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Hollowing</h3>
           </>
         )}
@@ -157,24 +140,28 @@ export function HollowingPanel({
             <div className="rounded-md border p-2 space-y-1.5 min-h-[4.5rem] box-border" style={accentCardStyle}>
               <div className="ui-meta" style={{ color: 'var(--text-muted)' }}>Mode</div>
               <div className="grid grid-cols-2 gap-1 min-h-8">
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                <Button
+                  variant="secondary"
+                  size="auto"
+                  className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                   onClick={() => setState({ mode: 'cavity' })}
                   style={state.mode === 'cavity' ? activeModeStyle : undefined}
                   disabled={isApplying}
                 >
                   Cavity
-                </button>
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                </Button>
+
+                <Button
+                  variant="secondary"
+                  size="auto"
+                  className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                   onClick={() => setState({ mode: 'infill' })}
                   style={state.mode === 'infill' ? activeModeStyle : undefined}
                   disabled={isApplying}
                 >
                   Infill
-                </button>
+                </Button>
+
               </div>
             </div>
           )}
@@ -214,24 +201,28 @@ export function HollowingPanel({
               <div className="rounded-md border p-2 space-y-1.5" style={panelCardStyle}>
                 <div className="ui-meta" style={{ color: 'var(--text-muted)' }}>Infill Type</div>
                 <div className="grid grid-cols-2 gap-1">
-                  <button
-                    type="button"
-                    className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                  <Button
+                    variant="secondary"
+                    size="auto"
+                    className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                     onClick={() => setState({ infillMode: 'lattice' })}
                     style={state.infillMode === 'lattice' ? activeModeStyle : undefined}
                     disabled={isApplying}
                   >
                     Lattice
-                  </button>
-                  <button
-                    type="button"
-                    className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                  </Button>
+
+                  <Button
+                    variant="secondary"
+                    size="auto"
+                    className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                     onClick={() => setState({ infillMode: 'pillar' })}
                     style={state.infillMode === 'pillar' ? activeModeStyle : undefined}
                     disabled={isApplying}
                   >
                     Pillar
-                  </button>
+                  </Button>
+
                 </div>
               </div>
 
@@ -296,17 +287,20 @@ export function HollowingPanel({
 
           {isEditMode ? (
             <div className="flex gap-2">
-              <button
-                type="button"
-                className="ui-button ui-button-secondary flex-1 !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
+              <Button
+                variant="secondary"
+                size="auto"
+                className="flex-1 !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
                 onClick={onClearEdit}
                 disabled={isApplying || isPreviewing}
               >
                 Clear
-              </button>
-              <button
-                type="button"
-                className="ui-button ui-button-accent flex-1 !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
+              </Button>
+
+              <Button
+                variant="accent"
+                size="auto"
+                className="flex-1 !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
                 onClick={onDoneEdit}
                 disabled={isApplying || isPreviewing || isApplyingBlockers}
               >
@@ -336,44 +330,52 @@ export function HollowingPanel({
                     <span>Applying Blockers</span>
                   </span>
                 ) : 'Done'}
-              </button>
+              </Button>
+
             </div>
           ) : (
             <div className="flex gap-2">
               {isHollowingApplied ? (
                 <>
                   {canApply && (
-                    <button
-                      type="button"
-                      className="ui-button ui-button-secondary flex-1 !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
+                    <Button
+                      variant="secondary"
+                      size="auto"
+                      className="flex-1 !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
                       onClick={onResetSettings}
                       disabled={isApplying || isPreviewing}
                     >
                       Reset
-                    </button>
+                    </Button>
+
                   )}
-                  <button
-                    type="button"
-                    className="ui-button ui-button-accent flex-1 !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
+                  <Button
+                    variant="accent"
+                    size="auto"
+                    className="flex-1 !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
                     onClick={onReset}
                     disabled={isApplying || isPreviewing}
                   >
                     Remove Hollowing
-                  </button>
+                  </Button>
+
                 </>
               ) : (
                 <>
-                  <button
-                    type="button"
-                    className="ui-button ui-button-secondary flex-1 !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
+                  <Button
+                    variant="secondary"
+                    size="auto"
+                    className="flex-1 !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
                     onClick={onStartEdit}
                     disabled={isApplying || isPreviewing || !canEdit}
                   >
                     Blockers
-                  </button>
-                  <button
-                    type="button"
-                    className="ui-button ui-button-accent flex-1 !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
+                  </Button>
+
+                  <Button
+                    variant="accent"
+                    size="auto"
+                    className="flex-1 !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
                     onClick={onApply}
                     disabled={isApplying || isPreviewing || !canApply}
                   >
@@ -403,7 +405,8 @@ export function HollowingPanel({
                         <span>Updating</span>
                       </span>
                     ) : 'Apply'}
-                  </button>
+                  </Button>
+
                 </>
               )}
             </div>

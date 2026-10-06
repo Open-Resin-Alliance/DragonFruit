@@ -17,6 +17,7 @@ import React from 'react';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import type { MessageDescriptor } from '@lingui/core';
+import { Button } from '@/components/atoms';
 import type { AutoSupportPreset } from '@/supports/Settings/autoSupportPresets';
 import { AutoSupportPresetSelect } from './AutoSupportPresetSelect';
 
@@ -91,16 +92,17 @@ export function AutoSupportPresetRow({
           is on. The label states the state as well — "Auto-Lift ON" / "Auto-Lift
           OFF" — so the button reads the same to someone who cannot tell the accent
           fill from the quiet one, and so a screenshot of the row is unambiguous. */}
-      <button
-        type="button"
+      <Button
         onClick={() => onAutoLiftChange(!autoLift)}
         aria-pressed={autoLift}
         title={_(AUTO_LIFT_HINT)}
-        className="ui-button ui-button-secondary min-w-0 flex-1 !h-8 px-2 text-[11px]"
+        variant="secondary"
+        size="auto"
+        className="min-w-0 flex-1 !h-8 px-2 text-[11px]"
         style={autoLift ? ON_STYLE : OFF_STYLE}
       >
         <span className="truncate">{_(autoLift ? AUTO_LIFT_ON : AUTO_LIFT_OFF)}</span>
-      </button>
+      </Button>
     </div>
   );
 }

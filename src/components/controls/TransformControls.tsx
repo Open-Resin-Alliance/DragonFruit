@@ -1,7 +1,8 @@
 import React from 'react';
 import * as THREE from 'three';
 import { NumberInput } from '@/components/ui/NumberInput';
-import { Card, CardHeader, IconButton } from '@/components/atoms';
+import { Button, Card, CardHeader } from '@/components/atoms';
+import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 interface SectionHeaderProps {
@@ -82,7 +83,7 @@ export function TransformControls({
   onTransformCommit,
 }: TransformControlsProps) {
   const [expanded, setExpanded] = useFloatingPanelCollapse(true);
-  const compactButtonClass = 'ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]';
+  const compactButtonClass = '!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]';
   const valueInputClass = 'ui-input h-8 w-full px-1.5 text-xs sm:text-sm text-left tabular-nums no-spinners';
 
   const sectionCardStyle: React.CSSProperties = {
@@ -192,25 +193,7 @@ export function TransformControls({
       <CardHeader
         left={(
           <>
-            <IconButton
-              onClick={() => setExpanded(!expanded)}
-              title={expanded ? 'Collapse card' : 'Expand card'}
-              className="!p-0.5"
-            >
-              <svg
-                className="w-3 h-3 transform transition-transform"
-                style={{ color: expanded ? 'var(--accent)' : 'var(--text-muted)' }}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                {expanded ? (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                ) : (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                )}
-              </svg>
-            </IconButton>
+            <PanelCollapseToggle expanded={expanded} onToggle={() => setExpanded((prev) => !prev)} />
             <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
               Transform
             </h3>
@@ -273,13 +256,15 @@ export function TransformControls({
                   </div>
                 </div>
 
-                <button
+                <Button
                   type="button"
                   onClick={onCenter}
+                  variant="secondary"
+                  size="auto"
                   className={compactButtonClass + ' w-full'}
                 >
                   Center Selection
-                </button>
+                </Button>
 
               </div>
           </div>
@@ -323,13 +308,15 @@ export function TransformControls({
               </div>
 
               <div className="grid grid-cols-2 gap-1">
-                <button
+                <Button
                   onClick={() => {
                     onLift();
                     onTransformCommit?.();
                   }}
                   disabled={!modelBBox}
-                  className="ui-button ui-button-secondary !h-8 px-1.5 text-[10px] sm:text-[11px] disabled:opacity-50 disabled:cursor-not-allowed"
+                  variant="secondary"
+                  size="auto"
+                  className="!h-8 px-1.5 text-[10px] sm:text-[11px] disabled:opacity-50 disabled:cursor-not-allowed"
                   style={{
                     borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 38%)',
                     color: 'color-mix(in srgb, var(--accent), var(--text-strong) 30%)',
@@ -337,14 +324,16 @@ export function TransformControls({
                   }}
                 >
                   Lift
-                </button>
-                <button
+                </Button>
+                <Button
                   onClick={() => {
                     onDrop();
                     onTransformCommit?.();
                   }}
                   disabled={!modelBBox}
-                  className="ui-button ui-button-secondary !h-8 px-1.5 text-[10px] sm:text-[11px] disabled:opacity-50 disabled:cursor-not-allowed"
+                  variant="secondary"
+                  size="auto"
+                  className="!h-8 px-1.5 text-[10px] sm:text-[11px] disabled:opacity-50 disabled:cursor-not-allowed"
                   style={{
                     borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
                     color: 'color-mix(in srgb, var(--accent-secondary), var(--text-strong) 30%)',
@@ -352,7 +341,7 @@ export function TransformControls({
                   }}
                 >
                   Drop
-                </button>
+                </Button>
               </div>
             </div>
           </div>
@@ -418,15 +407,17 @@ export function TransformControls({
                   </div>
                 </div>
 
-                <button
+                <Button
                   onClick={() => {
                     onResetRotation();
                     onTransformCommit?.();
                   }}
-                  className="ui-button ui-button-secondary w-full !h-8 px-1.5 text-[10px] sm:text-[11px]"
+                  variant="secondary"
+                  size="auto"
+                  className="w-full !h-8 px-1.5 text-[10px] sm:text-[11px]"
                 >
                   Reset Rotation
-                </button>
+                </Button>
               </div>
           </div>
 
@@ -566,15 +557,17 @@ export function TransformControls({
                   </div>
                 </div>
 
-                <button
+                <Button
                   onClick={() => {
                     onResetScale();
                     onTransformCommit?.();
                   }}
-                  className="ui-button ui-button-secondary w-full !h-8 px-1.5 text-[10px] sm:text-[11px]"
+                  variant="secondary"
+                  size="auto"
+                  className="w-full !h-8 px-1.5 text-[10px] sm:text-[11px]"
                 >
                   Reset Scale
-                </button>
+                </Button>
               </div>
           </div>
         </div>

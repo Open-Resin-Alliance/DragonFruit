@@ -8,6 +8,8 @@ import hljs from 'highlight.js';
 import 'highlight.js/styles/atom-one-dark.css';
 import { writeBytesToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
+import { Button, IconButton } from '@/components/atoms';
+import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import {
   getProfileLocalMaterialSettingsAdapter,
   getAvailableProfileNetworkModes,
@@ -1228,15 +1230,16 @@ function StepDetails({ meta, onChange, onImportManifest, installedPlugins, onImp
                       labelClassName="font-medium"
                       selectClassName="w-full h-[36px] px-2.5 pr-10 text-xs"
                     />
-                    <button
-                      type="button"
+                    <Button
+                      variant="secondary"
+                      size="md"
                       onClick={handleImportInstalledPlugin}
                       disabled={!selectedInstalledPluginId}
-                      className="ui-button ui-button-secondary !h-[36px] !px-3 text-xs disabled:opacity-50"
+                      className="disabled:opacity-50"
                       style={ACCENT_SECONDARY_BUTTON_STYLE_92}
                     >
                       Load Plugin
-                    </button>
+                    </Button>
                   </div>
                 )
               ) : (
@@ -1251,13 +1254,14 @@ function StepDetails({ meta, onChange, onImportManifest, installedPlugins, onImp
                   />
 
                   <div className="flex items-center gap-2 flex-wrap">
-                    <button
-                      type="button"
+                    <Button
+                      variant="secondary"
+                      size="auto"
                       onClick={handlePickFile}
-                      className="ui-button ui-button-secondary !h-8 !px-3 text-xs"
+                      className="!h-8 !px-3 text-xs"
                     >
                       Load from File
-                    </button>
+                    </Button>
                     <input
                       ref={fileInputRef}
                       type="file"
@@ -1266,26 +1270,28 @@ function StepDetails({ meta, onChange, onImportManifest, installedPlugins, onImp
                       onChange={handleFileChosen}
                     />
 
-                    <button
-                      type="button"
+                    <Button
+                      variant="secondary"
+                      size="auto"
                       onClick={handleImport}
                       disabled={importManifestText.trim().length === 0}
-                      className="ui-button ui-button-secondary !h-8 !px-3 text-xs disabled:opacity-50"
+                      className="!h-8 !px-3 text-xs disabled:opacity-50"
                       style={ACCENT_SECONDARY_BUTTON_STYLE_92}
                     >
                       Import into Studio
-                    </button>
+                    </Button>
 
-                    <button
-                      type="button"
+                    <Button
+                      variant="secondary"
+                      size="auto"
                       onClick={() => {
                         setImportManifestText('');
                         setImportFeedback(null);
                       }}
-                      className="ui-button ui-button-secondary !h-8 !px-3 text-xs"
+                      className="!h-8 !px-3 text-xs"
                     >
                       Clear
-                    </button>
+                    </Button>
                   </div>
                 </div>
               )}
@@ -1433,15 +1439,16 @@ function StepRepo({ meta }: StepRepoProps) {
           <code className="font-mono text-sm font-semibold" style={{ color: 'var(--accent-secondary)' }}>{repoName}</code>
         </div>
         {repoUrl && (
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            size="auto"
             onClick={() => { void copyRepoLink(); }}
-            className="ui-button ui-button-secondary !h-8 !px-3 text-xs inline-flex items-center gap-1.5 shrink-0"
+            className="!h-8 !px-3 text-xs inline-flex items-center gap-1.5 shrink-0"
             style={ACCENT_SECONDARY_BUTTON_STYLE_92}
           >
             <Copy className="h-3.5 w-3.5" />
             {copiedRepoLink ? 'Copied!' : 'Copy GitHub Link'}
-          </button>
+          </Button>
         )}
         {!hasHomepageRepoUrl && !hasValidOwner && (
           <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
@@ -1739,14 +1746,14 @@ function PrinterPresetEditor({ preset, onChange }: PrinterPresetEditorProps) {
             value={preset.imageAssetPath}
             onChange={(v) => onChange({ ...preset, imageAssetPath: v })}
           />
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            size="md"
             onClick={() => onChange({ ...preset, imageAssetPath: suggestedAssetPath })}
-            className="ui-button ui-button-secondary !h-[36px] !px-3 text-xs"
             style={ACCENT_SECONDARY_BUTTON_STYLE_92}
           >
             Use Suggested
-          </button>
+          </Button>
         </div>
         <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
           Suggested: <code className="font-mono">{suggestedAssetPath}</code>
@@ -1842,16 +1849,17 @@ function PrinterPresetEditor({ preset, onChange }: PrinterPresetEditorProps) {
           <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
             Auto-calculate width/depth from resolution × pixel size
           </div>
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            size="auto"
             role="switch"
             aria-checked={preset.autoBuildWidthDepth}
             onClick={() => onChange({ ...preset, autoBuildWidthDepth: !preset.autoBuildWidthDepth })}
-            className="ui-button ui-button-secondary !h-7 !px-2.5 text-[11px]"
+            className="!h-7 !px-2.5 text-[11px]"
             style={preset.autoBuildWidthDepth ? ACCENT_SECONDARY_BUTTON_STYLE_90 : undefined}
           >
             {preset.autoBuildWidthDepth ? 'Auto' : 'Manual'}
-          </button>
+          </Button>
         </div>
         <div className="grid grid-cols-3 gap-2">
           <LabeledNumberInput label="Width" disabled={preset.autoBuildWidthDepth} value={resolvedBuildWidth} onChange={(v) => onChange({ ...preset, buildWidth: v })} />
@@ -1881,85 +1889,39 @@ type DeleteConfirmDialogProps = {
 };
 
 function DeleteConfirmDialog({ isOpen, title, message, confirmLabel, onCancel, onConfirm }: DeleteConfirmDialogProps) {
-  if (!isOpen) return null;
-
   return (
-    <div
-      className="fixed inset-0 z-[140] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onCancel();
-      }}
-    >
-      <div
-        className="w-full max-w-md overflow-hidden rounded-xl border shadow-2xl"
-        style={{
-          background: 'var(--surface-0)',
-          borderColor: 'var(--border-subtle)',
-          boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-        }}
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-      >
-        <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
-          <div className="flex items-center gap-2.5">
-            <span
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
-              style={{
-                borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 55%)',
-                background: 'color-mix(in srgb, var(--danger), var(--surface-1) 88%)',
-                color: 'color-mix(in srgb, var(--danger), var(--text-strong) 22%)',
-              }}
-            >
-              <AlertTriangle className="h-4 w-4" />
-            </span>
-            <div>
-              <h2 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
-                {title}
-              </h2>
-              <p className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                {message}
-              </p>
-            </div>
-          </div>
-
-          <button
-            type="button"
-            className="h-8 w-8 inline-flex items-center justify-center rounded-md border transition-colors"
-            style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
-            aria-label="Close delete confirmation"
-            onClick={onCancel}
+    <StructuredDialogModal
+      open={isOpen}
+      ariaLabel={title}
+      title={title}
+      subtitle={message}
+      icon={<AlertTriangle className="h-4 w-4" />}
+      iconTone="danger"
+      zIndexClassName="z-[140]"
+      maxWidthClassName="max-w-md"
+      closeAriaLabel="Close delete confirmation"
+      onClose={onCancel}
+      onBackdropClick={onCancel}
+      actions={(
+        <>
+          <Button variant="secondary" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button
+            className="inline-flex items-center justify-center gap-1.5"
+            style={{
+              borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 45%)',
+              background: 'color-mix(in srgb, var(--danger), var(--surface-1) 86%)',
+              color: 'color-mix(in srgb, var(--danger), var(--text-strong) 22%)',
+            }}
+            onClick={onConfirm}
           >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        <div className="p-4">
-          <div className="flex items-center justify-end gap-2 pt-1">
-            <button
-              type="button"
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
-              onClick={onCancel}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center gap-1.5"
-              style={{
-                borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, var(--danger), var(--surface-1) 86%)',
-                color: 'color-mix(in srgb, var(--danger), var(--text-strong) 22%)',
-              }}
-              onClick={onConfirm}
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-              {confirmLabel}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+            <Trash2 className="h-3.5 w-3.5" />
+            {confirmLabel}
+          </Button>
+        </>
+      )}
+    />
   );
 }
 
@@ -2108,15 +2070,16 @@ function StepPrinters({ presets, onChange }: StepPrintersProps) {
                           </div>
                         )}
                       </button>
-                      <button
-                        type="button"
+                      <IconButton
+                        variant="ghost"
+                        size="xs"
                         onClick={() => requestDeletePreset(index)}
-                        className="ui-button ui-button-ghost !h-5 !w-5 !p-0 inline-flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shrink-0 mr-2"
+                        className="!h-5 !w-5 !p-0 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 mr-2"
                         aria-label="Delete preset"
                         title="Delete preset"
                       >
                         <Trash2 className="h-3 w-3" style={{ color: 'color-mix(in srgb, var(--danger), var(--text-strong) 22%)' }} />
-                      </button>
+                      </IconButton>
                     </div>
                   );
                 })}
@@ -2126,15 +2089,16 @@ function StepPrinters({ presets, onChange }: StepPrintersProps) {
         </div>
 
         <div className="p-2 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            size="auto"
             onClick={addPreset}
-            className="ui-button ui-button-secondary w-full !h-8 text-[11px] flex items-center justify-center gap-1.5"
+            className="w-full !h-8 text-[11px] flex items-center justify-center gap-1.5"
             style={ACCENT_SECONDARY_BUTTON_STYLE_92}
           >
             <Plus className="h-3.5 w-3.5" />
             Add Printer
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -2382,15 +2346,15 @@ function StepAssets({ presets, onPresetsChange, uploadedAssets, onUploadedAssets
                           }}
                         />
                         </label>
-                        <button
-                          type="button"
+                        <Button
+                          variant="secondary"
+                          size="sm"
                           onClick={() => clearUpload(index)}
-                          className="ui-button ui-button-secondary !h-8 !px-2.5 text-[11px]"
                           style={{ color: uploaded ? 'color-mix(in srgb, var(--danger), var(--text-strong) 22%)' : 'var(--text-muted)' }}
                           disabled={!uploaded}
                         >
                           Clear
-                        </button>
+                        </Button>
                       </div>
                     </div>
                   </div>
@@ -2500,9 +2464,9 @@ function MaterialTemplateEditor({ template, targetOptions, onChange, onDelete, h
       {!hideHeader && (
         <div className="flex items-center justify-between gap-2">
           <span className="ui-meta font-semibold uppercase tracking-wide">{label}</span>
-          <button type="button" onClick={onDelete} className="ui-button ui-button-ghost !h-7 !w-7 !p-0 flex items-center justify-center" aria-label="Remove material">
+          <IconButton variant="ghost" size="xs" onClick={onDelete} className="!h-7 !w-7 !p-0" aria-label="Remove material">
             <Trash2 className="h-3.5 w-3.5" />
-          </button>
+          </IconButton>
         </div>
       )}
 
@@ -2948,15 +2912,16 @@ function StepMaterials({ templates, onChange }: StepMaterialsProps) {
                                         {label}
                                       </div>
                                     </button>
-                                    <button
-                                      type="button"
+                                    <IconButton
+                                      variant="ghost"
+                                      size="xs"
                                       onClick={() => requestDeleteMaterialTemplate(index)}
-                                      className="ui-button ui-button-ghost !h-5 !w-5 !p-0 inline-flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shrink-0 mr-2"
+                                      className="!h-5 !w-5 !p-0 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 mr-2"
                                       aria-label="Delete material"
                                       title="Delete material"
                                     >
                                       <Trash2 className="h-3 w-3" style={{ color: 'color-mix(in srgb, var(--danger), var(--text-strong) 22%)' }} />
-                                    </button>
+                                    </IconButton>
                                   </div>
                                 );
                               })}
@@ -2972,16 +2937,17 @@ function StepMaterials({ templates, onChange }: StepMaterialsProps) {
           </div>
 
           <div className="p-2 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="auto"
               onClick={addTemplate}
-              className="ui-button ui-button-secondary w-full !h-8 text-[11px] flex items-center justify-center gap-1.5"
+              className="w-full !h-8 text-[11px] flex items-center justify-center gap-1.5"
               style={ACCENT_SECONDARY_BUTTON_STYLE_92}
               title="Add Material"
             >
               <Plus className="h-3.5 w-3.5" />
               Add Material
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -3007,16 +2973,17 @@ function StepMaterials({ templates, onChange }: StepMaterialsProps) {
                   </div>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
+                  <Button
+                    variant="secondary"
+                    size="xs"
                     onClick={() => addPrinterVariantFromTemplate(clampedIndex)}
-                    className="ui-button ui-button-secondary !h-7 !px-2 text-[11px] flex items-center gap-1.5"
+                    className="flex items-center gap-1.5"
                     style={ACCENT_SECONDARY_BUTTON_STYLE_92}
                     title="Duplicate this material core profile into a new printer variant"
                   >
                     <Plus className="h-3.5 w-3.5" />
                     Add Printer Variant
-                  </button>
+                  </Button>
                   <button
                     type="button"
                     onClick={() => requestDeleteMaterialTemplate(clampedIndex)}
@@ -3206,93 +3173,47 @@ function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles, mate
         </div>
       )}
 
-      {showOverwriteConfirm && (
-        <div
-          className="fixed inset-0 z-[130] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setShowOverwriteConfirm(false);
-          }}
-        >
-          <div
-            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
-            style={{
-              background: 'var(--surface-0)',
-              borderColor: 'var(--border-subtle)',
-              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Confirm overwrite files"
-          >
-            <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="flex items-center gap-2.5">
-                <span
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
-                  style={{
-                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
-                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
-                    color: 'color-mix(in srgb, #d97706, var(--text-strong) 20%)',
-                  }}
-                >
-                  <AlertTriangle className="h-4 w-4" />
-                </span>
-                <div>
-                  <h2 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
-                    Overwrite existing plugin files?
-                  </h2>
-                  <p className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                    This plugin is loaded in edit mode. Writing will replace existing files.
-                  </p>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                className="h-8 w-8 inline-flex items-center justify-center rounded-md border transition-colors"
-                style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
-                aria-label="Close overwrite confirmation"
-                onClick={() => setShowOverwriteConfirm(false)}
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="p-4 space-y-3">
-              <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
-                Files to overwrite:
-              </p>
-              <div className="rounded-lg border p-2 max-h-44 overflow-auto" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <ul className="space-y-1">
-                  {destinationPreviewFiles.map((file) => (
-                    <li key={file} className="text-xs font-mono" style={{ color: 'var(--text-strong)' }}>
-                      {file}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-1">
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-9 px-3 text-xs"
-                  onClick={() => setShowOverwriteConfirm(false)}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-9 px-3 text-xs inline-flex items-center gap-1.5"
-                  style={ACCENT_SECONDARY_BUTTON_STYLE_92}
-                  onClick={() => { void handleConfirmOverwriteWrite(); }}
-                >
-                  <Archive className="w-3.5 h-3.5" />
-                  Overwrite & Write
-                </button>
-              </div>
-            </div>
-          </div>
+      <StructuredDialogModal
+        open={showOverwriteConfirm}
+        ariaLabel="Confirm overwrite files"
+        title="Overwrite existing plugin files?"
+        subtitle="This plugin is loaded in edit mode. Writing will replace existing files."
+        icon={<AlertTriangle className="h-4 w-4" />}
+        iconTone="warning"
+        zIndexClassName="z-[130]"
+        closeAriaLabel="Close overwrite confirmation"
+        onClose={() => setShowOverwriteConfirm(false)}
+        onBackdropClick={() => setShowOverwriteConfirm(false)}
+        actions={(
+          <>
+            <Button variant="secondary" onClick={() => setShowOverwriteConfirm(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="secondary"
+              className="inline-flex items-center justify-center gap-1.5"
+              style={ACCENT_SECONDARY_BUTTON_STYLE_92}
+              onClick={() => { void handleConfirmOverwriteWrite(); }}
+            >
+              <Archive className="w-3.5 h-3.5" />
+              Overwrite & Write
+            </Button>
+          </>
+        )}
+      >
+        <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
+          Files to overwrite:
+        </p>
+        <div className="rounded-lg border p-2 max-h-44 overflow-auto" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+          <ul className="space-y-1">
+            {destinationPreviewFiles.map((file) => (
+              <li key={file} className="text-xs font-mono" style={{ color: 'var(--text-strong)' }}>
+                {file}
+              </li>
+            ))}
+          </ul>
         </div>
-      )}
+      </StructuredDialogModal>
 
       <CodeBlock label="dragonfruit-plugin.json" content={jsonContent} />
       <CodeBlock label="README.md" content={readmeContent} />
@@ -3310,17 +3231,18 @@ function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles, mate
 
       {canWriteToPluginsDirectory && (
         <div className="pt-1 flex items-center justify-center">
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            size="auto"
             onClick={() => { void handleWriteToPluginsDirectory(); }}
             disabled={isWritingToPluginsDir}
-            className="ui-button ui-button-secondary !h-8 !px-3 text-xs flex items-center gap-1.5 disabled:opacity-60"
+            className="!h-8 !px-3 text-xs flex items-center gap-1.5 disabled:opacity-60"
             style={ACCENT_SECONDARY_BUTTON_STYLE_92}
             title="Write files directly into plugins/<slug> in this dev workspace"
           >
             <Archive className="h-3.5 w-3.5" />
             {isWritingToPluginsDir ? 'Writing…' : 'Write to plugins/'}
-          </button>
+          </Button>
         </div>
       )}
     </div>
@@ -3994,17 +3916,18 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
 
         <div className="px-4 py-3 border-t flex items-center justify-between gap-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
           <div className="flex items-center gap-3 min-w-0">
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="auto"
               onClick={requestExitStudio}
-              className="ui-button ui-button-secondary !h-8 !px-3 text-xs shrink-0"
+              className="!h-8 !px-3 text-xs shrink-0"
               style={{
                 borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 55%)',
                 color: 'color-mix(in srgb, var(--danger), var(--text-strong) 22%)',
               }}
             >
               Exit Plugin Creation Studio
-            </button>
+            </Button>
 
             <div className="text-[11px] truncate" style={{ color: 'var(--text-muted)' }}>
               {!isPluginDetailsComplete
@@ -4018,122 +3941,71 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
               {currentStepIndex + 1} / {orderedSteps.length}
             </span>
 
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="auto"
               onClick={() => { if (canGoBack) setCurrentStep(orderedSteps[currentStepIndex - 1]); }}
               disabled={!canGoBack}
-              className="ui-button ui-button-secondary !h-8 !px-3 text-xs flex items-center gap-1.5 disabled:opacity-40"
+              className="!h-8 !px-3 text-xs flex items-center gap-1.5 disabled:opacity-40"
             >
               <ChevronLeft className="h-3.5 w-3.5" />
               Back
-            </button>
+            </Button>
 
             {isLastStep ? (
-              <button type="button" onClick={requestExitStudio} className="ui-button ui-button-secondary !h-8 !px-3 text-xs">
+              <Button variant="secondary" size="auto" onClick={requestExitStudio} className="!h-8 !px-3 text-xs">
                 Close
-              </button>
+              </Button>
             ) : (
-              <button
-                type="button"
+              <Button
+                variant="primary"
+                size="auto"
                 onClick={() => { if (canGoNext) setCurrentStep(orderedSteps[currentStepIndex + 1]); }}
                 disabled={!canGoNext}
                 title={nextBlockedReason}
-                className="ui-button ui-button-primary !h-8 !px-3 text-xs flex items-center gap-1.5 disabled:opacity-40"
+                className="!h-8 !px-3 text-xs flex items-center gap-1.5 disabled:opacity-40"
               >
                 Next
                 <ChevronRight className="h-3.5 w-3.5" />
-              </button>
+              </Button>
             )}
           </div>
         </div>
 
-        {showExitConfirm && (
-          <div
-            className="fixed inset-0 z-[120] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
-            onMouseDown={(event) => {
-              if (event.target === event.currentTarget) {
-                cancelExitStudio();
-              }
-            }}
-          >
-            <div
-              className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
-              style={{
-                background: 'var(--surface-0)',
-                borderColor: 'var(--border-subtle)',
-                boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-              }}
-              role="dialog"
-              aria-modal="true"
-              aria-label="Exit Plugin Creation Studio"
-            >
-              <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="flex items-center gap-2.5">
-                  <span
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
-                    style={{
-                      borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
-                      background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
-                      color: 'color-mix(in srgb, #d97706, var(--text-strong) 20%)',
-                    }}
-                  >
-                    <AlertTriangle className="h-4 w-4" />
-                  </span>
-                  <div>
-                    <h2 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
-                      Are you sure you're done with everything?
-                    </h2>
-                    <p className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                      Any unsaved progress in this session will be lost.
-                    </p>
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  className="h-8 w-8 inline-flex items-center justify-center rounded-md border transition-colors"
-                  style={{
-                    borderColor: 'var(--border-subtle)',
-                    background: 'var(--surface-1)',
-                    color: 'var(--text-muted)',
-                  }}
-                  aria-label="Close exit confirmation"
-                  onClick={cancelExitStudio}
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              <div className="p-4 space-y-3">
-                <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
-                  If you want to keep the generated manifest, copy or download it from the Export step before exiting.
-                </p>
-
-                <div className="flex items-center justify-end gap-2 pt-1">
-                  <button
-                    type="button"
-                    className="ui-button ui-button-secondary !h-9 px-3 text-xs"
-                    onClick={cancelExitStudio}
-                  >
-                    Stay in Studio
-                  </button>
-                  <button
-                    type="button"
-                    className="ui-button !h-9 px-3 text-xs"
-                    style={{
-                      borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 45%)',
-                      background: 'color-mix(in srgb, var(--danger), var(--surface-1) 86%)',
-                      color: 'color-mix(in srgb, var(--danger), var(--text-strong) 22%)',
-                    }}
-                    onClick={confirmExitStudio}
-                  >
-                    Exit Studio
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+        <StructuredDialogModal
+          open={showExitConfirm}
+          ariaLabel="Exit Plugin Creation Studio"
+          title="Are you sure you're done with everything?"
+          subtitle="Any unsaved progress in this session will be lost."
+          icon={<AlertTriangle className="h-4 w-4" />}
+          iconTone="warning"
+          zIndexClassName="z-[120]"
+          closeAriaLabel="Close exit confirmation"
+          onClose={cancelExitStudio}
+          onBackdropClick={cancelExitStudio}
+          actions={(
+            <>
+              <Button variant="secondary" onClick={cancelExitStudio}>
+                Stay in Studio
+              </Button>
+              <Button
+                className="inline-flex items-center justify-center gap-1.5"
+                style={{
+                  borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 45%)',
+                  background: 'color-mix(in srgb, var(--danger), var(--surface-1) 86%)',
+                  color: 'color-mix(in srgb, var(--danger), var(--text-strong) 22%)',
+                }}
+                onClick={confirmExitStudio}
+              >
+                Exit Studio
+              </Button>
+            </>
+          )}
+        >
+          <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
+            If you want to keep the generated manifest, copy or download it from the Export step before exiting.
+          </p>
+        </StructuredDialogModal>
       </div>
     </div>
   );

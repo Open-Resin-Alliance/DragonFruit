@@ -1,7 +1,10 @@
 'use client';
 
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
 import { Cpu, ImageIcon, Trash2, Zap } from 'lucide-react';
+import { SegmentedControl, SettingRow } from '@/components/atoms';
 import type { SlicingPerformanceSettings } from '@/components/settings/performancePreferences';
 import { cleanupAllPrintTempArtifacts, cleanupStalePrintTempArtifacts } from '@/features/slicing/tauri/nativeSlicerBridge';
 
@@ -28,6 +31,7 @@ export function PerformanceSettingsTab({
   onThumbnailSettingsChange,
   showPngCompressionControls = true,
 }: PerformanceSettingsTabProps) {
+  const { _ } = useLingui();
   const patch = React.useCallback((partial: Partial<SlicingPerformanceSettings>) => {
     onChange({ ...settings, ...partial });
   }, [onChange, settings]);
@@ -130,95 +134,50 @@ export function PerformanceSettingsTab({
         </div>
 
         <div className="mt-3 rounded-md border p-2.5 space-y-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Background gradient
-              </div>
-              <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                Scene mood overlay in thumbnail
-              </div>
-            </div>
-            <button
-              type="button"
-              aria-pressed={thumbnailSettings.includeGradient}
-              onClick={() => patchThumbnailSettings({ includeGradient: !thumbnailSettings.includeGradient })}
-              className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-              style={thumbnailSettings.includeGradient
-                ? {
-                    borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                    color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                  }
-                : {
-                    borderColor: 'var(--border-subtle)',
-                    background: 'var(--surface-1)',
-                    color: 'var(--text-muted)',
-                  }}
-            >
-              {thumbnailSettings.includeGradient ? 'ON' : 'OFF'}
-            </button>
-          </div>
+          <SettingRow
+            label={_(msg`Background gradient`)}
+            description={_(msg`Scene mood overlay in thumbnail`)}
+          >
+            <SegmentedControl
+              label={_(msg`Background gradient`)}
+              options={[
+                { value: 'on', label: _(msg`ON`) },
+                { value: 'off', label: _(msg`OFF`) },
+              ]}
+              value={thumbnailSettings.includeGradient ? 'on' : 'off'}
+              onChange={(next) => patchThumbnailSettings({ includeGradient: next === 'on' })}
+            />
+          </SettingRow>
 
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Build plate
-              </div>
-              <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                Render build plate in thumbnail
-              </div>
-            </div>
-            <button
-              type="button"
-              aria-pressed={thumbnailSettings.includeBuildPlate}
-              onClick={() => patchThumbnailSettings({ includeBuildPlate: !thumbnailSettings.includeBuildPlate })}
-              className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-              style={thumbnailSettings.includeBuildPlate
-                ? {
-                    borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                    color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                  }
-                : {
-                    borderColor: 'var(--border-subtle)',
-                    background: 'var(--surface-1)',
-                    color: 'var(--text-muted)',
-                  }}
-            >
-              {thumbnailSettings.includeBuildPlate ? 'ON' : 'OFF'}
-            </button>
-          </div>
+          <SettingRow
+            label={_(msg`Build plate`)}
+            description={_(msg`Render build plate in thumbnail`)}
+          >
+            <SegmentedControl
+              label={_(msg`Build plate`)}
+              options={[
+                { value: 'on', label: _(msg`ON`) },
+                { value: 'off', label: _(msg`OFF`) },
+              ]}
+              value={thumbnailSettings.includeBuildPlate ? 'on' : 'off'}
+              onChange={(next) => patchThumbnailSettings({ includeBuildPlate: next === 'on' })}
+            />
+          </SettingRow>
 
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Grid
-              </div>
-              <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                Render build grid in thumbnail
-              </div>
-            </div>
-            <button
-              type="button"
-              aria-pressed={thumbnailSettings.includeGrid}
-              onClick={() => patchThumbnailSettings({ includeGrid: !thumbnailSettings.includeGrid })}
-              className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-              style={thumbnailSettings.includeGrid
-                ? {
-                    borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                    color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                  }
-                : {
-                    borderColor: 'var(--border-subtle)',
-                    background: 'var(--surface-1)',
-                    color: 'var(--text-muted)',
-                  }}
-            >
-              {thumbnailSettings.includeGrid ? 'ON' : 'OFF'}
-            </button>
-          </div>
+          <SettingRow
+            label={_(msg`Grid`)}
+            description={_(msg`Render build grid in thumbnail`)}
+          >
+            <SegmentedControl
+              label={_(msg`Grid`)}
+              options={[
+                { value: 'on', label: _(msg`ON`) },
+                { value: 'off', label: _(msg`OFF`) },
+              ]}
+              value={thumbnailSettings.includeGrid ? 'on' : 'off'}
+              onChange={(next) => patchThumbnailSettings({ includeGrid: next === 'on' })}
+            />
+          </SettingRow>
         </div>
       </section>
 
@@ -251,52 +210,27 @@ export function PerformanceSettingsTab({
           </div>
 
           <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Compression
-                </div>
-                <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                  Auto adapts by AA level, Off is fastest, On favors smaller PNG files
-                </div>
-              </div>
-              <div className="flex gap-1.5">
-                {([
-                  { key: 'auto', label: 'Auto' },
-                  { key: 'off', label: 'Off' },
-                  { key: 'on', label: 'On' },
-                ] as const).map((option) => {
-                  const active = pngCompressionMode === option.key;
-                  return (
-                    <button
-                      key={option.key}
-                      type="button"
-                      onClick={() => patch({
-                        pngCompressionStrategy: option.key === 'auto'
-                          ? 'auto'
-                          : option.key === 'off'
-                            ? 'fastest'
-                            : 'balanced',
-                      })}
-                      className="h-10 min-w-[76px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                      style={active
-                        ? {
-                            borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                            background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                            color: 'var(--accent)',
-                          }
-                        : {
-                            borderColor: 'var(--border-subtle)',
-                            background: 'var(--surface-1)',
-                            color: 'var(--text-muted)',
-                          }}
-                    >
-                      {option.label}
-                    </button>
-                  );
+            <SettingRow
+              label={_(msg`Compression`)}
+              description={_(msg`Auto adapts by AA level, Off is fastest, On favors smaller PNG files`)}
+            >
+              <SegmentedControl
+                label={_(msg`Compression`)}
+                options={[
+                  { value: 'auto', label: _(msg`Auto`) },
+                  { value: 'off', label: _(msg`Off`) },
+                  { value: 'on', label: _(msg`On`) },
+                ]}
+                value={pngCompressionMode}
+                onChange={(next) => patch({
+                  pngCompressionStrategy: next === 'auto'
+                    ? 'auto'
+                    : next === 'off'
+                      ? 'fastest'
+                      : 'balanced',
                 })}
-              </div>
-            </div>
+              />
+            </SettingRow>
           </div>
         </section>
       )}

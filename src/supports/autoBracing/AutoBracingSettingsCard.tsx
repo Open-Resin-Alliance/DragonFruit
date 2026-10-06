@@ -187,15 +187,16 @@ export function AutoBracingSettingsCard({
                     {([['Low', 2], ['Mid', 5], ['High', 10]] as const).map(([label, value]) => {
                         const isActive = settings.seedSpacingMm === value;
                         return (
-                            <button
+                            <Button
                                 key={label}
-                                type="button"
-                                className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                                variant="secondary"
+                                size="auto"
+                                className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                                 style={isActive ? activeModeStyle : { background: 'var(--surface-0)' }}
                                 onClick={() => onChange({ seedSpacingMm: value })}
                             >
                                 {label}
-                            </button>
+                            </Button>
                         );
                     })}
                 </div>
@@ -217,10 +218,10 @@ export function AutoBracingSettingsCard({
             <div className="h-2" />
 
             <div className="flex items-stretch gap-1.5">
-                <button
-                    type="button"
+                <Button
+                    size="auto"
                     onClick={onAutoBrace}
-                    className="ui-button flex flex-1 items-center justify-center gap-1 !h-8 text-[11px]"
+                    className="flex flex-1 items-center justify-center gap-1 !h-8 text-[11px]"
                     style={{
                         borderColor: 'var(--accent)',
                         background: 'color-mix(in srgb, var(--accent), var(--surface-0) 86%)',
@@ -229,11 +230,11 @@ export function AutoBracingSettingsCard({
                 >
                     <WandSparkles className="h-3.5 w-3.5 shrink-0" />
                     {_(msg`Apply`)}
-                </button>
-                <button
-                    type="button"
+                </Button>
+                <Button
+                    size="auto"
                     onClick={onClearBraces}
-                    className="ui-button flex flex-1 items-center justify-center gap-1 !h-8 text-[11px]"
+                    className="flex flex-1 items-center justify-center gap-1 !h-8 text-[11px]"
                     style={{
                         borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 40%)',
                         background: 'color-mix(in srgb, var(--danger), var(--surface-0) 88%)',
@@ -242,7 +243,7 @@ export function AutoBracingSettingsCard({
                 >
                     <Trash2 className="h-3.5 w-3.5 shrink-0" />
                     {_(msg`Clear All`)}
-                </button>
+                </Button>
             </div>
         </div>
     );

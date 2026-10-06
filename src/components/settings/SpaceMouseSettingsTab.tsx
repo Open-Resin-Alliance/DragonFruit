@@ -1,11 +1,13 @@
 'use client';
 
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
 import { ArrowLeftRight, Ban, CheckCircle2, Gamepad2, MousePointer2, SlidersHorizontal } from 'lucide-react';
+import { SegmentedControl, Select, SettingRow } from '@/components/atoms';
 import type { SpaceMouseSettings } from '@/components/settings/spacemousePreferences';
 import { getCandidateGamepads, NAMED_3D_MOUSE } from '@/components/scene/camera/SpaceMouseController';
 import { getNativeSpaceMouseActive, subscribeNativeSpaceMouseActive } from '@/components/scene/camera/nativeSpaceMouseBridge';
-import { Select } from '@/components/atoms';
 
 type SpaceMouseSettingsTabProps = {
   settings: SpaceMouseSettings;
@@ -17,6 +19,7 @@ function formatNumber(value: number) {
 }
 
 export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettingsTabProps) {
+  const { _ } = useLingui();
   const [candidatePads, setCandidatePads] = React.useState<Gamepad[]>([]);
 
   // When the native 3DxWare/navlib bridge is driving the camera, the 3Dconnexion
@@ -75,36 +78,22 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
           </div>
         </div>
 
-        <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Enable 3D Mouse
-              </div>
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                Uses browser gamepad input from supported 3D mouse devices.
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => onChange({ enabled: !settings.enabled })}
-              className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-              style={settings.enabled
-                ? {
-                    borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                    color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                  }
-                : {
-                    borderColor: 'var(--border-subtle)',
-                    background: 'var(--surface-1)',
-                    color: 'var(--text-muted)',
-                  }}
-            >
-              {settings.enabled ? 'ON' : 'OFF'}
-            </button>
-          </div>
-        </div>
+        <SettingRow
+          bordered
+          className="mt-3"
+          label={_(msg`Enable 3D Mouse`)}
+          description={_(msg`Uses browser gamepad input from supported 3D mouse devices.`)}
+        >
+          <SegmentedControl
+            label={_(msg`Enable 3D Mouse`)}
+            options={[
+              { value: 'on', label: _(msg`ON`) },
+              { value: 'off', label: _(msg`OFF`) },
+            ]}
+            value={settings.enabled ? 'on' : 'off'}
+            onChange={(next) => onChange({ enabled: next === 'on' })}
+          />
+        </SettingRow>
 
         <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
           <div className="flex items-center gap-2 mb-2">
@@ -238,8 +227,7 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
               step="0.05"
               value={settings.translationSensitivity}
               onChange={(e) => onChange({ translationSensitivity: parseFloat(e.target.value) })}
-              className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-              style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+              className="ui-range w-full"
             />
           </div>
 
@@ -255,8 +243,7 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
               step="0.05"
               value={settings.rotationSensitivity}
               onChange={(e) => onChange({ rotationSensitivity: parseFloat(e.target.value) })}
-              className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-              style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+              className="ui-range w-full"
             />
           </div>
 
@@ -272,8 +259,7 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
               step="0.05"
               value={settings.zoomSensitivity}
               onChange={(e) => onChange({ zoomSensitivity: parseFloat(e.target.value) })}
-              className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-              style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+              className="ui-range w-full"
             />
           </div>
 
@@ -289,42 +275,27 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
               step="0.01"
               value={settings.deadzone}
               onChange={(e) => onChange({ deadzone: parseFloat(e.target.value) })}
-              className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-              style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+              className="ui-range w-full"
             />
           </div>
         </div>
 
-        <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Dominant axis mode
-              </div>
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                Prioritize strongest axis per translation/rotation group for steadier input.
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => onChange({ dominantAxis: !settings.dominantAxis })}
-              className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-              style={settings.dominantAxis
-                ? {
-                    borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                    color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                  }
-                : {
-                    borderColor: 'var(--border-subtle)',
-                    background: 'var(--surface-1)',
-                    color: 'var(--text-muted)',
-                  }}
-            >
-              {settings.dominantAxis ? 'ON' : 'OFF'}
-            </button>
-          </div>
-        </div>
+        <SettingRow
+          bordered
+          className="mt-2"
+          label={_(msg`Dominant axis mode`)}
+          description={_(msg`Prioritize strongest axis per translation/rotation group for steadier input.`)}
+        >
+          <SegmentedControl
+            label={_(msg`Dominant axis mode`)}
+            options={[
+              { value: 'on', label: _(msg`ON`) },
+              { value: 'off', label: _(msg`OFF`) },
+            ]}
+            value={settings.dominantAxis ? 'on' : 'off'}
+            onChange={(next) => onChange({ dominantAxis: next === 'on' })}
+          />
+        </SettingRow>
       </section>
       )}
 

@@ -9,7 +9,6 @@ import {
   Filter,
   FolderOpen,
   Info,
-  Loader2,
   Pause,
   Play,
   RefreshCcw,
@@ -17,6 +16,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
+import { Spinner } from '@/components/atoms';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -315,7 +315,7 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
               <span className="text-xs" style={{ color: '#f87171' }}>{logPathError}</span>
             ) : logPath === null ? (
               <span className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-                <Loader2 className="h-3 w-3 animate-spin" />Resolving path…
+                <Spinner size="xs" />Resolving path…
               </span>
             ) : (
               <span className="block text-xs font-mono truncate select-all" style={{ color: 'var(--text-strong)' }} title={logPath}>
@@ -335,17 +335,17 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
                 <button type="button" onClick={handleOpen} disabled={!logPath || opening} title="Open in text editor"
                   className="inline-flex items-center justify-center px-3 border-l transition-colors duration-150"
                   style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
-                  {opening ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ExternalLink className="h-3.5 w-3.5" />}
+                  {opening ? <Spinner size="sm" /> : <ExternalLink className="h-3.5 w-3.5" />}
                 </button>
                 <button type="button" onClick={handleReveal} disabled={!logPath || revealing} title="Reveal in file manager"
                   className="inline-flex items-center justify-center px-3 border-l transition-colors duration-150"
                   style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
-                  {revealing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FolderOpen className="h-3.5 w-3.5" />}
+                  {revealing ? <Spinner size="sm" /> : <FolderOpen className="h-3.5 w-3.5" />}
                 </button>
                 <button type="button" onClick={handleDelete} disabled={deleting} title="Delete log file"
                   className="inline-flex items-center justify-center px-3 border-l transition-colors duration-150"
                   style={{ borderColor: 'var(--border-subtle)', color: deleting ? 'var(--text-muted)' : '#f87171' }}>
-                  {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                  {deleting ? <Spinner size="sm" /> : <Trash2 className="h-3.5 w-3.5" />}
                 </button>
               </>
             )}

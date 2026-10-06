@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { CarFront, ChevronDown, ChevronUp, CircleHelp, Snail } from 'lucide-react';
+import { Button } from '@/components/atoms';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { MouseTooltip } from '@/components/ui/MouseTooltip';
@@ -2257,17 +2258,19 @@ export function PluginLocalMaterialSettingsSections({
                     {tabs.map((tab) => {
                         const active = tab.id === activeTabId;
                         return (
-                            <button
+                            <Button
                                 key={tab.id}
                                 type="button"
+                                variant="secondary"
+                                size="auto"
                                 onClick={() => setActiveTabId(tab.id)}
-                                className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-xs rounded-md"
+                                className="!h-7 !px-2.5 !py-0 text-xs rounded-md"
                                 style={active
                                     ? { color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)' }
                                     : { color: 'var(--text-muted)' }}
                             >
                                 {tab.title}
-                            </button>
+                            </Button>
                         );
                     })}
                 </div>
@@ -2620,17 +2623,19 @@ export function ReplacementMaterialEditorShell({
                 {tabs.map((tab) => {
                     const active = activeTabId === tab.id;
                     return (
-                        <button
+                        <Button
                             key={tab.id}
                             type="button"
+                            variant="secondary"
+                            size="auto"
                             onClick={() => onActiveTabChange(tab.id)}
-                            className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-xs rounded-md"
+                            className="!h-7 !px-2.5 !py-0 text-xs rounded-md"
                             style={active
                                 ? (activeTabStyle ?? { color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)' })
                                 : { color: 'var(--text-muted)' }}
                         >
                             {tab.title}
-                        </button>
+                        </Button>
                     );
                 })}
             </div>

@@ -121,6 +121,8 @@ nav:
           - Config Schemas: dev/config-schemas.md
           - Tauri IPC and Native Bridge: dev/tauri-ipc-bridge.md
           - Hotkeys: dev/hotkeys.md
+          - UI Atoms: dev/ui-atoms.md
+          - Context Menu: dev/context-menu.md
           - Notifications and Toasts: dev/notifications.md
           - System Notifications: dev/system-notifications.md
           - Support System: dev/support-system.md

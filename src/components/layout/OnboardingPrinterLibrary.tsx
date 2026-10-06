@@ -4,6 +4,7 @@ import React from 'react';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import { Check, ChevronLeft, ImagePlus, Plus, Printer, Search } from 'lucide-react';
+import { Button, IconButton, IconChip } from '@/components/atoms';
 import {
   addPrinterProfileFromPreset,
   getLibraryPrinterPresets,
@@ -271,25 +272,24 @@ export function OnboardingPrinterLibrary({ onAdded, onBack }: OnboardingPrinterL
         style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}
       >
         <div className="flex items-center gap-2.5">
-          <button
-            type="button"
+          <IconButton
+            variant="surface"
+            size="sm"
             onClick={onBack}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md border transition-colors"
-            style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
             title={_(msg`Back`)}
             aria-label={_(msg`Back to setup step`)}
           >
             <ChevronLeft className="h-4 w-4" />
-          </button>
-          <span
-            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border"
+          </IconButton>
+          <IconChip
+            size="md"
             style={{
               borderColor: 'var(--border-subtle)',
               background: 'linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary), var(--surface-1) 84%), color-mix(in srgb, var(--accent), var(--surface-1) 90%))',
             }}
           >
             <Printer className="h-4 w-4" style={{ color: 'var(--accent-secondary)' }} />
-          </span>
+          </IconChip>
           <div>
             <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
               {_(msg`Printer Library`)}
@@ -392,11 +392,12 @@ export function OnboardingPrinterLibrary({ onAdded, onBack }: OnboardingPrinterL
         <span className="text-[12px]" style={{ color: 'var(--text-muted)' }}>
           {selectedPreset ? (selectedPreset.libraryDisplayName ?? selectedPreset.name) : _(msg`Choose a printer to add`)}
         </span>
-        <button
-          type="button"
+        <Button
+          variant="secondary"
+          size="auto"
           onClick={selectedPreset ? handleAdd : undefined}
           aria-disabled={!selectedPreset}
-          className="ui-button inline-flex items-center gap-1.5 !h-8 !px-3 !py-0 text-sm rounded-md"
+          className="inline-flex items-center gap-1.5 !h-8 !px-3 !py-0 text-sm rounded-md"
           style={selectedPreset
             ? {
                 background: 'var(--secondary-button-surface)',
@@ -411,7 +412,7 @@ export function OnboardingPrinterLibrary({ onAdded, onBack }: OnboardingPrinterL
         >
           <Plus className="h-3.5 w-3.5" />
           {_(msg`Add printer`)}
-        </button>
+        </Button>
       </div>
 
       {variantChooserPreset && (

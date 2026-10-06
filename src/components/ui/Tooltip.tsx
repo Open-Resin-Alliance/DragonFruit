@@ -2,6 +2,7 @@
 
 import React, { useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { clampToViewport } from '@/utils/math';
 
 interface TooltipProps {
   /** Content to show inside the tooltip popover. Falsy content skips the tooltip entirely (children render unwrapped). */
@@ -74,13 +75,15 @@ export function Tooltip({ content, offsetY = 28, maxWidth = 260, wrapperClassNam
     if (!el) return;
     const rect = el.getBoundingClientRect();
     const halfW = rect.width / 2;
-    // Horizontal clamping: prefer centered under cursor, but keep on-screen
-    const left = Math.max(4, Math.min(window.innerWidth - rect.width - 4, pos.x - halfW));
-    let top = pos.y + offsetY;
-    // Vertical clamping: if below viewport, flip above cursor
-    if (top + rect.height > window.innerHeight - 4) {
-      top = pos.y - offsetY - rect.height;
-    }
+    // Prefer centred under the cursor, but keep the box on-screen. Same edge
+    // clamp (4px) as before; the box flips above the cursor when it would
+    // overflow the bottom edge.
+    const { left, top: clampedTop, overflowBottom } = clampToViewport(
+      { x: pos.x - halfW, y: pos.y + offsetY },
+      { width: rect.width, height: rect.height },
+      { margin: 4 },
+    );
+    let top = overflowBottom ? pos.y - offsetY - rect.height : clampedTop;
     // If still off-screen top, clamp to 4px from top
     if (top < 4) top = 4;
     setCoords({ left, top });

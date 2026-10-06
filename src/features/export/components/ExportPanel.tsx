@@ -4,7 +4,16 @@ import { Download, Files } from 'lucide-react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { ExportManager, ExportOptions } from '../logic/ExportManager';
 import { normalizeExportBaseName, resolveEntirePlateExportBaseName } from '../logic/exportFileNaming';
-import { Button, Card, CardHeader, IconButton, Input, Select } from '@/components/atoms';
+import {
+  Button,
+  Card,
+  CardHeader,
+  Input,
+  Select,
+  SettingRow,
+  Toggle,
+} from '@/components/atoms';
+import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { pickDirectoryWithNativeDialog } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
@@ -276,25 +285,10 @@ export function ExportPanel({
         <CardHeader
           left={(
             <>
-              <IconButton
-                onClick={() => setIsExpanded((prev) => !prev)}
-                className="!p-0.5"
-                title={isExpanded ? 'Collapse card' : 'Expand card'}
-              >
-                <svg
-                  className="w-3 h-3 transform transition-transform"
-                  style={{ color: isExpanded ? 'var(--accent)' : 'var(--text-muted)' }}
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  {isExpanded ? (
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  ) : (
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                  )}
-                </svg>
-              </IconButton>
+              <PanelCollapseToggle
+                expanded={isExpanded}
+                onToggle={() => setIsExpanded((prev) => !prev)}
+              />
               <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Export</h3>
             </>
           )}
@@ -313,25 +307,10 @@ export function ExportPanel({
       <CardHeader
         left={(
           <>
-            <IconButton
-              onClick={() => setIsExpanded((prev) => !prev)}
-              className="!p-0.5"
-              title={isExpanded ? 'Collapse card' : 'Expand card'}
-            >
-              <svg
-                className="w-3 h-3 transform transition-transform"
-                style={{ color: isExpanded ? 'var(--accent)' : 'var(--text-muted)' }}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                {isExpanded ? (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                ) : (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                )}
-              </svg>
-            </IconButton>
+            <PanelCollapseToggle
+              expanded={isExpanded}
+              onToggle={() => setIsExpanded((prev) => !prev)}
+            />
             <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Export</h3>
           </>
         )}
@@ -418,51 +397,27 @@ export function ExportPanel({
 
             {options.format !== 'voxl' && (
               <div className="space-y-1.5">
-                <label className="flex items-center justify-between gap-3 rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                  <div className="min-w-0">
-                    <div className="text-xs font-medium" style={{ color: 'var(--text-strong)' }}>Include Model Mesh</div>
-                  </div>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={options.includeModel}
-                    onClick={() => setOptions(prev => ({ ...prev, includeModel: !prev.includeModel }))}
-                    className="w-10 h-6 rounded-full flex items-center px-0.5 transition-colors shrink-0"
-                    style={{ background: options.includeModel ? 'var(--accent)' : 'var(--surface-2)' }}
-                  >
-                    <span className={`w-5 h-5 rounded-full bg-white shadow transform transition-transform ${options.includeModel ? 'translate-x-4' : 'translate-x-0'}`} />
-                  </button>
-                </label>
-                <label className="flex items-center justify-between gap-3 rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                  <div className="min-w-0">
-                    <div className="text-xs font-medium" style={{ color: 'var(--text-strong)' }}>Include Supports</div>
-                  </div>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={options.includeSupports}
-                    onClick={() => setOptions(prev => ({ ...prev, includeSupports: !prev.includeSupports }))}
-                    className="w-10 h-6 rounded-full flex items-center px-0.5 transition-colors shrink-0"
-                    style={{ background: options.includeSupports ? 'var(--accent)' : 'var(--surface-2)' }}
-                  >
-                    <span className={`w-5 h-5 rounded-full bg-white shadow transform transition-transform ${options.includeSupports ? 'translate-x-4' : 'translate-x-0'}`} />
-                  </button>
-                </label>
-                <label className="flex items-center justify-between gap-3 rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                  <div className="min-w-0">
-                    <div className="text-xs font-medium" style={{ color: 'var(--text-strong)' }}>Include Raft</div>
-                  </div>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={options.includeRaft}
-                    onClick={() => setOptions(prev => ({ ...prev, includeRaft: !prev.includeRaft }))}
-                    className="w-10 h-6 rounded-full flex items-center px-0.5 transition-colors shrink-0"
-                    style={{ background: options.includeRaft ? 'var(--accent)' : 'var(--surface-2)' }}
-                  >
-                    <span className={`w-5 h-5 rounded-full bg-white shadow transform transition-transform ${options.includeRaft ? 'translate-x-4' : 'translate-x-0'}`} />
-                  </button>
-                </label>
+                <SettingRow as="label" bordered surface="raised" density="comfortable" label="Include Model Mesh">
+                  <Toggle
+                    checked={options.includeModel}
+                    onChange={(v) => setOptions(prev => ({ ...prev, includeModel: v }))}
+                    size="md"
+                  />
+                </SettingRow>
+                <SettingRow as="label" bordered surface="raised" density="comfortable" label="Include Supports">
+                  <Toggle
+                    checked={options.includeSupports}
+                    onChange={(v) => setOptions(prev => ({ ...prev, includeSupports: v }))}
+                    size="md"
+                  />
+                </SettingRow>
+                <SettingRow as="label" bordered surface="raised" density="comfortable" label="Include Raft">
+                  <Toggle
+                    checked={options.includeRaft}
+                    onChange={(v) => setOptions(prev => ({ ...prev, includeRaft: v }))}
+                    size="md"
+                  />
+                </SettingRow>
               </div>
             )}
 

@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useInteractionStatus } from '../../interaction/useInteractionStatus';
 import { bracePlacementStore, useBracePlacementState } from './bracePlacementState';
 import { useActionActive } from '@/hotkeys/hotkeyStore';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 
 export function useBracePlacement() {
     const { isPlacementDisabled } = useInteractionStatus();
@@ -15,15 +16,7 @@ export function useBracePlacement() {
         }
     }, [braceHotkeyActive]);
 
-    useEffect(() => {
-        const handleEscape = (e: CustomEvent) => {
-            if (e.detail.key === 'Escape' && state.stage === 'awaitingEnd') {
-                bracePlacementStore.reset();
-            }
-        };
-        window.addEventListener('app-hotkey-keydown', handleEscape as EventListener);
-        return () => window.removeEventListener('app-hotkey-keydown', handleEscape as EventListener);
-    }, [state.stage]);
+    useEscapeToClose(state.stage === 'awaitingEnd', () => bracePlacementStore.reset());
 
     useEffect(() => {
         if (isPlacementDisabled && state.stage === 'idle') {

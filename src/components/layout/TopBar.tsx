@@ -10,7 +10,9 @@ import { ProfileSettingsModal } from '@/components/settings/ProfileSettingsModal
 import type { SupportMode } from '@/supports/types';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import { AlertDiamondIcon, Button } from '@/components/atoms';
-import { Activity, AlertTriangle, Anchor, ChevronDown, FolderInput, FolderOpen, Lock, Maximize2, Minimize2, Power, Printer, Save, SaveAll, Square, Upload, X } from 'lucide-react';
+import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import { ContextMenu, type ContextMenuEntry } from '@/components/ui/ContextMenu';
+import { Activity, AlertTriangle, Anchor, ChevronDown, FilePlus2, FolderInput, FolderOpen, Lock, Maximize2, Minimize2, Power, Printer, Save, SaveAll, Settings, Square, Upload, X } from 'lucide-react';
 import {
   applyThemeCustomColors,
   getSavedThemeCustomColors,
@@ -85,6 +87,7 @@ interface TopBarProps {
   heatmapColors: string[];
   onHeatmapColorChange: (index: number, color: string) => void;
   isSlicingBusy?: boolean;
+  onNewScene?: () => void;
   onSaveScene?: () => void;
   onSaveSceneAs?: () => void;
   onOpenScene?: () => void;
@@ -149,6 +152,7 @@ export function TopBar({
   isSlicingBusy = false,
   onLoadMeshChange,
   onImportSceneChange,
+  onNewScene,
   onSaveScene,
   onSaveSceneAs,
   onOpenScene,
@@ -322,35 +326,6 @@ export function TopBar({
   }, []);
 
   React.useEffect(() => {
-    if (!isAppMenuOpen) return;
-
-    const handlePointerDown = (event: MouseEvent) => {
-      const target = event.target as Node | null;
-      if (!target) return;
-
-      const appMenuNode = document.querySelector('[data-app-menu="true"]');
-      const appMenuButtonNode = appMenuButtonRef.current;
-
-      if (appMenuNode?.contains(target)) return;
-      if (appMenuButtonNode?.contains(target)) return;
-      closeAppMenu();
-    };
-
-    const handleEscape = (event: CustomEvent) => {
-      if (event.detail.key === 'Escape') {
-        closeAppMenu();
-      }
-    };
-
-    window.addEventListener('mousedown', handlePointerDown);
-    window.addEventListener('app-hotkey-keydown', handleEscape as EventListener);
-    return () => {
-      window.removeEventListener('mousedown', handlePointerDown);
-      window.removeEventListener('app-hotkey-keydown', handleEscape as EventListener);
-    };
-  }, [closeAppMenu, isAppMenuOpen]);
-
-  React.useEffect(() => {
     if (!isPrinterQuickMenuOpen) return;
 
     const handlePointerDown = (event: MouseEvent) => {
@@ -405,6 +380,9 @@ export function TopBar({
       'input',
       'select',
       '[role="button"]',
+      // The desktop window drag keeps its own opt-out. `data-no-drag` belongs to
+      // the floating panel stack (see FloatingPanelStack.isDragBlockedByTarget);
+      // the two are not interchangeable.
       '[data-no-window-drag="true"]',
     ].join(',');
 
@@ -645,6 +623,85 @@ export function TopBar({
     },
   ];
 
+  // Same rows the DragonFruit dropdown has always offered; placement, grouping
+  // rules and dismissal belong to ContextMenu.
+  const appMenuEntries: ContextMenuEntry[] = [
+    {
+      id: 'new-scene',
+      label: _(msg`New scene`),
+      icon: FilePlus2,
+      disabled: topbarActionsDisabled || !onNewScene || !hasModels,
+    },
+    {
+      id: 'save-scene',
+      label: _(msg`Save scene`),
+      icon: Save,
+      disabled: topbarActionsDisabled || !onSaveScene,
+      startsGroup: true,
+    },
+    {
+      id: 'save-scene-as',
+      label: _(msg`Save scene as…`),
+      icon: SaveAll,
+      disabled: topbarActionsDisabled || !onSaveSceneAs,
+    },
+    {
+      id: 'open-scene',
+      label: _(msg`Open scene…`),
+      icon: FolderOpen,
+      disabled: topbarActionsDisabled || !onOpenScene,
+    },
+    {
+      id: 'import-mesh',
+      label: _(msg`Import mesh…`),
+      icon: Upload,
+      disabled: topbarActionsDisabled || !onLoadMeshChange,
+      startsGroup: true,
+    },
+    {
+      id: 'import-scene',
+      label: _(msg`Import scene…`),
+      icon: FolderInput,
+      disabled: topbarActionsDisabled || !onImportSceneChange,
+    },
+    {
+      id: 'close-program',
+      label: _(msg`Close program`),
+      icon: Power,
+      startsGroup: true,
+    },
+  ];
+
+  const handleAppMenuSelect = (id: string) => {
+    switch (id) {
+      case 'new-scene':
+        onNewScene?.();
+        break;
+      case 'save-scene':
+        onSaveScene?.();
+        break;
+      case 'save-scene-as':
+        onSaveSceneAs?.();
+        break;
+      case 'open-scene':
+        onOpenScene?.();
+        break;
+      case 'import-mesh':
+        if (typeof document === 'undefined') break;
+        (document.getElementById('topbar-mesh-input') as HTMLInputElement | null)?.click();
+        break;
+      case 'import-scene':
+        if (typeof document === 'undefined') break;
+        (document.getElementById('topbar-scene-input') as HTMLInputElement | null)?.click();
+        break;
+      case 'close-program':
+        void handleCloseProgram();
+        break;
+      default:
+        break;
+    }
+  };
+
   return (
     <>
       <div className={`ui-topbar-blur ${hideWorkflowControls ? 'ui-topbar-blur-transparent' : ''}`} aria-hidden="true" />
@@ -779,143 +836,15 @@ export function TopBar({
       </div>
 
       {isAppMenuOpen && appMenuPosition && (
-        <div
-          data-app-menu="true"
-          className="fixed z-[120] w-44 rounded-lg border p-1.5 shadow-xl backdrop-blur-sm"
-          style={{
-            left: appMenuPosition.x,
-            top: appMenuPosition.y,
-            borderColor: 'var(--border-subtle)',
-            background: 'color-mix(in srgb, var(--surface-0), #000 10%)',
-          }}
-          role="menu"
-          aria-label={_(msg({ message: 'DragonFruit app menu', comment: '"DragonFruit" is the product name and should stay untranslated/unchanged.' }))}
-        >
-          <div className="mb-1 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-            DragonFruit
-          </div>
-          <div className="space-y-0.5">
-            <button
-              type="button"
-              onClick={() => {
-                closeAppMenu();
-                onSaveScene?.();
-              }}
-              disabled={topbarActionsDisabled || !onSaveScene}
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium transition-colors"
-              style={{
-                color: (topbarActionsDisabled || !onSaveScene) ? 'var(--text-muted)' : 'var(--text-strong)',
-                opacity: (topbarActionsDisabled || !onSaveScene) ? 0.55 : 1,
-              }}
-              role="menuitem"
-            >
-              <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <Save className="h-3.5 w-3.5" />
-              </span>
-              <span>{_(msg`Save scene`)}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                closeAppMenu();
-                onSaveSceneAs?.();
-              }}
-              disabled={topbarActionsDisabled || !onSaveSceneAs}
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium transition-colors"
-              style={{
-                color: (topbarActionsDisabled || !onSaveSceneAs) ? 'var(--text-muted)' : 'var(--text-strong)',
-                opacity: (topbarActionsDisabled || !onSaveSceneAs) ? 0.55 : 1,
-              }}
-              role="menuitem"
-            >
-              <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <SaveAll className="h-3.5 w-3.5" />
-              </span>
-              <span>{_(msg`Save scene as…`)}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                closeAppMenu();
-                onOpenScene?.();
-              }}
-              disabled={topbarActionsDisabled || !onOpenScene}
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium transition-colors"
-              style={{
-                color: (topbarActionsDisabled || !onOpenScene) ? 'var(--text-muted)' : 'var(--text-strong)',
-                opacity: (topbarActionsDisabled || !onOpenScene) ? 0.55 : 1,
-              }}
-              role="menuitem"
-            >
-              <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <FolderOpen className="h-3.5 w-3.5" />
-              </span>
-              <span>{_(msg`Open scene…`)}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                closeAppMenu();
-                if (typeof document === 'undefined') return;
-                const input = document.getElementById('topbar-mesh-input') as HTMLInputElement | null;
-                input?.click();
-              }}
-              disabled={topbarActionsDisabled || !onLoadMeshChange}
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium transition-colors"
-              style={{
-                color: (topbarActionsDisabled || !onLoadMeshChange) ? 'var(--text-muted)' : 'var(--text-strong)',
-                opacity: (topbarActionsDisabled || !onLoadMeshChange) ? 0.55 : 1,
-              }}
-              role="menuitem"
-            >
-              <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <Upload className="h-3.5 w-3.5" />
-              </span>
-              <span>{_(msg`Import mesh…`)}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                closeAppMenu();
-                if (typeof document === 'undefined') return;
-                const input = document.getElementById('topbar-scene-input') as HTMLInputElement | null;
-                input?.click();
-              }}
-              disabled={topbarActionsDisabled || !onImportSceneChange}
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium transition-colors"
-              style={{
-                color: (topbarActionsDisabled || !onImportSceneChange) ? 'var(--text-muted)' : 'var(--text-strong)',
-                opacity: (topbarActionsDisabled || !onImportSceneChange) ? 0.55 : 1,
-              }}
-              role="menuitem"
-            >
-              <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <FolderInput className="h-3.5 w-3.5" />
-              </span>
-              <span>{_(msg`Import scene…`)}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                closeAppMenu();
-                void handleCloseProgram();
-              }}
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium transition-colors"
-              style={{ color: 'var(--text-strong)' }}
-              role="menuitem"
-            >
-              <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <Power className="h-3.5 w-3.5" />
-              </span>
-              <span>{_(msg`Close program`)}</span>
-            </button>
-          </div>
-        </div>
+        <ContextMenu
+          position={appMenuPosition}
+          entries={appMenuEntries}
+          onSelect={handleAppMenuSelect}
+          onClose={closeAppMenu}
+          dismissIgnoreRef={appMenuButtonRef}
+          title="DragonFruit"
+          ariaLabel={_(msg({ message: 'DragonFruit app menu', comment: '"DragonFruit" is the product name and should stay untranslated/unchanged.' }))}
+        />
       )}
 
       <input
@@ -1154,15 +1083,7 @@ export function TopBar({
             aria-label={_(msg`Settings`)}
               data-no-window-drag="true"
             >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-              />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
+            <Settings className="w-4 h-4" />
             </Button>
         </div>
         {isDesktopWindow && (
@@ -1230,87 +1151,44 @@ export function TopBar({
       </div>
 
       {showProfileChangeWarning && (
-        <div className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3" data-no-window-drag="true">
-          <div
-            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
-            style={{
-              background: 'var(--surface-0)',
-              borderColor: 'var(--border-subtle)',
-              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-label={_(msg`Changing printer profile requires re-slice`)}
-          >
-            <div className="flex items-start justify-between gap-3 border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="flex min-w-0 items-start gap-2.5 pr-2">
-                <span
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
-                  style={{
-                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
-                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
-                    color: '#d97706',
-                  }}
-                >
-                  <AlertTriangle className="h-4 w-4" />
-                </span>
-                <div className="min-w-0 pr-2">
-                  <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                    {_(msg({ message: 'Re-slice required after profile change', comment: '"Slice"/"re-slice" is the 3D-printing step that converts a model into printer instructions (G-code). This dialog warns that switching printer profile invalidates the already-sliced file.' }))}
-                  </h2>
-                  <p className="mt-1 max-w-[40ch] text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-                    {_(msg`Changing print settings invalidates the current sliced file.`)}
-                  </p>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                className="h-8 w-8 shrink-0 inline-flex items-center justify-center rounded-md border transition-colors"
-                style={{
-                  borderColor: 'var(--border-subtle)',
-                  background: 'var(--surface-1)',
-                  color: 'var(--text-muted)',
-                }}
-                aria-label={_(msg`Close warning`)}
+        <StructuredDialogModal
+          open
+          ariaLabel={_(msg`Changing printer profile requires re-slice`)}
+          title={_(msg({ message: 'Re-slice required after profile change', comment: '"Slice"/"re-slice" is the 3D-printing step that converts a model into printer instructions (G-code). This dialog warns that switching printer profile invalidates the already-sliced file.' }))}
+          subtitle={_(msg`Changing print settings invalidates the current sliced file.`)}
+          icon={<AlertTriangle className="h-4 w-4" />}
+          iconTone="warning"
+          zIndexClassName="z-[220]"
+          closeAriaLabel={_(msg`Close warning`)}
+          onClose={() => setShowProfileChangeWarning(false)}
+          actions={(
+            <>
+              <Button
+                variant="secondary"
+                size="md"
+                className="w-full"
                 onClick={() => setShowProfileChangeWarning(false)}
               >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="p-4 space-y-3">
-              <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                {_(msg`You can continue to adjust profiles, but you’ll be prompted to re-slice before printing with the updated settings.`)}
-              </p>
-
-              <div className="grid grid-cols-2 gap-2 pt-1">
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
-                  onClick={() => setShowProfileChangeWarning(false)}
-                >
-                  {_(msg({ message: 'Keep current profiles', comment: 'Cancels the pending profile change and closes this warning dialog, leaving the previous profile selection untouched. Paired with the "Continue" button below.' }))}
-                </button>
-                <button
-                  type="button"
-                  className="ui-button !h-9 w-full px-3 text-xs"
-                  style={{
-                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
-                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 86%)',
-                    color: 'color-mix(in srgb, #f59e0b, var(--text-strong) 20%)',
-                  }}
-                  onClick={() => {
-                    setShowProfileChangeWarning(false);
-                    openProfileSettings(profileModalTab);
-                  }}
-                >
-                  {_(msg({ message: 'Continue', comment: 'Confirms proceeding with the profile change despite the re-slice warning above (paired with "Keep current profiles", which cancels).' }))}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+                {_(msg({ message: 'Keep current profiles', comment: 'Cancels the pending profile change and closes this warning dialog, leaving the previous profile selection untouched. Paired with the "Continue" button below.' }))}
+              </Button>
+              <Button
+                variant="tinted-warning"
+                size="md"
+                className="w-full"
+                onClick={() => {
+                  setShowProfileChangeWarning(false);
+                  openProfileSettings(profileModalTab);
+                }}
+              >
+                {_(msg({ message: 'Continue', comment: 'Confirms proceeding with the profile change despite the re-slice warning above (paired with "Keep current profiles", which cancels).' }))}
+              </Button>
+            </>
+          )}
+        >
+          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+            {_(msg`You can continue to adjust profiles, but you’ll be prompted to re-slice before printing with the updated settings.`)}
+          </p>
+        </StructuredDialogModal>
       )}
 
       <SettingsModal
