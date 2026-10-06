@@ -260,6 +260,10 @@ it against the selected Visual Studio installation's newest x64 CRT using direct
 NSIS/WiX includes and downloads only checksum-pinned
 InetC, the free HTTPS plugin described in `scripts/windows-runtime-download-plugin.json`.
 Its zlib notice, `scripts/inetc-license.txt`, ships as `licenses/InetC.txt`.
+Preparation writes the generated notice as `windows-resources/nsis-plugins/InetC.txt`:
+the pinned Tauri WiX bundler preserves the source basename even when a resource
+mapping specifies a different destination filename. Keeping the source and
+destination basenames equal makes both MSI and NSIS ship the expected notice.
 The native-resource build step and Windows pre-bundle hook run preparation.
 
 `src-tauri/nsis/runtime-prerequisite.nsh` checks the registered native x64 runtime

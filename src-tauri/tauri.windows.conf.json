@@ -6,7 +6,7 @@
     "licenseFile": "nsis/assets/license.txt",
     "resources": {
       "windows-resources/dragonfruit_voxl_thumbnail_com.dll": "dragonfruit_voxl_thumbnail_com.dll",
-      "windows-resources/nsis-plugins/LICENSE.txt": "licenses/InetC.txt"
+      "windows-resources/nsis-plugins/InetC.txt": "licenses/InetC.txt"
     },
     "windows": {
       "wix": {

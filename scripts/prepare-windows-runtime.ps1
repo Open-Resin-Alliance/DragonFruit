@@ -129,7 +129,8 @@ if (-not $pluginValid) {
         Remove-Item -LiteralPath $work -Recurse -Force
     }
 }
-[System.IO.File]::WriteAllText((Join-Path $pluginDirectory 'LICENSE.txt'), $license, $encoding)
+# WiX in the pinned Tauri bundler keeps the source basename for mapped resources.
+[System.IO.File]::WriteAllText((Join-Path $pluginDirectory 'InetC.txt'), $license, $encoding)
 Write-Host "Prepared checksum-pinned InetC $($pluginPin.version) HTTPS plugin and license notice."
 
 [System.IO.File]::WriteAllText((Join-Path $OutputDirectory 'runtime-version.nsh'), (($nsis -join "`n") + "`n"), $encoding)
