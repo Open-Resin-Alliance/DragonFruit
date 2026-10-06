@@ -377,3 +377,109 @@ test('native staged 3DAA contact geometry shrinks only generated contact faces',
     model.geometry.geometry.dispose();
   }
 });
+
+test('mesh preparation timing includes awaiting single-shot staging completion', async (t) => {
+  const model = modelFromPositions('staging-timing', new Float32Array([-2, -2, 0, 2, -2, 0, 0, 2, 1]));
+  let nowMs = 100;
+  t.mock.method(performance, 'now', () => nowMs);
+  let notifyStageStarted!: () => void;
+  const stageStarted = new Promise<void>((resolve) => { notifyStageStarted = resolve; });
+  let releaseStage!: () => void;
+  const stageCompleted = new Promise<void>((resolve) => { releaseStage = resolve; });
+  let meshPrepMs: number | undefined;
+  let slicerCalls = 0;
+  const reachedSlicer = new Error('captured staged timing');
+  const invoke = async (command: string, args?: unknown): Promise<unknown> => {
+    switch (command) {
+      case 'stage_mesh_binary_set':
+        assert.ok(args instanceof Uint8Array);
+        notifyStageStarted();
+        await stageCompleted;
+        return {};
+      case 'plugin:event|listen':
+        return 1;
+      case 'plugin:event|unlisten':
+        return;
+      case 'slice_solid_native_to_temp_path':
+        slicerCalls += 1;
+        throw reachedSlicer;
+      default:
+        throw new Error(`Unexpected native command: ${command}`);
+    }
+  };
+  const restoreWindow = installFakeWindow({
+    dispatchEvent: (event: Event) => {
+      if (event.type === 'dragonfruit:slicing-progress' && event instanceof CustomEvent) {
+        const detail: unknown = event.detail;
+        if (detail && typeof detail === 'object' && 'phase' in detail && detail.phase === 'Preparing mesh complete') {
+          assert.ok('meshPrepMs' in detail && typeof detail.meshPrepMs === 'number');
+          meshPrepMs = detail.meshPrepMs;
+        }
+      }
+      return true;
+    },
+    __TAURI_INTERNALS__: { invoke, transformCallback: () => 1 },
+    __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
+  });
+  const exportPromise = runSliceExportOrchestrator({
+    models: [model],
+    printerProfile: {
+      id: 'timing-printer', name: 'Timing printer',
+      buildVolumeMm: { width: 20, depth: 20, height: 20 },
+      display: { resolutionX: 64, resolutionY: 64, outputFormat: '.ctb' },
+    } as PrinterProfile,
+    materialProfile: { id: 'timing-material', name: 'Timing material', layerHeightMm: 0.05 } as MaterialProfile,
+    filenameBase: 'staging-timing', outputMode: 'return',
+  });
+  const exportRejected = assert.rejects(exportPromise, reachedSlicer);
+  try {
+    await stageStarted;
+    assert.equal(meshPrepMs, undefined, 'preparation completion is not published before staging settles');
+    assert.equal(slicerCalls, 0, 'slicing cannot start while staging is pending');
+    nowMs += 275;
+    releaseStage();
+    await exportRejected;
+    assert.equal(meshPrepMs, 275, 'the consumer-visible wall interval includes the awaited stage duration');
+    assert.equal(slicerCalls, 1);
+  } finally {
+    releaseStage();
+    await exportRejected;
+    restoreWindow();
+    model.geometry.geometry.dispose();
+  }
+});
+
+test('cancellation during modifier preparation stops mesh generation before single-shot staging', async () => {
+  const model = modelFromPositions('staging-cancel', new Float32Array([-2, -2, 0, 2, -2, 0, 0, 2, 1]));
+  const controller = new AbortController();
+  const nativeCommands: string[] = [];
+  const invoke = async (command: string): Promise<unknown> => {
+    nativeCommands.push(command);
+    throw new Error(`Unexpected native command after cancellation: ${command}`);
+  };
+  const restoreWindow = installFakeWindow({
+    dispatchEvent: () => true,
+    __TAURI_INTERNALS__: { invoke, transformCallback: () => 1 },
+    __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
+  });
+  try {
+    await assert.rejects(runSliceExportOrchestrator({
+      models: [model],
+      printerProfile: {
+        id: 'cancel-printer', name: 'Cancel printer',
+        buildVolumeMm: { width: 20, depth: 20, height: 20 },
+        display: { resolutionX: 64, resolutionY: 64, outputFormat: '.ctb' },
+      } as PrinterProfile,
+      materialProfile: { id: 'cancel-material', name: 'Cancel material', layerHeightMm: 0.05 } as MaterialProfile,
+      filenameBase: 'staging-cancel', outputMode: 'return', abortSignal: controller.signal,
+      onProgress: (_done, _total, phase) => {
+        if (phase === 'Baking Modifiers') controller.abort();
+      },
+    }), { name: 'AbortError' });
+    assert.equal(controller.signal.aborted, true);
+    assert.deepEqual(nativeCommands, [], 'cancelled geometry must not be staged or sent to the slicer');
+  } finally {
+    restoreWindow();
+    model.geometry.geometry.dispose();
+  }
+});

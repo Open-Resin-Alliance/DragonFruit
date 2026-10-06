@@ -2,7 +2,7 @@ import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profil
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { Box3, Vector3 } from 'three';
 import { computeApproxModelWorldBounds, computePreciseModelWorldBounds, isBoundsDisjointFromVolume } from '@/utils/modelBounds';
-import { buildSolidSliceMeshForWasm } from './rasterLayerZipExport';
+import { buildSolidSliceMeshForWasm, type SolidSliceMeshForWasm } from './rasterLayerZipExport';
 import { attachJobMetadataPayloads, getJobMetadataPayloadDeclarations } from './jobMetadataPayloads';
 import { prepareLoadedModelsForOutput } from '@/features/mesh-modifiers/prepareModelGeometry';
 import { resolveOutputFileExtension, resolveSlicingFormatDefinition } from './formats/registry';
@@ -442,7 +442,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         request: options.antiAliasing,
     });
     const meshPrepStartMs = performance.now();
-    let solidMesh: Awaited<ReturnType<typeof buildSolidSliceMeshForWasm>>;
+    let solidMesh: SolidSliceMeshForWasm;
     try {
         if (meshTransferMode === 'streamed') {
             // Modifier baking leaves raw f32 output in the shared native stage.
@@ -467,6 +467,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
             printerProfile: options.printerProfile,
             materialProfile: options.materialProfile,
             filenameBase: options.filenameBase,
+            abortSignal: options.abortSignal,
             supportTipShrinkPercent,
             flushBinaryMeshChunk: meshTransferMode === 'streamed'
                 ? handleMeshChunk
@@ -478,7 +479,6 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     } finally {
         preparedModelsForOutput.dispose();
     }
-    const meshPrepMs = performance.now() - meshPrepStartMs;
 
     if (meshTransferMode === 'single-shot') {
         const meshBytes = new Uint8Array(
@@ -517,6 +517,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
             cumulativeBytesStage = registeredLen;
         }
     }
+    const meshPrepMs = performance.now() - meshPrepStartMs;
 
     logDebug('Solid mesh prepared for native backend', {
         source: `${solidMesh.sourceWidthPx}x${solidMesh.sourceHeightPx}`,

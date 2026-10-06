@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { after } from 'node:test';
 import * as THREE from 'three';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profileStore';
+import type { MeshAnalysisJson, MeshHealthReport } from '@/utils/meshRepair';
+import type { SupportState } from '@/supports/types';
+import { disposeEventLoopChannel } from '@/utils/yieldToEventLoop';
 import {
   effectiveModelTriangleCount,
   getModelTriangleCount,
@@ -11,6 +14,48 @@ import {
 import { getSnapshot, setSnapshot } from '@/supports/state';
 import { createEmptySupportCollections } from '@/supports/supportTypeRegistry';
 
+after(disposeEventLoopChannel);
+
+function emptySupportState(): SupportState {
+  return {
+    ...createEmptySupportCollections(),
+    selectedId: null,
+    hoveredId: null,
+    selectedCategory: null,
+    hoveredCategory: 'none',
+    interactionWarning: null,
+  };
+}
+
+function repairReport(
+  triangleCount: number,
+  classification: { model_triangle_count?: number | null; likely_support_geometry?: boolean },
+): MeshHealthReport {
+  const analysis: MeshAnalysisJson = {
+    triangle_count: triangleCount, vertex_count: triangleCount * 3,
+    non_manifold_edges: 0, non_manifold_vertices: 0, boundary_edges: 0, boundary_loops: 0,
+    inconsistent_edges: 0, degenerate_triangles: 0, duplicate_triangles: 0,
+    component_count: 1, self_intersections: 0, signed_volume: 1, is_watertight: true,
+    timings_ms: { topology_ms: 0, self_intersections_ms: 0, components_ms: 0, total_ms: 0 },
+  };
+  return {
+    version: 1, pre: analysis, post: analysis, steps: [],
+    likely_support_geometry: classification.likely_support_geometry ?? false,
+    model_triangle_count: classification.model_triangle_count,
+    residual_issues: [], fully_repaired: true, total_ms: 0,
+  };
+}
+
+function expectedModelCoordinates(model: LoadedModel, vertices: readonly number[], order: readonly number[]) {
+  // Intrinsic ZYX is THREE's independent representation of global-axis XYZ.
+  const { position, rotation, scale } = model.transform;
+  const quaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(rotation.x, rotation.y, rotation.z, 'ZYX'));
+  const matrix = new THREE.Matrix4().compose(position, quaternion, scale);
+  const worldVertices = order.map((index) => new THREE.Vector3(
+    vertices[index * 3], vertices[index * 3 + 1], vertices[index * 3 + 2],
+  ).sub(model.geometry.center).applyMatrix4(matrix));
+  return { coordinates: Float32Array.from(worldVertices.flatMap((vertex) => vertex.toArray())), worldVertices };
+}
 function createMockModel(
   id: string,
   triangleCount: number,
@@ -38,14 +83,19 @@ function createMockModel(
       center: new THREE.Vector3(0, 0, 10),
       size: new THREE.Vector3(20, 20, 20),
       flatteningPlanes: [],
-      meshDefects: nativeRepairReport ? ({ nativeRepairReport } as any) : undefined,
+      meshDefects: nativeRepairReport ? {
+        hasDefects: false,
+        repairedFloats: 0,
+        totalVertices: triangleCount * 3,
+        nativeRepairReport: repairReport(triangleCount, nativeRepairReport),
+      } : undefined,
     },
     transform: {
       position: new THREE.Vector3(0, 0, 0),
       rotation: new THREE.Euler(0, 0, 0),
       scale: new THREE.Vector3(1, 1, 1),
     },
-  } as LoadedModel;
+  };
 }
 
 const mockPrinterProfile: PrinterProfile = {
@@ -91,21 +141,117 @@ test('effectiveModelTriangleCount handles isSupportGeometry true, false, and und
   assert.equal(effectiveModelTriangleCount(reportUnspecifiedModel), 10);
 });
 
-test('buildSolidSliceMeshForWasm partitions designated support models into support section', async () => {
-  const modelPart = createMockModel('m1', 2, false); // 2 model triangles
-  const supportPart = createMockModel('s1', 3, true); // 3 support triangles
-
-  const solidMesh = await buildSolidSliceMeshForWasm({
-    models: [modelPart, supportPart],
-    printerProfile: mockPrinterProfile,
-    materialProfile: mockMaterialProfile,
-    filenameBase: 'test_export',
+test('buildSolidSliceMeshForWasm orders all model bodies before designated and repair-classified supports', async (t) => {
+  const supportPart = createMockModel('designated-support', 2, true);
+  const splitPart = createMockModel('repair-split', 3, undefined, { model_triangle_count: 1 });
+  const modelPart = createMockModel('model-body', 2, false);
+  supportPart.transform.position.x = 30;
+  splitPart.transform.position.x = 10;
+  modelPart.transform.position.x = -20;
+  const savedSupportState = getSnapshot();
+  setSnapshot(emptySupportState());
+  t.after(() => {
+    setSnapshot(savedSupportState);
+    for (const model of [supportPart, splitPart, modelPart]) model.geometry.geometry.dispose();
   });
 
-  // Model triangle count must equal designated model triangles (2)
-  assert.equal(solidMesh.modelTriangleCount, 2);
-  // Total triangle count in collector must equal 5 (2 model + 3 support)
-  assert.equal(solidMesh.trianglesXYZ.length / 9, 5);
+  const solidMesh = await buildSolidSliceMeshForWasm({
+    models: [supportPart, splitPart, modelPart],
+    printerProfile: mockPrinterProfile,
+    materialProfile: mockMaterialProfile,
+    filenameBase: 'partition_order',
+  });
+  const coordinatesFor = (model: LoadedModel) => {
+    const source = model.geometry.geometry.getAttribute('position');
+    const vertices = Array.from(source.array);
+    return expectedModelCoordinates(model, vertices, Array.from({ length: source.count }, (_, i) => i)).coordinates;
+  };
+  const split = coordinatesFor(splitPart);
+  const expected = Float32Array.from([
+    ...split.subarray(0, 9), ...coordinatesFor(modelPart),
+    ...coordinatesFor(supportPart), ...split.subarray(9),
+  ]);
+  assert.equal(solidMesh.modelTriangleCount, 3);
+  assert.deepEqual(solidMesh.trianglesXYZ, expected);
+});
+
+test('model packing preserves centered transforms and winding across position attribute layouts', async (t) => {
+  const floatVertices = [4.5, -2, 1, 7, -1.5, 3, 5, 2, 2, 8, 1, 4];
+  const normalizedValues = [0, 32768, 65535, 65535, 8192, 16384, 16384, 65535, 32768, 49152, 16384, 8192];
+  const interleavedValues = [-32768, 8192, 16384, 32767, -16384, 8192, 16384, 32767, -8192];
+  const normalized = new THREE.BufferAttribute(new Uint16Array(normalizedValues), 3, true);
+  const interleaved = new THREE.InterleavedBuffer(new Int16Array([
+    12345, ...interleavedValues.slice(0, 3), -22222,
+    12345, ...interleavedValues.slice(3, 6), -22222,
+    12345, ...interleavedValues.slice(6, 9), -22222,
+  ]), 5);
+  const cases = [
+    {
+      name: 'indexed float32', attribute: new THREE.BufferAttribute(new Float32Array(floatVertices), 3),
+      vertices: floatVertices, index: [2, 0, 3, 3, 1, 2], order: [2, 0, 3, 3, 1, 2],
+      scale: new THREE.Vector3(1.75, 0.6, 2.25),
+    },
+    {
+      name: 'non-indexed mirrored float32',
+      attribute: new THREE.BufferAttribute(new Float32Array(floatVertices.slice(0, 9)), 3),
+      vertices: floatVertices.slice(0, 9), index: null, order: [0, 2, 1],
+      scale: new THREE.Vector3(-1.75, 0.6, 2.25),
+    },
+    {
+      name: 'indexed normalized uint16', attribute: normalized,
+      vertices: normalizedValues.map((value) => value / 65535),
+      index: [3, 1, 0, 2, 0, 1], order: [3, 0, 1, 2, 1, 0],
+      scale: new THREE.Vector3(1.75, -0.6, 2.25),
+    },
+    {
+      name: 'non-indexed normalized interleaved int16',
+      attribute: new THREE.InterleavedBufferAttribute(interleaved, 3, 1, true),
+      vertices: interleavedValues.map((value) => Math.max(value / 32767, -1)),
+      index: null, order: [0, 1, 2], scale: new THREE.Vector3(-1.75, -0.6, 2.25),
+    },
+    {
+      name: 'non-indexed half-float positions',
+      attribute: new THREE.Float16BufferAttribute(new Uint16Array([
+        0x3c00, 0x4000, 0x4200, 0x4400, 0x4500, 0x4600, 0x4700, 0x4800, 0x4880,
+      ]), 3),
+      vertices: [1, 2, 3, 4, 5, 6, 7, 8, 9], index: null, order: [0, 2, 1],
+      scale: new THREE.Vector3(-1.75, 0.6, 2.25),
+    },
+  ];
+
+  for (const entry of cases) {
+    await t.test(entry.name, async (context) => {
+      const model = createMockModel(entry.name, 1, false);
+      const geometry = model.geometry.geometry;
+      geometry.setAttribute('position', entry.attribute);
+      geometry.setIndex(entry.index);
+      model.geometry.center.set(0.75, -0.5, 1.25);
+      model.transform.position.set(3.25, -4.5, 18);
+      model.transform.rotation.set(0.29, -0.41, 0.63);
+      model.transform.scale.copy(entry.scale);
+      const savedSupportState = getSnapshot();
+      setSnapshot(emptySupportState());
+      context.after(() => {
+        setSnapshot(savedSupportState);
+        geometry.dispose();
+      });
+      const { coordinates, worldVertices } = expectedModelCoordinates(model, entry.vertices, entry.order);
+      const expectedBounds = new THREE.Box3().setFromPoints(worldVertices);
+      const solidMesh = await buildSolidSliceMeshForWasm({
+        models: [model], printerProfile: mockPrinterProfile,
+        materialProfile: mockMaterialProfile, filenameBase: 'transformed_positions',
+      });
+      assert.deepEqual(solidMesh.trianglesXYZ, coordinates, 'raw f32 coordinates and triangle vertex order');
+      assert.equal(solidMesh.modelTriangleCount, entry.order.length / 3);
+      for (const [actual, expected] of [
+        [solidMesh.meshBounds.minX, expectedBounds.min.x], [solidMesh.meshBounds.maxX, expectedBounds.max.x],
+        [solidMesh.meshBounds.minY, expectedBounds.min.y], [solidMesh.meshBounds.maxY, expectedBounds.max.y],
+        [solidMesh.meshBounds.minZ, expectedBounds.min.z], [solidMesh.meshBounds.maxZ, expectedBounds.max.z],
+      ]) assert.ok(Math.abs(actual - expected) < 1e-10, `world-space bound ${actual} matches ${expected}`);
+      assert.ok(Math.abs(solidMesh.tallestObjectHeightMm - expectedBounds.max.z) < 1e-10);
+      assert.equal(solidMesh.totalLayers, Math.ceil(expectedBounds.max.z / mockMaterialProfile.layerHeightMm));
+    });
+  }
 });
 
 function ringBoundsAtZ(triangles: Float32Array, z: number) {
@@ -166,7 +312,7 @@ test('twig contact disks shrink both the cylinder and round terminal without mov
   };
   const initialSupportState = {
     ...createEmptySupportCollections(),
-    twigs: { 'twig-1': mockTwig as any },
+    twigs: { 'twig-1': mockTwig },
     selectedId: null,
     hoveredId: null,
     selectedCategory: null,

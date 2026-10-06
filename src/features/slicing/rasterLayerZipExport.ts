@@ -16,7 +16,8 @@ import { inflateModelPlateClearance, raftBandTopMm } from '@/supports/Rafts/Cren
 import { filterLineRaftEdges, generateUnionedLineRaftMesh } from '@/supports/Rafts/Crenelated/geometry/generateUnionedLineRaftMesh';
 import { generateChamferedBeam } from '@/supports/Rafts/Crenelated/geometry/generateChamferedBeam';
 import { buildLineRaftEdgePairs } from '@/supports/Rafts/Crenelated/geometry/buildLineRaftEdgePairs';
-import type { ContactDisk, Segment, SupportState, Vec3 } from '@/supports/types';
+import type { ContactDisk, Joint, Segment, SupportState, Vec3 } from '@/supports/types';
+import type { ContactCone } from '@/supports/SupportPrimitives/ContactCone/types';
 import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness, getDiskCenter, getDiskRotation } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
 import { getBezierPointAtT } from '@/supports/Curves/BezierUtils';
@@ -31,6 +32,7 @@ import {
 } from '@/features/slicing/sliceJobAssembly';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { JOINT_DIAMETER_OFFSET_MM } from '@/supports/constants';
+import { yieldToEventLoop } from '@/utils/yieldToEventLoop';
 
 const DEFAULT_MESH_CHUNK_TARGET_BYTES = 64 * 1024 * 1024;
 const MIN_MESH_CHUNK_TARGET_BYTES = 16 * 1024 * 1024;
@@ -295,29 +297,25 @@ class TriangleFloatCollector {
   private maxXValue = -Infinity;
 
   private maxYValue = -Infinity;
-  
-  private flushCallback?: (chunk: Uint8Array) => Promise<void>;
-  
-  private flushChain: Promise<void> = Promise.resolve();
-  
-  private chunkElementLimit = Number.POSITIVE_INFINITY;
+
+  private readonly flushCallback?: (chunk: Uint8Array) => Promise<void>;
+
+  private inFlight: Promise<void> | null = null;
+
+  private inFlightBuffer: Float32Array | null = null;
+
+  private uploadFailure: { error: unknown } | null = null;
 
   constructor(
     initialTriangleCapacity: number,
     flushCallback?: (chunk: Uint8Array) => Promise<void>,
     chunkTargetBytes?: number,
   ) {
-    const safeTriangleCapacity = Math.max(1, Math.floor(initialTriangleCapacity));
-    this.data = new Float32Array(safeTriangleCapacity * 9);
+    const triangleCapacity = flushCallback
+      ? Math.max(1, Math.floor(normalizeMeshChunkTargetBytes(chunkTargetBytes) / 36))
+      : Math.max(1, Math.floor(initialTriangleCapacity));
+    this.data = new Float32Array(triangleCapacity * 9);
     this.flushCallback = flushCallback;
-
-    if (flushCallback) {
-      const normalizedChunkBytes = normalizeMeshChunkTargetBytes(chunkTargetBytes);
-      this.chunkElementLimit = Math.max(
-        9,
-        Math.floor(normalizedChunkBytes / Float32Array.BYTES_PER_ELEMENT),
-      );
-    }
   }
 
   get triangleCount(): number {
@@ -326,6 +324,111 @@ class TriangleFloatCollector {
 
   get maxZ(): number {
     return this.maxZValue;
+  }
+
+  get availableTriangles(): number {
+    return Math.floor((this.data.length - this.cursor) / 9);
+  }
+
+  get needsFlush(): boolean {
+    return this.flushCallback !== undefined && this.cursor === this.data.length;
+  }
+
+  get streamed(): boolean {
+    return this.flushCallback !== undefined;
+  }
+
+  appendModelTriangles(
+    position: THREE.BufferAttribute | THREE.InterleavedBufferAttribute,
+    indices: ArrayLike<number> | null,
+    matrix: THREE.Matrix4,
+    center: THREE.Vector3,
+    startTri: number,
+    endTri: number,
+  ): void {
+    this.ensureCapacity((endTri - startTri) * 9);
+    const data = this.data;
+    const values = position instanceof THREE.BufferAttribute
+      && !(position instanceof THREE.Float16BufferAttribute)
+      && !position.normalized
+      ? position.array
+      : null;
+    const stride = position.itemSize;
+    const e = matrix.elements;
+    const flipWinding = matrix.determinant() < 0;
+    const cx = center.x;
+    const cy = center.y;
+    const cz = center.z;
+    let cursor = this.cursor;
+    let minX = this.minXValue;
+    let minY = this.minYValue;
+    let minZ = this.minZValue;
+    let maxX = this.maxXValue;
+    let maxY = this.maxYValue;
+    let maxZ = this.maxZValue;
+
+    for (let triangle = startTri; triangle < endTri; triangle += 1) {
+      const first = triangle * 3;
+      const a = indices ? Number(indices[first]) : first;
+      const bSlot = first + (flipWinding ? 2 : 1);
+      const cSlot = first + (flipWinding ? 1 : 2);
+      const b = indices ? Number(indices[bSlot]) : bSlot;
+      const c = indices ? Number(indices[cSlot]) : cSlot;
+      const aOffset = a * stride;
+      const bOffset = b * stride;
+      const cOffset = c * stride;
+      const x0 = (values ? values[aOffset] : position.getX(a)) - cx;
+      const y0 = (values ? values[aOffset + 1] : position.getY(a)) - cy;
+      const z0 = (values ? values[aOffset + 2] : position.getZ(a)) - cz;
+      const x1 = (values ? values[bOffset] : position.getX(b)) - cx;
+      const y1 = (values ? values[bOffset + 1] : position.getY(b)) - cy;
+      const z1 = (values ? values[bOffset + 2] : position.getZ(b)) - cz;
+      const x2 = (values ? values[cOffset] : position.getX(c)) - cx;
+      const y2 = (values ? values[cOffset + 1] : position.getY(c)) - cy;
+      const z2 = (values ? values[cOffset + 2] : position.getZ(c)) - cz;
+      // composeModelMatrix is affine. Keep subtraction and multiply/add order
+      // identical to Vector3.applyMatrix4 so the emitted f32 bytes do not change.
+      const ax = e[0] * x0 + e[4] * y0 + e[8] * z0 + e[12];
+      const ay = e[1] * x0 + e[5] * y0 + e[9] * z0 + e[13];
+      const az = e[2] * x0 + e[6] * y0 + e[10] * z0 + e[14];
+      const bx = e[0] * x1 + e[4] * y1 + e[8] * z1 + e[12];
+      const by = e[1] * x1 + e[5] * y1 + e[9] * z1 + e[13];
+      const bz = e[2] * x1 + e[6] * y1 + e[10] * z1 + e[14];
+      const tx = e[0] * x2 + e[4] * y2 + e[8] * z2 + e[12];
+      const ty = e[1] * x2 + e[5] * y2 + e[9] * z2 + e[13];
+      const tz = e[2] * x2 + e[6] * y2 + e[10] * z2 + e[14];
+      data[cursor] = ax;
+      data[cursor + 1] = ay;
+      data[cursor + 2] = az;
+      data[cursor + 3] = bx;
+      data[cursor + 4] = by;
+      data[cursor + 5] = bz;
+      data[cursor + 6] = tx;
+      data[cursor + 7] = ty;
+      data[cursor + 8] = tz;
+      cursor += 9;
+      const triMinX = Math.min(ax, bx, tx);
+      const triMinY = Math.min(ay, by, ty);
+      const triMinZ = Math.min(az, bz, tz);
+      const triMaxX = Math.max(ax, bx, tx);
+      const triMaxY = Math.max(ay, by, ty);
+      const triMaxZ = Math.max(az, bz, tz);
+      if (triMinX < minX) minX = triMinX;
+      if (triMinY < minY) minY = triMinY;
+      if (triMinZ < minZ) minZ = triMinZ;
+      if (triMaxX > maxX) maxX = triMaxX;
+      if (triMaxY > maxY) maxY = triMaxY;
+      if (triMaxZ > maxZ) maxZ = triMaxZ;
+    }
+
+    this.cursor = cursor;
+    this.triangleCountValue += endTri - startTri;
+    this.minXValue = minX;
+    this.minYValue = minY;
+    this.minZValue = minZ;
+    this.maxXValue = maxX;
+    this.maxYValue = maxY;
+    this.maxZValue = maxZ;
   }
 
   get meshBounds() {
@@ -399,15 +502,44 @@ class TriangleFloatCollector {
     }
   }
 
-  async finalize(): Promise<Float32Array> {
+  async flushChunk(final = false, signal?: AbortSignal): Promise<void> {
+    if (!this.flushCallback || this.cursor === 0) return;
+    await this.waitForUpload();
+    throwIfAborted(signal);
+    const chunk = new Uint8Array(this.data.buffer, this.data.byteOffset, this.cursor * 4);
+    const reusable = this.inFlightBuffer;
+    this.inFlightBuffer = this.data;
+    if (!final) this.data = reusable ?? new Float32Array(this.data.length);
+    this.cursor = 0;
+    // Handle rejection immediately, even while the producer fills the other buffer.
+    this.inFlight = this.flushCallback(chunk).catch((error: unknown) => {
+      this.uploadFailure = { error };
+    });
+  }
+
+  async waitForUpload(): Promise<void> {
+    await this.inFlight;
+    this.throwIfUploadFailed();
+  }
+
+  throwIfUploadFailed(): void {
+    if (this.uploadFailure) throw this.uploadFailure.error;
+  }
+
+  async dispose(): Promise<void> {
+    // The rejection handler already records failures. Drain without masking a
+    // producer/cancellation error, and release the callback's backing buffer.
+    await this.inFlight;
+    this.inFlight = null;
+    this.inFlightBuffer = null;
+  }
+
+  async finalize(signal?: AbortSignal): Promise<Float32Array> {
+    throwIfAborted(signal);
     if (this.flushCallback) {
-      if (this.cursor > 0) {
-        const remaining = new Uint8Array(this.data.buffer, this.data.byteOffset, this.cursor * 4);
-        this.flushChain = this.flushChain.then(() => this.flushCallback!(remaining));
-        this.cursor = 0;
-      }
-      await this.flushChain;
-      return new Float32Array(0); // Sent gradually!
+      await this.flushChunk(true, signal);
+      await this.waitForUpload();
+      return new Float32Array(0);
     }
 
     if (this.cursor === this.data.length) {
@@ -418,17 +550,12 @@ class TriangleFloatCollector {
 
   private ensureCapacity(additionalFloats: number): void {
     const required = this.cursor + additionalFloats;
+    if (required <= this.data.length) return;
 
-    if (this.flushCallback && required >= this.chunkElementLimit) {
-      const chunk = new Uint8Array(this.data.buffer, this.data.byteOffset, this.cursor * 4);
-      this.flushChain = this.flushChain.then(() => this.flushCallback!(chunk));
-      
-      this.data = new Float32Array(this.chunkElementLimit);
-      this.cursor = 0;
-      return;
+    if (this.flushCallback) {
+      throw new Error('Streamed mesh producer must flush before filling the next chunk.');
     }
 
-    if (required <= this.data.length) return;
 
     let nextLength = Math.max(this.data.length * 2, 9);
     while (nextLength < required) {
@@ -485,11 +612,11 @@ function pushTriangleIntoSink(
   pushWorldTriangle(sink, ax, ay, az, bx, by, bz, cx, cy, cz);
 }
 
-function appendGeometryTriangles(
+function* appendGeometryTriangles(
   sink: TriangleSink,
   geometry: THREE.BufferGeometry,
   matrix?: THREE.Matrix4,
-): void {
+): Generator<void> {
   const position = geometry.getAttribute('position');
   if (!position) return;
 
@@ -525,12 +652,14 @@ function appendGeometryTriangles(
     const idx = index.array;
     for (let i = 0; i < idx.length; i += 3) {
       writeTri(Number(idx[i]), Number(idx[i + 1]), Number(idx[i + 2]));
+      if (sink instanceof TriangleFloatCollector && sink.needsFlush) yield;
     }
     return;
   }
 
   for (let i = 0; i + 2 < position.count; i += 3) {
     writeTri(i, i + 1, i + 2);
+    if (sink instanceof TriangleFloatCollector && sink.needsFlush) yield;
   }
 }
 
@@ -539,7 +668,10 @@ function appendGeometryWorldTriangles(
   geometry: THREE.BufferGeometry,
   matrix?: THREE.Matrix4,
 ): void {
-  appendGeometryTriangles(triangles, geometry, matrix);
+  const producer = appendGeometryTriangles(triangles, geometry, matrix);
+  while (!producer.next().done) {
+    // Array sinks are synchronous; streamed export drives the same producer asynchronously.
+  }
 }
 
 function createFrustumGeometryBetween(
@@ -566,19 +698,22 @@ function createFrustumGeometryBetween(
   return geom;
 }
 
-function appendJointSphere(
+function* appendJointSphere(
   sink: TriangleSink,
   pos: { x: number; y: number; z: number },
   diameter: number,
   radialSegments: number,
-): void {
+): Generator<void> {
   const radius = Math.max(0.001, diameter * 0.5);
   const heightSegments = Math.max(3, Math.floor(radialSegments * 0.75));
   const geom = new THREE.SphereGeometry(radius, radialSegments, heightSegments);
   const matrix = new THREE.Matrix4().makeTranslation(pos.x, pos.y, pos.z);
   geom.applyMatrix4(matrix);
-  appendGeometryTriangles(sink, geom);
-  geom.dispose();
+  try {
+    yield* appendGeometryTriangles(sink, geom);
+  } finally {
+    geom.dispose();
+  }
 }
 
 type SupportSliceTessellation = {
@@ -658,14 +793,20 @@ export function resolveSupportSliceTessellation(
   };
 }
 
-function appendSegmentPrimitive(
+type SliceSegmentCurve = {
+  type?: string;
+  controlPoint1?: Vec3;
+  controlPoint2?: Vec3;
+};
+
+function* appendSegmentPrimitive(
   sink: TriangleSink,
   start: THREE.Vector3,
   end: THREE.Vector3,
   diameter: number,
-  segment?: { type?: string; controlPoint1?: { x: number; y: number; z: number }; controlPoint2?: { x: number; y: number; z: number } },
+  segment?: SliceSegmentCurve,
   tessellation?: { shaftRadialSegments?: number; bezierRadialSegments?: number; bezierSteps?: number },
-): void {
+): Generator<void> {
   const radius = Math.max(0.001, diameter * 0.5);
   const shaftRadialSegments = Math.max(3, Math.floor(tessellation?.shaftRadialSegments ?? 12));
   const bezierRadialSegments = Math.max(3, Math.floor(tessellation?.bezierRadialSegments ?? 10));
@@ -684,8 +825,11 @@ function appendSegmentPrimitive(
       const cur = new THREE.Vector3(p.x, p.y, p.z);
       const g = createFrustumGeometryBetween(prev, cur, radius, radius, bezierRadialSegments);
       if (g) {
-        appendGeometryTriangles(sink, g);
-        g.dispose();
+        try {
+          yield* appendGeometryTriangles(sink, g);
+        } finally {
+          g.dispose();
+        }
       }
       prev = cur;
     }
@@ -694,24 +838,21 @@ function appendSegmentPrimitive(
 
   const geom = createFrustumGeometryBetween(start, end, radius, radius, shaftRadialSegments);
   if (!geom) return;
-  appendGeometryTriangles(sink, geom);
-  geom.dispose();
+  try {
+    yield* appendGeometryTriangles(sink, geom);
+  } finally {
+    geom.dispose();
+  }
 }
 
-function appendContactConePrimitive(
+function* appendContactConePrimitive(
   sink: TriangleSink,
-  cone: {
-    pos: { x: number; y: number; z: number };
-    normal: { x: number; y: number; z: number };
-    surfaceNormal?: { x: number; y: number; z: number };
-    diskLengthOverride?: number;
-    profile: { contactDiameterMm: number; bodyDiameterMm: number; type?: string; diskThicknessMm?: number; maxStandoffMm?: number; standoffAngleThreshold?: number; penetrationMm?: number };
-  },
+  cone: ContactCone,
   radialSegments = 12,
   penetrationMm = 0,
   tipScale = 1,
-): void {
-  const socket = getFinalSocketPosition(cone as any);
+): Generator<void> {
+  const socket = getFinalSocketPosition(cone);
   const effectiveNormal = cone.surfaceNormal ?? cone.normal;
   const start = new THREE.Vector3(
     cone.pos.x - effectiveNormal.x * penetrationMm,
@@ -727,17 +868,20 @@ function appendContactConePrimitive(
     Math.max(4, Math.floor(radialSegments)),
   );
   if (!g) return;
-  appendGeometryTriangles(sink, g);
-  g.dispose();
+  try {
+    yield* appendGeometryTriangles(sink, g);
+  } finally {
+    g.dispose();
+  }
 }
 
-function appendContactDiskPrimitive(
+function* appendContactDiskPrimitive(
   sink: TriangleSink,
   disk: ContactDisk,
   radialSegments: number,
   penetrationMm = 0.05,
   tipScale = 1,
-): void {
+): Generator<void> {
   const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile);
   const radius = Math.max(0.01, disk.contactDiameterMm * 0.5 * tipScale);
 
@@ -755,8 +899,11 @@ function appendContactDiskPrimitive(
 
   const cylinderMatrix = groupMatrix.clone().multiply(new THREE.Matrix4().makeTranslation(0, -penetrationMm / 2, 0));
   cylinderGeom.applyMatrix4(cylinderMatrix);
-  appendGeometryTriangles(sink, cylinderGeom);
-  cylinderGeom.dispose();
+  try {
+    yield* appendGeometryTriangles(sink, cylinderGeom);
+  } finally {
+    cylinderGeom.dispose();
+  }
 
   const sphereSegments = Math.max(4, Math.floor(radialSegments));
   const heightSegments = Math.max(3, Math.floor(sphereSegments * 0.75));
@@ -764,8 +911,11 @@ function appendContactDiskPrimitive(
 
   const sphereMatrix = groupMatrix.clone().multiply(new THREE.Matrix4().makeTranslation(0, thickness / 2, 0));
   sphereGeom.applyMatrix4(sphereMatrix);
-  appendGeometryTriangles(sink, sphereGeom);
-  sphereGeom.dispose();
+  try {
+    yield* appendGeometryTriangles(sink, sphereGeom);
+  } finally {
+    sphereGeom.dispose();
+  }
 }
 
 /** Exported for `local-only/slice-goldens/`; not part of the public surface. */
@@ -776,11 +926,24 @@ export function buildSupportAndRaftWorldTriangles(
   /** Visible models, whose plate footprint the raft has to clear. */
   plateClearanceModels: readonly PlateFootprintSource[] = [],
 ): WorldTriangle[] {
-  if (visibleModelIds.size === 0) return [];
-
   const out: WorldTriangle[] = [];
+  const producer = generateSupportAndRaftTriangles(visibleModelIds, collector ?? out, supportTipShrinkPercent, plateClearanceModels);
+  while (!producer.next().done) {
+    // Synchronous cross-section/golden callers share the export geometry producer.
+  }
+  return out;
+}
+
+function* generateSupportAndRaftTriangles(
+  visibleModelIds: Set<string>,
+  sink: TriangleSink,
+  supportTipShrinkPercent = 0,
+  /** Visible models, whose plate footprint the raft has to clear. */
+  plateClearanceModels: readonly PlateFootprintSource[] = [],
+): Generator<void> {
+  if (visibleModelIds.size === 0) return;
+
   const supportState = getSupportSnapshot();
-  const sink: TriangleSink = collector ?? out;
   const tipScale = 1 - supportTipShrinkPercent / 100;
   const raftSettings = getRaftSettings();
   const hasSolidBottom = raftSettings.bottomMode === 'solid';
@@ -857,14 +1020,20 @@ export function buildSupportAndRaftWorldTriangles(
 
     const diskGeom = createFrustumGeometryBetween(base, diskTop, rootRadius, rootRadius, tessellation.rootRadialSegments);
     if (diskGeom) {
-      appendGeometryTriangles(sink, diskGeom);
-      diskGeom.dispose();
+      try {
+        yield* appendGeometryTriangles(sink, diskGeom);
+      } finally {
+        diskGeom.dispose();
+      }
     }
 
     const coneGeom = createFrustumGeometryBetween(diskTop, coneTop, rootRadius, topRadius, tessellation.rootRadialSegments);
     if (coneGeom) {
-      appendGeometryTriangles(sink, coneGeom);
-      coneGeom.dispose();
+      try {
+        yield* appendGeometryTriangles(sink, coneGeom);
+      } finally {
+        coneGeom.dispose();
+      }
     }
   }
 
@@ -876,10 +1045,10 @@ export function buildSupportAndRaftWorldTriangles(
    * it braces is emitted by whichever type reaches it first, so the iteration
    * order is part of the output.
    */
-  const emitJoint = (joint: { id: string; pos: Vec3; diameter: number } | undefined | null) => {
+  const emitJoint = function* (joint: Joint | undefined | null): Generator<void> {
     if (!joint || seenJointIds.has(joint.id)) return;
     seenJointIds.add(joint.id);
-    appendJointSphere(
+    yield* appendJointSphere(
       sink,
       joint.pos,
       Math.max(0.001, joint.diameter - JOINT_BLEND_MM),
@@ -931,45 +1100,54 @@ export function buildSupportAndRaftWorldTriangles(
           tessellation.rootRadialSegments,
         );
         if (rootGeom) {
-          appendGeometryTriangles(sink, rootGeom);
-          rootGeom.dispose();
+          try {
+            yield* appendGeometryTriangles(sink, rootGeom);
+          } finally {
+            rootGeom.dispose();
+          }
         }
-        emitJoint(entity.joint as Parameters<typeof emitJoint>[0]);
+        // The registry dispatch erased the concrete support entity type.
+        const joint = entity.joint as Joint | undefined;
+        yield* emitJoint(joint);
       }
 
       const segments = (entity.segments as Segment[] | undefined) ?? [];
       const shaft = entity as unknown as ShaftEntity;
-      segments.forEach((seg, index) => {
+      for (let index = 0; index < segments.length; index += 1) {
+        const seg = segments[index];
         const endpoints = resolveSegmentEndpoints(shaft, seg, index, { root, hostKnot });
-        if (!endpoints) return;
+        if (!endpoints) continue;
 
-        appendSegmentPrimitive(
+        yield* appendSegmentPrimitive(
           sink,
           new THREE.Vector3(endpoints.start.x, endpoints.start.y, endpoints.start.z),
           new THREE.Vector3(endpoints.end.x, endpoints.end.y, endpoints.end.z),
           Math.max(0.05, seg.diameter),
-          seg as any,
+          seg,
           segmentTessellation,
         );
 
-        emitJoint(seg.bottomJoint);
-        emitJoint(seg.topJoint);
-      });
+        yield* emitJoint(seg.bottomJoint);
+        yield* emitJoint(seg.topJoint);
+      }
 
       // A brace spans its two knots instead of carrying a shaft. Its diameter
       // mirrors the renderer: derived from the host knots, not profile.diameter.
       if (descriptor.lower.kind === 'knot' && descriptor.upper.kind === 'knot' && !descriptor.hasSegments) {
         const endKnot = knotAt(1);
         if (!hostKnot || !endKnot) continue;
-        const profileDiameter = Math.max(0.001, (entity.profile as { diameter?: number } | undefined)?.diameter ?? 1);
+        // Registry-owned brace fields have these shapes after support import.
+        const profile = entity.profile as { diameter?: number } | undefined;
+        const curve = entity.curve as SliceSegmentCurve | undefined;
+        const profileDiameter = Math.max(0.001, profile?.diameter ?? 1);
         const startHostDia = Math.max(0.05, (hostKnot.diameter ?? (profileDiameter + 0.1)) - 0.1);
         const endHostDia = Math.max(0.05, (endKnot.diameter ?? (profileDiameter + 0.1)) - 0.1);
-        appendSegmentPrimitive(
+        yield* appendSegmentPrimitive(
           sink,
           new THREE.Vector3(hostKnot.pos.x, hostKnot.pos.y, hostKnot.pos.z),
           new THREE.Vector3(endKnot.pos.x, endKnot.pos.y, endKnot.pos.z),
           (startHostDia + endHostDia) * 0.5,
-          entity.curve as any,
+          curve,
           segmentTessellation,
         );
       }
@@ -979,9 +1157,11 @@ export function buildSupportAndRaftWorldTriangles(
         if (!contact) continue;
         const kind = field === descriptor.lower.field ? descriptor.lower.kind : descriptor.upper.kind;
         if (kind === 'disk') {
-          appendContactDiskPrimitive(sink, contact as ContactDisk, tessellation.contactConeRadialSegments, tipPenetrationMm, tipScale);
+          const disk = contact as ContactDisk;
+          yield* appendContactDiskPrimitive(sink, disk, tessellation.contactConeRadialSegments, tipPenetrationMm, tipScale);
         } else {
-          appendContactConePrimitive(sink, contact as any, tessellation.contactConeRadialSegments, tipPenetrationMm, tipScale);
+          const cone = contact as ContactCone;
+          yield* appendContactConePrimitive(sink, cone, tessellation.contactConeRadialSegments, tipPenetrationMm, tipScale);
         }
       }
     }
@@ -1017,7 +1197,7 @@ export function buildSupportAndRaftWorldTriangles(
       if (!parts.baseMesh && parts.footprint.length === 0) continue;
 
       if (parts.baseMesh) {
-        appendGeometryTriangles(sink, parts.baseMesh.geometry);
+        yield* appendGeometryTriangles(sink, parts.baseMesh.geometry);
       } else if (raft.bottomMode === 'line') {
         const nodes2d = circles.map((c) => new THREE.Vector2(c.x, c.y));
         const hasBorderRing = parts.footprint.length > 0;
@@ -1047,7 +1227,7 @@ export function buildSupportAndRaftWorldTriangles(
         const unionPositionAttribute = unionMesh.geometry.getAttribute('position');
         const unionHasGeometry = !!unionPositionAttribute && unionPositionAttribute.count > 0;
         if (unionHasGeometry) {
-          appendGeometryTriangles(sink, unionMesh.geometry);
+          yield* appendGeometryTriangles(sink, unionMesh.geometry);
         } else {
           for (const [a, b] of unionEdges) {
             const start = new THREE.Vector3(a.x, a.y, 0);
@@ -1057,18 +1237,17 @@ export function buildSupportAndRaftWorldTriangles(
               heightMm: beamHeight,
               chamferAngleDeg: 90,
             });
-            appendGeometryTriangles(sink, beam.geometry);
+            yield* appendGeometryTriangles(sink, beam.geometry);
           }
         }
       }
 
       if (parts.wallMesh) {
-        appendGeometryTriangles(sink, parts.wallMesh.geometry);
+        yield* appendGeometryTriangles(sink, parts.wallMesh.geometry);
       }
     }
   }
 
-  return out;
 }
 
 function mirrorWorldX(xMm: number, mirrorX: boolean): number {
@@ -1398,65 +1577,26 @@ function buildWorldTriangles(models: LoadedModel[]): WorldTriangle[] {
   return triangles;
 }
 
-function appendModelTrianglesInRange(
+function* appendModelTrianglesInRange(
   model: LoadedModel,
   collector: TriangleFloatCollector,
   startTri: number,
   endTri: number,
-): void {
+): Generator<void> {
   const matrix = composeModelMatrix(model.transform);
-  // A negative-determinant model transform (a mirror / negative scale, e.g.
-  // from a Lychee-mirrored .lys import or a transient live mirror preview)
-  // reflects the vertices without reordering them, which inverts every model
-  // triangle's winding. The rasterizer decides fill from face-normal X sign
-  // (geometry.rs: fill_wind), so an inside-out model overlapping the
-  // always-outward supports produces mixed-sign scanlines and dropped fill.
-  // Swap b<->c to keep the baked model consistently outward-wound. (#334)
-  const flipWinding = matrix.determinant() < 0;
-  const center = model.geometry.center;
   const geometry = model.geometry.geometry;
   const position = geometry.getAttribute('position');
-  const index = geometry.getIndex();
   if (!position) return;
-
-  const v0 = new THREE.Vector3();
-  const v1 = new THREE.Vector3();
-  const v2 = new THREE.Vector3();
-
-  const readVertex = (vertexIndex: number, target: THREE.Vector3) => {
-    target.set(
-      position.getX(vertexIndex) - center.x,
-      position.getY(vertexIndex) - center.y,
-      position.getZ(vertexIndex) - center.z,
-    );
-    target.applyMatrix4(matrix);
-    return target;
-  };
-
-  const push = () =>
-    flipWinding
-      ? collector.pushTriangle(v0.x, v0.y, v0.z, v2.x, v2.y, v2.z, v1.x, v1.y, v1.z)
-      : collector.pushTriangle(v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
-
-  if (index) {
-    const idx = index.array;
-    const triStart = startTri * 3;
-    const triEnd = Math.min(endTri * 3, idx.length);
-    for (let i = triStart; i < triEnd; i += 3) {
-      readVertex(Number(idx[i]), v0);
-      readVertex(Number(idx[i + 1]), v1);
-      readVertex(Number(idx[i + 2]), v2);
-      push();
-    }
-  } else {
-    const triStart = startTri * 3;
-    const triEnd = Math.min(endTri * 3, position.count);
-    for (let i = triStart; i < triEnd; i += 3) {
-      readVertex(i, v0);
-      readVertex(i + 1, v1);
-      readVertex(i + 2, v2);
-      push();
-    }
+  const indices = geometry.getIndex()?.array ?? null;
+  const limit = Math.min(endTri, Math.floor((indices?.length ?? position.count) / 3));
+  let next = startTri;
+  while (next < limit) {
+    const end = collector.streamed
+      ? Math.min(limit, next + collector.availableTriangles)
+      : limit;
+    collector.appendModelTriangles(position, indices, matrix, model.geometry.center, next, end);
+    next = end;
+    if (collector.needsFlush) yield;
   }
 }
 
@@ -2091,50 +2231,73 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
     options.meshChunkTargetBytes,
   );
 
-  // Push model-only triangles first (across all models), then support-only.
-  // This produces the same collector layout as manually splitting before slicing.
-  for (const model of visibleModels) {
-    const modelTriCount = effectiveModelTriangleCount(model);
-    if (modelTriCount > 0) {
-      appendModelTrianglesInRange(model, collector, 0, modelTriCount);
+  async function append(producer: Generator<void>): Promise<void> {
+    try {
+      throwIfAborted(options.abortSignal);
+      collector.throwIfUploadFailed();
+      while (!producer.next().done) {
+        await collector.flushChunk(false, options.abortSignal);
+        // A microtask alone cannot dispatch fetch/IPC responses or cancellation.
+        await yieldToEventLoop();
+        throwIfAborted(options.abortSignal);
+        collector.throwIfUploadFailed();
+      }
+    } finally {
+      producer.return(undefined);
     }
   }
-  // The native side splits the buffer here, before support-classified meshes
-  // and generated support/raft geometry are appended.
-  const modelTriangleCount = collector.triangleCount;
-  for (const model of visibleModels) {
-    const totalTris = getModelTriangleCount(model);
-    const modelTriCount = effectiveModelTriangleCount(model);
-    if (modelTriCount < totalTris) {
-      appendModelTrianglesInRange(model, collector, modelTriCount, totalTris);
+
+  let modelTriangleCount: number;
+  let totalLayers: number;
+  let tallestObjectHeightMm: number;
+  let trianglesXYZ: Float32Array;
+  try {
+    // Push model-only triangles first (across all models), then support-only.
+    // This produces the same collector layout as manually splitting before slicing.
+    for (const model of visibleModels) {
+      const modelTriCount = effectiveModelTriangleCount(model);
+      if (modelTriCount > 0) {
+        await append(appendModelTrianglesInRange(model, collector, 0, modelTriCount));
+      }
     }
+    // The native side splits the buffer here, before support-classified meshes
+    // and generated support/raft geometry are appended.
+    modelTriangleCount = collector.triangleCount;
+    for (const model of visibleModels) {
+      const totalTris = getModelTriangleCount(model);
+      const modelTriCount = effectiveModelTriangleCount(model);
+      if (modelTriCount < totalTris) {
+        await append(appendModelTrianglesInRange(model, collector, modelTriCount, totalTris));
+      }
+    }
+    emitMeshPrepDiagnostic('Mesh prep: models', 1, 4, {
+      modelTriangleEstimate,
+      triangleCountAfterModels: collector.triangleCount,
+    });
+
+    const visibleModelIds = new Set(visibleModels.map((model) => model.id));
+    await append(generateSupportAndRaftTriangles(visibleModelIds, collector, options.supportTipShrinkPercent ?? 0, visibleModels));
+    emitMeshPrepDiagnostic('Mesh prep: supports', 2, 4, {
+      triangleCountAfterSupports: collector.triangleCount,
+    });
+
+    if (collector.triangleCount === 0) {
+      throw new Error('Unable to prepare world-space triangles from visible models.');
+    }
+
+    const maxZ = Number.isFinite(collector.maxZ)
+      ? Math.max(0, collector.maxZ)
+      : 0;
+    ({ totalLayers, tallestObjectHeightMm } = resolveSliceLayerCount({
+      maxZMm: maxZ,
+      printerProfile: options.printerProfile,
+      layerHeightMm: settings.layerHeightMm,
+    }));
+
+    trianglesXYZ = await collector.finalize(options.abortSignal);
+  } finally {
+    await collector.dispose();
   }
-  emitMeshPrepDiagnostic('Mesh prep: models', 1, 4, {
-    modelTriangleEstimate,
-    triangleCountAfterModels: collector.triangleCount,
-  });
-
-  const visibleModelIds = new Set(visibleModels.map((model) => model.id));
-  buildSupportAndRaftWorldTriangles(visibleModelIds, collector, options.supportTipShrinkPercent ?? 0, visibleModels);
-  emitMeshPrepDiagnostic('Mesh prep: supports', 2, 4, {
-    triangleCountAfterSupports: collector.triangleCount,
-  });
-
-  if (collector.triangleCount === 0) {
-    throw new Error('Unable to prepare world-space triangles from visible models.');
-  }
-
-  const maxZ = Number.isFinite(collector.maxZ)
-    ? Math.max(0, collector.maxZ)
-    : 0;
-
-  const { totalLayers, tallestObjectHeightMm } = resolveSliceLayerCount({
-    maxZMm: maxZ,
-    printerProfile: options.printerProfile,
-    layerHeightMm: settings.layerHeightMm,
-  });
-
-  const trianglesXYZ = await collector.finalize();
   console.warn('[SupportAA] collector finalized', {
     modelTriangleCount,
     totalTriangleCount: collector.triangleCount,

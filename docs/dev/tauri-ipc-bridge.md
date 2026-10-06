@@ -93,6 +93,34 @@ grep -rhoE '\binvoke(<[^>]*>)?\(' src plugins --include=*.ts --include=*.tsx \
   a cancel command (`cancel_slicing`, …). Always offer cancellation for anything
   that runs longer than a second.
 
+## Slice mesh preparation and staging
+
+`buildSolidSliceMeshForWasm` in
+`src/features/slicing/rasterLayerZipExport.ts` packs world-space triangles as
+little-endian `f32` coordinates. Model-body triangles precede all classified
+support and generated support/raft triangles; `modelTriangleCount` names that
+boundary. Packing preserves geometry centering, transformed winding (including
+mirrors), and the closed surfaces needed for plate-edge rasterization.
+
+With `flushBinaryMeshChunk`, preparation owns at most two triangle-aligned,
+chunk-sized buffers: one being uploaded and one being filled. It starts uploading
+before the whole mesh is generated, yields through `yieldToEventLoop`, and waits
+for the previous upload before handing off the next chunk. The same backpressure
+applies to generated support/raft geometry. Chunk bytes remain unchanged until
+the callback's promise settles; a buffer may be reused only afterwards. Callback
+rejection stops subsequent uploads. Cancellation or a producer error drains any
+in-flight upload before returning, so it cannot overwrite a later staging job.
+Without the callback, the builder returns the complete packed array; with it,
+the returned `trianglesXYZ` is empty because the bytes are already staged.
+
+`runSliceExportOrchestrator` in
+`src/features/slicing/sliceExportOrchestrator.ts` reports `meshPrepMs` from staging
+setup through completed mesh preparation and staging in every transfer mode,
+including single-shot upload and file-backed registration. Modifier baking runs
+before this interval. `stageMeshMs` sums the awaited staging calls, which overlap
+geometry generation in streamed mode: do not add it to `meshPrepMs`, or subtract
+it to infer geometry CPU time. Native slicing begins only after staging completes.
+
 ## Baked ambient occlusion (`bake_vertex_occlusion`)
 
 `bake_vertex_occlusion(rays?, reach_mm?)` bakes per-vertex ambient occlusion for
