@@ -94,6 +94,20 @@ private copy at the call site.
   action scale silently resized the 21 call sites that had already used them, so
   those were moved to `size="auto"` with their own classes in the same change.
   When a size's value changes, grep `<Button` for the old size first.
+- **`SegmentedControl` covers the settings pill family only.** The app has four
+  different segmented looks: the uppercase ON/OFF pill (`SegmentedControl`), the
+  underline tab strip (`ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-xs`
+  with a colour-only active state), the compact grid strip (`grid grid-cols-N
+  gap-1` of `rounded border px-1.5 py-1 text-xs font-medium`), and a bordered
+  capsule around `ui-button-ghost` buttons. The other three are still written at
+  their call sites; do not map them onto `SegmentedControl` without first giving
+  it that variant, or their design changes.
+- **The two drag opt-out attributes are not interchangeable.**
+  `[data-no-drag]` is the floating panel stack's opt-out and is read only by
+  `isDragBlockedByTarget`; `data-no-window-drag="true"` is the desktop window
+  drag's and is read only by the topbar's handler. Because the app shell carries
+  the window one on its root, teaching the panel stack to honour it (via
+  `closest`, which walks to the root) blocks every panel drag in the app.
 - **A layout atom carries its layout on the root element.** `SettingRow`
   rendered as a `<label>` stayed inline while the flex row lived on a wrapper
   inside it, and an inline box holding a block child laid out 78px tall against
