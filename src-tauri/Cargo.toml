@@ -21,6 +21,9 @@ tauri-plugin-single-instance = { version = "2", optional = true }
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 url = "2"
+# Decodes the `x-mesh-stage-path` IPC header: HTTP header values are
+# visible-ASCII only, so destination paths cross the bridge percent-encoded.
+percent-encoding = "2"
 # Only to hand the updater's OffsetDateTime to the frontend as RFC 3339.
 time = { version = "0.3", features = ["formatting"] }
 serde = { version = "1", features = ["derive"] }

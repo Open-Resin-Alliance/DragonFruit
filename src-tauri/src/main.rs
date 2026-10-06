@@ -1216,6 +1216,29 @@ async fn allocate_mesh_stage_path() -> Result<String, String> {
     Ok(path.to_string_lossy().to_string())
 }
 
+/// Decodes the percent-encoded `x-mesh-stage-path` header back into a path.
+///
+/// The path cannot ride in the header verbatim: HTTP header values are
+/// visible-ASCII only, so `HeaderValue::to_str` rejects every byte outside
+/// 0x20-0x7E and a destination like `C:\Users\...\Tatsaechliche Dokumente\x.voxl`
+/// (any accent, umlaut or CJK character) failed on its very first chunk. Saving
+/// a project into such a folder was impossible, and the frontend's fallback
+/// chain turned the failure into a browser download rather than an error.
+///
+/// The sender is `encodeStagePathHeader` in `nativeSlicerBridge.ts`; every
+/// caller of this command goes through it, so the value here is always
+/// percent-encoded ASCII. An unencoded ASCII path decodes to itself, but a
+/// literal `%` would not survive the round trip - encode on the way in.
+fn decode_stage_path_header(raw: &[u8]) -> Result<String, String> {
+    let encoded = std::str::from_utf8(raw)
+        .map_err(|err| format!("Invalid x-mesh-stage-path header value: {err}"))?;
+
+    percent_encoding::percent_decode_str(encoded)
+        .decode_utf8()
+        .map(|decoded| decoded.into_owned())
+        .map_err(|err| format!("Invalid x-mesh-stage-path header encoding: {err}"))
+}
+
 #[tauri::command]
 async fn append_mesh_stage_chunk(request: tauri::ipc::Request<'_>) -> Result<u64, String> {
     let bytes = match request.body() {
@@ -1230,10 +1253,8 @@ async fn append_mesh_stage_chunk(request: tauri::ipc::Request<'_>) -> Result<u64
         .get("x-mesh-stage-path")
         .ok_or("append_mesh_stage_chunk missing x-mesh-stage-path header")?;
 
-    let path_text = path_header
-        .to_str()
-        .map_err(|e| format!("Invalid x-mesh-stage-path header value: {e}"))?
-        .trim();
+    let decoded_path = decode_stage_path_header(path_header.as_bytes())?;
+    let path_text = decoded_path.trim();
 
     if path_text.is_empty() {
         return Err("append_mesh_stage_chunk received empty x-mesh-stage-path header".into());
@@ -4602,6 +4623,60 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **The non-ASCII destination regression.** The staging path crosses the
+    /// IPC bridge in the `x-mesh-stage-path` header, and HTTP header values are
+    /// visible ASCII only. A project under `Tatsächliche Dokumente` therefore
+    /// failed on its first chunk with "failed to convert header to a str", and
+    /// the frontend's fallback chain downgraded the failure to a browser
+    /// download: the user picked a destination, got a success toast, and the
+    /// scene file was never written there. The path is percent-encoded on the
+    /// wire now, so the whole seam has to work under a non-ASCII directory.
+    #[test]
+    fn voxl_write_seam_works_under_a_non_ascii_path() {
+        let _guard = lock_writer_tests();
+        let dir = unique_test_dir("atomic-nonascii").join("Tatsächliche Dokumente");
+        std::fs::create_dir_all(&dir).expect("failed creating non-ASCII test dir");
+        let target = dir.join("Füße & Hände.voxl");
+
+        let payload: Vec<u8> = (0..256u32).flat_map(|i| i.to_le_bytes()).collect();
+        voxl_write_seam(&target, &payload, None).expect("write to a non-ASCII path failed");
+
+        assert_eq!(
+            std::fs::read(&target).expect("no file written to the non-ASCII path"),
+            payload,
+        );
+
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    /// The header carries a percent-encoded path; decoding it is what makes the
+    /// non-ASCII destination above reach the writer at all.
+    #[test]
+    fn stage_path_header_decodes_percent_encoding() {
+        assert_eq!(
+            super::decode_stage_path_header(
+                b"C%3A%5CUsers%5CSomeone%5CTats%C3%A4chliche%20Dokumente%5CF%C3%BC%C3%9Fe.voxl"
+            )
+            .expect("decoding a percent-encoded path failed"),
+            r"C:\Users\Someone\Tatsächliche Dokumente\Füße.voxl",
+        );
+    }
+
+    /// An ASCII path with nothing to decode must survive untouched, so the
+    /// encoding change cannot alter the paths that already worked.
+    #[test]
+    fn stage_path_header_passes_plain_ascii_through() {
+        assert_eq!(
+            super::decode_stage_path_header(b"C%3A%5Cprojects%5Cscene.voxl")
+                .expect("decoding failed"),
+            r"C:\projects\scene.voxl",
+        );
+        assert_eq!(
+            super::decode_stage_path_header(b"/tmp/scene.voxl").expect("decoding failed"),
+            "/tmp/scene.voxl",
+        );
     }
 
     /// The happy path of the commit: the target becomes the temp's bytes and no

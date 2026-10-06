@@ -77,6 +77,16 @@ grep -rhoE '\binvoke(<[^>]*>)?\(' src plugins --include=*.ts --include=*.tsx \
   rejected at the call site — *"expected a value for key … but the IPC call used
   a bytes payload"*. Put options in request headers, or keep them as crate
   constants; `stage_mesh_binary_set` takes nothing else for this reason.
+- **Header values are visible ASCII — percent-encode anything else.** An HTTP
+  header value may only hold bytes `0x20`–`0x7E`; `HeaderValue::to_str` rejects
+  the rest, so a header carrying a *path* breaks the moment the path has an
+  umlaut, accent or CJK character. This shipped: the destination rode in
+  `x-mesh-stage-path` verbatim, and every save into a folder such as
+  `Tatsächliche Dokumente` failed on its first chunk. Senders encode with
+  `encodeStagePathHeader` (`nativeSlicerBridge.ts`), Rust decodes with
+  `decode_stage_path_header` (`main.rs`). Any new header that can hold
+  user-supplied text needs the same treatment — and because the decoder always
+  runs, a sender that skips the encode corrupts paths containing `%`.
 - **camelCase in TS → snake_case in Rust.** `serde(rename_all = "camelCase")`
   on the args struct handles the field names; keep payloads flat.
 - **Binary vs JSON.** Large binary payloads (mesh geometry, slice output) use a

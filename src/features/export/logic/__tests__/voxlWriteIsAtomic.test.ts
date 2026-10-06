@@ -34,9 +34,14 @@ function createRecordingInvoke(options?: { failChunks?: boolean }): {
     const record = args && !(args instanceof Uint8Array) && !(args instanceof ArrayBuffer)
       ? (args as Record<string, string>)
       : {};
+    const encodedPath = headers['x-mesh-stage-path'];
     calls.push({
       cmd,
-      path: headers['x-mesh-stage-path'] ?? record.path ?? record.tempPath ?? record.targetPath,
+      // Percent-encoded on the wire so non-ASCII destinations survive the
+      // ASCII-only header; Rust decodes, and so does this recorder.
+      path: encodedPath !== undefined
+        ? decodeURIComponent(encodedPath)
+        : record.path ?? record.tempPath ?? record.targetPath,
     });
 
     if (cmd === 'scene_file_begin_atomic_write') return TEMP_PATH as never;

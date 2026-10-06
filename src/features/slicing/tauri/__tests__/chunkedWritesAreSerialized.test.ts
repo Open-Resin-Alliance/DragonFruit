@@ -33,10 +33,14 @@ function createRecordingInvoke(): { invoke: NativeWriteInvoke; calls: InvokeReco
     options?: { headers: HeadersInit },
   ) => {
     const headers = (options?.headers ?? {}) as Record<string, string>;
+    const encodedPath = headers['x-mesh-stage-path'];
     calls.push({
       cmd,
-      path: headers['x-mesh-stage-path']
-        ?? (args && !(args instanceof Uint8Array) && !(args instanceof ArrayBuffer)
+      // The header is percent-encoded on the wire (ASCII-only); Rust decodes it
+      // back, so the recorder has to as well to see the real path.
+      path: encodedPath !== undefined
+        ? decodeURIComponent(encodedPath)
+        : (args && !(args instanceof Uint8Array) && !(args instanceof ArrayBuffer)
           ? (args as Record<string, string>).path
           : undefined),
       offset: headers['x-mesh-stage-offset'],

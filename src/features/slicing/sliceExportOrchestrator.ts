@@ -8,6 +8,7 @@ import { prepareLoadedModelsForOutput } from '@/features/mesh-modifiers/prepareM
 import { resolveOutputFileExtension, resolveSlicingFormatDefinition } from './formats/registry';
 import { getSavedSlicingPerformanceSettings } from '@/components/settings/performancePreferences';
 import {
+    encodeStagePathHeader,
     isNativeSlicerAvailable,
     sliceSolidAndEncodeWithNativeSlicerToTempPath,
     type AntiAliasingLevel,
@@ -389,7 +390,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         const appendedLen = await invoke<number>('append_mesh_stage_chunk', chunk, {
             headers: {
                 'Content-Type': 'application/octet-stream',
-                'x-mesh-stage-path': meshStageFilePath,
+                'x-mesh-stage-path': encodeStagePathHeader(meshStageFilePath),
                 'x-mesh-stage-offset': String(chunkOffset),
             },
         });

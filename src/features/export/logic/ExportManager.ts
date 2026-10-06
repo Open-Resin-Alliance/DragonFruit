@@ -1484,6 +1484,9 @@ export class ExportManager {
 
     // If a native path was already picked before heavy work started, write directly.
     let nativeDestinationPath = prePickedNativePath;
+    // Kept so a desktop run can report *why* it failed instead of silently
+    // reinterpreting the failure as a browser download (see the throw below).
+    let nativeWriteError: unknown = null;
 
     if (nativeDestinationPath && useNativeWrite) {
       try {
@@ -1491,6 +1494,7 @@ export class ExportManager {
         return nativeDestinationPath;
       } catch (error) {
         console.warn('[ExportManager] Chunked write failed, retrying with a fresh save destination.', error);
+        nativeWriteError = error;
         nativeDestinationPath = null;
       }
     }
@@ -1506,11 +1510,30 @@ export class ExportManager {
         if (message.toLowerCase().includes('save cancelled by user') || message.toLowerCase().includes('cancelled by user')) {
           return null;
         }
-        console.warn('[ExportManager] Native save dialog unavailable/failed, falling back to browser download.', error);
+        console.warn('[ExportManager] Native save dialog unavailable/failed.', error);
+        nativeWriteError = error;
       }
     }
 
-    // Browser <a download> fallback
+    // Desktop runtime: the native write is the only way to honour the
+    // destination the user picked. Falling through to the blob <a download>
+    // below does NOT write there — WebView2 drops the file in the browser
+    // download folder under a de-duplicated name — and returning a filename
+    // reads as success to every caller, so the user saw a "saved" toast for a
+    // file that never reached their project folder. Fail loudly instead; the
+    // save handler turns this into the "Could not save the scene" dialog.
+    if (useNativeWrite) {
+      throw nativeWriteError instanceof Error
+        ? nativeWriteError
+        : new Error(
+            nativeWriteError === null
+              ? `Could not write ${resolvedFilename} to the selected destination.`
+              : this.getErrorMessage(nativeWriteError),
+          );
+    }
+
+    // Browser <a download> fallback — web builds only, where there is no
+    // native write seam and a download is the real save.
     const blobData = typeof data === 'string' ? data : new Uint8Array(bytes);
     const blob = new Blob([blobData], { type: mimeType });
 

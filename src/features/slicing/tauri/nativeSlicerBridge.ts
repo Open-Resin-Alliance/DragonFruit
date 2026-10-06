@@ -613,6 +613,22 @@ export function runExclusiveNativeWrite<T>(task: () => Promise<T>): Promise<T> {
 }
 
 /**
+ * Percent-encodes a destination path for the `x-mesh-stage-path` IPC header.
+ *
+ * HTTP header values carry visible ASCII only. A path with an umlaut, accent or
+ * CJK character (`C:\Users\…\Tatsächliche Dokumente\scene.voxl`) therefore made
+ * `append_mesh_stage_chunk` reject its very first chunk — every save into such a
+ * folder failed, and the fallback chain downgraded it to a browser download
+ * instead of an error. Rust reverses this with `decode_stage_path_header`.
+ *
+ * Every sender of the header must use this: the Rust side always decodes, so an
+ * unencoded path containing a literal `%` would be mangled.
+ */
+export function encodeStagePathHeader(path: string): string {
+  return encodeURIComponent(path);
+}
+
+/**
  * Chunked write with an explicit `invoke`, **without** taking the single-flight
  * lock. Internal composition seam — exported for the write-seam tests and for
  * `writeFileAtomicWithInvoke`, which holds the lock across its whole sequence.
@@ -630,7 +646,7 @@ export async function writeChunkedUnlocked(
       await invoke<number>('append_mesh_stage_chunk', chunk, {
         headers: {
           'Content-Type': 'application/octet-stream',
-          'x-mesh-stage-path': destinationPath,
+          'x-mesh-stage-path': encodeStagePathHeader(destinationPath),
           'x-mesh-stage-offset': String(offset),
         },
       });
@@ -748,7 +764,7 @@ export async function writeFileAtomicStreamedUnlocked(
           await invoke<number>('append_mesh_stage_chunk', chunk, {
             headers: {
               'Content-Type': 'application/octet-stream',
-              'x-mesh-stage-path': tempPath,
+              'x-mesh-stage-path': encodeStagePathHeader(tempPath),
               'x-mesh-stage-offset': String(written),
             },
           });
