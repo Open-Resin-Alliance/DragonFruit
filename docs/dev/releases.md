@@ -266,6 +266,8 @@ Preparation writes the generated notice as `windows-resources/nsis-plugins/InetC
 the pinned Tauri WiX bundler preserves the source basename even when a resource
 mapping specifies a different destination filename. Keeping the source and
 destination basenames equal makes both MSI and NSIS ship the expected notice.
+The NSIS prerequisite hook reads that same generated file and embeds it as
+`$PLUGINSDIR\InetC.txt`; changing the notice basename must update both consumers.
 The native-resource build step and Windows pre-bundle hook run preparation.
 
 `src-tauri/nsis/runtime-prerequisite.nsh` checks the registered native x64 runtime

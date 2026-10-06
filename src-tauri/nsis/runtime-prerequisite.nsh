@@ -7,7 +7,7 @@
 !addplugindir /x86-unicode "${__FILEDIR__}\..\windows-resources\nsis-plugins\x86-unicode"
 
 !define DF_VC_SCRIPTS "${__FILEDIR__}\..\..\scripts"
-!define DF_VC_PLUGIN_NOTICE "${__FILEDIR__}\..\windows-resources\nsis-plugins\LICENSE.txt"
+!define DF_VC_PLUGIN_NOTICE "${__FILEDIR__}\..\windows-resources\nsis-plugins\InetC.txt"
 !define DF_VC_LICENSE_URL "https://visualstudio.microsoft.com/license-terms/vs2026-ga-visualcpp-v14-redist-runtime/"
 !define DF_VC_DOWNLOAD_URL "https://aka.ms/vc14/vc_redist.x64.exe"
 
@@ -154,7 +154,7 @@ Function DF_EnsureVcRuntime
 
   InitPluginsDir
   File "/oname=$PLUGINSDIR\verify-windows-runtime.ps1" "${DF_VC_SCRIPTS}\verify-windows-runtime.ps1"
-  File "/oname=$PLUGINSDIR\INetC-LICENSE.txt" "${DF_VC_PLUGIN_NOTICE}"
+  File "/oname=$PLUGINSDIR\InetC.txt" "${DF_VC_PLUGIN_NOTICE}"
   Delete "$PLUGINSDIR\VC_redist.x64.exe"
   DetailPrint "Downloading the latest Microsoft Visual C++ x64 runtime (minimum ${DF_VC_VERSION})..."
   ; InetC uses WinINet TLS; NSISdl only supports HTTP. Never use /WEAKSECURITY.
