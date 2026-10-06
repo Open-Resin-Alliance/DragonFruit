@@ -289,10 +289,26 @@ jobs:
             ./src-tauri -> target
             ./rust/dragonfruit-voxl-thumbnail -> target
           shared-key: tauri
+          # The profile and the target are part of the artifacts, so they are part
+          # of the key: without this the job restores a cache built the other way,
+          # cannot reuse any of it, and skips saving its own.
           env-vars: CARGO_PROFILE_RELEASE_LTO CARGO_PROFILE_RELEASE_CODEGEN_UNITS DF_BUILD_TARGET_TRIPLE CMAKE_OSX_ARCHITECTURES
 
       - name: Install frontend dependencies
         run: npm ci
+
+      # Next asks for this on every run ("No build cache found"): its compiler and
+      # fetch caches live in `.next/cache`, and restoring that across runs is worth
+      # a minute or two of each frontend build. Keyed on the lockfile and the
+      # sources, with a prefix restore so a commit that changes sources still
+      # reuses what it can, which is most of it.
+      - name: Cache Next.js build
+        uses: actions/cache@v4
+        with:
+          path: .next/cache
+          key: next-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('src/**/*.ts', 'src/**/*.tsx', 'next.config.ts', 'tsconfig.json') }}
+          restore-keys: |
+            next-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
 
       - name: Enable Windows long paths
         if: runner.os == 'Windows'
