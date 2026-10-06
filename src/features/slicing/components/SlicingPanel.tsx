@@ -3834,10 +3834,9 @@ export function SlicingPanel({
           {excludedVisibleModelCount === 1 ? (
             <Trans>One visible model outside the build volume will be excluded from this slice.</Trans>
           ) : (
-            <>
-              <strong style={{ color: 'var(--text-strong)' }}>{excludedVisibleModelCount}</strong>{' '}
-              <Trans>visible models outside the build volume will be excluded from this slice.</Trans>
-            </>
+            <Trans comment="{excludedVisibleModelCount} is always 2 or more; the singular case is its own message.">
+              <strong style={{ color: 'var(--text-strong)' }}>{excludedVisibleModelCount}</strong> visible models outside the build volume will be excluded from this slice.
+            </Trans>
           )}
         </p>
       </StructuredDialogModal>

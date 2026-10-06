@@ -25,9 +25,9 @@ type Translate = (descriptor: MessageDescriptor) => string;
 export const NO_ACTIVE_PRESET_LABEL = msg`Custom — not a preset`;
 
 const BUILT_IN_NAMES: Record<string, MessageDescriptor> = {
-  light: msg({ message: 'Light', comment: "Built-in auto-support preset for sparse supports — the Light tier in the Auto Support panel's preset selector." }),
-  medium: msg({ message: 'Medium', comment: "Built-in auto-support preset for balanced supports — the Medium tier in the Auto Support panel's preset selector." }),
-  heavy: msg({ message: 'Heavy', comment: "Built-in auto-support preset for dense supports — the Heavy tier in the Auto Support panel's preset selector." }),
+  light: msg({ message: 'Light', context: 'auto-support preset', comment: "Built-in auto-support preset for sparse supports — the Light tier in the Auto Support panel's preset selector." }),
+  medium: msg({ message: 'Medium', context: 'auto-support preset', comment: "Built-in auto-support preset for balanced supports — the Medium tier in the Auto Support panel's preset selector." }),
+  heavy: msg({ message: 'Heavy', context: 'auto-support preset', comment: "Built-in auto-support preset for dense supports — the Heavy tier in the Auto Support panel's preset selector." }),
 };
 
 export function translateAutoSupportPresetName(preset: AutoSupportPreset, translate: Translate): string {

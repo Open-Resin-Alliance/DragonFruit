@@ -157,6 +157,11 @@ msgstr ""
 msgid "< 1 min"
 msgstr "< 1 min"
 
+#. {excludedVisibleModelCount} is always 2 or more; the singular case is its own message.
+#: src/features/slicing/components/SlicingPanel.tsx:3837
+msgid "<0>{excludedVisibleModelCount}</0> visible models outside the build volume will be excluded from this slice."
+msgstr ""
+
 #. {modelName} is the imported model's file name; it is shown in bold.
 #: src/components/modals/AaSupportWarningModal.tsx:61
 msgid "<0>{modelName}</0> was imported as an STL file. Our analysis could not determine whether this model contains support geometry baked into the mesh."
@@ -1606,10 +1611,6 @@ msgstr "Ziehen Sie eine Datei hierher. Die Plattform beurteilt Sie gerade."
 msgid "DragonFruit app menu"
 msgstr "DragonFruit-App-Menü"
 
-#: src/components/scene/SceneAutosaveRecoveryModal.tsx:95
-#~ msgid "DragonFruit autosaved a scene at {formattedDate}"
-#~ msgstr ""
-
 #: src/components/layout/FirstRunOnboarding.tsx:102
 msgid "DragonFruit first-time setup"
 msgstr ""
@@ -2136,6 +2137,7 @@ msgstr ""
 
 #. Built-in auto-support preset for dense supports — the Heavy tier in the Auto Support panel's preset selector.
 #: src/supports/Settings/autoSupportPresetMessages.ts:30
+msgctxt "auto-support preset"
 msgid "Heavy"
 msgstr ""
 
@@ -2554,9 +2556,13 @@ msgstr ""
 msgid "Lifecycle (Merge Status)"
 msgstr ""
 
-#. Built-in auto-support preset for sparse supports — the Light tier in the Auto Support panel's preset selector.
 #: src/components/layout/FirstRunOnboarding.tsx:254
+msgid "Light"
+msgstr ""
+
+#. Built-in auto-support preset for sparse supports — the Light tier in the Auto Support panel's preset selector.
 #: src/supports/Settings/autoSupportPresetMessages.ts:28
+msgctxt "auto-support preset"
 msgid "Light"
 msgstr ""
 
@@ -2818,6 +2824,7 @@ msgstr ""
 
 #. Built-in auto-support preset for balanced supports — the Medium tier in the Auto Support panel's preset selector.
 #: src/supports/Settings/autoSupportPresetMessages.ts:29
+msgctxt "auto-support preset"
 msgid "Medium"
 msgstr ""
 
@@ -4710,10 +4717,6 @@ msgstr ""
 msgid "Structure"
 msgstr ""
 
-#: src/components/organisms/NotificationStack.tsx:9
-#~ msgid "Successfully oriented"
-#~ msgstr ""
-
 #. {modelName} is the display name of the model that was reoriented.
 #: src/components/organisms/NotificationStack.tsx:19
 msgid "Successfully oriented {modelName}"
@@ -5075,14 +5078,6 @@ msgstr ""
 msgid "Tip Ø range"
 msgstr ""
 
-#: src/components/controls/AutoRotationPanel.tsx:77
-#~ msgid "to apply."
-#~ msgstr ""
-
-#: src/components/controls/AutoRotationPanel.tsx:76
-#~ msgid "to reset all,"
-#~ msgstr ""
-
 #: src/app/page.tsx:2254
 msgid "Toggle curve"
 msgstr "Kurve umschalten"
@@ -5342,10 +5337,6 @@ msgstr ""
 
 #: src/components/settings/BackupsSettingsTab.tsx:1269
 msgid "View, restore, or delete older snapshots from your private repository."
-msgstr ""
-
-#: src/features/slicing/components/SlicingPanel.tsx:3839
-msgid "visible models outside the build volume will be excluded from this slice."
 msgstr ""
 
 #: src/components/controls/IslandVoxelControls.tsx:144

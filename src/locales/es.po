@@ -157,6 +157,11 @@ msgstr "{steps}× muestras ZAA"
 msgid "< 1 min"
 msgstr "< 1 min"
 
+#. {excludedVisibleModelCount} is always 2 or more; the singular case is its own message.
+#: src/features/slicing/components/SlicingPanel.tsx:3837
+msgid "<0>{excludedVisibleModelCount}</0> visible models outside the build volume will be excluded from this slice."
+msgstr "<0>{excludedVisibleModelCount}</0> modelos visibles fuera del volumen de impresión quedarán fuera de este laminado."
+
 #. {modelName} is the imported model's file name; it is shown in bold.
 #: src/components/modals/AaSupportWarningModal.tsx:61
 msgid "<0>{modelName}</0> was imported as an STL file. Our analysis could not determine whether this model contains support geometry baked into the mesh."
@@ -186,11 +191,11 @@ msgstr "Controles de navegación del ratón 3D"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:646
 msgid "A built-in preset cannot be saved over — Duplicate it to make it yours"
-msgstr ""
+msgstr "Un preajuste integrado no se puede sobrescribir: duplícalo para tener tu propia copia"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:387
 msgid "A built-in's name is translated and cannot be renamed"
-msgstr ""
+msgstr "El nombre de un preajuste integrado se traduce y no se puede cambiar"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:146
 msgid "A candidate within this 3D distance of an existing support merges into it instead of starting a new trunk"
@@ -251,7 +256,7 @@ msgstr "Añade otro bucle y empieza a dibujarlo. Al cortar se cortan todos los b
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:196
 msgid "Add contacts along the edge or corner a pose bears on, so a leaning part is held against toppling and peel (default on)"
-msgstr ""
+msgstr "Añade contactos a lo largo del borde o la esquina en que se apoya la pose, para que una pieza inclinada no vuelque ni se despegue (activado por defecto)"
 
 #: src/app/page.tsx:2259
 msgid "Add joint"
@@ -285,7 +290,7 @@ msgstr "Añadida"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:92
 msgid "Advanced (calibration)"
-msgstr ""
+msgstr "Avanzado (calibración)"
 
 #: src/components/controls/IslandsPanel.tsx:348
 msgid "Advanced mode"
@@ -293,7 +298,7 @@ msgstr "Modo avanzado"
 
 #: src/components/settings/SceneAutosaveSettingsTab.tsx:244
 msgid "After an autosave, defer further automatic saves until this interval ends."
-msgstr ""
+msgstr "Tras un guardado automático, aplaza los siguientes hasta que acabe este intervalo."
 
 #: src/components/settings/BackupsSettingsTab.tsx:1009
 msgid "After updating .env, restart the app, then click “I configured it”."
@@ -301,7 +306,7 @@ msgstr "Después de actualizar el .env, reinicia la aplicación y pulsa «Ya lo 
 
 #: src/features/slicing/components/SlicingPanel.tsx:1835
 msgid "All visible models are outside the build volume."
-msgstr ""
+msgstr "Todos los modelos visibles están fuera del volumen de impresión."
 
 #: src/components/organisms/NotificationStack.tsx:10
 msgid "Already optimal for this goal."
@@ -347,7 +352,7 @@ msgstr "Aplicar a la sesión"
 
 #: src/components/controls/autoSupport/AutoSupportPresetSelect.tsx:86
 msgid "Apply this preset to the auto-support settings"
-msgstr ""
+msgstr "Aplica este preajuste a los ajustes de autosoportes"
 
 #. Cross-sectional area stats for the current print layer: "Area Σ" = total/summed solid area (Σ is the mathematical summation symbol, usually kept as-is); "Min"/"Max" = smallest/largest single contiguous area, abbreviating "Minimum"/"Maximum".
 #: src/components/organisms/modals/PrintingModals.tsx:1894
@@ -413,11 +418,11 @@ msgstr "Distribuir modelos en la placa automáticamente"
 
 #: src/components/controls/autoSupport/AutoSupportPresetRow.tsx:29
 msgid "Auto-Lift OFF"
-msgstr ""
+msgstr "Elevación automática: NO"
 
 #: src/components/controls/autoSupport/AutoSupportPresetRow.tsx:28
 msgid "Auto-Lift ON"
-msgstr ""
+msgstr "Elevación automática: SÍ"
 
 #. placeholder {0}: model.geometry.meshDefects.repairedFloats
 #: src/components/controls/ModelStatsCard.tsx:609
@@ -447,15 +452,15 @@ msgstr "Reparando mallas…"
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:360
 #: src/components/controls/autoSupport/AutoSupportPresetSelect.tsx:85
 msgid "Auto-support preset"
-msgstr ""
+msgstr "Preajuste de autosoportes"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:441
 msgid "Auto-support preset file"
-msgstr ""
+msgstr "Archivo de preajuste de autosoportes"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:360
 msgid "Auto-support preset, modified"
-msgstr ""
+msgstr "Preajuste de autosoportes, modificado"
 
 #: src/components/controls/AutoSupportPanel.tsx:411
 #: src/components/controls/AutoSupportPanel.tsx:547
@@ -493,7 +498,7 @@ msgstr "Guardado automático y recuperación tras un fallo"
 
 #: src/components/settings/SceneAutosaveSettingsTab.tsx:243
 msgid "Autosave cooldown"
-msgstr ""
+msgstr "Pausa entre guardados automáticos"
 
 #: src/components/settings/SceneAutosaveSettingsTab.tsx:364
 msgid "Autosave files are available in the DragonFruit desktop build."
@@ -617,7 +622,7 @@ msgstr "Equilibrado"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:247
 msgid "Balanced supports — the structure sizing band"
-msgstr ""
+msgstr "Soportes equilibrados: la banda de dimensionado estructural"
 
 #: src/supports/Settings/presetMessages.ts:29
 msgid "Balanced supports for general use"
@@ -710,11 +715,11 @@ msgstr "Volumen: {0} × {1} × {2} mm"
 #: src/components/controls/autoSupport/AutoSupportPresetSelect.tsx:57
 #: src/components/controls/autoSupport/AutoSupportSizingTierField.tsx:110
 msgid "Built-in"
-msgstr ""
+msgstr "Integrado"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:616
 msgid "Built-in presets cannot be deleted"
-msgstr ""
+msgstr "Los preajustes integrados no se pueden eliminar"
 
 #: src/features/slicing/components/SlicingPanel.tsx:2538
 msgid "Bypassed"
@@ -790,15 +795,15 @@ msgstr "No se puede colocar el soporte"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:178
 msgid "Ceiling of the height factor for a tall column, whose buckling load falls with height. The default, 1.35, bounds how much a tall support thickens."
-msgstr ""
+msgstr "Techo del factor de altura para una columna alta, cuya carga de pandeo cae con la altura. El valor por defecto, 1,35, limita cuánto engrosa un soporte alto."
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:177
 msgid "Ceiling of the load factor derived from resin mass per support. The default, 1.3, bounds how much a heavy part's shafts thicken."
-msgstr ""
+msgstr "Techo del factor de carga que se deduce de la masa de resina por soporte. El valor por defecto, 1,3, limita cuánto engrosan los vástagos de una pieza pesada."
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:176
 msgid "Ceiling of the size factor derived from the model's bounding-box diagonal. The default, 1.45, bounds how much a large part's shafts thicken."
-msgstr ""
+msgstr "Techo del factor de tamaño que se deduce de la diagonal de la caja envolvente del modelo. El valor por defecto, 1,45, limita cuánto engrosan los vástagos de una pieza grande."
 
 #: src/features/organicCut/OrganicCutPanel.tsx:620
 msgid "Center"
@@ -899,7 +904,7 @@ msgstr "Borrar todo"
 
 #: src/supports/Settings/SupportSidebar.tsx:635
 msgid "Clear All failed. Check console for details."
-msgstr ""
+msgstr "«Borrar todo» ha fallado. Mira la consola para más detalles."
 
 #: src/features/slicing/components/SlicingPanel.tsx:3612
 msgid "Clear Override"
@@ -938,7 +943,7 @@ msgstr "Cerrar"
 
 #: src/components/controls/AutoSupportPanel.tsx:573
 msgid "Close dialog"
-msgstr ""
+msgstr "Cerrar la ventana"
 
 #: src/features/slicing/components/SlicingPanel.tsx:3508
 msgid "Close material anti-aliasing settings"
@@ -979,11 +984,11 @@ msgstr "Cerrar la ventana de soportes"
 
 #: src/components/controls/AutoSupportPanel.tsx:637
 msgid "Close the dialog and discard the edits"
-msgstr ""
+msgstr "Cierra la ventana y descarta los cambios"
 
 #: src/components/controls/AutoSupportPanel.tsx:516
 msgid "Close the report"
-msgstr ""
+msgstr "Cerrar el informe"
 
 #: src/components/layout/TopBar.tsx:1275
 msgid "Close warning"
@@ -995,11 +1000,11 @@ msgstr "Cerrar ventana"
 
 #: src/components/controls/AutoSupportPanel.tsx:574
 msgid "Close without applying the edits made in this dialog"
-msgstr ""
+msgstr "Cierra sin aplicar los cambios hechos en esta ventana"
 
 #: src/components/controls/AutoSupportPanel.tsx:645
 msgid "Closing now leaves the auto-support settings as they are. Save in the dialog's footer writes them."
-msgstr ""
+msgstr "Si cierras ahora, los ajustes de autosoportes se quedan como están. «Guardar», al pie de la ventana, los escribe."
 
 #: src/supports/autoBracing/AutoBracingSettingsCard.tsx:185
 msgid "Cluster Spacing"
@@ -1154,7 +1159,7 @@ msgstr "Diámetro de contacto"
 
 #: src/supports/Settings/SupportSidebar.tsx:1222
 msgid "Contact discs only, supports as lines"
-msgstr ""
+msgstr "Solo discos de contacto, soportes como líneas"
 
 #: src/supports/Settings/components/TipSettingsCard.tsx:43
 msgid "Contact Disk"
@@ -1162,7 +1167,7 @@ msgstr "Disco de contacto"
 
 #: src/supports/PlacementLogic/SupportLimitations.tsx:13
 msgid "Contact point is lower than the stump root — the shaft would extend below the root joint."
-msgstr ""
+msgstr "El punto de contacto está más bajo que la raíz del tocón: el vástago quedaría por debajo de la unión con la raíz."
 
 #. Confirms proceeding with the profile change despite the re-slice warning above (paired with "Keep current profiles", which cancels).
 #: src/components/layout/FirstRunOnboarding.tsx:280
@@ -1202,11 +1207,11 @@ msgstr "Copia el Client ID y el Client Secret en tu <0>.env</0> local."
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:400
 msgid "Copy the selected preset under a new name"
-msgstr ""
+msgstr "Copia el preajuste seleccionado con otro nombre"
 
 #: src/components/controls/AutoSupportPanel.tsx:508
 msgid "Copy the whole report to the clipboard"
-msgstr ""
+msgstr "Copia el informe completo al portapapeles"
 
 #: src/components/printers/PrinterVariantPickerModal.tsx:338
 msgid "Could not read printer data."
@@ -1246,7 +1251,7 @@ msgstr "Recuperación tras un fallo"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:491
 msgid "Create"
-msgstr ""
+msgstr "Crear"
 
 #: src/components/settings/BackupsSettingsTab.tsx:1031
 msgid "Create {suggestedNewRepoName}"
@@ -1262,11 +1267,11 @@ msgstr "Crear cavidad o carcasa de cara abierta"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:461
 msgid "Create preset"
-msgstr ""
+msgstr "Crear preajuste"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:487
 msgid "Create the preset and select it"
-msgstr ""
+msgstr "Crea el preajuste y lo selecciona"
 
 #: src/components/settings/BackupsSettingsTab.tsx:1048
 msgid "Create your first backup snapshot"
@@ -1310,11 +1315,11 @@ msgstr "Curvas"
 #: src/components/controls/autoSupport/AutoSupportPresetSelect.tsx:57
 #: src/components/controls/autoSupport/AutoSupportSizingTierField.tsx:110
 msgid "Custom"
-msgstr ""
+msgstr "Personalizado"
 
 #: src/supports/Settings/autoSupportPresetMessages.ts:25
 msgid "Custom — not a preset"
-msgstr ""
+msgstr "Personalizado: no es un preajuste"
 
 #: src/components/controls/TransformToolbar.tsx:34
 #: src/components/ui/EditorContextMenu.tsx:81
@@ -1359,15 +1364,15 @@ msgstr "Oscuro"
 
 #: src/components/controls/autoSupport/AutoSupportSettingsBody.tsx:219
 msgid "Debug Mode"
-msgstr ""
+msgstr "Modo de depuración"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:198
 msgid "Debug: color supports by origin — stump (red), overhang (orange), island (blue), standalone (purple), reinforcement (teal)"
-msgstr ""
+msgstr "Depuración: colorea los soportes por origen: tocón (rojo), voladizo (naranja), isla (azul), suelto (morado), refuerzo (verde azulado)"
 
 #: src/components/controls/autoSupport/AutoSupportSettingsBody.tsx:189
 msgid "Debug: show the last run's sizing factors and forest report in the panel"
-msgstr ""
+msgstr "Depuración: muestra en el panel los factores de dimensionado y el informe del bosque de la última ejecución"
 
 #: src/components/controls/autoSupport/AutoSupportSettingsBody.tsx:188
 msgid "Debug: simplified support render — contact disks/cones plus line vectors instead of full shafts"
@@ -1407,11 +1412,11 @@ msgstr "¿Eliminar «{presetName}»?"
 
 #: src/supports/Settings/presetMessages.ts:61
 msgid "Delete {count} presets"
-msgstr ""
+msgstr "Eliminar {count} preajustes"
 
 #: src/supports/Settings/presetMessages.ts:56
 msgid "Delete {count} presets?"
-msgstr ""
+msgstr "¿Eliminar {count} preajustes?"
 
 #: src/components/settings/LocalBackupsSettingsTab.tsx:990
 msgid "Delete Backup Snapshot"
@@ -1424,7 +1429,7 @@ msgstr "Eliminar el preajuste"
 
 #: src/supports/Settings/components/PresetSelector.tsx:875
 msgid "Delete presets"
-msgstr ""
+msgstr "Eliminar preajustes"
 
 #: src/components/settings/BackupsSettingsTab.tsx:1318
 #: src/components/settings/LocalBackupsSettingsTab.tsx:974
@@ -1433,11 +1438,11 @@ msgstr "Eliminar la instantánea"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:687
 msgid "Delete the preset"
-msgstr ""
+msgstr "Eliminar el preajuste"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:617
 msgid "Delete the selected preset"
-msgstr ""
+msgstr "Elimina el preajuste seleccionado"
 
 #: src/components/settings/BackupsSettingsTab.tsx:645
 msgid "Delete this backup snapshot from GitHub history? This cannot be undone."
@@ -1445,7 +1450,7 @@ msgstr "¿Eliminar esta instantánea del historial de GitHub? No se puede deshac
 
 #: src/components/controls/AutoSupportPanel.tsx:678
 msgid "Delete this model's existing supports and place the new ones"
-msgstr ""
+msgstr "Elimina los soportes que ya tiene este modelo y coloca los nuevos"
 
 #: src/components/ui/EditorContextMenu.tsx:73
 msgid "Delete waypoint"
@@ -1453,7 +1458,7 @@ msgstr "Eliminar punto"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:248
 msgid "Dense supports — the anchor sizing band"
-msgstr ""
+msgstr "Soportes densos: la banda de dimensionado de anclaje"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:67
 msgid "Density & Sizing"
@@ -1475,7 +1480,7 @@ msgstr "Se ha detectado una pantalla de {bitsLabel} que no coincide con ninguna 
 
 #: src/components/controls/AutoSupportPanel.tsx:565
 msgid "Detected surfaces, density and sizing, stability, and the saved presets a run follows"
-msgstr ""
+msgstr "Superficies detectadas, densidad y dimensionado, estabilidad y los preajustes guardados que sigue una ejecución"
 
 #. Confirmation that the printer model variant was auto-detected over the network. {variantName} is the variant display name.
 #: src/components/printers/PrinterVariantPickerModal.tsx:27
@@ -1492,7 +1497,7 @@ msgstr "Detección"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:242
 msgid "Diagnostics"
-msgstr ""
+msgstr "Diagnóstico"
 
 #: src/supports/Settings/components/BaseFlareSettingsCard.tsx:35
 #: src/supports/Settings/components/RootsSettingsCard.tsx:24
@@ -1511,11 +1516,11 @@ msgstr "Descartar"
 
 #: src/components/controls/AutoSupportPanel.tsx:607
 msgid "Discard auto-support settings changes"
-msgstr ""
+msgstr "Descartar los cambios en los ajustes de autosoportes"
 
 #: src/components/controls/AutoSupportPanel.tsx:608
 msgid "Discard Changes?"
-msgstr ""
+msgstr "¿Descartar los cambios?"
 
 #: src/features/organicCut/OrganicCutPanel.tsx:873
 msgid "Discard every loop in this cut, not just the active one."
@@ -1523,7 +1528,7 @@ msgstr "Descarta todos los bucles de este corte, no solo el activo."
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:632
 msgid "Discard the edits made in this dialog and reload the selected preset"
-msgstr ""
+msgstr "Descarta los cambios hechos en esta ventana y recarga el preajuste seleccionado"
 
 #: src/components/settings/BackupsSettingsTab.tsx:1161
 #: src/components/settings/FleetManagement.tsx:229
@@ -1606,10 +1611,6 @@ msgstr "Arrastra un archivo. La plataforma te está juzgando."
 msgid "DragonFruit app menu"
 msgstr "Menú de aplicación de DragonFruit"
 
-#: src/components/scene/SceneAutosaveRecoveryModal.tsx:95
-#~ msgid "DragonFruit autosaved a scene at {formattedDate}"
-#~ msgstr "DragonFruit guardó automáticamente una escena: {formattedDate}"
-
 #: src/components/layout/FirstRunOnboarding.tsx:102
 msgid "DragonFruit first-time setup"
 msgstr "Configuración inicial de DragonFruit"
@@ -1649,7 +1650,7 @@ msgstr "Suelta aquí los ficheros compatibles para importarlos"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:403
 msgid "Duplicate"
-msgstr ""
+msgstr "Duplicar"
 
 #: src/components/settings/SettingsModal.tsx:1219
 msgid "Early-access and experimental features"
@@ -1840,7 +1841,7 @@ msgstr "Exportar"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:415
 msgid "Export the selected preset as a JSON file"
-msgstr ""
+msgstr "Exporta el preajuste seleccionado como archivo JSON"
 
 #: src/components/controls/ModelStatsCard.tsx:533
 msgid "Exposure:"
@@ -2095,7 +2096,7 @@ msgstr "Ventana de OAuth de GitHub abierta."
 
 #: src/components/controls/AutoSupportPanel.tsx:620
 msgid "Go back to the settings dialog"
-msgstr ""
+msgstr "Vuelve a la ventana de ajustes"
 
 #: src/features/slicing/components/SlicingPanel.tsx:2493
 msgid "Grey"
@@ -2136,8 +2137,9 @@ msgstr "Halo alrededor de la costura señalada."
 
 #. Built-in auto-support preset for dense supports — the Heavy tier in the Auto Support panel's preset selector.
 #: src/supports/Settings/autoSupportPresetMessages.ts:30
+msgctxt "auto-support preset"
 msgid "Heavy"
-msgstr ""
+msgstr "Pesado"
 
 #: src/supports/Settings/presetMessages.ts:30
 msgid "Heavy supports for large overhangs"
@@ -2149,7 +2151,7 @@ msgstr "Altura"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:178
 msgid "Height Factor Cap"
-msgstr ""
+msgstr "Tope del factor de altura"
 
 #: src/components/controls/IslandVoxelControls.tsx:111
 msgid "Height Gradient"
@@ -2161,7 +2163,7 @@ msgstr "Altura:"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:74
 msgid "Held against toppling and peel"
-msgstr ""
+msgstr "Sujeción frente al vuelco y al despegue"
 
 #: src/components/controls/ModelManagerPanel.tsx:689
 #: src/components/controls/ModelManagerPanel.tsx:700
@@ -2178,7 +2180,7 @@ msgstr "Jerarquía"
 
 #: src/components/controls/autoSupport/AutoSupportPresetRow.tsx:35
 msgid "Hold the model clear of the plate, so a support can stand under it. Turns off a manual Z move."
-msgstr ""
+msgstr "Mantiene el modelo separado de la placa para que quepa un soporte debajo. Desactiva cualquier movimiento manual en Z."
 
 #: src/components/controls/TransformToolbar.tsx:33
 msgid "Hollow"
@@ -2194,15 +2196,15 @@ msgstr "Atajos de teclado"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:63
 msgid "How a region's contacts scatter across it, and how far leaves fan out from a trunk"
-msgstr ""
+msgstr "Cómo se reparten los contactos por una región y cuánto se abren las hojas desde un tronco"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:69
 msgid "How dense and how thick the supports are"
-msgstr ""
+msgstr "Qué densidad y qué grosor tienen los soportes"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:68
 msgid "How many supports, and how thick"
-msgstr ""
+msgstr "Cuántos soportes y de qué grosor"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:161
 msgid "How much of each region's footprint the grid must cover before gap-filling stops"
@@ -2210,7 +2212,7 @@ msgstr "Cuánta huella de cada región debe cubrir la rejilla antes de dejar de 
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:174
 msgid "How much of the free width a contact tip may occupy. The default, 0.9, keeps the disc just inside the feature it lands on; lower values shrink every tip on a feature narrower than the band tip."
-msgstr ""
+msgstr "Qué parte del ancho libre puede ocupar una punta de contacto. El valor por defecto, 0,9, deja el disco justo dentro del detalle en que se apoya; valores más bajos encogen todas las puntas en detalles más estrechos que la punta de la banda."
 
 #: src/features/organicCut/OrganicCutPanel.tsx:512
 msgid "How smooth/taut the curved cutter surface is — contour cut only."
@@ -2222,7 +2224,7 @@ msgstr "Cuánto crece la densidad en zonas planas según el área de la región:
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:75
 msgid "How the part is held against toppling and peel — self-support angle, stabilization anchors and minima reinforcement"
-msgstr ""
+msgstr "Cómo se sujeta la pieza frente al vuelco y al despegue: ángulo de autosoporte, anclajes de estabilización y refuerzo de mínimos"
 
 #: src/features/organicCut/OrganicCutPanel.tsx:395
 msgid "How to use Cut"
@@ -2272,11 +2274,11 @@ msgstr "Si GitHub tiene una copia más reciente, DragonFruit detiene la sincroni
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:433
 msgid "Import"
-msgstr ""
+msgstr "Importar"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:430
 msgid "Import a preset from a JSON file, and apply it"
-msgstr ""
+msgstr "Importa un preajuste desde un archivo JSON y lo aplica"
 
 #: src/components/layout/TopBar.tsx:877
 msgid "Import mesh…"
@@ -2428,7 +2430,7 @@ msgstr "Mantener perfiles actuales"
 
 #: src/components/controls/AutoSupportPanel.tsx:622
 msgid "Keep Editing"
-msgstr ""
+msgstr "Seguir editando"
 
 #: src/components/layout/EmptySceneState.tsx:559
 msgid "Keep going without a printer. You can add one later."
@@ -2436,15 +2438,15 @@ msgstr "Continúa sin impresora. Puedes añadir una más adelante."
 
 #: src/components/controls/AutoSupportPanel.tsx:663
 msgid "Keep the existing supports and do nothing"
-msgstr ""
+msgstr "Conserva los soportes existentes y no hace nada"
 
 #: src/components/controls/AutoSupportPanel.tsx:671
 msgid "Keep the existing supports and place the new ones around them"
-msgstr ""
+msgstr "Conserva los soportes existentes y coloca los nuevos alrededor"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:671
 msgid "Keep the preset"
-msgstr ""
+msgstr "Conservar el preajuste"
 
 #: src/components/settings/SettingsModal.tsx:1201
 msgid "Keyboard bindings and presets"
@@ -2528,7 +2530,7 @@ msgstr "Capas:"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:175
 msgid "Least diameter a branch or leaf takes as a fraction of the trunk it grows from. The default, 0.7, keeps a hosted member a step below its host instead of a needle beside it."
-msgstr ""
+msgstr "Diámetro mínimo de una rama u hoja como fracción del tronco del que sale. El valor por defecto, 0,7, deja al elemento un escalón por debajo de su portador en vez de una aguja a su lado."
 
 #: src/components/controls/AutoRotationPanel.tsx:68
 msgid "Least Scarring"
@@ -2536,7 +2538,7 @@ msgstr "Menos marcas"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:476
 msgid "Leave the collection as it is"
-msgstr ""
+msgstr "Deja la colección como está"
 
 #. View cube face, rendered uppercase inside a small 3D cube. Keep it as short as possible.
 #: src/components/scene/SceneCanvas/SceneCanvas.tsx:1562
@@ -2555,11 +2557,15 @@ msgstr "Dejando que DragonFruit termine su animación de arranque antes de carga
 msgid "Lifecycle (Merge Status)"
 msgstr "Ciclo de vida (estado de fusión)"
 
-#. Built-in auto-support preset for sparse supports — the Light tier in the Auto Support panel's preset selector.
 #: src/components/layout/FirstRunOnboarding.tsx:254
-#: src/supports/Settings/autoSupportPresetMessages.ts:28
 msgid "Light"
 msgstr "Claro"
+
+#. Built-in auto-support preset for sparse supports — the Light tier in the Auto Support panel's preset selector.
+#: src/supports/Settings/autoSupportPresetMessages.ts:28
+msgctxt "auto-support preset"
+msgid "Light"
+msgstr "Ligero"
 
 #. Raft bottom mode. One of three narrow buttons: Off / Solid / Line.
 #: src/supports/Settings/components/RaftSettingsCard.tsx:120
@@ -2592,7 +2598,7 @@ msgstr "Cargar malla"
 
 #: src/components/controls/autoSupport/AutoSupportRunDiagnostics.tsx:65
 msgid "Load share"
-msgstr ""
+msgstr "Reparto de carga"
 
 #: src/components/controls/IslandScanCard.tsx:218
 msgid "Load Support Data (V2)"
@@ -2753,7 +2759,7 @@ msgstr "Multiplicador general sobre las bandas de tamaño del preajuste: todo m�
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:211
 msgid "Master switch for the run-level size, load and height factors. Off pins all three to ×1, so sizing is the active band plus the local terms alone (default: on)."
-msgstr ""
+msgstr "Interruptor general de los factores de tamaño, carga y altura de la ejecución. Apagado los fija los tres a ×1, de modo que el dimensionado es solo la banda activa más los términos locales (por defecto: encendido)."
 
 #: src/features/slicing/components/SlicingPanel.tsx:2312
 msgid "Material"
@@ -2799,7 +2805,7 @@ msgstr "Distancia máxima del arriostre"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:160
 msgid "Max branches + leaves one trunk may carry before new trunks are started — the cap on chunk consolidation"
-msgstr ""
+msgstr "Máximo de ramas más hojas que puede cargar un tronco antes de empezar troncos nuevos: el tope de la consolidación por bloques"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:148
 msgid "Max horizontal distance a fan-out leaf may span from a trunk shaft"
@@ -2819,12 +2825,13 @@ msgstr "Intervalo máximo de guardado"
 
 #. Built-in auto-support preset for balanced supports — the Medium tier in the Auto Support panel's preset selector.
 #: src/supports/Settings/autoSupportPresetMessages.ts:29
+msgctxt "auto-support preset"
 msgid "Medium"
-msgstr ""
+msgstr "Medio"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:175
 msgid "Member / Host Ratio"
-msgstr ""
+msgstr "Proporción elemento/portador"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:146
 msgid "Merge Radius"
@@ -2882,7 +2889,7 @@ msgstr "Mínimos"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:197
 msgid "Minima Reinforcement"
-msgstr ""
+msgstr "Refuerzo de mínimos"
 
 #: src/components/layout/TopBar.tsx:1183
 msgid "Minimize"
@@ -2922,15 +2929,15 @@ msgstr "Acciones del modelo…"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:177
 msgid "Model Load Cap"
-msgstr ""
+msgstr "Tope por carga del modelo"
 
 #: src/components/controls/autoSupport/AutoSupportRunDiagnostics.tsx:63
 msgid "Model size"
-msgstr ""
+msgstr "Tamaño del modelo"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:176
 msgid "Model Size Cap"
-msgstr ""
+msgstr "Tope por tamaño del modelo"
 
 #: src/components/modals/ModelSupportsModal.tsx:136
 msgid "Model supports"
@@ -2946,7 +2953,7 @@ msgstr "Volumen del modelo"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:210
 msgid "Model-Scale Sizing"
-msgstr ""
+msgstr "Dimensionado a escala del modelo"
 
 #. Section heading of the models context menu. Rendered uppercase.
 #. Title of the panel listing every model loaded into the scene.
@@ -2961,7 +2968,7 @@ msgstr "Menú contextual de modelos"
 
 #: src/features/slicing/components/SlicingPanel.tsx:3807
 msgid "Models Outside Build Volume"
-msgstr ""
+msgstr "Modelos fuera del volumen de impresión"
 
 #: src/components/controls/TransformToolbar.tsx:30
 msgid "Modify"
@@ -3054,7 +3061,7 @@ msgstr "Nuevo preajuste"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:97
 msgid "New preset…"
-msgstr ""
+msgstr "Nuevo preajuste…"
 
 #: src/components/controls/IslandsPanel.tsx:261
 msgid "Next (N)"
@@ -3094,7 +3101,7 @@ msgstr "Sin arriostrado"
 
 #: src/supports/autoBracing/autoBraceMessages.ts:21
 msgid "No braces to remove on this model."
-msgstr ""
+msgstr "Este modelo no tiene riostras que quitar."
 
 #: src/features/slicing/components/SlicingPanel.tsx:1431
 #: src/features/slicing/components/SlicingPanel.tsx:1433
@@ -3213,7 +3220,7 @@ msgstr "Normal"
 #. View mode that colours the surface by its normal vector, for debugging. "Normal" is the geometry term, not the opposite of "unusual".
 #: src/features/shaders/mesh/types.ts:48
 msgid "Normals"
-msgstr ""
+msgstr "Normales"
 
 #. Play on "all men are created equal" from the United States Declaration of Independence (1776).
 #: src/components/layout/EmptySceneState.tsx:105
@@ -3339,7 +3346,7 @@ msgstr "No se importa una malla sin más... aunque en realidad sí, solo hay que
 
 #: src/features/slicing/components/SlicingPanel.tsx:3835
 msgid "One visible model outside the build volume will be excluded from this slice."
-msgstr ""
+msgstr "Un modelo visible fuera del volumen de impresión quedará fuera de este laminado."
 
 #: src/components/layout/TopBar.tsx:1005
 #: src/components/settings/FleetManagement.tsx:179
@@ -3349,7 +3356,7 @@ msgstr "En línea"
 
 #: src/features/slicing/components/SlicingPanel.tsx:3808
 msgid "Only printable models will be sliced"
-msgstr ""
+msgstr "Solo se laminarán los modelos imprimibles"
 
 #: src/components/controls/IslandOverlayControls.tsx:172
 #: src/components/controls/IslandVoxelControls.tsx:117
@@ -3438,13 +3445,13 @@ msgstr "Voladizos"
 #: src/components/layout/TopBar.tsx:1139
 #: src/components/layout/TopBar.tsx:1140
 msgid "Overhangs view: Off"
-msgstr ""
+msgstr "Vista de voladizos: desactivada"
 
 #. Tooltip for a toggle button showing its current state, format "Feature name: state". The Overhangs view colours surfaces by how steeply they overhang, which is where supports are needed.
 #: src/components/layout/TopBar.tsx:1139
 #: src/components/layout/TopBar.tsx:1140
 msgid "Overhangs view: On"
-msgstr ""
+msgstr "Vista de voladizos: activada"
 
 #: src/components/controls/IslandScanCard.tsx:314
 msgid "Overlap Radius (px)"
@@ -3482,7 +3489,7 @@ msgstr "Pinta zonas vetadas para los soportes. Un contacto bloqueado se rechaza 
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:81
 msgid "Passes that run after placement — how much one trunk may carry, and the coverage the gap-filler must reach"
-msgstr ""
+msgstr "Pasadas que se ejecutan tras la colocación: cuánto puede cargar un tronco y qué cobertura debe alcanzar el relleno de huecos"
 
 #: src/components/ui/EditorContextMenu.tsx:83
 msgid "Paste"
@@ -3518,7 +3525,7 @@ msgstr "Mensaje de colocación."
 
 #: src/components/scene/scanProgressMessages.ts:27
 msgid "Placing supports"
-msgstr ""
+msgstr "Colocando soportes"
 
 #: src/features/slicing/components/SlicingPanel.tsx:3738
 msgid "Plate preview · Layer {previewSelectedLayer}/{previewTotalLayers}"
@@ -3550,7 +3557,7 @@ msgstr "Posible geometría de soporte sin clasificar"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:79
 msgid "Post-processing"
-msgstr ""
+msgstr "Posprocesado"
 
 #: src/components/layout/TopBar.tsx:616
 msgid "Prepare"
@@ -3583,7 +3590,7 @@ msgstr "El preajuste tiene cambios sin guardar"
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:501
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:515
 msgid "Preset name"
-msgstr ""
+msgstr "Nombre del preajuste"
 
 #. Sits under the Blocker Painting Mode heading. {clearLabel} and {doneLabel} are the Clear and Done button labels; keep them as placeholders so the two always match the buttons.
 #: src/components/controls/AutoRotationPanel.tsx:233
@@ -3870,7 +3877,7 @@ msgstr "Quitar los grupos ya soportados"
 
 #: src/supports/autoBracing/autoBraceMessages.ts:23
 msgid "Removed {count, plural, one {# brace} other {# braces}}."
-msgstr ""
+msgstr "{count, plural, one {Se ha quitado # riostra} other {Se han quitado # riostras}}."
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:391
 #: src/supports/Settings/components/PresetSelector.tsx:983
@@ -3892,16 +3899,16 @@ msgstr "Renombrar el nombre base del modelo"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:461
 msgid "Rename preset"
-msgstr ""
+msgstr "Renombrar preajuste"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:462
 msgid "Rename Preset"
-msgstr ""
+msgstr "Renombrar preajuste"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:388
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:488
 msgid "Rename the selected preset"
-msgstr ""
+msgstr "Renombra el preajuste seleccionado"
 
 #. placeholder {0}: entry.name
 #: src/components/layout/EmptySceneState.tsx:670
@@ -4023,7 +4030,7 @@ msgstr "Dcha."
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:197
 msgid "Ring each mesh minima with contacts on its own flank, so a section starts on a base instead of a needle (default on)"
-msgstr ""
+msgstr "Rodea cada mínimo de la malla con contactos en su propio flanco, para que una sección arranque sobre una base y no sobre una aguja (activado por defecto)"
 
 #. Paraphrase of Doc Brown's line from Back to the Future (1985): "Roads? Where we're going, we don't need roads."
 #: src/components/layout/EmptySceneState.tsx:96
@@ -4118,7 +4125,7 @@ msgstr "Guardar el material"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:491
 msgid "Save Name"
-msgstr ""
+msgstr "Guardar nombre"
 
 #: src/supports/Settings/presetMessages.ts:41
 msgid "Save Over \"{presetName}\"?"
@@ -4147,7 +4154,7 @@ msgstr "Guardado"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:652
 msgid "Saved!"
-msgstr ""
+msgstr "¡Guardado!"
 
 #: src/components/organisms/NotificationStack.tsx:78
 msgid "Saving…"
@@ -4168,7 +4175,7 @@ msgstr "Volver a escanear"
 
 #: src/components/controls/AutoSupportPanel.tsx:425
 msgid "Scan for islands if needed, then place automatic supports on this model"
-msgstr ""
+msgstr "Busca islas si hace falta y coloca soportes automáticos en este modelo"
 
 #: src/components/ui/EditorContextMenu.tsx:89
 msgid "Scan for Supports"
@@ -4466,11 +4473,11 @@ msgstr "Mostrar el borde de la huella"
 
 #: src/components/controls/autoSupport/AutoSupportRunDiagnostics.tsx:87
 msgid "Show Forest Report"
-msgstr ""
+msgstr "Mostrar el informe del bosque"
 
 #: src/supports/Settings/SupportSidebar.tsx:1222
 msgid "Show full supports"
-msgstr ""
+msgstr "Mostrar los soportes completos"
 
 #: src/components/controls/IslandScanCard.tsx:329
 msgid "Show Island IDs (debug)"
@@ -4515,11 +4522,11 @@ msgstr "Depuración del dimensionado"
 
 #: src/components/controls/autoSupport/AutoSupportRunDiagnostics.tsx:66
 msgid "Sizing factors"
-msgstr ""
+msgstr "Factores de dimensionado"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:253
 msgid "Sizing Tier"
-msgstr ""
+msgstr "Nivel de dimensionado"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:145
 msgid "Skip detected areas smaller than this — tiny specks rarely need supports"
@@ -4543,7 +4550,7 @@ msgstr "Corta por un único plano llano deducido de tus puntos."
 
 #: src/features/slicing/components/SlicingPanel.tsx:3828
 msgid "Slice Printable Models"
-msgstr ""
+msgstr "Laminar los modelos imprimibles"
 
 #: src/features/slicing/components/SlicingPanel.tsx:3395
 msgid "Slice to File"
@@ -4628,7 +4635,7 @@ msgstr "Sólida"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:246
 msgid "Sparse supports — the detail sizing band"
-msgstr ""
+msgstr "Soportes escasos: la banda de dimensionado de detalle"
 
 #: src/features/slicing/components/SlicingPanel.tsx:3729
 msgid "Speed"
@@ -4658,7 +4665,7 @@ msgstr "Separando soportes…"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:73
 msgid "Stability"
-msgstr ""
+msgstr "Estabilidad"
 
 #: src/supports/PlacementLogic/SupportLimitations.tsx:51
 msgid "Stability Warning"
@@ -4666,7 +4673,7 @@ msgstr "Aviso de estabilidad"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:196
 msgid "Stabilization Anchors"
-msgstr ""
+msgstr "Anclajes de estabilización"
 
 #: src/components/controls/autoSupport/AutoSupportRunDiagnostics.tsx:68
 msgid "Standalone trunks"
@@ -4675,7 +4682,7 @@ msgstr "Troncos sueltos"
 #. View mode: matte surface lit by the scene lights. The default view.
 #: src/features/shaders/mesh/types.ts:43
 msgid "Standard"
-msgstr ""
+msgstr "Estándar"
 
 #: src/components/settings/SceneAutosaveSettingsTab.tsx:395
 msgid "Standing Autosave Error"
@@ -4692,7 +4699,7 @@ msgstr "Empezando"
 
 #: src/components/scene/scanProgressMessages.ts:46
 msgid "Step {phaseNumber} of {phaseCount}"
-msgstr ""
+msgstr "Paso {phaseNumber} de {phaseCount}"
 
 #: src/volumeAnalysis/IslandScan/workflow/IslandScanWorkflowCard.tsx:39
 msgid "Step 1: Run Scanline Scan"
@@ -4710,10 +4717,6 @@ msgstr "Tamaño del STL:"
 #: src/supports/Settings/presetMessages.ts:23
 msgid "Structure"
 msgstr "Estructura"
-
-#: src/components/organisms/NotificationStack.tsx:9
-#~ msgid "Successfully oriented"
-#~ msgstr ""
 
 #. {modelName} is the display name of the model that was reoriented.
 #: src/components/organisms/NotificationStack.tsx:19
@@ -4889,7 +4892,7 @@ msgstr "La membrana de contorno y el plano de corte llano."
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:464
 msgid "The current settings are saved under this name, and it becomes the selected preset."
-msgstr ""
+msgstr "Los ajustes actuales se guardan con este nombre y pasa a ser el preajuste seleccionado."
 
 #: src/features/organicCut/OrganicCutColorsSection.tsx:16
 msgid "The cut line you draw."
@@ -4901,7 +4904,7 @@ msgstr "El punto que arrastras para deslizar la espiga."
 
 #: src/components/controls/AutoSupportPanel.tsx:609
 msgid "The edits made in this dialog have not been saved."
-msgstr ""
+msgstr "Los cambios hechos en esta ventana no se han guardado."
 
 #: src/features/organicCut/OrganicCutColorsSection.tsx:24
 msgid "The hole carved in the other half."
@@ -4909,7 +4912,7 @@ msgstr "El hueco tallado en la otra mitad."
 
 #: src/components/controls/autoSupport/AutoSupportRunDiagnostics.tsx:46
 msgid "The inputs and factors the last run sized the supports with"
-msgstr ""
+msgstr "Los datos y factores con que la última ejecución dimensionó los soportes"
 
 #: src/features/organicCut/OrganicCutColorsSection.tsx:26
 msgid "The mortise's silhouette lines."
@@ -4921,7 +4924,7 @@ msgstr "La Open Resin Alliance y quienes colaboran en ella no asumen ninguna res
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:80
 msgid "The passes after placement"
-msgstr ""
+msgstr "Las pasadas posteriores a la colocación"
 
 #: src/features/organicCut/OrganicCutColorsSection.tsx:31
 msgid "The point being dragged."
@@ -4937,7 +4940,7 @@ msgstr "El punto en el que has hecho clic."
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:695
 msgid "The preset is removed from the list. The current settings are left as they are."
-msgstr ""
+msgstr "El preajuste desaparece de la lista. Los ajustes actuales se quedan como están."
 
 #: src/components/printers/PrinterVariantPickerModal.tsx:457
 #: src/components/printers/PrinterVariantPickerModal.tsx:601
@@ -4950,7 +4953,7 @@ msgstr "La resina está lista. ¿Y tú?"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:363
 msgid "The saved run policy the settings below are. Selecting one applies it immediately; the rest of the dialog stays staged until you save."
-msgstr ""
+msgstr "La política de ejecución guardada que corresponde a los ajustes de abajo. Al elegir uno se aplica en el acto; el resto de la ventana queda pendiente hasta que guardes."
 
 #: src/app/page.tsx:4335
 msgid "The scene importer rejected or could not parse the autosave data."
@@ -4966,15 +4969,15 @@ msgstr "La máquina elegida no admite antialiasing por ahora."
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:465
 msgid "The selected preset is renamed; its settings are not touched."
-msgstr ""
+msgstr "Se renombra el preajuste seleccionado; sus ajustes no se tocan."
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:362
 msgid "The settings no longer match this preset. Save overwrites it; Reset reloads it."
-msgstr ""
+msgstr "Los ajustes ya no coinciden con este preajuste. «Guardar» lo sobrescribe; «Restablecer» lo recarga."
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:93
 msgid "The sizing constants the engine ships with. They are stored per preset."
-msgstr ""
+msgstr "Las constantes de dimensionado que trae el motor. Se guardan por preajuste."
 
 #. Paraphrase of "The spice must flow" from Dune (novel by Frank Herbert, 1965; films 1984 and 2021).
 #: src/components/layout/EmptySceneState.tsx:94
@@ -4983,7 +4986,7 @@ msgstr "La especia debe fluir. La resina debe curar."
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:254
 msgid "The Support Studio preset whose tip, shaft and root numbers size this run. Editing that preset changes what auto-support prints — Duplicate it first if you only want to change the run."
-msgstr ""
+msgstr "El preajuste del Estudio de soportes cuyas cifras de punta, vástago y raíz dimensionan esta ejecución. Editarlo cambia lo que imprimen los autosoportes; duplícalo antes si solo quieres cambiar esta ejecución."
 
 #: src/features/organicCut/OrganicCutColorsSection.tsx:21
 msgid "The tenon's faces turned toward you."
@@ -5017,11 +5020,11 @@ msgstr "Esta instantánea se borrará del disco para siempre."
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:661
 msgid "This cannot be undone."
-msgstr ""
+msgstr "No se puede deshacer."
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:266
 msgid "This is a built-in profile, so its fields are fixed. Duplicate it and edit the copy — custom settings belong in a custom profile."
-msgstr ""
+msgstr "Es un perfil integrado, así que sus campos son fijos. Duplícalo y edita la copia: los ajustes propios van en un perfil personalizado."
 
 #: src/components/controls/AutoSupportPanel.tsx:653
 msgid "This model already has supports. How would you like to proceed?"
@@ -5070,19 +5073,11 @@ msgstr "Punta"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:174
 msgid "Tip Fit Margin"
-msgstr ""
+msgstr "Margen de ajuste de la punta"
 
 #: src/components/controls/autoSupport/AutoSupportRunDiagnostics.tsx:73
 msgid "Tip Ø range"
 msgstr "Rango de Ø de la punta"
-
-#: src/components/controls/AutoRotationPanel.tsx:77
-#~ msgid "to apply."
-#~ msgstr ""
-
-#: src/components/controls/AutoRotationPanel.tsx:76
-#~ msgid "to reset all,"
-#~ msgstr ""
 
 #: src/app/page.tsx:2254
 msgid "Toggle curve"
@@ -5345,10 +5340,6 @@ msgstr "Consulta, restaura o elimina instantáneas antiguas del disco."
 msgid "View, restore, or delete older snapshots from your private repository."
 msgstr "Consulta, restaura o elimina instantáneas antiguas de tu repositorio privado."
 
-#: src/features/slicing/components/SlicingPanel.tsx:3839
-msgid "visible models outside the build volume will be excluded from this slice."
-msgstr ""
-
 #: src/components/controls/IslandVoxelControls.tsx:144
 msgid "Visualizes isolated grid-aligned islands."
 msgstr "Visualiza las islas aisladas alineadas a la rejilla."
@@ -5461,11 +5452,11 @@ msgstr "¿Qué imprimimos hoy?"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:57
 msgid "What counts as a support-needing surface, and how tightly neighbouring detections merge"
-msgstr ""
+msgstr "Qué cuenta como superficie que necesita soporte y cuánto se fusionan las detecciones vecinas"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:56
 msgid "What needs support, and how close is too close"
-msgstr ""
+msgstr "Qué necesita soporte y cuánta cercanía es demasiada"
 
 #: src/components/modals/AaSupportWarningModal.tsx:68
 msgid "When anti-aliasing is enabled, we disable it for identified support geometry to preserve fine support structure detail. Since we were unable to identify support geometry in this model, we cannot guarantee print quality."
@@ -5473,7 +5464,7 @@ msgstr "Cuando el antialiasing está activo, lo desactivamos en la geometría de
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:62
 msgid "Where contacts land, and how far members fan"
-msgstr ""
+msgstr "Dónde caen los contactos y cuánto se abren los elementos"
 
 #. Paraphrase of the Joker's line from The Dark Knight (2008): "Why so serious?"
 #: src/components/layout/EmptySceneState.tsx:89
@@ -5504,16 +5495,16 @@ msgstr "Espacios de trabajo"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:649
 msgid "Write these settings to the auto-support settings"
-msgstr ""
+msgstr "Escribe estos ajustes en los ajustes de autosoportes"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:648
 msgid "Write these settings, and overwrite the selected preset with them"
-msgstr ""
+msgstr "Escribe estos ajustes y sobrescribe con ellos el preajuste seleccionado"
 
 #. View mode: semi-transparent surface revealing the interior.
 #: src/features/shaders/mesh/types.ts:47
 msgid "X-Ray"
-msgstr ""
+msgstr "Rayos X"
 
 #: src/components/settings/LocalBackupsSettingsTab.tsx:1116
 msgid "Yes, restore"

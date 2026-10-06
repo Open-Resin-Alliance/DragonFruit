@@ -157,6 +157,11 @@ msgstr "{steps}x ZAA Samples"
 msgid "< 1 min"
 msgstr "< 1 min"
 
+#. {excludedVisibleModelCount} is always 2 or more; the singular case is its own message.
+#: src/features/slicing/components/SlicingPanel.tsx:3837
+msgid "<0>{excludedVisibleModelCount}</0> visible models outside the build volume will be excluded from this slice."
+msgstr "<0>{excludedVisibleModelCount}</0> visible models outside the build volume will be excluded from this slice."
+
 #. {modelName} is the imported model's file name; it is shown in bold.
 #: src/components/modals/AaSupportWarningModal.tsx:61
 msgid "<0>{modelName}</0> was imported as an STL file. Our analysis could not determine whether this model contains support geometry baked into the mesh."
@@ -1606,10 +1611,6 @@ msgstr "Drag a file in. The platform is judging you."
 msgid "DragonFruit app menu"
 msgstr "DragonFruit app menu"
 
-#: src/components/scene/SceneAutosaveRecoveryModal.tsx:95
-#~ msgid "DragonFruit autosaved a scene at {formattedDate}"
-#~ msgstr "DragonFruit autosaved a scene at {formattedDate}"
-
 #: src/components/layout/FirstRunOnboarding.tsx:102
 msgid "DragonFruit first-time setup"
 msgstr "DragonFruit first-time setup"
@@ -2136,6 +2137,7 @@ msgstr "Halo around the hovered seam."
 
 #. Built-in auto-support preset for dense supports — the Heavy tier in the Auto Support panel's preset selector.
 #: src/supports/Settings/autoSupportPresetMessages.ts:30
+msgctxt "auto-support preset"
 msgid "Heavy"
 msgstr "Heavy"
 
@@ -2555,9 +2557,13 @@ msgstr "Letting DragonFruit finish its startup animation before loading your sce
 msgid "Lifecycle (Merge Status)"
 msgstr "Lifecycle (Merge Status)"
 
-#. Built-in auto-support preset for sparse supports — the Light tier in the Auto Support panel's preset selector.
 #: src/components/layout/FirstRunOnboarding.tsx:254
+msgid "Light"
+msgstr "Light"
+
+#. Built-in auto-support preset for sparse supports — the Light tier in the Auto Support panel's preset selector.
 #: src/supports/Settings/autoSupportPresetMessages.ts:28
+msgctxt "auto-support preset"
 msgid "Light"
 msgstr "Light"
 
@@ -2819,6 +2825,7 @@ msgstr "Maximum autosave interval"
 
 #. Built-in auto-support preset for balanced supports — the Medium tier in the Auto Support panel's preset selector.
 #: src/supports/Settings/autoSupportPresetMessages.ts:29
+msgctxt "auto-support preset"
 msgid "Medium"
 msgstr "Medium"
 
@@ -4711,10 +4718,6 @@ msgstr "STL size:"
 msgid "Structure"
 msgstr "Structure"
 
-#: src/components/organisms/NotificationStack.tsx:9
-#~ msgid "Successfully oriented"
-#~ msgstr "Successfully oriented"
-
 #. {modelName} is the display name of the model that was reoriented.
 #: src/components/organisms/NotificationStack.tsx:19
 msgid "Successfully oriented {modelName}"
@@ -5076,14 +5079,6 @@ msgstr "Tip Fit Margin"
 msgid "Tip Ø range"
 msgstr "Tip Ø range"
 
-#: src/components/controls/AutoRotationPanel.tsx:77
-#~ msgid "to apply."
-#~ msgstr "to apply."
-
-#: src/components/controls/AutoRotationPanel.tsx:76
-#~ msgid "to reset all,"
-#~ msgstr "to reset all,"
-
 #: src/app/page.tsx:2254
 msgid "Toggle curve"
 msgstr "Toggle curve"
@@ -5344,10 +5339,6 @@ msgstr "View, restore, or delete older snapshots from disk."
 #: src/components/settings/BackupsSettingsTab.tsx:1269
 msgid "View, restore, or delete older snapshots from your private repository."
 msgstr "View, restore, or delete older snapshots from your private repository."
-
-#: src/features/slicing/components/SlicingPanel.tsx:3839
-msgid "visible models outside the build volume will be excluded from this slice."
-msgstr "visible models outside the build volume will be excluded from this slice."
 
 #: src/components/controls/IslandVoxelControls.tsx:144
 msgid "Visualizes isolated grid-aligned islands."
