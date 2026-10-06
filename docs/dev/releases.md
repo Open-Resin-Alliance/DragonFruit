@@ -100,12 +100,14 @@ and prerelease identifier, so the tag doesn't need to encode it separately.
 #  package-lock.json, package.json, src-tauri/Cargo.lock,
 #  src-tauri/Cargo.toml and src-tauri/tauri.conf.json
 VER=0.1.10
+git checkout dev
+git switch -c release/v$VER
 npm version $VER --no-git-tag-version
 # Generate the bitmap for the NSIS installer.
 ./scripts/gen_nsis_images.py
 
 git commit -a -m "chore: release $VER"
-git push origin dev
+git push
 ```
 
 That's it — `release.yml` tags `v0.1.10`, builds, publishes a GitHub
