@@ -82,6 +82,9 @@ jobs:
       - name: Check support id prefixes are derived
         run: npm run check:support-prefixes
 
+      - name: Check no new UI literals bypass Lingui
+        run: npm run check:i18n-literals
+
   support-metrics:
     name: Auto-support metrics
     runs-on: ubuntu-latest

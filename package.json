@@ -20,6 +20,7 @@
     "check:cargo-locks:fix": "scripts/check-cargo-locks.sh --fix",
     "check:docs": "node scripts/check-docs-accuracy.mjs",
     "check:generated-plugin-registry": "node scripts/verify-generated-plugin-registry.mjs",
+    "check:i18n-literals": "node scripts/check-i18n-literals.mjs",
     "check:lint": "node scripts/check-lint-clean.mjs",
     "check:plugin-allowlist": "node scripts/check-complex-plugin-allowlist.mjs",
     "check:support-prefixes": "tsx scripts/scan-support-type-references.ts --check",
