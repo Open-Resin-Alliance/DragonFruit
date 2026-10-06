@@ -429,18 +429,23 @@ export function UISettingsTab({
 	</section>
 
 			<div className="flex items-center gap-1.5 border-b pb-2" style={{ borderColor: 'var(--border-subtle)' }}>
-				<SegmentedControl
-					label={_(msg`Theme section`)}
-					options={[
-						{ value: 'general', label: 'General UI' },
-						{ value: 'mesh', label: 'Mesh Highlights' },
-						{ value: 'cut', label: 'Cutting Tool' },
-					]}
-					value={themeTab}
-					onChange={setThemeTab}
-					size="sm"
-					tone="accent-secondary"
-				/>
+				{([
+					{ id: 'general', title: 'General UI' },
+					{ id: 'mesh', title: 'Mesh Highlights' },
+					{ id: 'cut', title: 'Cutting Tool' },
+				] as const).map((tab) => (
+					<button
+						key={tab.id}
+						type="button"
+						onClick={() => setThemeTab(tab.id)}
+						className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-xs rounded-md"
+						style={themeTab === tab.id
+							? { color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)' }
+							: { color: 'var(--text-muted)' }}
+					>
+						{tab.title}
+					</button>
+				))}
 			</div>
 
 			<div style={{ display: themeTab === 'general' ? undefined : 'none' }}>

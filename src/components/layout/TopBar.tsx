@@ -380,10 +380,9 @@ export function TopBar({
       'input',
       'select',
       '[role="button"]',
-      // `data-no-drag` is the floating panel stack's opt-out; both are honoured
-      // so a control does not have to know which drag system it sits in.
-      '[data-no-drag]',
-      '[data-no-drag="true"]',
+      // The desktop window drag keeps its own opt-out. `data-no-drag` belongs to
+      // the floating panel stack (see FloatingPanelStack.isDragBlockedByTarget);
+      // the two are not interchangeable.
       '[data-no-window-drag="true"]',
     ].join(',');
 

@@ -8,10 +8,8 @@ import hljs from 'highlight.js';
 import 'highlight.js/styles/atom-one-dark.css';
 import { writeBytesToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
-import { Button, IconButton, SegmentedControl } from '@/components/atoms';
+import { Button, IconButton } from '@/components/atoms';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
-import { useLingui } from '@lingui/react';
-import { msg } from '@lingui/core/macro';
 import {
   getProfileLocalMaterialSettingsAdapter,
   getAvailableProfileNetworkModes,
@@ -1062,7 +1060,6 @@ type StepDetailsProps = {
 };
 
 function StepDetails({ meta, onChange, onImportManifest, installedPlugins, onImportInstalledPlugin, incompleteFields }: StepDetailsProps) {
-  const { _ } = useLingui();
   const [importManifestText, setImportManifestText] = React.useState('');
   const [selectedInstalledPluginId, setSelectedInstalledPluginId] = React.useState('');
   const [importFeedback, setImportFeedback] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -1196,17 +1193,24 @@ function StepDetails({ meta, onChange, onImportManifest, installedPlugins, onImp
                   Load an installed <strong>simple plugin</strong>, or import manifest JSON directly.
                 </div>
               </div>
-              <SegmentedControl
-                label={_(msg`Edit source`)}
-                size="sm"
-                tone="accent-secondary"
-                value={editSourceMode}
-                onChange={(next) => switchEditMode(next)}
-                options={[
-                  { value: 'installed', label: 'Installed' },
-                  { value: 'json', label: 'JSON' },
-                ]}
-              />
+              <div className="inline-flex items-center rounded-md border p-0.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                <button
+                  type="button"
+                  onClick={() => switchEditMode('installed')}
+                  className="ui-button ui-button-ghost !h-7 !px-2.5 text-[11px]"
+                  style={editSourceMode === 'installed' ? ACCENT_SECONDARY_BUTTON_STYLE_90 : undefined}
+                >
+                  Installed
+                </button>
+                <button
+                  type="button"
+                  onClick={() => switchEditMode('json')}
+                  className="ui-button ui-button-ghost !h-7 !px-2.5 text-[11px]"
+                  style={editSourceMode === 'json' ? ACCENT_SECONDARY_BUTTON_STYLE_90 : undefined}
+                >
+                  JSON
+                </button>
+              </div>
             </div>
 
             <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
@@ -2375,7 +2379,6 @@ type MaterialTemplateEditorProps = {
 };
 
 function MaterialTemplateEditor({ template, targetOptions, onChange, onDelete, hideHeader = false }: MaterialTemplateEditorProps) {
-  const { _ } = useLingui();
   type EditorTab = { id: string; title: string; kind: 'meta' | 'format'; formatTabId?: string };
 
   const selectedTarget = React.useMemo(
@@ -2564,15 +2567,24 @@ function MaterialTemplateEditor({ template, targetOptions, onChange, onDelete, h
       </div>
 
       <div className="rounded-xl border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-        <SegmentedControl
-          label={_(msg`Editor section`)}
-          size="sm"
-          tone="accent-secondary"
-          className="w-full flex-wrap"
-          value={activeEditorTab.id}
-          onChange={setActiveEditorTabId}
-          options={editorTabs.map((tab) => ({ value: tab.id, label: tab.title }))}
-        />
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {editorTabs.map((tab) => {
+            const active = tab.id === activeEditorTab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveEditorTabId(tab.id)}
+                className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-[11px] rounded-md"
+                style={active
+                  ? ACCENT_SECONDARY_BUTTON_STYLE_90
+                  : { color: 'var(--text-muted)' }}
+              >
+                {tab.title}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar pr-1">
