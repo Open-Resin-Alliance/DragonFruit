@@ -248,7 +248,7 @@ function SettingsSidebarTab({
     <button
       type="button"
       onClick={() => onSelect(tabId)}
-      className="w-full rounded-lg border px-2.5 py-2 text-left transition-all duration-150"
+      className="w-full rounded-lg border px-2.5 py-1.5 text-left transition-all duration-150"
       style={active
         ? {
           borderColor: `color-mix(in srgb, ${tabColor}, var(--border-subtle) 35%)`,
