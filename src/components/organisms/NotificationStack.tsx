@@ -1,7 +1,7 @@
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import type { MessageDescriptor } from '@lingui/core';
-import { AlertTriangle, CheckCircle2, Info, Redo2, Undo2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Info, Redo2, RefreshCw, Undo2 } from 'lucide-react';
 import { Spinner, Toast, ToastViewport } from '@/components/atoms';
 import type { SceneImportReport } from '@/features/scene/useSceneCollectionManager';
 import type { OrientationToastReport } from '@/features/notifications/useEditorToasts';
@@ -74,7 +74,7 @@ export function NotificationStack({
       {isSaveToastVisible && (
         <ToastViewport zIndex={126} offset="1.25rem">
           <Toast tone="info" animated visible={isSaveToastAnimatedVisible} className="flex items-center gap-2">
-            <Spinner size="md" />
+            <Spinner size="md" icon={RefreshCw} />
             {saveToastMode === 'saving' ? _(msg`Saving…`) : _(msg`Autosaving…`)}
           </Toast>
         </ToastViewport>

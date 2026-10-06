@@ -5,12 +5,19 @@ import { ICON_TONE_STYLES, type IconTone } from './iconTone';
 
 type IconChipSize = 'xs' | 'sm' | 'md' | 'lg';
 
+/**
+ * `inherit` is the default and leaves the icon's colour alone: a chip in a row
+ * inherits the row's colour, which is how the hand-written slots behaved. Use
+ * `neutral` when the icon should be muted regardless of its surroundings.
+ */
+type IconChipTone = IconTone | 'inherit';
+
 interface IconChipProps extends React.HTMLAttributes<HTMLSpanElement> {
   /** Shown only when no children are passed. */
   icon?: LucideIcon;
   iconClassName?: string;
   size?: IconChipSize;
-  tone?: IconTone;
+  tone?: IconChipTone;
 }
 
 const sizeClassMap: Record<IconChipSize, string> = {
@@ -39,16 +46,20 @@ export function IconChip({
   icon: Icon,
   iconClassName,
   size = 'sm',
-  tone = 'neutral',
+  tone = 'inherit',
   className,
   children,
   style,
   ...props
 }: IconChipProps) {
+  const toneStyle = tone === 'inherit'
+    ? { borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }
+    : ICON_TONE_STYLES[tone];
+
   return (
     <span
       className={cn('inline-flex shrink-0 items-center justify-center border', sizeClassMap[size], className)}
-      style={{ ...ICON_TONE_STYLES[tone], ...style }}
+      style={{ ...toneStyle, ...style }}
       {...props}
     >
       {children ?? (Icon ? <Icon className={cn(iconSizeClassMap[size], iconClassName)} /> : null)}

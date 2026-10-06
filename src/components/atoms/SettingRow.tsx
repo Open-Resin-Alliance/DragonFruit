@@ -42,7 +42,7 @@ export function SettingRow({
           </div>
         ) : null}
       </div>
-      <div className="inline-flex shrink-0 items-center gap-2">{children}</div>
+      <div className="inline-flex items-center gap-2">{children}</div>
     </div>
   );
 

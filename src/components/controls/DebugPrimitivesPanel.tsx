@@ -149,7 +149,7 @@ export function DebugPrimitivesPanel({ onAdd, onClear }: DebugPrimitivesPanelPro
                   key={s}
                   onClick={() => setSizePreset(s)}
                   variant={sizePreset === s ? 'primary' : 'secondary'}
-                  size="sm"
+                  size="auto"
                   className="capitalize"
                 >
                   {s}

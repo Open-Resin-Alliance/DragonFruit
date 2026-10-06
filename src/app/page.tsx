@@ -10344,6 +10344,8 @@ export default function Home() {
               details={importOverlayState.detail ? [importOverlayState.detail] : undefined}
               progress={null}
               zIndexClassName="z-50"
+              widthClassName="w-[min(460px,90vw)]"
+              backdropClassName="bg-black/35 backdrop-blur-[1px]"
             />
           )}
 

@@ -10,10 +10,13 @@ interface PanelCollapseToggleProps {
 }
 
 /**
- * The chevron that expands and collapses a panel card. Twenty-four copies
- * existed with a hand-drawn `<svg>`; eighteen of them hinted through an
- * untranslated `title` and none carried an `aria-label`, so the accessible name
- * only existed for a mouse user.
+ * The chevron that expands and collapses a panel card.
+ *
+ * The hand-written copies were `ui-button ui-button-secondary` with `!p-0.5`
+ * alongside the `!p-2` the button atom already carried. Both are `!important`,
+ * so the atom's `!p-2` won and the tile rendered 30x30 around a 12px chevron —
+ * dropping the padding here would shrink it to 18x18. What the copies did not
+ * have is the accessible name and `aria-expanded`, which live here.
  */
 export function PanelCollapseToggle({ expanded, onToggle, className }: PanelCollapseToggleProps) {
   const { _ } = useLingui();
@@ -22,8 +25,6 @@ export function PanelCollapseToggle({ expanded, onToggle, className }: PanelColl
 
   return (
     <IconButton
-      variant="ghost"
-      size="xs"
       onClick={onToggle}
       title={label}
       aria-label={label}

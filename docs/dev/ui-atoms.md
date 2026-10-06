@@ -17,12 +17,14 @@ private copy at the call site.
 - `Button` — `variant`: `primary`, `secondary`, `accent`, `danger` (solid), or
   the tinted family `tinted-accent`, `tinted-danger`, `tinted-warning`,
   `tinted-success` for confirm rows whose fill is the tone mixed into the
-  surface. `size`: `xs`, `sm`, `md` (the app default), `lg`. The tinted variants
-  read `--button-tint` from `src/app/globals.css`, so a tinted destructive
-  button matches the theme instead of a hardcoded red.
+  surface. `size`: `xs`, `sm`, `md` (the app default), `lg`, or `auto` for a call
+  site that carries its own geometry. The tinted variants read `--button-tint`
+  from `src/app/globals.css`, so a tinted destructive button matches the theme
+  instead of a hardcoded red.
 - `IconButton` — `variant`: `solid` (the `ui-button` tile), `surface` (the
   bordered tile a modal or panel header uses), `ghost` (bare hit target, surface
-  on hover). `size`: `xs` to `lg`, `tone`, and `active` for a toggle that is on.
+  on hover). `size`: `xs` to `lg`, or `auto`; `tone`, and `active` for a toggle
+  that is on.
 - `IconChip` — the bordered square an icon sits in: `xs` for a 16px badge, `sm`
   for the 20px slot of a menu or list row, `md` and `lg` for tiles. Pass `icon`
   (a Lucide icon) or `children` for a tick, a number or a glyph. `tone` picks the
@@ -79,6 +81,19 @@ private copy at the call site.
 
 ## Constraints
 
+- **Size means geometry, and geometry only wins when it is important.** The
+  `.ui-button` rule sets padding and font size, and a plain utility class ties
+  with it on specificity, so `.ui-button` wins: a size's `px-*` and `text-*` are
+  decorative, and the `!h-*` height is what actually sizes a button. The same is
+  true of the panel rule (`.ui-panel .ui-button`), which is a two-class selector
+  and beats any non-important utility. If a call site really needs its own
+  padding, it must write `!p-*`/`!px-*`, which is why the button atoms keep their
+  own geometry on the important side and offer `size="auto"` for everything else.
+- **A size must not be repurposed.** `Button`'s `sm`/`md` used to mean
+  `px-3 py-2 text-sm` / `px-3.5 py-2.5 text-sm`; redefining them to the app's
+  action scale silently resized the 21 call sites that had already used them, so
+  those were moved to `size="auto"` with their own classes in the same change.
+  When a size's value changes, grep `<Button` for the old size first.
 - **Atoms take content, not translations.** A label, title or `aria-label` is the
   caller's, so each file keeps its own i18n style (`<Trans>` or `msg` with `_`).
 - **A11y belongs to the atom.** `Toggle`, `PanelCollapseToggle` and

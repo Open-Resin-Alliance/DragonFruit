@@ -19,6 +19,10 @@ interface BlockingOverlayProps {
   children?: React.ReactNode;
   /** Stacking class. The copies this replaces ranged from `z-[120]` to `z-[123]`. */
   zIndexClassName?: string;
+  /** Panel width. Defaults to the 520px sheet most copies used. */
+  widthClassName?: string;
+  /** Backdrop tint. Defaults to `bg-black/45 backdrop-blur-[1px]`. */
+  backdropClassName?: string;
   position?: 'absolute' | 'fixed';
   className?: string;
 }
@@ -43,13 +47,15 @@ export function BlockingOverlay({
   progressLabel,
   children,
   zIndexClassName = 'z-[120]',
+  widthClassName = 'w-[min(520px,92vw)]',
+  backdropClassName = 'bg-black/45 backdrop-blur-[1px]',
   position = 'absolute',
   className,
 }: BlockingOverlayProps) {
   return (
-    <div className={`${position} inset-0 ${zIndexClassName} flex items-center justify-center bg-black/45 backdrop-blur-[1px]`}>
+    <div className={`${position} inset-0 ${zIndexClassName} flex items-center justify-center ${backdropClassName}`}>
       <div
-        className={`w-[min(520px,92vw)] rounded-xl border px-5 py-4 shadow-xl ${className ?? ''}`}
+        className={`${widthClassName} rounded-xl border px-5 py-4 shadow-xl ${className ?? ''}`}
         style={{ background: 'color-mix(in srgb, var(--surface-0), black 10%)', borderColor: 'var(--border-subtle)' }}
         role="status"
         aria-live="polite"

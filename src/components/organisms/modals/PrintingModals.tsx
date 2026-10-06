@@ -1550,7 +1550,7 @@ export function PrintingModals({
                         background: 'color-mix(in srgb, #f59e0b, transparent 84%)',
                         color: 'color-mix(in srgb, #f59e0b, var(--text-strong) 20%)',
                       }}>
-                        <Spinner size="lg" />
+                        <Spinner size="lg" icon={RefreshCw} />
                       </div>
                       <h3 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
                         Printer is responding slowly
@@ -1903,7 +1903,7 @@ export function PrintingModals({
                       {printingMonitorPauseButtonAnimating
                         ? (
                           <span className="inline-flex items-center gap-1.5">
-                            <Spinner size="sm" />
+                            <Spinner size="sm" icon={RefreshCw} />
                             <span>
                               {printingMonitorControlPendingAction === 'resume'
                                 ? 'Resuming…'
@@ -1937,7 +1937,7 @@ export function PrintingModals({
                       {printingMonitorCancelButtonAnimating
                         ? (
                           <span className="inline-flex items-center gap-1.5">
-                            <Spinner size="sm" />
+                            <Spinner size="sm" icon={RefreshCw} />
                             <span>Canceling…</span>
                           </span>
                         )
@@ -2002,7 +2002,7 @@ export function PrintingModals({
                       aria-label="Save webcam snapshot"
                     >
                       {isPrintingMonitorWebcamSnapshotSaving
-                        ? <Spinner size="sm" />
+                        ? <Spinner size="sm" icon={RefreshCw} />
                         : <Download className="w-3.5 h-3.5" />}
                     </IconButton>
                   </div>
