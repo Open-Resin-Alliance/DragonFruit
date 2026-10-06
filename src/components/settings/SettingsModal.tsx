@@ -224,9 +224,11 @@ type SettingsTabMeta = {
 
 /**
  * One settings sidebar entry: icon, label and its description. The description
- * stays visible; the compact metrics come from `leading-tight`, a 10px
- * description and `py-1.5`, which takes the row from 54px to about 36px without
- * hiding anything.
+ * stays visible; the compactness comes from dropping the icon's own 24px box,
+ * `leading-tight`, a 10px description and `px-2.5 py-2`, which matches the inset
+ * of the setting rows beside it. That takes the entry from 54px to 48px without
+ * hiding anything, and the icon keeps the full glyph size instead of sitting in
+ * a box that padded it away from the card edge.
  */
 function SettingsSidebarTab({
   tabId,
@@ -246,7 +248,7 @@ function SettingsSidebarTab({
     <button
       type="button"
       onClick={() => onSelect(tabId)}
-      className="w-full rounded-lg border p-1.5 text-left transition-all duration-150"
+      className="w-full rounded-lg border px-2.5 py-2 text-left transition-all duration-150"
       style={active
         ? {
           borderColor: `color-mix(in srgb, ${tabColor}, var(--border-subtle) 35%)`,
@@ -258,7 +260,7 @@ function SettingsSidebarTab({
           background: 'var(--surface-1)',
         }}
     >
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2.5">
         <Icon className="h-4 w-4 shrink-0" style={{ color: active ? tabColor : 'var(--text-muted)' }} />
         <span className="min-w-0 flex-1">
           <span className="block text-sm font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
