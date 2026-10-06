@@ -1,8 +1,22 @@
 import React from 'react';
 import { cn } from './cn';
 
-type ButtonVariant = 'primary' | 'secondary' | 'accent' | 'danger';
-type ButtonSize = 'sm' | 'md';
+type ButtonVariant =
+  | 'primary'
+  | 'secondary'
+  | 'accent'
+  | 'danger'
+  | 'tinted-accent'
+  | 'tinted-danger'
+  | 'tinted-warning'
+  | 'tinted-success';
+
+/**
+ * `md` is the app's default action shape (the one hand-written as `!h-9 px-3 text-xs`).
+ * `auto` emits no geometry at all, for a call site that still carries its own
+ * height/padding classes; the variant is the part that gets unified today.
+ */
+type ButtonSize = 'xs' | 'sm' | 'md' | 'lg' | 'auto';
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
@@ -13,12 +27,19 @@ const variantClassMap: Record<ButtonVariant, string> = {
   primary: 'ui-button-primary',
   secondary: 'ui-button-secondary',
   accent: 'ui-button-accent',
-  danger: 'border-red-500/30 bg-red-600/85 text-red-50 hover:bg-red-600',
+  danger: 'ui-button-danger',
+  'tinted-accent': 'ui-button-tint ui-button-tint-accent',
+  'tinted-danger': 'ui-button-tint ui-button-tint-danger',
+  'tinted-warning': 'ui-button-tint ui-button-tint-warning',
+  'tinted-success': 'ui-button-tint ui-button-tint-success',
 };
 
 const sizeClassMap: Record<ButtonSize, string> = {
-  sm: 'px-3 py-2 text-sm',
-  md: 'px-3.5 py-2.5 text-sm',
+  xs: '!h-7 px-2 text-[11px]',
+  sm: '!h-8 px-2.5 text-[11px]',
+  md: '!h-9 px-3 text-xs',
+  lg: 'h-10 px-4 text-sm',
+  auto: '',
 };
 
 export function Button({

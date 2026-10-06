@@ -3,7 +3,8 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { Check, ChevronRight, type LucideIcon } from 'lucide-react';
-import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
+import { useOutsideDismiss } from '@/hooks/useOutsideDismiss';
+import { clampToViewport } from '@/utils/math';
 
 /**
  * One right-click / dropdown menu entry.
@@ -226,29 +227,10 @@ export function ContextMenu({
 
   const open = position !== null;
 
-  // Escape is registered through the shared dialog stack, so a menu closes
-  // before whatever is behind it acts on the same press.
-  useEscapeToClose(open, onClose);
-
-  // Outside pointer down and window resizes dismiss. The root stops pointerdown
-  // from bubbling, so clicks inside the menu (and its flyouts) never reach here.
-  React.useEffect(() => {
-    if (!open) return;
-    const dismiss = (event: Event) => {
-      const target = event.target as Node | null;
-      if (target && dismissIgnoreRef?.current?.contains(target)) return;
-      onClose();
-    };
-    const dismissOnResize = () => onClose();
-    window.addEventListener('pointerdown', dismiss);
-    window.addEventListener('resize', dismissOnResize);
-    window.addEventListener('scroll', dismissOnResize, true);
-    return () => {
-      window.removeEventListener('pointerdown', dismiss);
-      window.removeEventListener('resize', dismissOnResize);
-      window.removeEventListener('scroll', dismissOnResize, true);
-    };
-  }, [dismissIgnoreRef, open, onClose]);
+  // Escape, outside pointer down, resize and scroll all dismiss. The root stops
+  // pointerdown from bubbling, so clicks inside the menu (and its flyouts) never
+  // reach the dismiss listener.
+  useOutsideDismiss(open, onClose, { ignoreRef: dismissIgnoreRef });
 
   // A reopened menu keeps the component mounted: the previous flyout is stale by
   // then. The clamped placement is not cleared here — the measurement below runs
@@ -270,8 +252,7 @@ export function ContextMenu({
     if (!element) return;
 
     const { width, height } = element.getBoundingClientRect();
-    const left = Math.max(EDGE_MARGIN_PX, Math.min(position.x, window.innerWidth - width - EDGE_MARGIN_PX));
-    const top = Math.max(EDGE_MARGIN_PX, Math.min(position.y, window.innerHeight - height - EDGE_MARGIN_PX));
+    const { left, top } = clampToViewport(position, { width, height }, { margin: EDGE_MARGIN_PX });
     setPlacement((previous) => (previous && previous.left === left && previous.top === top ? previous : { left, top }));
   }, [position, entries, title]);
 

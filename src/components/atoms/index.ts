@@ -1,5 +1,7 @@
 export { Button } from './Button';
 export { IconButton } from './IconButton';
+export { IconChip } from './IconChip';
+export { ICON_TONE_STYLES, type IconTone } from './iconTone';
 export { Input } from './Input';
 export { Select } from './Select';
 export { Card, CardHeader } from './Card';
@@ -7,3 +9,10 @@ export { Toast, ToastViewport } from './Toast';
 export { cn } from './cn';
 export { ColorSwatchInput } from './ColorSwatchInput';
 export { AlertDiamondIcon } from './AlertDiamondIcon';
+export { ProgressBar } from './ProgressBar';
+export { Spinner } from './Spinner';
+export { Toggle } from './Toggle';
+export { SegmentedControl, type SegmentedOption } from './SegmentedControl';
+export { SettingRow } from './SettingRow';
+export { BlockingOverlay } from './BlockingOverlay';
+export { PanelCollapseToggle } from './PanelCollapseToggle';

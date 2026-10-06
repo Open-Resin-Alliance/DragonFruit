@@ -398,6 +398,43 @@ body {
   background: color-mix(in srgb, var(--secondary-button-surface), black 9%);
 }
 
+/* Tinted action: the tone mixed into the surface rather than filled solid.
+   These three lines replace the inline style triples that ~60 call sites used to
+   hand-write (border 45%, surface 86%, text = tone). */
+.ui-button-tint {
+  background: color-mix(in srgb, var(--button-tint), var(--surface-1) 86%);
+  border-color: color-mix(in srgb, var(--button-tint), var(--border-subtle) 45%);
+  color: var(--button-tint);
+}
+
+.ui-button-tint:hover {
+  background: color-mix(in srgb, var(--button-tint), var(--surface-1) 76%);
+}
+
+.ui-button-tint-accent { --button-tint: var(--accent); }
+.ui-button-tint-danger { --button-tint: var(--danger); }
+.ui-button-tint-warning { --button-tint: #f59e0b; }
+.ui-button-tint-success { --button-tint: var(--success); }
+
+/* Segmented option pill. `--segmented-tone` is set by the control, so one class
+   covers the accent and accent-secondary families that were hand-written ~50
+   times with a four-line inline active style block. */
+.ui-segmented-option {
+  background: var(--surface-1);
+  border-color: var(--border-subtle);
+  color: var(--text-muted);
+}
+
+.ui-segmented-option:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.ui-segmented-option[data-active="true"] {
+  border-color: color-mix(in srgb, var(--segmented-tone, var(--accent)), white 10%);
+  background: color-mix(in srgb, var(--segmented-tone, var(--accent)), var(--surface-0) 76%);
+  color: color-mix(in srgb, var(--segmented-tone, var(--accent)), var(--text-strong) 25%);
+}
+
 .ui-shell {
   background: var(--background);
   color: var(--foreground);
