@@ -92,6 +92,10 @@ tauri-macros = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v
 tauri-utils = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.26" }
 tauri-codegen = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.26" }
 tauri-plugin = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.26" }
+# Local DragonFruit patch: Wry 0.56.1 carrying the batched request-body
+# readers. 0.56.2 is the local patch version, not an upstream release.
+# See rust/wry/README.md. Remove this entry to return to upstream Wry.
+wry = { path = "../rust/wry" }
 
 # Maximum release optimisation: fat LTO collapses all codegen units into one
 # link step, enabling inlining and dead-code elimination across crate boundaries.
