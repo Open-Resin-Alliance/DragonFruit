@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { CheckCircle2, ExternalLink, FolderOpen } from 'lucide-react';
+import { Button } from '@/components/atoms';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 
 type SliceCompletedModalProps = {
@@ -61,58 +62,39 @@ export function SliceCompletedModal({
       onBackdropClick={onClose}
       actions={onOpenInUvTools ? (
         <>
-          <button
-            type="button"
+          <Button
+            variant="tinted-accent"
             onClick={() => filePath && onOpenInUvTools(filePath)}
             disabled={!filePath}
-            className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 disabled:opacity-45"
-            style={{
-              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-              color: 'var(--accent)',
-            }}
+            className="inline-flex items-center justify-center gap-1.5 disabled:opacity-45"
           >
             <ExternalLink className="w-4 h-4" />
             Open in UVTools
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            variant="tinted-accent"
             onClick={handleOpenDirectory}
             disabled={!filePath}
-            className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 disabled:opacity-45"
-            style={{
-              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-              color: 'var(--accent)',
-            }}
+            className="inline-flex items-center justify-center gap-1.5 disabled:opacity-45"
           >
             <FolderOpen className="w-4 h-4" />
             Open Directory
-          </button>
+          </Button>
         </>
       ) : (
         <>
-          <button
-            type="button"
-            onClick={onClose}
-            className="ui-button ui-button-secondary !h-9 px-3 text-xs"
-          >
+          <Button variant="secondary" onClick={onClose}>
             Close
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            variant="tinted-accent"
             onClick={handleOpenDirectory}
             disabled={!filePath}
-            className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 disabled:opacity-45"
-            style={{
-              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-              color: 'var(--accent)',
-            }}
+            className="inline-flex items-center justify-center gap-1.5 disabled:opacity-45"
           >
             <FolderOpen className="w-4 h-4" />
             Open Directory
-          </button>
+          </Button>
         </>
       )}
     >

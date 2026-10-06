@@ -10,8 +10,9 @@ import { ProfileSettingsModal } from '@/components/settings/ProfileSettingsModal
 import type { SupportMode } from '@/supports/types';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import { AlertDiamondIcon, Button } from '@/components/atoms';
+import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { ContextMenu, type ContextMenuEntry } from '@/components/ui/ContextMenu';
-import { Activity, AlertTriangle, Anchor, ChevronDown, FilePlus2, FolderInput, FolderOpen, Lock, Maximize2, Minimize2, Power, Printer, Save, SaveAll, Square, Upload, X } from 'lucide-react';
+import { Activity, AlertTriangle, Anchor, ChevronDown, FilePlus2, FolderInput, FolderOpen, Lock, Maximize2, Minimize2, Power, Printer, Save, SaveAll, Settings, Square, Upload, X } from 'lucide-react';
 import {
   applyThemeCustomColors,
   getSavedThemeCustomColors,
@@ -379,6 +380,10 @@ export function TopBar({
       'input',
       'select',
       '[role="button"]',
+      // `data-no-drag` is the floating panel stack's opt-out; both are honoured
+      // so a control does not have to know which drag system it sits in.
+      '[data-no-drag]',
+      '[data-no-drag="true"]',
       '[data-no-window-drag="true"]',
     ].join(',');
 
@@ -1079,15 +1084,7 @@ export function TopBar({
             aria-label={_(msg`Settings`)}
               data-no-window-drag="true"
             >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-              />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
+            <Settings className="w-4 h-4" />
             </Button>
         </div>
         {isDesktopWindow && (
@@ -1155,87 +1152,44 @@ export function TopBar({
       </div>
 
       {showProfileChangeWarning && (
-        <div className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3" data-no-window-drag="true">
-          <div
-            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
-            style={{
-              background: 'var(--surface-0)',
-              borderColor: 'var(--border-subtle)',
-              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-label={_(msg`Changing printer profile requires re-slice`)}
-          >
-            <div className="flex items-start justify-between gap-3 border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="flex min-w-0 items-start gap-2.5 pr-2">
-                <span
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
-                  style={{
-                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
-                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
-                    color: '#d97706',
-                  }}
-                >
-                  <AlertTriangle className="h-4 w-4" />
-                </span>
-                <div className="min-w-0 pr-2">
-                  <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                    {_(msg({ message: 'Re-slice required after profile change', comment: '"Slice"/"re-slice" is the 3D-printing step that converts a model into printer instructions (G-code). This dialog warns that switching printer profile invalidates the already-sliced file.' }))}
-                  </h2>
-                  <p className="mt-1 max-w-[40ch] text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-                    {_(msg`Changing print settings invalidates the current sliced file.`)}
-                  </p>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                className="h-8 w-8 shrink-0 inline-flex items-center justify-center rounded-md border transition-colors"
-                style={{
-                  borderColor: 'var(--border-subtle)',
-                  background: 'var(--surface-1)',
-                  color: 'var(--text-muted)',
-                }}
-                aria-label={_(msg`Close warning`)}
+        <StructuredDialogModal
+          open
+          ariaLabel={_(msg`Changing printer profile requires re-slice`)}
+          title={_(msg({ message: 'Re-slice required after profile change', comment: '"Slice"/"re-slice" is the 3D-printing step that converts a model into printer instructions (G-code). This dialog warns that switching printer profile invalidates the already-sliced file.' }))}
+          subtitle={_(msg`Changing print settings invalidates the current sliced file.`)}
+          icon={<AlertTriangle className="h-4 w-4" />}
+          iconTone="warning"
+          zIndexClassName="z-[220]"
+          closeAriaLabel={_(msg`Close warning`)}
+          onClose={() => setShowProfileChangeWarning(false)}
+          actions={(
+            <>
+              <Button
+                variant="secondary"
+                size="md"
+                className="w-full"
                 onClick={() => setShowProfileChangeWarning(false)}
               >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="p-4 space-y-3">
-              <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                {_(msg`You can continue to adjust profiles, but you’ll be prompted to re-slice before printing with the updated settings.`)}
-              </p>
-
-              <div className="grid grid-cols-2 gap-2 pt-1">
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
-                  onClick={() => setShowProfileChangeWarning(false)}
-                >
-                  {_(msg({ message: 'Keep current profiles', comment: 'Cancels the pending profile change and closes this warning dialog, leaving the previous profile selection untouched. Paired with the "Continue" button below.' }))}
-                </button>
-                <button
-                  type="button"
-                  className="ui-button !h-9 w-full px-3 text-xs"
-                  style={{
-                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
-                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 86%)',
-                    color: 'color-mix(in srgb, #f59e0b, var(--text-strong) 20%)',
-                  }}
-                  onClick={() => {
-                    setShowProfileChangeWarning(false);
-                    openProfileSettings(profileModalTab);
-                  }}
-                >
-                  {_(msg({ message: 'Continue', comment: 'Confirms proceeding with the profile change despite the re-slice warning above (paired with "Keep current profiles", which cancels).' }))}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+                {_(msg({ message: 'Keep current profiles', comment: 'Cancels the pending profile change and closes this warning dialog, leaving the previous profile selection untouched. Paired with the "Continue" button below.' }))}
+              </Button>
+              <Button
+                variant="tinted-warning"
+                size="md"
+                className="w-full"
+                onClick={() => {
+                  setShowProfileChangeWarning(false);
+                  openProfileSettings(profileModalTab);
+                }}
+              >
+                {_(msg({ message: 'Continue', comment: 'Confirms proceeding with the profile change despite the re-slice warning above (paired with "Keep current profiles", which cancels).' }))}
+              </Button>
+            </>
+          )}
+        >
+          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+            {_(msg`You can continue to adjust profiles, but you’ll be prompted to re-slice before printing with the updated settings.`)}
+          </p>
+        </StructuredDialogModal>
       )}
 
       <SettingsModal

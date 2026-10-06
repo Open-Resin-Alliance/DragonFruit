@@ -4,7 +4,7 @@ import { msg } from '@lingui/core/macro';
 import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { Search, ScanLine, Cpu } from 'lucide-react';
-import { Button, Card, CardHeader, IconButton } from '@/components/atoms';
+import { Button, Card, CardHeader, PanelCollapseToggle, Toggle } from '@/components/atoms';
 
 type ImportPhase = 'idle' | 'awaiting_stl' | 'processing';
 
@@ -120,25 +120,10 @@ export function IslandScanCard({
             <CardHeader
                 left={(
                     <>
-                        <IconButton
-                        onClick={() => islands.setScanCardExpanded(!islands.scanCardExpanded)}
-                        className="!p-0.5"
-                        title={islands.scanCardExpanded ? 'Collapse card' : 'Expand card'}
-                    >
-                        <svg
-                            className="w-3 h-3 transform transition-transform"
-                            style={{ color: islands.scanCardExpanded ? 'var(--accent)' : 'var(--text-muted)' }}
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                        >
-                            {islands.scanCardExpanded ? (
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                            ) : (
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                            )}
-                        </svg>
-                        </IconButton>
+                        <PanelCollapseToggle
+                            expanded={islands.scanCardExpanded}
+                            onToggle={() => islands.setScanCardExpanded(!islands.scanCardExpanded)}
+                        />
                         <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{_(msg`Island Scan`)}</h3>
                     </>
                 )}
@@ -327,19 +312,11 @@ export function IslandScanCard({
                     {/* Debug options */}
                     <div className="mt-1 pt-1 border-t flex items-center justify-between" style={{ borderColor: 'var(--border-subtle)' }}>
                         <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>{_(msg`Show Island IDs (debug)`)}</label>
-                        <button
-                            type="button"
-                            onClick={() => islands.setShowIslandIdLabels(!islands.showIslandIdLabels)}
-                            className="w-9 h-5 rounded-full flex items-center px-0.5 transition-colors"
-                            style={{
-                                background: islands.showIslandIdLabels ? 'var(--accent)' : 'var(--surface-2)',
-                            }}
-                        >
-                            <span
-                                className={`w-4 h-4 rounded-full bg-white shadow transform transition-transform ${islands.showIslandIdLabels ? 'translate-x-4' : 'translate-x-0'
-                                    }`}
-                            />
-                        </button>
+                        <Toggle
+                            size="sm"
+                            checked={islands.showIslandIdLabels}
+                            onChange={(v) => islands.setShowIslandIdLabels(v)}
+                        />
                     </div>
                 </div>
             )}

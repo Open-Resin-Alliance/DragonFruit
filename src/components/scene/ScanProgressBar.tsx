@@ -2,6 +2,7 @@ import React from 'react';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import { formatPhaseStep, translateScanPhase } from '@/components/scene/scanProgressMessages';
+import { ProgressBar } from '@/components/atoms';
 
 export type ScanProgress = {
   done: number;
@@ -43,20 +44,10 @@ export function ScanProgressBar({ progress }: { progress: ScanProgress | null })
         </span>
       </div>
 
-      <div
-        className="h-2.5 w-full overflow-hidden rounded-full"
-        style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
-        role="progressbar"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={total > 0 ? Math.round(percent) : undefined}
-        aria-label={progress?.phase ? translateScanPhase(progress.phase, _) : _(msg`Scan progress`)}
-      >
-        <div
-          className="h-full rounded-full transition-[width] duration-200"
-          style={{ width: `${percent}%`, background: 'linear-gradient(90deg, var(--accent), #ff79c6)' }}
-        />
-      </div>
+      <ProgressBar
+        value={total > 0 ? percent : null}
+        ariaLabel={progress?.phase ? translateScanPhase(progress.phase, _) : _(msg`Scan progress`)}
+      />
 
       {total > 0 && (
         <div className="text-[11px]" style={{ color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums' }}>

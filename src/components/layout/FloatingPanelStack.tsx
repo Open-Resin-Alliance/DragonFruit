@@ -227,7 +227,11 @@ function findNearestFreePosition(
 function isDragBlockedByTarget(target: EventTarget | null) {
   if (!(target instanceof Element)) return false;
   return Boolean(
-    target.closest('button, input, select, textarea, label, a, [role="button"], [data-no-drag], [data-no-drag="true"], .react-colorful'),
+    // Both opt-out attributes are honoured: `data-no-drag` for the panel stack
+    // and `data-no-window-drag` for the desktop window drag. They express the
+    // same intent ("do not start dragging here"), so a control no longer has to
+    // know which drag system it happens to sit in.
+    target.closest('button, input, select, textarea, label, a, [role="button"], [data-no-drag], [data-no-drag="true"], [data-no-window-drag], [data-no-window-drag="true"], .react-colorful'),
   );
 }
 

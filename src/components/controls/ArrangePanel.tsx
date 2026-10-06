@@ -1,7 +1,7 @@
 import React from 'react';
-import { LayoutGrid, Loader2, RotateCw } from 'lucide-react';
+import { LayoutGrid, RotateCw } from 'lucide-react';
 import { MiniStepperField } from '@/components/ui/miniStepperField';
-import { Button, Card, CardHeader, IconButton, Select } from '@/components/atoms';
+import { Button, Card, CardHeader, PanelCollapseToggle, Select, Spinner } from '@/components/atoms';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
@@ -120,25 +120,7 @@ export function ArrangePanel({
       <CardHeader
         left={(
           <>
-            <IconButton
-              onClick={() => setExpanded((prev) => !prev)}
-              className="!p-0.5"
-              title={expanded ? 'Collapse card' : 'Expand card'}
-            >
-              <svg
-                className="w-3 h-3 transform transition-transform"
-                style={{ color: expanded ? 'var(--accent)' : 'var(--text-muted)' }}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                {expanded ? (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                ) : (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                )}
-              </svg>
-            </IconButton>
+            <PanelCollapseToggle expanded={expanded} onToggle={() => setExpanded((prev) => !prev)} />
             <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Arrange</h3>
           </>
         )}
@@ -155,24 +137,26 @@ export function ArrangePanel({
           <div className="rounded-md border p-2" style={accentCardStyle}>
             <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}>Layout Mode</div>
             <div className="grid grid-cols-2 gap-1">
-              <button
-                type="button"
-                className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+              <Button
+                variant="secondary"
+                size="auto"
+                className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                 onClick={() => onLayoutModeChange('auto')}
                 disabled={isApplying}
                 style={isApplying ? disabledModeStyle : (layoutMode === 'auto' ? activeModeStyle : undefined)}
               >
                 Auto
-              </button>
-              <button
-                type="button"
-                className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+              </Button>
+              <Button
+                variant="secondary"
+                size="auto"
+                className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                 onClick={() => onLayoutModeChange('array')}
                 disabled={isApplying}
                 style={isApplying ? disabledModeStyle : (layoutMode === 'array' ? activeModeStyle : undefined)}
               >
                 Manual
-              </button>
+              </Button>
             </div>
           </div>
 
@@ -180,19 +164,21 @@ export function ArrangePanel({
             <div className="rounded-md border p-2" style={accentCardStyle}>
               <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}>Arrange Mode</div>
               <div className="grid grid-cols-2 gap-1">
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                <Button
+                  variant="secondary"
+                  size="auto"
+                  className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                   onClick={() => onPrecisionModeChange('standard')}
                   disabled={isApplying}
                   style={isApplying ? disabledModeStyle : (precisionMode === 'standard' ? activeModeStyle : undefined)}
                   title="Current arrange algorithm"
                 >
                   Standard
-                </button>
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="auto"
+                  className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                   onClick={() => {
                     onPrecisionModeChange('high_precision');
                     onAllowRotateOnZChange(true);
@@ -202,7 +188,7 @@ export function ArrangePanel({
                   title="Hull-based SAT packing for tighter fit"
                 >
                   High-Precision
-                </button>
+                </Button>
               </div>
             </div>
           )}
@@ -324,7 +310,7 @@ export function ArrangePanel({
             >
               {isApplying ? (
                 <span className="inline-flex items-center gap-1.5">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <Spinner />
                   Arranging…
                 </span>
               ) : (
@@ -347,7 +333,7 @@ export function ArrangePanel({
             >
               {isApplying ? (
                 <span className="inline-flex items-center gap-1.5">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <Spinner />
                   Arranging…
                 </span>
               ) : (

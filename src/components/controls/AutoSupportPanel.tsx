@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 import { Settings, Settings2, X } from 'lucide-react';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
-import { Card, CardHeader, IconButton } from '@/components/atoms';
+import { Button, Card, CardHeader, IconButton, PanelCollapseToggle } from '@/components/atoms';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
@@ -388,22 +388,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, autoLift
         <CardHeader
           left={(
             <>
-              <IconButton
-                onClick={() => setExpanded(!expanded)}
-                className="!p-0.5"
-                title={expanded ? _(msg`Collapse card`) : _(msg`Expand card`)}
-              >
-                <svg className="w-3 h-3 transform transition-transform"
-                  style={{ color: expanded ? 'var(--accent)' : 'var(--text-muted)' }}
-                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
-                >
-                  {expanded ? (
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  ) : (
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                  )}
-                </svg>
-              </IconButton>
+              <PanelCollapseToggle expanded={expanded} onToggle={() => setExpanded(!expanded)} />
               <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{_(msg`Auto Supports (Beta)`)}</h3>
             </>
           )}
@@ -418,12 +403,13 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, autoLift
         {expanded && (
           <div className="px-2.5 pb-3 space-y-2.5">
             {/* Run button — always at top */}
-            <button
-              type="button"
+            <Button
               onClick={() => { void handleRun(); }}
               disabled={!canRun}
               title={_(msg`Scan for islands if needed, then place automatic supports on this model`)}
-              className="ui-button w-full !h-8 text-[11px] disabled:opacity-50"
+              variant="secondary"
+              size="auto"
+              className="w-full !h-8 text-[11px] disabled:opacity-50"
               style={{
                 borderColor: 'var(--accent)',
                 background: 'color-mix(in srgb, var(--accent), var(--surface-0) 86%)',
@@ -431,7 +417,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, autoLift
               }}
             >
               {busy ? _(msg`Running…`) : _(msg`Generate Supports`)}
-            </button>
+            </Button>
 
             {/* Island counts */}
             <div className="rounded-md border p-2" style={AUTO_SUPPORT_SECTION_CARD}>
@@ -497,26 +483,26 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, autoLift
         onBackdropClick={() => setShowForestReport(false)}
         actions={
           <>
-            <button
-              type="button"
+            <Button
               onClick={() => {
                 if (forestReport) {
                   void navigator.clipboard?.writeText(forestReportToText(forestReport));
                 }
               }}
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+              variant="secondary"
+              size="md"
               title={_(msg`Copy the whole report to the clipboard`)}
             >
               {_(msg`Copy`)}
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
               onClick={() => setShowForestReport(false)}
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+              variant="secondary"
+              size="md"
               title={_(msg`Close the report`)}
             >
               {_(msg`Close`)}
-            </button>
+            </Button>
           </>
         }
       >
@@ -566,15 +552,16 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, autoLift
                   </p>
                 </div>
               </div>
-              <button
-                type="button"
+              <IconButton
+                variant="solid"
+                size="sm"
                 onClick={closeSettings}
-                className="ui-button ui-button-secondary inline-flex h-8 w-8 shrink-0 items-center justify-center leading-none !p-0"
+                className="inline-flex shrink-0 items-center justify-center leading-none !p-0"
                 aria-label={_(msg`Close dialog`)}
                 title={_(msg`Close without applying the edits made in this dialog`)}
               >
                 <X className="h-4 w-4" />
-              </button>
+              </IconButton>
             </div>
 
             <AutoSupportSettingsBody
@@ -613,22 +600,21 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, autoLift
         onBackdropClick={() => setShowDiscardSettingsDialog(false)}
         actions={
           <>
-            <button
-              type="button"
+            <Button
               onClick={() => setShowDiscardSettingsDialog(false)}
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+              variant="secondary"
+              size="md"
               title={_(msg`Go back to the settings dialog`)}
             >
               {_(msg`Keep Editing`)}
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
               onClick={() => {
                 setShowDiscardSettingsDialog(false);
                 setDraft(getSettings().autoSupport);
                 setShowSettings(false);
               }}
-              className="ui-button !h-9 px-3 text-xs"
+              size="md"
               style={{
                 borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 45%)',
                 background: 'color-mix(in srgb, var(--danger), var(--surface-1) 88%)',
@@ -637,7 +623,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, autoLift
               title={_(msg`Close the dialog and discard the edits`)}
             >
               {_(msg`Discard`)}
-            </button>
+            </Button>
           </>
         }
       >
@@ -656,35 +642,31 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, autoLift
         onBackdropClick={() => setShowReplaceDialog(false)}
         actions={
           <>
-            <button
-              type="button"
+            <Button
               onClick={() => setShowReplaceDialog(false)}
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+              variant="secondary"
+              size="md"
               title={_(msg`Keep the existing supports and do nothing`)}
             >
               {_(msg`Cancel`)}
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
               onClick={() => { setShowReplaceDialog(false); doRun(false); }}
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+              variant="secondary"
+              size="md"
               title={_(msg`Keep the existing supports and place the new ones around them`)}
             >
               {_(msg`Add to existing`)}
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
               onClick={() => { setShowReplaceDialog(false); doRun(true); }}
+              variant="tinted-accent"
+              size="md"
+              className="inline-flex items-center justify-center gap-1.5"
               title={_(msg`Delete this model's existing supports and place the new ones`)}
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-              style={{
-                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                color: 'var(--accent)',
-              }}
             >
               {_(msg`Replace all`)}
-            </button>
+            </Button>
           </>
         }
       >

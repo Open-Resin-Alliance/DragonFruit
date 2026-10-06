@@ -4,7 +4,7 @@ import React from 'react';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import { Plural } from '@lingui/react/macro';
-import { Card, CardHeader, IconButton, Select } from '@/components/atoms';
+import { Card, CardHeader, PanelCollapseToggle, Select } from '@/components/atoms';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 interface IslandVoxelControlsProps {
@@ -41,25 +41,7 @@ export function IslandVoxelControls({
       <CardHeader
         left={(
           <>
-            <IconButton
-            onClick={() => setExpanded(!expanded)}
-            className="!p-0.5"
-            title={expanded ? 'Collapse card' : 'Expand card'}
-          >
-            <svg
-              className="w-3 h-3 transform transition-transform"
-              style={{ color: expanded ? 'var(--accent)' : 'var(--text-muted)' }}
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              {expanded ? (
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              ) : (
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-              )}
-            </svg>
-            </IconButton>
+            <PanelCollapseToggle expanded={expanded} onToggle={() => setExpanded(!expanded)} />
             <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{_(msg`Island Voxels`)}</h3>
           </>
         )}

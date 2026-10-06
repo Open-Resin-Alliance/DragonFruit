@@ -3,6 +3,7 @@
 import React from 'react';
 import { CheckCircle2, AlertTriangle, XCircle, X, Wrench, ClipboardCopy, ChevronDown, ChevronRight } from 'lucide-react';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
+import { Button, IconButton } from '@/components/atoms';
 import type { MeshRepairReportEntry } from '@/features/scene/useSceneCollectionManager';
 import type { MeshAnalysisJson } from '@/utils/meshRepair';
 
@@ -158,19 +159,14 @@ export function MeshRepairReportModal({ reports, presentation = 'default', onDis
             </div>
           </div>
 
-          <button
-            type="button"
-            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
-            style={{
-              borderColor: 'var(--border-subtle)',
-              background: 'var(--surface-1)',
-              color: 'var(--text-muted)',
-            }}
+          <IconButton
+            variant="surface"
+            size="md"
             aria-label="Close"
             onClick={onDismiss}
           >
             <X className="w-4 h-4" />
-          </button>
+          </IconButton>
         </div>
 
         <div className={bodyClassName}>
@@ -195,23 +191,22 @@ export function MeshRepairReportModal({ reports, presentation = 'default', onDis
 
         <div className={footerClassName} style={{ borderColor: 'var(--border-subtle)' }}>
           {effectivePresentation === 'default' ? (
-            <button
-              type="button"
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs inline-flex items-center gap-1.5"
+            <Button
+              variant="secondary"
+              className="gap-1.5"
               onClick={copyAll}
               title="Copy full JSON to clipboard"
             >
               <ClipboardCopy className="h-3.5 w-3.5" />
               Copy JSON
-            </button>
+            </Button>
           ) : <div />}
-          <button
-            type="button"
-            className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+          <Button
+            variant="secondary"
             onClick={onDismiss}
           >
             Dismiss
-          </button>
+          </Button>
         </div>
       </div>
     </div>

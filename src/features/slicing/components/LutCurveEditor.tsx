@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { AlertTriangle, Check, Download, Edit3, Pencil, Plus, Trash2, Upload, X, RotateCcw, TrendingUp } from 'lucide-react';
+import { Button, IconButton } from '@/components/atoms';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
@@ -598,27 +599,37 @@ export function LutCurveSelector({
           />
         </div>
 
-        <button
-          type="button"
-          title="Edit selected curve"
-          disabled={!canEdit}
-          onClick={() => {
-            if (canEdit) onOpenEditor(effectiveId);
-          }}
-          className={isSettingsVariant
-            ? 'ui-button ui-button-secondary inline-flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-md !p-0 disabled:opacity-35 disabled:cursor-not-allowed'
-            : 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition-colors hover:bg-white/5 disabled:opacity-35 disabled:cursor-not-allowed'}
-          style={isSettingsVariant
-            ? undefined
-            : {
-                borderColor: 'var(--border-subtle)',
-                background: 'var(--surface-0)',
-                color: 'var(--text-strong)',
-              }}
-          aria-label="Edit selected curve"
-        >
-          <Pencil className="h-3.5 w-3.5" />
-        </button>
+        {isSettingsVariant ? (
+          <Button
+            variant="secondary"
+            size="auto"
+            type="button"
+            title="Edit selected curve"
+            disabled={!canEdit}
+            onClick={() => {
+              if (canEdit) onOpenEditor(effectiveId);
+            }}
+            className="inline-flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-md !p-0 disabled:opacity-35 disabled:cursor-not-allowed"
+            aria-label="Edit selected curve"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </Button>
+        ) : (
+          <IconButton
+            variant="surface"
+            size="sm"
+            type="button"
+            title="Edit selected curve"
+            disabled={!canEdit}
+            onClick={() => {
+              if (canEdit) onOpenEditor(effectiveId);
+            }}
+            className="disabled:opacity-35 disabled:cursor-not-allowed"
+            aria-label="Edit selected curve"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </IconButton>
+        )}
       </div>
     </div>
   );
@@ -1217,15 +1228,14 @@ export function LutCurveEditorModal({
               </button>
             </div>
 
-            <button
-              type="button"
+            <IconButton
+              variant="surface"
+              size="sm"
               onClick={requestClose}
-              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition-colors hover:bg-white/5"
-              style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
               aria-label="Close"
             >
               <X className="h-4 w-4" />
-            </button>
+            </IconButton>
           </div>
         </div>
 
@@ -1260,30 +1270,36 @@ export function LutCurveEditorModal({
                   }}
                 />
               </div>
-              <button
+              <Button
                 type="button"
                 onClick={handleOpenRename}
-                className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px]"
+                variant="secondary"
+                size="auto"
+                className="!h-8 !px-2.5 !py-0 text-[11px]"
               >
                 Rename
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
                 onClick={handleExportCurve}
-                className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px] inline-flex items-center gap-1"
+                variant="secondary"
+                size="auto"
+                className="!h-8 !px-2.5 !py-0 text-[11px] inline-flex items-center gap-1"
                 title="Export selected curve"
               >
                 <Download className="h-3.5 w-3.5" />
                 Export
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
                 onClick={handleImportCurve}
-                className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px] inline-flex items-center gap-1"
+                variant="secondary"
+                size="auto"
+                className="!h-8 !px-2.5 !py-0 text-[11px] inline-flex items-center gap-1"
               >
                 <Upload className="h-3.5 w-3.5" />
                 Import
-              </button>
+              </Button>
             </div>
 
           </div>
@@ -1351,11 +1367,12 @@ export function LutCurveEditorModal({
                   />
                 </div>
 
-                <button
+                <Button
                   type="button"
                   onClick={handleRemoveSelected}
                   disabled={isEndpoint || draftPoints.length <= 2}
-                  className="ml-auto ui-button !h-8 px-3 text-xs inline-flex items-center justify-center gap-1.5 disabled:opacity-45 disabled:cursor-not-allowed"
+                  size="auto"
+                  className="ml-auto !h-8 px-3 text-xs inline-flex items-center justify-center gap-1.5 disabled:opacity-45 disabled:cursor-not-allowed"
                   style={{
                     borderColor: (isEndpoint || draftPoints.length <= 2)
                       ? 'var(--border-subtle)'
@@ -1370,7 +1387,7 @@ export function LutCurveEditorModal({
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                   Remove
-                </button>
+                </Button>
               </div>
             ) : (
               <p className="h-full w-full inline-flex items-center justify-center text-[11px] text-center" style={{ color: 'var(--text-muted)' }}>
@@ -1386,37 +1403,35 @@ export function LutCurveEditorModal({
           style={{ borderColor: 'var(--border-subtle)' }}
         >
           {editingCurve && onDelete ? (
-            <button
+            <Button
               type="button"
               onClick={() => setShowDeleteConfirm(true)}
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-              style={{
-                borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
-                color: 'var(--danger)',
-              }}
+              variant="tinted-danger"
+              className="inline-flex items-center justify-center gap-1.5"
               title="Delete this curve preset"
             >
               <Trash2 className="h-3.5 w-3.5" />
               Delete Curve
-            </button>
+            </Button>
           ) : <div />}
 
           <div className="flex items-center gap-2">
-            <button
+            <Button
               type="button"
               onClick={handleResetDraft}
               disabled={!isDirty}
-              className="ui-button ui-button-secondary inline-flex items-center gap-1.5 !h-9 px-3 text-[12px] disabled:opacity-45 disabled:cursor-not-allowed"
+              variant="secondary"
+              size="auto"
+              className="inline-flex items-center gap-1.5 !h-9 px-3 text-[12px] disabled:opacity-45 disabled:cursor-not-allowed"
             >
               <RotateCcw className="h-3.5 w-3.5" />
               Reset
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
               onClick={handleSave}
               disabled={!isDirty}
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 disabled:opacity-45 disabled:cursor-not-allowed"
+              className="inline-flex items-center justify-center gap-1.5 disabled:opacity-45 disabled:cursor-not-allowed"
               style={{
                 borderColor: 'var(--accent-secondary-action-border)',
                 background: 'var(--accent-secondary-action-bg-92)',
@@ -1424,7 +1439,7 @@ export function LutCurveEditorModal({
               }}
             >
               Save
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -1443,26 +1458,22 @@ export function LutCurveEditorModal({
         onBackdropClick={handleCancelCreate}
         actions={(
           <>
-            <button
+            <Button
               type="button"
               onClick={handleCancelCreate}
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+              variant="secondary"
             >
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
               onClick={handleConfirmCreate}
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-              style={{
-                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                color: 'var(--accent)',
-              }}
+              variant="tinted-accent"
+              className="inline-flex items-center justify-center gap-1.5"
             >
               <Check className="h-3.5 w-3.5" />
               Create
-            </button>
+            </Button>
           </>
         )}
       >
@@ -1590,27 +1601,23 @@ export function LutCurveEditorModal({
         onBackdropClick={handleCancelRename}
         actions={(
           <>
-            <button
+            <Button
               type="button"
               onClick={handleCancelRename}
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+              variant="secondary"
             >
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
               onClick={handleConfirmRename}
               disabled={draftRenameName.trim().length === 0}
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 disabled:opacity-45 disabled:cursor-not-allowed"
-              style={{
-                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                color: 'var(--accent)',
-              }}
+              variant="tinted-accent"
+              className="inline-flex items-center justify-center gap-1.5 disabled:opacity-45 disabled:cursor-not-allowed"
             >
               <Check className="h-3.5 w-3.5" />
               Save Name
-            </button>
+            </Button>
           </>
         )}
       >
@@ -1650,26 +1657,22 @@ export function LutCurveEditorModal({
         onBackdropClick={handleCancelDiscardClose}
         actions={(
           <>
-            <button
+            <Button
               type="button"
               onClick={handleCancelDiscardClose}
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+              variant="secondary"
             >
               Keep Editing
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
               onClick={handleConfirmDiscardClose}
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-              style={{
-                borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
-                color: 'var(--danger)',
-              }}
+              variant="tinted-danger"
+              className="inline-flex items-center justify-center gap-1.5"
             >
               <Trash2 className="w-3.5 h-3.5" />
               Quit Without Saving
-            </button>
+            </Button>
           </>
         )}
       >
@@ -1692,26 +1695,22 @@ export function LutCurveEditorModal({
         onBackdropClick={handleCancelDelete}
         actions={(
           <>
-            <button
+            <Button
               type="button"
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
               onClick={handleCancelDelete}
+              variant="secondary"
             >
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
               onClick={handleConfirmDelete}
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-              style={{
-                borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
-                color: 'var(--danger)',
-              }}
+              variant="tinted-danger"
+              className="inline-flex items-center justify-center gap-1.5"
             >
               <Trash2 className="w-3.5 h-3.5" />
               Delete
-            </button>
+            </Button>
           </>
         )}
       >

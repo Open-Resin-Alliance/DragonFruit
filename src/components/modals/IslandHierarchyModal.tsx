@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import type { Island } from '@/volumeAnalysis/IslandScan/types';
 import { X, ChevronDown, ChevronRight } from 'lucide-react';
+import { IconButton } from '@/components/atoms';
 
 type IslandHierarchyModalProps = {
   islands: Island[];
@@ -63,18 +64,14 @@ export function IslandHierarchyModal({ islands, isOpen, onClose, layerHeightMm, 
               Parent-child merges across detected islands
             </p>
           </div>
-          <button
+          <IconButton
+            variant="surface"
+            size="sm"
             onClick={onClose}
-            className="h-8 w-8 inline-flex items-center justify-center rounded-md border transition-colors"
-            style={{
-              borderColor: 'var(--border-subtle)',
-              background: 'var(--surface-1)',
-              color: 'var(--text-muted)',
-            }}
             aria-label="Close"
           >
             <X className="w-4 h-4" />
-          </button>
+          </IconButton>
         </div>
 
         {/* Content */}

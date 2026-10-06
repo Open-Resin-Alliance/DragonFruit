@@ -23,7 +23,7 @@ import { msg, plural } from '@lingui/core/macro';
 import { Trans } from '@lingui/react/macro';
 import type { MessageDescriptor } from '@lingui/core';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
-import { Card, CardHeader, IconButton } from '@/components/atoms';
+import { Card, CardHeader, IconButton, PanelCollapseToggle } from '@/components/atoms';
 import { formatPolygonCountCompact } from '@/utils/meshStatsFormatting';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 import { Tooltip } from '@/components/ui/Tooltip';
@@ -446,25 +446,7 @@ export function ModelManagerPanel({
       <CardHeader
         left={(
           <>
-            <IconButton
-              onClick={() => setExpanded(!expanded)}
-              title={expanded ? _(msg`Collapse card`) : _(msg`Expand card`)}
-              className="!p-0.5"
-            >
-              <svg
-                className="w-3 h-3 transform transition-transform"
-                style={{ color: expanded ? 'var(--accent)' : 'var(--text-muted)' }}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                {expanded ? (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                ) : (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                )}
-              </svg>
-            </IconButton>
+            <PanelCollapseToggle expanded={expanded} onToggle={() => setExpanded(!expanded)} />
             <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
               <Trans comment="Title of the panel listing every model loaded into the scene.">Models</Trans>
             </h3>
@@ -727,17 +709,17 @@ export function ModelManagerPanel({
 
                           <div className="flex items-center gap-1">
                             {onOpenSupportsInfo && (compactList ? (
-                              <button
-                                type="button"
+                              <IconButton
+                                variant="ghost"
+                                size="xs"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   onOpenSupportsInfo(model.id);
                                 }}
-                                className="inline-flex items-center justify-center p-0.5 rounded hover:bg-white/10"
                                 title={_(msg`Supports for model`)}
                               >
-                                <Info className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
-                              </button>
+                                <Info className="w-3.5 h-3.5" />
+                              </IconButton>
                             ) : (
                               <IconButton
                                 onClick={(e) => {
@@ -751,17 +733,17 @@ export function ModelManagerPanel({
                               </IconButton>
                             ))}
                             {compactList ? (
-                              <button
-                                type="button"
+                              <IconButton
+                                variant="ghost"
+                                size="xs"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   onVisibilityChange(model.id, !model.visible);
                                 }}
-                                className="inline-flex items-center justify-center p-0.5 rounded hover:bg-white/10"
                                 title={model.visible ? _(msg`Hide`) : _(msg`Show`)}
                               >
-                                {model.visible ? <Eye className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} /> : <EyeOff className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />}
-                              </button>
+                                {model.visible ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+                              </IconButton>
                             ) : (
                               <IconButton
                                 onClick={(e) => {

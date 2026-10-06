@@ -1,4 +1,5 @@
-import { AlertTriangle, Loader2, Wrench, X } from 'lucide-react';
+import { AlertTriangle, Wrench, X } from 'lucide-react';
+import { Button, IconButton, IconChip, Spinner } from '@/components/atoms';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { MeshRepairConfirmModal } from '@/components/scene/MeshRepairConfirmModal';
@@ -43,18 +44,13 @@ export function MeshRepairModals({
         closeDisabled
         onClose={() => setShowDamagedModelDialog(false)}
         actions={(
-          <button
-            type="button"
-            className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-            style={{
-              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-              color: 'var(--accent)',
-            }}
+          <Button
+            variant="tinted-accent"
+            className="inline-flex items-center justify-center gap-1.5"
             onClick={() => setShowDamagedModelDialog(false)}
           >
             Got it
-          </button>
+          </Button>
         )}
       >
         <div className="space-y-2">
@@ -106,16 +102,15 @@ export function MeshRepairModals({
             >
               <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
                 <div className="flex min-w-0 items-center gap-3">
-                  <span
-                    className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
+                  <IconChip
+                    size="lg"
+                    icon={AlertTriangle}
                     style={{
                       borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 45%)',
                       background: 'color-mix(in srgb, #d97706, var(--surface-1) 88%)',
                       color: '#d97706',
                     }}
-                  >
-                    <AlertTriangle className="h-4 w-4" />
-                  </span>
+                  />
 
                   <div className="min-w-0 pr-2">
                     <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
@@ -127,20 +122,15 @@ export function MeshRepairModals({
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
-                  style={{
-                    borderColor: 'var(--border-subtle)',
-                    background: 'var(--surface-1)',
-                    color: 'var(--text-muted)',
-                  }}
+                <IconButton
+                  variant="surface"
+                  size="md"
                   aria-label="Close repair mesh dialog"
                   disabled={isManualRepairing}
                   onClick={() => setManualRepairModelId(null)}
                 >
                   <X className="w-4 h-4" />
-                </button>
+                </IconButton>
               </div>
 
               <div className="space-y-4 p-5">
@@ -171,22 +161,17 @@ export function MeshRepairModals({
                 </div>
 
                 <div className="grid grid-cols-2 gap-2 pt-1">
-                  <button
-                    type="button"
-                    className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
+                  <Button
+                    variant="secondary"
+                    className="w-full"
                     disabled={isManualRepairing}
                     onClick={() => setManualRepairModelId(null)}
                   >
                     Keep Original
-                  </button>
-                  <button
-                    type="button"
-                    className="ui-button !h-9 w-full px-3 text-xs inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
-                    style={{
-                      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                      color: 'var(--accent)',
-                    }}
+                  </Button>
+                  <Button
+                    variant="tinted-accent"
+                    className="w-full inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
                     disabled={isManualRepairing}
                     onClick={() => {
                       const id = manualRepairModelId;
@@ -198,10 +183,10 @@ export function MeshRepairModals({
                     }}
                   >
                     {isManualRepairing
-                      ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />Repairing…</>
+                      ? <><Spinner size="sm" />Repairing…</>
                       : <><Wrench className="h-3.5 w-3.5" />Repair</>
                     }
-                  </button>
+                  </Button>
                 </div>
               </div>
             </div>

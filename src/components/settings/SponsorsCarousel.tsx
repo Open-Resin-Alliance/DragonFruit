@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useLayoutEffect } from 'react';
 import { Heart } from 'lucide-react';
+import { Button } from '@/components/atoms';
 import fallbackSponsors from '@/components/settings/sponsors.json';
 
 export type Sponsor = {
@@ -502,10 +503,12 @@ export function SponsorsCarousel() {
               Your name spins here when you back us.
             </p>
           </div>
-          <button
+          <Button
             type="button"
             onClick={() => openExternal(OPENCOLLECTIVE_URL)}
-            className="ui-button !h-7 shrink-0 !px-2.5 text-[11px] inline-flex items-center gap-1"
+            variant="secondary"
+            size="auto"
+            className="!h-7 shrink-0 !px-2.5 text-[11px] inline-flex items-center gap-1"
             style={{
               background: 'color-mix(in srgb, var(--accent), var(--surface-0) 12%)',
               borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
@@ -514,7 +517,7 @@ export function SponsorsCarousel() {
           >
             <Heart className="h-3 w-3" aria-hidden="true" />
             Sponsor
-          </button>
+          </Button>
         </div>
       ) : (
         <div className="relative mt-2 overflow-hidden rounded-md" style={{ background: 'color-mix(in srgb, var(--surface-0), transparent 20%)' }}>

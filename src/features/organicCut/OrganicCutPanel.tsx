@@ -2,8 +2,8 @@ import React from 'react';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import { Trans } from '@lingui/react/macro';
-import { CircleHelp, Eye, EyeOff, Link2, Link2Off, Loader2, RotateCcw, Trash2, TriangleAlert } from 'lucide-react';
-import { Card, CardHeader, IconButton } from '@/components/atoms';
+import { CircleHelp, Eye, EyeOff, Link2, Link2Off, RotateCcw, Trash2, TriangleAlert } from 'lucide-react';
+import { Button, Card, CardHeader, IconButton, PanelCollapseToggle, Spinner } from '@/components/atoms';
 import { CompactNumberField } from '@/components/ui/compactNumberField';
 import { Tooltip } from '@/components/ui/Tooltip';
 import type { OrganicCutMode } from './types';
@@ -361,28 +361,13 @@ export function OrganicCutPanel({
       <CardHeader
         left={(
           <>
-            <IconButton
-              onClick={() => {
+            <PanelCollapseToggle
+              expanded={expanded}
+              onToggle={() => {
                 if (disabled) return;
                 setExpanded((prev) => !prev);
               }}
-              className="!p-0.5"
-              title={expanded ? 'Collapse card' : 'Expand card'}
-            >
-              <svg
-                className="w-3 h-3 transform transition-transform"
-                style={{ color: expanded ? 'var(--accent)' : 'var(--text-muted)' }}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                {expanded ? (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                ) : (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                )}
-              </svg>
-            </IconButton>
+            />
             <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Cut</h3>
             <Tooltip
               maxWidth={280}
@@ -439,26 +424,28 @@ export function OrganicCutPanel({
           <div className="rounded-md border p-2 space-y-1.5" style={accentCardStyle}>
             <div className="ui-meta" style={{ color: 'var(--text-muted)' }}>{_(msg`Cut Mode`)}</div>
             <div className="grid grid-cols-2 gap-1">
-              <button
-                type="button"
-                className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+              <Button
+                variant="secondary"
+                size="auto"
+                className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                 onClick={() => setState({ cutMode: 'contour' })}
                 disabled={disabled || isApplying}
                 style={state.cutMode === 'contour' ? activeModeStyle : undefined}
                 title={_(msg`Split along a curved seam that follows your drawn loop (zero-thickness mate).`)}
               >
                 <Trans>Contour</Trans>
-              </button>
-              <button
-                type="button"
-                className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+              </Button>
+              <Button
+                variant="secondary"
+                size="auto"
+                className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                 onClick={() => setState({ cutMode: 'plane' })}
                 disabled={disabled || isApplying}
                 style={state.cutMode === 'plane' ? activeModeStyle : undefined}
                 title={_(msg`Slice along a single flat plane derived from your points.`)}
               >
                 <Trans>Flat</Trans>
-              </button>
+              </Button>
             </div>
           </div>
 
@@ -537,19 +524,21 @@ export function OrganicCutPanel({
                   Cut Mode. No Tenon cuts the halves without a tenon; Frustum/Dome
                   turns the tenon on with that shape. */}
               <div className="grid grid-cols-3 gap-1">
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                <Button
+                  variant="secondary"
+                  size="auto"
+                  className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                   onClick={() => setState({ generateTenon: false })}
                   disabled={disabled || isApplying}
                   style={!state.generateTenon ? activeModeStyle : undefined}
                   title={_(msg`Don't add a registration tenon — the halves are cut apart with no way to index them back together.`)}
                 >
                   <Trans>No Tenon</Trans>
-                </button>
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="auto"
+                  className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                   onClick={() =>
                     // Only the frustum is filleted, so the radius can be stale
                     // (above what this width/depth allows) after a detour through
@@ -571,10 +560,11 @@ export function OrganicCutPanel({
                   title={_(msg`Tapered rectangular tenon — locks the parts against rotation.`)}
                 >
                   <Trans>Frustum</Trans>
-                </button>
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="auto"
+                  className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                   onClick={() =>
                     // A dome's floor is higher than a frustum's, so lift any
                     // dimension that would be rejected outright on switch.
@@ -593,7 +583,7 @@ export function OrganicCutPanel({
                   title={_(msg`Half-sphere tenon — locates the parts but allows rotation.`)}
                 >
                   <Trans>Dome</Trans>
-                </button>
+                </Button>
               </div>
               {state.generateTenon && (
                 <div className="space-y-1.5 pt-0.5">
@@ -610,15 +600,16 @@ export function OrganicCutPanel({
                         <span className="ui-meta" style={{ color: 'var(--text-muted)' }}>
                           <Trans>Moved off centre</Trans>
                         </span>
-                        <button
-                          type="button"
-                          className="ui-button ui-button-secondary !h-6 whitespace-nowrap px-1.5 text-[10px]"
+                        <Button
+                          variant="secondary"
+                          size="auto"
+                          className="!h-6 whitespace-nowrap px-1.5 text-[10px]"
                           onClick={() => setState({ tenonAnchor: null })}
                           disabled={disabled || isApplying}
                           title={_(msg`Put the tenon back in the middle of the cut.`)}
                         >
                           <Trans>Center</Trans>
-                        </button>
+                        </Button>
                       </div>
                     );
                   })()}
@@ -716,9 +707,10 @@ export function OrganicCutPanel({
                   {/* Flip + reset actions: which half gets the tenon, and back to
                       defaults. The reset leaves the No Tenon/on choice alone. */}
                   <div className="flex gap-1 pt-1">
-                    <button
-                      type="button"
-                      className="ui-button ui-button-secondary flex-1 !min-h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px] disabled:opacity-60"
+                    <Button
+                      variant="secondary"
+                      size="auto"
+                      className="flex-1 !min-h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px] disabled:opacity-60"
                       onClick={() => setState({ tenonSwapSides: !state.tenonSwapSides })}
                       disabled={disabled || isApplying}
                       title={_(msg`Swap which cut half receives the tenon and which receives the mortise.`)}
@@ -729,10 +721,11 @@ export function OrganicCutPanel({
                       }}
                     >
                       <Trans>Flip Tenon</Trans>
-                    </button>
-                    <button
-                      type="button"
-                      className="ui-button ui-button-secondary flex-1 !min-h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px] disabled:opacity-60"
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="auto"
+                      className="flex-1 !min-h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px] disabled:opacity-60"
                       onClick={() => setState({ ...DEFAULT_TENON_SETTINGS, generateTenon: state.generateTenon })}
                       disabled={disabled || isApplying || !tenonSettingsDirty}
                       title={_(msg`Put every tenon setting back to its default: shape, width, depth, fillet, fit tolerance, uniform scale, side and aim.`)}
@@ -743,7 +736,7 @@ export function OrganicCutPanel({
                       }}
                     >
                       Reset
-                    </button>
+                    </Button>
                   </div>
                 </div>
               )}
@@ -793,10 +786,11 @@ export function OrganicCutPanel({
                   const isActive = s.index === activeLoopIndex;
                   const incomplete = s.pointCount < 3;
                   return (
-                    <button
+                    <Button
                       key={s.index}
-                      type="button"
-                      className="ui-button ui-button-secondary !h-7 !min-w-7 whitespace-nowrap px-1.5 text-[10px] disabled:opacity-60"
+                      variant="secondary"
+                      size="auto"
+                      className="!h-7 !min-w-7 whitespace-nowrap px-1.5 text-[10px] disabled:opacity-60"
                       onClick={() => onSelectLoop?.(s.index)}
                       disabled={disabled || isApplying}
                       style={
@@ -813,18 +807,19 @@ export function OrganicCutPanel({
                       }
                     >
                       {s.index + 1}
-                    </button>
+                    </Button>
                   );
                 })}
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-7 !min-w-7 whitespace-nowrap px-1.5 text-[11px] disabled:opacity-60"
+                <Button
+                  variant="secondary"
+                  size="auto"
+                  className="!h-7 !min-w-7 whitespace-nowrap px-1.5 text-[11px] disabled:opacity-60"
                   onClick={onAddLoop}
                   disabled={disabled || isApplying || !canAddLoop}
                   title={_(msg`Add another loop and start drawing it. On Cut, every loop is cut together — use it to free a part attached in several places (e.g. a tail joined at two posts).`)}
                 >
                   +
-                </button>
+                </Button>
               </div>
             </div>
           )}
@@ -832,15 +827,16 @@ export function OrganicCutPanel({
           {/* Snap to edges: pull every waypoint onto the model's
               nearest sharp crease/boundary, for tidying points placed roughly in
               a fold. No-op when the model has no sharp edges. */}
-          <button
-            type="button"
-            className="ui-button ui-button-secondary w-full !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
+          <Button
+            variant="secondary"
+            size="auto"
+            className="w-full !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
             onClick={onSnapToEdges}
             disabled={disabled || isApplying || !canSnapToEdges}
             title={_(msg`Nudge every waypoint onto the model's nearest sharp edge (crease or boundary), preferring a corner where several edges meet — for points placed roughly in a crease or corner. Does nothing on a smooth model with no sharp edges. Double-click a waypoint to lock it (white cage) so snap leaves it where it is.`)}
           >
             <Trans>Snap to Edges</Trans>
-          </button>
+          </Button>
         </div>
 
         {/* Actions stay pinned below the scroll area: Cut must be reachable
@@ -865,27 +861,29 @@ export function OrganicCutPanel({
             </div>
           )}
           <div className="flex gap-2">
-            <button
-              type="button"
-              className="ui-button ui-button-secondary flex-1 !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
+            <Button
+              variant="secondary"
+              size="auto"
+              className="flex-1 !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
               onClick={onClearLoop}
               disabled={disabled || isApplying || !loopSummaries.some((s) => s.pointCount > 0)}
               title={_(msg`Discard every loop in this cut, not just the active one.`)}
             >
               <Trans>Clear All</Trans>
-            </button>
-            <button
-              type="button"
-              className="ui-button ui-button-accent flex-1 !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
+            </Button>
+            <Button
+              variant="accent"
+              size="auto"
+              className="flex-1 !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
               onClick={onApply}
               disabled={disabled || isApplying || !canApply || tenonBlocksCut}
               title={tenonBlocksCut ? tenonDetail : undefined}
             >
               <span className="inline-flex items-center justify-center gap-1.5">
-                {isApplying && <Loader2 className="h-3 w-3 animate-spin" />}
+                {isApplying && <Spinner size="xs" />}
                 <span>{isApplying ? 'Cutting...' : 'Cut'}</span>
               </span>
-            </button>
+            </Button>
           </div>
         </div>
         </>

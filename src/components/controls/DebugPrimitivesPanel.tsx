@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { Trash2 } from 'lucide-react';
-import { Button, Card, CardHeader, IconButton } from '@/components/atoms';
+import { Button, Card, CardHeader, IconButton, IconChip, PanelCollapseToggle } from '@/components/atoms';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 export type DebugPrimitiveType =
@@ -108,25 +108,7 @@ export function DebugPrimitivesPanel({ onAdd, onClear }: DebugPrimitivesPanelPro
       <CardHeader
         left={(
           <>
-            <IconButton
-              onClick={() => setExpanded(!expanded)}
-              title={expanded ? 'Collapse card' : 'Expand card'}
-              className="!p-0.5"
-            >
-              <svg
-                className="w-3 h-3 transform transition-transform"
-                style={{ color: expanded ? 'var(--accent)' : 'var(--text-muted)' }}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                {expanded ? (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                ) : (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                )}
-              </svg>
-            </IconButton>
+            <PanelCollapseToggle expanded={expanded} onToggle={() => setExpanded(!expanded)} />
             <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Debug Primitives</h3>
           </>
         )}
@@ -135,6 +117,7 @@ export function DebugPrimitivesPanel({ onAdd, onClear }: DebugPrimitivesPanelPro
             onClick={onClear}
             className="!p-1.5 text-red-300 hover:text-red-200"
             title="Clear Debug Models"
+            aria-label="Clear Debug Models"
           >
             <Trash2 className="w-3.5 h-3.5" />
           </IconButton>
@@ -188,8 +171,8 @@ export function DebugPrimitivesPanel({ onAdd, onClear }: DebugPrimitivesPanelPro
                   background: 'color-mix(in srgb, var(--surface-1), var(--surface-0) 36%)',
                 }}
               >
-                <div
-                  className="w-9 h-9 rounded-md border flex items-center justify-center"
+                <IconChip
+                  size="lg"
                   style={{
                     background: `color-mix(in srgb, ${PRIMITIVE_STYLE[b.type].tint}, var(--surface-0) 86%)`,
                     borderColor: `color-mix(in srgb, ${PRIMITIVE_STYLE[b.type].tint}, var(--border-subtle) 45%)`,
@@ -198,7 +181,7 @@ export function DebugPrimitivesPanel({ onAdd, onClear }: DebugPrimitivesPanelPro
                   <div style={{ color: PRIMITIVE_STYLE[b.type].icon }}>
                     <PrimitiveIcon type={b.type} />
                   </div>
-                </div>
+                </IconChip>
                 <div className="text-[10px] text-center leading-tight px-1" style={{ color: 'var(--text-strong)' }}>
                   {b.label}
                 </div>

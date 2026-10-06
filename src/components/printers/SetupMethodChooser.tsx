@@ -3,7 +3,8 @@
 import React from 'react';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
-import { Loader2, Search, Settings2, Wifi } from 'lucide-react';
+import { Search, Settings2, Wifi } from 'lucide-react';
+import { Button, Spinner } from '@/components/atoms';
 
 type SetupMode = 'auto' | 'manual';
 
@@ -17,13 +18,15 @@ type SetupModeButtonProps = {
 export function SetupModeButton({ mode, onSwitch }: SetupModeButtonProps) {
   const { _ } = useLingui();
   return (
-    <button
+    <Button
       type="button"
       onClick={onSwitch}
-      className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-full"
+      variant="secondary"
+      size="auto"
+      className="!h-8 !px-3 !py-0 text-xs rounded-full"
     >
       {mode === 'auto' ? _(msg`Manual`) : _(msg`Auto`)}
-    </button>
+    </Button>
   );
 }
 
@@ -129,16 +132,18 @@ export function ManualIpEntryCard({
             if (event.key === 'Enter') onConnect();
           }}
         />
-        <button
+        <Button
           type="button"
           onClick={onConnect}
           disabled={isConnecting || !value.trim()}
-          className="ui-button ui-button-secondary !h-[34px] !px-3 !py-0 shrink-0 text-xs inline-flex items-center gap-1 rounded-full disabled:opacity-45"
+          variant="secondary"
+          size="auto"
+          className="!h-[34px] !px-3 !py-0 shrink-0 text-xs inline-flex items-center gap-1 rounded-full disabled:opacity-45"
           style={{ color: 'var(--accent-secondary)' }}
         >
-          {isConnecting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wifi className="h-3.5 w-3.5" />}
+          {isConnecting ? <Spinner size="sm" /> : <Wifi className="h-3.5 w-3.5" />}
           {isConnecting ? _(msg`Connecting…`) : label}
-        </button>
+        </Button>
       </div>
     </div>
   );

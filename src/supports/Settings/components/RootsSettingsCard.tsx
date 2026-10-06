@@ -14,7 +14,7 @@ interface RootsSettingsCardProps {
 export function RootsSettingsCard({ roots, onChange }: RootsSettingsCardProps) {
     const { _ } = useLingui();
     return (
-        <div className="bg-neutral-750 rounded p-1 mb-1">
+        <div className="rounded p-1 mb-1" style={{ background: 'var(--surface-1)' }}>
             <div className="flex items-center justify-between mb-1">
                 <span className="text-xs font-semibold text-neutral-300">{_(msg`Roots`)}</span>
                 <span className="text-[9px] text-neutral-500 uppercase tracking-wide">{roots.shape}</span>

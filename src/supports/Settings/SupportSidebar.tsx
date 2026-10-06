@@ -42,7 +42,7 @@ import {
     GridSettingsCard,
     SidebarPanelTabs,
 } from './components';
-import { Card, CardHeader, IconButton } from '@/components/atoms';
+import { Card, CardHeader, IconButton, PanelCollapseToggle } from '@/components/atoms';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { SupportAnatomyPreviewSlot } from './AnatomyPreview/SupportAnatomyPreviewSlot';
@@ -1192,25 +1192,7 @@ export function SupportSidebar({ activeModelId = null }: { activeModelId?: strin
             <CardHeader
                 left={(
                     <>
-                        <IconButton
-                            onClick={() => setExpanded((prev) => !prev)}
-                            className="!p-0.5"
-                            title={expanded ? _(msg`Collapse card`) : _(msg`Expand card`)}
-                        >
-                            <svg
-                                className="w-3 h-3 transform transition-transform"
-                                style={{ color: expanded ? 'var(--accent)' : 'var(--text-muted)' }}
-                                fill="none"
-                                stroke="currentColor"
-                                viewBox="0 0 24 24"
-                            >
-                                {expanded ? (
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                                ) : (
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                                )}
-                            </svg>
-                        </IconButton>
+                        <PanelCollapseToggle expanded={expanded} onToggle={() => setExpanded((prev) => !prev)} />
                         <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{_(msg`Support Studio`)}</h3>
                     </>
                 )}

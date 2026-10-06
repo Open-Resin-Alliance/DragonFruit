@@ -6,7 +6,8 @@ import { msg } from '@lingui/core/macro';
 import { Trans } from '@lingui/react/macro';
 import type { MessageDescriptor } from '@lingui/core';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
-import { ArchiveRestore, CheckCircle2, CircleHelp, Eye, Github, Loader2, RefreshCcw, ShieldCheck, ShieldX, Trash2, UploadCloud, X } from 'lucide-react';
+import { ArchiveRestore, CheckCircle2, CircleHelp, Eye, Github, RefreshCcw, ShieldCheck, ShieldX, Trash2, UploadCloud, X } from 'lucide-react';
+import { Button, IconButton, SegmentedControl, SettingRow, Spinner } from '@/components/atoms';
 import { getProfileStoreSnapshot } from '@/features/profiles/profileStore';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { v4 as uuidv4 } from 'uuid';
@@ -920,13 +921,13 @@ export function BackupsSettingsTab() {
               <div className="flex items-center gap-2">
                 <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Private GitHub Backups</Trans></h3>
                 {!backupsConfigured && (
-                  <button
+                  <Button
                     type="button"
                     onClick={() => setShowOAuthSetupModal(true)}
-                    className="ui-button ui-button-secondary !h-7 !px-2 !py-0 text-xs"
+                    variant="secondary" size="auto" className="!h-7 !px-2 !py-0 text-xs"
                   >
                     <Trans>OAuth setup</Trans>
-                  </button>
+                  </Button>
                 )}
                 <div className="relative group">
                   <button
@@ -976,7 +977,7 @@ export function BackupsSettingsTab() {
                       : <Trans>This self-compiled build needs your own GitHub OAuth app in .env before sign-in can work.</Trans>}
                   </p>
                   <div className="mt-2.5 flex items-center justify-center gap-2">
-                    <button
+                    <Button
                       type="button"
                       onClick={() => {
                         if (backupsConfigured) {
@@ -986,21 +987,21 @@ export function BackupsSettingsTab() {
                         }
                       }}
                       disabled={busy !== 'none'}
-                      className="ui-button ui-button-primary !h-10 !px-4 !py-0 text-sm inline-flex items-center gap-1.5 disabled:opacity-60"
+                      variant="primary" size="auto" className="!h-10 !px-4 !py-0 text-sm inline-flex items-center gap-1.5 disabled:opacity-60"
                       style={{ background: 'linear-gradient(135deg, #8250df, #6f42c1)', borderColor: 'color-mix(in srgb, #8250df, white 14%)', color: '#ffffff' }}
                     >
-                      {busy === 'auth' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Github className="h-4 w-4" />}
+                      {busy === 'auth' ? <Spinner size="md" /> : <Github className="h-4 w-4" />}
                       {backupsConfigured ? <Trans>Connect GitHub now</Trans> : <Trans>Set up OAuth</Trans>}
-                    </button>
+                    </Button>
                     {!backupsConfigured && (
-                      <button
+                      <Button
                         type="button"
                         onClick={() => { void loadStatus(true); }}
-                        className="ui-button ui-button-secondary !h-10 !px-3 !py-0 text-sm inline-flex items-center gap-1.5"
+                        variant="secondary" size="auto" className="!h-10 !px-3 !py-0 text-sm inline-flex items-center gap-1.5"
                       >
                         <RefreshCcw className="h-4 w-4" />
                         <Trans>I configured it</Trans>
-                      </button>
+                      </Button>
                     )}
                   </div>
                   <div className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
@@ -1016,20 +1017,20 @@ export function BackupsSettingsTab() {
                     <Trans>We found <span style={{ color: 'var(--text-strong)' }}>{defaultRepoName}</span>. Choose whether to keep using it or create a fresh repository.</Trans>
                   </p>
                   <div className="mt-2.5 grid gap-2 sm:grid-cols-2 text-left">
-                    <button
+                    <Button
                       type="button"
                       onClick={chooseExistingRepo}
-                      className="ui-button ui-button-secondary !h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5"
+                      variant="secondary" size="auto" className="!h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5"
                     >
                       <Trans>Use existing repo</Trans>
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       type="button"
                       onClick={chooseCreateNewRepo}
-                      className="ui-button ui-button-primary !h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5"
+                      variant="primary" size="auto" className="!h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5"
                     >
                       <Trans>Create {suggestedNewRepoName}</Trans>
-                    </button>
+                    </Button>
                   </div>
                 </>
               ) : !repoExists ? (
@@ -1039,7 +1040,7 @@ export function BackupsSettingsTab() {
                     <Trans>Preparing your repository <span style={{ color: 'var(--text-strong)' }}>{selectedBackupRepoName}</span>. This usually takes a moment.</Trans>
                   </p>
                   <div className="mt-2 inline-flex items-center justify-center gap-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <Spinner size="sm" />
                     {busy === 'ensure' ? <Trans>Creating and configuring repository…</Trans> : <Trans>Waiting for repository check…</Trans>}
                   </div>
                 </>
@@ -1050,15 +1051,15 @@ export function BackupsSettingsTab() {
                     <Trans>Repository <span style={{ color: 'var(--text-strong)' }}>{selectedBackupRepoName}</span> is ready. Run your first backup to finish onboarding.</Trans>
                   </p>
                   <div className="mt-2.5 flex items-center justify-center gap-2">
-                    <button
+                    <Button
                       type="button"
                       onClick={() => { void runSync(false); }}
                       disabled={busy !== 'none' || !status?.configured}
-                      className="ui-button ui-button-primary !h-9 !px-3 !py-0 text-sm inline-flex items-center gap-1.5 disabled:opacity-60"
+                      variant="primary" size="auto" className="!h-9 !px-3 !py-0 text-sm inline-flex items-center gap-1.5 disabled:opacity-60"
                     >
-                      {busy === 'sync' ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
+                      {busy === 'sync' ? <Spinner size="md" /> : <UploadCloud className="h-4 w-4" />}
                       <Trans>Run first backup now</Trans>
-                    </button>
+                    </Button>
                   </div>
                 </>
               )}
@@ -1069,7 +1070,7 @@ export function BackupsSettingsTab() {
           <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
           {loadingStatus ? (
             <div className="text-xs inline-flex items-center gap-1.5" style={{ color: 'var(--text-muted)' }}>
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <Spinner size="sm" />
               <Trans>Loading backup status…</Trans>
             </div>
           ) : !status?.configured ? (
@@ -1131,35 +1132,35 @@ export function BackupsSettingsTab() {
               <Trans>Run a sync, verify repository readiness, or disconnect this GitHub account.</Trans>
             </div>
             <div className="mt-2 grid gap-2 sm:grid-cols-3">
-              <button
+              <Button
                 type="button"
                 onClick={() => { void runSync(false); }}
                 disabled={busy !== 'none' || !authenticated}
-                className="ui-button ui-button-primary !h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
+                variant="primary" size="auto" className="!h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
               >
-                {busy === 'sync' ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
+                {busy === 'sync' ? <Spinner size="md" /> : <UploadCloud className="h-4 w-4" />}
                 <Trans>Backup Now</Trans>
-              </button>
+              </Button>
 
-              <button
+              <Button
                 type="button"
                 onClick={() => { void handleEnsureRepo(); }}
                 disabled={busy !== 'none' || !authenticated}
-                className="ui-button ui-button-secondary !h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
+                variant="secondary" size="auto" className="!h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
               >
-                {busy === 'ensure' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArchiveRestore className="h-4 w-4" />}
+                {busy === 'ensure' ? <Spinner size="md" /> : <ArchiveRestore className="h-4 w-4" />}
                 <Trans>Verify Repo</Trans>
-              </button>
+              </Button>
 
-              <button
+              <Button
                 type="button"
                 onClick={() => { void handleDisconnect(); }}
                 disabled={busy !== 'none' || !authenticated}
-                className="ui-button ui-button-danger !h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
+                variant="danger" size="auto" className="!h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
               >
-                {busy === 'logout' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldX className="h-4 w-4" />}
+                {busy === 'logout' ? <Spinner size="md" /> : <ShieldX className="h-4 w-4" />}
                 <Trans>Disconnect</Trans>
-              </button>
+              </Button>
             </div>
           </div>
 
@@ -1170,30 +1171,30 @@ export function BackupsSettingsTab() {
                 <Trans>Remote backup is newer than your local snapshot. Choose how to resolve this sync.</Trans>
               </p>
               <div className="mt-2 flex flex-wrap items-center gap-2">
-                <button
+                <Button
                   type="button"
                   onClick={() => {
                     setBusy('restore');
                     applyRemoteSnapshot(remoteConflictSnapshot);
                   }}
                   disabled={busy !== 'none'}
-                  className="ui-button ui-button-secondary !h-9 !px-3 !py-0 text-sm inline-flex items-center gap-1.5 disabled:opacity-60"
+                  variant="secondary" size="auto" className="!h-9 !px-3 !py-0 text-sm inline-flex items-center gap-1.5 disabled:opacity-60"
                   style={{ color: '#facc15' }}
                 >
                   <ArchiveRestore className="h-4 w-4" />
                   <Trans>Restore Remote</Trans>
-                </button>
+                </Button>
 
-                <button
+                <Button
                   type="button"
                   onClick={() => { void runSync(true); }}
                   disabled={busy !== 'none'}
-                  className="ui-button ui-button-secondary !h-9 !px-3 !py-0 text-sm inline-flex items-center gap-1.5 disabled:opacity-60"
+                  variant="secondary" size="auto" className="!h-9 !px-3 !py-0 text-sm inline-flex items-center gap-1.5 disabled:opacity-60"
                   style={{ color: 'var(--danger)' }}
                 >
                   <RefreshCcw className="h-4 w-4" />
                   <Trans>Force Push Local</Trans>
-                </button>
+                </Button>
               </div>
             </div>
           )}
@@ -1201,60 +1202,42 @@ export function BackupsSettingsTab() {
           <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
             <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}><Trans>Automation</Trans></div>
             <div className="mt-2 grid gap-2">
-              <div className="rounded-md border px-2.5 py-2 flex items-center justify-between gap-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div>
-                  <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Enable automatic backups</Trans></div>
-                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}><Trans>Automatically sync to your private GitHub backup on an interval.</Trans></div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setAutoSyncEnabled((prev) => !prev)}
-                  className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                  aria-pressed={autoSyncEnabled}
-                  style={autoSyncEnabled
-                    ? {
-                        borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                        color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                      }
-                    : {
-                        borderColor: 'var(--border-subtle)',
-                        background: 'var(--surface-1)',
-                        color: 'var(--text-muted)',
-                      }}
-                >
-                  {autoSyncEnabled ? <Trans>ON</Trans> : <Trans>OFF</Trans>}
-                </button>
-              </div>
-
-              <div
-                className="rounded-md border px-2.5 py-2 flex items-center justify-between gap-3"
-                style={{
-                  borderColor: 'var(--border-subtle)',
-                  background: 'var(--surface-1)',
-                  opacity: autoSyncEnabled ? 1 : 0.68,
-                }}
+              <SettingRow
+                bordered
+                label={<Trans>Enable automatic backups</Trans>}
+                description={<Trans>Automatically sync to your private GitHub backup on an interval.</Trans>}
               >
-                <div>
-                  <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Sync interval</Trans></div>
-                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}><Trans>Minutes between automatic sync attempts.</Trans></div>
-                </div>
-                <div className="inline-flex items-center gap-2">
-                  <NumberInput
-                    min={1}
-                    max={240}
-                    step={1}
-                    value={autoSyncMinutes}
-                    onChange={(next) => {
-                      if (!Number.isFinite(next)) return;
-                      setAutoSyncMinutes(Math.max(1, Math.min(240, Math.round(next))));
-                    }}
-                    className="ui-input h-[34px] w-[120px] pl-2.5 pr-5 py-1.5 text-sm"
-                    disabled={!autoSyncEnabled}
-                  />
-                  <span className="text-xs" style={{ color: 'var(--text-muted)' }}><Trans>min</Trans></span>
-                </div>
-              </div>
+                <SegmentedControl
+                  label={_(msg`Automatic backups`)}
+                  value={autoSyncEnabled ? 'on' : 'off'}
+                  onChange={(value) => setAutoSyncEnabled(value === 'on')}
+                  options={[
+                    { value: 'on', label: <Trans>ON</Trans> },
+                    { value: 'off', label: <Trans>OFF</Trans> },
+                  ]}
+                />
+              </SettingRow>
+
+              <SettingRow
+                bordered
+                disabled={!autoSyncEnabled}
+                label={<Trans>Sync interval</Trans>}
+                description={<Trans>Minutes between automatic sync attempts.</Trans>}
+              >
+                <NumberInput
+                  min={1}
+                  max={240}
+                  step={1}
+                  value={autoSyncMinutes}
+                  onChange={(next) => {
+                    if (!Number.isFinite(next)) return;
+                    setAutoSyncMinutes(Math.max(1, Math.min(240, Math.round(next))));
+                  }}
+                  className="ui-input h-[34px] w-[120px] pl-2.5 pr-5 py-1.5 text-sm"
+                  disabled={!autoSyncEnabled}
+                />
+                <span className="text-xs" style={{ color: 'var(--text-muted)' }}><Trans>min</Trans></span>
+              </SettingRow>
             </div>
 
             <div className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
@@ -1268,15 +1251,15 @@ export function BackupsSettingsTab() {
                 <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}><Trans>Manage Backups</Trans></div>
                 <div className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}><Trans>View, restore, or delete older snapshots from your private repository.</Trans></div>
               </div>
-              <button
+              <Button
                 type="button"
                 onClick={() => { void loadHistory(); }}
                 disabled={historyLoading}
-                className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs inline-flex items-center gap-1.5 disabled:opacity-60"
+                variant="secondary" size="auto" className="!h-8 !px-2.5 !py-0 text-xs inline-flex items-center gap-1.5 disabled:opacity-60"
               >
-                {historyLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCcw className="h-3.5 w-3.5" />}
+                {historyLoading ? <Spinner size="sm" /> : <RefreshCcw className="h-3.5 w-3.5" />}
                 <Trans>Refresh</Trans>
-              </button>
+              </Button>
             </div>
 
           <div className="mt-2 max-h-64 overflow-auto custom-scrollbar">
@@ -1354,26 +1337,26 @@ export function BackupsSettingsTab() {
               </div>
               <div className="flex items-center gap-2">
                 {selectedHistoryId && (
-                  <button
+                  <Button
                     type="button"
                     onClick={() => { void handleRestoreHistory(selectedHistoryId); }}
                     disabled={busy !== 'none'}
-                    className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs inline-flex items-center gap-1.5 disabled:opacity-60"
+                    variant="secondary" size="auto" className="!h-8 !px-2.5 !py-0 text-xs inline-flex items-center gap-1.5 disabled:opacity-60"
                     style={{ color: 'var(--accent-secondary)' }}
                   >
                     <ArchiveRestore className="h-3.5 w-3.5" />
                     <Trans>Restore as Current</Trans>
-                  </button>
+                  </Button>
                 )}
-                <button
+                <IconButton
+                  variant="surface"
+                  size="sm"
                   type="button"
                   onClick={() => setShowSnapshotModal(false)}
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border transition-colors"
-                  style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-1)' }}
                   aria-label={_(msg`Close snapshot details`)}
                 >
                   <X className="h-4 w-4" />
-                </button>
+                </IconButton>
               </div>
             </div>
 
@@ -1381,7 +1364,7 @@ export function BackupsSettingsTab() {
               {!selectedHistoryId || !selectedHistoryDocument ? (
                 <div className="h-full min-h-0 flex items-center justify-center">
                   <div className="inline-flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <Spinner size="sm" />
                     <Trans>Loading snapshot content…</Trans>
                   </div>
                 </div>
@@ -1613,15 +1596,15 @@ export function BackupsSettingsTab() {
                   <Trans>Required for self-compiled builds that do not ship with backup OAuth env values.</Trans>
                 </p>
               </div>
-              <button
+              <IconButton
+                variant="surface"
+                size="sm"
                 type="button"
                 onClick={() => setShowOAuthSetupModal(false)}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md border transition-colors"
-                style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-1)' }}
                 aria-label={_(msg`Close OAuth setup`)}
               >
                 <X className="h-4 w-4" />
-              </button>
+              </IconButton>
             </div>
 
             <div className="p-4 space-y-3">
@@ -1646,13 +1629,13 @@ export function BackupsSettingsTab() {
                     className="ui-input h-9 w-full px-2 text-[12px]"
                     placeholder={_(msg`Generate a secret…`)}
                   />
-                  <button
+                  <Button
                     type="button"
                     onClick={generateCookieSecretDraft}
-                    className="ui-button ui-button-secondary !h-9 !px-2.5 !py-0 text-xs"
+                    variant="secondary" size="auto" className="!h-9 !px-2.5 !py-0 text-xs"
                   >
                     <Trans>Generate</Trans>
-                  </button>
+                  </Button>
                 </div>
               </div>
 
@@ -1660,13 +1643,13 @@ export function BackupsSettingsTab() {
                 <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}><Trans>.env template</Trans></div>
                 <pre className="mt-2 rounded-md border p-2 text-xs leading-relaxed overflow-auto custom-scrollbar whitespace-pre" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)', color: 'var(--text-muted)' }}>{`GITHUB_OAUTH_CLIENT_ID=<your_github_oauth_client_id>\nGITHUB_OAUTH_CLIENT_SECRET=<your_github_oauth_client_secret>\nGITHUB_OAUTH_REDIRECT_URI=${oauthCallbackUrl}\nBACKUP_COOKIE_SECRET=${oauthCookieSecretDraft.trim() || '<generate_a_64_char_secret>'}`}</pre>
                 <div className="mt-2 flex items-center justify-end">
-                  <button
+                  <Button
                     type="button"
                     onClick={() => { void copyOAuthEnvTemplate(); }}
-                    className="ui-button ui-button-primary !h-8 !px-2.5 !py-0 text-xs"
+                    variant="primary" size="auto" className="!h-8 !px-2.5 !py-0 text-xs"
                   >
                     <Trans>Copy template</Trans>
-                  </button>
+                  </Button>
                 </div>
               </div>
             </div>

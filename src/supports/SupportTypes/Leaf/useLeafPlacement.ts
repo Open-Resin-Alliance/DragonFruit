@@ -4,6 +4,7 @@ import { useInteractionStatus } from '../../interaction/useInteractionStatus';
 import { calculateSmoothedNormal } from '../../PlacementLogic/PlacementUtils';
 import { leafPlacementStore, useLeafPlacementState } from './leafPlacementState';
 import { useActionActive } from '@/hotkeys/hotkeyStore';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { getSnapshot, removeKnotById } from '../../state';
 
 export const LEAF_HOTKEY_REARM_EVENT = 'support-leaf-hotkey-rearm';
@@ -40,26 +41,23 @@ export function useLeafPlacement() {
     }, [sproutedLockActive]);
 
     // Escape to cancel
-    useEffect(() => {
-        const handleEscape = (e: CustomEvent) => {
-            if (e.detail.key === 'Escape' && (state.stage === 'awaitingBase' || state.stage === 'awaitingSproutTip')) {
-                const snap = leafPlacementStore.getSnapshot();
-                if (snap.junctionHubId) {
-                    if (snap.junctionHubIsNew) {
-                        const leaves = Object.values(getSnapshot().leaves);
-                        const hasLeaves = leaves.some(leaf => leaf.parentKnotId === snap.junctionHubId);
-                        if (!hasLeaves) {
-                            removeKnotById(snap.junctionHubId);
-                        }
+    useEscapeToClose(
+        state.stage === 'awaitingBase' || state.stage === 'awaitingSproutTip',
+        () => {
+            const snap = leafPlacementStore.getSnapshot();
+            if (snap.junctionHubId) {
+                if (snap.junctionHubIsNew) {
+                    const leaves = Object.values(getSnapshot().leaves);
+                    const hasLeaves = leaves.some(leaf => leaf.parentKnotId === snap.junctionHubId);
+                    if (!hasLeaves) {
+                        removeKnotById(snap.junctionHubId);
                     }
-                    leafPlacementStore.setJunctionHub(null, null);
                 }
-                leafPlacementStore.reset();
+                leafPlacementStore.setJunctionHub(null, null);
             }
-        };
-        window.addEventListener('app-hotkey-keydown', handleEscape as EventListener);
-        return () => window.removeEventListener('app-hotkey-keydown', handleEscape as EventListener);
-    }, [state.stage]);
+            leafPlacementStore.reset();
+        },
+    );
 
     const onModelHover = useCallback((hit: THREE.Intersection | null) => {
         const leafReady = state.hotkeyActive;

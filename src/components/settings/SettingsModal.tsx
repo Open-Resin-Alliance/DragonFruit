@@ -131,7 +131,7 @@ import {
   saveImportDefaultsSettings,
   type ImportDefaultsSettings,
 } from '@/features/scene/importDefaultsPreferences';
-import { ColorSwatchInput } from '@/components/atoms';
+import { Button, ColorSwatchInput, IconButton } from '@/components/atoms';
 
 const DEFAULT_MESH_COLOR = '#a3a3a3';
 const DEFAULT_HEATMAP_MIN_ANGLE = 0;
@@ -1102,8 +1102,8 @@ export function SettingsModal({
   }, []);
 
   // Nested dialogs rendered through StructuredDialogModal register their own
-  // Escape handler and take precedence; the cascade here covers the inline
-  // restore-defaults confirmation, which does not.
+  // Escape handler and take precedence; the cascade here is the settings
+  // shell's own dismissal when nothing is layered above it.
   useEscapeToClose(isOpen, () => {
     if (showThemeDeleteConfirm) {
       handleCancelThemeDeleteConfirm();
@@ -1115,10 +1115,6 @@ export function SettingsModal({
     }
     if (showThemeSaveConfirm) {
       handleCancelThemeSaveConfirm();
-      return;
-    }
-    if (showRestoreDefaultsConfirm) {
-      handleCancelRestoreDefaults();
       return;
     }
     handleCancel();
@@ -1325,14 +1321,14 @@ export function SettingsModal({
               </p>
             </div>
           </div>
-          <button
-            onClick={handleCancel}
-            className="ui-button ui-button-secondary inline-flex items-center justify-center leading-none !h-8 !w-8 !p-0"
+          <IconButton
+            variant="solid"
+            size="sm"
             aria-label="Close"
-            type="button"
+            onClick={handleCancel}
           >
             <X className="h-4 w-4" />
-          </button>
+          </IconButton>
         </div>
 
         <div className="flex-1 min-h-0 flex">
@@ -1794,210 +1790,119 @@ export function SettingsModal({
         </div>
 
         <div className="px-4 py-3 flex items-center justify-between gap-2" style={{ borderTop: '1px solid var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 10%)' }}>
-          <button
-            type="button"
-            onClick={handleRestoreDefaults}
-            className="ui-button !h-10 !px-3.5 !py-0 text-sm inline-flex items-center gap-1.5 whitespace-nowrap"
+          <Button
+            variant="secondary"
+            size="auto"
+            className="!h-10 !px-3.5 !py-0 text-sm gap-1.5 whitespace-nowrap"
             style={accentSecondaryActionStyle92}
+            onClick={handleRestoreDefaults}
           >
             <RotateCcw className="h-4 w-4 shrink-0" />
             Restore Defaults
-          </button>
+          </Button>
 
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleCancel}
-              className="ui-button ui-button-secondary !h-10 !px-4 !py-0 text-sm"
+            <Button
+              variant="secondary"
+              size="auto"
+              className="!h-10 !px-4 !py-0 text-sm"
               style={{
                 color: 'var(--text-muted)',
               }}
+              onClick={handleCancel}
             >
               Cancel
-            </button>
-            <button
-              type="button"
-              onClick={handleApply}
-              className="ui-button ui-button-primary !h-10 !px-4 !py-0 text-sm inline-flex items-center gap-1.5 whitespace-nowrap"
+            </Button>
+            <Button
+              variant="primary"
+              size="auto"
+              className="!h-10 !px-4 !py-0 text-sm gap-1.5 whitespace-nowrap"
               style={{
                 background: 'color-mix(in srgb, var(--accent), var(--surface-0) 16%)',
                 borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
               }}
+              onClick={handleApply}
             >
               <Check className="h-4 w-4 shrink-0" />
               Apply
-            </button>
+            </Button>
           </div>
         </div>
       </div>
 
-      {showRestoreDefaultsConfirm && (
-        <div
-          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/55 backdrop-blur-sm p-4"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              handleCancelRestoreDefaults();
-            }
-          }}
-        >
-          <div
-            className="w-full max-w-md overflow-hidden rounded-xl border shadow-2xl"
-            style={{
-              background: 'var(--surface-0)',
-              borderColor: 'var(--border-subtle)',
-              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Confirm restore defaults"
-          >
-            <div className="flex items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="flex items-center gap-2.5 min-w-0">
-                <span
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
-                  style={{
-                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
-                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
-                    color: '#d97706',
-                  }}
-                >
-                  <RotateCcw className="h-4 w-4" />
-                </span>
-                <div className="min-w-0">
-                  <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                    Restore Defaults?
-                  </h3>
-                  <p className="text-xs leading-snug mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                    This resets settings in this dialog to their default values.
-                  </p>
-                </div>
-              </div>
+      <StructuredDialogModal
+        open={showRestoreDefaultsConfirm}
+        ariaLabel="Confirm restore defaults"
+        title="Restore Defaults?"
+        subtitle="This resets settings in this dialog to their default values."
+        icon={<RotateCcw className="h-4 w-4" />}
+        iconTone="warning"
+        zIndexClassName="z-[70]"
+        maxWidthClassName="max-w-md"
+        closeAriaLabel="Close restore defaults confirmation"
+        onClose={handleCancelRestoreDefaults}
+        actions={(
+          <>
+            <Button
+              variant="secondary"
+              size="md"
+              onClick={handleCancelRestoreDefaults}
+            >
+              Keep Current
+            </Button>
+            <Button
+              variant="tinted-accent"
+              size="md"
+              className="gap-1.5"
+              onClick={handleConfirmRestoreDefaults}
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Restore Defaults
+            </Button>
+          </>
+        )}
+      >
+        <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
+          You can still review the changes before saving. Nothing is written until you click <strong>Apply</strong>.
+        </p>
+      </StructuredDialogModal>
 
-              <button
-                type="button"
-                onClick={handleCancelRestoreDefaults}
-                className="ui-button ui-button-secondary inline-flex items-center justify-center leading-none !h-8 !w-8 !p-0"
-                aria-label="Close restore defaults confirmation"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="p-4 space-y-3">
-              <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
-                You can still review the changes before saving. Nothing is written until you click <strong>Apply</strong>.
-              </p>
-
-              <div className="flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={handleCancelRestoreDefaults}
-                  className="ui-button ui-button-secondary !h-9 px-3 text-xs"
-                >
-                  Keep Current
-                </button>
-                <button
-                  type="button"
-                  onClick={handleConfirmRestoreDefaults}
-                  className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-                  style={{
-                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                    color: 'var(--accent)',
-                  }}
-                >
-                  <RotateCcw className="h-3.5 w-3.5" />
-                  Restore Defaults
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showReloadPrompt && (
-        <div
-          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/55 backdrop-blur-sm p-4"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setShowReloadPrompt(false);
-            }
-          }}
-        >
-          <div
-            className="w-full max-w-md overflow-hidden rounded-xl border shadow-2xl"
-            style={{
-              background: 'var(--surface-0)',
-              borderColor: 'var(--border-subtle)',
-              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Apply experiments"
-          >
-            <div className="flex items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="flex items-center gap-2.5 min-w-0">
-                <span
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
-                  style={{
-                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
-                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
-                    color: '#d97706',
-                  }}
-                >
-                  <RotateCcw className="h-4 w-4" />
-                </span>
-                <div className="min-w-0">
-                  <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                    Apply Experiments
-                  </h2>
-                  <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-                    Experiment changes take effect after a restart.
-                  </p>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setShowReloadPrompt(false)}
-                className="ui-button ui-button-secondary inline-flex items-center justify-center leading-none !h-8 !w-8 !p-0"
-                aria-label="Close restart prompt"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="p-4 space-y-3">
-              <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
-                Reload DragonFruit now to apply your experiment changes? Any unsaved changes to the current scene will be lost.
-              </p>
-
-              <div className="flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => { setShowReloadPrompt(false); onClose(); }}
-                  className="ui-button ui-button-secondary !h-9 px-3 text-xs"
-                >
-                  Not Now
-                </button>
-                <button
-                  type="button"
-                  onClick={reloadToApplyExperiments}
-                  className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-                  style={{
-                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                    color: 'var(--accent)',
-                  }}
-                >
-                  <RotateCcw className="h-3.5 w-3.5" />
-                  Reload Now
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <StructuredDialogModal
+        open={showReloadPrompt}
+        ariaLabel="Apply experiments"
+        title="Apply Experiments"
+        subtitle="Experiment changes take effect after a restart."
+        icon={<RotateCcw className="h-4 w-4" />}
+        iconTone="warning"
+        zIndexClassName="z-[80]"
+        maxWidthClassName="max-w-md"
+        closeAriaLabel="Close restart prompt"
+        onClose={() => setShowReloadPrompt(false)}
+        actions={(
+          <>
+            <Button
+              variant="secondary"
+              size="md"
+              onClick={() => { setShowReloadPrompt(false); onClose(); }}
+            >
+              Not Now
+            </Button>
+            <Button
+              variant="tinted-accent"
+              size="md"
+              className="gap-1.5"
+              onClick={reloadToApplyExperiments}
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Reload Now
+            </Button>
+          </>
+        )}
+      >
+        <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
+          Reload DragonFruit now to apply your experiment changes? Any unsaved changes to the current scene will be lost.
+        </p>
+      </StructuredDialogModal>
 
       <StructuredDialogModal
         open={showThemeSaveConfirm && !isBuiltInThemePreset(draftThemePreset)}
@@ -2011,26 +1916,22 @@ export function SettingsModal({
         onClose={handleCancelThemeSaveConfirm}
         actions={(
           <>
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="md"
               onClick={handleCancelThemeSaveConfirm}
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
             >
               Cancel
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="tinted-accent"
+              size="md"
+              className="gap-1.5"
               onClick={handleConfirmSaveCurrentCustomTheme}
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-              style={{
-                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                color: 'var(--accent)',
-              }}
             >
               <Save className="h-3.5 w-3.5" />
               Save Theme
-            </button>
+            </Button>
           </>
         )}
       >
@@ -2051,26 +1952,22 @@ export function SettingsModal({
         onClose={handleCancelThemeDeleteConfirm}
         actions={(
           <>
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="md"
               onClick={handleCancelThemeDeleteConfirm}
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
             >
               Keep Theme
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="tinted-danger"
+              size="md"
+              className="gap-1.5"
               onClick={handleConfirmDeleteCurrentCustomTheme}
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-              style={{
-                borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
-                color: 'var(--danger)',
-              }}
             >
               <Trash2 className="h-3.5 w-3.5" />
               Delete Theme
-            </button>
+            </Button>
           </>
         )}
       >
@@ -2091,27 +1988,23 @@ export function SettingsModal({
         onClose={handleCancelThemeRenameDialog}
         actions={(
           <>
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="md"
               onClick={handleCancelThemeRenameDialog}
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
             >
               Cancel
-            </button>
-            <button
-              type="button"
-              onClick={handleConfirmRenameCurrentCustomTheme}
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-              style={{
-                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                color: 'var(--accent)',
-              }}
+            </Button>
+            <Button
+              variant="tinted-accent"
+              size="md"
+              className="gap-1.5"
               disabled={draftThemeRenameName.trim().length === 0}
+              onClick={handleConfirmRenameCurrentCustomTheme}
             >
               <Check className="h-3.5 w-3.5" />
               {isCreatingCustomThemeName ? 'Create' : 'Save Name'}
-            </button>
+            </Button>
           </>
         )}
       >

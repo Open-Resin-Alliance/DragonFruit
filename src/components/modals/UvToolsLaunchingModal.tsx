@@ -3,7 +3,8 @@
 import React from 'react';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { createPortal } from 'react-dom';
-import { ExternalLink, Loader2 } from 'lucide-react';
+import { ExternalLink } from 'lucide-react';
+import { ProgressBar, Spinner } from '@/components/atoms';
 
 type UvToolsLaunchingModalProps = {
   isOpen: boolean;
@@ -64,15 +65,7 @@ export function UvToolsLaunchingModal({
 
         <div className="p-4 space-y-3">
           {/* Smooth indeterminate progress bar (same as upload dialog) */}
-          <div
-            className="ui-loading-track h-2 w-full rounded-full"
-            style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
-          >
-            <div
-              className="ui-loading-indicator"
-              style={{ background: 'var(--accent)' }}
-            />
-          </div>
+          <ProgressBar size="sm" indeterminate />
 
           <p className="text-xs text-center" style={{ color: 'var(--text-muted)' }}>
             Launching UVTools to inspect the sliced file&hellip;
@@ -97,7 +90,7 @@ export function UvToolsLaunchingModal({
           )}
 
           <div className="flex items-center justify-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <Spinner size="sm" />
             <span>Please wait&hellip;</span>
           </div>
         </div>

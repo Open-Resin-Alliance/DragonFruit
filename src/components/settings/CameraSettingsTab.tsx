@@ -219,8 +219,7 @@ export function CameraSettingsTab({
                   step={1}
                   value={perspectiveFov}
                   onChange={(e) => onPerspectiveFovChange(parseInt(e.target.value, 10))}
-                  className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-                  style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+                  className="ui-range w-full"
                 />
               </div>
             )}
@@ -560,8 +559,7 @@ export function CameraSettingsTab({
                       step="0.05"
                       value={cameraTrackpadPanAcceleration}
                       onChange={(e) => onCameraTrackpadPanAccelerationChange(parseFloat(e.target.value))}
-                      className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-                      style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+                      className="ui-range w-full"
                     />
                   </div>
 
@@ -577,8 +575,7 @@ export function CameraSettingsTab({
                       step="0.05"
                       value={cameraTrackpadOrbitAcceleration}
                       onChange={(e) => onCameraTrackpadOrbitAccelerationChange(parseFloat(e.target.value))}
-                      className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-                      style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+                      className="ui-range w-full"
                     />
                   </div>
 
@@ -594,8 +591,7 @@ export function CameraSettingsTab({
                       step="0.05"
                       value={cameraTrackpadZoomAcceleration}
                       onChange={(e) => onCameraTrackpadZoomAccelerationChange(parseFloat(e.target.value))}
-                      className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-                      style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+                      className="ui-range w-full"
                     />
                   </div>
                 </div>

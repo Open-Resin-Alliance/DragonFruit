@@ -6,6 +6,7 @@ import { msg } from '@lingui/core/macro';
 import { Trans } from '@lingui/react/macro';
 import { AlertTriangle, ArchiveRestore, Trash2 } from 'lucide-react';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
+import { Button, IconChip } from '@/components/atoms';
 
 type Props = {
   savedAt: string;
@@ -95,16 +96,7 @@ export function SceneAutosaveRecoveryModal({ savedAt, voxlPath, origin, onRestor
           style={{ borderColor: 'var(--border-subtle)' }}
         >
           <div className="flex min-w-0 items-center gap-3">
-            <span
-              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
-              style={{
-                borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
-                background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
-                color: '#d97706',
-              }}
-            >
-              <AlertTriangle className="h-4 w-4" />
-            </span>
+            <IconChip icon={AlertTriangle} size="lg" tone="warning" />
             <div className="min-w-0 pr-2">
               <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
                 <Trans>Unsaved Scene Found</Trans>
@@ -158,23 +150,18 @@ export function SceneAutosaveRecoveryModal({ savedAt, voxlPath, origin, onRestor
           </div>
 
           <div className="grid grid-cols-2 gap-2 pt-1">
-            <button
-              type="button"
-              className="ui-button !h-9 w-full px-3 text-xs inline-flex items-center justify-center gap-1.5"
-              style={{
-                borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
-                color: 'var(--danger)',
-              }}
+            <Button
+              variant="tinted-danger"
+              className="w-full gap-1.5"
               disabled={busy !== 'none'}
               onClick={() => { void handleDiscard(); }}
             >
               <Trash2 className="h-3.5 w-3.5" />
               <Trans>Discard</Trans>
-            </button>
-            <button
-              type="button"
-              className="ui-button !h-9 w-full px-3 text-xs inline-flex items-center justify-center gap-1.5"
+            </Button>
+            <Button
+              variant="secondary"
+              className="w-full gap-1.5"
               style={{
                 borderColor: 'color-mix(in srgb, #22c55e, var(--border-subtle) 45%)',
                 background: 'color-mix(in srgb, #22c55e, var(--surface-1) 86%)',
@@ -185,7 +172,7 @@ export function SceneAutosaveRecoveryModal({ savedAt, voxlPath, origin, onRestor
             >
               <ArchiveRestore className="h-3.5 w-3.5" />
               <Trans>Restore</Trans>
-            </button>
+            </Button>
           </div>
         </div>
       </div>

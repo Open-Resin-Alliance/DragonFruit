@@ -5,7 +5,8 @@ import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import type { MessageDescriptor } from '@lingui/core';
-import { Check, ChevronRight, Loader2, Printer, X } from 'lucide-react';
+import { Check, ChevronRight, Printer, X } from 'lucide-react';
+import { Button, IconButton, ProgressBar, Spinner } from '@/components/atoms';
 import { getProfileNetworkUiAdapter } from '@/features/plugins/pluginRegistry';
 import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
 import { ManualIpEntryCard, SetupMethodChooser, SetupModeButton } from '@/components/printers/SetupMethodChooser';
@@ -414,15 +415,14 @@ export function PrinterVariantPickerModal({
             </h3>
             <p className="ui-meta truncate">{preset.libraryDisplayName ?? preset.name}</p>
           </div>
-          <button
-            type="button"
+          <IconButton
+            variant="surface"
+            size="sm"
             onClick={onClose}
-            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition-colors"
-            style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
             aria-label={_(msg`Close`)}
           >
             <X className="h-4 w-4" />
-          </button>
+          </IconButton>
         </div>
 
         {/* Body */}
@@ -464,7 +464,7 @@ export function PrinterVariantPickerModal({
                       </div>
                     ) : connecting ? (
                       <div className="flex items-center gap-2.5">
-                        <Loader2 className="h-4 w-4 shrink-0 animate-spin" style={{ color: 'var(--accent-secondary)' }} />
+                        <Spinner size="md" className="shrink-0" style={{ color: 'var(--accent-secondary)' }} />
                         <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
                           {_(msg`Detecting model…`)}
                         </span>
@@ -474,17 +474,7 @@ export function PrinterVariantPickerModal({
                         <span className="block truncate text-xs" style={{ color: 'var(--text-muted)' }}>
                           {formatScanningLabel(_, preset.libraryDisplayName ?? preset.name)}
                         </span>
-                        <div
-                          className="ui-loading-track h-1.5 w-full rounded-full"
-                          style={{ background: 'color-mix(in srgb, var(--surface-2), var(--surface-0) 40%)' }}
-                        >
-                          <div
-                            className="ui-loading-indicator"
-                            style={{
-                              background: 'linear-gradient(90deg, color-mix(in srgb, var(--accent-secondary), var(--surface-0) 30%), var(--accent))',
-                            }}
-                          />
-                        </div>
+                        <ProgressBar indeterminate size="xs" />
                       </div>
                     ) : devices.length > 0 ? (
                       <div className="flex items-center justify-between gap-3">
@@ -500,13 +490,15 @@ export function PrinterVariantPickerModal({
                         <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
                           {scanError ?? _(msg`No printers found.`)}
                         </span>
-                        <button
+                        <Button
                           type="button"
                           onClick={() => { void runScan(); }}
-                          className="ui-button ui-button-secondary !h-6 !px-2.5 !py-0 text-[11px] rounded-md"
+                          variant="secondary"
+                          size="auto"
+                          className="!h-6 !px-2.5 !py-0 text-[11px] rounded-md"
                         >
                           {_(msg`Scan again`)}
-                        </button>
+                        </Button>
                       </div>
                     )}
                   </div>
@@ -547,7 +539,7 @@ export function PrinterVariantPickerModal({
                               </span>
                             </span>
                             {connecting ? (
-                              <Loader2 className="h-4 w-4 shrink-0 animate-spin" style={{ color: 'var(--text-muted)' }} />
+                              <Spinner size="md" className="shrink-0" style={{ color: 'var(--text-muted)' }} />
                             ) : (
                               <ChevronRight className="h-4 w-4 shrink-0" style={{ color: 'var(--text-muted)' }} />
                             )}
@@ -693,23 +685,27 @@ export function PrinterVariantPickerModal({
             }}
           />
           <div className="flex shrink-0 items-center gap-2">
-            <button
+            <Button
               type="button"
               onClick={onClose}
-              className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-full"
+              variant="secondary"
+              size="auto"
+              className="!h-8 !px-3 !py-0 text-xs rounded-full"
             >
               {_(msg`Cancel`)}
-            </button>
+            </Button>
             {showNetworkMode && detectedVariant && !detectedAlreadyAdded && (
-              <button
+              <Button
                 type="button"
                 onClick={handleConfirmDetected}
-                className="ui-button ui-button-secondary !h-8 !px-3 !py-0 inline-flex items-center gap-1 text-xs rounded-full"
+                variant="secondary"
+                size="auto"
+                className="!h-8 !px-3 !py-0 inline-flex items-center gap-1 text-xs rounded-full"
                 style={ACCENT_ACTION_STYLE}
               >
                 <Check className="h-3.5 w-3.5" />
                 {_(msg`Add printer`)}
-              </button>
+              </Button>
             )}
           </div>
         </div>

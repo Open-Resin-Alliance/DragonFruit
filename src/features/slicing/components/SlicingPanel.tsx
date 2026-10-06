@@ -9,7 +9,7 @@ import { AlertTriangle, ChevronDown, CircleHelp, Cpu, Download, Edit3, ExternalL
 import { MouseTooltip } from '@/components/ui/MouseTooltip';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { KNOWN_SOURCE_EXTENSION_STRIP_RE } from '@/features/plugins/pluginFileTypeExtensions';
-import { Button, Card, CardHeader, IconButton } from '@/components/atoms';
+import { Button, Card, CardHeader, IconButton, PanelCollapseToggle, SegmentedControl } from '@/components/atoms';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
@@ -2218,25 +2218,7 @@ export function SlicingPanel({
         <CardHeader
           left={(
             <>
-              <IconButton
-                onClick={() => setIsExpanded((prev) => !prev)}
-                className="!p-0.5"
-                title={isExpanded ? _(msg`Collapse card`) : _(msg`Expand card`)}
-              >
-                <svg
-                  className="w-3 h-3 transform transition-transform"
-                  style={{ color: isExpanded ? 'var(--accent)' : 'var(--text-muted)' }}
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  {isExpanded ? (
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  ) : (
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                  )}
-                </svg>
-              </IconButton>
+              <PanelCollapseToggle expanded={isExpanded} onToggle={() => setIsExpanded((prev) => !prev)} />
               <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Slicing</Trans></h3>
             </>
           )}
@@ -2255,25 +2237,7 @@ export function SlicingPanel({
       <CardHeader
         left={(
           <>
-            <IconButton
-              onClick={() => setIsExpanded((prev) => !prev)}
-              className="!p-0.5"
-              title={isExpanded ? _(msg`Collapse card`) : _(msg`Expand card`)}
-            >
-              <svg
-                className="w-3 h-3 transform transition-transform"
-                style={{ color: isExpanded ? 'var(--accent)' : 'var(--text-muted)' }}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                {isExpanded ? (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                ) : (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                )}
-              </svg>
-            </IconButton>
+            <PanelCollapseToggle expanded={isExpanded} onToggle={() => setIsExpanded((prev) => !prev)} />
             <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Slicing</Trans></h3>
           </>
         )}
@@ -2585,32 +2549,17 @@ export function SlicingPanel({
                     label="Anti-Aliasing Mode"
                     help="Off disables AA. Blur applies XY smoothing only. 3DAA applies XY smoothing plus Z perturbation sampling through the layer height."
                   />
-                  <div className="grid grid-cols-3 gap-1">
-                    {(['Off', 'Blur', '3DAA'] as const).map((mode) => {
-                      const active = aaMode === mode;
-                      return (
-                        <button
-                          key={mode}
-                          type="button"
-                          className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                          style={active
-                            ? {
-                                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                color: 'var(--text-strong)',
-                              }
-                            : {
-                                borderColor: 'var(--border-subtle)',
-                                background: 'var(--surface-0)',
-                                color: 'var(--text-muted)',
-                              }}
-                          onClick={() => handleAaModeChange(mode)}
-                        >
-                          {mode}
-                        </button>
-                      );
-                    })}
-                  </div>
+                  <SegmentedControl
+                    label={_(msg`Anti-Aliasing Mode`)}
+                    size="sm"
+                    value={aaMode}
+                    onChange={handleAaModeChange}
+                    options={[
+                      { value: 'Off', label: 'Off' },
+                      { value: 'Blur', label: 'Blur' },
+                      { value: '3DAA', label: '3DAA' },
+                    ]}
+                  />
                   {aaMode !== 'Off' && (
                     <>
                       {/* ── Sample Count ── */}
@@ -2699,33 +2648,18 @@ export function SlicingPanel({
                                 label="Perturbation Pattern"
                                 help="Chooses how 3DAA distributes Z samples. Uniform uses centered spacing, Halton is low-discrepancy, and Base2 uses a van der Corput sequence."
                               />
-                              <div className="grid grid-cols-3 gap-1">
-                                {([
-                                  ['uniform', 'Uniform'],
-                                  ['halton', 'Halton'],
-                                  ['base2', 'Base2'],
-                                ] as const).map(([pattern, label]) => (
-                                  <button
-                                    key={pattern}
-                                    type="button"
-                                    className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                                    style={zaaPattern === pattern
-                                      ? {
-                                          borderColor: 'var(--accent-secondary-action-border)',
-                                          background: 'var(--accent-secondary-action-bg-92)',
-                                          color: 'var(--accent-secondary-action-color)',
-                                        }
-                                      : {
-                                          borderColor: 'var(--border-subtle)',
-                                          background: 'var(--surface-0)',
-                                          color: 'var(--text-muted)',
-                                        }}
-                                    onClick={() => setZaaPattern(pattern)}
-                                  >
-                                    {label}
-                                  </button>
-                                ))}
-                              </div>
+                              <SegmentedControl
+                                label={_(msg`Perturbation Pattern`)}
+                                size="sm"
+                                tone="accent-secondary"
+                                value={zaaPattern}
+                                onChange={setZaaPattern}
+                                options={[
+                                  { value: 'uniform', label: 'Uniform' },
+                                  { value: 'halton', label: 'Halton' },
+                                  { value: 'base2', label: 'Base2' },
+                                ]}
+                              />
 
                               {duplicateZSupportedAtCurrentAa && (
                                 <>
@@ -2733,44 +2667,17 @@ export function SlicingPanel({
                                     label="Duplicate Terminal Z"
                                     help="Reduces triangle lookups by 50% by pairing half of Y perturbations at the same Z perturbation height."
                                   />
-                                  <div className="grid grid-cols-2 gap-1">
-                                    <button
-                                      type="button"
-                                      className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                                      style={!zaaDuplicateZ
-                                        ? {
-                                            borderColor: 'var(--accent-secondary-action-border)',
-                                            background: 'var(--accent-secondary-action-bg-92)',
-                                            color: 'var(--accent-secondary-action-color)',
-                                          }
-                                        : {
-                                            borderColor: 'var(--border-subtle)',
-                                            background: 'var(--surface-0)',
-                                            color: 'var(--text-muted)',
-                                          }}
-                                      onClick={() => setZaaDuplicateZ(false)}
-                                    >
-                                      Off
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                                      style={zaaDuplicateZ
-                                        ? {
-                                            borderColor: 'var(--accent-secondary-action-border)',
-                                            background: 'var(--accent-secondary-action-bg-92)',
-                                            color: 'var(--accent-secondary-action-color)',
-                                          }
-                                        : {
-                                            borderColor: 'var(--border-subtle)',
-                                            background: 'var(--surface-0)',
-                                            color: 'var(--text-muted)',
-                                          }}
-                                      onClick={() => setZaaDuplicateZ(true)}
-                                    >
-                                      On
-                                    </button>
-                                  </div>
+                                  <SegmentedControl
+                                    label={_(msg`Duplicate Terminal Z`)}
+                                    size="sm"
+                                    tone="accent-secondary"
+                                    value={zaaDuplicateZ ? 'on' : 'off'}
+                                    onChange={(next) => setZaaDuplicateZ(next === 'on')}
+                                    options={[
+                                      { value: 'off', label: 'Off' },
+                                      { value: 'on', label: 'On' },
+                                    ]}
+                                  />
                                 </>
                               )}
                             </>
@@ -2869,32 +2776,17 @@ export function SlicingPanel({
                                   </button>
                                 </div>
                               ) : (
-                                <div className="mt-2 grid grid-cols-2 gap-1">
-                                  {([['box', 'Box'], ['gaussian', 'Gaussian']] as const).map(([mode, label]) => {
-                                    const active = blurBrushKernel === mode;
-                                    return (
-                                      <button
-                                        key={mode}
-                                        type="button"
-                                        className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                                        style={active
-                                          ? {
-                                              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                              color: 'var(--text-strong)',
-                                            }
-                                          : {
-                                              borderColor: 'var(--border-subtle)',
-                                              background: 'var(--surface-0)',
-                                              color: 'var(--text-muted)',
-                                            }}
-                                        onClick={() => setBlurBrushKernel(mode)}
-                                      >
-                                        {label}
-                                      </button>
-                                    );
-                                  })}
-                                </div>
+                                <SegmentedControl
+                                  className="mt-2"
+                                  label={_(msg`XY blur kernel`)}
+                                  size="sm"
+                                  value={blurBrushKernel}
+                                  onChange={setBlurBrushKernel}
+                                  options={[
+                                    { value: 'box', label: 'Box' },
+                                    { value: 'gaussian', label: 'Gaussian' },
+                                  ]}
+                                />
                               )}
                               {blurBrushKernel === 'gaussian' && blurBrushRadiusPx > 0 && (
                                 <div className="mt-2 grid grid-cols-2 gap-1.5">
@@ -3029,32 +2921,17 @@ export function SlicingPanel({
                                       </button>
                                     </div>
                                   ) : (
-                                    <div className="mt-2 grid grid-cols-2 gap-1">
-                                      {([['box', 'Box'], ['gaussian', 'Gaussian']] as const).map(([mode, label]) => {
-                                        const active = zBlurKernel === mode;
-                                        return (
-                                          <button
-                                            key={mode}
-                                            type="button"
-                                            className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                                            style={active
-                                              ? {
-                                                  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                                  background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                                  color: 'var(--text-strong)',
-                                                }
-                                              : {
-                                                  borderColor: 'var(--border-subtle)',
-                                                  background: 'var(--surface-0)',
-                                                  color: 'var(--text-muted)',
-                                                }}
-                                            onClick={() => setZBlurKernel(mode)}
-                                          >
-                                            {label}
-                                          </button>
-                                        );
-                                      })}
-                                    </div>
+                                    <SegmentedControl
+                                      className="mt-2"
+                                      label={_(msg`Z blur kernel`)}
+                                      size="sm"
+                                      value={zBlurKernel}
+                                      onChange={setZBlurKernel}
+                                      options={[
+                                        { value: 'box', label: 'Box' },
+                                        { value: 'gaussian', label: 'Gaussian' },
+                                      ]}
+                                    />
                                   )}
                                   {zBlurKernel === 'gaussian' && zBlurRadiusLayers > 0 && (
                                     <div className="mt-2">
@@ -3098,44 +2975,17 @@ export function SlicingPanel({
                       />
                       {showGrayscaleSection && (
                         <>
-                          <div className="grid grid-cols-2 gap-1">
-                            <button
-                              type="button"
-                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                              style={blurGraySourceMode === 'lut'
-                                ? {
-                                    borderColor: 'var(--accent-secondary-action-border)',
-                                    background: 'var(--accent-secondary-action-bg-92)',
-                                    color: 'var(--accent-secondary-action-color)',
-                                  }
-                                : {
-                                    borderColor: 'var(--border-subtle)',
-                                    background: 'var(--surface-0)',
-                                    color: 'var(--text-muted)',
-                                  }}
-                              onClick={() => setBlurGraySourceMode('lut')}
-                            >
-                              LUT Curve
-                            </button>
-                            <button
-                              type="button"
-                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                              style={blurGraySourceMode === 'minimum'
-                                ? {
-                                    borderColor: 'var(--accent-secondary-action-border)',
-                                    background: 'var(--accent-secondary-action-bg-92)',
-                                    color: 'var(--accent-secondary-action-color)',
-                                  }
-                                : {
-                                    borderColor: 'var(--border-subtle)',
-                                    background: 'var(--surface-0)',
-                                    color: 'var(--text-muted)',
-                                  }}
-                              onClick={() => setBlurGraySourceMode('minimum')}
-                            >
-                              Minimum Grey
-                            </button>
-                          </div>
+                          <SegmentedControl
+                            label={_(msg`Grayscale mapping`)}
+                            size="sm"
+                            tone="accent-secondary"
+                            value={blurGraySourceMode}
+                            onChange={setBlurGraySourceMode}
+                            options={[
+                              { value: 'lut', label: 'LUT Curve' },
+                              { value: 'minimum', label: 'Minimum Grey' },
+                            ]}
+                          />
 
                           {((aaMode === 'Blur' && blurUsesLutCurve)
                             || (aaMode === '3DAA' && blurGraySourceMode === 'lut')) && (
@@ -3146,35 +2996,26 @@ export function SlicingPanel({
                                   ? 'Chooses the cure-response LUT for perturbation-based 3DAA grayscale output. Opaque uses a stronger EXP curve (~47%→90%) for standard resins, Clear uses a gentler EXP curve (~39%→65%) for translucent materials, and Custom lets you import or tune your own curve.'
                                   : 'Remaps the final grayscale output through the shared resin-calibrated cure curve system used by both Blur AA and 3DAA.'}
                               />
-                              <div className="grid grid-cols-3 gap-1">
-                                {(['opaque', 'clear', 'custom'] as const).map((rtype) => {
-                                  const active = zBlendResinType === rtype;
+                              <SegmentedControl
+                                label={_(msg`LUT curve type`)}
+                                size="sm"
+                                tone="accent-secondary"
+                                value={zBlendResinType}
+                                onChange={setZBlendResinType}
+                                options={(['opaque', 'clear', 'custom'] as const).map((rtype) => {
                                   const isAutoDetected = rtype !== 'custom' && autoDetectedResinType === rtype;
-                                  return (
-                                    <button
-                                      key={rtype}
-                                      type="button"
-                                      className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                                      style={active
-                                        ? {
-                                            borderColor: 'var(--accent-secondary-action-border)',
-                                            background: 'var(--accent-secondary-action-bg-92)',
-                                            color: 'var(--accent-secondary-action-color)',
-                                          }
-                                        : {
-                                            borderColor: 'var(--border-subtle)',
-                                            background: 'var(--surface-0)',
-                                            color: 'var(--text-muted)',
-                                          }}
-                                      title={isAutoDetected ? 'Auto-detected from material name' : undefined}
-                                      onClick={() => setZBlendResinType(rtype)}
-                                    >
-                                      {rtype === 'opaque' ? 'Opaque' : rtype === 'clear' ? 'Clear' : 'Custom'}
-                                      {isAutoDetected && <span className="ml-1 opacity-60 text-[9px]">✦</span>}
-                                    </button>
-                                  );
+                                  return {
+                                    value: rtype,
+                                    title: isAutoDetected ? 'Auto-detected from material name' : undefined,
+                                    label: (
+                                      <>
+                                        {rtype === 'opaque' ? 'Opaque' : rtype === 'clear' ? 'Clear' : 'Custom'}
+                                        {isAutoDetected && <span className="ml-1 opacity-60 text-[9px]">✦</span>}
+                                      </>
+                                    ),
+                                  };
                                 })}
-                              </div>
+                              />
                               {zBlendResinType === 'custom' && (
                                 <LutCurveSelector
                                   savedCurves={savedCurves}
@@ -3254,44 +3095,16 @@ export function SlicingPanel({
                                 help="Sets the minimum pixel intensity used by AA gradients. Profile uses material defaults; Override lets you force a value for this slice."
                               />
                               {hasProfileMinimumAaAlpha && (
-                                <div className="grid grid-cols-2 gap-1">
-                                  <button
-                                    type="button"
-                                    className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                                    style={!enableMinimumAaAlphaOverride
-                                      ? {
-                                          borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                          background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                          color: 'var(--text-strong)',
-                                        }
-                                      : {
-                                          borderColor: 'var(--border-subtle)',
-                                          background: 'var(--surface-0)',
-                                          color: 'var(--text-muted)',
-                                        }}
-                                    onClick={() => setEnableMinimumAaAlphaOverride(false)}
-                                  >
-                                    {`Profile (${profileMinimumAaAlphaPercent}%)`}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                                    style={enableMinimumAaAlphaOverride
-                                      ? {
-                                          borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                          background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                          color: 'var(--text-strong)',
-                                        }
-                                      : {
-                                          borderColor: 'var(--border-subtle)',
-                                          background: 'var(--surface-0)',
-                                          color: 'var(--text-muted)',
-                                        }}
-                                    onClick={() => setEnableMinimumAaAlphaOverride(true)}
-                                  >
-                                    Override
-                                  </button>
-                                </div>
+                                <SegmentedControl
+                                  label={_(msg`Minimum grey level source`)}
+                                  size="sm"
+                                  value={enableMinimumAaAlphaOverride ? 'override' : 'profile'}
+                                  onChange={(next) => setEnableMinimumAaAlphaOverride(next === 'override')}
+                                  options={[
+                                    { value: 'profile', label: `Profile (${profileMinimumAaAlphaPercent}%)` },
+                                    { value: 'override', label: 'Override' },
+                                  ]}
+                                />
                               )}
                               {(enableMinimumAaAlphaOverride || !hasProfileMinimumAaAlpha) && (
                                 <ScrollableNumberField
@@ -3328,44 +3141,17 @@ export function SlicingPanel({
                             isOpen={showAaOnSupports}
                           />
                           {showAaOnSupports && (
-                            <div className="grid grid-cols-2 gap-1">
-                              <button
-                                type="button"
-                                className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                                style={!aaOnSupportsEnabled
-                                  ? {
-                                      borderColor: 'var(--accent-secondary-action-border)',
-                                      background: 'var(--accent-secondary-action-bg-92)',
-                                      color: 'var(--accent-secondary-action-color)',
-                                    }
-                                  : {
-                                      borderColor: 'var(--border-subtle)',
-                                      background: 'var(--surface-0)',
-                                      color: 'var(--text-muted)',
-                                    }}
-                                onClick={() => setAaOnSupportsEnabled(false)}
-                              >
-                                Supports Off
-                              </button>
-                              <button
-                                type="button"
-                                className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                                style={aaOnSupportsEnabled
-                                  ? {
-                                      borderColor: 'var(--accent-secondary-action-border)',
-                                      background: 'var(--accent-secondary-action-bg-92)',
-                                      color: 'var(--accent-secondary-action-color)',
-                                    }
-                                  : {
-                                      borderColor: 'var(--border-subtle)',
-                                      background: 'var(--surface-0)',
-                                      color: 'var(--text-muted)',
-                                    }}
-                                onClick={() => setAaOnSupportsEnabled(true)}
-                              >
-                                Supports On
-                              </button>
-                            </div>
+                            <SegmentedControl
+                              label={_(msg`AA on Supports`)}
+                              size="sm"
+                              tone="accent-secondary"
+                              value={aaOnSupportsEnabled ? 'on' : 'off'}
+                              onChange={(next) => setAaOnSupportsEnabled(next === 'on')}
+                              options={[
+                                { value: 'off', label: 'Supports Off' },
+                                { value: 'on', label: 'Supports On' },
+                              ]}
+                            />
                           )}
                         </>
                       )}
@@ -3404,18 +3190,20 @@ export function SlicingPanel({
             return (
               <div ref={sliceIntentAnchorRef} className="relative w-full">
                 <div className="flex items-center gap-0.5">
-                  <button
-                    type="button"
+                  <Button
+                    variant="primary"
+                    size="auto"
                     onClick={() => { void handleSliceZipExport(); }}
                     disabled={isDisabled}
-                    className={`ui-button ui-button-primary flex-1 !h-9 text-sm inline-flex items-center justify-center gap-1.5 ${hasMenuOptions && !isShiftHeld ? 'rounded-r-none' : ''} ${isSlicingZip ? 'cursor-wait opacity-70' : ''}`}
+                    className={`flex-1 !h-9 text-sm inline-flex items-center justify-center gap-1.5 ${hasMenuOptions && !isShiftHeld ? 'rounded-r-none' : ''} ${isSlicingZip ? 'cursor-wait opacity-70' : ''}`}
                   >
                     <CurrentIcon className="w-4 h-4 shrink-0" />
                     {isSlicingZip ? _(msg`Slicing…`) : current.label}
-                  </button>
+                  </Button>
                   {hasMenuOptions && !isShiftHeld && (
-                    <button
-                      type="button"
+                    <Button
+                      variant="primary"
+                      size="auto"
                       onClick={() => {
                         const rect = sliceIntentAnchorRef.current?.getBoundingClientRect() ?? null;
                         setSliceIntentMenuRect(rect);
@@ -3423,12 +3211,12 @@ export function SlicingPanel({
                       }}
                       disabled={isDisabled}
                       aria-label={_(msg`Choose slice action`)}
-                      className="ui-button ui-button-primary !h-9 w-10 shrink-0 inline-flex items-center justify-center rounded-l-none border-l border-black/15"
+                      className="!h-9 w-10 shrink-0 inline-flex items-center justify-center rounded-l-none border-l border-black/15"
                     >
                       <ChevronDown
                         className={`h-6 w-6 transition-transform duration-200 ease-out ${sliceIntentMenuOpen ? 'rotate-180' : 'rotate-0'}`}
                       />
-                    </button>
+                    </Button>
                   )}
                 </div>
                 {sliceIntentMenuOpen && sliceIntentMenuRect && typeof document !== 'undefined' && createPortal(
@@ -3500,15 +3288,14 @@ export function SlicingPanel({
                   {activeMaterialProfile.name} · {activeMaterialProfile.brand}
                 </p>
               </div>
-              <button
-                type="button"
+              <IconButton
+                variant="surface"
+                size="sm"
                 onClick={() => setIsMaterialAaEditorOpen(false)}
-                className="h-8 w-8 inline-flex items-center justify-center rounded-md border"
-                style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
                 aria-label={_(msg`Close material anti-aliasing settings`)}
               >
                 <X className="w-4 h-4" />
-              </button>
+              </IconButton>
             </div>
             <div className="p-3 overflow-y-auto custom-scrollbar flex-1">
               <MaterialAntiAliasingSection
@@ -3524,17 +3311,19 @@ export function SlicingPanel({
               />
             </div>
             <div className="px-3 py-2 border-t flex items-center justify-end gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
-              <button
-                type="button"
+              <Button
+                variant="secondary"
+                size="auto"
                 onClick={() => setIsMaterialAaEditorOpen(false)}
-                className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-full"
+                className="!h-8 !px-3 !py-0 text-xs rounded-full"
               >
                 Cancel
-              </button>
-              <button
-                type="button"
+              </Button>
+              <Button
+                variant="secondary"
+                size="auto"
                 onClick={handleSaveMaterialAaEditor}
-                className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-full"
+                className="!h-8 !px-3 !py-0 text-xs rounded-full"
                 style={{
                   borderColor: 'var(--accent-secondary-action-border)',
                   background: 'var(--accent-secondary-action-bg-92)',
@@ -3542,7 +3331,7 @@ export function SlicingPanel({
                 }}
               >
                 <Trans>Save Material</Trans>
-              </button>
+              </Button>
             </div>
           </div>
         </div>,
@@ -3571,15 +3360,14 @@ export function SlicingPanel({
                   {activeMaterialProfile ? `${activeMaterialProfile.name} · ${activeMaterialProfile.brand}` : _(msg`Current material`)}
                 </p>
               </div>
-              <button
-                type="button"
+              <IconButton
+                variant="surface"
+                size="sm"
                 onClick={() => setIsSessionAaOverrideOpen(false)}
-                className="h-8 w-8 inline-flex items-center justify-center rounded-md border"
-                style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
                 aria-label={_(msg`Close session anti-aliasing override`)}
               >
                 <X className="w-4 h-4" />
-              </button>
+              </IconButton>
             </div>
             <div className="p-3 overflow-y-auto custom-scrollbar flex-1">
               <MaterialAntiAliasingSection
@@ -3596,8 +3384,9 @@ export function SlicingPanel({
               />
             </div>
             <div className="px-3 py-2 border-t flex items-center justify-between gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
-              <button
-                type="button"
+              <Button
+                variant="secondary"
+                size="auto"
                 onClick={() => {
                   if (activeMaterialProfile) {
                     clearSessionAaOverrideDraft(activeMaterialProfile.id);
@@ -3606,21 +3395,23 @@ export function SlicingPanel({
                   setEditingSessionAaOverrideDraft(null);
                   setIsSessionAaOverrideOpen(false);
                 }}
-                className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-full"
+                className="!h-8 !px-3 !py-0 text-xs rounded-full"
                 style={{ color: 'var(--text-muted)' }}
               >
                 <Trans>Clear Override</Trans>
-              </button>
+              </Button>
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
+                <Button
+                  variant="secondary"
+                  size="auto"
                   onClick={() => setIsSessionAaOverrideOpen(false)}
-                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-full"
+                  className="!h-8 !px-3 !py-0 text-xs rounded-full"
                 >
                   Cancel
-                </button>
-                <button
-                  type="button"
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="auto"
                   onClick={() => {
                     if (activeMaterialProfile) {
                       writeSessionAaOverrideDraft(activeMaterialProfile.id, editingSessionAaOverrideDraft);
@@ -3628,7 +3419,7 @@ export function SlicingPanel({
                     setSessionAaOverrideDraft(editingSessionAaOverrideDraft);
                     setIsSessionAaOverrideOpen(false);
                   }}
-                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-full"
+                  className="!h-8 !px-3 !py-0 text-xs rounded-full"
                   style={{
                     borderColor: 'var(--accent-secondary-action-border)',
                     background: 'var(--accent-secondary-action-bg-92)',
@@ -3636,7 +3427,7 @@ export function SlicingPanel({
                   }}
                 >
                   <Trans>Apply for Session</Trans>
-                </button>
+                </Button>
               </div>
             </div>
           </div>

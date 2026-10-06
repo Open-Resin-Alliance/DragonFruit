@@ -107,7 +107,7 @@ import { buildMirrorSupportTransforms, reflectTransformAcrossWorldAxis } from '@
 import type { MirrorAxis } from '@/features/mirror/types';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { RtspRelayCanvasPlayer } from '@/components/monitoring/RtspRelayCanvasPlayer';
-import { IconButton, Toast, ToastViewport } from '@/components/atoms';
+import { BlockingOverlay, IconButton, Toast, ToastViewport } from '@/components/atoms';
 import { EditorContextMenu, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
@@ -10339,34 +10339,12 @@ export default function Home() {
           )}
 
           {showSceneImportOverlay && (
-            <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/35 backdrop-blur-[1px]">
-              <div
-                className="w-[min(460px,90vw)] rounded-xl border px-5 py-4 shadow-xl"
-                style={{
-                  background: 'color-mix(in srgb, var(--surface-0), black 8%)',
-                  borderColor: 'var(--border-subtle)',
-                }}
-              >
-                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  {importOverlayState.label}
-                </div>
-                {importOverlayState.detail && (
-                  <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-                    {importOverlayState.detail}
-                  </div>
-                )}
-
-                <div
-                  className="ui-loading-track mt-3 h-2.5 w-full rounded-full"
-                  style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
-                >
-                  <div
-                    className="ui-loading-indicator"
-                    style={{ background: 'linear-gradient(90deg, var(--accent), #ff79c6)' }}
-                  />
-                </div>
-              </div>
-            </div>
+            <BlockingOverlay
+              title={importOverlayState.label}
+              details={importOverlayState.detail ? [importOverlayState.detail] : undefined}
+              progress={null}
+              zIndexClassName="z-50"
+            />
           )}
 
         </div>
@@ -10708,102 +10686,45 @@ export default function Home() {
       <SystemNotificationStack />
 
       {islandsPoc.scanning && !autoSupportDrivingScan && (
-        <div className="absolute inset-0 z-[121] flex items-center justify-center bg-black/45 backdrop-blur-[1px]">
-          <div
-            className="w-[min(520px,92vw)] rounded-xl border px-5 py-4 shadow-xl"
-            style={{
-              background: 'color-mix(in srgb, var(--surface-0), black 10%)',
-              borderColor: 'var(--border-subtle)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-live="polite"
-          >
-            <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Analyzing Model Islands & Minima
-            </div>
-            <div className="mt-1 space-y-0.5 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-              <p>Slicing and analysis in progress...</p>
-            </div>
-
-            <div className="mt-2 text-[11px] font-medium tracking-wide" style={{ color: 'var(--accent)' }}>
-              Elapsed: {islandsPoc.elapsedLabel}
-            </div>
-            <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              Processing 1 model
-            </div>
-
-            <ScanProgressBar progress={islandsPoc.scanProgress} />
-          </div>
-        </div>
+        <BlockingOverlay
+          title="Analyzing Model Islands & Minima"
+          details={['Slicing and analysis in progress...']}
+          elapsed={<>Elapsed: {islandsPoc.elapsedLabel}</>}
+          footnote="Processing 1 model"
+          zIndexClassName="z-[121]"
+        >
+          <ScanProgressBar progress={islandsPoc.scanProgress} />
+        </BlockingOverlay>
       )}
 
       {autoSupportBusy && (
-        <div className="absolute inset-0 z-[122] flex items-center justify-center bg-black/45 backdrop-blur-[1px]">
-          <div
-            className="w-[min(520px,92vw)] rounded-xl border px-5 py-4 shadow-xl"
-            style={{ background: 'color-mix(in srgb, var(--surface-0), black 10%)', borderColor: 'var(--border-subtle)' }}
-            role="dialog" aria-modal="true" aria-live="polite"
-          >
-            <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Generating Supports
-            </div>
-            <div className="mt-1 space-y-0.5 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-              <p>{islandsPoc.scanning ? 'Scanning islands & minima…' : 'Placing and bracing supports…'}</p>
-            </div>
-            <div className="mt-2 text-[11px] font-medium tracking-wide" style={{ color: 'var(--accent)' }}>
-              {islandsPoc.scanning ? <>Elapsed: {islandsPoc.elapsedLabel}</> : <OrientElapsed />}
-            </div>
-            <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              Processing 1 model
-            </div>
-            <ScanProgressBar progress={islandsPoc.scanning ? islandsPoc.scanProgress : autoSupportProgress} />
-          </div>
-        </div>
+        <BlockingOverlay
+          title="Generating Supports"
+          details={[islandsPoc.scanning ? 'Scanning islands & minima…' : 'Placing and bracing supports…']}
+          elapsed={islandsPoc.scanning ? <>Elapsed: {islandsPoc.elapsedLabel}</> : <OrientElapsed />}
+          footnote="Processing 1 model"
+          zIndexClassName="z-[122]"
+        >
+          <ScanProgressBar progress={islandsPoc.scanning ? islandsPoc.scanProgress : autoSupportProgress} />
+        </BlockingOverlay>
       )}
       {orientationBusy && (
-        <div className="absolute inset-0 z-[123] flex items-center justify-center bg-black/45 backdrop-blur-[1px]">
-          <div
-            className="w-[min(520px,92vw)] rounded-xl border px-5 py-4 shadow-xl"
-            style={{ background: 'color-mix(in srgb, var(--surface-0), black 10%)', borderColor: 'var(--border-subtle)' }}
-            role="dialog" aria-modal="true" aria-live="polite"
-          >
-            <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Orienting Model
-            </div>
-            <div className="mt-1 space-y-0.5 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-              <p>Sweeping orientations…</p>
-            </div>
-            <div className="mt-2 text-[11px] font-medium tracking-wide" style={{ color: 'var(--accent)' }}>
-              <OrientElapsed />
-            </div>
-            <div className="ui-loading-track mt-3 h-2.5 w-full rounded-full" style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}>
-              <div className="ui-loading-indicator" style={{ background: 'linear-gradient(90deg, var(--accent), #ff79c6)' }} />
-            </div>
-          </div>
-        </div>
+        <BlockingOverlay
+          title="Orienting Model"
+          details={['Sweeping orientations…']}
+          elapsed={<OrientElapsed />}
+          progress={null}
+          zIndexClassName="z-[123]"
+        />
       )}
 
       {isExporting && (
-        <div className="absolute inset-0 z-[120] flex items-center justify-center bg-black/45 backdrop-blur-[1px]">
-          <div
-            className="w-[min(520px,92vw)] rounded-xl border px-5 py-4 shadow-xl"
-            style={{ background: 'color-mix(in srgb, var(--surface-0), black 10%)', borderColor: 'var(--border-subtle)' }}
-            role="dialog"
-            aria-modal="true"
-            aria-live="polite"
-          >
-            <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Exporting…
-            </div>
-            <div className="mt-1 space-y-0.5 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-              <p>Writing mesh geometry and support data to file…</p>
-            </div>
-            <div className="ui-loading-track mt-3 h-2.5 w-full rounded-full" style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}>
-              <div className="ui-loading-indicator" style={{ background: 'linear-gradient(90deg, var(--accent), #ff79c6)' }} />
-            </div>
-          </div>
-        </div>
+        <BlockingOverlay
+          title="Exporting…"
+          details={['Writing mesh geometry and support data to file…']}
+          progress={null}
+          zIndexClassName="z-[120]"
+        />
       )}
 
       {newDeviceToast && (

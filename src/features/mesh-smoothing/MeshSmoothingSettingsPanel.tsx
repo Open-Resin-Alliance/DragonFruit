@@ -4,7 +4,7 @@ import React from 'react';
 import { HexColorPicker } from 'react-colorful';
 import { RotateCcw } from 'lucide-react';
 import { NumberInput } from '@/components/ui/NumberInput';
-import { Card, CardHeader, IconButton } from '@/components/atoms';
+import { Button, Card, CardHeader, PanelCollapseToggle } from '@/components/atoms';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 import {
   DEFAULT_MESH_SMOOTHING_SETTINGS,
@@ -75,25 +75,7 @@ export function MeshSmoothingSettingsPanel() {
       <CardHeader
         left={(
           <>
-            <IconButton
-              onClick={() => setExpanded(!expanded)}
-              className="!p-0.5"
-              title={expanded ? 'Collapse card' : 'Expand card'}
-            >
-              <svg
-                className="w-3 h-3 transform transition-transform"
-                style={{ color: expanded ? 'var(--accent)' : 'var(--text-muted)' }}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                {expanded ? (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                ) : (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                )}
-              </svg>
-            </IconButton>
+            <PanelCollapseToggle expanded={expanded} onToggle={() => setExpanded(!expanded)} />
             <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Mesh Smoothing</h3>
           </>
         )}
@@ -202,14 +184,15 @@ export function MeshSmoothingSettingsPanel() {
             </div>
           </div>
 
-          <button
-            type="button"
-            className="ui-button ui-button-secondary w-full !h-8 px-3 text-xs inline-flex items-center justify-center gap-1.5"
+          <Button
+            variant="secondary"
+            size="auto"
+            className="w-full !h-8 px-3 text-xs inline-flex items-center justify-center gap-1.5"
             onClick={() => setMeshSmoothingSettings({ ...DEFAULT_MESH_SMOOTHING_SETTINGS })}
           >
             <RotateCcw className="w-3 h-3" />
             Reset Defaults
-          </button>
+          </Button>
 
         </div>
       )}

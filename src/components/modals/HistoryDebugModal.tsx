@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { X } from 'lucide-react';
+import { IconButton } from '@/components/atoms';
 import type { HistoryDebugEvent } from '@/history/types';
 import { formatHistoryLabel } from '@/history/formatHistoryLabel';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
@@ -158,19 +159,14 @@ export function HistoryDebugModal({
             </div>
           </div>
 
-          <button
-            type="button"
-            className="h-8 w-8 inline-flex items-center justify-center rounded-md border transition-colors"
-            style={{
-              borderColor: 'var(--border-subtle)',
-              background: 'var(--surface-1)',
-              color: 'var(--text-muted)',
-            }}
+          <IconButton
+            variant="surface"
+            size="sm"
             aria-label="Close history debug"
             onClick={onClose}
           >
             <X className="w-4 h-4" />
-          </button>
+          </IconButton>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>

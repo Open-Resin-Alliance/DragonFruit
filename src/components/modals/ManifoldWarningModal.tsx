@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { AlertTriangle } from 'lucide-react';
+import { Button } from '@/components/atoms';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 
 type ManifoldWarningModalProps = {
@@ -26,18 +27,13 @@ export function ManifoldWarningModal({
       // acknowledge the manifold warning.
       onBackdropClick={() => {}}
       actions={(
-        <button
-          type="button"
-          className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-          style={{
-            borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-            background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-            color: 'var(--accent)',
-          }}
+        <Button
+          variant="tinted-accent"
+          className="inline-flex items-center justify-center gap-1.5"
           onClick={onAcknowledge}
         >
           OK
-        </button>
+        </Button>
       )}
     >
       <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>

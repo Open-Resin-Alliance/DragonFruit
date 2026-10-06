@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import { wheelStepDirection } from '@/components/ui/wheelStepDirection';
+import { clamp } from '@/utils/math';
 
 interface NumberInputProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'onChange' | 'value'> {
   value: number;
@@ -97,8 +98,11 @@ export function NumberInput({ value, onChange, className, onBlur, showStepper = 
     const currentValue = Number.isFinite(parsedCurrent) ? parsedCurrent : safeValue;
     let next = currentValue + (stepSize * direction);
 
-    if (minBound != null) next = Math.max(minBound, next);
-    if (maxBound != null) next = Math.min(maxBound, next);
+    next = clamp(
+      next,
+      minBound ?? Number.NEGATIVE_INFINITY,
+      maxBound ?? Number.POSITIVE_INFINITY,
+    );
 
     const normalized = Number(next.toFixed(stepPrecision));
     setDisplayValue(formatValue(normalized));

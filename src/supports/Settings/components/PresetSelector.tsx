@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef, useSyncExternalStore } from 'react'
 import ReactDOM from 'react-dom';
 import { PenLine, Pencil, Trash2, Save, Pin, PinOff, RotateCcw } from 'lucide-react';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import { Button } from '@/components/atoms';
 import { ContextMenu, type ContextMenuEntry } from '@/components/ui/ContextMenu';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
@@ -820,21 +821,18 @@ export function PresetSelector({
                 onClose={() => setConfirmId(null)}
                 actions={(
                     <>
-                        <button
-                            type="button"
-                            className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
+                        <Button
+                            variant="secondary"
+                            size="md"
+                            className="w-full"
                             onClick={() => setConfirmId(null)}
                         >
                             <Trans>Cancel</Trans>
-                        </button>
-                        <button
-                            type="button"
-                            className="ui-button !h-9 w-full px-3 text-xs inline-flex items-center justify-center gap-1.5"
-                            style={{
-                                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                                color: 'var(--accent)',
-                            }}
+                        </Button>
+                        <Button
+                            variant="tinted-accent"
+                            size="md"
+                            className="w-full gap-1.5"
                             onClick={() => {
                                 if (confirmPreset) {
                                     savePreset(confirmPreset.id);
@@ -844,7 +842,7 @@ export function PresetSelector({
                         >
                             <Save className="h-3.5 w-3.5" />
                             <Trans>Save</Trans>
-                        </button>
+                        </Button>
                     </>
                 )}
             >
@@ -866,21 +864,18 @@ export function PresetSelector({
                 onClose={() => setDeleteConfirmId(null)}
                 actions={(
                     <>
-                        <button
-                            type="button"
-                            className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
+                        <Button
+                            variant="secondary"
+                            size="md"
+                            className="w-full"
                             onClick={() => setDeleteConfirmId(null)}
                         >
                             <Trans>Cancel</Trans>
-                        </button>
-                        <button
-                            type="button"
-                            className="ui-button !h-9 w-full px-3 text-xs inline-flex items-center justify-center gap-1.5"
-                            style={{
-                                borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
-                                background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
-                                color: 'var(--danger)',
-                            }}
+                        </Button>
+                        <Button
+                            variant="tinted-danger"
+                            size="md"
+                            className="w-full gap-1.5"
                             onClick={() => {
                                 if (deleteConfirmPreset) {
                                     deletePreset(deleteConfirmPreset.id);
@@ -891,7 +886,7 @@ export function PresetSelector({
                         >
                             <Trash2 className="h-3.5 w-3.5" />
                             <Trans>Delete</Trans>
-                        </button>
+                        </Button>
                     </>
                 )}
             >
@@ -918,21 +913,18 @@ export function PresetSelector({
                 onClose={() => setRestoreConfirmOpen(false)}
                 actions={(
                     <>
-                        <button
-                            type="button"
-                            className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
+                        <Button
+                            variant="secondary"
+                            size="md"
+                            className="w-full"
                             onClick={() => setRestoreConfirmOpen(false)}
                         >
                             <Trans>Cancel</Trans>
-                        </button>
-                        <button
-                            type="button"
-                            className="ui-button !h-9 w-full px-3 text-xs inline-flex items-center justify-center gap-1.5"
-                            style={{
-                                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                                color: 'var(--accent)',
-                            }}
+                        </Button>
+                        <Button
+                            variant="tinted-accent"
+                            size="md"
+                            className="w-full gap-1.5"
                             onClick={() => {
                                 restoreFactoryDefaults();
                                 setRestoreConfirmOpen(false);
@@ -943,7 +935,7 @@ export function PresetSelector({
                                 <path d="M3 3v5h5" />
                             </svg>
                             <Trans>Restore</Trans>
-                        </button>
+                        </Button>
                     </>
                 )}
             >
@@ -965,21 +957,18 @@ export function PresetSelector({
                 onClose={() => setBulkDeleteOpen(false)}
                 actions={(
                     <>
-                        <button
-                            type="button"
-                            className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
+                        <Button
+                            variant="secondary"
+                            size="md"
+                            className="w-full"
                             onClick={() => setBulkDeleteOpen(false)}
                         >
                             <Trans>Cancel</Trans>
-                        </button>
-                        <button
-                            type="button"
-                            className="ui-button !h-9 w-full px-3 text-xs inline-flex items-center justify-center gap-1.5"
-                            style={{
-                                borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
-                                background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
-                                color: 'var(--danger)',
-                            }}
+                        </Button>
+                        <Button
+                            variant="tinted-danger"
+                            size="md"
+                            className="w-full gap-1.5"
                             onClick={() => {
                                 deletePresets(selectedPresets.map((preset) => preset.id));
                                 setPresetSelection([]);
@@ -988,7 +977,7 @@ export function PresetSelector({
                         >
                             <Trash2 className="h-3.5 w-3.5" />
                             <Trans>Delete</Trans>
-                        </button>
+                        </Button>
                     </>
                 )}
             >

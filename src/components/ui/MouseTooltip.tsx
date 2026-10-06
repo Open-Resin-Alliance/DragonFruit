@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { clampToViewport } from '@/utils/math';
 
 interface MouseTooltipProps {
     children: React.ReactNode;
@@ -32,18 +33,25 @@ export function MouseTooltip({
 
     if (!visible || !pos) return null;
 
-    // Compute clamped position to keep tooltip on-screen
+    // Compute clamped position to keep tooltip on-screen, flipping sides when
+    // the box would overflow the viewport's right/bottom edge.
     let left = pos.x + offset.x;
     let top = pos.y + offset.y;
     const el = tooltipRef.current;
     if (el) {
         const rect = el.getBoundingClientRect();
-        if (left + rect.width > window.innerWidth) {
-            left = pos.x - offset.x - rect.width;
-        }
-        if (top + rect.height > window.innerHeight) {
-            top = pos.y - offset.y - rect.height;
-        }
+        const {
+            left: clampedLeft,
+            top: clampedTop,
+            overflowRight,
+            overflowBottom,
+        } = clampToViewport(
+            { x: left, y: top },
+            { width: rect.width, height: rect.height },
+            { margin: 0 },
+        );
+        left = overflowRight ? pos.x - offset.x - rect.width : clampedLeft;
+        top = overflowBottom ? pos.y - offset.y - rect.height : clampedTop;
     }
 
     return (
