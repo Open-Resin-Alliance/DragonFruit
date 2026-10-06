@@ -215,6 +215,62 @@ type SettingsModalProps = {
 export type SettingsTabKey = 'general' | 'camera' | 'workspaces' | 'mesh' | 'performance' | 'spacemouse' | 'plugins' | 'experiments' | 'sceneAutosave' | 'backups' | 'uvtools' | 'ui' | 'hotkeys' | 'logging' | 'updates' | 'about';
 type SettingsTabTone = 'primary' | 'secondary';
 
+type SettingsTabMeta = {
+  label: string;
+  description: string;
+  icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
+  tone: SettingsTabTone;
+};
+
+/**
+ * One settings sidebar entry: icon, label and its description. The description
+ * stays visible; the compact metrics come from `leading-tight`, a 10px
+ * description and `py-1.5`, which takes the row from 54px to about 36px without
+ * hiding anything.
+ */
+function SettingsSidebarTab({
+  tabId,
+  meta,
+  active,
+  onSelect,
+}: {
+  tabId: SettingsTabKey;
+  meta: SettingsTabMeta;
+  active: boolean;
+  onSelect: (tab: SettingsTabKey) => void;
+}) {
+  const Icon = meta.icon;
+  const tabColor = meta.tone === 'secondary' ? 'var(--accent-secondary)' : 'var(--accent)';
+
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(tabId)}
+      className="w-full rounded-lg border p-1.5 text-left transition-all duration-150"
+      style={active
+        ? {
+          borderColor: `color-mix(in srgb, ${tabColor}, var(--border-subtle) 35%)`,
+          background: `color-mix(in srgb, ${tabColor}, var(--surface-0) 84%)`,
+          boxShadow: `0 0 0 1px color-mix(in srgb, ${tabColor}, transparent 76%) inset`,
+        }
+        : {
+          borderColor: 'var(--border-subtle)',
+          background: 'var(--surface-1)',
+        }}
+    >
+      <div className="flex items-center gap-2">
+        <Icon className="h-4 w-4 shrink-0" style={{ color: active ? tabColor : 'var(--text-muted)' }} />
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
+            {meta.label}
+          </span>
+          <TabDescription text={meta.description} />
+        </span>
+      </div>
+    </button>
+  );
+}
+
 /**
  * A sidebar description line that only offers a tooltip when it is actually
  * clipped. Translated descriptions run much longer than the English ones — the
@@ -275,7 +331,7 @@ function TabDescription({ text }: { text: string }) {
       <Tooltip content={isClipped ? text : null} fullWidth maxWidth={280}>
         <span
           ref={textRef}
-          className="block min-w-0 flex-1 truncate text-xs"
+          className="block min-w-0 flex-1 truncate text-[10px] leading-tight"
           style={{ color: 'var(--text-muted)' }}
         >
           {text}
@@ -1155,7 +1211,7 @@ export function SettingsModal({
     return preferenceChanged || colorsChanged;
   })();
 
-  const tabMeta: Record<SettingsTabKey, { label: string; description: string; icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>; tone: SettingsTabTone }> = {
+  const tabMeta: Record<SettingsTabKey, SettingsTabMeta> = {
     general: {
       label: _(msg`General`),
       description: _(msg`Workspace behavior and panel layout`),
@@ -1341,106 +1397,27 @@ export function SettingsModal({
           >
             <div className="h-full min-h-0 overflow-y-auto custom-scrollbar pr-1 flex flex-col">
               <div className="space-y-1">
-                {sidebarTopTabs.map((tab) => {
-                  const meta = tabMeta[tab];
-                  const Icon = meta.icon;
-                  const active = activeTab === tab;
-                  const tabColor = meta.tone === 'secondary' ? 'var(--accent-secondary)' : 'var(--accent)';
-
-                  return (
-                    <button
-                      key={tab}
-                      type="button"
-                      onClick={() => handleSelectTab(tab)}
-                      className="w-full rounded-lg border px-3 py-2 text-left transition-all duration-150"
-                      style={active
-                        ? {
-                          borderColor: `color-mix(in srgb, ${tabColor}, var(--border-subtle) 35%)`,
-                          background: `color-mix(in srgb, ${tabColor}, var(--surface-0) 84%)`,
-                          boxShadow: `0 0 0 1px color-mix(in srgb, ${tabColor}, transparent 76%) inset`,
-                        }
-                        : {
-                          borderColor: 'var(--border-subtle)',
-                          background: 'var(--surface-1)',
-                        }}
-                    >
-                      <div className="flex items-center gap-2">
-                        <span
-                          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border"
-                          style={{
-                            borderColor: active
-                              ? `color-mix(in srgb, ${tabColor}, var(--border-subtle) 30%)`
-                              : 'var(--border-subtle)',
-                            background: active
-                              ? `color-mix(in srgb, ${tabColor}, var(--surface-1) 82%)`
-                              : 'var(--surface-2)',
-                          }}
-                        >
-                          <Icon className="h-3.5 w-3.5" style={{ color: active ? tabColor : 'var(--text-muted)' }} />
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-sm font-semibold" style={{ color: active ? 'var(--text-strong)' : 'var(--text-strong)' }}>
-                            {meta.label}
-                          </span>
-                          <TabDescription text={meta.description} />
-                        </span>
-                      </div>
-                    </button>
-                  );
-                })}
+                {sidebarTopTabs.map((tab) => (
+                  <SettingsSidebarTab
+                    key={tab}
+                    meta={tabMeta[tab]}
+                    active={activeTab === tab}
+                    onSelect={handleSelectTab}
+                    tabId={tab}
+                  />
+                ))}
               </div>
 
               <div className="mt-auto space-y-1 pt-3">
-                {sidebarBottomTabs.map((tab) => {
-                  const meta = tabMeta[tab];
-                  const Icon = meta.icon;
-                  const active = activeTab === tab;
-                  const tabColor = meta.tone === 'secondary' ? 'var(--accent-secondary)' : 'var(--accent)';
-
-                  return (
-                    <button
-                      key={tab}
-                      type="button"
-                      aria-disabled={false}
-                      onClick={() => handleSelectTab(tab)}
-                      className="w-full rounded-lg border px-3 py-2 text-left transition-all duration-150"
-                      style={{
-                        ...(active
-                          ? {
-                            borderColor: `color-mix(in srgb, ${tabColor}, var(--border-subtle) 35%)`,
-                            background: `color-mix(in srgb, ${tabColor}, var(--surface-0) 84%)`,
-                            boxShadow: `0 0 0 1px color-mix(in srgb, ${tabColor}, transparent 76%) inset`,
-                          }
-                          : {
-                            borderColor: 'var(--border-subtle)',
-                            background: 'var(--surface-1)',
-                          }),
-                      }}
-                    >
-                      <div className="flex items-center gap-2">
-                        <span
-                          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border"
-                          style={{
-                            borderColor: active
-                              ? `color-mix(in srgb, ${tabColor}, var(--border-subtle) 30%)`
-                              : 'var(--border-subtle)',
-                            background: active
-                              ? `color-mix(in srgb, ${tabColor}, var(--surface-1) 82%)`
-                              : 'var(--surface-2)',
-                          }}
-                        >
-                          <Icon className="h-3.5 w-3.5" style={{ color: active ? tabColor : 'var(--text-muted)' }} />
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-sm font-semibold" style={{ color: active ? 'var(--text-strong)' : 'var(--text-strong)' }}>
-                            {meta.label}
-                          </span>
-                          <TabDescription text={meta.description} />
-                        </span>
-                      </div>
-                    </button>
-                  );
-                })}
+                {sidebarBottomTabs.map((tab) => (
+                  <SettingsSidebarTab
+                    key={tab}
+                    meta={tabMeta[tab]}
+                    active={activeTab === tab}
+                    onSelect={handleSelectTab}
+                    tabId={tab}
+                  />
+                ))}
               </div>
             </div>
           </div>

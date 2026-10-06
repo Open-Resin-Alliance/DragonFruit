@@ -3,8 +3,14 @@ import { cn } from './cn';
 
 interface SettingRowProps extends Omit<React.HTMLAttributes<HTMLElement>, 'children'> {
   label: React.ReactNode;
-  /** Secondary line under the label. */
+  /** Secondary line under the label. Always visible. */
   description?: React.ReactNode;
+  /**
+   * `compact` (the default) tightens the line-heights and the padding for the
+   * settings tabs; `comfortable` is the `py-2` plus roomier text the rows shipped
+   * with before, for the few places whose row height was measured against it.
+   */
+  density?: 'compact' | 'comfortable';
   /** The control on the right. */
   children: React.ReactNode;
   /** Wraps the row in the inset card used by the settings tabs. */
@@ -25,14 +31,17 @@ interface SettingRowProps extends Omit<React.HTMLAttributes<HTMLElement>, 'child
  * Label and description on the left, control on the right, optionally in the
  * inset card the settings tabs use. This layout was re-declared ~55 times.
  *
- * The row layout lives on the root element, not on a wrapper inside it: rendered
- * as a `<label>` the root would otherwise stay inline, and an inline box holding
- * a block child lays out roughly twice as tall as the hand-written rows it
- * replaces (78px against 42px for a label plus a switch).
+ * Both lines stay visible: the description carries the behaviour, so hiding it
+ * behind a hover was worse than the space it saved. The compact density gets the
+ * height back from the padding and the line-heights instead (50px to 40px for a
+ * bordered row), and the row layout lives on the root element because rendered
+ * as a `<label>` a wrapper inside it would leave the root inline, laying out
+ * roughly twice as tall as the hand-written rows it replaces.
  */
 export function SettingRow({
   label,
   description,
+  density = 'compact',
   children,
   bordered = false,
   surface = 'sunken',
@@ -42,11 +51,13 @@ export function SettingRow({
   style,
   ...props
 }: SettingRowProps) {
+  const compact = density === 'compact';
+
   return (
     <Element
       className={cn(
         'flex items-center justify-between gap-3',
-        bordered && 'rounded-md border px-2.5 py-2',
+        bordered && cn('rounded-md border px-2.5', compact ? 'py-1.5' : 'py-2'),
         className
       )}
       style={{
@@ -62,11 +73,17 @@ export function SettingRow({
       {...props}
     >
       <div className="min-w-0">
-        <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+        <div
+          className={cn('text-xs font-semibold', compact && 'leading-tight')}
+          style={{ color: 'var(--text-strong)' }}
+        >
           {label}
         </div>
         {description ? (
-          <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+          <div
+            className={compact ? 'text-[11px] leading-tight' : 'text-xs'}
+            style={{ color: 'var(--text-muted)' }}
+          >
             {description}
           </div>
         ) : null}
