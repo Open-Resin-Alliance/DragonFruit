@@ -130,6 +130,7 @@ export function OrganicCutOverlay({
       <EditorContextMenu
         position={contextMenu ? { x: contextMenu.x, y: contextMenu.y } : null}
         onAction={session.onContextMenuAction}
+        onClose={session.closeContextMenu}
         title={contextMenu?.kind === 'delete' ? 'Waypoint' : 'Cut Seam'}
         items={
           contextMenu?.kind === 'delete'

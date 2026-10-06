@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   Eye,
   EyeOff,
@@ -27,6 +27,7 @@ import { Card, CardHeader, IconButton } from '@/components/atoms';
 import { formatPolygonCountCompact } from '@/utils/meshStatsFormatting';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 import { Tooltip } from '@/components/ui/Tooltip';
+import { ContextMenu, type ContextMenuEntry } from '@/components/ui/ContextMenu';
 import { getCompactListPreference, saveCompactListPreference } from '@/components/controls/compactListPreference';
 
 type SelectMode = 'single' | 'toggle' | 'add';
@@ -348,23 +349,94 @@ export function ModelManagerPanel({
     });
   };
 
-  useEffect(() => {
-    if (!contextMenu) return;
+  // Rebuilt per render: which sections exist depends on what was right-clicked —
+  // a model, a folder, or a multi-selection. Dismissal belongs to ContextMenu.
+  const contextMenuEntries: ContextMenuEntry[] = [];
+  if (showGroupSection) {
+    contextMenuEntries.push(
+      {
+        id: 'group-selected',
+        label: <Trans>Group selected</Trans>,
+        icon: FolderPlus,
+        disabled: selectedModelIds.length < 2,
+      },
+      {
+        id: 'ungroup-selected',
+        label: <Trans>Ungroup selected</Trans>,
+        icon: FolderMinus,
+        disabled: selectedGroupedCount === 0,
+      },
+    );
+  }
+  if (showFolderSection) {
+    contextMenuEntries.push(
+      { id: 'select-folder', label: <Trans>Select folder</Trans>, icon: PanelsTopLeft, startsGroup: true },
+      { id: 'rename-folder', label: <Trans>Rename folder</Trans>, icon: Pencil, disabled: !!contextMenu?.isSystemGroup },
+      { id: 'ungroup-folder', label: <Trans>Ungroup folder</Trans>, icon: FolderMinus, disabled: !!contextMenu?.isSystemGroup },
+    );
+  }
+  if (contextModel && (onRenameModel || onModelContextMenu || onRepairModel)) {
+    if (onRenameModel) {
+      contextMenuEntries.push({ id: 'rename-model', label: <Trans>Rename model</Trans>, icon: Pencil, startsGroup: true });
+    }
+    if (onRepairModel) {
+      contextMenuEntries.push({ id: 'repair-model', label: <Trans>Repair mesh…</Trans>, icon: Wrench });
+    }
+    if (contextModel.splitBodies && onSplitImportGroup) {
+      contextMenuEntries.push({
+        id: 'split-bodies',
+        label: <Trans comment="Context menu action: split a multi-body 3MF import into independent models.">Split to bodies</Trans>,
+        icon: Scissors,
+        startsGroup: true,
+      });
+    }
+    if (onModelContextMenu) {
+      contextMenuEntries.push({ id: 'model-actions', label: <Trans>Model actions…</Trans>, icon: Box });
+    }
+  }
+  contextMenuEntries.push({ id: 'toggle-compact-list', label: <Trans>Compact list</Trans>, checked: compactList, startsGroup: true });
 
-    const handlePointerDown = () => closeContextMenu();
-    const handleEscape = (e: CustomEvent) => {
-      if (e.detail.key === 'Escape') closeContextMenu();
-    };
-
-    window.addEventListener('pointerdown', handlePointerDown);
-    window.addEventListener('app-hotkey-keydown', handleEscape as EventListener);
-
-    return () => {
-      window.removeEventListener('pointerdown', handlePointerDown);
-      window.removeEventListener('app-hotkey-keydown', handleEscape as EventListener);
-    };
-  }, [contextMenu]);
-
+  const handleContextMenuSelect = (id: string) => {
+    switch (id) {
+      case 'group-selected':
+        if (onGroupModels && selectedModelIds.length >= 2) onGroupModels(selectedModelIds);
+        break;
+      case 'ungroup-selected':
+        if (onUngroupModels && selectedGroupedCount > 0) onUngroupModels(selectedModelIds);
+        break;
+      case 'select-folder': {
+        const target = contextGroup ?? grouped.find((g) => g.id === contextMenu?.groupId);
+        if (target) selectFolder(target, 'single');
+        break;
+      }
+      case 'rename-folder':
+        if (contextMenu?.groupId && onRenameGroup && !contextMenu.isSystemGroup) {
+          beginRenameGroup(contextMenu.groupId, contextMenu.groupName ?? contextGroup?.name ?? 'Group');
+        }
+        break;
+      case 'ungroup-folder':
+        if (contextMenu?.groupId && onUngroupGroup && !contextMenu.isSystemGroup) onUngroupGroup(contextMenu.groupId);
+        break;
+      case 'rename-model':
+        if (contextModel) beginRenameModel(contextModel.id, contextModel.name ?? 'Model');
+        break;
+      case 'repair-model':
+        if (contextModel && onRepairModel) onRepairModel(contextModel.id);
+        break;
+      case 'split-bodies':
+        if (contextModel && onSplitImportGroup) onSplitImportGroup(contextModel.id);
+        break;
+      case 'model-actions':
+        if (contextModel && onModelContextMenu && contextMenu) onModelContextMenu(contextModel.id, { x: contextMenu.x, y: contextMenu.y });
+        break;
+      case 'toggle-compact-list':
+        toggleCompactList();
+        break;
+      default:
+        break;
+    }
+    closeContextMenu();
+  };
 
   return (
     <Card
@@ -717,196 +789,14 @@ export function ModelManagerPanel({
         </div>
       )}
 
-      {contextMenu && (
-        <div
-          className="fixed z-[130] w-52 rounded-lg border p-1.5 shadow-xl"
-          style={{
-            left: Math.max(8, Math.min(contextMenu.x, (typeof window !== 'undefined' ? window.innerWidth : 1920) - 216)),
-            top: Math.max(8, Math.min(contextMenu.y, (typeof window !== 'undefined' ? window.innerHeight : 1080) - 220)),
-            borderColor: 'var(--border-subtle)',
-            background: 'color-mix(in srgb, var(--surface-0), #000 12%)',
-          }}
-          onPointerDown={(e) => e.stopPropagation()}
-          role="menu"
-          aria-label={_(msg`Models context menu`)}
-        >
-          <div className="mb-1 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-            <Trans comment="Section heading of the models context menu. Rendered uppercase.">Models</Trans>
-          </div>
-
-          <div className="space-y-0.5">
-            {showGroupSection && (
-              <>
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
-                  style={{ color: selectedModelIds.length >= 2 ? 'var(--text-strong)' : 'var(--text-muted)', opacity: selectedModelIds.length >= 2 ? 1 : 0.6 }}
-                  disabled={selectedModelIds.length < 2}
-                  onClick={() => {
-                    if (selectedModelIds.length < 2 || !onGroupModels) return;
-                    onGroupModels(selectedModelIds);
-                    closeContextMenu();
-                  }}
-                >
-                  <FolderPlus className="h-3.5 w-3.5" />
-                  <span><Trans>Group selected</Trans></span>
-                </button>
-
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
-                  style={{ color: selectedGroupedCount > 0 ? 'var(--text-strong)' : 'var(--text-muted)', opacity: selectedGroupedCount > 0 ? 1 : 0.6 }}
-                  disabled={selectedGroupedCount === 0}
-                  onClick={() => {
-                    if (selectedGroupedCount === 0 || !onUngroupModels) return;
-                    onUngroupModels(selectedModelIds);
-                    closeContextMenu();
-                  }}
-                >
-                  <FolderMinus className="h-3.5 w-3.5" />
-                  <span><Trans>Ungroup selected</Trans></span>
-                </button>
-              </>
-            )}
-
-            {showFolderSection && (
-              <>
-                {showGroupSection && <div className="my-1 h-px" style={{ background: 'var(--border-subtle)' }} />}
-
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
-                  style={{ color: 'var(--text-strong)' }}
-                  onClick={() => {
-                    if (!contextMenu.groupId) return;
-                    const target = contextGroup ?? grouped.find((g) => g.id === contextMenu.groupId);
-                    if (!target) return;
-                    selectFolder(target, 'single');
-                    closeContextMenu();
-                  }}
-                >
-                  <PanelsTopLeft className="h-3.5 w-3.5" />
-                  <span><Trans>Select folder</Trans></span>
-                </button>
-
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
-                  style={{ color: !contextMenu.isSystemGroup ? 'var(--text-strong)' : 'var(--text-muted)', opacity: !contextMenu.isSystemGroup ? 1 : 0.6 }}
-                  disabled={!!contextMenu.isSystemGroup}
-                  onClick={() => {
-                    if (!contextMenu.groupId || !onRenameGroup || contextMenu.isSystemGroup) return;
-                    beginRenameGroup(contextMenu.groupId, contextMenu.groupName ?? contextGroup?.name ?? 'Group');
-                  }}
-                >
-                  <Pencil className="h-3.5 w-3.5" />
-                  <span><Trans>Rename folder</Trans></span>
-                </button>
-
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
-                  style={{ color: !contextMenu.isSystemGroup ? 'var(--text-strong)' : 'var(--text-muted)', opacity: !contextMenu.isSystemGroup ? 1 : 0.6 }}
-                  disabled={!!contextMenu.isSystemGroup}
-                  onClick={() => {
-                    if (!contextMenu.groupId || !onUngroupGroup || contextMenu.isSystemGroup) return;
-                    onUngroupGroup(contextMenu.groupId);
-                    closeContextMenu();
-                  }}
-                >
-                  <FolderMinus className="h-3.5 w-3.5" />
-                  <span><Trans>Ungroup folder</Trans></span>
-                </button>
-              </>
-            )}
-
-            {contextModel && (onRenameModel || onModelContextMenu || onRepairModel) && (
-              <>
-                {(showGroupSection || showFolderSection) && <div className="my-1 h-px" style={{ background: 'var(--border-subtle)' }} />}
-
-                {onRenameModel && (
-                  <button
-                    type="button"
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
-                    style={{ color: 'var(--text-strong)' }}
-                    onClick={() => {
-                      beginRenameModel(contextModel.id, contextModel.name ?? 'Model');
-                    }}
-                  >
-                    <Pencil className="h-3.5 w-3.5" />
-                    <span><Trans>Rename model</Trans></span>
-                  </button>
-                )}
-
-                {onRepairModel && (
-                  <button
-                    type="button"
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
-                    style={{ color: 'var(--text-strong)' }}
-                    onClick={() => {
-                      onRepairModel(contextModel.id);
-                      closeContextMenu();
-                    }}
-                  >
-                    <Wrench className="h-3.5 w-3.5" />
-                    <span><Trans>Repair mesh…</Trans></span>
-                  </button>
-                )}
-
-                {contextModel.splitBodies && onSplitImportGroup && (
-                  <>
-                    <div className="my-1 h-px" style={{ background: 'var(--border-subtle)' }} />
-                    <button
-                      type="button"
-                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
-                      style={{ color: 'var(--text-strong)' }}
-                      onClick={() => {
-                        onSplitImportGroup(contextModel.id);
-                        closeContextMenu();
-                      }}
-                    >
-                      <Scissors className="h-3.5 w-3.5" />
-                      <span><Trans comment="Context menu action: split a multi-body 3MF import into independent models.">Split to bodies</Trans></span>
-                    </button>
-                  </>
-                )}
-
-                {onModelContextMenu && (
-                  <button
-                    type="button"
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
-                    style={{ color: 'var(--text-strong)' }}
-                    onClick={() => {
-                      onModelContextMenu(contextModel.id, { x: contextMenu.x, y: contextMenu.y });
-                      closeContextMenu();
-                    }}
-                  >
-                    <Box className="h-3.5 w-3.5" />
-                    <span><Trans>Model actions…</Trans></span>
-                  </button>
-                )}
-              </>
-            )}
-
-            <div className="my-1 h-px" style={{ background: 'var(--border-subtle)' }} />
-
-            <button
-              type="button"
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
-              style={{ color: 'var(--text-strong)' }}
-              onClick={() => {
-                toggleCompactList();
-                closeContextMenu();
-              }}
-            >
-              <span className="inline-flex h-3.5 w-3.5 items-center justify-center text-[10px] leading-none" style={{ color: compactList ? 'var(--accent)' : 'var(--text-muted)' }}>
-                {compactList ? '✓' : ''}
-              </span>
-              <span><Trans>Compact list</Trans></span>
-            </button>
-          </div>
-        </div>
-      )}
+      <ContextMenu
+        position={contextMenu}
+        entries={contextMenuEntries}
+        onSelect={handleContextMenuSelect}
+        onClose={closeContextMenu}
+        title={<Trans comment="Section heading of the models context menu. Rendered uppercase.">Models</Trans>}
+        ariaLabel={_(msg`Models context menu`)}
+      />
       {/* Horizontal resize handle on the right edge */}
       <div
         className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:opacity-100 opacity-0 transition-opacity"

@@ -926,6 +926,8 @@ export default function Home() {
   } | null>(null);
   const [showCloseUnsavedChangesModal, setShowCloseUnsavedChangesModal] = React.useState(false);
   const [closeUnsavedChangesBusy, setCloseUnsavedChangesBusy] = React.useState<'none' | 'save_and_close' | 'discard_and_close'>('none');
+  const [showNewSceneUnsavedChangesModal, setShowNewSceneUnsavedChangesModal] = React.useState(false);
+  const [newSceneBusy, setNewSceneBusy] = React.useState<'none' | 'save_and_new' | 'discard_and_new'>('none');
   const [hasUnsavedSceneChanges, setHasUnsavedSceneChanges] = React.useState(false);
   const pluginImportWarningPendingResolveRef = React.useRef<((proceed: boolean) => void) | null>(null);
   const sceneSaveChoiceResolveRef = React.useRef<((choice: 'overwrite' | 'save_as' | 'cancel') => void) | null>(null);
@@ -4537,6 +4539,8 @@ export default function Home() {
     setSceneFormatChunked(true);
     setShowCloseUnsavedChangesModal(false);
     setCloseUnsavedChangesBusy('none');
+    setShowNewSceneUnsavedChangesModal(false);
+    setNewSceneBusy('none');
     if (sceneSaveChoiceResolveRef.current) {
       sceneSaveChoiceResolveRef.current('cancel');
       sceneSaveChoiceResolveRef.current = null;
@@ -4694,6 +4698,53 @@ export default function Home() {
       }
     })();
   }, [closeDesktopWindowNow, saveCurrentSceneNow]);
+
+  /**
+   * Start a fresh scene. Deleting every model is what the editor already treats
+   * as "no scene": the empty-scene effect above drops the save target, the
+   * autosave sidecar and the save baseline, and the viewport falls back to the
+   * empty state. It goes through `deleteModels`, so the wipe is a single
+   * undoable history entry rather than an unrecoverable one.
+   */
+  const startNewScene = React.useCallback(() => {
+    const ids = scene.models.map((model) => model.id);
+    if (ids.length === 0) return;
+    void scene.deleteModels(ids);
+  }, [scene.deleteModels, scene.models]);
+
+  const handleRequestNewScene = React.useCallback(() => {
+    if (hasUnsavedSceneChangesRef.current) {
+      setShowNewSceneUnsavedChangesModal(true);
+      return;
+    }
+    startNewScene();
+  }, [startNewScene]);
+
+  const handleDiscardAndNewScene = React.useCallback(() => {
+    setNewSceneBusy('discard_and_new');
+    try {
+      setShowNewSceneUnsavedChangesModal(false);
+      startNewScene();
+    } finally {
+      setNewSceneBusy('none');
+    }
+  }, [startNewScene]);
+
+  const handleSaveAndNewScene = React.useCallback(() => {
+    void (async () => {
+      setNewSceneBusy('save_and_new');
+      try {
+        const saved = await saveCurrentSceneNow();
+        if (!saved) return;
+        setShowNewSceneUnsavedChangesModal(false);
+        startNewScene();
+      } catch (error) {
+        console.error('[SceneSave] Save-and-new-scene failed.', error);
+      } finally {
+        setNewSceneBusy('none');
+      }
+    })();
+  }, [saveCurrentSceneNow, startNewScene]);
 
   // Web runtime only. The desktop build has its own close flow (the
   // onCloseRequested effect below), which can actually save rather than just
@@ -6158,34 +6209,6 @@ export default function Home() {
     },
     [],
   );
-
-  React.useEffect(() => {
-    if (!editorContextMenuPos) return;
-
-    const handlePointerDown = () => closeEditorContextMenu();
-    const handleScrollOrResize = () => closeEditorContextMenu();
-
-    window.addEventListener('pointerdown', handlePointerDown);
-    window.addEventListener('resize', handleScrollOrResize);
-    window.addEventListener('scroll', handleScrollOrResize, true);
-
-    let wasEscapePressed = false;
-    const unsubscribe = hotkeyStore.subscribe((state) => {
-      const active = state.activeKeys;
-      const isEscapePressed = active.has('escape');
-      if (isEscapePressed && !wasEscapePressed) {
-        closeEditorContextMenu();
-      }
-      wasEscapePressed = isEscapePressed;
-    });
-
-    return () => {
-      window.removeEventListener('pointerdown', handlePointerDown);
-      window.removeEventListener('resize', handleScrollOrResize);
-      window.removeEventListener('scroll', handleScrollOrResize, true);
-      unsubscribe();
-    };
-  }, [editorContextMenuPos, closeEditorContextMenu]);
 
   React.useEffect(() => {
     setDebugPrimitivesPanelVisible(isDebugPrimitivesPanelVisibleEnabled());
@@ -9758,6 +9781,7 @@ export default function Home() {
         isSlicingBusy={isSlicingBusy}
         onLoadMeshChange={handleLoadMeshChangeWithZip}
         onImportSceneChange={handleImportSceneChangeWithZip}
+        onNewScene={handleRequestNewScene}
         onSaveScene={() => { void handleTopBarSaveScene(); }}
         onSaveSceneAs={() => { handleTopBarSaveSceneAs(); }}
         onOpenScene={handleTopBarOpenScene}
@@ -10390,6 +10414,7 @@ export default function Home() {
       <EditorContextMenu
         position={editorContextMenuPos}
         onAction={handleEditorMenuAction}
+        onClose={closeEditorContextMenu}
         title={editorContextMenuTitle}
         items={editorContextMenuItems}
         disabledActions={editorContextMenuDisabledActions}
@@ -10592,12 +10617,15 @@ export default function Home() {
         arrangeOverlayModelCount={arrangeOverlayModelCount}
         autosaveRecovery={autosaveRecovery}
         closeUnsavedChangesBusy={closeUnsavedChangesBusy}
+        newSceneBusy={newSceneBusy}
         handleAutosaveDiscard={handleAutosaveDiscard}
         handleAutosaveRestore={handleAutosaveRestore}
         handleCancelPluginImportWarning={handleCancelPluginImportWarning}
         handleContinuePluginImportWarning={handleContinuePluginImportWarning}
         handleDiscardAndCloseProgram={handleDiscardAndCloseProgram}
+        handleDiscardAndNewScene={handleDiscardAndNewScene}
         handleSaveAndCloseProgram={handleSaveAndCloseProgram}
+        handleSaveAndNewScene={handleSaveAndNewScene}
         hasUnsavedSceneChanges={hasUnsavedSceneChanges}
         pluginImportWarningSkipFuture={pluginImportWarningSkipFuture}
         pluginImportWarningTitle={activePluginImportWarning?.title ?? null}
@@ -10608,10 +10636,12 @@ export default function Home() {
         sceneSaveChoicePath={sceneSaveChoicePath}
         setPluginImportWarningSkipFuture={setPluginImportWarningSkipFuture}
         setShowCloseUnsavedChangesModal={setShowCloseUnsavedChangesModal}
+        setShowNewSceneUnsavedChangesModal={setShowNewSceneUnsavedChangesModal}
         setSupportsInfoModelId={setSupportsInfoModelId}
         setZipPickerState={setZipPickerState}
         showArrangeBlockingOverlay={showArrangeBlockingOverlay}
         showCloseUnsavedChangesModal={showCloseUnsavedChangesModal}
+        showNewSceneUnsavedChangesModal={showNewSceneUnsavedChangesModal}
         showPluginImportWarningModal={showPluginImportWarningModal}
         showSceneSaveChoiceModal={showSceneSaveChoiceModal}
         supportsInfoModelId={supportsInfoModelId}

@@ -13,12 +13,15 @@ export type SceneFileModalsProps = {
   arrangeOverlayModelCount: number | null;
   autosaveRecovery: { savedAt: string; voxlPath: string; origin: string } | null;
   closeUnsavedChangesBusy: "none" | "save_and_close" | "discard_and_close";
+  newSceneBusy: "none" | "save_and_new" | "discard_and_new";
   handleAutosaveDiscard: () => Promise<void>;
   handleAutosaveRestore: () => Promise<void>;
   handleCancelPluginImportWarning: () => void;
   handleContinuePluginImportWarning: () => void;
   handleDiscardAndCloseProgram: () => void;
+  handleDiscardAndNewScene: () => void;
   handleSaveAndCloseProgram: () => void;
+  handleSaveAndNewScene: () => void;
   hasUnsavedSceneChanges: boolean;
   pluginImportWarningSkipFuture: boolean;
   pluginImportWarningTitle?: string | null;
@@ -31,10 +34,12 @@ export type SceneFileModalsProps = {
   dismissSceneSaveError?: () => void;
   setPluginImportWarningSkipFuture: React.Dispatch<React.SetStateAction<boolean>>;
   setShowCloseUnsavedChangesModal: React.Dispatch<React.SetStateAction<boolean>>;
+  setShowNewSceneUnsavedChangesModal: React.Dispatch<React.SetStateAction<boolean>>;
   setSupportsInfoModelId: React.Dispatch<React.SetStateAction<string | null>>;
   setZipPickerState: React.Dispatch<React.SetStateAction<{ zipName: string; files: File[]; category: "mesh" | "scene" | "mixed"; defaultSelectionCategory: "mesh" | "scene"; } | null>>;
   showArrangeBlockingOverlay: boolean;
   showCloseUnsavedChangesModal: boolean;
+  showNewSceneUnsavedChangesModal: boolean;
   showPluginImportWarningModal: boolean;
   showSceneSaveChoiceModal: boolean;
   supportsInfoModelId: string | null;
@@ -42,19 +47,99 @@ export type SceneFileModalsProps = {
   zipPickerState: { zipName: string; files: File[]; category: "mesh" | "scene" | "mixed"; defaultSelectionCategory: "mesh" | "scene"; } | null;
 };
 
-/** Editor modal organism: ModelSupportsModal, sceneImportPlacementPrompt, autosaveRecovery, pluginImportWarning, zipPicker, StructuredDialog_closeUnsaved, sceneSaveChoice, arrangeBlockingOverlay, sceneSaveError. */
+type UnsavedChangesDialogProps = {
+  open: boolean;
+  busy: boolean;
+  subtitle: string;
+  body: React.ReactNode;
+  confirmLabel: string;
+  onCancel: () => void;
+  onDiscard: () => void;
+  onSave: () => void;
+};
+
+/**
+ * Shared shell for the two unsaved-changes prompts: closing the program and
+ * starting a new scene. Both offer the same three ways out (cancel, discard,
+ * save first); only the body copy and the primary button's label differ.
+ */
+function UnsavedChangesDialog({
+  open,
+  busy,
+  subtitle,
+  body,
+  confirmLabel,
+  onCancel,
+  onDiscard,
+  onSave,
+}: UnsavedChangesDialogProps) {
+  return (
+    <StructuredDialogModal
+      open={open}
+      ariaLabel="Unsaved changes"
+      title="Unsaved Scene Changes"
+      subtitle={subtitle}
+      icon={<AlertTriangle className="h-4 w-4" />}
+      iconTone="warning"
+      zIndexClassName="z-[220]"
+      closeAriaLabel="Close unsaved changes modal"
+      closeDisabled={busy}
+      onClose={() => {
+        if (busy) return;
+        onCancel();
+      }}
+      onBackdropClick={() => {
+        if (busy) return;
+        onCancel();
+      }}
+      actions={(
+        <>
+          <button
+            type="button"
+            className="ui-button !h-9 w-full px-3 text-xs inline-flex items-center justify-center gap-1.5"
+            style={{
+              borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
+              background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
+              color: 'var(--danger)',
+            }}
+            disabled={busy}
+            onClick={onDiscard}
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            Discard Changes
+          </button>
+          <button
+            type="button"
+            className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
+            disabled={busy}
+            onClick={onSave}
+          >
+            {confirmLabel}
+          </button>
+        </>
+      )}
+    >
+      {body}
+    </StructuredDialogModal>
+  );
+}
+
+/** Editor modal organism: ModelSupportsModal, sceneImportPlacementPrompt, autosaveRecovery, pluginImportWarning, zipPicker, StructuredDialog_closeUnsaved, StructuredDialog_newSceneUnsaved, sceneSaveChoice, arrangeBlockingOverlay, sceneSaveError. */
 export function SceneFileModals({
   arrangeOverlayContent,
   arrangeOverlayElapsedLabel,
   arrangeOverlayModelCount,
   autosaveRecovery,
   closeUnsavedChangesBusy,
+  newSceneBusy,
   handleAutosaveDiscard,
   handleAutosaveRestore,
   handleCancelPluginImportWarning,
   handleContinuePluginImportWarning,
   handleDiscardAndCloseProgram,
+  handleDiscardAndNewScene,
   handleSaveAndCloseProgram,
+  handleSaveAndNewScene,
   hasUnsavedSceneChanges,
   pluginImportWarningSkipFuture,
   pluginImportWarningTitle,
@@ -67,10 +152,12 @@ export function SceneFileModals({
   dismissSceneSaveError,
   setPluginImportWarningSkipFuture,
   setShowCloseUnsavedChangesModal,
+  setShowNewSceneUnsavedChangesModal,
   setSupportsInfoModelId,
   setZipPickerState,
   showArrangeBlockingOverlay,
   showCloseUnsavedChangesModal,
+  showNewSceneUnsavedChangesModal,
   showPluginImportWarningModal,
   showSceneSaveChoiceModal,
   supportsInfoModelId,
@@ -362,62 +449,53 @@ export function SceneFileModals({
         />
       )}
 
-      <StructuredDialogModal
+      <UnsavedChangesDialog
         open={showCloseUnsavedChangesModal}
-        ariaLabel="Unsaved changes"
-        title="Unsaved Scene Changes"
+        busy={closeUnsavedChangesBusy !== 'none'}
         subtitle={hasUnsavedSceneChanges
           ? 'You have unsaved edits in this scene.'
           : 'This scene is already saved.'}
-        icon={<AlertTriangle className="h-4 w-4" />}
-        iconTone="warning"
-        zIndexClassName="z-[220]"
-        closeAriaLabel="Close unsaved changes modal"
-        closeDisabled={closeUnsavedChangesBusy !== 'none'}
-        onClose={() => {
-          if (closeUnsavedChangesBusy !== 'none') return;
-          setShowCloseUnsavedChangesModal(false);
-        }}
-        onBackdropClick={() => {
-          if (closeUnsavedChangesBusy !== 'none') return;
-          setShowCloseUnsavedChangesModal(false);
-        }}
-        actions={(
+        confirmLabel="Save & Close"
+        onCancel={() => setShowCloseUnsavedChangesModal(false)}
+        onDiscard={handleDiscardAndCloseProgram}
+        onSave={handleSaveAndCloseProgram}
+        body={(
           <>
-            <button
-              type="button"
-              className="ui-button !h-9 w-full px-3 text-xs inline-flex items-center justify-center gap-1.5"
-              style={{
-                borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
-                color: 'var(--danger)',
-              }}
-              disabled={closeUnsavedChangesBusy !== 'none'}
-              onClick={handleDiscardAndCloseProgram}
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              Discard Changes
-            </button>
-            <button
-              type="button"
-              className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
-              disabled={closeUnsavedChangesBusy !== 'none'}
-              onClick={handleSaveAndCloseProgram}
-            >
-              Save &amp; Close
-            </button>
+            <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              {hasUnsavedSceneChanges
+                ? 'You’re about to close DragonFruit with unsaved scene changes.'
+                : 'Close DragonFruit now?'}
+            </p>
+            <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              <strong>Please ensure you have saved any important work.</strong>
+            </p>
           </>
         )}
-      >
-        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-          {hasUnsavedSceneChanges
-            ? 'You’re about to close DragonFruit with unsaved scene changes.'
-            : 'Close DragonFruit now?'}
-        </p>
-        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-          <strong>Please ensure you have saved any important work.</strong>
-        </p>
-      </StructuredDialogModal>
+      />
+
+      <UnsavedChangesDialog
+        open={showNewSceneUnsavedChangesModal}
+        busy={newSceneBusy !== 'none'}
+        subtitle={hasUnsavedSceneChanges
+          ? 'You have unsaved edits in this scene.'
+          : 'This scene is already saved.'}
+        confirmLabel="Save & New Scene"
+        onCancel={() => setShowNewSceneUnsavedChangesModal(false)}
+        onDiscard={handleDiscardAndNewScene}
+        onSave={handleSaveAndNewScene}
+        body={(
+          <>
+            <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              {hasUnsavedSceneChanges
+                ? 'You’re about to start a new scene with unsaved edits in this one.'
+                : 'Start a new scene now?'}
+            </p>
+            <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              <strong>Please ensure you have saved any important work.</strong>
+            </p>
+          </>
+        )}
+      />
 
       {showSceneSaveChoiceModal && (
         <div

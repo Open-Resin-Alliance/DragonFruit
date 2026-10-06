@@ -10,7 +10,8 @@ import { ProfileSettingsModal } from '@/components/settings/ProfileSettingsModal
 import type { SupportMode } from '@/supports/types';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import { AlertDiamondIcon, Button } from '@/components/atoms';
-import { Activity, AlertTriangle, Anchor, ChevronDown, FolderInput, FolderOpen, Lock, Maximize2, Minimize2, Power, Printer, Save, SaveAll, Square, Upload, X } from 'lucide-react';
+import { ContextMenu, type ContextMenuEntry } from '@/components/ui/ContextMenu';
+import { Activity, AlertTriangle, Anchor, ChevronDown, FilePlus2, FolderInput, FolderOpen, Lock, Maximize2, Minimize2, Power, Printer, Save, SaveAll, Square, Upload, X } from 'lucide-react';
 import {
   applyThemeCustomColors,
   getSavedThemeCustomColors,
@@ -85,6 +86,7 @@ interface TopBarProps {
   heatmapColors: string[];
   onHeatmapColorChange: (index: number, color: string) => void;
   isSlicingBusy?: boolean;
+  onNewScene?: () => void;
   onSaveScene?: () => void;
   onSaveSceneAs?: () => void;
   onOpenScene?: () => void;
@@ -149,6 +151,7 @@ export function TopBar({
   isSlicingBusy = false,
   onLoadMeshChange,
   onImportSceneChange,
+  onNewScene,
   onSaveScene,
   onSaveSceneAs,
   onOpenScene,
@@ -320,35 +323,6 @@ export function TopBar({
   const closePrinterQuickMenu = React.useCallback(() => {
     setIsPrinterQuickMenuOpen(false);
   }, []);
-
-  React.useEffect(() => {
-    if (!isAppMenuOpen) return;
-
-    const handlePointerDown = (event: MouseEvent) => {
-      const target = event.target as Node | null;
-      if (!target) return;
-
-      const appMenuNode = document.querySelector('[data-app-menu="true"]');
-      const appMenuButtonNode = appMenuButtonRef.current;
-
-      if (appMenuNode?.contains(target)) return;
-      if (appMenuButtonNode?.contains(target)) return;
-      closeAppMenu();
-    };
-
-    const handleEscape = (event: CustomEvent) => {
-      if (event.detail.key === 'Escape') {
-        closeAppMenu();
-      }
-    };
-
-    window.addEventListener('mousedown', handlePointerDown);
-    window.addEventListener('app-hotkey-keydown', handleEscape as EventListener);
-    return () => {
-      window.removeEventListener('mousedown', handlePointerDown);
-      window.removeEventListener('app-hotkey-keydown', handleEscape as EventListener);
-    };
-  }, [closeAppMenu, isAppMenuOpen]);
 
   React.useEffect(() => {
     if (!isPrinterQuickMenuOpen) return;
@@ -645,6 +619,85 @@ export function TopBar({
     },
   ];
 
+  // Same rows the DragonFruit dropdown has always offered; placement, grouping
+  // rules and dismissal belong to ContextMenu.
+  const appMenuEntries: ContextMenuEntry[] = [
+    {
+      id: 'new-scene',
+      label: _(msg`New scene`),
+      icon: FilePlus2,
+      disabled: topbarActionsDisabled || !onNewScene || !hasModels,
+    },
+    {
+      id: 'save-scene',
+      label: _(msg`Save scene`),
+      icon: Save,
+      disabled: topbarActionsDisabled || !onSaveScene,
+      startsGroup: true,
+    },
+    {
+      id: 'save-scene-as',
+      label: _(msg`Save scene as…`),
+      icon: SaveAll,
+      disabled: topbarActionsDisabled || !onSaveSceneAs,
+    },
+    {
+      id: 'open-scene',
+      label: _(msg`Open scene…`),
+      icon: FolderOpen,
+      disabled: topbarActionsDisabled || !onOpenScene,
+    },
+    {
+      id: 'import-mesh',
+      label: _(msg`Import mesh…`),
+      icon: Upload,
+      disabled: topbarActionsDisabled || !onLoadMeshChange,
+      startsGroup: true,
+    },
+    {
+      id: 'import-scene',
+      label: _(msg`Import scene…`),
+      icon: FolderInput,
+      disabled: topbarActionsDisabled || !onImportSceneChange,
+    },
+    {
+      id: 'close-program',
+      label: _(msg`Close program`),
+      icon: Power,
+      startsGroup: true,
+    },
+  ];
+
+  const handleAppMenuSelect = (id: string) => {
+    switch (id) {
+      case 'new-scene':
+        onNewScene?.();
+        break;
+      case 'save-scene':
+        onSaveScene?.();
+        break;
+      case 'save-scene-as':
+        onSaveSceneAs?.();
+        break;
+      case 'open-scene':
+        onOpenScene?.();
+        break;
+      case 'import-mesh':
+        if (typeof document === 'undefined') break;
+        (document.getElementById('topbar-mesh-input') as HTMLInputElement | null)?.click();
+        break;
+      case 'import-scene':
+        if (typeof document === 'undefined') break;
+        (document.getElementById('topbar-scene-input') as HTMLInputElement | null)?.click();
+        break;
+      case 'close-program':
+        void handleCloseProgram();
+        break;
+      default:
+        break;
+    }
+  };
+
   return (
     <>
       <div className={`ui-topbar-blur ${hideWorkflowControls ? 'ui-topbar-blur-transparent' : ''}`} aria-hidden="true" />
@@ -779,143 +832,15 @@ export function TopBar({
       </div>
 
       {isAppMenuOpen && appMenuPosition && (
-        <div
-          data-app-menu="true"
-          className="fixed z-[120] w-44 rounded-lg border p-1.5 shadow-xl backdrop-blur-sm"
-          style={{
-            left: appMenuPosition.x,
-            top: appMenuPosition.y,
-            borderColor: 'var(--border-subtle)',
-            background: 'color-mix(in srgb, var(--surface-0), #000 10%)',
-          }}
-          role="menu"
-          aria-label={_(msg({ message: 'DragonFruit app menu', comment: '"DragonFruit" is the product name and should stay untranslated/unchanged.' }))}
-        >
-          <div className="mb-1 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-            DragonFruit
-          </div>
-          <div className="space-y-0.5">
-            <button
-              type="button"
-              onClick={() => {
-                closeAppMenu();
-                onSaveScene?.();
-              }}
-              disabled={topbarActionsDisabled || !onSaveScene}
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium transition-colors"
-              style={{
-                color: (topbarActionsDisabled || !onSaveScene) ? 'var(--text-muted)' : 'var(--text-strong)',
-                opacity: (topbarActionsDisabled || !onSaveScene) ? 0.55 : 1,
-              }}
-              role="menuitem"
-            >
-              <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <Save className="h-3.5 w-3.5" />
-              </span>
-              <span>{_(msg`Save scene`)}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                closeAppMenu();
-                onSaveSceneAs?.();
-              }}
-              disabled={topbarActionsDisabled || !onSaveSceneAs}
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium transition-colors"
-              style={{
-                color: (topbarActionsDisabled || !onSaveSceneAs) ? 'var(--text-muted)' : 'var(--text-strong)',
-                opacity: (topbarActionsDisabled || !onSaveSceneAs) ? 0.55 : 1,
-              }}
-              role="menuitem"
-            >
-              <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <SaveAll className="h-3.5 w-3.5" />
-              </span>
-              <span>{_(msg`Save scene as…`)}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                closeAppMenu();
-                onOpenScene?.();
-              }}
-              disabled={topbarActionsDisabled || !onOpenScene}
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium transition-colors"
-              style={{
-                color: (topbarActionsDisabled || !onOpenScene) ? 'var(--text-muted)' : 'var(--text-strong)',
-                opacity: (topbarActionsDisabled || !onOpenScene) ? 0.55 : 1,
-              }}
-              role="menuitem"
-            >
-              <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <FolderOpen className="h-3.5 w-3.5" />
-              </span>
-              <span>{_(msg`Open scene…`)}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                closeAppMenu();
-                if (typeof document === 'undefined') return;
-                const input = document.getElementById('topbar-mesh-input') as HTMLInputElement | null;
-                input?.click();
-              }}
-              disabled={topbarActionsDisabled || !onLoadMeshChange}
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium transition-colors"
-              style={{
-                color: (topbarActionsDisabled || !onLoadMeshChange) ? 'var(--text-muted)' : 'var(--text-strong)',
-                opacity: (topbarActionsDisabled || !onLoadMeshChange) ? 0.55 : 1,
-              }}
-              role="menuitem"
-            >
-              <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <Upload className="h-3.5 w-3.5" />
-              </span>
-              <span>{_(msg`Import mesh…`)}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                closeAppMenu();
-                if (typeof document === 'undefined') return;
-                const input = document.getElementById('topbar-scene-input') as HTMLInputElement | null;
-                input?.click();
-              }}
-              disabled={topbarActionsDisabled || !onImportSceneChange}
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium transition-colors"
-              style={{
-                color: (topbarActionsDisabled || !onImportSceneChange) ? 'var(--text-muted)' : 'var(--text-strong)',
-                opacity: (topbarActionsDisabled || !onImportSceneChange) ? 0.55 : 1,
-              }}
-              role="menuitem"
-            >
-              <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <FolderInput className="h-3.5 w-3.5" />
-              </span>
-              <span>{_(msg`Import scene…`)}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                closeAppMenu();
-                void handleCloseProgram();
-              }}
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium transition-colors"
-              style={{ color: 'var(--text-strong)' }}
-              role="menuitem"
-            >
-              <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <Power className="h-3.5 w-3.5" />
-              </span>
-              <span>{_(msg`Close program`)}</span>
-            </button>
-          </div>
-        </div>
+        <ContextMenu
+          position={appMenuPosition}
+          entries={appMenuEntries}
+          onSelect={handleAppMenuSelect}
+          onClose={closeAppMenu}
+          dismissIgnoreRef={appMenuButtonRef}
+          title="DragonFruit"
+          ariaLabel={_(msg({ message: 'DragonFruit app menu', comment: '"DragonFruit" is the product name and should stay untranslated/unchanged.' }))}
+        />
       )}
 
       <input
