@@ -261,7 +261,7 @@ function SettingsSidebarTab({
         }}
     >
       <div className="flex items-center gap-2.5">
-        <Icon className="h-4 w-4 shrink-0" style={{ color: active ? tabColor : 'var(--text-muted)' }} />
+        <Icon className="h-[18px] w-[18px] shrink-0" style={{ color: active ? tabColor : 'var(--text-muted)' }} />
         <span className="min-w-0 flex-1">
           <span className="block text-sm font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
             {meta.label}
