@@ -4,7 +4,8 @@ import React from 'react';
 import { HexColorPicker } from 'react-colorful';
 import { RotateCcw } from 'lucide-react';
 import { NumberInput } from '@/components/ui/NumberInput';
-import { Button, Card, CardHeader, PanelCollapseToggle } from '@/components/atoms';
+import { Button, Card, CardHeader } from '@/components/atoms';
+import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 import {
   DEFAULT_MESH_SMOOTHING_SETTINGS,

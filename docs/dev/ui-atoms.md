@@ -32,6 +32,10 @@ private copy at the call site.
   one place the warning, danger, accent and neutral tones are defined.
 - `PanelCollapseToggle` — the chevron that expands a panel card. It carries the
   accessible name and `aria-expanded`, which the hand-rolled copies did not.
+  **Import it from `src/components/atoms/PanelCollapseToggle`, not from the
+  barrel**: it needs the catalog, so it is the one atom that imports a Lingui
+  macro, and a macro reachable from the barrel breaks unrelated unit tests (see
+  the barrelling rule below).
 
 ### Layout and form
 
@@ -80,6 +84,15 @@ private copy at the call site.
 - `clamp` and `quantizeToScale` (`src/utils/math.ts`) — bounds and grid snapping.
 
 ## Constraints
+
+- **The atoms barrel stays macro-free.** `node --test` transpiles with esbuild
+  only, and `@lingui/core/macro` throws by design when it runs untransformed
+  (only the Next build's SWC plugin transforms it). Settings tests reach the
+  barrel through `profileFormAtoms`, so a macro anywhere in that graph turns into
+  a failure in an unrelated test with a "macro is being executed outside the
+  context of compilation" message. An atom that needs catalog strings is imported
+  from its own module instead of being re-exported, and
+  `src/components/atoms/__tests__/barrel.test.ts` fails if one gets barrelled.
 
 - **Size means geometry, and geometry only wins when it is important.** The
   `.ui-button` rule sets padding and font size, and a plain utility class ties

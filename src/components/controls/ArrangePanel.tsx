@@ -1,7 +1,8 @@
 import React from 'react';
 import { LayoutGrid, RotateCw } from 'lucide-react';
 import { MiniStepperField } from '@/components/ui/miniStepperField';
-import { Button, Card, CardHeader, PanelCollapseToggle, Select, Spinner } from '@/components/atoms';
+import { Button, Card, CardHeader, Select, Spinner } from '@/components/atoms';
+import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 

@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import { RaftSettings } from '../RaftTypes';
-import { PanelCollapseToggle } from '@/components/atoms';
+import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 
 type RaftSettingsCardProps = {
   settings: RaftSettings;

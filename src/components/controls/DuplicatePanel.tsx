@@ -1,6 +1,7 @@
 import React from 'react';
 import { CopyPlus } from 'lucide-react';
-import { Button, Card, CardHeader, PanelCollapseToggle, Spinner } from '@/components/atoms';
+import { Button, Card, CardHeader, Spinner } from '@/components/atoms';
+import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 import { MiniStepperField } from '@/components/ui/miniStepperField';
 import type { ArrangePrecisionMode } from '@/components/controls/ArrangePanel';

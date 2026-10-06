@@ -1,6 +1,7 @@
 import React from 'react';
 import { ChevronDown, Download, ExternalLink, FolderOpen, Printer, RotateCcw, X } from 'lucide-react';
-import { Button, Card, CardHeader, PanelCollapseToggle, Spinner } from '@/components/atoms';
+import { Button, Card, CardHeader, Spinner } from '@/components/atoms';
+import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 type PrintingPanelProps = {

@@ -42,7 +42,8 @@ import {
     GridSettingsCard,
     SidebarPanelTabs,
 } from './components';
-import { Card, CardHeader, IconButton, PanelCollapseToggle } from '@/components/atoms';
+import { Card, CardHeader, IconButton } from '@/components/atoms';
+import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { SupportAnatomyPreviewSlot } from './AnatomyPreview/SupportAnatomyPreviewSlot';

@@ -9,11 +9,11 @@ import {
   Card,
   CardHeader,
   Input,
-  PanelCollapseToggle,
   Select,
   SettingRow,
   Toggle,
 } from '@/components/atoms';
+import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { pickDirectoryWithNativeDialog } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 

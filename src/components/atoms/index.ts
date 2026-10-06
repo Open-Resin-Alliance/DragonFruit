@@ -15,4 +15,10 @@ export { Toggle } from './Toggle';
 export { SegmentedControl, type SegmentedOption } from './SegmentedControl';
 export { SettingRow } from './SettingRow';
 export { BlockingOverlay } from './BlockingOverlay';
-export { PanelCollapseToggle } from './PanelCollapseToggle';
+// `PanelCollapseToggle` is deliberately NOT re-exported here. It resolves its
+// accessible name through the Lingui catalog, so it imports `@lingui/core/macro`,
+// and that module throws by design when it runs untransformed. The barrel is the
+// one atom module graph that unit tests import (`node --test` cannot run the SWC
+// macro transform), so a macro reachable from here breaks unrelated tests.
+// Import it directly: `import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';`
+// `src/components/atoms/__tests__/barrel.test.ts` guards this.

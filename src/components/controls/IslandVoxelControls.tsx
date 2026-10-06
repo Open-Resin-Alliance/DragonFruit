@@ -4,7 +4,8 @@ import React from 'react';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import { Plural } from '@lingui/react/macro';
-import { Card, CardHeader, PanelCollapseToggle, Select } from '@/components/atoms';
+import { Card, CardHeader, Select } from '@/components/atoms';
+import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 interface IslandVoxelControlsProps {

@@ -4,7 +4,8 @@ import { msg } from '@lingui/core/macro';
 import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { Search, ScanLine, Cpu } from 'lucide-react';
-import { Button, Card, CardHeader, PanelCollapseToggle, Toggle } from '@/components/atoms';
+import { Button, Card, CardHeader, Toggle } from '@/components/atoms';
+import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 
 type ImportPhase = 'idle' | 'awaiting_stl' | 'processing';
 

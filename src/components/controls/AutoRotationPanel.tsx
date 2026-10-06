@@ -5,7 +5,8 @@ import * as THREE from 'three';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import { Trans } from '@lingui/react/macro';
-import { Button, Card, CardHeader, PanelCollapseToggle, Select } from '@/components/atoms';
+import { Button, Card, CardHeader, Select } from '@/components/atoms';
+import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 import { getModelMesh } from '@/supports/autoSupport/meshStore';
 import {

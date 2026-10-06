@@ -1,7 +1,8 @@
 import React from 'react';
 import * as THREE from 'three';
 import { NumberInput } from '@/components/ui/NumberInput';
-import { Button, Card, CardHeader, PanelCollapseToggle } from '@/components/atoms';
+import { Button, Card, CardHeader } from '@/components/atoms';
+import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 interface SectionHeaderProps {

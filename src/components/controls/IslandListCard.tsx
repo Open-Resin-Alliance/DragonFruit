@@ -6,7 +6,8 @@ import { Plural } from '@lingui/react/macro';
 import type { Island } from '@/volumeAnalysis/IslandScan/types';
 import { IslandHierarchyModal } from '@/components/modals/IslandHierarchyModal';
 import { ChevronRight, Network } from 'lucide-react';
-import { Button, Card, CardHeader, IconChip, Input, PanelCollapseToggle } from '@/components/atoms';
+import { Button, Card, CardHeader, IconChip, Input } from '@/components/atoms';
+import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 type IslandListCardProps = {

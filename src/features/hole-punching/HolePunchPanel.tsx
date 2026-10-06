@@ -1,5 +1,6 @@
 import React from 'react';
-import { Button, Card, CardHeader, PanelCollapseToggle, Spinner } from '@/components/atoms';
+import { Button, Card, CardHeader, Spinner } from '@/components/atoms';
+import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 
 export interface HolePunchPanelState {

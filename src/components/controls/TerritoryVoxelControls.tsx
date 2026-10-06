@@ -1,7 +1,8 @@
 "use client";
 
 import React from 'react';
-import { Card, CardHeader, PanelCollapseToggle, Toggle } from '@/components/atoms';
+import { Card, CardHeader, Toggle } from '@/components/atoms';
+import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 interface TerritoryVoxelControlsProps {

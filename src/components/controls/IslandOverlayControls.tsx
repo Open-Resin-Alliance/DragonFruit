@@ -3,7 +3,8 @@ import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import { Plural } from '@lingui/react/macro';
 import { NumberInput } from '@/components/ui/NumberInput';
-import { Card, CardHeader, ColorSwatchInput, Input, PanelCollapseToggle } from '@/components/atoms';
+import { Card, CardHeader, ColorSwatchInput, Input } from '@/components/atoms';
+import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 type IslandOverlayControlsProps = {
