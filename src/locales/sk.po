@@ -3274,11 +3274,6 @@ msgstr ""
 msgid "Name"
 msgstr ""
 
-#. Placeholder and fallback label on the build plate's own name widget, shown while the plate has no name.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1563
-msgid "Name this plate"
-msgstr ""
-
 #. Button that runs the fast native Rust island scan. Sits next to a "JS" button; keep it very short.
 #: src/components/controls/IslandScanCard.tsx:143
 msgid "Native"
@@ -3839,6 +3834,11 @@ msgstr ""
 
 #: src/components/scene/scanProgressMessages.ts:27
 msgid "Placing supports"
+msgstr ""
+
+#. What the build plate's name widget shows while the plate has no name of its own, including after the plate is cleared or a new scene is started. The number is the plate's, plural forms come later with multiple plates.
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1563
+msgid "Plate 1"
 msgstr ""
 
 #: src/features/slicing/components/SlicingPanel.tsx:3703
