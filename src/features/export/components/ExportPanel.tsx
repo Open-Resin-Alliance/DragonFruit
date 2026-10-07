@@ -12,7 +12,6 @@ import {
   Button,
   Card,
   CardHeader,
-  Input,
   Select,
   SettingRow,
   Spinner,
@@ -120,7 +119,6 @@ export function ExportPanel({
   const { _ } = useLingui();
   const [isExpanded, setIsExpanded] = useFloatingPanelCollapse(true);
   const [exportScope, setExportScope] = useState<ExportScope>('entire_plate');
-  const [filename, setFilename] = useState(() => normalizeExportBaseName(activeModel?.name));
   const [isExporting, setIsExporting] = useState(false);
   const [isExportingIndividually, setIsExportingIndividually] = useState(false);
 
@@ -148,16 +146,14 @@ export function ExportPanel({
     ? (activeModel ? 1 : 0)
     : (visibleModelCount > 0 ? visibleModelCount : models.length);
 
-  useEffect(() => {
-    if (exportScope === 'active_model' && activeModel) {
-      setFilename(normalizeExportBaseName(activeModel.name));
-      return;
-    }
-
-    if (exportScope === 'entire_plate') {
-      setFilename(resolveEntirePlateExportBaseName(models));
-    }
-  }, [activeModel, exportScope, models]);
+  // The name the native save dialog opens with. The user renames the file there,
+  // so this is only a starting suggestion and never displayed in the panel.
+  const suggestedFileName = useMemo(
+    () => (exportScope === 'active_model'
+      ? normalizeExportBaseName(activeModel?.name)
+      : resolveEntirePlateExportBaseName(models)),
+    [activeModel, exportScope, models],
+  );
 
   useEffect(() => {
     if (options.format !== 'voxl') return;
@@ -255,7 +251,7 @@ export function ExportPanel({
           supportsRef?.current || null,
           {
             ...effectiveOptions,
-            filename: filename || 'export',
+            filename: suggestedFileName || 'export',
           },
           {
             models: scopeModels,
@@ -453,17 +449,6 @@ export function ExportPanel({
           ) : (
             <>
               <div className="rounded-md border p-2 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="space-y-0.5">
-                  <Input
-                    type="text"
-                    value={filename}
-                    onChange={(e) => setFilename(e.target.value)}
-                    className="w-full !h-8"
-                    placeholder="my_print"
-                    aria-label={_(msg`Export file name`)}
-                  />
-                </div>
-
                 <div role="group" aria-label={_(msg`Export format`)} className="grid grid-cols-3 gap-1.5">
                   {EXPORT_FORMAT_OPTIONS.map((option) => (
                     <Button
