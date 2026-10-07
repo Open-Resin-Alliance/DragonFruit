@@ -130,7 +130,7 @@ msgstr "{pixels} px de desenfoque de borde"
 msgid "{pixels}px XY · {layers}L Z"
 msgstr "{pixels} px en XY · {layers} capas en Z"
 
-#: src/features/slicing/components/SlicingPanel.tsx:217
+#: src/features/slicing/components/SlicingPanel.tsx:212
 msgid "{rate} layers/s"
 msgstr "{rate} capas/s"
 
@@ -157,7 +157,7 @@ msgid "< 1 min"
 msgstr "< 1 min"
 
 #. {excludedVisibleModelCount} is always 2 or more; the singular case is its own message.
-#: src/features/slicing/components/SlicingPanel.tsx:3807
+#: src/features/slicing/components/SlicingPanel.tsx:3802
 msgid "<0>{excludedVisibleModelCount}</0> visible models outside the build volume will be excluded from this slice."
 msgstr "<0>{excludedVisibleModelCount}</0> modelos visibles fuera del volumen de impresión quedarán fuera de este laminado."
 
@@ -176,15 +176,15 @@ msgstr "~{hours} h {mins} min"
 msgid "~{mins} min"
 msgstr "~{mins} min"
 
-#: src/features/slicing/components/SlicingPanel.tsx:1442
+#: src/features/slicing/components/SlicingPanel.tsx:1437
 msgid "2D Blur"
 msgstr "Desenfoque 2D"
 
-#: src/components/settings/SettingsModal.tsx:1267
+#: src/components/settings/SettingsModal.tsx:1266
 msgid "3D Mouse"
 msgstr "Ratón 3D"
 
-#: src/components/settings/SettingsModal.tsx:1268
+#: src/components/settings/SettingsModal.tsx:1267
 msgid "3D mouse navigation controls"
 msgstr "Controles de navegación del ratón 3D"
 
@@ -213,14 +213,14 @@ msgstr "Un candidato que esté a esta distancia 3D de un soporte existente se fu
 msgid "A recovery copy is written beside each saved project, as <name>_autosave.voxl. It uses roughly as much disk as the project itself."
 msgstr "Junto a cada proyecto guardado se escribe una copia de recuperación con el nombre <name>_autosave.voxl. Ocupa en disco más o menos lo mismo que el propio proyecto."
 
-#: src/components/settings/SettingsModal.tsx:1315
+#: src/components/settings/SettingsModal.tsx:1314
 msgid "About"
 msgstr "Acerca de"
 
 #. Badge next to the currently-selected printer in the fleet list (adjective describing the device, e.g. "the active one").
 #: src/components/controls/IslandListCard.tsx:127
 #: src/components/layout/TopBar.tsx:939
-#: src/features/slicing/components/SlicingPanel.tsx:2521
+#: src/features/slicing/components/SlicingPanel.tsx:2516
 msgid "Active"
 msgstr "Activo"
 
@@ -273,7 +273,7 @@ msgstr "Añade contactos a lo largo del borde o la esquina en que se apoya la po
 msgid "Add joint"
 msgstr "Añadir unión"
 
-#: src/features/export/components/ExportPanel.tsx:550
+#: src/features/export/components/ExportPanel.tsx:555
 msgid "Add more models to use Batch Export"
 msgstr "Añade más modelos para usar la exportación por lotes"
 
@@ -323,7 +323,7 @@ msgstr "Tras un guardado automático, aplaza los siguientes hasta que acabe este
 msgid "After updating .env, restart the app, then click “I configured it”."
 msgstr "Después de actualizar el .env, reinicia la aplicación y pulsa «Ya lo he configurado»."
 
-#: src/features/slicing/components/SlicingPanel.tsx:1836
+#: src/features/slicing/components/SlicingPanel.tsx:1831
 msgid "All visible models are outside the build volume."
 msgstr "Todos los modelos visibles están fuera del volumen de impresión."
 
@@ -344,7 +344,7 @@ msgstr "Menú contextual de la vista previa de anatomía"
 msgid "Anchor"
 msgstr "Anclaje"
 
-#: src/features/slicing/components/SlicingPanel.tsx:2356
+#: src/features/slicing/components/SlicingPanel.tsx:2351
 msgid "Anti-Aliasing"
 msgstr "Antialiasing"
 
@@ -369,7 +369,7 @@ msgstr "Se aplica de inmediato en toda la aplicación."
 msgid "Apply"
 msgstr "Aplicar"
 
-#: src/features/slicing/components/SlicingPanel.tsx:3608
+#: src/features/slicing/components/SlicingPanel.tsx:3603
 msgid "Apply for Session"
 msgstr "Aplicar a la sesión"
 
@@ -413,7 +413,7 @@ msgstr "Autoriza a DragonFruit para que pueda guardar las copias en tu repositor
 
 #: src/components/printers/SetupMethodChooser.tsx:28
 #: src/components/settings/PerformanceSettingsTab.tsx:220
-#: src/features/slicing/components/SlicingPanel.tsx:2362
+#: src/features/slicing/components/SlicingPanel.tsx:2357
 msgid "Auto"
 msgstr "Automático"
 
@@ -429,7 +429,7 @@ msgstr "Arriostrado automático completado: {generated, plural, one {# arriostre
 msgid "Auto Brace failed. Check console for details."
 msgstr "El arriostrado automático ha fallado. Mira la consola para más detalles."
 
-#: src/features/slicing/components/SlicingPanel.tsx:2357
+#: src/features/slicing/components/SlicingPanel.tsx:2352
 msgid "Auto derives slice settings from your printer resolution and material layer height. Expert lets you jump to material AA settings or apply a temporary session override."
 msgstr "«Automático» deduce los ajustes de laminado de la resolución de tu impresora y de la altura de capa del material. «Experto» te lleva a los ajustes de antialiasing del material o te deja aplicar una anulación temporal de sesión."
 
@@ -565,7 +565,7 @@ msgstr "Escribe instantáneas en el disco local cada cierto tiempo."
 msgid "Automation"
 msgstr "Automatización"
 
-#: src/components/settings/SettingsModal.tsx:1286
+#: src/components/settings/SettingsModal.tsx:1285
 msgid "Autosave and crash recovery behavior"
 msgstr "Guardado automático y recuperación tras un fallo"
 
@@ -625,7 +625,7 @@ msgstr "Volver al paso de configuración"
 msgid "Background gradient"
 msgstr "Degradado de fondo"
 
-#: src/features/slicing/components/SlicingPanel.tsx:3644
+#: src/features/slicing/components/SlicingPanel.tsx:3639
 msgid "Background Pipeline"
 msgstr "Proceso en segundo plano"
 
@@ -682,7 +682,7 @@ msgstr "Copia sincronizada con el repositorio de GitHub."
 msgid "BACKUP_COOKIE_SECRET helper"
 msgstr "Ayuda para BACKUP_COOKIE_SECRET"
 
-#: src/components/settings/SettingsModal.tsx:1291
+#: src/components/settings/SettingsModal.tsx:1290
 msgid "Backups"
 msgstr "Copias de seguridad"
 
@@ -694,7 +694,7 @@ msgstr "Esta compilación aún no tiene configuradas las copias. Añade las vari
 msgid "Backups are stored in your own private GitHub repository. DragonFruit does not run a central backup server and does not keep a copy of your backup data outside your repository."
 msgstr "Las copias se guardan en tu propio repositorio privado de GitHub. DragonFruit no tiene un servidor central de copias ni guarda tus datos fuera de ese repositorio."
 
-#: src/features/slicing/components/SlicingPanel.tsx:731
+#: src/features/slicing/components/SlicingPanel.tsx:726
 msgid "Balanced"
 msgstr "Equilibrado"
 
@@ -710,11 +710,11 @@ msgstr "Soportes equilibrados para uso general"
 msgid "Base Flare"
 msgstr "Base acampanada"
 
-#: src/features/export/components/ExportPanel.tsx:560
+#: src/features/export/components/ExportPanel.tsx:565
 msgid "Batch Export"
 msgstr "Exportación por lotes"
 
-#: src/features/export/components/ExportPanel.tsx:338
+#: src/features/export/components/ExportPanel.tsx:346
 msgid "Batch export failed. Check console for details."
 msgstr "La exportación por lotes ha fallado. Consulta la consola para más detalles."
 
@@ -726,7 +726,7 @@ msgstr "Sesgo (abajo - arriba)"
 msgid "Binary"
 msgstr "Binario"
 
-#: src/features/slicing/components/SlicingPanel.tsx:1427
+#: src/features/slicing/components/SlicingPanel.tsx:1422
 msgid "Binary Base"
 msgstr "Base binaria"
 
@@ -742,7 +742,7 @@ msgstr "Modo de pintado de bloqueos"
 msgid "Blockers"
 msgstr "Bloqueos"
 
-#: src/features/slicing/components/SlicingPanel.tsx:2457
+#: src/features/slicing/components/SlicingPanel.tsx:2452
 msgid "Blur"
 msgstr "Desenfoque"
 
@@ -820,7 +820,7 @@ msgstr "Integrado"
 msgid "Built-in presets cannot be deleted"
 msgstr "Los preajustes integrados no se pueden eliminar"
 
-#: src/features/slicing/components/SlicingPanel.tsx:2503
+#: src/features/slicing/components/SlicingPanel.tsx:2498
 msgid "Bypassed"
 msgstr "Omitido"
 
@@ -829,7 +829,7 @@ msgstr "Omitido"
 msgid "cached"
 msgstr "en caché"
 
-#: src/components/settings/SettingsModal.tsx:1231
+#: src/components/settings/SettingsModal.tsx:1230
 msgid "Camera"
 msgstr "Cámara"
 
@@ -847,7 +847,7 @@ msgstr "Modo de vista de la cámara: {currentLabel}"
 #: src/components/settings/FleetManagement.tsx:442
 #: src/components/settings/LocalBackupsSettingsTab.tsx:984
 #: src/components/settings/LocalBackupsSettingsTab.tsx:1027
-#: src/features/slicing/components/SlicingPanel.tsx:3792
+#: src/features/slicing/components/SlicingPanel.tsx:3787
 #: src/features/updater/UpdateCheckerSection.tsx:260
 #: src/supports/Settings/components/PresetSelector.tsx:830
 #: src/supports/Settings/components/PresetSelector.tsx:873
@@ -871,12 +871,12 @@ msgstr "Cancelar la sobrescritura"
 msgid "Cancel restore"
 msgstr "Cancelar la restauración"
 
-#: src/features/slicing/components/SlicingPanel.tsx:3754
+#: src/features/slicing/components/SlicingPanel.tsx:3749
 msgid "Cancel Slicing"
 msgstr "Cancelar el laminado"
 
 #: src/features/slicing/components/SlicingPanel.tsx:164
-#: src/features/slicing/components/SlicingPanel.tsx:3676
+#: src/features/slicing/components/SlicingPanel.tsx:3671
 msgid "Cancelled"
 msgstr "Cancelado"
 
@@ -924,7 +924,7 @@ msgstr "Cambiar el perfil de impresora requiere volver a laminar"
 msgid "Check Again"
 msgstr "Volver a comprobar"
 
-#: src/components/settings/SettingsModal.tsx:1310
+#: src/components/settings/SettingsModal.tsx:1309
 msgid "Check for new versions and manage channels"
 msgstr "Busca versiones nuevas y gestiona los canales"
 
@@ -957,7 +957,7 @@ msgstr "Elige un perfil oficial de impresora para añadirlo."
 msgid "Choose Folder"
 msgstr "Elegir carpeta"
 
-#: src/features/slicing/components/SlicingPanel.tsx:3392
+#: src/features/slicing/components/SlicingPanel.tsx:3387
 msgid "Choose slice action"
 msgstr "Elegir la acción de laminado"
 
@@ -991,7 +991,7 @@ msgstr "Limpio (nada que recuperar)"
 
 #: src/components/controls/AutoRotationPanel.tsx:73
 #: src/components/layout/EmptySceneState.tsx:620
-#: src/features/slicing/components/SlicingPanel.tsx:1006
+#: src/features/slicing/components/SlicingPanel.tsx:1001
 #: src/volumeAnalysis/IslandVolumes/components/IslandVolumesHierarchyCard.tsx:876
 msgid "Clear"
 msgstr "Borrar"
@@ -1005,7 +1005,7 @@ msgstr "Borrar todo"
 msgid "Clear All failed. Check console for details."
 msgstr "«Borrar todo» ha fallado. Mira la consola para más detalles."
 
-#: src/features/slicing/components/SlicingPanel.tsx:3580
+#: src/features/slicing/components/SlicingPanel.tsx:3575
 msgid "Clear Override"
 msgstr "Quitar la anulación"
 
@@ -1013,7 +1013,7 @@ msgstr "Quitar la anulación"
 msgid "Clear Selection"
 msgstr "Quitar la selección"
 
-#: src/features/slicing/components/SlicingPanel.tsx:2541
+#: src/features/slicing/components/SlicingPanel.tsx:2536
 msgid "Clear Session Override"
 msgstr "Quitar la anulación de sesión"
 
@@ -1044,7 +1044,7 @@ msgstr "Cerrar"
 msgid "Close dialog"
 msgstr "Cerrar la ventana"
 
-#: src/features/slicing/components/SlicingPanel.tsx:3474
+#: src/features/slicing/components/SlicingPanel.tsx:3469
 msgid "Close material anti-aliasing settings"
 msgstr "Cerrar los ajustes de antialiasing del material"
 
@@ -1060,7 +1060,7 @@ msgstr "Cerrar los ajustes de red"
 msgid "Close OAuth setup"
 msgstr "Cerrar la configuración de OAuth"
 
-#: src/features/slicing/components/SlicingPanel.tsx:3763
+#: src/features/slicing/components/SlicingPanel.tsx:3758
 msgid "Close Plate"
 msgstr "Cerrar la placa"
 
@@ -1068,7 +1068,7 @@ msgstr "Cerrar la placa"
 msgid "Close program"
 msgstr "Cerrar programa"
 
-#: src/features/slicing/components/SlicingPanel.tsx:3546
+#: src/features/slicing/components/SlicingPanel.tsx:3541
 msgid "Close session anti-aliasing override"
 msgstr "Cerrar la anulación de antialiasing de la sesión"
 
@@ -1332,7 +1332,7 @@ msgstr "No se ha podido conectar con {host}."
 msgid "Count"
 msgstr "Total"
 
-#: src/features/slicing/components/SlicingPanel.tsx:1441
+#: src/features/slicing/components/SlicingPanel.tsx:1436
 msgid "Coverage"
 msgstr "Cobertura"
 
@@ -1384,11 +1384,11 @@ msgstr "Creando y configurando el repositorio…"
 msgid "Creating new repository: {repoName}"
 msgstr "Creando el repositorio nuevo: {repoName}"
 
-#: src/features/slicing/components/SlicingPanel.tsx:730
+#: src/features/slicing/components/SlicingPanel.tsx:725
 msgid "Crisp text and details."
 msgstr "Texto y detalles nítidos."
 
-#: src/features/slicing/components/SlicingPanel.tsx:3539
+#: src/features/slicing/components/SlicingPanel.tsx:3534
 msgid "Current material"
 msgstr "Material actual"
 
@@ -1476,7 +1476,7 @@ msgstr "Depuración: render simplificado de soportes: discos y conos de contacto
 msgid "Debug: skip automatic bracing for this run"
 msgstr "Depuración: sáltate el arriostrado automático en esta pasada"
 
-#: src/features/slicing/components/SlicingPanel.tsx:2338
+#: src/features/slicing/components/SlicingPanel.tsx:2333
 msgid "Decrease offline layer height"
 msgstr "Reducir la altura de capa sin conexión"
 
@@ -1604,7 +1604,7 @@ msgstr "Diagnóstico"
 msgid "Diameter"
 msgstr "Diámetro"
 
-#: src/features/slicing/components/SlicingPanel.tsx:729
+#: src/features/slicing/components/SlicingPanel.tsx:724
 msgid "Disabled"
 msgstr "Desactivado"
 
@@ -1762,7 +1762,7 @@ msgstr "Suelta aquí los ficheros compatibles para importarlos"
 msgid "Duplicate"
 msgstr "Duplicar"
 
-#: src/components/settings/SettingsModal.tsx:1280
+#: src/components/settings/SettingsModal.tsx:1279
 msgid "Early-access and experimental features"
 msgstr "Funciones experimentales y de acceso anticipado"
 
@@ -1778,15 +1778,15 @@ msgstr "Ángulo del chaflán del borde"
 msgid "Edge Fillet"
 msgstr "Redondeo de aristas"
 
-#: src/features/slicing/components/SlicingPanel.tsx:2503
+#: src/features/slicing/components/SlicingPanel.tsx:2498
 msgid "Edit"
 msgstr "Editar"
 
-#: src/features/slicing/components/SlicingPanel.tsx:2274
+#: src/features/slicing/components/SlicingPanel.tsx:2269
 msgid "Edit material profile"
 msgstr "Editar el perfil de material"
 
-#: src/features/slicing/components/SlicingPanel.tsx:2256
+#: src/features/slicing/components/SlicingPanel.tsx:2251
 msgid "Edit printer profile"
 msgstr "Editar el perfil de impresora"
 
@@ -1802,7 +1802,7 @@ msgstr "Menú contextual del editor"
 msgid "Editor tools"
 msgstr "Herramientas del editor"
 
-#: src/features/slicing/components/SlicingPanel.tsx:3743
+#: src/features/slicing/components/SlicingPanel.tsx:3738
 msgid "Elapsed {slicingElapsedLabel}"
 msgstr "Transcurrido {slicingElapsedLabel}"
 
@@ -1853,7 +1853,7 @@ msgstr "Activar los visuales"
 msgid "Enabled"
 msgstr "Activado"
 
-#: src/features/slicing/components/SlicingPanel.tsx:1172
+#: src/features/slicing/components/SlicingPanel.tsx:1167
 msgid "Encoded Layers"
 msgstr "Capas codificadas"
 
@@ -1861,7 +1861,7 @@ msgstr "Capas codificadas"
 msgid "Encoding"
 msgstr "Codificando"
 
-#: src/features/slicing/components/SlicingPanel.tsx:2312
+#: src/features/slicing/components/SlicingPanel.tsx:2307
 msgid "Engine"
 msgstr "Motor"
 
@@ -1882,7 +1882,7 @@ msgstr "Falta configurar el entorno"
 msgid "Est. {estimatedTimeLabel} • {usedMaterialLabel}"
 msgstr "Est. {estimatedTimeLabel} • {usedMaterialLabel}"
 
-#: src/features/slicing/components/SlicingPanel.tsx:2302
+#: src/features/slicing/components/SlicingPanel.tsx:2297
 msgid "Est. Print Time"
 msgstr "Tiempo est."
 
@@ -1896,7 +1896,7 @@ msgstr "Tiempo est.:"
 msgid "Est. resin:"
 msgstr "Resina est.:"
 
-#: src/features/slicing/components/SlicingPanel.tsx:2298
+#: src/features/slicing/components/SlicingPanel.tsx:2293
 msgid "Est. Volume"
 msgstr "Volumen est."
 
@@ -1946,7 +1946,7 @@ msgid "Experimental Features"
 msgstr "Funciones experimentales"
 
 #: src/components/settings/ExperimentsSettingsTab.tsx:167
-#: src/components/settings/SettingsModal.tsx:1279
+#: src/components/settings/SettingsModal.tsx:1278
 msgid "Experiments"
 msgstr "Experimentos"
 
@@ -1958,14 +1958,14 @@ msgstr "Los experimentos son funciones de acceso anticipado todavía en desarrol
 msgid "Experiments disclaimer"
 msgstr "Aviso legal de los experimentos"
 
-#: src/features/slicing/components/SlicingPanel.tsx:2362
+#: src/features/slicing/components/SlicingPanel.tsx:2357
 msgid "Expert"
 msgstr "Experto"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:407
 #: src/components/layout/TopBar.tsx:610
-#: src/features/export/components/ExportPanel.tsx:358
-#: src/features/export/components/ExportPanel.tsx:380
+#: src/features/export/components/ExportPanel.tsx:366
+#: src/features/export/components/ExportPanel.tsx:388
 msgid "Export"
 msgstr "Exportar"
 
@@ -1977,19 +1977,19 @@ msgstr "Exportar como 3MF"
 msgid "Export as STL"
 msgstr "Exportar como STL"
 
-#: src/features/export/components/ExportPanel.tsx:550
+#: src/features/export/components/ExportPanel.tsx:555
 msgid "Export each visible model and its supports into separate files in a folder"
 msgstr "Exporta cada modelo visible y sus soportes en archivos separados dentro de una carpeta"
 
-#: src/features/export/components/ExportPanel.tsx:264
+#: src/features/export/components/ExportPanel.tsx:272
 msgid "Export failed. Check console for details."
 msgstr "La exportación ha fallado. Consulta la consola para más detalles."
 
-#: src/features/export/components/ExportPanel.tsx:458
+#: src/features/export/components/ExportPanel.tsx:463
 msgid "Export file name"
 msgstr "Nombre del archivo de exportación"
 
-#: src/features/export/components/ExportPanel.tsx:462
+#: src/features/export/components/ExportPanel.tsx:467
 msgid "Export format"
 msgstr "Formato de exportación"
 
@@ -1997,7 +1997,7 @@ msgstr "Formato de exportación"
 msgid "Export Scene File"
 msgstr "Exportar archivo de escena"
 
-#: src/features/export/components/ExportPanel.tsx:406
+#: src/features/export/components/ExportPanel.tsx:414
 msgid "Export scope"
 msgstr "Alcance de la exportación"
 
@@ -2005,11 +2005,11 @@ msgstr "Alcance de la exportación"
 msgid "Export the selected preset as a JSON file"
 msgstr "Exporta el preajuste seleccionado como archivo JSON"
 
-#: src/features/export/components/ExportPanel.tsx:555
+#: src/features/export/components/ExportPanel.tsx:560
 msgid "Exporting Individually…"
 msgstr "Exportando individualmente…"
 
-#: src/features/export/components/ExportPanel.tsx:535
+#: src/features/export/components/ExportPanel.tsx:540
 msgid "Exporting…"
 msgstr "Exportando…"
 
@@ -2021,7 +2021,7 @@ msgstr "Exposición:"
 msgid "Factory presets will be reset and user presets will be unpinned."
 msgstr "Los preajustes de fábrica se restablecerán y los del usuario se desanclarán."
 
-#: src/features/slicing/components/SlicingPanel.tsx:3677
+#: src/features/slicing/components/SlicingPanel.tsx:3672
 msgid "Failed"
 msgstr "Falló"
 
@@ -2143,7 +2143,7 @@ msgstr "Encuentra tu impresora en la red"
 msgid "Fine supports for delicate features"
 msgstr "Soportes finos para detalles delicados"
 
-#: src/features/slicing/components/SlicingPanel.tsx:3754
+#: src/features/slicing/components/SlicingPanel.tsx:3749
 msgid "Finishing…"
 msgstr "Terminando…"
 
@@ -2231,7 +2231,7 @@ msgid "Gap Width"
 msgstr "Anchura del hueco"
 
 #. Support kind tab. One of four tabs on a narrow row, so keep it to one short word.
-#: src/components/settings/SettingsModal.tsx:1225
+#: src/components/settings/SettingsModal.tsx:1224
 #: src/supports/Settings/components/SidebarPanelTabs.tsx:20
 msgid "General"
 msgstr "General"
@@ -2276,7 +2276,7 @@ msgstr "Ventana de OAuth de GitHub abierta."
 msgid "Go back to the settings dialog"
 msgstr "Vuelve a la ventana de ajustes"
 
-#: src/features/slicing/components/SlicingPanel.tsx:2458
+#: src/features/slicing/components/SlicingPanel.tsx:2453
 msgid "Grey"
 msgstr "Gris"
 
@@ -2375,7 +2375,7 @@ msgstr "Horizontal"
 msgid "Horizontal angles are not good for holding up overhangs. They are only good for lateral stability."
 msgstr "Los ángulos horizontales no sirven para sostener voladizos. Solo aportan estabilidad lateral."
 
-#: src/components/settings/SettingsModal.tsx:1261
+#: src/components/settings/SettingsModal.tsx:1260
 msgid "Hotkeys"
 msgstr "Atajos de teclado"
 
@@ -2499,19 +2499,19 @@ msgstr "Importando tu archivo…"
 msgid "In space, no one can hear you slice."
 msgstr "En el espacio, nadie puede oírte laminar."
 
-#: src/features/export/components/ExportPanel.tsx:501
+#: src/features/export/components/ExportPanel.tsx:506
 msgid "Include Model Mesh"
 msgstr "Incluir malla del modelo"
 
-#: src/features/export/components/ExportPanel.tsx:515
+#: src/features/export/components/ExportPanel.tsx:520
 msgid "Include Raft"
 msgstr "Incluir balsa"
 
-#: src/features/export/components/ExportPanel.tsx:508
+#: src/features/export/components/ExportPanel.tsx:513
 msgid "Include Supports"
 msgstr "Incluir soportes"
 
-#: src/features/slicing/components/SlicingPanel.tsx:2339
+#: src/features/slicing/components/SlicingPanel.tsx:2334
 msgid "Increase offline layer height"
 msgstr "Aumentar la altura de capa sin conexión"
 
@@ -2627,7 +2627,7 @@ msgstr "Holgura de la junta en milímetros"
 msgid "JSON loaded. Now select the original STL file."
 msgstr "JSON cargado. Ahora selecciona el fichero STL original."
 
-#: src/features/slicing/components/SlicingPanel.tsx:3364
+#: src/features/slicing/components/SlicingPanel.tsx:3359
 msgid "Just Slice"
 msgstr "Solo laminar"
 
@@ -2656,7 +2656,7 @@ msgstr "Conserva los soportes existentes y coloca los nuevos alrededor"
 msgid "Keep the preset"
 msgstr "Conservar el preajuste"
 
-#: src/components/settings/SettingsModal.tsx:1262
+#: src/components/settings/SettingsModal.tsx:1261
 msgid "Keyboard bindings and presets"
 msgstr "Combinaciones de teclas y perfiles"
 
@@ -2722,7 +2722,7 @@ msgstr "Vista previa de la capa {layer}"
 msgid "Layer 0 of 0. Living dangerously."
 msgstr "Capa 0 de 0. Viviendo al límite."
 
-#: src/features/slicing/components/SlicingPanel.tsx:2292
+#: src/features/slicing/components/SlicingPanel.tsx:2287
 msgid "Layer Height"
 msgstr "Altura de capa"
 
@@ -2732,7 +2732,7 @@ msgstr "Perfil de capa:"
 
 #. Sort order for the island list: by layer span. One of three narrow buttons (ID / Volume / Layers).
 #: src/components/controls/IslandListCard.tsx:175
-#: src/features/slicing/components/SlicingPanel.tsx:2288
+#: src/features/slicing/components/SlicingPanel.tsx:2283
 msgid "Layers"
 msgstr "Capas"
 
@@ -2816,7 +2816,7 @@ msgstr "Reparto de carga"
 msgid "Load Support Data (V2)"
 msgstr "Cargar datos de soportes (V2)"
 
-#: src/components/settings/SettingsModal.tsx:1274
+#: src/components/settings/SettingsModal.tsx:1273
 msgid "Load vendor profile plugins"
 msgstr "Carga complementos de perfiles de fabricante"
 
@@ -2842,7 +2842,7 @@ msgstr "Cargando ficheros de malla…"
 msgid "Loading Mesh…"
 msgstr "Cargando malla…"
 
-#: src/features/slicing/components/SlicingPanel.tsx:1683
+#: src/features/slicing/components/SlicingPanel.tsx:1678
 msgid "Loading remote material…"
 msgstr "Cargando el material remoto…"
 
@@ -2875,7 +2875,7 @@ msgstr "Carpeta local de copias actualizada."
 msgid "Local backup sync failed."
 msgstr "Falló la copia local."
 
-#: src/components/settings/SettingsModal.tsx:1292
+#: src/components/settings/SettingsModal.tsx:1291
 msgid "Local on-disk backup snapshots"
 msgstr "Instantáneas de copia de seguridad en disco"
 
@@ -2903,11 +2903,11 @@ msgstr "Claves de LocalStorage"
 msgid "Locked"
 msgstr "Fijo"
 
-#: src/components/settings/SettingsModal.tsx:1304
+#: src/components/settings/SettingsModal.tsx:1303
 msgid "Log file location and verbosity"
 msgstr "Ubicación y nivel de detalle del registro"
 
-#: src/components/settings/SettingsModal.tsx:1303
+#: src/components/settings/SettingsModal.tsx:1302
 msgid "Logging"
 msgstr "Registro"
 
@@ -2975,19 +2975,19 @@ msgstr "Multiplicador general sobre las bandas de tamaño del preajuste: todo m�
 msgid "Master switch for the run-level size, load and height factors. Off pins all three to ×1, so sizing is the active band plus the local terms alone (default: on)."
 msgstr "Interruptor general de los factores de tamaño, carga y altura de la ejecución. Apagado los fija los tres a ×1, de modo que el dimensionado es solo la banda activa más los términos locales (por defecto: encendido)."
 
-#: src/features/slicing/components/SlicingPanel.tsx:2277
+#: src/features/slicing/components/SlicingPanel.tsx:2272
 msgid "Material"
 msgstr "Material"
 
-#: src/features/slicing/components/SlicingPanel.tsx:3459
+#: src/features/slicing/components/SlicingPanel.tsx:3454
 msgid "Material anti-aliasing settings"
 msgstr "Ajustes de antialiasing del material"
 
-#: src/features/slicing/components/SlicingPanel.tsx:3464
+#: src/features/slicing/components/SlicingPanel.tsx:3459
 msgid "Material Anti-Aliasing Settings"
 msgstr "Ajustes de antialiasing del material"
 
-#: src/features/slicing/components/SlicingPanel.tsx:2501
+#: src/features/slicing/components/SlicingPanel.tsx:2496
 msgid "Material Profile Settings"
 msgstr "Ajustes del perfil de material"
 
@@ -3063,13 +3063,13 @@ msgstr "Fusionando soportes…"
 #. File type badge on the recent files list. Noun — labels a mesh file (.stl, .obj, .3mf).
 #. View mode: mesh edges drawn over a solid surface, so back edges stay hidden.
 #: src/components/layout/EmptySceneState.tsx:676
-#: src/components/settings/SettingsModal.tsx:1237
+#: src/components/settings/SettingsModal.tsx:1236
 #: src/features/shaders/mesh/types.ts:45
 msgid "Mesh"
 msgstr "Malla"
 
 #. Badge label next to the number of meshes this export writes. Rendered uppercase; keep it to one short word.
-#: src/features/export/components/ExportPanel.tsx:394
+#: src/features/export/components/ExportPanel.tsx:402
 msgid "Meshes"
 msgstr "Mallas"
 
@@ -3134,13 +3134,9 @@ msgstr "Reflejar"
 msgid "Mirror across X, Y, or Z"
 msgstr "Reflejar en X, Y o Z"
 
-#: src/features/slicing/components/SlicingPanel.tsx:2455
+#: src/features/slicing/components/SlicingPanel.tsx:2450
 msgid "Mode"
 msgstr "Modo"
-
-#: src/features/export/components/ExportPanel.tsx:425
-msgid "Model"
-msgstr "Modelo"
 
 #: src/features/scene/sceneImportMessages.ts:142
 msgid "Model {index}/{total}: {modelName}"
@@ -3170,7 +3166,7 @@ msgstr "Soportes del modelo"
 msgid "Model Supports"
 msgstr "Soportes del modelo"
 
-#: src/features/export/components/ExportPanel.tsx:431
+#: src/features/export/components/ExportPanel.tsx:436
 msgid "Model to export"
 msgstr "Modelo que exportar"
 
@@ -3195,7 +3191,7 @@ msgstr "Modelos"
 msgid "Models context menu"
 msgstr "Menú contextual de modelos"
 
-#: src/features/slicing/components/SlicingPanel.tsx:3777
+#: src/features/slicing/components/SlicingPanel.tsx:3772
 msgid "Models Outside Build Volume"
 msgstr "Modelos fuera del volumen de impresión"
 
@@ -3261,7 +3257,7 @@ msgstr "El escaneo de la red ha fallado."
 msgid "Network Settings"
 msgstr "Ajustes de red"
 
-#: src/features/slicing/components/SlicingPanel.tsx:2344
+#: src/features/slicing/components/SlicingPanel.tsx:2339
 msgid "Network unavailable."
 msgstr "Red no disponible."
 
@@ -3310,7 +3306,7 @@ msgstr "Este modelo no tiene {groupLabel}."
 msgid "No {presetName} printers found on the network."
 msgstr "No se han encontrado impresoras {presetName} en la red."
 
-#: src/features/slicing/components/SlicingPanel.tsx:1425
+#: src/features/slicing/components/SlicingPanel.tsx:1420
 msgid "No AA"
 msgstr "Sin antialiasing"
 
@@ -3336,8 +3332,8 @@ msgstr "Sin arriostrado"
 msgid "No braces to remove on this model."
 msgstr "Este modelo no tiene riostras que quitar."
 
-#: src/features/slicing/components/SlicingPanel.tsx:1432
-#: src/features/slicing/components/SlicingPanel.tsx:1434
+#: src/features/slicing/components/SlicingPanel.tsx:1427
+#: src/features/slicing/components/SlicingPanel.tsx:1429
 msgid "No Edge Blur"
 msgstr "Sin desenfoque de borde"
 
@@ -3349,7 +3345,7 @@ msgstr "No se han encontrado soportes aptos para el arriostrado automático."
 msgid "No experiments are available in this build."
 msgstr "No hay experimentos disponibles en esta compilación."
 
-#: src/features/slicing/components/SlicingPanel.tsx:1444
+#: src/features/slicing/components/SlicingPanel.tsx:1439
 msgid "No Gray Map"
 msgstr "Sin mapa de grises"
 
@@ -3370,7 +3366,7 @@ msgstr "Sin IP"
 msgid "No LocalStorage keys found."
 msgstr "No se encontraron claves de LocalStorage."
 
-#: src/features/slicing/components/SlicingPanel.tsx:1691
+#: src/features/slicing/components/SlicingPanel.tsx:1686
 msgid "No material selected"
 msgstr "Ningún material seleccionado"
 
@@ -3379,11 +3375,11 @@ msgstr "Ningún material seleccionado"
 msgid "No materials linked to this printer."
 msgstr "No hay materiales asociados a esta impresora."
 
-#: src/features/export/components/ExportPanel.tsx:364
+#: src/features/export/components/ExportPanel.tsx:372
 msgid "No meshes loaded yet. Import a model first, then hop back to Export."
 msgstr "Todavía no hay mallas cargadas. Importa un modelo y vuelve a Exportar."
 
-#: src/features/slicing/components/SlicingPanel.tsx:2229
+#: src/features/slicing/components/SlicingPanel.tsx:2224
 msgid "No meshes loaded yet. Import a model first, then return to Slicing."
 msgstr "Todavía no hay mallas cargadas. Importa un modelo y vuelve al laminado."
 
@@ -3406,8 +3402,8 @@ msgstr "Sin impresora conectada"
 msgid "No printer profiles."
 msgstr "No hay perfiles de impresora."
 
-#: src/features/slicing/components/SlicingPanel.tsx:2260
-#: src/features/slicing/components/SlicingPanel.tsx:2261
+#: src/features/slicing/components/SlicingPanel.tsx:2255
+#: src/features/slicing/components/SlicingPanel.tsx:2256
 msgid "No printer selected"
 msgstr "Ninguna impresora seleccionada"
 
@@ -3444,7 +3440,7 @@ msgstr "Sin espiga"
 msgid "No update available"
 msgstr "No hay ninguna actualización disponible"
 
-#: src/features/slicing/components/SlicingPanel.tsx:1837
+#: src/features/slicing/components/SlicingPanel.tsx:1832
 msgid "No visible models available for slicing."
 msgstr "No hay modelos visibles que laminar."
 
@@ -3547,11 +3543,11 @@ msgstr "Desactivado iguala el diámetro de las raíces importadas al del tronco.
 msgid "Offline"
 msgstr "Sin conexión"
 
-#: src/features/slicing/components/SlicingPanel.tsx:2323
+#: src/features/slicing/components/SlicingPanel.tsx:2318
 msgid "Offline Layer Height"
 msgstr "Altura de capa sin conexión"
 
-#: src/features/slicing/components/SlicingPanel.tsx:2337
+#: src/features/slicing/components/SlicingPanel.tsx:2332
 msgid "Offline layer height override in micrometers"
 msgstr "Altura de capa sin conexión, en micrómetros"
 
@@ -3613,7 +3609,7 @@ msgstr "Primeros pasos"
 msgid "One does not simply import a mesh... or actually, you just click a button."
 msgstr "No se importa una malla sin más... aunque en realidad sí, solo hay que hacer clic en un botón."
 
-#: src/features/slicing/components/SlicingPanel.tsx:3805
+#: src/features/slicing/components/SlicingPanel.tsx:3800
 msgid "One visible model outside the build volume will be excluded from this slice."
 msgstr "Un modelo visible fuera del volumen de impresión quedará fuera de este laminado."
 
@@ -3623,7 +3619,7 @@ msgstr "Un modelo visible fuera del volumen de impresión quedará fuera de este
 msgid "Online"
 msgstr "En línea"
 
-#: src/features/slicing/components/SlicingPanel.tsx:3778
+#: src/features/slicing/components/SlicingPanel.tsx:3773
 msgid "Only printable models will be sliced"
 msgstr "Solo se laminarán los modelos imprimibles"
 
@@ -3632,7 +3628,7 @@ msgstr "Solo se laminarán los modelos imprimibles"
 msgid "Opacity"
 msgstr "Opacidad"
 
-#: src/features/slicing/components/SlicingPanel.tsx:1006
+#: src/features/slicing/components/SlicingPanel.tsx:1001
 msgid "Opaque"
 msgstr "Opaca"
 
@@ -3654,7 +3650,7 @@ msgid "Open GitHub Developer Settings and create a new OAuth App."
 msgstr "Abre los ajustes de desarrollador de GitHub y crea una aplicación OAuth nueva."
 
 #: src/components/controls/ModelStatsCard.tsx:523
-#: src/features/slicing/components/SlicingPanel.tsx:2275
+#: src/features/slicing/components/SlicingPanel.tsx:2270
 msgid "Open material profiles"
 msgstr "Abrir los perfiles de material"
 
@@ -3668,7 +3664,7 @@ msgid "Open printer monitor"
 msgstr "Abrir monitor de impresora"
 
 #: src/components/controls/ModelStatsCard.tsx:508
-#: src/features/slicing/components/SlicingPanel.tsx:2257
+#: src/features/slicing/components/SlicingPanel.tsx:2252
 msgid "Open printer profiles"
 msgstr "Abrir los perfiles de impresora"
 
@@ -3696,7 +3692,7 @@ msgstr "Orientar modelo"
 msgid "Origin Colors"
 msgstr "Colores de origen"
 
-#: src/features/slicing/components/SlicingPanel.tsx:2306
+#: src/features/slicing/components/SlicingPanel.tsx:2301
 msgid "Output"
 msgstr "Salida"
 
@@ -3730,7 +3726,7 @@ msgstr "Radio de solapamiento (px)"
 msgid "Overlap Radius: 1"
 msgstr "Radio de solapamiento: 1"
 
-#: src/features/slicing/components/SlicingPanel.tsx:2503
+#: src/features/slicing/components/SlicingPanel.tsx:2498
 msgid "Override On"
 msgstr "Anulación activa"
 
@@ -3768,7 +3764,7 @@ msgstr "Pasadas que se ejecutan tras la colocación: cuánto puede cargar un tro
 msgid "Paste"
 msgstr "Pegar"
 
-#: src/components/settings/SettingsModal.tsx:1250
+#: src/components/settings/SettingsModal.tsx:1249
 msgid "Per-workspace camera defaults"
 msgstr "Valores de cámara por espacio de trabajo"
 
@@ -3776,7 +3772,7 @@ msgstr "Valores de cámara por espacio de trabajo"
 msgid "Persist dragged panel positions in local storage."
 msgstr "Guarda en el almacenamiento local las posiciones de los paneles al arrastrarlos."
 
-#: src/features/export/components/ExportPanel.tsx:446
+#: src/features/export/components/ExportPanel.tsx:451
 msgid "Pick a model to export."
 msgstr "Elige un modelo para exportar."
 
@@ -3788,11 +3784,11 @@ msgstr "Elige el que mejor le vaya a tu espacio. Puedes cambiarlo cuando quieras
 msgid "Pin to Slot"
 msgstr "Anclar a una ranura"
 
-#: src/features/slicing/components/SlicingPanel.tsx:3684
+#: src/features/slicing/components/SlicingPanel.tsx:3679
 msgid "Pipeline Stage"
 msgstr "Fase del proceso"
 
-#: src/features/slicing/components/SlicingPanel.tsx:1173
+#: src/features/slicing/components/SlicingPanel.tsx:1168
 msgid "Pipeline Units"
 msgstr "Unidades del proceso"
 
@@ -3808,7 +3804,7 @@ msgstr "Mensaje de colocación."
 msgid "Placing supports"
 msgstr "Colocando soportes"
 
-#: src/features/slicing/components/SlicingPanel.tsx:3708
+#: src/features/slicing/components/SlicingPanel.tsx:3703
 msgid "Plate preview · Layer {previewSelectedLayer}/{previewTotalLayers}"
 msgstr "Vista previa de la placa · Capa {previewSelectedLayer}/{previewTotalLayers}"
 
@@ -3824,11 +3820,11 @@ msgstr "Espera un momento mientras preparamos tu escena."
 msgid "Please use: {extensions}"
 msgstr "Usa: {extensions}"
 
-#: src/components/settings/SettingsModal.tsx:1273
+#: src/components/settings/SettingsModal.tsx:1272
 msgid "Plugins"
 msgstr "Complementos"
 
-#: src/components/settings/SettingsModal.tsx:1244
+#: src/components/settings/SettingsModal.tsx:1243
 msgid "PNG compression and engine metadata"
 msgstr "Compresión PNG y metadatos del motor"
 
@@ -3893,7 +3889,7 @@ msgstr "Pulsa <0>{clearLabel}</0> para reiniciar todo, o <1>{doneLabel}</1> para
 msgid "Preview"
 msgstr "Vista previa"
 
-#: src/features/slicing/components/SlicingPanel.tsx:3727
+#: src/features/slicing/components/SlicingPanel.tsx:3722
 msgid "Preview for this layer is not available."
 msgstr "No hay vista previa de esta capa."
 
@@ -3907,7 +3903,7 @@ msgstr "Impresora principal asignada a este perfil."
 
 #. Static field-label shown above the printer name in the topbar badge (like "Printer: <name>"), not an instruction. Only shown when a profile has a single printer, so there is no fleet to pick from.
 #: src/components/layout/TopBar.tsx:492
-#: src/features/slicing/components/SlicingPanel.tsx:2259
+#: src/features/slicing/components/SlicingPanel.tsx:2254
 msgid "Printer"
 msgstr "Impresora"
 
@@ -3955,7 +3951,7 @@ msgstr "Perfil de impresora: {profileName} • Impresora activa: {printerName}"
 msgid "Printer Profiles ({0})"
 msgstr "Perfiles de impresora ({0})"
 
-#: src/features/slicing/components/SlicingPanel.tsx:731
+#: src/features/slicing/components/SlicingPanel.tsx:726
 msgid "Printer-aware smoothing."
 msgstr "Suavizado según la impresora."
 
@@ -3992,7 +3988,7 @@ msgstr "Procesando la importación…"
 msgid "Profiles"
 msgstr "Perfiles"
 
-#: src/features/slicing/components/SlicingPanel.tsx:3694
+#: src/features/slicing/components/SlicingPanel.tsx:3689
 msgid "Progress"
 msgstr "Progreso"
 
@@ -4000,7 +3996,7 @@ msgstr "Progreso"
 msgid "Projected area each support carries — smaller = more, tighter supports (grid spacing ≈ √value)"
 msgstr "Área proyectada que soporta cada soporte: cuanto menor, más soportes y más juntos (separación de la rejilla ≈ √valor)"
 
-#: src/components/settings/SettingsModal.tsx:1232
+#: src/components/settings/SettingsModal.tsx:1231
 msgid "Projection and navigation behavior"
 msgstr "Proyección y comportamiento de la navegación"
 
@@ -4043,7 +4039,7 @@ msgstr "Grosor de la balsa"
 msgid "Raw JSON"
 msgstr "JSON en crudo"
 
-#: src/features/slicing/components/SlicingPanel.tsx:729
+#: src/features/slicing/components/SlicingPanel.tsx:724
 msgid "Raw masks only."
 msgstr "Solo máscaras en crudo."
 
@@ -4061,7 +4057,7 @@ msgid "Reading autosaved scene…"
 msgstr "Leyendo la escena guardada automáticamente…"
 
 #: src/features/slicing/components/SlicingPanel.tsx:162
-#: src/features/slicing/components/SlicingPanel.tsx:3674
+#: src/features/slicing/components/SlicingPanel.tsx:3669
 msgid "Ready"
 msgstr "Listo"
 
@@ -4149,7 +4145,7 @@ msgstr "Recordar posiciones de las ventanas"
 msgid "Remind me later"
 msgstr "Recordármelo más tarde"
 
-#: src/features/slicing/components/SlicingPanel.tsx:1684
+#: src/features/slicing/components/SlicingPanel.tsx:1679
 msgid "Remote"
 msgstr "Remoto"
 
@@ -4161,7 +4157,7 @@ msgstr "La copia remota es más reciente que tu instantánea local. Elige cómo 
 msgid "Remote backup is newer. Choose restore or force sync."
 msgstr "La copia remota es más reciente. Elige restaurar o forzar la sincronización."
 
-#: src/features/slicing/components/SlicingPanel.tsx:2326
+#: src/features/slicing/components/SlicingPanel.tsx:2321
 msgid "Remote material unavailable."
 msgstr "Material remoto no disponible."
 
@@ -4421,7 +4417,7 @@ msgstr "Lamina en Exportar para desbloquear la vista previa de Impresión"
 msgid "Run TypeScript scanline scan"
 msgstr "Ejecutar el escaneo por líneas en TypeScript"
 
-#: src/features/slicing/components/SlicingPanel.tsx:3672
+#: src/features/slicing/components/SlicingPanel.tsx:3667
 msgid "Running"
 msgstr "En curso"
 
@@ -4429,7 +4425,7 @@ msgstr "En curso"
 msgid "Running…"
 msgstr "Ejecutando…"
 
-#: src/features/slicing/components/SlicingPanel.tsx:2456
+#: src/features/slicing/components/SlicingPanel.tsx:2451
 msgid "Samples"
 msgstr "Muestras"
 
@@ -4450,7 +4446,7 @@ msgstr "Guardar los ajustes actuales en este preajuste"
 msgid "Save failed"
 msgstr "No se ha podido guardar"
 
-#: src/features/slicing/components/SlicingPanel.tsx:3512
+#: src/features/slicing/components/SlicingPanel.tsx:3507
 msgid "Save Material"
 msgstr "Guardar el material"
 
@@ -4562,7 +4558,7 @@ msgid "Scene"
 msgstr "Escena"
 
 #: src/components/settings/SceneAutosaveSettingsTab.tsx:167
-#: src/components/settings/SettingsModal.tsx:1285
+#: src/components/settings/SettingsModal.tsx:1284
 msgid "Scene Autosave"
 msgstr "Guardado automático de escenas"
 
@@ -4635,19 +4631,19 @@ msgstr "Elige una clave"
 msgid "Select a LocalStorage key from the left to view its value."
 msgstr "Elige una clave de LocalStorage a la izquierda para ver su valor."
 
-#: src/features/slicing/components/SlicingPanel.tsx:2345
+#: src/features/slicing/components/SlicingPanel.tsx:2340
 msgid "Select a matching material during import instead."
 msgstr "Elige un material equivalente al importar."
 
-#: src/features/slicing/components/SlicingPanel.tsx:1830
+#: src/features/slicing/components/SlicingPanel.tsx:1825
 msgid "Select a material profile first."
 msgstr "Elige antes un perfil de material."
 
-#: src/features/export/components/ExportPanel.tsx:433
+#: src/features/export/components/ExportPanel.tsx:438
 msgid "Select a model"
 msgstr "Selecciona un modelo"
 
-#: src/features/slicing/components/SlicingPanel.tsx:1825
+#: src/features/slicing/components/SlicingPanel.tsx:1820
 msgid "Select a printer profile first."
 msgstr "Elige antes un perfil de impresora."
 
@@ -4710,11 +4706,11 @@ msgstr "Modo de selección: volumen completo (de izquierda a derecha)"
 msgid "Self-Support Angle"
 msgstr "Ángulo de autosoporte"
 
-#: src/components/settings/SettingsModal.tsx:1298
+#: src/components/settings/SettingsModal.tsx:1297
 msgid "Send sliced files to UVTools for analysis"
 msgstr "Envía los archivos laminados a UVTools para analizarlos"
 
-#: src/features/slicing/components/SlicingPanel.tsx:3363
+#: src/features/slicing/components/SlicingPanel.tsx:3358
 msgid "Send to UVTools"
 msgstr "Enviar a UVTools"
 
@@ -4722,19 +4718,19 @@ msgstr "Enviar a UVTools"
 msgid "Separating model and support geometry…"
 msgstr "Separando la geometría del modelo y la de los soportes…"
 
-#: src/features/slicing/components/SlicingPanel.tsx:3531
+#: src/features/slicing/components/SlicingPanel.tsx:3526
 msgid "Session anti-aliasing override"
 msgstr "Anulación de antialiasing de la sesión"
 
-#: src/features/slicing/components/SlicingPanel.tsx:3536
+#: src/features/slicing/components/SlicingPanel.tsx:3531
 msgid "Session Anti-Aliasing Override"
 msgstr "Anulación de antialiasing de la sesión"
 
-#: src/features/slicing/components/SlicingPanel.tsx:1011
+#: src/features/slicing/components/SlicingPanel.tsx:1006
 msgid "Session Override active"
 msgstr "Anulación de sesión activa"
 
-#: src/features/slicing/components/SlicingPanel.tsx:2519
+#: src/features/slicing/components/SlicingPanel.tsx:2514
 msgid "Session Overrides"
 msgstr "Anulaciones de sesión"
 
@@ -4764,7 +4760,7 @@ msgstr "Configura las copias privadas"
 msgid "Settings"
 msgstr "Ajustes"
 
-#: src/components/settings/SettingsModal.tsx:1238
+#: src/components/settings/SettingsModal.tsx:1237
 msgid "Shader, rendering options, and selection behavior"
 msgstr "Sombreado, opciones de renderizado y selección"
 
@@ -4780,7 +4776,7 @@ msgstr "Rango de Ø del vástago"
 msgid "Shallow surfaces detected by the mesh-normal classifier (the surfaces auto-supports grid)"
 msgstr "Superficies poco inclinadas detectadas por el clasificador de normales de la malla (las superficies que los soportes automáticos cubren con rejilla)"
 
-#: src/features/slicing/components/SlicingPanel.tsx:730
+#: src/features/slicing/components/SlicingPanel.tsx:725
 msgid "Sharp"
 msgstr "Nítido"
 
@@ -4895,11 +4891,11 @@ msgstr "Ignora las áreas detectadas menores que esta: las motas diminutas rara 
 msgid "Slack between tenon and mortise, on every face. 0 = press fit (needs force). 0.1mm is a slide fit on a well-calibrated printer; raise it if the halves won't go together."
 msgstr "Holgura entre espiga y mortaja, en todas las caras. 0 = ajuste a presión (hay que forzar). 0,1 mm es un ajuste deslizante en una impresora bien calibrada; súbela si las mitades no entran."
 
-#: src/features/slicing/components/SlicingPanel.tsx:3362
+#: src/features/slicing/components/SlicingPanel.tsx:3357
 msgid "Slice & Print"
 msgstr "Laminar e imprimir"
 
-#: src/features/slicing/components/SlicingPanel.tsx:3361
+#: src/features/slicing/components/SlicingPanel.tsx:3356
 msgid "Slice & Upload"
 msgstr "Laminar y subir"
 
@@ -4907,22 +4903,22 @@ msgstr "Laminar y subir"
 msgid "Slice along a single flat plane derived from your points."
 msgstr "Corta por un único plano llano deducido de tus puntos."
 
-#: src/features/slicing/components/SlicingPanel.tsx:3798
+#: src/features/slicing/components/SlicingPanel.tsx:3793
 msgid "Slice Printable Models"
 msgstr "Laminar los modelos imprimibles"
 
-#: src/features/slicing/components/SlicingPanel.tsx:3360
+#: src/features/slicing/components/SlicingPanel.tsx:3355
 msgid "Slice to File"
 msgstr "Laminar a fichero"
 
-#: src/features/slicing/components/SlicingPanel.tsx:1170
+#: src/features/slicing/components/SlicingPanel.tsx:1165
 msgid "Sliced Layers"
 msgstr "Capas laminadas"
 
 #: src/components/scene/scanProgressMessages.ts:20
-#: src/components/settings/SettingsModal.tsx:1243
-#: src/features/slicing/components/SlicingPanel.tsx:2223
-#: src/features/slicing/components/SlicingPanel.tsx:2242
+#: src/components/settings/SettingsModal.tsx:1242
+#: src/features/slicing/components/SlicingPanel.tsx:2218
+#: src/features/slicing/components/SlicingPanel.tsx:2237
 msgid "Slicing"
 msgstr "Laminado"
 
@@ -4934,15 +4930,15 @@ msgstr "Laminado en curso. Las acciones de la barra superior están temporalment
 msgid "Slicing islands and suspended areas detected from layer contours"
 msgstr "Islas de laminado y áreas suspendidas detectadas a partir de los contornos de capa"
 
-#: src/features/slicing/components/SlicingPanel.tsx:3647
+#: src/features/slicing/components/SlicingPanel.tsx:3642
 msgid "Slicing Plate"
 msgstr "Laminando la placa"
 
-#: src/features/slicing/components/SlicingPanel.tsx:3628
+#: src/features/slicing/components/SlicingPanel.tsx:3623
 msgid "Slicing progress"
 msgstr "Progreso del laminado"
 
-#: src/features/slicing/components/SlicingPanel.tsx:3380
+#: src/features/slicing/components/SlicingPanel.tsx:3375
 msgid "Slicing…"
 msgstr "Laminando…"
 
@@ -4956,7 +4952,7 @@ msgstr "Ranura {slot}"
 
 #. Tool rail label in Prepare mode. The tool brushes and smooths local surface regions.
 #: src/components/controls/toolRailEntries.ts:59
-#: src/features/slicing/components/SlicingPanel.tsx:732
+#: src/features/slicing/components/SlicingPanel.tsx:727
 msgid "Smooth"
 msgstr "Suavizar"
 
@@ -4984,7 +4980,7 @@ msgstr "ID de la instantánea"
 msgid "Snapshot restored to current local backup state."
 msgstr "Instantánea restaurada como estado actual de la copia local."
 
-#: src/features/slicing/components/SlicingPanel.tsx:732
+#: src/features/slicing/components/SlicingPanel.tsx:727
 msgid "Soft organic curves."
 msgstr "Curvas orgánicas suaves."
 
@@ -4997,7 +4993,7 @@ msgstr "Sólida"
 msgid "Sparse supports — the detail sizing band"
 msgstr "Soportes escasos: la banda de dimensionado de detalle"
 
-#: src/features/slicing/components/SlicingPanel.tsx:3699
+#: src/features/slicing/components/SlicingPanel.tsx:3694
 msgid "Speed"
 msgstr "Velocidad"
 
@@ -5080,7 +5076,7 @@ msgstr "Paso 2: activar los visuales de depuración (ID + vóxeles)"
 msgid "STL"
 msgstr "STL"
 
-#: src/features/export/components/ExportPanel.tsx:480
+#: src/features/export/components/ExportPanel.tsx:485
 msgid "STL encoding"
 msgstr "Codificación STL"
 
@@ -5201,7 +5197,7 @@ msgstr "Estrechamiento"
 msgid "Tapered rectangular tenon — locks the parts against rotation."
 msgstr "Espiga rectangular con conicidad: impide que las piezas giren."
 
-#: src/features/slicing/components/SlicingPanel.tsx:2521
+#: src/features/slicing/components/SlicingPanel.tsx:2516
 msgid "Temporary"
 msgstr "Temporal"
 
@@ -5347,7 +5343,7 @@ msgstr "El importador de escenas rechazó los datos del guardado automático o n
 msgid "The seam while the cursor is over it."
 msgstr "La costura mientras el cursor está encima."
 
-#: src/features/slicing/components/SlicingPanel.tsx:3349
+#: src/features/slicing/components/SlicingPanel.tsx:3344
 msgid "The selected Machine does not support AA at this time."
 msgstr "La máquina elegida no admite antialiasing por ahora."
 
@@ -5384,7 +5380,7 @@ msgstr "Las líneas de silueta de la espiga."
 msgid "The update is being installed. DragonFruit will restart automatically."
 msgstr "Se está instalando la actualización. DragonFruit se reiniciará automáticamente."
 
-#: src/components/settings/SettingsModal.tsx:1256
+#: src/components/settings/SettingsModal.tsx:1255
 msgid "Theme and custom UI token customization"
 msgstr "Tema y personalización de los colores de la interfaz"
 
@@ -5540,7 +5536,7 @@ msgstr "Diámetro del tronco"
 msgid "Try again"
 msgstr "Reintentar"
 
-#: src/components/settings/SettingsModal.tsx:1255
+#: src/components/settings/SettingsModal.tsx:1254
 msgid "UI & Theme"
 msgstr "Interfaz y tema"
 
@@ -5638,7 +5634,7 @@ msgstr "La actualización ha fallado"
 msgid "Update installed. DragonFruit will restart."
 msgstr "Actualización instalada. DragonFruit se va a reiniciar."
 
-#: src/components/settings/SettingsModal.tsx:1309
+#: src/components/settings/SettingsModal.tsx:1308
 msgid "Updates"
 msgstr "Actualizaciones"
 
@@ -5682,11 +5678,11 @@ msgstr "Usando la carpeta local de copias por defecto."
 msgid "Using existing repository: {repoName}"
 msgstr "Usando el repositorio existente: {repoName}"
 
-#: src/features/slicing/components/SlicingPanel.tsx:1013
+#: src/features/slicing/components/SlicingPanel.tsx:1008
 msgid "Using Material Settings"
 msgstr "Usando los ajustes del material"
 
-#: src/components/settings/SettingsModal.tsx:1297
+#: src/components/settings/SettingsModal.tsx:1296
 msgid "UVTools"
 msgstr "UVTools"
 
@@ -5710,7 +5706,7 @@ msgstr "Versión {version} • lista para actualizar"
 msgid "Version {version} is ready to install"
 msgstr "La versión {version} está lista para instalarse"
 
-#: src/components/settings/SettingsModal.tsx:1316
+#: src/components/settings/SettingsModal.tsx:1315
 msgid "Version info and project details"
 msgstr "Versión y detalles del proyecto"
 
@@ -5919,11 +5915,11 @@ msgstr "Malla de alambre"
 msgid "With great resin comes great responsibility."
 msgstr "Una gran resina conlleva una gran responsabilidad."
 
-#: src/components/settings/SettingsModal.tsx:1226
+#: src/components/settings/SettingsModal.tsx:1225
 msgid "Workspace behavior and panel layout"
 msgstr "Comportamiento del espacio de trabajo y disposición de los paneles"
 
-#: src/components/settings/SettingsModal.tsx:1249
+#: src/components/settings/SettingsModal.tsx:1248
 msgid "Workspaces"
 msgstr "Espacios de trabajo"
 
