@@ -12,9 +12,10 @@ VOXL is DragonFruit’s native scene container. This page captures the core cont
 | V2.2       | Binary chunk container                                   | Superseded by V2.3           |
 | V2.3       | Binary chunk container                                   | Superseded by V2.4           |
 | V2.4       | Binary chunk container                                   | Superseded by V2.5           |
-| V2.5       | Binary chunk container                                   | Current read/write target    |
+| V2.5       | Binary chunk container                                   | Superseded by V2.6           |
+| V2.6       | Binary chunk container                                   | Current read/write target    |
 
-Readers must support V1 and V2.x. Writers should emit V2.5 semantics.
+Readers must support V1 and V2.x. Writers should emit V2.6 semantics.
 
 ## Core conventions
 
@@ -114,7 +115,8 @@ The `SCNE` payload is `VoxlSceneState`: which model is active, which models are
 selected, and, from V2.5, the scene's `plates` and its `activePlateId`. Earlier
 files carry `plateName` instead, the name of the one plate they had, so a reader
 must treat a scene with neither as a single unnamed plate rather than as a scene
-with nowhere to put its models.
+with nowhere to put its models. From V2.6 it may also carry `printer`, the machine
+the scene was packed for.
 
 For embedded model meshes, `MODL[i]` maps to `MESH(index = i)`.
 
@@ -207,7 +209,7 @@ inline modifier snapshots; `typeId` is not part of that detection.
 Backward compatibility: the field is optional and unknown JSON keys are ignored, so a V2.3 file
 opens in a V2/V2.1/V2.2 reader with no loss beyond the explicit type stamp.
 
-### V2.5 semantic revision (current)
+### V2.5 semantic revision
 
 V2.5 is a semantic revision of the V2 binary container; like V2.1 to V2.4 it does **not** change
 the binary header major version (`version` stays `2`, or `3` when identical-geometry dedup also
@@ -242,6 +244,35 @@ snapshots; the plate fields are not part of that detection.
 
 Backward compatibility: unknown JSON keys are ignored, so a V2.5 file opens in an older reader as
 a single-plate scene with every model in its world position, which is where it was.
+
+### V2.6 semantic revision (current)
+
+V2.6 is a semantic revision of the V2 binary container; like V2.1 to V2.5 it does **not** change
+the binary header major version (`version` stays `2`, or `3` when identical-geometry dedup also
+fired).
+
+V2.6 records the printer a scene was packed for, as `printer` on the `SCNE` scene state:
+
+- `profileId` and `name`, when a profile was active at save time.
+- `buildVolume`: `widthMm`, `depthMm`, `maxZMm`, and optionally `originMode` and `safetyMarginMm`.
+
+Requirements:
+
+- The build volume is stored, not looked up. The reason to record the printer is to tell whether a
+  plate still fits on the machine it is opened on, and a profile that has been edited, renamed or
+  is not installed here would leave the id with nothing to check. The volume it was packed against
+  is what the check needs.
+- Writers write `printer` whenever a printer profile is active.
+- A reader that finds none knows only what the scene contains, not what it was built to fit, and
+  must not report a mismatch. An absent `printer` is not a mismatch.
+
+Detection (no version number is written for the semantic revision): a scene carrying `printer` is
+V2.6; one without is read exactly as before. The revision is additive, so the semantic revision a
+reader reports for a V2 file stays `2.2`, or `2.1` when the file carries inline modifier
+snapshots; the printer fields are not part of that detection.
+
+Backward compatibility: unknown JSON keys are ignored, so a V2.6 file opens in an older reader
+with the scene intact and the printer note discarded.
 
 ### V2.4 semantic revision
 

@@ -718,6 +718,21 @@ export default function Home() {
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
   const activeMaterialProfile = React.useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
   const hasActivePrinterProfile = Boolean(activePrinterProfile);
+  // What the scene was packed for, recorded in the file so a plate can be checked
+  // against the printer it is opened on. The volume comes from the scene's resolved
+  // settings rather than the profile, so it is what the plate was actually laid out
+  // against even if the profile has drifted since.
+  const scenePrinterRef = React.useMemo(() => ({
+    ...(activePrinterProfile?.id ? { profileId: activePrinterProfile.id } : {}),
+    ...(activePrinterProfile?.name ? { name: activePrinterProfile.name } : {}),
+    buildVolume: {
+      widthMm: scene.view3dSettings.widthMm,
+      depthMm: scene.view3dSettings.depthMm,
+      maxZMm: scene.view3dSettings.maxZMm,
+      originMode: scene.view3dSettings.originMode,
+      ...(scene.view3dSettings.safetyMarginMm ? { safetyMarginMm: scene.view3dSettings.safetyMarginMm } : {}),
+    },
+  }), [activePrinterProfile, scene.view3dSettings]);
   const hasPrinterProfiles = React.useMemo(
     () => profileState.printerProfiles.length > 0,
     [profileState.printerProfiles],
@@ -999,6 +1014,7 @@ export default function Home() {
     activeModelId: scene.activeModelId,
     selectedModelIds: scene.selectedModelIds,
     plateName: scene.plateName,
+    printer: scenePrinterRef,
     enabled: sceneAutosaveEnabled,
     debounceMs: sceneAutosaveSettings.debounceMs,
     cooldownMs: sceneAutosaveSettings.cooldownMs,
@@ -4337,6 +4353,7 @@ export default function Home() {
         activeModelId: scene.activeModelId,
         selectedModelIds: scene.selectedModelIds,
         plateName: scene.plateName,
+        printer: scenePrinterRef,
         exportThumbnailPng: exportThumbnailPng ?? undefined,
       },
       {

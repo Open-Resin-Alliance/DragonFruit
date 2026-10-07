@@ -431,6 +431,9 @@ async function prepareVoxlDocumentV2(
     ...(input.plates && input.plates.length > 1 && input.activePlateId
       ? { activePlateId: input.activePlateId }
       : {}),
+    // V2.6. Written whenever a printer is known, which is every save made with a
+    // profile active: the volume is what a fit check on another machine needs.
+    ...(input.printer ? { printer: input.printer } : {}),
   };
 
   // ── Identical-geometry MESH chunk dedup ───────────────────────────────

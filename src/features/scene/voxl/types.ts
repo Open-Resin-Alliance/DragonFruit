@@ -123,6 +123,29 @@ export type VoxlPlateEntry = {
   name: string;
 };
 
+/**
+ * The printer a scene was built for. VOXL 2.6.
+ *
+ * The build volume is stored rather than looked up from `profileId`, and that is the
+ * point of the shape: the reason to record the printer at all is to tell whether the
+ * plate still fits on the machine it is opened on. A profile that has been edited,
+ * renamed, or is not installed on this machine would leave the id with nothing to
+ * check, while the volume it was packed against is exactly what the check needs.
+ */
+export type VoxlPrinterRef = {
+  /** The profile that was active at save time, when there was one. */
+  profileId?: string;
+  /** Its name then, for display. A profile can be renamed after the fact. */
+  name?: string;
+  buildVolume: {
+    widthMm: number;
+    depthMm: number;
+    maxZMm: number;
+    originMode?: 'center' | 'front_left';
+    safetyMarginMm?: { front: number; back: number; left: number; right: number };
+  };
+};
+
 export type VoxlSceneState = {
   activeModelId: string | null;
   selectedModelIds: string[];
@@ -145,6 +168,14 @@ export type VoxlSceneState = {
   plates?: VoxlPlateEntry[];
   /** Which plate is being worked on. VOXL 2.3. Defaults to the first plate. */
   activePlateId?: string | null;
+  /**
+   * The printer this scene was packed for. VOXL 2.6.
+   *
+   * Optional, and absent from every file written before it existed. A reader without
+   * it knows only what the scene contains, not what it was built to fit, so it must
+   * not assume a mismatch either.
+   */
+  printer?: VoxlPrinterRef;
 };
 
 export type VoxlDocumentV1 = {
@@ -209,6 +240,8 @@ export type BuildVoxlDocumentInput = {
   /** V2.5. Omitted for a single-plate scene, which writes no plate fields at all. */
   plates?: VoxlPlateEntry[];
   activePlateId?: string | null;
+  /** V2.6. The printer the scene was packed for. */
+  printer?: VoxlPrinterRef;
   supports: DragonfruitImportFormat;
   meta?: Partial<Pick<VoxlMeta, 'generator' | 'generatorVersion'>>;
   extensions?: Record<string, unknown>;

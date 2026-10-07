@@ -4,6 +4,7 @@ import React from 'react';
 import { subscribeHistory } from '@/history/historyStore';
 import { ExportManager } from '@/features/export/logic/ExportManager';
 import { VoxlChunkCache } from '@/features/scene/voxl';
+import type { VoxlPrinterRef } from '@/features/scene/voxl/types';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 
 // ---------------------------------------------------------------------------
@@ -342,6 +343,8 @@ export type UseSceneAutosaveOptions = {
   selectedModelIds: string[];
   /** The plate's name, written into the document's scene chunk. */
   plateName?: string;
+  /** The printer the scene was packed for, written into the document's scene chunk. */
+  printer?: VoxlPrinterRef;
   enabled?: boolean;
   debounceMs?: number;
   cooldownMs?: number;
@@ -383,6 +386,7 @@ export function useSceneAutosave({
   activeModelId,
   selectedModelIds,
   plateName,
+  printer,
   enabled = true,
   debounceMs = AUTOSAVE_DEBOUNCE_MS,
   cooldownMs = AUTOSAVE_COOLDOWN_MS,
@@ -405,6 +409,8 @@ export function useSceneAutosave({
   selectedModelIdsRef.current = selectedModelIds;
   const plateNameRef = React.useRef(plateName);
   plateNameRef.current = plateName;
+  const printerRef = React.useRef(printer);
+  printerRef.current = printer;
   const enabledRef = React.useRef(enabled);
   enabledRef.current = enabled;
   const debounceMsRef = React.useRef(debounceMs);
@@ -572,6 +578,7 @@ export function useSceneAutosave({
               activeModelId: activeModelIdRef.current,
               selectedModelIds: selectedModelIdsRef.current,
               plateName: plateNameRef.current,
+              printer: printerRef.current,
             },
             {
               nativePath: voxlPath,

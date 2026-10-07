@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { STLExporter } from 'three-stdlib';
+import type { VoxlPrinterRef } from '@/features/scene/voxl/types';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
 import type { MeshHealthReport } from '@/utils/meshRepair';
@@ -38,6 +39,8 @@ export interface ExportSceneContext {
   selectedModelIds: string[];
   /** The plate's name, written into the document's scene chunk. */
   plateName?: string;
+  /** The printer the scene was packed for, written into the document's scene chunk. */
+  printer?: VoxlPrinterRef;
   exportThumbnailPng?: Uint8Array | null;
 }
 
@@ -1348,6 +1351,7 @@ export class ExportManager {
       activeModelId: sceneContext?.activeModelId ?? null,
       selectedModelIds: sceneContext?.selectedModelIds ?? [],
       ...(sceneContext?.plateName ? { plateName: sceneContext.plateName } : {}),
+      ...(sceneContext?.printer ? { printer: sceneContext.printer } : {}),
       supports,
       meta: {
         generator: 'DragonFruit',
