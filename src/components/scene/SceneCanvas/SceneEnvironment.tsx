@@ -348,6 +348,42 @@ type PlateLayerShared = {
  * unpickable, so a click on it is still a click on the scene. The axes triad is left
  * alone: it marks the origin, not the plate.
  */
+/**
+ * A plate-shaped marker for the bed a drag would create if it were let go. Faint
+ * while the model is only off its bed, brighter once the model is over it, which
+ * is when letting go actually makes the plate.
+ */
+function GhostPlateLayer({
+  dxMm,
+  dyMm,
+  armed,
+  shared,
+}: {
+  dxMm: number;
+  dyMm: number;
+  armed: boolean;
+  shared: PlateLayerShared;
+}) {
+  return (
+    <group position={[dxMm, dyMm, 0]}>
+      <mesh
+        position={shared.plate.position}
+        renderOrder={-9}
+        raycast={nullRaycast}
+        frustumCulled={false}
+      >
+        <primitive object={shared.plate.geometry} attach="geometry" />
+        <meshBasicMaterial
+          color={armed ? shared.grid.majorColor : shared.plate.color}
+          transparent
+          opacity={armed ? 0.38 : 0.16}
+          depthWrite={false}
+        />
+      </mesh>
+    </group>
+  );
+}
+
 function PlateLayer({
   dxMm,
   dyMm,
@@ -457,8 +493,10 @@ function PlateLayer({
         </group>
       )}
 
-      {/* Axes: short, thicker arrows hovering slightly above Z0 to avoid grid clipping */}
-      {shared.showGrid && (
+      {/* Axes: short, thicker arrows hovering slightly above Z0 to avoid grid clipping.
+          Only on the plate being worked on: three arrows on every bed is noise, and
+          they mark one origin, not each plate's. */}
+      {shared.showGrid && isActive && (
       <group position={shared.axes.position} frustumCulled={false} userData={{ thumbnailHelperType: 'grid' }}>
         {/* X axis */}
         <mesh position={[shared.axes.length * 0.5, 0, 0]} rotation={[0, 0, -Math.PI * 0.5]} raycast={nullRaycast}>
@@ -525,8 +563,9 @@ function PlateLayer({
         />
       )}
 
-      {/* FRONT orientation marker locked to grid front edge and constrained within build plate bounds */}
-      {shared.showBuildPlate && (
+      {/* FRONT orientation marker locked to grid front edge and constrained within build plate bounds.
+          A decal, so only the plate being worked on wears it. */}
+      {shared.showBuildPlate && isActive && (
       <group position={shared.frontMarker.position} frustumCulled={false} userData={{ thumbnailHelperType: 'buildPlate' }}>
         {shared.frontMarker.texture && (
           <mesh renderOrder={21} raycast={nullRaycast}>
@@ -547,8 +586,10 @@ function PlateLayer({
       </group>
       )}
 
-      {/* Safety margin hazard stripes - semi-transparent red-white diagonal stripes */}
-      {shared.showBuildPlate && shared.margins.visible && (
+      {/* Safety margin hazard stripes - semi-transparent red-white diagonal stripes.
+          Also a decal: the margin still holds, it is just not drawn on a plate you
+          are not working on. */}
+      {shared.showBuildPlate && isActive && shared.margins.visible && (
         <group position={shared.margins.groupPosition} visible={shared.buildPlateOpacity > 0.001} frustumCulled={false} userData={{ thumbnailHelperType: 'buildPlate' }}>
           {(['front', 'back', 'left', 'right'] as const).map((side) => {
             const strip = shared.margins[side];
@@ -601,6 +642,7 @@ export function Helpers({
   plateArrangeDisabledTitle,
   onArrangePlate,
   plates,
+  ghostPlate,
   onActivatePlate,
   onRenamePlate,
   onAddPlate,
@@ -649,6 +691,12 @@ export function Helpers({
    * above, exactly as it always was.
    */
   plates?: PlateLayerSpec[];
+  /**
+   * The bed that would appear if the model being dragged were let go where it is:
+   * a plate's footprint drawn faint, with nothing to pick and no label, because it
+   * is a place rather than a plate yet.
+   */
+  ghostPlate?: { dxMm: number; dyMm: number; armed: boolean } | null;
   /** Picking the surface of a plate that is not active makes it the active one. */
   onActivatePlate?: (plateId: string) => void;
   /** Committing a new name for one of the plates above. */
@@ -1267,6 +1315,9 @@ export function Helpers({
 
   return (
     <>
+      {ghostPlate && (
+        <GhostPlateLayer dxMm={ghostPlate.dxMm} dyMm={ghostPlate.dyMm} armed={ghostPlate.armed} shared={shared} />
+      )}
       {plateLayers.map((plate) => {
         const isActive = plate ? plate.isActive : true;
         return (

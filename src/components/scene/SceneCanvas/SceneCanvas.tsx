@@ -134,6 +134,7 @@ import { PickingEmptySpaceHoverResetter, SceneRenderBindings } from './SceneCanv
 import { PickingProviderWrapper, SelectionSync, useInteractionWarning } from './SceneSelectionAndPicking';
 import { CameraClipPlaneStabilizer, CameraProvider, EnableLocalClipping, Helpers, Lights, SceneMoodOverlay } from './SceneEnvironment';
 import { plateNumberPlaceholder } from '@/features/scene/plates/plateMessages';
+import { plateCascadeOffsetMm } from '@/features/scene/plates/plateCascade';
 import type { PlateFrame, ScenePlate } from '@/features/scene/useSceneCollectionManager';
 import { StlMesh } from './StlMesh';
 import { setClipBounds } from './clipBoundsStore';
@@ -681,7 +682,7 @@ export function SceneCanvas({
   onTransformEnd?: (
     operation: 'move' | 'rotate' | 'scale',
     finalTransform?: ModelTransform,
-    options?: { skipStoreCommit?: boolean },
+    options?: { skipStoreCommit?: boolean; spawnPlateForDrop?: boolean },
   ) => void;
   showIslandIdLabels?: boolean;
   mode?: SupportMode;
@@ -1622,6 +1623,21 @@ export function SceneCanvas({
    * Undefined for a caller with no plate list, which keeps the single-plate path
    * exactly as it was.
    */
+  /**
+   * Where the next bed would go: one cascade step out from the last plate, at the
+   * same footprint. Null without a plate list, which is the single-plate path.
+   */
+  const nextPlateFrame = React.useMemo(() => {
+    const last = plateFrames?.[plateFrames.length - 1];
+    if (!last) return null;
+    const widthMm = last.maxX - last.minX;
+    const depthMm = last.maxY - last.minY;
+    const { dxMm, dyMm } = plateCascadeOffsetMm(last.index + 1, { widthMm, depthMm });
+    const minX = last.minX - last.dxMm + dxMm;
+    const minY = last.minY - last.dyMm + dyMm;
+    return { dxMm, dyMm, minX, minY, maxX: minX + widthMm, maxY: minY + depthMm };
+  }, [plateFrames]);
+
   const plateLayers = React.useMemo(() => {
     if (!plates || plates.length === 0 || !plateFrames || plateFrames.length === 0) return undefined;
     return plates.map((plate, index) => {
@@ -5788,6 +5804,14 @@ export function SceneCanvas({
   const selectDragRaycasterRef = React.useRef(new THREE.Raycaster());
   const selectDragIntersectionRef = React.useRef(new THREE.Vector3());
   const selectDragDeltaRef = React.useRef(new THREE.Vector3());
+  /** Whether the drag is over the ghost bed, which is what a drop there creates. */
+  const ghostPlateDropArmedRef = React.useRef(false);
+  /**
+   * Off, drawn, or drawn as the place this drop would actually land. One string
+   * rather than a pair of booleans, so a move that changes nothing bails out
+   * instead of re-rendering the scene.
+   */
+  const [ghostPlateMode, setGhostPlateMode] = React.useState<'off' | 'shown' | 'armed'>('off');
   const selectDragNdcRef = React.useRef(new THREE.Vector2());
 
   // Mirrors activeModelId synchronously so the deferred drag-begin can confirm
@@ -5805,6 +5829,8 @@ export function SceneCanvas({
     selectDragPlaneRef.current = null;
     selectDragLastPointRef.current = null;
     selectDragStartSnapshotRef.current = null;
+    ghostPlateDropArmedRef.current = false;
+    setGhostPlateMode('off');
     setSelectDragPressed(false);
 
     hideDragCornerCagesNow();
@@ -5928,12 +5954,31 @@ export function SceneCanvas({
     // trailing behind a fast drag.
     updateDragCornerCagesNow();
     last.copy(worldPoint);
-  }, [getSelectDragWorldPoint, queueLiveDragTransform, updateDragCornerCagesNow]);
+
+    // Off every bed, the next one is a place the model could go, so show where it
+    // would land and remember whether the model is over it: a drop there hands the
+    // model a plate of its own.
+    const ghost = nextPlateFrame;
+    if (!ghost) return;
+    const point = group.position;
+    const overPlate = (plateFrames ?? []).some(
+      (frame) => point.x >= frame.minX && point.x <= frame.maxX && point.y >= frame.minY && point.y <= frame.maxY,
+    );
+    const offEveryPlate = !overPlate;
+    const overGhost = offEveryPlate
+      && point.x >= ghost.minX && point.x <= ghost.maxX
+      && point.y >= ghost.minY && point.y <= ghost.maxY;
+    ghostPlateDropArmedRef.current = overGhost;
+    setGhostPlateMode(overGhost ? 'armed' : offEveryPlate ? 'shown' : 'off');
+  }, [getSelectDragWorldPoint, nextPlateFrame, plateFrames, queueLiveDragTransform, updateDragCornerCagesNow]);
 
   const finishSelectDrag = React.useCallback(() => {
     const candidate = selectDragCandidateRef.current;
     const wasActive = selectDragActiveRef.current;
     const snapshot = selectDragStartSnapshotRef.current;
+    // Read before the candidate is cleared: clearing also puts the ghost away, so
+    // by the time the drop is committed the answer would be gone.
+    const spawnPlate = ghostPlateDropArmedRef.current;
     clearSelectDragCandidate();
 
     if (!wasActive || !candidate) return;
@@ -5974,7 +6019,9 @@ export function SceneCanvas({
       });
     }
 
-    onTransformEnd?.('move', live ?? undefined);
+    onTransformEnd?.('move', live ?? undefined, { spawnPlateForDrop: spawnPlate });
+    ghostPlateDropArmedRef.current = false;
+    setGhostPlateMode('off');
     queueLiveDragTransform(null);
     setIsGizmoDragging(false);
     // The cage is already drawn at the final live position by the last move
@@ -6177,6 +6224,9 @@ export function SceneCanvas({
           plateNameEditTitle={plateNameEditTitle}
           plateNameEmptyTitle={plateNameEmptyTitle}
           plates={plateLayers}
+          ghostPlate={ghostPlateMode === 'off' || !nextPlateFrame
+            ? null
+            : { ...nextPlateFrame, armed: ghostPlateMode === 'armed' }}
           onActivatePlate={onActivatePlate}
           onRenamePlate={onRenamePlate}
           onAddPlate={onAddPlate}

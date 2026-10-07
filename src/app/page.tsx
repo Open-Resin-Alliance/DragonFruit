@@ -909,6 +909,11 @@ export default function Home() {
     description?: string;
     supportBefore?: ReturnType<typeof getSupportSnapshot>;
     supportAfter?: ReturnType<typeof getSupportSnapshot>;
+    /**
+     * Set when this gesture created the plate the model landed on, so the bed and
+     * the move are one undo step instead of two.
+     */
+    plateSpawn?: { platesBefore: { id: string; name: string }[]; activePlateIdBefore: string };
   } | null>(null);
   const pendingSelectionPositionHistoryRef = React.useRef<{
     targetIdsKey: string;
@@ -5681,10 +5686,12 @@ export default function Home() {
             }
     );
 
-    const supportHistoryOptions = pending.supportBefore
+    const supportHistoryOptions = (pending.supportBefore || pending.plateSpawn)
       ? {
-          includeSupportState: true,
-          supportBefore: pending.supportBefore,
+          ...(pending.supportBefore
+            ? { includeSupportState: true, supportBefore: pending.supportBefore }
+            : {}),
+          ...(pending.plateSpawn ? { plateSpawn: pending.plateSpawn } : {}),
         }
       : undefined;
 
@@ -8326,7 +8333,7 @@ export default function Home() {
   const handleTransformEnd = (
     operation: 'move' | 'rotate' | 'scale',
     finalTransform?: ModelTransform,
-    options?: { skipStoreCommit?: boolean },
+    options?: { skipStoreCommit?: boolean; spawnPlateForDrop?: boolean },
   ) => {
     const stampNow = () => ({ perfMs: performance.now(), epochMs: Date.now() });
     const releasePerf = performance.now();
@@ -8345,6 +8352,26 @@ export default function Home() {
       transformMgr.pendingTransformRef.current = null;
       invalidatePendingTransformHistory();
       return;
+    }
+
+    let spawnedPlateId: string | undefined;
+    if (options?.spawnPlateForDrop) {
+      // The model was let go where the next bed goes, so the bed arrives with it.
+      // Recorded on the pending step, where the history commit folds it in: the
+      // model and the plate it now stands on are one undo.
+      const pendingHistory = pendingTransformHistoryRef.current;
+      const platesBefore = scene.plates;
+      const activePlateIdBefore = scene.activePlateId;
+      if (pendingHistory) {
+        pendingHistory.plateSpawn = { platesBefore, activePlateIdBefore };
+        // The move is told which bed it lands on, because the plate list this
+        // render holds does not have the new one yet: left to resolve for itself it
+        // would keep the model on the old plate and never follow the new one.
+        spawnedPlateId = scene.addPlate({ pushHistory: false });
+      } else {
+        // No transform step to fold into, so the bed is a step of its own.
+        scene.addPlate();
+      }
     }
 
     let transformCommitResult: TransformStoreCommitResult = {
@@ -8407,6 +8434,7 @@ export default function Home() {
           scene.activeModelId,
           committedTransform,
           explicitBeforeTransform,
+          spawnedPlateId ? { landedPlateId: spawnedPlateId } : undefined,
         );
         transformDebugTimelineRef.current.storeUpdatedAt = stampNow();
 

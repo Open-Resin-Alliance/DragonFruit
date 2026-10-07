@@ -2611,7 +2611,20 @@ export function useSceneCollectionManager(options?: {
     }));
   }, []);
 
-  const updateModelTransform = useCallback((id: string, transform: ModelTransform, previousTransformOverride?: ModelTransform) => {
+  const updateModelTransform = useCallback((
+    id: string,
+    transform: ModelTransform,
+    previousTransformOverride?: ModelTransform,
+    options?: {
+      /**
+       * The plate this move lands on, when the caller made it in the same step. The
+       * plate list this render still holds does not include a bed created moments
+       * ago, so resolving the position against it would put the model on the old
+       * plate and leave the new one empty.
+       */
+      landedPlateId?: string;
+    },
+  ) => {
     // Every move lands here — drag, gizmo, the transform panel, the nudge hotkeys —
     // so a locked plate refuses them all at the one place that writes a transform.
     const currentModel = modelsRef.current.find((m) => m.id === id);
@@ -2706,14 +2719,15 @@ export function useSceneCollectionManager(options?: {
     // A drag that lands on another bed makes that bed the one you are working on.
     // A move spreading the models over several plates says nothing about which to
     // work on, so the active plate is left alone.
-    const followedPlateId = landedPlateIds.size === 1 ? [...landedPlateIds][0] : null;
+    const followedPlateId = options?.landedPlateId
+      ?? (landedPlateIds.size === 1 ? [...landedPlateIds][0] : null);
 
     setModels(prev => prev.map(m => {
       const nextTransform = updateMap.get(m.id);
       if (!nextTransform) return m;
       const moved = { ...m, transform: nextTransform };
       // Membership follows the model: it stands on whichever plate it now does.
-      const plateId = resolveModelPlateIdRef.current(moved);
+      const plateId = options?.landedPlateId ?? resolveModelPlateIdRef.current(moved);
       return plateId ? { ...moved, plateId } : moved;
     }));
 
@@ -2733,7 +2747,14 @@ export function useSceneCollectionManager(options?: {
     beforeTransform: ModelTransform,
     afterTransform: ModelTransform,
     description?: string,
-    supportSnapshotOptions?: TransformHistorySupportSnapshotOptions,
+    supportSnapshotOptions?: TransformHistorySupportSnapshotOptions & {
+      /**
+       * Set when the same gesture created the plate the model landed on. The bed
+       * is then part of this step, so one undo takes the model back and the empty
+       * bed with it rather than leaving it behind.
+       */
+      plateSpawn?: { platesBefore: ScenePlate[]; activePlateIdBefore: string };
+    },
   ) => {
     if (transformsEqual(beforeTransform, afterTransform)) return false;
 
@@ -2790,13 +2811,16 @@ export function useSceneCollectionManager(options?: {
 
     const includeSupportHistory = includeSupportByOption || includeSupportByState;
 
+    const spawn = supportSnapshotOptions?.plateSpawn;
     const before = captureSceneSnapshot(beforeModels, currentActiveModelId, currentSelectedModelIds, {
       includeSupportState: includeSupportHistory,
       supportStateOverride: supportSnapshotOptions?.supportBefore,
+      ...(spawn ? { plates: spawn.platesBefore, activePlateId: spawn.activePlateIdBefore } : {}),
     });
     const after = captureSceneSnapshot(afterModels, currentActiveModelId, currentSelectedModelIds, {
       includeSupportState: includeSupportHistory,
       supportStateOverride: supportSnapshotOptions?.supportAfter,
+      ...(spawn ? { plates: platesRef.current, activePlateId: activePlateIdRef.current } : {}),
     });
     const targetModelName = targetModel.name ?? id;
     pushSceneSnapshotHistory(before, after, description ?? `Transform Model ${targetModelName}`);
@@ -6110,8 +6134,13 @@ export function useSceneCollectionManager(options?: {
    * Add an empty plate after the last one. The plate being worked on does not
    * change: adding a bed is not a reason to leave the one you are on.
    */
-  const addPlate = useCallback((): string => {
+  const addPlate = useCallback((options?: { pushHistory?: boolean }): string => {
     const plate: ScenePlate = { id: uuidv4(), name: '' };
+    if (options?.pushHistory === false) {
+      setPlates((prev) => [...prev, plate]);
+      return plate.id;
+    }
+
     const current = platesRef.current;
     const before = captureSceneSnapshot(modelsRef.current, activeModelIdRef.current, selectedModelIdsRef.current, {
       plates: current,
@@ -6129,7 +6158,17 @@ export function useSceneCollectionManager(options?: {
   }, [pushSceneSnapshotHistory]);
 
   const activatePlate = useCallback((plateId: string) => {
-    setActivePlateId((prev) => (platesRef.current.some((plate) => plate.id === plateId) ? plateId : prev));
+    if (!platesRef.current.some((plate) => plate.id === plateId)) return;
+    if (activePlateIdRef.current === plateId) return;
+
+    // Working on another bed: whatever was selected on the last one is not selected
+    // here, and leaving it selected would keep the gizmo and the panels on a model
+    // that is not on the plate you are looking at. The panel's own plate header
+    // selects that plate's models straight after, which is where a selection on the
+    // plate you just moved to comes from.
+    setSelectedModelIds([]);
+    setActiveModelId(null);
+    setActivePlateId(plateId);
   }, []);
 
   /**
