@@ -31,6 +31,8 @@ interface ModelStatsCardProps {
   heightMm: number;
   estimatedPrintTimeLabelOverride?: string | null;
   estimatedResinLabelOverride?: string | null;
+  /** The same estimate for every plate. Absent when there is only one plate. */
+  estimatedResinTotalLabel?: string | null;
 }
 
 export function ModelStatsCard({
@@ -42,6 +44,7 @@ export function ModelStatsCard({
   heightMm,
   estimatedPrintTimeLabelOverride,
   estimatedResinLabelOverride,
+  estimatedResinTotalLabel,
 }: ModelStatsCardProps) {
   const { _ } = useLingui();
   const [isFlipped, setIsFlipped] = React.useState(false);
@@ -542,6 +545,15 @@ export function ModelStatsCard({
                   ? `${estimatedResinMl.toFixed(2)} ml${estimatedResinCost ? ` (${estimatedResinCost})` : ''}`
                   : '-')}
               </span>
+
+              {estimatedResinTotalLabel != null && (
+                <>
+                  <span><Trans comment='Row label on the printer card: estimated resin for every plate in the scene, beside the row for the plate being worked on. Keep it terse — the label column is narrow.'>Est. resin, all plates:</Trans></span>
+                  <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>
+                    {estimatedResinTotalLabel}
+                  </span>
+                </>
+              )}
             </div>
 
             <div className="pt-0.5 text-[10px] mt-auto" style={{ color: 'var(--text-muted)' }}>

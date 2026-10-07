@@ -16,8 +16,16 @@
  * in the order a person adding plates would expect.
  */
 
-/** Distance between two plates' build volumes, on top of the plate footprint. */
+/** Minimum distance between two plates' build volumes. */
 export const PLATE_CASCADE_GAP_MM = 20;
+
+/**
+ * How much of a plate's width is left clear to its right for the widget column
+ * that hangs off its edge. The widgets are sized in CSS pixels and scaled with
+ * the plate, so their footprint is a fraction of the plate rather than a fixed
+ * number of millimetres; a constant gap puts the next plate underneath them.
+ */
+export const PLATE_WIDGET_STRIP_FRACTION = 0.25;
 
 export type PlateCascadeCell = { col: number; row: number };
 
@@ -67,8 +75,15 @@ export function plateCascadeOffsetMm(
   footprint: { widthMm: number; depthMm: number },
 ): { dxMm: number; dyMm: number } {
   const { col, row } = plateCascadeCell(index);
+  // Columns are pitched far enough apart that a plate's widget column lands in
+  // the gap rather than on the next plate; rows only need the plain gap, since
+  // nothing hangs off a plate's front or back edge.
+  const columnPitch = footprint.widthMm + Math.max(
+    PLATE_CASCADE_GAP_MM,
+    footprint.widthMm * PLATE_WIDGET_STRIP_FRACTION,
+  );
   return {
-    dxMm: col * (footprint.widthMm + PLATE_CASCADE_GAP_MM),
+    dxMm: col * columnPitch,
     dyMm: row * (footprint.depthMm + PLATE_CASCADE_GAP_MM),
   };
 }

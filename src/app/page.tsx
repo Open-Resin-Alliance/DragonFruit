@@ -1353,6 +1353,8 @@ export default function Home() {
   const [printingArtifactIsInvalid, setPrintingArtifactIsInvalid] = React.useState(false);
   const slicedArtifactProfileFingerprintRef = React.useRef<string | null>(null);
   const [printingEstimatedResinMl, setPrintingEstimatedResinMl] = React.useState<number | null>(null);
+  /** The same estimate over every plate, shown beside the per-plate one. */
+  const [printingEstimatedResinTotalMl, setPrintingEstimatedResinTotalMl] = React.useState<number | null>(null);
   const printingEstimatedResinMlRef = React.useRef<number | null>(null);
   const [isPrintingEstimatedResinBusy, setIsPrintingEstimatedResinBusy] = React.useState(false);
   const [resinEstimateRefreshTick, setResinEstimateRefreshTick] = React.useState(0);
@@ -2985,6 +2987,11 @@ export default function Home() {
       (model) => model.visible && resinInBoundsModelIdSet.has(model.id) && activePlateModelIds.has(model.id),
     );
   }, [activePlateModelIds, resinInBoundsModelIdSet, scene.models]);
+
+  /** Every plate's models, for the scene-wide total beside the per-plate estimate. */
+  const sceneResinModels = React.useMemo(() => {
+    return scene.models.filter((model) => model.visible && resinInBoundsModelIdSet.has(model.id));
+  }, [resinInBoundsModelIdSet, scene.models]);
   const shouldEstimateResinInBackground = visibleResinModels.length > 0
     && (scene.mode !== 'printing' || !printingArtifact);
 
@@ -3318,10 +3325,11 @@ export default function Home() {
     let cancelled = false;
 
     if (!shouldEstimateResinInBackground) {
-      if (visibleResinModels.length === 0) {
+      if (sceneResinModels.length === 0) {
         lastCompletedResinEstimateSignatureRef.current = '';
         printingEstimatedResinMlRef.current = null;
         setPrintingEstimatedResinMl(null);
+        setPrintingEstimatedResinTotalMl(null);
       }
       setIsPrintingEstimatedResinBusy(false);
       return () => {
@@ -3339,9 +3347,12 @@ export default function Home() {
 
     const run = async () => {
       let totalMl = 0;
+      let sceneTotalMl = 0;
       let found = false;
 
-      for (const model of visibleModels) {
+      // One pass over every plate's models: the active plate's share is the
+      // per-plate figure, and the whole sum is the scene total beside it.
+      for (const model of sceneResinModels) {
         if (cancelled) return;
         const baseMl = await getOrComputeBaseResinMl(model);
         if (cancelled) return;
@@ -3350,7 +3361,9 @@ export default function Home() {
         const sx = Math.abs(model.transform.scale.x || 1);
         const sy = Math.abs(model.transform.scale.y || 1);
         const sz = Math.abs(model.transform.scale.z || 1);
-        totalMl += baseMl * sx * sy * sz;
+        const contribution = baseMl * sx * sy * sz;
+        sceneTotalMl += contribution;
+        if (activePlateModelIds.has(model.id)) totalMl += contribution;
         found = true;
       }
 
@@ -3359,6 +3372,7 @@ export default function Home() {
       const nextValue = found || totalWithSupports > 0 ? totalWithSupports : null;
       printingEstimatedResinMlRef.current = nextValue;
       setPrintingEstimatedResinMl(nextValue);
+      setPrintingEstimatedResinTotalMl(found || sceneTotalMl > 0 ? sceneTotalMl + supportAndRaftResinMl : null);
       lastCompletedResinEstimateSignatureRef.current = compositeSignature;
       setIsPrintingEstimatedResinBusy(false);
     };
@@ -3384,6 +3398,13 @@ export default function Home() {
     if (printingEstimatedResinMl == null) return '—';
     return `${printingEstimatedResinMl.toFixed(2)} ml`;
   }, [isPrintingEstimatedResinBusy, printingEstimatedResinMl, scene.models]);
+
+  /** The same figure for every plate, shown beside the per-plate one. */
+  const estimatedResinTotalLabel = React.useMemo(() => {
+    if (sceneResinModels.length === 0) return null;
+    if (printingEstimatedResinTotalMl == null) return null;
+    return `${printingEstimatedResinTotalMl.toFixed(2)} ml`;
+  }, [printingEstimatedResinTotalMl, sceneResinModels.length]);
 
   const estimatedPrintTimeLabel = React.useMemo(() => {
     if (!activeMaterialProfile || printingPreviewTotalLayers <= 0) return '—';
@@ -10574,6 +10595,7 @@ export default function Home() {
                 heightMm={slicing.heightMm}
                 estimatedPrintTimeLabelOverride={modelStatsEstimatedPrintTimeLabel}
                 estimatedResinLabelOverride={estimatedVolumeMlLabel}
+                estimatedResinTotalLabel={estimatedResinTotalLabel}
               />
             </div>
           )}
