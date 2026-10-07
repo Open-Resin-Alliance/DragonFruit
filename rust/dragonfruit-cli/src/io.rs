@@ -563,7 +563,7 @@ pub fn load_voxl_triangles(path: &Path) -> Result<(Vec<f32>, bool), String> {
     }
     let ver = u16::from_le_bytes([data[4], data[5]]);
     if ver < 2 {
-        return Err(format!("Unsupported VOXL container version: {ver}"));
+        return Err(unsupported_voxl_version_error(ver));
     }
     let chunk_count = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
     let dir_end = 16 + chunk_count * 20;
@@ -735,8 +735,6 @@ pub struct VoxlMeshRef {
     pub mode: Option<String>,
     #[serde(rename = "chunkIndex")]
     pub chunk_index: Option<u16>,
-    #[serde(rename = "dataBase64")]
-    pub data_base64: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -826,6 +824,14 @@ pub fn read_positions_bin_from_bytes(bytes: &[u8]) -> Result<Vec<f32>, String> {
     Ok(floats)
 }
 
+/// Error text for a VOXL container below the supported binary floor.
+pub const VOXL_V1_UNSUPPORTED: &str = "VOXL V1 (legacy JSON scene) files are no longer supported; \
+re-export the scene with a current DragonFruit build to get a VOXL V2 binary container.";
+
+fn unsupported_voxl_version_error(version: u16) -> String {
+    format!("Unsupported VOXL binary version {version}. {VOXL_V1_UNSUPPORTED}")
+}
+
 pub fn load_voxl(path: &Path) -> Result<VoxlLoadedMesh, String> {
     let data = std::fs::read(path).map_err(|e| format!("Failed to read VOXL file: {e}"))?;
     load_voxl_from_bytes_with_path(&data, path)
@@ -836,10 +842,24 @@ pub fn load_voxl_from_bytes(data: &[u8]) -> Result<VoxlLoadedMesh, String> {
 }
 
 pub fn load_voxl_from_bytes_with_path(data: &[u8], path: &Path) -> Result<VoxlLoadedMesh, String> {
-    if data.len() >= 16 && &data[0..4] == b"VOXL" {
-        return load_voxl_v2_from_bytes_with_path(data, path);
+    if data.len() >= 4 && &data[0..4] == b"VOXL" {
+        if data.len() >= 6 {
+            let ver = u16::from_le_bytes([data[4], data[5]]);
+            if ver < 2 {
+                return Err(unsupported_voxl_version_error(ver));
+            }
+        }
+        if data.len() >= 16 {
+            return load_voxl_v2_from_bytes_with_path(data, path);
+        }
+        return Err(format!(
+            "VOXL binary container is truncated ({} bytes, need at least 16)",
+            data.len()
+        ));
     }
-    load_voxl_v1_from_bytes(data)
+    Err(format!(
+        "Not a VOXL binary container (missing VOXL magic header). {VOXL_V1_UNSUPPORTED}"
+    ))
 }
 
 struct VoxlChunkHeader {
@@ -998,67 +1018,6 @@ fn load_voxl_v2_from_bytes_with_path(data: &[u8], path: &Path) -> Result<VoxlLoa
         model_triangle_count,
         total_triangle_count,
         mesh_encoding: mesh_encoding.to_string(),
-    })
-}
-
-fn load_voxl_v1_from_bytes(data: &[u8]) -> Result<VoxlLoadedMesh, String> {
-    use base64::Engine;
-
-    let json_bytes = if data.len() >= 2 && data[0] == 0x78 {
-        let mut decompressor = libdeflater::Decompressor::new();
-        let mut buf = vec![0u8; data.len() * 10 + 65536];
-        match decompressor.zlib_decompress(data, &mut buf) {
-            Ok(sz) => {
-                buf.truncate(sz);
-                buf
-            }
-            Err(_) => data.to_vec(),
-        }
-    } else {
-        data.to_vec()
-    };
-
-    let text = std::str::from_utf8(&json_bytes).map_err(|e| format!("Invalid UTF-8 in VOXL V1: {e}"))?;
-    let doc: serde_json::Value = serde_json::from_str(text).map_err(|e| format!("Invalid VOXL V1 JSON: {e}"))?;
-
-    let models = doc.get("models").and_then(|v| v.as_array()).ok_or("VOXL V1 missing models array")?;
-
-    let mut model_triangles = Vec::new();
-    let mut support_triangles = Vec::new();
-
-    for m in models {
-        let visible = m.get("visible").and_then(|v| v.as_bool()).unwrap_or(true);
-        if !visible {
-            continue;
-        }
-
-        let is_support = m.get("isSupportGeometry").and_then(|v| v.as_bool()).unwrap_or(false);
-
-        if let Some(mesh) = m.get("mesh") {
-            if let Some(base64_str) = mesh.get("dataBase64").and_then(|v| v.as_str()) {
-                if let Ok(raw_bytes) = base64::engine::general_purpose::STANDARD.decode(base64_str) {
-                    if let Ok(tris) = parse_mesh_bytes(&raw_bytes) {
-                        if is_support {
-                            support_triangles.extend(tris);
-                        } else {
-                            model_triangles.extend(tris);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    let model_triangle_count = model_triangles.len() / 9;
-    let mut triangles_xyz = model_triangles;
-    triangles_xyz.extend(support_triangles);
-    let total_triangle_count = triangles_xyz.len() / 9;
-
-    Ok(VoxlLoadedMesh {
-        triangles_xyz,
-        model_triangle_count,
-        total_triangle_count,
-        mesh_encoding: "voxl_mesh".to_string(),
     })
 }
 
@@ -1566,64 +1525,54 @@ mod tests {
     }
 
     #[test]
-    fn voxl_load_is_support_geometry_partitioning() {
-        use base64::Engine;
-
-        // Tri 1 (model): z=1.0
-        let tri1_stl = vec![
-            0.0f32, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0,
-        ];
-        let mut tri1_buf = Vec::new();
-        for f in &tri1_stl {
-            tri1_buf.extend_from_slice(&f.to_le_bytes());
-        }
-        let tri1_b64 = base64::engine::general_purpose::STANDARD.encode(&tri1_buf);
-
-        // Tri 2 (support): z=5.0
-        let tri2_stl = vec![
-            0.0f32, 0.0, 5.0, 1.0, 0.0, 5.0, 0.0, 1.0, 5.0,
-        ];
-        let mut tri2_buf = Vec::new();
-        for f in &tri2_stl {
-            tri2_buf.extend_from_slice(&f.to_le_bytes());
-        }
-        let tri2_b64 = base64::engine::general_purpose::STANDARD.encode(&tri2_buf);
-
+    fn voxl_load_rejects_legacy_v1_json_scene() {
+        // Shape of a pre-release V1 JSON scene; no VOXL magic anywhere.
         let voxl_json = serde_json::json!({
             "version": 1,
             "models": [
                 {
                     "id": "m1",
-                    "name": "Model Part",
                     "visible": true,
                     "isSupportGeometry": false,
-                    "mesh": {
-                        "mode": "base64-raw",
-                        "dataBase64": tri1_b64
-                    }
-                },
-                {
-                    "id": "s1",
-                    "name": "Support Part",
-                    "visible": true,
-                    "isSupportGeometry": true,
-                    "mesh": {
-                        "mode": "base64-raw",
-                        "dataBase64": tri2_b64
-                    }
+                    "mesh": { "mode": "base64-raw", "dataBase64": "AAAAAA==" }
                 }
             ]
-        }).to_string();
+        })
+        .to_string();
 
-        let voxl = load_voxl_from_bytes(voxl_json.as_bytes()).unwrap();
-        assert_eq!(voxl.model_triangle_count, 1);
-        assert_eq!(voxl.total_triangle_count, 2);
-        assert_eq!(voxl.triangles_xyz.len(), 18);
+        let err = load_voxl_from_bytes(voxl_json.as_bytes()).unwrap_err();
+        assert!(err.contains("Not a VOXL binary container"), "{err}");
+        assert!(err.contains("VOXL V1"), "{err}");
+        assert!(err.contains("no longer supported"), "{err}");
+    }
 
-        // Model tri (z=1.0) must come first
-        assert_eq!(voxl.triangles_xyz[2], 1.0);
-        // Support tri (z=5.0) must come second
-        assert_eq!(voxl.triangles_xyz[11], 5.0);
+    #[test]
+    fn voxl_load_names_the_version_of_a_binary_below_the_floor() {
+        // Magic present but version 1: the legacy binary/JSON hybrid the old
+        // reader used to probe.
+        let mut data = Vec::new();
+        data.extend_from_slice(b"VOXL");
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&[0u8; 10]);
+
+        let err = load_voxl_from_bytes(&data).unwrap_err();
+        assert!(err.contains("Unsupported VOXL binary version 1"), "{err}");
+        assert!(err.contains("VOXL V1"), "{err}");
+
+        // Same version through the triangles entry point.
+        let dir = TempDir::new();
+        let path = dir.join("v1.voxl");
+        std::fs::write(&path, &data).unwrap();
+        let err = load_voxl_triangles(&path).unwrap_err();
+        assert!(err.contains("Unsupported VOXL binary version 1"), "{err}");
+        assert!(!is_voxl_file(&path), "V1 must not be accepted as a VOXL file");
+    }
+
+    #[test]
+    fn voxl_load_rejects_a_truncated_binary_header() {
+        let data = b"VOXL\x02\x00\x00\x00";
+        let err = load_voxl_from_bytes(data).unwrap_err();
+        assert!(err.contains("truncated"), "{err}");
     }
 
     #[test]

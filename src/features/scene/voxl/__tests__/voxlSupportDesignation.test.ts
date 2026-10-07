@@ -7,15 +7,11 @@ import {
   serializeVoxlDocumentV2,
   parseVoxlBinaryV2,
 } from '../codec-v2';
-import {
-  buildVoxlDocumentV1,
-  parseVoxlDocument,
-  serializeVoxlDocument,
-  parseVoxlAuto,
-} from '../codec';
-import type { BuildVoxlDocumentInput, VoxlModelRuntimeLike } from '../types';
+import { parseVoxlAuto } from '../codec';
+import type { BuildVoxlDocumentInput, VoxlModelEntry, VoxlModelRuntimeLike } from '../types';
 import type { DragonfruitImportFormat } from '@/supports/types';
 import { installFakeWindow } from '@/utils/__tests__/helpers/fakeWindow';
+import { readVoxlChunkText } from './voxlTestSupport';
 
 const EMPTY_SUPPORTS: DragonfruitImportFormat = {
   version: 1,
@@ -49,32 +45,6 @@ function createTestModel(
     linkGroupId,
   };
 }
-
-test('VOXL V1 serialization and parsing preserves isSupportGeometry and linkGroupId', () => {
-  const model1 = createTestModel('m1', true, 'group-123');
-  const model2 = createTestModel('m2', false, undefined);
-
-  const input: BuildVoxlDocumentInput = {
-    models: [model1, model2],
-    activeModelId: 'm1',
-    selectedModelIds: ['m1'],
-    supports: EMPTY_SUPPORTS,
-  };
-
-  const doc = buildVoxlDocumentV1(input);
-  assert.equal(doc.models[0].isSupportGeometry, true);
-  assert.equal(doc.models[0].linkGroupId, 'group-123');
-  assert.equal(doc.models[1].isSupportGeometry, false);
-  assert.equal(doc.models[1].linkGroupId, undefined);
-
-  const serializedJson = serializeVoxlDocument(doc, false, { compression: 'none' });
-  const parsed = parseVoxlDocument(serializedJson);
-
-  assert.equal(parsed.models[0].isSupportGeometry, true);
-  assert.equal(parsed.models[0].linkGroupId, 'group-123');
-  assert.equal(parsed.models[1].isSupportGeometry, false);
-  assert.equal(parsed.models[1].linkGroupId, undefined);
-});
 
 test('VOXL V2 binary round-trip persistence preserves isSupportGeometry and linkGroupId', async () => {
   const model1 = createTestModel('supp_mesh_1', true, 'link-grp-abc');

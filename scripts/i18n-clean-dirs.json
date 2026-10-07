@@ -8,6 +8,7 @@
             "src/components/gizmo/move",
             "src/components/gizmo/scale",
             "src/components/modals/AaSupportWarningModal.tsx",
+            "src/components/modals/ObsoleteVoxlVersionModal.tsx",
             "src/components/monitoring",
             "src/components/organisms/NotificationStack.tsx",
             "src/components/organisms/scene",

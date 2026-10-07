@@ -4,6 +4,7 @@ import { BlockingOverlay, Button, IconButton, IconChip } from '@/components/atom
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { ModelSupportsModal } from '@/components/modals/ModelSupportsModal';
+import { ObsoleteVoxlVersionModal } from '@/components/modals/ObsoleteVoxlVersionModal';
 import { SceneAutosaveRecoveryModal } from '@/components/scene/SceneAutosaveRecoveryModal';
 import { ZipFilePickerModal } from '@/components/modals/ZipFilePickerModal';
 import { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
@@ -291,6 +292,15 @@ export function SceneFileModals({
             </div>
           </div>
         </div>
+      )}
+
+      {scene.obsoleteVoxlScene && (
+        <ObsoleteVoxlVersionModal
+          isOpen
+          fileName={scene.obsoleteVoxlScene.fileName}
+          detected={scene.obsoleteVoxlScene.detected}
+          onDismiss={scene.dismissObsoleteVoxlScene}
+        />
       )}
 
       {autosaveRecovery && (

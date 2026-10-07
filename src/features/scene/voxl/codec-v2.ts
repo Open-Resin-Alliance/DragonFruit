@@ -1,15 +1,19 @@
 /**
- * VOXL V2 Binary Container Codec
+ * VOXL V3 Binary Container Codec
  *
  * Binary chunk-based container that eliminates base64 overhead for mesh data
- * and enables independent compression per section.
+ * and enables independent compression per section. This module is the current
+ * (V3-generation) writer; it reads both the V2 and V3 compat floors, and the
+ * `version` field it writes is the floor, not the generation — see the
+ * `VOXL_V2`/`VOXL_V3` doc block below.
  *
  * Layout:
  *   [16-byte header] [chunk directory] [chunk data…]
  *
  * Header (16 bytes):
  *   0..3   magic     "VOXL" (ASCII: 0x56 0x4F 0x58 0x4C)
- *   4..5   version   uint16 LE (2)
+ *   4..5   version   uint16 LE (2; 3 when MESH chunks are shared — the
+ *                     compat floor, i.e. the minimum reader generation)
  *   6..7   flags     uint16 LE (reserved, 0)
  *   8..11  count     uint32 LE (number of chunks)
  *   12..15 reserved  uint32 LE (0)
@@ -34,8 +38,6 @@ import {
   type VoxlMeta,
   type VoxlModelEntry,
   type VoxlSceneState,
-  type VoxlCompressionRef,
-  type VoxlCompressedDocumentEnvelopeV1,
   type PrecompressedChunk,
 } from './types';
 import type { DragonfruitImportFormat } from '@/supports/types';
@@ -57,23 +59,39 @@ const compressAsync = (data: Uint8Array, level: ZlibCompressionLevel): Promise<U
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-export const VOXL_V2 = 2;
-export const VOXL_V2_SEMANTIC_REVISION = 2.2;
 /**
- * Semantic revision reported for a binary V2 file that has NO modifier-snapshot
- * chunks — either a genuinely pre-2.2 ("2.1") file with inline base64, or a
- * 2.2-capable write of a scene that had no snapshots to chunk (byte-identical).
+ * The container `version` header field is the *compat floor* — the minimum
+ * reader generation that can interpret the file — not the writer's generation.
+ * A generation-N reader understands everything at or below N.
+ *
+ * - `VOXL_V2` — a V2-generation reader suffices (no shared MESH chunks).
+ * - `VOXL_V3` — a V3-generation reader is required: identical-geometry MESH
+ *   dedup removed at least one chunk, so duplicate models point at an owner
+ *   chunk via `meshRef.chunkIndex`. A V2 reader maps MESH chunks 1:1 to model
+ *   index and would silently drop the duplicates, so the floor is raised.
+ *   All-unique scenes keep writing `VOXL_V2` and stay old-readable.
+ *
+ * The authoring revision below is a separate axis; see
+ * `docs/dev/voxl-format-spec.md`.
+ */
+export const VOXL_V2 = 2;
+export const VOXL_V3 = 3;
+
+/**
+ * Authoring revision at which modifier position snapshots moved out of the
+ * `MODL` JSON into raw `HSRC`/`CAVT`/`PSRC` chunks. Additive — older readers
+ * ignore unknown chunks and still open the file without the snapshots — so it
+ * did not raise the container floor. Reported as `ParsedVoxlResult.sourceVersion`
+ * when a file actually carries those chunks.
+ */
+export const VOXL_V3_SEMANTIC_REVISION = 3.1;
+/**
+ * Revision reported for a binary file with NO modifier-snapshot chunks —
+ * either a genuinely older ("2.1") file with inline base64, or a current write
+ * of a scene that had no snapshots to chunk (byte-identical to that layout).
  * Save-time format preservation treats such files as "inline".
  */
 export const VOXL_V2_INLINE_REVISION = 2.1;
-/**
- * Container version written when identical-geometry MESH chunk dedup removed
- * at least one chunk (duplicate models share one chunk via meshRef.chunkIndex).
- * Bumped from 2 so older readers — which map MESH chunks 1:1 to model index —
- * fail the strict version check cleanly instead of silently dropping the
- * duplicate models. All-unique scenes keep writing V2 and stay old-readable.
- */
-export const VOXL_V3 = 3;
 
 const HEADER_SIZE = 16;
 const DIR_ENTRY_SIZE = 20;
@@ -92,7 +110,7 @@ const CHUNK_MESH = 'MESH';
 export const CHUNK_ORIG = 'ORIG';
 const CHUNK_SUPP = 'SUPP';
 const CHUNK_EXTD = 'EXTD';
-// VOXL 2.2 modifier-snapshot chunks: the large Float32 position snapshots that
+// VOXL 3.1 modifier-snapshot chunks: the large Float32 position snapshots that
 // hollowing / hole-punch bakes into meshModifiers, moved OUT of the MODL JSON
 // (where they were base64 strings that summed past V8's ~512 MiB single-string
 // ceiling) and into raw-bytes chunks indexed by owning model, like MESH.
@@ -279,9 +297,9 @@ export interface VoxlSerializeOptions {
   originalMeshBytes?: Map<number, Uint8Array>;
   embedOriginalMesh?: boolean;
   /**
-   * VOXL 2.2 modifier-snapshot chunking. `true` (default) moves the large
+   * VOXL 3.1 modifier-snapshot chunking. `true` (default) moves the large
    * hollow/hole position snapshots out of MODL into HSRC/CAVT/PSRC chunks.
-   * `false` keeps them inline as base64 (the pre-2.2 = "2.1" layout), used by
+   * `false` keeps them inline as base64 (the pre-3.1 = "2.1" layout), used by
    * autosave to preserve the loaded file's format; the caller escalates to
    * `true` if the inline write throws (e.g. the MODL string ceiling). Scenes
    * without modifier snapshots serialize identically either way.
@@ -449,7 +467,7 @@ async function prepareVoxlDocumentV2(
   }
   const dedupRemovedChunks = chunkCandidateCount > dedupedChunkIndices.length;
 
-  // ── Modifier-snapshot chunks (V2.2): HSRC / CAVT / PSRC ────────────────
+  // ── Modifier-snapshot chunks (V3.1): HSRC / CAVT / PSRC ────────────────
   // The hollowing/hole-punch bake stores three full-mesh position snapshots as
   // base64 inside meshModifiers. Summed across models these blow past V8's
   // ~512 MiB single-string ceiling when JSON.stringify(models) concatenates
@@ -473,7 +491,7 @@ async function prepareVoxlDocumentV2(
   const holeSourceOwner = new Map<string, number>();
 
   // Skipped entirely when chunkModifierSnapshots is false: the base64 blobs stay
-  // inline in the MODL entries (pre-2.2 "2.1" layout) and no HSRC/CAVT/PSRC
+  // inline in the MODL entries (pre-3.1 "2.1" layout) and no HSRC/CAVT/PSRC
   // chunk is emitted. Autosave uses this to preserve an old file's format.
   for (let i = 0; chunkModifierSnapshots && i < input.models.length; i += 1) {
     const mm = input.models[i].meshModifiers;
@@ -646,7 +664,7 @@ async function prepareVoxlDocumentV2(
     }
   }
 
-  // V2.2 modifier-snapshot chunks (owners only; duplicates were pointer-linked
+  // V3.1 modifier-snapshot chunks (owners only; duplicates were pointer-linked
   // above). Insertion order is deterministic (models ascending, HSRC/CAVT/PSRC
   // per model), so both writers stay byte-identical. The base64 decode is
   // deferred via `rawThunk` so a cache hit (the common transform-edit case)
@@ -1139,7 +1157,7 @@ export function parseVoxlBinaryV2(data: Uint8Array): ParsedVoxlResult {
     }
   }
 
-  // ── Re-attach V2.2 modifier-snapshot chunks (HSRC/CAVT/PSRC) ──────────
+  // ── Re-attach V3.1 modifier-snapshot chunks (HSRC/CAVT/PSRC) ──────────
   // The writer moved these Float32 position snapshots out of the MODL JSON into
   // raw-bytes chunks (§ CHUNK_HSRC). A snapshot lives in a chunk when its
   // *PositionCount is non-zero but the matching *Base64 is absent. Resolve the
@@ -1183,10 +1201,10 @@ export function parseVoxlBinaryV2(data: Uint8Array): ParsedVoxlResult {
     delete mm.holePunchSourceChunkIndex;
   }
 
-  // A file is 2.2 iff it actually carries modifier-snapshot chunks; otherwise it
-  // is the inline ("2.1") layout — including 2.2-capable writes of scenes that
+  // A file is 3.1 iff it actually carries modifier-snapshot chunks; otherwise it
+  // is the inline ("2.1") layout — including 3.1-capable writes of scenes that
   // simply had no snapshots to chunk (byte-identical either way). Save-time
-  // format preservation keys off this: a 2.2 file must never be autosaved back
+  // format preservation keys off this: a 3.1 file must never be autosaved back
   // to inline.
   const hasModifierChunks = entries.some(
     (e) => e.type === CHUNK_HSRC || e.type === CHUNK_CAVT || e.type === CHUNK_PSRC,
@@ -1209,7 +1227,7 @@ export function parseVoxlBinaryV2(data: Uint8Array): ParsedVoxlResult {
     meshBytes: meshBytesMap,
     ...(lazyOriginalMeshBytesMap ? { originalMeshBytes: lazyOriginalMeshBytesMap } : {}),
     ...(originalMeshChunksMap.size > 0 ? { originalMeshChunks: originalMeshChunksMap } : {}),
-    sourceVersion: hasModifierChunks ? VOXL_V2_SEMANTIC_REVISION : VOXL_V2_INLINE_REVISION,
+    sourceVersion: hasModifierChunks ? VOXL_V3_SEMANTIC_REVISION : VOXL_V2_INLINE_REVISION,
   };
 }
 

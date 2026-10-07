@@ -5,7 +5,7 @@ import { refineCoarseFaces } from '@/utils/tauriMeshBridge';
 import { loadMeshGeometry, load3mfGeometryMergedWithSplitData, processGeometry, type GeometryWithBounds, type ProcessGeometryOptions } from '@/hooks/useStlGeometry';
 import type { MeshHealthReport, MeshAnalysisJson } from '@/utils/meshRepair';
 import { computeFlatteningPlanes } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
-import { isVoxlBinaryV2, meshChunkStore, parseVoxlBinaryV2, parseVoxlDocument, readSidecarFileBytes, resolveOriginalRefSidecar, type VoxlDocumentV1, type VoxlMeshRef, type PrecompressedChunk } from '@/features/scene/voxl';
+import { detectObsoleteVoxlVersion, isVoxlBinaryV2, meshChunkStore, parseVoxlBinaryV2, readSidecarFileBytes, resolveOriginalRefSidecar, VoxlObsoleteVersionError, type VoxlDocumentV1, type VoxlMeshRef } from '@/features/scene/voxl';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
 import { getSnapshot, loadFromImportFormat, mergeFromImportFormat, reassignAllSupportModelIds, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
@@ -648,74 +648,6 @@ function writeRecentOpenedFilesToLocalStorage(entries: RecentOpenedFileEntry[]):
   }
 }
 
-function decodeBase64ToUint8Array(base64: string): Uint8Array {
-  if (typeof atob !== 'function') {
-    throw new Error('Base64 decoding is unavailable in this environment.');
-  }
-
-  const normalized = base64.replace(/\s+/g, '');
-  const binary = atob(normalized);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
-
-function decodeRleU8(encoded: Uint8Array, expectedSize: number): Uint8Array {
-  if (!Number.isFinite(expectedSize) || expectedSize <= 0 || !Number.isInteger(expectedSize)) {
-    throw new Error('Invalid VOXL RLE expected size.');
-  }
-
-  if (encoded.length % 2 !== 0) {
-    throw new Error('Invalid VOXL RLE payload: expected count/value byte pairs.');
-  }
-
-  const out = new Uint8Array(expectedSize);
-  let outIndex = 0;
-
-  for (let i = 0; i < encoded.length; i += 2) {
-    const count = encoded[i];
-    const value = encoded[i + 1];
-    if (count <= 0) {
-      throw new Error('Invalid VOXL RLE payload: zero-length run.');
-    }
-
-    const next = outIndex + count;
-    if (next > expectedSize) {
-      throw new Error('Invalid VOXL RLE payload: run length exceeds expected output size.');
-    }
-
-    out.fill(value, outIndex, next);
-    outIndex = next;
-  }
-
-  if (outIndex !== expectedSize) {
-    throw new Error('Invalid VOXL RLE payload: decoded size mismatch.');
-  }
-
-  return out;
-}
-
-function decodeVoxlEmbeddedMeshBytes(meshRef: VoxlMeshRef): Uint8Array {
-  if (!meshRef.dataBase64) {
-    throw new Error('VOXL embedded mesh is missing dataBase64.');
-  }
-
-  const encoded = decodeBase64ToUint8Array(meshRef.dataBase64);
-  const dataEncoding = meshRef.dataEncoding ?? 'base64-raw';
-
-  if (dataEncoding === 'base64-raw') {
-    return encoded;
-  }
-
-  if (dataEncoding === 'base64-rle-u8') {
-    return decodeRleU8(encoded, meshRef.uncompressedSizeBytes ?? 0);
-  }
-
-  throw new Error(`Unsupported VOXL embedded mesh encoding: ${String(dataEncoding)}`);
-}
-
 function sanitizeImportedModelDisplayName(rawName: string): string {
   const trimmed = rawName.trim();
   if (!trimmed) return 'model';
@@ -1029,6 +961,12 @@ export type MeshRepairConfirmPrompt = {
   analysis: MeshAnalysisJson;
 };
 
+/** A scene refused because it was saved by a VOXL generation we no longer read. */
+export type ObsoleteVoxlScenePrompt = {
+  fileName: string;
+  detected: 'v1-json' | 'v1-binary';
+};
+
 type MeshRepairConfirmChoice = 'repair' | 'load_as_is' | 'cancel_import';
 
 type ModelClipboardEntry = {
@@ -1226,9 +1164,9 @@ export function useSceneCollectionManager(options?: {
   const modelsRef = useRef<LoadedModel[]>([]);
   const activeModelIdRef = useRef<string | null>(null);
   const selectedModelIdsRef = useRef<string[]>([]);
-  // Whether the most recently loaded .voxl was the chunked 2.2 layout. Read by
+  // Whether the most recently loaded .voxl was the chunked 3.1 layout. Read by
   // the import/export manager right after a load to seed the scene's save-format
-  // so autosave preserves an old file's format without ever downgrading a 2.2
+  // so autosave preserves an old file's format without ever downgrading a 3.1
   // one. Defaults to true (newest) for non-voxl / fresh scenes.
   const lastLoadedVoxlFormatChunkedRef = useRef<boolean>(true);
   modelsRef.current = models;
@@ -1256,6 +1194,7 @@ export function useSceneCollectionManager(options?: {
   });
   const [sceneImportReport, setSceneImportReport] = useState<SceneImportReport | null>(null);
   const [sceneImportPlacementPrompt, setSceneImportPlacementPrompt] = useState<SceneImportPlacementPrompt | null>(null);
+  const [obsoleteVoxlScene, setObsoleteVoxlScene] = useState<ObsoleteVoxlScenePrompt | null>(null);
   const [meshRepairConfirmPrompt, setMeshRepairConfirmPrompt] = useState<MeshRepairConfirmPrompt | null>(null);
   const [meshRepairReports, setMeshRepairReports] = useState<MeshRepairReportEntry[]>([]);
   const [meshRepairReportPresentation, setMeshRepairReportPresentation] = useState<MeshRepairReportPresentation>('default');
@@ -1326,6 +1265,10 @@ export function useSceneCollectionManager(options?: {
   const dismissMeshRepairReports = useCallback(() => {
     setMeshRepairReports([]);
     setMeshRepairReportPresentation('default');
+  }, []);
+
+  const dismissObsoleteVoxlScene = useCallback(() => {
+    setObsoleteVoxlScene(null);
   }, []);
 
   const openPendingMeshRepairReports = useCallback(() => {
@@ -4981,33 +4924,28 @@ export function useSceneCollectionManager(options?: {
 
     try {
       const autoRepairScenes = shouldAutoRepairSceneImports(options);
-      // Peek at the first 6 bytes to detect format.
-      // V2 binary starts with "VOXL" magic (0x56 0x4F 0x58 0x4C) + uint16 version >= 2.
-      // V1 JSON starts with '{' (0x7B).
-      // For V1, we use file.text() rather than TextDecoder.decode(arrayBuffer) because
-      // some WebView environments (e.g. Tauri/WebView2) truncate TextDecoder output at ~4 MB
-      // for large single-buffer decodes, while the native file.text() path is unaffected.
+      // Peek at the first 6 bytes to detect the container. The binary container
+      // starts with "VOXL" magic (0x56 0x4F 0x58 0x4C) + uint16 version >= 2;
+      // anything else is either an obsolete V1 scene or not a VOXL file at all.
       const headerBytes = new Uint8Array(await file.slice(0, 6).arrayBuffer());
       const isV2 = isVoxlBinaryV2(headerBytes);
 
-      let document: VoxlDocumentV1;
-      let resolvedMeshBytes: Map<string, Uint8Array>;
-      let resolvedOriginalMeshBytes: Map<string, Uint8Array> | undefined;
-      let originalMeshChunks: Map<string, PrecompressedChunk> | undefined;
-
-      if (isV2) {
-        const r = parseVoxlBinaryV2(new Uint8Array(await file.arrayBuffer()));
-        document = r.document;
-        resolvedMeshBytes = r.meshBytes;
-        resolvedOriginalMeshBytes = r.originalMeshBytes;
-        originalMeshChunks = r.originalMeshChunks;
-        // sourceVersion is 2.2 only when the file actually carries modifier
-        // chunks; anything lower is treated as inline for format preservation.
-        lastLoadedVoxlFormatChunkedRef.current = r.sourceVersion >= 2.2;
-      } else {
-        document = parseVoxlDocument(await file.text());
-        resolvedMeshBytes = new Map();
+      if (!isV2) {
+        const obsolete = detectObsoleteVoxlVersion(headerBytes);
+        if (obsolete) {
+          throw new VoxlObsoleteVersionError(obsolete);
+        }
+        throw new Error('Not a VOXL file: the VOXL binary header is missing.');
       }
+
+      const parsed = parseVoxlBinaryV2(new Uint8Array(await file.arrayBuffer()));
+      const document: VoxlDocumentV1 = parsed.document;
+      const resolvedMeshBytes: Map<string, Uint8Array> = parsed.meshBytes;
+      const resolvedOriginalMeshBytes = parsed.originalMeshBytes;
+      const originalMeshChunks = parsed.originalMeshChunks;
+      // sourceVersion is 3.1 only when the file actually carries modifier
+      // chunks; anything lower is treated as inline for format preservation.
+      lastLoadedVoxlFormatChunkedRef.current = parsed.sourceVersion >= 3.1;
 
       const existingIds = new Set(modelsRef.current.map((model) => model.id));
       const idMap = new Map<string, string>();
@@ -5041,22 +4979,18 @@ export function useSceneCollectionManager(options?: {
           progress: null,
         });
 
-        if (meshRef.mode !== 'embedded-file' && meshRef.mode !== 'embedded-chunk') {
+        if (meshRef.mode !== 'embedded-chunk') {
           console.warn(`[SceneCollection] Skipping VOXL model "${model.name}": mesh mode \"${meshRef.mode}\" is not importable without embedded mesh data.`);
           skippedModels += 1;
           continue;
         }
 
-        // V2: mesh bytes pre-decoded; V1: fall back to base64 decode from meshRef.dataBase64
-        let meshDataBytes: Uint8Array | undefined = resolvedMeshBytes.get(model.id);
-
+        // Mesh bytes arrive pre-decoded from the container's MESH chunks.
+        const meshDataBytes = resolvedMeshBytes.get(model.id);
         if (!meshDataBytes) {
-          if (!meshRef.dataBase64) {
-            console.warn(`[SceneCollection] Skipping VOXL model "${model.name}": missing embedded mesh payload.`);
-            skippedModels += 1;
-            continue;
-          }
-          meshDataBytes = decodeVoxlEmbeddedMeshBytes(meshRef);
+          console.warn(`[SceneCollection] Skipping VOXL model "${model.name}": missing embedded mesh payload.`);
+          skippedModels += 1;
+          continue;
         }
 
         try {
@@ -5091,7 +5025,7 @@ export function useSceneCollectionManager(options?: {
 
             const embeddedName = meshRef.fileName?.trim() || `${model.name || 'model'}.stl`;
 
-            // Baked classification (VOXL V2.4): the file carries the model/support
+            // Baked classification (VOXL V3.3): the file carries the model/support
             // split this mesh was saved with, so skip the classifier instead of
             // re-deriving it. Auto-repair supersedes it — a repair pass produces
             // its own report for the geometry it rebuilt.
@@ -5329,7 +5263,7 @@ export function useSceneCollectionManager(options?: {
       }
 
       if (importedModels.length === 0) {
-        console.warn('[SceneCollection] VOXL import completed without importable meshes (expected embedded-file meshes).');
+        console.warn('[SceneCollection] VOXL import completed without importable meshes (expected embedded-chunk meshes).');
         if (!options?.suppressReport) {
           emitSceneImportReport('VOXL import finished with no importable meshes.', 'warning');
         }
@@ -5338,6 +5272,16 @@ export function useSceneCollectionManager(options?: {
       return true;
     } catch (error) {
       console.error('[SceneCollection] VOXL import failed:', error);
+      if (error instanceof VoxlObsoleteVersionError) {
+        // A V1 scene is refused outright: no shipped DragonFruit ever wrote one
+        // (the first release already wrote the binary container), so this is
+        // explained rather than reported as a parse failure.
+        setObsoleteVoxlScene({ fileName: file.name, detected: error.detected });
+        if (!options?.suppressReport) {
+          emitSceneImportReport(`Could not open ${file.name}: unsupported VOXL version.`, 'warning');
+        }
+        return false;
+      }
       const message = error instanceof Error ? error.message : String(error);
       if (!options?.suppressReport) {
         emitSceneImportReport(`VOXL import failed: ${message}`, 'error');
@@ -5869,6 +5813,8 @@ export function useSceneCollectionManager(options?: {
     dismissMeshRepairReports,
     sceneImportPlacementPrompt,
     resolveSceneImportPlacementPrompt,
+    obsoleteVoxlScene,
+    dismissObsoleteVoxlScene,
     meshRepairConfirmPrompt,
     resolveMeshRepairConfirmPrompt,
     repairModelInPlace,

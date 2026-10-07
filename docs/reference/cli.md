@@ -30,7 +30,7 @@ Every command produces JSON output (`--json`) and reports timing metrics.
 ```
 
 **Shared file formats** — both CLIs and the GUI operate on the same data:
-- `.voxl` — scene + support state (VOXL V1 JSON, optional zlib compression)
+- `.voxl` — scene + support state (VOXL V2 binary container)
 - `positions.bin` — flat `f32` triangle vertices `[x,y,z,...]`
 - `.nanodlp` — sliced layer archive (ZIP of PNGs)
 
@@ -185,7 +185,7 @@ and prints `[command] Xms` to stderr.
 
 | Command | Description | Wraps |
 |---------|-------------|-------|
-| `scene create --o <scene.voxl>` | Create empty scene | `voxl/codec::buildVoxlDocumentV1` |
+| `scene create --o <scene.voxl>` | Create empty scene | `voxl/codec-v2::serializeVoxlDocumentV2` |
 | `scene add-model <voxl> --mesh <stl> [--name N] [--position x,y,z]` | Add model | VOXL model entry |
 | `scene remove-model <voxl> --id <id>` | Remove model (cascades supports) | VOXL mutation |
 | `scene list-models <voxl> [--json]` | List models with transforms | VOXL read |
@@ -193,7 +193,7 @@ and prints `[command] Xms` to stderr.
 | `scene duplicate <voxl> --id <id> [--count N] [--offset x,y,z]` | Duplicate model | VOXL mutation |
 | `scene arrange <voxl> --mesh-dir <dir> [--spacing 2] [--build-width-mm 218] [--build-depth-mm 122] [--anchor center]` | Auto-arrange on plate | `highPrecisionArrange` (SAT nesting) |
 | `scene slice <voxl> --o <out> --mesh-dir <dir> [--printer <profile.json>] [--material <material.json>] [--aa-preset P] [--aa-settings <aa.json>] [--lut-curves <curves.json>]` | Merge + slice via Rust, with the job the app would build | Loads STLs → applies transforms → `assembleSliceJob` → `dragonfruit-cli slice run` |
-| `scene load <voxl> [--json]` | Dump full scene | `voxl/codec::parseVoxlDocument` |
+| `scene load <voxl> [--json]` | Dump full scene | `voxl/codec::parseVoxlAuto` |
 
 **`scene slice` builds the same job as the app.** With `--printer` (an official
 preset, a custom profile, a list of either with `--printer-id`, or an

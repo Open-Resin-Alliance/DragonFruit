@@ -44,11 +44,11 @@ export interface ExportSceneContext {
 export interface ExportSceneSaveTarget {
   nativePath?: string | null;
   /**
-   * VOXL 2.2 modifier-snapshot chunking. Omitted/`true` writes the newest
-   * (chunked 2.2) layout — the manual-save default. Autosave passes `false` to
-   * preserve a pre-2.2 file's inline layout, and escalates to `true` itself if
+   * VOXL 3.1 modifier-snapshot chunking. Omitted/`true` writes the newest
+   * (chunked 3.1) layout — the manual-save default. Autosave passes `false` to
+   * preserve a pre-3.1 file's inline layout, and escalates to `true` itself if
    * that write throws (see `useSceneAutosave`). Never write `false` for a file
-   * that is already 2.2 — that would downgrade it.
+   * that is already 3.1 — that would downgrade it.
    */
   chunkModifierSnapshots?: boolean;
   /**
@@ -289,63 +289,6 @@ export class ExportManager {
   /** Backstop for paths that drop models without going through `deleteModels`. */
   static retainModelChunks(modelIds: Iterable<string>): void {
     meshChunkStore.retainOnly(modelIds);
-  }
-
-  private static encodeRleU8(input: Uint8Array): Uint8Array {
-    if (input.length === 0) return new Uint8Array();
-
-    const output: number[] = [];
-    let runValue = input[0];
-    let runCount = 1;
-
-    for (let i = 1; i < input.length; i += 1) {
-      const value = input[i];
-      if (value === runValue && runCount < 255) {
-        runCount += 1;
-      } else {
-        output.push(runCount, runValue);
-        runValue = value;
-        runCount = 1;
-      }
-    }
-
-    output.push(runCount, runValue);
-    return new Uint8Array(output);
-  }
-
-  private static async sha256Hex(bytes: Uint8Array): Promise<string> {
-    if (!globalThis.crypto?.subtle) {
-      throw new Error('SHA-256 hashing is unavailable in this environment.');
-    }
-
-    const digestInput = new ArrayBuffer(bytes.byteLength);
-    new Uint8Array(digestInput).set(bytes);
-    const digest = await globalThis.crypto.subtle.digest('SHA-256', digestInput);
-    const digestBytes = new Uint8Array(digest);
-    let hex = '';
-    for (let i = 0; i < digestBytes.length; i += 1) {
-      hex += digestBytes[i].toString(16).padStart(2, '0');
-    }
-    return hex;
-  }
-
-  private static async buildEmbeddedMeshPayload(model: LoadedModel): Promise<{
-    dataBase64: string;
-    dataEncoding: 'base64-raw' | 'base64-rle-u8';
-    uncompressedSizeBytes: number;
-    sha256: string;
-  }> {
-    const rawBytes = this.exportModelAsEmbeddedBinaryStlBytes(model);
-    const rleBytes = this.encodeRleU8(rawBytes);
-    const useRle = rleBytes.length > 0 && rleBytes.length < rawBytes.length;
-    const payloadBytes = useRle ? rleBytes : rawBytes;
-
-    return {
-      dataBase64: this.toBase64(payloadBytes),
-      dataEncoding: useRle ? 'base64-rle-u8' : 'base64-raw',
-      uncompressedSizeBytes: rawBytes.length,
-      sha256: await this.sha256Hex(rawBytes),
-    };
   }
 
   /**
@@ -1241,7 +1184,7 @@ export class ExportManager {
               if (resolvedChunk.stale) staleModelIds.add(model.id);
             }
 
-            // Baked mesh classification (VOXL V2.4): the model/support split the
+            // Baked mesh classification (VOXL V3.3): the model/support split the
             // session already knows, persisted so a reload does not re-run the
             // classifier over the same triangles. Omitted for a stale chunk —
             // those bytes are one bake behind the geometry the report describes,
@@ -1366,10 +1309,10 @@ export class ExportManager {
         ].join('|')
       : undefined;
 
-    // `chunkModifierSnapshots` selects the VOXL 2.2 layout (chunked, the default
-    // and the manual-save path) or the pre-2.2 inline layout (autosave preserving
+    // `chunkModifierSnapshots` selects the VOXL 3.1 layout (chunked, the default
+    // and the manual-save path) or the pre-3.1 inline layout (autosave preserving
     // an old file's format). Autosave owns the escalate-on-failure decision so it
-    // can also latch the scene to 2.2 — see `useSceneAutosave`.
+    // can also latch the scene to 3.1 — see `useSceneAutosave`.
     const serializeOptions = {
       precompressed: precompressedMap,
       precompressedOriginal: precompressedOriginalMap,

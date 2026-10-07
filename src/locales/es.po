@@ -165,6 +165,11 @@ msgstr "< 1 min"
 msgid "<0>{excludedVisibleModelCount}</0> visible models outside the build volume will be excluded from this slice."
 msgstr "<0>{excludedVisibleModelCount}</0> modelos visibles fuera del volumen de impresión quedarán fuera de este laminado."
 
+#. {fileName} is the scene file's name; it is shown in bold.
+#: src/components/modals/ObsoleteVoxlVersionModal.tsx:54
+msgid "<0>{fileName}</0> was saved in the VOXL V1 format, which this version no longer reads."
+msgstr "<0>{fileName}</0> se guardó en el formato VOXL V1, que esta versión ya no puede leer."
+
 #. {modelName} is the imported model's file name; it is shown in bold.
 #: src/components/modals/AaSupportWarningModal.tsx:53
 msgid "<0>{modelName}</0> was imported as an STL file. Our analysis could not determine whether this model contains support geometry baked into the mesh."
@@ -864,6 +869,10 @@ msgstr "Cámara"
 msgid "Camera view mode: {currentLabel}"
 msgstr "Modo de vista de la cámara: {currentLabel}"
 
+#: src/components/modals/ObsoleteVoxlVersionModal.tsx:35
+msgid "Can't open this scene"
+msgstr "No se puede abrir esta escena"
+
 #: src/app/page.tsx:10961
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:468
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:664
@@ -1098,6 +1107,7 @@ msgid "Close material anti-aliasing settings"
 msgstr "Cerrar los ajustes de antialiasing del material"
 
 #: src/components/modals/AaSupportWarningModal.tsx:34
+#: src/components/modals/ObsoleteVoxlVersionModal.tsx:40
 msgid "Close modal"
 msgstr "Cerrar la ventana"
 
@@ -3653,6 +3663,10 @@ msgstr "Altura de capa sin conexión, en micrómetros"
 msgid "Offset"
 msgstr "Desfase"
 
+#: src/components/modals/ObsoleteVoxlVersionModal.tsx:49
+msgid "OK"
+msgstr "Aceptar"
+
 #. Lowercase on/off marker next to a small toggle in the support settings cards.
 #: src/supports/Settings/components/BaseFlareSettingsCard.tsx:22
 msgid "on"
@@ -4579,6 +4593,10 @@ msgstr "Guarda instantáneas en tu carpeta local de copias y revisa o restaura c
 msgid "Saved"
 msgstr "Guardado"
 
+#: src/components/modals/ObsoleteVoxlVersionModal.tsx:36
+msgid "Saved by an obsolete DragonFruit version"
+msgstr "Guardado con una versión obsoleta de DragonFruit"
+
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:643
 msgid "Saved!"
 msgstr "¡Guardado!"
@@ -5494,6 +5512,14 @@ msgstr "Esta instantánea se borrará del disco para siempre."
 msgid "This cannot be undone."
 msgstr "No se puede deshacer."
 
+#: src/components/modals/ObsoleteVoxlVersionModal.tsx:63
+msgid "This file is a VOXL V1 binary container."
+msgstr "Este archivo es un contenedor binario VOXL V1."
+
+#: src/components/modals/ObsoleteVoxlVersionModal.tsx:61
+msgid "This file is a VOXL V1 JSON scene."
+msgstr "Este archivo es una escena JSON VOXL V1."
+
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:266
 msgid "This is a built-in profile, so its fields are fixed. Duplicate it and edit the copy — custom settings belong in a custom profile."
 msgstr "Es un perfil integrado, así que sus campos son fijos. Duplícalo y edita la copia: los ajustes propios van en un perfil personalizado."
@@ -5550,6 +5576,10 @@ msgstr "Margen de ajuste de la punta"
 #: src/components/controls/autoSupport/AutoSupportRunDiagnostics.tsx:73
 msgid "Tip Ø range"
 msgstr "Rango de Ø de la punta"
+
+#: src/components/modals/ObsoleteVoxlVersionModal.tsx:67
+msgid "To recover it, open the scene in an older version of DragonFruit and save it again — the re-saved scene will open here."
+msgstr "Para recuperarla, abre la escena con una versión anterior de DragonFruit y vuelve a guardarla: la escena guardada de nuevo se abrirá aquí."
 
 #: src/app/page.tsx:2342
 msgid "Toggle curve"
@@ -5715,6 +5745,10 @@ msgstr "Tipo de archivo no compatible"
 #: src/components/layout/EmptySceneState.tsx:747
 msgid "Unsupported format detected."
 msgstr "Formato no compatible."
+
+#: src/components/modals/ObsoleteVoxlVersionModal.tsx:34
+msgid "Unsupported scene version"
+msgstr "Versión de escena no compatible"
 
 #: src/features/updater/UpdateCheckerSection.tsx:140
 msgid "Up to date"

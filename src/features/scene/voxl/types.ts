@@ -9,8 +9,6 @@ export type VoxlUnits = 'mm';
 export type VoxlCoordinateSystem = 'right-handed-z-up';
 
 export type VoxlMeshMode = 'none' | 'external-file' | 'embedded-file' | 'embedded-chunk';
-export type VoxlMeshEncoding = 'base64-raw' | 'base64-rle-u8';
-export type VoxlDocumentCompressionEncoding = 'base64-raw' | 'base64-rle-u8' | 'base64-zlib';
 
 export type VoxlVec3 = {
   x: number;
@@ -28,15 +26,14 @@ export type VoxlMeshRef = {
   mode: VoxlMeshMode;
   fileName?: string;
   mimeType?: string;
-  dataBase64?: string;
-  dataEncoding?: VoxlMeshEncoding;
   uncompressedSizeBytes?: number;
   sha256?: string;
   /**
    * For `embedded-chunk` models: the MESH-chunk ordinal this model's geometry
    * lives in. Present only on DUPLICATE models that share another model's
    * chunk (identical-geometry dedup); absent means "my own model index" (the
-   * legacy 1:1 mapping). Files that use this carry container version 3.
+   * legacy 1:1 mapping). Files that use this carry container version 3 — the
+   * compat floor rises to the reader generation that understands chunk sharing.
    */
   chunkIndex?: number;
 };
@@ -88,7 +85,7 @@ export type VoxlModelEntry = {
   isSupportGeometry?: boolean;
   linkGroupId?: string;
   /**
-   * Baked mesh classification (V2.4): the native classify-only report for the
+   * Baked mesh classification (V3.3): the native classify-only report for the
    * exact triangle order stored in this model's `mesh` payload, so a reader can
    * restore the model/support split without re-running the classifier. Purely
    * additive — a reader that ignores it derives the same split by classifying.
@@ -126,24 +123,6 @@ export type VoxlDocumentV1 = {
   extensions?: Record<string, unknown>;
 };
 
-export type VoxlCompressionRef = {
-  kind: 'document-json-utf8';
-  encoding: VoxlDocumentCompressionEncoding;
-  payloadBase64: string;
-  uncompressedSizeBytes: number;
-};
-
-export type VoxlCompressedDocumentEnvelopeV1 = {
-  magic: typeof VOXL_MAGIC;
-  version: typeof VOXL_VERSION;
-  compression: VoxlCompressionRef;
-};
-
-export type SerializeVoxlOptions = {
-  compression?: 'none' | 'auto' | 'rle-u8' | 'zlib';
-  embedOriginalMesh?: boolean;
-};
-
 export type VoxlModelRuntimeLike = {
   id: string;
   name: string;
@@ -165,7 +144,7 @@ export type VoxlModelRuntimeLike = {
   meshModifiers?: ModelMeshModifiers;
   isSupportGeometry?: boolean;
   linkGroupId?: string;
-  /** See `VoxlModelEntry.classification` (V2.4). */
+  /** See `VoxlModelEntry.classification` (V3.3). */
   classification?: MeshHealthReport;
 };
 
@@ -199,6 +178,6 @@ export type ParsedVoxlResult = {
   originalMeshBytes?: Map<string, Uint8Array>;
   /** Pre-compressed original mesh chunks for lazy decompression. */
   originalMeshChunks?: Map<string, PrecompressedChunk>;
-  /** The VOXL format version that was read (e.g. 1, 2.1). */
+  /** The detected layout revision of a binary file (2.1 inline, 3.1 chunked), or 1 for V1 JSON. */
   sourceVersion: number;
 };

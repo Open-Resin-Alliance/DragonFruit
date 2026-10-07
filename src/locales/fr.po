@@ -165,6 +165,11 @@ msgstr "< 1 min"
 msgid "<0>{excludedVisibleModelCount}</0> visible models outside the build volume will be excluded from this slice."
 msgstr ""
 
+#. {fileName} is the scene file's name; it is shown in bold.
+#: src/components/modals/ObsoleteVoxlVersionModal.tsx:54
+msgid "<0>{fileName}</0> was saved in the VOXL V1 format, which this version no longer reads."
+msgstr ""
+
 #. {modelName} is the imported model's file name; it is shown in bold.
 #: src/components/modals/AaSupportWarningModal.tsx:53
 msgid "<0>{modelName}</0> was imported as an STL file. Our analysis could not determine whether this model contains support geometry baked into the mesh."
@@ -864,6 +869,10 @@ msgstr ""
 msgid "Camera view mode: {currentLabel}"
 msgstr ""
 
+#: src/components/modals/ObsoleteVoxlVersionModal.tsx:35
+msgid "Can't open this scene"
+msgstr ""
+
 #: src/app/page.tsx:10961
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:468
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:664
@@ -1098,6 +1107,7 @@ msgid "Close material anti-aliasing settings"
 msgstr ""
 
 #: src/components/modals/AaSupportWarningModal.tsx:34
+#: src/components/modals/ObsoleteVoxlVersionModal.tsx:40
 msgid "Close modal"
 msgstr ""
 
@@ -3652,6 +3662,10 @@ msgstr ""
 msgid "Offset"
 msgstr ""
 
+#: src/components/modals/ObsoleteVoxlVersionModal.tsx:49
+msgid "OK"
+msgstr ""
+
 #. Lowercase on/off marker next to a small toggle in the support settings cards.
 #: src/supports/Settings/components/BaseFlareSettingsCard.tsx:22
 msgid "on"
@@ -4578,6 +4592,10 @@ msgstr ""
 msgid "Saved"
 msgstr ""
 
+#: src/components/modals/ObsoleteVoxlVersionModal.tsx:36
+msgid "Saved by an obsolete DragonFruit version"
+msgstr ""
+
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:643
 msgid "Saved!"
 msgstr ""
@@ -5493,6 +5511,14 @@ msgstr ""
 msgid "This cannot be undone."
 msgstr ""
 
+#: src/components/modals/ObsoleteVoxlVersionModal.tsx:63
+msgid "This file is a VOXL V1 binary container."
+msgstr ""
+
+#: src/components/modals/ObsoleteVoxlVersionModal.tsx:61
+msgid "This file is a VOXL V1 JSON scene."
+msgstr ""
+
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:266
 msgid "This is a built-in profile, so its fields are fixed. Duplicate it and edit the copy — custom settings belong in a custom profile."
 msgstr ""
@@ -5548,6 +5574,10 @@ msgstr ""
 
 #: src/components/controls/autoSupport/AutoSupportRunDiagnostics.tsx:73
 msgid "Tip Ø range"
+msgstr ""
+
+#: src/components/modals/ObsoleteVoxlVersionModal.tsx:67
+msgid "To recover it, open the scene in an older version of DragonFruit and save it again — the re-saved scene will open here."
 msgstr ""
 
 #: src/app/page.tsx:2342
@@ -5713,6 +5743,10 @@ msgstr "Type de fichier non pris en charge"
 
 #: src/components/layout/EmptySceneState.tsx:747
 msgid "Unsupported format detected."
+msgstr ""
+
+#: src/components/modals/ObsoleteVoxlVersionModal.tsx:34
+msgid "Unsupported scene version"
 msgstr ""
 
 #: src/features/updater/UpdateCheckerSection.tsx:140

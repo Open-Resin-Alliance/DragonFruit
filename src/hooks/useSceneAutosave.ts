@@ -348,16 +348,16 @@ export type UseSceneAutosaveOptions = {
   capMs?: number;
   preferredSavePath?: string | null;
   /**
-   * Whether the current scene's on-disk format is the chunked VOXL 2.2 layout.
-   * Autosave preserves the inline (pre-2.2) layout only when this is `false`; a
-   * scene that is already 2.2 is never written back to inline (no downgrade).
-   * Defaults to `true` (newest) so an unknown/new scene autosaves as 2.2.
+   * Whether the current scene's on-disk format is the chunked VOXL 3.1 layout.
+   * Autosave preserves the inline (pre-3.1) layout only when this is `false`; a
+   * scene that is already 3.1 is never written back to inline (no downgrade).
+   * Defaults to `true` (newest) so an unknown/new scene autosaves as 3.1.
    */
   sceneFormatChunked?: boolean;
   /**
-   * Fired when autosave had to escalate an inline write to the 2.2 chunked
+   * Fired when autosave had to escalate an inline write to the 3.1 chunked
    * layout (the inline write threw). The owner latches the scene to chunked so
-   * later ticks stop re-attempting — and never downgrade — the now-2.2 file.
+   * later ticks stop re-attempting — and never downgrade — the now-3.1 file.
    */
   onSceneFormatUpgraded?: () => void;
 };
@@ -539,10 +539,10 @@ export function useSceneAutosave({
         const paths = await getAutosavePaths(preferredSavePathRef.current);
         const { voxlPath } = paths;
 
-        // Format preservation: keep a pre-2.2 file inline, but never downgrade a
-        // file that is already 2.2. If the inline write throws (typically the
+        // Format preservation: keep a pre-3.1 file inline, but never downgrade a
+        // file that is already 3.1. If the inline write throws (typically the
         // MODL string ceiling on snapshots too large to inline), escalate to the
-        // chunked 2.2 layout and latch the scene there so later ticks stop
+        // chunked 3.1 layout and latch the scene there so later ticks stop
         // re-attempting inline.
         // Incremental-write cache (Phase 1): reuse compressed chunks across
         // ticks and skip the disk write entirely when the document fingerprint
@@ -592,7 +592,7 @@ export function useSceneAutosave({
           try {
             await runExport(false);
           } catch (error) {
-            console.warn('[autosave] Inline VOXL write failed; upgrading scene to the 2.2 chunked layout.', error);
+            console.warn('[autosave] Inline VOXL write failed; upgrading scene to the 3.1 chunked layout.', error);
             onSceneFormatUpgradedRef.current?.();
             sceneFormatChunkedRef.current = true;
             await runExport(true);

@@ -4,16 +4,40 @@ VOXL is DragonFruit’s native scene container. This page captures the core cont
 
 ## Supported generations
 
-| Generation | Container                                                | Status                       |
-| ---------- | -------------------------------------------------------- | ---------------------------- |
-| V1         | UTF-8 JSON (direct document or compressed JSON envelope) | Legacy read support required |
-| V2.0       | Binary chunk container                                   | Historical                   |
-| V2.1       | Binary chunk container                                   | Superseded by V2.2           |
-| V2.2       | Binary chunk container                                   | Superseded by V2.3           |
-| V2.3       | Binary chunk container                                   | Superseded by V2.4           |
-| V2.4       | Binary chunk container                                   | Current read/write target    |
+Two independent numbers describe a VOXL file.
 
-Readers must support V1 and V2.x. Writers should emit V2.4 semantics.
+**Container version** — the `version` field in the binary header — is the
+*compat floor*: the minimum reader generation that can interpret the file. A
+generation-N reader understands everything at or below N. Generation 1 (V1) is
+obsolete and is not read; see the appendix.
+
+| Generation | Container                                       | `version` | Status                                  |
+| ---------- | ----------------------------------------------- | --------- | --------------------------------------- |
+| V2         | Binary chunk container                          | `2`       | Written when no MESH chunks are shared  |
+| V3         | Binary chunk container with MESH chunk sharing  | `3`       | Written when dedup removed a chunk      |
+
+**Authoring revision** — a `major.minor` label, not stored in the file — is the
+feature level of the writer. The major only bumps when a change makes an older
+reader *wrong* on the same input; additive revisions ride along in either
+container generation.
+
+| Revision | Adds                                                                                     | Container version |
+| -------- | ---------------------------------------------------------------------------------------- | ----------------- |
+| 2.0      | Binary chunk container (first V2 write)                                                  | `2`               |
+| 2.1      | `meshModifiers` persistence, inline modifier snapshots, `bakedIntoGeometry`               | `2`               |
+| 3.0      | Identical-geometry MESH chunk dedup — the reader-breaking change that raised the floor    | `3`               |
+| 3.1      | Modifier snapshots moved to `HSRC`/`CAVT`/`PSRC` chunks                                   | `2` or `3`        |
+| 3.2      | Support `typeId`                                                                          | `2` or `3`        |
+| 3.3      | `MODL.classification` — current writer target                                              | `2` or `3`        |
+
+Dedup (3.0) is the only reader-breaking change since V1, so a current writer
+emits `version 2` for a scene with no shared MESH chunks and `version 3` when
+dedup fired. Readers must support both binary floors. Writers should emit 3.3
+semantics.
+
+V1 was only ever written by pre-release builds — the first release already wrote
+the binary container — so a V1 file is refused outright and explained rather than
+parsed. Its shape is kept in the appendix for reference.
 
 ## Core conventions
 
@@ -25,54 +49,14 @@ Readers must support V1 and V2.x. Writers should emit V2.4 semantics.
 
 Format detection by first bytes:
 
-- `{` (`0x7B`) → V1 JSON
-- `VOXL` (`0x56 0x4F 0x58 0x4C`) → V2 binary
+- `VOXL` (`0x56 0x4F 0x58 0x4C`) → binary container (floor 2 or 3)
+- `{` (`0x7B`) → V1 JSON — obsolete, refused with an "unsupported version" prompt
 
 All transform/vector numbers must be finite IEEE 754 values.
 
-## V1 contract (JSON)
+## Binary container contract (V2/V3)
 
-Top-level profiles:
-
-1. direct scene JSON document
-2. compressed envelope containing scene JSON
-
-Required root fields (direct profile):
-
-- `magic = "VOXL"`
-- `version = 1`
-- `meta`
-- `scene`
-- `models`
-- `supports`
-
-Optional root fields:
-
-- `extensions`
-
-V1 mesh object supports:
-
-- `none`
-- `external-file`
-- `embedded-file`
-
-Supported V1 mesh encodings:
-
-- `base64-raw`
-- `base64-rle-u8`
-
-For `base64-rle-u8`, decoded size must equal `uncompressedSizeBytes`.
-
-Compressed envelope profile fields:
-
-- `compression.kind = "document-json-utf8"`
-- `compression.encoding`: `base64-raw`, `base64-rle-u8` or `base64-zlib`
-- `compression.uncompressedSizeBytes`
-- `compression.payloadBase64`
-
-## V2 contract (binary chunks)
-
-V2 layout:
+Binary layout:
 
 - 16-byte file header
 - chunk directory (`chunkCount` entries, 20 bytes each)
@@ -81,7 +65,7 @@ V2 layout:
 Header requirements:
 
 - `magic = VOXL`
-- `version = 2` (container-major; V2.0, V2.1, and V2.2 all use this — semantic revisions do not bump the header.)
+- `version` = the compat floor: `2`, or `3` when identical-geometry MESH dedup shares a chunk (authoring revisions 3.1–3.3 do not raise it)
 - little-endian integer fields
 
 Compression codes:
@@ -103,9 +87,9 @@ Chunk types:
 | `MESH` | raw mesh bytes      |
 | `SUPP` | supports JSON       |
 | `EXTD` | extensions JSON     |
-| `HSRC` | hollowing source-mesh positions — V2.2   |
-| `CAVT` | hollowing cavity-mesh positions — V2.2   |
-| `PSRC` | hole-punch source-mesh positions — V2.2  |
+| `HSRC` | hollowing source-mesh positions — V3.1   |
+| `CAVT` | hollowing cavity-mesh positions — V3.1   |
+| `PSRC` | hole-punch source-mesh positions — V3.1  |
 
 Unknown chunk types may be ignored.
 
@@ -114,13 +98,15 @@ selected, and `plateName` — the user's name for the build plate, shown on the
 plate itself. `plateName` is optional and absent from files written before it
 existed, so readers must treat a missing one as an unnamed plate.
 
-For embedded model meshes, `MODL[i]` maps to `MESH(index = i)`.
+For embedded model meshes, `MODL[i]` maps to `MESH(index = i)` unless the entry
+carries a `chunkIndex` (V3.0 dedup), which names the owning MESH chunk.
 
-### V2.1 semantic revision
+### Revision 2.1
 
-V2.1 is a semantic revision of the V2 binary container; it does **not** change the binary header major version.
+Revision 2.1 is additive over the binary container; it does **not** change the
+binary header (`version` stays `2`).
 
-V2.1 additionally requires:
+Revision 2.1 additionally requires:
 
 - `MODL[*].meshModifiers` persistence for model modifier state.
 - Hollowing source snapshot persistence in the hollowing modifier payload:
@@ -135,16 +121,26 @@ Behavioral requirement:
 
 This is required so hollowing and hole-punch workflows remain re-editable after VOXL round-trips.
 
-### V2.2 semantic revision
+### Revision 3.0 — MESH chunk sharing
 
-V2.2 is a semantic revision of the V2 binary container; like V2.1 it does **not** change the
-binary header major version (`version` stays `2`, or `3` when identical-geometry dedup also
-fired — the two are orthogonal).
+Revision 3.0 is the reader-breaking change that raised the container floor from
+`2` to `3`. When identical-geometry dedup removes at least one MESH chunk, the
+duplicate models point at the owner's chunk via `MODL[*].mesh.chunkIndex`.
+Readers of the V2 generation map MESH chunks 1:1 to model index and would
+silently drop those models, so writers stamp `version = 3` on any file where
+dedup fired and a V2 reader then fails the version check cleanly instead. A
+scene with no shared MESH chunks keeps writing `version = 2` and stays readable
+by V2 readers.
 
-V2.2 moves the large modifier position snapshots **out of the `MODL` JSON and into raw-binary
+### Revision 3.1
+
+Revision 3.1 is additive over the container and does **not** raise the floor
+(`version` stays `2`, or `3` when dedup also fired — the two are orthogonal).
+
+Revision 3.1 moves the large modifier position snapshots **out of the `MODL` JSON and into raw-binary
 chunks**, indexed by model index like `MESH`:
 
-| Modifier field (in-memory / V2.1 JSON) | V2.2 chunk | Dedup pointer (MODL JSON)          |
+| Modifier field (in-memory / 2.1 JSON) | 3.1 chunk | Dedup pointer (MODL JSON)          |
 | -------------------------------------- | ---------- | --------------------------------- |
 | `hollowing.sourcePositionsBase64`      | `HSRC`     | `hollowing.sourceChunkIndex`      |
 | `hollowing.cavityPositionsBase64`      | `CAVT`     | `hollowing.cavityChunkIndex`      |
@@ -169,26 +165,26 @@ Requirements:
   `*ChunkIndex` pointer (see table) in the MODL JSON naming the owner. Dedup is keyed by the
   blob's own content, **independent of `MESH` dedup** — a MESH-duplicate model may still own
   its own `HSRC`/`CAVT`/`PSRC` chunk, and two models sharing `MESH` geometry may still hold
-  distinct modifier snapshots. Deduping these chunks does not bump the header (unlike MESH
-  dedup, which bumps to `3`): they are invisible to older readers.
+  distinct modifier snapshots. Deduping these chunks does not raise the floor
+  (unlike MESH dedup, revision 3.0, which raises it to `3`): they are invisible
+  to older readers.
 
-Detection (no version number is written for the semantic revision): a `MODL` entry whose
+Detection (no version number is written for the authoring revision): a `MODL` entry whose
 `meshModifiers` carries a non-zero `*PositionCount` with the matching `*Base64` **absent**
 means the data lives in the corresponding `HSRC`/`CAVT`/`PSRC` chunk, read at
 `index = *ChunkIndex ?? modelIndex` (owner defaults to its own model index; a duplicate's
 `*ChunkIndex` names the owner).
 
-Backward compatibility (accepted tradeoff): because the header does not bump and unknown chunk
-types may be ignored, older V2/V2.1 readers still open a V2.2 file — baked geometry loads from
-`MESH`, and they silently drop only the hollow/hole re-editability snapshots.
+Backward compatibility (accepted tradeoff): because the floor is not raised and unknown chunk
+types may be ignored, older readers still open a 3.1 file — baked geometry loads from `MESH`,
+and they silently drop only the hollow/hole re-editability snapshots.
 
-### V2.3 semantic revision
+### Revision 3.2
 
-V2.3 is a semantic revision of the V2 binary container; like V2.1 and V2.2 it does **not** change
-the binary header major version (`version` stays `2`, or `3` when identical-geometry dedup also
-fired).
+Revision 3.2 is additive over the container and does **not** raise the floor
+(`version` stays `2`, or `3` when dedup also fired).
 
-V2.3 adds an optional `typeId` to every entity in the supports payload, recording the support
+Revision 3.2 adds an optional `typeId` to every entity in the supports payload, recording the support
 type explicitly rather than leaving it implicit in the array the entity sits in.
 
 Requirements:
@@ -197,21 +193,20 @@ Requirements:
 - Readers must accept a payload without it, deriving each entity's type from the array it
   appears in. `typeId` is never required to interpret a file.
 
-Detection (no version number is written for the semantic revision): an entity carrying `typeId`
-is V2.3; a payload without it is read exactly as before. The revision is additive, so the
-semantic revision a reader reports for a V2 file stays `2.2`, or `2.1` when the file carries
+Detection (no version number is written for the authoring revision): an entity carrying `typeId`
+is 3.2; a payload without it is read exactly as before. The revision is additive, so the
+authoring revision a reader reports for a binary file stays `3.1`, or `2.1` when the file carries
 inline modifier snapshots; `typeId` is not part of that detection.
 
-Backward compatibility: the field is optional and unknown JSON keys are ignored, so a V2.3 file
-opens in a V2/V2.1/V2.2 reader with no loss beyond the explicit type stamp.
+Backward compatibility: the field is optional and unknown JSON keys are ignored, so a 3.2 file
+opens in an older reader with no loss beyond the explicit type stamp.
 
-### V2.4 semantic revision (current)
+### Revision 3.3 (current)
 
-V2.4 is a semantic revision of the V2 binary container; like V2.1–V2.3 it does **not** change the
-binary header major version (`version` stays `2`, or `3` when identical-geometry dedup also
-fired).
+Revision 3.3 is additive over the container and does **not** raise the floor
+(`version` stays `2`, or `3` when dedup also fired).
 
-V2.4 adds an optional `classification` to a `MODL` entry: the native model/support classification
+Revision 3.3 adds an optional `classification` to a `MODL` entry: the native model/support classification
 that ran over the triangle order of that model's `mesh` payload. The value is the classifier's
 report — the `MeshHealthReport` shape (`src/utils/meshRepair.ts`), whose `model_triangle_count`
 is the split boundary: the first N triangles are the model body, the remainder support geometry.
@@ -231,12 +226,12 @@ Requirements:
 - Readers must accept a `MODL` entry without it and classify as before. `classification` is never
   required to interpret a file, and an auto-repair pass on load supersedes it.
 
-Detection (no version number is written for the semantic revision): a `MODL` entry carrying
-`classification` is V2.4. As with V2.3 it does not participate in the reported semantic
-revision, which stays `2.2` or `2.1`.
+Detection (no version number is written for the authoring revision): a `MODL` entry carrying
+`classification` is 3.3. As with 3.2 it does not participate in the reported authoring
+revision, which stays `3.1` or `2.1`.
 
-Backward compatibility: the field is optional and unknown JSON keys are ignored, so a V2.4 file
-opens in an older V2 reader with no loss beyond the classifier having to run again.
+Backward compatibility: the field is optional and unknown JSON keys are ignored, so a 3.3 file
+opens in an older reader with no loss beyond the classifier having to run again.
 
 ## Supports and extensions
 
@@ -248,37 +243,80 @@ Optional arrays:
 
 - `twigs`, `sticks`, `stumps`, `kickstands`
 
-Every entity may carry an optional `typeId` naming its support type (V2.3). A payload without
+Every entity may carry an optional `typeId` naming its support type (3.2). A payload without
 it is read exactly as before, with each entity's type derived from the array it appears in.
 
 Extensions location:
 
-- V1: root `extensions`
-- V2: `EXTD` chunk
+- Binary: `EXTD` chunk
 
 Unknown extension keys should be ignored.
 
 ## Implementation notes
 
-- Export writes V2 by default. Mesh bytes go raw into `MESH` chunks with per-chunk zlib, with no base64, which makes files roughly 60-65% smaller than V1 for typical scenes and faster to write and read.
-- The V2 reader hands callers pre-decoded mesh bytes through `ParsedVoxlResult.meshBytes`.
-- The V1 import path is fully preserved: base64 decoding, RLE and SHA-256 validation.
+- The current writer (`src/features/scene/voxl/codec-v2.ts`) emits 3.3 semantics: raw mesh bytes into `MESH` chunks with per-chunk zlib and no base64, which makes files roughly 60-65% smaller than the old JSON container for typical scenes and faster to write and read. It stamps the container floor `2`, or `3` when dedup shared a MESH chunk.
+- The binary reader hands callers pre-decoded mesh bytes through `ParsedVoxlResult.meshBytes`.
+- A V1 file is refused by `VoxlObsoleteVersionError` (`src/features/scene/voxl/codec.ts`) rather than parsed; the app turns that into the "unsupported version" modal. Detection is `detectObsoleteVoxlVersion`.
 
 ## Validation expectations
 
 Readers should enforce:
 
-1. valid JSON payload parse
+1. valid payload parse
 2. required field presence
 3. finite numeric transform values
-4. V2 chunk bounds correctness
+4. binary chunk bounds correctness
 5. compression/decompression validity
 6. decoded-size checks
 7. optional SHA-256 verification when digest fields are present
 
 ## Related files
 
+- `src/features/scene/voxl/codec.ts`
+- `src/features/scene/voxl/codec-v2.ts`
 - `src/supports/types.ts`
 - `src/features/scene/voxl/types.ts`
 - `src/hooks/useStlGeometry.ts`
 - `docs/dev/formats.md`
+
+## Appendix: V1 (obsolete)
+
+V1 is no longer read by any DragonFruit reader. The shape is kept for
+hand-recovery and so a refused file can be identified; nothing here is a
+supported contract.
+
+A V1 file is UTF-8 JSON with one of two top-level profiles:
+
+1. direct scene JSON document
+2. compressed envelope containing scene JSON
+
+Required root fields (direct profile):
+
+- `magic = "VOXL"`
+- `version = 1`
+- `meta`
+- `scene`
+- `models`
+- `supports`
+
+Optional root fields:
+
+- `extensions`
+
+V1 mesh object modes: `none`, `external-file`, `embedded-file`.
+
+V1 mesh encodings:
+
+- `base64-raw`
+- `base64-rle-u8`
+
+For `base64-rle-u8`, decoded size must equal `uncompressedSizeBytes`.
+
+Compressed envelope profile fields:
+
+- `compression.kind = "document-json-utf8"`
+- `compression.encoding`: `base64-raw`, `base64-rle-u8` or `base64-zlib`
+- `compression.uncompressedSizeBytes`
+- `compression.payloadBase64`
+
+V1 extensions lived at the root `extensions` key.

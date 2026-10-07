@@ -141,7 +141,7 @@ export interface ProcessGeometryOptions {
   skipClassification?: boolean;
   /**
    * Classification the source container already carries for this exact
-   * geometry (VOXL V2.4 model entries). When present the native classify pass
+   * geometry (VOXL V3.3 model entries). When present the native classify pass
    * is skipped — the report describes the triangles as they are, so re-running
    * the classifier over the same bytes could only reproduce it. The report is
    * consumed exactly where a native classify-only result would be, including

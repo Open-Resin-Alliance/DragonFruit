@@ -172,6 +172,8 @@ nav:
           - Island Scan Data Shapes: adr/0039-island-scan-data-shapes.md
           - Linux CEF Runs on X11: adr/0040-linux-cef-windowing-x11.md
           - Flatpak Ships No Thumbnailer: adr/0041-flatpak-thumbnailer.md
+          - VOXL Version Semantics: adr/0042-voxl-version-semantics.md
+          - VOXL V1 Support Removed: adr/0043-voxl-v1-removal.md
           - Organic Cut Surface Redesign: dev/organic-cut-surface-redesign.md
       - Integration and Operations:
           - RTSP Relay: dev/rtsp-relay.md
