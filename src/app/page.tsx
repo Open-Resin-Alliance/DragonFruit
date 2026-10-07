@@ -995,7 +995,8 @@ export default function Home() {
     models: scene.models,
     activeModelId: scene.activeModelId,
     selectedModelIds: scene.selectedModelIds,
-    plateId: scene.plateId,
+    plates: scene.plates,
+    activePlateId: scene.activePlateId,
     plateName: scene.plateName,
     printer: scene.voxlPrinterBundle ?? undefined,
     enabled: sceneAutosaveEnabled,
@@ -4334,7 +4335,8 @@ export default function Home() {
         models: scopeModels,
         activeModelId: scene.activeModelId,
         selectedModelIds: scene.selectedModelIds,
-        plateId: scene.plateId,
+        plates: scene.plates,
+        activePlateId: scene.activePlateId,
         plateName: scene.plateName,
         printer: scene.voxlPrinterBundle ?? undefined,
         exportThumbnailPng: exportThumbnailPng ?? undefined,
@@ -10272,7 +10274,7 @@ export default function Home() {
               void handleAutoArrangeModels('all', undefined, { spacingMm: 1, allowRotateOnZ: true });
             }}
             plateLocked={scene.plateLocked}
-            onTogglePlateLock={() => scene.setPlateLocked((prev) => !prev)}
+            onTogglePlateLock={() => scene.setPlateLocked(!scene.plateLocked)}
             onClearPlate={() => setShowClearPlateConfirm(true)}
             cavityGeometryByModelId={new Map(Array.from(cavityGeometryByModelIdRef.current.entries()).map(([id, entry]) => [id, entry.geometry]))}
             disableRaycast={transformMgr.isTransforming}

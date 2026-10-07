@@ -434,6 +434,7 @@ async function prepareVoxlDocumentV2(
     activeModelId: input.activeModelId,
     selectedModelIds: [...input.selectedModelIds],
     ...(plates && plates.length > 0 ? { plates } : {}),
+    ...(input.activePlateId ? { activePlateId: input.activePlateId } : {}),
     // One plate is still expressible as the older shorthand, so a reader that
     // only knows `plateName` keeps showing the name. With several plates the
     // shorthand cannot say which one it names, so it is left out.
@@ -607,6 +608,10 @@ async function prepareVoxlDocumentV2(
       // Written only when true (Ph0.1 D2): a scene with nothing stale must
       // serialize to exactly the bytes it did before the flag existed.
       ...(m.geometryStale === true ? { geometryStale: true } : {}),
+      // Written only for a model that is not on the scene's first plate, so a
+      // single-plate scene's bytes are unchanged and the first plate needs no
+      // membership field at all.
+      ...(m.plateId && plates?.[0]?.id && m.plateId !== plates[0].id ? { plateId: m.plateId } : {}),
       transform: {
         position: { x: m.transform.position.x, y: m.transform.position.y, z: m.transform.position.z },
         rotation: { x: m.transform.rotation.x, y: m.transform.rotation.y, z: m.transform.rotation.z },

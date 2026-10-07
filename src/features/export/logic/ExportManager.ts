@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { STLExporter } from 'three-stdlib';
-import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
+import type { LoadedModel, ScenePlate } from '@/features/scene/useSceneCollectionManager';
 import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
 import type { MeshHealthReport } from '@/utils/meshRepair';
 import { resolveModelMeshModifiers } from '@/features/mesh-modifiers/meshModifierStore';
@@ -36,9 +36,11 @@ export interface ExportSceneContext {
   models: LoadedModel[];
   activeModelId: string | null;
   selectedModelIds: string[];
-  /** The plate's identity. With it, a save carries a plates list; without it, none. */
-  plateId?: string;
-  /** The plate's name, written as the plate's name in that list. */
+  /** The scene's plates. With them, a save carries a plate list; without them, none. */
+  plates?: ScenePlate[];
+  /** Which plate was active, written as the file's cursor. */
+  activePlateId?: string;
+  /** The active plate's name, written as the older single-plate shorthand. */
   plateName?: string;
   /** The printer this scene is being written for, embedded whole, if one is selected. */
   printer?: VoxlPrinterBundle;
@@ -1145,6 +1147,8 @@ export class ExportManager {
             visible: boolean;
             color: string;
             polygonCount: number;
+            /** The plate the model stands on; see `VoxlModelEntry.plateId`. */
+            plateId?: string;
             /** Absent when the mesh's size was never recorded; never a stand-in 0. */
             fileSizeBytes?: number;
             sourcePath?: string;
@@ -1259,6 +1263,7 @@ export class ExportManager {
               // every saved VOXL silently loses hollowing/hole-punch
               // re-editability (voxl-format-spec.md V2.1 requirement).
               meshModifiers: resolveModelMeshModifiers(model),
+              ...(model.plateId ? { plateId: model.plateId } : {}),
               isSupportGeometry: model.isSupportGeometry,
               linkGroupId: model.linkGroupId,
               classification,
@@ -1294,18 +1299,15 @@ export class ExportManager {
       models,
       activeModelId: sceneContext?.activeModelId ?? null,
       selectedModelIds: sceneContext?.selectedModelIds ?? [],
-      // The app has one plate today, so the scene's plate list is the active
-      // one. When plates become creatable this is where the real list goes.
-      ...(sceneContext?.plateId
+      ...(sceneContext?.plates && sceneContext.plates.length > 0
         ? {
-            plates: [
-              {
-                id: sceneContext.plateId,
-                ...(sceneContext.plateName ? { name: sceneContext.plateName } : {}),
-              },
-            ],
+            plates: sceneContext.plates.map((plate) => ({
+              id: plate.id,
+              ...(plate.name ? { name: plate.name } : {}),
+            })),
           }
         : {}),
+      ...(sceneContext?.activePlateId ? { activePlateId: sceneContext.activePlateId } : {}),
       supports,
       meta: {
         generator: 'DragonFruit',

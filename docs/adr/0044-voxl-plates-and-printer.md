@@ -31,9 +31,19 @@ preset id or name is a guess that fails exactly when it matters.
 
 **Revision 3.4 is additive; the container floor does not move.**
 
-`SCNE.plates` carries the scene's plates in display order as `{ id, name? }`, and
-`META.printer` carries the printer the scene was written for **whole**, in the
-profile library's own bundle shape, with the materials that belong to it.
+`SCNE.plates` carries the scene's plates in display order as `{ id, name? }`,
+`SCNE.activePlateId` the plate that was being worked on, and `MODL[i].plateId` the
+plate a model stands on, written only when it is not the first plate so a
+single-plate scene's bytes are unchanged. `META.printer` carries the printer the
+scene was written for **whole**, in the profile library's own bundle shape, with
+the materials that belong to it.
+
+A model's stored transform stays a **world** coordinate, and the plate it belongs
+to is recorded beside it. That is what keeps the revision additive: a reader that
+ignores plates sees every plate laid out in the cascade with each model where it
+belongs, rather than every bed stacked at one origin. Plate-local coordinates were
+rejected for exactly that reason, and because they would have made this the
+reader-breaking change the floor rule is reserved for.
 
 Embedding the definition rather than naming it is what makes a custom printer
 work. An import that finds the selected printer smaller than the embedded one on

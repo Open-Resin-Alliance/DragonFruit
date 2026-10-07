@@ -5,7 +5,8 @@ import { refineCoarseFaces } from '@/utils/tauriMeshBridge';
 import { loadMeshGeometry, load3mfGeometryMergedWithSplitData, processGeometry, type GeometryWithBounds, type ProcessGeometryOptions } from '@/hooks/useStlGeometry';
 import type { MeshHealthReport, MeshAnalysisJson } from '@/utils/meshRepair';
 import { computeFlatteningPlanes } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
-import { detectObsoleteVoxlVersion, isVoxlBinaryV2, meshChunkStore, parseVoxlBinaryV2, readScenePlate, readSidecarFileBytes, resolveOriginalRefSidecar, VoxlObsoleteVersionError, type VoxlDocumentV1, type VoxlMeshRef } from '@/features/scene/voxl';
+import { plateCascadeOffsetMm } from '@/features/scene/plates/plateCascade';
+import { detectObsoleteVoxlVersion, isVoxlBinaryV2, meshChunkStore, parseVoxlBinaryV2, readScenePlates, readSidecarFileBytes, resolveOriginalRefSidecar, VoxlObsoleteVersionError, type VoxlDocumentV1, type VoxlMeshRef } from '@/features/scene/voxl';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
 import { getSnapshot, loadFromImportFormat, mergeFromImportFormat, reassignAllSupportModelIds, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
@@ -867,12 +868,27 @@ function normalizePluginSceneImportPayload(payload: unknown): PluginSceneImportP
   };
 }
 
+/**
+ * One build plate in the scene. `name` is '' when the user has not named it, so
+ * the widget falls back to its own wording rather than showing an empty label.
+ */
+export type ScenePlate = {
+  id: string;
+  name: string;
+};
+
 export interface LoadedModel {
   id: string;
   name: string;
   groupId?: string;
   groupName?: string;
   fileUrl: string;
+  /**
+   * The plate this model stands on. Absent means the scene's first plate, which
+   * is what a scene written before plates meant by it; new models are stamped
+   * with the plate they were imported onto.
+   */
+  plateId?: string;
   /** Original on-disk mesh retained when `geometry` is a reduced native preview. */
   sourcePath?: string | null;
   /** Original mesh sidecar reference when not embedded in ORIG chunk. */
@@ -1166,38 +1182,77 @@ export function useSceneCollectionManager(options?: {
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
   /**
-   * What the user called this build plate. Deliberately not part of the
-   * model-grouping snapshot machinery: a rename is a document field, not a model
+   * The scene's build plates, in cascade order. Deliberately not part of the
+   * model-grouping snapshot machinery: a plate is a document fact, not a model
    * state, and undoing a rename is not something the history is for.
    */
-  const [plateName, setPlateName] = useState('');
+  const [plates, setPlates] = useState<ScenePlate[]>(() => [{ id: uuidv4(), name: '' }]);
+  /** Which plate is being worked on. */
+  const [activePlateId, setActivePlateId] = useState<string>(() => plates[0].id);
+  const activePlateIdRef = useRef(activePlateId);
+  activePlateIdRef.current = activePlateId;
+
+  const activePlate = plates.find((plate) => plate.id === activePlateId) ?? plates[0];
   /**
-   * The plate's identity, so a save can record which plate it is. One per
-   * document: minted for a fresh scene, adopted from the file on load. It is not
-   * cleared with the name, because deleting the last model leaves the plate in
-   * place and a plate that changed identity on every emptied bed would make the
-   * recorded id meaningless.
+   * The active plate's name, which is what the plate widget edits and what a
+   * save records as the single-plate shorthand.
    */
-  const [plateId, setPlateId] = useState(() => uuidv4());
+  const plateName = activePlate?.name ?? '';
+  const setPlateName = useCallback((name: string) => {
+    const target = activePlateIdRef.current;
+    setPlates((prev) => prev.map((plate) => (plate.id === target ? { ...plate, name } : plate)));
+  }, []);
   /**
-   * Whether the plate refuses edits. A lock, not a document field: it is about the
+   * Which plates refuse edits. A lock, not a document field: it is about the
    * session you are working in, so it is not written to the file and it does not
-   * travel with the scene. A ref mirrors it for the guards below, which are stable
-   * callbacks and must read the current value rather than the one they closed over.
+   * travel with the scene. Per plate, because locking one bed says nothing about
+   * the next. A ref mirrors it for the guards below, which are stable callbacks
+   * and must read the current value rather than the one they closed over.
    */
-  const [plateLocked, setPlateLocked] = useState(false);
-  const plateLockedRef = useRef(false);
+  const [lockedPlateIds, setLockedPlateIds] = useState<string[]>([]);
+  const lockedPlateIdsRef = useRef<string[]>([]);
+  lockedPlateIdsRef.current = lockedPlateIds;
+  const plateLocked = lockedPlateIds.includes(activePlateId);
+  const setPlateLocked = useCallback((locked: boolean) => {
+    const target = activePlateIdRef.current;
+    setLockedPlateIds((prev) => {
+      if (locked) return prev.includes(target) ? prev : [...prev, target];
+      return prev.filter((id) => id !== target);
+    });
+  }, []);
+
+  const platesRef = useRef<ScenePlate[]>(plates);
+  platesRef.current = plates;
+  /**
+   * The plate a model stands on. A model with no membership is on the scene's
+   * first plate, which is what a scene written before plates meant by it.
+   */
+  const modelPlateId = useCallback(
+    (model: LoadedModel) => model.plateId ?? platesRef.current[0]?.id ?? '',
+    [],
+  );
+  /** Whether the plate a model stands on refuses edits. */
+  const isModelPlateLocked = useCallback((model: LoadedModel) => {
+    const locked = lockedPlateIdsRef.current;
+    return locked.length > 0 && locked.includes(model.plateId ?? platesRef.current[0]?.id ?? '');
+  }, []);
+  /** Whether the plate new work would land on refuses edits. */
+  const isActivePlateLocked = useCallback(
+    () => lockedPlateIdsRef.current.includes(activePlateIdRef.current),
+    [],
+  );
   // Told, not shown: the manager has no UI, so a refused gesture reports through this
   // callback and the page decides what that looks like.
   const onBlockedByLockRef = useRef<(() => void) | undefined>(undefined);
   // An empty plate has no name: deleting the last model, or starting a new scene,
-  // clears it, and the widget falls back to its default wording. A named scene
-  // that happens to carry models keeps its name, since this only reacts when the
-  // plate is empty.
+  // clears it, and the widget falls back to its default wording. Scoped to a
+  // single-plate scene, so a plate you add and name is not emptied out from under
+  // you by the first plate happening to be bare.
   useEffect(() => {
     if (models.length > 0) return;
-    setPlateName('');
-  }, [models.length]);
+    if (plates.length > 1) return;
+    setPlates((prev) => (prev[0]?.name ? [{ ...prev[0], name: '' }] : prev));
+  }, [models.length, plates.length]);
 
   const modelsRef = useRef<LoadedModel[]>([]);
   const activeModelIdRef = useRef<string | null>(null);
@@ -1208,7 +1263,6 @@ export function useSceneCollectionManager(options?: {
   // one. Defaults to true (newest) for non-voxl / fresh scenes.
   const lastLoadedVoxlFormatChunkedRef = useRef<boolean>(true);
   modelsRef.current = models;
-  plateLockedRef.current = plateLocked;
   onBlockedByLockRef.current = options?.onBlockedByLock;
   activeModelIdRef.current = activeModelId;
   selectedModelIdsRef.current = selectedModelIds;
@@ -2101,7 +2155,8 @@ export function useSceneCollectionManager(options?: {
     // The lock's whole point: nothing on a locked plate can be selected. Guarded at
     // the gesture rather than at the setter, because the internal writers (import,
     // duplicate, split) call the setter directly and must keep working.
-    if (plateLockedRef.current) {
+    const lockedTarget = modelsRef.current.find((model) => model.id === id);
+    if (lockedTarget && isModelPlateLocked(lockedTarget)) {
       onBlockedByLockRef.current?.();
       return;
     }
@@ -2139,8 +2194,9 @@ export function useSceneCollectionManager(options?: {
   // File handling - support multiple files
   const loadFiles = useCallback(async (filesInput: FileList | File[]) => {
     // One door for every way a mesh arrives — picker, drop, the panel's plus — so the
-    // lock is enforced here rather than at each of them.
-    if (plateLockedRef.current) {
+    // lock is enforced here rather than at each of them. New meshes land on the
+    // active plate, so that is the plate whose lock matters.
+    if (isActivePlateLocked()) {
       onBlockedByLockRef.current?.();
       return;
     }
@@ -2460,14 +2516,14 @@ export function useSceneCollectionManager(options?: {
   const updateModelTransform = useCallback((id: string, transform: ModelTransform, previousTransformOverride?: ModelTransform) => {
     // Every move lands here — drag, gizmo, the transform panel, the nudge hotkeys —
     // so a locked plate refuses them all at the one place that writes a transform.
-    if (plateLockedRef.current) {
+    const currentModel = modelsRef.current.find((m) => m.id === id);
+    if (currentModel && isModelPlateLocked(currentModel)) {
       return {
         updated: false,
         supportsChanged: false,
         kickstandsChanged: false,
       };
     }
-    const currentModel = modelsRef.current.find((m) => m.id === id);
     if (!currentModel) {
       return {
         updated: false,
@@ -2673,7 +2729,11 @@ export function useSceneCollectionManager(options?: {
     updates: Array<{ id: string; transform: ModelTransform }>,
     options?: { pushHistory?: boolean },
   ) => {
-    if (plateLockedRef.current) {
+    const lockedMove = updates.some((update) => {
+      const model = modelsRef.current.find((candidate) => candidate.id === update.id);
+      return model ? isModelPlateLocked(model) : false;
+    });
+    if (lockedMove) {
       return {
         updated: false,
         supportsChanged: false,
@@ -5013,6 +5073,15 @@ export function useSceneCollectionManager(options?: {
       // chunks; anything lower is treated as inline for format preservation.
       lastLoadedVoxlFormatChunkedRef.current = parsed.sourceVersion >= 3.1;
 
+      // The file's plates, read once: the models below are stamped with the
+      // plate they stand on, and the scene adopts the list after they land.
+      const scenePlates = readScenePlates(document.scene);
+      const importedPlateIds = new Set(scenePlates.plates.map((plate) => plate.id));
+      const importedDefaultPlateId = scenePlates.plates[0]?.id;
+      /** A model's plate, when the file names one of its own; otherwise its first. */
+      const plateIdForImport = (raw?: string): string | undefined =>
+        raw && importedPlateIds.has(raw) ? raw : importedDefaultPlateId;
+
       const existingIds = new Set(modelsRef.current.map((model) => model.id));
       const idMap = new Map<string, string>();
       const importedModels: LoadedModel[] = [];
@@ -5195,11 +5264,13 @@ export function useSceneCollectionManager(options?: {
 
           const polygonCount = geometry.geometry.getAttribute('position').count / 3;
           const color = clampHexColor(model.color, DEFAULT_MESH_COLOR);
+          const importedPlateId = plateIdForImport(model.plateId);
 
           importedModels.push({
             id: resolvedId,
             name: sanitizeImportedModelDisplayName(model.name),
             fileUrl: '',
+            ...(importedPlateId ? { plateId: importedPlateId } : {}),
             sourcePath: model.sourcePath ?? undefined,
             originalRef: model.originalRef,
             fileSizeBytes: model.fileSizeBytes,
@@ -5297,13 +5368,17 @@ export function useSceneCollectionManager(options?: {
         setActiveModelId(mappedActiveId);
         setSelectedModelIds(finalSelected);
 
-        // The scene's plate: `plates` is canonical, the older `plateName` is the
-        // single-plate shorthand a file written before plates carries. An import
-        // that brings neither leaves this scene's plate as it was, since this
+        // The scene's plates: `plates` is canonical, the older `plateName` is the
+        // single-plate shorthand a file written before plates carries. A file with
+        // no plate list at all leaves this scene's plates as they were, since this
         // path merges into the scene rather than replacing it.
-        const importedPlate = readScenePlate(document.scene);
-        if (importedPlate.id) setPlateId(importedPlate.id);
-        if (importedPlate.name) setPlateName(importedPlate.name);
+        if (scenePlates.plates.length > 0) {
+          setPlates(scenePlates.plates.map((plate) => ({ id: plate.id, name: plate.name ?? '' })));
+          setActivePlateId(scenePlates.activePlateId ?? scenePlates.plates[0].id);
+        } else if (scenePlates.legacyName) {
+          const legacyName = scenePlates.legacyName;
+          setPlates((prev) => prev.map((plate, index) => (index === 0 ? { ...plate, name: legacyName } : plate)));
+        }
 
         // A scene packed for a bigger machine should not be dropped into the
         // selected one without a word. Read the store fresh rather than the memo,
@@ -5872,13 +5947,104 @@ export function useSceneCollectionManager(options?: {
     return hasVisible ? unionBox : null;
   }, [models]);
 
+  // ─── Plates ─────────────────────────────────────────────────────────────────
+
+  /**
+   * Where a plate sits in the world, from its place in the cascade. The first
+   * plate is the origin, so a single-plate scene is exactly where it always was.
+   */
+  const plateOffsetFor = useCallback((plateId: string): { dxMm: number; dyMm: number } => {
+    const index = platesRef.current.findIndex((plate) => plate.id === plateId);
+    if (index <= 0) return { dxMm: 0, dyMm: 0 };
+    return plateCascadeOffsetMm(index, {
+      widthMm: view3dSettings.widthMm,
+      depthMm: view3dSettings.depthMm,
+    });
+  }, [view3dSettings.widthMm, view3dSettings.depthMm]);
+
+  /** Add an empty plate after the last one and make it the active plate. */
+  const addPlate = useCallback((): string => {
+    const plate: ScenePlate = { id: uuidv4(), name: '' };
+    setPlates((prev) => [...prev, plate]);
+    setActivePlateId(plate.id);
+    return plate.id;
+  }, []);
+
+  const activatePlate = useCallback((plateId: string) => {
+    setActivePlateId((prev) => (platesRef.current.some((plate) => plate.id === plateId) ? plateId : prev));
+  }, []);
+
+  const renamePlate = useCallback((plateId: string, name: string) => {
+    setPlates((prev) => prev.map((plate) => (plate.id === plateId ? { ...plate, name } : plate)));
+  }, []);
+
+  /**
+   * Delete a plate and the models standing on it. The scene always keeps a plate
+   * to work on, so removing the last one is refused rather than leaving nowhere
+   * to build.
+   */
+  const removePlate = useCallback((plateId: string): boolean => {
+    const remaining = platesRef.current.filter((plate) => plate.id !== plateId);
+    if (remaining.length === 0 || remaining.length === platesRef.current.length) return false;
+
+    const firstPlateId = platesRef.current[0]?.id;
+    const doomed = modelsRef.current.filter((model) => (model.plateId ?? firstPlateId) === plateId);
+    if (doomed.length > 0) void deleteModels(doomed.map((model) => model.id));
+
+    setPlates(remaining);
+    setActivePlateId((prev) => (prev === plateId ? remaining[0].id : prev));
+    return true;
+  }, [deleteModels]);
+
+  /**
+   * Move models to another plate, carrying them across the cascade so they keep
+   * their place on the bed they arrive at rather than landing wherever their old
+   * coordinates happen to fall.
+   */
+  const moveModelsToPlate = useCallback((modelIds: string[], plateId: string) => {
+    const plateList = platesRef.current;
+    const targetIndex = plateList.findIndex((plate) => plate.id === plateId);
+    if (targetIndex < 0) return;
+
+    const footprint = { widthMm: view3dSettings.widthMm, depthMm: view3dSettings.depthMm };
+    const target = plateCascadeOffsetMm(targetIndex, footprint);
+    const firstPlateId = plateList[0]?.id;
+    const wanted = new Set(modelIds);
+
+    for (const model of modelsRef.current) {
+      if (!wanted.has(model.id)) continue;
+      const sourceIndex = Math.max(0, plateList.findIndex((plate) => plate.id === (model.plateId ?? firstPlateId)));
+      const source = plateCascadeOffsetMm(sourceIndex, footprint);
+      const dx = target.dxMm - source.dxMm;
+      const dy = target.dyMm - source.dyMm;
+      if (dx === 0 && dy === 0) continue;
+      updateModelTransform(model.id, {
+        ...model.transform,
+        position: new THREE.Vector3(
+          model.transform.position.x + dx,
+          model.transform.position.y + dy,
+          model.transform.position.z,
+        ),
+      }, model.transform);
+    }
+
+    setModels((prev) => prev.map((model) => (wanted.has(model.id) ? { ...model, plateId } : model)));
+  }, [updateModelTransform, view3dSettings.widthMm, view3dSettings.depthMm]);
+
   return {
     models,
     activeModelId,
     setActiveModelId,
     plateName,
     setPlateName,
-    plateId,
+    plates,
+    activePlateId,
+    addPlate,
+    activatePlate,
+    renamePlate,
+    removePlate,
+    moveModelsToPlate,
+    plateOffsetFor,
     voxlPrinterBundle,
     printerMismatch,
     resolvePrinterMismatch,

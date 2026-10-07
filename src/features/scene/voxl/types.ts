@@ -79,6 +79,12 @@ export type VoxlModelEntry = {
    * written as `false` — so an ordinary scene's bytes are unchanged.
    */
   geometryStale?: boolean;
+  /**
+   * The plate this model stands on. Written only when it is not the scene's
+   * first plate, so a single-plate scene's bytes are unchanged, and a reader
+   * that ignores it places every model on one plate.
+   */
+  plateId?: string;
   transform: VoxlModelTransform;
   mesh: VoxlMeshRef;
   meshModifiers?: ModelMeshModifiers;
@@ -157,6 +163,11 @@ export type VoxlSceneState = {
    */
   plates?: VoxlPlate[];
   /**
+   * Which plate was being worked on. Optional, and a reader that ignores it can
+   * fall back to the first plate; it is a cursor, not a fact about the geometry.
+   */
+  activePlateId?: string;
+  /**
    * What the user called this build plate, shown on the plate itself. Kept for
    * a scene with exactly one plate, where it is that plate's name, so a reader
    * that only knows this field still shows it; `plates` is canonical.
@@ -193,6 +204,8 @@ export type VoxlModelRuntimeLike = {
   };
   mesh?: VoxlMeshRef;
   meshModifiers?: ModelMeshModifiers;
+  /** See `VoxlModelEntry.plateId`. */
+  plateId?: string;
   isSupportGeometry?: boolean;
   linkGroupId?: string;
   /** See `VoxlModelEntry.classification` (V3.3). */
@@ -205,6 +218,8 @@ export type BuildVoxlDocumentInput = {
   selectedModelIds: string[];
   /** The scene's plates. Omitted writes a scene with no plate list at all. */
   plates?: VoxlPlate[];
+  /** Which plate was active. Omitted writes no cursor. */
+  activePlateId?: string;
   supports: DragonfruitImportFormat;
   meta?: Partial<Pick<VoxlMeta, 'generator' | 'generatorVersion' | 'printer'>>;
   extensions?: Record<string, unknown>;

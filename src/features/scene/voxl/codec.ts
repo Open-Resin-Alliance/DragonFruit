@@ -1,5 +1,5 @@
 import type { DragonfruitImportFormat, SupportState } from '@/supports/types';
-import type { ParsedVoxlResult, VoxlSceneState } from './types';
+import type { ParsedVoxlResult, VoxlPlate, VoxlSceneState } from './types';
 import { isVoxlBinaryV2, parseVoxlBinaryV2 } from './codec-v2';
 import { importPayloadCollections } from '@/supports/supportCollections';
 
@@ -95,22 +95,45 @@ export function detectObsoleteVoxlVersion(data: Uint8Array): 'v1-json' | 'v1-bin
   return null;
 }
 
-// ─── Scene plate ──────────────────────────────────────────────────────────────
+// ─── Scene plates ─────────────────────────────────────────────────────────────
+
+/** What a scene state says about its plates, normalised for the caller. */
+export type ReadScenePlates = {
+  /** The plates the file lists, in order. Empty when the file predates the list. */
+  plates: VoxlPlate[];
+  /** The older single-plate shorthand, when the file carries no list. */
+  legacyName: string | null;
+  /** The plate the file had active, when it names one of its own plates. */
+  activePlateId: string | null;
+};
 
 /**
- * The plate a scene state describes: the first entry of `plates`, or the older
- * single-plate `plateName` shorthand when the file predates the list. Nulls mean
- * the file describes one unnamed plate, and the caller mints its identity.
+ * Read the plates a scene state describes. The precedence lives here rather than
+ * at each reader, so the older `plateName` shorthand cannot be interpreted two
+ * ways: a file with a `plates` list is taken at its word, and a file without one
+ * is a single plate whose name, if any, is the shorthand.
  *
- * The precedence lives here rather than at each reader so the shorthand cannot
- * be interpreted differently in two places.
+ * An empty `plates` list means the file describes one plate that has no identity
+ * of its own, and the caller mints one.
  */
-export function readScenePlate(scene: VoxlSceneState): { id: string | null; name: string | null } {
-  const plate = scene.plates?.[0];
-  const id = plate?.id && plate.id.length > 0 ? plate.id : null;
-  if (plate?.name && plate.name.length > 0) return { id, name: plate.name };
-  const name = scene.plateName && scene.plateName.length > 0 ? scene.plateName : null;
-  return { id, name };
+export function readScenePlates(scene: VoxlSceneState): ReadScenePlates {
+  const plates = (scene.plates ?? [])
+    .filter((plate) => typeof plate?.id === 'string' && plate.id.length > 0)
+    .map((plate) => ({
+      id: plate.id,
+      ...(typeof plate.name === 'string' && plate.name.length > 0 ? { name: plate.name } : {}),
+    }));
+
+  if (plates.length > 0) {
+    const active = scene.activePlateId;
+    const activePlateId = active && plates.some((plate) => plate.id === active)
+      ? active
+      : plates[0].id;
+    return { plates, legacyName: null, activePlateId };
+  }
+
+  const legacyName = scene.plateName && scene.plateName.length > 0 ? scene.plateName : null;
+  return { plates: [], legacyName, activePlateId: null };
 }
 
 // ─── Unified Parser ───────────────────────────────────────────────────────────

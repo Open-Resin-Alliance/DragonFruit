@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { readScenePlate } from '../codec';
+import { readScenePlates } from '../codec';
 import { parseVoxlBinaryV2, serializeVoxlDocumentV2 } from '../codec-v2';
 import type { VoxlPrinterBundle } from '../types';
 import { readVoxlChunkText, testInput } from './voxlTestSupport';
@@ -9,6 +9,13 @@ import { readVoxlChunkText, testInput } from './voxlTestSupport';
 /** A chunk's JSON as an untyped record: these tests assert on the wire keys. */
 function chunkRecord(bytes: Uint8Array, type: string): Record<string, unknown> {
   return JSON.parse(readVoxlChunkText(bytes, type)) as Record<string, unknown>;
+}
+
+/** The same, for a chunk whose payload is a list of entries (MODL). */
+function chunkEntries(bytes: Uint8Array, type: string): Record<string, unknown>[] {
+  const parsed = chunkRecord(bytes, type);
+  if (!Array.isArray(parsed)) throw new Error(`${type} is not a list of entries`);
+  return parsed as Record<string, unknown>[];
 }
 
 test('plates round-trip with their ids and names', async () => {
@@ -60,29 +67,73 @@ test('an unnamed plate writes no shorthand, and several plates cannot', async ()
   assert.equal(plates.length, 2);
 });
 
-test('readScenePlate prefers the plate list and falls back to the shorthand', () => {
+test('readScenePlates takes a plate list at its word', () => {
   assert.deepEqual(
-    readScenePlate({ activeModelId: null, selectedModelIds: [], plates: [{ id: 'p1', name: 'Bed' }], plateName: 'Stale' }),
-    { id: 'p1', name: 'Bed' },
+    readScenePlates({
+      activeModelId: null,
+      selectedModelIds: [],
+      plates: [{ id: 'p1', name: 'Bed' }, { id: 'p2' }],
+      activePlateId: 'p2',
+      plateName: 'Stale shorthand',
+    }),
+    { plates: [{ id: 'p1', name: 'Bed' }, { id: 'p2' }], legacyName: null, activePlateId: 'p2' },
   );
+});
 
+test('readScenePlates falls back to the shorthand and to a plate with no identity', () => {
   // A file written before plates carries only the shorthand.
   assert.deepEqual(
-    readScenePlate({ activeModelId: null, selectedModelIds: [], plateName: 'Bed' }),
-    { id: null, name: 'Bed' },
+    readScenePlates({ activeModelId: null, selectedModelIds: [], plateName: 'Bed' }),
+    { plates: [], legacyName: 'Bed', activePlateId: null },
   );
 
-  // Neither: one unnamed plate, whose identity the caller mints.
+  // Neither: one plate, whose identity the caller mints.
   assert.deepEqual(
-    readScenePlate({ activeModelId: null, selectedModelIds: [] }),
-    { id: null, name: null },
+    readScenePlates({ activeModelId: null, selectedModelIds: [] }),
+    { plates: [], legacyName: null, activePlateId: null },
   );
+});
 
-  // Empty strings are absent values, not names.
+test('readScenePlates ignores a cursor that names no plate, and drops empty names', () => {
   assert.deepEqual(
-    readScenePlate({ activeModelId: null, selectedModelIds: [], plates: [{ id: 'p1', name: '' }] }),
-    { id: 'p1', name: null },
+    readScenePlates({
+      activeModelId: null,
+      selectedModelIds: [],
+      plates: [{ id: 'p1', name: '' }],
+      activePlateId: 'gone',
+    }),
+    { plates: [{ id: 'p1' }], legacyName: null, activePlateId: 'p1' },
   );
+});
+
+test('plate membership and the active cursor round-trip', async () => {
+  const input = {
+    ...testInput(['m1', 'm2']),
+    plates: [{ id: 'plate-a', name: 'Left bed' }, { id: 'plate-b', name: 'Right bed' }],
+    activePlateId: 'plate-b',
+  };
+  input.models[1].plateId = 'plate-b';
+
+  const binary = await serializeVoxlDocumentV2(input, new Map());
+  const parsed = parseVoxlBinaryV2(binary);
+
+  assert.equal(parsed.document.scene.activePlateId, 'plate-b');
+  assert.equal(parsed.document.models[1].plateId, 'plate-b');
+  // The first plate needs no membership field, so a model on it stays bare.
+  assert.equal('plateId' in parsed.document.models[0], false);
+});
+
+test('a model on the first plate writes no membership key', async () => {
+  const input = {
+    ...testInput(['m1']),
+    plates: [{ id: 'plate-a', name: 'Left bed' }],
+    activePlateId: 'plate-a',
+  };
+  input.models[0].plateId = 'plate-a';
+
+  const modl = chunkEntries(await serializeVoxlDocumentV2(input, new Map()), 'MODL');
+
+  assert.equal('plateId' in modl[0], false);
 });
 
 test('the printer a scene was written for round-trips in the document meta', async () => {

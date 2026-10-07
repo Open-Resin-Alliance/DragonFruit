@@ -247,6 +247,12 @@ Revision 3.4 records the scene's build plates and the printer it was written for
 - `id` is a stable identity, so a plate keeps it across save and load.
 - `name` is what the user called it. Absent means the plate is unnamed.
 
+`SCNE.activePlateId` is the plate that was being worked on. It is a cursor rather than a fact about the geometry, so a reader that ignores it can fall back to the first plate.
+
+`MODL[i].plateId` is the plate that model stands on, written **only when it is not the scene's first plate**. A model with no membership field is on the first plate, which is what a scene written before plates meant by it, so a single-plate scene's bytes are unchanged.
+
+Plate membership does not move the geometry. A model's `transform.position` stays a world coordinate, which is what keeps this revision additive: a reader that ignores plates sees every plate laid out in the cascade with each model where it belongs, rather than several beds stacked at one origin.
+
 `plateName` remains for a scene with exactly one plate, where it is that plate's name, so a
 reader that only knows the older field still shows it. `plates` is canonical, and with several
 plates the shorthand is omitted because it cannot say which plate it names.

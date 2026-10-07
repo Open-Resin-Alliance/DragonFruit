@@ -5,7 +5,7 @@ import { subscribeHistory } from '@/history/historyStore';
 import { ExportManager } from '@/features/export/logic/ExportManager';
 import { VoxlChunkCache } from '@/features/scene/voxl';
 import type { VoxlPrinterBundle } from '@/features/scene/voxl';
-import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
+import type { LoadedModel, ScenePlate } from '@/features/scene/useSceneCollectionManager';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -341,9 +341,11 @@ export type UseSceneAutosaveOptions = {
   models: LoadedModel[];
   activeModelId: string | null;
   selectedModelIds: string[];
-  /** The plate's identity, carried into the saved scene's plates list. */
-  plateId?: string;
-  /** The plate's name, written as that plate's name. */
+  /** The scene's plates, carried into the saved scene's plate list. */
+  plates?: ScenePlate[];
+  /** Which plate was active. */
+  activePlateId?: string;
+  /** The active plate's name, written as the older single-plate shorthand. */
   plateName?: string;
   /** The printer this scene is being saved for. */
   printer?: VoxlPrinterBundle;
@@ -387,7 +389,8 @@ export function useSceneAutosave({
   models,
   activeModelId,
   selectedModelIds,
-  plateId,
+  plates,
+  activePlateId,
   plateName,
   printer,
   enabled = true,
@@ -410,8 +413,10 @@ export function useSceneAutosave({
   activeModelIdRef.current = activeModelId;
   const selectedModelIdsRef = React.useRef(selectedModelIds);
   selectedModelIdsRef.current = selectedModelIds;
-  const plateIdRef = React.useRef(plateId);
-  plateIdRef.current = plateId;
+  const platesRef = React.useRef(plates);
+  platesRef.current = plates;
+  const activePlateIdRef = React.useRef(activePlateId);
+  activePlateIdRef.current = activePlateId;
   const plateNameRef = React.useRef(plateName);
   plateNameRef.current = plateName;
   const printerRef = React.useRef(printer);
@@ -582,7 +587,8 @@ export function useSceneAutosave({
               models: currentModels,
               activeModelId: activeModelIdRef.current,
               selectedModelIds: selectedModelIdsRef.current,
-              plateId: plateIdRef.current,
+              plates: platesRef.current,
+              activePlateId: activePlateIdRef.current,
               plateName: plateNameRef.current,
               printer: printerRef.current,
             },
