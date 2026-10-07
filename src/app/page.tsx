@@ -10978,11 +10978,16 @@ export default function Home() {
             shape="rounded"
             animated
             visible
-            className="flex items-center gap-3 max-w-sm pointer-events-auto"
+            className="flex items-center max-w-sm pointer-events-auto"
           >
-            <Lock className="h-4 w-4 flex-shrink-0" />
+            {/* The padlock leads the first line rather than standing beside the block:
+                centred on two lines of text it read as belonging to neither. */}
             <span className="flex-1 text-center text-[12px] leading-snug">
-              {_(msg`The build plate is locked.`)}<br />
+              <span className="inline-flex items-center gap-1.5">
+                <Lock className="h-3.5 w-3.5 flex-shrink-0" />
+                {_(msg`The build plate is locked.`)}
+              </span>
+              <br />
               <span style={{ fontWeight: 400, opacity: 0.8 }}>{_(msg`Unlock it to add or move models.`)}</span>
             </span>
           </Toast>
