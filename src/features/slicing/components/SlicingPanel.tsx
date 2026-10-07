@@ -15,6 +15,7 @@ import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';
+import { derivePlateOutputPath, plateSliceBaseName, type PlateSliceScope } from '@/features/slicing/plateSliceNaming';
 import { MaterialAntiAliasingSection, type MaterialDraft } from '@/components/settings/profileFormAtoms';
 import {
   getActiveMaterialProfile,
@@ -72,16 +73,15 @@ export type SliceIntent = 'file' | 'upload' | 'print' | 'preview' | 'uvtools';
 interface SlicingPanelProps {
   models: LoadedModel[];
   /**
-   * The plate this slice covers. Without it the panel slices every visible
-   * model, which is what a single-plate scene means. With it, only that plate's
-   * models are sliced, judged against that plate's volume and shifted to the
-   * origin so the rasterizer's origin-centred mapping stays true.
+   * The plates a slice can cover, in cascade order. Without them the panel
+   * slices every visible model, which is what a single-plate scene means. With
+   * them, a slice covers one plate: its models, judged against its own volume and
+   * shifted to the origin so the rasterizer's origin-centred mapping stays true.
+   * More than one entry also offers slicing them all, one file per plate.
    */
-  plateSliceScope?: {
-    modelIds: readonly string[];
-    volumeBoundsMm: { minX: number; minY: number; maxX: number; maxY: number };
-    offsetMm: { dxMm: number; dyMm: number };
-  };
+  plateSliceScopes?: readonly PlateSliceScope[];
+  /** Which of those the plain Slice action covers. */
+  activePlateSliceIndex?: number;
   excludedModelIds?: readonly string[];
   activeModel: LoadedModel | null;
   estimatedLayerCountOverride?: number | null;
@@ -742,7 +742,8 @@ const AUTO_AA_PRESET_OPTIONS: ReadonlyArray<{
 
 export function SlicingPanel({
   models,
-  plateSliceScope,
+  plateSliceScopes,
+  activePlateSliceIndex = 0,
   excludedModelIds = [],
   activeModel,
   estimatedLayerCountOverride,
@@ -909,7 +910,7 @@ export function SlicingPanel({
   const slicingAbortControllerRef = useRef<AbortController | null>(null);
   const autoSliceTriggeredRef = useRef(false);
   const autoSliceTimeoutRef = useRef<number | null>(null);
-  const handleSliceZipExportRef = useRef<(() => Promise<void>) | null>(null);
+  const handleSliceZipExportRef = useRef<((scopeOverride?: PlateSliceScope) => Promise<boolean>) | null>(null);
   const hasSlicingProgressStartedRef = useRef(false);
 
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
@@ -1233,10 +1234,12 @@ export function SlicingPanel({
   }, []);
 
   const excludedModelIdSet = useMemo(() => new Set(excludedModelIds), [excludedModelIds]);
+  /** The plate the plain Slice action covers. */
+  const activePlateSliceScope = plateSliceScopes?.[activePlateSliceIndex] ?? null;
   /** The models the slice covers: one plate's, or every visible one. */
   const plateModelIdSet = useMemo(
-    () => (plateSliceScope ? new Set(plateSliceScope.modelIds) : null),
-    [plateSliceScope],
+    () => (activePlateSliceScope ? new Set(activePlateSliceScope.modelIds) : null),
+    [activePlateSliceScope],
   );
   const scopedModels = useMemo(
     () => (plateModelIdSet ? models.filter((model) => plateModelIdSet.has(model.id)) : models),
@@ -1836,29 +1839,38 @@ export function SlicingPanel({
     selectedRemoteMaterialId,
   ]);
 
-  const handleSliceZipExport = async () => {
+  const handleSliceZipExport = async (scopeOverride?: PlateSliceScope): Promise<boolean> => {
+    // A batch passes each plate's scope in turn; a plain run uses the active one.
+    const scope = scopeOverride ?? activePlateSliceScope;
+    const scopeModelIdSet = scope ? new Set(scope.modelIds) : null;
+    const scopeModels = scopeModelIdSet
+      ? models.filter((model) => scopeModelIdSet.has(model.id))
+      : models;
+    const scopeFilenameBase = scope
+      ? plateSliceBaseName(scope.plateName, scopeModels)
+      : null;
     if (!activePrinterProfile) {
       alert(_(msg`Select a printer profile first.`));
-      return;
+      return false;
     }
 
     if (!materialProfileForSlicing) {
       alert(_(msg`Select a material profile first.`));
-      return;
+      return false;
     }
 
     if (visibleModels.length === 0) {
       alert(excludedVisibleModelCount > 0
         ? _(msg`All visible models are outside the build volume.`)
         : _(msg`No visible models available for slicing.`));
-      return;
+      return false;
     }
 
-    if (excludedVisibleModelCount > 0 && !(await requestOutOfBoundsSliceConfirmation())) return;
+    if (excludedVisibleModelCount > 0 && !(await requestOutOfBoundsSliceConfirmation())) return false;
 
     const proceed = await Promise.resolve(onBeforeSliceStart?.(effectiveSliceIntent) ?? true).catch(() => false);
     if (!proceed) {
-      return;
+      return false;
     }
 
     const resolvedOutputPath = (resolveOutputPathForIntent?.(effectiveSliceIntent) ?? '').trim();
@@ -1921,21 +1933,28 @@ export function SlicingPanel({
         }
       }
 
+      // A plate's file is named for the plate, beside the chosen path; a plain
+      // run keeps the name and destination it always had.
+      const outputBaseName = scopeFilenameBase ?? (sliceFilenameBase || activePrinterProfile.name || 'slice_export');
+      const scopeOutputPath = scopeFilenameBase
+        ? derivePlateOutputPath(resolvedOutputPath, scopeFilenameBase)
+        : null;
+
       const result = await runSliceExportOrchestrator({
-        models: plateModelIdSet
-          ? models.filter((model) => plateModelIdSet.has(model.id))
-          : models,
+        models: scopeModels,
         excludedModelIds,
-        ...(plateSliceScope
+        ...(scope
           ? {
-              plateVolumeBoundsMm: plateSliceScope.volumeBoundsMm,
-              plateOffsetMm: plateSliceScope.offsetMm,
+              plateVolumeBoundsMm: scope.volumeBoundsMm,
+              plateOffsetMm: scope.offsetMm,
             }
           : {}),
         printerProfile: activePrinterProfile,
         materialProfile: materialProfileForSlicing,
-        filenameBase: sliceFilenameBase || activePrinterProfile.name || 'slice_export',
-        outputPath: resolvedOutputPath.length > 0 ? resolvedOutputPath : null,
+        filenameBase: outputBaseName,
+        outputPath: (scopeOutputPath ?? resolvedOutputPath).trim().length > 0
+          ? (scopeOutputPath ?? resolvedOutputPath)
+          : null,
         antiAliasing: {
           preset: aaAutoPreset,
           override: sessionAaOverrideDraft,
@@ -2150,6 +2169,22 @@ export function SlicingPanel({
         setSliceStatus('Opening');
         onSlicingFinished?.({ totalLayers: Math.max(completedTotalLayers, completedTotalLayersFromResult, 1) });
       }
+    }
+
+    return slicingSucceeded;
+  };
+
+  /**
+   * Slice every plate in turn, one file each, named for the plate. Sequential
+   * rather than concurrent: each run drives the same native pipeline and the same
+   * progress surface, and a batch that stops on the first failure leaves the
+   * plates it did write intact.
+   */
+  const handleSliceAllPlates = async () => {
+    if (!plateSliceScopes || plateSliceScopes.length < 2) return;
+    for (const scope of plateSliceScopes) {
+      const sliced = await handleSliceZipExport(scope);
+      if (!sliced) break;
     }
   };
 
@@ -3422,6 +3457,21 @@ export function SlicingPanel({
                     </Button>
                   )}
                 </div>
+
+                {/* One file per plate, named for the plate. Only worth offering
+                    when there is more than one bed to slice. */}
+                {plateSliceScopes && plateSliceScopes.length > 1 && (
+                  <Button
+                    variant="secondary"
+                    size="auto"
+                    onClick={() => { void handleSliceAllPlates(); }}
+                    disabled={isDisabled}
+                    className={`mt-1 w-full !h-8 text-xs inline-flex items-center justify-center gap-1.5 ${isSlicingZip ? 'cursor-wait opacity-70' : ''}`}
+                  >
+                    <Layers3 className="w-3.5 h-3.5 shrink-0" />
+                    <Trans comment='Action beside the slice button: slices every plate in the scene, one file per plate.'>Slice all plates</Trans>
+                  </Button>
+                )}
                 {sliceIntentMenuOpen && sliceIntentMenuRect && typeof document !== 'undefined' && createPortal(
                   <div
                     ref={sliceIntentMenuRef}

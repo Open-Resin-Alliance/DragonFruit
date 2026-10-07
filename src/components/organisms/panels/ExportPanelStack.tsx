@@ -69,25 +69,29 @@ export function ExportPanelStack({
   // Invoked inline by Home (not as <JSX/>) so FloatingPanelStack can flatten these keyed panels as direct children for its layout-profile positioning. 'use no memo' keeps React Compiler from injecting a useMemoCache hook (the conditional inline call must stay hook-free).
   'use no memo';
 
-  // The plate the slice covers. Computed inline because this component is
-  // deliberately hook-free: a slice is scoped to the active plate, judged
-  // against that plate's volume and shifted to the origin for the rasterizer.
-  const activePlateFrame = scene.plateFrames.find((frame) => frame.id === scene.activePlateId)
-    ?? scene.plateFrames[0];
-  const plateSliceScope = activePlateFrame
-    ? {
+  // The plates a slice can cover. Computed inline because this component is
+  // deliberately hook-free: a slice is scoped to one plate, judged against that
+  // plate's volume and shifted to the origin for the rasterizer, and a scene with
+  // several plates can be sliced one file per plate.
+  const plateSliceScopes = scene.plateFrames.length > 0
+    ? scene.plateFrames.map((frame) => ({
+        plateName: scene.plates.find((plate) => plate.id === frame.id)?.name ?? '',
         modelIds: scene.models
-          .filter((model) => scene.resolveModelPlateId(model) === activePlateFrame.id)
+          .filter((model) => scene.resolveModelPlateId(model) === frame.id)
           .map((model) => model.id),
         volumeBoundsMm: {
-          minX: activePlateFrame.minX,
-          minY: activePlateFrame.minY,
-          maxX: activePlateFrame.maxX,
-          maxY: activePlateFrame.maxY,
+          minX: frame.minX,
+          minY: frame.minY,
+          maxX: frame.maxX,
+          maxY: frame.maxY,
         },
-        offsetMm: { dxMm: activePlateFrame.dxMm, dyMm: activePlateFrame.dyMm },
-      }
+        offsetMm: { dxMm: frame.dxMm, dyMm: frame.dyMm },
+      }))
     : undefined;
+  const activePlateSliceIndex = Math.max(
+    0,
+    scene.plateFrames.findIndex((frame) => frame.id === scene.activePlateId),
+  );
 
   return (
     <>
@@ -108,7 +112,8 @@ export function ExportPanelStack({
       <SlicingPanel
         key="export-slicing"
         models={scene.models}
-        plateSliceScope={plateSliceScope}
+        plateSliceScopes={plateSliceScopes}
+        activePlateSliceIndex={activePlateSliceIndex}
         excludedModelIds={excludedSliceModelIds}
         activeModel={scene.activeModel}
         estimatedLayerCountOverride={estimatedSlicerLayerCount}
