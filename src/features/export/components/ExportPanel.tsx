@@ -429,9 +429,6 @@ export function ExportPanel({
 
             {exportScope === 'active_model' && (
               <div className="space-y-0.5">
-                <label className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                  <Trans>Model</Trans>
-                </label>
                 <Select
                   value={activeModelId ?? ''}
                   onChange={(e) => onActiveModelChange(e.target.value || null)}
