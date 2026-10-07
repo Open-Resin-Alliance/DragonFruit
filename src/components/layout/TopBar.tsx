@@ -984,7 +984,7 @@ export function TopBar({
                   }}
                   disabled={nativeDisabled}
                   aria-disabled={disabled}
-                  className={`group relative flex cursor-pointer items-center gap-1.5 rounded-lg border px-1.5 py-1.5 transition-all duration-200 flex-1 min-w-[90px] max-w-[190px] h-[32px] ${
+                  className={`group relative flex cursor-pointer items-center gap-1.5 rounded-[5.5px] border px-1.5 py-1.5 transition-all duration-200 flex-1 min-w-[90px] max-w-[190px] h-[32px] ${
                     active
                       ? 'shadow-[0_6px_16px_rgba(0,0,0,0.25)]'
                       : 'hover:-translate-y-[1px] hover:shadow-[0_6px_14px_rgba(0,0,0,0.18)]'
