@@ -7239,27 +7239,51 @@ export default function Home() {
     scene.view3dSettings.widthMm,
   ]);
 
+  /**
+   * The build volume of every plate, in world coordinates, so a model is judged
+   * against the plate it stands on rather than the first one.
+   */
+  const plateVolumeBounds = React.useMemo(() => {
+    if (!scene.view3dSettings.enabled) return null;
+    const { maxZMm } = scene.view3dSettings;
+
+    return new Map(scene.plateFrames.map((frame) => [frame.id, new THREE.Box3(
+      new THREE.Vector3(frame.minX, frame.minY, 0),
+      new THREE.Vector3(frame.maxX, frame.maxY, maxZMm),
+    )]));
+  }, [
+    scene.plateFrames,
+    scene.view3dSettings.enabled,
+    scene.view3dSettings.maxZMm,
+  ]);
+
   const outsidePlateModelIds = React.useMemo(() => {
     if (!buildVolumeBounds) return [] as string[];
     const BUILD_VOLUME_BOUNDS_EPS_MM = 0.01;
+    const firstPlateId = scene.plateFrames[0]?.id;
 
     return scene.models
       .filter((model) => model.visible)
       .filter((model) => {
+        const volume = (plateVolumeBounds && (model.plateId ?? firstPlateId)
+          ? plateVolumeBounds.get(model.plateId ?? firstPlateId ?? '')
+          : undefined) ?? buildVolumeBounds;
         const effectiveTransform =
           (scene.activeModelId === model.id && displayActiveModelId === scene.activeModelId)
             ? transformMgr.transform
             : model.transform;
-        const bounds = computeModelWorldBounds(model, effectiveTransform, buildVolumeBounds);
-        return isBoundsOutsideVolume(bounds, buildVolumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM);
+        const bounds = computeModelWorldBounds(model, effectiveTransform, volume);
+        return isBoundsOutsideVolume(bounds, volume, BUILD_VOLUME_BOUNDS_EPS_MM);
       })
       .map((model) => model.id);
   }, [
     buildVolumeBounds,
     computeModelWorldBounds,
     displayActiveModelId,
+    plateVolumeBounds,
     scene.activeModelId,
     scene.models,
+    scene.plateFrames,
     transformMgr.transform,
   ]);
 
@@ -10264,9 +10288,15 @@ export default function Home() {
             heatmapMaxAngle={scene.heatmapMaxAngle}
             heatmapColors={scene.heatmapColors}
             interiorView={interiorView}
+            plates={scene.plates}
+            plateFrames={scene.plateFrames}
+            activePlateId={scene.activePlateId}
+            onActivatePlate={scene.activatePlate}
+            onAddPlate={() => { scene.addPlate(); }}
+            onRenamePlate={scene.renamePlate}
             plateName={scene.plateName}
             onPlateNameChange={scene.setPlateName}
-            showPlateName={scene.models.length > 0}
+            showPlateName={scene.models.length > 0 || scene.plates.length > 1}
             onArrangePlate={() => {
               // The regular arrange, at the settings this button is for: 1mm apart with
               // Z-rotation allowed. Passed as a per-run override, so the panel keeps

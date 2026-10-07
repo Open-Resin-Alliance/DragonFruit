@@ -44,7 +44,7 @@ msgid "{count, plural, one {# mesh will be exported.} other {# meshes will be ex
 msgstr "{count, plural, one {Se exportará # malla.} other {Se exportarán # mallas.}}"
 
 #. Warning badge over the viewport when models stick out of the printer build volume.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:227
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:229
 msgid "{count, plural, one {# model out of build volume} other {# models out of build volume}}"
 msgstr "{count, plural, one {# modelo fuera del volumen de impresión} other {# modelos fuera del volumen de impresión}}"
 
@@ -286,7 +286,7 @@ msgstr "Añade otro bucle y empieza a dibujarlo. Al cortar se cortan todos los b
 msgid "Add contacts along the edge or corner a pose bears on, so a leaning part is held against toppling and peel (default on)"
 msgstr "Añade contactos a lo largo del borde o la esquina en que se apoya la pose, para que una pieza inclinada no vuelque ni se despegue (activado por defecto)"
 
-#: src/app/page.tsx:2353
+#: src/app/page.tsx:2354
 msgid "Add joint"
 msgstr "Añadir unión"
 
@@ -304,7 +304,7 @@ msgid "Add or switch printer anytime from the top bar."
 msgstr "Añade o cambia de impresora en cualquier momento desde la barra superior."
 
 #. Accessible name of the button beside the build plate that will add another plate. Inert for now, so it reads as unavailable to a screen reader too.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1580
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1608
 msgid "Add plate"
 msgstr "Añadir plataforma"
 
@@ -404,7 +404,7 @@ msgstr "Aplicar a la sesión"
 msgid "Apply this preset to the auto-support settings"
 msgstr "Aplica este preajuste a los ajustes de autosoportes"
 
-#: src/app/page.tsx:11014
+#: src/app/page.tsx:11046
 msgid "Are you sure you want to remove every model from the plate?"
 msgstr "¿Seguro que quieres quitar todos los modelos de la plataforma?"
 
@@ -453,7 +453,7 @@ msgid "Auto adapts by AA level, Off is fastest, On favors smaller PNG files"
 msgstr "Automático se adapta al nivel de AA, Desactivado es lo más rápido, Activado prioriza archivos PNG más pequeños"
 
 #. Tooltip on the arrange button beside the build plate. Runs the standard arrange across every model, 1mm apart, with Z-rotation allowed.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1586
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1634
 msgid "Auto arrange the plate"
 msgstr "Ordenar la plataforma automáticamente"
 
@@ -617,7 +617,7 @@ msgstr "Los archivos de guardado automático solo existen en la versión de escr
 msgid "Autosave idle delay"
 msgstr "Espera antes de guardar"
 
-#: src/app/page.tsx:1065
+#: src/app/page.tsx:1066
 msgid "Autosave is not working"
 msgstr "El guardado automático no funciona"
 
@@ -648,7 +648,7 @@ msgstr "Área media de isla"
 #. View cube face (the side opposite Front), rendered uppercase inside a small 3D cube. Keep it as short as possible.
 #: src/components/layout/FirstRunOnboarding.tsx:278
 #: src/components/layout/OnboardingPrinterLibrary.tsx:279
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1592
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1640
 msgid "Back"
 msgstr "Atrás"
 
@@ -791,7 +791,7 @@ msgid "Border Margin"
 msgstr "Margen del borde"
 
 #. View cube face (seen from below), rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1596
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1644
 msgid "Bottom"
 msgstr "Abajo"
 
@@ -881,7 +881,7 @@ msgstr "Modo de vista de la cámara: {currentLabel}"
 msgid "Can't open this scene"
 msgstr "No se puede abrir esta escena"
 
-#: src/app/page.tsx:10991
+#: src/app/page.tsx:11023
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:468
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:664
 #: src/components/controls/AutoSupportPanel.tsx:652
@@ -1051,11 +1051,11 @@ msgid "Clear All failed. Check console for details."
 msgstr "«Borrar todo» ha fallado. Mira la consola para más detalles."
 
 #. Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1584
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1632
 msgid "Clear build plate"
 msgstr "Vaciar la plataforma"
 
-#: src/app/page.tsx:10980
+#: src/app/page.tsx:11012
 msgid "Clear Build Plate?"
 msgstr "¿Vaciar la plataforma?"
 
@@ -1063,7 +1063,7 @@ msgstr "¿Vaciar la plataforma?"
 msgid "Clear Override"
 msgstr "Quitar la anulación"
 
-#: src/app/page.tsx:11007
+#: src/app/page.tsx:11039
 msgid "Clear Plate"
 msgstr "Vaciar plataforma"
 
@@ -1098,7 +1098,7 @@ msgstr "ID de cliente"
 msgid "Close"
 msgstr "Cerrar"
 
-#: src/app/page.tsx:10986
+#: src/app/page.tsx:11018
 msgid "Close clear-plate confirmation"
 msgstr "Cerrar la confirmación de vaciado"
 
@@ -1203,7 +1203,7 @@ msgid "Color Scheme"
 msgstr "Esquema de color"
 
 #. Hover text on the add-plate button beside the build plate. The app has one plate for now, so the button says so instead of doing nothing.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1581
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1609
 msgid "Coming Soon!"
 msgstr "¡Próximamente!"
 
@@ -1245,7 +1245,7 @@ msgstr "Configura los parámetros de detección de islas"
 msgid "Configure Networking Later"
 msgstr "Configurar la red más tarde"
 
-#: src/app/page.tsx:10979
+#: src/app/page.tsx:11011
 msgid "Confirm clearing the build plate"
 msgstr "Confirmar el vaciado de la plataforma"
 
@@ -1347,7 +1347,7 @@ msgstr "Contorno"
 msgid "Contoured regions"
 msgstr "Regiones contorneadas"
 
-#: src/app/page.tsx:8197
+#: src/app/page.tsx:8223
 msgid "Converting support data and model metadata"
 msgstr "Convirtiendo los datos de soportes y los metadatos del modelo"
 
@@ -1817,7 +1817,7 @@ msgstr "DragonFruit va a <0>descargar, verificar e instalar</0> la actualizació
 msgid "Drop supported files"
 msgstr "Suelta archivos compatibles"
 
-#: src/app/page.tsx:10263
+#: src/app/page.tsx:10289
 msgid "Drop supported files to import"
 msgstr "Suelta aquí los ficheros compatibles para importarlos"
 
@@ -1854,7 +1854,7 @@ msgstr "Editar el perfil de material"
 msgid "Edit printer profile"
 msgstr "Editar el perfil de impresora"
 
-#: src/app/page.tsx:2359
+#: src/app/page.tsx:2360
 msgid "Editor"
 msgstr "Editor"
 
@@ -2274,7 +2274,7 @@ msgid "From the community, for the community. Free to use, open to contribute, a
 msgstr "De la comunidad y para la comunidad. Libre de usar, abierto a contribuciones y moldeado por quienes imprimen con él."
 
 #. Orientation label, rendered uppercase on the view cube and on the build plate's front edge. Keep it as short as possible — long words are auto-shrunk to fit and become hard to read.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1588
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1636
 msgid "Front"
 msgstr "Frente"
 
@@ -2338,7 +2338,7 @@ msgid "GitHub OAuth popup opened."
 msgstr "Ventana de OAuth de GitHub abierta."
 
 #. Tooltip on the build plate's name widget while it is still unnamed.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1579
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1607
 msgid "Give this build plate a name"
 msgstr "Dale un nombre a esta plataforma"
 
@@ -2847,7 +2847,7 @@ msgid "Leave the collection as it is"
 msgstr "Deja la colección como está"
 
 #. View cube face, rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1594
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1642
 msgid "Left"
 msgstr "Izq."
 
@@ -2855,7 +2855,7 @@ msgstr "Izq."
 msgid "Length"
 msgstr "Longitud"
 
-#: src/app/page.tsx:8237
+#: src/app/page.tsx:8263
 msgid "Letting DragonFruit finish its startup animation before loading your scene."
 msgstr "Dejando que DragonFruit termine su animación de arranque antes de cargar la escena."
 
@@ -2936,7 +2936,7 @@ msgstr "Cargando el estado de las copias…"
 msgid "Loading Mesh Files…"
 msgstr "Cargando ficheros de malla…"
 
-#: src/app/page.tsx:8187
+#: src/app/page.tsx:8213
 #: src/features/scene/sceneImportMessages.ts:23
 msgid "Loading Mesh…"
 msgstr "Cargando malla…"
@@ -2945,9 +2945,9 @@ msgstr "Cargando malla…"
 msgid "Loading remote material…"
 msgstr "Cargando el material remoto…"
 
-#: src/app/page.tsx:4398
-#: src/app/page.tsx:8187
-#: src/app/page.tsx:8196
+#: src/app/page.tsx:4400
+#: src/app/page.tsx:8213
+#: src/app/page.tsx:8222
 msgid "Loading Scene…"
 msgstr "Cargando escena…"
 
@@ -2997,7 +2997,7 @@ msgid "LocalStorage Keys"
 msgstr "Claves de LocalStorage"
 
 #. Tooltip on the lock button beside the build plate while it is unlocked. Locking refuses new meshes and moves of the models already on the plate.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1582
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1630
 msgid "Lock build plate"
 msgstr "Bloquear la plataforma"
 
@@ -3430,7 +3430,7 @@ msgstr "Sin antialiasing"
 msgid "No active printer"
 msgstr "Sin impresora activa"
 
-#: src/app/page.tsx:1069
+#: src/app/page.tsx:1070
 msgid "No autosave has succeeded this session. Save your project manually."
 msgstr "Ningún guardado automático ha funcionado en esta sesión. Guarda tu proyecto a mano."
 
@@ -3794,7 +3794,7 @@ msgstr "Abrir escena…"
 msgid "Opening"
 msgstr "Abriendo"
 
-#: src/app/page.tsx:8234
+#: src/app/page.tsx:8260
 msgid "Opening scene…"
 msgstr "Abriendo escena…"
 
@@ -3922,8 +3922,12 @@ msgstr "Mensaje de colocación."
 msgid "Placing supports"
 msgstr "Colocando soportes"
 
+#: src/features/scene/plates/plateMessages.ts:19
+msgid "Plate {index}"
+msgstr "Plata {index}"
+
 #. What the build plate's name widget shows while the plate has no name of its own, including after the plate is cleared or a new scene is started. The number is the plate's, plural forms come later with multiple plates.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1577
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1605
 msgid "Plate 1"
 msgstr "Plataforma 1"
 
@@ -4175,7 +4179,7 @@ msgstr "Repetir el escaneo por líneas"
 msgid "Re-slice required after profile change"
 msgstr "Es necesario volver a laminar tras cambiar de perfil"
 
-#: src/app/page.tsx:4399
+#: src/app/page.tsx:4401
 msgid "Reading autosaved scene…"
 msgstr "Leyendo la escena guardada automáticamente…"
 
@@ -4310,7 +4314,7 @@ msgid "Rename"
 msgstr "Renombrar"
 
 #. Tooltip on the pencil beside the build plate's name.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1578
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1606
 msgid "Rename build plate"
 msgstr "Renombrar la plataforma"
 
@@ -4444,8 +4448,8 @@ msgstr "Restaurar los valores de fábrica"
 msgid "Restore Factory Defaults?"
 msgstr "¿Restaurar los valores de fábrica?"
 
-#: src/app/page.tsx:4430
-#: src/app/page.tsx:4441
+#: src/app/page.tsx:4432
+#: src/app/page.tsx:4443
 msgid "Restore Failed"
 msgstr "Error al restaurar"
 
@@ -4474,7 +4478,7 @@ msgid "Revert Changes"
 msgstr "Descartar los cambios"
 
 #. View cube face, rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1593
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1641
 msgid "Right"
 msgstr "Dcha."
 
@@ -4829,12 +4833,12 @@ msgid "Selected printer is offline"
 msgstr "La impresora seleccionada está sin conexión"
 
 #. Shown while dragging a selection rectangle right to left, which takes every object the rectangle touches. Mirrors the CAD convention; keep it on one short line.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3065
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3146
 msgid "Selection Mode: Contact (Right to Left)"
 msgstr "Modo de selección: contacto (de derecha a izquierda)"
 
 #. Shown while dragging a selection rectangle left to right, which takes only the objects the rectangle fully encloses. Mirrors the CAD convention; keep it on one short line.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3069
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3150
 msgid "Selection Mode: Enclosed (Left to Right)"
 msgstr "Modo de selección: volumen completo (de izquierda a derecha)"
 
@@ -5287,7 +5291,7 @@ msgstr "El soporte chocaría con la geometría del modelo."
 msgid "Supported: {extensions}"
 msgstr "Compatibles: {extensions}"
 
-#: src/app/page.tsx:2359
+#: src/app/page.tsx:2360
 #: src/components/ui/EditorContextMenu.tsx:109
 msgid "Supports"
 msgstr "Soportes"
@@ -5382,16 +5386,16 @@ msgstr "Ancho de la espiga en milímetros"
 msgid "Tension"
 msgstr "Tensión"
 
-#: src/app/page.tsx:4443
+#: src/app/page.tsx:4445
 msgid "The autosave recovery file could not be found."
 msgstr "No se encuentra el archivo de recuperación."
 
-#: src/app/page.tsx:4431
-#: src/app/page.tsx:4444
+#: src/app/page.tsx:4433
+#: src/app/page.tsx:4446
 msgid "The autosaved recovery file is corrupted or unreadable."
 msgstr "El archivo de recuperación está dañado o no se puede leer."
 
-#: src/app/page.tsx:1066
+#: src/app/page.tsx:1067
 msgid "The background recovery save failed repeatedly."
 msgstr "El guardado de recuperación en segundo plano ha fallado varias veces seguidas."
 
@@ -5399,7 +5403,7 @@ msgstr "El guardado de recuperación en segundo plano ha fallado varias veces se
 msgid "The build plate awaits."
 msgstr "La placa de impresión te espera."
 
-#: src/app/page.tsx:11033
+#: src/app/page.tsx:11065
 msgid "The build plate is locked."
 msgstr "La plataforma está bloqueada."
 
@@ -5488,7 +5492,7 @@ msgstr "La resina está lista. ¿Y tú?"
 msgid "The saved run policy the settings below are. Selecting one applies it immediately; the rest of the dialog stays staged until you save."
 msgstr "La política de ejecución guardada que corresponde a los ajustes de abajo. Al elegir uno se aplica en el acto; el resto de la ventana queda pendiente hasta que guardes."
 
-#: src/app/page.tsx:4432
+#: src/app/page.tsx:4434
 msgid "The scene importer rejected or could not parse the autosave data."
 msgstr "El importador de escenas rechazó los datos del guardado automático o no pudo interpretarlos."
 
@@ -5628,7 +5632,7 @@ msgstr "Rango de Ø de la punta"
 msgid "To recover it, open the scene in an older version of DragonFruit and save it again — the re-saved scene will open here."
 msgstr "Para recuperarla, abre la escena con una versión anterior de DragonFruit y vuelve a guardarla: la escena guardada de nuevo se abrirá aquí."
 
-#: src/app/page.tsx:2348
+#: src/app/page.tsx:2349
 msgid "Toggle curve"
 msgstr "Alternar curva"
 
@@ -5664,7 +5668,7 @@ msgid "Tool layout"
 msgstr "Disposición de herramientas"
 
 #. View cube face (seen from above), rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1595
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1643
 msgid "Top"
 msgstr "Arriba"
 
@@ -5714,7 +5718,7 @@ msgstr "Interfaz y tema"
 msgid "Unavailable"
 msgstr "No disponible"
 
-#: src/app/page.tsx:10983
+#: src/app/page.tsx:11015
 msgid "Undo brings the models back"
 msgstr "Deshacer devuelve los modelos"
 
@@ -5752,21 +5756,21 @@ msgid "Unknown manufacturer"
 msgstr "Fabricante desconocido"
 
 #. Tooltip on the lock button beside the build plate while it is locked.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1583
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1631
 msgid "Unlock build plate"
 msgstr "Desbloquear la plataforma"
 
-#: src/app/page.tsx:11036
+#: src/app/page.tsx:11068
 msgid "Unlock it to add or move models."
 msgstr "Desbloquéala para añadir o mover modelos."
 
 #. Tooltip on the arrange button beside the build plate while the plate is locked, which is why it is disabled.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1587
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1635
 msgid "Unlock the plate to arrange it"
 msgstr "Desbloquea la plataforma para ordenarla"
 
 #. Tooltip on the bin beside the build plate while the plate is locked, which is why it is disabled.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1585
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1633
 msgid "Unlock the plate to clear it"
 msgstr "Desbloquea la plataforma para vaciarla"
 
@@ -5782,7 +5786,7 @@ msgstr "Puedes perder los cambios sin guardar."
 msgid "Unsaved Scene Found"
 msgstr "Hay una escena sin guardar"
 
-#: src/app/page.tsx:10263
+#: src/app/page.tsx:10289
 msgid "Unsupported file format"
 msgstr "Formato de fichero no compatible"
 

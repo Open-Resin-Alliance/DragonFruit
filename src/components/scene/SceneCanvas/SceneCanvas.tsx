@@ -133,6 +133,8 @@ import { PickingEmptySpaceHoverResetter, SceneRenderBindings } from './SceneCanv
 
 import { PickingProviderWrapper, SelectionSync, useInteractionWarning } from './SceneSelectionAndPicking';
 import { CameraClipPlaneStabilizer, CameraProvider, EnableLocalClipping, Helpers, Lights, SceneMoodOverlay } from './SceneEnvironment';
+import { plateNumberPlaceholder } from '@/features/scene/plates/plateMessages';
+import type { PlateFrame, ScenePlate } from '@/features/scene/useSceneCollectionManager';
 import { StlMesh } from './StlMesh';
 import { setClipBounds } from './clipBoundsStore';
 import { setSupportPlacementGuideZ, useSupportPlacementGuideActive } from './supportPlacementGuideStore';
@@ -459,6 +461,12 @@ export function SceneCanvas({
   heatmapMaxAngle,
   heatmapColors,
   interiorView = false,
+  plates,
+  plateFrames,
+  activePlateId,
+  onActivatePlate,
+  onAddPlate,
+  onRenamePlate,
   plateName,
   onPlateNameChange,
   showPlateName = true,
@@ -580,6 +588,14 @@ export function SceneCanvas({
   heatmapMaxAngle?: number;
   heatmapColors?: string[];
   interiorView?: boolean;
+  /** The scene's plates and where each one sits in the cascade. */
+  plates?: ScenePlate[];
+  plateFrames?: PlateFrame[];
+  /** Which plate is being worked on. */
+  activePlateId?: string;
+  onActivatePlate?: (plateId: string) => void;
+  onAddPlate?: () => void;
+  onRenamePlate?: (plateId: string, name: string) => void;
   /** The build plate's name and its setter. Strings for its editor are resolved here. */
   plateName?: string;
   onPlateNameChange?: (next: string) => void;
@@ -1348,16 +1364,28 @@ export function SceneCanvas({
   );
   const activeBuildVolumeSettings = view3dSettings ?? DEFAULT_VIEW3D_SETTINGS;
 
+  /** Where the active plate is in the world. No frames means one plate at the origin. */
+  const activePlateFrame = React.useMemo(
+    () => plateFrames?.find((frame) => frame.id === activePlateId) ?? plateFrames?.[0],
+    [plateFrames, activePlateId],
+  );
+
   const buildVolumeCenterTarget = React.useMemo(() => {
     const centerX = activeBuildVolumeSettings.originMode === 'front_left' ? activeBuildVolumeSettings.widthMm * 0.5 : 0;
     const centerY = activeBuildVolumeSettings.originMode === 'front_left' ? activeBuildVolumeSettings.depthMm * 0.5 : 0;
     const centerZ = activeBuildVolumeSettings.maxZMm * 0.5;
-    return new THREE.Vector3(centerX, centerY, centerZ);
+    return new THREE.Vector3(
+      centerX + (activePlateFrame?.dxMm ?? 0),
+      centerY + (activePlateFrame?.dyMm ?? 0),
+      centerZ,
+    );
   }, [
     activeBuildVolumeSettings.depthMm,
     activeBuildVolumeSettings.maxZMm,
     activeBuildVolumeSettings.originMode,
     activeBuildVolumeSettings.widthMm,
+    activePlateFrame?.dxMm,
+    activePlateFrame?.dyMm,
   ]);
 
   const { defaultCamera, orbitTarget, setOrbitTargetFromPoint, introBoundsSnapshot, cameraIntroRunId, cameraHomeResetRunId, resetCameraHome } =
@@ -1579,6 +1607,26 @@ export function SceneCanvas({
   const plateNameEmptyTitle = _(msg({ message: 'Give this build plate a name', comment: "Tooltip on the build plate's name widget while it is still unnamed." }));
   const addPlateLabel = _(msg({ message: 'Add plate', comment: 'Accessible name of the button beside the build plate that will add another plate. Inert for now, so it reads as unavailable to a screen reader too.' }));
   const addPlateComingSoonTitle = _(msg({ message: 'Coming Soon!', comment: 'Hover text on the add-plate button beside the build plate. The app has one plate for now, so the button says so instead of doing nothing.' }));
+
+  /**
+   * What the canvas draws: one entry per plate, at its place in the cascade.
+   * Undefined for a caller with no plate list, which keeps the single-plate path
+   * exactly as it was.
+   */
+  const plateLayers = React.useMemo(() => {
+    if (!plates || plates.length === 0 || !plateFrames || plateFrames.length === 0) return undefined;
+    return plates.map((plate, index) => {
+      const frame = plateFrames.find((candidate) => candidate.id === plate.id) ?? plateFrames[index];
+      return {
+        id: plate.id,
+        name: plate.name,
+        placeholder: plateNumberPlaceholder(index + 1, _),
+        dxMm: frame?.dxMm ?? 0,
+        dyMm: frame?.dyMm ?? 0,
+        isActive: plate.id === activePlateId,
+      };
+    });
+  }, [plates, plateFrames, activePlateId, _]);
   const plateLockTitle = _(msg({ message: 'Lock build plate', comment: 'Tooltip on the lock button beside the build plate while it is unlocked. Locking refuses new meshes and moves of the models already on the plate.' }));
   const plateUnlockTitle = _(msg({ message: 'Unlock build plate', comment: 'Tooltip on the lock button beside the build plate while it is locked.' }));
   const plateClearTitle = _(msg({ message: 'Clear build plate', comment: 'Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.' }));
@@ -1865,6 +1913,36 @@ export function SceneCanvas({
     );
   }, [activeBuildVolumeSettings]);
 
+  /**
+   * The build volume of every plate, in world coordinates. A model is judged
+   * against the plate it stands on, so a plate further along the cascade does not
+   * read as "outside the volume" for the crime of not being the first one.
+   */
+  const plateVolumeBoxes = React.useMemo(() => {
+    if (!plateFrames || plateFrames.length === 0 || !activeBuildVolumeSettings?.enabled) return null;
+    const sm = activeBuildVolumeSettings.safetyMarginMm;
+    const marginFront = sm?.front ?? 0;
+    const marginBack = sm?.back ?? 0;
+    const marginLeft = sm?.left ?? 0;
+    const marginRight = sm?.right ?? 0;
+
+    const boxes = new Map<string, THREE.Box3>();
+    for (const frame of plateFrames) {
+      boxes.set(frame.id, new THREE.Box3(
+        new THREE.Vector3(frame.minX + marginLeft, frame.minY + marginFront, 0),
+        new THREE.Vector3(frame.maxX - marginRight, frame.maxY - marginBack, activeBuildVolumeSettings.maxZMm),
+      ));
+    }
+    return boxes;
+  }, [plateFrames, activeBuildVolumeSettings]);
+
+  /** The volume a model is judged against: its own plate's, or the only one. */
+  const volumeBoxForModel = React.useCallback((model: LoadedModel): THREE.Box3 | null => {
+    if (!plateVolumeBoxes) return buildVolumeBounds;
+    const plateId = model.plateId ?? plateFrames?.[0]?.id;
+    return (plateId ? plateVolumeBoxes.get(plateId) : undefined) ?? buildVolumeBounds;
+  }, [plateVolumeBoxes, plateFrames, buildVolumeBounds]);
+
   const cachedModelWorldBoundsRef = React.useRef<Map<string, THREE.Box3>>(new Map());
   const activeTransformOverrideModelId = React.useMemo(
     () => (transform ? activeModelId : null),
@@ -1929,18 +2007,21 @@ export function SceneCanvas({
     return models
       .filter((model) => model.visible)
       .map((model) => {
-        const bounds = modelWorldBounds.get(model.id) ?? computeModelWorldBounds(model, model.transform, buildVolumeBounds);
+        const volume = volumeBoxForModel(model) ?? buildVolumeBounds;
+        const bounds = modelWorldBounds.get(model.id) ?? computeModelWorldBounds(model, model.transform, volume);
         return {
           id: model.id,
           name: model.name,
           bounds,
+          volume,
         };
       })
-      .filter(({ bounds }) => isBoundsOutsideVolume(bounds, buildVolumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM));
+      .filter(({ bounds, volume }) => isBoundsOutsideVolume(bounds, volume, BUILD_VOLUME_BOUNDS_EPS_MM));
   }, [
     BUILD_VOLUME_BOUNDS_EPS_MM,
     liveDragTransformVersion,
     buildVolumeBounds,
+    volumeBoxForModel,
     computeModelWorldBounds,
     isGizmoDragging,
     isGizmoRetargeting,
@@ -6076,6 +6157,10 @@ export function SceneCanvas({
           plateNamePlaceholder={plateNamePlaceholder}
           plateNameEditTitle={plateNameEditTitle}
           plateNameEmptyTitle={plateNameEmptyTitle}
+          plates={plateLayers}
+          onActivatePlate={onActivatePlate}
+          onRenamePlate={onRenamePlate}
+          onAddPlate={onAddPlate}
           addPlateLabel={addPlateLabel}
           addPlateComingSoonTitle={addPlateComingSoonTitle}
           plateLocked={plateLocked}

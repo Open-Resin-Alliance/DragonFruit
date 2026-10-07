@@ -34,6 +34,7 @@ type PlateWidgetAnchor = [number, number, number];
 export function PlateSideButtons({
   addLabel,
   addComingSoonTitle,
+  onAdd,
   locked,
   lockTitle,
   unlockTitle,
@@ -53,8 +54,17 @@ export function PlateSideButtons({
 }: {
   /** Accessible name of the add-plate button, already translated. */
   addLabel: string;
-  /** The add-plate button's hover wording, already translated. */
-  addComingSoonTitle: string;
+  /**
+   * The add-plate button's hover wording, already translated. Only needed while the
+   * button is inert: once there is somewhere to add a plate to (`onAdd`), it says what
+   * it does like every other button here.
+   */
+  addComingSoonTitle?: string;
+  /**
+   * What adding a plate does. Absent while the app has nowhere to keep a second plate,
+   * which is what leaves the button disabled and wearing the coming-soon wording.
+   */
+  onAdd?: () => void;
   locked: boolean;
   /** Wording shown while the plate is unlocked, i.e. what pressing the lock will do. */
   lockTitle: string;
@@ -89,6 +99,13 @@ export function PlateSideButtons({
     opacity: 0.55,
   } as const;
 
+  /** A button that is merely available: quiet grey, so locked/disabled stand out. */
+  const quietButtonStyle = {
+    borderColor: 'color-mix(in srgb, var(--text-muted), transparent 55%)',
+    background: 'color-mix(in srgb, var(--surface-0), transparent 55%)',
+    color: 'var(--text-muted)',
+  } as const;
+
   return (
     <>
       <Html
@@ -106,13 +123,15 @@ export function PlateSideButtons({
         <div className="flex flex-col items-start gap-3 select-none" style={{ transform: 'translate(50%, 50%)' }}>
           {/* The tooltip goes on a wrapper, not the button: a disabled button emits no
               pointer events of its own, so hovering it would show nothing. */}
-          <Tooltip content={addComingSoonTitle} maxWidth={200} delayMs={PLATE_WIDGET_TOOLTIP_DELAY_MS}>
+          <Tooltip content={onAdd ? addLabel : addComingSoonTitle} maxWidth={200} delayMs={PLATE_WIDGET_TOOLTIP_DELAY_MS}>
             <button
               type="button"
-              disabled
+              disabled={!onAdd}
+              onClick={onAdd}
+              onPointerDown={(event) => event.stopPropagation()}
               aria-label={addLabel}
-              className="flex h-[104px] w-[104px] cursor-not-allowed items-center justify-center rounded-[5.5px] border transition-[filter,background-color,border-color] duration-150 hover:brightness-110"
-              style={disabledButtonStyle}
+              className={`flex h-[104px] w-[104px] items-center justify-center rounded-[5.5px] border transition-[filter,background-color,border-color] duration-150 ${onAdd ? 'cursor-pointer hover:brightness-110' : 'cursor-not-allowed'}`}
+              style={onAdd ? quietButtonStyle : disabledButtonStyle}
             >
               <Plus className="h-14 w-14" />
             </button>
@@ -129,16 +148,13 @@ export function PlateSideButtons({
               style={locked
                 ? {
                   // Locked is a state worth noticing, so it wears the accent rather
-                  // than sharing the quiet grey of the inert button above it.
+                  // than sharing the quiet grey of the button above it.
                   borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
                   background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)',
                   color: 'var(--text-strong)',
                 }
-                : {
-                  borderColor: 'color-mix(in srgb, var(--text-muted), transparent 55%)',
-                  background: 'color-mix(in srgb, var(--surface-0), transparent 55%)',
-                  color: 'var(--text-muted)',
-                }}
+                : quietButtonStyle
+              }
             >
               <LockIcon className="h-14 w-14" />
             </button>
@@ -154,11 +170,7 @@ export function PlateSideButtons({
               className={`flex h-[104px] w-[104px] items-center justify-center rounded-[5.5px] border transition-[filter,background-color,border-color] duration-150 ${arrangeDisabled ? 'cursor-not-allowed' : 'cursor-pointer hover:brightness-110'}`}
               style={arrangeDisabled
                 ? disabledButtonStyle
-                : {
-                  borderColor: 'color-mix(in srgb, var(--text-muted), transparent 55%)',
-                  background: 'color-mix(in srgb, var(--surface-0), transparent 55%)',
-                  color: 'var(--text-muted)',
-                }}
+                : quietButtonStyle}
             >
               <LayoutGrid className="h-14 w-14" />
             </button>

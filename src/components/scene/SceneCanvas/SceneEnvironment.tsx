@@ -218,6 +218,352 @@ function SafetyStripeMaterial({
   );
 }
 
+/** The scene helpers' scenery never answers a pick. */
+const nullRaycast = () => null;
+
+/**
+ * One plate in the scene's plate list, as the canvas needs it: its own name (and the
+ * wording to show while it has none), where it sits relative to the first plate
+ * (`dxMm`/`dyMm`, in build-volume millimetres), and whether it is the plate being
+ * worked on.
+ */
+export type PlateLayerSpec = {
+  id: string;
+  name: string;
+  /** Already-translated wording for an unnamed plate, e.g. "Plate 2". */
+  placeholder: string;
+  dxMm: number;
+  dyMm: number;
+  isActive: boolean;
+};
+
+/** The plate's own side buttons, minus their anchors: placing them is this file's job. */
+type PlateSideButtonsProps = Omit<
+  React.ComponentProps<typeof PlateSideButtons>,
+  'columnAnchor' | 'clearAnchor' | 'labelScale'
+>;
+
+/** The plate's name widget, with everything committing a new name needs. */
+type PlateLayerNameLabel = {
+  name: string;
+  placeholder: string;
+  editTitle: string;
+  emptyTitle: string;
+  onCommit: (next: string) => void;
+};
+
+/** One safety-margin strip: the plane the stripes are drawn across, and where it sits. */
+type PlateMarginStrip = {
+  widthMm: number;
+  heightMm: number;
+  /** The plate's overhang the stripes continue across, so they run off the edge. */
+  bleedXMm: number;
+  bleedYMm: number;
+  position: [number, number, number];
+  geometry: THREE.ShapeGeometry | null;
+};
+
+/**
+ * Everything a plate layer draws from, apart from the plate itself: the geometry,
+ * textures, colours and widget anchors every plate shares. Built once in `Helpers`, so
+ * a second plate costs an offset rather than a second extrude and a second copy of
+ * every texture. Positions are the first plate's, in world space: a layer is the whole
+ * of this, shifted by its own offset.
+ */
+type PlateLayerShared = {
+  /** What the scene helpers show at all, and the plate's own opacity, already clamped. */
+  showGrid: boolean;
+  showBuildPlate: boolean;
+  buildPlateOpacity: number;
+  plate: {
+    geometry: THREE.ExtrudeGeometry;
+    color: string;
+    /** World centre of the plate's box. */
+    position: [number, number, number];
+  };
+  grid: {
+    baseSize: number;
+    divisions: number;
+    scaleX: number;
+    scaleZ: number;
+    position: [number, number, number];
+    majorColor: string;
+    minorColor: string;
+    /** The same two, faded toward the plate: what a plate that is not active wears. */
+    mutedMajorColor: string;
+    mutedMinorColor: string;
+  };
+  logo: {
+    groupPosition: [number, number, number];
+    position: [number, number, number];
+    widthMm: number;
+    heightMm: number;
+    texture: THREE.Texture;
+  };
+  axes: {
+    position: [number, number, number];
+    length: number;
+    shaftRadius: number;
+    headRadius: number;
+    headLength: number;
+    labelLift: number;
+    xGradient: THREE.Texture | null;
+    yGradient: THREE.Texture | null;
+    zGradient: THREE.Texture | null;
+  };
+  frontMarker: {
+    position: [number, number, number];
+    widthMm: number;
+    depthMm: number;
+    texture: THREE.Texture | null;
+  };
+  margins: {
+    groupPosition: [number, number, number];
+    /** Whether the plate has any margin to stripe at all. */
+    visible: boolean;
+    front: PlateMarginStrip | null;
+    back: PlateMarginStrip | null;
+    left: PlateMarginStrip | null;
+    right: PlateMarginStrip | null;
+  };
+  widgets: {
+    /** World units per CSS pixel, sized to the plate. */
+    scale: number;
+    /** Where the name widget's bottom-left corner sits. */
+    nameLabelPosition: [number, number, number];
+    /** Where each side-button group hangs: the column's top-left, the bin's bottom-left. */
+    columnAnchor: [number, number, number];
+    clearAnchor: [number, number, number];
+  };
+};
+
+/**
+ * One plate and everything drawn on it, placed by its offset from the first plate.
+ *
+ * A plate that is not the active one reads as secondary: the opacity of everything
+ * painted on it — the surface, its safety strips, the logo and the FRONT marker — is
+ * halved, and its grid fades toward the plate, so the plate being worked on comes
+ * first. Its surface is also the one part of it that answers a pick, because activating
+ * it is the only thing an inactive plate does; the active plate's surface stays
+ * unpickable, so a click on it is still a click on the scene. The axes triad is left
+ * alone: it marks the origin, not the plate.
+ */
+function PlateLayer({
+  dxMm,
+  dyMm,
+  isActive,
+  shared,
+  nameLabel,
+  sideButtons,
+  onActivate,
+}: {
+  dxMm: number;
+  dyMm: number;
+  isActive: boolean;
+  shared: PlateLayerShared;
+  nameLabel?: PlateLayerNameLabel;
+  sideButtons?: PlateSideButtonsProps;
+  /** What picking the surface does, on a plate that is not the active one. */
+  onActivate?: () => void;
+}) {
+  // Halved rather than hidden: an inactive plate keeps its shape and stays readable, it
+  // just stops competing with the plate being worked on.
+  const dimFactor = isActive ? 1 : 0.5;
+  const plateOpacity = shared.buildPlateOpacity * dimFactor;
+  const pickable = !isActive && !!onActivate;
+  const handleActivate = React.useCallback(
+    (event: { stopPropagation: () => void }) => {
+      // Picking this plate is what the click is for, so it must not also read as a click
+      // on the empty scene behind it.
+      event.stopPropagation();
+      onActivate?.();
+    },
+    [onActivate],
+  );
+
+  return (
+    <group position={[dxMm, dyMm, 0]}>
+      {/* Primitive mock build plate under grid */}
+      <mesh
+        position={shared.plate.position}
+        renderOrder={-10}
+        raycast={pickable ? undefined : nullRaycast}
+        onClick={pickable ? handleActivate : undefined}
+        visible={shared.showBuildPlate && shared.buildPlateOpacity > 0.001}
+        frustumCulled={false}
+        userData={{ thumbnailHelperType: 'buildPlate' }}
+      >
+        <primitive object={shared.plate.geometry} attach="geometry" />
+        <meshStandardMaterial
+          color={shared.plate.color}
+          transparent
+          opacity={0.94 * plateOpacity}
+          side={THREE.FrontSide}
+          depthWrite
+        />
+      </mesh>
+
+      {/* Grid on XY plane (horizontal) - rotate 90° around X */}
+      {shared.showGrid && shared.buildPlateOpacity > 0.001 && (
+        <gridHelper
+          args={[
+            shared.grid.baseSize,
+            shared.grid.divisions,
+            isActive ? shared.grid.majorColor : shared.grid.mutedMajorColor,
+            isActive ? shared.grid.minorColor : shared.grid.mutedMinorColor,
+          ]}
+          position={shared.grid.position}
+          rotation={[Math.PI / 2, 0, 0]}
+          scale={[shared.grid.scaleX, 1, shared.grid.scaleZ]}
+          raycast={nullRaycast}
+          frustumCulled={false}
+          userData={{ thumbnailHelperType: 'grid' }}
+          // The grid's own lines are scenery too, but an inactive plate's are faint: its
+          // lines fade into the plate instead of drawing the eye away from it.
+          material-transparent={!isActive}
+          material-opacity={dimFactor}
+        />
+      )}
+
+      {shared.showGrid && shared.showBuildPlate && (
+        <group
+          position={shared.logo.groupPosition}
+          visible={shared.showBuildPlate && shared.buildPlateOpacity > 0.001}
+          frustumCulled={false}
+          userData={{ thumbnailHelperType: 'grid' }}
+        >
+          <mesh position={shared.logo.position} renderOrder={20} raycast={nullRaycast} frustumCulled={false}>
+            <planeGeometry args={[shared.logo.widthMm, shared.logo.heightMm]} />
+            <meshBasicMaterial
+              map={shared.logo.texture}
+              transparent
+              opacity={0.4 * dimFactor}
+              depthWrite={false}
+              polygonOffset
+              polygonOffsetFactor={-2}
+              polygonOffsetUnits={-2}
+              side={THREE.DoubleSide}
+              toneMapped={false}
+            />
+          </mesh>
+        </group>
+      )}
+
+      {/* Axes: short, thicker arrows hovering slightly above Z0 to avoid grid clipping */}
+      {shared.showGrid && (
+      <group position={shared.axes.position} frustumCulled={false} userData={{ thumbnailHelperType: 'grid' }}>
+        {/* X axis */}
+        <mesh position={[shared.axes.length * 0.5, 0, 0]} rotation={[0, 0, -Math.PI * 0.5]} raycast={nullRaycast}>
+          <cylinderGeometry args={[shared.axes.shaftRadius, shared.axes.shaftRadius, shared.axes.length, 12]} />
+          <meshBasicMaterial map={shared.axes.xGradient ?? undefined} toneMapped={false} />
+        </mesh>
+        <mesh position={[shared.axes.length + shared.axes.headLength * 0.5, 0, 0]} rotation={[0, 0, -Math.PI * 0.5]} raycast={nullRaycast}>
+          <coneGeometry args={[shared.axes.headRadius, shared.axes.headLength, 12]} />
+          <meshBasicMaterial map={shared.axes.xGradient ?? undefined} toneMapped={false} />
+        </mesh>
+
+        {/* Y axis */}
+        <mesh position={[0, shared.axes.length * 0.5, 0]} raycast={nullRaycast}>
+          <cylinderGeometry args={[shared.axes.shaftRadius, shared.axes.shaftRadius, shared.axes.length, 12]} />
+          <meshBasicMaterial map={shared.axes.yGradient ?? undefined} toneMapped={false} />
+        </mesh>
+        <mesh position={[0, shared.axes.length + shared.axes.headLength * 0.5, 0]} raycast={nullRaycast}>
+          <coneGeometry args={[shared.axes.headRadius, shared.axes.headLength, 12]} />
+          <meshBasicMaterial map={shared.axes.yGradient ?? undefined} toneMapped={false} />
+        </mesh>
+
+        {/* Z axis */}
+        <mesh position={[0, 0, shared.axes.length * 0.5]} rotation={[Math.PI * 0.5, 0, 0]} raycast={nullRaycast}>
+          <cylinderGeometry args={[shared.axes.shaftRadius, shared.axes.shaftRadius, shared.axes.length, 12]} />
+          <meshBasicMaterial map={shared.axes.zGradient ?? undefined} toneMapped={false} />
+        </mesh>
+        <mesh position={[0, 0, shared.axes.length + shared.axes.headLength * 0.5]} rotation={[Math.PI * 0.5, 0, 0]} raycast={nullRaycast}>
+          <coneGeometry args={[shared.axes.headRadius, shared.axes.headLength, 12]} />
+          <meshBasicMaterial map={shared.axes.zGradient ?? undefined} toneMapped={false} />
+        </mesh>
+
+        <group position={[0, 0, shared.axes.labelLift]}>
+          <AxisLabels size={shared.axes.length + 6} />
+        </group>
+      </group>
+      )}
+
+      {/* The plate's name, laid flat just inside its front-left corner. The anchor is the
+          plate's left and back edge: the label is shifted by half its own size inside
+          the component, so this point is its bottom-left corner. */}
+      {nameLabel && (
+        <PlateNameLabel
+          name={nameLabel.name}
+          placeholder={nameLabel.placeholder}
+          editTitle={nameLabel.editTitle}
+          emptyTitle={nameLabel.emptyTitle}
+          onCommit={nameLabel.onCommit}
+          position={shared.widgets.nameLabelPosition}
+          labelScale={shared.widgets.scale * 1.5}
+        />
+      )}
+
+      {/* Beside the plate, and only beside the plate being worked on: the buttons act on
+          it. One component, so the column's spacing is CSS rather than millimetres of
+          plate. */}
+      {sideButtons && (
+        <PlateSideButtons
+          {...sideButtons}
+          // Two anchors in one component: the column hangs from the plate's back edge,
+          // the bin stands on its front edge (the plate's front is its smallest Y).
+          columnAnchor={shared.widgets.columnAnchor}
+          clearAnchor={shared.widgets.clearAnchor}
+          labelScale={shared.widgets.scale}
+        />
+      )}
+
+      {/* FRONT orientation marker locked to grid front edge and constrained within build plate bounds */}
+      {shared.showBuildPlate && (
+      <group position={shared.frontMarker.position} frustumCulled={false} userData={{ thumbnailHelperType: 'buildPlate' }}>
+        {shared.frontMarker.texture && (
+          <mesh renderOrder={21} raycast={nullRaycast}>
+            <planeGeometry args={[shared.frontMarker.widthMm, shared.frontMarker.depthMm]} />
+            <meshBasicMaterial
+              map={shared.frontMarker.texture}
+              transparent
+              opacity={dimFactor}
+              depthWrite={false}
+              polygonOffset
+              polygonOffsetFactor={-1}
+              polygonOffsetUnits={-1}
+              side={THREE.FrontSide}
+              toneMapped={false}
+            />
+          </mesh>
+        )}
+      </group>
+      )}
+
+      {/* Safety margin hazard stripes - semi-transparent red-white diagonal stripes */}
+      {shared.showBuildPlate && shared.margins.visible && (
+        <group position={shared.margins.groupPosition} visible={shared.buildPlateOpacity > 0.001} frustumCulled={false} userData={{ thumbnailHelperType: 'buildPlate' }}>
+          {(['front', 'back', 'left', 'right'] as const).map((side) => {
+            const strip = shared.margins[side];
+            if (!strip) return null;
+            return (
+              <mesh key={side} position={strip.position} renderOrder={20} raycast={nullRaycast}>
+                {strip.geometry && <primitive object={strip.geometry} attach="geometry" />}
+                <SafetyStripeMaterial
+                  widthMm={strip.widthMm}
+                  heightMm={strip.heightMm}
+                  bleedXMm={strip.bleedXMm}
+                  bleedYMm={strip.bleedYMm}
+                  opacity={0.42 * plateOpacity}
+                />
+              </mesh>
+            );
+          })}
+        </group>
+      )}
+    </group>
+  );
+}
+
 export function Helpers({
   gridWidthMm,
   gridDepthMm,
@@ -246,6 +592,10 @@ export function Helpers({
   plateArrangeTitle,
   plateArrangeDisabledTitle,
   onArrangePlate,
+  plates,
+  onActivatePlate,
+  onRenamePlate,
+  onAddPlate,
 }: {
   gridWidthMm?: number;
   gridDepthMm?: number;
@@ -285,8 +635,19 @@ export function Helpers({
   plateArrangeTitle?: string;
   plateArrangeDisabledTitle?: string;
   onArrangePlate?: () => void;
+  /**
+   * The scene's plates, each drawn at its own offset from the first one. Absent while
+   * the scene has a single plate: that plate is then drawn at the origin with the props
+   * above, exactly as it always was.
+   */
+  plates?: PlateLayerSpec[];
+  /** Picking the surface of a plate that is not active makes it the active one. */
+  onActivatePlate?: (plateId: string) => void;
+  /** Committing a new name for one of the plates above. */
+  onRenamePlate?: (plateId: string, name: string) => void;
+  /** Adding another plate, from the button beside the active one. */
+  onAddPlate?: () => void;
 }) {
-  const nullRaycast = () => null;
   const shouldShowGrid = showGrid ?? true;
   const shouldShowBuildPlate = showBuildPlate ?? true;
 
@@ -333,6 +694,15 @@ export function Helpers({
   const frontMarkerColor = React.useMemo(() => {
     return new THREE.Color(gridMajorColor).lerp(new THREE.Color(isLightTheme ? '#000000' : '#ffffff'), 0.36).getStyle();
   }, [gridMajorColor, isLightTheme]);
+  /**
+   * The grid of a plate that is not the active one: the same lines, faded toward the
+   * plate they lie on, so a second plate reads as scenery rather than as the plate being
+   * worked on.
+   */
+  const mutedGridColors = React.useMemo(() => ({
+    major: new THREE.Color(gridMajorColor).lerp(new THREE.Color(buildPlateColor), 0.55).getStyle(),
+    minor: new THREE.Color(gridMinorColor).lerp(new THREE.Color(buildPlateColor), 0.55).getStyle(),
+  }), [buildPlateColor, gridMajorColor, gridMinorColor]);
   const buildPlateWidth = width + buildPlateOversizeEachSideMm * 2;
   const buildPlateDepth = depth + buildPlateOversizeEachSideMm * 2;
   const buildPlateCenterZ = -buildPlateThicknessMm * 0.5 - 0.08;
@@ -719,256 +1089,191 @@ export function Helpers({
     rightStripGeometry,
   ]);
 
+  /**
+   * What every plate draws from, built once: the plates differ only by where they sit
+   * and by being the one being worked on.
+   */
+  const shared: PlateLayerShared = {
+    showGrid: shouldShowGrid,
+    showBuildPlate: shouldShowBuildPlate,
+    buildPlateOpacity: clampedBuildPlateOpacity,
+    plate: {
+      geometry: buildPlateGeometry,
+      color: buildPlateColor,
+      position: [buildVolumeCenterX, buildVolumeCenterY, buildPlateCenterZ],
+    },
+    grid: {
+      baseSize,
+      divisions,
+      scaleX,
+      scaleZ,
+      position: [buildVolumeCenterX, buildVolumeCenterY, -0.01],
+      majorColor: gridMajorColor,
+      minorColor: gridMinorColor,
+      mutedMajorColor: mutedGridColors.major,
+      mutedMinorColor: mutedGridColors.minor,
+    },
+    logo: {
+      groupPosition: [0, 0, plateLogoZ],
+      position: [plateLogoX, plateLogoY, 0],
+      widthMm: plateLogoWidth,
+      heightMm: plateLogoHeight,
+      texture: plateLogoTexture,
+    },
+    axes: {
+      position: [resolvedOriginMinX, resolvedOriginMinY, axisBaseZ],
+      length: axisLength,
+      shaftRadius: axisShaftRadius,
+      headRadius: axisHeadRadius,
+      headLength: axisHeadLength,
+      labelLift: axisLabelLift,
+      xGradient: xAxisGradient,
+      yGradient: yAxisGradient,
+      zGradient: zAxisGradient,
+    },
+    frontMarker: {
+      position: [buildVolumeCenterX, buildVolumeCenterY + frontMarkerY, 0.001],
+      widthMm: frontMarkerWidth,
+      depthMm: frontMarkerDepth,
+      texture: frontTexture,
+    },
+    margins: {
+      groupPosition: [0, 0, plateLogoZ],
+      visible: hasSafetyMargins,
+      front: marginFront > 0 ? {
+        widthMm: width,
+        heightMm: marginFront,
+        bleedXMm: stripeEdgeBleedMm,
+        bleedYMm: 0,
+        position: [buildVolumeCenterX, resolvedOriginMinY + marginFront * 0.5, 0],
+        geometry: frontStripGeometry,
+      } : null,
+      back: marginBack > 0 ? {
+        widthMm: width,
+        heightMm: marginBack,
+        bleedXMm: stripeEdgeBleedMm,
+        bleedYMm: 0,
+        position: [buildVolumeCenterX, resolvedOriginMinY + depth - marginBack * 0.5, 0],
+        geometry: backStripGeometry,
+      } : null,
+      left: marginLeft > 0 ? {
+        widthMm: marginLeft,
+        heightMm: depth,
+        bleedXMm: 0,
+        bleedYMm: stripeEdgeBleedMm,
+        position: [resolvedOriginMinX + marginLeft * 0.5, buildVolumeCenterY, 0],
+        geometry: leftStripGeometry,
+      } : null,
+      right: marginRight > 0 ? {
+        widthMm: marginRight,
+        heightMm: depth,
+        bleedXMm: 0,
+        bleedYMm: stripeEdgeBleedMm,
+        position: [resolvedOriginMinX + width - marginRight * 0.5, buildVolumeCenterY, 0],
+        geometry: rightStripGeometry,
+      } : null,
+    },
+    widgets: {
+      scale: plateWidgetScale,
+      // The plate's left edge (X0 in the front-left origin mode) and its back edge.
+      nameLabelPosition: [resolvedOriginMinX, resolvedOriginMinY + depth, plateLogoZ + 0.2],
+      // Two anchors in one component: the column hangs from the plate's back edge, the
+      // bin stands on its front edge (the plate's front is its smallest Y).
+      columnAnchor: [resolvedOriginMinX + width + buildPlateOversizeEachSideMm + plateWidgetClearanceMm, resolvedOriginMinY + depth, plateLogoZ + 0.2],
+      clearAnchor: [resolvedOriginMinX + width + buildPlateOversizeEachSideMm + plateWidgetClearanceMm, resolvedOriginMinY, plateLogoZ + 0.2],
+    },
+  };
+
+  /**
+   * One plate's name widget. A plate from the scene's list carries its own name and the
+   * wording to show while it has none, so it is labelled whenever the strings its editor
+   * needs are there; the scene without a list keeps the single plate's rule, including
+   * hiding the name while the plate is empty.
+   */
+  const nameLabelFor = (plate: PlateLayerSpec | null): PlateLayerNameLabel | undefined => {
+    if (!shouldShowBuildPlate || !plateNameEditTitle || !plateNameEmptyTitle) return undefined;
+    if (plate) {
+      if (!onRenamePlate) return undefined;
+      return {
+        name: plate.name,
+        placeholder: plate.placeholder,
+        editTitle: plateNameEditTitle,
+        emptyTitle: plateNameEmptyTitle,
+        onCommit: (next) => onRenamePlate(plate.id, next),
+      };
+    }
+    if (!showPlateName || plateName === undefined || !plateNamePlaceholder || !onPlateNameChange) return undefined;
+    return {
+      name: plateName,
+      placeholder: plateNamePlaceholder,
+      editTitle: plateNameEditTitle,
+      emptyTitle: plateNameEmptyTitle,
+      onCommit: onPlateNameChange,
+    };
+  };
+
+  /**
+   * One plate's side buttons, or none: they act on the plate being worked on, so only the
+   * active plate has them. The scene without a plate list keeps the single plate's rule,
+   * where the widgets arrive with the scene's content. The add button is live as soon as
+   * there is somewhere to add a plate to.
+   */
+  const sideButtonsFor = (plate: PlateLayerSpec | null, isActive: boolean): PlateSideButtonsProps | undefined => {
+    if (!shouldShowBuildPlate) return undefined;
+    if (plate ? !isActive : (!showPlateName || !addPlateComingSoonTitle)) return undefined;
+    if (!addPlateLabel
+      || plateLocked === undefined
+      || !onTogglePlateLock
+      || !plateLockTitle
+      || !plateUnlockTitle
+      || !plateClearTitle
+      || !plateClearDisabledTitle
+      || !onClearPlate
+      || !plateArrangeTitle
+      || !plateArrangeDisabledTitle
+      || !onArrangePlate) {
+      return undefined;
+    }
+    return {
+      addLabel: addPlateLabel,
+      addComingSoonTitle: addPlateComingSoonTitle,
+      onAdd: onAddPlate,
+      locked: plateLocked,
+      lockTitle: plateLockTitle,
+      unlockTitle: plateUnlockTitle,
+      onToggleLock: onTogglePlateLock,
+      arrangeTitle: plateArrangeTitle,
+      arrangeDisabledTitle: plateArrangeDisabledTitle,
+      arrangeDisabled: plateLocked,
+      onArrangePlate,
+      clearTitle: plateClearTitle,
+      clearDisabledTitle: plateClearDisabledTitle,
+      clearDisabled: plateLocked,
+      onClearPlate,
+    };
+  };
+
+  // No plate list is the scene's one plate: it draws at the origin, active, from the
+  // single plate's own props. A plate list draws one entry per plate.
+  const plateLayers: (PlateLayerSpec | null)[] = plates && plates.length > 0 ? plates : [null];
+
   return (
     <>
-      {/* Primitive mock build plate under grid */}
-      <mesh
-        position={[buildVolumeCenterX, buildVolumeCenterY, buildPlateCenterZ]}
-        renderOrder={-10}
-        raycast={nullRaycast}
-        visible={shouldShowBuildPlate && clampedBuildPlateOpacity > 0.001}
-        frustumCulled={false}
-        userData={{ thumbnailHelperType: 'buildPlate' }}
-      >
-        <primitive object={buildPlateGeometry} attach="geometry" />
-        <meshStandardMaterial
-          color={buildPlateColor}
-          transparent
-          opacity={0.94 * clampedBuildPlateOpacity}
-          side={THREE.FrontSide}
-          depthWrite
-        />
-      </mesh>
-
-      {/* Grid on XY plane (horizontal) - rotate 90° around X */}
-      {shouldShowGrid && clampedBuildPlateOpacity > 0.001 && (
-        <gridHelper
-          args={[baseSize, divisions, gridMajorColor, gridMinorColor]}
-          position={[buildVolumeCenterX, buildVolumeCenterY, -0.01]}
-          rotation={[Math.PI / 2, 0, 0]}
-          scale={[scaleX, 1, scaleZ]}
-          raycast={nullRaycast}
-          frustumCulled={false}
-          userData={{ thumbnailHelperType: 'grid' }}
-        />
-      )}
-
-      {shouldShowGrid && shouldShowBuildPlate && (
-        <group
-          position={[0, 0, plateLogoZ]}
-          visible={shouldShowBuildPlate && clampedBuildPlateOpacity > 0.001}
-          frustumCulled={false}
-          userData={{ thumbnailHelperType: 'grid' }}
-        >
-          <mesh position={[plateLogoX, plateLogoY, 0]} renderOrder={20} raycast={nullRaycast} frustumCulled={false}>
-            <planeGeometry args={[plateLogoWidth, plateLogoHeight]} />
-            <meshBasicMaterial
-              map={plateLogoTexture}
-              transparent
-              opacity={0.4}
-              depthWrite={false}
-              polygonOffset
-              polygonOffsetFactor={-2}
-              polygonOffsetUnits={-2}
-              side={THREE.DoubleSide}
-              toneMapped={false}
-            />
-          </mesh>
-        </group>
-      )}
-
-      {/* Axes: short, thicker arrows hovering slightly above Z0 to avoid grid clipping */}
-      {shouldShowGrid && (
-      <group position={[resolvedOriginMinX, resolvedOriginMinY, axisBaseZ]} frustumCulled={false} userData={{ thumbnailHelperType: 'grid' }}>
-        {/* X axis */}
-        <mesh position={[axisLength * 0.5, 0, 0]} rotation={[0, 0, -Math.PI * 0.5]} raycast={nullRaycast}>
-          <cylinderGeometry args={[axisShaftRadius, axisShaftRadius, axisLength, 12]} />
-          <meshBasicMaterial map={xAxisGradient ?? undefined} toneMapped={false} />
-        </mesh>
-        <mesh position={[axisLength + axisHeadLength * 0.5, 0, 0]} rotation={[0, 0, -Math.PI * 0.5]} raycast={nullRaycast}>
-          <coneGeometry args={[axisHeadRadius, axisHeadLength, 12]} />
-          <meshBasicMaterial map={xAxisGradient ?? undefined} toneMapped={false} />
-        </mesh>
-
-        {/* Y axis */}
-        <mesh position={[0, axisLength * 0.5, 0]} raycast={nullRaycast}>
-          <cylinderGeometry args={[axisShaftRadius, axisShaftRadius, axisLength, 12]} />
-          <meshBasicMaterial map={yAxisGradient ?? undefined} toneMapped={false} />
-        </mesh>
-        <mesh position={[0, axisLength + axisHeadLength * 0.5, 0]} raycast={nullRaycast}>
-          <coneGeometry args={[axisHeadRadius, axisHeadLength, 12]} />
-          <meshBasicMaterial map={yAxisGradient ?? undefined} toneMapped={false} />
-        </mesh>
-
-        {/* Z axis */}
-        <mesh position={[0, 0, axisLength * 0.5]} rotation={[Math.PI * 0.5, 0, 0]} raycast={nullRaycast}>
-          <cylinderGeometry args={[axisShaftRadius, axisShaftRadius, axisLength, 12]} />
-          <meshBasicMaterial map={zAxisGradient ?? undefined} toneMapped={false} />
-        </mesh>
-        <mesh position={[0, 0, axisLength + axisHeadLength * 0.5]} rotation={[Math.PI * 0.5, 0, 0]} raycast={nullRaycast}>
-          <coneGeometry args={[axisHeadRadius, axisHeadLength, 12]} />
-          <meshBasicMaterial map={zAxisGradient ?? undefined} toneMapped={false} />
-        </mesh>
-
-        <group position={[0, 0, axisLabelLift]}>
-          <AxisLabels size={axisLength + 6} />
-        </group>
-      </group>
-      )}
-
-      {/* The plate's name, laid flat just inside its front-left corner. */}
-      {shouldShowBuildPlate
-        && showPlateName
-        && plateName !== undefined
-        && plateNamePlaceholder
-        && plateNameEditTitle
-        && plateNameEmptyTitle
-        && onPlateNameChange && (
-        <PlateNameLabel
-          name={plateName}
-          placeholder={plateNamePlaceholder}
-          editTitle={plateNameEditTitle}
-          emptyTitle={plateNameEmptyTitle}
-          onCommit={onPlateNameChange}
-          // The plate's left edge (X0 in the front-left origin mode) and its back
-          // edge. The label is shifted by half its own size inside the component,
-          // so this point is its bottom-left corner.
-          position={[resolvedOriginMinX, resolvedOriginMinY + depth, plateLogoZ + 0.2]}
-          labelScale={plateWidgetScale * 1.5}
-        />
-      )}
-
-      {/* Beside the plate: where plates will come from (inert until the app grows a
-          second one), and the lock. One component, so the column's spacing is CSS
-          rather than millimetres of plate. */}
-      {shouldShowBuildPlate
-        && showPlateName
-        && addPlateLabel
-        && addPlateComingSoonTitle
-        && plateLocked !== undefined
-        && onTogglePlateLock
-        && plateLockTitle
-        && plateUnlockTitle
-        && plateClearTitle
-        && plateClearDisabledTitle
-        && onClearPlate
-        && plateArrangeTitle
-        && plateArrangeDisabledTitle
-        && onArrangePlate && (
-        <PlateSideButtons
-          addLabel={addPlateLabel}
-          addComingSoonTitle={addPlateComingSoonTitle}
-          locked={plateLocked}
-          lockTitle={plateLockTitle}
-          unlockTitle={plateUnlockTitle}
-          onToggleLock={onTogglePlateLock}
-          clearTitle={plateClearTitle}
-          clearDisabledTitle={plateClearDisabledTitle}
-          clearDisabled={plateLocked}
-          onClearPlate={onClearPlate}
-          arrangeTitle={plateArrangeTitle}
-          arrangeDisabledTitle={plateArrangeDisabledTitle}
-          arrangeDisabled={plateLocked}
-          onArrangePlate={onArrangePlate}
-          // Two anchors in one component: the column hangs from the plate's back edge,
-          // the bin stands on its front edge (the plate's front is its smallest Y).
-          columnAnchor={[resolvedOriginMinX + width + buildPlateOversizeEachSideMm + plateWidgetClearanceMm, resolvedOriginMinY + depth, plateLogoZ + 0.2]}
-          clearAnchor={[resolvedOriginMinX + width + buildPlateOversizeEachSideMm + plateWidgetClearanceMm, resolvedOriginMinY, plateLogoZ + 0.2]}
-          labelScale={plateWidgetScale}
-        />
-      )}
-
-      {/* FRONT orientation marker locked to grid front edge and constrained within build plate bounds */}
-      {shouldShowBuildPlate && (
-      <group position={[buildVolumeCenterX, buildVolumeCenterY + frontMarkerY, 0.001]} frustumCulled={false} userData={{ thumbnailHelperType: 'buildPlate' }}>
-        {frontTexture && (
-          <mesh renderOrder={21} raycast={nullRaycast}>
-            <planeGeometry args={[frontMarkerWidth, frontMarkerDepth]} />
-            <meshBasicMaterial
-              map={frontTexture}
-              transparent
-              opacity={1}
-              depthWrite={false}
-              polygonOffset
-              polygonOffsetFactor={-1}
-              polygonOffsetUnits={-1}
-              side={THREE.FrontSide}
-              toneMapped={false}
-            />
-          </mesh>
-        )}
-      </group>
-      )}
-
-      {/* Safety margin hazard stripes - semi-transparent red-white diagonal stripes */}
-      {shouldShowBuildPlate && hasSafetyMargins && (
-        <group position={[0, 0, plateLogoZ]} visible={clampedBuildPlateOpacity > 0.001} frustumCulled={false} userData={{ thumbnailHelperType: 'buildPlate' }}>
-          {/* Front strip */}
-          {marginFront > 0 && (
-            <mesh
-              position={[buildVolumeCenterX, resolvedOriginMinY + marginFront * 0.5, 0]}
-              renderOrder={20}
-              raycast={nullRaycast}
-            >
-              {frontStripGeometry && <primitive object={frontStripGeometry} attach="geometry" />}
-              <SafetyStripeMaterial
-                widthMm={width}
-                heightMm={marginFront}
-                bleedXMm={stripeEdgeBleedMm}
-                opacity={0.42 * clampedBuildPlateOpacity}
-              />
-            </mesh>
-          )}
-          {/* Back strip */}
-          {marginBack > 0 && (
-            <mesh
-              position={[buildVolumeCenterX, resolvedOriginMinY + depth - marginBack * 0.5, 0]}
-              renderOrder={20}
-              raycast={nullRaycast}
-            >
-              {backStripGeometry && <primitive object={backStripGeometry} attach="geometry" />}
-              <SafetyStripeMaterial
-                widthMm={width}
-                heightMm={marginBack}
-                bleedXMm={stripeEdgeBleedMm}
-                opacity={0.42 * clampedBuildPlateOpacity}
-              />
-            </mesh>
-          )}
-          {/* Left strip */}
-          {marginLeft > 0 && (
-            <mesh
-              position={[resolvedOriginMinX + marginLeft * 0.5, buildVolumeCenterY, 0]}
-              renderOrder={20}
-              raycast={nullRaycast}
-            >
-              {leftStripGeometry && <primitive object={leftStripGeometry} attach="geometry" />}
-              <SafetyStripeMaterial
-                widthMm={marginLeft}
-                heightMm={depth}
-                bleedYMm={stripeEdgeBleedMm}
-                opacity={0.42 * clampedBuildPlateOpacity}
-              />
-            </mesh>
-          )}
-          {/* Right strip */}
-          {marginRight > 0 && (
-            <mesh
-              position={[resolvedOriginMinX + width - marginRight * 0.5, buildVolumeCenterY, 0]}
-              renderOrder={20}
-              raycast={nullRaycast}
-            >
-              {rightStripGeometry && <primitive object={rightStripGeometry} attach="geometry" />}
-              <SafetyStripeMaterial
-                widthMm={marginRight}
-                heightMm={depth}
-                bleedYMm={stripeEdgeBleedMm}
-                opacity={0.42 * clampedBuildPlateOpacity}
-              />
-            </mesh>
-          )}
-        </group>
-      )}
+      {plateLayers.map((plate) => {
+        const isActive = plate ? plate.isActive : true;
+        return (
+          <PlateLayer
+            key={plate ? plate.id : 'plate'}
+            dxMm={plate ? plate.dxMm : 0}
+            dyMm={plate ? plate.dyMm : 0}
+            isActive={isActive}
+            shared={shared}
+            nameLabel={nameLabelFor(plate)}
+            sideButtons={sideButtonsFor(plate, isActive)}
+            onActivate={plate && onActivatePlate ? () => onActivatePlate(plate.id) : undefined}
+          />
+        );
+      })}
     </>
   );
 }

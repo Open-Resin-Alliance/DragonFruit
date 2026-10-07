@@ -877,6 +877,21 @@ export type ScenePlate = {
   name: string;
 };
 
+/** Where a plate is in the world, and the build volume it holds there. */
+export type PlateFrame = {
+  id: string;
+  /** Position in the cascade, which is also its display order. */
+  index: number;
+  /** World offset from the first plate's frame. */
+  dxMm: number;
+  dyMm: number;
+  /** The build volume in world coordinates. */
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+};
+
 export interface LoadedModel {
   id: string;
   name: string;
@@ -1593,12 +1608,28 @@ export function useSceneCollectionManager(options?: {
   // Global application mode
   const [mode, setMode] = useState<SupportMode>('prepare');
 
+  /**
+   * Where new work goes: the middle of the **active** plate, in world
+   * coordinates. The plate's own frame is what the app's rect maths speaks, so
+   * the cascade offset is added here and in `isRectInsidePlate` rather than at
+   * every caller.
+   */
   const defaultImportCenterXY = useMemo(() => {
-    if (view3dSettings.originMode === 'front_left') {
-      return new THREE.Vector2(view3dSettings.widthMm * 0.5, view3dSettings.depthMm * 0.5);
-    }
-    return new THREE.Vector2(0, 0);
-  }, [view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
+    const localX = view3dSettings.originMode === 'front_left' ? view3dSettings.widthMm * 0.5 : 0;
+    const localY = view3dSettings.originMode === 'front_left' ? view3dSettings.depthMm * 0.5 : 0;
+    const index = Math.max(0, plates.findIndex((plate) => plate.id === activePlateId));
+    const { dxMm, dyMm } = plateCascadeOffsetMm(index, {
+      widthMm: view3dSettings.widthMm,
+      depthMm: view3dSettings.depthMm,
+    });
+    return new THREE.Vector2(localX + dxMm, localY + dyMm);
+  }, [
+    activePlateId,
+    plates,
+    view3dSettings.depthMm,
+    view3dSettings.originMode,
+    view3dSettings.widthMm,
+  ]);
 
   type Rect2D = { minX: number; maxX: number; minY: number; maxY: number };
 
@@ -1606,19 +1637,31 @@ export function useSceneCollectionManager(options?: {
     return !(a.maxX < b.minX || a.minX > b.maxX || a.maxY < b.minY || a.minY > b.maxY);
   }, []);
 
-  const isRectInsidePlate = useCallback((rect: Rect2D) => {
-    const minX = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.widthMm * 0.5;
-    const maxX = minX + view3dSettings.widthMm;
-    const minY = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.depthMm * 0.5;
-    const maxY = minY + view3dSettings.depthMm;
+  /** The active plate's build volume in world coordinates. */
+  const activePlateRect = useMemo<Rect2D>(() => {
+    const index = Math.max(0, plates.findIndex((plate) => plate.id === activePlateId));
+    const { dxMm, dyMm } = plateCascadeOffsetMm(index, {
+      widthMm: view3dSettings.widthMm,
+      depthMm: view3dSettings.depthMm,
+    });
+    const minX = (view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.widthMm * 0.5) + dxMm;
+    const minY = (view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.depthMm * 0.5) + dyMm;
+    return {
+      minX,
+      maxX: minX + view3dSettings.widthMm,
+      minY,
+      maxY: minY + view3dSettings.depthMm,
+    };
+  }, [activePlateId, plates, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
 
+  const isRectInsidePlate = useCallback((rect: Rect2D) => {
     return (
-      rect.minX >= minX
-      && rect.maxX <= maxX
-      && rect.minY >= minY
-      && rect.maxY <= maxY
+      rect.minX >= activePlateRect.minX
+      && rect.maxX <= activePlateRect.maxX
+      && rect.minY >= activePlateRect.minY
+      && rect.maxY <= activePlateRect.maxY
     );
-  }, [view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
+  }, [activePlateRect]);
 
   const footprintForTransform = useCallback((size: THREE.Vector3, transform: ModelTransform) => {
     const baseW = Math.max(2, Math.abs(size.x * transform.scale.x));
@@ -1682,10 +1725,9 @@ export function useSceneCollectionManager(options?: {
 
     const centerX = defaultImportCenterXY.x;
     const centerY = defaultImportCenterXY.y;
-    const minX = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.widthMm * 0.5;
-    const maxX = minX + view3dSettings.widthMm;
-    const minY = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.depthMm * 0.5;
-    const maxY = minY + view3dSettings.depthMm;
+    // The search runs in world coordinates over the ACTIVE plate's volume, so a
+    // model imported onto the second plate lands on the second plate.
+    const { minX, maxX, minY, maxY } = activePlateRect;
 
     const placementOffsets = incomingModels.map((model) => buildMeshPlacementOffsets(
       { x: model.transform.position.x, y: model.transform.position.y },
@@ -1818,7 +1860,7 @@ export function useSceneCollectionManager(options?: {
     });
 
     return assignedCenters;
-  }, [buildMeshPlacementOffsets, defaultImportCenterXY.x, defaultImportCenterXY.y, estimateSupportBoundsForModel, intersectsRect, isRectInsidePlate, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
+  }, [activePlateRect, buildMeshPlacementOffsets, defaultImportCenterXY.x, defaultImportCenterXY.y, estimateSupportBoundsForModel, intersectsRect, isRectInsidePlate]);
 
   const applySceneSnapshot = useCallback((snapshot: SceneSnapshot) => {
     if (snapshot.modifierRecord) {
@@ -2362,6 +2404,9 @@ export function useSceneCollectionManager(options?: {
               fileUrl: url,
               fileSizeBytes: file.size,
               sourcePath: (file as File & { filePath?: string }).filePath,
+              // Imported meshes land on the plate being worked on, which is also
+              // the plate the placement search above was run against.
+              plateId: activePlateIdRef.current,
               geometry: merged,
               splitBodies: splitBodies.length > 1 ? splitBodies : undefined,
               transform: {
@@ -2404,6 +2449,7 @@ export function useSceneCollectionManager(options?: {
               fileUrl: url,
               fileSizeBytes: file.size,
               sourcePath: (file as File & { filePath?: string }).filePath,
+              plateId: activePlateIdRef.current,
               geometry: geom,
               transform: {
                 position: new THREE.Vector3(defaultImportCenterXY.x, defaultImportCenterXY.y, initialZ),
@@ -4241,10 +4287,9 @@ export function useSceneCollectionManager(options?: {
 
     const centerX = defaultImportCenterXY.x;
     const centerY = defaultImportCenterXY.y;
-    const minX = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.widthMm * 0.5;
-    const maxX = minX + view3dSettings.widthMm;
-    const minY = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.depthMm * 0.5;
-    const maxY = minY + view3dSettings.depthMm;
+    // The search runs in world coordinates over the ACTIVE plate's volume, so a
+    // model imported onto the second plate lands on the second plate.
+    const { minX, maxX, minY, maxY } = activePlateRect;
 
     type Rect2D = { minX: number; maxX: number; minY: number; maxY: number };
 
@@ -5974,6 +6019,40 @@ export function useSceneCollectionManager(options?: {
     setActivePlateId((prev) => (platesRef.current.some((plate) => plate.id === plateId) ? plateId : prev));
   }, []);
 
+  /**
+   * Every plate's world rect: its cascade offset, and the build volume it holds
+   * in world coordinates. Computed once here because the canvas, the placement
+   * search and the out-of-bounds check all have to agree about where a plate is,
+   * and three separate derivations is how they stop agreeing.
+   */
+  const plateFrames = useMemo<PlateFrame[]>(() => {
+    const { widthMm, depthMm, originMode } = view3dSettings;
+    const localMinX = originMode === 'front_left' ? 0 : -widthMm * 0.5;
+    const localMinY = originMode === 'front_left' ? 0 : -depthMm * 0.5;
+    const footprint = { widthMm, depthMm };
+
+    return plates.map((plate, index) => {
+      const { dxMm, dyMm } = plateCascadeOffsetMm(index, footprint);
+      return {
+        id: plate.id,
+        index,
+        dxMm,
+        dyMm,
+        minX: localMinX + dxMm,
+        minY: localMinY + dyMm,
+        maxX: localMinX + dxMm + widthMm,
+        maxY: localMinY + dyMm + depthMm,
+      };
+    });
+  }, [plates, view3dSettings]);
+
+  /** The frame of the plate a model stands on. */
+  const modelPlateFrame = useCallback((model: LoadedModel): PlateFrame | undefined => {
+    const firstPlateId = platesRef.current[0]?.id;
+    const plateId = model.plateId ?? firstPlateId;
+    return plateFrames.find((frame) => frame.id === plateId) ?? plateFrames[0];
+  }, [plateFrames]);
+
   const renamePlate = useCallback((plateId: string, name: string) => {
     setPlates((prev) => prev.map((plate) => (plate.id === plateId ? { ...plate, name } : plate)));
   }, []);
@@ -6045,6 +6124,8 @@ export function useSceneCollectionManager(options?: {
     removePlate,
     moveModelsToPlate,
     plateOffsetFor,
+    plateFrames,
+    modelPlateFrame,
     voxlPrinterBundle,
     printerMismatch,
     resolvePrinterMismatch,
