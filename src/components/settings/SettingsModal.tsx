@@ -228,10 +228,9 @@ type SettingsTabMeta = {
 /**
  * One settings sidebar entry: icon, label and its description. The description
  * stays visible; the compactness comes from dropping the icon's own 24px box,
- * `leading-tight`, a 10px description and `px-2.5 py-2`, which matches the inset
- * of the setting rows beside it. That takes the entry from 54px to 48px without
- * hiding anything, and the icon keeps the full glyph size instead of sitting in
- * a box that padded it away from the card edge.
+ * `leading-tight` and `px-2.5 py-2`, which matches the inset of the setting rows
+ * beside it, and the icon keeps the full glyph size instead of sitting in a box
+ * that padded it away from the card edge.
  */
 function SettingsSidebarTab({
   tabId,
@@ -266,7 +265,7 @@ function SettingsSidebarTab({
       <div className="flex items-center gap-2.5">
         <Icon className="h-[18px] w-[18px] shrink-0" style={{ color: active ? tabColor : 'var(--text-muted)' }} />
         <span className="min-w-0 flex-1">
-          <span className="block text-sm font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
+          <span className="block text-[15px] font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
             {meta.label}
           </span>
           <TabDescription text={meta.description} />
@@ -336,7 +335,7 @@ function TabDescription({ text }: { text: string }) {
       <Tooltip content={isClipped ? text : null} fullWidth maxWidth={280}>
         <span
           ref={textRef}
-          className="block min-w-0 flex-1 truncate text-[10px] leading-tight"
+          className="block min-w-0 flex-1 truncate text-xs leading-tight"
           style={{ color: 'var(--text-muted)' }}
         >
           {text}
