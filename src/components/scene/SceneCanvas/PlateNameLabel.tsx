@@ -3,6 +3,7 @@
 import React from 'react';
 import { Html } from '@react-three/drei';
 import { Pencil } from 'lucide-react';
+import { Tooltip } from '@/components/ui/Tooltip';
 
 /**
  * The build plate's name, written on the plate itself and clicked to change it.
@@ -102,34 +103,37 @@ export function PlateNameLabel({
             }}
           />
         ) : (
-          <button
-            type="button"
-            onClick={() => setDraft(name)}
-            onPointerDown={(event) => event.stopPropagation()}
-            title={name ? editTitle : emptyTitle}
-            className="cursor-text rounded-[5.5px] px-1 text-left text-[36px] font-bold leading-tight"
-            style={{ color: name ? 'var(--accent)' : 'var(--text-muted)' }}
-          >
-            {name || placeholder}
-          </button>
+          <Tooltip content={name ? editTitle : emptyTitle} maxWidth={220}>
+            <button
+              type="button"
+              onClick={() => setDraft(name)}
+              onPointerDown={(event) => event.stopPropagation()}
+              aria-label={name ? editTitle : emptyTitle}
+              className="cursor-text rounded-[5.5px] px-1 text-left text-[36px] font-bold leading-tight"
+              style={{ color: name ? 'var(--accent)' : 'var(--text-muted)' }}
+            >
+              {name || placeholder}
+            </button>
+          </Tooltip>
         )}
 
         {!isEditing && (
-          <button
-            type="button"
-            onClick={() => setDraft(name)}
-            onPointerDown={(event) => event.stopPropagation()}
-            title={editTitle}
-            aria-label={editTitle}
-            className="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-[5.5px] border"
+          <Tooltip content={editTitle} maxWidth={220}>
+            <button
+              type="button"
+              onClick={() => setDraft(name)}
+              onPointerDown={(event) => event.stopPropagation()}
+              aria-label={editTitle}
+              className="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-[5.5px] border"
             style={{
               borderColor: 'color-mix(in srgb, var(--text-muted), transparent 45%)',
               background: 'color-mix(in srgb, var(--surface-0), transparent 45%)',
               color: 'var(--text-muted)',
             }}
           >
-            <Pencil className="h-5 w-5" />
-          </button>
+              <Pencil className="h-5 w-5" />
+            </button>
+          </Tooltip>
         )}
       </div>
     </Html>

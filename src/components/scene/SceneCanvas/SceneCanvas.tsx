@@ -1566,6 +1566,8 @@ export function SceneCanvas({
   const plateNamePlaceholder = _(msg({ message: 'Plate 1', comment: 'What the build plate\'s name widget shows while the plate has no name of its own, including after the plate is cleared or a new scene is started. The number is the plate\'s, plural forms come later with multiple plates.' }));
   const plateNameEditTitle = _(msg({ message: 'Rename build plate', comment: "Tooltip on the pencil beside the build plate's name." }));
   const plateNameEmptyTitle = _(msg({ message: 'Give this build plate a name', comment: "Tooltip on the build plate's name widget while it is still unnamed." }));
+  const addPlateLabel = _(msg({ message: 'Add plate', comment: 'Accessible name of the button beside the build plate that will add another plate. Inert for now, so it reads as unavailable to a screen reader too.' }));
+  const addPlateComingSoonTitle = _(msg({ message: 'Coming Soon!', comment: 'Hover text on the add-plate button beside the build plate. The app has one plate for now, so the button says so instead of doing nothing.' }));
   const frontFaceLabel = _(msg({ message: 'Front', comment: 'Orientation label, rendered uppercase on the view cube and on the build plate\'s front edge. Keep it as short as possible — long words are auto-shrunk to fit and become hard to read.' }));
   // Face order is fixed by the box geometry: +X, -X, +Y, -Y, +Z, -Z.
   const gizmoFaceLabels = React.useMemo(() => ([
@@ -6057,6 +6059,8 @@ export function SceneCanvas({
           plateNamePlaceholder={plateNamePlaceholder}
           plateNameEditTitle={plateNameEditTitle}
           plateNameEmptyTitle={plateNameEmptyTitle}
+          addPlateLabel={addPlateLabel}
+          addPlateComingSoonTitle={addPlateComingSoonTitle}
         />
         <EnableLocalClipping enabled={clipLower != null || clipUpper != null || indicatorPlaneZ != null || !!organicCutKeyGizmo} />
         <CameraProvider cameraRef={cameraRef} />
