@@ -78,7 +78,7 @@ msgstr "{done}/{total} procesados"
 msgid "{downloaded} / {total} ({pct}%)"
 msgstr "{downloaded} / {total} ({pct} %)"
 
-#: src/app/page.tsx:490
+#: src/app/page.tsx:491
 #: src/components/controls/ModelStatsCard.tsx:209
 msgid "{hours} h {minutes} min"
 msgstr "{hours} h {minutes} min"
@@ -108,8 +108,8 @@ msgstr "{materialName} ({sourceName})"
 msgid "{minutes} min"
 msgstr "{minutes} min"
 
-#: src/app/page.tsx:482
-#: src/app/page.tsx:491
+#: src/app/page.tsx:483
+#: src/app/page.tsx:492
 #: src/components/controls/ModelStatsCard.tsx:210
 msgid "{minutes} min {seconds} s"
 msgstr "{minutes} min {seconds} s"
@@ -167,12 +167,12 @@ msgid "<0>{modelName}</0> was imported as an STL file. Our analysis could not de
 msgstr "<0>{modelName}</0> se importó como archivo STL. Nuestro análisis no ha podido determinar si este modelo lleva geometría de soporte integrada en la malla."
 
 #. Approximate estimated print time (the "~" marks it as a rough estimate). {hours}/{mins} are whole-number quantities.
-#: src/app/page.tsx:474
+#: src/app/page.tsx:475
 msgid "~{hours} h {mins} min"
 msgstr "~{hours} h {mins} min"
 
 #. Approximate estimated print time under an hour (the "~" marks it as a rough estimate).
-#: src/app/page.tsx:475
+#: src/app/page.tsx:476
 msgid "~{mins} min"
 msgstr "~{mins} min"
 
@@ -240,20 +240,20 @@ msgid "Active model has no readable geometry."
 msgstr "El modelo activo no tiene geometría legible."
 
 #: src/supports/Settings/components/TipSettingsCard.tsx:62
-#: src/supports/Settings/SupportSidebar.tsx:917
-#: src/supports/Settings/SupportSidebar.tsx:1081
+#: src/supports/Settings/SupportSidebar.tsx:914
+#: src/supports/Settings/SupportSidebar.tsx:1078
 msgid "Adaptive"
 msgstr "Adaptativo"
 
-#: src/supports/Settings/SupportSidebar.tsx:922
-#: src/supports/Settings/SupportSidebar.tsx:1086
+#: src/supports/Settings/SupportSidebar.tsx:919
+#: src/supports/Settings/SupportSidebar.tsx:1083
 msgid "Adaptive mode"
 msgstr "Modo adaptativo"
 
-#: src/supports/Settings/SupportSidebar.tsx:940
-#: src/supports/Settings/SupportSidebar.tsx:941
-#: src/supports/Settings/SupportSidebar.tsx:1103
-#: src/supports/Settings/SupportSidebar.tsx:1104
+#: src/supports/Settings/SupportSidebar.tsx:937
+#: src/supports/Settings/SupportSidebar.tsx:938
+#: src/supports/Settings/SupportSidebar.tsx:1100
+#: src/supports/Settings/SupportSidebar.tsx:1101
 msgid "Adaptive offset"
 msgstr "Desfase adaptativo"
 
@@ -269,7 +269,7 @@ msgstr "Añade otro bucle y empieza a dibujarlo. Al cortar se cortan todos los b
 msgid "Add contacts along the edge or corner a pose bears on, so a leaning part is held against toppling and peel (default on)"
 msgstr "Añade contactos a lo largo del borde o la esquina en que se apoya la pose, para que una pieza inclinada no vuelque ni se despegue (activado por defecto)"
 
-#: src/app/page.tsx:2334
+#: src/app/page.tsx:2338
 msgid "Add joint"
 msgstr "Añadir unión"
 
@@ -382,7 +382,7 @@ msgstr "Aplica este preajuste a los ajustes de autosoportes"
 msgid "Area Σ {totalAreaLabel} • Min {minAreaLabel} • Max {maxAreaLabel}"
 msgstr "Área Σ {totalAreaLabel} • Mín {minAreaLabel} • Máx {maxAreaLabel}"
 
-#: src/components/controls/toolRailEntries.ts:57
+#: src/components/controls/toolRailEntries.ts:59
 msgid "Arrange"
 msgstr "Organizar"
 
@@ -391,11 +391,11 @@ msgid "Arrange model and transforms"
 msgstr "Colocar el modelo y aplicar transformaciones"
 
 #. Tool rail entry. The tool that auto-packs the models onto the plate.
-#: src/components/controls/toolRailEntries.ts:57
+#: src/components/controls/toolRailEntries.ts:59
 msgid "Arrange models on the plate"
 msgstr "Organizar los modelos en la placa"
 
-#: src/components/controls/toolRailEntries.ts:56
+#: src/components/controls/toolRailEntries.ts:58
 msgid "Array copies across the plate"
 msgstr "Distribuir copias en matriz por la placa"
 
@@ -425,7 +425,7 @@ msgstr "Automático se adapta al nivel de AA, Desactivado es lo más rápido, Ac
 msgid "Auto Brace complete: {generated, plural, one {# brace generated} other {# braces generated}}, {removed, plural, one {# legacy brace removed} other {# legacy braces removed}}."
 msgstr "Arriostrado automático completado: {generated, plural, one {# arriostre generado} other {# arriostres generados}}, {removed, plural, one {# arriostre antiguo eliminado} other {# arriostres antiguos eliminados}}."
 
-#: src/supports/Settings/SupportSidebar.tsx:615
+#: src/supports/Settings/SupportSidebar.tsx:612
 msgid "Auto Brace failed. Check console for details."
 msgstr "El arriostrado automático ha fallado. Mira la consola para más detalles."
 
@@ -446,7 +446,7 @@ msgid "Auto Orientation (Beta)"
 msgstr "Orientación automática (beta)"
 
 #. Tool rail entry in Support mode. Selecting it shows the Auto Supports panel, which generates supports.
-#: src/components/controls/toolRailEntries.ts:129
+#: src/components/controls/toolRailEntries.ts:143
 msgid "Auto support generation"
 msgstr "Generación automática de soportes"
 
@@ -524,7 +524,7 @@ msgid "Auto-support settings"
 msgstr "Ajustes de los soportes automáticos"
 
 #. Tool rail label in Support mode. Short for the Auto Supports panel, which generates supports automatically.
-#: src/components/controls/toolRailEntries.ts:128
+#: src/components/controls/toolRailEntries.ts:142
 msgid "Automatic"
 msgstr "Automático"
 
@@ -581,7 +581,7 @@ msgstr "Los archivos de guardado automático solo existen en la versión de escr
 msgid "Autosave idle delay"
 msgstr "Espera antes de guardar"
 
-#: src/app/page.tsx:1049
+#: src/app/page.tsx:1050
 msgid "Autosave is not working"
 msgstr "El guardado automático no funciona"
 
@@ -1001,7 +1001,7 @@ msgstr "Borrar"
 msgid "Clear All"
 msgstr "Borrar todo"
 
-#: src/supports/Settings/SupportSidebar.tsx:636
+#: src/supports/Settings/SupportSidebar.tsx:633
 msgid "Clear All failed. Check console for details."
 msgstr "«Borrar todo» ha fallado. Mira la consola para más detalles."
 
@@ -1147,10 +1147,10 @@ msgstr "Recopilando resultados"
 msgid "Compression"
 msgstr "Compresión"
 
-#: src/supports/Settings/SupportSidebar.tsx:903
-#: src/supports/Settings/SupportSidebar.tsx:903
-#: src/supports/Settings/SupportSidebar.tsx:1067
-#: src/supports/Settings/SupportSidebar.tsx:1067
+#: src/supports/Settings/SupportSidebar.tsx:900
+#: src/supports/Settings/SupportSidebar.tsx:900
+#: src/supports/Settings/SupportSidebar.tsx:1064
+#: src/supports/Settings/SupportSidebar.tsx:1064
 msgid "Cone Angle"
 msgstr "Ángulo del cono"
 
@@ -1163,8 +1163,8 @@ msgstr "Modo del ángulo del cono"
 msgid "Cone H"
 msgstr "Alt. cono"
 
-#: src/supports/Settings/SupportSidebar.tsx:1164
-#: src/supports/Settings/SupportSidebar.tsx:1164
+#: src/supports/Settings/SupportSidebar.tsx:1161
+#: src/supports/Settings/SupportSidebar.tsx:1161
 msgid "Cone Height"
 msgstr "Altura del cono"
 
@@ -1237,24 +1237,20 @@ msgid "Contact"
 msgstr "Contacto"
 
 #: src/supports/Settings/components/PresetCard.tsx:132
-#: src/supports/Settings/SupportSidebar.tsx:879
-#: src/supports/Settings/SupportSidebar.tsx:879
-#: src/supports/Settings/SupportSidebar.tsx:1044
-#: src/supports/Settings/SupportSidebar.tsx:1044
+#: src/supports/Settings/SupportSidebar.tsx:876
+#: src/supports/Settings/SupportSidebar.tsx:876
+#: src/supports/Settings/SupportSidebar.tsx:1041
+#: src/supports/Settings/SupportSidebar.tsx:1041
 msgid "Contact Cone Length"
 msgstr "Longitud del cono de contacto"
 
 #: src/supports/Settings/components/PresetCard.tsx:115
-#: src/supports/Settings/SupportSidebar.tsx:863
-#: src/supports/Settings/SupportSidebar.tsx:863
-#: src/supports/Settings/SupportSidebar.tsx:1029
-#: src/supports/Settings/SupportSidebar.tsx:1029
+#: src/supports/Settings/SupportSidebar.tsx:860
+#: src/supports/Settings/SupportSidebar.tsx:860
+#: src/supports/Settings/SupportSidebar.tsx:1026
+#: src/supports/Settings/SupportSidebar.tsx:1026
 msgid "Contact Diameter"
 msgstr "Diámetro de contacto"
-
-#: src/supports/Settings/SupportSidebar.tsx:1205
-msgid "Contact discs only, supports as lines"
-msgstr "Solo discos de contacto, soportes como líneas"
 
 #: src/supports/Settings/components/TipSettingsCard.tsx:43
 msgid "Contact Disk"
@@ -1278,7 +1274,7 @@ msgstr "Contorno"
 msgid "Contoured regions"
 msgstr "Regiones contorneadas"
 
-#: src/app/page.tsx:8170
+#: src/app/page.tsx:8174
 msgid "Converting support data and model metadata"
 msgstr "Convirtiendo los datos de soportes y los metadatos del modelo"
 
@@ -1356,7 +1352,7 @@ msgstr "Crear {suggestedNewRepoName}"
 msgid "Create a snapshot now and refresh history."
 msgstr "Crea una instantánea ahora y actualiza el historial."
 
-#: src/components/controls/toolRailEntries.ts:154
+#: src/components/controls/toolRailEntries.ts:168
 msgid "Create cavity or open-face shell"
 msgstr "Crear cavidad o carcasa de cara abierta"
 
@@ -1402,7 +1398,7 @@ msgstr "Mostrando nada con la máxima fidelidad."
 msgid "Curve Settings"
 msgstr "Ajustes de la curva"
 
-#: src/supports/Settings/SupportSidebar.tsx:1233
+#: src/supports/Settings/SupportSidebar.tsx:1223
 msgid "Curves"
 msgstr "Curvas"
 
@@ -1707,7 +1703,7 @@ msgid "Downloading Update"
 msgstr "Descargando la actualización"
 
 #. Tool rail label. The tool that drags and places models on the plate. Deliberately "Drag" rather than "Arrange": the app uses "Arrange" elsewhere for arranging the whole plate, and Spanish distinguishes the two.
-#: src/components/controls/toolRailEntries.ts:47
+#: src/components/controls/toolRailEntries.ts:49
 msgid "Drag"
 msgstr "Arrastrar"
 
@@ -1753,12 +1749,12 @@ msgstr "DragonFruit va a <0>descargar, verificar e instalar</0> la actualizació
 msgid "Drop supported files"
 msgstr "Suelta archivos compatibles"
 
-#: src/app/page.tsx:10234
+#: src/app/page.tsx:10238
 msgid "Drop supported files to import"
 msgstr "Suelta aquí los ficheros compatibles para importarlos"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:391
-#: src/components/controls/toolRailEntries.ts:56
+#: src/components/controls/toolRailEntries.ts:58
 msgid "Duplicate"
 msgstr "Duplicar"
 
@@ -1790,7 +1786,7 @@ msgstr "Editar el perfil de material"
 msgid "Edit printer profile"
 msgstr "Editar el perfil de impresora"
 
-#: src/app/page.tsx:2340
+#: src/app/page.tsx:2344
 msgid "Editor"
 msgstr "Editor"
 
@@ -1798,7 +1794,7 @@ msgstr "Editor"
 msgid "Editor context menu"
 msgstr "Menú contextual del editor"
 
-#: src/components/controls/ToolRail.tsx:268
+#: src/components/controls/ToolRail.tsx:337
 msgid "Editor tools"
 msgstr "Herramientas del editor"
 
@@ -2218,6 +2214,11 @@ msgstr "Frente"
 msgid "Frustum"
 msgstr "Piramidal"
 
+#. Support view mode. Every support member is drawn as a solid mesh.
+#: src/components/controls/toolRailEntries.ts:199
+msgid "Full"
+msgstr "Completo"
+
 #: src/supports/Settings/components/RaftSettingsCard.tsx:237
 msgid "Gap Spacing"
 msgstr "Separación entre huecos"
@@ -2358,11 +2359,11 @@ msgid "Hold the model clear of the plate, so a support can stand under it. Turns
 msgstr "Mantiene el modelo separado de la placa para que quepa un soporte debajo. Desactiva cualquier movimiento manual en Z."
 
 #. Tool rail label in Support mode. One word, like the other tool names: opens the hollowing tool (shell the model, add drainage holes).
-#: src/components/controls/toolRailEntries.ts:153
+#: src/components/controls/toolRailEntries.ts:167
 msgid "Hollow"
 msgstr "Vaciar"
 
-#: src/components/controls/ToolRail.tsx:248
+#: src/components/controls/ToolRail.tsx:317
 #: src/components/settings/GeneralSettingsTab.tsx:300
 msgid "Horizontal"
 msgstr "Horizontal"
@@ -2406,6 +2407,11 @@ msgstr "Cuánto crece la densidad en zonas planas según el área de la región:
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:75
 msgid "How the part is held against toppling and peel — self-support angle, stabilization anchors and minima reinforcement"
 msgstr "Cómo se sujeta la pieza frente al vuelco y al despegue: ángulo de autosoporte, anclajes de estabilización y refuerzo de mínimos"
+
+#. Tool rail entry in Support mode. Opens a menu of view modes rather than toggling on its own.
+#: src/components/controls/toolRailEntries.ts:186
+msgid "How the support forest is drawn"
+msgstr "Cómo se dibuja el bosque de soportes"
 
 #. Accessible name of the help toggle in the Split panel; the tool is called Split in the tool rail.
 #: src/features/organicCut/OrganicCutPanel.tsx:381
@@ -2590,7 +2596,7 @@ msgstr "Vóxeles de isla"
 
 #. Tool rail label in Support mode. Short for the Islands panel, which scans the model for unsupported islands.
 #: src/components/controls/IslandsPanel.tsx:137
-#: src/components/controls/toolRailEntries.ts:122
+#: src/components/controls/toolRailEntries.ts:136
 msgid "Islands"
 msgstr "Islas"
 
@@ -2697,7 +2703,7 @@ msgid "Last remote backup"
 msgstr "Última copia remota"
 
 #. {timestamp} is a locale-formatted date and time.
-#: src/app/page.tsx:633
+#: src/app/page.tsx:634
 msgid "Last successful autosave: {timestamp}. Save your project manually."
 msgstr "Último guardado automático correcto: {timestamp}. Guarda tu proyecto a mano."
 
@@ -2757,7 +2763,7 @@ msgstr "Izq."
 msgid "Length"
 msgstr "Longitud"
 
-#: src/app/page.tsx:8210
+#: src/app/page.tsx:8214
 msgid "Letting DragonFruit finish its startup animation before loading your scene."
 msgstr "Dejando que DragonFruit termine su animación de arranque antes de cargar la escena."
 
@@ -2787,6 +2793,11 @@ msgstr "Altura de la línea"
 #: src/supports/Settings/components/RaftSettingsCard.tsx:167
 msgid "Line Width"
 msgstr "Anchura de la línea"
+
+#. Support view mode. Contact discs stay solid and every other member is drawn as a line, which keeps a dense support forest readable.
+#: src/components/controls/toolRailEntries.ts:206
+msgid "Lines"
+msgstr "Líneas"
 
 #: src/components/controls/AutoSupportPanel.tsx:469
 msgid "Load a model and scan for islands."
@@ -2833,7 +2844,7 @@ msgstr "Cargando el estado de las copias…"
 msgid "Loading Mesh Files…"
 msgstr "Cargando ficheros de malla…"
 
-#: src/app/page.tsx:8160
+#: src/app/page.tsx:8164
 #: src/features/scene/sceneImportMessages.ts:23
 msgid "Loading Mesh…"
 msgstr "Cargando malla…"
@@ -2842,9 +2853,9 @@ msgstr "Cargando malla…"
 msgid "Loading remote material…"
 msgstr "Cargando el material remoto…"
 
-#: src/app/page.tsx:4376
-#: src/app/page.tsx:8160
-#: src/app/page.tsx:8169
+#: src/app/page.tsx:4380
+#: src/app/page.tsx:8164
+#: src/app/page.tsx:8173
 msgid "Loading Scene…"
 msgstr "Cargando escena…"
 
@@ -2894,8 +2905,8 @@ msgid "LocalStorage Keys"
 msgstr "Claves de LocalStorage"
 
 #: src/supports/Settings/components/TipSettingsCard.tsx:61
-#: src/supports/Settings/SupportSidebar.tsx:916
-#: src/supports/Settings/SupportSidebar.tsx:1080
+#: src/supports/Settings/SupportSidebar.tsx:913
+#: src/supports/Settings/SupportSidebar.tsx:1077
 msgid "Locked"
 msgstr "Fijo"
 
@@ -2941,7 +2952,7 @@ msgid "Managed Printers"
 msgstr "Impresoras gestionadas"
 
 #. Tool rail label in Support mode. Short for the manual support settings panel (tip, shaft, roots, bracing).
-#: src/components/controls/toolRailEntries.ts:134
+#: src/components/controls/toolRailEntries.ts:148
 #: src/components/printers/SetupMethodChooser.tsx:28
 msgid "Manual"
 msgstr "Manual"
@@ -3122,11 +3133,11 @@ msgstr "Minutos entre copias locales automáticas."
 msgid "Minutes between automatic sync attempts."
 msgstr "Minutos entre intentos de sincronización automática."
 
-#: src/components/controls/toolRailEntries.ts:55
+#: src/components/controls/toolRailEntries.ts:57
 msgid "Mirror"
 msgstr "Reflejar"
 
-#: src/components/controls/toolRailEntries.ts:55
+#: src/components/controls/toolRailEntries.ts:57
 msgid "Mirror across X, Y, or Z"
 msgstr "Reflejar en X, Y o Z"
 
@@ -3178,8 +3189,8 @@ msgstr "Dimensionado a escala del modelo"
 #. Title of the panel listing every model loaded into the scene.
 #: src/components/controls/ModelManagerPanel.tsx:438
 #: src/components/controls/ModelManagerPanel.tsx:726
-#: src/components/controls/toolRailEntries.ts:65
-#: src/components/controls/toolRailEntries.ts:143
+#: src/components/controls/toolRailEntries.ts:67
+#: src/components/controls/toolRailEntries.ts:157
 msgid "Models"
 msgstr "Modelos"
 
@@ -3208,7 +3219,7 @@ msgstr "Mortaja (caras cercanas)"
 msgid "Mortise edges"
 msgstr "Aristas de la mortaja"
 
-#: src/components/controls/toolRailEntries.ts:47
+#: src/components/controls/toolRailEntries.ts:49
 msgid "Move and place models on the plate"
 msgstr "Mover y colocar los modelos en la placa"
 
@@ -3216,7 +3227,7 @@ msgstr "Mover y colocar los modelos en la placa"
 msgid "Move Slot"
 msgstr "Cambiar de ranura"
 
-#: src/components/controls/toolRailEntries.ts:48
+#: src/components/controls/toolRailEntries.ts:50
 msgid "Move, rotate, and scale"
 msgstr "Mover, rotar y escalar"
 
@@ -3312,7 +3323,7 @@ msgstr "Sin antialiasing"
 msgid "No active printer"
 msgstr "Sin impresora activa"
 
-#: src/app/page.tsx:1053
+#: src/app/page.tsx:1054
 msgid "No autosave has succeeded this session. Save your project manually."
 msgstr "Ningún guardado automático ha funcionado en esta sesión. Guarda tu proyecto a mano."
 
@@ -3441,8 +3452,8 @@ msgid "No visible models available for slicing."
 msgstr "No hay modelos visibles que laminar."
 
 #: src/supports/Settings/components/TipSettingsCard.tsx:60
-#: src/supports/Settings/SupportSidebar.tsx:915
-#: src/supports/Settings/SupportSidebar.tsx:1079
+#: src/supports/Settings/SupportSidebar.tsx:912
+#: src/supports/Settings/SupportSidebar.tsx:1076
 msgid "Normal"
 msgstr "Normal"
 
@@ -3547,10 +3558,10 @@ msgstr "Altura de capa sin conexión"
 msgid "Offline layer height override in micrometers"
 msgstr "Altura de capa sin conexión, en micrómetros"
 
-#: src/supports/Settings/SupportSidebar.tsx:905
-#: src/supports/Settings/SupportSidebar.tsx:905
-#: src/supports/Settings/SupportSidebar.tsx:1069
-#: src/supports/Settings/SupportSidebar.tsx:1069
+#: src/supports/Settings/SupportSidebar.tsx:902
+#: src/supports/Settings/SupportSidebar.tsx:902
+#: src/supports/Settings/SupportSidebar.tsx:1066
+#: src/supports/Settings/SupportSidebar.tsx:1066
 msgid "Offset"
 msgstr "Desfase"
 
@@ -3592,7 +3603,7 @@ msgid "ON"
 msgstr "SÍ"
 
 #. Tool rail label. Short for "lay the model flat on a selected face"; keep it terse so the rail entry stays one line.
-#: src/components/controls/toolRailEntries.ts:51
+#: src/components/controls/toolRailEntries.ts:53
 msgid "On-Face"
 msgstr "Sobre cara"
 
@@ -3672,11 +3683,11 @@ msgstr "Abrir escena…"
 msgid "Opening"
 msgstr "Abriendo"
 
-#: src/app/page.tsx:8207
+#: src/app/page.tsx:8211
 msgid "Opening scene…"
 msgstr "Abriendo escena…"
 
-#: src/components/controls/toolRailEntries.ts:52
+#: src/components/controls/toolRailEntries.ts:54
 msgid "Orient flat against plate"
 msgstr "Orientar plano sobre la placa"
 
@@ -4048,7 +4059,7 @@ msgstr "Repetir el escaneo por líneas"
 msgid "Re-slice required after profile change"
 msgstr "Es necesario volver a laminar tras cambiar de perfil"
 
-#: src/app/page.tsx:4377
+#: src/app/page.tsx:4381
 msgid "Reading autosaved scene…"
 msgstr "Leyendo la escena guardada automáticamente…"
 
@@ -4296,7 +4307,7 @@ msgstr "Restaurar"
 msgid "Restore as Current"
 msgstr "Restaurar como actual"
 
-#: src/supports/Settings/SupportSidebar.tsx:1219
+#: src/supports/Settings/SupportSidebar.tsx:1209
 msgid "Restore defaults"
 msgstr "Restaurar los valores por defecto"
 
@@ -4312,8 +4323,8 @@ msgstr "Restaurar los valores de fábrica"
 msgid "Restore Factory Defaults?"
 msgstr "¿Restaurar los valores de fábrica?"
 
-#: src/app/page.tsx:4408
-#: src/app/page.tsx:4419
+#: src/app/page.tsx:4412
+#: src/app/page.tsx:4423
 msgid "Restore Failed"
 msgstr "Error al restaurar"
 
@@ -4360,8 +4371,8 @@ msgstr "¿Carreteras? Donde imprimimos, no necesitamos carreteras."
 msgid "Root Disk H"
 msgstr "Alt. disco"
 
-#: src/supports/Settings/SupportSidebar.tsx:1149
-#: src/supports/Settings/SupportSidebar.tsx:1149
+#: src/supports/Settings/SupportSidebar.tsx:1146
+#: src/supports/Settings/SupportSidebar.tsx:1146
 msgid "Root Disk Height"
 msgstr "Altura del disco de la raíz"
 
@@ -4369,10 +4380,10 @@ msgstr "Altura del disco de la raíz"
 msgid "Roots"
 msgstr "Raíces"
 
-#: src/supports/Settings/SupportSidebar.tsx:975
-#: src/supports/Settings/SupportSidebar.tsx:975
-#: src/supports/Settings/SupportSidebar.tsx:1132
-#: src/supports/Settings/SupportSidebar.tsx:1132
+#: src/supports/Settings/SupportSidebar.tsx:972
+#: src/supports/Settings/SupportSidebar.tsx:972
+#: src/supports/Settings/SupportSidebar.tsx:1129
+#: src/supports/Settings/SupportSidebar.tsx:1129
 msgid "Roots Diameter"
 msgstr "Diámetro de las raíces"
 
@@ -4438,7 +4449,7 @@ msgstr "Guardar los cambios"
 msgid "Save current settings to this preset"
 msgstr "Guardar los ajustes actuales en este preajuste"
 
-#: src/supports/Settings/SupportSidebar.tsx:1212
+#: src/supports/Settings/SupportSidebar.tsx:1202
 msgid "Save failed"
 msgstr "No se ha podido guardar"
 
@@ -4462,7 +4473,7 @@ msgstr "Guardar escena"
 msgid "Save scene as…"
 msgstr "Guardar escena como…"
 
-#: src/supports/Settings/SupportSidebar.tsx:1212
+#: src/supports/Settings/SupportSidebar.tsx:1202
 msgid "Save settings"
 msgstr "Guardar los ajustes"
 
@@ -4471,7 +4482,7 @@ msgid "Save snapshots to your local backup folder, then review and restore any p
 msgstr "Guarda instantáneas en tu carpeta local de copias y revisa o restaura cualquiera de ellas desde la propia aplicación."
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:635
-#: src/supports/Settings/SupportSidebar.tsx:1212
+#: src/supports/Settings/SupportSidebar.tsx:1202
 msgid "Saved"
 msgstr "Guardado"
 
@@ -4518,7 +4529,7 @@ msgid "Scan Settings"
 msgstr "Ajustes del escaneo"
 
 #. Tool rail entry in Support mode. Selecting it shows the Islands panel.
-#: src/components/controls/toolRailEntries.ts:123
+#: src/components/controls/toolRailEntries.ts:137
 msgid "Scan the model for unsupported islands"
 msgstr "Escanear el modelo en busca de islas sin soporte"
 
@@ -4562,7 +4573,7 @@ msgstr "Guardado automático de escenas"
 msgid "Scene mood overlay in thumbnail"
 msgstr "Superposición ambiental de la escena en la miniatura"
 
-#: src/components/controls/toolRailEntries.ts:59
+#: src/components/controls/toolRailEntries.ts:61
 msgid "Sculpt and smooth surface"
 msgstr "Esculpir y suavizar la superficie"
 
@@ -4810,10 +4821,6 @@ msgstr "Mostrar el borde de la huella"
 msgid "Show Forest Report"
 msgstr "Mostrar el informe del bosque"
 
-#: src/supports/Settings/SupportSidebar.tsx:1205
-msgid "Show full supports"
-msgstr "Mostrar los soportes completos"
-
 #: src/components/controls/IslandScanCard.tsx:315
 msgid "Show Island IDs (debug)"
 msgstr "Mostrar los ID de las islas (depuración)"
@@ -4833,8 +4840,8 @@ msgstr "Mostrar los nodos en los vóxeles"
 
 #. Tool rail entry that toggles the model list panel on the left. The list is the panel titled "Models".
 #. Tool rail entry that toggles the model list panel on the left. The list is the panel titled "Models".
-#: src/components/controls/toolRailEntries.ts:66
-#: src/components/controls/toolRailEntries.ts:144
+#: src/components/controls/toolRailEntries.ts:68
+#: src/components/controls/toolRailEntries.ts:158
 msgid "Show or hide the model list"
 msgstr "Mostrar u ocultar la lista de modelos"
 
@@ -4947,7 +4954,7 @@ msgid "Slot {slot}"
 msgstr "Ranura {slot}"
 
 #. Tool rail label in Prepare mode. The tool brushes and smooths local surface regions.
-#: src/components/controls/toolRailEntries.ts:59
+#: src/components/controls/toolRailEntries.ts:61
 #: src/features/slicing/components/SlicingPanel.tsx:727
 msgid "Smooth"
 msgstr "Suavizar"
@@ -4995,7 +5002,7 @@ msgstr "Velocidad"
 
 #. Title of the panel that splits one model along a drawn seam. The tool rail calls this tool Split; keep the two identical.
 #. Tool rail label in Prepare mode. Splits the model along a drawn seam.
-#: src/components/controls/toolRailEntries.ts:58
+#: src/components/controls/toolRailEntries.ts:60
 #: src/features/organicCut/OrganicCutPanel.tsx:372
 msgid "Split"
 msgstr "Dividir"
@@ -5009,7 +5016,7 @@ msgstr "Divide por una costura curva que sigue el bucle que has dibujado (encaje
 msgid "Split supports"
 msgstr "Dividir soportes"
 
-#: src/components/controls/toolRailEntries.ts:58
+#: src/components/controls/toolRailEntries.ts:60
 msgid "Split the model along a drawn seam"
 msgstr "Dividir el modelo por una costura dibujada"
 
@@ -5131,7 +5138,7 @@ msgid "Support placement is outside the build volume."
 msgstr "La colocación del soporte queda fuera del volumen de impresión."
 
 #. Tool rail entry in Support mode. Selecting it shows the support parameter sidebar (tip, shaft, roots, bracing).
-#: src/components/controls/toolRailEntries.ts:135
+#: src/components/controls/toolRailEntries.ts:149
 msgid "Support settings and presets"
 msgstr "Ajustes y preajustes de soportes"
 
@@ -5139,7 +5146,7 @@ msgstr "Ajustes y preajustes de soportes"
 msgid "Support Size"
 msgstr "Tamaño del soporte"
 
-#: src/supports/Settings/SupportSidebar.tsx:1197
+#: src/supports/Settings/SupportSidebar.tsx:1194
 msgid "Support Studio"
 msgstr "Estudio de soportes"
 
@@ -5151,7 +5158,7 @@ msgstr "El soporte chocaría con la geometría del modelo."
 msgid "Supported: {extensions}"
 msgstr "Compatibles: {extensions}"
 
-#: src/app/page.tsx:2340
+#: src/app/page.tsx:2344
 #: src/components/ui/EditorContextMenu.tsx:109
 msgid "Supports"
 msgstr "Soportes"
@@ -5241,16 +5248,16 @@ msgstr "Ancho de la espiga en milímetros"
 msgid "Tension"
 msgstr "Tensión"
 
-#: src/app/page.tsx:4421
+#: src/app/page.tsx:4425
 msgid "The autosave recovery file could not be found."
 msgstr "No se encuentra el archivo de recuperación."
 
-#: src/app/page.tsx:4409
-#: src/app/page.tsx:4422
+#: src/app/page.tsx:4413
+#: src/app/page.tsx:4426
 msgid "The autosaved recovery file is corrupted or unreadable."
 msgstr "El archivo de recuperación está dañado o no se puede leer."
 
-#: src/app/page.tsx:1050
+#: src/app/page.tsx:1051
 msgid "The background recovery save failed repeatedly."
 msgstr "El guardado de recuperación en segundo plano ha fallado varias veces seguidas."
 
@@ -5331,7 +5338,7 @@ msgstr "La resina está lista. ¿Y tú?"
 msgid "The saved run policy the settings below are. Selecting one applies it immediately; the rest of the dialog stays staged until you save."
 msgstr "La política de ejecución guardada que corresponde a los ajustes de abajo. Al elegir uno se aplica en el acto; el resto de la ventana queda pendiente hasta que guardes."
 
-#: src/app/page.tsx:4410
+#: src/app/page.tsx:4414
 msgid "The scene importer rejected or could not parse the autosave data."
 msgstr "El importador de escenas rechazó los datos del guardado automático o no pudo interpretarlos."
 
@@ -5455,7 +5462,7 @@ msgstr "Margen de ajuste de la punta"
 msgid "Tip Ø range"
 msgstr "Rango de Ø de la punta"
 
-#: src/app/page.tsx:2329
+#: src/app/page.tsx:2333
 msgid "Toggle curve"
 msgstr "Alternar curva"
 
@@ -5483,8 +5490,8 @@ msgstr "Muestra u oculta la ventana de primitivas de depuración del modo Prepar
 msgid "Too close to an existing support."
 msgstr "Demasiado cerca de un soporte existente."
 
-#: src/components/controls/ToolRail.tsx:306
-#: src/components/controls/ToolRail.tsx:307
+#: src/components/controls/ToolRail.tsx:394
+#: src/components/controls/ToolRail.tsx:395
 #: src/components/settings/GeneralSettingsTab.tsx:293
 #: src/components/settings/GeneralSettingsTab.tsx:297
 msgid "Tool layout"
@@ -5512,7 +5519,7 @@ msgstr "Siguiendo las islas"
 msgid "Tracking territories"
 msgstr "Siguiendo los territorios"
 
-#: src/components/controls/toolRailEntries.ts:48
+#: src/components/controls/toolRailEntries.ts:50
 msgid "Transform"
 msgstr "Transformar"
 
@@ -5521,10 +5528,10 @@ msgid "Triangles:"
 msgstr "Triángulos:"
 
 #: src/supports/Settings/components/PresetCard.tsx:149
-#: src/supports/Settings/SupportSidebar.tsx:955
-#: src/supports/Settings/SupportSidebar.tsx:955
-#: src/supports/Settings/SupportSidebar.tsx:1117
-#: src/supports/Settings/SupportSidebar.tsx:1117
+#: src/supports/Settings/SupportSidebar.tsx:952
+#: src/supports/Settings/SupportSidebar.tsx:952
+#: src/supports/Settings/SupportSidebar.tsx:1114
+#: src/supports/Settings/SupportSidebar.tsx:1114
 msgid "Trunk Diameter"
 msgstr "Diámetro del tronco"
 
@@ -5586,7 +5593,7 @@ msgstr "Puedes perder los cambios sin guardar."
 msgid "Unsaved Scene Found"
 msgstr "Hay una escena sin guardar"
 
-#: src/app/page.tsx:10234
+#: src/app/page.tsx:10238
 msgid "Unsupported file format"
 msgstr "Formato de fichero no compatible"
 
@@ -5706,7 +5713,7 @@ msgstr "La versión {version} está lista para instalarse"
 msgid "Version info and project details"
 msgstr "Versión y detalles del proyecto"
 
-#: src/components/controls/ToolRail.tsx:247
+#: src/components/controls/ToolRail.tsx:316
 #: src/components/settings/GeneralSettingsTab.tsx:299
 msgid "Vertical"
 msgstr "Vertical"
@@ -5747,6 +5754,11 @@ msgstr "Consulta, restaura o elimina instantáneas antiguas del disco."
 #: src/components/settings/BackupsSettingsTab.tsx:1254
 msgid "View, restore, or delete older snapshots from your private repository."
 msgstr "Consulta, restaura o elimina instantáneas antiguas de tu repositorio privado."
+
+#. Tool rail label in Support mode. Opens the support display modes: everything drawn solid, or contact discs with line members.
+#: src/components/controls/toolRailEntries.ts:185
+msgid "Visibility"
+msgstr "Visibilidad"
 
 #: src/components/controls/IslandVoxelControls.tsx:127
 msgid "Visualizes isolated grid-aligned islands."
