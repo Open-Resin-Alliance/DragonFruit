@@ -15,7 +15,7 @@ body:
     id: version
     attributes:
       label: DragonFruit version
-      description: Copy the full version line from the app, e.g. "DragonFruit 0.1.16 (beta) — dev @ 5362aed · macOS/arm64".
+      description: Copy the full version line from the app - Settings->About , e.g. "DragonFruit 0.1.16 (beta) — dev @ 5362aed · macOS/arm64".
       placeholder: DragonFruit 0.1.16 (beta) — dev @ 5362aed · macOS/arm64
     validations:
       required: true
@@ -31,12 +31,6 @@ body:
         - Other
     validations:
       required: true
-
-  - type: input
-    id: os_version
-    attributes:
-      label: OS version (optional)
-      placeholder: e.g. Windows 11 Pro 25H2, macOS 15.3, Ubuntu 24.04
 
   - type: dropdown
     id: printer_brand
