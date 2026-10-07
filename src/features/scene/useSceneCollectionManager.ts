@@ -185,11 +185,21 @@ type SceneSnapshot = {
   selectedModelIds: string[];
   supportState?: SupportState;
   modifierRecord?: { modelId: string; modifiers: ModelMeshModifiers | undefined };
+  /**
+   * The beds, on the entries that add or remove one. Optional: a snapshot without
+   * them leaves the plate list exactly as it is, which is what every entry that
+   * only touches models wants.
+   */
+  plates?: ScenePlate[];
+  activePlateId?: string;
 };
 
 type SceneSnapshotCaptureOptions = {
   includeSupportState?: boolean;
   supportStateOverride?: SupportState;
+  /** Record the plate list on this snapshot, for the entries that change it. */
+  plates?: ScenePlate[];
+  activePlateId?: string;
 };
 
 type TransformHistorySupportSnapshotOptions = {
@@ -310,6 +320,12 @@ function captureSceneSnapshot(
     ...(includeSupportState
       ? {
           supportState: clonePlainData(supportStateOverride ?? getSnapshot()),
+        }
+      : {}),
+    ...(options?.plates
+      ? {
+          plates: options.plates.map((plate) => ({ ...plate })),
+          activePlateId: options.activePlateId,
         }
       : {}),
   };
@@ -1879,6 +1895,17 @@ export function useSceneCollectionManager(options?: {
     setModels(snapshot.models.map(cloneLoadedModel));
     setActiveModelId(snapshot.activeModelId);
     setSelectedModelIds([...snapshot.selectedModelIds]);
+
+    // A snapshot that carries beds also carries which one was being worked on,
+    // falling back to the first when that plate is one of the ones that went.
+    if (snapshot.plates) {
+      const plates = snapshot.plates.map((plate) => ({ ...plate }));
+      const active = snapshot.activePlateId;
+      setPlates(plates);
+      setActivePlateId((prev) => (active && plates.some((plate) => plate.id === active)
+        ? active
+        : (plates[0]?.id ?? prev)));
+    }
 
     // setSupportSnapshot restores kickstands with everything else -- they are
     // ordinary SupportState collections, and their roots and host knots ride in
@@ -4049,7 +4076,7 @@ export function useSceneCollectionManager(options?: {
     });
   }, [models]);
 
-  const deleteModels = useCallback(async (idsInput: string[]) => {
+  const deleteModels = useCallback(async (idsInput: string[], options?: { pushHistory?: boolean }) => {
     const ids = new Set(idsInput);
     if (ids.size === 0) return;
 
@@ -4104,7 +4131,12 @@ export function useSceneCollectionManager(options?: {
     const currentActiveModelId = activeModelIdRef.current;
     const currentSelectedModelIds = selectedModelIdsRef.current;
 
-    const before = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, { includeSupportState: includeSupportHistory });
+    // A caller removing a whole plate pushes one entry for the plate and its
+    // models together, so it asks this to stay off the stack.
+    const shouldPushHistory = options?.pushHistory !== false;
+    const before = shouldPushHistory
+      ? captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, { includeSupportState: includeSupportHistory })
+      : null;
 
     existing.forEach((model) => {
       tryRevokeObjectUrl(model.fileUrl);
@@ -4159,11 +4191,13 @@ export function useSceneCollectionManager(options?: {
       }
     }
 
-    const after = captureSceneSnapshot(nextModels, nextActiveModelId, nextSelectedModelIds, { includeSupportState: includeSupportHistory });
-    const deletedLabel = existing.length === 1
-      ? `Delete Model ${existing[0].name}`
-      : `Delete ${existing.length} Models`;
-    pushSceneSnapshotHistory(before, after, deletedLabel);
+    if (shouldPushHistory && before) {
+      const after = captureSceneSnapshot(nextModels, nextActiveModelId, nextSelectedModelIds, { includeSupportState: includeSupportHistory });
+      const deletedLabel = existing.length === 1
+        ? `Delete Model ${existing[0].name}`
+        : `Delete ${existing.length} Models`;
+      pushSceneSnapshotHistory(before, after, deletedLabel);
+    }
 
     console.log(`[SceneCollection] Deleted ${ids.size} model(s) and ${totalRemovedSupports} associated supports.`);
   }, [pushSceneSnapshotHistory, tryRevokeObjectUrl, waitForUiYield]);
@@ -6078,9 +6112,21 @@ export function useSceneCollectionManager(options?: {
    */
   const addPlate = useCallback((): string => {
     const plate: ScenePlate = { id: uuidv4(), name: '' };
+    const current = platesRef.current;
+    const before = captureSceneSnapshot(modelsRef.current, activeModelIdRef.current, selectedModelIdsRef.current, {
+      plates: current,
+      activePlateId: activePlateIdRef.current,
+    });
+
     setPlates((prev) => [...prev, plate]);
+
+    const after = captureSceneSnapshot(modelsRef.current, activeModelIdRef.current, selectedModelIdsRef.current, {
+      plates: [...current, plate],
+      activePlateId: activePlateIdRef.current,
+    });
+    pushSceneSnapshotHistory(before, after, `Add Plate ${current.length + 1}`);
     return plate.id;
-  }, []);
+  }, [pushSceneSnapshotHistory]);
 
   const activatePlate = useCallback((plateId: string) => {
     setActivePlateId((prev) => (platesRef.current.some((plate) => plate.id === plateId) ? plateId : prev));
@@ -6162,12 +6208,28 @@ export function useSceneCollectionManager(options?: {
     const doomed = modelsRef.current.filter(
       (model) => resolveModelPlateIdRef.current(model) === plateId,
     );
-    if (doomed.length > 0) void deleteModels(doomed.map((model) => model.id));
+    const nextActivePlateId = activePlateIdRef.current === plateId ? remaining[0].id : activePlateIdRef.current;
+    const before = captureSceneSnapshot(modelsRef.current, activeModelIdRef.current, selectedModelIdsRef.current, {
+      plates: current,
+      activePlateId: activePlateIdRef.current,
+    });
 
     setPlates(remaining);
-    setActivePlateId((prev) => (prev === plateId ? remaining[0].id : prev));
+    setActivePlateId(nextActivePlateId);
+
+    // One entry for the whole move: `deleteModels` is asked not to push its own,
+    // because undoing that one alone would bring the models back onto a bed that
+    // is still gone and land them on another plate.
+    void deleteModels(doomed.map((model) => model.id), { pushHistory: false }).then(() => {
+      const after = captureSceneSnapshot(modelsRef.current, activeModelIdRef.current, selectedModelIdsRef.current, {
+        plates: remaining,
+        activePlateId: nextActivePlateId,
+      });
+      pushSceneSnapshotHistory(before, after, `Delete Plate ${current.findIndex((plate) => plate.id === plateId) + 1}`);
+    });
+
     return true;
-  }, [deleteModels]);
+  }, [deleteModels, pushSceneSnapshotHistory]);
 
   /**
    * Move models to another plate, carrying them across the cascade so they keep

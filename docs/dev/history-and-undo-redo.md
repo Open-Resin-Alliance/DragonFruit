@@ -166,6 +166,22 @@ Three payload patterns exist:
   `sceneSnapshotRegistry` (in `useSceneCollectionManager.ts`), which stores the
   heavy `{ before, after }` pairs with a 200-entry + ~300 MB-eviction budget.
 
+### Plates on the scene snapshot
+
+Beds ride on the same snapshot as the models, so an entry that changes the plate
+list records them too: `captureSceneSnapshot` in
+`src/features/scene/useSceneCollectionManager.ts` takes `{ plates, activePlateId }`
+in its options, and `applySceneSnapshot` puts them back — a snapshot that carries
+no plates leaves the list exactly as it is, which is what every models-only entry
+wants.
+
+`addPlate` and `removePlate` push such a snapshot. `removePlate` asks
+`deleteModels` for `{ pushHistory: false }` and pushes the single entry itself:
+undoing a models-only entry alone would bring the models back onto a bed that is
+still gone and leave them on another plate. It keeps its synchronous signature for
+callers and pushes from the deletion's completion, because `deleteModels` yields
+to the UI before it finishes.
+
 ### Geometry replacements with external modifiers
 
 `scene.replaceModelGeometry` in `src/features/scene/useSceneCollectionManager.ts` accepts `{ meshModifiersAfter, meshModifiersBefore? }` for hollowing operations that must undo geometry and externally stored `ModelMeshModifiers` together. Pass the complete modifier value as `meshModifiersAfter` (or `null` to delete it); omit the option for geometry replacements that should not create this history entry. The optional `meshModifiersBefore` overrides the history before-state when Apply follows an unbaked draft: restoring that draft verbatim would bake the hollow again at slice time.
