@@ -218,6 +218,12 @@ export function resolveSceneSliceJob(options: SceneSliceJobOptions): SceneSliceJ
 export type SceneSliceGeometry = {
   maxZMm: number;
   models: SliceJobManifestModel[];
+  /**
+   * Model-only triangle count, the split point before baked support/raft
+   * triangles in `positions.bin`. Omitted (or 0) means the whole mesh is model
+   * geometry and the engine treats it as one piece.
+   */
+  modelTriangleCount?: number;
 };
 
 export type SceneSliceRun = {
@@ -268,10 +274,11 @@ export function buildSceneSliceRun(
     throw new Error(`scene slice will not fall back silently: ${assembled.antiAliasing.warnings.join(' ')}`);
   }
 
-  // The app's defaults for what its performance settings decide, and no model
-  // triangle count: `slice run` counts the triangles in the mesh it loads.
+  // The app's defaults for what its performance settings decide. The model
+  // triangle count is the split point for baked supports in `positions.bin`;
+  // 0 lets `slice run` treat the whole mesh as model geometry.
   const payload = toNativeMetadataPayload({
-    ...buildNativeSliceJob(assembled, { pngCompressionMode: 'auto', aaOnSupportsFallback: false, modelTriangleCount: 0 }),
+    ...buildNativeSliceJob(assembled, { pngCompressionMode: 'auto', aaOnSupportsFallback: false, modelTriangleCount: geometry.modelTriangleCount ?? 0 }),
     trianglesXYZ: new Float32Array(0),
   });
   return {

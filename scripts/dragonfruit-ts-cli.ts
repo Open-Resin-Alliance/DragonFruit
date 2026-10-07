@@ -42,6 +42,8 @@ import type {
   SupportEntity,
 } from '../src/supports/types';
 import type { AaPreset } from '../src/features/slicing/autoAaPhysics';
+import type { SceneSliceModelInput } from './cli/sceneSliceMesh';
+import type { RaftSettings } from '../src/supports/Rafts/Crenelated/RaftTypes';
 
 // ---------------------------------------------------------------------------
 // VOXL File I/O
@@ -1342,7 +1344,14 @@ function loadSceneSliceJob(): typeof import('./cli/sceneSliceJob') {
   }
 }
 
-function sceneSlice(args: ReturnType<typeof parseArgs>): void {
+// Assembling the slice mesh pulls in THREE and the slicing stores, so load it
+// only for `scene slice` (keeps the header's "no THREE" promise for every other
+// command).
+function loadSceneSliceMesh(): typeof import('./cli/sceneSliceMesh') {
+  return createRequire(import.meta.url)('./cli/sceneSliceMesh');
+}
+
+async function sceneSlice(args: ReturnType<typeof parseArgs>): Promise<void> {
   const voxlPath = args.positional[0];
   if (!voxlPath) {
     throw new Error(
@@ -1353,12 +1362,19 @@ function sceneSlice(args: ReturnType<typeof parseArgs>): void {
       + '  [--aa-settings <aa.json>]                        AA settings on top of the material\'s, like a session override\n'
       + '  [--lut-curves <curves.json>]                     the curve library a custom LUT is looked up in\n'
       + '  [--dither on|off] [--dither-bit-depth N] [--dither-device-gamma G]\n'
+      + '  [--raft off|solid|line]                          bake a raft under rooted supports (default: off)\n'
+      + '  [--raft-settings <raft.json>]                    full raft settings, as the app stores them (merged over defaults)\n'
       + '  [--layer-height N] [--build-width-mm N] [--build-depth-mm N]  override the material / printer',
     );
   }
 
   const output = requireFlag(args.flags, 'o');
   const meshDir = optionalFlag(args.flags, 'mesh-dir') ?? dirname(resolve(voxlPath));
+  const raftMode = optionalFlag(args.flags, 'raft') as 'off' | 'solid' | 'line' | undefined;
+  if (raftMode !== undefined && raftMode !== 'off' && raftMode !== 'solid' && raftMode !== 'line') {
+    throw new Error(`--raft must be off, solid or line (got '${raftMode}')`);
+  }
+  const raftSettings = readJsonFlag(args.flags, 'raft-settings') as Partial<RaftSettings> | undefined;
   const aaPreset = optionalFlag(args.flags, 'aa-preset') as AaPreset | 'raw' | undefined; // sharp|balanced|smooth|raw
   const printerPath = optionalFlag(args.flags, 'printer');
   const materialPath = printerPath ? optionalFlag(args.flags, 'material') : undefined;
@@ -1384,10 +1400,10 @@ function sceneSlice(args: ReturnType<typeof parseArgs>): void {
 
   console.error(`scene slice: ${visibleModels.length} visible models`);
 
-  // Phase 1: Load each model's STL, apply translation, collect all positions
-  const allPositions: Float32Array[] = [];
-  let totalTriangles = 0;
-  let maxZMm = 0;
+  // Phase 1: Load each model's STL and bake its scene transform into world
+  // space. The vertices go to the orchestrator as-is (identity transform), so
+  // the model triangles match the CLI's validated world output.
+  const modelInputs: SceneSliceModelInput[] = [];
 
   for (const model of visibleModels) {
     let positions: Float32Array;
@@ -1445,48 +1461,78 @@ function sceneSlice(args: ReturnType<typeof parseArgs>): void {
       console.error(`    transform: pos=(${t.position.x.toFixed(1)},${t.position.y.toFixed(1)},${t.position.z.toFixed(1)}) rot=(${t.rotation.x.toFixed(3)},${t.rotation.y.toFixed(3)},${t.rotation.z.toFixed(3)}) scale=(${t.scale.x},${t.scale.y},${t.scale.z})`);
     }
 
-    for (let i = 2; i < positions.length; i += 3) {
-      if (positions[i] > maxZMm) maxZMm = positions[i];
-    }
-    allPositions.push(positions);
-    totalTriangles += positions.length / 9;
+    modelInputs.push({
+      id: model.id,
+      name: model.name,
+      color: model.color,
+      polygonCount: model.polygonCount,
+      isSupportGeometry: model.isSupportGeometry ?? false,
+      positions,
+    });
   }
 
-  // Phase 2: Merge into single positions buffer, releasing each per-model source
-  // array the moment it has been copied. Peak heap is then ~one merged copy plus
-  // the single model being copied, not (all sources + merged) — matters on
-  // low-resource machines where the scene's geometry may already be a large slice
-  // of available RAM.
-  const totalFloats = allPositions.reduce((sum, p) => sum + p.length, 0);
-  let merged: Float32Array = new Float32Array(totalFloats);
-  let writeOffset = 0;
-  for (let i = 0; i < allPositions.length; i++) {
-    const p = allPositions[i];
-    merged.set(p, writeOffset);
-    writeOffset += p.length;
-    allPositions[i] = EMPTY_F32; // drop the per-model copy immediately
+  // Phase 2: Assemble the slice mesh. With a printer, the app's own orchestrator
+  // merges models + supports + raft, splits model from support triangles, and
+  // derives the layer count — one shared path keeps `scene slice` in parity with
+  // the GUI slice. Without a printer (raw engine defaults) only the model
+  // geometry is sliced.
+  let meshPositions: Float32Array;
+  let modelTriangleCount: number;
+  let maxZMm = 0;
+  const raftOn = Boolean(raftSettings) || (raftMode !== undefined && raftMode !== 'off');
+  if (job.printer && job.material) {
+    const mesh = await loadSceneSliceMesh().buildSceneSliceMesh({
+      models: modelInputs,
+      supports: doc.supports,
+      printerProfile: job.printer,
+      materialProfile: job.material,
+      raftMode,
+      raftSettings,
+    });
+    meshPositions = mesh.trianglesXYZ;
+    modelTriangleCount = mesh.modelTriangleCount;
+    maxZMm = mesh.meshBounds.maxZ;
+    const supportTriangles = meshPositions.length / 9 - modelTriangleCount;
+    console.error(`scene slice: ${modelTriangleCount} model + ${supportTriangles} support${raftOn ? '+raft' : ''} triangles`);
+  } else {
+    if (raftOn) throw new Error('--raft / --raft-settings need a printer; pass --printer');
+    const totalFloats = modelInputs.reduce((sum, m) => sum + m.positions.length, 0);
+    meshPositions = new Float32Array(totalFloats);
+    let writeOffset = 0;
+    for (const m of modelInputs) {
+      meshPositions.set(m.positions, writeOffset);
+      writeOffset += m.positions.length;
+      for (let i = 2; i < m.positions.length; i += 3) {
+        if (m.positions[i] > maxZMm) maxZMm = m.positions[i];
+      }
+    }
+    modelTriangleCount = totalFloats / 9;
+    console.error(`scene slice: ${modelTriangleCount} model triangles (no printer: supports not sliced)`);
   }
-  allPositions.length = 0;
+  // The per-model buffers are now consumed; drop them before writing out.
+  modelInputs.length = 0;
   releaseHeap();
 
-  // Phase 3: Write merged positions.bin
+  // Phase 3: Write positions.bin
   const tmpDir = `/tmp/df-scene-slice-${Date.now()}`;
   execSync(`mkdir -p ${tmpDir}`);
   const mergedPath = resolve(tmpDir, 'positions.bin');
-  writePositionsBin(mergedPath, merged);
-  console.error(`  merged: ${totalTriangles} triangles -> ${mergedPath}`);
+  const totalTriangles = meshPositions.length / 9;
+  writePositionsBin(mergedPath, meshPositions);
+  console.error(`  mesh: ${totalTriangles} triangles -> ${mergedPath}`);
 
   // Hand-off complete: positions.bin on disk now owns the geometry, and the
   // slicing engine (Rust) reads it from there — node holds nothing the engine
-  // needs. Drop the merged copy (the last large buffer) before shelling out so
+  // needs. Drop the mesh buffer (the last large buffer) before shelling out so
   // the process sits near-idle in RAM during the blocking slice.
-  merged = EMPTY_F32;
+  meshPositions = EMPTY_F32;
   releaseHeap();
 
   // Phase 4: Shell out to Rust slicer
   const rustCli = resolve(dirname(new URL(import.meta.url).pathname), '../rust/dragonfruit-cli/target/release/dragonfruit-cli');
   const run = sliceJob.buildSceneSliceRun(job, {
     maxZMm,
+    modelTriangleCount,
     models: visibleModels.map((model) => ({
       id: model.id,
       name: model.name,
@@ -1588,7 +1634,7 @@ Each command operates on a .voxl file — the same format the DragonFruit GUI us
 /**
  * Wrap a command function with timing. Captures stdout JSON output and injects _perf.
  */
-function withTiming(fn: (args: ReturnType<typeof parseArgs>) => void, args: ReturnType<typeof parseArgs>): void {
+async function withTiming(fn: (args: ReturnType<typeof parseArgs>) => void | Promise<void>, args: ReturnType<typeof parseArgs>): Promise<void> {
   const t0 = performance.now();
   const commandLabel = `${args.command} ${args.subcommand}`;
 
@@ -1602,7 +1648,7 @@ function withTiming(fn: (args: ReturnType<typeof parseArgs>) => void, args: Retu
     };
   }
 
-  fn(args);
+  await fn(args);
 
   const elapsed_ms = +(performance.now() - t0).toFixed(2);
 
@@ -1622,7 +1668,7 @@ function withTiming(fn: (args: ReturnType<typeof parseArgs>) => void, args: Retu
   }
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const rawArgs = process.argv.slice(2);
   if (rawArgs.length === 0 || rawArgs[0] === '--help' || rawArgs[0] === '-h') {
     console.log(USAGE);
@@ -1631,7 +1677,11 @@ function main(): void {
 
   const args = parseArgs(rawArgs);
 
-  const dispatch = (fn: (a: ReturnType<typeof parseArgs>) => void) => withTiming(fn, args);
+  // Each case sets `pending` to the (possibly async) handler; it is awaited once
+  // the switch has picked one, so an async command such as `scene slice`
+  // finishes — and its errors surface — inside this try/catch.
+  let pending: void | Promise<void> = undefined;
+  const dispatch = (fn: (a: ReturnType<typeof parseArgs>) => void | Promise<void>) => { pending = withTiming(fn, args); };
 
   try {
     if (args.command === 'scene') {
@@ -1672,10 +1722,11 @@ function main(): void {
     } else {
       throw new Error(`Unknown command: ${args.command}\n\n${USAGE}`);
     }
+    await pending;
   } catch (err: any) {
     console.error(`Error: ${err.message}`);
     process.exit(1);
   }
 }
 
-main();
+void main();
