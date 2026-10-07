@@ -1139,7 +1139,10 @@ function scheduleChunkStoreSweep(getModels: () => LoadedModel[]): void {
   }, 1_500);
 }
 
-export function useSceneCollectionManager() {
+export function useSceneCollectionManager(options?: {
+  /** Called when the plate's lock refuses a gesture, so the caller can say so. */
+  onBlockedByLock?: () => void;
+}) {
   const { _ } = useLingui();
 
   type ScenePluginImportEntry = {
@@ -1219,6 +1222,9 @@ export function useSceneCollectionManager() {
    */
   const [plateLocked, setPlateLocked] = useState(false);
   const plateLockedRef = useRef(false);
+  // Told, not shown: the manager has no UI, so a refused gesture reports through this
+  // callback and the page decides what that looks like.
+  const onBlockedByLockRef = useRef<(() => void) | undefined>(undefined);
   // An empty plate has no name: deleting the last model, or starting a new scene,
   // clears it, and the widget falls back to its default wording. A named scene
   // that happens to carry models keeps its name, since this only reacts when the
@@ -1238,6 +1244,7 @@ export function useSceneCollectionManager() {
   const lastLoadedVoxlFormatChunkedRef = useRef<boolean>(true);
   modelsRef.current = models;
   plateLockedRef.current = plateLocked;
+  onBlockedByLockRef.current = options?.onBlockedByLock;
   activeModelIdRef.current = activeModelId;
   selectedModelIdsRef.current = selectedModelIds;
 
@@ -2272,7 +2279,10 @@ export function useSceneCollectionManager() {
     // The lock's whole point: nothing on a locked plate can be selected. Guarded at
     // the gesture rather than at the setter, because the internal writers (import,
     // duplicate, split) call the setter directly and must keep working.
-    if (plateLockedRef.current) return;
+    if (plateLockedRef.current) {
+      onBlockedByLockRef.current?.();
+      return;
+    }
     setActiveModelId(id);
 
     setSelectedModelIds((prev) => {
@@ -2308,7 +2318,10 @@ export function useSceneCollectionManager() {
   const loadFiles = useCallback(async (filesInput: FileList | File[]) => {
     // One door for every way a mesh arrives — picker, drop, the panel's plus — so the
     // lock is enforced here rather than at each of them.
-    if (plateLockedRef.current) return;
+    if (plateLockedRef.current) {
+      onBlockedByLockRef.current?.();
+      return;
+    }
     const files = Array.from(filesInput).filter((file) => getMeshExtension(file.name) !== null);
 
     if (files.length === 0) {
