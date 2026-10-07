@@ -1,0 +1,89 @@
+name: Feature request
+description: Suggest a new feature or an improvement to DragonFruit.
+title: "[FEAT] "
+labels: ["form-v1"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea! Please search existing issues first in case someone has already suggested it.
+        If something is broken, use the **Bug report** form instead.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the situation or frustration that led to this idea. Focus on the need, not the solution.
+      placeholder: e.g. When I print several models at once, I have to set up supports on each one separately, which takes a long time.
+    validations:
+      required: true
+
+  - type: textarea
+    id: user_story
+    attributes:
+      label: User story (optional)
+      description: If it helps, describe it as "As a [type of user] I want [goal] so that [reason]."
+      placeholder: As a hobbyist printing miniatures, I want to copy support settings between models so that I can set up a full plate faster.
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like DragonFruit to do?
+      description: Describe the feature or change you have in mind. Sketches, mockups, or examples from other slicers are welcome.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of DragonFruit does this affect?
+      description: Your best guess is fine.
+      multiple: true
+      options:
+        - File import (STL / OBJ / 3MF / .lys / .chitubox)
+        - Opening or saving projects (.voxl)
+        - Moving, rotating, scaling, arranging models
+        - Cutting models
+        - Hollowing
+        - Mesh repair
+        - Auto supports
+        - Support Studio (manual supports)
+        - Islands
+        - Slicing
+        - Antialiasing / 3DAA
+        - Printer or material profiles
+        - Exporting files
+        - Sending to / printing on the printer
+        - Interface (menus, viewport, shortcuts)
+        - Installing, starting, updating
+        - Not sure / other
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: How would you know it's done? (optional)
+      description: What would need to be true for this to solve your problem?
+      placeholder: |
+        - I can copy support settings from one model
+        - I can paste them onto one or more other models
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Workarounds or alternatives (optional)
+      description: How do you handle this today? Have you seen it done well in another tool?
+
+  - type: input
+    id: version
+    attributes:
+      label: DragonFruit version (optional)
+      description: The version you're using, in case the feature already partly exists.
+      placeholder: DragonFruit 0.1.16 (beta) — dev @ 5362aed · macOS/arm64
+
+  - type: textarea
+    id: attachments
+    attributes:
+      label: Mockups, screenshots, or examples (optional)
+      description: Drag and drop images or files here.
