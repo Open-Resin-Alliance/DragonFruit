@@ -228,6 +228,7 @@ export function Helpers({
   safetyMarginMm,
   frontLabel = 'Front',
   plateName,
+  showPlateName = false,
   plateNamePlaceholder,
   plateNameEditTitle,
   plateNameEmptyTitle,
@@ -249,6 +250,8 @@ export function Helpers({
   frontLabel?: string;
   /** The build plate's name, and the strings its editor needs (see the note above). */
   plateName?: string;
+  /** Whether to draw the plate's name widget at all: an empty plate has nothing to name. */
+  showPlateName?: boolean;
   plateNamePlaceholder?: string;
   plateNameEditTitle?: string;
   plateNameEmptyTitle?: string;
@@ -771,6 +774,7 @@ export function Helpers({
 
       {/* The plate's name, laid flat just inside its front-left corner. */}
       {shouldShowBuildPlate
+        && showPlateName
         && plateName !== undefined
         && plateNamePlaceholder
         && plateNameEditTitle

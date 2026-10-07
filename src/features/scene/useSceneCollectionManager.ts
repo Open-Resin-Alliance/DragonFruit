@@ -1211,6 +1211,15 @@ export function useSceneCollectionManager() {
    * state, and undoing a rename is not something the history is for.
    */
   const [plateName, setPlateName] = useState('');
+  // An empty plate has no name: deleting the last model, or starting a new scene,
+  // clears it, and the widget falls back to its default wording. A named scene
+  // that happens to carry models keeps its name, since this only reacts when the
+  // plate is empty.
+  useEffect(() => {
+    if (models.length > 0) return;
+    setPlateName('');
+  }, [models.length]);
+
   const modelsRef = useRef<LoadedModel[]>([]);
   const activeModelIdRef = useRef<string | null>(null);
   const selectedModelIdsRef = useRef<string[]>([]);
