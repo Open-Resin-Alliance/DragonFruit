@@ -101,9 +101,10 @@ export function SolidSupportIcon(props: React.SVGProps<SVGSVGElement>) {
           width so the two read as one tapered object rather than an arrowhead
           stuck on a stick. */}
       <path d="M2.4 2.4 8.6 5 6 8Z" fill="currentColor" stroke="none" />
-      {/* The member. Butt ends, so the foot stops at the plate instead of ending
-          in a blob; the join rounds the bend. */}
-      <path d="M7.3 6.5 15.2 13.1V20.9" strokeWidth={4} />
+      {/* The member: a shorter run on the incline, then a longer drop to the
+          plate. Butt ends, so the foot stops at the plate instead of ending in a
+          blob; the join rounds the bend. */}
+      <path d="M7.3 6.5 11.6 10.1V21.2" strokeWidth={4} />
     </svg>
   );
 }
@@ -127,12 +128,12 @@ export function LineSupportIcon(props: React.SVGProps<SVGSVGElement>) {
       {/* Butt caps on purpose: a round cap adds half the stroke width to each end
           of a dash, and at these lengths that closes the gap and the shaft reads
           as one solid line again. */}
-      <path d="M3.7 3.6 5.4 5" />
-      <path d="M7.2 6.5 8.8 7.9" />
-      <path d="M10.6 9.3 12.3 10.7" />
-      <path d="M14.1 12.2 15.1 13.1" />
-      <path d="M15.2 13.1V15.3" />
-      <path d="M15.2 17.2V19.4" />
+      <path d="M3.1 3 4.8 4.4" />
+      <path d="M6.5 5.9 8.2 7.3" />
+      <path d="M10 8.8 11.6 10.1" />
+      <path d="M11.6 10.1V12.3" />
+      <path d="M11.6 14.2V16.4" />
+      <path d="M11.6 18.3V20.5" />
     </svg>
   );
 }
