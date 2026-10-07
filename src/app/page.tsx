@@ -987,6 +987,7 @@ export default function Home() {
     models: scene.models,
     activeModelId: scene.activeModelId,
     selectedModelIds: scene.selectedModelIds,
+    plateName: scene.plateName,
     enabled: sceneAutosaveEnabled,
     debounceMs: sceneAutosaveSettings.debounceMs,
     cooldownMs: sceneAutosaveSettings.cooldownMs,
@@ -4324,6 +4325,7 @@ export default function Home() {
         models: scopeModels,
         activeModelId: scene.activeModelId,
         selectedModelIds: scene.selectedModelIds,
+        plateName: scene.plateName,
         exportThumbnailPng: exportThumbnailPng ?? undefined,
       },
       {
@@ -10269,6 +10271,8 @@ export default function Home() {
             heatmapMaxAngle={scene.heatmapMaxAngle}
             heatmapColors={scene.heatmapColors}
             interiorView={interiorView}
+            plateName={scene.plateName}
+            onPlateNameChange={scene.setPlateName}
             cavityGeometryByModelId={new Map(Array.from(cavityGeometryByModelIdRef.current.entries()).map(([id, entry]) => [id, entry.geometry]))}
             disableRaycast={transformMgr.isTransforming}
             hideCrossSectionCap={false}

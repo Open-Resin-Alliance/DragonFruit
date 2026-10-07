@@ -269,7 +269,7 @@ msgstr ""
 msgid "Add contacts along the edge or corner a pose bears on, so a leaning part is held against toppling and peel (default on)"
 msgstr ""
 
-#: src/app/page.tsx:2339
+#: src/app/page.tsx:2340
 msgid "Add joint"
 msgstr ""
 
@@ -382,7 +382,7 @@ msgstr ""
 msgid "Area Σ {totalAreaLabel} • Min {minAreaLabel} • Max {maxAreaLabel}"
 msgstr ""
 
-#: src/components/controls/toolRailEntries.ts:57
+#: src/components/controls/toolRailEntries.ts:58
 msgid "Arrange"
 msgstr ""
 
@@ -391,11 +391,11 @@ msgid "Arrange model and transforms"
 msgstr ""
 
 #. Tool rail entry. The tool that auto-packs the models onto the plate.
-#: src/components/controls/toolRailEntries.ts:57
+#: src/components/controls/toolRailEntries.ts:58
 msgid "Arrange models on the plate"
 msgstr ""
 
-#: src/components/controls/toolRailEntries.ts:56
+#: src/components/controls/toolRailEntries.ts:57
 msgid "Array copies across the plate"
 msgstr ""
 
@@ -446,7 +446,7 @@ msgid "Auto Orientation (Beta)"
 msgstr ""
 
 #. Tool rail entry in Support mode. Selecting it shows the Auto Supports panel, which generates supports.
-#: src/components/controls/toolRailEntries.ts:153
+#: src/components/controls/toolRailEntries.ts:155
 msgid "Auto support generation"
 msgstr ""
 
@@ -524,7 +524,7 @@ msgid "Auto-support settings"
 msgstr ""
 
 #. Tool rail label in Support mode. Short for the Auto Supports panel, which generates supports automatically.
-#: src/components/controls/toolRailEntries.ts:152
+#: src/components/controls/toolRailEntries.ts:154
 msgid "Automatic"
 msgstr ""
 
@@ -581,7 +581,7 @@ msgstr ""
 msgid "Autosave idle delay"
 msgstr ""
 
-#: src/app/page.tsx:1051
+#: src/app/page.tsx:1052
 msgid "Autosave is not working"
 msgstr ""
 
@@ -612,7 +612,7 @@ msgstr ""
 #. View cube face (the side opposite Front), rendered uppercase inside a small 3D cube. Keep it as short as possible.
 #: src/components/layout/FirstRunOnboarding.tsx:278
 #: src/components/layout/OnboardingPrinterLibrary.tsx:279
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1560
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1570
 msgid "Back"
 msgstr ""
 
@@ -755,7 +755,7 @@ msgid "Border Margin"
 msgstr ""
 
 #. View cube face (seen from below), rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1564
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1574
 msgid "Bottom"
 msgstr ""
 
@@ -1274,7 +1274,7 @@ msgstr ""
 msgid "Contoured regions"
 msgstr ""
 
-#: src/app/page.tsx:8180
+#: src/app/page.tsx:8182
 msgid "Converting support data and model metadata"
 msgstr ""
 
@@ -1352,7 +1352,7 @@ msgstr ""
 msgid "Create a snapshot now and refresh history."
 msgstr ""
 
-#: src/components/controls/toolRailEntries.ts:178
+#: src/components/controls/toolRailEntries.ts:180
 msgid "Create cavity or open-face shell"
 msgstr ""
 
@@ -1749,12 +1749,12 @@ msgstr ""
 msgid "Drop supported files"
 msgstr ""
 
-#: src/app/page.tsx:10244
+#: src/app/page.tsx:10246
 msgid "Drop supported files to import"
 msgstr ""
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:391
-#: src/components/controls/toolRailEntries.ts:56
+#: src/components/controls/toolRailEntries.ts:57
 msgid "Duplicate"
 msgstr ""
 
@@ -1786,7 +1786,7 @@ msgstr ""
 msgid "Edit printer profile"
 msgstr ""
 
-#: src/app/page.tsx:2345
+#: src/app/page.tsx:2346
 msgid "Editor"
 msgstr ""
 
@@ -2206,7 +2206,7 @@ msgid "From the community, for the community. Free to use, open to contribute, a
 msgstr ""
 
 #. Orientation label, rendered uppercase on the view cube and on the build plate's front edge. Keep it as short as possible — long words are auto-shrunk to fit and become hard to read.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1556
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1566
 msgid "Front"
 msgstr ""
 
@@ -2215,7 +2215,7 @@ msgid "Frustum"
 msgstr ""
 
 #. Support view mode. Every support member is drawn as a solid mesh.
-#: src/components/controls/toolRailEntries.ts:209
+#: src/components/controls/toolRailEntries.ts:211
 msgid "Full"
 msgstr ""
 
@@ -2267,6 +2267,11 @@ msgstr ""
 
 #: src/components/settings/BackupsSettingsTab.tsx:572
 msgid "GitHub OAuth popup opened."
+msgstr ""
+
+#. Tooltip on the build plate's name widget while it is still unnamed.
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1565
+msgid "Give this build plate a name"
 msgstr ""
 
 #: src/components/controls/AutoSupportPanel.tsx:608
@@ -2359,12 +2364,12 @@ msgid "Hold the model clear of the plate, so a support can stand under it. Turns
 msgstr ""
 
 #. Tool rail label in Support mode. One word, like the other tool names: opens the hollowing tool (shell the model, add drainage holes).
-#: src/components/controls/toolRailEntries.ts:177
+#: src/components/controls/toolRailEntries.ts:179
 msgid "Hollow"
 msgstr ""
 
 #. Tool rail entry in Support mode, shown greyed when the model has no cavity yet.
-#: src/components/controls/toolRailEntries.ts:228
+#: src/components/controls/toolRailEntries.ts:230
 msgid "Hollow the model first to look inside it"
 msgstr ""
 
@@ -2414,7 +2419,7 @@ msgid "How the part is held against toppling and peel — self-support angle, st
 msgstr ""
 
 #. Tool rail entry in Support mode. Opens a menu of view modes rather than toggling on its own.
-#: src/components/controls/toolRailEntries.ts:196
+#: src/components/controls/toolRailEntries.ts:198
 msgid "How the support forest is drawn"
 msgstr ""
 
@@ -2576,7 +2581,7 @@ msgid "Interface scale"
 msgstr ""
 
 #. Tool rail label in Support mode. Toggles looking inside a hollowed model instead of at its outside. One word, to fit the rail.
-#: src/components/controls/toolRailEntries.ts:225
+#: src/components/controls/toolRailEntries.ts:227
 msgid "Interior"
 msgstr ""
 
@@ -2606,7 +2611,7 @@ msgstr ""
 
 #. Tool rail label in Support mode. Short for the Islands panel, which scans the model for unsupported islands.
 #: src/components/controls/IslandsPanel.tsx:137
-#: src/components/controls/toolRailEntries.ts:146
+#: src/components/controls/toolRailEntries.ts:148
 msgid "Islands"
 msgstr ""
 
@@ -2764,7 +2769,7 @@ msgid "Leave the collection as it is"
 msgstr ""
 
 #. View cube face, rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1562
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1572
 msgid "Left"
 msgstr ""
 
@@ -2772,7 +2777,7 @@ msgstr ""
 msgid "Length"
 msgstr ""
 
-#: src/app/page.tsx:8220
+#: src/app/page.tsx:8222
 msgid "Letting DragonFruit finish its startup animation before loading your scene."
 msgstr ""
 
@@ -2804,7 +2809,7 @@ msgid "Line Width"
 msgstr ""
 
 #. Support view mode. Contact discs stay solid and every other member is drawn as a line, which keeps a dense support forest readable.
-#: src/components/controls/toolRailEntries.ts:216
+#: src/components/controls/toolRailEntries.ts:218
 msgid "Lines"
 msgstr ""
 
@@ -2853,7 +2858,7 @@ msgstr ""
 msgid "Loading Mesh Files…"
 msgstr ""
 
-#: src/app/page.tsx:8170
+#: src/app/page.tsx:8172
 #: src/features/scene/sceneImportMessages.ts:23
 msgid "Loading Mesh…"
 msgstr ""
@@ -2862,9 +2867,9 @@ msgstr ""
 msgid "Loading remote material…"
 msgstr ""
 
-#: src/app/page.tsx:4381
-#: src/app/page.tsx:8170
-#: src/app/page.tsx:8179
+#: src/app/page.tsx:4383
+#: src/app/page.tsx:8172
+#: src/app/page.tsx:8181
 msgid "Loading Scene…"
 msgstr ""
 
@@ -2936,7 +2941,7 @@ msgid "Logical Volumes: Show Ownership Leaves Only"
 msgstr ""
 
 #. Tool rail entry in Support mode, enabled once the model has been hollowed.
-#: src/components/controls/toolRailEntries.ts:227
+#: src/components/controls/toolRailEntries.ts:229
 msgid "Look inside the hollow, at the cavity and its drain holes"
 msgstr ""
 
@@ -2966,7 +2971,7 @@ msgid "Managed Printers"
 msgstr ""
 
 #. Tool rail label in Support mode. Short for the manual support settings panel (tip, shaft, roots, bracing).
-#: src/components/controls/toolRailEntries.ts:158
+#: src/components/controls/toolRailEntries.ts:160
 #: src/components/printers/SetupMethodChooser.tsx:28
 msgid "Manual"
 msgstr ""
@@ -3203,8 +3208,8 @@ msgstr ""
 #. Title of the panel listing every model loaded into the scene.
 #: src/components/controls/ModelManagerPanel.tsx:438
 #: src/components/controls/ModelManagerPanel.tsx:726
-#: src/components/controls/toolRailEntries.ts:65
-#: src/components/controls/toolRailEntries.ts:167
+#: src/components/controls/toolRailEntries.ts:66
+#: src/components/controls/toolRailEntries.ts:169
 msgid "Models"
 msgstr ""
 
@@ -3261,6 +3266,11 @@ msgstr ""
 
 #: src/components/scene/SceneAutosaveRecoveryModal.tsx:143
 msgid "Name"
+msgstr ""
+
+#. Placeholder and fallback label on the build plate's own name widget, shown while the plate has no name.
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1563
+msgid "Name this plate"
 msgstr ""
 
 #. Button that runs the fast native Rust island scan. Sits next to a "JS" button; keep it very short.
@@ -3337,7 +3347,7 @@ msgstr ""
 msgid "No active printer"
 msgstr ""
 
-#: src/app/page.tsx:1055
+#: src/app/page.tsx:1056
 msgid "No autosave has succeeded this session. Save your project manually."
 msgstr ""
 
@@ -3697,7 +3707,7 @@ msgstr ""
 msgid "Opening"
 msgstr ""
 
-#: src/app/page.tsx:8217
+#: src/app/page.tsx:8219
 msgid "Opening scene…"
 msgstr ""
 
@@ -4073,7 +4083,7 @@ msgstr ""
 msgid "Re-slice required after profile change"
 msgstr ""
 
-#: src/app/page.tsx:4382
+#: src/app/page.tsx:4384
 msgid "Reading autosaved scene…"
 msgstr ""
 
@@ -4207,6 +4217,11 @@ msgstr ""
 msgid "Rename"
 msgstr ""
 
+#. Tooltip on the pencil beside the build plate's name.
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1564
+msgid "Rename build plate"
+msgstr ""
+
 #: src/components/controls/ModelManagerPanel.tsx:363
 #: src/components/controls/ModelManagerPanel.tsx:562
 msgid "Rename folder"
@@ -4337,8 +4352,8 @@ msgstr ""
 msgid "Restore Factory Defaults?"
 msgstr ""
 
-#: src/app/page.tsx:4413
-#: src/app/page.tsx:4424
+#: src/app/page.tsx:4415
+#: src/app/page.tsx:4426
 msgid "Restore Failed"
 msgstr ""
 
@@ -4367,7 +4382,7 @@ msgid "Revert Changes"
 msgstr ""
 
 #. View cube face, rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1561
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1571
 msgid "Right"
 msgstr ""
 
@@ -4543,7 +4558,7 @@ msgid "Scan Settings"
 msgstr ""
 
 #. Tool rail entry in Support mode. Selecting it shows the Islands panel.
-#: src/components/controls/toolRailEntries.ts:147
+#: src/components/controls/toolRailEntries.ts:149
 msgid "Scan the model for unsupported islands"
 msgstr ""
 
@@ -4587,7 +4602,7 @@ msgstr ""
 msgid "Scene mood overlay in thumbnail"
 msgstr ""
 
-#: src/components/controls/toolRailEntries.ts:59
+#: src/components/controls/toolRailEntries.ts:60
 msgid "Sculpt and smooth surface"
 msgstr ""
 
@@ -4714,12 +4729,12 @@ msgid "Selected printer is offline"
 msgstr ""
 
 #. Shown while dragging a selection rectangle right to left, which takes every object the rectangle touches. Mirrors the CAD convention; keep it on one short line.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3033
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3043
 msgid "Selection Mode: Contact (Right to Left)"
 msgstr ""
 
 #. Shown while dragging a selection rectangle left to right, which takes only the objects the rectangle fully encloses. Mirrors the CAD convention; keep it on one short line.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3037
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3047
 msgid "Selection Mode: Enclosed (Left to Right)"
 msgstr ""
 
@@ -4854,8 +4869,8 @@ msgstr ""
 
 #. Tool rail entry that toggles the model list panel on the left. The list is the panel titled "Models".
 #. Tool rail entry that toggles the model list panel on the left. The list is the panel titled "Models".
-#: src/components/controls/toolRailEntries.ts:66
-#: src/components/controls/toolRailEntries.ts:168
+#: src/components/controls/toolRailEntries.ts:67
+#: src/components/controls/toolRailEntries.ts:170
 msgid "Show or hide the model list"
 msgstr ""
 
@@ -4968,7 +4983,7 @@ msgid "Slot {slot}"
 msgstr ""
 
 #. Tool rail label in Prepare mode. The tool brushes and smooths local surface regions.
-#: src/components/controls/toolRailEntries.ts:59
+#: src/components/controls/toolRailEntries.ts:60
 #: src/features/slicing/components/SlicingPanel.tsx:727
 msgid "Smooth"
 msgstr ""
@@ -5016,7 +5031,7 @@ msgstr ""
 
 #. Title of the panel that splits one model along a drawn seam. The tool rail calls this tool Split; keep the two identical.
 #. Tool rail label in Prepare mode. Splits the model along a drawn seam.
-#: src/components/controls/toolRailEntries.ts:58
+#: src/components/controls/toolRailEntries.ts:59
 #: src/features/organicCut/OrganicCutPanel.tsx:372
 msgid "Split"
 msgstr ""
@@ -5030,7 +5045,7 @@ msgstr ""
 msgid "Split supports"
 msgstr ""
 
-#: src/components/controls/toolRailEntries.ts:58
+#: src/components/controls/toolRailEntries.ts:59
 msgid "Split the model along a drawn seam"
 msgstr ""
 
@@ -5152,7 +5167,7 @@ msgid "Support placement is outside the build volume."
 msgstr ""
 
 #. Tool rail entry in Support mode. Selecting it shows the support parameter sidebar (tip, shaft, roots, bracing).
-#: src/components/controls/toolRailEntries.ts:159
+#: src/components/controls/toolRailEntries.ts:161
 msgid "Support settings and presets"
 msgstr ""
 
@@ -5172,7 +5187,7 @@ msgstr ""
 msgid "Supported: {extensions}"
 msgstr ""
 
-#: src/app/page.tsx:2345
+#: src/app/page.tsx:2346
 #: src/components/ui/EditorContextMenu.tsx:109
 msgid "Supports"
 msgstr ""
@@ -5262,16 +5277,16 @@ msgstr ""
 msgid "Tension"
 msgstr ""
 
-#: src/app/page.tsx:4426
+#: src/app/page.tsx:4428
 msgid "The autosave recovery file could not be found."
 msgstr ""
 
-#: src/app/page.tsx:4414
-#: src/app/page.tsx:4427
+#: src/app/page.tsx:4416
+#: src/app/page.tsx:4429
 msgid "The autosaved recovery file is corrupted or unreadable."
 msgstr ""
 
-#: src/app/page.tsx:1052
+#: src/app/page.tsx:1053
 msgid "The background recovery save failed repeatedly."
 msgstr ""
 
@@ -5352,7 +5367,7 @@ msgstr ""
 msgid "The saved run policy the settings below are. Selecting one applies it immediately; the rest of the dialog stays staged until you save."
 msgstr ""
 
-#: src/app/page.tsx:4415
+#: src/app/page.tsx:4417
 msgid "The scene importer rejected or could not parse the autosave data."
 msgstr ""
 
@@ -5476,7 +5491,7 @@ msgstr ""
 msgid "Tip Ø range"
 msgstr ""
 
-#: src/app/page.tsx:2334
+#: src/app/page.tsx:2335
 msgid "Toggle curve"
 msgstr ""
 
@@ -5512,7 +5527,7 @@ msgid "Tool layout"
 msgstr ""
 
 #. View cube face (seen from above), rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1563
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1573
 msgid "Top"
 msgstr ""
 
@@ -5607,7 +5622,7 @@ msgstr ""
 msgid "Unsaved Scene Found"
 msgstr ""
 
-#: src/app/page.tsx:10244
+#: src/app/page.tsx:10246
 msgid "Unsupported file format"
 msgstr ""
 
@@ -5770,7 +5785,7 @@ msgid "View, restore, or delete older snapshots from your private repository."
 msgstr ""
 
 #. Tool rail label in Support mode. Opens the support display modes: everything drawn solid, or contact discs with line members.
-#: src/components/controls/toolRailEntries.ts:195
+#: src/components/controls/toolRailEntries.ts:197
 msgid "Visibility"
 msgstr ""
 

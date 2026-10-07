@@ -108,6 +108,12 @@ export type VoxlMeta = {
 export type VoxlSceneState = {
   activeModelId: string | null;
   selectedModelIds: string[];
+  /**
+   * What the user called this build plate, shown on the plate itself. Optional
+   * and additive: a reader that ignores it derives nothing from it, and an old
+   * file without one loads as an unnamed plate rather than as an error.
+   */
+  plateName?: string;
 };
 
 export type VoxlDocumentV1 = {

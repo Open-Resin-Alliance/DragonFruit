@@ -109,6 +109,11 @@ Chunk types:
 
 Unknown chunk types may be ignored.
 
+The `SCNE` payload is `VoxlSceneState`: which model is active, which models are
+selected, and `plateName` — the user's name for the build plate, shown on the
+plate itself. `plateName` is optional and absent from files written before it
+existed, so readers must treat a missing one as an unnamed plate.
+
 For embedded model meshes, `MODL[i]` maps to `MESH(index = i)`.
 
 ### V2.1 semantic revision

@@ -1205,6 +1205,12 @@ export function useSceneCollectionManager() {
   const [models, setModels] = useState<LoadedModel[]>([]);
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
+  /**
+   * What the user called this build plate. Deliberately not part of the
+   * model-grouping snapshot machinery: a rename is a document field, not a model
+   * state, and undoing a rename is not something the history is for.
+   */
+  const [plateName, setPlateName] = useState('');
   const modelsRef = useRef<LoadedModel[]>([]);
   const activeModelIdRef = useRef<string | null>(null);
   const selectedModelIdsRef = useRef<string[]>([]);
@@ -5402,6 +5408,7 @@ export function useSceneCollectionManager() {
 
         setActiveModelId(mappedActiveId);
         setSelectedModelIds(finalSelected);
+        if (document.scene.plateName) setPlateName(document.scene.plateName);
       }
 
       if (voxlSupportsContainData(document)) {
@@ -5943,6 +5950,8 @@ export function useSceneCollectionManager() {
     models,
     activeModelId,
     setActiveModelId,
+    plateName,
+    setPlateName,
     selectedModelIds,
     setSelectedModelIds,
     lastLoadedVoxlFormatChunkedRef,
