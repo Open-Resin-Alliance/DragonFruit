@@ -386,7 +386,10 @@ export function Helpers({
     context.font = fitFontToWidth(context, '700 70px Arial', label, FRONT_MARKER_MAX_TEXT_WIDTH);
     context.textAlign = 'center';
     context.textBaseline = 'middle';
-    context.fillText(label, canvas.width / 2, canvas.height / 2 + 1);
+    // Nudged below the texture's centre: `middle` centres the em box, and the
+    // capitals sit above its middle, so dead-centre reads high in the tab. 5px of a
+    // 72px texture is a fraction of a millimetre on the plate.
+    context.fillText(label, canvas.width / 2, canvas.height / 2 + 5);
 
     const texture = new THREE.CanvasTexture(canvas);
     texture.needsUpdate = true;
