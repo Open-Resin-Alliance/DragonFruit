@@ -4,7 +4,6 @@ import {
   EyeOff,
   Box,
   Plus,
-  LayoutGrid,
   AlertTriangle,
 
   Folder,
@@ -61,7 +60,6 @@ interface ModelManagerPanelProps {
   plates?: readonly ScenePlate[];
   activePlateId?: string;
   onActivatePlate?: (plateId: string) => void;
-  onAddPlate?: () => void;
   onRenamePlate?: (plateId: string, name: string) => void;
   /** Deleting a plate takes its models with it, so the panel asks first. */
   onRemovePlate?: (plateId: string) => void;
@@ -105,6 +103,12 @@ type GroupedEntry = {
   models: LoadedModel[];
   isGrouped: boolean;
   isSystemGroup?: boolean;
+  /**
+   * Set when the group IS a build plate. A plate groups its models the way a
+   * folder does, but its name and its life belong to the plate list above, so
+   * the folder's own context actions do not apply to it.
+   */
+  isPlateGroup?: boolean;
 };
 
 type PanelContextMenuState = {
@@ -114,6 +118,8 @@ type PanelContextMenuState = {
   groupId?: string;
   groupName?: string;
   isSystemGroup?: boolean;
+  /** Set when the menu was opened on a plate, whose actions differ from a folder's. */
+  plateId?: string;
 };
 
 const OUTSIDE_PLATE_GROUP_ID = '__system_outside_plate__';
@@ -138,7 +144,6 @@ export function ModelManagerPanel({
   plates,
   activePlateId,
   onActivatePlate,
-  onAddPlate,
   onRenamePlate,
   onRemovePlate,
   resolveModelPlateId,
@@ -225,6 +230,45 @@ export function ModelManagerPanel({
 
     const groupedMap = new Map<string, GroupedEntry>();
 
+    // With plates, a plate is the grouping: one folder per plate, in the
+    // cascade's own order, holding the models that stand on it.
+    if (plates && plates.length > 0 && resolveModelPlateId) {
+      const plateGroups = new Map<string, GroupedEntry>();
+      plates.forEach((plate, index) => {
+        plateGroups.set(plate.id, {
+          id: plate.id,
+          name: plate.name.trim() || plateNumberPlaceholder(index + 1, _),
+          models: [],
+          isGrouped: true,
+          isPlateGroup: true,
+        });
+      });
+
+      const strays: LoadedModel[] = [];
+      for (const model of inPlateModels) {
+        const group = plateGroups.get(resolveModelPlateId(model));
+        if (group) group.models.push(model);
+        else strays.push(model);
+      }
+
+      const ordered = [...plateGroups.values()].map((group) => ({
+        ...group,
+        models: [...group.models].sort((a, b) => a.name.localeCompare(b.name)),
+      }));
+
+      const trailing = strays.length > 0 || outsideModels.length > 0
+        ? [{
+            id: OUTSIDE_PLATE_GROUP_ID,
+            name: _(msg({ message: 'Outside plate', comment: 'Name of the automatic folder collecting models that sit outside the build plate.' })),
+            models: [...strays, ...outsideModels].sort((a, b) => a.name.localeCompare(b.name)),
+            isGrouped: true,
+            isSystemGroup: true,
+          } satisfies GroupedEntry]
+        : [];
+
+      return [...ordered, ...trailing];
+    }
+
     inPlateModels.forEach((model) => {
       const key = model.groupId ?? `single-${model.id}`;
       const existing = groupedMap.get(key);
@@ -262,7 +306,7 @@ export function ModelManagerPanel({
             isSystemGroup: true,
           }]
         : []);
-  }, [_, models, outsidePlateModelIds]);
+  }, [_, models, outsidePlateModelIds, plates, resolveModelPlateId]);
 
   const contextModelId = contextMenu?.modelId;
   const contextGroupId = contextMenu?.groupId;
@@ -405,6 +449,17 @@ export function ModelManagerPanel({
       },
     );
   }
+  if (contextMenu?.plateId) {
+    contextMenuEntries.push(
+      { id: 'rename-plate', label: <Trans>Rename plate</Trans>, icon: Pencil, startsGroup: true },
+      {
+        id: 'delete-plate',
+        label: <Trans>Delete plate</Trans>,
+        icon: Trash2,
+        disabled: (plates?.length ?? 0) <= 1,
+      },
+    );
+  }
   if (showFolderSection) {
     contextMenuEntries.push(
       { id: 'select-folder', label: <Trans>Select folder</Trans>, icon: PanelsTopLeft, startsGroup: true },
@@ -453,6 +508,24 @@ export function ModelManagerPanel({
       case 'ungroup-folder':
         if (contextMenu?.groupId && onUngroupGroup && !contextMenu.isSystemGroup) onUngroupGroup(contextMenu.groupId);
         break;
+      case 'rename-plate': {
+        const plateId = contextMenu?.plateId;
+        if (plateId && onRenamePlate) {
+          setPlateNameDraft(plates?.find((plate) => plate.id === plateId)?.name ?? '');
+          setRenamingPlateId(plateId);
+        }
+        break;
+      }
+      case 'delete-plate': {
+        const plateId = contextMenu?.plateId;
+        if (plateId && onRemovePlate) {
+          setPlatePendingDelete({
+            id: plateId,
+            name: plates?.find((plate) => plate.id === plateId)?.name ?? '',
+          });
+        }
+        break;
+      }
       case 'rename-model':
         if (contextModel) beginRenameModel(contextModel.id, contextModel.name ?? 'Model');
         break;
@@ -499,116 +572,6 @@ export function ModelManagerPanel({
           </IconButton>
         ) : undefined}
       />
-
-      {/* The plates the models below stand on. One row each: click to work on
-          that plate, rename it in place, or delete it and its models. */}
-      {expanded && plates && plates.length > 0 && (
-        <div className="px-2.5 pt-1 pb-1 space-y-1">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-medium uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-              <Trans comment="Heading of the plate list at the top of the Models panel.">Plates</Trans>
-            </span>
-            {onAddPlate && (
-              <IconButton
-                onClick={onAddPlate}
-                className="!p-0.5 !text-[var(--text-muted)] hover:!text-[var(--text-strong)] hover:!bg-[var(--surface-2)]"
-                title={_(msg({ message: 'Add a plate', comment: 'Tooltip on the plus in the Plates heading, which adds an empty build plate.' }))}
-              >
-                <Plus className="h-3.5 w-3.5" />
-              </IconButton>
-            )}
-          </div>
-
-          {plates.map((plate, index) => {
-            const isActive = plate.id === activePlateId;
-            const isRenaming = renamingPlateId === plate.id;
-            const modelCount = resolveModelPlateId
-              ? models.filter((model) => resolveModelPlateId(model) === plate.id).length
-              : 0;
-            return (
-              <div
-                key={plate.id}
-                className="px-1.5 py-1 rounded border flex items-center gap-1.5 cursor-pointer transition-colors"
-                style={isActive
-                  ? {
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-2) 90%)',
-                      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                    }
-                  : { borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
-                onClick={() => onActivatePlate?.(plate.id)}
-              >
-                <LayoutGrid className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--accent)' }} />
-
-                {isRenaming ? (
-                  <input
-                    autoFocus
-                    value={plateNameDraft}
-                    onChange={(event) => setPlateNameDraft(event.target.value)}
-                    onBlur={() => {
-                      onRenamePlate?.(plate.id, plateNameDraft.trim());
-                      setRenamingPlateId(null);
-                    }}
-                    onClick={(event) => event.stopPropagation()}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        onRenamePlate?.(plate.id, plateNameDraft.trim());
-                        setRenamingPlateId(null);
-                      } else if (event.key === 'Escape') {
-                        setRenamingPlateId(null);
-                      }
-                    }}
-                    className="min-w-0 flex-1 rounded border px-1 py-0.5 text-xs"
-                    style={{ background: 'var(--surface-0)', borderColor: 'var(--border-subtle)', color: 'var(--text-strong)' }}
-                    aria-label={_(msg`Plate name`)}
-                  />
-                ) : (
-                  <span
-                    className="text-[10px] font-semibold uppercase tracking-wide truncate"
-                    style={{ color: 'var(--text-muted)' }}
-                    title={_(msg`Work on this plate`)}
-                  >
-                    {plate.name.trim() || plateNumberPlaceholder(index + 1, _)}
-                  </span>
-                )}
-
-                {onRenamePlate && !isRenaming && (
-                  <IconButton
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      setPlateNameDraft(plate.name);
-                      setRenamingPlateId(plate.id);
-                    }}
-                    className="!p-0.5 !text-[var(--text-muted)] hover:!text-[var(--text-strong)] hover:!bg-[var(--surface-2)]"
-                    title={_(msg`Rename plate`)}
-                  >
-                    <Pencil className="h-3 w-3" />
-                  </IconButton>
-                )}
-
-                {onRemovePlate && (
-                  <IconButton
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      setPlatePendingDelete(plate);
-                    }}
-                    disabled={plates.length <= 1}
-                    className="!p-0.5 !text-[var(--text-muted)] hover:!text-[var(--text-strong)] hover:!bg-[var(--surface-2)] disabled:!opacity-35"
-                    title={plates.length <= 1
-                      ? _(msg`The scene needs one plate`)
-                      : _(msg`Delete this plate and the models on it`)}
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </IconButton>
-                )}
-
-                <span className="ml-auto text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
-                  {modelCount}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      )}
 
       {platePendingDelete && (
         <StructuredDialogModal
@@ -661,13 +624,17 @@ export function ModelManagerPanel({
                 const isGroupFullySelected = selectedCount > 0 && selectedCount === group.models.length;
                 const isGroupPartiallySelected = selectedCount > 0 && !isGroupFullySelected;
                 const showHeader = group.isGrouped;
+                /** The plate being worked on reads as the selected folder. */
+                const isActivePlateGroup = !!group.isPlateGroup && group.id === activePlateId;
                 const showChildren = !showHeader || !isCollapsed;
 
                 return (
                   <div
                     key={group.id}
-                    className={showHeader ? 'space-y-1 rounded-md border p-1' : 'space-y-1'}
-                    style={showHeader
+                    // A plate group is its own row and needs no card around it; a folder
+                    // of models keeps the wrapper that groups it visually.
+                    className={showHeader && !group.isPlateGroup ? 'space-y-1 rounded-md border p-1' : 'space-y-1'}
+                    style={showHeader && !group.isPlateGroup
                       ? {
                           borderColor: 'color-mix(in srgb, var(--border-subtle), var(--accent) 14%)',
                           background: 'color-mix(in srgb, var(--surface-1), var(--accent) 3%)',
@@ -677,7 +644,7 @@ export function ModelManagerPanel({
                     {showHeader && (
                       <div
                         className="px-1.5 py-1 rounded border flex items-center gap-1.5 cursor-pointer transition-colors"
-                        style={isGroupFullySelected
+                        style={isGroupFullySelected || isActivePlateGroup
                           ? {
                               background: 'color-mix(in srgb, var(--accent), var(--surface-2) 90%)',
                               borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
@@ -689,12 +656,19 @@ export function ModelManagerPanel({
                               }
                             : { borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
                         onClick={(e) => {
+                          // A plate group is the plate: clicking its header works on it,
+                          // and then selects the models standing on it like any folder.
+                          if (group.isPlateGroup && onActivatePlate) onActivatePlate(group.id);
                           const mode: GroupSelectMode = (e.ctrlKey || e.metaKey || e.shiftKey) ? 'add' : 'single';
                           selectFolder(group, mode);
                         }}
                         onContextMenu={(e) => {
                           e.preventDefault();
                           e.stopPropagation();
+                          if (group.isPlateGroup) {
+                            setContextMenu({ x: e.clientX, y: e.clientY, plateId: group.id });
+                            return;
+                          }
                           setContextMenu({
                             x: e.clientX,
                             y: e.clientY,
@@ -724,7 +698,36 @@ export function ModelManagerPanel({
                           ? <Folder className="w-3.5 h-3.5" style={{ color: 'var(--accent)' }} />
                           : <FolderOpen className="w-3.5 h-3.5" style={{ color: 'var(--accent)' }} />}
 
-                        {renamingGroupId === group.id ? (
+                        {renamingPlateId === group.id ? (
+                          <input
+                            autoFocus
+                            value={plateNameDraft}
+                            onChange={(event) => setPlateNameDraft(event.target.value)}
+                            onClick={(event) => event.stopPropagation()}
+                            onBlur={() => {
+                              onRenamePlate?.(group.id, plateNameDraft.trim());
+                              setRenamingPlateId(null);
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault();
+                                onRenamePlate?.(group.id, plateNameDraft.trim());
+                                setRenamingPlateId(null);
+                              }
+                              if (event.key === 'Escape') {
+                                event.preventDefault();
+                                setRenamingPlateId(null);
+                              }
+                            }}
+                            className="flex-1 min-w-0 rounded border px-1.5 py-0.5 text-[11px]"
+                            style={{
+                              borderColor: 'var(--border-subtle)',
+                              background: 'var(--surface-0)',
+                              color: 'var(--text-strong)',
+                            }}
+                            aria-label={_(msg`Plate name`)}
+                          />
+                        ) : renamingGroupId === group.id ? (
                           <input
                             value={renamingGroupName}
                             onChange={(e) => setRenamingGroupName(e.target.value)}

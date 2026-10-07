@@ -59,7 +59,6 @@ export function ModelsPanel({
       plates={scene.plates}
       activePlateId={scene.activePlateId}
       onActivatePlate={scene.activatePlate}
-      onAddPlate={() => { scene.addPlate(); }}
       onRenamePlate={scene.renamePlate}
       onRemovePlate={scene.removePlate}
       resolveModelPlateId={scene.resolveModelPlateId}
