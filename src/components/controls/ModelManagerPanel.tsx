@@ -19,8 +19,10 @@ import {
   Scissors,
 } from 'lucide-react';
 import { useLingui } from '@lingui/react';
-import { msg } from '@lingui/core/macro';
+import { msg, plural } from '@lingui/core/macro';
 import { Trans } from '@lingui/react/macro';
+import type { MessageDescriptor } from '@lingui/core';
+import { formatFileSize } from '@/utils/meshStatsFormatting';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { Card, CardHeader, IconButton } from '@/components/atoms';
 import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
@@ -29,6 +31,21 @@ import { Tooltip } from '@/components/ui/Tooltip';
 import { ContextMenu, type ContextMenuEntry } from '@/components/ui/ContextMenu';
 
 type SelectMode = 'single' | 'toggle' | 'add';
+
+type Translate = (descriptor: MessageDescriptor, values?: Record<string, unknown>) => string;
+
+/**
+ * What the model row's info button explains: how big the mesh is and how many
+ * polygons it has. Built at module scope because React Compiler renames locals
+ * ahead of the Lingui macro, which desyncs an interpolated message id and leaves
+ * the placeholders raw in production — the same reason page.tsx keeps its
+ * formatters out here.
+ */
+function formatModelInfoTooltip(translate: Translate, model: LoadedModel): string {
+  const polygons = translate(msg`${plural(model.polygonCount, { one: '# polygon', other: '# polygons' })}`);
+  const size = formatFileSize(model.fileSizeBytes);
+  return size ? translate(msg`${size} · ${polygons}`) : polygons;
+}
 
 type GroupSelectMode = 'single' | 'add';
 
@@ -677,17 +694,19 @@ export function ModelManagerPanel({
 
                           <div className="flex items-center gap-1">
                             {onOpenSupportsInfo && (
-                              <IconButton
-                                variant="ghost"
-                                size="sm"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onOpenSupportsInfo(model.id);
-                                }}
-                                title={_(msg`Supports for model`)}
-                              >
-                                <Info className="w-3.5 h-3.5" />
-                              </IconButton>
+                              <Tooltip content={formatModelInfoTooltip(_, model)}>
+                                <IconButton
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onOpenSupportsInfo(model.id);
+                                  }}
+                                  aria-label={_(msg({ message: 'Model details', comment: 'Accessible name of the info button on a model row. The tooltip beside it lists the mesh size and polygon count.' }))}
+                                >
+                                  <Info className="w-3.5 h-3.5" />
+                                </IconButton>
+                              </Tooltip>
                             )}
                             <IconButton
                               variant="ghost"

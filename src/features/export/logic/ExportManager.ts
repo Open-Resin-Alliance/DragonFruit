@@ -1198,7 +1198,8 @@ export class ExportManager {
             visible: boolean;
             color: string;
             polygonCount: number;
-            fileSizeBytes: number;
+            /** Absent when the mesh's size was never recorded; never a stand-in 0. */
+            fileSizeBytes?: number;
             sourcePath?: string;
             nativePreview?: {
               originalTriangleCount: number;
@@ -1265,7 +1266,12 @@ export class ExportManager {
               visible: model.visible,
               color: model.color,
               polygonCount: model.polygonCount,
-              fileSizeBytes: model.fileSizeBytes ?? 0,
+              // Only when known: writing 0 for an unknown size is what made a
+              // cached or re-opened scene report "0 B" — the field said the mesh
+              // occupies no space rather than that its size was never recorded.
+              ...(typeof model.fileSizeBytes === 'number' && model.fileSizeBytes > 0
+                ? { fileSizeBytes: model.fileSizeBytes }
+                : {}),
               // Preserves sourcePath / nativePreview if present on model
               ...(typeof model.sourcePath === 'string' && model.sourcePath.trim().length > 0
                 ? { sourcePath: model.sourcePath }
