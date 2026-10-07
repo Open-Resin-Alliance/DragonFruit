@@ -4,6 +4,7 @@ import React from 'react';
 import { subscribeHistory } from '@/history/historyStore';
 import { ExportManager } from '@/features/export/logic/ExportManager';
 import { VoxlChunkCache } from '@/features/scene/voxl';
+import type { VoxlPrinterBundle } from '@/features/scene/voxl';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 
 // ---------------------------------------------------------------------------
@@ -340,8 +341,12 @@ export type UseSceneAutosaveOptions = {
   models: LoadedModel[];
   activeModelId: string | null;
   selectedModelIds: string[];
-  /** The plate's name, written into the document's scene chunk. */
+  /** The plate's identity, carried into the saved scene's plates list. */
+  plateId?: string;
+  /** The plate's name, written as that plate's name. */
   plateName?: string;
+  /** The printer this scene is being saved for. */
+  printer?: VoxlPrinterBundle;
   enabled?: boolean;
   debounceMs?: number;
   cooldownMs?: number;
@@ -382,7 +387,9 @@ export function useSceneAutosave({
   models,
   activeModelId,
   selectedModelIds,
+  plateId,
   plateName,
+  printer,
   enabled = true,
   debounceMs = AUTOSAVE_DEBOUNCE_MS,
   cooldownMs = AUTOSAVE_COOLDOWN_MS,
@@ -403,8 +410,12 @@ export function useSceneAutosave({
   activeModelIdRef.current = activeModelId;
   const selectedModelIdsRef = React.useRef(selectedModelIds);
   selectedModelIdsRef.current = selectedModelIds;
+  const plateIdRef = React.useRef(plateId);
+  plateIdRef.current = plateId;
   const plateNameRef = React.useRef(plateName);
   plateNameRef.current = plateName;
+  const printerRef = React.useRef(printer);
+  printerRef.current = printer;
   const enabledRef = React.useRef(enabled);
   enabledRef.current = enabled;
   const debounceMsRef = React.useRef(debounceMs);
@@ -571,7 +582,9 @@ export function useSceneAutosave({
               models: currentModels,
               activeModelId: activeModelIdRef.current,
               selectedModelIds: selectedModelIdsRef.current,
+              plateId: plateIdRef.current,
               plateName: plateNameRef.current,
+              printer: printerRef.current,
             },
             {
               nativePath: voxlPath,

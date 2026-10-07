@@ -5,7 +5,7 @@ import { refineCoarseFaces } from '@/utils/tauriMeshBridge';
 import { loadMeshGeometry, load3mfGeometryMergedWithSplitData, processGeometry, type GeometryWithBounds, type ProcessGeometryOptions } from '@/hooks/useStlGeometry';
 import type { MeshHealthReport, MeshAnalysisJson } from '@/utils/meshRepair';
 import { computeFlatteningPlanes } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
-import { detectObsoleteVoxlVersion, isVoxlBinaryV2, meshChunkStore, parseVoxlBinaryV2, readSidecarFileBytes, resolveOriginalRefSidecar, VoxlObsoleteVersionError, type VoxlDocumentV1, type VoxlMeshRef } from '@/features/scene/voxl';
+import { detectObsoleteVoxlVersion, isVoxlBinaryV2, meshChunkStore, parseVoxlBinaryV2, readScenePlate, readSidecarFileBytes, resolveOriginalRefSidecar, VoxlObsoleteVersionError, type VoxlDocumentV1, type VoxlMeshRef } from '@/features/scene/voxl';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
 import { getSnapshot, loadFromImportFormat, mergeFromImportFormat, reassignAllSupportModelIds, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
@@ -69,10 +69,19 @@ import {
 } from '@/components/settings/view3dPreferences';
 import {
   getActivePrinterProfile,
+  getMaterialProfilesForPrinter,
   getProfileStoreSnapshot,
   getProfileStoreServerSnapshot,
+  importPrinterBundle,
+  setActivePrinterProfile,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
+import {
+  buildVolumeIsSmaller,
+  findPrinterProfileForBundle,
+  toVoxlPrinterBundle,
+} from '@/features/profiles/voxlPrinterBundle';
+import type { VoxlPrinterBundle } from '@/features/scene/voxl/types';
 import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
 import {
   deleteStoredMeshModifiers,
@@ -967,6 +976,27 @@ export type ObsoleteVoxlScenePrompt = {
   detected: 'v1-json' | 'v1-binary';
 };
 
+/**
+ * A scene written for a bigger printer than the one selected. Raised on import
+ * so the user can switch before a plate packed for a larger machine is squeezed
+ * into a smaller build volume.
+ */
+export type PrinterMismatchPrompt = {
+  /** The printer the scene carries, whole, so switching can add it when it is missing here. */
+  bundle: VoxlPrinterBundle;
+  /** The printer's name as the bundle carries it; absent when it has none. */
+  recordedName?: string;
+  recordedBuildVolumeMm: { width: number; depth: number; height: number };
+  /** The selected profile at the moment of the import. */
+  currentName: string;
+  currentBuildVolumeMm: { width: number; depth: number; height: number };
+  /**
+   * The installed profile the scene's printer resolves to, or null when this
+   * machine has none and switching will add it from the bundle.
+   */
+  installedProfileId: string | null;
+};
+
 type MeshRepairConfirmChoice = 'repair' | 'load_as_is' | 'cancel_import';
 
 type ModelClipboardEntry = {
@@ -1142,6 +1172,14 @@ export function useSceneCollectionManager(options?: {
    */
   const [plateName, setPlateName] = useState('');
   /**
+   * The plate's identity, so a save can record which plate it is. One per
+   * document: minted for a fresh scene, adopted from the file on load. It is not
+   * cleared with the name, because deleting the last model leaves the plate in
+   * place and a plate that changed identity on every emptied bed would make the
+   * recorded id meaningless.
+   */
+  const [plateId, setPlateId] = useState(() => uuidv4());
+  /**
    * Whether the plate refuses edits. A lock, not a document field: it is about the
    * session you are working in, so it is not written to the file and it does not
    * travel with the scene. A ref mirrors it for the guards below, which are stable
@@ -1195,6 +1233,7 @@ export function useSceneCollectionManager(options?: {
   const [sceneImportReport, setSceneImportReport] = useState<SceneImportReport | null>(null);
   const [sceneImportPlacementPrompt, setSceneImportPlacementPrompt] = useState<SceneImportPlacementPrompt | null>(null);
   const [obsoleteVoxlScene, setObsoleteVoxlScene] = useState<ObsoleteVoxlScenePrompt | null>(null);
+  const [printerMismatch, setPrinterMismatch] = useState<PrinterMismatchPrompt | null>(null);
   const [meshRepairConfirmPrompt, setMeshRepairConfirmPrompt] = useState<MeshRepairConfirmPrompt | null>(null);
   const [meshRepairReports, setMeshRepairReports] = useState<MeshRepairReportEntry[]>([]);
   const [meshRepairReportPresentation, setMeshRepairReportPresentation] = useState<MeshRepairReportPresentation>('default');
@@ -1270,6 +1309,20 @@ export function useSceneCollectionManager(options?: {
   const dismissObsoleteVoxlScene = useCallback(() => {
     setObsoleteVoxlScene(null);
   }, []);
+
+  /**
+   * Answer the printer-mismatch prompt. Switching selects the scene's printer
+   * when this machine already has it, and otherwise adds it from the bundle the
+   * scene carries, which is the point of shipping it whole.
+   */
+  const resolvePrinterMismatch = useCallback((choice: 'switch' | 'keep') => {
+    if (choice === 'switch' && printerMismatch) {
+      const installedId = printerMismatch.installedProfileId;
+      if (installedId) setActivePrinterProfile(installedId);
+      else setActivePrinterProfile(importPrinterBundle(printerMismatch.bundle));
+    }
+    setPrinterMismatch(null);
+  }, [printerMismatch]);
 
   const openPendingMeshRepairReports = useCallback(() => {
     if (pendingMeshRepairReports.length === 0) {
@@ -1396,6 +1449,19 @@ export function useSceneCollectionManager(options?: {
       safetyMarginMm: activePrinterProfile.safetyMarginMm,
     });
   }, [activePrinterProfile, storedView3dSettings]);
+
+  // What a save embeds as the printer this scene was built for: the profile
+  // whole, plus the materials that belong to it. Memoized on the store snapshot
+  // so an unchanged selection does not re-render the autosave options.
+  const voxlPrinterBundle = useMemo(
+    () => (activePrinterProfile
+      ? toVoxlPrinterBundle(
+          activePrinterProfile,
+          getMaterialProfilesForPrinter(activePrinterProfile.id, profileState),
+        )
+      : null),
+    [activePrinterProfile, profileState],
+  );
 
   useEffect(() => {
     const persistedAppearance = readMeshAppearanceFromLocalStorage();
@@ -5230,7 +5296,35 @@ export function useSceneCollectionManager(options?: {
 
         setActiveModelId(mappedActiveId);
         setSelectedModelIds(finalSelected);
-        if (document.scene.plateName) setPlateName(document.scene.plateName);
+
+        // The scene's plate: `plates` is canonical, the older `plateName` is the
+        // single-plate shorthand a file written before plates carries. An import
+        // that brings neither leaves this scene's plate as it was, since this
+        // path merges into the scene rather than replacing it.
+        const importedPlate = readScenePlate(document.scene);
+        if (importedPlate.id) setPlateId(importedPlate.id);
+        if (importedPlate.name) setPlateName(importedPlate.name);
+
+        // A scene packed for a bigger machine should not be dropped into the
+        // selected one without a word. Read the store fresh rather than the memo,
+        // because this callback can run long after it was created.
+        const recordedPrinter = document.meta?.printer;
+        const recordedVolume = recordedPrinter?.printer.buildVolumeMm;
+        const currentPrinter = getActivePrinterProfile(getProfileStoreSnapshot());
+        if (recordedPrinter && recordedVolume && currentPrinter && buildVolumeIsSmaller(currentPrinter, recordedPrinter)) {
+          const installed = findPrinterProfileForBundle(recordedPrinter, getProfileStoreSnapshot());
+          const recordedName = typeof recordedPrinter.printer.name === 'string' && recordedPrinter.printer.name.trim().length > 0
+            ? recordedPrinter.printer.name
+            : undefined;
+          setPrinterMismatch({
+            bundle: recordedPrinter,
+            ...(recordedName ? { recordedName } : {}),
+            recordedBuildVolumeMm: { ...recordedVolume },
+            currentName: currentPrinter.name,
+            currentBuildVolumeMm: { ...currentPrinter.buildVolumeMm },
+            installedProfileId: installed?.id ?? null,
+          });
+        }
       }
 
       if (voxlSupportsContainData(document)) {
@@ -5784,6 +5878,10 @@ export function useSceneCollectionManager(options?: {
     setActiveModelId,
     plateName,
     setPlateName,
+    plateId,
+    voxlPrinterBundle,
+    printerMismatch,
+    resolvePrinterMismatch,
     plateLocked,
     setPlateLocked,
     selectedModelIds,

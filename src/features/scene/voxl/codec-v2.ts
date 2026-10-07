@@ -426,11 +426,18 @@ async function prepareVoxlDocumentV2(
     updatedAt: nowIso,
     units: 'mm',
     coordinateSystem: 'right-handed-z-up',
+    ...(input.meta?.printer ? { printer: input.meta.printer } : {}),
   };
 
+  const plates = input.plates;
   const scene: VoxlSceneState = {
     activeModelId: input.activeModelId,
     selectedModelIds: [...input.selectedModelIds],
+    ...(plates && plates.length > 0 ? { plates } : {}),
+    // One plate is still expressible as the older shorthand, so a reader that
+    // only knows `plateName` keeps showing the name. With several plates the
+    // shorthand cannot say which one it names, so it is left out.
+    ...(plates?.length === 1 && plates[0].name ? { plateName: plates[0].name } : {}),
   };
 
   // ── Identical-geometry MESH chunk dedup ───────────────────────────────

@@ -28,11 +28,12 @@ container generation.
 | 3.0      | Identical-geometry MESH chunk dedup — the reader-breaking change that raised the floor    | `3`               |
 | 3.1      | Modifier snapshots moved to `HSRC`/`CAVT`/`PSRC` chunks                                   | `2` or `3`        |
 | 3.2      | Support `typeId`                                                                          | `2` or `3`        |
-| 3.3      | `MODL.classification` — current writer target                                              | `2` or `3`        |
+| 3.3      | `MODL.classification`                                                                     | `2` or `3`        |
+| 3.4      | `SCNE.plates` (plate ids and names) and `META.printer` — current writer target            | `2` or `3`        |
 
 Dedup (3.0) is the only reader-breaking change since V1, so a current writer
 emits `version 2` for a scene with no shared MESH chunks and `version 3` when
-dedup fired. Readers must support both binary floors. Writers should emit 3.3
+dedup fired. Readers must support both binary floors. Writers should emit 3.4
 semantics.
 
 V1 was only ever written by pre-release builds — the first release already wrote
@@ -94,9 +95,10 @@ Chunk types:
 Unknown chunk types may be ignored.
 
 The `SCNE` payload is `VoxlSceneState`: which model is active, which models are
-selected, and `plateName` — the user's name for the build plate, shown on the
-plate itself. `plateName` is optional and absent from files written before it
-existed, so readers must treat a missing one as an unnamed plate.
+selected, the scene's `plates` (3.4), and `plateName` — the user's name for the
+build plate, shown on the plate itself. Both plate fields are optional: a file
+written before plates existed has neither, and readers must treat a missing one
+as a single unnamed plate.
 
 For embedded model meshes, `MODL[i]` maps to `MESH(index = i)` unless the entry
 carries a `chunkIndex` (V3.0 dedup), which names the owning MESH chunk.
@@ -201,7 +203,7 @@ inline modifier snapshots; `typeId` is not part of that detection.
 Backward compatibility: the field is optional and unknown JSON keys are ignored, so a 3.2 file
 opens in an older reader with no loss beyond the explicit type stamp.
 
-### Revision 3.3 (current)
+### Revision 3.3
 
 Revision 3.3 is additive over the container and does **not** raise the floor
 (`version` stays `2`, or `3` when dedup also fired).
@@ -233,6 +235,57 @@ revision, which stays `3.1` or `2.1`.
 Backward compatibility: the field is optional and unknown JSON keys are ignored, so a 3.3 file
 opens in an older reader with no loss beyond the classifier having to run again.
 
+### Revision 3.4 (current)
+
+Revision 3.4 is additive over the container and does **not** raise the floor
+(`version` stays `2`, or `3` when dedup also fired).
+
+Revision 3.4 records the scene's build plates and the printer it was written for.
+
+`SCNE.plates` is the scene's plates in display order, each `{ id, name? }`:
+
+- `id` is a stable identity, so a plate keeps it across save and load.
+- `name` is what the user called it. Absent means the plate is unnamed.
+
+`plateName` remains for a scene with exactly one plate, where it is that plate's name, so a
+reader that only knows the older field still shows it. `plates` is canonical, and with several
+plates the shorthand is omitted because it cannot say which plate it names.
+
+`META.printer` embeds the printer the scene was written for, whole, in the profile library's own
+bundle shape:
+
+| Field       | Meaning                                                              |
+| ----------- | -------------------------------------------------------------------- |
+| `version`   | The bundle format version.                                            |
+| `printer`   | The printer profile definition, as `importPrinterBundle` accepts it.  |
+| `materials` | The material profiles that belong to that printer.                    |
+
+Shipping the definition rather than a reference is what makes a custom printer work: the scene does
+not depend on that profile being installed wherever it is opened, because an import can add it from
+the file. Three kinds of field are deliberately left out:
+
+- The network and connection fields (`network`, `networkFleet`, `networkConnection`,
+  `activeNetworkDeviceId`) are session state rather than facts about the printer, and they carry a
+  LAN address and device ids.
+- An uploaded printer photo, which is a data URL and would be duplicated into every save. A factory
+  printer's image is a bundled asset path and does travel.
+- The bundle's export timestamp. It changes on every save, and the autosave write-skip fingerprints
+  the document from chunk content, so a timestamp in the file would stop the skip from ever firing.
+
+An import that finds the selected printer smaller than the embedded one on any axis offers to
+switch. Switching selects the installed profile the bundle resolves to, matching the official
+preset id first, then the local id it was written with, then the name, and otherwise adds the
+printer from the bundle.
+
+Detection (no version number is written for the authoring revision): a `SCNE` carrying `plates`,
+or a `META` carrying `printer`, is 3.4. As with 3.2 and 3.3 it does not participate in the
+reported authoring revision, which stays `3.1` or `2.1`.
+
+Backward compatibility: both fields are optional and unknown JSON keys are ignored, so a 3.4 file
+opens in an older reader. It sees every model as belonging to one plate, which is what the scene
+would have been before plates existed, and it ignores the printer. Nothing is dropped; the plate
+split is simply not shown.
+
 ## Supports and extensions
 
 Supports payloads are DragonFruitImportFormat-compatible. Common arrays include:
@@ -254,7 +307,7 @@ Unknown extension keys should be ignored.
 
 ## Implementation notes
 
-- The current writer (`src/features/scene/voxl/codec-v2.ts`) emits 3.3 semantics: raw mesh bytes into `MESH` chunks with per-chunk zlib and no base64, which makes files roughly 60-65% smaller than the old JSON container for typical scenes and faster to write and read. It stamps the container floor `2`, or `3` when dedup shared a MESH chunk.
+- The current writer (`src/features/scene/voxl/codec-v2.ts`) emits 3.4 semantics: raw mesh bytes into `MESH` chunks with per-chunk zlib and no base64, which makes files roughly 60-65% smaller than the old JSON container for typical scenes and faster to write and read. It stamps the container floor `2`, or `3` when dedup shared a MESH chunk.
 - The binary reader hands callers pre-decoded mesh bytes through `ParsedVoxlResult.meshBytes`.
 - A V1 file is refused by `VoxlObsoleteVersionError` (`src/features/scene/voxl/codec.ts`) rather than parsed; the app turns that into the "unsupported version" modal. Detection is `detectObsoleteVoxlVersion`.
 

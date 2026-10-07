@@ -100,15 +100,66 @@ export type VoxlMeta = {
   updatedAt: string;
   units: VoxlUnits;
   coordinateSystem: VoxlCoordinateSystem;
+  /**
+   * The printer the scene was written for, embedded whole. A scene therefore
+   * does not depend on that profile being installed wherever it is opened: an
+   * import can add it from the file when this machine does not have it.
+   */
+  printer?: VoxlPrinterBundle;
+};
+
+/**
+ * The printer definition inside an embedded bundle. Only what a reader matches
+ * on and compares is typed; the rest of the profile library's shape travels
+ * untouched and is read by `importPrinterBundle`.
+ */
+export type VoxlPrinterProfile = {
+  name?: string;
+  officialPresetId?: string;
+  buildVolumeMm?: { width: number; depth: number; height: number };
+  [key: string]: unknown;
+};
+
+/**
+ * The printer bundle a scene carries.
+ *
+ * This is the profile library's own export shape, minus what is not a fact about
+ * the printer:
+ *
+ * - the export timestamp, which changes on every save and would defeat the
+ *   autosave write-skip (the fingerprint is built from chunk content);
+ * - the network and connection fields, which are session state and carry a LAN
+ *   address and device ids;
+ * - an uploaded photo, which is a data URL and would be duplicated into every
+ *   save. A factory printer's image is a bundled asset path and is kept.
+ */
+export type VoxlPrinterBundle = {
+  version: number;
+  printer: VoxlPrinterProfile;
+  materials: unknown[];
+};
+
+/** One build plate the scene holds. */
+export type VoxlPlate = {
+  /** Stable identity, so a plate keeps it across save and load. */
+  id: string;
+  /** What the user called it. Absent means the plate is unnamed. */
+  name?: string;
 };
 
 export type VoxlSceneState = {
   activeModelId: string | null;
   selectedModelIds: string[];
   /**
-   * What the user called this build plate, shown on the plate itself. Optional
-   * and additive: a reader that ignores it derives nothing from it, and an old
-   * file without one loads as an unnamed plate rather than as an error.
+   * The scene's build plates, in display order. Optional and additive: a reader
+   * that ignores it sees every model as belonging to one plate, which is what a
+   * scene written before plates existed actually had.
+   */
+  plates?: VoxlPlate[];
+  /**
+   * What the user called this build plate, shown on the plate itself. Kept for
+   * a scene with exactly one plate, where it is that plate's name, so a reader
+   * that only knows this field still shows it; `plates` is canonical.
    */
   plateName?: string;
 };
@@ -152,8 +203,10 @@ export type BuildVoxlDocumentInput = {
   models: VoxlModelRuntimeLike[];
   activeModelId: string | null;
   selectedModelIds: string[];
+  /** The scene's plates. Omitted writes a scene with no plate list at all. */
+  plates?: VoxlPlate[];
   supports: DragonfruitImportFormat;
-  meta?: Partial<Pick<VoxlMeta, 'generator' | 'generatorVersion'>>;
+  meta?: Partial<Pick<VoxlMeta, 'generator' | 'generatorVersion' | 'printer'>>;
   extensions?: Record<string, unknown>;
 };
 

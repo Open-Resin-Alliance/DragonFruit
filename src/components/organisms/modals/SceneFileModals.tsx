@@ -5,6 +5,7 @@ import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { ModelSupportsModal } from '@/components/modals/ModelSupportsModal';
 import { ObsoleteVoxlVersionModal } from '@/components/modals/ObsoleteVoxlVersionModal';
+import { ScenePrinterMismatchModal } from '@/components/modals/ScenePrinterMismatchModal';
 import { SceneAutosaveRecoveryModal } from '@/components/scene/SceneAutosaveRecoveryModal';
 import { ZipFilePickerModal } from '@/components/modals/ZipFilePickerModal';
 import { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
@@ -300,6 +301,19 @@ export function SceneFileModals({
           fileName={scene.obsoleteVoxlScene.fileName}
           detected={scene.obsoleteVoxlScene.detected}
           onDismiss={scene.dismissObsoleteVoxlScene}
+        />
+      )}
+
+      {scene.printerMismatch && (
+        <ScenePrinterMismatchModal
+          isOpen
+          recordedPrinterName={scene.printerMismatch.recordedName}
+          recordedBuildVolumeMm={scene.printerMismatch.recordedBuildVolumeMm}
+          currentPrinterName={scene.printerMismatch.currentName}
+          currentBuildVolumeMm={scene.printerMismatch.currentBuildVolumeMm}
+          willAddPrinter={scene.printerMismatch.installedProfileId === null}
+          onSwitch={() => scene.resolvePrinterMismatch('switch')}
+          onKeep={() => scene.resolvePrinterMismatch('keep')}
         />
       )}
 

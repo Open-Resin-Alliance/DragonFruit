@@ -5,7 +5,7 @@ import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
 import type { MeshHealthReport } from '@/utils/meshRepair';
 import { resolveModelMeshModifiers } from '@/features/mesh-modifiers/meshModifierStore';
 import { KNOWN_SOURCE_EXTENSION_STRIP_RE } from '@/features/plugins/pluginFileTypeExtensions';
-import { buildSupportExportFromStores, serializeVoxlDocumentV2, serializeVoxlDocumentV2Streaming, VoxlSizeLimitError, VoxlUnchangedError, type PrecompressedChunk, type VoxlChunkCache, type VoxlChunkReportEntry } from '@/features/scene/voxl';
+import { buildSupportExportFromStores, serializeVoxlDocumentV2, serializeVoxlDocumentV2Streaming, VoxlSizeLimitError, VoxlUnchangedError, type PrecompressedChunk, type VoxlChunkCache, type VoxlChunkReportEntry, type VoxlPrinterBundle } from '@/features/scene/voxl';
 import { type BakedChunk, meshChunkStore } from '@/features/scene/voxl/meshChunkStore';
 import { buildScopedSupportExportDocument, buildScopedSupportGeometryGroup } from '@/features/export/logic/supportExportReconstruction';
 import { allocateMeshStagePath, exportMeshFile, pickSavePathWithNativeDialog, writeChunkedToNativePath, writeFileAtomicToNativePath, writeFileAtomicStreamedToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
@@ -36,8 +36,12 @@ export interface ExportSceneContext {
   models: LoadedModel[];
   activeModelId: string | null;
   selectedModelIds: string[];
-  /** The plate's name, written into the document's scene chunk. */
+  /** The plate's identity. With it, a save carries a plates list; without it, none. */
+  plateId?: string;
+  /** The plate's name, written as the plate's name in that list. */
   plateName?: string;
+  /** The printer this scene is being written for, embedded whole, if one is selected. */
+  printer?: VoxlPrinterBundle;
   exportThumbnailPng?: Uint8Array | null;
 }
 
@@ -1290,10 +1294,22 @@ export class ExportManager {
       models,
       activeModelId: sceneContext?.activeModelId ?? null,
       selectedModelIds: sceneContext?.selectedModelIds ?? [],
-      ...(sceneContext?.plateName ? { plateName: sceneContext.plateName } : {}),
+      // The app has one plate today, so the scene's plate list is the active
+      // one. When plates become creatable this is where the real list goes.
+      ...(sceneContext?.plateId
+        ? {
+            plates: [
+              {
+                id: sceneContext.plateId,
+                ...(sceneContext.plateName ? { name: sceneContext.plateName } : {}),
+              },
+            ],
+          }
+        : {}),
       supports,
       meta: {
         generator: 'DragonFruit',
+        ...(sceneContext?.printer ? { printer: sceneContext.printer } : {}),
       },
       extensions: voxlExtensions,
     };
