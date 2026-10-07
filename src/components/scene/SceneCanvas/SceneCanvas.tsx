@@ -461,6 +461,7 @@ export function SceneCanvas({
   interiorView = false,
   plateName,
   onPlateNameChange,
+  showPlateName = true,
   disableRaycast,
   ambientIntensity,
   directionalIntensity,
@@ -578,6 +579,8 @@ export function SceneCanvas({
   /** The build plate's name and its setter. Strings for its editor are resolved here. */
   plateName?: string;
   onPlateNameChange?: (next: string) => void;
+  /** Hide the name widget on an empty plate: there is nothing on it to name. */
+  showPlateName?: boolean;
   disableRaycast?: boolean;
   hideCrossSectionCap?: boolean;
   onCameraChange?: () => void;
@@ -1560,7 +1563,7 @@ export function SceneCanvas({
   // front-edge marker so both always read the same word.
   // The plate-name editor lives inside the r3f reconciler too, so its strings are
   // resolved here for the same reason as the orientation labels above.
-  const plateNamePlaceholder = _(msg({ message: 'Name this plate', comment: "Placeholder and fallback label on the build plate's own name widget, shown while the plate has no name." }));
+  const plateNamePlaceholder = _(msg({ message: 'Plate 1', comment: 'What the build plate\'s name widget shows while the plate has no name of its own, including after the plate is cleared or a new scene is started. The number is the plate\'s, plural forms come later with multiple plates.' }));
   const plateNameEditTitle = _(msg({ message: 'Rename build plate', comment: "Tooltip on the pencil beside the build plate's name." }));
   const plateNameEmptyTitle = _(msg({ message: 'Give this build plate a name', comment: "Tooltip on the build plate's name widget while it is still unnamed." }));
   const frontFaceLabel = _(msg({ message: 'Front', comment: 'Orientation label, rendered uppercase on the view cube and on the build plate\'s front edge. Keep it as short as possible — long words are auto-shrunk to fit and become hard to read.' }));
@@ -6049,6 +6052,7 @@ export function SceneCanvas({
           safetyMarginMm={activeBuildVolumeSettings.safetyMarginMm}
           frontLabel={frontFaceLabel}
           plateName={plateName}
+          showPlateName={showPlateName}
           onPlateNameChange={onPlateNameChange}
           plateNamePlaceholder={plateNamePlaceholder}
           plateNameEditTitle={plateNameEditTitle}
@@ -6556,7 +6560,10 @@ export function SceneCanvas({
                     <lineBasicMaterial
                       color={outOfBoundsModels.length > 0 ? '#ff5b6f' : '#8abfff'}
                       transparent
-                      opacity={0.36}
+                      // Quiet by default: the box marks the limit, it is not something
+                      // to look at. The out-of-bounds colour stays loud, because that
+                      // one is a warning.
+                      opacity={outOfBoundsModels.length > 0 ? 0.36 : 0.18}
                       depthWrite={false}
                       depthTest
                     />
