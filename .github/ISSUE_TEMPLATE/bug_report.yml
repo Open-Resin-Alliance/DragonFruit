@@ -25,8 +25,7 @@ body:
       label: Operating system
       options:
         - Windows
-        - macOS (Apple Silicon)
-        - macOS (Intel)
+        - macOS
         - Linux
         - Other
     validations:
@@ -48,8 +47,8 @@ body:
         - Anycubic
         - ELEGOO
         - UniFormation
-        - Concepts3D Athena / NanoDLP
-        - Odyssey (LUMEN)
+        - Concepts3D
+        - Odyssey
         - Other
     validations:
       required: true
