@@ -240,6 +240,9 @@ export function Helpers({
   onTogglePlateLock,
   plateLockTitle,
   plateUnlockTitle,
+  plateClearTitle,
+  plateClearDisabledTitle,
+  onClearPlate,
 }: {
   gridWidthMm?: number;
   gridDepthMm?: number;
@@ -271,6 +274,10 @@ export function Helpers({
   onTogglePlateLock?: () => void;
   plateLockTitle?: string;
   plateUnlockTitle?: string;
+  /** Clearing the plate from beside it, and the wording the lock uses to forbid it. */
+  plateClearTitle?: string;
+  plateClearDisabledTitle?: string;
+  onClearPlate?: () => void;
 }) {
   const nullRaycast = () => null;
   const shouldShowGrid = showGrid ?? true;
@@ -327,6 +334,10 @@ export function Helpers({
   // buttons sit just outside the plate you can see. Their spacing is CSS inside the
   // component; only this clearance is a plate measurement.
   const plateWidgetClearanceMm = 1;
+  // Widget size follows the plate, so a 100mm printer's buttons are not the same
+  // physical size as a 300mm one's. 5 is what a 200mm plate has always used; the
+  // clamp keeps a very small plate legible and a very large one from dominating.
+  const plateWidgetScale = Math.min(14, Math.max(3, width / 40));
   const frontTabBackWidth = Math.min(buildPlateWidth - 12, 24);
   const frontTabFrontWidth = Math.min(frontTabBackWidth - 3, 16);
   const frontMarkerInsetMm = 0.2;
@@ -809,7 +820,7 @@ export function Helpers({
           // edge. The label is shifted by half its own size inside the component,
           // so this point is its bottom-left corner.
           position={[resolvedOriginMinX, resolvedOriginMinY + depth, plateLogoZ + 0.2]}
-          labelScale={7.5}
+          labelScale={plateWidgetScale * 1.5}
         />
       )}
 
@@ -823,7 +834,10 @@ export function Helpers({
         && plateLocked !== undefined
         && onTogglePlateLock
         && plateLockTitle
-        && plateUnlockTitle && (
+        && plateUnlockTitle
+        && plateClearTitle
+        && plateClearDisabledTitle
+        && onClearPlate && (
         <PlateSideButtons
           addLabel={addPlateLabel}
           addComingSoonTitle={addPlateComingSoonTitle}
@@ -831,10 +845,15 @@ export function Helpers({
           lockTitle={plateLockTitle}
           unlockTitle={plateUnlockTitle}
           onToggleLock={onTogglePlateLock}
-          // The column's top-left corner: on the mock plate's right edge — the drawn
-          // plate oversizes the volume by this much each side — and level with its
-          // back edge, so the buttons hang beside the plate rather than above it.
-          position={[resolvedOriginMinX + width + buildPlateOversizeEachSideMm + plateWidgetClearanceMm, resolvedOriginMinY + depth, plateLogoZ + 0.2]}
+          clearTitle={plateClearTitle}
+          clearDisabledTitle={plateClearDisabledTitle}
+          clearDisabled={plateLocked}
+          onClearPlate={onClearPlate}
+          // Two anchors in one component: the column hangs from the plate's back edge,
+          // the bin stands on its front edge (the plate's front is its smallest Y).
+          columnAnchor={[resolvedOriginMinX + width + buildPlateOversizeEachSideMm + plateWidgetClearanceMm, resolvedOriginMinY + depth, plateLogoZ + 0.2]}
+          clearAnchor={[resolvedOriginMinX + width + buildPlateOversizeEachSideMm + plateWidgetClearanceMm, resolvedOriginMinY, plateLogoZ + 0.2]}
+          labelScale={plateWidgetScale}
         />
       )}
 
