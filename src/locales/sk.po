@@ -278,7 +278,7 @@ msgstr ""
 msgid "Add contacts along the edge or corner a pose bears on, so a leaning part is held against toppling and peel (default on)"
 msgstr ""
 
-#: src/app/page.tsx:2350
+#: src/app/page.tsx:2351
 msgid "Add joint"
 msgstr "Pridať Kĺb"
 
@@ -394,6 +394,10 @@ msgstr ""
 
 #: src/components/controls/autoSupport/AutoSupportPresetSelect.tsx:86
 msgid "Apply this preset to the auto-support settings"
+msgstr ""
+
+#: src/app/page.tsx:11005
+msgid "Are you sure you want to remove every model from the plate?"
 msgstr ""
 
 #. Cross-sectional area stats for the current print layer: "Area Σ" = total/summed solid area (Σ is the mathematical summation symbol, usually kept as-is); "Min"/"Max" = smallest/largest single contiguous area, abbreviating "Minimum"/"Maximum".
@@ -600,7 +604,7 @@ msgstr ""
 msgid "Autosave idle delay"
 msgstr ""
 
-#: src/app/page.tsx:1062
+#: src/app/page.tsx:1063
 msgid "Autosave is not working"
 msgstr ""
 
@@ -856,6 +860,7 @@ msgstr ""
 msgid "Camera view mode: {currentLabel}"
 msgstr ""
 
+#: src/app/page.tsx:10981
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:468
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:664
 #: src/components/controls/AutoSupportPanel.tsx:652
@@ -1029,8 +1034,16 @@ msgstr ""
 msgid "Clear build plate"
 msgstr ""
 
+#: src/app/page.tsx:10970
+msgid "Clear Build Plate?"
+msgstr ""
+
 #: src/features/slicing/components/SlicingPanel.tsx:3575
 msgid "Clear Override"
+msgstr ""
+
+#: src/app/page.tsx:10998
+msgid "Clear Plate"
 msgstr ""
 
 #: src/components/controls/IslandListCard.tsx:260
@@ -1063,6 +1076,10 @@ msgstr ""
 #: src/components/printers/PrinterVariantPickerModal.tsx:422
 msgid "Close"
 msgstr "Zatvoriť"
+
+#: src/app/page.tsx:10976
+msgid "Close clear-plate confirmation"
+msgstr ""
 
 #: src/components/controls/AutoSupportPanel.tsx:561
 msgid "Close dialog"
@@ -1205,6 +1222,10 @@ msgstr ""
 msgid "Configure Networking Later"
 msgstr ""
 
+#: src/app/page.tsx:10969
+msgid "Confirm clearing the build plate"
+msgstr ""
+
 #: src/components/settings/LocalBackupsSettingsTab.tsx:969
 msgid "Confirm delete snapshot"
 msgstr ""
@@ -1303,7 +1324,7 @@ msgstr ""
 msgid "Contoured regions"
 msgstr ""
 
-#: src/app/page.tsx:8192
+#: src/app/page.tsx:8193
 msgid "Converting support data and model metadata"
 msgstr ""
 
@@ -1773,7 +1794,7 @@ msgstr ""
 msgid "Drop supported files"
 msgstr "Hoď podporované súbory"
 
-#: src/app/page.tsx:10258
+#: src/app/page.tsx:10259
 msgid "Drop supported files to import"
 msgstr ""
 
@@ -1810,7 +1831,7 @@ msgstr ""
 msgid "Edit printer profile"
 msgstr ""
 
-#: src/app/page.tsx:2356
+#: src/app/page.tsx:2357
 msgid "Editor"
 msgstr "Editor"
 
@@ -2802,7 +2823,7 @@ msgstr ""
 msgid "Length"
 msgstr ""
 
-#: src/app/page.tsx:8232
+#: src/app/page.tsx:8233
 msgid "Letting DragonFruit finish its startup animation before loading your scene."
 msgstr ""
 
@@ -2883,7 +2904,7 @@ msgstr ""
 msgid "Loading Mesh Files…"
 msgstr ""
 
-#: src/app/page.tsx:8182
+#: src/app/page.tsx:8183
 #: src/features/scene/sceneImportMessages.ts:23
 msgid "Loading Mesh…"
 msgstr ""
@@ -2892,9 +2913,9 @@ msgstr ""
 msgid "Loading remote material…"
 msgstr ""
 
-#: src/app/page.tsx:4393
-#: src/app/page.tsx:8182
-#: src/app/page.tsx:8191
+#: src/app/page.tsx:4394
+#: src/app/page.tsx:8183
+#: src/app/page.tsx:8192
 msgid "Loading Scene…"
 msgstr ""
 
@@ -3377,7 +3398,7 @@ msgstr ""
 msgid "No active printer"
 msgstr "Žiadne aktívne tlačiarne"
 
-#: src/app/page.tsx:1066
+#: src/app/page.tsx:1067
 msgid "No autosave has succeeded this session. Save your project manually."
 msgstr ""
 
@@ -3737,7 +3758,7 @@ msgstr "Otvoriť scénu…"
 msgid "Opening"
 msgstr ""
 
-#: src/app/page.tsx:8229
+#: src/app/page.tsx:8230
 msgid "Opening scene…"
 msgstr ""
 
@@ -4118,7 +4139,7 @@ msgstr ""
 msgid "Re-slice required after profile change"
 msgstr "Znovu nasekanie je potrebné po zmene v profile"
 
-#: src/app/page.tsx:4394
+#: src/app/page.tsx:4395
 msgid "Reading autosaved scene…"
 msgstr ""
 
@@ -4387,8 +4408,8 @@ msgstr ""
 msgid "Restore Factory Defaults?"
 msgstr ""
 
-#: src/app/page.tsx:4425
-#: src/app/page.tsx:4436
+#: src/app/page.tsx:4426
+#: src/app/page.tsx:4437
 msgid "Restore Failed"
 msgstr ""
 
@@ -5222,7 +5243,7 @@ msgstr ""
 msgid "Supported: {extensions}"
 msgstr ""
 
-#: src/app/page.tsx:2356
+#: src/app/page.tsx:2357
 #: src/components/ui/EditorContextMenu.tsx:109
 msgid "Supports"
 msgstr "Podpery"
@@ -5308,16 +5329,16 @@ msgstr ""
 msgid "Tension"
 msgstr ""
 
-#: src/app/page.tsx:4438
+#: src/app/page.tsx:4439
 msgid "The autosave recovery file could not be found."
 msgstr ""
 
-#: src/app/page.tsx:4426
-#: src/app/page.tsx:4439
+#: src/app/page.tsx:4427
+#: src/app/page.tsx:4440
 msgid "The autosaved recovery file is corrupted or unreadable."
 msgstr ""
 
-#: src/app/page.tsx:1063
+#: src/app/page.tsx:1064
 msgid "The background recovery save failed repeatedly."
 msgstr ""
 
@@ -5325,7 +5346,7 @@ msgstr ""
 msgid "The build plate awaits."
 msgstr "Pracovná plocha ťa čaká."
 
-#: src/app/page.tsx:10985
+#: src/app/page.tsx:11024
 msgid "The build plate is locked."
 msgstr ""
 
@@ -5402,7 +5423,7 @@ msgstr "Živica je pripravená. Si ty?"
 msgid "The saved run policy the settings below are. Selecting one applies it immediately; the rest of the dialog stays staged until you save."
 msgstr ""
 
-#: src/app/page.tsx:4427
+#: src/app/page.tsx:4428
 msgid "The scene importer rejected or could not parse the autosave data."
 msgstr ""
 
@@ -5526,7 +5547,7 @@ msgstr ""
 msgid "Tip Ø range"
 msgstr ""
 
-#: src/app/page.tsx:2345
+#: src/app/page.tsx:2346
 msgid "Toggle curve"
 msgstr "Prepnúť Krivku"
 
@@ -5612,6 +5633,10 @@ msgstr ""
 msgid "Unavailable"
 msgstr ""
 
+#: src/app/page.tsx:10973
+msgid "Undo brings the models back"
+msgstr ""
+
 #: src/components/controls/ModelManagerPanel.tsx:385
 msgid "Ungroup folder"
 msgstr ""
@@ -5650,7 +5675,7 @@ msgstr ""
 msgid "Unlock build plate"
 msgstr ""
 
-#: src/app/page.tsx:10986
+#: src/app/page.tsx:11027
 msgid "Unlock it to add or move models."
 msgstr ""
 
@@ -5671,7 +5696,7 @@ msgstr ""
 msgid "Unsaved Scene Found"
 msgstr ""
 
-#: src/app/page.tsx:10258
+#: src/app/page.tsx:10259
 msgid "Unsupported file format"
 msgstr ""
 

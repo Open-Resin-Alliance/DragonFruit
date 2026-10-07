@@ -110,7 +110,7 @@ import { buildMirrorSupportTransforms, reflectTransformAcrossWorldAxis } from '@
 import type { MirrorAxis } from '@/features/mirror/types';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { RtspRelayCanvasPlayer } from '@/components/monitoring/RtspRelayCanvasPlayer';
-import { BlockingOverlay, IconButton, Toast, ToastViewport } from '@/components/atoms';
+import { BlockingOverlay, Button, IconButton, Toast, ToastViewport } from '@/components/atoms';
 import { EditorContextMenu, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
@@ -651,6 +651,7 @@ export default function Home() {
   useUiScale();
   // 1. Scene & Geometry (Multi-Model)
   const [plateLockedNoticeVisible, setPlateLockedNoticeVisible] = React.useState(false);
+  const [showClearPlateConfirm, setShowClearPlateConfirm] = React.useState(false);
   const plateLockedNoticeTimerRef = React.useRef<number | null>(null);
   const notifyPlateLockedRef = React.useRef<() => void>(() => {});
   const scene = useSceneCollectionManager({ onBlockedByLock: () => notifyPlateLockedRef.current() });
@@ -10288,15 +10289,7 @@ export default function Home() {
             showPlateName={scene.models.length > 0}
             plateLocked={scene.plateLocked}
             onTogglePlateLock={() => scene.setPlateLocked((prev) => !prev)}
-            onClearPlate={() => {
-              // The same call the Models menu's delete uses, so clearing the plate
-              // stays one action with one history entry.
-              dispatchDeleteModelAction({
-                modelIds: scene.models.map((model) => model.id),
-                selectedModelIds: scene.selectedModelIds,
-                activeModelId: scene.activeModelId,
-              }, scene.deleteModels);
-            }}
+            onClearPlate={() => setShowClearPlateConfirm(true)}
             cavityGeometryByModelId={new Map(Array.from(cavityGeometryByModelIdRef.current.entries()).map(([id, entry]) => [id, entry.geometry]))}
             disableRaycast={transformMgr.isTransforming}
             hideCrossSectionCap={false}
@@ -10970,6 +10963,48 @@ export default function Home() {
           zIndexClassName="z-[120]"
         />
       )}
+
+      <StructuredDialogModal
+        open={showClearPlateConfirm}
+        ariaLabel={_(msg`Confirm clearing the build plate`)}
+        title={_(msg`Clear Build Plate?`)}
+        // Undo does bring them back, unlike the app's other destructive confirmation,
+        // so it says that instead of "this can't be undone".
+        subtitle={_(msg`Undo brings the models back`)}
+        icon={<Trash2 className="h-4 w-4" />}
+        iconTone="warning"
+        closeAriaLabel={_(msg`Close clear-plate confirmation`)}
+        onClose={() => setShowClearPlateConfirm(false)}
+        actions={(
+          <>
+            <Button variant="secondary" onClick={() => setShowClearPlateConfirm(false)}>
+              {_(msg`Cancel`)}
+            </Button>
+            <Button
+              variant="tinted-danger"
+              className="inline-flex items-center justify-center gap-1.5"
+              onClick={() => {
+                setShowClearPlateConfirm(false);
+                // Straight to `deleteModels`, deliberately not through
+                // `dispatchDeleteModelAction`: that resolves *the selection*, or one
+                // fallback model, and never "every model" — so routing a clear-all
+                // through it deleted whatever happened to be selected (or nothing,
+                // with no active model) while looking like it worked.
+                void scene.deleteModels(scene.models.map((model) => model.id));
+              }}
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              {_(msg`Clear Plate`)}
+            </Button>
+          </>
+        )}
+      >
+        <div className="space-y-2">
+          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+            {_(msg`Are you sure you want to remove every model from the plate?`)}
+          </p>
+        </div>
+      </StructuredDialogModal>
 
       {plateLockedNoticeVisible && (
         <ToastViewport zIndex={127} offset="1.25rem">
