@@ -13,6 +13,5 @@ export function normalizeExportBaseName(rawName: string | null | undefined): str
 
 export function resolveEntirePlateExportBaseName(models: LoadedModel[]): string {
   const firstVisible = models.find((model) => model.visible) ?? models[0] ?? null;
-  const firstBase = normalizeExportBaseName(firstVisible?.name);
-  return `${firstBase}_DF_Scene`;
+  return normalizeExportBaseName(firstVisible?.name);
 }

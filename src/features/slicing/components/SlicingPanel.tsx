@@ -180,15 +180,10 @@ function normalizeExportBaseName(rawName: string | null | undefined): string {
 }
 
 function resolveSliceFilenameBase(models: LoadedModel[], activeModel: LoadedModel | null): string {
-  const visibleModels = models.filter((model) => model.visible);
+  const firstVisible = models.find((model) => model.visible);
 
-  if (visibleModels.length === 1) {
-    return normalizeExportBaseName(visibleModels[0].name);
-  }
-
-  if (visibleModels.length > 1) {
-    const firstVisibleName = normalizeExportBaseName(visibleModels[0]?.name);
-    return `${firstVisibleName}_DF_Scene`;
+  if (firstVisible) {
+    return normalizeExportBaseName(firstVisible.name);
   }
 
   if (activeModel) {
