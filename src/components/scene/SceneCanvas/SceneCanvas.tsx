@@ -474,6 +474,7 @@ export function SceneCanvas({
   plateLocked,
   onTogglePlateLock,
   onClearPlate,
+  plateClearTitle,
   onArrangePlate,
   disableRaycast,
   ambientIntensity,
@@ -607,8 +608,13 @@ export function SceneCanvas({
   /** The plate lock, handed to the 3D helpers that draw it. */
   plateLocked?: boolean;
   onTogglePlateLock?: () => void;
-  /** Removes every model from the plate, from the bin beside it. */
+  /** Runs from the bin beside the plate: it takes the plate, or empties it. */
   onClearPlate?: () => void;
+  /**
+   * The bin's tooltip. The caller knows what the bin will do — remove the plate or
+   * only empty it — so it words it; without this it is worded as a clear.
+   */
+  plateClearTitle?: string;
   /** Arranges every model on the plate, from the button beside it. */
   onArrangePlate?: () => void;
   disableRaycast?: boolean;
@@ -1632,7 +1638,8 @@ export function SceneCanvas({
   }, [plates, plateFrames, activePlateId, _]);
   const plateLockTitle = _(msg({ message: 'Lock build plate', comment: 'Tooltip on the lock button beside the build plate while it is unlocked. Locking refuses new meshes and moves of the models already on the plate.' }));
   const plateUnlockTitle = _(msg({ message: 'Unlock build plate', comment: 'Tooltip on the lock button beside the build plate while it is locked.' }));
-  const plateClearTitle = _(msg({ message: 'Clear build plate', comment: 'Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.' }));
+  const defaultPlateClearTitle = _(msg({ message: 'Clear build plate', comment: 'Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.' }));
+  const clearTitle = plateClearTitle ?? defaultPlateClearTitle;
   const plateClearDisabledTitle = _(msg({ message: 'Unlock the plate to clear it', comment: 'Tooltip on the bin beside the build plate while the plate is locked, which is why it is disabled.' }));
   const plateArrangeTitle = _(msg({ message: 'Auto arrange the plate', comment: 'Tooltip on the arrange button beside the build plate. Runs the standard arrange across every model, 1mm apart, with Z-rotation allowed.' }));
   const plateArrangeDisabledTitle = _(msg({ message: 'Unlock the plate to arrange it', comment: 'Tooltip on the arrange button beside the build plate while the plate is locked, which is why it is disabled.' }));
@@ -6179,7 +6186,7 @@ export function SceneCanvas({
           onTogglePlateLock={onTogglePlateLock}
           plateLockTitle={plateLockTitle}
           plateUnlockTitle={plateUnlockTitle}
-          plateClearTitle={plateClearTitle}
+          plateClearTitle={clearTitle}
           plateClearDisabledTitle={plateClearDisabledTitle}
           onClearPlate={onClearPlate}
           plateArrangeTitle={plateArrangeTitle}

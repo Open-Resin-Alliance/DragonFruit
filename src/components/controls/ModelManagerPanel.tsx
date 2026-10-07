@@ -476,7 +476,8 @@ export function ModelManagerPanel({
         id: 'delete-plate',
         label: <Trans>Delete plate</Trans>,
         icon: Trash2,
-        disabled: (plates?.length ?? 0) <= 1,
+        // The first plate is the scene's floor; the last one has nowhere to go.
+        disabled: (plates?.length ?? 0) <= 1 || plates?.[0]?.id === contextMenu.plateId,
       },
     );
   }

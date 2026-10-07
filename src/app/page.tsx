@@ -648,7 +648,9 @@ export default function Home() {
   useUiScale();
   // 1. Scene & Geometry (Multi-Model)
   const [plateLockedNoticeVisible, setPlateLockedNoticeVisible] = React.useState(false);
-  const [showClearPlateConfirm, setShowClearPlateConfirm] = React.useState(false);
+  // What the plate bin is about to do: take the bed you are standing at, or — on
+  // the scene's first plate, which has to stay — only empty it.
+  const [plateTrashIntent, setPlateTrashIntent] = React.useState<'delete' | 'clear' | null>(null);
   const plateLockedNoticeTimerRef = React.useRef<number | null>(null);
   const notifyPlateLockedRef = React.useRef<() => void>(() => {});
   const scene = useSceneCollectionManager({ onBlockedByLock: () => notifyPlateLockedRef.current() });
@@ -10357,7 +10359,14 @@ export default function Home() {
             }}
             plateLocked={scene.plateLocked}
             onTogglePlateLock={() => scene.setPlateLocked(!scene.plateLocked)}
-            onClearPlate={() => setShowClearPlateConfirm(true)}
+            plateClearTitle={scene.plates.length > 1 && scene.activePlateId !== scene.plates[0]?.id
+              ? _(msg({ message: 'Delete this plate', comment: 'Tooltip on the bin beside the build plate when the plate can go: it removes the bed and the models standing on it. Undo brings them back.' }))
+              : _(msg({ message: 'Clear build plate', comment: 'Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.' }))}
+            onClearPlate={() => {
+              const plateId = scene.activePlateId;
+              const isFirstPlate = plateId === scene.plates[0]?.id;
+              setPlateTrashIntent(scene.plates.length > 1 && !isFirstPlate ? 'delete' : 'clear');
+            }}
             cavityGeometryByModelId={new Map(Array.from(cavityGeometryByModelIdRef.current.entries()).map(([id, entry]) => [id, entry.geometry]))}
             disableRaycast={transformMgr.isTransforming}
             hideCrossSectionCap={false}
@@ -11035,26 +11044,35 @@ export default function Home() {
       )}
 
       <StructuredDialogModal
-        open={showClearPlateConfirm}
-        ariaLabel={_(msg`Confirm clearing the build plate`)}
-        title={_(msg`Clear Build Plate?`)}
+        open={plateTrashIntent !== null}
+        ariaLabel={plateTrashIntent === 'delete'
+          ? _(msg`Confirm deleting the plate`)
+          : _(msg`Confirm clearing the build plate`)}
+        title={plateTrashIntent === 'delete' ? _(msg`Delete this plate?`) : _(msg`Clear Build Plate?`)}
         // Undo does bring them back, unlike the app's other destructive confirmation,
         // so it says that instead of "this can't be undone".
         subtitle={_(msg`Undo brings the models back`)}
         icon={<Trash2 className="h-4 w-4" />}
-        iconTone="warning"
+        iconTone={plateTrashIntent === 'delete' ? 'danger' : 'warning'}
         closeAriaLabel={_(msg`Close clear-plate confirmation`)}
-        onClose={() => setShowClearPlateConfirm(false)}
+        onClose={() => setPlateTrashIntent(null)}
         actions={(
           <>
-            <Button variant="secondary" onClick={() => setShowClearPlateConfirm(false)}>
+            <Button variant="secondary" onClick={() => setPlateTrashIntent(null)}>
               {_(msg`Cancel`)}
             </Button>
             <Button
               variant="tinted-danger"
               className="inline-flex items-center justify-center gap-1.5"
               onClick={() => {
-                setShowClearPlateConfirm(false);
+                const intent = plateTrashIntent;
+                setPlateTrashIntent(null);
+                if (intent === 'delete') {
+                  // The bed goes with what is on it; `removePlate` carries the models
+                  // away rather than leaving them behind on a plate that is gone.
+                  scene.removePlate(scene.activePlateId);
+                  return;
+                }
                 // Straight to `deleteModels`, deliberately not through
                 // `dispatchDeleteModelAction`: that resolves *the selection*, or one
                 // fallback model, and never "the plate" — so routing a clear through
@@ -11071,14 +11089,16 @@ export default function Home() {
               }}
             >
               <Trash2 className="w-3.5 h-3.5" />
-              {_(msg`Clear Plate`)}
+              {plateTrashIntent === 'delete' ? _(msg`Delete plate`) : _(msg`Clear Plate`)}
             </Button>
           </>
         )}
       >
         <div className="space-y-2">
           <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-            {_(msg`Are you sure you want to remove every model from the plate?`)}
+            {plateTrashIntent === 'delete'
+              ? _(msg`The models on this plate are deleted with it.`)
+              : _(msg`Are you sure you want to remove every model from the plate?`)}
           </p>
         </div>
       </StructuredDialogModal>

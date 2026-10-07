@@ -6148,13 +6148,16 @@ export function useSceneCollectionManager(options?: {
   }, []);
 
   /**
-   * Delete a plate and the models standing on it. The scene always keeps a plate
-   * to work on, so removing the last one is refused rather than leaving nowhere
-   * to build.
+   * Delete a plate and the models standing on it. The first plate is the scene's
+   * floor and stays, and so does the last one — a scene with no bed has nowhere
+   * to build — so both are refused rather than half-done.
    */
   const removePlate = useCallback((plateId: string): boolean => {
-    const remaining = platesRef.current.filter((plate) => plate.id !== plateId);
-    if (remaining.length === 0 || remaining.length === platesRef.current.length) return false;
+    const current = platesRef.current;
+    const remaining = current.filter((plate) => plate.id !== plateId);
+    if (remaining.length === 0 || remaining.length === current.length || current[0]?.id === plateId) {
+      return false;
+    }
 
     const doomed = modelsRef.current.filter(
       (model) => resolveModelPlateIdRef.current(model) === plateId,
