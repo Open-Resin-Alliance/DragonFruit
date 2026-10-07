@@ -5401,6 +5401,19 @@ export function useSceneCollectionManager() {
           });
         }
 
+        // A cached or older scene can carry a model whose size was never recorded —
+        // the writer used to store 0 for unknown, which reads back as "0 B". The
+        // document keeps the model's original path when it has one, so the size is
+        // one metadata call away. Desktop only: `readNativeFileSize` answers null
+        // elsewhere, which leaves the size unknown rather than wrong.
+        await Promise.all(importedModels.map(async (model) => {
+          if (typeof model.fileSizeBytes === 'number' && model.fileSizeBytes > 0) return;
+          const sourcePath = typeof model.sourcePath === 'string' ? model.sourcePath.trim() : '';
+          if (!sourcePath) return;
+          const size = await readNativeFileSize(sourcePath);
+          if (size != null && size > 0) model.fileSizeBytes = size;
+        }));
+
         setModels((prev) => [...prev, ...importedModels]);
 
         const mappedActiveId = (document.scene.activeModelId && idMap.get(document.scene.activeModelId))
