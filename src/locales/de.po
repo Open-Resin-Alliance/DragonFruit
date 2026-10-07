@@ -273,7 +273,7 @@ msgstr ""
 msgid "Add contacts along the edge or corner a pose bears on, so a leaning part is held against toppling and peel (default on)"
 msgstr ""
 
-#: src/app/page.tsx:2340
+#: src/app/page.tsx:2350
 msgid "Add joint"
 msgstr "Verbindung hinzufügen"
 
@@ -595,7 +595,7 @@ msgstr ""
 msgid "Autosave idle delay"
 msgstr ""
 
-#: src/app/page.tsx:1052
+#: src/app/page.tsx:1062
 msgid "Autosave is not working"
 msgstr ""
 
@@ -1298,7 +1298,7 @@ msgstr ""
 msgid "Contoured regions"
 msgstr ""
 
-#: src/app/page.tsx:8182
+#: src/app/page.tsx:8192
 msgid "Converting support data and model metadata"
 msgstr ""
 
@@ -1768,7 +1768,7 @@ msgstr ""
 msgid "Drop supported files"
 msgstr "Unterstützte Dateien ablegen"
 
-#: src/app/page.tsx:10248
+#: src/app/page.tsx:10258
 msgid "Drop supported files to import"
 msgstr ""
 
@@ -1805,7 +1805,7 @@ msgstr ""
 msgid "Edit printer profile"
 msgstr ""
 
-#: src/app/page.tsx:2346
+#: src/app/page.tsx:2356
 msgid "Editor"
 msgstr "Editor"
 
@@ -2796,7 +2796,7 @@ msgstr ""
 msgid "Length"
 msgstr ""
 
-#: src/app/page.tsx:8222
+#: src/app/page.tsx:8232
 msgid "Letting DragonFruit finish its startup animation before loading your scene."
 msgstr ""
 
@@ -2877,7 +2877,7 @@ msgstr ""
 msgid "Loading Mesh Files…"
 msgstr ""
 
-#: src/app/page.tsx:8172
+#: src/app/page.tsx:8182
 #: src/features/scene/sceneImportMessages.ts:23
 msgid "Loading Mesh…"
 msgstr ""
@@ -2886,9 +2886,9 @@ msgstr ""
 msgid "Loading remote material…"
 msgstr ""
 
-#: src/app/page.tsx:4383
-#: src/app/page.tsx:8172
-#: src/app/page.tsx:8181
+#: src/app/page.tsx:4393
+#: src/app/page.tsx:8182
+#: src/app/page.tsx:8191
 msgid "Loading Scene…"
 msgstr ""
 
@@ -3371,7 +3371,7 @@ msgstr ""
 msgid "No active printer"
 msgstr "Kein aktiver Drucker"
 
-#: src/app/page.tsx:1056
+#: src/app/page.tsx:1066
 msgid "No autosave has succeeded this session. Save your project manually."
 msgstr ""
 
@@ -3731,7 +3731,7 @@ msgstr "Szene öffnen…"
 msgid "Opening"
 msgstr ""
 
-#: src/app/page.tsx:8219
+#: src/app/page.tsx:8229
 msgid "Opening scene…"
 msgstr ""
 
@@ -4112,7 +4112,7 @@ msgstr ""
 msgid "Re-slice required after profile change"
 msgstr "Erneutes Slicen nach Profilwechsel erforderlich"
 
-#: src/app/page.tsx:4384
+#: src/app/page.tsx:4394
 msgid "Reading autosaved scene…"
 msgstr ""
 
@@ -4381,8 +4381,8 @@ msgstr ""
 msgid "Restore Factory Defaults?"
 msgstr ""
 
-#: src/app/page.tsx:4415
-#: src/app/page.tsx:4426
+#: src/app/page.tsx:4425
+#: src/app/page.tsx:4436
 msgid "Restore Failed"
 msgstr ""
 
@@ -5216,7 +5216,7 @@ msgstr ""
 msgid "Supported: {extensions}"
 msgstr ""
 
-#: src/app/page.tsx:2346
+#: src/app/page.tsx:2356
 #: src/components/ui/EditorContextMenu.tsx:109
 msgid "Supports"
 msgstr "Stützen"
@@ -5302,22 +5302,26 @@ msgstr ""
 msgid "Tension"
 msgstr ""
 
-#: src/app/page.tsx:4428
+#: src/app/page.tsx:4438
 msgid "The autosave recovery file could not be found."
 msgstr ""
 
-#: src/app/page.tsx:4416
-#: src/app/page.tsx:4429
+#: src/app/page.tsx:4426
+#: src/app/page.tsx:4439
 msgid "The autosaved recovery file is corrupted or unreadable."
 msgstr ""
 
-#: src/app/page.tsx:1053
+#: src/app/page.tsx:1063
 msgid "The background recovery save failed repeatedly."
 msgstr ""
 
 #: src/components/layout/EmptySceneState.tsx:69
 msgid "The build plate awaits."
 msgstr "Die Druckplatte wartet."
+
+#: src/app/page.tsx:10985
+msgid "The build plate is locked."
+msgstr ""
 
 #: src/components/layout/EmptySceneState.tsx:82
 msgid "The build volume misses you."
@@ -5392,7 +5396,7 @@ msgstr "Das Harz ist bereit. Sind Sie es auch?"
 msgid "The saved run policy the settings below are. Selecting one applies it immediately; the rest of the dialog stays staged until you save."
 msgstr ""
 
-#: src/app/page.tsx:4417
+#: src/app/page.tsx:4427
 msgid "The scene importer rejected or could not parse the autosave data."
 msgstr ""
 
@@ -5516,7 +5520,7 @@ msgstr ""
 msgid "Tip Ø range"
 msgstr ""
 
-#: src/app/page.tsx:2335
+#: src/app/page.tsx:2345
 msgid "Toggle curve"
 msgstr "Kurve umschalten"
 
@@ -5640,6 +5644,10 @@ msgstr ""
 msgid "Unlock build plate"
 msgstr ""
 
+#: src/app/page.tsx:10986
+msgid "Unlock it to add or move models."
+msgstr ""
+
 #. Tooltip on the bin beside the build plate while the plate is locked, which is why it is disabled.
 #: src/components/scene/SceneCanvas/SceneCanvas.tsx:1582
 msgid "Unlock the plate to clear it"
@@ -5657,7 +5665,7 @@ msgstr ""
 msgid "Unsaved Scene Found"
 msgstr ""
 
-#: src/app/page.tsx:10248
+#: src/app/page.tsx:10258
 msgid "Unsupported file format"
 msgstr ""
 

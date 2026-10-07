@@ -273,7 +273,7 @@ msgstr "Añade otro bucle y empieza a dibujarlo. Al cortar se cortan todos los b
 msgid "Add contacts along the edge or corner a pose bears on, so a leaning part is held against toppling and peel (default on)"
 msgstr "Añade contactos a lo largo del borde o la esquina en que se apoya la pose, para que una pieza inclinada no vuelque ni se despegue (activado por defecto)"
 
-#: src/app/page.tsx:2340
+#: src/app/page.tsx:2350
 msgid "Add joint"
 msgstr "Añadir unión"
 
@@ -595,7 +595,7 @@ msgstr "Los archivos de guardado automático solo existen en la versión de escr
 msgid "Autosave idle delay"
 msgstr "Espera antes de guardar"
 
-#: src/app/page.tsx:1052
+#: src/app/page.tsx:1062
 msgid "Autosave is not working"
 msgstr "El guardado automático no funciona"
 
@@ -1298,7 +1298,7 @@ msgstr "Contorno"
 msgid "Contoured regions"
 msgstr "Regiones contorneadas"
 
-#: src/app/page.tsx:8182
+#: src/app/page.tsx:8192
 msgid "Converting support data and model metadata"
 msgstr "Convirtiendo los datos de soportes y los metadatos del modelo"
 
@@ -1768,7 +1768,7 @@ msgstr "DragonFruit va a <0>descargar, verificar e instalar</0> la actualizació
 msgid "Drop supported files"
 msgstr "Suelta archivos compatibles"
 
-#: src/app/page.tsx:10248
+#: src/app/page.tsx:10258
 msgid "Drop supported files to import"
 msgstr "Suelta aquí los ficheros compatibles para importarlos"
 
@@ -1805,7 +1805,7 @@ msgstr "Editar el perfil de material"
 msgid "Edit printer profile"
 msgstr "Editar el perfil de impresora"
 
-#: src/app/page.tsx:2346
+#: src/app/page.tsx:2356
 msgid "Editor"
 msgstr "Editor"
 
@@ -2797,7 +2797,7 @@ msgstr "Izq."
 msgid "Length"
 msgstr "Longitud"
 
-#: src/app/page.tsx:8222
+#: src/app/page.tsx:8232
 msgid "Letting DragonFruit finish its startup animation before loading your scene."
 msgstr "Dejando que DragonFruit termine su animación de arranque antes de cargar la escena."
 
@@ -2878,7 +2878,7 @@ msgstr "Cargando el estado de las copias…"
 msgid "Loading Mesh Files…"
 msgstr "Cargando ficheros de malla…"
 
-#: src/app/page.tsx:8172
+#: src/app/page.tsx:8182
 #: src/features/scene/sceneImportMessages.ts:23
 msgid "Loading Mesh…"
 msgstr "Cargando malla…"
@@ -2887,9 +2887,9 @@ msgstr "Cargando malla…"
 msgid "Loading remote material…"
 msgstr "Cargando el material remoto…"
 
-#: src/app/page.tsx:4383
-#: src/app/page.tsx:8172
-#: src/app/page.tsx:8181
+#: src/app/page.tsx:4393
+#: src/app/page.tsx:8182
+#: src/app/page.tsx:8191
 msgid "Loading Scene…"
 msgstr "Cargando escena…"
 
@@ -3372,7 +3372,7 @@ msgstr "Sin antialiasing"
 msgid "No active printer"
 msgstr "Sin impresora activa"
 
-#: src/app/page.tsx:1056
+#: src/app/page.tsx:1066
 msgid "No autosave has succeeded this session. Save your project manually."
 msgstr "Ningún guardado automático ha funcionado en esta sesión. Guarda tu proyecto a mano."
 
@@ -3732,7 +3732,7 @@ msgstr "Abrir escena…"
 msgid "Opening"
 msgstr "Abriendo"
 
-#: src/app/page.tsx:8219
+#: src/app/page.tsx:8229
 msgid "Opening scene…"
 msgstr "Abriendo escena…"
 
@@ -4113,7 +4113,7 @@ msgstr "Repetir el escaneo por líneas"
 msgid "Re-slice required after profile change"
 msgstr "Es necesario volver a laminar tras cambiar de perfil"
 
-#: src/app/page.tsx:4384
+#: src/app/page.tsx:4394
 msgid "Reading autosaved scene…"
 msgstr "Leyendo la escena guardada automáticamente…"
 
@@ -4382,8 +4382,8 @@ msgstr "Restaurar los valores de fábrica"
 msgid "Restore Factory Defaults?"
 msgstr "¿Restaurar los valores de fábrica?"
 
-#: src/app/page.tsx:4415
-#: src/app/page.tsx:4426
+#: src/app/page.tsx:4425
+#: src/app/page.tsx:4436
 msgid "Restore Failed"
 msgstr "Error al restaurar"
 
@@ -5217,7 +5217,7 @@ msgstr "El soporte chocaría con la geometría del modelo."
 msgid "Supported: {extensions}"
 msgstr "Compatibles: {extensions}"
 
-#: src/app/page.tsx:2346
+#: src/app/page.tsx:2356
 #: src/components/ui/EditorContextMenu.tsx:109
 msgid "Supports"
 msgstr "Soportes"
@@ -5303,22 +5303,26 @@ msgstr "Ancho de la espiga en milímetros"
 msgid "Tension"
 msgstr "Tensión"
 
-#: src/app/page.tsx:4428
+#: src/app/page.tsx:4438
 msgid "The autosave recovery file could not be found."
 msgstr "No se encuentra el archivo de recuperación."
 
-#: src/app/page.tsx:4416
-#: src/app/page.tsx:4429
+#: src/app/page.tsx:4426
+#: src/app/page.tsx:4439
 msgid "The autosaved recovery file is corrupted or unreadable."
 msgstr "El archivo de recuperación está dañado o no se puede leer."
 
-#: src/app/page.tsx:1053
+#: src/app/page.tsx:1063
 msgid "The background recovery save failed repeatedly."
 msgstr "El guardado de recuperación en segundo plano ha fallado varias veces seguidas."
 
 #: src/components/layout/EmptySceneState.tsx:69
 msgid "The build plate awaits."
 msgstr "La placa de impresión te espera."
+
+#: src/app/page.tsx:10985
+msgid "The build plate is locked."
+msgstr "La plataforma está bloqueada."
 
 #: src/components/layout/EmptySceneState.tsx:82
 msgid "The build volume misses you."
@@ -5393,7 +5397,7 @@ msgstr "La resina está lista. ¿Y tú?"
 msgid "The saved run policy the settings below are. Selecting one applies it immediately; the rest of the dialog stays staged until you save."
 msgstr "La política de ejecución guardada que corresponde a los ajustes de abajo. Al elegir uno se aplica en el acto; el resto de la ventana queda pendiente hasta que guardes."
 
-#: src/app/page.tsx:4417
+#: src/app/page.tsx:4427
 msgid "The scene importer rejected or could not parse the autosave data."
 msgstr "El importador de escenas rechazó los datos del guardado automático o no pudo interpretarlos."
 
@@ -5517,7 +5521,7 @@ msgstr "Margen de ajuste de la punta"
 msgid "Tip Ø range"
 msgstr "Rango de Ø de la punta"
 
-#: src/app/page.tsx:2335
+#: src/app/page.tsx:2345
 msgid "Toggle curve"
 msgstr "Alternar curva"
 
@@ -5641,6 +5645,10 @@ msgstr "Fabricante desconocido"
 msgid "Unlock build plate"
 msgstr "Desbloquear la plataforma"
 
+#: src/app/page.tsx:10986
+msgid "Unlock it to add or move models."
+msgstr "Desbloquéala para añadir o mover modelos."
+
 #. Tooltip on the bin beside the build plate while the plate is locked, which is why it is disabled.
 #: src/components/scene/SceneCanvas/SceneCanvas.tsx:1582
 msgid "Unlock the plate to clear it"
@@ -5658,7 +5666,7 @@ msgstr "Puedes perder los cambios sin guardar."
 msgid "Unsaved Scene Found"
 msgstr "Hay una escena sin guardar"
 
-#: src/app/page.tsx:10248
+#: src/app/page.tsx:10258
 msgid "Unsupported file format"
 msgstr "Formato de fichero no compatible"
 

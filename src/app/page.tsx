@@ -9,7 +9,7 @@ import { detectIsIOS } from '@/hooks/usePlatform';
 import { useUiScale } from '@/hooks/useUiScale';
 import * as THREE from 'three';
 import type { ThreeEvent } from '@react-three/fiber';
-import { AlertTriangle, CheckCircle2, ChevronDown, Download, Gamepad2, LayoutGrid, Loader2, Maximize2, Minimize2, Play, Plus, Printer, Redo2, RefreshCw, Trash2, Undo2, Wrench, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, Download, Gamepad2, LayoutGrid, Loader2, Lock, Maximize2, Minimize2, Play, Plus, Printer, Redo2, RefreshCw, Trash2, Undo2, Wrench, X } from 'lucide-react';
 import { SceneCanvas } from '@/components/scene/SceneCanvas';
 import { SceneOverlays } from '@/components/organisms/scene/SceneOverlays';
 import { FloatingPanelStack } from '@/components/layout/FloatingPanelStack';
@@ -650,7 +650,10 @@ export default function Home() {
   // Applies the user's saved UI scale via native webview zoom (no-op in browser).
   useUiScale();
   // 1. Scene & Geometry (Multi-Model)
-  const scene = useSceneCollectionManager();
+  const [plateLockedNoticeVisible, setPlateLockedNoticeVisible] = React.useState(false);
+  const plateLockedNoticeTimerRef = React.useRef<number | null>(null);
+  const notifyPlateLockedRef = React.useRef<() => void>(() => {});
+  const scene = useSceneCollectionManager({ onBlockedByLock: () => notifyPlateLockedRef.current() });
 
   // Warn when an imported mesh fails the manifold_csg validity check — the same
   // models shown with the red striped overlay in the viewport. Only a single
@@ -659,6 +662,13 @@ export default function Home() {
   // the batch does not pop additional modals.
   const warnedManifoldModelIdsRef = React.useRef<Set<string>>(new Set());
   const [showManifoldWarning, setShowManifoldWarning] = React.useState(false);
+  // Restarting the timer on every refusal means holding the lock and clicking about
+  // keeps one toast on screen rather than stacking them.
+  notifyPlateLockedRef.current = () => {
+    setPlateLockedNoticeVisible(true);
+    if (plateLockedNoticeTimerRef.current !== null) window.clearTimeout(plateLockedNoticeTimerRef.current);
+    plateLockedNoticeTimerRef.current = window.setTimeout(() => setPlateLockedNoticeVisible(false), 2600);
+  };
   React.useEffect(() => {
     const flagged = scene.models.filter(
       (model) => model.geometry?.meshDefects?.nativeRepairReport?.model_is_manifold === false,
@@ -10959,6 +10969,24 @@ export default function Home() {
           progress={null}
           zIndexClassName="z-[120]"
         />
+      )}
+
+      {plateLockedNoticeVisible && (
+        <ToastViewport zIndex={127} offset="1.25rem">
+          <Toast
+            tone="warning"
+            shape="rounded"
+            animated
+            visible
+            className="flex items-center gap-3 max-w-sm pointer-events-auto"
+          >
+            <Lock className="h-4 w-4 flex-shrink-0" />
+            <span className="flex-1 text-center text-[12px] leading-snug">
+              {_(msg`The build plate is locked.`)}<br />
+              <span style={{ fontWeight: 400, opacity: 0.8 }}>{_(msg`Unlock it to add or move models.`)}</span>
+            </span>
+          </Toast>
+        </ToastViewport>
       )}
 
       {newDeviceToast && (
