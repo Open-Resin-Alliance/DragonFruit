@@ -10278,6 +10278,15 @@ export default function Home() {
             showPlateName={scene.models.length > 0}
             plateLocked={scene.plateLocked}
             onTogglePlateLock={() => scene.setPlateLocked((prev) => !prev)}
+            onClearPlate={() => {
+              // The same call the Models menu's delete uses, so clearing the plate
+              // stays one action with one history entry.
+              dispatchDeleteModelAction({
+                modelIds: scene.models.map((model) => model.id),
+                selectedModelIds: scene.selectedModelIds,
+                activeModelId: scene.activeModelId,
+              }, scene.deleteModels);
+            }}
             cavityGeometryByModelId={new Map(Array.from(cavityGeometryByModelIdRef.current.entries()).map(([id, entry]) => [id, entry.geometry]))}
             disableRaycast={transformMgr.isTransforming}
             hideCrossSectionCap={false}
