@@ -23,14 +23,9 @@ msgid "{0, plural, one {# island} other {# islands}}"
 msgstr "{0, plural, one {# isla} other {# islas}}"
 
 #. placeholder {0}: model.polygonCount
-#: src/components/controls/ModelManagerPanel.tsx:49
+#: src/components/controls/ModelManagerPanel.tsx:45
 msgid "{0, plural, one {# polygon} other {# polygons}}"
 msgstr "{0, plural, one {# polígono} other {# polígonos}}"
-
-#. placeholder {0}: formatModelSizeMegabytes(model.fileSizeBytes as number)
-#: src/components/controls/ModelManagerPanel.tsx:52
-msgid "{0} · {polygons}"
-msgstr "{0} · {polygons}"
 
 #. Badge counting the printers the network scan turned up.
 #: src/components/settings/FleetManagement.tsx:23
@@ -84,7 +79,7 @@ msgid "{downloaded} / {total} ({pct}%)"
 msgstr "{downloaded} / {total} ({pct} %)"
 
 #: src/app/page.tsx:491
-#: src/components/controls/ModelStatsCard.tsx:209
+#: src/components/controls/ModelStatsCard.tsx:197
 msgid "{hours} h {minutes} min"
 msgstr "{hours} h {minutes} min"
 
@@ -115,7 +110,7 @@ msgstr "{minutes} min"
 
 #: src/app/page.tsx:483
 #: src/app/page.tsx:492
-#: src/components/controls/ModelStatsCard.tsx:210
+#: src/components/controls/ModelStatsCard.tsx:198
 msgid "{minutes} min {seconds} s"
 msgstr "{minutes} min {seconds} s"
 
@@ -144,9 +139,13 @@ msgstr "{rate} capas/s"
 msgid "{saved, plural, one {# saved} other {# saved}} • {online, plural, one {# online} other {# online}}"
 msgstr "{saved, plural, one {# guardada} other {# guardadas}} • {online, plural, one {# en línea} other {# en línea}}"
 
-#: src/components/controls/ModelStatsCard.tsx:211
+#: src/components/controls/ModelStatsCard.tsx:199
 msgid "{seconds} s"
 msgstr "{seconds} s"
+
+#: src/components/controls/ModelManagerPanel.tsx:47
+msgid "{size} · {polygons}"
+msgstr "{size} · {polygons}"
 
 #: src/features/slicing/components/SlicingPanel.tsx:129
 msgid "{steps}x Coverage"
@@ -279,7 +278,7 @@ msgid "Add joint"
 msgstr "Añadir unión"
 
 #. Tooltip on the plus in the Models panel header, which opens the mesh picker.
-#: src/components/controls/ModelManagerPanel.tsx:475
+#: src/components/controls/ModelManagerPanel.tsx:469
 msgid "Add models to the plate"
 msgstr "Añadir modelos a la plataforma"
 
@@ -290,6 +289,11 @@ msgstr "Añade más modelos para usar la exportación por lotes"
 #: src/components/layout/EmptySceneState.tsx:558
 msgid "Add or switch printer anytime from the top bar."
 msgstr "Añade o cambia de impresora en cualquier momento desde la barra superior."
+
+#. Accessible name of the button beside the build plate that will add another plate. Inert for now, so it reads as unavailable to a screen reader too.
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1569
+msgid "Add plate"
+msgstr "Añadir plataforma"
 
 #: src/components/layout/EmptySceneState.tsx:530
 #: src/components/layout/OnboardingPrinterLibrary.tsx:414
@@ -491,7 +495,7 @@ msgid "Auto-Repair Scenes"
 msgstr "Reparación automática de escenas"
 
 #. placeholder {0}: model.geometry.meshDefects.repairedFloats
-#: src/components/controls/ModelStatsCard.tsx:609
+#: src/components/controls/ModelStatsCard.tsx:597
 msgid "Auto-repaired — {0} errors"
 msgstr "Reparado automáticamente — {0} errores"
 
@@ -622,7 +626,7 @@ msgstr "Área media de isla"
 #. View cube face (the side opposite Front), rendered uppercase inside a small 3D cube. Keep it as short as possible.
 #: src/components/layout/FirstRunOnboarding.tsx:278
 #: src/components/layout/OnboardingPrinterLibrary.tsx:279
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1573
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1575
 msgid "Back"
 msgstr "Atrás"
 
@@ -765,7 +769,7 @@ msgid "Border Margin"
 msgstr "Margen del borde"
 
 #. View cube face (seen from below), rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1577
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1579
 msgid "Bottom"
 msgstr "Abajo"
 
@@ -1027,11 +1031,11 @@ msgstr "Quitar la selección"
 msgid "Clear Session Override"
 msgstr "Quitar la anulación de sesión"
 
-#: src/components/controls/ModelStatsCard.tsx:616
+#: src/components/controls/ModelStatsCard.tsx:604
 msgid "Click card to return to print settings"
 msgstr "Pulsa la tarjeta para volver a los ajustes de impresión"
 
-#: src/components/controls/ModelStatsCard.tsx:560
+#: src/components/controls/ModelStatsCard.tsx:548
 msgid "Click card to view model details"
 msgstr "Pulsa la tarjeta para ver los detalles del modelo"
 
@@ -1132,7 +1136,7 @@ msgstr "Coincidentes"
 msgid "Collapse card"
 msgstr "Plegar la tarjeta"
 
-#: src/components/controls/ModelManagerPanel.tsx:546
+#: src/components/controls/ModelManagerPanel.tsx:540
 msgid "Collapse folder"
 msgstr "Plegar la carpeta"
 
@@ -1147,6 +1151,11 @@ msgstr "Color"
 #: src/components/controls/IslandVoxelControls.tsx:85
 msgid "Color Scheme"
 msgstr "Esquema de color"
+
+#. Hover text on the add-plate button beside the build plate. The app has one plate for now, so the button says so instead of doing nothing.
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1570
+msgid "Coming Soon!"
+msgstr "¡Próximamente!"
 
 #: src/components/scene/scanProgressMessages.ts:25
 msgid "Compiling results"
@@ -1491,7 +1500,7 @@ msgid "Default Raft Wall"
 msgstr "Pared de balsa predeterminada"
 
 #. placeholder {0}: model.geometry.meshDefects.repairedFloats
-#: src/components/controls/ModelStatsCard.tsx:610
+#: src/components/controls/ModelStatsCard.tsx:598
 msgid "Defective — {0} errors"
 msgstr "Defectuoso — {0} errores"
 
@@ -1888,12 +1897,12 @@ msgid "Est. Print Time"
 msgstr "Tiempo est."
 
 #. Row label on the printer card. "Est." is short for "estimated"; keep the abbreviation terse — the label column is narrow.
-#: src/components/controls/ModelStatsCard.tsx:546
+#: src/components/controls/ModelStatsCard.tsx:534
 msgid "Est. print time:"
 msgstr "Tiempo est.:"
 
 #. Row label on the printer card: estimated resin volume. Keep it terse — the label column is narrow.
-#: src/components/controls/ModelStatsCard.tsx:551
+#: src/components/controls/ModelStatsCard.tsx:539
 msgid "Est. resin:"
 msgstr "Resina est.:"
 
@@ -1934,7 +1943,7 @@ msgstr "Se han detectado soportes existentes"
 msgid "Expand card"
 msgstr "Desplegar la tarjeta"
 
-#: src/components/controls/ModelManagerPanel.tsx:546
+#: src/components/controls/ModelManagerPanel.tsx:540
 msgid "Expand folder"
 msgstr "Desplegar la carpeta"
 
@@ -2010,7 +2019,7 @@ msgstr "Exportando individualmente…"
 msgid "Exporting…"
 msgstr "Exportando…"
 
-#: src/components/controls/ModelStatsCard.tsx:533
+#: src/components/controls/ModelStatsCard.tsx:521
 msgid "Exposure:"
 msgstr "Exposición:"
 
@@ -2178,7 +2187,7 @@ msgstr "Cambio rápido de flota"
 msgid "Fleet units"
 msgstr "Unidades de la flota"
 
-#: src/components/controls/ModelStatsCard.tsx:467
+#: src/components/controls/ModelStatsCard.tsx:455
 msgid "Flip model stats card"
 msgstr "Girar la tarjeta de datos del modelo"
 
@@ -2211,7 +2220,7 @@ msgid "From the community, for the community. Free to use, open to contribute, a
 msgstr "De la comunidad y para la comunidad. Libre de usar, abierto a contribuciones y moldeado por quienes imprimen con él."
 
 #. Orientation label, rendered uppercase on the view cube and on the build plate's front edge. Keep it as short as possible — long words are auto-shrunk to fit and become hard to read.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1569
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1571
 msgid "Front"
 msgstr "Frente"
 
@@ -2310,7 +2319,7 @@ msgstr "Separación de la rejilla en pendientes al ángulo de autosoporte: cuant
 msgid "Grid Threshold"
 msgstr "Umbral de la rejilla"
 
-#: src/components/controls/ModelManagerPanel.tsx:375
+#: src/components/controls/ModelManagerPanel.tsx:369
 msgid "Group selected"
 msgstr "Agrupar la selección"
 
@@ -2344,7 +2353,7 @@ msgstr "Tope del factor de altura"
 msgid "Height Gradient"
 msgstr "Degradado por altura"
 
-#: src/components/controls/ModelStatsCard.tsx:587
+#: src/components/controls/ModelStatsCard.tsx:575
 msgid "Height:"
 msgstr "Altura:"
 
@@ -2352,7 +2361,7 @@ msgstr "Altura:"
 msgid "Held against toppling and peel"
 msgstr "Sujeción frente al vuelco y al despegue"
 
-#: src/components/controls/ModelManagerPanel.tsx:724
+#: src/components/controls/ModelManagerPanel.tsx:718
 msgid "Hide"
 msgstr "Ocultar"
 
@@ -2748,7 +2757,7 @@ msgstr "Capa 0 de 0. Viviendo al límite."
 msgid "Layer Height"
 msgstr "Altura de capa"
 
-#: src/components/controls/ModelStatsCard.tsx:528
+#: src/components/controls/ModelStatsCard.tsx:516
 msgid "Layer profile:"
 msgstr "Perfil de capa:"
 
@@ -2758,7 +2767,7 @@ msgstr "Perfil de capa:"
 msgid "Layers"
 msgstr "Capas"
 
-#: src/components/controls/ModelStatsCard.tsx:541
+#: src/components/controls/ModelStatsCard.tsx:529
 msgid "Layers:"
 msgstr "Capas:"
 
@@ -2775,7 +2784,7 @@ msgid "Leave the collection as it is"
 msgstr "Deja la colección como está"
 
 #. View cube face, rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1575
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1577
 msgid "Left"
 msgstr "Izq."
 
@@ -3027,7 +3036,7 @@ msgstr "Ajustes del perfil de material"
 msgid "Material profile unavailable"
 msgstr "Perfil de material no disponible"
 
-#: src/components/controls/ModelStatsCard.tsx:513
+#: src/components/controls/ModelStatsCard.tsx:501
 msgid "Material:"
 msgstr "Material:"
 
@@ -3174,12 +3183,12 @@ msgstr "Modo"
 msgid "Model {index}/{total}: {modelName}"
 msgstr "Modelo {index}/{total}: {modelName}"
 
-#: src/components/controls/ModelManagerPanel.tsx:410
+#: src/components/controls/ModelManagerPanel.tsx:404
 msgid "Model actions…"
 msgstr "Acciones del modelo…"
 
 #. Accessible name of the info button on a model row. The tooltip beside it lists the mesh size and polygon count.
-#: src/components/controls/ModelManagerPanel.tsx:711
+#: src/components/controls/ModelManagerPanel.tsx:705
 msgid "Model details"
 msgstr "Detalles del modelo"
 
@@ -3217,14 +3226,14 @@ msgstr "Dimensionado a escala del modelo"
 
 #. Section heading of the models context menu. Rendered uppercase.
 #. Title of the panel listing every model loaded into the scene.
-#: src/components/controls/ModelManagerPanel.tsx:465
-#: src/components/controls/ModelManagerPanel.tsx:748
+#: src/components/controls/ModelManagerPanel.tsx:459
+#: src/components/controls/ModelManagerPanel.tsx:742
 #: src/components/controls/toolRailEntries.ts:66
 #: src/components/controls/toolRailEntries.ts:169
 msgid "Models"
 msgstr "Modelos"
 
-#: src/components/controls/ModelManagerPanel.tsx:749
+#: src/components/controls/ModelManagerPanel.tsx:743
 msgid "Models context menu"
 msgstr "Menú contextual de modelos"
 
@@ -3420,17 +3429,17 @@ msgstr "Todavía no hay mallas cargadas. Importa un modelo y vuelve a Exportar."
 msgid "No meshes loaded yet. Import a model first, then return to Slicing."
 msgstr "Todavía no hay mallas cargadas. Importa un modelo y vuelve al laminado."
 
-#: src/components/controls/ModelStatsCard.tsx:573
-#: src/components/controls/ModelStatsCard.tsx:574
+#: src/components/controls/ModelStatsCard.tsx:561
+#: src/components/controls/ModelStatsCard.tsx:562
 #: src/components/modals/ModelSupportsModal.tsx:145
 msgid "No model selected"
 msgstr "Ningún modelo seleccionado"
 
-#: src/components/controls/ModelManagerPanel.tsx:487
+#: src/components/controls/ModelManagerPanel.tsx:481
 msgid "No models loaded"
 msgstr "No hay modelos cargados"
 
-#: src/components/controls/ModelStatsCard.tsx:439
+#: src/components/controls/ModelStatsCard.tsx:427
 msgid "No printer connected"
 msgstr "Sin impresora conectada"
 
@@ -3686,7 +3695,7 @@ msgstr "Abrir la carpeta"
 msgid "Open GitHub Developer Settings and create a new OAuth App."
 msgstr "Abre los ajustes de desarrollador de GitHub y crea una aplicación OAuth nueva."
 
-#: src/components/controls/ModelStatsCard.tsx:523
+#: src/components/controls/ModelStatsCard.tsx:511
 #: src/features/slicing/components/SlicingPanel.tsx:2270
 msgid "Open material profiles"
 msgstr "Abrir los perfiles de material"
@@ -3700,7 +3709,7 @@ msgstr "Abre la biblioteca de impresoras y añade una ahora."
 msgid "Open printer monitor"
 msgstr "Abrir monitor de impresora"
 
-#: src/components/controls/ModelStatsCard.tsx:508
+#: src/components/controls/ModelStatsCard.tsx:496
 #: src/features/slicing/components/SlicingPanel.tsx:2252
 msgid "Open printer profiles"
 msgstr "Abrir los perfiles de impresora"
@@ -3734,7 +3743,7 @@ msgid "Output"
 msgstr "Salida"
 
 #. Name of the automatic folder collecting models that sit outside the build plate.
-#: src/components/controls/ModelManagerPanel.tsx:238
+#: src/components/controls/ModelManagerPanel.tsx:232
 msgid "Outside plate"
 msgstr "Fuera de la plataforma"
 
@@ -3997,7 +4006,7 @@ msgstr "Perfiles de impresora ({0})"
 msgid "Printer-aware smoothing."
 msgstr "Suavizado según la impresora."
 
-#: src/components/controls/ModelStatsCard.tsx:498
+#: src/components/controls/ModelStatsCard.tsx:486
 msgid "Printer:"
 msgstr "Impresora:"
 
@@ -4233,16 +4242,16 @@ msgstr "Renombrar"
 msgid "Rename build plate"
 msgstr "Renombrar la plataforma"
 
-#: src/components/controls/ModelManagerPanel.tsx:390
-#: src/components/controls/ModelManagerPanel.tsx:582
+#: src/components/controls/ModelManagerPanel.tsx:384
+#: src/components/controls/ModelManagerPanel.tsx:576
 msgid "Rename folder"
 msgstr "Renombrar la carpeta"
 
-#: src/components/controls/ModelManagerPanel.tsx:396
+#: src/components/controls/ModelManagerPanel.tsx:390
 msgid "Rename model"
 msgstr "Renombrar el modelo"
 
-#: src/components/controls/ModelManagerPanel.tsx:684
+#: src/components/controls/ModelManagerPanel.tsx:678
 msgid "Rename model base name"
 msgstr "Renombrar el nombre base del modelo"
 
@@ -4276,7 +4285,7 @@ msgstr "Reabrir {0}"
 msgid "Repair"
 msgstr "Reparar"
 
-#: src/components/controls/ModelManagerPanel.tsx:399
+#: src/components/controls/ModelManagerPanel.tsx:393
 msgid "Repair mesh…"
 msgstr "Reparar la malla…"
 
@@ -4393,7 +4402,7 @@ msgid "Revert Changes"
 msgstr "Descartar los cambios"
 
 #. View cube face, rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1574
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1576
 msgid "Right"
 msgstr "Dcha."
 
@@ -4703,7 +4712,7 @@ msgstr "Elige un perfil de impresora para ver los detalles."
 msgid "Select a printer to detect its model."
 msgstr "Selecciona una impresora para detectar su modelo."
 
-#: src/components/controls/ModelManagerPanel.tsx:389
+#: src/components/controls/ModelManagerPanel.tsx:383
 msgid "Select folder"
 msgstr "Seleccionar la carpeta"
 
@@ -4740,12 +4749,12 @@ msgid "Selected printer is offline"
 msgstr "La impresora seleccionada está sin conexión"
 
 #. Shown while dragging a selection rectangle right to left, which takes every object the rectangle touches. Mirrors the CAD convention; keep it on one short line.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3046
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3048
 msgid "Selection Mode: Contact (Right to Left)"
 msgstr "Modo de selección: contacto (de derecha a izquierda)"
 
 #. Shown while dragging a selection rectangle left to right, which takes only the objects the rectangle fully encloses. Mirrors the CAD convention; keep it on one short line.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3050
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3052
 msgid "Selection Mode: Enclosed (Left to Right)"
 msgstr "Modo de selección: volumen completo (de izquierda a derecha)"
 
@@ -4828,7 +4837,7 @@ msgid "Sharp"
 msgstr "Nítido"
 
 #. Row label on the model details card: number of separate connected surfaces ("shells"/bodies) in the mesh.
-#: src/components/controls/ModelStatsCard.tsx:584
+#: src/components/controls/ModelStatsCard.tsx:572
 msgid "Shells:"
 msgstr "Cascarones:"
 
@@ -4836,7 +4845,7 @@ msgstr "Cascarones:"
 msgid "Shortest Print Time"
 msgstr "Menor tiempo de impresión"
 
-#: src/components/controls/ModelManagerPanel.tsx:724
+#: src/components/controls/ModelManagerPanel.tsx:718
 msgid "Show"
 msgstr "Mostrar"
 
@@ -5061,7 +5070,7 @@ msgid "Split the model along a drawn seam"
 msgstr "Dividir el modelo por una costura dibujada"
 
 #. Context menu action: split a multi-body 3MF import into independent models.
-#: src/components/controls/ModelManagerPanel.tsx:404
+#: src/components/controls/ModelManagerPanel.tsx:398
 msgid "Split to bodies"
 msgstr "Dividir en cuerpos"
 
@@ -5127,7 +5136,7 @@ msgstr "Codificación STL"
 msgid "STL Mesh (.stl)"
 msgstr "Malla STL (.stl)"
 
-#: src/components/controls/ModelStatsCard.tsx:578
+#: src/components/controls/ModelStatsCard.tsx:566
 msgid "STL size:"
 msgstr "Tamaño del STL:"
 
@@ -5534,7 +5543,7 @@ msgid "Tool layout"
 msgstr "Disposición de herramientas"
 
 #. View cube face (seen from above), rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1576
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1578
 msgid "Top"
 msgstr "Arriba"
 
@@ -5559,7 +5568,7 @@ msgstr "Siguiendo los territorios"
 msgid "Transform"
 msgstr "Transformar"
 
-#: src/components/controls/ModelStatsCard.tsx:581
+#: src/components/controls/ModelStatsCard.tsx:569
 msgid "Triangles:"
 msgstr "Triángulos:"
 
@@ -5584,11 +5593,11 @@ msgstr "Interfaz y tema"
 msgid "Unavailable"
 msgstr "No disponible"
 
-#: src/components/controls/ModelManagerPanel.tsx:391
+#: src/components/controls/ModelManagerPanel.tsx:385
 msgid "Ungroup folder"
 msgstr "Desagrupar la carpeta"
 
-#: src/components/controls/ModelManagerPanel.tsx:381
+#: src/components/controls/ModelManagerPanel.tsx:375
 msgid "Ungroup selected"
 msgstr "Desagrupar la selección"
 

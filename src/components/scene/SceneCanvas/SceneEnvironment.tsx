@@ -6,6 +6,7 @@ import { useThree, useFrame } from '@react-three/fiber';
 import { AxisLabels } from '@/components/scene/AxisLabels';
 import { fitFontToWidth } from '@/utils/canvasTextFit';
 import { PlateNameLabel } from './PlateNameLabel';
+import { PlateAddButton } from './PlateAddButton';
 
 /**
  * Front-marker texture is 256px wide; leave 4px either side of the label. Wide
@@ -233,6 +234,8 @@ export function Helpers({
   plateNameEditTitle,
   plateNameEmptyTitle,
   onPlateNameChange,
+  addPlateLabel,
+  addPlateComingSoonTitle,
 }: {
   gridWidthMm?: number;
   gridDepthMm?: number;
@@ -256,6 +259,9 @@ export function Helpers({
   plateNameEditTitle?: string;
   plateNameEmptyTitle?: string;
   onPlateNameChange?: (next: string) => void;
+  /** The add-plate button's accessible name, and its hover wording (see the note above). */
+  addPlateLabel?: string;
+  addPlateComingSoonTitle?: string;
 }) {
   const nullRaycast = () => null;
   const shouldShowGrid = showGrid ?? true;
@@ -791,6 +797,21 @@ export function Helpers({
           // so this point is its bottom-left corner.
           position={[resolvedOriginMinX, resolvedOriginMinY + depth, plateLogoZ + 0.2]}
           labelScale={7.5}
+        />
+      )}
+
+      {/* Where plates will come from, on the plate's right edge: inert until the app
+          grows a second plate, and anchored the same way as the name opposite it. */}
+      {shouldShowBuildPlate
+        && showPlateName
+        && addPlateLabel
+        && addPlateComingSoonTitle && (
+        <PlateAddButton
+          label={addPlateLabel}
+          comingSoonTitle={addPlateComingSoonTitle}
+          // Barely off the plate's right edge: enough that the button reads as a
+          // separate object, close enough that it still reads as belonging to it.
+          position={[resolvedOriginMinX + width + 2, resolvedOriginMinY + depth, plateLogoZ + 0.2]}
         />
       )}
 
