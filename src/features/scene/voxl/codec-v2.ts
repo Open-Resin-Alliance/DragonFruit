@@ -58,6 +58,16 @@ const compressAsync = (data: Uint8Array, level: ZlibCompressionLevel): Promise<U
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 export const VOXL_V2 = 2;
+/**
+ * The layout revision reported for a chunked write: 2.2 means "this file may carry
+ * modifier-snapshot chunks", 2.1 (`VOXL_V2_INLINE_REVISION`) means "inline base64".
+ * Save-format preservation reads it that way.
+ *
+ * It is NOT the schema revision. Semantic revisions (V2.3 support `typeId`, V2.4
+ * `classification`, V2.5 the plate fields) are additive, are never written as a
+ * number, and are detected by the presence of their fields. See
+ * `docs/dev/voxl-format-spec.md`.
+ */
 export const VOXL_V2_SEMANTIC_REVISION = 2.2;
 /**
  * Semantic revision reported for a binary V2 file that has NO modifier-snapshot
@@ -413,6 +423,14 @@ async function prepareVoxlDocumentV2(
   const scene: VoxlSceneState = {
     activeModelId: input.activeModelId,
     selectedModelIds: [...input.selectedModelIds],
+    // V2.5, and only when there is something to say: a single-plate scene writes
+    // neither field, so its bytes match a V2.4 write of the same scene.
+    ...(input.plates && input.plates.length > 1
+      ? { plates: input.plates.map((plate) => ({ id: plate.id, name: plate.name })) }
+      : {}),
+    ...(input.plates && input.plates.length > 1 && input.activePlateId
+      ? { activePlateId: input.activePlateId }
+      : {}),
   };
 
   // ── Identical-geometry MESH chunk dedup ───────────────────────────────
@@ -565,6 +583,7 @@ async function prepareVoxlDocumentV2(
       visible: Boolean(m.visible),
       color: m.color,
       polygonCount: Math.max(0, Math.floor(m.polygonCount || 0)),
+      ...(m.plateId ? { plateId: m.plateId } : {}),
       fileSizeBytes:
         typeof m.fileSizeBytes === 'number' && Number.isFinite(m.fileSizeBytes)
           ? Math.max(0, Math.floor(m.fileSizeBytes))

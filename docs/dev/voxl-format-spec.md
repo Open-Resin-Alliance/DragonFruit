@@ -11,9 +11,10 @@ VOXL is DragonFruit’s native scene container. This page captures the core cont
 | V2.1       | Binary chunk container                                   | Superseded by V2.2           |
 | V2.2       | Binary chunk container                                   | Superseded by V2.3           |
 | V2.3       | Binary chunk container                                   | Superseded by V2.4           |
-| V2.4       | Binary chunk container                                   | Current read/write target    |
+| V2.4       | Binary chunk container                                   | Superseded by V2.5           |
+| V2.5       | Binary chunk container                                   | Current read/write target    |
 
-Readers must support V1 and V2.x. Writers should emit V2.4 semantics.
+Readers must support V1 and V2.x. Writers should emit V2.5 semantics.
 
 ## Core conventions
 
@@ -110,9 +111,10 @@ Chunk types:
 Unknown chunk types may be ignored.
 
 The `SCNE` payload is `VoxlSceneState`: which model is active, which models are
-selected, and `plateName` — the user's name for the build plate, shown on the
-plate itself. `plateName` is optional and absent from files written before it
-existed, so readers must treat a missing one as an unnamed plate.
+selected, and, from V2.5, the scene's `plates` and its `activePlateId`. Earlier
+files carry `plateName` instead, the name of the one plate they had, so a reader
+must treat a scene with neither as a single unnamed plate rather than as a scene
+with nowhere to put its models.
 
 For embedded model meshes, `MODL[i]` maps to `MESH(index = i)`.
 
@@ -205,7 +207,43 @@ inline modifier snapshots; `typeId` is not part of that detection.
 Backward compatibility: the field is optional and unknown JSON keys are ignored, so a V2.3 file
 opens in a V2/V2.1/V2.2 reader with no loss beyond the explicit type stamp.
 
-### V2.4 semantic revision (current)
+### V2.5 semantic revision (current)
+
+V2.5 is a semantic revision of the V2 binary container; like V2.1 to V2.4 it does **not** change
+the binary header major version (`version` stays `2`, or `3` when identical-geometry dedup also
+fired).
+
+V2.5 makes a scene able to hold more than one build plate. It adds to the `SCNE` scene state:
+
+- `plates`: the scene's plates, in layout order, each `{ id, name }`.
+- `activePlateId`: which plate is being worked on.
+
+and to a `MODL` entry:
+
+- `plateId`: which plate that model sits on.
+
+A model's transform stays in world space, as it always was, so placement is unaffected by which
+plate a model belongs to.
+
+Requirements:
+
+- Writers write `plates` when the scene has more than one, and `plateId` on a model that is not on
+  the first plate. A single-plate scene writes neither, so it stays byte-comparable with a V2.4
+  write of the same scene.
+- Readers that find no `plates` treat the scene as one unnamed plate, as `plateName` described it,
+  and place every model on it. `plateName`, which V2.5 supersedes, is then the first plate's name.
+- A `plateId` that names no plate in `plates` is ignored; the model lands on the first plate.
+  Nothing in this revision may make a file unreadable.
+
+Detection (no version number is written for the semantic revision): a scene carrying `plates` is
+V2.5; one without is read exactly as before. The revision is additive, so the semantic revision a
+reader reports for a V2 file stays `2.2`, or `2.1` when the file carries inline modifier
+snapshots; the plate fields are not part of that detection.
+
+Backward compatibility: unknown JSON keys are ignored, so a V2.5 file opens in an older reader as
+a single-plate scene with every model in its world position, which is where it was.
+
+### V2.4 semantic revision
 
 V2.4 is a semantic revision of the V2 binary container; like V2.1–V2.3 it does **not** change the
 binary header major version (`version` stays `2`, or `3` when identical-geometry dedup also

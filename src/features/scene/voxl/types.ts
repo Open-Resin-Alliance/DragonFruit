@@ -63,6 +63,14 @@ export type VoxlNativePreviewRef = {
 };
 
 export type VoxlModelEntry = {
+  /**
+   * Which plate this model sits on. VOXL 2.3.
+   *
+   * Absent in older files, where the scene had one plate, and absent in newer ones
+   * for a model on the first plate: the transform is in world space either way, so
+   * a reader that ignores this places the model exactly where it was.
+   */
+  plateId?: string;
   id: string;
   name: string;
   visible: boolean;
@@ -105,6 +113,16 @@ export type VoxlMeta = {
   coordinateSystem: VoxlCoordinateSystem;
 };
 
+/**
+ * One build plate. A scene may hold several, laid out side by side in world space,
+ * with each model belonging to one of them.
+ */
+export type VoxlPlateEntry = {
+  id: string;
+  /** What the user called it, shown on the plate itself. */
+  name: string;
+};
+
 export type VoxlSceneState = {
   activeModelId: string | null;
   selectedModelIds: string[];
@@ -112,8 +130,21 @@ export type VoxlSceneState = {
    * What the user called this build plate, shown on the plate itself. Optional
    * and additive: a reader that ignores it derives nothing from it, and an old
    * file without one loads as an unnamed plate rather than as an error.
+   *
+   * Superseded by `plates` in VOXL 2.3, where it is the name of the *first* plate.
+   * Kept because a pre-2.3 file has no plates array and this is all it knows.
    */
   plateName?: string;
+  /**
+   * The scene's plates, in layout order. VOXL 2.3.
+   *
+   * Absent in older files, and a reader must treat that as one unnamed plate rather
+   * than as an empty scene: the models are still there, they simply all belong to the
+   * plate that did not need naming.
+   */
+  plates?: VoxlPlateEntry[];
+  /** Which plate is being worked on. VOXL 2.3. Defaults to the first plate. */
+  activePlateId?: string | null;
 };
 
 export type VoxlDocumentV1 = {
@@ -150,6 +181,8 @@ export type VoxlModelRuntimeLike = {
   visible: boolean;
   color: string;
   polygonCount: number;
+  /** V2.5. Omitted for a model on the first plate. */
+  plateId?: string;
   fileSizeBytes?: number;
   sourcePath?: string;
   nativePreview?: VoxlNativePreviewRef;
@@ -173,6 +206,9 @@ export type BuildVoxlDocumentInput = {
   models: VoxlModelRuntimeLike[];
   activeModelId: string | null;
   selectedModelIds: string[];
+  /** V2.5. Omitted for a single-plate scene, which writes no plate fields at all. */
+  plates?: VoxlPlateEntry[];
+  activePlateId?: string | null;
   supports: DragonfruitImportFormat;
   meta?: Partial<Pick<VoxlMeta, 'generator' | 'generatorVersion'>>;
   extensions?: Record<string, unknown>;
