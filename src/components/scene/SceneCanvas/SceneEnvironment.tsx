@@ -6,7 +6,7 @@ import { useThree, useFrame } from '@react-three/fiber';
 import { AxisLabels } from '@/components/scene/AxisLabels';
 import { fitFontToWidth } from '@/utils/canvasTextFit';
 import { PlateNameLabel } from './PlateNameLabel';
-import { PlateAddButton } from './PlateAddButton';
+import { PlateSideButtons } from './PlateSideButtons';
 
 /**
  * Front-marker texture is 256px wide; leave 4px either side of the label. Wide
@@ -236,6 +236,10 @@ export function Helpers({
   onPlateNameChange,
   addPlateLabel,
   addPlateComingSoonTitle,
+  plateLocked,
+  onTogglePlateLock,
+  plateLockTitle,
+  plateUnlockTitle,
 }: {
   gridWidthMm?: number;
   gridDepthMm?: number;
@@ -262,6 +266,11 @@ export function Helpers({
   /** The add-plate button's accessible name, and its hover wording (see the note above). */
   addPlateLabel?: string;
   addPlateComingSoonTitle?: string;
+  /** The plate lock: its state, its toggle, and the wordings for its tooltip. */
+  plateLocked?: boolean;
+  onTogglePlateLock?: () => void;
+  plateLockTitle?: string;
+  plateUnlockTitle?: string;
 }) {
   const nullRaycast = () => null;
   const shouldShowGrid = showGrid ?? true;
@@ -314,6 +323,10 @@ export function Helpers({
   const buildPlateDepth = depth + buildPlateOversizeEachSideMm * 2;
   const buildPlateCenterZ = -buildPlateThicknessMm * 0.5 - 0.08;
   const frontTabDepth = buildPlateOversizeEachSideMm + 0.2;
+  // A hair more than the overhang the mock plate draws past the build volume, so the
+  // buttons sit just outside the plate you can see. Their spacing is CSS inside the
+  // component; only this clearance is a plate measurement.
+  const plateWidgetClearanceMm = 1;
   const frontTabBackWidth = Math.min(buildPlateWidth - 12, 24);
   const frontTabFrontWidth = Math.min(frontTabBackWidth - 3, 16);
   const frontMarkerInsetMm = 0.2;
@@ -800,19 +813,28 @@ export function Helpers({
         />
       )}
 
-      {/* Where plates will come from, on the plate's right edge: inert until the app
-          grows a second plate, and anchored the same way as the name opposite it. */}
+      {/* Beside the plate: where plates will come from (inert until the app grows a
+          second one), and the lock. One component, so the column's spacing is CSS
+          rather than millimetres of plate. */}
       {shouldShowBuildPlate
         && showPlateName
         && addPlateLabel
-        && addPlateComingSoonTitle && (
-        <PlateAddButton
-          label={addPlateLabel}
-          comingSoonTitle={addPlateComingSoonTitle}
-          // Clear of the *mock plate*, not the build volume: the drawn plate oversizes
-          // the volume by this much each side, so this puts the button's left edge
-          // exactly on the plate's right edge, sitting just outside it.
-          position={[resolvedOriginMinX + width + buildPlateOversizeEachSideMm, resolvedOriginMinY + depth, plateLogoZ + 0.2]}
+        && addPlateComingSoonTitle
+        && plateLocked !== undefined
+        && onTogglePlateLock
+        && plateLockTitle
+        && plateUnlockTitle && (
+        <PlateSideButtons
+          addLabel={addPlateLabel}
+          addComingSoonTitle={addPlateComingSoonTitle}
+          locked={plateLocked}
+          lockTitle={plateLockTitle}
+          unlockTitle={plateUnlockTitle}
+          onToggleLock={onTogglePlateLock}
+          // The column's top-left corner: on the mock plate's right edge — the drawn
+          // plate oversizes the volume by this much each side — and level with its
+          // back edge, so the buttons hang beside the plate rather than above it.
+          position={[resolvedOriginMinX + width + buildPlateOversizeEachSideMm + plateWidgetClearanceMm, resolvedOriginMinY + depth, plateLogoZ + 0.2]}
         />
       )}
 

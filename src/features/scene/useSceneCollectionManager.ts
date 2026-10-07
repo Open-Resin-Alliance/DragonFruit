@@ -1211,6 +1211,14 @@ export function useSceneCollectionManager() {
    * state, and undoing a rename is not something the history is for.
    */
   const [plateName, setPlateName] = useState('');
+  /**
+   * Whether the plate refuses edits. A lock, not a document field: it is about the
+   * session you are working in, so it is not written to the file and it does not
+   * travel with the scene. A ref mirrors it for the guards below, which are stable
+   * callbacks and must read the current value rather than the one they closed over.
+   */
+  const [plateLocked, setPlateLocked] = useState(false);
+  const plateLockedRef = useRef(false);
   // An empty plate has no name: deleting the last model, or starting a new scene,
   // clears it, and the widget falls back to its default wording. A named scene
   // that happens to carry models keeps its name, since this only reacts when the
@@ -1229,6 +1237,7 @@ export function useSceneCollectionManager() {
   // one. Defaults to true (newest) for non-voxl / fresh scenes.
   const lastLoadedVoxlFormatChunkedRef = useRef<boolean>(true);
   modelsRef.current = models;
+  plateLockedRef.current = plateLocked;
   activeModelIdRef.current = activeModelId;
   selectedModelIdsRef.current = selectedModelIds;
 
@@ -2260,6 +2269,10 @@ export function useSceneCollectionManager() {
   }, [activeModelId, models]);
 
   const selectModel = useCallback((id: string, mode: 'single' | 'toggle' | 'add' = 'single') => {
+    // The lock's whole point: nothing on a locked plate can be selected. Guarded at
+    // the gesture rather than at the setter, because the internal writers (import,
+    // duplicate, split) call the setter directly and must keep working.
+    if (plateLockedRef.current) return;
     setActiveModelId(id);
 
     setSelectedModelIds((prev) => {
@@ -2270,6 +2283,14 @@ export function useSceneCollectionManager() {
       return prev.includes(id) ? prev.filter((sid) => sid !== id) : [...prev, id];
     });
   }, []);
+
+  // Locking a plate drops any selection with it: the models are no longer
+  // selectable, so a selection left standing would have the panels acting on models
+  // the plate refuses to touch.
+  useEffect(() => {
+    if (!plateLocked) return;
+    setSelectedModelIds((prev) => (prev.length > 0 ? [] : prev));
+  }, [plateLocked]);
 
   const clearModelSelection = useCallback(() => {
     setSelectedModelIds((prev) => (prev.length > 0 ? [] : prev));
@@ -2285,6 +2306,9 @@ export function useSceneCollectionManager() {
 
   // File handling - support multiple files
   const loadFiles = useCallback(async (filesInput: FileList | File[]) => {
+    // One door for every way a mesh arrives — picker, drop, the panel's plus — so the
+    // lock is enforced here rather than at each of them.
+    if (plateLockedRef.current) return;
     const files = Array.from(filesInput).filter((file) => getMeshExtension(file.name) !== null);
 
     if (files.length === 0) {
@@ -2599,6 +2623,15 @@ export function useSceneCollectionManager() {
   }, []);
 
   const updateModelTransform = useCallback((id: string, transform: ModelTransform, previousTransformOverride?: ModelTransform) => {
+    // Every move lands here — drag, gizmo, the transform panel, the nudge hotkeys —
+    // so a locked plate refuses them all at the one place that writes a transform.
+    if (plateLockedRef.current) {
+      return {
+        updated: false,
+        supportsChanged: false,
+        kickstandsChanged: false,
+      };
+    }
     const currentModel = modelsRef.current.find((m) => m.id === id);
     if (!currentModel) {
       return {
@@ -2805,6 +2838,13 @@ export function useSceneCollectionManager() {
     updates: Array<{ id: string; transform: ModelTransform }>,
     options?: { pushHistory?: boolean },
   ) => {
+    if (plateLockedRef.current) {
+      return {
+        updated: false,
+        supportsChanged: false,
+        kickstandsChanged: false,
+      };
+    }
     if (updates.length === 0) {
       return {
         updated: false,
@@ -5974,6 +6014,8 @@ export function useSceneCollectionManager() {
     setActiveModelId,
     plateName,
     setPlateName,
+    plateLocked,
+    setPlateLocked,
     selectedModelIds,
     setSelectedModelIds,
     lastLoadedVoxlFormatChunkedRef,
