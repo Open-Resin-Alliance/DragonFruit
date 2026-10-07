@@ -67,7 +67,12 @@ export function PlateNameLabel({
       zIndexRange={[8, 0]}
       style={{ pointerEvents: 'auto' }}
     >
-      <div className="flex items-center gap-2 select-none whitespace-nowrap">
+      {/* `Html` centres its content on the anchor, so without this the anchor is the
+          label's middle. Shifting by half its own size makes the anchor its
+          bottom-left corner: the label then starts exactly at the plate's left
+          edge and sits entirely behind its back edge (and the width is whatever
+          the name needs, so this cannot be a fixed offset). */}
+      <div className="flex items-center gap-2 select-none whitespace-nowrap" style={{ transform: 'translate(50%, -50%)' }}>
         {isEditing ? (
           <input
             autoFocus
