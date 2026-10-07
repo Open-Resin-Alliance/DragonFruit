@@ -236,11 +236,25 @@ anti-aliasing and compression included. What the app takes from its
 performance settings gets the defaults: `auto` PNG compression and no AA on
 supports.
 
+The slice mesh is assembled by the app's own orchestrator
+(`buildSolidSliceMeshForWasm`): it merges the models, the scene's parametric
+supports and an optional raft, orders model triangles before support triangles,
+passes the model count as the split point so support-only anti-aliasing and tip
+penetration land where the GUI puts them, and derives the layer count — the same
+code the GUI slice runs, so `scene slice` stays in parity with it. Support tip
+penetration resolves against the printer/material the job already activated in
+the profile store, so it matches the GUI. `--raft off|solid|line` adds a raft
+under rooted supports (default `off`): the VOXL does not record a raft choice,
+so it is opt-in here. `--raft-settings <raft.json>` feeds the full raft settings
+the way the app stores them (thickness, wall, chamfer, line width/height,
+margins — merged over the defaults), the same JSON-fed path `--printer` uses;
+`--raft` then overrides just the bottom mode. Supports and rafts need a printer;
+without `--printer` only the model geometry is sliced.
+
 It needs the generated plugin registry (`npm run generate:plugin-registry` and
 `npm run generate:builtin-simple-plugins`); the other commands do not.
 
-Not covered: support and raft geometry
-(supports in the scene are not sliced), plugin metadata payloads such as the
+Not covered: plugin metadata payloads such as the
 VOXL scene in `.lumen`, and thumbnails.
 
 **Arrange wraps the same algorithm as the GUI** (`src/features/scene/arrange/highPrecisionArrange.ts`):
