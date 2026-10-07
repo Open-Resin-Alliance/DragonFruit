@@ -165,6 +165,15 @@ type SceneHistoryPayloadMap = {
 };
 const sceneHistory = createTypedHistory<SceneHistoryPayloadMap>();
 
+/** A build plate. The name is what the plate's own widget shows and edits. */
+export type ScenePlate = {
+  id: string;
+  name: string;
+};
+
+/** The plate every scene starts with, and the one a pre-V2.5 file describes. */
+export const FIRST_PLATE_ID = 'plate-1';
+
 /** Push the post-slice marker used to detect edits made after a slice. */
 export function pushSceneSlicedMarker(): void {
   sceneHistory.push({ type: SCENE_SLICED, description: 'Scene sliced for printing', payload: {} });
@@ -930,6 +939,12 @@ function normalizePluginSceneImportPayload(payload: unknown): PluginSceneImportP
 export interface LoadedModel {
   id: string;
   name: string;
+  /**
+   * Which plate this model sits on (VOXL 2.5). Absent means the first plate, which is
+   * where every model was before plates existed, so nothing that builds a model has to
+   * know about them: only a move between plates sets this.
+   */
+  plateId?: string;
   groupId?: string;
   groupName?: string;
   fileUrl: string;
@@ -1213,7 +1228,25 @@ export function useSceneCollectionManager(options?: {
    * model-grouping snapshot machinery: a rename is a document field, not a model
    * state, and undoing a rename is not something the history is for.
    */
-  const [plateName, setPlateName] = useState('');
+  /**
+   * The scene's plates, in layout order. Always at least one: a scene with no plate has
+   * nowhere to put a model, and every file that predates V2.5 describes exactly one.
+   */
+  const [plates, setPlates] = useState<ScenePlate[]>([{ id: FIRST_PLATE_ID, name: '' }]);
+  const [activePlateId, setActivePlateId] = useState<string>(FIRST_PLATE_ID);
+  const activePlateIdRef = useRef(FIRST_PLATE_ID);
+  const activePlate = plates.find((plate) => plate.id === activePlateId) ?? plates[0];
+  /**
+   * The active plate's name. Kept as a name-shaped pair rather than exposing the list to
+   * the widgets: the plate's own name field, the file, and the empty-plate reset all
+   * talk about "the plate's name", and which plate that is is this scene's business.
+   */
+  const plateName = activePlate?.name ?? '';
+  const setPlateName = useCallback((next: string) => {
+    setPlates((prev) => prev.map((plate) => (
+      plate.id === activePlateIdRef.current ? { ...plate, name: next } : plate
+    )));
+  }, []);
   /**
    * Whether the plate refuses edits. A lock, not a document field: it is about the
    * session you are working in, so it is not written to the file and it does not
@@ -1232,7 +1265,7 @@ export function useSceneCollectionManager(options?: {
   useEffect(() => {
     if (models.length > 0) return;
     setPlateName('');
-  }, [models.length]);
+  }, [models.length, setPlateName]);
 
   const modelsRef = useRef<LoadedModel[]>([]);
   const activeModelIdRef = useRef<string | null>(null);
@@ -1244,6 +1277,7 @@ export function useSceneCollectionManager(options?: {
   const lastLoadedVoxlFormatChunkedRef = useRef<boolean>(true);
   modelsRef.current = models;
   plateLockedRef.current = plateLocked;
+  activePlateIdRef.current = activePlateId;
   onBlockedByLockRef.current = options?.onBlockedByLock;
   activeModelIdRef.current = activeModelId;
   selectedModelIdsRef.current = selectedModelIds;
@@ -5483,7 +5517,17 @@ export function useSceneCollectionManager(options?: {
 
         setActiveModelId(mappedActiveId);
         setSelectedModelIds(finalSelected);
-        if (document.scene.plateName) setPlateName(document.scene.plateName);
+        // V2.5 plates when the file has them. Otherwise the file predates plates and its
+        // single name is the first plate's, which is the plate everything lands on.
+        if (document.scene.plates && document.scene.plates.length > 0) {
+          setPlates(document.scene.plates.map((plate) => ({ id: plate.id, name: plate.name })));
+          setActivePlateId(document.scene.activePlateId && document.scene.plates.some((plate) => plate.id === document.scene.activePlateId)
+            ? document.scene.activePlateId
+            : document.scene.plates[0].id);
+        } else if (document.scene.plateName) {
+          setPlates([{ id: FIRST_PLATE_ID, name: document.scene.plateName }]);
+          setActivePlateId(FIRST_PLATE_ID);
+        }
       }
 
       if (voxlSupportsContainData(document)) {
@@ -6027,6 +6071,9 @@ export function useSceneCollectionManager(options?: {
     setActiveModelId,
     plateName,
     setPlateName,
+    plates,
+    activePlateId,
+    setActivePlateId,
     plateLocked,
     setPlateLocked,
     selectedModelIds,

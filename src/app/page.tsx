@@ -1015,6 +1015,8 @@ export default function Home() {
     selectedModelIds: scene.selectedModelIds,
     plateName: scene.plateName,
     printer: scenePrinterRef,
+    plates: scene.plates,
+    activePlateId: scene.activePlateId,
     enabled: sceneAutosaveEnabled,
     debounceMs: sceneAutosaveSettings.debounceMs,
     cooldownMs: sceneAutosaveSettings.cooldownMs,
@@ -4354,6 +4356,8 @@ export default function Home() {
         selectedModelIds: scene.selectedModelIds,
         plateName: scene.plateName,
         printer: scenePrinterRef,
+        plates: scene.plates,
+        activePlateId: scene.activePlateId,
         exportThumbnailPng: exportThumbnailPng ?? undefined,
       },
       {

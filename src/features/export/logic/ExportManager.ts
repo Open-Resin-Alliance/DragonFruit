@@ -39,6 +39,9 @@ export interface ExportSceneContext {
   selectedModelIds: string[];
   /** The plate's name, written into the document's scene chunk. */
   plateName?: string;
+  /** V2.5. The scene's plates and which is active. Written only when there is more than one. */
+  plates?: Array<{ id: string; name: string }>;
+  activePlateId?: string | null;
   /** The printer the scene was packed for, written into the document's scene chunk. */
   printer?: VoxlPrinterRef;
   exportThumbnailPng?: Uint8Array | null;
@@ -1352,6 +1355,8 @@ export class ExportManager {
       selectedModelIds: sceneContext?.selectedModelIds ?? [],
       ...(sceneContext?.plateName ? { plateName: sceneContext.plateName } : {}),
       ...(sceneContext?.printer ? { printer: sceneContext.printer } : {}),
+      ...(sceneContext?.plates ? { plates: sceneContext.plates } : {}),
+      ...(sceneContext?.activePlateId ? { activePlateId: sceneContext.activePlateId } : {}),
       supports,
       meta: {
         generator: 'DragonFruit',

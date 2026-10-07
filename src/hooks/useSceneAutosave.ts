@@ -343,6 +343,9 @@ export type UseSceneAutosaveOptions = {
   selectedModelIds: string[];
   /** The plate's name, written into the document's scene chunk. */
   plateName?: string;
+  /** V2.5. The scene's plates and which is active. Written only when there is more than one. */
+  plates?: Array<{ id: string; name: string }>;
+  activePlateId?: string | null;
   /** The printer the scene was packed for, written into the document's scene chunk. */
   printer?: VoxlPrinterRef;
   enabled?: boolean;
@@ -387,6 +390,8 @@ export function useSceneAutosave({
   selectedModelIds,
   plateName,
   printer,
+  plates,
+  activePlateId,
   enabled = true,
   debounceMs = AUTOSAVE_DEBOUNCE_MS,
   cooldownMs = AUTOSAVE_COOLDOWN_MS,
@@ -411,6 +416,10 @@ export function useSceneAutosave({
   plateNameRef.current = plateName;
   const printerRef = React.useRef(printer);
   printerRef.current = printer;
+  const platesRef = React.useRef(plates);
+  platesRef.current = plates;
+  const activePlateIdRef = React.useRef(activePlateId);
+  activePlateIdRef.current = activePlateId;
   const enabledRef = React.useRef(enabled);
   enabledRef.current = enabled;
   const debounceMsRef = React.useRef(debounceMs);
@@ -579,6 +588,8 @@ export function useSceneAutosave({
               selectedModelIds: selectedModelIdsRef.current,
               plateName: plateNameRef.current,
               printer: printerRef.current,
+              plates: platesRef.current,
+              activePlateId: activePlateIdRef.current,
             },
             {
               nativePath: voxlPath,
