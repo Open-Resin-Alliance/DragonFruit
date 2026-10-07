@@ -36,6 +36,8 @@ export interface ExportSceneContext {
   models: LoadedModel[];
   activeModelId: string | null;
   selectedModelIds: string[];
+  /** The plate's name, written into the document's scene chunk. */
+  plateName?: string;
   exportThumbnailPng?: Uint8Array | null;
 }
 
@@ -1339,6 +1341,7 @@ export class ExportManager {
       models,
       activeModelId: sceneContext?.activeModelId ?? null,
       selectedModelIds: sceneContext?.selectedModelIds ?? [],
+      ...(sceneContext?.plateName ? { plateName: sceneContext.plateName } : {}),
       supports,
       meta: {
         generator: 'DragonFruit',

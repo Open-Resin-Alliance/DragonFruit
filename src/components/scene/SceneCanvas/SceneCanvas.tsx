@@ -459,6 +459,8 @@ export function SceneCanvas({
   heatmapMaxAngle,
   heatmapColors,
   interiorView = false,
+  plateName,
+  onPlateNameChange,
   disableRaycast,
   ambientIntensity,
   directionalIntensity,
@@ -573,6 +575,9 @@ export function SceneCanvas({
   heatmapMaxAngle?: number;
   heatmapColors?: string[];
   interiorView?: boolean;
+  /** The build plate's name and its setter. Strings for its editor are resolved here. */
+  plateName?: string;
+  onPlateNameChange?: (next: string) => void;
   disableRaycast?: boolean;
   hideCrossSectionCap?: boolean;
   onCameraChange?: () => void;
@@ -1553,6 +1558,11 @@ export function SceneCanvas({
   // the 3D helpers as props — those live inside the r3f reconciler, where the
   // i18n provider is not in scope. "Front" is shared with the build plate's
   // front-edge marker so both always read the same word.
+  // The plate-name editor lives inside the r3f reconciler too, so its strings are
+  // resolved here for the same reason as the orientation labels above.
+  const plateNamePlaceholder = _(msg({ message: 'Name this plate', comment: "Placeholder and fallback label on the build plate's own name widget, shown while the plate has no name." }));
+  const plateNameEditTitle = _(msg({ message: 'Rename build plate', comment: "Tooltip on the pencil beside the build plate's name." }));
+  const plateNameEmptyTitle = _(msg({ message: 'Give this build plate a name', comment: "Tooltip on the build plate's name widget while it is still unnamed." }));
   const frontFaceLabel = _(msg({ message: 'Front', comment: 'Orientation label, rendered uppercase on the view cube and on the build plate\'s front edge. Keep it as short as possible — long words are auto-shrunk to fit and become hard to read.' }));
   // Face order is fixed by the box geometry: +X, -X, +Y, -Y, +Z, -Z.
   const gizmoFaceLabels = React.useMemo(() => ([
@@ -6038,6 +6048,11 @@ export function SceneCanvas({
           showBuildPlate={!thumbnailCaptureActive || includeBuildPlateDuringCapture}
           safetyMarginMm={activeBuildVolumeSettings.safetyMarginMm}
           frontLabel={frontFaceLabel}
+          plateName={plateName}
+          onPlateNameChange={onPlateNameChange}
+          plateNamePlaceholder={plateNamePlaceholder}
+          plateNameEditTitle={plateNameEditTitle}
+          plateNameEmptyTitle={plateNameEmptyTitle}
         />
         <EnableLocalClipping enabled={clipLower != null || clipUpper != null || indicatorPlaneZ != null || !!organicCutKeyGizmo} />
         <CameraProvider cameraRef={cameraRef} />

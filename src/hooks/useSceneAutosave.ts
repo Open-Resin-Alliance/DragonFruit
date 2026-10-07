@@ -340,6 +340,8 @@ export type UseSceneAutosaveOptions = {
   models: LoadedModel[];
   activeModelId: string | null;
   selectedModelIds: string[];
+  /** The plate's name, written into the document's scene chunk. */
+  plateName?: string;
   enabled?: boolean;
   debounceMs?: number;
   cooldownMs?: number;
@@ -380,6 +382,7 @@ export function useSceneAutosave({
   models,
   activeModelId,
   selectedModelIds,
+  plateName,
   enabled = true,
   debounceMs = AUTOSAVE_DEBOUNCE_MS,
   cooldownMs = AUTOSAVE_COOLDOWN_MS,
@@ -400,6 +403,8 @@ export function useSceneAutosave({
   activeModelIdRef.current = activeModelId;
   const selectedModelIdsRef = React.useRef(selectedModelIds);
   selectedModelIdsRef.current = selectedModelIds;
+  const plateNameRef = React.useRef(plateName);
+  plateNameRef.current = plateName;
   const enabledRef = React.useRef(enabled);
   enabledRef.current = enabled;
   const debounceMsRef = React.useRef(debounceMs);
@@ -566,6 +571,7 @@ export function useSceneAutosave({
               models: currentModels,
               activeModelId: activeModelIdRef.current,
               selectedModelIds: selectedModelIdsRef.current,
+              plateName: plateNameRef.current,
             },
             {
               nativePath: voxlPath,

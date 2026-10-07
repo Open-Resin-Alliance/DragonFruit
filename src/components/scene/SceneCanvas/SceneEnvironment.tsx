@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { useThree, useFrame } from '@react-three/fiber';
 import { AxisLabels } from '@/components/scene/AxisLabels';
 import { fitFontToWidth } from '@/utils/canvasTextFit';
+import { PlateNameLabel } from './PlateNameLabel';
 
 /**
  * Front-marker texture is 256px wide; leave 4px either side of the label. Wide
@@ -226,6 +227,11 @@ export function Helpers({
   showBuildPlate,
   safetyMarginMm,
   frontLabel = 'Front',
+  plateName,
+  plateNamePlaceholder,
+  plateNameEditTitle,
+  plateNameEmptyTitle,
+  onPlateNameChange,
 }: {
   gridWidthMm?: number;
   gridDepthMm?: number;
@@ -241,6 +247,12 @@ export function Helpers({
    * reconciler, where the i18n provider is out of scope.
    */
   frontLabel?: string;
+  /** The build plate's name, and the strings its editor needs (see the note above). */
+  plateName?: string;
+  plateNamePlaceholder?: string;
+  plateNameEditTitle?: string;
+  plateNameEmptyTitle?: string;
+  onPlateNameChange?: (next: string) => void;
 }) {
   const nullRaycast = () => null;
   const shouldShowGrid = showGrid ?? true;
@@ -755,6 +767,27 @@ export function Helpers({
           <AxisLabels size={axisLength + 6} />
         </group>
       </group>
+      )}
+
+      {/* The plate's name, laid flat just inside its front-left corner. */}
+      {shouldShowBuildPlate
+        && plateName !== undefined
+        && plateNamePlaceholder
+        && plateNameEditTitle
+        && plateNameEmptyTitle
+        && onPlateNameChange && (
+        <PlateNameLabel
+          name={plateName}
+          placeholder={plateNamePlaceholder}
+          editTitle={plateNameEditTitle}
+          emptyTitle={plateNameEmptyTitle}
+          onCommit={onPlateNameChange}
+          // Front right, just off the plate: the left of the viewport is where the
+          // tool rail and the panel stack live, so a label at the front left sits
+          // behind them. The plate's front is its smallest Y.
+          position={[resolvedOriginMinX + width * 0.62, resolvedOriginMinY - 13, plateLogoZ + 0.2]}
+          labelScale={5}
+        />
       )}
 
       {/* FRONT orientation marker locked to grid front edge and constrained within build plate bounds */}
