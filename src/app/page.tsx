@@ -69,6 +69,7 @@ import { contactEndpointsFor, countSupportCollections, knotHostId, spanKnotHostT
 import { LayerSlider } from '@/components/controls/LayerSlider';
 import { PrintingLayerGpuPreview } from '@/components/controls/PrintingLayerGpuPreview';
 import { SupportSidebar } from '@/supports/Settings/SupportSidebar';
+import { getSettings as getSupportDisplaySettings, subscribeToSettings as subscribeToSupportSettings, updateNavigationDiscsOnly } from '@/supports/Settings/state';
 import { useLeafPlacementState } from '@/supports/SupportTypes/Leaf/leafPlacementState';
 import { ExportPanel } from '@/features/export/components/ExportPanel';
 import { ExportManager } from '@/features/export/logic/ExportManager';
@@ -1746,6 +1747,9 @@ export default function Home() {
     trackSupportCollectionsInHome ? getHomeKickstandCollectionsSnapshot : getEmptyKickstandSnapshot,
   );
   const raftSettingsSnapshot = React.useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
+  // The rail's View entry reads and writes this, so the rail and the scene agree
+  // on the mode without either owning it.
+  const supportDisplaySettings = React.useSyncExternalStore(subscribeToSupportSettings, getSupportDisplaySettings, getSupportDisplaySettings);
   const bracePlacementSnapshot = React.useSyncExternalStore(
     bracePlacementStore.subscribe,
     bracePlacementStore.getSnapshot,
@@ -10571,6 +10575,8 @@ export default function Home() {
               },
               hollowingActive: transformMgr.transformMode === 'hollowing',
               onSelectHollowing: () => setTransformModeWithMirrorFinalize('hollowing'),
+              viewMode: supportDisplaySettings.navigationDiscsOnly ? 'lines' : 'full',
+              onViewModeChange: (nextViewMode) => updateNavigationDiscsOnly(nextViewMode === 'lines'),
             })
             : buildPrepareToolRailEntries({
               mode: transformMgr.transformMode,

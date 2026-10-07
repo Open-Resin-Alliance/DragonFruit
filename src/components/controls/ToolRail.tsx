@@ -1,14 +1,31 @@
 "use client";
 
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import type { MessageDescriptor } from '@lingui/core';
 import type { ToolLayout } from '@/components/layout/floatingLayoutPreferences';
 import { ContextMenu, type ContextMenuEntry } from '@/components/ui/ContextMenu';
+import { useOutsideDismiss } from '@/hooks/useOutsideDismiss';
+import type { LucideIcon } from 'lucide-react';
 
 /** The docked column's width, also used to inset the floating panel stack. */
 export const TOOL_RAIL_WIDTH_PX = 74;
+
+/**
+ * One row of an entry's flyout. The labels stay descriptors so the rail keeps
+ * the app's translation style, and `onSelect` stays with the caller that knows
+ * what the option means.
+ */
+export type ToolRailMenuEntry = {
+  id: string;
+  label: MessageDescriptor;
+  icon?: LucideIcon;
+  /** Lights the option's tile: for a list of mutually exclusive modes, the one in use. */
+  checked?: boolean;
+  onSelect: () => void;
+};
 
 export type ToolRailEntry = {
   id: string;
@@ -22,7 +39,14 @@ export type ToolRailEntry = {
    * between its three panels.
    */
   tone: 'tool' | 'panel';
-  onSelect: () => void;
+  /** What clicking the entry does. Absent when it only opens a `menu`. */
+  onSelect?: () => void;
+  /**
+   * When present the entry opens this list instead of running `onSelect`, which
+   * is how an entry offers several variants of one thing (the support view
+   * modes) without spending a rail slot on each.
+   */
+  menu?: ToolRailMenuEntry[];
   /** Fired on hover, with `true` while the pointer is on the entry. */
   onHover?: (entering: boolean) => void;
   /** Panel entries sit one gap further from the tools; only the first does. */
@@ -168,8 +192,15 @@ const PANEL_STYLES = railEntryStyles('var(--accent-secondary)');
 export function ToolRail({ entries, layout, onLayoutChange }: ToolRailProps) {
   const { _ } = useLingui();
   const [menuPosition, setMenuPosition] = React.useState<{ x: number; y: number } | null>(null);
+  const [entryMenu, setEntryMenu] = React.useState<{ entry: ToolRailEntry; position: { x: number; y: number } } | null>(null);
   const [isFolding, setIsFolding] = React.useState(false);
   const containerRef = React.useRef<HTMLDivElement | null>(null);
+  const entryMenuRef = React.useRef<HTMLDivElement | null>(null);
+  const hoverCloseTimerRef = React.useRef<number | null>(null);
+  // Outside pointer down, Escape, resize and scroll — the same lifecycle the
+  // layout menu gets from `ContextMenu`. The flyout is its own ignore target, so
+  // choosing an option is not a dismissal.
+  useOutsideDismiss(entryMenu !== null, () => setEntryMenu(null), { ignoreRef: entryMenuRef });
   const entryRectsRef = React.useRef<Array<DOMRect>>([]);
   const previousLayoutRef = React.useRef(layout);
 
@@ -240,8 +271,46 @@ export function ToolRail({ entries, layout, onLayoutChange }: ToolRailProps) {
   // a trip to Settings.
   const openLayoutMenu = (event: React.MouseEvent) => {
     event.preventDefault();
+    setEntryMenu(null);
     setMenuPosition({ x: event.clientX, y: event.clientY });
   };
+
+  // A left click on an entry that carries a menu opens it beside the entry —
+  // right of the column, below the bar — the way the layout menu opens where the
+  // pointer asked for it.
+  const openEntryMenuFor = (entry: ToolRailEntry, element: HTMLElement) => {
+    const rect = element.getBoundingClientRect();
+    const count = entry.menu?.length ?? 1;
+    // The tiles are 62px wide with a 6px gap, the same as the bar's own tiles.
+    const rowWidth = count * 62 + (count - 1) * 6;
+    setMenuPosition(null);
+    setEntryMenu({
+      entry,
+      // Both layouts spread the list sideways: right of the tile in the column,
+      // below and centred on it in the bar. Only where it starts changes.
+      position: layout === 'vertical'
+        ? { x: Math.min(rect.right + 6, window.innerWidth - rowWidth - 8), y: rect.top }
+        : {
+          x: Math.min(Math.max(8, rect.left + rect.width / 2 - rowWidth / 2), window.innerWidth - rowWidth - 8),
+          y: rect.bottom + 6,
+        },
+    });
+  };
+
+  // Hovering is how the list is meant to be read, so entering the tile opens it
+  // and a short grace period on leaving keeps it open while the pointer crosses
+  // the gap into the flyout.
+  const cancelHoverClose = () => {
+    if (hoverCloseTimerRef.current !== null) {
+      window.clearTimeout(hoverCloseTimerRef.current);
+      hoverCloseTimerRef.current = null;
+    }
+  };
+  const scheduleHoverClose = () => {
+    cancelHoverClose();
+    hoverCloseTimerRef.current = window.setTimeout(() => setEntryMenu(null), 220);
+  };
+  React.useEffect(() => cancelHoverClose, []);
 
   const layoutMenuEntries: ContextMenuEntry[] = [
     { id: 'vertical', label: _(msg`Vertical`), checked: layout === 'vertical' },
@@ -274,23 +343,42 @@ export function ToolRail({ entries, layout, onLayoutChange }: ToolRailProps) {
           ? 'var(--accent-secondary)'
           : entry.active ? 'var(--accent)' : 'var(--text-muted)';
         const separation = entry.separated ? (layout === 'vertical' ? ' mb-3' : ' mr-3') : '';
+        const hasMenu = (entry.menu?.length ?? 0) > 0;
+        const isMenuOpen = entryMenu?.entry.id === entry.id;
 
         return (
           <button
             key={entry.id}
             type="button"
             data-rail-entry="true"
-            onClick={entry.onSelect}
-            onMouseEnter={() => entry.onHover?.(true)}
-            onMouseLeave={() => entry.onHover?.(false)}
-            onFocus={() => entry.onHover?.(true)}
+            onClick={hasMenu
+              ? (event) => {
+                cancelHoverClose();
+                if (entryMenu?.entry.id !== entry.id) openEntryMenuFor(entry, event.currentTarget);
+              }
+              : entry.onSelect}
+            onMouseEnter={hasMenu
+              ? (event) => {
+                cancelHoverClose();
+                openEntryMenuFor(entry, event.currentTarget);
+              }
+              : () => entry.onHover?.(true)}
+            onMouseLeave={hasMenu ? scheduleHoverClose : () => entry.onHover?.(false)}
+            onFocus={hasMenu
+              ? (event) => {
+                cancelHoverClose();
+                openEntryMenuFor(entry, event.currentTarget);
+              }
+              : () => entry.onHover?.(true)}
             onBlur={() => entry.onHover?.(false)}
             onContextMenu={openLayoutMenu}
             className={`${entryClass}${separation}`}
             style={entry.active ? styles.on : styles.off}
             title={_(entry.hint)}
             aria-label={_(entry.hint)}
-            aria-pressed={entry.active}
+            {...(hasMenu
+              ? { 'aria-haspopup': 'menu' as const, 'aria-expanded': isMenuOpen }
+              : { 'aria-pressed': entry.active })}
           >
             <Icon className="h-6 w-6" style={{ color: iconColor }} />
             <span>{_(entry.label)}</span>
@@ -306,6 +394,49 @@ export function ToolRail({ entries, layout, onLayoutChange }: ToolRailProps) {
         title={_(msg`Tool layout`)}
         ariaLabel={_(msg`Tool layout`)}
       />
+
+      {/* An entry's own list, drawn as rail tiles rather than menu rows: the
+          options are variants of the entry itself, so they read as the same
+          control. It is portalled because the bar layout centres the rail with a
+          transform, and `position: fixed` inside a transformed ancestor resolves
+          against that ancestor rather than the viewport — the same reason
+          `ContextMenu` portals. */}
+      {entryMenu && createPortal(
+        <div
+          ref={entryMenuRef}
+          role="menu"
+          aria-label={_(entryMenu.entry.label)}
+          className="fixed z-[121] flex flex-row gap-1.5"
+          style={{ left: entryMenu.position.x, top: entryMenu.position.y }}
+          onMouseEnter={cancelHoverClose}
+          onMouseLeave={scheduleHoverClose}
+        >
+          {(entryMenu.entry.menu ?? []).map((option) => {
+            const OptionIcon = option.icon;
+            const optionIconColor = option.checked ? 'var(--accent-secondary)' : 'var(--text-muted)';
+
+            return (
+              <button
+                key={option.id}
+                type="button"
+                role="menuitemradio"
+                aria-checked={option.checked === true}
+                onClick={() => {
+                  setEntryMenu(null);
+                  option.onSelect();
+                }}
+                className={`${entryClass.replace('w-full', 'w-[62px]')} cursor-pointer`}
+                style={option.checked ? PANEL_STYLES.on : PANEL_STYLES.off}
+                title={_(option.label)}
+              >
+                {OptionIcon && <OptionIcon className="h-6 w-6" style={{ color: optionIconColor }} />}
+                <span>{_(option.label)}</span>
+              </button>
+            );
+          })}
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }
