@@ -5,6 +5,9 @@ import { Html } from '@react-three/drei';
 import { Pencil } from 'lucide-react';
 import { Tooltip } from '@/components/ui/Tooltip';
 
+/** Same reasoning as the side buttons: the plate is looked at, so the hint waits. */
+const PLATE_NAME_TOOLTIP_DELAY_MS = 1000;
+
 /**
  * The build plate's name, written on the plate itself and clicked to change it.
  *
@@ -103,13 +106,13 @@ export function PlateNameLabel({
             }}
           />
         ) : (
-          <Tooltip content={name ? editTitle : emptyTitle} maxWidth={220}>
+          <Tooltip content={name ? editTitle : emptyTitle} maxWidth={220} delayMs={PLATE_NAME_TOOLTIP_DELAY_MS}>
             <button
               type="button"
               onClick={() => setDraft(name)}
               onPointerDown={(event) => event.stopPropagation()}
               aria-label={name ? editTitle : emptyTitle}
-              className="cursor-text rounded-[5.5px] px-1 text-left text-[36px] font-bold leading-tight"
+              className="cursor-text rounded-[5.5px] px-1 text-left text-[36px] font-bold leading-tight transition-[filter] duration-150 hover:brightness-125"
               style={{ color: name ? 'var(--accent)' : 'var(--text-muted)' }}
             >
               {name || placeholder}
@@ -118,13 +121,13 @@ export function PlateNameLabel({
         )}
 
         {!isEditing && (
-          <Tooltip content={editTitle} maxWidth={220}>
+          <Tooltip content={editTitle} maxWidth={220} delayMs={PLATE_NAME_TOOLTIP_DELAY_MS}>
             <button
               type="button"
               onClick={() => setDraft(name)}
               onPointerDown={(event) => event.stopPropagation()}
               aria-label={editTitle}
-              className="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-[5.5px] border"
+              className="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-[5.5px] border transition-[filter] duration-150 hover:brightness-125"
             style={{
               borderColor: 'color-mix(in srgb, var(--text-muted), transparent 45%)',
               background: 'color-mix(in srgb, var(--surface-0), transparent 45%)',
