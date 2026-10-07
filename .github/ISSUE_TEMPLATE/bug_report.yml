@@ -1,6 +1,7 @@
 name: Bug report
 description: Report something in DragonFruit that isn't working as expected.
 title: "[BUG] "
+type: Bug
 labels: ["form-v1"]
 body:
   - type: markdown
