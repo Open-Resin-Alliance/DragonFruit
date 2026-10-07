@@ -13,7 +13,6 @@ import {
   Card,
   CardHeader,
   Input,
-  SegmentedControl,
   Select,
   SettingRow,
   Spinner,
@@ -64,9 +63,9 @@ const EXPORT_FORMAT_OPTIONS: ReadonlyArray<{
   label: MessageDescriptor;
   title: MessageDescriptor;
 }> = [
+  { value: 'voxl', label: msg`VOXL`, title: msg`VOXL Scene (.voxl)` },
   { value: '3mf', label: msg`3MF`, title: msg`3MF Mesh (.3mf)` },
   { value: 'stl', label: msg`STL`, title: msg`STL Mesh (.stl)` },
-  { value: 'voxl', label: msg`VOXL`, title: msg`VOXL Scene (.voxl)` },
 ];
 
 const STL_ENCODING_OPTIONS: ReadonlyArray<{
@@ -82,6 +81,14 @@ const EXPORT_ACTION_LABELS: Record<ExportOptions['format'], MessageDescriptor> =
   '3mf': msg`Export as 3MF`,
   stl: msg`Export as STL`,
   voxl: msg`Export Scene File`,
+};
+
+// Active state of the button-row pickers, lifted from the Support Studio
+// bracing card's Low/Mid/High density selector so the two panels agree.
+const activeOptionStyle: React.CSSProperties = {
+  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
+  background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)',
+  color: 'var(--text-strong)',
 };
 
 function joinNativePath(directory: string, fileName: string): string {
@@ -111,7 +118,7 @@ export function ExportPanel({
 
   const [options, setOptions] = useState<ExportOptions>({
     filename: '',
-    format: '3mf',
+    format: 'voxl',
     binary: true,
     separateFiles: false,
     includeRaft: true,
@@ -396,18 +403,20 @@ export function ExportPanel({
       {isExpanded && (
         <div className="px-2.5 pt-1 pb-2.5 space-y-2">
           <div className="rounded-md border p-2 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-            <div className="space-y-0.5">
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                <Trans comment="Label above the picker that chooses whether the export writes the whole plate or only the active model.">Scope</Trans>
-              </div>
-              <SegmentedControl
-                fullWidth
-                size="sm"
-                label={_(msg`Export scope`)}
-                value={exportScope}
-                onChange={setExportScope}
-                options={EXPORT_SCOPE_OPTIONS.map((option) => ({ value: option.value, label: _(option.label) }))}
-              />
+            <div role="group" aria-label={_(msg`Export scope`)} className="grid grid-cols-2 gap-1.5">
+              {EXPORT_SCOPE_OPTIONS.map((option) => (
+                <Button
+                  key={option.value}
+                  variant="secondary"
+                  size="auto"
+                  aria-pressed={exportScope === option.value}
+                  className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                  style={exportScope === option.value ? activeOptionStyle : { background: 'var(--surface-0)' }}
+                  onClick={() => setExportScope(option.value)}
+                >
+                  {_(option.label)}
+                </Button>
+              ))}
             </div>
 
             {exportScope === 'active_model' && (
@@ -440,45 +449,49 @@ export function ExportPanel({
             <>
               <div className="rounded-md border p-2 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <div className="space-y-0.5">
-                  <label className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                    <Trans>File Name</Trans>
-                  </label>
                   <Input
                     type="text"
                     value={filename}
                     onChange={(e) => setFilename(e.target.value)}
                     className="w-full !h-8"
                     placeholder="my_print"
+                    aria-label={_(msg`Export file name`)}
                   />
                 </div>
 
-                <div className="space-y-0.5">
-                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                    <Trans>Format</Trans>
-                  </div>
-                  <SegmentedControl
-                    fullWidth
-                    size="sm"
-                    label={_(msg`Export format`)}
-                    value={options.format}
-                    onChange={(next) => setOptions(prev => ({ ...prev, format: next }))}
-                    options={EXPORT_FORMAT_OPTIONS.map((option) => ({ value: option.value, label: _(option.label), title: _(option.title) }))}
-                  />
+                <div role="group" aria-label={_(msg`Export format`)} className="grid grid-cols-3 gap-1.5">
+                  {EXPORT_FORMAT_OPTIONS.map((option) => (
+                    <Button
+                      key={option.value}
+                      variant="secondary"
+                      size="auto"
+                      aria-pressed={options.format === option.value}
+                      className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                      style={options.format === option.value ? activeOptionStyle : { background: 'var(--surface-0)' }}
+                      title={_(option.title)}
+                      onClick={() => setOptions(prev => ({ ...prev, format: option.value }))}
+                    >
+                      {_(option.label)}
+                    </Button>
+                  ))}
                 </div>
 
                 {options.format === 'stl' && (
-                  <div className="space-y-0.5">
-                    <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                      <Trans>STL Encoding</Trans>
-                    </div>
-                    <SegmentedControl
-                      fullWidth
-                      size="sm"
-                      label={_(msg`STL encoding`)}
-                      value={options.binary ? 'binary' : 'ascii'}
-                      onChange={(next) => setOptions(prev => ({ ...prev, binary: next === 'binary' }))}
-                      options={STL_ENCODING_OPTIONS.map((option) => ({ value: option.value, label: _(option.label), title: _(option.title) }))}
-                    />
+                  <div role="group" aria-label={_(msg`STL encoding`)} className="grid grid-cols-2 gap-1.5">
+                    {STL_ENCODING_OPTIONS.map((option) => (
+                      <Button
+                        key={option.value}
+                        variant="secondary"
+                        size="auto"
+                        aria-pressed={(options.binary ? 'binary' : 'ascii') === option.value}
+                        className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                        style={(options.binary ? 'binary' : 'ascii') === option.value ? activeOptionStyle : { background: 'var(--surface-0)' }}
+                        title={_(option.title)}
+                        onClick={() => setOptions(prev => ({ ...prev, binary: option.value === 'binary' }))}
+                      >
+                        {_(option.label)}
+                      </Button>
+                    ))}
                   </div>
                 )}
               </div>
@@ -513,7 +526,7 @@ export function ExportPanel({
                 <Button
                   onClick={handleExport}
                   disabled={isAnyExportInProgress || (options.includeModel && exportScope === 'active_model' && !activeModel)}
-                  variant="primary"
+                  variant="accent"
                   className={`w-full gap-1.5 ${isExporting ? 'cursor-wait opacity-70' : ''}`}
                 >
                   {isExporting ? (

@@ -39,7 +39,7 @@ msgstr "{count, plural, one {Encontrada #} other {Encontradas #}}"
 msgid "{count, plural, one {# material} other {# materials}}"
 msgstr "{count, plural, one {# material} other {# materiales}}"
 
-#: src/features/export/components/ExportPanel.tsx:51
+#: src/features/export/components/ExportPanel.tsx:50
 msgid "{count, plural, one {# mesh will be exported.} other {# meshes will be exported.}}"
 msgstr "{count, plural, one {Se exportará # malla.} other {Se exportarán # mallas.}}"
 
@@ -114,7 +114,7 @@ msgstr "{minutes} min"
 msgid "{minutes} min {seconds} s"
 msgstr "{minutes} min {seconds} s"
 
-#: src/features/export/components/ExportPanel.tsx:47
+#: src/features/export/components/ExportPanel.tsx:46
 msgid "{modelName} (hidden)"
 msgstr "{modelName} (oculto)"
 
@@ -231,7 +231,7 @@ msgstr "Activo"
 msgid "ACTIVE"
 msgstr "ACTIVO"
 
-#: src/features/export/components/ExportPanel.tsx:59
+#: src/features/export/components/ExportPanel.tsx:58
 msgid "Active Model"
 msgstr "Modelo activo"
 
@@ -273,7 +273,7 @@ msgstr "Añade contactos a lo largo del borde o la esquina en que se apoya la po
 msgid "Add joint"
 msgstr "Añadir unión"
 
-#: src/features/export/components/ExportPanel.tsx:537
+#: src/features/export/components/ExportPanel.tsx:550
 msgid "Add more models to use Batch Export"
 msgstr "Añade más modelos para usar la exportación por lotes"
 
@@ -399,11 +399,11 @@ msgstr "Organizar los modelos en la placa"
 msgid "Array copies across the plate"
 msgstr "Distribuir copias en matriz por la placa"
 
-#: src/features/export/components/ExportPanel.tsx:78
+#: src/features/export/components/ExportPanel.tsx:77
 msgid "ASCII"
 msgstr "ASCII"
 
-#: src/features/export/components/ExportPanel.tsx:78
+#: src/features/export/components/ExportPanel.tsx:77
 msgid "ASCII STL"
 msgstr "STL ASCII"
 
@@ -710,11 +710,11 @@ msgstr "Soportes equilibrados para uso general"
 msgid "Base Flare"
 msgstr "Base acampanada"
 
-#: src/features/export/components/ExportPanel.tsx:547
+#: src/features/export/components/ExportPanel.tsx:560
 msgid "Batch Export"
 msgstr "Exportación por lotes"
 
-#: src/features/export/components/ExportPanel.tsx:331
+#: src/features/export/components/ExportPanel.tsx:338
 msgid "Batch export failed. Check console for details."
 msgstr "La exportación por lotes ha fallado. Consulta la consola para más detalles."
 
@@ -722,7 +722,7 @@ msgstr "La exportación por lotes ha fallado. Consulta la consola para más deta
 msgid "Bias (Bottom - Top)"
 msgstr "Sesgo (abajo - arriba)"
 
-#: src/features/export/components/ExportPanel.tsx:77
+#: src/features/export/components/ExportPanel.tsx:76
 msgid "Binary"
 msgstr "Binario"
 
@@ -730,7 +730,7 @@ msgstr "Binario"
 msgid "Binary Base"
 msgstr "Base binaria"
 
-#: src/features/export/components/ExportPanel.tsx:77
+#: src/features/export/components/ExportPanel.tsx:76
 msgid "Binary STL (recommended)"
 msgstr "STL binario (recomendado)"
 
@@ -1869,7 +1869,7 @@ msgstr "Motor"
 msgid "Enter your printer's IP address"
 msgstr "Introduce la dirección IP de tu impresora"
 
-#: src/features/export/components/ExportPanel.tsx:58
+#: src/features/export/components/ExportPanel.tsx:57
 msgid "Entire Plate"
 msgstr "Placa completa"
 
@@ -1964,32 +1964,36 @@ msgstr "Experto"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:407
 #: src/components/layout/TopBar.tsx:610
-#: src/features/export/components/ExportPanel.tsx:351
-#: src/features/export/components/ExportPanel.tsx:373
+#: src/features/export/components/ExportPanel.tsx:358
+#: src/features/export/components/ExportPanel.tsx:380
 msgid "Export"
 msgstr "Exportar"
 
-#: src/features/export/components/ExportPanel.tsx:82
+#: src/features/export/components/ExportPanel.tsx:81
 msgid "Export as 3MF"
 msgstr "Exportar como 3MF"
 
-#: src/features/export/components/ExportPanel.tsx:83
+#: src/features/export/components/ExportPanel.tsx:82
 msgid "Export as STL"
 msgstr "Exportar como STL"
 
-#: src/features/export/components/ExportPanel.tsx:537
+#: src/features/export/components/ExportPanel.tsx:550
 msgid "Export each visible model and its supports into separate files in a folder"
 msgstr "Exporta cada modelo visible y sus soportes en archivos separados dentro de una carpeta"
 
-#: src/features/export/components/ExportPanel.tsx:257
+#: src/features/export/components/ExportPanel.tsx:264
 msgid "Export failed. Check console for details."
 msgstr "La exportación ha fallado. Consulta la consola para más detalles."
+
+#: src/features/export/components/ExportPanel.tsx:458
+msgid "Export file name"
+msgstr "Nombre del archivo de exportación"
 
 #: src/features/export/components/ExportPanel.tsx:462
 msgid "Export format"
 msgstr "Formato de exportación"
 
-#: src/features/export/components/ExportPanel.tsx:84
+#: src/features/export/components/ExportPanel.tsx:83
 msgid "Export Scene File"
 msgstr "Exportar archivo de escena"
 
@@ -2001,11 +2005,11 @@ msgstr "Alcance de la exportación"
 msgid "Export the selected preset as a JSON file"
 msgstr "Exporta el preajuste seleccionado como archivo JSON"
 
-#: src/features/export/components/ExportPanel.tsx:542
+#: src/features/export/components/ExportPanel.tsx:555
 msgid "Exporting Individually…"
 msgstr "Exportando individualmente…"
 
-#: src/features/export/components/ExportPanel.tsx:522
+#: src/features/export/components/ExportPanel.tsx:535
 msgid "Exporting…"
 msgstr "Exportando…"
 
@@ -2115,10 +2119,6 @@ msgstr "Caras lejanas, más oscuras para que la forma se lea como sólida."
 msgid "Fewest Supports"
 msgstr "Menos soportes"
 
-#: src/features/export/components/ExportPanel.tsx:444
-msgid "File Name"
-msgstr "Nombre del archivo"
-
 #: src/components/controls/IslandsPanel.tsx:361
 msgid "Filters"
 msgstr "Filtros"
@@ -2208,10 +2208,6 @@ msgstr "Informe del bosque"
 #: src/components/settings/GeneralSettingsTab.tsx:311
 msgid "Forget all stored panel positions and return to seeded layout."
 msgstr "Descarta las posiciones guardadas de los paneles y vuelve a la distribución inicial."
-
-#: src/features/export/components/ExportPanel.tsx:457
-msgid "Format"
-msgstr "Formato"
 
 #: src/components/layout/FirstRunOnboarding.tsx:179
 msgid "From the community, for the community. Free to use, open to contribute, and shaped by the people who print with it."
@@ -2503,15 +2499,15 @@ msgstr "Importando tu archivo…"
 msgid "In space, no one can hear you slice."
 msgstr "En el espacio, nadie puede oírte laminar."
 
-#: src/features/export/components/ExportPanel.tsx:488
+#: src/features/export/components/ExportPanel.tsx:501
 msgid "Include Model Mesh"
 msgstr "Incluir malla del modelo"
 
-#: src/features/export/components/ExportPanel.tsx:502
+#: src/features/export/components/ExportPanel.tsx:515
 msgid "Include Raft"
 msgstr "Incluir balsa"
 
-#: src/features/export/components/ExportPanel.tsx:495
+#: src/features/export/components/ExportPanel.tsx:508
 msgid "Include Supports"
 msgstr "Incluir soportes"
 
@@ -3073,7 +3069,7 @@ msgid "Mesh"
 msgstr "Malla"
 
 #. Badge label next to the number of meshes this export writes. Rendered uppercase; keep it to one short word.
-#: src/features/export/components/ExportPanel.tsx:387
+#: src/features/export/components/ExportPanel.tsx:394
 msgid "Meshes"
 msgstr "Mallas"
 
@@ -3142,7 +3138,7 @@ msgstr "Reflejar en X, Y o Z"
 msgid "Mode"
 msgstr "Modo"
 
-#: src/features/export/components/ExportPanel.tsx:416
+#: src/features/export/components/ExportPanel.tsx:425
 msgid "Model"
 msgstr "Modelo"
 
@@ -3174,7 +3170,7 @@ msgstr "Soportes del modelo"
 msgid "Model Supports"
 msgstr "Soportes del modelo"
 
-#: src/features/export/components/ExportPanel.tsx:422
+#: src/features/export/components/ExportPanel.tsx:431
 msgid "Model to export"
 msgstr "Modelo que exportar"
 
@@ -3383,7 +3379,7 @@ msgstr "Ningún material seleccionado"
 msgid "No materials linked to this printer."
 msgstr "No hay materiales asociados a esta impresora."
 
-#: src/features/export/components/ExportPanel.tsx:357
+#: src/features/export/components/ExportPanel.tsx:364
 msgid "No meshes loaded yet. Import a model first, then hop back to Export."
 msgstr "Todavía no hay mallas cargadas. Importa un modelo y vuelve a Exportar."
 
@@ -3780,7 +3776,7 @@ msgstr "Valores de cámara por espacio de trabajo"
 msgid "Persist dragged panel positions in local storage."
 msgstr "Guarda en el almacenamiento local las posiciones de los paneles al arrastrarlos."
 
-#: src/features/export/components/ExportPanel.tsx:437
+#: src/features/export/components/ExportPanel.tsx:446
 msgid "Pick a model to export."
 msgstr "Elige un modelo para exportar."
 
@@ -4574,11 +4570,6 @@ msgstr "Guardado automático de escenas"
 msgid "Scene mood overlay in thumbnail"
 msgstr "Superposición ambiental de la escena en la miniatura"
 
-#. Label above the picker that chooses whether the export writes the whole plate or only the active model.
-#: src/features/export/components/ExportPanel.tsx:401
-msgid "Scope"
-msgstr "Alcance"
-
 #: src/components/controls/toolRailEntries.ts:59
 msgid "Sculpt and smooth surface"
 msgstr "Esculpir y suavizar la superficie"
@@ -4652,7 +4643,7 @@ msgstr "Elige un material equivalente al importar."
 msgid "Select a material profile first."
 msgstr "Elige antes un perfil de material."
 
-#: src/features/export/components/ExportPanel.tsx:424
+#: src/features/export/components/ExportPanel.tsx:433
 msgid "Select a model"
 msgstr "Selecciona un modelo"
 
@@ -5089,12 +5080,8 @@ msgstr "Paso 2: activar los visuales de depuración (ID + vóxeles)"
 msgid "STL"
 msgstr "STL"
 
-#: src/features/export/components/ExportPanel.tsx:477
+#: src/features/export/components/ExportPanel.tsx:480
 msgid "STL encoding"
-msgstr "Codificación STL"
-
-#: src/features/export/components/ExportPanel.tsx:472
-msgid "STL Encoding"
 msgstr "Codificación STL"
 
 #: src/features/export/components/ExportPanel.tsx:68
@@ -5811,11 +5798,11 @@ msgstr "Vóxeles: nodos"
 msgid "Voxels: Systems"
 msgstr "Vóxeles: sistemas"
 
-#: src/features/export/components/ExportPanel.tsx:69
+#: src/features/export/components/ExportPanel.tsx:66
 msgid "VOXL"
 msgstr "VOXL"
 
-#: src/features/export/components/ExportPanel.tsx:69
+#: src/features/export/components/ExportPanel.tsx:66
 msgid "VOXL Scene (.voxl)"
 msgstr "Escena VOXL (.voxl)"
 
