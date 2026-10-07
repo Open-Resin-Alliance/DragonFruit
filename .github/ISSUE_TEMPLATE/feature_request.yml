@@ -80,7 +80,9 @@ body:
     id: version
     attributes:
       label: DragonFruit version (optional)
-      description: The version you're using, in case the feature already partly exists.
+      description: The version you're using, in case the feature already partly exists. Copied from Settings->About
+
+Removed the detailed OS version section
       placeholder: DragonFruit 0.1.16 (beta) — dev @ 5362aed · macOS/arm64
 
   - type: textarea
