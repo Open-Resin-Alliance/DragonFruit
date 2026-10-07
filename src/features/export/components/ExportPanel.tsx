@@ -83,11 +83,19 @@ const EXPORT_ACTION_LABELS: Record<ExportOptions['format'], MessageDescriptor> =
   voxl: msg`Export Scene File`,
 };
 
-// Active state of the button-row pickers, lifted from the Support Studio
-// bracing card's Low/Mid/High density selector so the two panels agree.
+// Active state of the button-row pickers. The geometry is the Support Studio
+// bracing card's Low/Mid/High density selector; the tint is the accent, except
+// for the format row, which carries the secondary theme colour to match the
+// lime action button below it.
 const activeOptionStyle: React.CSSProperties = {
   borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
   background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)',
+  color: 'var(--text-strong)',
+};
+
+const activeSecondaryOptionStyle: React.CSSProperties = {
+  borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 30%)',
+  background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 85%)',
   color: 'var(--text-strong)',
 };
 
@@ -467,7 +475,7 @@ export function ExportPanel({
                       size="auto"
                       aria-pressed={options.format === option.value}
                       className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
-                      style={options.format === option.value ? activeOptionStyle : { background: 'var(--surface-0)' }}
+                      style={options.format === option.value ? activeSecondaryOptionStyle : { background: 'var(--surface-0)' }}
                       title={_(option.title)}
                       onClick={() => setOptions(prev => ({ ...prev, format: option.value }))}
                     >
