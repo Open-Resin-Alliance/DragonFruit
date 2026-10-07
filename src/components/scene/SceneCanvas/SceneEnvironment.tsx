@@ -782,11 +782,10 @@ export function Helpers({
           editTitle={plateNameEditTitle}
           emptyTitle={plateNameEmptyTitle}
           onCommit={onPlateNameChange}
-          // Front right, just off the plate: the left of the viewport is where the
-          // tool rail and the panel stack live, so a label at the front left sits
-          // behind them. The plate's front is its smallest Y.
-          position={[resolvedOriginMinX + width * 0.62, resolvedOriginMinY - 13, plateLogoZ + 0.2]}
-          labelScale={5}
+          // The plate's own top left, i.e. the back-left corner in plan: the plate's
+          // back is its largest Y, its left is its smallest X.
+          position={[resolvedOriginMinX + width * 0.03, resolvedOriginMinY + depth - 14, plateLogoZ + 0.2]}
+          labelScale={7.5}
         />
       )}
 

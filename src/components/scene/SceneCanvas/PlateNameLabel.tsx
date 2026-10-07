@@ -88,7 +88,7 @@ export function PlateNameLabel({
               }
             }}
             placeholder={placeholder}
-            className="rounded-[5.5px] border px-2 py-1 text-[26px] font-bold outline-none"
+            className="rounded-[5.5px] border px-2 py-1 text-[30px] font-bold outline-none"
             style={{
               borderColor: 'var(--accent)',
               background: 'color-mix(in srgb, var(--surface-0), transparent 10%)',
@@ -102,7 +102,7 @@ export function PlateNameLabel({
             onClick={() => setDraft(name)}
             onPointerDown={(event) => event.stopPropagation()}
             title={name ? editTitle : emptyTitle}
-            className="cursor-text rounded-[5.5px] px-1 text-left text-[30px] font-bold leading-tight"
+            className="cursor-text rounded-[5.5px] px-1 text-left text-[36px] font-bold leading-tight"
             style={{ color: name ? 'var(--accent)' : 'var(--text-muted)' }}
           >
             {name || placeholder}
