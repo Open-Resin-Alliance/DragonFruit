@@ -111,7 +111,8 @@ export function PickingDebugOverlay({
         <span>{config.patchSize}×{config.patchSize}</span>
         
         <span style={{ color: '#888' }}>Rate:</span>
-        <span>{config.hoverUpdateRate} Hz</span>
+        {/* The configured rate is a floor: the real one follows the frame rate. */}
+        <span>≥ {config.hoverUpdateRate} Hz</span>
       </div>
       
       <div 
