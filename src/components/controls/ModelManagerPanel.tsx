@@ -3,6 +3,7 @@ import {
   Eye,
   EyeOff,
   Box,
+  Plus,
   AlertTriangle,
 
   Folder,
@@ -18,7 +19,7 @@ import {
   Scissors,
 } from 'lucide-react';
 import { useLingui } from '@lingui/react';
-import { msg, plural } from '@lingui/core/macro';
+import { msg } from '@lingui/core/macro';
 import { Trans } from '@lingui/react/macro';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { Card, CardHeader, IconButton } from '@/components/atoms';
@@ -49,6 +50,8 @@ interface ModelManagerPanelProps {
   onModelContextMenu?: (id: string, position: { x: number; y: number }) => void;
   onRepairModel?: (id: string) => void;
   onOpenSupportsInfo?: (id: string) => void;
+  /** Opens the mesh picker: the plus in the panel header. */
+  onAddModels?: () => void;
   onDelete: (id: string) => void;
   onVisibilityChange: (id: string, visible: boolean) => void;
 
@@ -114,6 +117,7 @@ export function ModelManagerPanel({
   onModelContextMenu,
   onRepairModel,
   onOpenSupportsInfo,
+  onAddModels,
   onDelete: _onDelete,
   onVisibilityChange,
   dimmed = false,
@@ -439,24 +443,17 @@ export function ModelManagerPanel({
             </h3>
           </>
         )}
-        right={(
-          <div
-            className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5"
-            style={{
-              borderColor: 'color-mix(in srgb, var(--accent), transparent 62%)',
-              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-            }}
-            title={_(msg`${plural(models.length, { one: '# model loaded', other: '# models loaded' })}`)}
+        right={onAddModels ? (
+          // The count that used to sit here repeated what the list below already
+          // says, line by line. The slot earns its keep as the way to add more.
+          <IconButton
+            onClick={onAddModels}
+            className="!p-0.5 !text-[var(--text-muted)] hover:!text-[var(--text-strong)] hover:!bg-[var(--surface-2)]"
+            title={_(msg({ message: 'Add models to the plate', comment: 'Tooltip on the plus in the Models panel header, which opens the mesh picker.' }))}
           >
-            <Box className="h-3 w-3" style={{ color: 'var(--accent)' }} />
-            <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-              <Trans comment="Badge label next to the number of loaded models. Rendered uppercase; keep it to one short word.">Count</Trans>
-            </span>
-            <span className="text-xs font-bold tabular-nums" style={{ color: 'var(--text-strong)' }}>
-              {models.length}
-            </span>
-          </div>
-        )}
+            <Plus className="h-3.5 w-3.5" />
+          </IconButton>
+        ) : undefined}
       />
 
       {expanded && (

@@ -24,6 +24,7 @@ export type ModelsPanelProps = {
   handleModelListContextMenu: React.ComponentProps<typeof ModelManagerPanel>['onModelContextMenu'];
   handleRepairModel: React.ComponentProps<typeof ModelManagerPanel>['onRepairModel'];
   handleOpenModelSupportsInfo: React.ComponentProps<typeof ModelManagerPanel>['onOpenSupportsInfo'];
+  handleAddModels: React.ComponentProps<typeof ModelManagerPanel>['onAddModels'];
   dimmed: boolean;
   hidden: boolean;
   /** Collapsible only while the tool rail is a bar; see ModelManagerPanel. */
@@ -46,6 +47,7 @@ export function ModelsPanel({
   handleModelListContextMenu,
   handleRepairModel,
   handleOpenModelSupportsInfo,
+  handleAddModels,
   dimmed,
   hidden,
   collapsible,
@@ -57,6 +59,7 @@ export function ModelsPanel({
       outsidePlateModelIds={outsidePlateModelIds}
       activeModelId={scene.activeModelId}
       selectedModelIds={scene.selectedModelIds}
+      onAddModels={handleAddModels}
       onSelect={handleModelSelection}
       onSelectRange={handleModelRangeSelection}
       onSelectGroup={handleGroupSelection}

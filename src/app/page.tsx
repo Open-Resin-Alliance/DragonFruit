@@ -9953,6 +9953,7 @@ export default function Home() {
               handleModelListContextMenu: handleModelListContextMenu,
               handleRepairModel: handleRepairModel,
               handleOpenModelSupportsInfo: handleOpenModelSupportsInfo,
+              handleAddModels: () => { void handleOpenMeshDialog(); },
               showEmptySceneDialog: showEmptySceneDialog,
               importOverlayState: importOverlayState,
               modelStatsBottomClearancePx: modelStatsBottomClearancePx,
@@ -10048,6 +10049,7 @@ export default function Home() {
               handleModelListContextMenu={handleModelListContextMenu}
               handleRepairModel={handleRepairModel}
               handleOpenModelSupportsInfo={handleOpenModelSupportsInfo}
+              handleAddModels={() => { void handleOpenMeshDialog(); }}
               dimmed={showEmptySceneDialog || importOverlayState.active}
               hidden={!modelsPanelVisible}
               collapsible={toolLayout === 'horizontal'}
