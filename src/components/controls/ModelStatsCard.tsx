@@ -31,6 +31,12 @@ interface ModelStatsCardProps {
   heightMm: number;
   estimatedPrintTimeLabelOverride?: string | null;
   estimatedResinLabelOverride?: string | null;
+  /**
+   * The plate's layer count, as text. Distinct from `numLayers` because a plate
+   * with nothing on it has zero layers, and zero must not fall back to the
+   * scene's own count the way an unknown one does.
+   */
+  estimatedLayerCountLabelOverride?: string | null;
   /** The same estimate for every plate. Absent when there is only one plate. */
   estimatedResinTotalLabel?: string | null;
 }
@@ -44,6 +50,7 @@ export function ModelStatsCard({
   heightMm,
   estimatedPrintTimeLabelOverride,
   estimatedResinLabelOverride,
+  estimatedLayerCountLabelOverride,
   estimatedResinTotalLabel,
 }: ModelStatsCardProps) {
   const { _ } = useLingui();
@@ -531,7 +538,7 @@ export function ModelStatsCard({
 
               <span><Trans>Layers:</Trans></span>
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>
-                {resolvedLayerCount != null ? resolvedLayerCount : '-'}
+                {estimatedLayerCountLabelOverride ?? (resolvedLayerCount != null ? resolvedLayerCount : '-')}
               </span>
 
               <span><Trans comment='Row label on the printer card. "Est." is short for "estimated"; keep the abbreviation terse — the label column is narrow.'>Est. print time:</Trans></span>
@@ -548,7 +555,7 @@ export function ModelStatsCard({
 
               {estimatedResinTotalLabel != null && (
                 <>
-                  <span><Trans comment='Row label on the printer card: estimated resin for every plate in the scene, beside the row for the plate being worked on. Keep it terse — the label column is narrow.'>Est. resin, all plates:</Trans></span>
+                  <span><Trans comment='Row label on the printer card: estimated resin for every plate in the scene, beside the row for the plate being worked on. Keep it terse — the label column is narrow.'>Est. resin (all):</Trans></span>
                   <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>
                     {estimatedResinTotalLabel}
                   </span>

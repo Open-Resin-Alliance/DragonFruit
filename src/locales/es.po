@@ -23,7 +23,7 @@ msgid "{0, plural, one {# island} other {# islands}}"
 msgstr "{0, plural, one {# isla} other {# islas}}"
 
 #. placeholder {0}: model.polygonCount
-#: src/components/controls/ModelManagerPanel.tsx:45
+#: src/components/controls/ModelManagerPanel.tsx:49
 msgid "{0, plural, one {# polygon} other {# polygons}}"
 msgstr "{0, plural, one {# polígono} other {# polígonos}}"
 
@@ -79,7 +79,7 @@ msgid "{downloaded} / {total} ({pct}%)"
 msgstr "{downloaded} / {total} ({pct} %)"
 
 #: src/app/page.tsx:491
-#: src/components/controls/ModelStatsCard.tsx:200
+#: src/components/controls/ModelStatsCard.tsx:207
 msgid "{hours} h {minutes} min"
 msgstr "{hours} h {minutes} min"
 
@@ -110,7 +110,7 @@ msgstr "{minutes} min"
 
 #: src/app/page.tsx:483
 #: src/app/page.tsx:492
-#: src/components/controls/ModelStatsCard.tsx:201
+#: src/components/controls/ModelStatsCard.tsx:208
 msgid "{minutes} min {seconds} s"
 msgstr "{minutes} min {seconds} s"
 
@@ -139,11 +139,11 @@ msgstr "{rate} capas/s"
 msgid "{saved, plural, one {# saved} other {# saved}} • {online, plural, one {# online} other {# online}}"
 msgstr "{saved, plural, one {# guardada} other {# guardadas}} • {online, plural, one {# en línea} other {# en línea}}"
 
-#: src/components/controls/ModelStatsCard.tsx:202
+#: src/components/controls/ModelStatsCard.tsx:209
 msgid "{seconds} s"
 msgstr "{seconds} s"
 
-#: src/components/controls/ModelManagerPanel.tsx:47
+#: src/components/controls/ModelManagerPanel.tsx:51
 msgid "{size} · {polygons}"
 msgstr "{size} · {polygons}"
 
@@ -278,6 +278,11 @@ msgstr "Desfase adaptativo"
 msgid "Adaptive Offset (deg)"
 msgstr "Desfase adaptativo (grados)"
 
+#. Tooltip on the plus in the Plates heading, which adds an empty build plate.
+#: src/components/controls/ModelManagerPanel.tsx:514
+msgid "Add a plate"
+msgstr "Añadir una plata"
+
 #: src/features/organicCut/OrganicCutPanel.tsx:820
 msgid "Add another loop and start drawing it. On Cut, every loop is cut together — use it to free a part attached in several places (e.g. a tail joined at two posts)."
 msgstr "Añade otro bucle y empieza a dibujarlo. Al cortar se cortan todos los bucles a la vez; úsalo para liberar una pieza unida por varios sitios (por ejemplo, una cola sujeta en dos postes)."
@@ -291,7 +296,7 @@ msgid "Add joint"
 msgstr "Añadir unión"
 
 #. Tooltip on the plus in the Models panel header, which opens the mesh picker.
-#: src/components/controls/ModelManagerPanel.tsx:469
+#: src/components/controls/ModelManagerPanel.tsx:495
 msgid "Add models to the plate"
 msgstr "Añadir modelos a la plataforma"
 
@@ -404,7 +409,7 @@ msgstr "Aplicar a la sesión"
 msgid "Apply this preset to the auto-support settings"
 msgstr "Aplica este preajuste a los ajustes de autosoportes"
 
-#: src/app/page.tsx:11094
+#: src/app/page.tsx:11100
 msgid "Are you sure you want to remove every model from the plate?"
 msgstr "¿Seguro que quieres quitar todos los modelos de la plataforma?"
 
@@ -517,7 +522,7 @@ msgid "Auto-Repair Scenes"
 msgstr "Reparación automática de escenas"
 
 #. placeholder {0}: model.geometry.meshDefects.repairedFloats
-#: src/components/controls/ModelStatsCard.tsx:609
+#: src/components/controls/ModelStatsCard.tsx:616
 msgid "Auto-repaired — {0} errors"
 msgstr "Reparado automáticamente — {0} errores"
 
@@ -881,12 +886,13 @@ msgstr "Modo de vista de la cámara: {currentLabel}"
 msgid "Can't open this scene"
 msgstr "No se puede abrir esta escena"
 
-#: src/app/page.tsx:11071
+#: src/app/page.tsx:11077
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:468
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:664
 #: src/components/controls/AutoSupportPanel.tsx:652
 #: src/components/controls/IslandScanCard.tsx:184
 #: src/components/controls/IslandsPanel.tsx:304
+#: src/components/controls/ModelManagerPanel.tsx:621
 #: src/components/modals/AaSupportWarningModal.tsx:40
 #: src/components/printers/PrinterVariantPickerModal.tsx:695
 #: src/components/settings/FleetManagement.tsx:442
@@ -1055,7 +1061,7 @@ msgstr "«Borrar todo» ha fallado. Mira la consola para más detalles."
 msgid "Clear build plate"
 msgstr "Vaciar la plataforma"
 
-#: src/app/page.tsx:11060
+#: src/app/page.tsx:11066
 msgid "Clear Build Plate?"
 msgstr "¿Vaciar la plataforma?"
 
@@ -1063,7 +1069,7 @@ msgstr "¿Vaciar la plataforma?"
 msgid "Clear Override"
 msgstr "Quitar la anulación"
 
-#: src/app/page.tsx:11087
+#: src/app/page.tsx:11093
 msgid "Clear Plate"
 msgstr "Vaciar plataforma"
 
@@ -1075,11 +1081,11 @@ msgstr "Quitar la selección"
 msgid "Clear Session Override"
 msgstr "Quitar la anulación de sesión"
 
-#: src/components/controls/ModelStatsCard.tsx:616
+#: src/components/controls/ModelStatsCard.tsx:623
 msgid "Click card to return to print settings"
 msgstr "Pulsa la tarjeta para volver a los ajustes de impresión"
 
-#: src/components/controls/ModelStatsCard.tsx:560
+#: src/components/controls/ModelStatsCard.tsx:567
 msgid "Click card to view model details"
 msgstr "Pulsa la tarjeta para ver los detalles del modelo"
 
@@ -1098,7 +1104,7 @@ msgstr "ID de cliente"
 msgid "Close"
 msgstr "Cerrar"
 
-#: src/app/page.tsx:11066
+#: src/app/page.tsx:11072
 msgid "Close clear-plate confirmation"
 msgstr "Cerrar la confirmación de vaciado"
 
@@ -1110,6 +1116,7 @@ msgstr "Cerrar la ventana"
 msgid "Close material anti-aliasing settings"
 msgstr "Cerrar los ajustes de antialiasing del material"
 
+#: src/components/controls/ModelManagerPanel.tsx:615
 #: src/components/modals/AaSupportWarningModal.tsx:34
 #: src/components/modals/ObsoleteVoxlVersionModal.tsx:40
 #: src/components/modals/ScenePrinterMismatchModal.tsx:55
@@ -1186,7 +1193,7 @@ msgstr "Coincidentes"
 msgid "Collapse card"
 msgstr "Plegar la tarjeta"
 
-#: src/components/controls/ModelManagerPanel.tsx:540
+#: src/components/controls/ModelManagerPanel.tsx:707
 msgid "Collapse folder"
 msgstr "Plegar la carpeta"
 
@@ -1245,7 +1252,7 @@ msgstr "Configura los parámetros de detección de islas"
 msgid "Configure Networking Later"
 msgstr "Configurar la red más tarde"
 
-#: src/app/page.tsx:11059
+#: src/app/page.tsx:11065
 msgid "Confirm clearing the build plate"
 msgstr "Confirmar el vaciado de la plataforma"
 
@@ -1347,7 +1354,7 @@ msgstr "Contorno"
 msgid "Contoured regions"
 msgstr "Regiones contorneadas"
 
-#: src/app/page.tsx:8269
+#: src/app/page.tsx:8274
 msgid "Converting support data and model metadata"
 msgstr "Convirtiendo los datos de soportes y los metadatos del modelo"
 
@@ -1554,7 +1561,7 @@ msgid "Default Raft Wall"
 msgstr "Pared de balsa predeterminada"
 
 #. placeholder {0}: model.geometry.meshDefects.repairedFloats
-#: src/components/controls/ModelStatsCard.tsx:610
+#: src/components/controls/ModelStatsCard.tsx:617
 msgid "Defective — {0} errors"
 msgstr "Defectuoso — {0} errores"
 
@@ -1585,6 +1592,11 @@ msgstr "¿Eliminar {count} preajustes?"
 msgid "Delete Backup Snapshot"
 msgstr "Eliminar la instantánea"
 
+#: src/components/controls/ModelManagerPanel.tsx:609
+#: src/components/controls/ModelManagerPanel.tsx:630
+msgid "Delete plate"
+msgstr "Eliminar plata"
+
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:650
 #: src/supports/Settings/components/PresetSelector.tsx:857
 msgid "Delete preset"
@@ -1614,6 +1626,14 @@ msgstr "¿Eliminar esta instantánea del historial de GitHub? No se puede deshac
 #: src/components/controls/AutoSupportPanel.tsx:667
 msgid "Delete this model's existing supports and place the new ones"
 msgstr "Elimina los soportes que ya tiene este modelo y coloca los nuevos"
+
+#: src/components/controls/ModelManagerPanel.tsx:589
+msgid "Delete this plate and the models on it"
+msgstr "Eliminar esta plata y los modelos que contiene"
+
+#: src/components/controls/ModelManagerPanel.tsx:610
+msgid "Delete this plate?"
+msgstr "¿Eliminar esta plata?"
 
 #: src/components/ui/EditorContextMenu.tsx:91
 msgid "Delete waypoint"
@@ -1817,7 +1837,7 @@ msgstr "DragonFruit va a <0>descargar, verificar e instalar</0> la actualizació
 msgid "Drop supported files"
 msgstr "Suelta archivos compatibles"
 
-#: src/app/page.tsx:10335
+#: src/app/page.tsx:10340
 msgid "Drop supported files to import"
 msgstr "Suelta aquí los ficheros compatibles para importarlos"
 
@@ -1951,17 +1971,17 @@ msgid "Est. Print Time"
 msgstr "Tiempo est."
 
 #. Row label on the printer card. "Est." is short for "estimated"; keep the abbreviation terse — the label column is narrow.
-#: src/components/controls/ModelStatsCard.tsx:537
+#: src/components/controls/ModelStatsCard.tsx:544
 msgid "Est. print time:"
 msgstr "Tiempo est.:"
 
 #. Row label on the printer card: estimated resin for every plate in the scene, beside the row for the plate being worked on. Keep it terse — the label column is narrow.
-#: src/components/controls/ModelStatsCard.tsx:551
-msgid "Est. resin, all plates:"
-msgstr "Resina est., todas las platas:"
+#: src/components/controls/ModelStatsCard.tsx:558
+msgid "Est. resin (all):"
+msgstr "Resina est. (todas):"
 
 #. Row label on the printer card: estimated resin volume. Keep it terse — the label column is narrow.
-#: src/components/controls/ModelStatsCard.tsx:542
+#: src/components/controls/ModelStatsCard.tsx:549
 msgid "Est. resin:"
 msgstr "Resina est.:"
 
@@ -2002,7 +2022,7 @@ msgstr "Se han detectado soportes existentes"
 msgid "Expand card"
 msgstr "Desplegar la tarjeta"
 
-#: src/components/controls/ModelManagerPanel.tsx:540
+#: src/components/controls/ModelManagerPanel.tsx:707
 msgid "Expand folder"
 msgstr "Desplegar la carpeta"
 
@@ -2078,7 +2098,7 @@ msgstr "Exportando individualmente…"
 msgid "Exporting…"
 msgstr "Exportando…"
 
-#: src/components/controls/ModelStatsCard.tsx:524
+#: src/components/controls/ModelStatsCard.tsx:531
 msgid "Exposure:"
 msgstr "Exposición:"
 
@@ -2246,7 +2266,7 @@ msgstr "Cambio rápido de flota"
 msgid "Fleet units"
 msgstr "Unidades de la flota"
 
-#: src/components/controls/ModelStatsCard.tsx:458
+#: src/components/controls/ModelStatsCard.tsx:465
 msgid "Flip model stats card"
 msgstr "Girar la tarjeta de datos del modelo"
 
@@ -2378,7 +2398,7 @@ msgstr "Separación de la rejilla en pendientes al ángulo de autosoporte: cuant
 msgid "Grid Threshold"
 msgstr "Umbral de la rejilla"
 
-#: src/components/controls/ModelManagerPanel.tsx:369
+#: src/components/controls/ModelManagerPanel.tsx:395
 msgid "Group selected"
 msgstr "Agrupar la selección"
 
@@ -2412,7 +2432,7 @@ msgstr "Tope del factor de altura"
 msgid "Height Gradient"
 msgstr "Degradado por altura"
 
-#: src/components/controls/ModelStatsCard.tsx:587
+#: src/components/controls/ModelStatsCard.tsx:594
 msgid "Height:"
 msgstr "Altura:"
 
@@ -2420,7 +2440,7 @@ msgstr "Altura:"
 msgid "Held against toppling and peel"
 msgstr "Sujeción frente al vuelco y al despegue"
 
-#: src/components/controls/ModelManagerPanel.tsx:718
+#: src/components/controls/ModelManagerPanel.tsx:885
 msgid "Hide"
 msgstr "Ocultar"
 
@@ -2825,7 +2845,7 @@ msgstr "Capa 0 de 0. Viviendo al límite."
 msgid "Layer Height"
 msgstr "Altura de capa"
 
-#: src/components/controls/ModelStatsCard.tsx:519
+#: src/components/controls/ModelStatsCard.tsx:526
 msgid "Layer profile:"
 msgstr "Perfil de capa:"
 
@@ -2835,7 +2855,7 @@ msgstr "Perfil de capa:"
 msgid "Layers"
 msgstr "Capas"
 
-#: src/components/controls/ModelStatsCard.tsx:532
+#: src/components/controls/ModelStatsCard.tsx:539
 msgid "Layers:"
 msgstr "Capas:"
 
@@ -2860,7 +2880,7 @@ msgstr "Izq."
 msgid "Length"
 msgstr "Longitud"
 
-#: src/app/page.tsx:8309
+#: src/app/page.tsx:8314
 msgid "Letting DragonFruit finish its startup animation before loading your scene."
 msgstr "Dejando que DragonFruit termine su animación de arranque antes de cargar la escena."
 
@@ -2941,7 +2961,7 @@ msgstr "Cargando el estado de las copias…"
 msgid "Loading Mesh Files…"
 msgstr "Cargando ficheros de malla…"
 
-#: src/app/page.tsx:8259
+#: src/app/page.tsx:8264
 #: src/features/scene/sceneImportMessages.ts:23
 msgid "Loading Mesh…"
 msgstr "Cargando malla…"
@@ -2950,9 +2970,9 @@ msgstr "Cargando malla…"
 msgid "Loading remote material…"
 msgstr "Cargando el material remoto…"
 
-#: src/app/page.tsx:4466
-#: src/app/page.tsx:8259
-#: src/app/page.tsx:8268
+#: src/app/page.tsx:4471
+#: src/app/page.tsx:8264
+#: src/app/page.tsx:8273
 msgid "Loading Scene…"
 msgstr "Cargando escena…"
 
@@ -3109,7 +3129,7 @@ msgstr "Ajustes del perfil de material"
 msgid "Material profile unavailable"
 msgstr "Perfil de material no disponible"
 
-#: src/components/controls/ModelStatsCard.tsx:504
+#: src/components/controls/ModelStatsCard.tsx:511
 msgid "Material:"
 msgstr "Material:"
 
@@ -3256,12 +3276,12 @@ msgstr "Modo"
 msgid "Model {index}/{total}: {modelName}"
 msgstr "Modelo {index}/{total}: {modelName}"
 
-#: src/components/controls/ModelManagerPanel.tsx:404
+#: src/components/controls/ModelManagerPanel.tsx:430
 msgid "Model actions…"
 msgstr "Acciones del modelo…"
 
 #. Accessible name of the info button on a model row. The tooltip beside it lists the mesh size and polygon count.
-#: src/components/controls/ModelManagerPanel.tsx:705
+#: src/components/controls/ModelManagerPanel.tsx:872
 msgid "Model details"
 msgstr "Detalles del modelo"
 
@@ -3299,14 +3319,14 @@ msgstr "Dimensionado a escala del modelo"
 
 #. Section heading of the models context menu. Rendered uppercase.
 #. Title of the panel listing every model loaded into the scene.
-#: src/components/controls/ModelManagerPanel.tsx:459
-#: src/components/controls/ModelManagerPanel.tsx:742
+#: src/components/controls/ModelManagerPanel.tsx:485
+#: src/components/controls/ModelManagerPanel.tsx:909
 #: src/components/controls/toolRailEntries.ts:66
 #: src/components/controls/toolRailEntries.ts:169
 msgid "Models"
 msgstr "Modelos"
 
-#: src/components/controls/ModelManagerPanel.tsx:743
+#: src/components/controls/ModelManagerPanel.tsx:910
 msgid "Models context menu"
 msgstr "Menú contextual de modelos"
 
@@ -3353,7 +3373,7 @@ msgid "My Preset"
 msgstr "Mi preajuste"
 
 #. Value placeholder shown when the material is unknown because the printer is offline. Keep it as short as "N/A".
-#: src/components/controls/ModelStatsCard.tsx:126
+#: src/components/controls/ModelStatsCard.tsx:133
 msgid "N/A"
 msgstr "N/D"
 
@@ -3502,17 +3522,17 @@ msgstr "Todavía no hay mallas cargadas. Importa un modelo y vuelve a Exportar."
 msgid "No meshes loaded yet. Import a model first, then return to Slicing."
 msgstr "Todavía no hay mallas cargadas. Importa un modelo y vuelve al laminado."
 
-#: src/components/controls/ModelStatsCard.tsx:573
-#: src/components/controls/ModelStatsCard.tsx:574
+#: src/components/controls/ModelStatsCard.tsx:580
+#: src/components/controls/ModelStatsCard.tsx:581
 #: src/components/modals/ModelSupportsModal.tsx:145
 msgid "No model selected"
 msgstr "Ningún modelo seleccionado"
 
-#: src/components/controls/ModelManagerPanel.tsx:481
+#: src/components/controls/ModelManagerPanel.tsx:648
 msgid "No models loaded"
 msgstr "No hay modelos cargados"
 
-#: src/components/controls/ModelStatsCard.tsx:430
+#: src/components/controls/ModelStatsCard.tsx:437
 msgid "No printer connected"
 msgstr "Sin impresora conectada"
 
@@ -3772,7 +3792,7 @@ msgstr "Abrir la carpeta"
 msgid "Open GitHub Developer Settings and create a new OAuth App."
 msgstr "Abre los ajustes de desarrollador de GitHub y crea una aplicación OAuth nueva."
 
-#: src/components/controls/ModelStatsCard.tsx:514
+#: src/components/controls/ModelStatsCard.tsx:521
 #: src/features/slicing/components/SlicingPanel.tsx:2334
 msgid "Open material profiles"
 msgstr "Abrir los perfiles de material"
@@ -3786,7 +3806,7 @@ msgstr "Abre la biblioteca de impresoras y añade una ahora."
 msgid "Open printer monitor"
 msgstr "Abrir monitor de impresora"
 
-#: src/components/controls/ModelStatsCard.tsx:499
+#: src/components/controls/ModelStatsCard.tsx:506
 #: src/features/slicing/components/SlicingPanel.tsx:2316
 msgid "Open printer profiles"
 msgstr "Abrir los perfiles de impresora"
@@ -3799,7 +3819,7 @@ msgstr "Abrir escena…"
 msgid "Opening"
 msgstr "Abriendo"
 
-#: src/app/page.tsx:8306
+#: src/app/page.tsx:8311
 msgid "Opening scene…"
 msgstr "Abriendo escena…"
 
@@ -3820,7 +3840,7 @@ msgid "Output"
 msgstr "Salida"
 
 #. Name of the automatic folder collecting models that sit outside the build plate.
-#: src/components/controls/ModelManagerPanel.tsx:232
+#: src/components/controls/ModelManagerPanel.tsx:258
 msgid "Outside plate"
 msgstr "Fuera de la plataforma"
 
@@ -3936,9 +3956,18 @@ msgstr "Plata {index}"
 msgid "Plate 1"
 msgstr "Plataforma 1"
 
+#: src/components/controls/ModelManagerPanel.tsx:555
+msgid "Plate name"
+msgstr "Nombre de la plata"
+
 #: src/features/slicing/components/SlicingPanel.tsx:3782
 msgid "Plate preview · Layer {previewSelectedLayer}/{previewTotalLayers}"
 msgstr "Vista previa de la placa · Capa {previewSelectedLayer}/{previewTotalLayers}"
+
+#. Heading of the plate list at the top of the Models panel.
+#: src/components/controls/ModelManagerPanel.tsx:508
+msgid "Plates"
+msgstr "Platas"
 
 #: src/features/updater/UpdateCheckerSection.tsx:270
 msgid "Please <0>save your scene and any unsaved progress</0> before continuing."
@@ -4087,7 +4116,7 @@ msgstr "Perfiles de impresora ({0})"
 msgid "Printer-aware smoothing."
 msgstr "Suavizado según la impresora."
 
-#: src/components/controls/ModelStatsCard.tsx:489
+#: src/components/controls/ModelStatsCard.tsx:496
 msgid "Printer:"
 msgstr "Impresora:"
 
@@ -4184,7 +4213,7 @@ msgstr "Repetir el escaneo por líneas"
 msgid "Re-slice required after profile change"
 msgstr "Es necesario volver a laminar tras cambiar de perfil"
 
-#: src/app/page.tsx:4467
+#: src/app/page.tsx:4472
 msgid "Reading autosaved scene…"
 msgstr "Leyendo la escena guardada automáticamente…"
 
@@ -4323,18 +4352,22 @@ msgstr "Renombrar"
 msgid "Rename build plate"
 msgstr "Renombrar la plataforma"
 
-#: src/components/controls/ModelManagerPanel.tsx:384
-#: src/components/controls/ModelManagerPanel.tsx:576
+#: src/components/controls/ModelManagerPanel.tsx:410
+#: src/components/controls/ModelManagerPanel.tsx:743
 msgid "Rename folder"
 msgstr "Renombrar la carpeta"
 
-#: src/components/controls/ModelManagerPanel.tsx:390
+#: src/components/controls/ModelManagerPanel.tsx:416
 msgid "Rename model"
 msgstr "Renombrar el modelo"
 
-#: src/components/controls/ModelManagerPanel.tsx:678
+#: src/components/controls/ModelManagerPanel.tsx:845
 msgid "Rename model base name"
 msgstr "Renombrar el nombre base del modelo"
+
+#: src/components/controls/ModelManagerPanel.tsx:576
+msgid "Rename plate"
+msgstr "Renombrar plata"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:451
 msgid "Rename preset"
@@ -4366,7 +4399,7 @@ msgstr "Reabrir {0}"
 msgid "Repair"
 msgstr "Reparar"
 
-#: src/components/controls/ModelManagerPanel.tsx:393
+#: src/components/controls/ModelManagerPanel.tsx:419
 msgid "Repair mesh…"
 msgstr "Reparar la malla…"
 
@@ -4453,8 +4486,8 @@ msgstr "Restaurar los valores de fábrica"
 msgid "Restore Factory Defaults?"
 msgstr "¿Restaurar los valores de fábrica?"
 
-#: src/app/page.tsx:4498
-#: src/app/page.tsx:4509
+#: src/app/page.tsx:4503
+#: src/app/page.tsx:4514
 msgid "Restore Failed"
 msgstr "Error al restaurar"
 
@@ -4801,7 +4834,7 @@ msgstr "Elige un perfil de impresora para ver los detalles."
 msgid "Select a printer to detect its model."
 msgstr "Selecciona una impresora para detectar su modelo."
 
-#: src/components/controls/ModelManagerPanel.tsx:383
+#: src/components/controls/ModelManagerPanel.tsx:409
 msgid "Select folder"
 msgstr "Seleccionar la carpeta"
 
@@ -4926,7 +4959,7 @@ msgid "Sharp"
 msgstr "Nítido"
 
 #. Row label on the model details card: number of separate connected surfaces ("shells"/bodies) in the mesh.
-#: src/components/controls/ModelStatsCard.tsx:584
+#: src/components/controls/ModelStatsCard.tsx:591
 msgid "Shells:"
 msgstr "Cascarones:"
 
@@ -4934,7 +4967,7 @@ msgstr "Cascarones:"
 msgid "Shortest Print Time"
 msgstr "Menor tiempo de impresión"
 
-#: src/components/controls/ModelManagerPanel.tsx:718
+#: src/components/controls/ModelManagerPanel.tsx:885
 msgid "Show"
 msgstr "Mostrar"
 
@@ -5164,7 +5197,7 @@ msgid "Split the model along a drawn seam"
 msgstr "Dividir el modelo por una costura dibujada"
 
 #. Context menu action: split a multi-body 3MF import into independent models.
-#: src/components/controls/ModelManagerPanel.tsx:398
+#: src/components/controls/ModelManagerPanel.tsx:424
 msgid "Split to bodies"
 msgstr "Dividir en cuerpos"
 
@@ -5230,7 +5263,7 @@ msgstr "Codificación STL"
 msgid "STL Mesh (.stl)"
 msgstr "Malla STL (.stl)"
 
-#: src/components/controls/ModelStatsCard.tsx:578
+#: src/components/controls/ModelStatsCard.tsx:585
 msgid "STL size:"
 msgstr "Tamaño del STL:"
 
@@ -5396,12 +5429,12 @@ msgstr "Ancho de la espiga en milímetros"
 msgid "Tension"
 msgstr "Tensión"
 
-#: src/app/page.tsx:4511
+#: src/app/page.tsx:4516
 msgid "The autosave recovery file could not be found."
 msgstr "No se encuentra el archivo de recuperación."
 
-#: src/app/page.tsx:4499
-#: src/app/page.tsx:4512
+#: src/app/page.tsx:4504
+#: src/app/page.tsx:4517
 msgid "The autosaved recovery file is corrupted or unreadable."
 msgstr "El archivo de recuperación está dañado o no se puede leer."
 
@@ -5413,7 +5446,7 @@ msgstr "El guardado de recuperación en segundo plano ha fallado varias veces se
 msgid "The build plate awaits."
 msgstr "La placa de impresión te espera."
 
-#: src/app/page.tsx:11113
+#: src/app/page.tsx:11119
 msgid "The build plate is locked."
 msgstr "La plataforma está bloqueada."
 
@@ -5448,6 +5481,11 @@ msgstr "El hueco tallado en la otra mitad."
 #: src/components/controls/autoSupport/AutoSupportRunDiagnostics.tsx:46
 msgid "The inputs and factors the last run sized the supports with"
 msgstr "Los datos y factores con que la última ejecución dimensionó los soportes"
+
+#. The count is how many models stand on the plate being deleted.
+#: src/components/controls/ModelManagerPanel.tsx:636
+msgid "The models on this plate are deleted with it. Undo brings them back."
+msgstr "Los modelos de esta plata se eliminan con ella. Deshacer los recupera."
 
 #: src/features/organicCut/OrganicCutColorsSection.tsx:26
 msgid "The mortise's silhouette lines."
@@ -5502,9 +5540,13 @@ msgstr "La resina está lista. ¿Y tú?"
 msgid "The saved run policy the settings below are. Selecting one applies it immediately; the rest of the dialog stays staged until you save."
 msgstr "La política de ejecución guardada que corresponde a los ajustes de abajo. Al elegir uno se aplica en el acto; el resto de la ventana queda pendiente hasta que guardes."
 
-#: src/app/page.tsx:4500
+#: src/app/page.tsx:4505
 msgid "The scene importer rejected or could not parse the autosave data."
 msgstr "El importador de escenas rechazó los datos del guardado automático o no pudo interpretarlos."
+
+#: src/components/controls/ModelManagerPanel.tsx:588
+msgid "The scene needs one plate"
+msgstr "La escena necesita al menos una plata"
 
 #: src/features/organicCut/OrganicCutColorsSection.tsx:17
 msgid "The seam while the cursor is over it."
@@ -5703,7 +5745,7 @@ msgstr "Siguiendo los territorios"
 msgid "Transform"
 msgstr "Transformar"
 
-#: src/components/controls/ModelStatsCard.tsx:581
+#: src/components/controls/ModelStatsCard.tsx:588
 msgid "Triangles:"
 msgstr "Triángulos:"
 
@@ -5728,15 +5770,15 @@ msgstr "Interfaz y tema"
 msgid "Unavailable"
 msgstr "No disponible"
 
-#: src/app/page.tsx:11063
+#: src/app/page.tsx:11069
 msgid "Undo brings the models back"
 msgstr "Deshacer devuelve los modelos"
 
-#: src/components/controls/ModelManagerPanel.tsx:385
+#: src/components/controls/ModelManagerPanel.tsx:411
 msgid "Ungroup folder"
 msgstr "Desagrupar la carpeta"
 
-#: src/components/controls/ModelManagerPanel.tsx:375
+#: src/components/controls/ModelManagerPanel.tsx:401
 msgid "Ungroup selected"
 msgstr "Desagrupar la selección"
 
@@ -5770,7 +5812,7 @@ msgstr "Fabricante desconocido"
 msgid "Unlock build plate"
 msgstr "Desbloquear la plataforma"
 
-#: src/app/page.tsx:11116
+#: src/app/page.tsx:11122
 msgid "Unlock it to add or move models."
 msgstr "Desbloquéala para añadir o mover modelos."
 
@@ -5796,7 +5838,7 @@ msgstr "Puedes perder los cambios sin guardar."
 msgid "Unsaved Scene Found"
 msgstr "Hay una escena sin guardar"
 
-#: src/app/page.tsx:10335
+#: src/app/page.tsx:10340
 msgid "Unsupported file format"
 msgstr "Formato de fichero no compatible"
 
@@ -6129,6 +6171,10 @@ msgstr "Malla de alambre"
 #: src/components/layout/EmptySceneState.tsx:89
 msgid "With great resin comes great responsibility."
 msgstr "Una gran resina conlleva una gran responsabilidad."
+
+#: src/components/controls/ModelManagerPanel.tsx:563
+msgid "Work on this plate"
+msgstr "Trabajar en esta plata"
 
 #: src/components/settings/SettingsModal.tsx:1225
 msgid "Workspace behavior and panel layout"

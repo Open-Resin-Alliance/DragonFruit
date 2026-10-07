@@ -4,6 +4,7 @@ import {
   EyeOff,
   Box,
   Plus,
+  LayoutGrid,
   AlertTriangle,
 
   Folder,
@@ -11,6 +12,7 @@ import {
   ChevronRight,
   ChevronDown,
   Pencil,
+  Trash2,
   FolderPlus,
   FolderMinus,
   PanelsTopLeft,
@@ -24,7 +26,10 @@ import { Trans } from '@lingui/react/macro';
 import type { MessageDescriptor } from '@lingui/core';
 import { formatFileSize } from '@/utils/meshStatsFormatting';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
-import { Card, CardHeader, IconButton } from '@/components/atoms';
+import { Button, Card, CardHeader, IconButton } from '@/components/atoms';
+import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import { plateNumberPlaceholder } from '@/features/scene/plates/plateMessages';
+import type { ScenePlate } from '@/features/scene/useSceneCollectionManager';
 import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 import { Tooltip } from '@/components/ui/Tooltip';
@@ -52,6 +57,16 @@ type GroupSelectMode = 'single' | 'add';
 interface ModelManagerPanelProps {
   models: LoadedModel[];
   outsidePlateModelIds?: string[];
+  /** The scene's plates, listed above the models that stand on them. */
+  plates?: readonly ScenePlate[];
+  activePlateId?: string;
+  onActivatePlate?: (plateId: string) => void;
+  onAddPlate?: () => void;
+  onRenamePlate?: (plateId: string, name: string) => void;
+  /** Deleting a plate takes its models with it, so the panel asks first. */
+  onRemovePlate?: (plateId: string) => void;
+  /** Which plate a model stands on, resolved by the scene rather than the hint. */
+  resolveModelPlateId?: (model: LoadedModel) => string;
   activeModelId: string | null;
   selectedModelIds: string[];
   onSelect: (id: string, mode?: SelectMode) => void;
@@ -120,6 +135,13 @@ const splitModelNameSuffix = (name: string): { base: string; suffix: string } =>
 export function ModelManagerPanel({
   models,
   outsidePlateModelIds = [],
+  plates,
+  activePlateId,
+  onActivatePlate,
+  onAddPlate,
+  onRenamePlate,
+  onRemovePlate,
+  resolveModelPlateId,
   activeModelId,
   selectedModelIds,
   onSelect,
@@ -149,6 +171,11 @@ export function ModelManagerPanel({
   // the column layout and hides the whole body, which is an empty model list.
   const expanded = collapsible ? collapseExpanded : true;
   const [collapsedGroupIds, setCollapsedGroupIds] = useState<Record<string, boolean>>({});
+  /** The plate being renamed inline, and the text being typed. */
+  const [renamingPlateId, setRenamingPlateId] = useState<string | null>(null);
+  const [plateNameDraft, setPlateNameDraft] = useState('');
+  /** The plate whose deletion is waiting on an answer. */
+  const [platePendingDelete, setPlatePendingDelete] = useState<ScenePlate | null>(null);
   const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
   const [renamingGroupName, setRenamingGroupName] = useState('');
   const [renamingModelId, setRenamingModelId] = useState<string | null>(null);
@@ -472,6 +499,153 @@ export function ModelManagerPanel({
           </IconButton>
         ) : undefined}
       />
+
+      {/* The plates the models below stand on. One row each: click to work on
+          that plate, rename it in place, or delete it and its models. */}
+      {expanded && plates && plates.length > 0 && (
+        <div className="px-2.5 pt-1 pb-1 space-y-1">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-medium uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+              <Trans comment="Heading of the plate list at the top of the Models panel.">Plates</Trans>
+            </span>
+            {onAddPlate && (
+              <IconButton
+                onClick={onAddPlate}
+                className="!p-0.5 !text-[var(--text-muted)] hover:!text-[var(--text-strong)] hover:!bg-[var(--surface-2)]"
+                title={_(msg({ message: 'Add a plate', comment: 'Tooltip on the plus in the Plates heading, which adds an empty build plate.' }))}
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </IconButton>
+            )}
+          </div>
+
+          {plates.map((plate, index) => {
+            const isActive = plate.id === activePlateId;
+            const isRenaming = renamingPlateId === plate.id;
+            const modelCount = resolveModelPlateId
+              ? models.filter((model) => resolveModelPlateId(model) === plate.id).length
+              : 0;
+            return (
+              <div
+                key={plate.id}
+                className="px-1.5 py-1 rounded border flex items-center gap-1.5 cursor-pointer transition-colors"
+                style={isActive
+                  ? {
+                      background: 'color-mix(in srgb, var(--accent), var(--surface-2) 90%)',
+                      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                    }
+                  : { borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
+                onClick={() => onActivatePlate?.(plate.id)}
+              >
+                <LayoutGrid className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--accent)' }} />
+
+                {isRenaming ? (
+                  <input
+                    autoFocus
+                    value={plateNameDraft}
+                    onChange={(event) => setPlateNameDraft(event.target.value)}
+                    onBlur={() => {
+                      onRenamePlate?.(plate.id, plateNameDraft.trim());
+                      setRenamingPlateId(null);
+                    }}
+                    onClick={(event) => event.stopPropagation()}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        onRenamePlate?.(plate.id, plateNameDraft.trim());
+                        setRenamingPlateId(null);
+                      } else if (event.key === 'Escape') {
+                        setRenamingPlateId(null);
+                      }
+                    }}
+                    className="min-w-0 flex-1 rounded border px-1 py-0.5 text-xs"
+                    style={{ background: 'var(--surface-0)', borderColor: 'var(--border-subtle)', color: 'var(--text-strong)' }}
+                    aria-label={_(msg`Plate name`)}
+                  />
+                ) : (
+                  <span
+                    className="text-[10px] font-semibold uppercase tracking-wide truncate"
+                    style={{ color: 'var(--text-muted)' }}
+                    title={_(msg`Work on this plate`)}
+                  >
+                    {plate.name.trim() || plateNumberPlaceholder(index + 1, _)}
+                  </span>
+                )}
+
+                {onRenamePlate && !isRenaming && (
+                  <IconButton
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setPlateNameDraft(plate.name);
+                      setRenamingPlateId(plate.id);
+                    }}
+                    className="!p-0.5 !text-[var(--text-muted)] hover:!text-[var(--text-strong)] hover:!bg-[var(--surface-2)]"
+                    title={_(msg`Rename plate`)}
+                  >
+                    <Pencil className="h-3 w-3" />
+                  </IconButton>
+                )}
+
+                {onRemovePlate && (
+                  <IconButton
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setPlatePendingDelete(plate);
+                    }}
+                    disabled={plates.length <= 1}
+                    className="!p-0.5 !text-[var(--text-muted)] hover:!text-[var(--text-strong)] hover:!bg-[var(--surface-2)] disabled:!opacity-35"
+                    title={plates.length <= 1
+                      ? _(msg`The scene needs one plate`)
+                      : _(msg`Delete this plate and the models on it`)}
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </IconButton>
+                )}
+
+                <span className="ml-auto text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
+                  {modelCount}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {platePendingDelete && (
+        <StructuredDialogModal
+          open
+          ariaLabel={_(msg`Delete plate`)}
+          title={_(msg`Delete this plate?`)}
+          subtitle={platePendingDelete.name.trim() || plateNumberPlaceholder(plates?.findIndex((plate) => plate.id === platePendingDelete.id) ?? 0, _)}
+          icon={<Trash2 className="h-4 w-4" />}
+          iconTone="danger"
+          zIndexClassName="z-[130]"
+          closeAriaLabel={_(msg`Close modal`)}
+          onClose={() => setPlatePendingDelete(null)}
+          onBackdropClick={() => setPlatePendingDelete(null)}
+          actions={(
+            <>
+              <Button variant="secondary" onClick={() => setPlatePendingDelete(null)}>
+                <Trans>Cancel</Trans>
+              </Button>
+              <Button
+                variant="tinted-danger"
+                onClick={() => {
+                  onRemovePlate?.(platePendingDelete.id);
+                  setPlatePendingDelete(null);
+                }}
+              >
+                <Trans>Delete plate</Trans>
+              </Button>
+            </>
+          )}
+        >
+          <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+            <Trans comment="The count is how many models stand on the plate being deleted.">
+              The models on this plate are deleted with it. Undo brings them back.
+            </Trans>
+          </p>
+        </StructuredDialogModal>
+      )}
 
       {expanded && (
         <div className="px-2.5 pt-1 pb-2.5 space-y-2 flex flex-col flex-1 min-h-0">

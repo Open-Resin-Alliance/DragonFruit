@@ -3394,10 +3394,15 @@ export default function Home() {
   const estimatedVolumeMlLabel = React.useMemo(() => {
     const visible = scene.models.filter((model) => model.visible);
     if (visible.length === 0) return '—';
+    // An empty plate is a real answer, not an unknown: it holds no resin. The
+    // scene-wide row beside it still carries the whole figure.
+    if (visibleResinModels.length === 0) return '0.00 ml';
     if (isPrintingEstimatedResinBusy && printingEstimatedResinMl == null) return 'Calculating…';
     if (printingEstimatedResinMl == null) return '—';
     return `${printingEstimatedResinMl.toFixed(2)} ml`;
-  }, [isPrintingEstimatedResinBusy, printingEstimatedResinMl, scene.models]);
+  }, [isPrintingEstimatedResinBusy, printingEstimatedResinMl, scene.models, visibleResinModels.length]);
+
+
 
   /** The same figure for every plate, shown beside the per-plate one. */
   const estimatedResinTotalLabel = React.useMemo(() => {
@@ -10592,6 +10597,7 @@ export default function Home() {
                 selectedModelIds={scene.selectedModelIds}
                 inBoundsModelIds={inBoundsModelIds}
                 numLayers={estimatedSlicerLayerCount}
+                estimatedLayerCountLabelOverride={String(estimatedSlicerLayerCount)}
                 heightMm={slicing.heightMm}
                 estimatedPrintTimeLabelOverride={modelStatsEstimatedPrintTimeLabel}
                 estimatedResinLabelOverride={estimatedVolumeMlLabel}

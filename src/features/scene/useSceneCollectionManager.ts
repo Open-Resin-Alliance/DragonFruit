@@ -6072,11 +6072,13 @@ export function useSceneCollectionManager(options?: {
     });
   }, [view3dSettings.widthMm, view3dSettings.depthMm]);
 
-  /** Add an empty plate after the last one and make it the active plate. */
+  /**
+   * Add an empty plate after the last one. The plate being worked on does not
+   * change: adding a bed is not a reason to leave the one you are on.
+   */
   const addPlate = useCallback((): string => {
     const plate: ScenePlate = { id: uuidv4(), name: '' };
     setPlates((prev) => [...prev, plate]);
-    setActivePlateId(plate.id);
     return plate.id;
   }, []);
 

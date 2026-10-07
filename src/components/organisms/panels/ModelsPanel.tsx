@@ -56,6 +56,13 @@ export function ModelsPanel({
   return (
     <ModelManagerPanel
       models={scene.models}
+      plates={scene.plates}
+      activePlateId={scene.activePlateId}
+      onActivatePlate={scene.activatePlate}
+      onAddPlate={() => { scene.addPlate(); }}
+      onRenamePlate={scene.renamePlate}
+      onRemovePlate={scene.removePlate}
+      resolveModelPlateId={scene.resolveModelPlateId}
       outsidePlateModelIds={outsidePlateModelIds}
       activeModelId={scene.activeModelId}
       selectedModelIds={scene.selectedModelIds}
