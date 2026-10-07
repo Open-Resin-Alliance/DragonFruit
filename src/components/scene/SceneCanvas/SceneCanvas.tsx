@@ -4443,8 +4443,8 @@ export function SceneCanvas({
     });
   }, [buildPlateOpacity, isCameraBelowBuildPlate]);
 
-  const hidePlateContactPrimitives = plateContactCullActive || (mode === 'prepare' && transformMode === 'hollowing');
-  const hideRaftPrimitives = (mode === 'support' && plateContactCullActive) || (mode === 'prepare' && transformMode === 'hollowing');
+  const hidePlateContactPrimitives = plateContactCullActive || ((mode === 'prepare' || mode === 'support') && transformMode === 'hollowing');
+  const hideRaftPrimitives = (mode === 'support' && plateContactCullActive) || ((mode === 'prepare' || mode === 'support') && transformMode === 'hollowing');
   const hideGridHelpers = false;
   const modifyToolActive = mode === 'prepare' && transformMode === 'transform';
   const navigationLodActive = isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive || isGizmoDragging || isGizmoRetargeting || isLayerScrubbing;

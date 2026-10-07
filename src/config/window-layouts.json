@@ -22,6 +22,10 @@
         "prepare-transform-controls": {
           "to": "visual-settings",
           "side": "left"
+        },
+        "prepare-orientation": {
+          "to": "prepare-transform-controls",
+          "side": "below"
         }
       }
     },
@@ -41,6 +45,10 @@
         "prepare-transform-controls": {
           "to": "visual-settings",
           "side": "left"
+        },
+        "prepare-orientation": {
+          "to": "prepare-transform-controls",
+          "side": "below"
         }
       }
     },
@@ -240,68 +248,6 @@
       }
     },
     {
-      "id": "prepare-hollowing-hole-punch",
-      "matchPanelIds": [
-        "prepare-models",
-        "prepare-hollowing-panel",
-        "prepare-hole-punch-panel"
-      ],
-      "order": [
-        "prepare-models",
-        "visual-settings",
-        "prepare-hollowing-panel",
-        "prepare-hole-punch-panel"
-      ],
-      "anchors": {
-        "visual-settings": {
-          "to": "prepare-models",
-          "side": "right-edge"
-        },
-        "prepare-hollowing-panel": {
-          "to": "visual-settings",
-          "side": "left"
-        },
-        "prepare-hole-punch-panel": {
-          "to": "prepare-hollowing-panel",
-          "side": "below"
-        }
-      }
-    },
-    {
-      "id": "prepare-hollowing-hole-punch-debug",
-      "matchPanelIds": [
-        "prepare-models",
-        "prepare-debug-primitives",
-        "prepare-hollowing-panel",
-        "prepare-hole-punch-panel"
-      ],
-      "order": [
-        "prepare-models",
-        "prepare-debug-primitives",
-        "visual-settings",
-        "prepare-hollowing-panel",
-        "prepare-hole-punch-panel"
-      ],
-      "anchors": {
-        "prepare-debug-primitives": {
-          "to": "prepare-models",
-          "side": "below"
-        },
-        "visual-settings": {
-          "to": "prepare-models",
-          "side": "right-edge"
-        },
-        "prepare-hollowing-panel": {
-          "to": "visual-settings",
-          "side": "left"
-        },
-        "prepare-hole-punch-panel": {
-          "to": "prepare-hollowing-panel",
-          "side": "below"
-        }
-      }
-    },
-    {
       "id": "analysis",
       "matchPanelIds": ["analysis-scan-card", "analysis-workflow"],
       "order": [
@@ -348,26 +294,34 @@
     {
       "id": "support",
       "matchPanelIds": ["support-settings", "support-islands"],
-      "order": ["visual-settings", "support-settings", "support-islands"],
+      "order": ["visual-settings", "support-islands", "support-settings", "support-hollowing", "support-hole-punch"],
       "anchors": {
         "visual-settings": {
           "to": "support-settings",
           "side": "right-edge"
         },
+        "support-models": {
+          "to": "visual-settings",
+          "side": "left-edge"
+        },
+        "support-islands": {
+          "to": "visual-settings",
+          "side": "left"
+        },
         "support-settings": {
           "to": "visual-settings",
           "side": "left"
         },
-        "support-islands": {
-          "to": "support-settings",
-          "side": "left-edge"
-        },
         "support-auto": {
-          "to": "support-rotation",
-          "side": "below"
+          "to": "visual-settings",
+          "side": "left"
         },
-        "support-rotation": {
-          "to": "support-islands",
+        "support-hollowing": {
+          "to": "visual-settings",
+          "side": "left"
+        },
+        "support-hole-punch": {
+          "to": "support-hollowing",
           "side": "below"
         }
       }

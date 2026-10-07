@@ -120,10 +120,13 @@ import {
 import { outputFormatUsesPngLayers } from '@/features/slicing/formats/registry';
 import {
   clearSavedFloatingLayout,
+  getToolLayout,
   isDebugPrimitivesPanelVisibleEnabled,
   isFloatingLayoutPersistenceEnabled,
   setDebugPrimitivesPanelVisibleEnabled,
   setFloatingLayoutPersistenceEnabled,
+  setToolLayout,
+  type ToolLayout,
 } from '@/components/layout/floatingLayoutPreferences';
 import {
   DEFAULT_IMPORT_DEFAULTS_SETTINGS,
@@ -479,6 +482,7 @@ export function SettingsModal({
     return savedProfile.isBuiltIn ? '' : savedProfile.name;
   });
   const [draftFloatingLayoutPersistence, setDraftFloatingLayoutPersistence] = useState<boolean>(() => isFloatingLayoutPersistenceEnabled());
+  const [draftToolLayout, setDraftToolLayout] = useState<ToolLayout>(() => getToolLayout());
   const [draftDebugPrimitivesPanelVisible, setDraftDebugPrimitivesPanelVisible] = useState<boolean>(() => debugPrimitivesPanelVisible);
   const [draftImportDefaults, setDraftImportDefaults] = useState<ImportDefaultsSettings>(() => getSavedImportDefaultsSettings());
   const [draftSpaceMouseSettings, setDraftSpaceMouseSettings] = useState<SpaceMouseSettings>(() => getSavedSpaceMouseSettings());
@@ -580,6 +584,7 @@ export function SettingsModal({
     setDraftThemeProfiles(savedThemeProfiles);
     setDraftCustomThemeName(savedThemeProfile.isBuiltIn ? '' : savedThemeProfile.name);
     setDraftFloatingLayoutPersistence(isFloatingLayoutPersistenceEnabled());
+    setDraftToolLayout(getToolLayout());
     setDraftDebugPrimitivesPanelVisible(isDebugPrimitivesPanelVisibleEnabled());
     setDraftImportDefaults(getSavedImportDefaultsSettings());
     setDraftSpaceMouseSettings(getSavedSpaceMouseSettings());
@@ -989,6 +994,7 @@ export function SettingsModal({
     applyThemePreference(draftThemePreference);
     applyThemeCustomColors(draftThemeColors);
     setFloatingLayoutPersistenceEnabled(draftFloatingLayoutPersistence);
+    setToolLayout(draftToolLayout);
     setDebugPrimitivesPanelVisibleEnabled(draftDebugPrimitivesPanelVisible);
     saveImportDefaultsSettings(draftImportDefaults);
     saveSpaceMouseSettings(draftSpaceMouseSettings);
@@ -1049,6 +1055,7 @@ export function SettingsModal({
     draftThemeColors,
     draftThemeProfiles,
     draftFloatingLayoutPersistence,
+    draftToolLayout,
     draftDebugPrimitivesPanelVisible,
     draftImportDefaults,
     draftSpaceMouseSettings,
@@ -1431,6 +1438,8 @@ export function SettingsModal({
                 <GeneralSettingsTab
                   floatingLayoutPersistence={draftFloatingLayoutPersistence}
                   onFloatingLayoutPersistenceChange={setDraftFloatingLayoutPersistence}
+                  toolLayout={draftToolLayout}
+                  onToolLayoutChange={setDraftToolLayout}
                   onResetFloatingLayout={handleResetFloatingLayout}
                   debugPrimitivesPanelVisible={draftDebugPrimitivesPanelVisible}
                   onDebugPrimitivesPanelVisibleChange={setDraftDebugPrimitivesPanelVisible}

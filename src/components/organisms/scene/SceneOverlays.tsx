@@ -221,7 +221,7 @@ export function SceneOverlays({
     ? scene.models.find((model) => model.id === hollowPreview.modelId) ?? null
     : null;
   const activeModelId = scene.activeModel?.id ?? null;
-  const isInHollowingTool = scene.mode === 'prepare' && transformMgr.transformMode === 'hollowing';
+  const isInHollowingTool = (scene.mode === 'prepare' || scene.mode === 'support') && transformMgr.transformMode === 'hollowing';
   const showDraftHolePunchMarkers = (
     interiorView
     || (

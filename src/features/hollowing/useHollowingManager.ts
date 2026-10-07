@@ -30,6 +30,7 @@ import { getRotationQuatTuple, resolveBlockedVoxelValidity } from '@/features/me
 import { toPersistedHolePunchPlacements } from '@/features/hole-punching/holePunchPersistence';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { serializeHollowingModifier } from '@/features/hollowing/hollowingSerialize';
+import { accelerateGeometry } from '@/utils/bvh';
 import {
   buildGeometryVersionKey,
   createGeometryFromPreviewPositions,
@@ -299,6 +300,11 @@ export function useHollowingManager({
           cavityGeometry.computeVertexNormals();
           cavityGeometry.computeBoundingBox();
           cavityGeometry.computeBoundingSphere();
+          // Interior placement builds an SDFCache from whatever mesh the click
+          // hit, and the cavity mesh is one of those. Without a boundsTree the
+          // cache throws and every interior support press dies, so accelerate it
+          // here, where the geometry is born, rather than at each consumer.
+          accelerateGeometry(cavityGeometry);
         }
 
         const sourceSnapshot = snapshotGeometryPositions(sourceGeometry);
@@ -717,7 +723,7 @@ export function useHollowingManager({
   }, []);
 
   React.useEffect(() => {
-    if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'hollowing' || !hollowingEditMode) {
+    if ((scene.mode !== 'prepare' && scene.mode !== 'support') || transformMgr.transformMode !== 'hollowing' || !hollowingEditMode) {
       return;
     }
 
@@ -1323,6 +1329,9 @@ export function useHollowingManager({
       cavityGeometry.computeVertexNormals();
       cavityGeometry.computeBoundingBox();
       cavityGeometry.computeBoundingSphere();
+      // Same reason as the apply path: interior placement builds an SDFCache
+      // from the cavity mesh, so a restored cavity needs its boundsTree too.
+      accelerateGeometry(cavityGeometry);
       cavityGeometryByModelIdRef.current.set(model.id, { geometry: cavityGeometry });
     }
   }, [scene.models]);
@@ -1417,7 +1426,7 @@ export function useHollowingManager({
 
   React.useEffect(() => {
     if (!hollowPreview) return;
-    if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'hollowing') {
+    if ((scene.mode !== 'prepare' && scene.mode !== 'support') || transformMgr.transformMode !== 'hollowing') {
       clearHollowPreview();
       return;
     }
@@ -1428,7 +1437,7 @@ export function useHollowingManager({
   }, [clearHollowPreview, hollowPreview, scene.mode, scene.models, transformMgr.transformMode]);
 
   React.useEffect(() => {
-    if (scene.mode === 'prepare' && transformMgr.transformMode === 'hollowing') {
+    if ((scene.mode === 'prepare' || scene.mode === 'support') && transformMgr.transformMode === 'hollowing') {
       return;
     }
     setHollowingEditMode(false);
@@ -1590,7 +1599,7 @@ export function useHollowingManager({
   }, [blockedHollowVoxelIndices, clearHollowPreview, commitBlockedHollowVoxelIndices, editingBlockedHollowVoxelIndices]);
 
   React.useEffect(() => {
-    if (scene.mode !== 'prepare' || transformMgr.transformMode === 'hollowing') {
+    if ((scene.mode !== 'prepare' && scene.mode !== 'support') || transformMgr.transformMode === 'hollowing') {
       return;
     }
 

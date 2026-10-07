@@ -14,6 +14,7 @@ import {
   FLOATING_LAYOUT_DEBUG_REQUEST_EVENT,
   FLOATING_LAYOUT_STORAGE_KEY,
   type FloatingLayoutDebugRequestDetail,
+  type ToolLayout,
 } from '@/components/layout/floatingLayoutPreferences';
 import {
   UI_SCALE_PRESETS,
@@ -32,7 +33,9 @@ import {
 
 interface GeneralSettingsTabProps {
   floatingLayoutPersistence: boolean;
-  onFloatingLayoutPersistenceChange: (enabled: boolean) => void;
+  onFloatingLayoutPersistenceChange: (value: boolean) => void;
+  toolLayout: ToolLayout;
+  onToolLayoutChange: (value: ToolLayout) => void;
   onResetFloatingLayout: () => void;
   debugPrimitivesPanelVisible: boolean;
   onDebugPrimitivesPanelVisibleChange: (enabled: boolean) => void;
@@ -45,6 +48,8 @@ interface GeneralSettingsTabProps {
 export function GeneralSettingsTab({
   floatingLayoutPersistence,
   onFloatingLayoutPersistenceChange,
+  toolLayout,
+  onToolLayoutChange,
   onResetFloatingLayout,
   debugPrimitivesPanelVisible,
   onDebugPrimitivesPanelVisibleChange,
@@ -279,6 +284,23 @@ export function GeneralSettingsTab({
             ]}
             value={floatingLayoutPersistence ? 'on' : 'off'}
             onChange={(next) => onFloatingLayoutPersistenceChange(next === 'on')}
+          />
+        </SettingRow>
+
+        <SettingRow
+          bordered
+          className="mt-2"
+          label={_(msg`Tool layout`)}
+          description={_(msg`Park the tools in a column on the left edge, or in a bar centred under the app bar.`)}
+        >
+          <SegmentedControl
+            label={_(msg`Tool layout`)}
+            options={[
+              { value: 'vertical', label: _(msg`Vertical`) },
+              { value: 'horizontal', label: _(msg`Horizontal`) },
+            ]}
+            value={toolLayout}
+            onChange={(next) => onToolLayoutChange(next === 'horizontal' ? 'horizontal' : 'vertical')}
           />
         </SettingRow>
 

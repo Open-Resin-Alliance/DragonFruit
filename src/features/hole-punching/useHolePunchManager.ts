@@ -856,7 +856,7 @@ export function useHolePunchManager({
   React.useEffect(() => {
     const unregister = registerDeleteHandler(
       () => (
-        scene.mode === 'prepare'
+        (scene.mode === 'prepare' || scene.mode === 'support')
         && transformMgr.transformMode === 'hollowing'
         && selectedHolePunchPlacementIds.length > 0
         && selectedHolePunchPlacements.some((placement) => placement.modelId === scene.activeModel?.id)
