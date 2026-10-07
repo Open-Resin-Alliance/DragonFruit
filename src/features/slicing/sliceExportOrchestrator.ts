@@ -17,6 +17,7 @@ import {
 import { invoke } from '@tauri-apps/api/core';
 import { assembleSliceJob, buildNativeSliceJob, resolveSliceRasterSettings } from './sliceJobAssembly';
 import { resolveSliceJobAntiAliasing, type SliceJobAntiAliasingRequest } from './sliceAntiAliasing';
+import { prepareMeshChunk } from './tauri/meshChunkCompression';
 
 const DEBUG_PREFIX = '[SlicingDebug]';
 const BYTES_PER_TRIANGLE_XYZ = Float32Array.BYTES_PER_ELEMENT * 9;
@@ -41,6 +42,7 @@ type StageMeshChunkAck = {
     reserveGrew: boolean;
     chunksReceived: number;
     appendNs: number;
+    decodeNs: number;
     appendNsTotal: number;
 };
 
@@ -208,6 +210,9 @@ export type SliceExportResult = {
             meshBytesLen: number | null;
             stageMeshMs: number | null;
             stageMeshBytes: number | null;
+            stageMeshWireBytes: number | null;
+            stageMeshEncodeMs: number | null;
+            stageMeshDecodeMs: number | null;
             stageMeshChunkCount: number | null;
             stageMeshAvgChunkBytes: number | null;
             stageMeshThroughputMiBPerSec: number | null;
@@ -327,6 +332,9 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     let meshStageFilePath: string | null = null;
 
     let cumulativeBytesStage = 0;
+    let cumulativeWireBytesStage = 0;
+    let stageMeshEncodeMs = 0;
+    let stageMeshDecodeNs = 0;
     let stageMeshIpcMs = 0;
     let stageMeshChunkCount = 0;
     let stageMeshAckAppendNsTotal = 0;
@@ -354,13 +362,19 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         cumulativeBytesStage += chunk.byteLength;
         stageMeshChunkCount += 1;
         maybeEmitStageProgress();
+        throwIfAborted(options.abortSignal);
+        const payload = await prepareMeshChunk(chunk, options.abortSignal);
+        throwIfAborted(options.abortSignal);
+        cumulativeWireBytesStage += payload.bytes.byteLength;
+        stageMeshEncodeMs += payload.compressionMs;
 
         const chunkInvokeStart = performance.now();
-        const chunkAck = await invoke<StageMeshChunkAck>('stage_mesh_binary_chunk', chunk, {
-            headers: { 'Content-Type': 'application/octet-stream' },
+        const chunkAck = await invoke<StageMeshChunkAck>('stage_mesh_binary_chunk', payload.bytes, {
+            headers: payload.headers,
         });
 
         stageMeshAckAppendNsTotal = Math.max(stageMeshAckAppendNsTotal, chunkAck.appendNsTotal ?? 0);
+        stageMeshDecodeNs += chunkAck.decodeNs ?? 0;
         stageMeshCapacityMaxBytes = Math.max(stageMeshCapacityMaxBytes, chunkAck.capacityBytes ?? 0);
         if (chunkAck.reserveGrew) {
             stageMeshReserveGrowthEvents += 1;
@@ -381,14 +395,19 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         cumulativeBytesStage += chunk.byteLength;
         stageMeshChunkCount += 1;
         maybeEmitStageProgress();
+        throwIfAborted(options.abortSignal);
+        const payload = await prepareMeshChunk(chunk, options.abortSignal);
+        throwIfAborted(options.abortSignal);
+        cumulativeWireBytesStage += payload.bytes.byteLength;
+        stageMeshEncodeMs += payload.compressionMs;
 
         const chunkOffset = meshStageFileOffset;
         meshStageFileOffset += chunk.byteLength;
 
         const appendStart = performance.now();
-        const appendedLen = await invoke<number>('append_mesh_stage_chunk', chunk, {
+        const appendedLen = await invoke<number>('append_mesh_stage_chunk', payload.bytes, {
             headers: {
-                'Content-Type': 'application/octet-stream',
+                ...payload.headers,
                 'x-mesh-stage-path': meshStageFilePath,
                 'x-mesh-stage-offset': String(chunkOffset),
             },
@@ -488,16 +507,22 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         );
         const mb = Math.round(meshBytes.byteLength / (1024 * 1024));
         options.onProgress?.(0, 1, `Transferring Mesh (${mb} MB)`);
+        throwIfAborted(options.abortSignal);
+        const payload = await prepareMeshChunk(meshBytes, options.abortSignal);
+        throwIfAborted(options.abortSignal);
+        cumulativeWireBytesStage = payload.bytes.byteLength;
+        stageMeshEncodeMs += payload.compressionMs;
 
         const chunkInvokeStart = performance.now();
-        const chunkAck = await invoke<StageMeshChunkAck>('stage_mesh_binary_set', meshBytes, {
-            headers: { 'Content-Type': 'application/octet-stream' },
+        const chunkAck = await invoke<StageMeshChunkAck>('stage_mesh_binary_set', payload.bytes, {
+            headers: payload.headers,
         });
 
         stageMeshIpcMs += performance.now() - chunkInvokeStart;
         cumulativeBytesStage = chunkAck.totalBytes > 0 ? chunkAck.totalBytes : meshBytes.byteLength;
         stageMeshChunkCount = chunkAck.chunksReceived > 0 ? chunkAck.chunksReceived : 1;
         stageMeshAckAppendNsTotal = Math.max(stageMeshAckAppendNsTotal, chunkAck.appendNsTotal ?? 0);
+        stageMeshDecodeNs += chunkAck.decodeNs ?? 0;
         stageMeshCapacityMaxBytes = Math.max(stageMeshCapacityMaxBytes, chunkAck.capacityBytes ?? 0);
         if (chunkAck.reserveGrew) {
             stageMeshReserveGrowthEvents += 1;
@@ -628,7 +653,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         ? (cumulativeBytesStage / stageMeshChunkCount)
         : null;
     const stageMeshThroughputMiBPerSec = stageMeshIpcMs > 0
-        ? ((cumulativeBytesStage / (1024 * 1024)) / (stageMeshIpcMs / 1000))
+        ? ((cumulativeWireBytesStage / (1024 * 1024)) / (stageMeshIpcMs / 1000))
         : null;
     const stageMeshAckAppendMs = stageMeshAckAppendNsTotal > 0
         ? (stageMeshAckAppendNsTotal / 1_000_000)
@@ -708,6 +733,9 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
                     ? stageMeshIpcMs
                     : (encodedArtifact.bridge?.stageMeshMs ?? null),
                 stageMeshBytes: cumulativeBytesStage > 0 ? cumulativeBytesStage : null,
+                stageMeshWireBytes: cumulativeWireBytesStage > 0 ? cumulativeWireBytesStage : null,
+                stageMeshEncodeMs,
+                stageMeshDecodeMs: meshTransferMode === 'file-backed' ? null : stageMeshDecodeNs / 1_000_000,
                 stageMeshChunkCount: stageMeshChunkCount > 0 ? stageMeshChunkCount : null,
                 stageMeshAvgChunkBytes,
                 stageMeshThroughputMiBPerSec,

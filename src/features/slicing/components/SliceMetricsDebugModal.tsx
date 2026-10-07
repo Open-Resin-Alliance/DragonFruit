@@ -281,8 +281,10 @@ export function SliceMetricsDebugModal({
                         <RuntimeStat label="Mesh prep vs app wall" value={formatPercent(meshPrepVsWallPct)} />
                         <RuntimeStat label="CPU agg vs render wall" value={formatPercent(workerCpuVsRenderWallPct)} />
                         <RuntimeStat label="Transport overhead" value={formatMs(benchmark.nativePerf.transportOverheadMs, 2)} />
+                        <RuntimeStat label="Mesh transport encode" value={formatMs(benchmark.nativePerf.stageMeshEncodeMs, 2)} />
+                        <RuntimeStat label="Mesh transport decode" value={formatMs(benchmark.nativePerf.stageMeshDecodeMs, 2)} />
                         <RuntimeStat label="Stage mesh IPC" value={formatMs(benchmark.nativePerf.stageMeshMs, 2)} />
-                        <RuntimeStat label="Stage throughput" value={formatMiBPerSec(benchmark.nativePerf.stageMeshThroughputMiBPerSec)} />
+                        <RuntimeStat label="Wire throughput" value={formatMiBPerSec(benchmark.nativePerf.stageMeshThroughputMiBPerSec)} />
                       </div>
                     </div>
                   </div>
@@ -375,6 +377,7 @@ export function SliceMetricsDebugModal({
               <RuntimeStat label="Triangles / layer" value={trianglesPerLayer != null ? trianglesPerLayer.toLocaleString(undefined, { maximumFractionDigits: 2 }) : '—'} />
               <RuntimeStat label="Triangle floats" value={benchmark.jobConfig.triangleFloatCount.toLocaleString()} />
               <RuntimeStat label="Staged mesh bytes" value={formatBytes(benchmark.nativePerf.stageMeshBytes)} />
+              <RuntimeStat label="Wire mesh bytes" value={formatBytes(benchmark.nativePerf.stageMeshWireBytes)} />
               <RuntimeStat label="Mesh payload bytes" value={formatBytes(benchmark.nativePerf.meshBytesLen)} />
               <RuntimeStat label="Bridge payload chars" value={benchmark.nativePerf.bridgePayloadChars != null ? benchmark.nativePerf.bridgePayloadChars.toLocaleString() : '—'} />
               <RuntimeStat label="Staged chunk count" value={benchmark.nativePerf.stageMeshChunkCount != null ? benchmark.nativePerf.stageMeshChunkCount.toLocaleString() : '—'} />

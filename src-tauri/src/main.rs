@@ -3,6 +3,7 @@
 mod mesh_minima;
 mod mesh_repair;
 mod mesh_refine;
+mod mesh_transport;
 mod network;
 mod ao_vertex;
 mod overhang;
@@ -488,7 +489,26 @@ struct StageMeshChunkAck {
     reserve_grew: bool,
     chunks_received: u64,
     append_ns: u64,
+    decode_ns: u64,
     append_ns_total: u64,
+}
+
+fn mesh_compression_header<'a>(
+    request: &'a tauri::ipc::Request<'_>,
+) -> Result<Option<&'a str>, String> {
+    let mut headers = request.headers().get_all("x-mesh-compression").iter();
+    let compression = headers
+        .next()
+        .map(|value| {
+            value
+                .to_str()
+                .map_err(|error| format!("Invalid x-mesh-compression header value: {error}"))
+        })
+        .transpose()?;
+    if headers.next().is_some() {
+        return Err("Multiple x-mesh-compression header values are not allowed".into());
+    }
+    Ok(compression)
 }
 
 pub(crate) fn staged_mesh() -> &'static Mutex<Option<Vec<u8>>> {
@@ -1224,6 +1244,7 @@ async fn append_mesh_stage_chunk(request: tauri::ipc::Request<'_>) -> Result<u64
             return Err("append_mesh_stage_chunk expects raw binary body, got JSON".into())
         }
     };
+    let (bytes, _) = mesh_transport::decode_mesh_body(bytes, mesh_compression_header(&request)?)?;
 
     let path_header = request
         .headers()
@@ -1263,7 +1284,7 @@ async fn append_mesh_stage_chunk(request: tauri::ipc::Request<'_>) -> Result<u64
         None => false,
     };
 
-    stage_append_chunk(path_text, bytes, is_first_chunk)
+    stage_append_chunk(path_text, bytes.as_ref(), is_first_chunk)
 }
 
 /// Body of `append_mesh_stage_chunk`, extracted from the `#[tauri::command]`
@@ -1451,11 +1472,24 @@ async fn stage_mesh_binary_set(
             return Err("stage_mesh_binary_set expects raw binary body, got JSON".into())
         }
     };
+    let (bytes, decode_ns) =
+        mesh_transport::decode_mesh_body(bytes, mesh_compression_header(&request)?)?;
 
     let reserve_bytes = normalize_staged_mesh_prealloc_bytes(bytes.len());
     let append_start = std::time::Instant::now();
-    let mut staged = Vec::with_capacity(reserve_bytes);
-    staged.extend_from_slice(bytes);
+    let staged = match bytes {
+        std::borrow::Cow::Borrowed(bytes) => {
+            let mut staged = Vec::with_capacity(reserve_bytes);
+            staged.extend_from_slice(bytes);
+            staged
+        }
+        std::borrow::Cow::Owned(mut bytes) => {
+            if bytes.capacity() < reserve_bytes {
+                bytes.reserve_exact(reserve_bytes - bytes.len());
+            }
+            bytes
+        }
+    };
     let append_ns = append_start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
     let capacity_bytes = staged.capacity() as u64;
     let total_bytes = staged.len() as u64;
@@ -1486,6 +1520,7 @@ async fn stage_mesh_binary_set(
         reserve_grew: capacity_bytes > reserve_bytes as u64,
         chunks_received: 1,
         append_ns,
+        decode_ns,
         append_ns_total: append_ns,
     })
 }
@@ -1500,6 +1535,8 @@ async fn stage_mesh_binary_chunk(
             return Err("stage_mesh_binary_chunk expects raw binary body, got JSON".into())
         }
     };
+    let (bytes, decode_ns) =
+        mesh_transport::decode_mesh_body(bytes, mesh_compression_header(&request)?)?;
 
     let mut lock = staged_mesh()
         .lock()
@@ -1512,7 +1549,7 @@ async fn stage_mesh_binary_chunk(
     let chunk_bytes = bytes.len() as u64;
     let capacity_before = vec.capacity();
     let append_start = std::time::Instant::now();
-    vec.extend_from_slice(bytes);
+    vec.extend_from_slice(bytes.as_ref());
     let append_ns = append_start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
     let capacity_after = vec.capacity();
     let total_bytes = vec.len() as u64;
@@ -1532,6 +1569,7 @@ async fn stage_mesh_binary_chunk(
         reserve_grew: capacity_after > capacity_before,
         chunks_received: stats.chunks_received,
         append_ns,
+        decode_ns,
         append_ns_total: stats.append_ns_total,
     })
 }

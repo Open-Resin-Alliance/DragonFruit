@@ -51,6 +51,7 @@ dragonfruit-mesh-repair = { path = "../rust/dragonfruit-mesh-repair", features =
 dragonfruit-organic-cut = { path = "../rust/dragonfruit-organic-cut", features = ["manifold"] }
 bytemuck = "1"
 meshopt = "0.6.2"
+lz4_flex = { version = "0.14", default-features = false, features = ["std", "safe-decode", "checked-decode"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri-plugin-macos-fps = { path = "../rust/tauri-plugin-macos-fps" }

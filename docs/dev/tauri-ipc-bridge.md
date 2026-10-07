@@ -121,6 +121,63 @@ before this interval. `stageMeshMs` sums the awaited staging calls, which overla
 geometry generation in streamed mode: do not add it to `meshPrepMs`, or subtract
 it to infer geometry CPU time. Native slicing begins only after staging completes.
 
+### Lossless transport compression
+
+`prepareMeshChunk` in `src/features/slicing/tauri/meshChunkCompression.ts`
+compresses eligible payloads with the upstream LZ4 1.10.0 fast encoder. It lazily
+loads `public/wasm/lz4-1.10.0.wasm`; `createMeshChunkEncoder` constructs the same
+encoder from supplied module bytes for non-browser callers. Loader/codec errors
+are propagated, not replaced with a silent raw fallback. Cancellation is checked
+before encoding and after shared initialization without cancelling another caller.
+
+```ts
+const payload = await prepareMeshChunk(rawBytes, abortSignal);
+await invoke('stage_mesh_binary_chunk', payload.bytes, { headers: payload.headers });
+```
+
+Payloads below 64 KiB or above 256 MiB remain raw. Eligible payloads are sent
+compressed only when the encoded size is at most seven eighths of the raw size;
+otherwise they retain the raw representation. This is transport compression,
+not geometry quantization: the job still declares `meshEncoding: 'raw_f32'`,
+and native staging contains the exact original float bits and triangle order.
+
+The existing `stage_mesh_binary_set`, `stage_mesh_binary_chunk`, and
+`append_mesh_stage_chunk` commands accept `x-mesh-compression: lz4`. The body is
+a four-byte little-endian decoded-size prefix followed by one standard LZ4 block.
+An absent header means raw bytes for other staging callers. Unknown/repeated
+tags, invalid sizes, malformed blocks, and decoded-size mismatches fail before
+staging mutation. `src-tauri/src/mesh_transport.rs` enforces the 256 MiB decoded
+block limit. In-memory acknowledgements count decoded bytes and expose `decodeNs`
+separately from `appendNs`; file-backed append retains its byte-offset contract.
+
+The V3 metrics window and copied benchmark JSON expose `stageMeshEncodeMs` and
+`stageMeshDecodeMs` separately. Encode time includes cold module initialization;
+decode time includes validation, allocation, and decompression, not native append.
+File-backed decoding is unmeasured and reports `null`, not a fabricated zero.
+`stageMeshBytes` remains the decoded geometry size, while `stageMeshWireBytes`
+counts bytes actually submitted to IPC. `stageMeshThroughputMiBPerSec` uses wire
+bytes and invocation waits. Encode/decode/IPC intervals can overlap; they are not
+an additive breakdown of `meshPrepMs`.
+
+The bundled encoder is the BSD-2-Clause [upstream LZ4 1.10.0 library](https://github.com/lz4/lz4/releases/tag/v1.10.0),
+not the GPL command-line tool. Its licence and linked runtime notices are shipped
+beside the asset. The standalone, scalar WebAssembly library was built with
+[WASI SDK 34](https://github.com/WebAssembly/wasi-sdk/releases/tag/wasi-sdk-34):
+
+```sh
+clang --target=wasm32-wasip1 -nostartfiles -O3 -DNDEBUG \
+  -Wl,--no-entry -Wl,--export=malloc -Wl,--export=free \
+  -Wl,--export=LZ4_versionNumber -Wl,--export=LZ4_compressBound \
+  -Wl,--export=LZ4_compress_default -Wl,--export-memory \
+  -Wl,-z,stack-size=1048576 lz4-1.10.0/lib/lz4.c -o lz4-1.10.0.wasm
+```
+
+The expected encoder asset SHA-256 is
+`8d146d9fa2b148045a8c29a5f7752c6ceb11a2b880cf2222f92aa7c0abe8fc95`.
+Rebuild/version the asset and update its ABI validation together; it has no host
+imports and requires no WASI shims or build-framework changes. Existing frontend
+packaging copies public assets into the desktop distribution.
+
 ## Baked ambient occlusion (`bake_vertex_occlusion`)
 
 `bake_vertex_occlusion(rays?, reach_mm?)` bakes per-vertex ambient occlusion for
