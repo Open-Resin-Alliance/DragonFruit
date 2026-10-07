@@ -136,6 +136,17 @@ export function useHollowingManager({
   const hollowPreviewWarmupKeyRef = React.useRef<string | null>(null);
   const hollowingSourceByModelIdRef = React.useRef<Map<string, HollowingSourceEntry>>(new Map());
   const cavityGeometryByModelIdRef = React.useRef<Map<string, CavityGeometryEntry>>(new Map());
+  /**
+   * Bumped whenever the cavity map above changes. The map is a ref, so a read of
+   * it does not subscribe anything: without this, a value derived from it —
+   * "is interior view available?" — keeps the answer it had on the last render
+   * that happened for some other reason, and the feature stayed enabled after the
+   * hollow that justified it was reset.
+   */
+  const [cavityGeometryVersion, setCavityGeometryVersion] = React.useState(0);
+  const markCavityGeometryChanged = React.useCallback(() => {
+    setCavityGeometryVersion((version) => version + 1);
+  }, []);
   const bakedHollowingBeforeDraftRef = React.useRef<Map<string, ModelHollowingModifier>>(new Map());
 
   const rememberBakedHollowing = React.useCallback((model: NonNullable<SceneManager['activeModel']>) => {
@@ -181,14 +192,14 @@ export function useHollowingManager({
     hollowingSourceByModelIdRef.current.delete(modelId);
     const cavity = cavityGeometryByModelIdRef.current.get(modelId);
     cavity?.geometry.dispose();
-    cavityGeometryByModelIdRef.current.delete(modelId);
+    if (cavityGeometryByModelIdRef.current.delete(modelId)) markCavityGeometryChanged();
     for (const [key, entry] of hollowPreviewResultCacheRef.current) {
       if (entry.modelId !== modelId) continue;
       disposeHollowPreviewCacheEntry(entry);
       hollowPreviewResultCacheRef.current.delete(key);
     }
     bakedHollowingBeforeDraftRef.current.delete(modelId);
-  }, [clearHollowPreview, hollowPreview?.modelId, scene.activeModelId]);
+  }, [clearHollowPreview, hollowPreview?.modelId, scene.activeModelId, markCavityGeometryChanged]);
 
   const handleApplyHollowing = React.useCallback(() => {
     void (async () => {
@@ -424,6 +435,7 @@ export function useHollowingManager({
         } else {
           cavityGeometryByModelIdRef.current.delete(activeModel.id);
         }
+        markCavityGeometryChanged();
         deps.current.setHolePunchState((previous) => (
           previous.depthMode === 'auto' ? previous : { ...previous, depthMode: 'auto' }
         ));
@@ -442,7 +454,7 @@ export function useHollowingManager({
         setIsApplyingBlockersHollowing(false);
       }
     })();
-  }, [blockedHollowVoxelIndices, hollowingDraftEnabled, hollowingState, isShellOpenFaceSelected, scene]);
+  }, [blockedHollowVoxelIndices, hollowingDraftEnabled, hollowingState, isShellOpenFaceSelected, scene, markCavityGeometryChanged]);
 
   const handleResetHollowing = React.useCallback(() => {
     const activeModel = scene.activeModel;
@@ -1277,11 +1289,14 @@ export function useHollowingManager({
       hollowingSourceByModelIdRef.current.delete(modelId);
     }
 
+    let removedCavityGeometry = false;
     for (const [modelId, entry] of cavityGeometryByModelIdRef.current.entries()) {
       if (liveIds.has(modelId)) continue;
       entry.geometry.dispose();
       cavityGeometryByModelIdRef.current.delete(modelId);
+      removedCavityGeometry = true;
     }
+    if (removedCavityGeometry) markCavityGeometryChanged();
 
     // If the active model's cavity geometry was just removed, exit interior view
     // so the user doesn't get stuck with no way to toggle it off.
@@ -1300,7 +1315,7 @@ export function useHollowingManager({
     for (const modelId of bakedHollowingBeforeDraftRef.current.keys()) {
       if (!liveIds.has(modelId)) bakedHollowingBeforeDraftRef.current.delete(modelId);
     }
-  }, [scene.models, deps.current.interiorView, deps.current.setInteriorView]);
+  }, [scene.models, deps.current.interiorView, deps.current.setInteriorView, markCavityGeometryChanged]);
 
   // Restore cavity geometry from persisted data for models with baked hollowing.
   React.useEffect(() => {
@@ -1333,8 +1348,9 @@ export function useHollowingManager({
       // from the cavity mesh, so a restored cavity needs its boundsTree too.
       accelerateGeometry(cavityGeometry);
       cavityGeometryByModelIdRef.current.set(model.id, { geometry: cavityGeometry });
+      markCavityGeometryChanged();
     }
-  }, [scene.models]);
+  }, [scene.models, scene.activeModelId, markCavityGeometryChanged]);
 
   // Rust echoes back which committed blockers it actually accepted (stale
   // indices that fell off the grid or landed on non-solid voxels are
@@ -1668,6 +1684,7 @@ export function useHollowingManager({
     hollowPreviewWarmupKeyRef,
     hollowingSourceByModelIdRef,
     cavityGeometryByModelIdRef,
+    cavityGeometryVersion,
     defaultHollowingState,
     isHollowingApplied,
     persistedHollowingSignature,
