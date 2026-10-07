@@ -653,6 +653,42 @@ export default function Home() {
   const notifyPlateLockedRef = React.useRef<() => void>(() => {});
   const scene = useSceneCollectionManager({ onBlockedByLock: () => notifyPlateLockedRef.current() });
 
+  /**
+   * The build volume of every plate, in world coordinates. Every plate is a valid
+   * build volume, so a model is judged against the plate it stands on rather than
+   * the first one; the plates differ only in where they sit.
+   */
+  const plateVolumeBounds = React.useMemo(() => {
+    if (!scene.view3dSettings.enabled) return null;
+    const { maxZMm } = scene.view3dSettings;
+    return new Map(scene.plateFrames.map((frame) => [frame.id, new THREE.Box3(
+      new THREE.Vector3(frame.minX, frame.minY, 0),
+      new THREE.Vector3(frame.maxX, frame.maxY, maxZMm),
+    )]));
+  }, [scene.plateFrames, scene.view3dSettings.enabled, scene.view3dSettings.maxZMm]);
+
+  /**
+   * The volume a model is judged against: the plate it stands on, resolved by the
+   * scene so a model with no membership of its own is placed by where it is.
+   */
+  const volumeBoundsForModel = React.useCallback((model: (typeof scene.models)[number]): THREE.Box3 | null => {
+    const plateId = scene.resolveModelPlateId(model);
+    return (plateId ? plateVolumeBounds?.get(plateId) : undefined) ?? null;
+  }, [plateVolumeBounds, scene.resolveModelPlateId]);
+
+  /**
+   * The models on the plate being worked on. Layer count, print time and resin
+   * are about the bed you are looking at, not about every bed in the scene.
+   */
+  const activePlateModelIds = React.useMemo(
+    () => new Set(
+      scene.models
+        .filter((model) => scene.resolveModelPlateId(model) === scene.activePlateId)
+        .map((model) => model.id),
+    ),
+    [scene.activePlateId, scene.models, scene.resolveModelPlateId],
+  );
+
   // Warn when an imported mesh fails the manifold_csg validity check — the same
   // models shown with the red striped overlay in the viewport. Only a single
   // warning is shown per import job: as soon as any newly-imported model is
@@ -2890,12 +2926,13 @@ export default function Home() {
       // Use stored transform — bounds don't change on selection.
       // Previously depended on scene.activeModelId, causing recomputation
       // (including computePreciseModelWorldBounds, O(vertices)) on every click.
+      const volume = volumeBoundsForModel(model) ?? resinBuildVolumeBounds;
       const approxBounds = computeApproxModelWorldBounds(model.geometry, model.transform);
-      const bounds = isBoundsOutsideVolume(approxBounds, resinBuildVolumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM)
+      const bounds = isBoundsOutsideVolume(approxBounds, volume, BUILD_VOLUME_BOUNDS_EPS_MM)
         ? computePreciseModelWorldBounds(model.geometry, model.transform)
         : approxBounds;
 
-      if (!isBoundsOutsideVolume(bounds, resinBuildVolumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM)) {
+      if (!isBoundsOutsideVolume(bounds, volume, BUILD_VOLUME_BOUNDS_EPS_MM)) {
         inBoundsModelIds.add(model.id);
       }
     }
@@ -2904,6 +2941,7 @@ export default function Home() {
   }, [
     resinBuildVolumeBounds,
     scene.models,
+    volumeBoundsForModel,
   ]);
 
   /**
@@ -2920,13 +2958,17 @@ export default function Home() {
     const sliceableModelIds = new Set<string>();
 
     for (const model of visibleModels) {
+      // The plate the model stands on is the volume that counts: any plate is a
+      // valid build volume, so a model on the second one is not "outside" just
+      // for being on the second one.
+      const volume = volumeBoundsForModel(model) ?? resinBuildVolumeBounds;
       const approxBounds = computeApproxModelWorldBounds(model.geometry, model.transform);
-      if (isBoundsDisjointFromVolume(approxBounds, resinBuildVolumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM)) continue;
+      if (isBoundsDisjointFromVolume(approxBounds, volume, BUILD_VOLUME_BOUNDS_EPS_MM)) continue;
       // Rotated bounding boxes can overlap even when the actual mesh does not.
-      const bounds = isBoundsOutsideVolume(approxBounds, resinBuildVolumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM)
+      const bounds = isBoundsOutsideVolume(approxBounds, volume, BUILD_VOLUME_BOUNDS_EPS_MM)
         ? computePreciseModelWorldBounds(model.geometry, model.transform)
         : approxBounds;
-      if (!isBoundsDisjointFromVolume(bounds, resinBuildVolumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM)) {
+      if (!isBoundsDisjointFromVolume(bounds, volume, BUILD_VOLUME_BOUNDS_EPS_MM)) {
         sliceableModelIds.add(model.id);
       }
     }
@@ -2935,11 +2977,14 @@ export default function Home() {
   }, [
     resinBuildVolumeBounds,
     scene.models,
+    volumeBoundsForModel,
   ]);
 
   const visibleResinModels = React.useMemo(() => {
-    return scene.models.filter((model) => model.visible && resinInBoundsModelIdSet.has(model.id));
-  }, [resinInBoundsModelIdSet, scene.models]);
+    return scene.models.filter(
+      (model) => model.visible && resinInBoundsModelIdSet.has(model.id) && activePlateModelIds.has(model.id),
+    );
+  }, [activePlateModelIds, resinInBoundsModelIdSet, scene.models]);
   const shouldEstimateResinInBackground = visibleResinModels.length > 0
     && (scene.mode !== 'printing' || !printingArtifact);
 
@@ -6543,14 +6588,16 @@ export default function Home() {
   }, [hasAnyEntries, raftSettingsSnapshot.bottomMode, supportStateSnapshot]);
 
   const slicingModels = React.useMemo(
-    () => scene.models.filter((model) => model.visible && sliceableModelIdSet.has(model.id)),
-    [scene.models, sliceableModelIdSet],
+    () => scene.models.filter(
+      (model) => model.visible && sliceableModelIdSet.has(model.id) && activePlateModelIds.has(model.id),
+    ),
+    [activePlateModelIds, scene.models, sliceableModelIdSet],
   );
   const excludedSliceModelIds = React.useMemo(
     () => scene.models
-      .filter((model) => model.visible && !sliceableModelIdSet.has(model.id))
+      .filter((model) => model.visible && activePlateModelIds.has(model.id) && !sliceableModelIdSet.has(model.id))
       .map((model) => model.id),
-    [scene.models, sliceableModelIdSet],
+    [activePlateModelIds, scene.models, sliceableModelIdSet],
   );
 
   // For non-printing workflows, avoid expensive world-triangle projection work by default.
@@ -7239,35 +7286,14 @@ export default function Home() {
     scene.view3dSettings.widthMm,
   ]);
 
-  /**
-   * The build volume of every plate, in world coordinates, so a model is judged
-   * against the plate it stands on rather than the first one.
-   */
-  const plateVolumeBounds = React.useMemo(() => {
-    if (!scene.view3dSettings.enabled) return null;
-    const { maxZMm } = scene.view3dSettings;
-
-    return new Map(scene.plateFrames.map((frame) => [frame.id, new THREE.Box3(
-      new THREE.Vector3(frame.minX, frame.minY, 0),
-      new THREE.Vector3(frame.maxX, frame.maxY, maxZMm),
-    )]));
-  }, [
-    scene.plateFrames,
-    scene.view3dSettings.enabled,
-    scene.view3dSettings.maxZMm,
-  ]);
-
   const outsidePlateModelIds = React.useMemo(() => {
     if (!buildVolumeBounds) return [] as string[];
     const BUILD_VOLUME_BOUNDS_EPS_MM = 0.01;
-    const firstPlateId = scene.plateFrames[0]?.id;
 
     return scene.models
       .filter((model) => model.visible)
       .filter((model) => {
-        const volume = (plateVolumeBounds && (model.plateId ?? firstPlateId)
-          ? plateVolumeBounds.get(model.plateId ?? firstPlateId ?? '')
-          : undefined) ?? buildVolumeBounds;
+        const volume = volumeBoundsForModel(model) ?? buildVolumeBounds;
         const effectiveTransform =
           (scene.activeModelId === model.id && displayActiveModelId === scene.activeModelId)
             ? transformMgr.transform
@@ -7280,11 +7306,10 @@ export default function Home() {
     buildVolumeBounds,
     computeModelWorldBounds,
     displayActiveModelId,
-    plateVolumeBounds,
     scene.activeModelId,
     scene.models,
-    scene.plateFrames,
     transformMgr.transform,
+    volumeBoundsForModel,
   ]);
 
   const inBoundsModelIds = React.useMemo(() => {
@@ -10290,6 +10315,7 @@ export default function Home() {
             interiorView={interiorView}
             plates={scene.plates}
             plateFrames={scene.plateFrames}
+            resolveModelPlateId={scene.resolveModelPlateId}
             activePlateId={scene.activePlateId}
             onActivatePlate={scene.activatePlate}
             onAddPlate={() => { scene.addPlate(); }}

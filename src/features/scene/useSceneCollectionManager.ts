@@ -1239,17 +1239,26 @@ export function useSceneCollectionManager(options?: {
   const platesRef = useRef<ScenePlate[]>(plates);
   platesRef.current = plates;
   /**
+   * The plate resolver, in a ref because the guards and transform writers are
+   * declared above it and must read the live one rather than a stale closure.
+   * Until it is assigned, a model keeps whatever membership it already had.
+   */
+  const resolveModelPlateIdRef = useRef<(model: LoadedModel) => string>(
+    (model) => model.plateId ?? '',
+  );
+  /**
    * The plate a model stands on. A model with no membership is on the scene's
    * first plate, which is what a scene written before plates meant by it.
    */
   const modelPlateId = useCallback(
-    (model: LoadedModel) => model.plateId ?? platesRef.current[0]?.id ?? '',
+    (model: LoadedModel) => resolveModelPlateIdRef.current(model),
     [],
   );
   /** Whether the plate a model stands on refuses edits. */
   const isModelPlateLocked = useCallback((model: LoadedModel) => {
     const locked = lockedPlateIdsRef.current;
-    return locked.length > 0 && locked.includes(model.plateId ?? platesRef.current[0]?.id ?? '');
+    if (locked.length === 0) return false;
+    return locked.includes(resolveModelPlateIdRef.current(model));
   }, []);
   /** Whether the plate new work would land on refuses edits. */
   const isActivePlateLocked = useCallback(
@@ -2556,7 +2565,23 @@ export function useSceneCollectionManager(options?: {
   // (e.g. mirror, which reflects supports about the model bbox center via
   // `transformSupportsForModel` rather than through a delta-matrix).
   const setModelTransformRaw = useCallback((id: string, transform: ModelTransform) => {
-    setModels((prev) => prev.map((m) => (m.id === id ? { ...m, transform } : m)));
+    // Resolved before the state update rather than inside it: a setter is not a
+    // place for a side effect, and the active plate is a second piece of state.
+    const current = modelsRef.current.find((m) => m.id === id);
+    if (current) {
+      const plateId = resolveModelPlateIdRef.current({ ...current, transform });
+      if (plateId && plateId !== current.plateId) {
+        setActivePlateId((active) => (active === plateId ? active : plateId));
+      }
+    }
+
+    setModels((prev) => prev.map((m) => {
+      if (m.id !== id) return m;
+      const moved = { ...m, transform };
+      // Membership follows the model: it stands on whichever plate it now does.
+      const plateId = resolveModelPlateIdRef.current(moved);
+      return plateId ? { ...moved, plateId } : moved;
+    }));
   }, []);
 
   const updateModelTransform = useCallback((id: string, transform: ModelTransform, previousTransformOverride?: ModelTransform) => {
@@ -2642,10 +2667,32 @@ export function useSceneCollectionManager(options?: {
       }
     }
 
+    // Which plate the moved models land on, resolved before the state update: a
+    // setter is not a place for a side effect, and the active plate is state too.
+    const landedPlateIds = new Set<string>();
+    for (const model of modelsRef.current) {
+      const nextTransform = updateMap.get(model.id);
+      if (!nextTransform) continue;
+      const plateId = resolveModelPlateIdRef.current({ ...model, transform: nextTransform });
+      if (plateId) landedPlateIds.add(plateId);
+    }
+    // A drag that lands on another bed makes that bed the one you are working on.
+    // A move spreading the models over several plates says nothing about which to
+    // work on, so the active plate is left alone.
+    const followedPlateId = landedPlateIds.size === 1 ? [...landedPlateIds][0] : null;
+
     setModels(prev => prev.map(m => {
       const nextTransform = updateMap.get(m.id);
-      return nextTransform ? { ...m, transform: nextTransform } : m;
+      if (!nextTransform) return m;
+      const moved = { ...m, transform: nextTransform };
+      // Membership follows the model: it stands on whichever plate it now does.
+      const plateId = resolveModelPlateIdRef.current(moved);
+      return plateId ? { ...moved, plateId } : moved;
     }));
+
+    if (followedPlateId) {
+      setActivePlateId((active) => (active === followedPlateId ? active : followedPlateId));
+    }
 
     return {
       updated: true,
@@ -2868,8 +2915,26 @@ export function useSceneCollectionManager(options?: {
 
     const nextModels = currentModels.map((m) => {
       const nextTransform = updateMap.get(m.id);
-      return nextTransform ? { ...m, transform: nextTransform } : m;
+      if (!nextTransform) return m;
+      const moved = { ...m, transform: nextTransform };
+      // Membership follows the model, folded into the same update so a drag does
+      // not cost a second render.
+      const plateId = resolveModelPlateIdRef.current(moved);
+      return plateId ? { ...moved, plateId } : moved;
     });
+
+    // Follow the moved set when it lands wholly on one plate, which is a drag of
+    // one or a few models onto another bed. A set spread across plates says
+    // nothing about which one to work on, so the active plate is left alone.
+    const movedPlateIds = new Set(
+      nextModels
+        .filter((model) => updateMap.has(model.id) && model.plateId)
+        .map((model) => model.plateId as string),
+    );
+    if (movedPlateIds.size === 1) {
+      const [onlyPlateId] = movedPlateIds;
+      setActivePlateId((active) => (active === onlyPlateId ? active : onlyPlateId));
+    }
 
     if (!shouldPushHistory) modelsRef.current = nextModels;
     setModels(nextModels);
@@ -6046,12 +6111,35 @@ export function useSceneCollectionManager(options?: {
     });
   }, [plates, view3dSettings]);
 
+  /**
+   * The plate a model stands on.
+   *
+   * Where it stands is what counts: every plate is a valid build volume, and a
+   * model dragged from one bed to the next belongs to the bed it landed on. A
+   * stored membership is only a hint, and it goes stale the moment a model is
+   * moved, which is how a model sitting on plate two came to be reported as
+   * outside the volume for not being on plate one.
+   *
+   * The hint is the fallback for a model that stands outside every plate, where
+   * position cannot answer; then the first plate.
+   */
+  const resolveModelPlateId = useCallback((model: LoadedModel): string => {
+    const x = model.transform.position.x;
+    const y = model.transform.position.y;
+    const containing = plateFrames.find(
+      (frame) => x >= frame.minX && x <= frame.maxX && y >= frame.minY && y <= frame.maxY,
+    );
+    if (containing) return containing.id;
+    if (model.plateId && plateFrames.some((frame) => frame.id === model.plateId)) return model.plateId;
+    return plateFrames[0]?.id ?? '';
+  }, [plateFrames]);
+  resolveModelPlateIdRef.current = resolveModelPlateId;
+
   /** The frame of the plate a model stands on. */
   const modelPlateFrame = useCallback((model: LoadedModel): PlateFrame | undefined => {
-    const firstPlateId = platesRef.current[0]?.id;
-    const plateId = model.plateId ?? firstPlateId;
+    const plateId = resolveModelPlateId(model);
     return plateFrames.find((frame) => frame.id === plateId) ?? plateFrames[0];
-  }, [plateFrames]);
+  }, [plateFrames, resolveModelPlateId]);
 
   const renamePlate = useCallback((plateId: string, name: string) => {
     setPlates((prev) => prev.map((plate) => (plate.id === plateId ? { ...plate, name } : plate)));
@@ -6066,8 +6154,9 @@ export function useSceneCollectionManager(options?: {
     const remaining = platesRef.current.filter((plate) => plate.id !== plateId);
     if (remaining.length === 0 || remaining.length === platesRef.current.length) return false;
 
-    const firstPlateId = platesRef.current[0]?.id;
-    const doomed = modelsRef.current.filter((model) => (model.plateId ?? firstPlateId) === plateId);
+    const doomed = modelsRef.current.filter(
+      (model) => resolveModelPlateIdRef.current(model) === plateId,
+    );
     if (doomed.length > 0) void deleteModels(doomed.map((model) => model.id));
 
     setPlates(remaining);
@@ -6087,12 +6176,12 @@ export function useSceneCollectionManager(options?: {
 
     const footprint = { widthMm: view3dSettings.widthMm, depthMm: view3dSettings.depthMm };
     const target = plateCascadeOffsetMm(targetIndex, footprint);
-    const firstPlateId = plateList[0]?.id;
     const wanted = new Set(modelIds);
 
     for (const model of modelsRef.current) {
       if (!wanted.has(model.id)) continue;
-      const sourceIndex = Math.max(0, plateList.findIndex((plate) => plate.id === (model.plateId ?? firstPlateId)));
+      const sourcePlateId = resolveModelPlateIdRef.current(model);
+      const sourceIndex = Math.max(0, plateList.findIndex((plate) => plate.id === sourcePlateId));
       const source = plateCascadeOffsetMm(sourceIndex, footprint);
       const dx = target.dxMm - source.dxMm;
       const dy = target.dyMm - source.dyMm;
@@ -6126,6 +6215,7 @@ export function useSceneCollectionManager(options?: {
     plateOffsetFor,
     plateFrames,
     modelPlateFrame,
+    resolveModelPlateId,
     voxlPrinterBundle,
     printerMismatch,
     resolvePrinterMismatch,

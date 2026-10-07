@@ -71,6 +71,17 @@ export type SliceIntent = 'file' | 'upload' | 'print' | 'preview' | 'uvtools';
 
 interface SlicingPanelProps {
   models: LoadedModel[];
+  /**
+   * The plate this slice covers. Without it the panel slices every visible
+   * model, which is what a single-plate scene means. With it, only that plate's
+   * models are sliced, judged against that plate's volume and shifted to the
+   * origin so the rasterizer's origin-centred mapping stays true.
+   */
+  plateSliceScope?: {
+    modelIds: readonly string[];
+    volumeBoundsMm: { minX: number; minY: number; maxX: number; maxY: number };
+    offsetMm: { dxMm: number; dyMm: number };
+  };
   excludedModelIds?: readonly string[];
   activeModel: LoadedModel | null;
   estimatedLayerCountOverride?: number | null;
@@ -731,6 +742,7 @@ const AUTO_AA_PRESET_OPTIONS: ReadonlyArray<{
 
 export function SlicingPanel({
   models,
+  plateSliceScope,
   excludedModelIds = [],
   activeModel,
   estimatedLayerCountOverride,
@@ -1221,13 +1233,22 @@ export function SlicingPanel({
   }, []);
 
   const excludedModelIdSet = useMemo(() => new Set(excludedModelIds), [excludedModelIds]);
+  /** The models the slice covers: one plate's, or every visible one. */
+  const plateModelIdSet = useMemo(
+    () => (plateSliceScope ? new Set(plateSliceScope.modelIds) : null),
+    [plateSliceScope],
+  );
+  const scopedModels = useMemo(
+    () => (plateModelIdSet ? models.filter((model) => plateModelIdSet.has(model.id)) : models),
+    [models, plateModelIdSet],
+  );
   const visibleModels = useMemo(
-    () => models.filter((model) => model.visible && !excludedModelIdSet.has(model.id)),
-    [excludedModelIdSet, models],
+    () => scopedModels.filter((model) => model.visible && !excludedModelIdSet.has(model.id)),
+    [excludedModelIdSet, scopedModels],
   );
   const excludedVisibleModelCount = useMemo(
-    () => models.filter((model) => model.visible && excludedModelIdSet.has(model.id)).length,
-    [excludedModelIdSet, models],
+    () => scopedModels.filter((model) => model.visible && excludedModelIdSet.has(model.id)).length,
+    [excludedModelIdSet, scopedModels],
   );
   const requestOutOfBoundsSliceConfirmation = useCallback(() => new Promise<boolean>((resolve) => {
     outOfBoundsWarningResolveRef.current?.(false);
@@ -1901,8 +1922,16 @@ export function SlicingPanel({
       }
 
       const result = await runSliceExportOrchestrator({
-        models,
+        models: plateModelIdSet
+          ? models.filter((model) => plateModelIdSet.has(model.id))
+          : models,
         excludedModelIds,
+        ...(plateSliceScope
+          ? {
+              plateVolumeBoundsMm: plateSliceScope.volumeBoundsMm,
+              plateOffsetMm: plateSliceScope.offsetMm,
+            }
+          : {}),
         printerProfile: activePrinterProfile,
         materialProfile: materialProfileForSlicing,
         filenameBase: sliceFilenameBase || activePrinterProfile.name || 'slice_export',

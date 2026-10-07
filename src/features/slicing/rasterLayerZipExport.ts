@@ -47,6 +47,12 @@ export type RasterLayerZipExportOptions = {
   onProgress?: (done: number, total: number, phase: string) => void;
   flushBinaryMeshChunk?: (chunk: Uint8Array) => Promise<void>;
   meshChunkTargetBytes?: number;
+  /**
+   * Where the plate being sliced sits in the cascade. The rasterizer maps the
+   * origin to the plate centre, so a plate that is not the first one has to be
+   * handed geometry shifted back to the origin; models and their supports alike.
+   */
+  plateOffsetMm?: { dxMm: number; dyMm: number };
 };
 
 function normalizeMeshChunkTargetBytes(value: number | null | undefined): number {
@@ -302,14 +308,28 @@ class TriangleFloatCollector {
   
   private chunkElementLimit = Number.POSITIVE_INFINITY;
 
+  /**
+   * World -> plate-local shift, applied to every triangle this collector takes.
+   * Slicing a plate that is not the first one in the cascade has to hand the
+   * rasterizer geometry centred on the origin, and both the models and their
+   * supports arrive in world coordinates, so the shift lives here rather than at
+   * each producer.
+   */
+  private readonly offsetX: number;
+
+  private readonly offsetY: number;
+
   constructor(
     initialTriangleCapacity: number,
     flushCallback?: (chunk: Uint8Array) => Promise<void>,
     chunkTargetBytes?: number,
+    plateOffsetMm?: { dxMm: number; dyMm: number },
   ) {
     const safeTriangleCapacity = Math.max(1, Math.floor(initialTriangleCapacity));
     this.data = new Float32Array(safeTriangleCapacity * 9);
     this.flushCallback = flushCallback;
+    this.offsetX = -(plateOffsetMm?.dxMm ?? 0);
+    this.offsetY = -(plateOffsetMm?.dyMm ?? 0);
 
     if (flushCallback) {
       const normalizedChunkBytes = normalizeMeshChunkTargetBytes(chunkTargetBytes);
@@ -351,6 +371,12 @@ class TriangleFloatCollector {
     cz: number,
   ): void {
     this.ensureCapacity(9);
+    ax += this.offsetX;
+    ay += this.offsetY;
+    bx += this.offsetX;
+    by += this.offsetY;
+    cx += this.offsetX;
+    cy += this.offsetY;
     const base = this.cursor;
     this.data[base] = ax;
     this.data[base + 1] = ay;
@@ -2089,6 +2115,7 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
     modelTriangleEstimate + 4096,
     options.flushBinaryMeshChunk,
     options.meshChunkTargetBytes,
+    options.plateOffsetMm,
   );
 
   // Push model-only triangles first (across all models), then support-only.

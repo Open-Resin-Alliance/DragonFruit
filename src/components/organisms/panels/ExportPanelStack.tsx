@@ -68,6 +68,27 @@ export function ExportPanelStack({
 }: ExportPanelStackProps) {
   // Invoked inline by Home (not as <JSX/>) so FloatingPanelStack can flatten these keyed panels as direct children for its layout-profile positioning. 'use no memo' keeps React Compiler from injecting a useMemoCache hook (the conditional inline call must stay hook-free).
   'use no memo';
+
+  // The plate the slice covers. Computed inline because this component is
+  // deliberately hook-free: a slice is scoped to the active plate, judged
+  // against that plate's volume and shifted to the origin for the rasterizer.
+  const activePlateFrame = scene.plateFrames.find((frame) => frame.id === scene.activePlateId)
+    ?? scene.plateFrames[0];
+  const plateSliceScope = activePlateFrame
+    ? {
+        modelIds: scene.models
+          .filter((model) => scene.resolveModelPlateId(model) === activePlateFrame.id)
+          .map((model) => model.id),
+        volumeBoundsMm: {
+          minX: activePlateFrame.minX,
+          minY: activePlateFrame.minY,
+          maxX: activePlateFrame.maxX,
+          maxY: activePlateFrame.maxY,
+        },
+        offsetMm: { dxMm: activePlateFrame.dxMm, dyMm: activePlateFrame.dyMm },
+      }
+    : undefined;
+
   return (
     <>
       <ExportPanel
@@ -87,6 +108,7 @@ export function ExportPanelStack({
       <SlicingPanel
         key="export-slicing"
         models={scene.models}
+        plateSliceScope={plateSliceScope}
         excludedModelIds={excludedSliceModelIds}
         activeModel={scene.activeModel}
         estimatedLayerCountOverride={estimatedSlicerLayerCount}

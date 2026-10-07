@@ -467,6 +467,7 @@ export function SceneCanvas({
   onActivatePlate,
   onAddPlate,
   onRenamePlate,
+  resolveModelPlateId,
   plateName,
   onPlateNameChange,
   showPlateName = true,
@@ -596,6 +597,8 @@ export function SceneCanvas({
   onActivatePlate?: (plateId: string) => void;
   onAddPlate?: () => void;
   onRenamePlate?: (plateId: string, name: string) => void;
+  /** The plate a model stands on, resolved by the scene. */
+  resolveModelPlateId?: (model: LoadedModel) => string;
   /** The build plate's name and its setter. Strings for its editor are resolved here. */
   plateName?: string;
   onPlateNameChange?: (next: string) => void;
@@ -1181,14 +1184,14 @@ export function SceneCanvas({
       crossSectionLiveTransformsRef.current.set(activeModelId, next);
     } else if (!next) {
       crossSectionLiveTransformsRef.current.clear();
+      // Scene objects are moved imperatively and this ref remains the source of
+      // truth, so a drag needs no rerender to draw. The out-of-bounds test does:
+      // it compares a box against the build volume, so it is judged when the
+      // gesture ends. Bumping during the drag made the red volume and stripe
+      // flicker under the model as it crossed the edge, which is noise; where the
+      // model ends up is the thing worth reporting.
+      setLiveDragTransformVersion((value) => value + 1);
     }
-    // Scene objects are moved imperatively and this ref remains the source of
-    // truth, so a drag does not need a rerender to draw. The out-of-bounds test
-    // does: it compares a box against the build volume, and without this it only
-    // sees where the model was when the gesture started, so the red volume and the
-    // stripe appeared on release. Pointer moves are frame-throttled by the browser,
-    // which keeps this to about one bump per frame.
-    setLiveDragTransformVersion((value) => value + 1);
   }, [activeModelId]);
 
   const {
@@ -1893,13 +1896,20 @@ export function SceneCanvas({
     return meshBounds.clone().union(supportRaftBounds);
   }, [BUILD_VOLUME_BOUNDS_EPS_MM, computeSupportAndRaftWorldBounds]);
 
+  /**
+   * The drawn build volume: the ACTIVE plate's, in world coordinates. The
+   * overlay marks the plate being worked on, not whichever plate happens to sit
+   * at the origin, so the cascade offset belongs in here.
+   */
   const buildVolumeBounds = React.useMemo(() => {
     if (!activeBuildVolumeSettings?.enabled) return null;
 
     const width = activeBuildVolumeSettings.widthMm;
     const depth = activeBuildVolumeSettings.depthMm;
-    const minX = activeBuildVolumeSettings.originMode === 'front_left' ? 0 : -width * 0.5;
-    const minY = activeBuildVolumeSettings.originMode === 'front_left' ? 0 : -depth * 0.5;
+    const dx = activePlateFrame?.dxMm ?? 0;
+    const dy = activePlateFrame?.dyMm ?? 0;
+    const minX = (activeBuildVolumeSettings.originMode === 'front_left' ? 0 : -width * 0.5) + dx;
+    const minY = (activeBuildVolumeSettings.originMode === 'front_left' ? 0 : -depth * 0.5) + dy;
 
     const sm = activeBuildVolumeSettings.safetyMarginMm;
     const marginFront = sm?.front ?? 0;
@@ -1911,7 +1921,7 @@ export function SceneCanvas({
       new THREE.Vector3(minX + marginLeft, minY + marginFront, 0),
       new THREE.Vector3(minX + width - marginRight, minY + depth - marginBack, activeBuildVolumeSettings.maxZMm),
     );
-  }, [activeBuildVolumeSettings]);
+  }, [activeBuildVolumeSettings, activePlateFrame?.dxMm, activePlateFrame?.dyMm]);
 
   /**
    * The build volume of every plate, in world coordinates. A model is judged
@@ -1936,12 +1946,14 @@ export function SceneCanvas({
     return boxes;
   }, [plateFrames, activeBuildVolumeSettings]);
 
-  /** The volume a model is judged against: its own plate's, or the only one. */
+  /** The volume a model is judged against: the plate it stands on, or the only one. */
   const volumeBoxForModel = React.useCallback((model: LoadedModel): THREE.Box3 | null => {
     if (!plateVolumeBoxes) return buildVolumeBounds;
-    const plateId = model.plateId ?? plateFrames?.[0]?.id;
+    const plateId = resolveModelPlateId
+      ? resolveModelPlateId(model)
+      : (model.plateId ?? plateFrames?.[0]?.id);
     return (plateId ? plateVolumeBoxes.get(plateId) : undefined) ?? buildVolumeBounds;
-  }, [plateVolumeBoxes, plateFrames, buildVolumeBounds]);
+  }, [plateVolumeBoxes, plateFrames, buildVolumeBounds, resolveModelPlateId]);
 
   const cachedModelWorldBoundsRef = React.useRef<Map<string, THREE.Box3>>(new Map());
   const activeTransformOverrideModelId = React.useMemo(

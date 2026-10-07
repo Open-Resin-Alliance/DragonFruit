@@ -373,12 +373,15 @@ function PlateLayer({
   const pickable = !isActive && !!onActivate;
   const handleActivate = React.useCallback(
     (event: { stopPropagation: () => void }) => {
+      // The active plate is not pickable (its raycast is off), so this only runs for
+      // a plate that is not the one being worked on.
+      if (isActive) return;
       // Picking this plate is what the click is for, so it must not also read as a click
       // on the empty scene behind it.
       event.stopPropagation();
       onActivate?.();
     },
-    [onActivate],
+    [isActive, onActivate],
   );
 
   return (
@@ -387,8 +390,13 @@ function PlateLayer({
       <mesh
         position={shared.plate.position}
         renderOrder={-10}
-        raycast={pickable ? undefined : nullRaycast}
-        onClick={pickable ? handleActivate : undefined}
+        // The handler is attached for every plate, including the active one, and
+        // decides for itself what a click means. It has to be: r3f collects the
+        // objects it can pick from the handlers present when they mount, so a
+        // handler that only appears once a plate stops being active never gets
+        // collected and the plate is never clickable.
+        raycast={pickable ? THREE.Mesh.prototype.raycast : nullRaycast}
+        onClick={onActivate ? handleActivate : undefined}
         visible={shared.showBuildPlate && shared.buildPlateOpacity > 0.001}
         frustumCulled={false}
         userData={{ thumbnailHelperType: 'buildPlate' }}
