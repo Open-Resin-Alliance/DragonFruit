@@ -809,9 +809,10 @@ export function Helpers({
         <PlateAddButton
           label={addPlateLabel}
           comingSoonTitle={addPlateComingSoonTitle}
-          // Barely off the plate's right edge: enough that the button reads as a
-          // separate object, close enough that it still reads as belonging to it.
-          position={[resolvedOriginMinX + width + 2, resolvedOriginMinY + depth, plateLogoZ + 0.2]}
+          // Clear of the *mock plate*, not the build volume: the drawn plate oversizes
+          // the volume by this much each side, so this puts the button's left edge
+          // exactly on the plate's right edge, sitting just outside it.
+          position={[resolvedOriginMinX + width + buildPlateOversizeEachSideMm, resolvedOriginMinY + depth, plateLogoZ + 0.2]}
         />
       )}
 
