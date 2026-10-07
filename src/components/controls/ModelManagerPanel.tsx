@@ -4,6 +4,7 @@ import {
   EyeOff,
   Box,
   Plus,
+  LayoutGrid,
   AlertTriangle,
 
   Folder,
@@ -109,6 +110,11 @@ type GroupedEntry = {
    * the folder's own context actions do not apply to it.
    */
   isPlateGroup?: boolean;
+  /**
+   * A plate's children: the folders of the models standing on it, or one entry
+   * per ungrouped model. A folder has no children, only models.
+   */
+  children?: GroupedEntry[];
 };
 
 type PanelContextMenuState = {
@@ -123,6 +129,40 @@ type PanelContextMenuState = {
 };
 
 const OUTSIDE_PLATE_GROUP_ID = '__system_outside_plate__';
+
+/**
+ * The folders inside a set of models: one per import group, and one per model
+ * that belongs to none. A plate's children are built with this, so grouping
+ * models works the same inside a plate as it does at the top level.
+ */
+function buildModelGroups(models: readonly LoadedModel[]): GroupedEntry[] {
+  const map = new Map<string, GroupedEntry>();
+
+  for (const model of models) {
+    const key = model.groupId ?? `single-${model.id}`;
+    const existing = map.get(key);
+    if (existing) {
+      existing.models.push(model);
+      continue;
+    }
+    map.set(key, {
+      id: key,
+      name: model.groupName ?? model.name,
+      models: [model],
+      isGrouped: !!model.groupId,
+    });
+  }
+
+  return [...map.values()]
+    .map((group) => ({
+      ...group,
+      models: [...group.models].sort((a, b) => a.name.localeCompare(b.name)),
+    }))
+    .sort((a, b) => {
+      if (a.isGrouped !== b.isGrouped) return a.isGrouped ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+}
 
 const splitModelNameSuffix = (name: string): { base: string; suffix: string } => {
   const trimmed = name.trim();
@@ -228,11 +268,10 @@ export function ModelManagerPanel({
     const outsideModels = models.filter((model) => outsidePlateSet.has(model.id));
     const inPlateModels = models.filter((model) => !outsidePlateSet.has(model.id));
 
-    const groupedMap = new Map<string, GroupedEntry>();
-
-    // With plates, a plate is the grouping: one folder per plate, in the
-    // cascade's own order, holding the models that stand on it.
-    if (plates && plates.length > 0 && resolveModelPlateId) {
+    // More than one plate makes the plate the grouping: one folder per plate, in
+    // the cascade's own order, holding the models that stand on it. A single
+    // plate is not worth a folder around everything.
+    if (plates && plates.length > 1 && resolveModelPlateId) {
       const plateGroups = new Map<string, GroupedEntry>();
       plates.forEach((plate, index) => {
         plateGroups.set(plate.id, {
@@ -254,6 +293,7 @@ export function ModelManagerPanel({
       const ordered = [...plateGroups.values()].map((group) => ({
         ...group,
         models: [...group.models].sort((a, b) => a.name.localeCompare(b.name)),
+        children: buildModelGroups(group.models),
       }));
 
       const trailing = strays.length > 0 || outsideModels.length > 0
@@ -269,32 +309,7 @@ export function ModelManagerPanel({
       return [...ordered, ...trailing];
     }
 
-    inPlateModels.forEach((model) => {
-      const key = model.groupId ?? `single-${model.id}`;
-      const existing = groupedMap.get(key);
-      if (existing) {
-        existing.models.push(model);
-        return;
-      }
-
-      groupedMap.set(key, {
-        id: key,
-        name: model.groupName ?? model.name,
-        models: [model],
-        isGrouped: !!model.groupId,
-      });
-    });
-
-    return Array.from(groupedMap.values())
-      .map((group) => ({
-        ...group,
-        models: [...group.models].sort((a, b) => a.name.localeCompare(b.name)),
-      }))
-      .sort((a, b) => {
-        if (a.isGrouped !== b.isGrouped) return a.isGrouped ? -1 : 1;
-        return a.name.localeCompare(b.name);
-      })
-      .reduce<GroupedEntry[]>((acc, group) => {
+    return buildModelGroups(inPlateModels).reduce<GroupedEntry[]>((acc, group) => {
         acc.push(group);
         return acc;
       }, outsideModels.length > 0
@@ -335,7 +350,12 @@ export function ModelManagerPanel({
   const showGroupSection = !!(contextMenu?.groupId || selectedModelIds.length >= 2 || selectedGroupedCount > 0 || !contextMenu?.modelId);
   const showFolderSection = !!contextMenu?.groupId;
 
-  const orderedModelIds = useMemo(() => grouped.flatMap((group) => group.models.map((model) => model.id)), [grouped]);
+  const orderedModelIds = useMemo(
+    () => grouped.flatMap((group) => (group.children
+      ? group.children.flatMap((child) => child.models.map((model) => model.id))
+      : group.models.map((model) => model.id))),
+    [grouped],
+  );
   const computedBottomClearance = Math.max(140, Math.round(bottomClearancePx));
   const panelMaxHeight = `calc(100vh - var(--topbar-height) - ${computedBottomClearance}px)`;
   const panelClassName = dimmed
@@ -519,9 +539,13 @@ export function ModelManagerPanel({
       case 'delete-plate': {
         const plateId = contextMenu?.plateId;
         if (plateId && onRemovePlate) {
+          const index = plates?.findIndex((plate) => plate.id === plateId) ?? 0;
+          const named = plates?.[index]?.name.trim() ?? '';
+          // The wording is settled here, where the plate is known, rather than in
+          // the modal, where the list may already have moved on.
           setPlatePendingDelete({
             id: plateId,
-            name: plates?.find((plate) => plate.id === plateId)?.name ?? '',
+            name: named || plateNumberPlaceholder(index + 1, _),
           });
         }
         break;
@@ -542,6 +566,140 @@ export function ModelManagerPanel({
         break;
     }
     closeContextMenu();
+  };
+
+  /** One model's row. A folder's models and a plate's ungrouped ones share it. */
+  const renderModelRow = (model: LoadedModel) => {
+    const isSelected = selectedSet.has(model.id);
+    return (
+                  <div
+                    key={model.id}
+                      className="px-2 py-1 rounded border transition-colors flex items-center gap-2 cursor-pointer"
+                      style={isSelected
+                        ? {
+                            background: 'color-mix(in srgb, var(--accent), var(--surface-1) 92%)',
+                            borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 40%)',
+                          }
+                        : {
+                            background: 'var(--surface-1)',
+                            borderColor: 'var(--border-subtle)',
+                          }}
+                    onClick={(e) => {
+                      if (e.shiftKey) {
+                        const anchorId = activeModelId ?? selectedModelIds[selectedModelIds.length - 1] ?? model.id;
+                        const anchorIndex = orderedModelIds.indexOf(anchorId);
+                        const clickedIndex = orderedModelIds.indexOf(model.id);
+
+                        if (anchorIndex >= 0 && clickedIndex >= 0) {
+                          const start = Math.min(anchorIndex, clickedIndex);
+                          const end = Math.max(anchorIndex, clickedIndex);
+                          const rangeIds = orderedModelIds.slice(start, end + 1);
+                          const additive = e.ctrlKey || e.metaKey;
+
+                          if (onSelectRange) {
+                            onSelectRange(rangeIds, model.id, additive ? 'add' : 'replace');
+                          } else {
+                            if (additive) {
+                              rangeIds.forEach((id) => onSelect(id, 'add'));
+                            } else {
+                              onSelect(model.id, 'single');
+                              rangeIds.filter((id) => id !== model.id).forEach((id) => onSelect(id, 'add'));
+                            }
+                          }
+                          return;
+                        }
+                      }
+
+                      const isToggle = e.ctrlKey || e.metaKey;
+                      onSelect(model.id, isToggle ? 'toggle' : 'single');
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setContextMenu({
+                        x: e.clientX,
+                        y: e.clientY,
+                        modelId: model.id,
+                        groupId: model.groupId,
+                        groupName: model.groupName,
+                      });
+                    }}
+                  >
+                    
+                    <div className="flex-1 min-w-0">
+                      {renamingModelId === model.id ? (
+                        <div className="flex w-full min-w-0 items-center gap-1">
+                          <input
+                            value={renamingModelName}
+                            onChange={(e) => setRenamingModelName(e.target.value)}
+                            onClick={(e) => e.stopPropagation()}
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                commitRenameModel();
+                              }
+                              if (e.key === 'Escape') {
+                                e.preventDefault();
+                                cancelRenameModel();
+                              }
+                            }}
+                            onBlur={commitRenameModel}
+                            autoFocus
+                            className="min-w-0 flex-1 rounded border px-1.5 py-0.5 text-xs font-medium"
+                            style={{
+                              borderColor: 'var(--border-subtle)',
+                              background: 'var(--surface-0)',
+                              color: 'var(--text-strong)',
+                            }}
+                            aria-label={_(msg`Rename model base name`)}
+                          />
+                          {renamingModelSuffix && (
+                            <span className="shrink-0 text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>
+                              {renamingModelSuffix}
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <Tooltip content={model.name} fullWidth>
+                          <div className="min-w-0 text-sm font-medium truncate" style={{ color: 'var(--text-strong)' }}>
+                            {model.name}
+                          </div>
+                        </Tooltip>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-1">
+                      {onOpenSupportsInfo && (
+                        <Tooltip content={formatModelInfoTooltip(_, model)}>
+                          <IconButton
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onOpenSupportsInfo(model.id);
+                            }}
+                            aria-label={_(msg({ message: 'Model details', comment: 'Accessible name of the info button on a model row. The tooltip beside it lists the mesh size and polygon count.' }))}
+                          >
+                            <Info className="w-3.5 h-3.5" />
+                          </IconButton>
+                        </Tooltip>
+                      )}
+                      <IconButton
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onVisibilityChange(model.id, !model.visible);
+                        }}
+                        title={model.visible ? _(msg`Hide`) : _(msg`Show`)}
+                      >
+                        {model.visible ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                      </IconButton>
+
+                    </div>
+                  </div>
+    );
   };
 
   return (
@@ -578,7 +736,7 @@ export function ModelManagerPanel({
           open
           ariaLabel={_(msg`Delete plate`)}
           title={_(msg`Delete this plate?`)}
-          subtitle={platePendingDelete.name.trim() || plateNumberPlaceholder(plates?.findIndex((plate) => plate.id === platePendingDelete.id) ?? 0, _)}
+          subtitle={platePendingDelete.name}
           icon={<Trash2 className="h-4 w-4" />}
           iconTone="danger"
           zIndexClassName="z-[130]"
@@ -619,7 +777,11 @@ export function ModelManagerPanel({
               </div>
             ) : (
               grouped.map((group) => {
-                const isCollapsed = group.isGrouped ? !!collapsedGroupIds[group.id] : false;
+                // Plates start with the one you are working on open and the rest
+                // closed; an explicit toggle still wins.
+                const isCollapsed = group.isGrouped
+                  ? (collapsedGroupIds[group.id] ?? (!!group.isPlateGroup && group.id !== activePlateId))
+                  : false;
                 const selectedCount = group.models.filter((model) => selectedSet.has(model.id)).length;
                 const isGroupFullySelected = selectedCount > 0 && selectedCount === group.models.length;
                 const isGroupPartiallySelected = selectedCount > 0 && !isGroupFullySelected;
@@ -694,9 +856,13 @@ export function ModelManagerPanel({
 
                         {group.isSystemGroup ? (
                           <AlertTriangle className="w-3.5 h-3.5" style={{ color: '#ff7c88' }} />
-                        ) : isCollapsed
-                          ? <Folder className="w-3.5 h-3.5" style={{ color: 'var(--accent)' }} />
-                          : <FolderOpen className="w-3.5 h-3.5" style={{ color: 'var(--accent)' }} />}
+                        ) : group.isPlateGroup
+                          // A plate is not a folder of models, it is a bed they stand
+                          // on, so it wears a plate rather than a folder.
+                          ? <LayoutGrid className="w-3.5 h-3.5" style={{ color: 'var(--accent)' }} />
+                          : isCollapsed
+                            ? <Folder className="w-3.5 h-3.5" style={{ color: 'var(--accent)' }} />
+                            : <FolderOpen className="w-3.5 h-3.5" style={{ color: 'var(--accent)' }} />}
 
                         {renamingPlateId === group.id ? (
                           <input
@@ -768,139 +934,50 @@ export function ModelManagerPanel({
                       <div
                         className={showHeader ? 'ml-1.5 space-y-1 pl-1' : 'space-y-1'}
                       >
-                        {group.models.map((model) => {
-                        const isSelected = selectedSet.has(model.id);
-
-                      return (
-                        <div
-                          key={model.id}
-                            className="px-2 py-1.5 rounded border transition-colors flex items-center gap-2 cursor-pointer"
-                            style={isSelected
-                              ? {
-                                  background: 'color-mix(in srgb, var(--accent), var(--surface-1) 92%)',
-                                  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 40%)',
-                                }
-                              : {
-                                  background: 'var(--surface-1)',
-                                  borderColor: 'var(--border-subtle)',
-                                }}
-                          onClick={(e) => {
-                            if (e.shiftKey) {
-                              const anchorId = activeModelId ?? selectedModelIds[selectedModelIds.length - 1] ?? model.id;
-                              const anchorIndex = orderedModelIds.indexOf(anchorId);
-                              const clickedIndex = orderedModelIds.indexOf(model.id);
-
-                              if (anchorIndex >= 0 && clickedIndex >= 0) {
-                                const start = Math.min(anchorIndex, clickedIndex);
-                                const end = Math.max(anchorIndex, clickedIndex);
-                                const rangeIds = orderedModelIds.slice(start, end + 1);
-                                const additive = e.ctrlKey || e.metaKey;
-
-                                if (onSelectRange) {
-                                  onSelectRange(rangeIds, model.id, additive ? 'add' : 'replace');
-                                } else {
-                                  if (additive) {
-                                    rangeIds.forEach((id) => onSelect(id, 'add'));
-                                  } else {
-                                    onSelect(model.id, 'single');
-                                    rangeIds.filter((id) => id !== model.id).forEach((id) => onSelect(id, 'add'));
-                                  }
-                                }
-                                return;
-                              }
-                            }
-
-                            const isToggle = e.ctrlKey || e.metaKey;
-                            onSelect(model.id, isToggle ? 'toggle' : 'single');
-                          }}
-                          onContextMenu={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            setContextMenu({
-                              x: e.clientX,
-                              y: e.clientY,
-                              modelId: model.id,
-                              groupId: model.groupId,
-                              groupName: model.groupName,
-                            });
-                          }}
-                        >
-                          
-                          <div className="flex-1 min-w-0">
-                            {renamingModelId === model.id ? (
-                              <div className="flex w-full min-w-0 items-center gap-1">
-                                <input
-                                  value={renamingModelName}
-                                  onChange={(e) => setRenamingModelName(e.target.value)}
-                                  onClick={(e) => e.stopPropagation()}
-                                  onPointerDown={(e) => e.stopPropagation()}
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter') {
-                                      e.preventDefault();
-                                      commitRenameModel();
-                                    }
-                                    if (e.key === 'Escape') {
-                                      e.preventDefault();
-                                      cancelRenameModel();
-                                    }
-                                  }}
-                                  onBlur={commitRenameModel}
-                                  autoFocus
-                                  className="min-w-0 flex-1 rounded border px-1.5 py-0.5 text-xs font-medium"
-                                  style={{
-                                    borderColor: 'var(--border-subtle)',
-                                    background: 'var(--surface-0)',
-                                    color: 'var(--text-strong)',
-                                  }}
-                                  aria-label={_(msg`Rename model base name`)}
-                                />
-                                {renamingModelSuffix && (
-                                  <span className="shrink-0 text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>
-                                    {renamingModelSuffix}
-                                  </span>
-                                )}
-                              </div>
-                            ) : (
-                              <Tooltip content={model.name} fullWidth>
-                                <div className="min-w-0 text-sm font-medium truncate" style={{ color: 'var(--text-strong)' }}>
-                                  {model.name}
-                                </div>
-                              </Tooltip>
-                            )}
-                          </div>
-
-                          <div className="flex items-center gap-1">
-                            {onOpenSupportsInfo && (
-                              <Tooltip content={formatModelInfoTooltip(_, model)}>
-                                <IconButton
-                                  variant="ghost"
-                                  size="sm"
+                        {group.children
+                          ? group.children.map((child) => (
+                            <div key={child.id} className="space-y-1">
+                              {child.isGrouped && (
+                                <div
+                                  className="px-1.5 py-1 rounded border flex items-center gap-1.5 cursor-pointer transition-colors"
+                                  style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
                                   onClick={(e) => {
-                                    e.stopPropagation();
-                                    onOpenSupportsInfo(model.id);
+                                    const mode: GroupSelectMode = (e.ctrlKey || e.metaKey || e.shiftKey) ? 'add' : 'single';
+                                    selectFolder(child, mode);
                                   }}
-                                  aria-label={_(msg({ message: 'Model details', comment: 'Accessible name of the info button on a model row. The tooltip beside it lists the mesh size and polygon count.' }))}
                                 >
-                                  <Info className="w-3.5 h-3.5" />
-                                </IconButton>
-                              </Tooltip>
-                            )}
-                            <IconButton
-                              variant="ghost"
-                              size="sm"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onVisibilityChange(model.id, !model.visible);
-                              }}
-                              title={model.visible ? _(msg`Hide`) : _(msg`Show`)}
-                            >
-                              {model.visible ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
-                            </IconButton>
-
-                          </div>
-                        </div>
-                      );
-                    })}
+                                  <button
+                                    type="button"
+                                    className="inline-flex items-center justify-center rounded p-0.5 hover:bg-black/20"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      toggleGroupCollapsed(child.id);
+                                    }}
+                                    title={collapsedGroupIds[child.id] ? _(msg`Expand folder`) : _(msg`Collapse folder`)}
+                                  >
+                                    {collapsedGroupIds[child.id]
+                                      ? <ChevronRight className="w-3 h-3" style={{ color: 'var(--text-muted)' }} />
+                                      : <ChevronDown className="w-3 h-3" style={{ color: 'var(--text-muted)' }} />}
+                                  </button>
+                                  {collapsedGroupIds[child.id]
+                                    ? <Folder className="w-3.5 h-3.5" style={{ color: 'var(--accent)' }} />
+                                    : <FolderOpen className="w-3.5 h-3.5" style={{ color: 'var(--accent)' }} />}
+                                  <span className="text-[10px] font-semibold uppercase tracking-wide truncate" style={{ color: 'var(--text-muted)' }}>
+                                    {child.name}
+                                  </span>
+                                  <span className="ml-auto text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
+                                    {child.models.length}
+                                  </span>
+                                </div>
+                              )}
+                              {(!child.isGrouped || !collapsedGroupIds[child.id]) && (
+                                <div className={child.isGrouped ? 'ml-1.5 space-y-1 pl-1' : 'space-y-1'}>
+                                  {child.models.map((model) => renderModelRow(model))}
+                                </div>
+                              )}
+                            </div>
+                          ))
+                          : group.models.map((model) => renderModelRow(model))}
                       </div>
                     )}
                   </div>

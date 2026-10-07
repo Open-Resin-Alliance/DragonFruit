@@ -23,7 +23,7 @@ msgid "{0, plural, one {# island} other {# islands}}"
 msgstr "{0, plural, one {# isla} other {# islas}}"
 
 #. placeholder {0}: model.polygonCount
-#: src/components/controls/ModelManagerPanel.tsx:50
+#: src/components/controls/ModelManagerPanel.tsx:49
 msgid "{0, plural, one {# polygon} other {# polygons}}"
 msgstr "{0, plural, one {# polígono} other {# polígonos}}"
 
@@ -143,7 +143,7 @@ msgstr "{saved, plural, one {# guardada} other {# guardadas}} • {online, plura
 msgid "{seconds} s"
 msgstr "{seconds} s"
 
-#: src/components/controls/ModelManagerPanel.tsx:52
+#: src/components/controls/ModelManagerPanel.tsx:51
 msgid "{size} · {polygons}"
 msgstr "{size} · {polygons}"
 
@@ -291,7 +291,7 @@ msgid "Add joint"
 msgstr "Añadir unión"
 
 #. Tooltip on the plus in the Models panel header, which opens the mesh picker.
-#: src/components/controls/ModelManagerPanel.tsx:572
+#: src/components/controls/ModelManagerPanel.tsx:721
 msgid "Add models to the plate"
 msgstr "Añadir modelos a la plataforma"
 
@@ -404,7 +404,7 @@ msgstr "Aplicar a la sesión"
 msgid "Apply this preset to the auto-support settings"
 msgstr "Aplica este preajuste a los ajustes de autosoportes"
 
-#: src/app/page.tsx:11100
+#: src/app/page.tsx:11107
 msgid "Are you sure you want to remove every model from the plate?"
 msgstr "¿Seguro que quieres quitar todos los modelos de la plataforma?"
 
@@ -887,7 +887,7 @@ msgstr "No se puede abrir esta escena"
 #: src/components/controls/AutoSupportPanel.tsx:652
 #: src/components/controls/IslandScanCard.tsx:184
 #: src/components/controls/IslandsPanel.tsx:304
-#: src/components/controls/ModelManagerPanel.tsx:594
+#: src/components/controls/ModelManagerPanel.tsx:743
 #: src/components/modals/AaSupportWarningModal.tsx:40
 #: src/components/printers/PrinterVariantPickerModal.tsx:695
 #: src/components/settings/FleetManagement.tsx:442
@@ -1064,7 +1064,7 @@ msgstr "¿Vaciar la plataforma?"
 msgid "Clear Override"
 msgstr "Quitar la anulación"
 
-#: src/app/page.tsx:11093
+#: src/app/page.tsx:11100
 msgid "Clear Plate"
 msgstr "Vaciar plataforma"
 
@@ -1111,7 +1111,7 @@ msgstr "Cerrar la ventana"
 msgid "Close material anti-aliasing settings"
 msgstr "Cerrar los ajustes de antialiasing del material"
 
-#: src/components/controls/ModelManagerPanel.tsx:588
+#: src/components/controls/ModelManagerPanel.tsx:737
 #: src/components/modals/AaSupportWarningModal.tsx:34
 #: src/components/modals/ObsoleteVoxlVersionModal.tsx:40
 #: src/components/modals/ScenePrinterMismatchModal.tsx:55
@@ -1188,7 +1188,8 @@ msgstr "Coincidentes"
 msgid "Collapse card"
 msgstr "Plegar la tarjeta"
 
-#: src/components/controls/ModelManagerPanel.tsx:686
+#: src/components/controls/ModelManagerPanel.tsx:840
+#: src/components/controls/ModelManagerPanel.tsx:942
 msgid "Collapse folder"
 msgstr "Plegar la carpeta"
 
@@ -1587,9 +1588,9 @@ msgstr "¿Eliminar {count} preajustes?"
 msgid "Delete Backup Snapshot"
 msgstr "Eliminar la instantánea"
 
-#: src/components/controls/ModelManagerPanel.tsx:460
-#: src/components/controls/ModelManagerPanel.tsx:582
-#: src/components/controls/ModelManagerPanel.tsx:603
+#: src/components/controls/ModelManagerPanel.tsx:475
+#: src/components/controls/ModelManagerPanel.tsx:731
+#: src/components/controls/ModelManagerPanel.tsx:752
 msgid "Delete plate"
 msgstr "Eliminar plata"
 
@@ -1623,7 +1624,7 @@ msgstr "¿Eliminar esta instantánea del historial de GitHub? No se puede deshac
 msgid "Delete this model's existing supports and place the new ones"
 msgstr "Elimina los soportes que ya tiene este modelo y coloca los nuevos"
 
-#: src/components/controls/ModelManagerPanel.tsx:583
+#: src/components/controls/ModelManagerPanel.tsx:732
 msgid "Delete this plate?"
 msgstr "¿Eliminar esta plata?"
 
@@ -2014,7 +2015,8 @@ msgstr "Se han detectado soportes existentes"
 msgid "Expand card"
 msgstr "Desplegar la tarjeta"
 
-#: src/components/controls/ModelManagerPanel.tsx:686
+#: src/components/controls/ModelManagerPanel.tsx:840
+#: src/components/controls/ModelManagerPanel.tsx:942
 msgid "Expand folder"
 msgstr "Desplegar la carpeta"
 
@@ -2390,7 +2392,7 @@ msgstr "Separación de la rejilla en pendientes al ángulo de autosoporte: cuant
 msgid "Grid Threshold"
 msgstr "Umbral de la rejilla"
 
-#: src/components/controls/ModelManagerPanel.tsx:443
+#: src/components/controls/ModelManagerPanel.tsx:458
 msgid "Group selected"
 msgstr "Agrupar la selección"
 
@@ -2432,7 +2434,7 @@ msgstr "Altura:"
 msgid "Held against toppling and peel"
 msgstr "Sujeción frente al vuelco y al despegue"
 
-#: src/components/controls/ModelManagerPanel.tsx:893
+#: src/components/controls/ModelManagerPanel.tsx:689
 msgid "Hide"
 msgstr "Ocultar"
 
@@ -3268,12 +3270,12 @@ msgstr "Modo"
 msgid "Model {index}/{total}: {modelName}"
 msgstr "Modelo {index}/{total}: {modelName}"
 
-#: src/components/controls/ModelManagerPanel.tsx:489
+#: src/components/controls/ModelManagerPanel.tsx:504
 msgid "Model actions…"
 msgstr "Acciones del modelo…"
 
 #. Accessible name of the info button on a model row. The tooltip beside it lists the mesh size and polygon count.
-#: src/components/controls/ModelManagerPanel.tsx:880
+#: src/components/controls/ModelManagerPanel.tsx:676
 msgid "Model details"
 msgstr "Detalles del modelo"
 
@@ -3311,14 +3313,14 @@ msgstr "Dimensionado a escala del modelo"
 
 #. Section heading of the models context menu. Rendered uppercase.
 #. Title of the panel listing every model loaded into the scene.
-#: src/components/controls/ModelManagerPanel.tsx:562
-#: src/components/controls/ModelManagerPanel.tsx:917
+#: src/components/controls/ModelManagerPanel.tsx:711
+#: src/components/controls/ModelManagerPanel.tsx:982
 #: src/components/controls/toolRailEntries.ts:66
 #: src/components/controls/toolRailEntries.ts:169
 msgid "Models"
 msgstr "Modelos"
 
-#: src/components/controls/ModelManagerPanel.tsx:918
+#: src/components/controls/ModelManagerPanel.tsx:983
 msgid "Models context menu"
 msgstr "Menú contextual de modelos"
 
@@ -3520,7 +3522,7 @@ msgstr "Todavía no hay mallas cargadas. Importa un modelo y vuelve al laminado.
 msgid "No model selected"
 msgstr "Ningún modelo seleccionado"
 
-#: src/components/controls/ModelManagerPanel.tsx:621
+#: src/components/controls/ModelManagerPanel.tsx:770
 msgid "No models loaded"
 msgstr "No hay modelos cargados"
 
@@ -3833,8 +3835,8 @@ msgstr "Salida"
 
 #. Name of the automatic folder collecting models that sit outside the build plate.
 #. Name of the automatic folder collecting models that sit outside the build plate.
-#: src/components/controls/ModelManagerPanel.tsx:265
-#: src/components/controls/ModelManagerPanel.tsx:306
+#: src/components/controls/ModelManagerPanel.tsx:300
+#: src/components/controls/ModelManagerPanel.tsx:316
 msgid "Outside plate"
 msgstr "Fuera de la plataforma"
 
@@ -3950,7 +3952,7 @@ msgstr "Plata {index}"
 msgid "Plate 1"
 msgstr "Plataforma 1"
 
-#: src/components/controls/ModelManagerPanel.tsx:726
+#: src/components/controls/ModelManagerPanel.tsx:880
 msgid "Plate name"
 msgstr "Nombre de la plata"
 
@@ -4341,20 +4343,20 @@ msgstr "Renombrar"
 msgid "Rename build plate"
 msgstr "Renombrar la plataforma"
 
-#: src/components/controls/ModelManagerPanel.tsx:469
-#: src/components/controls/ModelManagerPanel.tsx:751
+#: src/components/controls/ModelManagerPanel.tsx:484
+#: src/components/controls/ModelManagerPanel.tsx:905
 msgid "Rename folder"
 msgstr "Renombrar la carpeta"
 
-#: src/components/controls/ModelManagerPanel.tsx:475
+#: src/components/controls/ModelManagerPanel.tsx:490
 msgid "Rename model"
 msgstr "Renombrar el modelo"
 
-#: src/components/controls/ModelManagerPanel.tsx:853
+#: src/components/controls/ModelManagerPanel.tsx:649
 msgid "Rename model base name"
 msgstr "Renombrar el nombre base del modelo"
 
-#: src/components/controls/ModelManagerPanel.tsx:457
+#: src/components/controls/ModelManagerPanel.tsx:472
 msgid "Rename plate"
 msgstr "Renombrar plata"
 
@@ -4388,7 +4390,7 @@ msgstr "Reabrir {0}"
 msgid "Repair"
 msgstr "Reparar"
 
-#: src/components/controls/ModelManagerPanel.tsx:478
+#: src/components/controls/ModelManagerPanel.tsx:493
 msgid "Repair mesh…"
 msgstr "Reparar la malla…"
 
@@ -4823,7 +4825,7 @@ msgstr "Elige un perfil de impresora para ver los detalles."
 msgid "Select a printer to detect its model."
 msgstr "Selecciona una impresora para detectar su modelo."
 
-#: src/components/controls/ModelManagerPanel.tsx:468
+#: src/components/controls/ModelManagerPanel.tsx:483
 msgid "Select folder"
 msgstr "Seleccionar la carpeta"
 
@@ -4956,7 +4958,7 @@ msgstr "Cascarones:"
 msgid "Shortest Print Time"
 msgstr "Menor tiempo de impresión"
 
-#: src/components/controls/ModelManagerPanel.tsx:893
+#: src/components/controls/ModelManagerPanel.tsx:689
 msgid "Show"
 msgstr "Mostrar"
 
@@ -5186,7 +5188,7 @@ msgid "Split the model along a drawn seam"
 msgstr "Dividir el modelo por una costura dibujada"
 
 #. Context menu action: split a multi-body 3MF import into independent models.
-#: src/components/controls/ModelManagerPanel.tsx:483
+#: src/components/controls/ModelManagerPanel.tsx:498
 msgid "Split to bodies"
 msgstr "Dividir en cuerpos"
 
@@ -5435,7 +5437,7 @@ msgstr "El guardado de recuperación en segundo plano ha fallado varias veces se
 msgid "The build plate awaits."
 msgstr "La placa de impresión te espera."
 
-#: src/app/page.tsx:11119
+#: src/app/page.tsx:11126
 msgid "The build plate is locked."
 msgstr "La plataforma está bloqueada."
 
@@ -5472,7 +5474,7 @@ msgid "The inputs and factors the last run sized the supports with"
 msgstr "Los datos y factores con que la última ejecución dimensionó los soportes"
 
 #. The count is how many models stand on the plate being deleted.
-#: src/components/controls/ModelManagerPanel.tsx:609
+#: src/components/controls/ModelManagerPanel.tsx:758
 msgid "The models on this plate are deleted with it. Undo brings them back."
 msgstr "Los modelos de esta plata se eliminan con ella. Deshacer los recupera."
 
@@ -5759,11 +5761,11 @@ msgstr "No disponible"
 msgid "Undo brings the models back"
 msgstr "Deshacer devuelve los modelos"
 
-#: src/components/controls/ModelManagerPanel.tsx:470
+#: src/components/controls/ModelManagerPanel.tsx:485
 msgid "Ungroup folder"
 msgstr "Desagrupar la carpeta"
 
-#: src/components/controls/ModelManagerPanel.tsx:449
+#: src/components/controls/ModelManagerPanel.tsx:464
 msgid "Ungroup selected"
 msgstr "Desagrupar la selección"
 
@@ -5797,7 +5799,7 @@ msgstr "Fabricante desconocido"
 msgid "Unlock build plate"
 msgstr "Desbloquear la plataforma"
 
-#: src/app/page.tsx:11122
+#: src/app/page.tsx:11129
 msgid "Unlock it to add or move models."
 msgstr "Desbloquéala para añadir o mover modelos."
 

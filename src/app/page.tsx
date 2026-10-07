@@ -11057,10 +11057,17 @@ export default function Home() {
                 setShowClearPlateConfirm(false);
                 // Straight to `deleteModels`, deliberately not through
                 // `dispatchDeleteModelAction`: that resolves *the selection*, or one
-                // fallback model, and never "every model" — so routing a clear-all
-                // through it deleted whatever happened to be selected (or nothing,
-                // with no active model) while looking like it worked.
-                void scene.deleteModels(scene.models.map((model) => model.id));
+                // fallback model, and never "the plate" — so routing a clear through
+                // it deleted whatever happened to be selected (or nothing, with no
+                // active model) while looking like it worked.
+                //
+                // The plate, not the scene: with more than one bed, the bin empties
+                // the one you are working on and leaves the others alone.
+                void scene.deleteModels(
+                  scene.models
+                    .filter((model) => scene.resolveModelPlateId(model) === scene.activePlateId)
+                    .map((model) => model.id),
+                );
               }}
             >
               <Trash2 className="w-3.5 h-3.5" />
