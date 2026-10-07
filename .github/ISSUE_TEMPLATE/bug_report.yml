@@ -1,0 +1,153 @@
+name: Bug report
+description: Report something in DragonFruit that isn't working as expected.
+title: "[BUG] "
+labels: ["form-v1"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a problem. The details below help us reproduce it quickly.
+        Please search existing issues first to avoid duplicates.
+
+  # ---------- Baseline configuration ----------
+  - type: input
+    id: version
+    attributes:
+      label: DragonFruit version
+      description: Copy the full version line from the app, e.g. "DragonFruit 0.1.16 (beta) — dev @ 5362aed · macOS/arm64".
+      placeholder: DragonFruit 0.1.16 (beta) — dev @ 5362aed · macOS/arm64
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: os_version
+    attributes:
+      label: OS version (optional)
+      placeholder: e.g. Windows 11 Pro 25H2, macOS 15.3, Ubuntu 24.04
+
+  - type: dropdown
+    id: printer_brand
+    attributes:
+      label: Printer brand
+      description: Leave as "Not printer-related" if the problem happens before you export or print.
+      options:
+        - Not printer-related
+        - Anycubic
+        - ELEGOO
+        - UniFormation
+        - Concepts3D Athena / NanoDLP
+        - Odyssey (LUMEN)
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: printer_model
+    attributes:
+      label: Printer model (optional)
+      placeholder: e.g. Saturn 4 Ultra, Photon M3, Athena II 16K
+
+  - type: dropdown
+    id: export_format
+    attributes:
+      label: Export / print file format
+      options:
+        - Not export-related
+        - CTB (.ctb)
+        - LUMEN (.lumen)
+        - NanoDLP (.nanodlp)
+        - ELEGOO (.goo)
+        - Anycubic (.pwmb / .pwma / .pm3 / similar)
+        - Mesh export (STL / 3MF / OBJ)
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: hardware
+    attributes:
+      label: RAM and graphics (optional)
+      description: Helpful for slicing speed, memory, and display problems.
+      placeholder: e.g. 32 GB RAM, Apple M2 Pro / NVIDIA RTX 3060
+
+  # ---------- The problem ----------
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where in DragonFruit did it happen?
+      description: Your best guess is fine.
+      multiple: true
+      options:
+        - File import (STL / OBJ / 3MF / .lys / .chitubox)
+        - Opening or saving projects (.voxl)
+        - Moving, rotating, scaling, arranging models
+        - Cutting models
+        - Hollowing
+        - Mesh repair
+        - Auto supports
+        - Support Studio (manual supports)
+        - Islands
+        - Slicing
+        - Antialiasing / 3DAA
+        - Printer or material profiles
+        - Exporting files
+        - Sending to / printing on the printer
+        - Interface (menus, viewport, shortcuts)
+        - Installing, starting, updating, crashing
+        - Not sure / other
+    validations:
+      required: true
+
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened?
+      description: Describe what you saw, and what you expected to happen instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The clicks and settings that lead to the problem, in order. Include the panel or tool you were in.
+      placeholder: |
+        1. Import model.stl
+        2. Go to Supports and run Auto Support (Medium)
+        3. ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: How often does it happen?
+      options:
+        - Every time
+        - Sometimes
+        - Happened once
+    validations:
+      required: true
+
+  # ---------- Attachments ----------
+  - type: textarea
+    id: attachments
+    attributes:
+      label: Logs, screenshots, and scene files
+      description: |
+        Drag and drop files here. Logs and screenshots help a lot.
+        If a scene or model file is too big to attach, zip it or share a link.
+        Please don't include anything private.
