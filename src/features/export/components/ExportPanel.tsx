@@ -1,6 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import * as THREE from 'three';
-import { Download, Files } from 'lucide-react';
+import { Box, Download, Files } from 'lucide-react';
+import { useLingui } from '@lingui/react';
+import { msg, plural } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
+import type { MessageDescriptor } from '@lingui/core';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { ExportManager, ExportOptions } from '../logic/ExportManager';
 import { normalizeExportBaseName, resolveEntirePlateExportBaseName } from '../logic/exportFileNaming';
@@ -9,8 +13,10 @@ import {
   Card,
   CardHeader,
   Input,
+  SegmentedControl,
   Select,
   SettingRow,
+  Spinner,
   Toggle,
 } from '@/components/atoms';
 import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
@@ -32,6 +38,52 @@ interface ExportPanelProps {
 
 type ExportScope = 'entire_plate' | 'active_model';
 
+type Translate = (descriptor: MessageDescriptor, values?: Record<string, unknown>) => string;
+
+// Interpolated messages live in module-level formatters: React Compiler renames
+// locals before the Lingui macro computes the id, so interpolating inside a
+// component leaves the placeholder raw in production builds.
+function formatHiddenModelOptionLabel(translate: Translate, modelName: string): string {
+  return translate(msg`${modelName} (hidden)`);
+}
+
+function formatScopedMeshCountTitle(translate: Translate, count: number): string {
+  return translate(msg`${plural(count, {
+    one: '# mesh will be exported.',
+    other: '# meshes will be exported.',
+  })}`);
+}
+
+const EXPORT_SCOPE_OPTIONS: ReadonlyArray<{ value: ExportScope; label: MessageDescriptor }> = [
+  { value: 'entire_plate', label: msg`Entire Plate` },
+  { value: 'active_model', label: msg`Active Model` },
+];
+
+const EXPORT_FORMAT_OPTIONS: ReadonlyArray<{
+  value: ExportOptions['format'];
+  label: MessageDescriptor;
+  title: MessageDescriptor;
+}> = [
+  { value: '3mf', label: msg`3MF`, title: msg`3MF Mesh (.3mf)` },
+  { value: 'stl', label: msg`STL`, title: msg`STL Mesh (.stl)` },
+  { value: 'voxl', label: msg`VOXL`, title: msg`VOXL Scene (.voxl)` },
+];
+
+const STL_ENCODING_OPTIONS: ReadonlyArray<{
+  value: 'binary' | 'ascii';
+  label: MessageDescriptor;
+  title: MessageDescriptor;
+}> = [
+  { value: 'binary', label: msg`Binary`, title: msg`Binary STL (recommended)` },
+  { value: 'ascii', label: msg`ASCII`, title: msg`ASCII STL` },
+];
+
+const EXPORT_ACTION_LABELS: Record<ExportOptions['format'], MessageDescriptor> = {
+  '3mf': msg`Export as 3MF`,
+  stl: msg`Export as STL`,
+  voxl: msg`Export Scene File`,
+};
+
 function joinNativePath(directory: string, fileName: string): string {
   const trimmedDirectory = directory.trim().replace(/[\\/]+$/, '');
   const separator = trimmedDirectory.includes('\\') ? '\\' : '/';
@@ -50,6 +102,7 @@ export function ExportPanel({
   onExportError,
   onExportProgress,
 }: ExportPanelProps) {
+  const { _ } = useLingui();
   const [isExpanded, setIsExpanded] = useFloatingPanelCollapse(true);
   const [exportScope, setExportScope] = useState<ExportScope>('entire_plate');
   const [filename, setFilename] = useState(() => normalizeExportBaseName(activeModel?.name));
@@ -73,6 +126,12 @@ export function ExportPanel({
       visible: model.visible,
     }));
   }, [models]);
+
+  // How many meshes the current scope hands to the export, for the header badge.
+  const visibleModelCount = models.filter((model) => model.visible).length;
+  const scopedMeshCount = exportScope === 'active_model'
+    ? (activeModel ? 1 : 0)
+    : (visibleModelCount > 0 ? visibleModelCount : models.length);
 
   useEffect(() => {
     if (exportScope === 'active_model' && activeModel) {
@@ -195,7 +254,7 @@ export function ExportPanel({
         if (savedPath) onExportSuccess?.(savedPath);
       } catch (err) {
         console.error('Export failed:', err);
-        onExportError?.('Export failed. Check console for details.');
+        onExportError?.(_(msg`Export failed. Check console for details.`));
       } finally {
         setIsExporting(false);
         onExportProgress?.(false);
@@ -269,7 +328,7 @@ export function ExportPanel({
         return;
       }
       console.error('Batch export failed:', error);
-      onExportError?.('Batch export failed. Check console for details.');
+      onExportError?.(_(msg`Batch export failed. Check console for details.`));
     } finally {
       setIsExportingIndividually(false);
       onExportProgress?.(false);
@@ -289,13 +348,13 @@ export function ExportPanel({
                 expanded={isExpanded}
                 onToggle={() => setIsExpanded((prev) => !prev)}
               />
-              <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Export</h3>
+              <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Export</Trans></h3>
             </>
           )}
         />
         {isExpanded && (
-          <div className="px-3 pb-3 text-xs" style={{ color: 'var(--text-muted)' }}>
-            No meshes loaded yet. Import a model first, then hop back to Export.
+          <div className="px-2.5 pt-1 pb-2.5 text-xs" style={{ color: 'var(--text-muted)' }}>
+            <Trans>No meshes loaded yet. Import a model first, then hop back to Export.</Trans>
           </div>
         )}
       </Card>
@@ -311,164 +370,189 @@ export function ExportPanel({
               expanded={isExpanded}
               onToggle={() => setIsExpanded((prev) => !prev)}
             />
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Export</h3>
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Export</Trans></h3>
           </>
+        )}
+        right={(
+          <div
+            className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5"
+            style={{
+              borderColor: 'color-mix(in srgb, var(--accent), transparent 62%)',
+              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
+            }}
+            title={formatScopedMeshCountTitle(_, scopedMeshCount)}
+          >
+            <Box className="h-3 w-3" style={{ color: 'var(--accent)' }} />
+            <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+              <Trans comment="Badge label next to the number of meshes this export writes. Rendered uppercase; keep it to one short word.">Meshes</Trans>
+            </span>
+            <span className="text-xs font-bold tabular-nums" style={{ color: 'var(--text-strong)' }}>
+              {scopedMeshCount}
+            </span>
+          </div>
         )}
       />
 
       {isExpanded && (
-      <div className="px-3 pt-2 pb-3 space-y-2.5">
-        {exportScope === 'active_model' && (
-          <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-            <Select
-              value={activeModelId ?? ''}
-              onChange={(e) => onActiveModelChange(e.target.value || null)}
-              className="w-full !h-9 text-sm"
-            >
-              <option value="" disabled>Select a model</option>
-              {modelOptions.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.visible ? model.name : `${model.name} (hidden)`}
-                </option>
-              ))}
-            </Select>
-          </div>
-        )}
+        <div className="px-2.5 pt-1 pb-2.5 space-y-2">
+          <div className="rounded-md border p-2 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div className="space-y-0.5">
+              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                <Trans comment="Label above the picker that chooses whether the export writes the whole plate or only the active model.">Scope</Trans>
+              </div>
+              <SegmentedControl
+                fullWidth
+                size="sm"
+                label={_(msg`Export scope`)}
+                value={exportScope}
+                onChange={setExportScope}
+                options={EXPORT_SCOPE_OPTIONS.map((option) => ({ value: option.value, label: _(option.label) }))}
+              />
+            </div>
 
-        {exportScope === 'active_model' && !activeModel ? (
-          <div className="rounded-md border p-2 text-xs" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-1)' }}>
-            Pick a model to export.
+            {exportScope === 'active_model' && (
+              <div className="space-y-0.5">
+                <label className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                  <Trans>Model</Trans>
+                </label>
+                <Select
+                  value={activeModelId ?? ''}
+                  onChange={(e) => onActiveModelChange(e.target.value || null)}
+                  className="w-full"
+                  aria-label={_(msg`Model to export`)}
+                >
+                  <option value="" disabled>{_(msg`Select a model`)}</option>
+                  {modelOptions.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.visible ? model.name : formatHiddenModelOptionLabel(_, model.name)}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            )}
           </div>
-        ) : (
-          <>
-            <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-              <div className="space-y-1.5">
+
+          {exportScope === 'active_model' && !activeModel ? (
+            <div className="rounded-md border px-2.5 py-2 text-xs" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-1)' }}>
+              <Trans>Pick a model to export.</Trans>
+            </div>
+          ) : (
+            <>
+              <div className="rounded-md border p-2 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <div className="space-y-0.5">
-                  <label className="text-xs" style={{ color: 'var(--text-muted)' }}>File Name</label>
+                  <label className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                    <Trans>File Name</Trans>
+                  </label>
                   <Input
                     type="text"
                     value={filename}
                     onChange={(e) => setFilename(e.target.value)}
-                    className="w-full !h-9 text-sm"
+                    className="w-full !h-8"
                     placeholder="my_print"
                   />
                 </div>
 
                 <div className="space-y-0.5">
-                  <label className="text-xs" style={{ color: 'var(--text-muted)' }}>Export Scope</label>
-                  <Select
-                    value={exportScope}
-                    onChange={(e) => setExportScope(e.target.value as ExportScope)}
-                    className="w-full !h-9 text-sm"
-                  >
-                    <option value="entire_plate">Entire Plate (default)</option>
-                    <option value="active_model">Active Model Only</option>
-                  </Select>
-                </div>
-
-                <div className="space-y-0.5">
-                  <label className="text-xs" style={{ color: 'var(--text-muted)' }}>Format</label>
-                  <Select
+                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                    <Trans>Format</Trans>
+                  </div>
+                  <SegmentedControl
+                    fullWidth
+                    size="sm"
+                    label={_(msg`Export format`)}
                     value={options.format}
-                    onChange={(e) => setOptions(prev => ({ ...prev, format: e.target.value as ExportOptions['format'] }))}
-                    className="w-full !h-9 text-sm"
-                  >
-                    <option value="3mf">3MF Mesh (.3mf)</option>
-                    <option value="stl">STL Mesh (.stl)</option>
-                    <option value="voxl">VOXL Scene (.voxl)</option>
-                  </Select>
+                    onChange={(next) => setOptions(prev => ({ ...prev, format: next }))}
+                    options={EXPORT_FORMAT_OPTIONS.map((option) => ({ value: option.value, label: _(option.label), title: _(option.title) }))}
+                  />
                 </div>
 
                 {options.format === 'stl' && (
                   <div className="space-y-0.5">
-                    <label className="text-xs" style={{ color: 'var(--text-muted)' }}>STL Encoding</label>
-                    <Select
+                    <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                      <Trans>STL Encoding</Trans>
+                    </div>
+                    <SegmentedControl
+                      fullWidth
+                      size="sm"
+                      label={_(msg`STL encoding`)}
                       value={options.binary ? 'binary' : 'ascii'}
-                      onChange={(e) => setOptions(prev => ({ ...prev, binary: e.target.value === 'binary' }))}
-                      className="w-full !h-9 text-sm"
-                    >
-                      <option value="binary">Binary STL (recommended)</option>
-                      <option value="ascii">ASCII STL</option>
-                    </Select>
+                      onChange={(next) => setOptions(prev => ({ ...prev, binary: next === 'binary' }))}
+                      options={STL_ENCODING_OPTIONS.map((option) => ({ value: option.value, label: _(option.label), title: _(option.title) }))}
+                    />
                   </div>
                 )}
               </div>
-            </div>
 
-            {options.format !== 'voxl' && (
-              <div className="space-y-1.5">
-                <SettingRow as="label" bordered surface="raised" density="comfortable" label="Include Model Mesh">
-                  <Toggle
-                    checked={options.includeModel}
-                    onChange={(v) => setOptions(prev => ({ ...prev, includeModel: v }))}
-                    size="md"
-                  />
-                </SettingRow>
-                <SettingRow as="label" bordered surface="raised" density="comfortable" label="Include Supports">
-                  <Toggle
-                    checked={options.includeSupports}
-                    onChange={(v) => setOptions(prev => ({ ...prev, includeSupports: v }))}
-                    size="md"
-                  />
-                </SettingRow>
-                <SettingRow as="label" bordered surface="raised" density="comfortable" label="Include Raft">
-                  <Toggle
-                    checked={options.includeRaft}
-                    onChange={(v) => setOptions(prev => ({ ...prev, includeRaft: v }))}
-                    size="md"
-                  />
-                </SettingRow>
+              {options.format !== 'voxl' && (
+                <div className="space-y-1.5">
+                  <SettingRow as="label" bordered surface="raised" label={<Trans>Include Model Mesh</Trans>}>
+                    <Toggle
+                      checked={options.includeModel}
+                      onChange={(v) => setOptions(prev => ({ ...prev, includeModel: v }))}
+                      size="md"
+                    />
+                  </SettingRow>
+                  <SettingRow as="label" bordered surface="raised" label={<Trans>Include Supports</Trans>}>
+                    <Toggle
+                      checked={options.includeSupports}
+                      onChange={(v) => setOptions(prev => ({ ...prev, includeSupports: v }))}
+                      size="md"
+                    />
+                  </SettingRow>
+                  <SettingRow as="label" bordered surface="raised" label={<Trans>Include Raft</Trans>}>
+                    <Toggle
+                      checked={options.includeRaft}
+                      onChange={(v) => setOptions(prev => ({ ...prev, includeRaft: v }))}
+                      size="md"
+                    />
+                  </SettingRow>
+                </div>
+              )}
+
+              <div className="space-y-1.5 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                <Button
+                  onClick={handleExport}
+                  disabled={isAnyExportInProgress || (options.includeModel && exportScope === 'active_model' && !activeModel)}
+                  variant="primary"
+                  className={`w-full gap-1.5 ${isExporting ? 'cursor-wait opacity-70' : ''}`}
+                >
+                  {isExporting ? (
+                    <>
+                      <Spinner size="md" />
+                      <span><Trans>Exporting…</Trans></span>
+                    </>
+                  ) : (
+                    <>
+                      <Download className="h-4 w-4" />
+                      <span>{_(EXPORT_ACTION_LABELS[options.format])}</span>
+                    </>
+                  )}
+                </Button>
+
+                <Button
+                  onClick={() => { void handleExportIndividually(); }}
+                  disabled={isAnyExportInProgress || models.length <= 1}
+                  variant="secondary"
+                  className={`w-full gap-1.5 ${isExportingIndividually ? 'cursor-wait opacity-70' : ''}`}
+                  title={models.length <= 1 ? _(msg`Add more models to use Batch Export`) : _(msg`Export each visible model and its supports into separate files in a folder`)}
+                >
+                  {isExportingIndividually ? (
+                    <>
+                      <Spinner size="md" />
+                      <span><Trans>Exporting Individually…</Trans></span>
+                    </>
+                  ) : (
+                    <>
+                      <Files className="h-4 w-4" />
+                      <span><Trans>Batch Export</Trans></span>
+                    </>
+                  )}
+                </Button>
               </div>
-            )}
 
-            <Button
-              onClick={handleExport}
-              disabled={isAnyExportInProgress || (options.includeModel && exportScope === 'active_model' && !activeModel)}
-              variant="accent"
-              className={`w-full !h-9 inline-flex items-center justify-center gap-1.5 ${isExporting ? 'cursor-wait opacity-70' : ''}`}
-            >
-              {isExporting ? (
-                <>
-                  <div className="w-3.5 h-3.5 border-2 rounded-full animate-spin" style={{ borderColor: 'color-mix(in srgb, var(--accent-contrast), transparent 65%)', borderTopColor: 'var(--accent-contrast)' }} />
-                  <span>Exporting…</span>
-                </>
-              ) : (
-                <>
-                  <Download className="h-4 w-4" />
-                  <span>
-                    {options.format === 'voxl'
-                      ? 'Export Scene File'
-                      : options.format === '3mf'
-                        ? 'Export as 3MF'
-                        : 'Export as STL'}
-                  </span>
-                </>
-              )}
-            </Button>
-
-            <Button
-              onClick={() => { void handleExportIndividually(); }}
-              disabled={isAnyExportInProgress || models.length <= 1}
-              variant="secondary"
-              className={`w-full !h-8 inline-flex items-center justify-center gap-1.5 ${isExportingIndividually ? 'cursor-wait opacity-70' : ''}`}
-              title={models.length <= 1 ? 'Add more models to use Batch Export' : 'Export each visible model and its supports into separate files in a folder'}
-            >
-              {isExportingIndividually ? (
-                <>
-                  <div className="w-3.5 h-3.5 border-2 rounded-full animate-spin" style={{ borderColor: 'color-mix(in srgb, var(--text-strong), transparent 70%)', borderTopColor: 'var(--text-strong)' }} />
-                  <span>Exporting Individually…</span>
-                </>
-              ) : (
-                <>
-                  <Files className="h-4 w-4" />
-                  <span>Batch Export</span>
-                </>
-              )}
-            </Button>
-
-          </>
-        )}
-      </div>
+            </>
+          )}
+        </div>
       )}
     </Card>
   );

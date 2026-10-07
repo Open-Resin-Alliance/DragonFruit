@@ -39,6 +39,10 @@ msgstr "{count, plural, one {Encontrada #} other {Encontradas #}}"
 msgid "{count, plural, one {# material} other {# materials}}"
 msgstr "{count, plural, one {# material} other {# materiales}}"
 
+#: src/features/export/components/ExportPanel.tsx:51
+msgid "{count, plural, one {# mesh will be exported.} other {# meshes will be exported.}}"
+msgstr "{count, plural, one {Se exportará # malla.} other {Se exportarán # mallas.}}"
+
 #. Warning badge over the viewport when models stick out of the printer build volume.
 #: src/components/scene/SceneCanvas/SceneCanvas.tsx:227
 msgid "{count, plural, one {# model out of build volume} other {# models out of build volume}}"
@@ -110,6 +114,10 @@ msgstr "{minutes} min"
 msgid "{minutes} min {seconds} s"
 msgstr "{minutes} min {seconds} s"
 
+#: src/features/export/components/ExportPanel.tsx:47
+msgid "{modelName} (hidden)"
+msgstr "{modelName} (oculto)"
+
 #: src/features/updater/updaterMessages.ts:19
 msgid "{pct}%"
 msgstr "{pct} %"
@@ -180,6 +188,14 @@ msgstr "Ratón 3D"
 msgid "3D mouse navigation controls"
 msgstr "Controles de navegación del ratón 3D"
 
+#: src/features/export/components/ExportPanel.tsx:67
+msgid "3MF"
+msgstr "3MF"
+
+#: src/features/export/components/ExportPanel.tsx:67
+msgid "3MF Mesh (.3mf)"
+msgstr "Malla 3MF (.3mf)"
+
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:637
 msgid "A built-in preset cannot be saved over — Duplicate it to make it yours"
 msgstr "Un preajuste integrado no se puede sobrescribir: duplícalo para tener tu propia copia"
@@ -214,6 +230,10 @@ msgstr "Activo"
 #: src/components/settings/LocalBackupsSettingsTab.tsx:1297
 msgid "ACTIVE"
 msgstr "ACTIVO"
+
+#: src/features/export/components/ExportPanel.tsx:59
+msgid "Active Model"
+msgstr "Modelo activo"
 
 #: src/components/controls/AutoRotationPanel.tsx:71
 msgid "Active model has no readable geometry."
@@ -252,6 +272,10 @@ msgstr "Añade contactos a lo largo del borde o la esquina en que se apoya la po
 #: src/app/page.tsx:2334
 msgid "Add joint"
 msgstr "Añadir unión"
+
+#: src/features/export/components/ExportPanel.tsx:537
+msgid "Add more models to use Batch Export"
+msgstr "Añade más modelos para usar la exportación por lotes"
 
 #: src/components/layout/EmptySceneState.tsx:558
 msgid "Add or switch printer anytime from the top bar."
@@ -374,6 +398,14 @@ msgstr "Organizar los modelos en la placa"
 #: src/components/controls/toolRailEntries.ts:56
 msgid "Array copies across the plate"
 msgstr "Distribuir copias en matriz por la placa"
+
+#: src/features/export/components/ExportPanel.tsx:78
+msgid "ASCII"
+msgstr "ASCII"
+
+#: src/features/export/components/ExportPanel.tsx:78
+msgid "ASCII STL"
+msgstr "STL ASCII"
 
 #: src/components/settings/BackupsSettingsTab.tsx:976
 msgid "Authorize DragonFruit so backups can be saved into your private repository."
@@ -678,13 +710,29 @@ msgstr "Soportes equilibrados para uso general"
 msgid "Base Flare"
 msgstr "Base acampanada"
 
+#: src/features/export/components/ExportPanel.tsx:547
+msgid "Batch Export"
+msgstr "Exportación por lotes"
+
+#: src/features/export/components/ExportPanel.tsx:331
+msgid "Batch export failed. Check console for details."
+msgstr "La exportación por lotes ha fallado. Consulta la consola para más detalles."
+
 #: src/supports/Curves/CurveSettingsCard.tsx:190
 msgid "Bias (Bottom - Top)"
 msgstr "Sesgo (abajo - arriba)"
 
+#: src/features/export/components/ExportPanel.tsx:77
+msgid "Binary"
+msgstr "Binario"
+
 #: src/features/slicing/components/SlicingPanel.tsx:1427
 msgid "Binary Base"
 msgstr "Base binaria"
+
+#: src/features/export/components/ExportPanel.tsx:77
+msgid "Binary STL (recommended)"
+msgstr "STL binario (recomendado)"
 
 #: src/components/controls/AutoRotationPanel.tsx:77
 msgid "Blocker Painting Mode"
@@ -1750,7 +1798,7 @@ msgstr "Editor"
 msgid "Editor context menu"
 msgstr "Menú contextual del editor"
 
-#: src/components/controls/ToolRail.tsx:267
+#: src/components/controls/ToolRail.tsx:268
 msgid "Editor tools"
 msgstr "Herramientas del editor"
 
@@ -1820,6 +1868,10 @@ msgstr "Motor"
 #: src/components/printers/SetupMethodChooser.tsx:88
 msgid "Enter your printer's IP address"
 msgstr "Introduce la dirección IP de tu impresora"
+
+#: src/features/export/components/ExportPanel.tsx:58
+msgid "Entire Plate"
+msgstr "Placa completa"
 
 #: src/components/settings/BackupsSettingsTab.tsx:903
 msgid "Env config required"
@@ -1912,12 +1964,50 @@ msgstr "Experto"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:407
 #: src/components/layout/TopBar.tsx:610
+#: src/features/export/components/ExportPanel.tsx:351
+#: src/features/export/components/ExportPanel.tsx:373
 msgid "Export"
 msgstr "Exportar"
+
+#: src/features/export/components/ExportPanel.tsx:82
+msgid "Export as 3MF"
+msgstr "Exportar como 3MF"
+
+#: src/features/export/components/ExportPanel.tsx:83
+msgid "Export as STL"
+msgstr "Exportar como STL"
+
+#: src/features/export/components/ExportPanel.tsx:537
+msgid "Export each visible model and its supports into separate files in a folder"
+msgstr "Exporta cada modelo visible y sus soportes en archivos separados dentro de una carpeta"
+
+#: src/features/export/components/ExportPanel.tsx:257
+msgid "Export failed. Check console for details."
+msgstr "La exportación ha fallado. Consulta la consola para más detalles."
+
+#: src/features/export/components/ExportPanel.tsx:462
+msgid "Export format"
+msgstr "Formato de exportación"
+
+#: src/features/export/components/ExportPanel.tsx:84
+msgid "Export Scene File"
+msgstr "Exportar archivo de escena"
+
+#: src/features/export/components/ExportPanel.tsx:406
+msgid "Export scope"
+msgstr "Alcance de la exportación"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:404
 msgid "Export the selected preset as a JSON file"
 msgstr "Exporta el preajuste seleccionado como archivo JSON"
+
+#: src/features/export/components/ExportPanel.tsx:542
+msgid "Exporting Individually…"
+msgstr "Exportando individualmente…"
+
+#: src/features/export/components/ExportPanel.tsx:522
+msgid "Exporting…"
+msgstr "Exportando…"
 
 #: src/components/controls/ModelStatsCard.tsx:533
 msgid "Exposure:"
@@ -2025,6 +2115,10 @@ msgstr "Caras lejanas, más oscuras para que la forma se lea como sólida."
 msgid "Fewest Supports"
 msgstr "Menos soportes"
 
+#: src/features/export/components/ExportPanel.tsx:444
+msgid "File Name"
+msgstr "Nombre del archivo"
+
 #: src/components/controls/IslandsPanel.tsx:361
 msgid "Filters"
 msgstr "Filtros"
@@ -2114,6 +2208,10 @@ msgstr "Informe del bosque"
 #: src/components/settings/GeneralSettingsTab.tsx:311
 msgid "Forget all stored panel positions and return to seeded layout."
 msgstr "Descarta las posiciones guardadas de los paneles y vuelve a la distribución inicial."
+
+#: src/features/export/components/ExportPanel.tsx:457
+msgid "Format"
+msgstr "Formato"
 
 #: src/components/layout/FirstRunOnboarding.tsx:179
 msgid "From the community, for the community. Free to use, open to contribute, and shaped by the people who print with it."
@@ -2272,7 +2370,7 @@ msgstr "Mantiene el modelo separado de la placa para que quepa un soporte debajo
 msgid "Hollow"
 msgstr "Vaciar"
 
-#: src/components/controls/ToolRail.tsx:247
+#: src/components/controls/ToolRail.tsx:248
 #: src/components/settings/GeneralSettingsTab.tsx:300
 msgid "Horizontal"
 msgstr "Horizontal"
@@ -2404,6 +2502,18 @@ msgstr "Importando tu archivo…"
 #: src/components/layout/EmptySceneState.tsx:86
 msgid "In space, no one can hear you slice."
 msgstr "En el espacio, nadie puede oírte laminar."
+
+#: src/features/export/components/ExportPanel.tsx:488
+msgid "Include Model Mesh"
+msgstr "Incluir malla del modelo"
+
+#: src/features/export/components/ExportPanel.tsx:502
+msgid "Include Raft"
+msgstr "Incluir balsa"
+
+#: src/features/export/components/ExportPanel.tsx:495
+msgid "Include Supports"
+msgstr "Incluir soportes"
 
 #: src/features/slicing/components/SlicingPanel.tsx:2339
 msgid "Increase offline layer height"
@@ -2962,6 +3072,11 @@ msgstr "Fusionando soportes…"
 msgid "Mesh"
 msgstr "Malla"
 
+#. Badge label next to the number of meshes this export writes. Rendered uppercase; keep it to one short word.
+#: src/features/export/components/ExportPanel.tsx:387
+msgid "Meshes"
+msgstr "Mallas"
+
 #. Unit suffix after a minutes input box. Keep it abbreviated.
 #: src/components/settings/BackupsSettingsTab.tsx:1241
 #: src/components/settings/LocalBackupsSettingsTab.tsx:889
@@ -3027,6 +3142,10 @@ msgstr "Reflejar en X, Y o Z"
 msgid "Mode"
 msgstr "Modo"
 
+#: src/features/export/components/ExportPanel.tsx:416
+msgid "Model"
+msgstr "Modelo"
+
 #: src/features/scene/sceneImportMessages.ts:142
 msgid "Model {index}/{total}: {modelName}"
 msgstr "Modelo {index}/{total}: {modelName}"
@@ -3054,6 +3173,10 @@ msgstr "Soportes del modelo"
 #: src/components/modals/ModelSupportsModal.tsx:142
 msgid "Model Supports"
 msgstr "Soportes del modelo"
+
+#: src/features/export/components/ExportPanel.tsx:422
+msgid "Model to export"
+msgstr "Modelo que exportar"
 
 #: src/components/controls/autoSupport/AutoSupportRunDiagnostics.tsx:59
 msgid "Model volume"
@@ -3259,6 +3382,10 @@ msgstr "Ningún material seleccionado"
 #: src/components/settings/LocalBackupsSettingsTab.tsx:1283
 msgid "No materials linked to this printer."
 msgstr "No hay materiales asociados a esta impresora."
+
+#: src/features/export/components/ExportPanel.tsx:357
+msgid "No meshes loaded yet. Import a model first, then hop back to Export."
+msgstr "Todavía no hay mallas cargadas. Importa un modelo y vuelve a Exportar."
 
 #: src/features/slicing/components/SlicingPanel.tsx:2229
 msgid "No meshes loaded yet. Import a model first, then return to Slicing."
@@ -3652,6 +3779,10 @@ msgstr "Valores de cámara por espacio de trabajo"
 #: src/components/settings/GeneralSettingsTab.tsx:277
 msgid "Persist dragged panel positions in local storage."
 msgstr "Guarda en el almacenamiento local las posiciones de los paneles al arrastrarlos."
+
+#: src/features/export/components/ExportPanel.tsx:437
+msgid "Pick a model to export."
+msgstr "Elige un modelo para exportar."
 
 #: src/components/layout/FirstRunOnboarding.tsx:202
 msgid "Pick what fits your workspace. You can change it anytime in Settings."
@@ -4443,6 +4574,11 @@ msgstr "Guardado automático de escenas"
 msgid "Scene mood overlay in thumbnail"
 msgstr "Superposición ambiental de la escena en la miniatura"
 
+#. Label above the picker that chooses whether the export writes the whole plate or only the active model.
+#: src/features/export/components/ExportPanel.tsx:401
+msgid "Scope"
+msgstr "Alcance"
+
 #: src/components/controls/toolRailEntries.ts:59
 msgid "Sculpt and smooth surface"
 msgstr "Esculpir y suavizar la superficie"
@@ -4515,6 +4651,10 @@ msgstr "Elige un material equivalente al importar."
 #: src/features/slicing/components/SlicingPanel.tsx:1830
 msgid "Select a material profile first."
 msgstr "Elige antes un perfil de material."
+
+#: src/features/export/components/ExportPanel.tsx:424
+msgid "Select a model"
+msgstr "Selecciona un modelo"
 
 #: src/features/slicing/components/SlicingPanel.tsx:1825
 msgid "Select a printer profile first."
@@ -4945,6 +5085,22 @@ msgstr "Paso 1: ejecutar el escaneo por líneas"
 msgid "Step 2: Enable Debug Visuals (IDs + Voxels)"
 msgstr "Paso 2: activar los visuales de depuración (ID + vóxeles)"
 
+#: src/features/export/components/ExportPanel.tsx:68
+msgid "STL"
+msgstr "STL"
+
+#: src/features/export/components/ExportPanel.tsx:477
+msgid "STL encoding"
+msgstr "Codificación STL"
+
+#: src/features/export/components/ExportPanel.tsx:472
+msgid "STL Encoding"
+msgstr "Codificación STL"
+
+#: src/features/export/components/ExportPanel.tsx:68
+msgid "STL Mesh (.stl)"
+msgstr "Malla STL (.stl)"
+
 #: src/components/controls/ModelStatsCard.tsx:578
 msgid "STL size:"
 msgstr "Tamaño del STL:"
@@ -5348,8 +5504,8 @@ msgstr "Muestra u oculta la ventana de primitivas de depuración del modo Prepar
 msgid "Too close to an existing support."
 msgstr "Demasiado cerca de un soporte existente."
 
-#: src/components/controls/ToolRail.tsx:305
 #: src/components/controls/ToolRail.tsx:306
+#: src/components/controls/ToolRail.tsx:307
 #: src/components/settings/GeneralSettingsTab.tsx:293
 #: src/components/settings/GeneralSettingsTab.tsx:297
 msgid "Tool layout"
@@ -5571,7 +5727,7 @@ msgstr "La versión {version} está lista para instalarse"
 msgid "Version info and project details"
 msgstr "Versión y detalles del proyecto"
 
-#: src/components/controls/ToolRail.tsx:246
+#: src/components/controls/ToolRail.tsx:247
 #: src/components/settings/GeneralSettingsTab.tsx:299
 msgid "Vertical"
 msgstr "Vertical"
@@ -5654,6 +5810,14 @@ msgstr "Vóxeles: nodos"
 #: src/volumeAnalysis/IslandVolumes/components/IslandVolumesHierarchyCard.tsx:955
 msgid "Voxels: Systems"
 msgstr "Vóxeles: sistemas"
+
+#: src/features/export/components/ExportPanel.tsx:69
+msgid "VOXL"
+msgstr "VOXL"
+
+#: src/features/export/components/ExportPanel.tsx:69
+msgid "VOXL Scene (.voxl)"
+msgstr "Escena VOXL (.voxl)"
 
 #: src/components/settings/SceneAutosaveSettingsTab.tsx:195
 msgid "Wait this long after edits before autosaving."
