@@ -49,9 +49,11 @@ import { IslandVoxelControls } from '@/components/controls/IslandVoxelControls';
 import { TerritoryVoxelControls } from '@/components/controls/TerritoryVoxelControls';
 import { IslandListCard } from '@/components/controls/IslandListCard';
 import { ModelManagerPanel } from '../components/controls/ModelManagerPanel';
+import { ModelsPanel } from '@/components/organisms/panels/ModelsPanel';
 import { DebugPrimitivesPanel } from '@/components/controls/DebugPrimitivesPanel';
 import { ModelStatsCard } from '@/components/controls/ModelStatsCard';
-import { TransformToolbar } from '@/components/controls/TransformToolbar';
+import { ToolRail, TOOL_RAIL_WIDTH_PX } from '@/components/controls/ToolRail';
+import { buildPrepareToolRailEntries, buildSupportToolRailEntries, type SupportRailMode } from '@/components/controls/toolRailEntries';
 import { SnapAngleReadout } from '@/components/gizmo/rotate/SnapAngleReadout';
 import { RotationHintTooltip } from '@/components/gizmo/rotate/RotationHintTooltip';
 import { TransformControls } from '@/components/controls/TransformControls';
@@ -122,7 +124,13 @@ import { ZipFilePickerModal } from '@/components/modals/ZipFilePickerModal';
 import { extractFilesFromZip, getFileExtensionLower } from '@/utils/zipImport';
 import {
   DEBUG_PRIMITIVES_PANEL_VISIBILITY_EVENT,
+  getToolLayout,
   isDebugPrimitivesPanelVisibleEnabled,
+  isModelsPanelVisibleEnabled,
+  setModelsPanelVisibleEnabled,
+  setToolLayout,
+  TOOL_LAYOUT_EVENT,
+  type ToolLayout,
 } from '@/components/layout/floatingLayoutPreferences';
 
 import { initializeBVH } from '@/utils/bvh';
@@ -251,7 +259,7 @@ import { AutoSupportPanel, getAutoSupportBusy, subscribeAutoSupportBusy, autoSup
 import { installPerfConsoleAPI } from '@/supports/PlacementLogic/Pathfinding/pathfindingPerf';
 import { getUnappliedModifiers } from '@/features/mesh-modifiers/unappliedModifiers';
 import type { UnappliedModifierAction } from '@/components/organisms/modals/ModifierModals';
-import { AutoRotationPanel, getOrientationBusy, subscribeOrientationBusy, OrientElapsed } from '@/components/controls/AutoRotationPanel';
+import { getOrientationBusy, subscribeOrientationBusy, OrientElapsed } from '@/components/controls/AutoRotationPanel';
 import { IslandOverlay } from '@/components/scene/IslandOverlay';
 import { useSupportInteractionManager } from '@/features/supports/useSupportInteractionManager';
 import { useUndoRedoHotkeys } from '@/hotkeys/useUndoRedoHotkeys';
@@ -596,7 +604,15 @@ function createModelTransformKey(modelId: string, transform: ModelTransform): st
  */
 const HISTORY_APP_MODES: readonly SupportMode[] = ['prepare', 'analysis', 'support', 'export', 'printing'];
 const HISTORY_TRANSFORM_MODES: readonly TransformMode[] = [
-  'select', 'transform', 'smoothing', 'arrange', 'placeOnFace', 'mirror', 'hollowing', 'organicCut',
+  'select', 'transform', 'smoothing', 'arrange', 'duplicate', 'placeOnFace', 'mirror', 'hollowing', 'organicCut',
+];
+
+/**
+ * The transform modes Prepare's rail offers. Support's Hollowing is deliberately
+ * absent: it is a Support tool now, and Prepare must never restore it.
+ */
+const PREPARE_TOOL_MODES: readonly TransformMode[] = [
+  'select', 'transform', 'placeOnFace', 'mirror', 'duplicate', 'arrange', 'organicCut', 'smoothing',
 ];
 
 function isAppMode(value: string): value is SupportMode {
@@ -800,7 +816,7 @@ export default function Home() {
   const supportsRef = React.useRef<THREE.Group | null>(null);
   // Hide support geometry in hollowing mode — it just gets in the way.
   React.useEffect(() => {
-    const hidden = scene.mode === 'prepare' && transformMgr.transformMode === 'hollowing';
+    const hidden = (scene.mode === 'prepare' || scene.mode === 'support') && transformMgr.transformMode === 'hollowing';
     if (supportsRef.current) supportsRef.current.visible = !hidden;
   }, [scene.mode, transformMgr.transformMode]);
   // Ref for the drag-wrapper group around supports/rafts (live gizmo transform)
@@ -1136,7 +1152,35 @@ export default function Home() {
   const [pendingModifierResetAction, setPendingModifierResetAction] = React.useState<PendingModifierResetAction | null>(null);
   const [pendingBlockerResetState, setPendingBlockerResetState] = React.useState<HollowingPanelState | null>(null);
   const [debugPrimitivesPanelVisible, setDebugPrimitivesPanelVisible] = React.useState<boolean>(false);
+  // Tool rail's `Models` entry. Defaults to shown, which is how the list behaved
+  // before the rail existed; the stored value is applied on mount, not at render,
+  // because localStorage does not exist during the server render.
+  const [modelsPanelVisible, setModelsPanelVisible] = React.useState<boolean>(true);
+  React.useEffect(() => {
+    setModelsPanelVisible(isModelsPanelVisibleEnabled());
+  }, []);
+  // Column on the left edge or bar under the app bar; Settings and the rail's own
+  // context menu both write the preference and announce it. The fold animation
+  // itself lives in `ToolRail`, which measures the entries as the layout lands.
+  const [toolLayout, setToolLayoutState] = React.useState<ToolLayout>('vertical');
+  React.useEffect(() => {
+    setToolLayoutState(getToolLayout());
+
+    const handleToolLayoutChanged = (event: Event) => {
+      setToolLayoutState((event as CustomEvent<{ layout?: ToolLayout }>).detail?.layout ?? getToolLayout());
+    };
+
+    window.addEventListener(TOOL_LAYOUT_EVENT, handleToolLayoutChanged as EventListener);
+    return () => {
+      window.removeEventListener(TOOL_LAYOUT_EVENT, handleToolLayoutChanged as EventListener);
+    };
+  }, []);
   const [editorContextMenuPos, setEditorContextMenuPos] = React.useState<{ x: number; y: number } | null>(null);
+  // Support mode's rail selects one of three tools, like Prepare's selects a
+  // transform mode: the selected tool's panel is the one shown and the others are
+  // hidden with `display: none`, because the window layout profiles resolve against
+  // the set of mounted panels.
+  const [supportRailMode, setSupportRailMode] = React.useState<SupportRailMode>('manual');
   const [editorContextMenuSupportTarget, setEditorContextMenuSupportTarget] = React.useState<{
     segmentId: string;
     point: { x: number; y: number; z: number };
@@ -2138,8 +2182,8 @@ export default function Home() {
   }, [requestDestructiveTransformSupportDeletion]);
 
   const requestOrientSupportDeletionWithContinuation = React.useCallback((onContinue: () => void) => {
-    // Unlike the prepare-mode destructive transforms, orient runs from support
-    // mode, so there is no mode gate — placed supports always force the dialog.
+    // Unlike the prepare-mode destructive transforms, orient always forces the
+    // dialog when placed supports would be invalidated by the rotation.
     if (!scene.activeModelId) return true;
     if (pendingDestructiveTransform) return false;
     const supportCount = getSupportPrimitiveCountForModel(scene.activeModelId);
@@ -2153,6 +2197,35 @@ export default function Home() {
     pendingDestructiveTransformContinueRef.current = onContinue;
     return false;
   }, [getSupportPrimitiveCountForModel, pendingDestructiveTransform, scene]);
+
+  // The scene-owned apply for the Auto Orientation panel, shared by whichever
+  // mode hosts it: re-seat the model to the plate clearance after the rotation
+  // (lift OR drop) so repeated orienting never drifts the model upward, and
+  // record rotate + lift as one history entry.
+  const handleApplyOrientation = React.useCallback((modelId: string, rotation: THREE.Euler) => {
+    const activeModel = scene.activeModel;
+    const current = activeModel?.transform;
+    if (!activeModel || !current) return;
+    const before = {
+      position: current.position.clone(),
+      rotation: current.rotation.clone(),
+      scale: current.scale.clone(),
+    };
+    const after = {
+      position: current.position.clone(),
+      rotation,
+      scale: current.scale.clone(),
+    };
+    // A new down-axis means new extents: seat to the plate clearance after
+    // orientation — lift OR drop — so repeated orienting never drifts the model
+    // upward. One history entry covers rotate + lift.
+    if (activeModel.id === modelId) {
+      const lowestWorldZ = getModelLowestWorldZ({ id: modelId, geometry: activeModel.geometry, transform: after });
+      after.position.z += transformMgr.liftDistance - lowestWorldZ;
+    }
+    scene.updateModelTransform(modelId, after);
+    scene.commitModelTransformHistory(modelId, before, after, 'Apply Orientation Suggestion');
+  }, [scene, transformMgr.liftDistance]);
 
   const handleConfirmDestructiveTransform = React.useCallback(() => {
     const pending = pendingDestructiveTransform;
@@ -5319,7 +5392,7 @@ export default function Home() {
   const handleSceneModelSelection = React.useCallback((modelId: string | null, options?: { selectionMode?: 'single' | 'toggle' | 'add' }) => {
     if (modelId == null) {
       if (
-        scene.mode === 'prepare'
+        (scene.mode === 'prepare' || scene.mode === 'support')
         && transformMgr.transformMode === 'hollowing'
         && selectedHolePunchPlacementIds.length > 0
       ) {
@@ -5336,7 +5409,7 @@ export default function Home() {
 
   React.useEffect(() => {
     if (
-      scene.mode !== 'prepare'
+      (scene.mode !== 'prepare' && scene.mode !== 'support')
       || transformMgr.transformMode !== 'hollowing'
       || selectedHolePunchPlacementIds.length === 0
     ) {
@@ -7633,6 +7706,51 @@ export default function Home() {
     };
   });
 
+  // Each rail-bearing workspace remembers the tool it was last on, so a switch
+  // restores that tool instead of carrying the other workspace's mode across.
+  // Prepare keeps one of its rail modes; Support keeps either Hollowing or its
+  // last panel mode.
+  const prepareToolMemoryRef = React.useRef<TransformMode>('select');
+  const supportToolMemoryRef = React.useRef<{ hollowing: boolean; panelMode: SupportRailMode }>({ hollowing: false, panelMode: 'manual' });
+  const lastWorkspaceModeRef = React.useRef(scene.mode);
+
+  // Restore on the transition itself. Declared before the recorders so it reads
+  // the memory before they rewrite it for the workspace being entered.
+  React.useEffect(() => {
+    if (lastWorkspaceModeRef.current === scene.mode) return;
+    lastWorkspaceModeRef.current = scene.mode;
+
+    if (scene.mode === 'prepare') {
+      if (transformMgr.transformMode !== prepareToolMemoryRef.current) {
+        setTransformModeWithMirrorFinalize(prepareToolMemoryRef.current);
+      }
+    } else if (scene.mode === 'support') {
+      const memory = supportToolMemoryRef.current;
+      if (memory.hollowing) {
+        if (transformMgr.transformMode !== 'hollowing') setTransformModeWithMirrorFinalize('hollowing');
+      } else {
+        if (transformMgr.transformMode !== 'select') setTransformModeWithMirrorFinalize('select');
+        if (supportRailMode !== memory.panelMode) setSupportRailMode(memory.panelMode);
+      }
+    }
+  }, [scene.mode, transformMgr.transformMode, setTransformModeWithMirrorFinalize, supportRailMode]);
+
+  React.useEffect(() => {
+    if (scene.mode !== 'prepare') return;
+    if (PREPARE_TOOL_MODES.includes(transformMgr.transformMode)) {
+      prepareToolMemoryRef.current = transformMgr.transformMode;
+    }
+  }, [scene.mode, transformMgr.transformMode]);
+
+  React.useEffect(() => {
+    if (scene.mode !== 'support') return;
+    if (transformMgr.transformMode === 'hollowing') {
+      supportToolMemoryRef.current = { hollowing: true, panelMode: supportToolMemoryRef.current.panelMode };
+    } else {
+      supportToolMemoryRef.current = { hollowing: false, panelMode: supportRailMode };
+    }
+  }, [scene.mode, transformMgr.transformMode, supportRailMode]);
+
   useDeleteHotkey();
   useCameraProjectionHotkey();
   const hasCavityGeometry = scene.activeModel
@@ -7704,7 +7822,7 @@ export default function Home() {
     setPendingHolePunchAutoApplyModelId(queue[0]);
   }, [getVisibleModelIdsWithUnappliedHoles, scene.setActiveModelId]);
 
-  // Guide the user to the per-model hole-punch UI (Prepare → Hollow tool).
+  // Guide the user to the per-model hole-punch UI (Support → Hollowing tool).
   const handleGoToHollowTool = React.useCallback(() => {
     setShowUnappliedHolePunchModal(false);
     const { holeIds, hollowIds } = getVisibleModelIdsWithUnappliedModifiers();
@@ -7712,7 +7830,7 @@ export default function Home() {
     if (firstPending) {
       scene.setActiveModelId(firstPending);
     }
-    scene.setMode('prepare');
+    scene.setMode('support');
     setTransformModeWithMirrorFinalize('hollowing');
   }, [getVisibleModelIdsWithUnappliedModifiers, scene.setActiveModelId, scene.setMode, setTransformModeWithMirrorFinalize]);
 
@@ -9238,7 +9356,7 @@ export default function Home() {
       const isSJustPressed = isSPressed && !wasSPressed;
 
       if (isAJustPressed) {
-        if (scene.mode === 'prepare' && transformMgr.transformMode === 'hollowing') {
+        if ((scene.mode === 'prepare' || scene.mode === 'support') && transformMgr.transformMode === 'hollowing') {
           if (activeHolePunchPlacements.length > 0) {
             const nextIds = activeHolePunchPlacements.map((placement) => placement.id);
             setSelectedHolePunchPlacementIds(nextIds);
@@ -9328,7 +9446,7 @@ export default function Home() {
 
   // Relocated from the early state block: depends on hollowPreview which is now
   // produced by useHollowingManager (declared above, after transformMgr).
-  const shouldForceHollowingXray = scene.mode === 'prepare'
+  const shouldForceHollowingXray = (scene.mode === 'prepare' || scene.mode === 'support')
     && transformMgr.transformMode === 'hollowing'
     && !scene.activeModel?.meshModifiers?.hollowing?.bakedIntoGeometry;
   const effectiveShaderType = (shouldForceHollowingXray || hollowPreview)
@@ -9425,9 +9543,9 @@ export default function Home() {
   }, [defaultHollowingState, hollowingState, pendingBlockerResetState, persistActiveModelModifiers, scene.activeModel]);
 
 
-  const handleTransformToolbarHover = React.useCallback((mode: TransformMode | null) => {
+  const handleToolRailHover = React.useCallback((mode: TransformMode | null) => {
     if (mode === 'hollowing') {
-      if (scene.mode === 'prepare') {
+      if (scene.mode === 'prepare' || scene.mode === 'support') {
         const activeModel = scene.activeModel;
         if (activeModel) {
           const persistedHollowing = activeModel.meshModifiers?.hollowing;
@@ -9593,7 +9711,7 @@ export default function Home() {
   ]);
 
   React.useEffect(() => {
-    if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'hollowing') {
+    if ((scene.mode !== 'prepare' && scene.mode !== 'support') || transformMgr.transformMode !== 'hollowing') {
       return;
     }
 
@@ -9797,17 +9915,20 @@ export default function Home() {
 
       <GlobalUpdateIndicator />
 
-      <FloatingPanelStack>
+      <FloatingPanelStack
+        leftInsetPx={scene.models.length > 0 && (scene.mode === 'prepare' || scene.mode === 'support') && toolLayout === 'vertical' ? TOOL_RAIL_WIDTH_PX : 0}
+        railIsColumn={toolLayout === 'vertical'}
+      >
         {scene.mode === 'prepare' ? (
           <>
             {PreparePanelStack({
               scene: scene,
               transformMgr: transformMgr,
-              hollowing: hollowing,
-              holePunch: holePunch,
               arrange: arrange,
               organicCut: organicCut,
               outsidePlateModelIds: outsidePlateModelIds,
+              modelsPanelVisible: modelsPanelVisible,
+              modelsPanelCollapsible: toolLayout === 'horizontal',
               handleModelSelection: handleModelSelection,
               handleModelRangeSelection: handleModelRangeSelection,
               handleGroupSelection: handleGroupSelection,
@@ -9839,11 +9960,18 @@ export default function Home() {
               setUniformScaling: setUniformScaling,
               localTransformSpace: localTransformSpace,
               setLocalTransformSpace: setLocalTransformSpace,
-              isApplyingHolePunch: isApplyingHolePunch,
-              interiorView: interiorView,
-              hasCavityGeometry: hasCavityGeometry,
               arrangeSpacingMm: arrangeSpacingMm,
               setArrangeSpacingMm: setArrangeSpacingMm,
+              orientationPanel: autoRotationExperimentEnabled
+                ? {
+                  activeModelId: scene.activeModelId ?? undefined,
+                  activeModelName: scene.activeModel?.name,
+                  currentRotation: scene.activeModel?.transform.rotation,
+                  onApplyRotation: handleApplyOrientation,
+                  onBeforeOrientApply: requestOrientSupportDeletionWithContinuation,
+                  onOrientationReport: showOrientationToast,
+                }
+                : null,
             })}
           </>
         ) : scene.mode === 'analysis' ? (
@@ -9888,63 +10016,99 @@ export default function Home() {
 
         ) : scene.mode === 'support' ? (
           <>
-            <SupportSidebar key="support-settings" activeModelId={scene.activeModelId} />
-            {autoSupportsExperimentEnabled && (
-              <AutoSupportPanel
-                key="support-auto"
-                islands={islandsPoc}
-                hasGeometry={!!scene.geom}
-                activeModelId={scene.activeModelId ?? undefined}
-                autoLift={transformMgr.autoLift}
-                onAutoLiftChange={handleAutoLiftChange}
-                onBeforeRun={requestModifierDecisionBeforeSupports}
-              />
-            )}
-            {autoRotationExperimentEnabled && (
-              <AutoRotationPanel
-                key="support-rotation"
-                activeModelId={scene.activeModelId ?? undefined}
-                currentRotation={scene.activeModel?.transform.rotation}
-                onApplyRotation={(modelId, rotation) => {
-                  const activeModel = scene.activeModel;
-                  const current = activeModel?.transform;
-                  if (!activeModel || !current) return;
-                  const before = {
-                    position: current.position.clone(),
-                    rotation: current.rotation.clone(),
-                    scale: current.scale.clone(),
-                  };
-                  const after = {
-                    position: current.position.clone(),
-                    rotation,
-                    scale: current.scale.clone(),
-                  };
-                  // A new down-axis means new extents: seat to the plate
-                  // clearance after orientation — lift OR drop — so repeated
-                  // orienting never drifts the model upward. One history entry
-                  // covers rotate + lift.
-                  if (activeModel.id === modelId) {
-                    const lowestWorldZ = getModelLowestWorldZ({ id: modelId, geometry: activeModel.geometry, transform: after });
-                    after.position.z += transformMgr.liftDistance - lowestWorldZ;
-                  }
-                  scene.updateModelTransform(modelId, after);
-                  scene.commitModelTransformHistory(modelId, before, after, 'Apply Orientation Suggestion');
-                }}
-                onBeforeOrientApply={(continueApply) => requestOrientSupportDeletionWithContinuation(continueApply)}
-                onOrientationReport={showOrientationToast}
-                activeModelName={scene.activeModel?.name}
-                blockersActive={transformMgr.transformMode === 'supportBlockers'}
-                onToggleBlockers={() => {
-                  setTransformModeWithMirrorFinalize(transformMgr.transformMode === 'supportBlockers' ? 'select' : 'supportBlockers');
-                }}
-              />
-            )}
-            <IslandsPanel
-              key="support-islands"
-              islands={islandsPoc}
-              hasGeometry={!!scene.geom}
+            {/* Every panel stays mounted and the ones the selected tool does not own
+                are hidden with `display: none` — the window layout profiles resolve
+                against the set of mounted panels, so unmounting one would move every
+                panel anchored to it. */}
+            <ModelsPanel
+              key="support-models"
+              scene={scene}
+              outsidePlateModelIds={outsidePlateModelIds}
+              handleModelSelection={handleModelSelection}
+              handleModelRangeSelection={handleModelRangeSelection}
+              handleGroupSelection={handleGroupSelection}
+              handleGroupSelectedModels={handleGroupSelectedModels}
+              handleUngroupSelectedModels={handleUngroupSelectedModels}
+              handleUngroupFolder={handleUngroupFolder}
+              handleSplitImportGroup={handleSplitImportGroup}
+              handleRenameFolder={handleRenameFolder}
+              handleRenameModel={handleRenameModel}
+              handleModelListContextMenu={handleModelListContextMenu}
+              handleRepairModel={handleRepairModel}
+              handleOpenModelSupportsInfo={handleOpenModelSupportsInfo}
+              dimmed={showEmptySceneDialog || importOverlayState.active}
+              hidden={!modelsPanelVisible}
+              collapsible={toolLayout === 'horizontal'}
               bottomClearancePx={modelStatsBottomClearancePx}
             />
+            <div
+              key="support-settings"
+              style={{ display: supportRailMode === 'manual' && transformMgr.transformMode !== 'hollowing' ? undefined : 'none' }}
+            >
+              <SupportSidebar activeModelId={scene.activeModelId} />
+            </div>
+            {autoSupportsExperimentEnabled && (
+              <div
+                key="support-auto"
+                style={{ display: supportRailMode === 'auto' && transformMgr.transformMode !== 'hollowing' ? undefined : 'none' }}
+              >
+                <AutoSupportPanel
+                  islands={islandsPoc}
+                  hasGeometry={!!scene.geom}
+                  activeModelId={scene.activeModelId ?? undefined}
+                  autoLift={transformMgr.autoLift}
+                  onAutoLiftChange={handleAutoLiftChange}
+                  onBeforeRun={requestModifierDecisionBeforeSupports}
+                />
+              </div>
+            )}
+            <div
+              key="support-islands"
+              style={{ display: supportRailMode === 'islands' && transformMgr.transformMode !== 'hollowing' ? undefined : 'none' }}
+            >
+              <IslandsPanel
+                islands={islandsPoc}
+                hasGeometry={!!scene.geom}
+                bottomClearancePx={modelStatsBottomClearancePx}
+              />
+            </div>
+            {scene.geom && transformMgr.transformMode === 'hollowing' && (
+              <>
+                <HollowingPanel
+                  key="support-hollowing"
+                  state={hollowing.hollowingState}
+                  onStateChange={hollowing.handleHollowingStateChange}
+                  onReset={hollowing.requestClearAppliedHollowing}
+                  onResetSettings={hollowing.handleResetHollowingSettings}
+                  onStartEdit={hollowing.handleStartHollowVoxelEditing}
+                  onDoneEdit={hollowing.handleDoneHollowVoxelEditing}
+                  onClearEdit={hollowing.handleClearHollowVoxelEditing}
+                  onApply={() => { void hollowing.handleApplyHollowing(); }}
+                  isApplying={hollowing.isApplyingHollowing}
+                  isPreviewing={hollowing.isPreviewingHollowing}
+                  isApplyingBlockers={hollowing.isApplyingBlockersHollowing || hollowing.isPreviewingHollowing}
+                  canApply={!hollowing.isShellFaceSelectionPending && (hollowing.isHollowingDirty || !hollowing.isHollowingApplied)}
+                  canEdit={!hollowing.isShellFaceSelectionPending && Boolean(scene.activeModel)}
+                  isEditMode={hollowing.hollowingEditMode}
+                  isHollowingApplied={hollowing.isHollowingApplied}
+                  shellFaceSelectionPending={hollowing.isShellFaceSelectionPending}
+                />
+                <HolePunchPanel
+                  key="support-hole-punch"
+                  state={holePunch.holePunchState}
+                  onStateChange={holePunch.handleHolePunchStateChange}
+                  onReset={holePunch.requestResetHolePunch}
+                  onApply={() => { void holePunch.handleApplyHolePunch(); }}
+                  canUseAutoDepth={holePunch.canUseAutoHolePunchDepth}
+                  isApplying={isApplyingHolePunch}
+                  canApply={!hollowing.isShellFaceSelectionPending && (holePunch.isHolePunchDirty || holePunch.holePunchNeedsBake)}
+                  canReset={!hollowing.isShellFaceSelectionPending && holePunch.canResetHolePunch}
+                  disabled={hollowing.hollowingEditMode}
+                  interiorView={interiorView}
+                  interiorViewAvailable={hasCavityGeometry}
+                />
+              </>
+            )}
           </>
         ) : scene.mode === 'printing' ? (
           <>
@@ -10150,8 +10314,8 @@ export default function Home() {
             onTransformEnd={handleTransformEnd}
             mode={scene.mode}
             onSupportClick={supports.onModelClick}
-            onHolePunchClick={scene.mode === 'prepare' && transformMgr.transformMode === 'hollowing' && !hollowingEditMode ? handleHolePunchClick : undefined}
-            onHolePunchHover={scene.mode === 'prepare' && transformMgr.transformMode === 'hollowing' && !hollowingEditMode ? handleHolePunchHover : undefined}
+            onHolePunchClick={(scene.mode === 'prepare' || scene.mode === 'support') && transformMgr.transformMode === 'hollowing' && !hollowingEditMode ? handleHolePunchClick : undefined}
+            onHolePunchHover={(scene.mode === 'prepare' || scene.mode === 'support') && transformMgr.transformMode === 'hollowing' && !hollowingEditMode ? handleHolePunchHover : undefined}
             onOrganicCutClick={organicCutToolActive ? organicCut.onSurfaceClick : undefined}
             organicCutDragging={organicCut.dragging}
             organicCutKeyGizmo={
@@ -10170,7 +10334,10 @@ export default function Home() {
             onActiveModelChange={handleSceneModelSelection}
             onMarqueeSelectionChange={handleSceneMarqueeSelection}
             placementPreviews={supports.placementPreviews}
-            blockSupportPlacement={supports.isPlacementHardDisabled}
+            // One canvas, one tool: while Hollowing owns the canvas (it is a
+            // Support tool now), support placement, its pathfinding preview and
+            // the placement guide must be off, or they compete for the click.
+            blockSupportPlacement={supports.isPlacementHardDisabled || transformMgr.transformMode === 'hollowing'}
             placementActive={supports.placementActive}
             branchTipPosition={supports.branchPlacement.tipPosition}
             branchHoverPosition={supports.branchPlacement.hoverPosition}
@@ -10190,7 +10357,7 @@ export default function Home() {
             supportDragTransactionId={supportDragTransactionId}
             customPrepareLassoSelection={{
               enabled: Boolean(
-                scene.mode === 'prepare'
+                (scene.mode === 'prepare' || scene.mode === 'support')
                 && transformMgr.transformMode === 'hollowing'
                 && hollowingEditMode
                 && hollowPreview
@@ -10383,11 +10550,41 @@ export default function Home() {
         )}
       </div>
 
-      {scene.models.length > 0 && scene.mode === 'prepare' && (
-        <TransformToolbar
-          mode={transformMgr.transformMode}
-          onModeChange={setTransformModeWithMirrorFinalize}
-          onModeHover={handleTransformToolbarHover}
+      {scene.models.length > 0 && (scene.mode === 'prepare' || scene.mode === 'support') && (
+        <ToolRail
+          entries={scene.mode === 'support'
+            ? buildSupportToolRailEntries({
+              mode: supportRailMode,
+              onModeChange: (nextMode) => {
+                setSupportRailMode(nextMode);
+                // Picking a panel tool leaves the Hollowing transform mode, so its
+                // panel gives way to the selected one.
+                if (transformMgr.transformMode === 'hollowing') {
+                  setTransformModeWithMirrorFinalize('select');
+                }
+              },
+              modelsPanelVisible,
+              onToggleModelsPanel: () => {
+                const next = !modelsPanelVisible;
+                setModelsPanelVisible(next);
+                setModelsPanelVisibleEnabled(next);
+              },
+              hollowingActive: transformMgr.transformMode === 'hollowing',
+              onSelectHollowing: () => setTransformModeWithMirrorFinalize('hollowing'),
+            })
+            : buildPrepareToolRailEntries({
+              mode: transformMgr.transformMode,
+              onModeChange: setTransformModeWithMirrorFinalize,
+              onModeHover: handleToolRailHover,
+              modelsPanelVisible,
+              onToggleModelsPanel: () => {
+                const next = !modelsPanelVisible;
+                setModelsPanelVisible(next);
+                setModelsPanelVisibleEnabled(next);
+              },
+            })}
+          layout={toolLayout}
+          onLayoutChange={setToolLayout}
         />
       )}
 

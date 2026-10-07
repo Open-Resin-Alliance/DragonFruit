@@ -5,7 +5,7 @@ Hollowing removes interior volume from a model, reducing material and print time
 ## Recommended sequence
 
 1. Import your model and enter **Prepare** mode.
-2. Switch to **Hollow** mode in the transform toolbar.
+2. Switch to **Hollow** in the tool rail on the left edge.
 3. Configure hollowing settings (wall thickness, voxel size, mode).
 4. Review the cavity preview before applying.
 5. Place hole punches for drainage or venting.

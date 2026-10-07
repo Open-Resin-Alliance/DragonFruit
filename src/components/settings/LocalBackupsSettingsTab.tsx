@@ -131,7 +131,7 @@ const KNOWN_LOCAL_STORAGE_KEYS = [
   'app-theme-preference',
   'app-theme-colors',
   'app-theme-preset',
-  'lumenslicer:floating-panel-layout:v4',
+  'lumenslicer:floating-panel-layout:v5',
   'app-floating-layout-persistence',
   'app-recent-opened-files',
   'app-3d-view-settings',

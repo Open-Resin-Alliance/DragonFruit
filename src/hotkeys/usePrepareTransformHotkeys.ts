@@ -59,7 +59,7 @@ export function usePrepareTransformHotkeys({
           setTransformMode('arrange');
         }
       } else if (isDuplicateActive && !wasDuplicateActive) {
-        setTransformMode('arrange');
+        setTransformMode('duplicate');
       } else if (isEscapeActive && !wasEscapeActive && transformMode === 'mirror') {
         setTransformMode('select');
       }

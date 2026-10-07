@@ -1,11 +1,11 @@
 # Transform and Positioning Workflow
 
-Use **Modify** in Prepare mode to position models before supports.
+Use **Transform** in Prepare mode to position models before supports.
 
-## 1) Enter Modify mode
+## 1) Enter Transform mode
 
 1. Switch to **Prepare**.
-2. In the top toolbar, choose **Modify**.
+2. In the tool rail on the left edge, choose **Transform**.
 3. Select the target model.
 
 ## 2) Move
@@ -63,4 +63,4 @@ either writes `useTransformManager`'s `autoLift`.
 
 ![Transform workflow placeholder](../assets/placeholders/workflow-transform-positioning.png)
 
-> Screenshot placeholder: Modify mode with move/rotate/scale cards and auto-lift controls.
+> Screenshot placeholder: Transform mode with move/rotate/scale cards and auto-lift controls.

@@ -5,7 +5,7 @@ Use **On-Face** and **Mirror** in Prepare mode for fast orientation and symmetry
 ## On-Face workflow
 
 1. Enter **Prepare** mode.
-2. Choose **On-Face** from the transform toolbar.
+2. Choose **On-Face** in the tool rail on the left edge.
 3. Click the face you want to place against the plate.
 4. Let the orientation animation finish.
 
@@ -18,7 +18,7 @@ Use **On-Face** and **Mirror** in Prepare mode for fast orientation and symmetry
 ## Mirror workflow
 
 1. Enter **Prepare** mode.
-2. Choose **Mirror** from the transform toolbar.
+2. Choose **Mirror** in the tool rail on the left edge.
 3. Select mirror axis (X, Y, or Z) using mirror handles.
 4. Continue mirroring as needed.
 5. Exit Mirror mode to finalize.
@@ -45,4 +45,4 @@ Use **On-Face** and **Mirror** in Prepare mode for fast orientation and symmetry
 
 ![On-face and mirror placeholder](../assets/placeholders/workflow-on-face-mirror.png)
 
-> Screenshot placeholder: toolbar in On-Face/Mirror mode with selected face and mirror axis handles.
+> Screenshot placeholder: tool rail in On-Face/Mirror mode with selected face and mirror axis handles.

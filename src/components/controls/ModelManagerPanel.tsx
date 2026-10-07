@@ -14,22 +14,18 @@ import {
   FolderMinus,
   PanelsTopLeft,
   Info,
-  Crosshair,
   Wrench,
   Scissors,
 } from 'lucide-react';
 import { useLingui } from '@lingui/react';
 import { msg, plural } from '@lingui/core/macro';
 import { Trans } from '@lingui/react/macro';
-import type { MessageDescriptor } from '@lingui/core';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { Card, CardHeader, IconButton } from '@/components/atoms';
 import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
-import { formatPolygonCountCompact } from '@/utils/meshStatsFormatting';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { ContextMenu, type ContextMenuEntry } from '@/components/ui/ContextMenu';
-import { getCompactListPreference, saveCompactListPreference } from '@/components/controls/compactListPreference';
 
 type SelectMode = 'single' | 'toggle' | 'add';
 
@@ -57,7 +53,15 @@ interface ModelManagerPanelProps {
   onVisibilityChange: (id: string, visible: boolean) => void;
 
   dimmed?: boolean;
+  /** Kept mounted but not shown, so the window layout keeps its left column. */
+  hidden?: boolean;
   bottomClearancePx?: number;
+  /**
+   * Collapsible only while the tool rail is a bar under the app bar. Pinned under
+   * a rail down the left edge the panel is shown and hidden from that rail alone,
+   * so a 48px collapsed strip would only be a way to lose the list.
+   */
+  collapsible?: boolean;
 }
 
 type GroupedEntry = {
@@ -78,26 +82,6 @@ type PanelContextMenuState = {
 };
 
 const OUTSIDE_PLATE_GROUP_ID = '__system_outside_plate__';
-
-// Mesh stats shown under a model's name, e.g. "1.37M triangles • 3 shells".
-// Triangle counts are compacted for width, so the plural category comes from the
-// raw number while the compact string is what gets interpolated. The shell count
-// is omitted for single-shell meshes — that is the desired result, not news.
-const formatMeshStats = (
-  model: LoadedModel,
-  translate: (descriptor: MessageDescriptor) => string,
-): string => {
-  const compactTriangles = formatPolygonCountCompact(model.polygonCount);
-  const triangles = translate(msg`${plural(model.polygonCount, {
-    one: `${compactTriangles} triangle`,
-    other: `${compactTriangles} triangles`,
-  })}`);
-
-  const shells = model.geometry.meshDefects?.nativeRepairReport?.post.component_count;
-  if (shells == null || shells <= 1) return triangles;
-
-  return `${triangles} • ${translate(msg`${plural(shells, { one: '# shell', other: '# shells' })}`)}`;
-};
 
 const splitModelNameSuffix = (name: string): { base: string; suffix: string } => {
   const trimmed = name.trim();
@@ -133,10 +117,16 @@ export function ModelManagerPanel({
   onDelete: _onDelete,
   onVisibilityChange,
   dimmed = false,
+  hidden = false,
   bottomClearancePx = 220,
+  collapsible = true,
 }: ModelManagerPanelProps) {
   const { _ } = useLingui();
-  const [expanded, setExpanded] = useFloatingPanelCollapse(true);
+  const [collapseExpanded, setCollapseExpanded] = useFloatingPanelCollapse(true);
+  // Where collapse is not offered the panel is pinned expanded. This has to be a
+  // fallback, not a conjunction: `collapsible && collapseExpanded` reads false in
+  // the column layout and hides the whole body, which is an empty model list.
+  const expanded = collapsible ? collapseExpanded : true;
   const [collapsedGroupIds, setCollapsedGroupIds] = useState<Record<string, boolean>>({});
   const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
   const [renamingGroupName, setRenamingGroupName] = useState('');
@@ -144,13 +134,7 @@ export function ModelManagerPanel({
   const [renamingModelName, setRenamingModelName] = useState('');
   const [renamingModelSuffix, setRenamingModelSuffix] = useState('');
   const [contextMenu, setContextMenu] = useState<PanelContextMenuState | null>(null);
-  const [compactList, setCompactList] = useState(() => getCompactListPreference());
 
-  const toggleCompactList = () => {
-    const next = !compactList;
-    setCompactList(next);
-    saveCompactListPreference(next);
-  };
   void _onDelete;
   const cardRef = useRef<HTMLDivElement | null>(null);
   const resizeDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
@@ -268,6 +252,10 @@ export function ModelManagerPanel({
   const panelStyle: React.CSSProperties = {
     ...(dimmed ? { filter: 'grayscale(0.25)' } : {}),
     ...(expanded ? { maxHeight: panelMaxHeight } : {}),
+    // Hidden rather than unmounted: the window layout profiles resolve against
+    // the set of mounted panels, so unmounting this one would move every panel
+    // that is anchored to it.
+    ...(hidden ? { display: 'none' } : {}),
   };
 
   const toggleGroupCollapsed = (groupId: string) => {
@@ -395,7 +383,6 @@ export function ModelManagerPanel({
       contextMenuEntries.push({ id: 'model-actions', label: <Trans>Model actions…</Trans>, icon: Box });
     }
   }
-  contextMenuEntries.push({ id: 'toggle-compact-list', label: <Trans>Compact list</Trans>, checked: compactList, startsGroup: true });
 
   const handleContextMenuSelect = (id: string) => {
     switch (id) {
@@ -430,9 +417,6 @@ export function ModelManagerPanel({
       case 'model-actions':
         if (contextModel && onModelContextMenu && contextMenu) onModelContextMenu(contextModel.id, { x: contextMenu.x, y: contextMenu.y });
         break;
-      case 'toggle-compact-list':
-        toggleCompactList();
-        break;
       default:
         break;
     }
@@ -447,7 +431,9 @@ export function ModelManagerPanel({
       <CardHeader
         left={(
           <>
-            <PanelCollapseToggle expanded={expanded} onToggle={() => setExpanded(!expanded)} />
+            {collapsible && (
+              <PanelCollapseToggle expanded={expanded} onToggle={() => setCollapseExpanded((prev) => !prev)} />
+            )}
             <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
               <Trans comment="Title of the panel listing every model loaded into the scene.">Models</Trans>
             </h3>
@@ -592,13 +578,12 @@ export function ModelManagerPanel({
                         className={showHeader ? 'ml-1.5 space-y-1 pl-1' : 'space-y-1'}
                       >
                         {group.models.map((model) => {
-                      const isActive = model.id === activeModelId;
-                      const isSelected = selectedSet.has(model.id);
+                        const isSelected = selectedSet.has(model.id);
 
                       return (
                         <div
                           key={model.id}
-                            className="p-2 rounded border transition-colors flex items-center gap-2 cursor-pointer"
+                            className="px-2 py-1.5 rounded border transition-colors flex items-center gap-2 cursor-pointer"
                             style={isSelected
                               ? {
                                   background: 'color-mix(in srgb, var(--accent), var(--surface-1) 92%)',
@@ -649,17 +634,7 @@ export function ModelManagerPanel({
                             });
                           }}
                         >
-                          {!compactList && (isActive
-                            ? (
-                              <div className="p-1 rounded" style={{ background: 'color-mix(in srgb, var(--accent), var(--surface-2) 72%)', color: 'var(--accent)' }}>
-                                <Crosshair className="w-3.5 h-3.5" />
-                              </div>
-                            ) : (
-                              <div className="p-1 rounded" style={isSelected ? { background: 'color-mix(in srgb, var(--accent), var(--surface-2) 82%)', color: 'var(--accent)' } : { background: 'var(--surface-2)', color: 'var(--text-muted)' }}>
-                                <Box className="w-3.5 h-3.5" />
-                              </div>
-                            ))}
-
+                          
                           <div className="flex-1 min-w-0">
                             {renamingModelId === model.id ? (
                               <div className="flex w-full min-w-0 items-center gap-1">
@@ -696,23 +671,18 @@ export function ModelManagerPanel({
                               </div>
                             ) : (
                               <Tooltip content={model.name} fullWidth>
-                                <div className="min-w-0 text-xs font-medium truncate" style={{ color: 'var(--text-strong)' }}>
+                                <div className="min-w-0 text-sm font-medium truncate" style={{ color: 'var(--text-strong)' }}>
                                   {model.name}
                                 </div>
                               </Tooltip>
                             )}
-                            {!compactList && (
-                              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                                {formatMeshStats(model, _)}
-                              </div>
-                            )}
                           </div>
 
                           <div className="flex items-center gap-1">
-                            {onOpenSupportsInfo && (compactList ? (
+                            {onOpenSupportsInfo && (
                               <IconButton
                                 variant="ghost"
-                                size="xs"
+                                size="sm"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   onOpenSupportsInfo(model.id);
@@ -720,43 +690,19 @@ export function ModelManagerPanel({
                                 title={_(msg`Supports for model`)}
                               >
                                 <Info className="w-3.5 h-3.5" />
-                              </IconButton>
-                            ) : (
-                              <IconButton
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onOpenSupportsInfo(model.id);
-                                }}
-                                className="!p-1.5"
-                                title={_(msg`Supports for model`)}
-                              >
-                                <Info className="w-3.5 h-3.5" />
-                              </IconButton>
-                            ))}
-                            {compactList ? (
-                              <IconButton
-                                variant="ghost"
-                                size="xs"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onVisibilityChange(model.id, !model.visible);
-                                }}
-                                title={model.visible ? _(msg`Hide`) : _(msg`Show`)}
-                              >
-                                {model.visible ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-                              </IconButton>
-                            ) : (
-                              <IconButton
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onVisibilityChange(model.id, !model.visible);
-                                }}
-                                className="!p-1.5"
-                                title={model.visible ? _(msg`Hide`) : _(msg`Show`)}
-                              >
-                                {model.visible ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
                               </IconButton>
                             )}
+                            <IconButton
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onVisibilityChange(model.id, !model.visible);
+                              }}
+                              title={model.visible ? _(msg`Hide`) : _(msg`Show`)}
+                            >
+                              {model.visible ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                            </IconButton>
 
                           </div>
                         </div>
