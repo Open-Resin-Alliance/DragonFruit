@@ -462,6 +462,8 @@ export function SceneCanvas({
   plateName,
   onPlateNameChange,
   showPlateName = true,
+  plateLocked,
+  onTogglePlateLock,
   disableRaycast,
   ambientIntensity,
   directionalIntensity,
@@ -581,6 +583,9 @@ export function SceneCanvas({
   onPlateNameChange?: (next: string) => void;
   /** Hide the name widget on an empty plate: there is nothing on it to name. */
   showPlateName?: boolean;
+  /** The plate lock, handed to the 3D helpers that draw it. */
+  plateLocked?: boolean;
+  onTogglePlateLock?: () => void;
   disableRaycast?: boolean;
   hideCrossSectionCap?: boolean;
   onCameraChange?: () => void;
@@ -1568,6 +1573,8 @@ export function SceneCanvas({
   const plateNameEmptyTitle = _(msg({ message: 'Give this build plate a name', comment: "Tooltip on the build plate's name widget while it is still unnamed." }));
   const addPlateLabel = _(msg({ message: 'Add plate', comment: 'Accessible name of the button beside the build plate that will add another plate. Inert for now, so it reads as unavailable to a screen reader too.' }));
   const addPlateComingSoonTitle = _(msg({ message: 'Coming Soon!', comment: 'Hover text on the add-plate button beside the build plate. The app has one plate for now, so the button says so instead of doing nothing.' }));
+  const plateLockTitle = _(msg({ message: 'Lock build plate', comment: 'Tooltip on the lock button beside the build plate while it is unlocked. Locking refuses new meshes and moves of the models already on the plate.' }));
+  const plateUnlockTitle = _(msg({ message: 'Unlock build plate', comment: 'Tooltip on the lock button beside the build plate while it is locked.' }));
   const frontFaceLabel = _(msg({ message: 'Front', comment: 'Orientation label, rendered uppercase on the view cube and on the build plate\'s front edge. Keep it as short as possible — long words are auto-shrunk to fit and become hard to read.' }));
   // Face order is fixed by the box geometry: +X, -X, +Y, -Y, +Z, -Z.
   const gizmoFaceLabels = React.useMemo(() => ([
@@ -6061,6 +6068,10 @@ export function SceneCanvas({
           plateNameEmptyTitle={plateNameEmptyTitle}
           addPlateLabel={addPlateLabel}
           addPlateComingSoonTitle={addPlateComingSoonTitle}
+          plateLocked={plateLocked}
+          onTogglePlateLock={onTogglePlateLock}
+          plateLockTitle={plateLockTitle}
+          plateUnlockTitle={plateUnlockTitle}
         />
         <EnableLocalClipping enabled={clipLower != null || clipUpper != null || indicatorPlaneZ != null || !!organicCutKeyGizmo} />
         <CameraProvider cameraRef={cameraRef} />

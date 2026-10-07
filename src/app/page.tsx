@@ -10276,6 +10276,8 @@ export default function Home() {
             plateName={scene.plateName}
             onPlateNameChange={scene.setPlateName}
             showPlateName={scene.models.length > 0}
+            plateLocked={scene.plateLocked}
+            onTogglePlateLock={() => scene.setPlateLocked((prev) => !prev)}
             cavityGeometryByModelId={new Map(Array.from(cavityGeometryByModelIdRef.current.entries()).map(([id, entry]) => [id, entry.geometry]))}
             disableRaycast={transformMgr.isTransforming}
             hideCrossSectionCap={false}
