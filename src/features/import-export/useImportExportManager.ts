@@ -2,6 +2,7 @@ import React from 'react';
 import { detectIsIOS } from '@/hooks/usePlatform';
 import { suppressSceneAutosave } from '@/hooks/useSceneAutosave';
 import { extractFilesFromZip, getFileExtensionLower } from '@/utils/zipImport';
+import { readNativeFileSize } from '@/utils/pluginNetworkBridge';
 import {
   pickOpenFilesWithNativeDialog,
   readPrintArtifactBytesFromPath,
@@ -405,12 +406,20 @@ export function useImportExportManager({
     setTimeout(resolve, 0);
   }), []);
 
-  const createPathBackedStlFile = React.useCallback((sourcePath: string, name: string): File => {
+  const createPathBackedStlFile = React.useCallback((sourcePath: string, name: string, sizeBytes?: number | null): File => {
     const file = new File([], name, {
       type: getDroppedFileMimeType(name),
       lastModified: Date.now(),
     });
     (file as File & { filePath?: string }).filePath = sourcePath;
+    // A path-backed file holds no bytes, so its own `size` is 0 — which is how
+    // every readout of an STL imported on desktop said "0 B". The native picker
+    // reports only the path, so the length comes from the core's metadata command.
+    // Read it here rather than at the display, because `size` is what the model is
+    // built from.
+    if (typeof sizeBytes === 'number' && Number.isFinite(sizeBytes) && sizeBytes > 0) {
+      Object.defineProperty(file, 'size', { value: sizeBytes });
+    }
     return file;
   }, []);
 
@@ -460,7 +469,8 @@ export function useImportExportManager({
 
           const name = resolvedName;
           if (getFileExtensionLower(name) === '.stl') {
-            files.push(createPathBackedStlFile(sourcePath, name));
+            // Metadata only: the STL path stays path-backed and never reads the mesh.
+            files.push(createPathBackedStlFile(sourcePath, name, await readNativeFileSize(sourcePath)));
           } else {
             const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
             files.push(new File([new Uint8Array(bytes)], name, {
@@ -940,7 +950,8 @@ export function useImportExportManager({
         try {
           const name = getFileNameFromPath(sourcePath);
           if (getFileExtensionLower(name) === '.stl') {
-            files.push(createPathBackedStlFile(sourcePath, name));
+            // Metadata only: the STL path stays path-backed and never reads the mesh.
+            files.push(createPathBackedStlFile(sourcePath, name, await readNativeFileSize(sourcePath)));
           } else {
             const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
             files.push(new File([new Uint8Array(bytes)], name, {

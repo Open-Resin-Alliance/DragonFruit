@@ -27,6 +27,16 @@ msgstr ""
 msgid "{0, plural, one {# island} other {# islands}}"
 msgstr ""
 
+#. placeholder {0}: model.polygonCount
+#: src/components/controls/ModelManagerPanel.tsx:49
+msgid "{0, plural, one {# polygon} other {# polygons}}"
+msgstr ""
+
+#. placeholder {0}: formatModelSizeMegabytes(model.fileSizeBytes as number)
+#: src/components/controls/ModelManagerPanel.tsx:52
+msgid "{0} · {polygons}"
+msgstr ""
+
 #. Badge counting the printers the network scan turned up.
 #: src/components/settings/FleetManagement.tsx:23
 msgid "{count, plural, one {# found} other {# found}}"
@@ -274,7 +284,7 @@ msgid "Add joint"
 msgstr "Pridať Kĺb"
 
 #. Tooltip on the plus in the Models panel header, which opens the mesh picker.
-#: src/components/controls/ModelManagerPanel.tsx:452
+#: src/components/controls/ModelManagerPanel.tsx:475
 msgid "Add models to the plate"
 msgstr ""
 
@@ -1127,7 +1137,7 @@ msgstr ""
 msgid "Collapse card"
 msgstr ""
 
-#: src/components/controls/ModelManagerPanel.tsx:523
+#: src/components/controls/ModelManagerPanel.tsx:546
 msgid "Collapse folder"
 msgstr ""
 
@@ -1929,7 +1939,7 @@ msgstr ""
 msgid "Expand card"
 msgstr ""
 
-#: src/components/controls/ModelManagerPanel.tsx:523
+#: src/components/controls/ModelManagerPanel.tsx:546
 msgid "Expand folder"
 msgstr ""
 
@@ -2305,7 +2315,7 @@ msgstr ""
 msgid "Grid Threshold"
 msgstr ""
 
-#: src/components/controls/ModelManagerPanel.tsx:352
+#: src/components/controls/ModelManagerPanel.tsx:375
 msgid "Group selected"
 msgstr ""
 
@@ -2347,7 +2357,7 @@ msgstr ""
 msgid "Held against toppling and peel"
 msgstr ""
 
-#: src/components/controls/ModelManagerPanel.tsx:699
+#: src/components/controls/ModelManagerPanel.tsx:724
 msgid "Hide"
 msgstr ""
 
@@ -3169,8 +3179,13 @@ msgstr ""
 msgid "Model {index}/{total}: {modelName}"
 msgstr ""
 
-#: src/components/controls/ModelManagerPanel.tsx:387
+#: src/components/controls/ModelManagerPanel.tsx:410
 msgid "Model actions…"
+msgstr ""
+
+#. Accessible name of the info button on a model row. The tooltip beside it lists the mesh size and polygon count.
+#: src/components/controls/ModelManagerPanel.tsx:711
+msgid "Model details"
 msgstr ""
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:177
@@ -3207,14 +3222,14 @@ msgstr ""
 
 #. Section heading of the models context menu. Rendered uppercase.
 #. Title of the panel listing every model loaded into the scene.
-#: src/components/controls/ModelManagerPanel.tsx:442
-#: src/components/controls/ModelManagerPanel.tsx:723
+#: src/components/controls/ModelManagerPanel.tsx:465
+#: src/components/controls/ModelManagerPanel.tsx:748
 #: src/components/controls/toolRailEntries.ts:66
 #: src/components/controls/toolRailEntries.ts:169
 msgid "Models"
 msgstr ""
 
-#: src/components/controls/ModelManagerPanel.tsx:724
+#: src/components/controls/ModelManagerPanel.tsx:749
 msgid "Models context menu"
 msgstr ""
 
@@ -3416,7 +3431,7 @@ msgstr ""
 msgid "No model selected"
 msgstr ""
 
-#: src/components/controls/ModelManagerPanel.tsx:464
+#: src/components/controls/ModelManagerPanel.tsx:487
 msgid "No models loaded"
 msgstr ""
 
@@ -3724,7 +3739,7 @@ msgid "Output"
 msgstr ""
 
 #. Name of the automatic folder collecting models that sit outside the build plate.
-#: src/components/controls/ModelManagerPanel.tsx:215
+#: src/components/controls/ModelManagerPanel.tsx:238
 msgid "Outside plate"
 msgstr ""
 
@@ -4223,16 +4238,16 @@ msgstr ""
 msgid "Rename build plate"
 msgstr ""
 
-#: src/components/controls/ModelManagerPanel.tsx:367
-#: src/components/controls/ModelManagerPanel.tsx:559
+#: src/components/controls/ModelManagerPanel.tsx:390
+#: src/components/controls/ModelManagerPanel.tsx:582
 msgid "Rename folder"
 msgstr ""
 
-#: src/components/controls/ModelManagerPanel.tsx:373
+#: src/components/controls/ModelManagerPanel.tsx:396
 msgid "Rename model"
 msgstr ""
 
-#: src/components/controls/ModelManagerPanel.tsx:661
+#: src/components/controls/ModelManagerPanel.tsx:684
 msgid "Rename model base name"
 msgstr ""
 
@@ -4266,7 +4281,7 @@ msgstr "Znovu otvoriť {0}"
 msgid "Repair"
 msgstr "Opraviť"
 
-#: src/components/controls/ModelManagerPanel.tsx:376
+#: src/components/controls/ModelManagerPanel.tsx:399
 msgid "Repair mesh…"
 msgstr ""
 
@@ -4693,7 +4708,7 @@ msgstr ""
 msgid "Select a printer to detect its model."
 msgstr ""
 
-#: src/components/controls/ModelManagerPanel.tsx:366
+#: src/components/controls/ModelManagerPanel.tsx:389
 msgid "Select folder"
 msgstr ""
 
@@ -4826,7 +4841,7 @@ msgstr ""
 msgid "Shortest Print Time"
 msgstr ""
 
-#: src/components/controls/ModelManagerPanel.tsx:699
+#: src/components/controls/ModelManagerPanel.tsx:724
 msgid "Show"
 msgstr ""
 
@@ -5051,7 +5066,7 @@ msgid "Split the model along a drawn seam"
 msgstr ""
 
 #. Context menu action: split a multi-body 3MF import into independent models.
-#: src/components/controls/ModelManagerPanel.tsx:381
+#: src/components/controls/ModelManagerPanel.tsx:404
 msgid "Split to bodies"
 msgstr ""
 
@@ -5192,10 +5207,6 @@ msgstr ""
 #: src/components/ui/EditorContextMenu.tsx:109
 msgid "Supports"
 msgstr "Podpery"
-
-#: src/components/controls/ModelManagerPanel.tsx:687
-msgid "Supports for model"
-msgstr ""
 
 #: src/supports/PlacementLogic/SupportLimitations.tsx:11
 msgid "Surface angle is upward facing. Supports cannot be placed here."
@@ -5578,11 +5589,11 @@ msgstr ""
 msgid "Unavailable"
 msgstr ""
 
-#: src/components/controls/ModelManagerPanel.tsx:368
+#: src/components/controls/ModelManagerPanel.tsx:391
 msgid "Ungroup folder"
 msgstr ""
 
-#: src/components/controls/ModelManagerPanel.tsx:358
+#: src/components/controls/ModelManagerPanel.tsx:381
 msgid "Ungroup selected"
 msgstr ""
 

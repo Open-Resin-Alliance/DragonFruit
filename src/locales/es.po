@@ -22,6 +22,16 @@ msgstr "Plantilla de .env"
 msgid "{0, plural, one {# island} other {# islands}}"
 msgstr "{0, plural, one {# isla} other {# islas}}"
 
+#. placeholder {0}: model.polygonCount
+#: src/components/controls/ModelManagerPanel.tsx:49
+msgid "{0, plural, one {# polygon} other {# polygons}}"
+msgstr "{0, plural, one {# polígono} other {# polígonos}}"
+
+#. placeholder {0}: formatModelSizeMegabytes(model.fileSizeBytes as number)
+#: src/components/controls/ModelManagerPanel.tsx:52
+msgid "{0} · {polygons}"
+msgstr "{0} · {polygons}"
+
 #. Badge counting the printers the network scan turned up.
 #: src/components/settings/FleetManagement.tsx:23
 msgid "{count, plural, one {# found} other {# found}}"
@@ -269,7 +279,7 @@ msgid "Add joint"
 msgstr "Añadir unión"
 
 #. Tooltip on the plus in the Models panel header, which opens the mesh picker.
-#: src/components/controls/ModelManagerPanel.tsx:452
+#: src/components/controls/ModelManagerPanel.tsx:475
 msgid "Add models to the plate"
 msgstr "Añadir modelos a la plataforma"
 
@@ -1122,7 +1132,7 @@ msgstr "Coincidentes"
 msgid "Collapse card"
 msgstr "Plegar la tarjeta"
 
-#: src/components/controls/ModelManagerPanel.tsx:523
+#: src/components/controls/ModelManagerPanel.tsx:546
 msgid "Collapse folder"
 msgstr "Plegar la carpeta"
 
@@ -1924,7 +1934,7 @@ msgstr "Se han detectado soportes existentes"
 msgid "Expand card"
 msgstr "Desplegar la tarjeta"
 
-#: src/components/controls/ModelManagerPanel.tsx:523
+#: src/components/controls/ModelManagerPanel.tsx:546
 msgid "Expand folder"
 msgstr "Desplegar la carpeta"
 
@@ -2300,7 +2310,7 @@ msgstr "Separación de la rejilla en pendientes al ángulo de autosoporte: cuant
 msgid "Grid Threshold"
 msgstr "Umbral de la rejilla"
 
-#: src/components/controls/ModelManagerPanel.tsx:352
+#: src/components/controls/ModelManagerPanel.tsx:375
 msgid "Group selected"
 msgstr "Agrupar la selección"
 
@@ -2342,7 +2352,7 @@ msgstr "Altura:"
 msgid "Held against toppling and peel"
 msgstr "Sujeción frente al vuelco y al despegue"
 
-#: src/components/controls/ModelManagerPanel.tsx:699
+#: src/components/controls/ModelManagerPanel.tsx:724
 msgid "Hide"
 msgstr "Ocultar"
 
@@ -3164,9 +3174,14 @@ msgstr "Modo"
 msgid "Model {index}/{total}: {modelName}"
 msgstr "Modelo {index}/{total}: {modelName}"
 
-#: src/components/controls/ModelManagerPanel.tsx:387
+#: src/components/controls/ModelManagerPanel.tsx:410
 msgid "Model actions…"
 msgstr "Acciones del modelo…"
+
+#. Accessible name of the info button on a model row. The tooltip beside it lists the mesh size and polygon count.
+#: src/components/controls/ModelManagerPanel.tsx:711
+msgid "Model details"
+msgstr "Detalles del modelo"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:177
 msgid "Model Load Cap"
@@ -3202,14 +3217,14 @@ msgstr "Dimensionado a escala del modelo"
 
 #. Section heading of the models context menu. Rendered uppercase.
 #. Title of the panel listing every model loaded into the scene.
-#: src/components/controls/ModelManagerPanel.tsx:442
-#: src/components/controls/ModelManagerPanel.tsx:723
+#: src/components/controls/ModelManagerPanel.tsx:465
+#: src/components/controls/ModelManagerPanel.tsx:748
 #: src/components/controls/toolRailEntries.ts:66
 #: src/components/controls/toolRailEntries.ts:169
 msgid "Models"
 msgstr "Modelos"
 
-#: src/components/controls/ModelManagerPanel.tsx:724
+#: src/components/controls/ModelManagerPanel.tsx:749
 msgid "Models context menu"
 msgstr "Menú contextual de modelos"
 
@@ -3411,7 +3426,7 @@ msgstr "Todavía no hay mallas cargadas. Importa un modelo y vuelve al laminado.
 msgid "No model selected"
 msgstr "Ningún modelo seleccionado"
 
-#: src/components/controls/ModelManagerPanel.tsx:464
+#: src/components/controls/ModelManagerPanel.tsx:487
 msgid "No models loaded"
 msgstr "No hay modelos cargados"
 
@@ -3719,7 +3734,7 @@ msgid "Output"
 msgstr "Salida"
 
 #. Name of the automatic folder collecting models that sit outside the build plate.
-#: src/components/controls/ModelManagerPanel.tsx:215
+#: src/components/controls/ModelManagerPanel.tsx:238
 msgid "Outside plate"
 msgstr "Fuera de la plataforma"
 
@@ -4218,16 +4233,16 @@ msgstr "Renombrar"
 msgid "Rename build plate"
 msgstr "Renombrar la plataforma"
 
-#: src/components/controls/ModelManagerPanel.tsx:367
-#: src/components/controls/ModelManagerPanel.tsx:559
+#: src/components/controls/ModelManagerPanel.tsx:390
+#: src/components/controls/ModelManagerPanel.tsx:582
 msgid "Rename folder"
 msgstr "Renombrar la carpeta"
 
-#: src/components/controls/ModelManagerPanel.tsx:373
+#: src/components/controls/ModelManagerPanel.tsx:396
 msgid "Rename model"
 msgstr "Renombrar el modelo"
 
-#: src/components/controls/ModelManagerPanel.tsx:661
+#: src/components/controls/ModelManagerPanel.tsx:684
 msgid "Rename model base name"
 msgstr "Renombrar el nombre base del modelo"
 
@@ -4261,7 +4276,7 @@ msgstr "Reabrir {0}"
 msgid "Repair"
 msgstr "Reparar"
 
-#: src/components/controls/ModelManagerPanel.tsx:376
+#: src/components/controls/ModelManagerPanel.tsx:399
 msgid "Repair mesh…"
 msgstr "Reparar la malla…"
 
@@ -4688,7 +4703,7 @@ msgstr "Elige un perfil de impresora para ver los detalles."
 msgid "Select a printer to detect its model."
 msgstr "Selecciona una impresora para detectar su modelo."
 
-#: src/components/controls/ModelManagerPanel.tsx:366
+#: src/components/controls/ModelManagerPanel.tsx:389
 msgid "Select folder"
 msgstr "Seleccionar la carpeta"
 
@@ -4821,7 +4836,7 @@ msgstr "Cascarones:"
 msgid "Shortest Print Time"
 msgstr "Menor tiempo de impresión"
 
-#: src/components/controls/ModelManagerPanel.tsx:699
+#: src/components/controls/ModelManagerPanel.tsx:724
 msgid "Show"
 msgstr "Mostrar"
 
@@ -5046,7 +5061,7 @@ msgid "Split the model along a drawn seam"
 msgstr "Dividir el modelo por una costura dibujada"
 
 #. Context menu action: split a multi-body 3MF import into independent models.
-#: src/components/controls/ModelManagerPanel.tsx:381
+#: src/components/controls/ModelManagerPanel.tsx:404
 msgid "Split to bodies"
 msgstr "Dividir en cuerpos"
 
@@ -5187,10 +5202,6 @@ msgstr "Compatibles: {extensions}"
 #: src/components/ui/EditorContextMenu.tsx:109
 msgid "Supports"
 msgstr "Soportes"
-
-#: src/components/controls/ModelManagerPanel.tsx:687
-msgid "Supports for model"
-msgstr "Soportes del modelo"
 
 #: src/supports/PlacementLogic/SupportLimitations.tsx:11
 msgid "Surface angle is upward facing. Supports cannot be placed here."
@@ -5573,11 +5584,11 @@ msgstr "Interfaz y tema"
 msgid "Unavailable"
 msgstr "No disponible"
 
-#: src/components/controls/ModelManagerPanel.tsx:368
+#: src/components/controls/ModelManagerPanel.tsx:391
 msgid "Ungroup folder"
 msgstr "Desagrupar la carpeta"
 
-#: src/components/controls/ModelManagerPanel.tsx:358
+#: src/components/controls/ModelManagerPanel.tsx:381
 msgid "Ungroup selected"
 msgstr "Desagrupar la selección"
 
