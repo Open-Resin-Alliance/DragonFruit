@@ -5,6 +5,13 @@ import { Lock, LockOpen, Plus } from 'lucide-react';
 import { Tooltip } from '@/components/ui/Tooltip';
 
 /**
+ * The plate's widgets are looked *at*, not hunted for, so their tooltips wait: a
+ * pointer crossing the plate on its way somewhere else should not throw a box over
+ * the view. One second is long enough to mean "you stopped here".
+ */
+const PLATE_WIDGET_TOOLTIP_DELAY_MS = 1000;
+
+/**
  * The buttons that sit beside the build plate: add a plate, and lock this one.
  *
  * Both live in a single `Html` because they are one column: their spacing is then
@@ -66,12 +73,12 @@ export function PlateSideButtons({
       <div className="flex flex-col items-start gap-3 select-none" style={{ transform: 'translate(50%, 50%)' }}>
         {/* The tooltip goes on a wrapper, not the button: a disabled button emits no
             pointer events of its own, so hovering it would show nothing. */}
-        <Tooltip content={addComingSoonTitle} maxWidth={200}>
+        <Tooltip content={addComingSoonTitle} maxWidth={200} delayMs={PLATE_WIDGET_TOOLTIP_DELAY_MS}>
           <button
             type="button"
             disabled
             aria-label={addLabel}
-            className="flex h-[104px] w-[104px] cursor-not-allowed items-center justify-center rounded-[5.5px] border"
+            className="flex h-[104px] w-[104px] cursor-not-allowed items-center justify-center rounded-[5.5px] border transition-[filter,background-color,border-color] duration-150 hover:brightness-110"
             style={{
               borderColor: 'color-mix(in srgb, var(--text-muted), transparent 60%)',
               background: 'color-mix(in srgb, var(--surface-0), transparent 55%)',
@@ -83,14 +90,14 @@ export function PlateSideButtons({
           </button>
         </Tooltip>
 
-        <Tooltip content={locked ? unlockTitle : lockTitle} maxWidth={220}>
+        <Tooltip content={locked ? unlockTitle : lockTitle} maxWidth={220} delayMs={PLATE_WIDGET_TOOLTIP_DELAY_MS}>
           <button
             type="button"
             onClick={onToggleLock}
             onPointerDown={(event) => event.stopPropagation()}
             aria-pressed={locked}
             aria-label={locked ? unlockTitle : lockTitle}
-            className="flex h-[104px] w-[104px] cursor-pointer items-center justify-center rounded-[5.5px] border transition-colors"
+            className="flex h-[104px] w-[104px] cursor-pointer items-center justify-center rounded-[5.5px] border transition-[filter,background-color,border-color] duration-150 hover:brightness-110"
             style={locked
               ? {
                 // Locked is a state worth noticing, so it wears the accent rather

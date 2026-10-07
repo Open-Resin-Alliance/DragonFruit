@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useLayoutEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { clampToViewport } from '@/utils/math';
 
@@ -11,6 +11,13 @@ interface TooltipProps {
   offsetY?: number;
   /** Max width of the tooltip box (default 260). */
   maxWidth?: number;
+  /**
+   * How long the pointer has to rest before the tooltip appears, in milliseconds.
+   * Default 0 — immediate, which is right for a control that explains itself in one
+   * word. Reach for a delay where the tooltip covers the thing being looked at, so a
+   * pointer merely crossing it does not throw a box over the view.
+   */
+  delayMs?: number;
   /** Extra classes for the wrapping span, e.g. to pass through flex sizing (flex-1, h-full) from the trigger. */
   wrapperClassName?: string;
   /**
@@ -39,7 +46,7 @@ interface TooltipProps {
  *     <button>Label</button>
  *   </Tooltip>
  */
-export function Tooltip({ content, offsetY = 28, maxWidth = 260, wrapperClassName, fullWidth, children }: TooltipProps) {
+export function Tooltip({ content, offsetY = 28, maxWidth = 260, wrapperClassName, fullWidth, delayMs = 0, children }: TooltipProps) {
   const [hovered, setHovered] = useState(false);
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   // Real position, filled in once the popover has been measured. Kept separate from
@@ -47,11 +54,32 @@ export function Tooltip({ content, offsetY = 28, maxWidth = 260, wrapperClassNam
   // flashing at a guessed spot before snapping to its centered, clamped position.
   const [coords, setCoords] = useState<{ left: number; top: number } | null>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
+  const delayTimerRef = useRef<number | null>(null);
+
+  const clearDelay = () => {
+    if (delayTimerRef.current === null) return;
+    window.clearTimeout(delayTimerRef.current);
+    delayTimerRef.current = null;
+  };
+  // Cancel a pending reveal on unmount, or a delayed tooltip would set state on a
+  // component that is gone.
+  useEffect(() => clearDelay, []);
 
   const handleMouseEnter = (e: React.MouseEvent) => {
-    setHovered(true);
-    setPos({ x: e.clientX, y: e.clientY });
-    setCoords(null);
+    clearDelay();
+    if (delayMs <= 0) {
+      setHovered(true);
+      setPos({ x: e.clientX, y: e.clientY });
+      setCoords(null);
+      return;
+    }
+    const { clientX, clientY } = e;
+    delayTimerRef.current = window.setTimeout(() => {
+      delayTimerRef.current = null;
+      setHovered(true);
+      setPos({ x: clientX, y: clientY });
+      setCoords(null);
+    }, delayMs);
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
@@ -60,6 +88,7 @@ export function Tooltip({ content, offsetY = 28, maxWidth = 260, wrapperClassNam
   };
 
   const handleMouseLeave = () => {
+    clearDelay();
     setHovered(false);
     setPos(null);
     setCoords(null);
