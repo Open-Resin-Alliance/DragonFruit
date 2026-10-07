@@ -329,7 +329,11 @@ export function Helpers({
   const buildPlateWidth = width + buildPlateOversizeEachSideMm * 2;
   const buildPlateDepth = depth + buildPlateOversizeEachSideMm * 2;
   const buildPlateCenterZ = -buildPlateThicknessMm * 0.5 - 0.08;
-  const frontTabDepth = buildPlateOversizeEachSideMm + 0.2;
+  // The tab the FRONT marker is printed on. Its depth is what sizes that marker: the
+  // label's texture is fitted to the plane, and the plane is aspect-locked to the tab
+  // (256/72), so a deeper tab is a larger label: the tab's 3.2mm -> 4.2mm takes the
+  // marker from 11.4 x 3.2mm to 13.5 x 3.8mm, the "a little larger" range.
+  const frontTabDepth = buildPlateOversizeEachSideMm + 1.2;
   // A hair more than the overhang the mock plate draws past the build volume, so the
   // buttons sit just outside the plate you can see. Their spacing is CSS inside the
   // component; only this clearance is a plate measurement.
