@@ -12,7 +12,7 @@ import {
   SlidersHorizontal,
 } from 'lucide-react';
 import type { TransformMode } from '@/hooks/useModelTransform';
-import { CutSeamIcon, HollowShellIcon, LineSupportIcon, SmoothingSphereIcon, SolidSupportIcon, type ToolRailEntry } from '@/components/controls/ToolRail';
+import { CutSeamIcon, HollowShellIcon, InteriorViewIcon, LineSupportIcon, SmoothingSphereIcon, SolidSupportIcon, type ToolRailEntry } from '@/components/controls/ToolRail';
 
 /**
  * The Support tools the rail can select. One is active at a time, and its panel is
@@ -104,6 +104,15 @@ export type SupportToolRailOptions = {
    */
   viewMode: SupportViewMode;
   onViewModeChange: (mode: SupportViewMode) => void;
+  /**
+   * Interior view looks through the shell of a hollowed model. It is only
+   * meaningful once a cavity exists, which is what `interiorViewAvailable`
+   * answers — the tile greys out rather than hiding while there is nothing to
+   * look inside.
+   */
+  interiorView: boolean;
+  interiorViewAvailable: boolean;
+  onToggleInteriorView: () => void;
 };
 
 /** How the support forest is drawn. */
@@ -127,6 +136,9 @@ export function buildSupportToolRailEntries({
   onSelectHollowing,
   viewMode,
   onViewModeChange,
+  interiorView,
+  interiorViewAvailable,
+  onToggleInteriorView,
 }: SupportToolRailOptions): ToolRailEntry[] {
   const tools: Array<{ mode: SupportRailMode; label: ToolRailEntry['label']; hint: ToolRailEntry['hint']; icon: ToolRailEntry['icon'] }> = [
     {
@@ -207,6 +219,18 @@ export function buildSupportToolRailEntries({
           onSelect: () => onViewModeChange('lines'),
         },
       ],
+    },
+    {
+      id: 'interiorView',
+      label: msg({ message: 'Interior', comment: 'Tool rail label in Support mode. Toggles looking inside a hollowed model instead of at its outside. One word, to fit the rail.' }),
+      hint: interiorViewAvailable
+        ? msg({ message: 'Look inside the hollow, at the cavity and its drain holes', comment: 'Tool rail entry in Support mode, enabled once the model has been hollowed.' })
+        : msg({ message: 'Hollow the model first to look inside it', comment: 'Tool rail entry in Support mode, shown greyed when the model has no cavity yet.' }),
+      icon: InteriorViewIcon,
+      active: interiorView,
+      tone: 'tool',
+      disabled: !interiorViewAvailable,
+      onSelect: onToggleInteriorView,
     },
   ];
 }

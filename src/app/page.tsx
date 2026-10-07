@@ -777,6 +777,7 @@ export default function Home() {
     hollowPreviewWarmupKeyRef,
     hollowingSourceByModelIdRef,
     cavityGeometryByModelIdRef,
+    cavityGeometryVersion,
     defaultHollowingState,
     isHollowingApplied,
     persistedHollowingSignature,
@@ -7757,9 +7758,14 @@ export default function Home() {
 
   useDeleteHotkey();
   useCameraProjectionHotkey();
-  const hasCavityGeometry = scene.activeModel
-    ? cavityGeometryByModelIdRef.current.has(scene.activeModel.id)
-    : false;
+  // The map is a ref, so it never subscribes this component: `cavityGeometryVersion`
+  // is the reactive half and has to be in the deps, or the answer is whatever it
+  // was on the last render and interior view stays available after the hollow that
+  // justified it is reset.
+  const hasCavityGeometry = React.useMemo(
+    () => (scene.activeModel ? cavityGeometryByModelIdRef.current.has(scene.activeModel.id) : false),
+    [scene.activeModel, cavityGeometryVersion],
+  );
   useInteriorViewHotkey(
     () => setInteriorView((prev) => !prev),
     hasCavityGeometry,
@@ -10577,6 +10583,11 @@ export default function Home() {
               onSelectHollowing: () => setTransformModeWithMirrorFinalize('hollowing'),
               viewMode: supportDisplaySettings.navigationDiscsOnly ? 'lines' : 'full',
               onViewModeChange: (nextViewMode) => updateNavigationDiscsOnly(nextViewMode === 'lines'),
+              interiorView,
+              // The same gate the X hotkey uses, so the tile and the key agree
+              // on when there is something to look inside.
+              interiorViewAvailable: hasCavityGeometry,
+              onToggleInteriorView: () => setInteriorView((prev) => !prev),
             })
             : buildPrepareToolRailEntries({
               mode: transformMgr.transformMode,

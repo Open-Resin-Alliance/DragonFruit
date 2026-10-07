@@ -47,6 +47,12 @@ export type ToolRailEntry = {
    * modes) without spending a rail slot on each.
    */
   menu?: ToolRailMenuEntry[];
+  /**
+   * Renders the entry greyed and inert. For an entry whose feature depends on
+   * something the scene may not have (interior view needs a hollowed model), so
+   * the tile stays in place and explains itself instead of disappearing.
+   */
+  disabled?: boolean;
   /** Fired on hover, with `true` while the pointer is on the entry. */
   onHover?: (entering: boolean) => void;
   /** Which side of the entry takes an extra gap, separating groups in the rail. */
@@ -77,6 +83,30 @@ export function HollowShellIcon(props: React.SVGProps<SVGSVGElement>) {
         clipRule="evenodd"
         d="M5 2.5h14a2.5 2.5 0 0 1 2.5 2.5v14a2.5 2.5 0 0 1-2.5 2.5H5A2.5 2.5 0 0 1 2.5 19V5A2.5 2.5 0 0 1 5 2.5Zm2 3A1.5 1.5 0 0 0 5.5 7v10A1.5 1.5 0 0 0 7 18.5h10a1.5 1.5 0 0 0 1.5-1.5V7A1.5 1.5 0 0 0 17 5.5H7Z"
       />
+    </svg>
+  );
+}
+
+/**
+ * The Interior view's icon: the hollowing tool's two squares, with the ink moved
+ * to where the hollowing leaves it empty. `HollowShellIcon` fills the shell and
+ * punches the cavity out; this fills the cavity and leaves the shell as an
+ * outline. Same geometry, opposite side inked, so the pair reads as one idea
+ * seen from two sides.
+ */
+export function InteriorViewIcon(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    >
+      <path d="M5 2.5h14a2.5 2.5 0 0 1 2.5 2.5v14a2.5 2.5 0 0 1-2.5 2.5H5A2.5 2.5 0 0 1 2.5 19V5A2.5 2.5 0 0 1 5 2.5Z" />
+      <rect x="6.5" y="6.5" width="11" height="11" rx="1.4" fill="currentColor" stroke="none" />
     </svg>
   );
 }
@@ -232,6 +262,15 @@ function railEntryStyles(hue: string): { off: React.CSSProperties; on: React.CSS
 const TOOL_STYLES = railEntryStyles('var(--accent)');
 /** Panel entries open or close a panel, so they wear the secondary hue. */
 const PANEL_STYLES = railEntryStyles('var(--accent-secondary)');
+/** An entry with nothing to act on: neutral surface, muted, and dimmed on top. */
+const DISABLED_STYLES: React.CSSProperties = {
+  background: 'var(--surface-1)',
+  borderColor: 'var(--border-subtle)',
+  color: 'var(--text-muted)',
+  // Dimmed here rather than with an `opacity-*` class: this Tailwind's scale has
+  // no 45, so the class would be dropped and the tile would only look muted.
+  opacity: 0.45,
+};
 
 /**
  * The tool rail: a list of entries, in two layouts chosen in Settings and driven
@@ -379,7 +418,7 @@ export function ToolRail({ entries, layout, onLayoutChange }: ToolRailProps) {
   // entry's own box (a column entry is a scrollbar narrower than `w-[68px]`, and
   // the scrollbar goes away in the bar) at the same time as the fold animation was
   // driving transform — two engines animating one property is the glitch.
-  const entryClass = `flex h-[62px] flex-col items-center justify-center gap-1.5 rounded-sm border px-1 text-[11px] font-semibold leading-tight transition-[color,background-color,border-color,filter,box-shadow] duration-150 hover:brightness-110 ${layout === 'vertical' ? 'w-full' : 'w-[62px] shrink-0'}`;
+  const entryClass = `flex h-[62px] flex-col items-center justify-center gap-1.5 rounded-[5.5px] border px-1 text-[11px] font-semibold leading-tight transition-[color,background-color,border-color,filter,box-shadow] duration-150 hover:brightness-110 ${layout === 'vertical' ? 'w-full' : 'w-[62px] shrink-0'}`;
 
   return (
     <div
@@ -406,25 +445,29 @@ export function ToolRail({ entries, layout, onLayoutChange }: ToolRailProps) {
             : '';
         const hasMenu = (entry.menu?.length ?? 0) > 0;
         const isMenuOpen = entryMenu?.entry.id === entry.id;
+        const isDisabled = entry.disabled === true;
 
         return (
           <button
             key={entry.id}
             type="button"
             data-rail-entry="true"
+            disabled={isDisabled}
             onClick={hasMenu
               ? (event) => {
                 cancelHoverClose();
                 if (entryMenu?.entry.id !== entry.id) openEntryMenuFor(entry, event.currentTarget);
               }
               : entry.onSelect}
-            onMouseEnter={hasMenu
-              ? (event) => {
-                cancelHoverClose();
-                openEntryMenuFor(entry, event.currentTarget);
-              }
-              : () => entry.onHover?.(true)}
-            onMouseLeave={hasMenu ? scheduleHoverClose : () => entry.onHover?.(false)}
+            onMouseEnter={isDisabled
+              ? undefined
+              : hasMenu
+                ? (event) => {
+                  cancelHoverClose();
+                  openEntryMenuFor(entry, event.currentTarget);
+                }
+                : () => entry.onHover?.(true)}
+            onMouseLeave={isDisabled ? undefined : hasMenu ? scheduleHoverClose : () => entry.onHover?.(false)}
             onFocus={hasMenu
               ? (event) => {
                 cancelHoverClose();
@@ -433,15 +476,15 @@ export function ToolRail({ entries, layout, onLayoutChange }: ToolRailProps) {
               : () => entry.onHover?.(true)}
             onBlur={() => entry.onHover?.(false)}
             onContextMenu={openLayoutMenu}
-            className={`${entryClass}${separation}`}
-            style={entry.active ? styles.on : styles.off}
+            className={`${entryClass}${separation}${isDisabled ? ' cursor-not-allowed' : ''}`}
+            style={isDisabled ? DISABLED_STYLES : entry.active ? styles.on : styles.off}
             title={_(entry.hint)}
             aria-label={_(entry.hint)}
             {...(hasMenu
               ? { 'aria-haspopup': 'menu' as const, 'aria-expanded': isMenuOpen }
               : { 'aria-pressed': entry.active })}
           >
-            <Icon className="h-6 w-6" style={{ color: iconColor }} />
+            <Icon className="h-6 w-6" style={{ color: isDisabled ? 'var(--text-muted)' : iconColor }} />
             <span>{_(entry.label)}</span>
           </button>
         );
