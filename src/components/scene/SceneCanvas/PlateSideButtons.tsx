@@ -156,16 +156,10 @@ export function PlateSideButtons({
               onClick={onClearPlate}
               onPointerDown={(event) => event.stopPropagation()}
               aria-label={clearDisabled ? clearDisabledTitle : clearTitle}
-              className={`flex h-[104px] w-[104px] items-center justify-center rounded-[5.5px] border transition-[filter,background-color,border-color] duration-150 ${clearDisabled ? 'cursor-not-allowed' : 'cursor-pointer hover:brightness-110'}`}
-              style={clearDisabled
-                ? disabledButtonStyle
-                : {
-                  // Destructive, so it announces itself: the danger tone rather than
-                  // the quiet grey of the plate's other buttons.
-                  borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 40%)',
-                  background: 'color-mix(in srgb, #ef4444, var(--surface-0) 88%)',
-                  color: '#ef4444',
-                }}
+              // Red on hover, quiet otherwise: `.plate-trash-button` in globals.css owns
+              // both, because a hover cannot live in an inline style.
+              className={`plate-trash-button flex h-[104px] w-[104px] items-center justify-center rounded-[5.5px] border transition-[background-color,border-color,color] duration-150 ${clearDisabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
+              style={clearDisabled ? disabledButtonStyle : undefined}
             >
               <Trash2 className="h-14 w-14" />
             </button>
