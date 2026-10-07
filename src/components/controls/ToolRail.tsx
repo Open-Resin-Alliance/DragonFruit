@@ -8,7 +8,6 @@ import type { MessageDescriptor } from '@lingui/core';
 import type { ToolLayout } from '@/components/layout/floatingLayoutPreferences';
 import { ContextMenu, type ContextMenuEntry } from '@/components/ui/ContextMenu';
 import { useOutsideDismiss } from '@/hooks/useOutsideDismiss';
-import type { LucideIcon } from 'lucide-react';
 
 /** The docked column's width, also used to inset the floating panel stack. */
 export const TOOL_RAIL_WIDTH_PX = 74;
@@ -21,7 +20,8 @@ export const TOOL_RAIL_WIDTH_PX = 74;
 export type ToolRailMenuEntry = {
   id: string;
   label: MessageDescriptor;
-  icon?: LucideIcon;
+  /** Any SVG component: the rail's own drawn icons are options here too. */
+  icon?: React.ComponentType<React.SVGProps<SVGSVGElement>>;
   /** Lights the option's tile: for a list of mutually exclusive modes, the one in use. */
   checked?: boolean;
   onSelect: () => void;
@@ -49,8 +49,8 @@ export type ToolRailEntry = {
   menu?: ToolRailMenuEntry[];
   /** Fired on hover, with `true` while the pointer is on the entry. */
   onHover?: (entering: boolean) => void;
-  /** Panel entries sit one gap further from the tools; only the first does. */
-  separated?: boolean;
+  /** Which side of the entry takes an extra gap, separating groups in the rail. */
+  separated?: 'above' | 'below';
 };
 
 interface ToolRailProps {
@@ -77,6 +77,62 @@ export function HollowShellIcon(props: React.SVGProps<SVGSVGElement>) {
         clipRule="evenodd"
         d="M5 2.5h14a2.5 2.5 0 0 1 2.5 2.5v14a2.5 2.5 0 0 1-2.5 2.5H5A2.5 2.5 0 0 1 2.5 19V5A2.5 2.5 0 0 1 5 2.5Zm2 3A1.5 1.5 0 0 0 5.5 7v10A1.5 1.5 0 0 0 7 18.5h10a1.5 1.5 0 0 0 1.5-1.5V7A1.5 1.5 0 0 0 17 5.5H7Z"
       />
+    </svg>
+  );
+}
+
+/**
+ * The Full view mode's icon: a support as the scene renders it — the thin cone
+ * that meets the model, its member inclined down to the joint, then straight to
+ * the plate. No base plate is drawn, because the icon is about the member being
+ * *solid*, and a plate under it would just be a second thing to read.
+ */
+export function SolidSupportIcon(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    >
+      {/* The contact cone: a point at the model, its base exactly the member's
+          width so the two read as one tapered object rather than an arrowhead
+          stuck on a stick. */}
+      <path d="M2.4 2.4 8.6 5 6 8Z" fill="currentColor" stroke="none" />
+      {/* The member. Butt ends, so the foot stops at the plate instead of ending
+          in a blob; the join rounds the bend. */}
+      <path d="M7.3 6.5 15.2 13.1V20.9" strokeWidth={4} />
+    </svg>
+  );
+}
+
+/**
+ * The Lines view mode's icon: the same support traced as dashes, with no solid
+ * contact at all. The dash nearest the model stands in for the cone and is cut
+ * on the same axis, so the two icons are recognisably one shape — the solid one
+ * filled, this one broken — instead of "a support" and "an arrow".
+ */
+export function LineSupportIcon(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2.4}
+      aria-hidden="true"
+      {...props}
+    >
+      {/* Butt caps on purpose: a round cap adds half the stroke width to each end
+          of a dash, and at these lengths that closes the gap and the shaft reads
+          as one solid line again. */}
+      <path d="M3.7 3.6 5.4 5" />
+      <path d="M7.2 6.5 8.8 7.9" />
+      <path d="M10.6 9.3 12.3 10.7" />
+      <path d="M14.1 12.2 15.1 13.1" />
+      <path d="M15.2 13.1V15.3" />
+      <path d="M15.2 17.2V19.4" />
     </svg>
   );
 }
@@ -342,7 +398,11 @@ export function ToolRail({ entries, layout, onLayoutChange }: ToolRailProps) {
         const iconColor = entry.tone === 'panel'
           ? 'var(--accent-secondary)'
           : entry.active ? 'var(--accent)' : 'var(--text-muted)';
-        const separation = entry.separated ? (layout === 'vertical' ? ' mb-3' : ' mr-3') : '';
+        const separation = entry.separated === 'below'
+          ? (layout === 'vertical' ? ' mb-3' : ' mr-3')
+          : entry.separated === 'above'
+            ? (layout === 'vertical' ? ' mt-3' : ' ml-3')
+            : '';
         const hasMenu = (entry.menu?.length ?? 0) > 0;
         const isMenuOpen = entryMenu?.entry.id === entry.id;
 

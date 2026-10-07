@@ -1,10 +1,8 @@
 import { msg } from '@lingui/core/macro';
 import {
   ArrowDownToLine,
-  Box,
   Boxes,
   Copy,
-  Eye,
   FlipHorizontal2,
   Hand,
   LayoutGrid,
@@ -14,7 +12,7 @@ import {
   SlidersHorizontal,
 } from 'lucide-react';
 import type { TransformMode } from '@/hooks/useModelTransform';
-import { CutSeamIcon, HollowShellIcon, SmoothingSphereIcon, type ToolRailEntry } from '@/components/controls/ToolRail';
+import { CutSeamIcon, HollowShellIcon, LineSupportIcon, SmoothingSphereIcon, SolidSupportIcon, type ToolRailEntry } from '@/components/controls/ToolRail';
 
 /**
  * The Support tools the rail can select. One is active at a time, and its panel is
@@ -69,7 +67,7 @@ export function buildPrepareToolRailEntries({
       icon: Boxes,
       active: modelsPanelVisible,
       tone: 'panel',
-      separated: true,
+      separated: 'below',
       onSelect: onToggleModelsPanel,
     },
     ...tools.map((tool) => ({
@@ -159,7 +157,7 @@ export function buildSupportToolRailEntries({
       icon: Boxes,
       active: modelsPanelVisible,
       tone: 'panel',
-      separated: true,
+      separated: 'below',
       onSelect: onToggleModelsPanel,
     },
     {
@@ -186,25 +184,25 @@ export function buildSupportToolRailEntries({
       hint: msg({ message: 'How the support forest is drawn', comment: 'Tool rail entry in Support mode. Opens a menu of view modes rather than toggling on its own.' }),
       // The tile wears the icon of the mode in use, so the rail answers "how am
       // I looking at this?" without opening the list.
-      icon: viewMode === 'lines' ? Eye : Box,
+      icon: viewMode === 'lines' ? LineSupportIcon : SolidSupportIcon,
       // Primary hue, but never lit: the entry opens a list rather than being
       // switched on, so it sits with the tools in their resting state. The mode
       // in use is the lit tile in the list.
       active: false,
       tone: 'tool',
-      separated: true,
+      separated: 'above',
       menu: [
         {
           id: 'full',
           label: msg({ message: 'Full', comment: 'Support view mode. Every support member is drawn as a solid mesh.' }),
-          icon: Box,
+          icon: SolidSupportIcon,
           checked: viewMode === 'full',
           onSelect: () => onViewModeChange('full'),
         },
         {
           id: 'lines',
           label: msg({ message: 'Lines', comment: 'Support view mode. Contact discs stay solid and every other member is drawn as a line, which keeps a dense support forest readable.' }),
-          icon: Eye,
+          icon: LineSupportIcon,
           checked: viewMode === 'lines',
           onSelect: () => onViewModeChange('lines'),
         },

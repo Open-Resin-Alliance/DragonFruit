@@ -387,7 +387,7 @@ msgstr ""
 msgid "Area Σ {totalAreaLabel} • Min {minAreaLabel} • Max {maxAreaLabel}"
 msgstr "Plocha Σ {totalAreaLabel} • Min {minAreaLabel} • Max {maxAreaLabel}"
 
-#: src/components/controls/toolRailEntries.ts:59
+#: src/components/controls/toolRailEntries.ts:57
 msgid "Arrange"
 msgstr ""
 
@@ -396,11 +396,11 @@ msgid "Arrange model and transforms"
 msgstr "Usporiadať modely a transformy"
 
 #. Tool rail entry. The tool that auto-packs the models onto the plate.
-#: src/components/controls/toolRailEntries.ts:59
+#: src/components/controls/toolRailEntries.ts:57
 msgid "Arrange models on the plate"
 msgstr ""
 
-#: src/components/controls/toolRailEntries.ts:58
+#: src/components/controls/toolRailEntries.ts:56
 msgid "Array copies across the plate"
 msgstr ""
 
@@ -451,7 +451,7 @@ msgid "Auto Orientation (Beta)"
 msgstr ""
 
 #. Tool rail entry in Support mode. Selecting it shows the Auto Supports panel, which generates supports.
-#: src/components/controls/toolRailEntries.ts:143
+#: src/components/controls/toolRailEntries.ts:141
 msgid "Auto support generation"
 msgstr ""
 
@@ -529,7 +529,7 @@ msgid "Auto-support settings"
 msgstr ""
 
 #. Tool rail label in Support mode. Short for the Auto Supports panel, which generates supports automatically.
-#: src/components/controls/toolRailEntries.ts:142
+#: src/components/controls/toolRailEntries.ts:140
 msgid "Automatic"
 msgstr ""
 
@@ -1357,7 +1357,7 @@ msgstr ""
 msgid "Create a snapshot now and refresh history."
 msgstr ""
 
-#: src/components/controls/toolRailEntries.ts:168
+#: src/components/controls/toolRailEntries.ts:166
 msgid "Create cavity or open-face shell"
 msgstr "Vytvoriť dutinu alebo mušlu s otvorenou stranou"
 
@@ -1708,7 +1708,7 @@ msgid "Downloading Update"
 msgstr ""
 
 #. Tool rail label. The tool that drags and places models on the plate. Deliberately "Drag" rather than "Arrange": the app uses "Arrange" elsewhere for arranging the whole plate, and Spanish distinguishes the two.
-#: src/components/controls/toolRailEntries.ts:49
+#: src/components/controls/toolRailEntries.ts:47
 msgid "Drag"
 msgstr ""
 
@@ -1759,7 +1759,7 @@ msgid "Drop supported files to import"
 msgstr ""
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:391
-#: src/components/controls/toolRailEntries.ts:58
+#: src/components/controls/toolRailEntries.ts:56
 msgid "Duplicate"
 msgstr ""
 
@@ -1799,7 +1799,7 @@ msgstr "Editor"
 msgid "Editor context menu"
 msgstr "Kontextové menu editoru"
 
-#: src/components/controls/ToolRail.tsx:337
+#: src/components/controls/ToolRail.tsx:393
 msgid "Editor tools"
 msgstr ""
 
@@ -2220,7 +2220,7 @@ msgid "Frustum"
 msgstr ""
 
 #. Support view mode. Every support member is drawn as a solid mesh.
-#: src/components/controls/toolRailEntries.ts:199
+#: src/components/controls/toolRailEntries.ts:197
 msgid "Full"
 msgstr ""
 
@@ -2364,11 +2364,11 @@ msgid "Hold the model clear of the plate, so a support can stand under it. Turns
 msgstr ""
 
 #. Tool rail label in Support mode. One word, like the other tool names: opens the hollowing tool (shell the model, add drainage holes).
-#: src/components/controls/toolRailEntries.ts:167
+#: src/components/controls/toolRailEntries.ts:165
 msgid "Hollow"
 msgstr ""
 
-#: src/components/controls/ToolRail.tsx:317
+#: src/components/controls/ToolRail.tsx:373
 #: src/components/settings/GeneralSettingsTab.tsx:300
 msgid "Horizontal"
 msgstr ""
@@ -2414,7 +2414,7 @@ msgid "How the part is held against toppling and peel — self-support angle, st
 msgstr ""
 
 #. Tool rail entry in Support mode. Opens a menu of view modes rather than toggling on its own.
-#: src/components/controls/toolRailEntries.ts:186
+#: src/components/controls/toolRailEntries.ts:184
 msgid "How the support forest is drawn"
 msgstr ""
 
@@ -2601,7 +2601,7 @@ msgstr ""
 
 #. Tool rail label in Support mode. Short for the Islands panel, which scans the model for unsupported islands.
 #: src/components/controls/IslandsPanel.tsx:137
-#: src/components/controls/toolRailEntries.ts:136
+#: src/components/controls/toolRailEntries.ts:134
 msgid "Islands"
 msgstr ""
 
@@ -2800,7 +2800,7 @@ msgid "Line Width"
 msgstr ""
 
 #. Support view mode. Contact discs stay solid and every other member is drawn as a line, which keeps a dense support forest readable.
-#: src/components/controls/toolRailEntries.ts:206
+#: src/components/controls/toolRailEntries.ts:204
 msgid "Lines"
 msgstr ""
 
@@ -2957,7 +2957,7 @@ msgid "Managed Printers"
 msgstr ""
 
 #. Tool rail label in Support mode. Short for the manual support settings panel (tip, shaft, roots, bracing).
-#: src/components/controls/toolRailEntries.ts:148
+#: src/components/controls/toolRailEntries.ts:146
 #: src/components/printers/SetupMethodChooser.tsx:28
 msgid "Manual"
 msgstr ""
@@ -3138,11 +3138,11 @@ msgstr ""
 msgid "Minutes between automatic sync attempts."
 msgstr ""
 
-#: src/components/controls/toolRailEntries.ts:57
+#: src/components/controls/toolRailEntries.ts:55
 msgid "Mirror"
 msgstr "Zrkadliť"
 
-#: src/components/controls/toolRailEntries.ts:57
+#: src/components/controls/toolRailEntries.ts:55
 msgid "Mirror across X, Y, or Z"
 msgstr "Zrkadliť podľa X, Y alebo Z"
 
@@ -3194,8 +3194,8 @@ msgstr ""
 #. Title of the panel listing every model loaded into the scene.
 #: src/components/controls/ModelManagerPanel.tsx:438
 #: src/components/controls/ModelManagerPanel.tsx:726
-#: src/components/controls/toolRailEntries.ts:67
-#: src/components/controls/toolRailEntries.ts:157
+#: src/components/controls/toolRailEntries.ts:65
+#: src/components/controls/toolRailEntries.ts:155
 msgid "Models"
 msgstr ""
 
@@ -3224,7 +3224,7 @@ msgstr ""
 msgid "Mortise edges"
 msgstr ""
 
-#: src/components/controls/toolRailEntries.ts:49
+#: src/components/controls/toolRailEntries.ts:47
 msgid "Move and place models on the plate"
 msgstr ""
 
@@ -3232,7 +3232,7 @@ msgstr ""
 msgid "Move Slot"
 msgstr ""
 
-#: src/components/controls/toolRailEntries.ts:50
+#: src/components/controls/toolRailEntries.ts:48
 msgid "Move, rotate, and scale"
 msgstr "Posunúť, otočiť a zväčšiť/zmenšiť"
 
@@ -3608,7 +3608,7 @@ msgid "ON"
 msgstr ""
 
 #. Tool rail label. Short for "lay the model flat on a selected face"; keep it terse so the rail entry stays one line.
-#: src/components/controls/toolRailEntries.ts:53
+#: src/components/controls/toolRailEntries.ts:51
 msgid "On-Face"
 msgstr "Na-Stranu"
 
@@ -3692,7 +3692,7 @@ msgstr ""
 msgid "Opening scene…"
 msgstr ""
 
-#: src/components/controls/toolRailEntries.ts:54
+#: src/components/controls/toolRailEntries.ts:52
 msgid "Orient flat against plate"
 msgstr "Orientovať rovinu proti ploche"
 
@@ -4534,7 +4534,7 @@ msgid "Scan Settings"
 msgstr ""
 
 #. Tool rail entry in Support mode. Selecting it shows the Islands panel.
-#: src/components/controls/toolRailEntries.ts:137
+#: src/components/controls/toolRailEntries.ts:135
 msgid "Scan the model for unsupported islands"
 msgstr ""
 
@@ -4578,7 +4578,7 @@ msgstr ""
 msgid "Scene mood overlay in thumbnail"
 msgstr ""
 
-#: src/components/controls/toolRailEntries.ts:61
+#: src/components/controls/toolRailEntries.ts:59
 msgid "Sculpt and smooth surface"
 msgstr "Skulptovať a vyhladzovať povrch"
 
@@ -4845,8 +4845,8 @@ msgstr ""
 
 #. Tool rail entry that toggles the model list panel on the left. The list is the panel titled "Models".
 #. Tool rail entry that toggles the model list panel on the left. The list is the panel titled "Models".
-#: src/components/controls/toolRailEntries.ts:68
-#: src/components/controls/toolRailEntries.ts:158
+#: src/components/controls/toolRailEntries.ts:66
+#: src/components/controls/toolRailEntries.ts:156
 msgid "Show or hide the model list"
 msgstr ""
 
@@ -4959,7 +4959,7 @@ msgid "Slot {slot}"
 msgstr ""
 
 #. Tool rail label in Prepare mode. The tool brushes and smooths local surface regions.
-#: src/components/controls/toolRailEntries.ts:61
+#: src/components/controls/toolRailEntries.ts:59
 #: src/features/slicing/components/SlicingPanel.tsx:727
 msgid "Smooth"
 msgstr "Vyhladiť"
@@ -5007,7 +5007,7 @@ msgstr ""
 
 #. Title of the panel that splits one model along a drawn seam. The tool rail calls this tool Split; keep the two identical.
 #. Tool rail label in Prepare mode. Splits the model along a drawn seam.
-#: src/components/controls/toolRailEntries.ts:60
+#: src/components/controls/toolRailEntries.ts:58
 #: src/features/organicCut/OrganicCutPanel.tsx:372
 msgid "Split"
 msgstr ""
@@ -5021,7 +5021,7 @@ msgstr ""
 msgid "Split supports"
 msgstr "Rozdeliť podpery"
 
-#: src/components/controls/toolRailEntries.ts:60
+#: src/components/controls/toolRailEntries.ts:58
 msgid "Split the model along a drawn seam"
 msgstr ""
 
@@ -5143,7 +5143,7 @@ msgid "Support placement is outside the build volume."
 msgstr ""
 
 #. Tool rail entry in Support mode. Selecting it shows the support parameter sidebar (tip, shaft, roots, bracing).
-#: src/components/controls/toolRailEntries.ts:149
+#: src/components/controls/toolRailEntries.ts:147
 msgid "Support settings and presets"
 msgstr ""
 
@@ -5495,8 +5495,8 @@ msgstr ""
 msgid "Too close to an existing support."
 msgstr ""
 
-#: src/components/controls/ToolRail.tsx:394
-#: src/components/controls/ToolRail.tsx:395
+#: src/components/controls/ToolRail.tsx:454
+#: src/components/controls/ToolRail.tsx:455
 #: src/components/settings/GeneralSettingsTab.tsx:293
 #: src/components/settings/GeneralSettingsTab.tsx:297
 msgid "Tool layout"
@@ -5524,7 +5524,7 @@ msgstr ""
 msgid "Tracking territories"
 msgstr ""
 
-#: src/components/controls/toolRailEntries.ts:50
+#: src/components/controls/toolRailEntries.ts:48
 msgid "Transform"
 msgstr ""
 
@@ -5718,7 +5718,7 @@ msgstr ""
 msgid "Version info and project details"
 msgstr ""
 
-#: src/components/controls/ToolRail.tsx:316
+#: src/components/controls/ToolRail.tsx:372
 #: src/components/settings/GeneralSettingsTab.tsx:299
 msgid "Vertical"
 msgstr ""
@@ -5761,7 +5761,7 @@ msgid "View, restore, or delete older snapshots from your private repository."
 msgstr ""
 
 #. Tool rail label in Support mode. Opens the support display modes: everything drawn solid, or contact discs with line members.
-#: src/components/controls/toolRailEntries.ts:185
+#: src/components/controls/toolRailEntries.ts:183
 msgid "Visibility"
 msgstr ""
 
