@@ -43,7 +43,7 @@ export function buildPrepareToolRailEntries({
   modelsPanelVisible,
   onToggleModelsPanel,
 }: PrepareToolRailOptions): ToolRailEntry[] {
-  const tools: Array<{ mode: TransformMode; label: ToolRailEntry['label']; hint: ToolRailEntry['hint']; icon: ToolRailEntry['icon'] }> = [
+  const tools: Array<{ mode: TransformMode; label: ToolRailEntry['label']; hint: ToolRailEntry['hint']; icon: ToolRailEntry['icon']; separated?: ToolRailEntry['separated'] }> = [
     { mode: 'select', label: msg({ message: 'Drag', comment: 'Tool rail label. The tool that drags and places models on the plate. Deliberately "Drag" rather than "Arrange": the app uses "Arrange" elsewhere for arranging the whole plate, and Spanish distinguishes the two.' }), hint: msg`Move and place models on the plate`, icon: Hand },
     { mode: 'transform', label: msg`Transform`, hint: msg`Move, rotate, and scale`, icon: Move3D },
     {
@@ -53,9 +53,10 @@ export function buildPrepareToolRailEntries({
       icon: ArrowDownToLine,
     },
     { mode: 'mirror', label: msg`Mirror`, hint: msg`Mirror across X, Y, or Z`, icon: FlipHorizontal2 },
-    { mode: 'duplicate', label: msg`Duplicate`, hint: msg`Array copies across the plate`, icon: Copy },
+    // Three groups: orient the model, lay out copies, then edit its surface.
+    { mode: 'duplicate', label: msg`Duplicate`, hint: msg`Array copies across the plate`, icon: Copy, separated: 'above' },
     { mode: 'arrange', label: msg`Arrange`, hint: msg({ message: 'Arrange models on the plate', comment: 'Tool rail entry. The tool that auto-packs the models onto the plate.' }), icon: LayoutGrid },
-    { mode: 'organicCut', label: msg({ message: 'Split', comment: 'Tool rail label in Prepare mode. Splits the model along a drawn seam.' }), hint: msg`Split the model along a drawn seam`, icon: CutSeamIcon },
+    { mode: 'organicCut', label: msg({ message: 'Split', comment: 'Tool rail label in Prepare mode. Splits the model along a drawn seam.' }), hint: msg`Split the model along a drawn seam`, icon: CutSeamIcon, separated: 'above' },
     { mode: 'smoothing', label: msg({ message: 'Smooth', comment: 'Tool rail label in Prepare mode. The tool brushes and smooths local surface regions.' }), hint: msg`Sculpt and smooth surface`, icon: SmoothingSphereIcon },
   ];
 
@@ -79,6 +80,7 @@ export function buildPrepareToolRailEntries({
       tone: 'tool' as const,
       onSelect: () => onModeChange(tool.mode),
       onHover: (entering: boolean) => onModeHover?.(entering ? tool.mode : null),
+      separated: tool.separated,
     })),
   ];
 }
