@@ -31,6 +31,7 @@ export type PreparePanelStackProps = {
   handleModelListContextMenu: React.ComponentProps<typeof ModelManagerPanel>['onModelContextMenu'];
   handleRepairModel: React.ComponentProps<typeof ModelManagerPanel>['onRepairModel'];
   handleOpenModelSupportsInfo: React.ComponentProps<typeof ModelManagerPanel>['onOpenSupportsInfo'];
+  handleAddModels: React.ComponentProps<typeof ModelsPanel>['handleAddModels'];
   showEmptySceneDialog: boolean;
   importOverlayState: { active: boolean };
   modelStatsBottomClearancePx: number;
@@ -87,6 +88,7 @@ export function PreparePanelStack({
   handleModelListContextMenu,
   handleRepairModel,
   handleOpenModelSupportsInfo,
+  handleAddModels,
   showEmptySceneDialog,
   importOverlayState,
   modelStatsBottomClearancePx,
@@ -184,6 +186,7 @@ export function PreparePanelStack({
         handleModelListContextMenu={handleModelListContextMenu}
         handleRepairModel={handleRepairModel}
         handleOpenModelSupportsInfo={handleOpenModelSupportsInfo}
+        handleAddModels={handleAddModels}
         dimmed={showEmptySceneDialog || importOverlayState.active}
         hidden={!modelsPanelVisible}
         collapsible={modelsPanelCollapsible}
