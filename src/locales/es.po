@@ -291,7 +291,7 @@ msgid "Add or switch printer anytime from the top bar."
 msgstr "Añade o cambia de impresora en cualquier momento desde la barra superior."
 
 #. Accessible name of the button beside the build plate that will add another plate. Inert for now, so it reads as unavailable to a screen reader too.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1577
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1580
 msgid "Add plate"
 msgstr "Añadir plataforma"
 
@@ -391,7 +391,7 @@ msgstr "Aplicar a la sesión"
 msgid "Apply this preset to the auto-support settings"
 msgstr "Aplica este preajuste a los ajustes de autosoportes"
 
-#: src/app/page.tsx:11005
+#: src/app/page.tsx:11010
 msgid "Are you sure you want to remove every model from the plate?"
 msgstr "¿Seguro que quieres quitar todos los modelos de la plataforma?"
 
@@ -438,6 +438,11 @@ msgstr "Automático"
 #: src/components/settings/PerformanceSettingsTab.tsx:215
 msgid "Auto adapts by AA level, Off is fastest, On favors smaller PNG files"
 msgstr "Automático se adapta al nivel de AA, Desactivado es lo más rápido, Activado prioriza archivos PNG más pequeños"
+
+#. Tooltip on the arrange button beside the build plate. Runs the standard arrange across every model, 1mm apart, with Z-rotation allowed.
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1586
+msgid "Auto arrange the plate"
+msgstr "Ordenar la plataforma automáticamente"
 
 #: src/supports/autoBracing/autoBraceMessages.ts:36
 msgid "Auto Brace complete: {generated, plural, one {# brace generated} other {# braces generated}}, {removed, plural, one {# legacy brace removed} other {# legacy braces removed}}."
@@ -630,7 +635,7 @@ msgstr "Área media de isla"
 #. View cube face (the side opposite Front), rendered uppercase inside a small 3D cube. Keep it as short as possible.
 #: src/components/layout/FirstRunOnboarding.tsx:278
 #: src/components/layout/OnboardingPrinterLibrary.tsx:279
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1587
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1592
 msgid "Back"
 msgstr "Atrás"
 
@@ -773,7 +778,7 @@ msgid "Border Margin"
 msgstr "Margen del borde"
 
 #. View cube face (seen from below), rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1591
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1596
 msgid "Bottom"
 msgstr "Abajo"
 
@@ -855,7 +860,7 @@ msgstr "Cámara"
 msgid "Camera view mode: {currentLabel}"
 msgstr "Modo de vista de la cámara: {currentLabel}"
 
-#: src/app/page.tsx:10981
+#: src/app/page.tsx:10987
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:468
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:664
 #: src/components/controls/AutoSupportPanel.tsx:652
@@ -1025,11 +1030,11 @@ msgid "Clear All failed. Check console for details."
 msgstr "«Borrar todo» ha fallado. Mira la consola para más detalles."
 
 #. Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1581
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1584
 msgid "Clear build plate"
 msgstr "Vaciar la plataforma"
 
-#: src/app/page.tsx:10970
+#: src/app/page.tsx:10976
 msgid "Clear Build Plate?"
 msgstr "¿Vaciar la plataforma?"
 
@@ -1037,7 +1042,7 @@ msgstr "¿Vaciar la plataforma?"
 msgid "Clear Override"
 msgstr "Quitar la anulación"
 
-#: src/app/page.tsx:10998
+#: src/app/page.tsx:11003
 msgid "Clear Plate"
 msgstr "Vaciar plataforma"
 
@@ -1072,7 +1077,7 @@ msgstr "ID de cliente"
 msgid "Close"
 msgstr "Cerrar"
 
-#: src/app/page.tsx:10976
+#: src/app/page.tsx:10982
 msgid "Close clear-plate confirmation"
 msgstr "Cerrar la confirmación de vaciado"
 
@@ -1175,7 +1180,7 @@ msgid "Color Scheme"
 msgstr "Esquema de color"
 
 #. Hover text on the add-plate button beside the build plate. The app has one plate for now, so the button says so instead of doing nothing.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1578
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1581
 msgid "Coming Soon!"
 msgstr "¡Próximamente!"
 
@@ -1217,7 +1222,7 @@ msgstr "Configura los parámetros de detección de islas"
 msgid "Configure Networking Later"
 msgstr "Configurar la red más tarde"
 
-#: src/app/page.tsx:10969
+#: src/app/page.tsx:10975
 msgid "Confirm clearing the build plate"
 msgstr "Confirmar el vaciado de la plataforma"
 
@@ -2246,7 +2251,7 @@ msgid "From the community, for the community. Free to use, open to contribute, a
 msgstr "De la comunidad y para la comunidad. Libre de usar, abierto a contribuciones y moldeado por quienes imprimen con él."
 
 #. Orientation label, rendered uppercase on the view cube and on the build plate's front edge. Keep it as short as possible — long words are auto-shrunk to fit and become hard to read.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1583
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1588
 msgid "Front"
 msgstr "Frente"
 
@@ -2310,7 +2315,7 @@ msgid "GitHub OAuth popup opened."
 msgstr "Ventana de OAuth de GitHub abierta."
 
 #. Tooltip on the build plate's name widget while it is still unnamed.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1576
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1579
 msgid "Give this build plate a name"
 msgstr "Dale un nombre a esta plataforma"
 
@@ -2810,7 +2815,7 @@ msgid "Leave the collection as it is"
 msgstr "Deja la colección como está"
 
 #. View cube face, rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1589
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1594
 msgid "Left"
 msgstr "Izq."
 
@@ -2960,7 +2965,7 @@ msgid "LocalStorage Keys"
 msgstr "Claves de LocalStorage"
 
 #. Tooltip on the lock button beside the build plate while it is unlocked. Locking refuses new meshes and moves of the models already on the plate.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1579
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1582
 msgid "Lock build plate"
 msgstr "Bloquear la plataforma"
 
@@ -3882,7 +3887,7 @@ msgid "Placing supports"
 msgstr "Colocando soportes"
 
 #. What the build plate's name widget shows while the plate has no name of its own, including after the plate is cleared or a new scene is started. The number is the plate's, plural forms come later with multiple plates.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1574
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1577
 msgid "Plate 1"
 msgstr "Plataforma 1"
 
@@ -4269,7 +4274,7 @@ msgid "Rename"
 msgstr "Renombrar"
 
 #. Tooltip on the pencil beside the build plate's name.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1575
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1578
 msgid "Rename build plate"
 msgstr "Renombrar la plataforma"
 
@@ -4433,7 +4438,7 @@ msgid "Revert Changes"
 msgstr "Descartar los cambios"
 
 #. View cube face, rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1588
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1593
 msgid "Right"
 msgstr "Dcha."
 
@@ -4780,12 +4785,12 @@ msgid "Selected printer is offline"
 msgstr "La impresora seleccionada está sin conexión"
 
 #. Shown while dragging a selection rectangle right to left, which takes every object the rectangle touches. Mirrors the CAD convention; keep it on one short line.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3060
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3065
 msgid "Selection Mode: Contact (Right to Left)"
 msgstr "Modo de selección: contacto (de derecha a izquierda)"
 
 #. Shown while dragging a selection rectangle left to right, which takes only the objects the rectangle fully encloses. Mirrors the CAD convention; keep it on one short line.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3064
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3069
 msgid "Selection Mode: Enclosed (Left to Right)"
 msgstr "Modo de selección: volumen completo (de izquierda a derecha)"
 
@@ -5341,7 +5346,7 @@ msgstr "El guardado de recuperación en segundo plano ha fallado varias veces se
 msgid "The build plate awaits."
 msgstr "La placa de impresión te espera."
 
-#: src/app/page.tsx:11024
+#: src/app/page.tsx:11029
 msgid "The build plate is locked."
 msgstr "La plataforma está bloqueada."
 
@@ -5578,7 +5583,7 @@ msgid "Tool layout"
 msgstr "Disposición de herramientas"
 
 #. View cube face (seen from above), rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1590
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1595
 msgid "Top"
 msgstr "Arriba"
 
@@ -5628,7 +5633,7 @@ msgstr "Interfaz y tema"
 msgid "Unavailable"
 msgstr "No disponible"
 
-#: src/app/page.tsx:10973
+#: src/app/page.tsx:10979
 msgid "Undo brings the models back"
 msgstr "Deshacer devuelve los modelos"
 
@@ -5666,16 +5671,21 @@ msgid "Unknown manufacturer"
 msgstr "Fabricante desconocido"
 
 #. Tooltip on the lock button beside the build plate while it is locked.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1580
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1583
 msgid "Unlock build plate"
 msgstr "Desbloquear la plataforma"
 
-#: src/app/page.tsx:11027
+#: src/app/page.tsx:11032
 msgid "Unlock it to add or move models."
 msgstr "Desbloquéala para añadir o mover modelos."
 
+#. Tooltip on the arrange button beside the build plate while the plate is locked, which is why it is disabled.
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1587
+msgid "Unlock the plate to arrange it"
+msgstr "Desbloquea la plataforma para ordenarla"
+
 #. Tooltip on the bin beside the build plate while the plate is locked, which is why it is disabled.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1582
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1585
 msgid "Unlock the plate to clear it"
 msgstr "Desbloquea la plataforma para vaciarla"
 

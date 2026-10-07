@@ -1,7 +1,7 @@
 "use client";
 
 import { Html } from '@react-three/drei';
-import { Lock, LockOpen, Plus, Trash2 } from 'lucide-react';
+import { LayoutGrid, Lock, LockOpen, Plus, Trash2 } from 'lucide-react';
 import { Tooltip } from '@/components/ui/Tooltip';
 
 /**
@@ -38,6 +38,10 @@ export function PlateSideButtons({
   lockTitle,
   unlockTitle,
   onToggleLock,
+  arrangeTitle,
+  arrangeDisabledTitle,
+  arrangeDisabled,
+  onArrangePlate,
   clearTitle,
   clearDisabledTitle,
   clearDisabled,
@@ -57,6 +61,11 @@ export function PlateSideButtons({
   /** Wording shown while the plate is locked. */
   unlockTitle: string;
   onToggleLock: () => void;
+  /** Arranging the plate: its wording, the wording while locked, and the action. */
+  arrangeTitle: string;
+  arrangeDisabledTitle: string;
+  arrangeDisabled: boolean;
+  onArrangePlate: () => void;
   /** Clearing the plate: the wording, the wording while the lock forbids it, and the action. */
   clearTitle: string;
   clearDisabledTitle: string;
@@ -132,6 +141,26 @@ export function PlateSideButtons({
                 }}
             >
               <LockIcon className="h-14 w-14" />
+            </button>
+          </Tooltip>
+
+          <Tooltip content={arrangeDisabled ? arrangeDisabledTitle : arrangeTitle} maxWidth={220} delayMs={PLATE_WIDGET_TOOLTIP_DELAY_MS}>
+            <button
+              type="button"
+              disabled={arrangeDisabled}
+              onClick={onArrangePlate}
+              onPointerDown={(event) => event.stopPropagation()}
+              aria-label={arrangeDisabled ? arrangeDisabledTitle : arrangeTitle}
+              className={`flex h-[104px] w-[104px] items-center justify-center rounded-[5.5px] border transition-[filter,background-color,border-color] duration-150 ${arrangeDisabled ? 'cursor-not-allowed' : 'cursor-pointer hover:brightness-110'}`}
+              style={arrangeDisabled
+                ? disabledButtonStyle
+                : {
+                  borderColor: 'color-mix(in srgb, var(--text-muted), transparent 55%)',
+                  background: 'color-mix(in srgb, var(--surface-0), transparent 55%)',
+                  color: 'var(--text-muted)',
+                }}
+            >
+              <LayoutGrid className="h-14 w-14" />
             </button>
           </Tooltip>
         </div>

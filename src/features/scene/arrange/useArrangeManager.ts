@@ -334,7 +334,18 @@ export function useArrangeManager({
     transformMgr.transformHook.setScale(scale.x, scale.y, scale.z);
   }, [displayActiveModelId, scene, transformMgr.transformHook]);
 
-  const handleAutoArrangeModels = React.useCallback(async (scope: 'all' | 'selected', explicitSelectedIds?: string[]) => {
+  const handleAutoArrangeModels = React.useCallback(async (
+    scope: 'all' | 'selected',
+    explicitSelectedIds?: string[],
+    /**
+     * A one-off run can ask for its own spacing and Z-rotation — the plate's arrange
+     * button does, at 1mm with rotation allowed — without disturbing the panel's
+     * settings, which the panel's own runs use.
+     */
+    overrides?: { spacingMm?: number; allowRotateOnZ?: boolean },
+  ) => {
+    const spacingMmForRun = overrides?.spacingMm ?? arrangeSpacingMm;
+    const allowRotateOnZForRun = overrides?.allowRotateOnZ ?? arrangeAllowRotateOnZ;
     if (isAutoArranging) return;
 
     const visibleModels = resolveArrangeVisibleModels(scope, explicitSelectedIds);
@@ -568,7 +579,7 @@ export function useArrangeManager({
             for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
               const row = rows[rowIndex];
               for (const option of fitOptions) {
-                const nextWidth = row.widthUsed + (row.items.length > 0 ? arrangeSpacingMm : 0) + option.width;
+                const nextWidth = row.widthUsed + (row.items.length > 0 ? spacingMmForRun : 0) + option.width;
                 if (nextWidth > plateWidth) continue;
 
                 const nextDepth = Math.max(row.maxDepth, option.depth);
@@ -590,7 +601,7 @@ export function useArrangeManager({
           }
 
           for (const option of fitOptions) {
-            const nextTotalDepth = totalDepthUsed + (rows.length > 0 ? arrangeSpacingMm : 0) + option.depth;
+            const nextTotalDepth = totalDepthUsed + (rows.length > 0 ? spacingMmForRun : 0) + option.depth;
             if (nextTotalDepth > plateDepth) continue;
 
             const widthPenalty = Math.abs(targetRowWidth - option.width) * 0.12;
@@ -619,7 +630,7 @@ export function useArrangeManager({
           if (bestPlacement.kind === 'new-row') {
             const row: Row = { widthUsed: 0, maxDepth: 0, items: [] };
             rows.push(row);
-            totalDepthUsed += (rows.length > 1 ? arrangeSpacingMm : 0) + bestPlacement.option.depth;
+            totalDepthUsed += (rows.length > 1 ? spacingMmForRun : 0) + bestPlacement.option.depth;
             row.widthUsed = bestPlacement.option.width;
             row.maxDepth = bestPlacement.option.depth;
             row.items.push({
@@ -634,7 +645,7 @@ export function useArrangeManager({
           } else {
             const row = rows[bestPlacement.rowIndex];
             const previousDepth = row.maxDepth;
-            row.widthUsed += (row.items.length > 0 ? arrangeSpacingMm : 0) + bestPlacement.option.width;
+            row.widthUsed += (row.items.length > 0 ? spacingMmForRun : 0) + bestPlacement.option.width;
             row.maxDepth = Math.max(row.maxDepth, bestPlacement.option.depth);
             totalDepthUsed += row.maxDepth - previousDepth;
             row.items.push({
@@ -652,7 +663,7 @@ export function useArrangeManager({
         const rowDepths = rows.map((r) => r.maxDepth);
         const rowWidths = rows.map((r) => r.widthUsed);
         const totalWidth = Math.min(plateWidth, rowWidths.reduce((acc, width) => Math.max(acc, width), 0));
-        const totalDepth = rowDepths.reduce((acc, depth) => acc + depth, 0) + Math.max(0, rows.length - 1) * arrangeSpacingMm;
+        const totalDepth = rowDepths.reduce((acc, depth) => acc + depth, 0) + Math.max(0, rows.length - 1) * spacingMmForRun;
 
         const layoutArea = totalWidth * totalDepth;
         const deadSpace = Math.max(0, layoutArea - occupiedArea);
@@ -724,7 +735,7 @@ export function useArrangeManager({
       const uniqueTargetRowWidths = [...new Set(targetRowWidths.map((w) => Number(w.toFixed(3))))];
 
       let bestLayout: ReturnType<typeof evaluatePacking> | null = null;
-      const rotationModes = arrangeAllowRotateOnZ ? [false, true] : [false];
+      const rotationModes = allowRotateOnZForRun ? [false, true] : [false];
       for (const ordered of orderingCandidates) {
         for (const targetRowWidth of uniqueTargetRowWidths) {
           for (const enableRotation of rotationModes) {
@@ -762,7 +773,7 @@ export function useArrangeManager({
       for (let row = 0; row < rowDepths.length; row += 1) {
         const depth = rowDepths[row];
         rowCenters[row] = cursorY + depth * 0.5;
-        cursorY += depth + arrangeSpacingMm;
+        cursorY += depth + spacingMmForRun;
       }
 
       const packedWithPositions: Array<PackedEntry & { positionX: number; positionY: number }> = [];
@@ -775,13 +786,13 @@ export function useArrangeManager({
             positionX: centerX,
             positionY: rowCenters[rowIndex],
           });
-          rowCursorX += item.width + arrangeSpacingMm;
+          rowCursorX += item.width + spacingMmForRun;
         });
       });
 
       const spillWithPositions: Array<SpillEntry & { positionX: number; positionY: number }> = [];
       if (spills.length > 0) {
-        const outsideGap = Math.max(8, arrangeSpacingMm);
+        const outsideGap = Math.max(8, spacingMmForRun);
         let columnLeftX = maxX + outsideGap;
         let columnYCursor = minY;
         let columnMaxWidth = 0;
@@ -797,7 +808,7 @@ export function useArrangeManager({
           const positionY = columnYCursor + item.depth * 0.5;
           spillWithPositions.push({ ...item, positionX, positionY });
 
-          columnYCursor += item.depth + arrangeSpacingMm;
+          columnYCursor += item.depth + spacingMmForRun;
           columnMaxWidth = Math.max(columnMaxWidth, item.width);
         });
       }
