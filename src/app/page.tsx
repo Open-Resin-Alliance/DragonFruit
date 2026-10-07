@@ -10287,6 +10287,12 @@ export default function Home() {
             plateName={scene.plateName}
             onPlateNameChange={scene.setPlateName}
             showPlateName={scene.models.length > 0}
+            onArrangePlate={() => {
+              // The regular arrange, at the settings this button is for: 1mm apart with
+              // Z-rotation allowed. Passed as a per-run override, so the panel keeps
+              // whatever the user set there.
+              void handleAutoArrangeModels('all', undefined, { spacingMm: 1, allowRotateOnZ: true });
+            }}
             plateLocked={scene.plateLocked}
             onTogglePlateLock={() => scene.setPlateLocked((prev) => !prev)}
             onClearPlate={() => setShowClearPlateConfirm(true)}

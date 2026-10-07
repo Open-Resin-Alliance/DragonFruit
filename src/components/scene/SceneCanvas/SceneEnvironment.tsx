@@ -243,6 +243,9 @@ export function Helpers({
   plateClearTitle,
   plateClearDisabledTitle,
   onClearPlate,
+  plateArrangeTitle,
+  plateArrangeDisabledTitle,
+  onArrangePlate,
 }: {
   gridWidthMm?: number;
   gridDepthMm?: number;
@@ -278,6 +281,10 @@ export function Helpers({
   plateClearTitle?: string;
   plateClearDisabledTitle?: string;
   onClearPlate?: () => void;
+  /** Arranging every model on the plate, and the wording the lock uses to forbid it. */
+  plateArrangeTitle?: string;
+  plateArrangeDisabledTitle?: string;
+  onArrangePlate?: () => void;
 }) {
   const nullRaycast = () => null;
   const shouldShowGrid = showGrid ?? true;
@@ -844,7 +851,10 @@ export function Helpers({
         && plateUnlockTitle
         && plateClearTitle
         && plateClearDisabledTitle
-        && onClearPlate && (
+        && onClearPlate
+        && plateArrangeTitle
+        && plateArrangeDisabledTitle
+        && onArrangePlate && (
         <PlateSideButtons
           addLabel={addPlateLabel}
           addComingSoonTitle={addPlateComingSoonTitle}
@@ -856,6 +866,10 @@ export function Helpers({
           clearDisabledTitle={plateClearDisabledTitle}
           clearDisabled={plateLocked}
           onClearPlate={onClearPlate}
+          arrangeTitle={plateArrangeTitle}
+          arrangeDisabledTitle={plateArrangeDisabledTitle}
+          arrangeDisabled={plateLocked}
+          onArrangePlate={onArrangePlate}
           // Two anchors in one component: the column hangs from the plate's back edge,
           // the bin stands on its front edge (the plate's front is its smallest Y).
           columnAnchor={[resolvedOriginMinX + width + buildPlateOversizeEachSideMm + plateWidgetClearanceMm, resolvedOriginMinY + depth, plateLogoZ + 0.2]}
