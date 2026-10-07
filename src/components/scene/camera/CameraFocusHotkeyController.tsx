@@ -22,6 +22,12 @@ type CameraFocusHotkeyControllerProps = {
   hoverPointRef: React.MutableRefObject<THREE.Vector3 | null>;
   setOrbitTargetFromPoint: (point: THREE.Vector3, options?: { animate?: boolean }) => void;
   models: LoadedModel[];
+  /**
+   * Which models F may frame. A model on a bed that is not the one being worked on
+   * is scenery, and framing it would move the camera off the plate you are on to
+   * look at something you cannot even click.
+   */
+  isModelFocusable?: (model: LoadedModel) => boolean;
   activeModelId: string | null;
   selectedModelIds: string[];
   hoveredModelId: string | null;
@@ -79,6 +85,7 @@ export function CameraFocusHotkeyController({
   hoverPointRef,
   setOrbitTargetFromPoint,
   models,
+  isModelFocusable,
   activeModelId,
   selectedModelIds,
   hoveredModelId,
@@ -194,7 +201,9 @@ export function CameraFocusHotkeyController({
   }, [cameraRef, orbitControlsRef, perspectiveFov, setOrbitTargetFromPoint]);
 
   const runFocus = React.useCallback(() => {
-    const visibleModels = models.filter((model) => model.visible);
+    const visibleModels = models.filter(
+      (model) => model.visible && (isModelFocusable?.(model) ?? true),
+    );
     const visibleById = new Map(visibleModels.map((model) => [model.id, model] as const));
     const hoverPoint = hoverPointRef.current;
 
@@ -251,7 +260,7 @@ export function CameraFocusHotkeyController({
 
     const bestSphere = computeModelWorldBoundingSphere(bestModel);
     snapCameraToPoint(bestSphere.center, bestSphere.radius);
-  }, [activeModelId, hoveredModelId, models, orbitTarget, selectedModelIds, snapCameraToPoint]);
+  }, [activeModelId, hoveredModelId, isModelFocusable, models, orbitTarget, selectedModelIds, snapCameraToPoint]);
 
   useCameraFocusHotkey(runFocus);
 

@@ -135,6 +135,7 @@ import { PickingProviderWrapper, SelectionSync, useInteractionWarning } from './
 import { CameraClipPlaneStabilizer, CameraProvider, EnableLocalClipping, Helpers, Lights, SceneMoodOverlay } from './SceneEnvironment';
 import { plateNumberPlaceholder } from '@/features/scene/plates/plateMessages';
 import { plateCascadeOffsetMm } from '@/features/scene/plates/plateCascade';
+import { modelPlateScope, type PlateScope } from '@/features/scene/plates/plateInteractivity';
 import type { PlateFrame, ScenePlate } from '@/features/scene/useSceneCollectionManager';
 import { StlMesh } from './StlMesh';
 import { setClipBounds } from './clipBoundsStore';
@@ -342,6 +343,13 @@ function resolveTrackpadGestureAction(
 }
 
 const EMPTY_MODEL_ID_LIST: readonly string[] = Object.freeze([]);
+
+/**
+ * How much darker a model standing on a bed that is not the one being worked on is
+ * drawn. Module scope, not the component body: the render pass that dims the models
+ * runs before a later `const` in the body would have been initialised.
+ */
+const INACTIVE_PLATE_MODEL_DIM = 0.4;
 
 const FLOATING_PANEL_RIGHT_INSET_PX = 12;
 // Drei GizmoHelper positions by gizmo center, not right edge.
@@ -1624,6 +1632,39 @@ export function SceneCanvas({
    * exactly as it was.
    */
   /**
+   * Where each model stands, once per render: which plate's models answer the
+   * pointer, and which are drawn dimmed because they stand on another bed. The
+   * colour is multiplied rather than made transparent, so a dimmed model still
+   * reads as solid and does not sort against the ones behind it.
+   */
+  const modelPlateStates = React.useMemo(() => {
+    const states = new Map<string, { scope: PlateScope; dimmedColor?: string }>();
+    for (const model of models ?? []) {
+      const scope = modelPlateScope({
+        position: model.transform.position,
+        frames: plateFrames ?? [],
+        activePlateId,
+        plateCount: plates?.length ?? 0,
+      });
+      states.set(model.id, scope === 'other'
+        ? {
+            scope,
+            dimmedColor: new THREE.Color(model.color || meshColor || '#c8c8ce')
+              .multiplyScalar(INACTIVE_PLATE_MODEL_DIM)
+              .getStyle(),
+          }
+        : { scope });
+    }
+    return states;
+  }, [models, meshColor, plateFrames, activePlateId, plates]);
+
+  /** A model on another bed is not what F should frame while you work on this one. */
+  const isModelFocusable = React.useCallback(
+    (model: LoadedModel) => modelPlateStates.get(model.id)?.scope !== 'other',
+    [modelPlateStates],
+  );
+
+  /**
    * Where the next bed would go: one cascade step out from the last plate, at the
    * same footprint. Null without a plate list, which is the single-plate path.
    */
@@ -1632,7 +1673,9 @@ export function SceneCanvas({
     if (!last) return null;
     const widthMm = last.maxX - last.minX;
     const depthMm = last.maxY - last.minY;
-    const { dxMm, dyMm } = plateCascadeOffsetMm(last.index + 1, { widthMm, depthMm });
+    // The ghost is the plate this scene would have next, so the grid is numbered
+    // against one more plate than there is: that is where it will actually land.
+    const { dxMm, dyMm } = plateCascadeOffsetMm(last.index + 1, { widthMm, depthMm }, plateFrames.length + 1);
     const minX = last.minX - last.dxMm + dxMm;
     const minY = last.minY - last.dyMm + dyMm;
     return { dxMm, dyMm, minX, minY, maxX: minX + widthMm, maxY: minY + depthMm };
@@ -6294,7 +6337,14 @@ export function SceneCanvas({
                 const isActive = isCaptureTintModel || model.id === activeModelId;
                 const isSelectedModel = isCaptureTintModel || selectedModelIdSet.has(model.id);
                 const isMarqueeCandidate = isMarqueeSelecting && marqueeCandidateIdSet.has(model.id);
-                const suppressModelInteraction = !modelPickerEnabled || !cameraInteractionCycleEnabled || isGizmoDragging || isPostGizmoInteractionGuardActive || supportGizmoInteractionActive || isOrbitInteracting || isWheelZoomInteracting;
+                // A model on another bed is scenery: it keeps its shape, stops
+                // answering the pointer, and is drawn dimmed to match the plate under
+                // it. The first is what keeps a scene of full plates from raycasting
+                // every model on it on every move.
+                const modelPlateState = modelPlateStates.get(model.id);
+                const onAnotherPlate = modelPlateState?.scope === 'other';
+                const answersPointer = !onAnotherPlate;
+                const suppressModelInteraction = !answersPointer || !modelPickerEnabled || !cameraInteractionCycleEnabled || isGizmoDragging || isPostGizmoInteractionGuardActive || supportGizmoInteractionActive || isOrbitInteracting || isWheelZoomInteracting;
                 const interactionLodEnabled = (isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive) && !isActive;
                 const supportNonSelectedOpacity = mode === 'support' && !!activeModelId && !isActive ? 0.5 : undefined;
                 const shouldHideDuplicateSourceModel = Boolean(
@@ -6366,7 +6416,7 @@ export function SceneCanvas({
                       geometry={model.geometry.geometry}
                       clipLower={clipLower}
                       clipUpper={clipUpper}
-                      meshColor={model.color || meshColor} // Use model color
+                      meshColor={modelPlateState?.dimmedColor ?? (model.color || meshColor)} // Use model color
                       nonManifold={modelIsNonManifold} // Red checkerboard overlay when the model fails the manifold status check
                       meshRef={meshGroupRefCallback}
                       actualMeshRef={actualMeshRefCallback}
@@ -6394,7 +6444,7 @@ export function SceneCanvas({
                       onSupportHover={handleSupportHover}
                       onActiveModelChange={onActiveModelChange}
                       onSelectModeDragStart={handleSelectModeDragStart}
-                      disableRaycast={disableRaycast || !modelPickerEnabled || !cameraInteractionCycleEnabled}
+                      disableRaycast={disableRaycast || !answersPointer || !modelPickerEnabled || !cameraInteractionCycleEnabled}
                       blockSupportPlacement={!cameraInteractionCycleEnabled || isGizmoDragging || blockSupportPlacement}
                       suppressNextClickRef={suppressNextCanvasClickRef}
                       isSelected={
@@ -7657,6 +7707,7 @@ export function SceneCanvas({
             hoverPointRef={lastHoveredModelPointRef}
             setOrbitTargetFromPoint={setOrbitTargetFromPoint}
             models={models}
+            isModelFocusable={isModelFocusable}
             activeModelId={activeModelId}
             selectedModelIds={selectedModelIds ?? []}
             hoveredModelId={hoveredModelId}

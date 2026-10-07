@@ -1646,7 +1646,7 @@ export function useSceneCollectionManager(options?: {
     const { dxMm, dyMm } = plateCascadeOffsetMm(index, {
       widthMm: view3dSettings.widthMm,
       depthMm: view3dSettings.depthMm,
-    });
+    }, plates.length);
     return new THREE.Vector2(localX + dxMm, localY + dyMm);
   }, [
     activePlateId,
@@ -1668,7 +1668,7 @@ export function useSceneCollectionManager(options?: {
     const { dxMm, dyMm } = plateCascadeOffsetMm(index, {
       widthMm: view3dSettings.widthMm,
       depthMm: view3dSettings.depthMm,
-    });
+    }, plates.length);
     const minX = (view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.widthMm * 0.5) + dxMm;
     const minY = (view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.depthMm * 0.5) + dyMm;
     return {
@@ -6127,35 +6127,97 @@ export function useSceneCollectionManager(options?: {
     return plateCascadeOffsetMm(index, {
       widthMm: view3dSettings.widthMm,
       depthMm: view3dSettings.depthMm,
-    });
+    }, platesRef.current.length);
   }, [view3dSettings.widthMm, view3dSettings.depthMm]);
 
   /**
    * Add an empty plate after the last one. The plate being worked on does not
    * change: adding a bed is not a reason to leave the one you are on.
    */
+  /**
+   * The models, moved with their beds when the grid is re-laid.
+   *
+   * Plates are numbered by position, so a new one can shuffle the plates already
+   * placed. A model left where its bed used to be would quietly belong to whichever
+   * plate now covers that spot, so each one is shifted by exactly how far its own
+   * plate moved. A model on no plate stays where it was put: it was dragged off a bed
+   * deliberately and is not standing on anything that moved.
+   */
+  const modelsShiftedForRelaidPlates = useCallback((
+    before: readonly ScenePlate[],
+    after: readonly ScenePlate[],
+    models: readonly LoadedModel[],
+  ): LoadedModel[] => {
+    if (after.length <= 1) return models as LoadedModel[];
+
+    const { widthMm, depthMm, originMode } = view3dSettings;
+    const footprint = { widthMm, depthMm };
+    const localMinX = originMode === 'front_left' ? 0 : -widthMm * 0.5;
+    const localMinY = originMode === 'front_left' ? 0 : -depthMm * 0.5;
+
+    const shifts = new Map<string, { dxMm: number; dyMm: number }>();
+    const frames = before.map((plate, index) => {
+      const from = plateCascadeOffsetMm(index, footprint, before.length);
+      const to = plateCascadeOffsetMm(index, footprint, after.length);
+      if (from.dxMm !== to.dxMm || from.dyMm !== to.dyMm) {
+        shifts.set(plate.id, { dxMm: to.dxMm - from.dxMm, dyMm: to.dyMm - from.dyMm });
+      }
+      return {
+        id: plate.id,
+        minX: localMinX + from.dxMm,
+        minY: localMinY + from.dyMm,
+        maxX: localMinX + from.dxMm + widthMm,
+        maxY: localMinY + from.dyMm + depthMm,
+      };
+    });
+
+    if (shifts.size === 0) return models as LoadedModel[];
+
+    return models.map((model) => {
+      const { x, y } = model.transform.position;
+      const frame = frames.find(
+        (candidate) => x >= candidate.minX && x <= candidate.maxX && y >= candidate.minY && y <= candidate.maxY,
+      );
+      const shift = frame ? shifts.get(frame.id) : undefined;
+      if (!shift) return model;
+
+      return {
+        ...model,
+        transform: {
+          ...model.transform,
+          position: model.transform.position.clone().add(new THREE.Vector3(shift.dxMm, shift.dyMm, 0)),
+        },
+      };
+    });
+  }, [view3dSettings]);
+
   const addPlate = useCallback((options?: { pushHistory?: boolean }): string => {
     const plate: ScenePlate = { id: uuidv4(), name: '' };
+    const current = platesRef.current;
+    const next = [...current, plate];
+    const shiftedModels = modelsShiftedForRelaidPlates(current, next, modelsRef.current);
+
     if (options?.pushHistory === false) {
-      setPlates((prev) => [...prev, plate]);
+      setPlates(next);
+      if (shiftedModels !== modelsRef.current) setModels(shiftedModels);
       return plate.id;
     }
 
-    const current = platesRef.current;
     const before = captureSceneSnapshot(modelsRef.current, activeModelIdRef.current, selectedModelIdsRef.current, {
       plates: current,
       activePlateId: activePlateIdRef.current,
     });
 
-    setPlates((prev) => [...prev, plate]);
+    setPlates(next);
+    if (shiftedModels !== modelsRef.current) setModels(shiftedModels);
 
-    const after = captureSceneSnapshot(modelsRef.current, activeModelIdRef.current, selectedModelIdsRef.current, {
-      plates: [...current, plate],
+    const after = captureSceneSnapshot(shiftedModels, activeModelIdRef.current, selectedModelIdsRef.current, {
+      plates: next,
       activePlateId: activePlateIdRef.current,
     });
-    pushSceneSnapshotHistory(before, after, `Add Plate ${current.length + 1}`);
+    pushSceneSnapshotHistory(before, after, `Add Plate ${next.length}`);
     return plate.id;
-  }, [pushSceneSnapshotHistory]);
+  }, [modelsShiftedForRelaidPlates, pushSceneSnapshotHistory]);
 
   const activatePlate = useCallback((plateId: string) => {
     if (!platesRef.current.some((plate) => plate.id === plateId)) return;
@@ -6184,7 +6246,7 @@ export function useSceneCollectionManager(options?: {
     const footprint = { widthMm, depthMm };
 
     return plates.map((plate, index) => {
-      const { dxMm, dyMm } = plateCascadeOffsetMm(index, footprint);
+      const { dxMm, dyMm } = plateCascadeOffsetMm(index, footprint, plates.length);
       return {
         id: plate.id,
         index,
@@ -6281,14 +6343,14 @@ export function useSceneCollectionManager(options?: {
     if (targetIndex < 0) return;
 
     const footprint = { widthMm: view3dSettings.widthMm, depthMm: view3dSettings.depthMm };
-    const target = plateCascadeOffsetMm(targetIndex, footprint);
+    const target = plateCascadeOffsetMm(targetIndex, footprint, plateList.length);
     const wanted = new Set(modelIds);
 
     for (const model of modelsRef.current) {
       if (!wanted.has(model.id)) continue;
       const sourcePlateId = resolveModelPlateIdRef.current(model);
       const sourceIndex = Math.max(0, plateList.findIndex((plate) => plate.id === sourcePlateId));
-      const source = plateCascadeOffsetMm(sourceIndex, footprint);
+      const source = plateCascadeOffsetMm(sourceIndex, footprint, plateList.length);
       const dx = target.dxMm - source.dxMm;
       const dy = target.dyMm - source.dyMm;
       if (dx === 0 && dy === 0) continue;
