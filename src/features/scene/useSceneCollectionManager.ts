@@ -2409,6 +2409,49 @@ export function useSceneCollectionManager(options?: {
     }
 
     const stagedNewModels: LoadedModel[] = [];
+
+    /**
+     * Puts a model on a bed of its own when the search could not seat it on one.
+     *
+     * The search fills the beds the scene has, and its last resort is a column beside the plates,
+     * which is where an over-sized model used to end up. A paste adds a bed for an overflow copy
+     * instead, and an import does the same here. A model larger than a bed has nowhere to go
+     * either way and keeps the search's fallback.
+     */
+    const seatModelOnNewBedIfNeeded = (
+      model: LoadedModel,
+      assignedCenter: { x: number; y: number } | undefined,
+    ): void => {
+      if (!assignedCenter) return;
+
+      const localMinX = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.widthMm * 0.5;
+      const localMinY = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.depthMm * 0.5;
+      const insideAnyBed = platesRef.current.some((plate) => {
+        const { dxMm, dyMm } = plateOffsetForRef.current(plate.id);
+        const minX = localMinX + dxMm;
+        const minY = localMinY + dyMm;
+        return assignedCenter.x >= minX && assignedCenter.x <= minX + view3dSettings.widthMm
+          && assignedCenter.y >= minY && assignedCenter.y <= minY + view3dSettings.depthMm;
+      });
+      if (insideAnyBed) return;
+
+      const placement = buildMeshPlacementOffsets(
+        { x: model.transform.position.x, y: model.transform.position.y },
+        model.geometry.size,
+        model.transform,
+      );
+      if (placement.width > view3dSettings.widthMm || placement.depth > view3dSettings.depthMm) return;
+
+      const reserved = addPlatesRef.current(1);
+      const plate = reserved.added[0];
+      if (!plate) return;
+
+      const { dxMm, dyMm } = reserved.offsets.get(plate.id) ?? { dxMm: 0, dyMm: 0 };
+      const localCenterX = view3dSettings.originMode === 'front_left' ? view3dSettings.widthMm * 0.5 : 0;
+      const localCenterY = view3dSettings.originMode === 'front_left' ? view3dSettings.depthMm * 0.5 : 0;
+      model.transform.position.set(localCenterX + dxMm, localCenterY + dyMm, model.transform.position.z);
+      model.plateId = plate.id;
+    };
     const repairReports: MeshRepairReportEntry[] = [];
     const hadActiveModelAtStart = Boolean(activeModelIdRef.current);
     let firstLoadedModelId: string | null = null;
@@ -2539,6 +2582,7 @@ export function useSceneCollectionManager(options?: {
             if (assignedCenter) {
               model.transform.position.set(assignedCenter.x, assignedCenter.y, model.transform.position.z);
             }
+            seatModelOnNewBedIfNeeded(model, assignedCenter);
 
             stagedNewModels.push(model);
             if (!firstLoadedModelId) firstLoadedModelId = model.id;
@@ -2581,6 +2625,7 @@ export function useSceneCollectionManager(options?: {
             if (assignedCenter) {
               model.transform.position.set(assignedCenter.x, assignedCenter.y, model.transform.position.z);
             }
+            seatModelOnNewBedIfNeeded(model, assignedCenter);
 
             stagedNewModels.push(model);
             if (!firstLoadedModelId) firstLoadedModelId = model.id;
