@@ -4786,10 +4786,6 @@ export function useSceneCollectionManager(options?: {
     });
     pendingPlacements = activePlacements.unplaced;
 
-    // Whatever the plate could not take gets a bed of its own rather than hanging off its
-    // edge or landing in the void beside the scene. The plan runs on the plate's own
-    // frame — every bed is the same shape, and a bed added here is empty — so the beds are
-    // added once, together, with the count the plan needs.
     const localMinX = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.widthMm * 0.5;
     const localMinY = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.depthMm * 0.5;
     const localPlateRect: Rect2D = {
@@ -4799,6 +4795,45 @@ export function useSceneCollectionManager(options?: {
       maxY: localMinY + view3dSettings.depthMm,
     };
 
+    // The beds the scene already has are filled next, in plate order: the run that spilled
+    // onto plate 2 leaves room on it, and a paste that went straight to a new bed would add
+    // plate 3 alongside a bed that is still half empty. What each one holds is known — they
+    // are the same shape as this plate, and what stands on them is in `blockedRects` — so a
+    // copy that fits needs no new bed at all.
+    for (const plate of platesRef.current) {
+      if (pendingPlacements.length === 0) break;
+      if (plate.id === activePlateIdRef.current) continue;
+
+      const offset = plateOffsetForRef.current(plate.id);
+      const bedRect: Rect2D = {
+        minX: localPlateRect.minX + offset.dxMm,
+        maxX: localPlateRect.maxX + offset.dxMm,
+        minY: localPlateRect.minY + offset.dyMm,
+        maxY: localPlateRect.maxY + offset.dyMm,
+      };
+      const bedPlacements = placeIntoBed(
+        bedRect,
+        { x: (bedRect.minX + bedRect.maxX) * 0.5, y: (bedRect.minY + bedRect.maxY) * 0.5 },
+        blockedRects,
+        pendingPlacements,
+      );
+      bedPlacements.placed.forEach((entry) => {
+        // That bed's own millimetres, so it rides with the bed the way the active plate's
+        // copies do.
+        placedByEntry.set(entry.entryIndex, {
+          bedId: plate.id,
+          slot: -1,
+          x: entry.x - offset.dxMm,
+          y: entry.y - offset.dyMm,
+        });
+      });
+      pendingPlacements = bedPlacements.unplaced;
+    }
+
+    // Whatever the beds could not take gets a bed of its own rather than hanging off an
+    // edge or landing in the void beside the scene. The plan runs on a bed's own
+    // frame — every bed is the same shape, and a bed added here is empty — so the beds are
+    // added once, together, with the count the plan needs.
     let plannedBeds = 0;
     while (pendingPlacements.length > 0 && plannedBeds < MAX_PASTE_PLATES) {
       const bedPlacements = placeIntoBed(
@@ -4848,6 +4883,17 @@ export function useSceneCollectionManager(options?: {
       return { x: placement.x + offset.dxMm, y: placement.y + offset.dyMm };
     });
 
+    /**
+     * The bed each copy landed on, so the copy carries it. Its position is what decides
+     * which plate it stands on, but a copy planned onto a bed is a copy that belongs to
+     * it, and the stored membership is what a printer switch shifts the models by.
+     */
+    const assignedPlateIds = entries.map((_, index) => {
+      const placement = placedByEntry.get(index);
+      if (!placement) return undefined;
+      return placement.bedId ?? reserved.added[placement.slot]?.id;
+    });
+
     const createdIds: string[] = [];
     const pastedModels: LoadedModel[] = entries.map((entry, index) => {
       const id = uuidv4();
@@ -4874,6 +4920,7 @@ export function useSceneCollectionManager(options?: {
         meshModifiers: undefined,
         isSupportGeometry: entry.isSupportGeometry,
         linkGroupId: entry.linkGroupId,
+        ...(assignedPlateIds[index] ? { plateId: assignedPlateIds[index] } : {}),
       };
     });
 
