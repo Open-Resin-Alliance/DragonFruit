@@ -2628,7 +2628,7 @@ export default function Home() {
 
   const handleSliceArtifactReady = React.useCallback((
     artifact: SliceExportArtifact,
-    context?: { plateId?: string; totalLayers?: number },
+    context?: { plateId?: string; totalLayers?: number; savedPath?: string },
   ) => {
     const plateId = context?.plateId ?? scene.activePlateId;
     setPrintingSlicesByPlateId((previous) => {
@@ -2696,7 +2696,12 @@ export default function Home() {
       scene.setMode('printing');
     } else {
       // 'file' or 'uvtools': write to pre-selected destination, then navigate to printing workspace.
-      const destinationPath = preSliceFileDestinationPathRef.current?.trim() || '';
+      // The run writes to the path the pre-slice step chose, so a batch hands that path back
+      // with its artifact: the pre-slice ref holds one path and is spent by the first plate,
+      // and a later plate with no path would be saved again through a dialog.
+      const destinationPath = context?.savedPath?.trim()
+        || preSliceFileDestinationPathRef.current?.trim()
+        || '';
       preSliceFileDestinationPathRef.current = null;
 
       const nativePathForIntent = artifact.nativeTempPath?.trim() || '';

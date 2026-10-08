@@ -100,7 +100,7 @@ interface SlicingPanelProps {
   }) => void;
   onSliceArtifactReady?: (
     artifact: SliceExportArtifact,
-    context?: { plateId?: string; totalLayers?: number },
+    context?: { plateId?: string; totalLayers?: number; savedPath?: string },
   ) => void;
   onBenchmarkComplete?: (benchmark: SliceBenchmarkSnapshot) => void;
   onSliceTriggerRef?: React.MutableRefObject<(() => void) | null>;
@@ -1897,7 +1897,13 @@ export function SlicingPanel({
      */
     batch?: {
       destinationDirectory: string;
-      completed: Array<{ artifact: SliceExportArtifact; plateId?: string; totalLayers: number }>;
+      completed: Array<{
+        artifact: SliceExportArtifact;
+        plateId?: string;
+        totalLayers: number;
+        /** Where the run wrote it, so the plate is not saved again on the way past. */
+        savedPath?: string;
+      }>;
     },
   ): Promise<boolean> => {
     // A batch passes each plate's scope in turn; a plain run uses the active one.
@@ -2214,6 +2220,7 @@ export function SlicingPanel({
           batch.completed.push({
             artifact: result.artifact,
             ...(scope ? { plateId: scope.plateId } : {}),
+            ...(result.artifact.nativeTempPath ? { savedPath: result.artifact.nativeTempPath } : {}),
             totalLayers: Math.max(
               1,
               completedTotalLayers,
@@ -2279,7 +2286,12 @@ export function SlicingPanel({
     const destinationDirectory = (await pickDirectoryWithNativeDialog()).trim();
     if (!destinationDirectory) return;
 
-    const completed: Array<{ artifact: SliceExportArtifact; plateId?: string; totalLayers: number }> = [];
+    const completed: Array<{
+      artifact: SliceExportArtifact;
+      plateId?: string;
+      totalLayers: number;
+      savedPath?: string;
+    }> = [];
     for (const scope of populatedPlateScopes) {
       const sliced = await handleSliceZipExport(scope, { destinationDirectory, completed });
       if (!sliced) break;
@@ -2290,6 +2302,7 @@ export function SlicingPanel({
     for (const entry of completed) {
       onSliceArtifactReady?.(entry.artifact, {
         ...(entry.plateId ? { plateId: entry.plateId } : {}),
+        ...(entry.savedPath ? { savedPath: entry.savedPath } : {}),
         totalLayers: entry.totalLayers,
       });
     }
