@@ -204,18 +204,27 @@ export function ExportPanel({
   }, [models]);
 
   /**
+   * Which plate of the list the panel speaks for: the one being worked on, or the first it
+   * knows, which is what an active plate with nothing on it leaves.
+   */
+  const activePlateIndex = useMemo(
+    () => Math.max(0, (plateGroups ?? []).findIndex((plate) => plate.id === activePlateId)),
+    [activePlateId, plateGroups],
+  );
+
+  /**
    * The models the "Entire Plate" scope covers: the plate being worked on, or every plate
    * in the scene. Hidden models are only reached when nothing visible is there to export,
    * which is what the scope has always done.
    */
   const entirePlateScopeModels = useMemo(() => {
-    const currentPlateModelIds = plateGroups?.find((plate) => plate.id === activePlateId)?.modelIds;
+    const currentPlateModelIds = (plateGroups ?? [])[activePlateIndex]?.modelIds;
     const plateModels = plateScope === 'current_plate' && currentPlateModelIds
       ? models.filter((model) => currentPlateModelIds.includes(model.id))
       : models;
     const visiblePlateModels = plateModels.filter((model) => model.visible);
     return visiblePlateModels.length > 0 ? visiblePlateModels : plateModels;
-  }, [activePlateId, models, plateGroups, plateScope]);
+  }, [activePlateIndex, models, plateGroups, plateScope]);
 
   /** One bed is the whole export: there is no "per plate" to offer or to name. */
   const singlePlate = (plateGroups?.length ?? 0) <= 1;
@@ -253,12 +262,6 @@ export function ExportPanel({
     : entirePlateScopeModels;
 
   const scopedMeshCount = scopeModels.length;
-
-  /** Which plate of the list is being worked on. */
-  const activePlateIndex = useMemo(
-    () => Math.max(0, (plateGroups ?? []).findIndex((plate) => plate.id === activePlateId)),
-    [activePlateId, plateGroups],
-  );
 
   /**
    * The plate being worked on, as a file name. A bundle and a per-plate run are both exports

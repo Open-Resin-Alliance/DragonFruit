@@ -182,6 +182,30 @@ function formatSlicingPhaseLabel(translate: Translate, phase: string): string {
   return descriptor ? translate(descriptor) : phase;
 }
 
+type SlicePlateScope = 'all_plates' | 'current_plate';
+
+/**
+ * Which plates a slice covers. "All Plates" writes one file per plate into a zip, which the
+ * panel used to offer as a second button under the slice action.
+ */
+const SLICE_PLATE_SCOPE_OPTIONS: ReadonlyArray<{ value: SlicePlateScope; label: MessageDescriptor }> = [
+  { value: 'all_plates', label: msg`All Plates` },
+  { value: 'current_plate', label: msg`Current Plate` },
+];
+
+/** The plate scope control, in the panel's own palette: the AA toggles' accent, at a width. */
+const activeSliceScopeStyle: React.CSSProperties = {
+  borderColor: 'var(--accent-secondary-action-border)',
+  background: 'var(--accent-secondary-action-bg-92)',
+  color: 'var(--accent-secondary-action-color)',
+};
+
+const idleSliceScopeStyle: React.CSSProperties = {
+  borderColor: 'var(--border-subtle)',
+  background: 'var(--surface-0)',
+  color: 'var(--text-muted)',
+};
+
 function resolveSliceFilenameBase(models: LoadedModel[], activeModel: LoadedModel | null): string {
   const firstVisible = models.find((model) => model.visible);
 
@@ -1228,6 +1252,18 @@ export function SlicingPanel({
   const excludedModelIdSet = useMemo(() => new Set(excludedModelIds), [excludedModelIds]);
   /** The plate the plain Slice action covers. */
   const activePlateSliceScope = plateSliceScopes?.[activePlateSliceIndex] ?? null;
+  /**
+   * The plates a slice could cover that actually hold something. An empty bed is not a
+   * choice: a scene whose other beds are bare slices exactly as a single-bed scene does, and
+   * a bare bed is not what a file is named for either.
+   */
+  const populatedPlateScopes = useMemo(
+    () => (plateSliceScopes ?? []).filter((scope) => scope.modelIds.length > 0),
+    [plateSliceScopes],
+  );
+  const singlePlate = populatedPlateScopes.length <= 1;
+  /** Which plates the slice covers: the plate being worked on, or every plate that has one. */
+  const [slicePlateScope, setSlicePlateScope] = useState<SlicePlateScope>('current_plate');
   /** The models the slice covers: one plate's, or every visible one. */
   const plateModelIdSet = useMemo(
     () => (activePlateSliceScope ? new Set(activePlateSliceScope.modelIds) : null),
@@ -1284,7 +1320,7 @@ export function SlicingPanel({
     return resolvePlateOutputBaseName({
       plateName: scope.plateName,
       plateNumberLabel: plateNumberPlaceholder(activePlateSliceIndex + 1, _),
-      singlePlate: (plateSliceScopes?.length ?? 1) <= 1,
+      singlePlate,
       plateModels: models.filter((model) => scopeModelIdSet.has(model.id)),
     });
   }, [_, activeModel, activePlateSliceIndex, models, plateSliceScopes, visibleModels]);
@@ -1852,7 +1888,7 @@ export function SlicingPanel({
       ? resolvePlateOutputBaseName({
           plateName: scope.plateName,
           plateNumberLabel: plateNumberPlaceholder((plateSliceScopes?.indexOf(scope) ?? 0) + 1, _),
-          singlePlate: (plateSliceScopes?.length ?? 1) <= 1,
+          singlePlate,
           plateModels: scopeModels,
         })
       : null;
@@ -2188,8 +2224,10 @@ export function SlicingPanel({
    * plates it did write intact.
    */
   const handleSliceAllPlates = async () => {
-    if (!plateSliceScopes || plateSliceScopes.length < 2) return;
-    for (const scope of plateSliceScopes) {
+    // The beds that hold something, in cascade order. An empty bed has no file of its own, and
+    // asking for one would stop the batch on a bed there is nothing to slice.
+    if (populatedPlateScopes.length < 2) return;
+    for (const scope of populatedPlateScopes) {
       const sliced = await handleSliceZipExport(scope);
       if (!sliced) break;
     }
@@ -3418,6 +3456,31 @@ export function SlicingPanel({
             </div>
           </div>
 
+          {/* Which plates the slice covers: one file for the bed being worked on, or a zip
+              with one file per bed. Only worth offering when more than one bed holds
+              something — an empty bed is not a choice. */}
+          {!singlePlate && (
+            <div
+              className="rounded-md border p-2"
+              style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+            >
+              <div role="group" aria-label={_(msg`Slice plates`)} className="grid grid-cols-2 gap-1.5">
+                {SLICE_PLATE_SCOPE_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    aria-pressed={slicePlateScope === option.value}
+                    className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                    style={slicePlateScope === option.value ? activeSliceScopeStyle : idleSliceScopeStyle}
+                    onClick={() => setSlicePlateScope(option.value)}
+                  >
+                    {_(option.label)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Slice intent split-button */}
           {(() => {
             const isDisabled = isSlicingZip || !activePrinterProfile || !materialProfileForSlicing || models.length === 0;
@@ -3438,14 +3501,22 @@ export function SlicingPanel({
                   <Button
                     variant="primary"
                     size="auto"
-                    onClick={() => { void handleSliceZipExport(); }}
+                    onClick={() => {
+                      void (slicePlateScope === 'all_plates'
+                        ? handleSliceAllPlates()
+                        : handleSliceZipExport());
+                    }}
                     disabled={isDisabled}
-                    className={`flex-1 !h-9 text-sm inline-flex items-center justify-center gap-1.5 ${hasMenuOptions && !isShiftHeld ? 'rounded-r-none' : ''} ${isSlicingZip ? 'cursor-wait opacity-70' : ''}`}
+                    className={`flex-1 !h-9 text-sm inline-flex items-center justify-center gap-1.5 ${hasMenuOptions && !isShiftHeld && slicePlateScope === 'current_plate' ? 'rounded-r-none' : ''} ${isSlicingZip ? 'cursor-wait opacity-70' : ''}`}
                   >
-                    <CurrentIcon className="w-4 h-4 shrink-0" />
-                    {isSlicingZip ? _(msg`Slicing…`) : current.label}
+                    {slicePlateScope === 'all_plates'
+                      ? <Layers3 className="w-4 h-4 shrink-0" />
+                      : <CurrentIcon className="w-4 h-4 shrink-0" />}
+                    {isSlicingZip
+                      ? _(msg`Slicing…`)
+                      : (slicePlateScope === 'all_plates' ? _(msg`Slice all plates`) : current.label)}
                   </Button>
-                  {hasMenuOptions && !isShiftHeld && (
+                  {hasMenuOptions && !isShiftHeld && slicePlateScope === 'current_plate' && (
                     <Button
                       variant="primary"
                       size="auto"
@@ -3465,20 +3536,6 @@ export function SlicingPanel({
                   )}
                 </div>
 
-                {/* One file per plate, named for the plate. Only worth offering
-                    when there is more than one bed to slice. */}
-                {plateSliceScopes && plateSliceScopes.length > 1 && (
-                  <Button
-                    variant="secondary"
-                    size="auto"
-                    onClick={() => { void handleSliceAllPlates(); }}
-                    disabled={isDisabled}
-                    className={`mt-1 w-full !h-8 text-xs inline-flex items-center justify-center gap-1.5 ${isSlicingZip ? 'cursor-wait opacity-70' : ''}`}
-                  >
-                    <Layers3 className="w-3.5 h-3.5 shrink-0" />
-                    <Trans comment='Action beside the slice button: slices every plate in the scene, one file per plate.'>Slice all plates</Trans>
-                  </Button>
-                )}
                 {sliceIntentMenuOpen && sliceIntentMenuRect && typeof document !== 'undefined' && createPortal(
                   <div
                     ref={sliceIntentMenuRef}
