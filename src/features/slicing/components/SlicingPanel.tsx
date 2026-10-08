@@ -8,7 +8,7 @@ import { createPortal } from 'react-dom';
 import { AlertTriangle, ChevronDown, CircleHelp, Cpu, Download, Edit3, ExternalLink, Layers3, Play, Printer, Timer, X } from 'lucide-react';
 import { MouseTooltip } from '@/components/ui/MouseTooltip';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
-import { KNOWN_SOURCE_EXTENSION_STRIP_RE } from '@/features/plugins/pluginFileTypeExtensions';
+import { normalizeExportBaseName } from '@/features/export/logic/exportFileNaming';
 import { Button, Card, CardHeader, IconButton } from '@/components/atoms';
 import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
@@ -179,15 +179,6 @@ const SLICING_PHASE_LABELS: Record<string, MessageDescriptor> = {
 function formatSlicingPhaseLabel(translate: Translate, phase: string): string {
   const descriptor = SLICING_PHASE_LABELS[phase];
   return descriptor ? translate(descriptor) : phase;
-}
-
-function normalizeExportBaseName(rawName: string | null | undefined): string {
-  const trimmed = (rawName ?? '').trim();
-  if (!trimmed) return 'MyPrint';
-
-  const withoutKnownExt = trimmed.replace(KNOWN_SOURCE_EXTENSION_STRIP_RE, '');
-  const cleaned = withoutKnownExt.replace(/[.\s]+$/g, '').trim();
-  return cleaned || 'MyPrint';
 }
 
 function resolveSliceFilenameBase(models: LoadedModel[], activeModel: LoadedModel | null): string {

@@ -7,7 +7,10 @@ export function normalizeExportBaseName(rawName: string | null | undefined): str
 
   // Strip common source suffixes if present (including chained suffixes).
   const withoutKnownExt = trimmed.replace(KNOWN_SOURCE_EXTENSION_STRIP_RE, '');
-  const cleaned = withoutKnownExt.replace(/[.\s]+$/g, '').trim();
+  // A space is what a person types; a file name reads better without it, and a shell needs it
+  // quoted. Runs of whitespace become one underscore.
+  const underscored = withoutKnownExt.replace(/\s+/g, '_');
+  const cleaned = underscored.replace(/[._\s]+$/g, '').trim();
   return cleaned || 'MyPrint';
 }
 
