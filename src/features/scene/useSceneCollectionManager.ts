@@ -1281,6 +1281,11 @@ export function useSceneCollectionManager(options?: {
     () => lockedPlateIdsRef.current.includes(activePlateIdRef.current),
     [],
   );
+  /** Whether one named plate refuses edits. */
+  const isPlateLocked = useCallback(
+    (plateId: string) => lockedPlateIdsRef.current.includes(plateId),
+    [],
+  );
   // Told, not shown: the manager has no UI, so a refused gesture reports through this
   // callback and the page decides what that looks like.
   const onBlockedByLockRef = useRef<(() => void) | undefined>(undefined);
@@ -2871,7 +2876,17 @@ export function useSceneCollectionManager(options?: {
 
   const updateModelTransforms = useCallback((
     updates: Array<{ id: string; transform: ModelTransform }>,
-    options?: { pushHistory?: boolean },
+    options?: {
+      pushHistory?: boolean;
+      /**
+       * Set when the same action added the plates these models land on. The beds are
+       * then part of this step, so one undo takes the models back and the beds with
+       * them rather than leaving empty beds behind.
+       */
+      platesBefore?: { plates: ScenePlate[]; activePlateId: string };
+      /** The beds as they stand after the addition. Defaults to the hook's own list. */
+      platesAfter?: { plates: ScenePlate[]; activePlateId: string };
+    },
   ) => {
     const lockedMove = updates.some((update) => {
       const model = modelsRef.current.find((candidate) => candidate.id === update.id);
@@ -2936,10 +2951,12 @@ export function useSceneCollectionManager(options?: {
     const includeSupportHistory = allUpdatedIds.some((id) => hasSupportsForModel(id, supportStateBefore));
 
     const shouldPushHistory = options?.pushHistory !== false;
+    const platesBefore = options?.platesBefore;
     const before = shouldPushHistory
       ? captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, {
           includeSupportState: includeSupportHistory,
           supportStateOverride: includeSupportHistory ? supportStateBefore : undefined,
+          ...(platesBefore ? { plates: platesBefore.plates, activePlateId: platesBefore.activePlateId } : {}),
         })
       : null;
 
@@ -2995,6 +3012,12 @@ export function useSceneCollectionManager(options?: {
       const after = captureSceneSnapshot(nextModels, currentActiveModelId, currentSelectedModelIds, {
         includeSupportState: includeSupportHistory,
         supportStateOverride: supportStateAfter,
+        ...(platesBefore
+          ? {
+              plates: options?.platesAfter?.plates ?? platesRef.current,
+              activePlateId: options?.platesAfter?.activePlateId ?? activePlateIdRef.current,
+            }
+          : {}),
       });
       pushSceneSnapshotHistory(before, after, updates.length === 1 ? 'Update Model Transform' : 'Update Model Transforms');
     }
@@ -4785,14 +4808,32 @@ export function useSceneCollectionManager(options?: {
     return createdIds;
   }, [activeModelId, cloneGeometryWithBounds, defaultImportCenterXY.x, defaultImportCenterXY.y, modelClipboard, models, pushSceneSnapshotHistory, selectedModelIds, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
 
-  const duplicateModelWithTransforms = useCallback((sourceId: string, transforms: ModelTransform[], sourceTransform?: ModelTransform | null) => {
+  const duplicateModelWithTransforms = useCallback((
+    sourceId: string,
+    transforms: ModelTransform[],
+    sourceTransform?: ModelTransform | null,
+    options?: {
+      /**
+       * Set when the same run added the beds these copies land on — a duplicate that
+       * overflowed the plate. The beds are then part of this step, so one undo takes the
+       * copies back and the beds with them rather than leaving empty beds behind.
+       */
+      platesBefore?: { plates: ScenePlate[]; activePlateId: string };
+      /** The beds as they stand after the addition. Defaults to the hook's own list. */
+      platesAfter?: { plates: ScenePlate[]; activePlateId: string };
+    },
+  ) => {
     if (transforms.length === 0) return [] as string[];
 
     const source = models.find((m) => m.id === sourceId);
     if (!source) return [] as string[];
     const supportClipboard = captureModelSupportsToClipboard(sourceId);
 
-    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds, { includeSupportState: true });
+    const platesBefore = options?.platesBefore;
+    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds, {
+      includeSupportState: true,
+      ...(platesBefore ? { plates: platesBefore.plates, activePlateId: platesBefore.activePlateId } : {}),
+    });
 
     const resolvedGroupId = source.groupId ?? `group-${uuidv4()}`;
     const resolvedGroupName = source.groupName ?? source.name;
@@ -4881,7 +4922,15 @@ export function useSceneCollectionManager(options?: {
         setSelectedModelIds([sourceId, ...createdIds]);
 
         const nextSelected = [sourceId, ...createdIds];
-        const after = captureSceneSnapshot(nextModels, createdIds[0], nextSelected, { includeSupportState: true });
+        const after = captureSceneSnapshot(nextModels, createdIds[0], nextSelected, {
+          includeSupportState: true,
+          ...(platesBefore
+            ? {
+                plates: options?.platesAfter?.plates ?? platesRef.current,
+                activePlateId: options?.platesAfter?.activePlateId ?? activePlateIdRef.current,
+              }
+            : {}),
+        });
         pushSceneSnapshotHistory(before, after, createdIds.length === 1 ? `Duplicate Model ${source.name}` : `Duplicate ${createdIds.length} Models`);
       }
     } finally {
@@ -6131,6 +6180,21 @@ export function useSceneCollectionManager(options?: {
   }, [view3dSettings.widthMm, view3dSettings.depthMm]);
 
   /**
+   * The batched bed insert and the offset lookup, for callers declared above them.
+   *
+   * A paste that overflows needs both, and it is defined earlier in this hook than they
+   * are; going through refs keeps the hook's declaration order intact instead of
+   * rearranging a thousand lines to satisfy it.
+   */
+  const addPlatesRef = useRef<(count: number) => {
+    plates: ScenePlate[];
+    added: ScenePlate[];
+    offsets: Map<string, { dxMm: number; dyMm: number }>;
+  }>(() => ({ plates: [], added: [], offsets: new Map() }));
+  const plateOffsetForRef = useRef(plateOffsetFor);
+  plateOffsetForRef.current = plateOffsetFor;
+
+  /**
    * Add an empty plate after the last one. The plate being worked on does not
    * change: adding a bed is not a reason to leave the one you are on.
    */
@@ -6218,6 +6282,53 @@ export function useSceneCollectionManager(options?: {
     pushSceneSnapshotHistory(before, after, `Add Plate ${next.length}`);
     return plate.id;
   }, [modelsShiftedForRelaidPlates, pushSceneSnapshotHistory]);
+
+  /**
+   * Add `count` empty beds after the last one, and report the scene's beds with the frame
+   * each ends up at.
+   *
+   * A run that fills more than one bed has to know where every bed sits before it can
+   * place anything: it packs in a bed's own frame and then shifts the result into the
+   * bed. Adding a bed can re-lay the ones already there, so the frames are only true once
+   * the whole addition has landed — and they come from refs this hook owns, which a
+   * caller cannot read until React has committed. Hence one call that adds the beds and
+   * answers with the frames.
+   *
+   * No history entry of its own: the caller folds the beds into its own step, which one
+   * undo then takes back with the placements.
+   */
+  const addPlates = useCallback((count: number): {
+    plates: ScenePlate[];
+    added: ScenePlate[];
+    offsets: Map<string, { dxMm: number; dyMm: number }>;
+  } => {
+    const current = platesRef.current;
+    const footprint = { widthMm: view3dSettings.widthMm, depthMm: view3dSettings.depthMm };
+    const addedPlates: ScenePlate[] = count > 0
+      ? Array.from({ length: count }, () => ({ id: uuidv4(), name: '' }))
+      : [];
+    const settled = addedPlates.length > 0 ? [...current, ...addedPlates] : current;
+
+    if (addedPlates.length > 0) {
+      const shiftedModels = modelsShiftedForRelaidPlates(current, settled, modelsRef.current);
+      setPlates(settled);
+      if (shiftedModels !== modelsRef.current) {
+        // The ref as well as the state: whatever asked for the beds places its models from
+        // the same list in this same tick, and a model left on the stale list would be
+        // dropped back to where its bed used to be.
+        modelsRef.current = shiftedModels;
+        setModels(shiftedModels);
+      }
+    }
+
+    const offsets = new Map<string, { dxMm: number; dyMm: number }>();
+    settled.forEach((plate, index) => {
+      offsets.set(plate.id, plateCascadeOffsetMm(index, footprint, settled.length));
+    });
+
+    return { plates: settled, added: addedPlates, offsets };
+  }, [modelsShiftedForRelaidPlates, view3dSettings.depthMm, view3dSettings.widthMm]);
+  addPlatesRef.current = addPlates;
 
   const activatePlate = useCallback((plateId: string) => {
     if (!platesRef.current.some((plate) => plate.id === plateId)) return;
@@ -6389,6 +6500,7 @@ export function useSceneCollectionManager(options?: {
     resolvePrinterMismatch,
     plateLocked,
     setPlateLocked,
+    isPlateLocked,
     selectedModelIds,
     setSelectedModelIds,
     lastLoadedVoxlFormatChunkedRef,

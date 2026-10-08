@@ -115,6 +115,8 @@ export function PreparePanelStack({
   const {
     arrangePrecisionMode,
     setArrangePrecisionMode,
+    arrangePlateFillMode,
+    setArrangePlateFillMode,
     arrangeLayoutMode,
     setArrangeLayoutMode,
     arrangeAllowRotateOnZ,
@@ -297,6 +299,8 @@ export function PreparePanelStack({
           key="prepare-arrange-panel"
           precisionMode={arrangePrecisionMode}
           onPrecisionModeChange={setArrangePrecisionMode}
+          fillMode={arrangePlateFillMode}
+          onFillModeChange={setArrangePlateFillMode}
           layoutMode={arrangeLayoutMode}
           onLayoutModeChange={setArrangeLayoutMode}
           spacingMm={arrangeSpacingMm}

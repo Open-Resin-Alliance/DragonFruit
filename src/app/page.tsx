@@ -237,10 +237,7 @@ import {
   type HullCacheEntry,
   type ArrangeModel as HighPrecisionArrangeModel,
 } from '@/features/scene/arrange/highPrecisionArrange';
-import {
-  computeHighPrecisionArrangeResultWorker,
-  computeHighPrecisionArrangeUpdatesWorker,
-} from '@/features/scene/arrange/highPrecisionArrangeWorkerClient';
+import { computeHighPrecisionArrangeResultWorker } from '@/features/scene/arrange/highPrecisionArrangeWorkerClient';
 
 // Domain Features
 import { useSceneCollectionManager, SCENE_SLICED, pushSceneSlicedMarker, getSceneSnapshotRegistryBytes } from '@/features/scene/useSceneCollectionManager';
@@ -10381,9 +10378,10 @@ export default function Home() {
             showPlateName={scene.models.length > 0 || scene.plates.length > 1}
             onArrangePlate={() => {
               // The regular arrange, at the settings this button is for: 1mm apart with
-              // Z-rotation allowed. Passed as a per-run override, so the panel keeps
-              // whatever the user set there.
-              void handleAutoArrangeModels('all', undefined, { spacingMm: 1, allowRotateOnZ: true });
+              // Z-rotation allowed, and to this plate alone — it is the plate's own
+              // button, so it does not go filling the others. Passed as a per-run
+              // override, so the panel keeps whatever the user set there.
+              void handleAutoArrangeModels('all', undefined, { spacingMm: 1, allowRotateOnZ: true, plateFillMode: 'plate' });
             }}
             plateLocked={scene.plateLocked}
             onTogglePlateLock={() => scene.setPlateLocked(!scene.plateLocked)}

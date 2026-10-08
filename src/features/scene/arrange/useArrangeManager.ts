@@ -1,14 +1,13 @@
 import React from 'react';
 import * as THREE from 'three';
-import type { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
+import type { ScenePlate, useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
 import type { useTransformManager } from '@/features/transform/useTransformManager';
 import type { ArrangeAnchorMode, ArrangeLayoutMode, ArrangePrecisionMode } from '@/components/controls/ArrangePanel';
 import type { DuplicateLayoutMode } from '@/components/controls/DuplicatePanel';
 import { type HullCacheEntry, type ArrangeModel as HighPrecisionArrangeModel } from '@/features/scene/arrange/highPrecisionArrange';
-import {
-  computeHighPrecisionArrangeResultWorker,
-  computeHighPrecisionArrangeUpdatesWorker,
-} from '@/features/scene/arrange/highPrecisionArrangeWorkerClient';
+import { computeHighPrecisionArrangeResultWorker } from '@/features/scene/arrange/highPrecisionArrangeWorkerClient';
+import { freeRectsForPlate, type PlateRect } from '@/features/scene/arrange/plateFreeSpace';
+import { modelPlateScope } from '@/features/scene/plates/plateInteractivity';
 
 type SceneManager = ReturnType<typeof useSceneCollectionManager>;
 type TransformManager = ReturnType<typeof useTransformManager>;
@@ -16,6 +15,90 @@ type SceneModel = SceneManager['models'][number];
 type ModelDimsMm = { width: number; depth: number; height: number };
 type SupportAwareDimsFn = (model: SceneModel, rotationZOverride?: number, transformOverride?: SceneModel['transform']) => ModelDimsMm;
 type FootprintPolygonFn = (model: SceneModel, rotationZOverride?: number, transformOverride?: SceneModel['transform']) => THREE.Vector2[];
+
+/**
+ * How many beds an arrange run will pack before giving up and setting the rest beside
+ * the last one. A run adds a bed only when a full pass placed nothing new, so this is a
+ * guard against a pathological set rather than a real limit — a plate holds hundreds of
+ * small models.
+ */
+const MAX_ARRANGE_BEDS = 32;
+
+/**
+ * How far an arrange run may spread its models.
+ *
+ * `'plate'` keeps to the plate being worked on — overflow goes onto beds the run adds, and
+ * no other bed in the scene is touched. `'plates'` fills the scene's beds before it makes
+ * new ones, packing around whatever is already standing on them.
+ */
+export type ArrangePlateFillMode = 'plate' | 'plates';
+
+/**
+ * Where a lone model sits in a frame: the centre, or the corner the anchor mode names.
+ *
+ * Both the single-model branch and the pass that ends up with one model still to place
+ * need this, and the high-precision packer answers nothing at all for a single target —
+ * it is built to arrange a set, not to answer where one model goes.
+ */
+function loneModelCenter(
+  frame: { minX: number; maxX: number; minY: number; maxY: number },
+  dims: { width: number; depth: number },
+  anchorMode: ArrangeAnchorMode,
+): { x: number; y: number } {
+  const halfWidth = dims.width * 0.5;
+  const halfDepth = dims.depth * 0.5;
+
+  if (anchorMode === 'front_left') return { x: frame.minX + halfWidth, y: frame.minY + halfDepth };
+  if (anchorMode === 'front_right') return { x: frame.maxX - halfWidth, y: frame.minY + halfDepth };
+  if (anchorMode === 'back_left') return { x: frame.minX + halfWidth, y: frame.maxY - halfDepth };
+  if (anchorMode === 'back_right') return { x: frame.maxX - halfWidth, y: frame.maxY - halfDepth };
+  return { x: (frame.minX + frame.maxX) * 0.5, y: (frame.minY + frame.maxY) * 0.5 };
+}
+
+/**
+ * The last resort, kept from the days of one bed: models that cannot be packed anywhere
+ * are set down in a column beside the beds rather than left stacked at the origin.
+ *
+ * The column starts left of every bed and walks further left as it fills. A model that
+ * does not fit a bed is out of the build volume, but it has to be out of all of it —
+ * beside a bed that has another bed to its left, a column would drop it half onto the
+ * neighbour, and the out-of-volume check would be right to flag it. Left of the cascade is
+ * the one side no bed — the ones already there or the ones a run adds — can reach.
+ *
+ * Positions come back in the active plate's own millimetres, like every other placement.
+ */
+function placeModelsBesideBeds<M>(args: {
+  models: readonly M[];
+  /** The active plate's frame, in its own millimetres: the column's height. */
+  frame: PlateRect;
+  spacingMm: number;
+  /** Left edge of every bed, in world millimetres. */
+  leftmostBedEdgeMm: number;
+  activeOffset: { dxMm: number; dyMm: number };
+  getRotationZ: (model: M) => number;
+  getDims: (model: M) => { width: number; depth: number };
+}): Array<{ model: M; rotationZ: number; positionX: number; positionY: number }> {
+  const outsideGap = Math.max(8, args.spacingMm);
+  let columnRightX = args.leftmostBedEdgeMm - outsideGap - args.activeOffset.dxMm;
+  let columnYCursor = args.frame.minY;
+  let columnMaxWidth = 0;
+
+  return args.models.map((model) => {
+    const dims = args.getDims(model);
+    if (columnYCursor > args.frame.minY && (columnYCursor + dims.depth) > args.frame.maxY) {
+      columnRightX -= columnMaxWidth + outsideGap;
+      columnMaxWidth = 0;
+      columnYCursor = args.frame.minY;
+    }
+
+    const positionX = columnRightX - dims.width * 0.5;
+    const positionY = columnYCursor + dims.depth * 0.5;
+    columnYCursor += dims.depth + args.spacingMm;
+    columnMaxWidth = Math.max(columnMaxWidth, dims.width);
+
+    return { model, rotationZ: args.getRotationZ(model), positionX, positionY };
+  });
+}
 
 export type UseArrangeManagerOptions = {
   scene: SceneManager;
@@ -46,6 +129,7 @@ export function useArrangeManager({
 }: UseArrangeManagerOptions) {
 
   const [arrangePrecisionMode, setArrangePrecisionMode] = React.useState<ArrangePrecisionMode>('standard');
+  const [arrangePlateFillMode, setArrangePlateFillMode] = React.useState<ArrangePlateFillMode>('plates');
   const [arrangeAllowRotateOnZ, setArrangeAllowRotateOnZ] = React.useState(false);
   const [arrangeLayoutMode, setArrangeLayoutMode] = React.useState<ArrangeLayoutMode>('auto');
   const [arrangeAnchorMode, setArrangeAnchorMode] = React.useState<ArrangeAnchorMode>('center');
@@ -265,9 +349,134 @@ export function useArrangeManager({
     });
   }, [buildHighPrecisionArrangeSupportLocalPoints]);
 
+  /**
+   * Where the active plate sits, in world millimetres: the cascade offset from the
+   * first plate. Arrange packs in a plate's own frame, so a run on a later plate
+   * needs this to come out on that plate rather than on plate 1.
+   *
+   * The members are listed one by one rather than depending on `scene` itself: the
+   * manager object is new on every render, and a callback that changed with it rebuilt
+   * the array-preview effect on every render, which set state from an effect on every
+   * commit — React's "Maximum update depth exceeded". Keep these dependency lists
+   * precise.
+   */
+  const arrangePlateOffset = React.useCallback(
+    () => scene.plateOffsetFor(scene.activePlateId),
+    [scene.activePlateId, scene.plateOffsetFor],
+  );
+
+  /**
+   * The build area a run packs, in millimetres.
+   *
+   * Arrange works in a plate's own frame — the one `view3dSettings` describes — and a
+   * scene's later plates are drawn at a cascade offset from the first. The offset
+   * defaults to the active plate's, so a run on plate 2 packs into plate 2's bounds
+   * instead of dropping its models onto plate 1; a bed an overflow pass is about to
+   * land on passes its own once it exists. The models a run may touch come from
+   * `resolveArrangeVisibleModels`, which is scoped to the active plate.
+   */
+  const resolveArrangeFrame = React.useCallback((offset?: { dxMm: number; dyMm: number }) => {
+    const { originMode, widthMm, depthMm, safetyMarginMm } = scene.view3dSettings;
+    const { dxMm, dyMm } = offset ?? arrangePlateOffset();
+    const rawMinX = (originMode === 'front_left' ? 0 : -widthMm * 0.5) + dxMm;
+    const rawMaxX = rawMinX + widthMm;
+    const rawMinY = (originMode === 'front_left' ? 0 : -depthMm * 0.5) + dyMm;
+    const rawMaxY = rawMinY + depthMm;
+    const minX = rawMinX + Math.max(0, safetyMarginMm?.left ?? 0);
+    const maxX = rawMaxX - Math.max(0, safetyMarginMm?.right ?? 0);
+    const minY = rawMinY + Math.max(0, safetyMarginMm?.front ?? 0);
+    const maxY = rawMaxY - Math.max(0, safetyMarginMm?.back ?? 0);
+
+    return {
+      dxMm,
+      dyMm,
+      minX,
+      maxX,
+      minY,
+      maxY,
+      width: Math.max(1, maxX - minX),
+      depth: Math.max(1, maxY - minY),
+    };
+  }, [arrangePlateOffset, scene.view3dSettings]);
+
+  /**
+   * The beds a run fills, in the order it fills them, each with the room already taken on
+   * it.
+   *
+   * `'plates'` — the scene's own beds are used up before a new one is made: the plate
+   * being worked on first, then every other bed, in cascade order.
+   * `'plate'` — only the plate being worked on; whatever does not fit goes onto beds this
+   * run adds.
+   *
+   * Everything standing on a bed counts as taken except the models this run is placing,
+   * so a bed that is already carrying models is filled around them rather than skipped or
+   * stacked on. Rectangles come back in the bed's own millimetres, which is the frame the
+   * packers place in.
+   */
+  const resolveArrangeBedTargets = React.useCallback((
+    mode: ArrangePlateFillMode,
+    runModelIds: ReadonlySet<string>,
+  ): Array<{ plateId: string; occupied: PlateRect[] }> => {
+    const otherBeds = mode === 'plates'
+      ? scene.plates.filter((plate) => plate.id !== scene.activePlateId && !scene.isPlateLocked(plate.id))
+      : [];
+
+    const plateIds = [scene.activePlateId, ...otherBeds.map((plate) => plate.id)];
+
+    return plateIds.map((plateId) => {
+      const { dxMm, dyMm } = scene.plateOffsetFor(plateId);
+      const occupied: PlateRect[] = [];
+
+      for (const model of scene.models) {
+        if (runModelIds.has(model.id)) continue;
+        if (scene.resolveModelPlateId(model) !== plateId) continue;
+
+        const t = getArrangeTransform(model);
+        const dims = getModelSupportAwareDimensionsMm(model, undefined, t);
+        const x = t.position.x - dxMm;
+        const y = t.position.y - dyMm;
+
+        occupied.push({
+          minX: x - dims.width * 0.5,
+          maxX: x + dims.width * 0.5,
+          minY: y - dims.depth * 0.5,
+          maxY: y + dims.depth * 0.5,
+        });
+      }
+
+      return { plateId, occupied };
+    });
+  }, [
+    getArrangeTransform,
+    getModelSupportAwareDimensionsMm,
+    scene.activePlateId,
+    scene.isPlateLocked,
+    scene.models,
+    scene.plateOffsetFor,
+    scene.plates,
+    scene.resolveModelPlateId,
+  ]);
+
   const resolveArrangeVisibleModels = React.useCallback((scope: 'all' | 'selected', explicitSelectedIds?: string[]) => {
+    // An arrange run packs one plate — the one whose tool asked for it, which is the
+    // active one. A scene-wide sweep would pack the other beds' models into this
+    // plate's frame, which is how arranging plate 2 moved its models onto plate 1.
+    const onActivePlate = (model: SceneModel) => (
+      scene.resolveModelPlateId(model) === scene.activePlateId
+    );
+    // A model standing on no plate at all is broken whichever bed asked for the arrange,
+    // so every run takes it: arranging is what puts it back on a bed. It is the same rule
+    // the canvas uses to decide a model is loose, not a second one.
+    const standsOnNoPlate = (model: SceneModel) => modelPlateScope({
+      position: model.transform.position,
+      frames: scene.plateFrames,
+      activePlateId: scene.activePlateId,
+      plateCount: scene.plates.length,
+    }) === 'loose';
+    const inRun = (model: SceneModel) => onActivePlate(model) || standsOnNoPlate(model);
+
     if (scope === 'all') {
-      return scene.models.filter((m) => m.visible);
+      return scene.models.filter((m) => m.visible && inRun(m));
     }
 
     const selectedIdSet = new Set(explicitSelectedIds ?? scene.selectedModelIds);
@@ -279,17 +488,35 @@ export function useArrangeManager({
       if (activeVisible) selectedIdSet.add(scene.activeModelId);
     }
 
-    return scene.models.filter((m) => m.visible && selectedIdSet.has(m.id));
-  }, [scene.activeModelId, scene.models, scene.selectedModelIds]);
+    return scene.models.filter((m) => m.visible && selectedIdSet.has(m.id) && inRun(m));
+  }, [
+    scene.activeModelId,
+    scene.activePlateId,
+    scene.models,
+    scene.plateFrames,
+    scene.plates.length,
+    scene.resolveModelPlateId,
+    scene.selectedModelIds,
+  ]);
 
-  const applyArrangeTransforms = React.useCallback((updates: Array<{
-    id: string;
-    transform: {
-      position: THREE.Vector3;
-      rotation: THREE.Euler;
-      scale: THREE.Vector3;
-    };
-  }>) => {
+  const applyArrangeTransforms = React.useCallback((
+    updates: Array<{
+      id: string;
+      transform: {
+        position: THREE.Vector3;
+        rotation: THREE.Euler;
+        scale: THREE.Vector3;
+      };
+    }>,
+    /**
+     * The beds as they stood before the run and as they stand after it, when the run
+     * added some of them: the beds and the placements are then one undo step.
+     */
+    historyOptions?: {
+      platesBefore?: { plates: ScenePlate[]; activePlateId: string };
+      platesAfter?: { plates: ScenePlate[]; activePlateId: string };
+    },
+  ) => {
     if (updates.length === 0) return;
 
     const isFiniteNumber = (n: number) => Number.isFinite(n) && !Number.isNaN(n);
@@ -318,7 +545,9 @@ export function useArrangeManager({
       });
     }
 
-    scene.updateModelTransforms(sanitizedUpdates);
+    scene.updateModelTransforms(sanitizedUpdates, historyOptions?.platesBefore
+      ? { platesBefore: historyOptions.platesBefore, platesAfter: historyOptions.platesAfter }
+      : undefined);
     setSupportRenderRefreshNonce((prev) => prev + 1);
 
     if (!scene.activeModelId || displayActiveModelId !== scene.activeModelId) {
@@ -338,14 +567,15 @@ export function useArrangeManager({
     scope: 'all' | 'selected',
     explicitSelectedIds?: string[],
     /**
-     * A one-off run can ask for its own spacing and Z-rotation — the plate's arrange
-     * button does, at 1mm with rotation allowed — without disturbing the panel's
-     * settings, which the panel's own runs use.
+     * A one-off run can ask for its own spacing, Z-rotation and reach — the plate's
+     * arrange button does, at 1mm with rotation allowed and to that plate alone — without
+     * disturbing the panel's settings, which the panel's own runs use.
      */
-    overrides?: { spacingMm?: number; allowRotateOnZ?: boolean },
+    overrides?: { spacingMm?: number; allowRotateOnZ?: boolean; plateFillMode?: ArrangePlateFillMode },
   ) => {
     const spacingMmForRun = overrides?.spacingMm ?? arrangeSpacingMm;
     const allowRotateOnZForRun = overrides?.allowRotateOnZ ?? arrangeAllowRotateOnZ;
+    const plateFillModeForRun = overrides?.plateFillMode ?? arrangePlateFillMode;
     if (isAutoArranging) return;
 
     const visibleModels = resolveArrangeVisibleModels(scope, explicitSelectedIds);
@@ -356,34 +586,8 @@ export function useArrangeManager({
         const t = getArrangeTransform(model);
         const dims = getModelSupportAwareDimensionsMm(model, undefined, t);
 
-        const rawMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
-        const rawMaxX = rawMinX + scene.view3dSettings.widthMm;
-        const rawMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
-        const rawMaxY = rawMinY + scene.view3dSettings.depthMm;
-        const sm = scene.view3dSettings.safetyMarginMm;
-        const minX = rawMinX + Math.max(0, sm?.left ?? 0);
-        const maxX = rawMaxX - Math.max(0, sm?.right ?? 0);
-        const minY = rawMinY + Math.max(0, sm?.front ?? 0);
-        const maxY = rawMaxY - Math.max(0, sm?.back ?? 0);
-
-        let centerX: number;
-        let centerY: number;
-        if (arrangeAnchorMode === 'front_left') {
-          centerX = minX + dims.width * 0.5;
-          centerY = minY + dims.depth * 0.5;
-        } else if (arrangeAnchorMode === 'front_right') {
-          centerX = maxX - dims.width * 0.5;
-          centerY = minY + dims.depth * 0.5;
-        } else if (arrangeAnchorMode === 'back_left') {
-          centerX = minX + dims.width * 0.5;
-          centerY = maxY - dims.depth * 0.5;
-        } else if (arrangeAnchorMode === 'back_right') {
-          centerX = maxX - dims.width * 0.5;
-          centerY = maxY - dims.depth * 0.5;
-        } else {
-          centerX = (minX + maxX) * 0.5;
-          centerY = (minY + maxY) * 0.5;
-        }
+        const { minX, maxX, minY, maxY } = resolveArrangeFrame();
+        const { x: centerX, y: centerY } = loneModelCenter({ minX, maxX, minY, maxY }, dims, arrangeAnchorMode);
 
         // Arrange and Duplicate previews should never overlap.
         setDuplicateApplySourceModel(null);
@@ -419,435 +623,490 @@ export function useArrangeManager({
     await sleep(0);
 
     try {
-      const modelTransformById = new Map(
-        visibleModels.map((model) => [model.id, getArrangeTransform(model)] as const),
-      );
-
-      const modelsWithFootprints = visibleModels.map((model) => {
-        const t = modelTransformById.get(model.id) ?? model.transform;
-        const baseFootprint = getModelSupportAwareDimensionsMm(model, undefined, t);
-        return {
-          model,
-          baseWidth: baseFootprint.width,
-          baseDepth: baseFootprint.depth,
-        };
-      });
-
-      const rawMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
-      const rawMaxX = rawMinX + scene.view3dSettings.widthMm;
-      const rawMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
-      const rawMaxY = rawMinY + scene.view3dSettings.depthMm;
-      const arrangeSm = scene.view3dSettings.safetyMarginMm;
-      const minX = rawMinX + Math.max(0, arrangeSm?.left ?? 0);
-      const maxX = rawMaxX - Math.max(0, arrangeSm?.right ?? 0);
-      const minY = rawMinY + Math.max(0, arrangeSm?.front ?? 0);
-      const maxY = rawMaxY - Math.max(0, arrangeSm?.back ?? 0);
-      const plateWidth = Math.max(1, maxX - minX);
-      const plateDepth = Math.max(1, maxY - minY);
-
-      type PackedEntry = {
-        model: (typeof visibleModels)[number];
-        width: number;
-        depth: number;
-        row: number;
-        indexInRow: number;
-        rotationZ: number;
-      };
-
-      type SpillEntry = {
-        model: (typeof visibleModels)[number];
-        width: number;
-        depth: number;
-        rotationZ: number;
-      };
-
-      type Row = {
-        widthUsed: number;
-        maxDepth: number;
-        items: PackedEntry[];
-      };
-
-      const evaluatePacking = (
-        ordered: typeof modelsWithFootprints,
-        targetRowWidth: number,
-        enableRotation: boolean,
+      /**
+       * One bed's worth: pack what fits into `frame` and hand back what does not, so the
+       * caller can offer the rest to the next bed. Everything here is in the frame's own
+       * millimetres, which every bed shares — beds differ only by where the cascade puts
+       * them, and the caller shifts the result once it knows.
+       */
+      const planPass = (
+        passModels: SceneModel[],
+        frame: { minX: number; maxX: number; minY: number; maxY: number },
       ) => {
-        const rows: Row[] = [];
-        const spills: SpillEntry[] = [];
-        const placementSizeCache = new Map<string, { width: number; depth: number }>();
+        const modelTransformById = new Map(
+          passModels.map((model) => [model.id, getArrangeTransform(model)] as const),
+        );
 
-        let occupiedArea = 0;
-        let totalDepthUsed = 0;
+        const modelsWithFootprints = passModels.map((model) => {
+          const t = modelTransformById.get(model.id) ?? model.transform;
+          const baseFootprint = getModelSupportAwareDimensionsMm(model, undefined, t);
+          return {
+            model,
+            baseWidth: baseFootprint.width,
+            baseDepth: baseFootprint.depth,
+          };
+        });
 
-        type PlacementOption = {
-          rotationZ: number;
+        const { minX, maxX, minY, maxY } = frame;
+        const plateWidth = Math.max(1, maxX - minX);
+        const plateDepth = Math.max(1, maxY - minY);
+
+        type PackedEntry = {
+          model: SceneModel;
           width: number;
           depth: number;
+          row: number;
+          indexInRow: number;
+          rotationZ: number;
         };
 
-        const normalizeToPi = (angle: number) => {
-          let a = angle % Math.PI;
-          if (a < 0) a += Math.PI;
-          return a;
+        type SpillEntry = {
+          model: SceneModel;
+          width: number;
+          depth: number;
+          rotationZ: number;
         };
 
-        const nearestEquivalentAngle = (reference: number, canonical: number) => {
-          const twoPi = Math.PI * 2;
-          const k = Math.round((reference - canonical) / twoPi);
-          return canonical + k * twoPi;
+        type Row = {
+          widthUsed: number;
+          maxDepth: number;
+          items: PackedEntry[];
         };
 
-        const footprintAtAngle = (model: (typeof visibleModels)[number], angleZ: number) => {
-          const t = modelTransformById.get(model.id) ?? model.transform;
-          const key = `${model.id}|${angleZ.toFixed(5)}|${t.scale.x.toFixed(5)}|${t.scale.y.toFixed(5)}|${t.scale.z.toFixed(5)}|${t.rotation.x.toFixed(5)}|${t.rotation.y.toFixed(5)}`;
-          const cached = placementSizeCache.get(key);
-          if (cached) return cached;
+        const evaluatePacking = (
+          ordered: typeof modelsWithFootprints,
+          targetRowWidth: number,
+          enableRotation: boolean,
+        ) => {
+          const rows: Row[] = [];
+          const spills: SpillEntry[] = [];
+          const placementSizeCache = new Map<string, { width: number; depth: number }>();
 
-          const dims = getModelSupportAwareDimensionsMm(model, angleZ, t);
+          let occupiedArea = 0;
+          let totalDepthUsed = 0;
 
-          placementSizeCache.set(key, dims);
-          return dims;
-        };
+          type PlacementOption = {
+            rotationZ: number;
+            width: number;
+            depth: number;
+          };
 
-        const getAllOptions = (current: (typeof modelsWithFootprints)[number]): PlacementOption[] => {
-          const t = modelTransformById.get(current.model.id) ?? current.model.transform;
-          const currentZ = t.rotation.z;
-          const currentCanonical = normalizeToPi(currentZ);
+          const normalizeToPi = (angle: number) => {
+            let a = angle % Math.PI;
+            if (a < 0) a += Math.PI;
+            return a;
+          };
 
-          if (!enableRotation) {
-            const dims = footprintAtAngle(current.model, currentCanonical);
-            return [{ rotationZ: currentZ, width: dims.width, depth: dims.depth }];
-          }
+          const nearestEquivalentAngle = (reference: number, canonical: number) => {
+            const twoPi = Math.PI * 2;
+            const k = Math.round((reference - canonical) / twoPi);
+            return canonical + k * twoPi;
+          };
 
-          const candidateCanonicals: number[] = [currentCanonical];
-          const coarseStepDeg = 15;
-          for (let deg = 0; deg < 180; deg += coarseStepDeg) {
-            candidateCanonicals.push(THREE.MathUtils.degToRad(deg));
-          }
+          const footprintAtAngle = (model: SceneModel, angleZ: number) => {
+            const t = modelTransformById.get(model.id) ?? model.transform;
+            const key = `${model.id}|${angleZ.toFixed(5)}|${t.scale.x.toFixed(5)}|${t.scale.y.toFixed(5)}|${t.scale.z.toFixed(5)}|${t.rotation.x.toFixed(5)}|${t.rotation.y.toFixed(5)}`;
+            const cached = placementSizeCache.get(key);
+            if (cached) return cached;
 
-          // Ensure we always evaluate the width/depth-swapped alternative from the current pose.
-          candidateCanonicals.push(normalizeToPi(currentCanonical + (Math.PI * 0.5)));
+            const dims = getModelSupportAwareDimensionsMm(model, angleZ, t);
 
-          const seenFootprints = new Set<string>();
-          const options: PlacementOption[] = [];
+            placementSizeCache.set(key, dims);
+            return dims;
+          };
 
-          for (const rawCanonical of candidateCanonicals) {
-            const canonical = normalizeToPi(rawCanonical);
-            const dims = footprintAtAngle(current.model, canonical);
-            const key = `${dims.width.toFixed(3)}:${dims.depth.toFixed(3)}`;
-            if (seenFootprints.has(key)) continue;
-            seenFootprints.add(key);
+          const getAllOptions = (current: (typeof modelsWithFootprints)[number]): PlacementOption[] => {
+            const t = modelTransformById.get(current.model.id) ?? current.model.transform;
+            const currentZ = t.rotation.z;
+            const currentCanonical = normalizeToPi(currentZ);
 
-            options.push({
-              rotationZ: nearestEquivalentAngle(currentZ, canonical),
-              width: dims.width,
-              depth: dims.depth,
-            });
-          }
+            if (!enableRotation) {
+              const dims = footprintAtAngle(current.model, currentCanonical);
+              return [{ rotationZ: currentZ, width: dims.width, depth: dims.depth }];
+            }
 
-          return options;
-        };
+            const candidateCanonicals: number[] = [currentCanonical];
+            const coarseStepDeg = 15;
+            for (let deg = 0; deg < 180; deg += coarseStepDeg) {
+              candidateCanonicals.push(THREE.MathUtils.degToRad(deg));
+            }
 
-        for (const current of ordered) {
-          const options = getAllOptions(current);
-          const fitOptions = options.filter((opt) => opt.width <= plateWidth && opt.depth <= plateDepth);
+            // Ensure we always evaluate the width/depth-swapped alternative from the current pose.
+            candidateCanonicals.push(normalizeToPi(currentCanonical + (Math.PI * 0.5)));
 
-          if (fitOptions.length === 0) {
-            const fallback = options.reduce((best, candidate) => {
-              const bestOverflow = Math.max(0, best.width - plateWidth) + Math.max(0, best.depth - plateDepth);
-              const candidateOverflow = Math.max(0, candidate.width - plateWidth) + Math.max(0, candidate.depth - plateDepth);
-              if (candidateOverflow < bestOverflow) return candidate;
-              if (candidateOverflow === bestOverflow && (candidate.width * candidate.depth) < (best.width * best.depth)) return candidate;
-              return best;
-            }, options[0]);
+            const seenFootprints = new Set<string>();
+            const options: PlacementOption[] = [];
 
-            spills.push({
-              model: current.model,
-              width: fallback.width,
-              depth: fallback.depth,
-              rotationZ: fallback.rotationZ,
-            });
-            continue;
-          }
+            for (const rawCanonical of candidateCanonicals) {
+              const canonical = normalizeToPi(rawCanonical);
+              const dims = footprintAtAngle(current.model, canonical);
+              const key = `${dims.width.toFixed(3)}:${dims.depth.toFixed(3)}`;
+              if (seenFootprints.has(key)) continue;
+              seenFootprints.add(key);
 
-          let bestPlacement:
-            | { kind: 'same-row'; rowIndex: number; option: PlacementOption; score: number }
-            | { kind: 'new-row'; option: PlacementOption; score: number }
-            | null = null;
+              options.push({
+                rotationZ: nearestEquivalentAngle(currentZ, canonical),
+                width: dims.width,
+                depth: dims.depth,
+              });
+            }
 
-          if (rows.length > 0) {
-            for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
-              const row = rows[rowIndex];
-              for (const option of fitOptions) {
-                const nextWidth = row.widthUsed + (row.items.length > 0 ? spacingMmForRun : 0) + option.width;
-                if (nextWidth > plateWidth) continue;
+            return options;
+          };
 
-                const nextDepth = Math.max(row.maxDepth, option.depth);
-                const depthDelta = nextDepth - row.maxDepth;
-                const nextTotalDepth = totalDepthUsed + depthDelta;
-                if (nextTotalDepth > plateDepth) continue;
+          for (const current of ordered) {
+            const options = getAllOptions(current);
+            const fitOptions = options.filter((opt) => opt.width <= plateWidth && opt.depth <= plateDepth);
 
-                // Prefer tighter rows, less depth growth, and widths near target row width.
-                const depthPenalty = depthDelta * 40;
-                const widthPenalty = Math.abs(targetRowWidth - nextWidth) * 0.08;
-                const areaScore = nextWidth * nextDepth;
-                const score = areaScore + depthPenalty + widthPenalty;
+            if (fitOptions.length === 0) {
+              const fallback = options.reduce((best, candidate) => {
+                const bestOverflow = Math.max(0, best.width - plateWidth) + Math.max(0, best.depth - plateDepth);
+                const candidateOverflow = Math.max(0, candidate.width - plateWidth) + Math.max(0, candidate.depth - plateDepth);
+                if (candidateOverflow < bestOverflow) return candidate;
+                if (candidateOverflow === bestOverflow && (candidate.width * candidate.depth) < (best.width * best.depth)) return candidate;
+                return best;
+              }, options[0]);
 
-                if (!bestPlacement || score < bestPlacement.score) {
-                  bestPlacement = { kind: 'same-row', rowIndex, option, score };
+              spills.push({
+                model: current.model,
+                width: fallback.width,
+                depth: fallback.depth,
+                rotationZ: fallback.rotationZ,
+              });
+              continue;
+            }
+
+            let bestPlacement:
+              | { kind: 'same-row'; rowIndex: number; option: PlacementOption; score: number }
+              | { kind: 'new-row'; option: PlacementOption; score: number }
+              | null = null;
+
+            if (rows.length > 0) {
+              for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+                const row = rows[rowIndex];
+                for (const option of fitOptions) {
+                  const nextWidth = row.widthUsed + (row.items.length > 0 ? spacingMmForRun : 0) + option.width;
+                  if (nextWidth > plateWidth) continue;
+
+                  const nextDepth = Math.max(row.maxDepth, option.depth);
+                  const depthDelta = nextDepth - row.maxDepth;
+                  const nextTotalDepth = totalDepthUsed + depthDelta;
+                  if (nextTotalDepth > plateDepth) continue;
+
+                  // Prefer tighter rows, less depth growth, and widths near target row width.
+                  const depthPenalty = depthDelta * 40;
+                  const widthPenalty = Math.abs(targetRowWidth - nextWidth) * 0.08;
+                  const areaScore = nextWidth * nextDepth;
+                  const score = areaScore + depthPenalty + widthPenalty;
+
+                  if (!bestPlacement || score < bestPlacement.score) {
+                    bestPlacement = { kind: 'same-row', rowIndex, option, score };
+                  }
                 }
               }
             }
-          }
 
-          for (const option of fitOptions) {
-            const nextTotalDepth = totalDepthUsed + (rows.length > 0 ? spacingMmForRun : 0) + option.depth;
-            if (nextTotalDepth > plateDepth) continue;
+            for (const option of fitOptions) {
+              const nextTotalDepth = totalDepthUsed + (rows.length > 0 ? spacingMmForRun : 0) + option.depth;
+              if (nextTotalDepth > plateDepth) continue;
 
-            const widthPenalty = Math.abs(targetRowWidth - option.width) * 0.12;
-            const score = (option.width * option.depth) + widthPenalty + 10;
-            if (!bestPlacement || score < bestPlacement.score) {
-              bestPlacement = { kind: 'new-row', option, score };
+              const widthPenalty = Math.abs(targetRowWidth - option.width) * 0.12;
+              const score = (option.width * option.depth) + widthPenalty + 10;
+              if (!bestPlacement || score < bestPlacement.score) {
+                bestPlacement = { kind: 'new-row', option, score };
+              }
+            }
+
+            if (!bestPlacement) {
+              const fallback = fitOptions.reduce((best, candidate) => {
+                if (candidate.width < best.width) return candidate;
+                if (candidate.width === best.width && candidate.depth < best.depth) return candidate;
+                return best;
+              }, fitOptions[0]);
+
+              spills.push({
+                model: current.model,
+                width: fallback.width,
+                depth: fallback.depth,
+                rotationZ: fallback.rotationZ,
+              });
+              continue;
+            }
+
+            if (bestPlacement.kind === 'new-row') {
+              const row: Row = { widthUsed: 0, maxDepth: 0, items: [] };
+              rows.push(row);
+              totalDepthUsed += (rows.length > 1 ? spacingMmForRun : 0) + bestPlacement.option.depth;
+              row.widthUsed = bestPlacement.option.width;
+              row.maxDepth = bestPlacement.option.depth;
+              row.items.push({
+                model: current.model,
+                width: bestPlacement.option.width,
+                depth: bestPlacement.option.depth,
+                row: rows.length - 1,
+                indexInRow: 0,
+                rotationZ: bestPlacement.option.rotationZ,
+              });
+              occupiedArea += bestPlacement.option.width * bestPlacement.option.depth;
+            } else {
+              const row = rows[bestPlacement.rowIndex];
+              const previousDepth = row.maxDepth;
+              row.widthUsed += (row.items.length > 0 ? spacingMmForRun : 0) + bestPlacement.option.width;
+              row.maxDepth = Math.max(row.maxDepth, bestPlacement.option.depth);
+              totalDepthUsed += row.maxDepth - previousDepth;
+              row.items.push({
+                model: current.model,
+                width: bestPlacement.option.width,
+                depth: bestPlacement.option.depth,
+                row: bestPlacement.rowIndex,
+                indexInRow: row.items.length,
+                rotationZ: bestPlacement.option.rotationZ,
+              });
+              occupiedArea += bestPlacement.option.width * bestPlacement.option.depth;
             }
           }
 
-          if (!bestPlacement) {
-            const fallback = fitOptions.reduce((best, candidate) => {
-              if (candidate.width < best.width) return candidate;
-              if (candidate.width === best.width && candidate.depth < best.depth) return candidate;
-              return best;
-            }, fitOptions[0]);
+          const rowDepths = rows.map((r) => r.maxDepth);
+          const rowWidths = rows.map((r) => r.widthUsed);
+          const totalWidth = Math.min(plateWidth, rowWidths.reduce((acc, width) => Math.max(acc, width), 0));
+          const totalDepth = rowDepths.reduce((acc, depth) => acc + depth, 0) + Math.max(0, rows.length - 1) * spacingMmForRun;
 
-            spills.push({
-              model: current.model,
-              width: fallback.width,
-              depth: fallback.depth,
-              rotationZ: fallback.rotationZ,
-            });
-            continue;
+          const layoutArea = totalWidth * totalDepth;
+          const deadSpace = Math.max(0, layoutArea - occupiedArea);
+          const spillArea = spills.reduce((acc, item) => acc + (item.width * item.depth), 0);
+          const spillPenalty = spills.length * 1_000_000 + spillArea * 100;
+          const aspectPenalty = Math.abs(totalWidth - totalDepth) * 0.05;
+
+          return {
+            rows,
+            spills,
+            rowDepths,
+            totalWidth,
+            totalDepth,
+            score: deadSpace + spillPenalty + aspectPenalty,
+            usedRotation: enableRotation,
+          };
+        };
+
+        const countPackedItems = (layout: ReturnType<typeof evaluatePacking>) => (
+          layout.rows.reduce((acc, row) => acc + row.items.length, 0)
+        );
+
+        const isBetterLayout = (
+          candidate: ReturnType<typeof evaluatePacking>,
+          currentBest: ReturnType<typeof evaluatePacking> | null,
+        ) => {
+          if (!currentBest) return true;
+
+          if (candidate.spills.length !== currentBest.spills.length) {
+            return candidate.spills.length < currentBest.spills.length;
           }
 
-          if (bestPlacement.kind === 'new-row') {
-            const row: Row = { widthUsed: 0, maxDepth: 0, items: [] };
-            rows.push(row);
-            totalDepthUsed += (rows.length > 1 ? spacingMmForRun : 0) + bestPlacement.option.depth;
-            row.widthUsed = bestPlacement.option.width;
-            row.maxDepth = bestPlacement.option.depth;
-            row.items.push({
-              model: current.model,
-              width: bestPlacement.option.width,
-              depth: bestPlacement.option.depth,
-              row: rows.length - 1,
-              indexInRow: 0,
-              rotationZ: bestPlacement.option.rotationZ,
-            });
-            occupiedArea += bestPlacement.option.width * bestPlacement.option.depth;
-          } else {
-            const row = rows[bestPlacement.rowIndex];
-            const previousDepth = row.maxDepth;
-            row.widthUsed += (row.items.length > 0 ? spacingMmForRun : 0) + bestPlacement.option.width;
-            row.maxDepth = Math.max(row.maxDepth, bestPlacement.option.depth);
-            totalDepthUsed += row.maxDepth - previousDepth;
-            row.items.push({
-              model: current.model,
-              width: bestPlacement.option.width,
-              depth: bestPlacement.option.depth,
-              row: bestPlacement.rowIndex,
-              indexInRow: row.items.length,
-              rotationZ: bestPlacement.option.rotationZ,
-            });
-            occupiedArea += bestPlacement.option.width * bestPlacement.option.depth;
+          const candidatePackedCount = countPackedItems(candidate);
+          const bestPackedCount = countPackedItems(currentBest);
+          if (candidatePackedCount !== bestPackedCount) {
+            return candidatePackedCount > bestPackedCount;
+          }
+
+          const scoreDelta = candidate.score - currentBest.score;
+          if (Math.abs(scoreDelta) > 1e-6) {
+            return scoreDelta < 0;
+          }
+
+          // When layouts are effectively tied, do not force rotation.
+          if (candidate.usedRotation !== currentBest.usedRotation) {
+            return !candidate.usedRotation;
+          }
+
+          return false;
+        };
+
+        const byAreaDesc = [...modelsWithFootprints].sort((a, b) => (b.baseWidth * b.baseDepth) - (a.baseWidth * a.baseDepth));
+        const byMaxSideDesc = [...modelsWithFootprints].sort((a, b) => Math.max(b.baseWidth, b.baseDepth) - Math.max(a.baseWidth, a.baseDepth));
+        const orderingCandidates = [modelsWithFootprints, byAreaDesc, byMaxSideDesc];
+
+        const totalModelArea = modelsWithFootprints.reduce((acc, current) => acc + (current.baseWidth * current.baseDepth), 0);
+        const baseWidth = Math.min(plateWidth, Math.max(30, Math.sqrt(totalModelArea)));
+        const targetRowWidths = [
+          baseWidth * 0.8,
+          baseWidth,
+          baseWidth * 1.2,
+          plateWidth * 0.5,
+          plateWidth * 0.65,
+          plateWidth * 0.8,
+          plateWidth,
+        ]
+          .map((w) => Math.min(plateWidth, Math.max(20, w)));
+
+        const uniqueTargetRowWidths = [...new Set(targetRowWidths.map((w) => Number(w.toFixed(3))))];
+
+        let bestLayout: ReturnType<typeof evaluatePacking> | null = null;
+        const rotationModes = allowRotateOnZForRun ? [false, true] : [false];
+        for (const ordered of orderingCandidates) {
+          for (const targetRowWidth of uniqueTargetRowWidths) {
+            for (const enableRotation of rotationModes) {
+              const layout = evaluatePacking(ordered, targetRowWidth, enableRotation);
+              if (isBetterLayout(layout, bestLayout)) {
+                bestLayout = layout;
+              }
+            }
           }
         }
 
-        const rowDepths = rows.map((r) => r.maxDepth);
-        const rowWidths = rows.map((r) => r.widthUsed);
-        const totalWidth = Math.min(plateWidth, rowWidths.reduce((acc, width) => Math.max(acc, width), 0));
-        const totalDepth = rowDepths.reduce((acc, depth) => acc + depth, 0) + Math.max(0, rows.length - 1) * spacingMmForRun;
+        if (!bestLayout) return { placed: [] as Array<PackedEntry & { positionX: number; positionY: number }>, spilled: [...passModels] };
 
-        const layoutArea = totalWidth * totalDepth;
-        const deadSpace = Math.max(0, layoutArea - occupiedArea);
-        const spillArea = spills.reduce((acc, item) => acc + (item.width * item.depth), 0);
-        const spillPenalty = spills.length * 1_000_000 + spillArea * 100;
-        const aspectPenalty = Math.abs(totalWidth - totalDepth) * 0.05;
+        const { rows, spills, rowDepths, totalWidth, totalDepth } = bestLayout;
 
-        return {
-          rows,
-          spills,
-          rowDepths,
-          totalWidth,
-          totalDepth,
-          score: deadSpace + spillPenalty + aspectPenalty,
-          usedRotation: enableRotation,
-        };
+        let startX = minX + ((maxX - minX) - totalWidth) * 0.5;
+        let startY = minY + ((maxY - minY) - totalDepth) * 0.5;
+
+        if (arrangeAnchorMode === 'front_left') {
+          startX = minX;
+          startY = minY;
+        } else if (arrangeAnchorMode === 'front_right') {
+          startX = maxX - totalWidth;
+          startY = minY;
+        } else if (arrangeAnchorMode === 'back_left') {
+          startX = minX;
+          startY = maxY - totalDepth;
+        } else if (arrangeAnchorMode === 'back_right') {
+          startX = maxX - totalWidth;
+          startY = maxY - totalDepth;
+        }
+
+        const rowCenters: number[] = [];
+        let cursorY = startY;
+        for (let row = 0; row < rowDepths.length; row += 1) {
+          const depth = rowDepths[row];
+          rowCenters[row] = cursorY + depth * 0.5;
+          cursorY += depth + spacingMmForRun;
+        }
+
+        const packedWithPositions: Array<PackedEntry & { positionX: number; positionY: number }> = [];
+        rows.forEach((row, rowIndex) => {
+          let rowCursorX = startX;
+          row.items.forEach((item) => {
+            const centerX = rowCursorX + item.width * 0.5;
+            packedWithPositions.push({
+              ...item,
+              positionX: centerX,
+              positionY: rowCenters[rowIndex],
+            });
+            rowCursorX += item.width + spacingMmForRun;
+          });
+        });
+
+        return { placed: packedWithPositions, spilled: spills.map((item) => item.model) };
       };
 
-      const countPackedItems = (layout: ReturnType<typeof evaluatePacking>) => (
-        layout.rows.reduce((acc, row) => acc + row.items.length, 0)
+      // Every bed holds the same build volume; only where the cascade puts it differs.
+      const localFrame = resolveArrangeFrame({ dxMm: 0, dyMm: 0 });
+      const platesBefore = { plates: scene.plates, activePlateId: scene.activePlateId };
+      const runModelIds = new Set(visibleModels.map((model) => model.id));
+      const targets = resolveArrangeBedTargets(plateFillModeForRun, runModelIds);
+      /** Left edge of every bed, in world millimetres: where the fallback column starts. */
+      const leftmostBedEdgeMm = scene.plateFrames.reduce(
+        (edge, plateFrame) => Math.min(edge, plateFrame.minX),
+        localFrame.minX,
       );
 
-      const isBetterLayout = (
-        candidate: ReturnType<typeof evaluatePacking>,
-        currentBest: ReturnType<typeof evaluatePacking> | null,
-      ) => {
-        if (!currentBest) return true;
+      /**
+       * The models that could not be packed anywhere are set down in a column beside the
+       * beds. Reached only when a bed adds nothing — a model larger than the plate — which
+       * is also what stops a run adding beds forever.
+       */
+      const placeBesidePlate = (modelsForColumn: SceneModel[]) => placeModelsBesideBeds({
+        models: modelsForColumn,
+        frame: localFrame,
+        spacingMm: spacingMmForRun,
+        leftmostBedEdgeMm,
+        activeOffset: arrangePlateOffset(),
+        getRotationZ: (model) => getArrangeTransform(model).rotation.z,
+        getDims: (model) => {
+          const t = getArrangeTransform(model);
+          const dims = getModelSupportAwareDimensionsMm(model, undefined, t);
+          return { width: dims.width, depth: dims.depth };
+        },
+      });
 
-        if (candidate.spills.length !== currentBest.spills.length) {
-          return candidate.spills.length < currentBest.spills.length;
-        }
-
-        const candidatePackedCount = countPackedItems(candidate);
-        const bestPackedCount = countPackedItems(currentBest);
-        if (candidatePackedCount !== bestPackedCount) {
-          return candidatePackedCount > bestPackedCount;
-        }
-
-        const scoreDelta = candidate.score - currentBest.score;
-        if (Math.abs(scoreDelta) > 1e-6) {
-          return scoreDelta < 0;
-        }
-
-        // When layouts are effectively tied, do not force rotation.
-        if (candidate.usedRotation !== currentBest.usedRotation) {
-          return !candidate.usedRotation;
-        }
-
-        return false;
+      type PlannedPass = {
+        placed: Array<{ model: SceneModel; rotationZ: number; positionX: number; positionY: number }>;
+        /** The bed this pass lands on, or null when the run has to add one. */
+        plateId: string | null;
       };
 
-      const byAreaDesc = [...modelsWithFootprints].sort((a, b) => (b.baseWidth * b.baseDepth) - (a.baseWidth * a.baseDepth));
-      const byMaxSideDesc = [...modelsWithFootprints].sort((a, b) => Math.max(b.baseWidth, b.baseDepth) - Math.max(a.baseWidth, a.baseDepth));
-      const orderingCandidates = [modelsWithFootprints, byAreaDesc, byMaxSideDesc];
+      const passes: PlannedPass[] = [];
+      let pending: SceneModel[] = [...visibleModels];
 
-      const totalModelArea = modelsWithFootprints.reduce((acc, current) => acc + (current.baseWidth * current.baseDepth), 0);
-      const baseWidth = Math.min(plateWidth, Math.max(30, Math.sqrt(totalModelArea)));
-      const targetRowWidths = [
-        baseWidth * 0.8,
-        baseWidth,
-        baseWidth * 1.2,
-        plateWidth * 0.5,
-        plateWidth * 0.65,
-        plateWidth * 0.8,
-        plateWidth,
-      ]
-        .map((w) => Math.min(plateWidth, Math.max(20, w)));
+      // Fill what the scene already has: each bed's own free space, its largest rectangle
+      // first, so a bed that is half full still takes what fits before another is made.
+      for (const target of targets) {
+        if (pending.length === 0) break;
 
-      const uniqueTargetRowWidths = [...new Set(targetRowWidths.map((w) => Number(w.toFixed(3))))];
+        const freeRects = freeRectsForPlate(localFrame, target.occupied, {
+          gapMm: spacingMmForRun,
+          minSideMm: 2,
+        });
 
-      let bestLayout: ReturnType<typeof evaluatePacking> | null = null;
-      const rotationModes = allowRotateOnZForRun ? [false, true] : [false];
-      for (const ordered of orderingCandidates) {
-        for (const targetRowWidth of uniqueTargetRowWidths) {
-          for (const enableRotation of rotationModes) {
-            const layout = evaluatePacking(ordered, targetRowWidth, enableRotation);
-            if (isBetterLayout(layout, bestLayout)) {
-              bestLayout = layout;
-            }
-          }
+        for (const rect of freeRects) {
+          if (pending.length === 0) break;
+          const pass = planPass(pending, rect);
+          if (pass.placed.length === 0) continue;
+          passes.push({ placed: pass.placed, plateId: target.plateId });
+          pending = pass.spilled;
         }
       }
 
-      if (!bestLayout) return;
+      // Everything the scene had is full: add beds until the rest has somewhere to stand.
+      // The cap only bites on a set that cannot be packed at all, where a pass below makes
+      // no progress and the rest goes beside the plate instead.
+      while (pending.length > 0 && passes.filter((pass) => pass.plateId === null).length < MAX_ARRANGE_BEDS) {
+        const pass = planPass(pending, localFrame);
+        if (pass.placed.length === 0) break;
 
-      const { rows, spills, rowDepths, totalWidth, totalDepth } = bestLayout;
-
-      let startX = minX + ((maxX - minX) - totalWidth) * 0.5;
-      let startY = minY + ((maxY - minY) - totalDepth) * 0.5;
-
-      if (arrangeAnchorMode === 'front_left') {
-        startX = minX;
-        startY = minY;
-      } else if (arrangeAnchorMode === 'front_right') {
-        startX = maxX - totalWidth;
-        startY = minY;
-      } else if (arrangeAnchorMode === 'back_left') {
-        startX = minX;
-        startY = maxY - totalDepth;
-      } else if (arrangeAnchorMode === 'back_right') {
-        startX = maxX - totalWidth;
-        startY = maxY - totalDepth;
+        passes.push({ placed: pass.placed, plateId: null });
+        pending = pass.spilled;
       }
 
-      const rowCenters: number[] = [];
-      let cursorY = startY;
-      for (let row = 0; row < rowDepths.length; row += 1) {
-        const depth = rowDepths[row];
-        rowCenters[row] = cursorY + depth * 0.5;
-        cursorY += depth + spacingMmForRun;
+      if (pending.length > 0) {
+        // A model bigger than a bed, or a set past the bed cap: the leftover goes beside
+        // the active plate, which is what arrange has always done with it.
+        passes.push({ placed: placeBesidePlate(pending), plateId: scene.activePlateId });
       }
 
-      const packedWithPositions: Array<PackedEntry & { positionX: number; positionY: number }> = [];
-      rows.forEach((row, rowIndex) => {
-        let rowCursorX = startX;
-        row.items.forEach((item) => {
-          const centerX = rowCursorX + item.width * 0.5;
-          packedWithPositions.push({
-            ...item,
-            positionX: centerX,
-            positionY: rowCenters[rowIndex],
-          });
-          rowCursorX += item.width + spacingMmForRun;
+      const newPlateCount = passes.filter((pass) => pass.plateId === null).length;
+      const reserved = scene.addPlates(newPlateCount);
+
+      // Each pass is shifted into its own bed. The frames come back with the beds because
+      // a bed added late can re-lay the ones already there.
+      let addedPlateIndex = 0;
+      const updates = passes.flatMap((pass) => {
+        const plateId = pass.plateId ?? reserved.added[addedPlateIndex++].id;
+        const offset = reserved.offsets.get(plateId) ?? { dxMm: 0, dyMm: 0 };
+
+        return pass.placed.map(({ model, rotationZ, positionX, positionY }) => {
+          const t = getArrangeTransform(model);
+          return {
+            id: model.id,
+            transform: {
+              position: new THREE.Vector3(positionX + offset.dxMm, positionY + offset.dyMm, t.position.z),
+              rotation: new THREE.Euler(
+                t.rotation.x,
+                t.rotation.y,
+                rotationZ,
+                t.rotation.order,
+              ),
+              scale: t.scale.clone(),
+            },
+          };
         });
       });
 
-      const spillWithPositions: Array<SpillEntry & { positionX: number; positionY: number }> = [];
-      if (spills.length > 0) {
-        const outsideGap = Math.max(8, spacingMmForRun);
-        let columnLeftX = maxX + outsideGap;
-        let columnYCursor = minY;
-        let columnMaxWidth = 0;
-
-        spills.forEach((item) => {
-          if (columnYCursor > minY && (columnYCursor + item.depth) > maxY) {
-            columnLeftX += columnMaxWidth + outsideGap;
-            columnMaxWidth = 0;
-            columnYCursor = minY;
-          }
-
-          const positionX = columnLeftX + item.width * 0.5;
-          const positionY = columnYCursor + item.depth * 0.5;
-          spillWithPositions.push({ ...item, positionX, positionY });
-
-          columnYCursor += item.depth + spacingMmForRun;
-          columnMaxWidth = Math.max(columnMaxWidth, item.width);
-        });
-      }
-
       applyArrangeTransforms(
-        [
-          ...packedWithPositions.map(({ model, rotationZ, positionX, positionY }) => {
-            const t = modelTransformById.get(model.id) ?? model.transform;
-            return {
-              id: model.id,
-              transform: {
-                position: new THREE.Vector3(positionX, positionY, t.position.z),
-                rotation: new THREE.Euler(
-                  t.rotation.x,
-                  t.rotation.y,
-                  rotationZ,
-                  t.rotation.order,
-                ),
-                scale: t.scale.clone(),
-              },
-            };
-          }),
-          ...spillWithPositions.map(({ model, rotationZ, positionX, positionY }) => {
-            const t = modelTransformById.get(model.id) ?? model.transform;
-            return {
-              id: model.id,
-              transform: {
-                position: new THREE.Vector3(positionX, positionY, t.position.z),
-                rotation: new THREE.Euler(
-                  t.rotation.x,
-                  t.rotation.y,
-                  rotationZ,
-                  t.rotation.order,
-                ),
-                scale: t.scale.clone(),
-              },
-            };
-          }),
-        ],
+        updates,
+        newPlateCount > 0
+          ? { platesBefore, platesAfter: { plates: reserved.plates, activePlateId: scene.activePlateId } }
+          : undefined,
       );
     } finally {
       const elapsed = performance.now() - startedAt;
@@ -858,7 +1117,7 @@ export function useArrangeManager({
       setActiveArrangeOperation(null);
       setArrangeOverlayModelCount(null);
     }
-  }, [arrangeAllowRotateOnZ, arrangeAnchorMode, arrangeSpacingMm, getArrangeTransform, getModelSupportAwareDimensionsMm, isAutoArranging, resolveArrangeVisibleModels, scene, sleep, transformMgr, applyArrangeTransforms]);
+  }, [arrangeAllowRotateOnZ, arrangeAnchorMode, arrangeSpacingMm, getArrangeTransform, getModelSupportAwareDimensionsMm, isAutoArranging, resolveArrangeBedTargets, resolveArrangeFrame, resolveArrangeVisibleModels, scene, sleep, transformMgr, applyArrangeTransforms]);
 
   const handleHighPrecisionArrangeModels = React.useCallback(async (scope: 'all' | 'selected', explicitSelectedIds?: string[]) => {
     if (isAutoArranging) return;
@@ -870,34 +1129,8 @@ export function useArrangeManager({
         const t = getArrangeTransform(model);
         const dims = getModelSupportAwareDimensionsMm(model, undefined, t);
 
-        const rawMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
-        const rawMaxX = rawMinX + scene.view3dSettings.widthMm;
-        const rawMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
-        const rawMaxY = rawMinY + scene.view3dSettings.depthMm;
-        const sm = scene.view3dSettings.safetyMarginMm;
-        const minX = rawMinX + Math.max(0, sm?.left ?? 0);
-        const maxX = rawMaxX - Math.max(0, sm?.right ?? 0);
-        const minY = rawMinY + Math.max(0, sm?.front ?? 0);
-        const maxY = rawMaxY - Math.max(0, sm?.back ?? 0);
-
-        let centerX: number;
-        let centerY: number;
-        if (arrangeAnchorMode === 'front_left') {
-          centerX = minX + dims.width * 0.5;
-          centerY = minY + dims.depth * 0.5;
-        } else if (arrangeAnchorMode === 'front_right') {
-          centerX = maxX - dims.width * 0.5;
-          centerY = minY + dims.depth * 0.5;
-        } else if (arrangeAnchorMode === 'back_left') {
-          centerX = minX + dims.width * 0.5;
-          centerY = maxY - dims.depth * 0.5;
-        } else if (arrangeAnchorMode === 'back_right') {
-          centerX = maxX - dims.width * 0.5;
-          centerY = maxY - dims.depth * 0.5;
-        } else {
-          centerX = (minX + maxX) * 0.5;
-          centerY = (minY + maxY) * 0.5;
-        }
+        const { minX, maxX, minY, maxY } = resolveArrangeFrame();
+        const { x: centerX, y: centerY } = loneModelCenter({ minX, maxX, minY, maxY }, dims, arrangeAnchorMode);
 
         // Arrange and Duplicate previews should never overlap.
         setDuplicateApplySourceModel(null);
@@ -933,29 +1166,203 @@ export function useArrangeManager({
     await sleep(0);
 
     try {
-      const modelTransformById = new Map(
-        scene.models.map((model) => [model.id, getArrangeTransform(model)] as const),
+      const activeOffset = arrangePlateOffset();
+      // Every bed holds the same build volume, so a pass packs in the plate's own
+      // millimetres and the bed is added afterwards. Model positions are shifted into
+      // the active plate's frame so that the models standing on OTHER beds stay where
+      // the cascade puts them relative to this one — the packer treats everything that
+      // is not a target as a blocker.
+      const localTransformById = new Map(
+        scene.models.map((model) => {
+          const t = getArrangeTransform(model);
+          return [model.id, {
+            ...t,
+            position: new THREE.Vector3(
+              t.position.x - activeOffset.dxMm,
+              t.position.y - activeOffset.dyMm,
+              t.position.z,
+            ),
+          }] as const;
+        }),
       );
-      const visibleIdSet = new Set(visibleModels.map((model) => model.id));
-      const highPrecisionSceneModels = buildHighPrecisionArrangeModels(scene.models, modelTransformById);
-      const highPrecisionVisibleModels = highPrecisionSceneModels.filter((model) => visibleIdSet.has(model.id));
+      const sceneArrangeModels = buildHighPrecisionArrangeModels(scene.models, localTransformById);
+      const arrangeIdSet = new Set(visibleModels.map((model) => model.id));
 
-      const updates = await computeHighPrecisionArrangeUpdatesWorker({
-        visibleModels: highPrecisionVisibleModels,
-        sceneModels: highPrecisionSceneModels,
-        widthMm: scene.view3dSettings.widthMm,
-        depthMm: scene.view3dSettings.depthMm,
-        originMode: scene.view3dSettings.originMode,
-        arrangeSpacingMm,
-        arrangeAllowRotateOnZ,
-        arrangeAnchorMode,
-        getArrangeTransform: (model) => model.transform,
-        hullCache: arrangeHullFootprintCacheRef.current,
-        safetyMarginMm: scene.view3dSettings.safetyMarginMm,
+      const platesBefore = { plates: scene.plates, activePlateId: scene.activePlateId };
+      // Every bed holds the same build volume; only where the cascade puts it differs.
+      const localFrame = resolveArrangeFrame({ dxMm: 0, dyMm: 0 });
+      const targets = resolveArrangeBedTargets(arrangePlateFillMode, arrangeIdSet);
+      /** Left edge of every bed, in world millimetres: where the fallback column starts. */
+      const leftmostBedEdgeMm = scene.plateFrames.reduce(
+        (edge, plateFrame) => Math.min(edge, plateFrame.minX),
+        localFrame.minX,
+      );
+
+      type PlannedPass = {
+        /** Placements in the bed's own millimetres, before the bed is put anywhere. */
+        placed: Array<{ id: string; transform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 } }>;
+        /** The bed this pass lands on, or null when the run has to add one. */
+        plateId: string | null;
+      };
+
+      const passes: PlannedPass[] = [];
+      let pendingIds = visibleModels.map((model) => model.id);
+      /** The last pass's own placement beside its bed, in plate millimetres. */
+
+      /**
+       * Packs whatever is still pending into one rectangle of one bed.
+       *
+       * The rectangle is the room a bed has left, so the packer is told where to put
+       * models rather than what to avoid: no blockers, and the frame it is given is that
+       * rectangle — a bed's own frame is only the special case where nothing is on it.
+       */
+      const packIntoRect = async (rect: PlateRect, plateId: string | null): Promise<void> => {
+        if (pendingIds.length === 0) return;
+
+        // The packer arranges a set; asked for one model it answers nothing at all. The
+        // lone leftover is therefore placed the way a solo arrange places it.
+        if (pendingIds.length === 1) {
+          const lone = visibleModels.find((model) => model.id === pendingIds[0]);
+          if (!lone) {
+            pendingIds = [];
+            return;
+          }
+
+          const t = getArrangeTransform(lone);
+          const dims = getModelSupportAwareDimensionsMm(lone, undefined, t);
+          // Only where it fits. A lone model is not a reason to hang it over the edge of a
+          // bed — the caller offers it the next rectangle, and a bed of its own if none of
+          // the free space is big enough.
+          if (dims.width > (rect.maxX - rect.minX) || dims.depth > (rect.maxY - rect.minY)) return;
+
+          const { x, y } = loneModelCenter(rect, dims, arrangeAnchorMode);
+          passes.push({
+            placed: [{
+              id: lone.id,
+              transform: {
+                position: new THREE.Vector3(x, y, t.position.z),
+                rotation: t.rotation.clone(),
+                scale: t.scale.clone(),
+              },
+            }],
+            plateId,
+          });
+          pendingIds = [];
+          return;
+        }
+
+        const targetIds = new Set(pendingIds);
+        const passModels = sceneArrangeModels.filter((model) => targetIds.has(model.id));
+        const result = await computeHighPrecisionArrangeResultWorker({
+          visibleModels: passModels,
+          sceneModels: passModels,
+          widthMm: rect.maxX - rect.minX,
+          depthMm: rect.maxY - rect.minY,
+          // The rectangle is the frame: a front-left origin plus the offset puts it
+          // exactly where the free space is, with the margins already taken out.
+          originMode: 'front_left',
+          plateOffsetMm: { dxMm: rect.minX, dyMm: rect.minY },
+          arrangeSpacingMm,
+          arrangeAllowRotateOnZ,
+          arrangeAnchorMode,
+          getArrangeTransform: (model) => model.transform,
+          hullCache: arrangeHullFootprintCacheRef.current,
+          safetyMarginMm: undefined,
+        });
+
+        const packedIds = new Set(result.packedIds);
+        const packed = result.updates.filter((update) => packedIds.has(update.id));
+
+        if (packed.length === 0) {
+          // Nothing fitted this rectangle; the caller moves on to the next one.
+          return;
+        }
+
+        passes.push({ placed: packed, plateId });
+        pendingIds = result.spilledIds;
+      };
+
+      // Fill what the scene already has: each bed's own free space, its largest rectangle
+      // first, so a bed that is half full still takes what fits before another is made.
+      for (const target of targets) {
+        if (pendingIds.length === 0) break;
+
+        const freeRects = freeRectsForPlate(localFrame, target.occupied, {
+          gapMm: arrangeSpacingMm,
+          minSideMm: 2,
+        });
+
+        for (const rect of freeRects) {
+          if (pendingIds.length === 0) break;
+          await packIntoRect(rect, target.plateId);
+        }
+      }
+
+      // Everything the scene had is full: add beds until the rest has somewhere to stand.
+      let addedBeds = 0;
+      while (pendingIds.length > 0 && addedBeds < MAX_ARRANGE_BEDS) {
+        const before = pendingIds.length;
+        await packIntoRect(localFrame, null);
+        if (pendingIds.length >= before) break;
+        addedBeds += 1;
+      }
+
+      if (pendingIds.length > 0) {
+        // A model bigger than a bed, or a set past the bed cap: the leftover goes in a
+        // column beside the beds, which is what arrange has always done with it.
+        const leftoverModels = visibleModels.filter((model) => pendingIds.includes(model.id));
+        const beside = placeModelsBesideBeds({
+          models: leftoverModels,
+          frame: localFrame,
+          spacingMm: arrangeSpacingMm,
+          leftmostBedEdgeMm,
+          activeOffset: arrangePlateOffset(),
+          getRotationZ: (model) => getArrangeTransform(model).rotation.z,
+          getDims: (model) => {
+            const t = getArrangeTransform(model);
+            const dims = getModelSupportAwareDimensionsMm(model, undefined, t);
+            return { width: dims.width, depth: dims.depth };
+          },
+        });
+
+        passes.push({
+          placed: beside.map((entry) => ({
+            id: entry.model.id,
+            transform: {
+              position: new THREE.Vector3(entry.positionX, entry.positionY, getArrangeTransform(entry.model).position.z),
+              rotation: getArrangeTransform(entry.model).rotation.clone(),
+              scale: getArrangeTransform(entry.model).scale.clone(),
+            },
+          })),
+          plateId: scene.activePlateId,
+        });
+      }
+
+      const newPlateCount = passes.filter((pass) => pass.plateId === null).length;
+      const reserved = scene.addPlates(newPlateCount);
+
+      let addedPlateIndex = 0;
+      const updates = passes.flatMap((pass) => {
+        const plateId = pass.plateId ?? reserved.added[addedPlateIndex++].id;
+        const offset = reserved.offsets.get(plateId) ?? { dxMm: 0, dyMm: 0 };
+
+        return pass.placed.map((update) => ({
+          id: update.id,
+          transform: {
+            position: update.transform.position.clone().add(new THREE.Vector3(offset.dxMm, offset.dyMm, 0)),
+            rotation: update.transform.rotation.clone(),
+            scale: update.transform.scale.clone(),
+          },
+        }));
       });
 
       if (updates.length > 1) {
-        applyArrangeTransforms(updates);
+        applyArrangeTransforms(
+          updates,
+          newPlateCount > 0
+            ? { platesBefore, platesAfter: { plates: reserved.plates, activePlateId: scene.activePlateId } }
+            : undefined,
+        );
       }
     } finally {
       const elapsed = performance.now() - startedAt;
@@ -969,9 +1376,12 @@ export function useArrangeManager({
   }, [
     arrangeAllowRotateOnZ,
     arrangeAnchorMode,
+    arrangePlateOffset,
     arrangeSpacingMm,
     getArrangeTransform,
     isAutoArranging,
+    resolveArrangeBedTargets,
+    resolveArrangeFrame,
     resolveArrangeVisibleModels,
     scene,
     sleep,
@@ -1019,15 +1429,7 @@ export function useArrangeManager({
     const stepY = Math.max(0.1, maxDepth + gapY);
     const stepZ = Math.max(0.1, maxHeight + gapZ);
 
-    const rawMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
-    const rawMaxX = rawMinX + scene.view3dSettings.widthMm;
-    const rawMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
-    const rawMaxY = rawMinY + scene.view3dSettings.depthMm;
-    const arraySm = scene.view3dSettings.safetyMarginMm;
-    const minX = rawMinX + Math.max(0, arraySm?.left ?? 0);
-    const maxX = rawMaxX - Math.max(0, arraySm?.right ?? 0);
-    const minY = rawMinY + Math.max(0, arraySm?.front ?? 0);
-    const maxY = rawMaxY - Math.max(0, arraySm?.back ?? 0);
+    const { minX, maxX, minY, maxY } = resolveArrangeFrame();
 
     const slotsPerLayer = countX * countY;
     const requiredLayers = Math.max(1, Math.ceil(visibleModels.length / slotsPerLayer));
@@ -1086,10 +1488,7 @@ export function useArrangeManager({
     arrangeArrayGapZ,
     scene.models,
     scene.selectedModelIds,
-    scene.view3dSettings.depthMm,
-    scene.view3dSettings.originMode,
-    scene.view3dSettings.safetyMarginMm,
-    scene.view3dSettings.widthMm,
+    resolveArrangeFrame,
     getArrangeTransform,
     getModelSupportAwareDimensionsMm,
     resolveArrangeVisibleModels,
@@ -1105,34 +1504,8 @@ export function useArrangeManager({
         const t = getArrangeTransform(model);
         const dims = getModelSupportAwareDimensionsMm(model, undefined, t);
 
-        const rawMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
-        const rawMaxX = rawMinX + scene.view3dSettings.widthMm;
-        const rawMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
-        const rawMaxY = rawMinY + scene.view3dSettings.depthMm;
-        const sm = scene.view3dSettings.safetyMarginMm;
-        const minX = rawMinX + Math.max(0, sm?.left ?? 0);
-        const maxX = rawMaxX - Math.max(0, sm?.right ?? 0);
-        const minY = rawMinY + Math.max(0, sm?.front ?? 0);
-        const maxY = rawMaxY - Math.max(0, sm?.back ?? 0);
-
-        let centerX: number;
-        let centerY: number;
-        if (arrangeAnchorMode === 'front_left') {
-          centerX = minX + dims.width * 0.5;
-          centerY = minY + dims.depth * 0.5;
-        } else if (arrangeAnchorMode === 'front_right') {
-          centerX = maxX - dims.width * 0.5;
-          centerY = minY + dims.depth * 0.5;
-        } else if (arrangeAnchorMode === 'back_left') {
-          centerX = minX + dims.width * 0.5;
-          centerY = maxY - dims.depth * 0.5;
-        } else if (arrangeAnchorMode === 'back_right') {
-          centerX = maxX - dims.width * 0.5;
-          centerY = maxY - dims.depth * 0.5;
-        } else {
-          centerX = (minX + maxX) * 0.5;
-          centerY = (minY + maxY) * 0.5;
-        }
+        const { minX, maxX, minY, maxY } = resolveArrangeFrame();
+        const { x: centerX, y: centerY } = loneModelCenter({ minX, maxX, minY, maxY }, dims, arrangeAnchorMode);
 
         // Arrange and Duplicate previews should never overlap.
         setDuplicateApplySourceModel(null);
@@ -1191,6 +1564,7 @@ export function useArrangeManager({
     arrangeArrayGapZ,
     computeManualArrayArrangeUpdates,
     isAutoArranging,
+    resolveArrangeFrame,
     scene,
     sleep,
     transformMgr,
@@ -1287,6 +1661,12 @@ export function useArrangeManager({
             scale: duplicateSourcePreviewTransform.scale.clone(),
           }
           : null,
+        reserved
+          ? {
+              platesBefore,
+              platesAfter: { plates: reserved.plates, activePlateId: scene.activePlateId },
+            }
+          : undefined,
       );
 
       const firstCreatedId = createdIds[0] ?? null;
@@ -1565,6 +1945,8 @@ export function useArrangeManager({
   return {
     arrangePrecisionMode,
     setArrangePrecisionMode,
+    arrangePlateFillMode,
+    setArrangePlateFillMode,
     arrangeAllowRotateOnZ,
     setArrangeAllowRotateOnZ,
     arrangeLayoutMode,

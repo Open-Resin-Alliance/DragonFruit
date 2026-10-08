@@ -1,10 +1,14 @@
 import React from 'react';
 import { LayoutGrid, RotateCw } from 'lucide-react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
 import { MiniStepperField } from '@/components/ui/miniStepperField';
 import { Button, Card, CardHeader, Select, Spinner } from '@/components/atoms';
 import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
+import type { ArrangePlateFillMode } from '@/features/scene/arrange/useArrangeManager';
 
 export type ArrangeAnchorMode = 'center' | 'front_left' | 'front_right' | 'back_left' | 'back_right';
 export type ArrangeLayoutMode = 'auto' | 'array';
@@ -13,6 +17,8 @@ export type ArrangePrecisionMode = 'standard' | 'high_precision';
 interface ArrangePanelProps {
   precisionMode: ArrangePrecisionMode;
   onPrecisionModeChange: (value: ArrangePrecisionMode) => void;
+  fillMode: ArrangePlateFillMode;
+  onFillModeChange: (value: ArrangePlateFillMode) => void;
   layoutMode: ArrangeLayoutMode;
   onLayoutModeChange: (value: ArrangeLayoutMode) => void;
   spacingMm: number;
@@ -44,6 +50,8 @@ interface ArrangePanelProps {
 export function ArrangePanel({
   precisionMode,
   onPrecisionModeChange,
+  fillMode,
+  onFillModeChange,
   layoutMode,
   onLayoutModeChange,
   spacingMm,
@@ -71,6 +79,7 @@ export function ArrangePanel({
   isApplying = false,
   disableArrangeActions = false,
 }: ArrangePanelProps) {
+  const { _ } = useLingui();
   const [expanded, setExpanded] = useFloatingPanelCollapse(true);
   const isArrangeAllDisabled = modelCount <= 0 || isApplying || disableArrangeActions;
   const isArrangeSelectedDisabled = selectedModelCount === 0 || isApplying || disableArrangeActions;
@@ -160,6 +169,36 @@ export function ArrangePanel({
               </Button>
             </div>
           </div>
+
+          {layoutMode === 'auto' && (
+            <div className="rounded-md border p-2" style={accentCardStyle}>
+              <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}><Trans>Plate Mode</Trans></div>
+              <div className="grid grid-cols-2 gap-1">
+                <Button
+                  variant="secondary"
+                  size="auto"
+                  className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                  onClick={() => onFillModeChange('plates')}
+                  disabled={isApplying}
+                  style={isApplying ? disabledModeStyle : (fillMode === 'plates' ? activeModeStyle : undefined)}
+                  title={_(msg({ message: 'Use the plates the scene already has before adding more', comment: 'Tooltip on the Arrange panel\'s plate mode choice. It fills partly used plates around the models already on them.' }))}
+                >
+                  <Trans>Multi-Plate</Trans>
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="auto"
+                  className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                  onClick={() => onFillModeChange('plate')}
+                  disabled={isApplying}
+                  style={isApplying ? disabledModeStyle : (fillMode === 'plate' ? activeModeStyle : undefined)}
+                  title={_(msg({ message: 'Arrange only the plate being worked on', comment: 'Tooltip on the Arrange panel\'s plate mode choice. Overflow goes onto new plates, and no other plate is touched.' }))}
+                >
+                  <Trans>This Plate</Trans>
+                </Button>
+              </div>
+            </div>
+          )}
 
           {layoutMode === 'auto' && (
             <div className="rounded-md border p-2" style={accentCardStyle}>
