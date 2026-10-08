@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
+import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { useLingui } from '@lingui/react';
 import * as THREE from 'three';
 import { refineCoarseFaces } from '@/utils/tauriMeshBridge';
@@ -6331,32 +6331,39 @@ export function useSceneCollectionManager(options?: {
    * plate now covers that spot, so each one is shifted by exactly how far its own
    * plate moved. A model on no plate stays where it was put: it was dragged off a bed
    * deliberately and is not standing on anything that moved.
+   *
+   * The beds are spaced by their own footprint, so the same shift applies when the
+   * build volume changes under them — a printer switch moves every bed but the first.
+   * `laidOut` is the footprint they were placed on then, which is what the models'
+   * positions are still measured against.
    */
   const modelsShiftedForRelaidPlates = useCallback((
     before: readonly ScenePlate[],
     after: readonly ScenePlate[],
     models: readonly LoadedModel[],
+    laidOut?: { widthMm: number; depthMm: number; originMode: View3DSettings['originMode'] },
   ): LoadedModel[] => {
     if (after.length <= 1) return models as LoadedModel[];
 
     const { widthMm, depthMm, originMode } = view3dSettings;
     const footprint = { widthMm, depthMm };
-    const localMinX = originMode === 'front_left' ? 0 : -widthMm * 0.5;
-    const localMinY = originMode === 'front_left' ? 0 : -depthMm * 0.5;
+    const was = laidOut ?? { widthMm, depthMm, originMode };
+    const wasMinX = was.originMode === 'front_left' ? 0 : -was.widthMm * 0.5;
+    const wasMinY = was.originMode === 'front_left' ? 0 : -was.depthMm * 0.5;
 
     const shifts = new Map<string, { dxMm: number; dyMm: number }>();
     const frames = before.map((plate, index) => {
-      const from = plateCascadeOffsetMm(index, footprint, before.length);
+      const from = plateCascadeOffsetMm(index, was, before.length);
       const to = plateCascadeOffsetMm(index, footprint, after.length);
       if (from.dxMm !== to.dxMm || from.dyMm !== to.dyMm) {
         shifts.set(plate.id, { dxMm: to.dxMm - from.dxMm, dyMm: to.dyMm - from.dyMm });
       }
       return {
         id: plate.id,
-        minX: localMinX + from.dxMm,
-        minY: localMinY + from.dyMm,
-        maxX: localMinX + from.dxMm + widthMm,
-        maxY: localMinY + from.dyMm + depthMm,
+        minX: wasMinX + from.dxMm,
+        minY: wasMinY + from.dyMm,
+        maxX: wasMinX + from.dxMm + was.widthMm,
+        maxY: wasMinY + from.dyMm + was.depthMm,
       };
     });
 
@@ -6379,6 +6386,57 @@ export function useSceneCollectionManager(options?: {
       };
     });
   }, [view3dSettings]);
+
+  /**
+   * The build volume the beds were last laid out on.
+   *
+   * The cascade spaces the beds by their own footprint, so a printer switch moves every
+   * bed but the first. The models have to make the same move: one left at the plate 2
+   * of the old printer sits off the side of the one it stands on, and reads as outside
+   * its plate — which is what a smaller printer used to do to every bed but the first.
+   */
+  const laidOutFootprintRef = useRef<{
+    widthMm: number;
+    depthMm: number;
+    originMode: View3DSettings['originMode'];
+  } | null>(null);
+
+  useLayoutEffect(() => {
+    const previous = laidOutFootprintRef.current;
+    const current = {
+      widthMm: view3dSettings.widthMm,
+      depthMm: view3dSettings.depthMm,
+      originMode: view3dSettings.originMode,
+    };
+    laidOutFootprintRef.current = current;
+    if (
+      !previous
+      || (previous.widthMm === current.widthMm
+        && previous.depthMm === current.depthMm
+        && previous.originMode === current.originMode)
+    ) {
+      return;
+    }
+
+    const currentPlates = platesRef.current;
+    const shiftedModels = modelsShiftedForRelaidPlates(
+      currentPlates,
+      currentPlates,
+      modelsRef.current,
+      previous,
+    );
+    if (shiftedModels === modelsRef.current) return;
+
+    setModels(shiftedModels);
+    // The bed being worked on moved with the others, so the view comes along the way it
+    // does when you pick a bed.
+    setPlateViewRunId((id) => id + 1);
+  }, [
+    modelsShiftedForRelaidPlates,
+    view3dSettings.depthMm,
+    view3dSettings.originMode,
+    view3dSettings.widthMm,
+  ]);
 
   const addPlate = useCallback((options?: { pushHistory?: boolean }): string => {
     const plate: ScenePlate = { id: uuidv4(), name: '' };
