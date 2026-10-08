@@ -11,7 +11,7 @@ export type ExportPanelStackProps = {
   slicing: ReturnType<typeof useSlicingManager>;
 
   supportsRef: React.RefObject<THREE.Group | null>;
-  captureExportThumbnailPng: React.ComponentProps<typeof ExportPanel>['captureSceneThumbnailPng'];
+  captureExportThumbnailPng: React.ComponentProps<typeof SlicingPanel>['captureSceneThumbnailPng'];
   handleExportSuccess: React.ComponentProps<typeof ExportPanel>['onExportSuccess'];
   showOperationError: React.ComponentProps<typeof ExportPanel>['onExportError'];
   setIsExporting: (exporting: boolean) => void;

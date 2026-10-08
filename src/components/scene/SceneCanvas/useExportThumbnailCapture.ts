@@ -70,7 +70,17 @@ export function useExportThumbnailCapture({
 }: UseExportThumbnailCaptureArgs) {
   const thumbnailCaptureActive = false;
 
-  const captureExportThumbnailPng = React.useCallback(async (): Promise<Uint8Array | null> => {
+  /**
+   * Renders the export thumbnail.
+   *
+   * `volumeBoundsOverride` frames a bed other than the one being worked on: a batch slices one
+   * bed after another while the workspace's active bed stays put, and every plate's file would
+   * otherwise carry the same shot of that one bed.
+   */
+  const captureExportThumbnailPng = React.useCallback(async (
+    volumeBoundsOverride?: THREE.Box3 | null,
+  ): Promise<Uint8Array | null> => {
+    const framingBounds = volumeBoundsOverride ?? buildVolumeBounds;
     const renderer = rendererRef.current;
     const sceneGraph = sceneRef.current;
     const camera = cameraRef.current;
@@ -81,15 +91,15 @@ export function useExportThumbnailCapture({
     // Models dragged out of bounds should not appear in the export thumbnail.
     const inBoundsModels = models.filter((model) => {
       if (!model.visible) return false;
-      if (!buildVolumeBounds) return true;
-      const bounds = modelWorldBounds.get(model.id) ?? computeModelWorldBounds(model, model.transform, buildVolumeBounds);
+      if (!framingBounds) return true;
+      const bounds = modelWorldBounds.get(model.id) ?? computeModelWorldBounds(model, model.transform, framingBounds);
       if (!bounds || bounds.isEmpty()) return false;
-      return bounds.intersectsBox(buildVolumeBounds);
+      return bounds.intersectsBox(framingBounds);
     });
     const inBoundsModelIdSet = new Set(inBoundsModels.map((model) => model.id));
 
     const visibleBounds = inBoundsModels
-      .map((model) => modelWorldBounds.get(model.id) ?? computeModelWorldBounds(model, model.transform, buildVolumeBounds))
+      .map((model) => modelWorldBounds.get(model.id) ?? computeModelWorldBounds(model, model.transform, framingBounds))
       .filter((box): box is THREE.Box3 => !!box && !box.isEmpty());
 
     if (visibleBounds.length === 0) return null;

@@ -88,7 +88,8 @@ interface SlicingPanelProps {
   estimatedLayerCountOverride?: number | null;
   estimatedLayerHeightMmOverride?: number | null;
   estimatedVolumeLabelOverride?: string | null;
-  captureSceneThumbnailPng?: () => Promise<Uint8Array | null>;
+  /** The scene shot for a plate's file. The bed frames it: a batch writes one shot per bed. */
+  captureSceneThumbnailPng?: (plateId?: string) => Promise<Uint8Array | null>;
   /** A run's first moment, with the bed it is slicing, so per-bed state is dropped for that bed. */
   onSliceRunStarted?: (context?: { plateId?: string }) => void;
   onLayerPreviewGenerated?: (payload: {
@@ -2047,7 +2048,7 @@ export function SlicingPanel({
 
       if (captureSceneThumbnailPng && !skipThumbnailCapture) {
         try {
-          exportThumbnailPng = await captureSceneThumbnailPng();
+          exportThumbnailPng = await captureSceneThumbnailPng(scope?.plateId ?? undefined);
           console.info('[Slicing] Scene thumbnail capture result', {
             hasThumbnail: Boolean(exportThumbnailPng && exportThumbnailPng.length > 0),
             bytes: exportThumbnailPng?.length ?? 0,

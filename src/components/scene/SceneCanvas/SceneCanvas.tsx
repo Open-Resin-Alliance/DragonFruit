@@ -804,7 +804,14 @@ export function SceneCanvas({
   gizmoResetNonce?: number;
   historyTransformResyncToken?: number;
   isLayerScrubbing?: boolean;
-  onRegisterExportThumbnailCapture?: (capture: (() => Promise<Uint8Array | null>) | null) => void;
+  /**
+   * Registered with the canvas so a caller outside it can take the shot. The optional bounds
+   * frame a bed other than the one being worked on — a batch slices one bed after another while
+   * the workspace's active bed stays put.
+   */
+  onRegisterExportThumbnailCapture?: (
+    capture: ((volumeBoundsOverride?: THREE.Box3 | null) => Promise<Uint8Array | null>) | null,
+  ) => void;
   exportThumbnailRenderOptions?: ExportThumbnailRenderOptions;
   indicatorPlaneZ?: number | null;
   indicatorPlaneColor?: string;

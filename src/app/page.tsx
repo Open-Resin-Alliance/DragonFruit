@@ -3073,6 +3073,22 @@ export default function Home() {
     }));
   }, [scene.activePlateId, scene.models, scene.plateFrames, scene.resolveModelPlateId]);
 
+  /**
+   * The scene shot a plate's file carries, framed on that plate.
+   *
+   * `captureExportThumbnailPng` renders the scene as it stands, framed on the bed being worked
+   * on, so a batch would give every plate the same picture of plate 1. Handing it the bed's own
+   * build volume frames that bed and, through the bounds filter, keeps the other beds' models
+   * out of it.
+   */
+  const captureSliceThumbnailPng = React.useCallback(async (plateId?: string): Promise<Uint8Array | null> => {
+    if (!plateId) return captureExportThumbnailPng();
+    const frame = scene.plateFrames.find((candidate) => candidate.id === plateId);
+    const bounds = plateVolumeBounds?.get(plateId) ?? null;
+    if (!frame || !bounds) return captureExportThumbnailPng();
+    return captureExportThumbnailPng(bounds);
+  }, [captureExportThumbnailPng, plateVolumeBounds, scene.plateFrames]);
+
   const printingOutputSizeLabel = React.useMemo(() => {
     if (!printingArtifact) return '—';
     const bytes = Math.max(0, printingArtifact.byteSize);
@@ -10459,7 +10475,7 @@ export default function Home() {
               scene: scene,
               slicing: slicing,
               supportsRef: supportsRef,
-              captureExportThumbnailPng: captureExportThumbnailPng,
+              captureExportThumbnailPng: captureSliceThumbnailPng,
               handleExportSuccess: handleExportSuccess,
               showOperationError: showOperationError,
               estimatedSlicerLayerCount: estimatedSlicerLayerCount,

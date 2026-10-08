@@ -1,4 +1,5 @@
 import React from 'react';
+import * as THREE from 'three';
 import { detectIsIOS } from '@/hooks/usePlatform';
 import { suppressSceneAutosave } from '@/hooks/useSceneAutosave';
 import { extractFilesFromZip, getFileExtensionLower } from '@/utils/zipImport';
@@ -84,7 +85,8 @@ export function useImportExportManager({
 
   const exportThumbnailCaptureRef = React.useRef<(() => Promise<Uint8Array | null>) | null>(null);
 
-  const exportThumbnailCaptureRunnerRef = React.useRef<(() => Promise<Uint8Array | null>) | null>(null);
+  /** The canvas's shot of the scene. The optional bounds frame a bed other than the active one. */
+  const exportThumbnailCaptureRunnerRef = React.useRef<((volumeBoundsOverride?: THREE.Box3 | null) => Promise<Uint8Array | null>) | null>(null);
 
   const [isPrepareDragActive, setIsPrepareDragActive] = React.useState(false);
 
@@ -123,14 +125,14 @@ export function useImportExportManager({
     atMs: 0,
   });
 
-    const handleRegisterExportThumbnailCapture = React.useCallback((capture: (() => Promise<Uint8Array | null>) | null) => {
+    const handleRegisterExportThumbnailCapture = React.useCallback((capture: ((volumeBoundsOverride?: THREE.Box3 | null) => Promise<Uint8Array | null>) | null) => {
       exportThumbnailCaptureRef.current = capture;
     }, []);
 
-    const captureExportThumbnailPng = React.useCallback(async () => {
+    const captureExportThumbnailPng = React.useCallback(async (volumeBoundsOverride?: THREE.Box3 | null) => {
       const runCapture = exportThumbnailCaptureRunnerRef.current;
       if (!runCapture) return null;
-      return runCapture();
+      return runCapture(volumeBoundsOverride);
     }, []);
 
   const importSceneFilesWithPluginWarning = React.useCallback(async (
