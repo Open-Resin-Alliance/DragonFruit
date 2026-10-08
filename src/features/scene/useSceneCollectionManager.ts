@@ -1787,6 +1787,7 @@ export function useSceneCollectionManager(options?: {
 
     const centerX = defaultImportCenterXY.x;
     const centerY = defaultImportCenterXY.y;
+    const activePlateOffset = plateOffsetForRef.current(activePlateIdRef.current);
     // The search runs in world coordinates over the ACTIVE plate's volume, so a
     // model imported onto the second plate lands on the second plate.
     const { minX, maxX, minY, maxY } = activePlateRect;
@@ -1903,11 +1904,30 @@ export function useSceneCollectionManager(options?: {
         return { x: candidate.x, y: candidate.y };
       }
 
-      for (const candidate of candidateCenters) {
-        const rect = makeRectAt(candidate.x, candidate.y);
-        if (blockedRects.some((blocked) => intersectsRect(rect, blocked))) continue;
-        blockedRects.push(rect);
-        return { x: candidate.x, y: candidate.y };
+      // Then the scene's other beds, in cascade order, each checked in its own frame. A paste has
+      // always filled the beds that exist before adding one; an import used to give up after the
+      // active plate and set the model down beside the plates.
+      for (const plate of platesRef.current) {
+        if (plate.id === activePlateIdRef.current) continue;
+        const { dxMm, dyMm } = plateOffsetForRef.current(plate.id);
+        const bedRect: Rect2D = {
+          minX: activePlateRect.minX - activePlateOffset.dxMm + dxMm,
+          maxX: activePlateRect.maxX - activePlateOffset.dxMm + dxMm,
+          minY: activePlateRect.minY - activePlateOffset.dyMm + dyMm,
+          maxY: activePlateRect.maxY - activePlateOffset.dyMm + dyMm,
+        };
+        const fitsBed = (rect: Rect2D) => (
+          rect.minX >= bedRect.minX && rect.maxX <= bedRect.maxX
+          && rect.minY >= bedRect.minY && rect.maxY <= bedRect.maxY
+        );
+
+        for (const candidate of candidateCenters) {
+          const rect = makeRectAt(candidate.x, candidate.y);
+          if (!fitsBed(rect)) continue;
+          if (blockedRects.some((blocked) => intersectsRect(rect, blocked))) continue;
+          blockedRects.push(rect);
+          return { x: candidate.x, y: candidate.y };
+        }
       }
 
       const fallbackX = centerX + (maxRing + 2 + blockedRects.length) * stepX;
@@ -5339,10 +5359,57 @@ export function useSceneCollectionManager(options?: {
         shouldAutoArrangeOnImport = choice === 'auto_arrange';
       }
 
-      // Auto-arrange all models together so they don't overlap
+      // Auto-arrange all models together so they don't overlap, filling the beds the scene has
+      // before reaching for a new one.
       const assignedCenters = shouldAutoArrangeOnImport
         ? findFreeSpotCentersForModels(sourceCandidates, 5)
         : [];
+
+      if (assignedCenters.length > 0) {
+        // What the search could not seat on a bed, but which would fit an empty one, gets a bed of
+        // its own: the beds are added once, together, and the model placed at its centre. A model
+        // larger than a bed has nowhere to go and keeps the search's own fallback.
+        const localMinX = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.widthMm * 0.5;
+        const localMinY = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.depthMm * 0.5;
+        const bedFrames = platesRef.current.map((plate) => {
+          const { dxMm, dyMm } = plateOffsetForRef.current(plate.id);
+          return {
+            minX: localMinX + dxMm,
+            maxX: localMinX + dxMm + view3dSettings.widthMm,
+            minY: localMinY + dyMm,
+            maxY: localMinY + dyMm + view3dSettings.depthMm,
+          };
+        });
+
+        const unseatedIndices = assignedCenters
+          .map((center, index) => ({ center, index }))
+          .filter(({ center }) => !bedFrames.some((frame) => (
+            center.x >= frame.minX && center.x <= frame.maxX
+            && center.y >= frame.minY && center.y <= frame.maxY
+          )))
+          .filter(({ index }) => {
+            const candidate = sourceCandidates[index];
+            if (!candidate) return false;
+            const placement = buildMeshPlacementOffsets(
+              { x: candidate.transform.position.x, y: candidate.transform.position.y },
+              candidate.geometry.size,
+              candidate.transform,
+            );
+            return placement.width <= view3dSettings.widthMm && placement.depth <= view3dSettings.depthMm;
+          });
+
+        if (unseatedIndices.length > 0) {
+          const reserved = addPlatesRef.current(unseatedIndices.length);
+          unseatedIndices.forEach(({ index }, order) => {
+            const plate = reserved.added[order];
+            if (!plate) return;
+            const { dxMm, dyMm } = reserved.offsets.get(plate.id) ?? { dxMm: 0, dyMm: 0 };
+            const localCenterX = view3dSettings.originMode === 'front_left' ? view3dSettings.widthMm * 0.5 : 0;
+            const localCenterY = view3dSettings.originMode === 'front_left' ? view3dSettings.depthMm * 0.5 : 0;
+            assignedCenters[index] = { x: localCenterX + dxMm, y: localCenterY + dyMm };
+          });
+        }
+      }
 
       const newModels: LoadedModel[] = [];
       const supportEntries: Array<{
