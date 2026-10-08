@@ -83,7 +83,8 @@ export function useImportExportManager({
   deps,
 }: UseImportExportManagerOptions) {
 
-  const exportThumbnailCaptureRef = React.useRef<(() => Promise<Uint8Array | null>) | null>(null);
+  /** The canvas's shot of the scene; the optional bounds frame a bed other than the active one. */
+  const exportThumbnailCaptureRef = React.useRef<((volumeBoundsOverride?: THREE.Box3 | null) => Promise<Uint8Array | null>) | null>(null);
 
   /** The canvas's shot of the scene. The optional bounds frame a bed other than the active one. */
   const exportThumbnailCaptureRunnerRef = React.useRef<((volumeBoundsOverride?: THREE.Box3 | null) => Promise<Uint8Array | null>) | null>(null);
@@ -1209,7 +1210,13 @@ export function useImportExportManager({
     void handleDroppedPrepareFiles(files);
   }, [handleDroppedPrepareFiles, scene.mode]);
 
-  const runExportThumbnailCapture = React.useCallback(async () => {
+  /**
+   * Runs the canvas's shot, with the selection and slice layer set up for a clean picture.
+   *
+   * `volumeBoundsOverride` is passed through: the slicing panel frames the bed it is slicing, so a
+   * batch's files each carry their own bed rather than whichever one is active.
+   */
+  const runExportThumbnailCapture = React.useCallback(async (volumeBoundsOverride?: THREE.Box3 | null) => {
     const capture = exportThumbnailCaptureRef.current;
     if (!capture) return null;
 
@@ -1254,7 +1261,7 @@ export function useImportExportManager({
         await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       }
 
-      return await capture();
+      return await capture(volumeBoundsOverride);
     } finally {
       if (shouldResetLayer) {
         deps.current.slicing.setLayerIndex(previousLayerIndex);
