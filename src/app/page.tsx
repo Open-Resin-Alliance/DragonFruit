@@ -10758,7 +10758,10 @@ export default function Home() {
             onRenamePlate={scene.renamePlate}
             plateName={scene.plateName}
             onPlateNameChange={scene.setPlateName}
-            showPlateName={scene.models.length > 0 || scene.plates.length > 1}
+            // An empty scene has nothing on its beds, so the bed's name and its buttons would be
+            // pointing at nothing.
+            showPlateName={scene.models.length > 0}
+            showPlateWidgets={scene.models.length > 0}
             onArrangePlate={() => {
               // The regular arrange, at the settings this button is for: 1mm apart with
               // Z-rotation allowed, and to this plate alone — it is the plate's own

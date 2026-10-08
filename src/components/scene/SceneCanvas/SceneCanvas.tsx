@@ -481,6 +481,7 @@ export function SceneCanvas({
   plateName,
   onPlateNameChange,
   showPlateName = true,
+  showPlateWidgets = true,
   plateLocked,
   onTogglePlateLock,
   onClearPlate,
@@ -621,6 +622,8 @@ export function SceneCanvas({
   onPlateNameChange?: (next: string) => void;
   /** Hide the name widget on an empty plate: there is nothing on it to name. */
   showPlateName?: boolean;
+  /** The add/lock/arrange/bin column beside the plate, hidden in an empty scene. */
+  showPlateWidgets?: boolean;
   /** The plate lock, handed to the 3D helpers that draw it. */
   plateLocked?: boolean;
   onTogglePlateLock?: () => void;
@@ -6329,6 +6332,7 @@ export function SceneCanvas({
           frontLabel={frontFaceLabel}
           plateName={plateName}
           showPlateName={showPlateName}
+          showPlateWidgets={showPlateWidgets}
           onPlateNameChange={onPlateNameChange}
           plateNamePlaceholder={plateNamePlaceholder}
           plateNameEditTitle={plateNameEditTitle}

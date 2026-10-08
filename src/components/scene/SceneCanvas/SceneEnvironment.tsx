@@ -625,6 +625,7 @@ export function Helpers({
   frontLabel = 'Front',
   plateName,
   showPlateName = false,
+  showPlateWidgets = true,
   plateNamePlaceholder,
   plateNameEditTitle,
   plateNameEmptyTitle,
@@ -666,6 +667,8 @@ export function Helpers({
   plateName?: string;
   /** Whether to draw the plate's name widget at all: an empty plate has nothing to name. */
   showPlateName?: boolean;
+  /** The add/lock/arrange/bin column beside the plate. Off in a scene with nothing in it. */
+  showPlateWidgets?: boolean;
   plateNamePlaceholder?: string;
   plateNameEditTitle?: string;
   plateNameEmptyTitle?: string;
@@ -1283,6 +1286,7 @@ export function Helpers({
    */
   const sideButtonsFor = (plate: PlateLayerSpec | null, isActive: boolean): PlateSideButtonsProps | undefined => {
     if (!shouldShowBuildPlate) return undefined;
+    if (!showPlateWidgets) return undefined;
     if (plate ? !isActive : (!showPlateName || !addPlateComingSoonTitle)) return undefined;
     if (!addPlateLabel
       || plateLocked === undefined
