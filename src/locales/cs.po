@@ -39,7 +39,7 @@ msgstr ""
 msgid "{count, plural, one {# material} other {# materials}}"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:60
+#: src/features/export/components/ExportPanel.tsx:61
 msgid "{count, plural, one {# mesh will be exported.} other {# meshes will be exported.}}"
 msgstr ""
 
@@ -114,7 +114,7 @@ msgstr ""
 msgid "{minutes} min {seconds} s"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:56
+#: src/features/export/components/ExportPanel.tsx:57
 msgid "{modelName} (hidden)"
 msgstr ""
 
@@ -205,11 +205,11 @@ msgstr ""
 msgid "3D mouse navigation controls"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:116
+#: src/features/export/components/ExportPanel.tsx:117
 msgid "3MF"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:116
+#: src/features/export/components/ExportPanel.tsx:117
 msgid "3MF Mesh (.3mf)"
 msgstr ""
 
@@ -248,7 +248,7 @@ msgstr ""
 msgid "ACTIVE"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:68
+#: src/features/export/components/ExportPanel.tsx:69
 msgid "Active Model"
 msgstr ""
 
@@ -300,7 +300,7 @@ msgid "Add or switch printer anytime from the top bar."
 msgstr ""
 
 #. Accessible name of the button beside the build plate that will add another plate. Inert for now, so it reads as unavailable to a screen reader too.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1629
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1661
 msgid "Add plate"
 msgstr ""
 
@@ -346,7 +346,7 @@ msgstr ""
 msgid "After updating .env, restart the app, then click “I configured it”."
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:76
+#: src/features/export/components/ExportPanel.tsx:77
 msgid "All Plates"
 msgstr ""
 
@@ -404,7 +404,7 @@ msgstr ""
 msgid "Apply this preset to the auto-support settings"
 msgstr ""
 
-#: src/app/page.tsx:11217
+#: src/app/page.tsx:11218
 msgid "Are you sure you want to remove every model from the plate?"
 msgstr ""
 
@@ -435,11 +435,11 @@ msgstr ""
 msgid "Array copies across the plate"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:126
+#: src/features/export/components/ExportPanel.tsx:127
 msgid "ASCII"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:126
+#: src/features/export/components/ExportPanel.tsx:127
 msgid "ASCII STL"
 msgstr ""
 
@@ -458,7 +458,7 @@ msgid "Auto adapts by AA level, Off is fastest, On favors smaller PNG files"
 msgstr ""
 
 #. Tooltip on the arrange button beside the build plate. Runs the standard arrange across every model, 1mm apart, with Z-rotation allowed.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1706
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1738
 msgid "Auto arrange the plate"
 msgstr ""
 
@@ -653,7 +653,7 @@ msgstr ""
 #. View cube face (the side opposite Front), rendered uppercase inside a small 3D cube. Keep it as short as possible.
 #: src/components/layout/FirstRunOnboarding.tsx:278
 #: src/components/layout/OnboardingPrinterLibrary.tsx:279
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1712
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1744
 msgid "Back"
 msgstr ""
 
@@ -755,7 +755,7 @@ msgstr ""
 msgid "Bias (Bottom - Top)"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:125
+#: src/features/export/components/ExportPanel.tsx:126
 msgid "Binary"
 msgstr ""
 
@@ -763,7 +763,7 @@ msgstr ""
 msgid "Binary Base"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:125
+#: src/features/export/components/ExportPanel.tsx:126
 msgid "Binary STL (recommended)"
 msgstr ""
 
@@ -788,7 +788,7 @@ msgid "Border Margin"
 msgstr ""
 
 #. View cube face (seen from below), rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1716
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1748
 msgid "Bottom"
 msgstr ""
 
@@ -857,7 +857,8 @@ msgstr ""
 msgid "Built-in presets cannot be deleted"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:92
+#: src/features/export/components/ExportPanel.tsx:93
+#: src/features/export/components/ExportPanel.tsx:235
 msgid "Bundle"
 msgstr ""
 
@@ -882,7 +883,7 @@ msgstr ""
 msgid "Can't open this scene"
 msgstr ""
 
-#: src/app/page.tsx:11178
+#: src/app/page.tsx:11179
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:468
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:664
 #: src/components/controls/AutoSupportPanel.tsx:652
@@ -1054,12 +1055,12 @@ msgstr ""
 
 #. Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.
 #. Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.
-#: src/app/page.tsx:10472
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1703
+#: src/app/page.tsx:10473
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1735
 msgid "Clear build plate"
 msgstr ""
 
-#: src/app/page.tsx:11167
+#: src/app/page.tsx:11168
 msgid "Clear Build Plate?"
 msgstr ""
 
@@ -1067,7 +1068,7 @@ msgstr ""
 msgid "Clear Override"
 msgstr ""
 
-#: src/app/page.tsx:11208
+#: src/app/page.tsx:11209
 msgid "Clear Plate"
 msgstr ""
 
@@ -1102,7 +1103,7 @@ msgstr ""
 msgid "Close"
 msgstr ""
 
-#: src/app/page.tsx:11173
+#: src/app/page.tsx:11174
 msgid "Close clear-plate confirmation"
 msgstr ""
 
@@ -1209,7 +1210,7 @@ msgid "Color Scheme"
 msgstr ""
 
 #. Hover text on the add-plate button beside the build plate. The app has one plate for now, so the button says so instead of doing nothing.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1630
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1662
 msgid "Coming Soon!"
 msgstr ""
 
@@ -1251,7 +1252,7 @@ msgstr ""
 msgid "Configure Networking Later"
 msgstr ""
 
-#: src/app/page.tsx:11166
+#: src/app/page.tsx:11167
 msgid "Confirm clearing the build plate"
 msgstr ""
 
@@ -1259,7 +1260,7 @@ msgstr ""
 msgid "Confirm delete snapshot"
 msgstr ""
 
-#: src/app/page.tsx:11165
+#: src/app/page.tsx:11166
 msgid "Confirm deleting the plate"
 msgstr ""
 
@@ -1466,7 +1467,7 @@ msgstr ""
 msgid "Current material"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:77
+#: src/features/export/components/ExportPanel.tsx:78
 msgid "Current Plate"
 msgstr ""
 
@@ -1599,7 +1600,7 @@ msgstr ""
 msgid "Delete Backup Snapshot"
 msgstr ""
 
-#: src/app/page.tsx:11208
+#: src/app/page.tsx:11209
 #: src/components/controls/ModelManagerPanel.tsx:477
 #: src/components/controls/ModelManagerPanel.tsx:748
 #: src/components/controls/ModelManagerPanel.tsx:769
@@ -1637,11 +1638,11 @@ msgid "Delete this model's existing supports and place the new ones"
 msgstr ""
 
 #. Tooltip on the bin beside the build plate when the plate can go: it removes the bed and the models standing on it. Undo brings them back.
-#: src/app/page.tsx:10471
+#: src/app/page.tsx:10472
 msgid "Delete this plate"
 msgstr ""
 
-#: src/app/page.tsx:11167
+#: src/app/page.tsx:11168
 #: src/components/controls/ModelManagerPanel.tsx:749
 msgid "Delete this plate?"
 msgstr ""
@@ -1964,7 +1965,7 @@ msgstr ""
 msgid "Enter your printer's IP address"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:67
+#: src/features/export/components/ExportPanel.tsx:68
 msgid "Entire Plate"
 msgstr ""
 
@@ -2065,41 +2066,41 @@ msgstr ""
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:407
 #: src/components/layout/TopBar.tsx:610
-#: src/features/export/components/ExportPanel.tsx:486
-#: src/features/export/components/ExportPanel.tsx:508
+#: src/features/export/components/ExportPanel.tsx:510
+#: src/features/export/components/ExportPanel.tsx:532
 msgid "Export"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:130
+#: src/features/export/components/ExportPanel.tsx:131
 msgid "Export as 3MF"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:131
+#: src/features/export/components/ExportPanel.tsx:132
 msgid "Export as STL"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:353
-#: src/features/export/components/ExportPanel.tsx:447
+#: src/features/export/components/ExportPanel.tsx:379
+#: src/features/export/components/ExportPanel.tsx:465
 msgid "Export failed. Check console for details."
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:604
+#: src/features/export/components/ExportPanel.tsx:634
 msgid "Export format"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:646
+#: src/features/export/components/ExportPanel.tsx:676
 msgid "Export layout"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:572
+#: src/features/export/components/ExportPanel.tsx:601
 msgid "Export plates"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:132
+#: src/features/export/components/ExportPanel.tsx:133
 msgid "Export Scene File"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:534
+#: src/features/export/components/ExportPanel.tsx:559
 msgid "Export scope"
 msgstr ""
 
@@ -2107,7 +2108,7 @@ msgstr ""
 msgid "Export the selected preset as a JSON file"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:710
+#: src/features/export/components/ExportPanel.tsx:739
 msgid "Exporting…"
 msgstr ""
 
@@ -2312,7 +2313,7 @@ msgid "From the community, for the community. Free to use, open to contribute, a
 msgstr ""
 
 #. Orientation label, rendered uppercase on the view cube and on the build plate's front edge. Keep it as short as possible — long words are auto-shrunk to fit and become hard to read.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1708
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1740
 msgid "Front"
 msgstr ""
 
@@ -2376,7 +2377,7 @@ msgid "GitHub OAuth popup opened."
 msgstr ""
 
 #. Tooltip on the build plate's name widget while it is still unnamed.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1628
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1660
 msgid "Give this build plate a name"
 msgstr ""
 
@@ -2617,15 +2618,15 @@ msgstr ""
 msgid "In space, no one can hear you slice."
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:670
+#: src/features/export/components/ExportPanel.tsx:699
 msgid "Include Model Mesh"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:684
+#: src/features/export/components/ExportPanel.tsx:713
 msgid "Include Raft"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:677
+#: src/features/export/components/ExportPanel.tsx:706
 msgid "Include Supports"
 msgstr ""
 
@@ -2884,7 +2885,7 @@ msgid "Leave the collection as it is"
 msgstr ""
 
 #. View cube face, rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1714
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1746
 msgid "Left"
 msgstr ""
 
@@ -3034,7 +3035,7 @@ msgid "LocalStorage Keys"
 msgstr ""
 
 #. Tooltip on the lock button beside the build plate while it is unlocked. Locking refuses new meshes and moves of the models already on the plate.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1701
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1733
 msgid "Lock build plate"
 msgstr ""
 
@@ -3215,7 +3216,7 @@ msgid "Mesh"
 msgstr ""
 
 #. Badge label next to the number of meshes this export writes. Rendered uppercase; keep it to one short word.
-#: src/features/export/components/ExportPanel.tsx:522
+#: src/features/export/components/ExportPanel.tsx:546
 msgid "Meshes"
 msgstr ""
 
@@ -3317,7 +3318,7 @@ msgstr ""
 msgid "Model Supports"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:556
+#: src/features/export/components/ExportPanel.tsx:581
 msgid "Model to export"
 msgstr ""
 
@@ -3530,7 +3531,7 @@ msgstr ""
 msgid "No materials linked to this printer."
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:492
+#: src/features/export/components/ExportPanel.tsx:516
 msgid "No meshes loaded yet. Import a model first, then hop back to Export."
 msgstr ""
 
@@ -3768,15 +3769,19 @@ msgstr ""
 msgid "One does not simply import a mesh... or actually, you just click a button."
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:93
+#: src/features/export/components/ExportPanel.tsx:94
 msgid "One file holding every plate together"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:105
+#: src/features/export/components/ExportPanel.tsx:235
+msgid "One file holding everything on the plate"
+msgstr ""
+
+#: src/features/export/components/ExportPanel.tsx:106
 msgid "One file per model"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:99
+#: src/features/export/components/ExportPanel.tsx:100
 msgid "One file per plate"
 msgstr ""
 
@@ -3945,7 +3950,7 @@ msgstr ""
 msgid "Persist dragged panel positions in local storage."
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:599
+#: src/features/export/components/ExportPanel.tsx:629
 msgid "Pick a model to export."
 msgstr ""
 
@@ -3982,7 +3987,7 @@ msgid "Plate {index}"
 msgstr ""
 
 #. What the build plate's name widget shows while the plate has no name of its own, including after the plate is cleared or a new scene is started. The number is the plate's, plural forms come later with multiple plates.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1626
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1658
 msgid "Plate 1"
 msgstr ""
 
@@ -3998,7 +4003,7 @@ msgstr ""
 msgid "Plate preview · Layer {previewSelectedLayer}/{previewTotalLayers}"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:98
+#: src/features/export/components/ExportPanel.tsx:99
 msgid "Plates"
 msgstr ""
 
@@ -4381,7 +4386,7 @@ msgid "Rename"
 msgstr ""
 
 #. Tooltip on the pencil beside the build plate's name.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1627
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1659
 msgid "Rename build plate"
 msgstr ""
 
@@ -4549,7 +4554,7 @@ msgid "Revert Changes"
 msgstr ""
 
 #. View cube face, rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1713
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1745
 msgid "Right"
 msgstr ""
 
@@ -4850,7 +4855,7 @@ msgstr ""
 msgid "Select a material profile first."
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:558
+#: src/features/export/components/ExportPanel.tsx:583
 msgid "Select a model"
 msgstr ""
 
@@ -4904,12 +4909,12 @@ msgid "Selected printer is offline"
 msgstr ""
 
 #. Shown while dragging a selection rectangle right to left, which takes every object the rectangle touches. Mirrors the CAD convention; keep it on one short line.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3227
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3259
 msgid "Selection Mode: Contact (Right to Left)"
 msgstr ""
 
 #. Shown while dragging a selection rectangle left to right, which takes only the objects the rectangle fully encloses. Mirrors the CAD convention; keep it on one short line.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3231
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3263
 msgid "Selection Mode: Enclosed (Left to Right)"
 msgstr ""
 
@@ -4925,7 +4930,7 @@ msgstr ""
 msgid "Send to UVTools"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:104
+#: src/features/export/components/ExportPanel.tsx:105
 msgid "Separate"
 msgstr ""
 
@@ -5288,15 +5293,15 @@ msgstr ""
 msgid "Step 2: Enable Debug Visuals (IDs + Voxels)"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:117
+#: src/features/export/components/ExportPanel.tsx:118
 msgid "STL"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:622
+#: src/features/export/components/ExportPanel.tsx:652
 msgid "STL encoding"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:117
+#: src/features/export/components/ExportPanel.tsx:118
 msgid "STL Mesh (.stl)"
 msgstr ""
 
@@ -5483,7 +5488,7 @@ msgstr ""
 msgid "The build plate awaits."
 msgstr ""
 
-#: src/app/page.tsx:11236
+#: src/app/page.tsx:11237
 msgid "The build plate is locked."
 msgstr ""
 
@@ -5519,7 +5524,7 @@ msgstr ""
 msgid "The inputs and factors the last run sized the supports with"
 msgstr ""
 
-#: src/app/page.tsx:11216
+#: src/app/page.tsx:11217
 msgid "The models on this plate are deleted with it."
 msgstr ""
 
@@ -5761,7 +5766,7 @@ msgid "Tool layout"
 msgstr ""
 
 #. View cube face (seen from above), rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1715
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1747
 msgid "Top"
 msgstr ""
 
@@ -5811,7 +5816,7 @@ msgstr ""
 msgid "Unavailable"
 msgstr ""
 
-#: src/app/page.tsx:11170
+#: src/app/page.tsx:11171
 msgid "Undo brings the models back"
 msgstr ""
 
@@ -5849,21 +5854,21 @@ msgid "Unknown manufacturer"
 msgstr ""
 
 #. Tooltip on the lock button beside the build plate while it is locked.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1702
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1734
 msgid "Unlock build plate"
 msgstr ""
 
-#: src/app/page.tsx:11239
+#: src/app/page.tsx:11240
 msgid "Unlock it to add or move models."
 msgstr ""
 
 #. Tooltip on the arrange button beside the build plate while the plate is locked, which is why it is disabled.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1707
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1739
 msgid "Unlock the plate to arrange it"
 msgstr ""
 
 #. Tooltip on the bin beside the build plate while the plate is locked, which is why it is disabled.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1705
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1737
 msgid "Unlock the plate to clear it"
 msgstr ""
 
@@ -6097,11 +6102,11 @@ msgstr ""
 msgid "Voxels: Systems"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:115
+#: src/features/export/components/ExportPanel.tsx:116
 msgid "VOXL"
 msgstr ""
 
-#: src/features/export/components/ExportPanel.tsx:115
+#: src/features/export/components/ExportPanel.tsx:116
 msgid "VOXL Scene (.voxl)"
 msgstr ""
 

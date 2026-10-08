@@ -217,10 +217,35 @@ export function ExportPanel({
     return visiblePlateModels.length > 0 ? visiblePlateModels : plateModels;
   }, [activePlateId, models, plateGroups, plateScope]);
 
-  // A scene is the only layout that can hold several plates at once.
+  /** One bed is the whole export: there is no "per plate" to offer or to name. */
+  const singlePlate = (plateGroups?.length ?? 0) <= 1;
+
+  /**
+   * The layouts this format offers, for this scene.
+   *
+   * A bundle is a scene, so 3MF and STL have no such thing and their nearest choice is one
+   * file per plate — with a single plate that is one file for everything, which is what the
+   * panel now calls it instead of "Plates".
+   */
+  const layoutOptions = useMemo(() => (
+    EXPORT_LAYOUT_OPTIONS
+      .filter((option) => option.formats.includes(options.format))
+      .filter((option) => !(singlePlate && option.value === 'plates' && options.format === 'voxl'))
+      .map((option) => (singlePlate && option.value === 'plates'
+        ? { ...option, label: msg`Bundle`, title: msg`One file holding everything on the plate` }
+        : option))
+  ), [options.format, singlePlate]);
+
+  // A scene is the only layout that can hold several plates at once, and one bed is the
+  // whole export: with a single plate, "one file per plate" and "one file for the lot" write
+  // the same file, so VOXL hides the duplicate and moves a selection that was on it.
   useEffect(() => {
-    if (options.format !== 'voxl' && exportLayout === 'bundle') setExportLayout('plates');
-  }, [exportLayout, options.format]);
+    if (options.format !== 'voxl') {
+      if (exportLayout === 'bundle') setExportLayout('plates');
+      return;
+    }
+    if (singlePlate && exportLayout === 'plates') setExportLayout('bundle');
+  }, [exportLayout, options.format, singlePlate]);
 
   /** The models the run covers, before the layout decides how to split them up. */
   const scopeModels = exportScope === 'active_model'
@@ -446,11 +471,18 @@ export function ExportPanel({
 
   /** One file per plate, each named for the plate and holding the models on it. */
   const handleExportPerPlate = async () => {
-    const groups = (plateGroups && plateGroups.length > 0 ? plateGroups : [{ id: '', name: '', modelIds: scopeModels.map((model) => model.id) }])
-      .map((plate, index) => ({
-        name: plate.name.trim() || plateNumberPlaceholder(index + 1, _),
-        models: scopeModels.filter((model) => plate.modelIds.includes(model.id)),
-      }));
+    const plates = plateGroups && plateGroups.length > 0
+      ? plateGroups
+      : [{ id: '', name: '', modelIds: scopeModels.map((model) => model.id) }];
+    const groups = plates.map((plate, index) => ({
+      // One bed is the whole export, and the panel calls that choice "Bundle" in every
+      // format: its file is named for the scene rather than for the plate, so a single-plate
+      // export does not come out called "Plate 1".
+      name: plates.length === 1
+        ? suggestedFileName
+        : (plate.name.trim() || plateNumberPlaceholder(index + 1, _)),
+      models: scopeModels.filter((model) => plate.modelIds.includes(model.id)),
+    }));
 
     await exportGroupsToDirectory(groups);
   };
@@ -642,10 +674,9 @@ export function ExportPanel({
                 <div
                   role="group"
                   aria-label={_(msg`Export layout`)}
-                  className={`grid gap-1.5 ${options.format === 'voxl' ? 'grid-cols-3' : 'grid-cols-2'}`}
+                  className={`grid gap-1.5 ${layoutOptions.length >= 3 ? 'grid-cols-3' : 'grid-cols-2'}`}
                 >
-                  {EXPORT_LAYOUT_OPTIONS
-                    .filter((option) => option.formats.includes(options.format))
+                  {layoutOptions
                     .map((option) => (
                       <Tooltip key={option.value} content={_(option.title)} maxWidth={220} wrapperClassName="w-full">
                       <Button
