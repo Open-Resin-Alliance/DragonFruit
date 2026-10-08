@@ -540,6 +540,16 @@ export function ModelManagerPanel({
       case 'delete-plate': {
         const plateId = contextMenu?.plateId;
         if (plateId && onRemovePlate) {
+          // An empty bed has nothing to lose, so it goes straight away. The
+          // confirmation is for the models a delete takes with it.
+          const holdsModels = resolveModelPlateId
+            ? models.some((model) => resolveModelPlateId(model) === plateId)
+            : true;
+          if (!holdsModels) {
+            onRemovePlate(plateId);
+            break;
+          }
+
           const index = plates?.findIndex((plate) => plate.id === plateId) ?? 0;
           const named = plates?.[index]?.name.trim() ?? '';
           // The wording is settled here, where the plate is known, rather than in

@@ -9040,7 +9040,13 @@ export default function Home() {
       () => scene.mode === 'prepare' && scene.selectedModelIds.length > 0,
       () => {
         const ids = Array.from(new Set(scene.selectedModelIds));
-        scene.deleteModels(ids);
+        // Select-all means the whole scene: the beds go with the models, so the
+        // scene is left as one empty plate rather than as empty beds.
+        if (isSelectAllModelsActive) {
+          void scene.deleteModelsAndExtraPlates(ids);
+        } else {
+          void scene.deleteModels(ids);
+        }
         setIsSelectAllModelsActive(false);
       },
       30,
@@ -9049,14 +9055,14 @@ export default function Home() {
     return () => {
       unregister();
     };
-  }, [scene]);
+  }, [isSelectAllModelsActive, scene]);
 
   React.useEffect(() => {
     const unregister = registerDeleteHandler(
       () => scene.mode === 'prepare' && isSelectAllModelsActive && scene.models.length > 0,
       () => {
         const ids = scene.models.map((model) => model.id);
-        scene.deleteModels(ids);
+        void scene.deleteModelsAndExtraPlates(ids);
         setIsSelectAllModelsActive(false);
       },
       20,
@@ -10391,7 +10397,15 @@ export default function Home() {
             onClearPlate={() => {
               const plateId = scene.activePlateId;
               const isFirstPlate = plateId === scene.plates[0]?.id;
-              setPlateTrashIntent(scene.plates.length > 1 && !isFirstPlate ? 'delete' : 'clear');
+              const intent = scene.plates.length > 1 && !isFirstPlate ? 'delete' : 'clear';
+              // An empty bed has nothing to lose, so it goes straight away; the
+              // confirmation is for the models a delete takes with it.
+              if (intent === 'delete'
+                && !scene.models.some((model) => scene.resolveModelPlateId(model) === plateId)) {
+                scene.removePlate(plateId);
+                return;
+              }
+              setPlateTrashIntent(intent);
             }}
             cavityGeometryByModelId={new Map(Array.from(cavityGeometryByModelIdRef.current.entries()).map(([id, entry]) => [id, entry.geometry]))}
             disableRaycast={transformMgr.isTransforming}

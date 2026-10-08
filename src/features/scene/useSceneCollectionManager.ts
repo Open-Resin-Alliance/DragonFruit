@@ -6444,6 +6444,58 @@ export function useSceneCollectionManager(options?: {
   }, [deleteModels, pushSceneSnapshotHistory]);
 
   /**
+   * Delete the models *and* every bed but the first.
+   *
+   * This is the select-all delete: the gesture names the whole scene, so leaving the
+   * other beds standing behind would leave a scene that is empty but not clean. One
+   * history entry for the lot, because undoing a wipe should bring the scene back whole
+   * rather than bed by bed.
+   *
+   * A bed is kept when something the delete does not name is still standing on it — a
+   * hidden model the select-all gesture skipped keeps its bed, rather than being orphaned
+   * onto a plate it never stood on.
+   */
+  const deleteModelsAndExtraPlates = useCallback(async (idsInput: string[]): Promise<void> => {
+    const current = platesRef.current;
+    const firstPlateId = current[0]?.id;
+    if (current.length <= 1 || !firstPlateId) {
+      await deleteModels(idsInput);
+      return;
+    }
+
+    const doomed = new Set(idsInput);
+    const survivorStandsOnExtraPlate = modelsRef.current.some(
+      (model) => !doomed.has(model.id) && resolveModelPlateIdRef.current(model) !== firstPlateId,
+    );
+    if (survivorStandsOnExtraPlate) {
+      await deleteModels(idsInput);
+      return;
+    }
+
+    const remaining = current.slice(0, 1);
+    const before = captureSceneSnapshot(modelsRef.current, activeModelIdRef.current, selectedModelIdsRef.current, {
+      plates: current,
+      activePlateId: activePlateIdRef.current,
+    });
+
+    setPlates(remaining);
+    setActivePlateId(firstPlateId);
+
+    await deleteModels(idsInput, { pushHistory: false });
+    // The models, the active model and the selection all come from the scene's refs,
+    // which the delete's `setState`es only refresh once React has committed — a
+    // snapshot taken a microtask early would put the deleted models back into the
+    // "after" state, and redo would resurrect them.
+    await waitForUiYield();
+
+    const after = captureSceneSnapshot(modelsRef.current, activeModelIdRef.current, selectedModelIdsRef.current, {
+      plates: remaining,
+      activePlateId: firstPlateId,
+    });
+    pushSceneSnapshotHistory(before, after, 'Delete Models and Plates');
+  }, [deleteModels, pushSceneSnapshotHistory, waitForUiYield]);
+
+  /**
    * Move models to another plate, carrying them across the cascade so they keep
    * their place on the bed they arrive at rather than landing wherever their old
    * coordinates happen to fall.
@@ -6568,6 +6620,7 @@ export function useSceneCollectionManager(options?: {
     renameGroup,
     selectGroup,
     deleteModels,
+    deleteModelsAndExtraPlates,
     deleteModel,
     deleteSupportsForModels,
     copyModel,
