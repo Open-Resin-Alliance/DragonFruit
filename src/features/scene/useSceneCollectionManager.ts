@@ -2686,8 +2686,16 @@ export function useSceneCollectionManager(options?: {
   ) => {
     // Every move lands here — drag, gizmo, the transform panel, the nudge hotkeys —
     // so a locked plate refuses them all at the one place that writes a transform.
+    //
+    // Both beds are checked: the one the model leaves, and the one it would land on. A model
+    // dragged from an unlocked bed onto a locked one is refused there, and refusing the write
+    // leaves it where it started.
     const currentModel = modelsRef.current.find((m) => m.id === id);
-    if (currentModel && isModelPlateLocked(currentModel)) {
+    if (currentModel && (
+      isModelPlateLocked(currentModel)
+      || isModelPlateLocked({ ...currentModel, transform })
+    )) {
+      onBlockedByLockRef.current?.();
       return {
         updated: false,
         supportsChanged: false,
