@@ -31,6 +31,11 @@ export type ExportPanelStackProps = {
     artifact: SliceExportArtifact,
     context?: { plateId?: string; totalLayers?: number; savedPath?: string; savedDirectory?: string },
   ) => void;
+  /** A batch's plate, as soon as it is sliced, so its previews can be read ahead of the batch. */
+  handleSlicePlateSliced: (
+    artifact: SliceExportArtifact,
+    context: { plateId?: string; totalLayers: number; savedPath?: string },
+  ) => void;
   handleSlicingBenchmarkComplete: (benchmark: SliceExportResult['benchmark']) => void;
   triggerSliceExportRef: React.MutableRefObject<(() => void) | null>;
   shouldAutoSliceOnExportEntry: boolean;
@@ -64,6 +69,7 @@ export function ExportPanelStack({
   handlePrintingLayerPreviewGenerated,
   handleSlicingFinishedForPrinting,
   handleSliceArtifactReady,
+  handleSlicePlateSliced,
   handleSlicingBenchmarkComplete,
   triggerSliceExportRef,
   shouldAutoSliceOnExportEntry,
@@ -154,6 +160,7 @@ export function ExportPanelStack({
         onLayerPreviewGenerated={handlePrintingLayerPreviewGenerated}
         onSlicingFinished={handleSlicingFinishedForPrinting}
         onSliceArtifactReady={handleSliceArtifactReady}
+        onSlicePlateSliced={handleSlicePlateSliced}
         onBenchmarkComplete={handleSlicingBenchmarkComplete}
         onSliceTriggerRef={triggerSliceExportRef}
         shouldAutoSlice={shouldAutoSliceOnExportEntry}

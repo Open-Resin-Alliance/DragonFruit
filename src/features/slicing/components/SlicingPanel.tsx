@@ -102,6 +102,15 @@ interface SlicingPanelProps {
     artifact: SliceExportArtifact,
     context?: { plateId?: string; totalLayers?: number; savedPath?: string; savedDirectory?: string },
   ) => void;
+  /**
+   * A batch's plate, as soon as it is sliced — before the batch ends and the app walks into the
+   * printing workspace. Recording it here is what lets the workspace's own previews be read
+   * ahead of time, while the other plates are still slicing, instead of after it opens.
+   */
+  onSlicePlateSliced?: (
+    artifact: SliceExportArtifact,
+    context: { plateId?: string; totalLayers: number; savedPath?: string },
+  ) => void;
   onBenchmarkComplete?: (benchmark: SliceBenchmarkSnapshot) => void;
   onSliceTriggerRef?: React.MutableRefObject<(() => void) | null>;
   shouldAutoSlice?: boolean;
@@ -780,6 +789,7 @@ export function SlicingPanel({
   onLayerPreviewGenerated,
   onSlicingFinished,
   onSliceArtifactReady,
+  onSlicePlateSliced,
   onBenchmarkComplete,
   onSliceTriggerRef,
   shouldAutoSlice,
@@ -1274,6 +1284,12 @@ export function SlicingPanel({
   const singlePlate = populatedPlateScopes.length <= 1;
   /** Which plates the slice covers: every plate that has one, or just the plate in hand. */
   const [slicePlateScope, setSlicePlateScope] = useState<SlicePlateScope>('all_plates');
+  /**
+   * What the scope means here. With one bed there is nothing to choose, so it is the bed in hand
+   * whatever the selector last said — the button then reads and slices like a single run, which
+   * is what a one-bed scene is.
+   */
+  const effectiveSlicePlateScope: SlicePlateScope = singlePlate ? 'current_plate' : slicePlateScope;
   /** The models the slice covers: one plate's, or every visible one. */
   const plateModelIdSet = useMemo(
     () => (activePlateSliceScope ? new Set(activePlateSliceScope.modelIds) : null),
@@ -2217,16 +2233,22 @@ export function SlicingPanel({
       slicingSucceeded = true;
       if (result.artifact) {
         if (batch) {
+          const plateTotalLayers = Math.max(
+            1,
+            completedTotalLayers,
+            completedTotalLayersFromResult,
+            result.benchmark.totalLayers ?? 0,
+          );
           batch.completed.push({
             artifact: result.artifact,
             ...(scope ? { plateId: scope.plateId } : {}),
             ...(result.artifact.nativeTempPath ? { savedPath: result.artifact.nativeTempPath } : {}),
-            totalLayers: Math.max(
-              1,
-              completedTotalLayers,
-              completedTotalLayersFromResult,
-              result.benchmark.totalLayers ?? 0,
-            ),
+            totalLayers: plateTotalLayers,
+          });
+          onSlicePlateSliced?.(result.artifact, {
+            ...(scope ? { plateId: scope.plateId } : {}),
+            ...(result.artifact.nativeTempPath ? { savedPath: result.artifact.nativeTempPath } : {}),
+            totalLayers: plateTotalLayers,
           });
         } else {
           onSliceArtifactReady?.(result.artifact, scope ? { plateId: scope.plateId } : undefined);
@@ -3578,21 +3600,21 @@ export function SlicingPanel({
                     variant="primary"
                     size="auto"
                     onClick={() => {
-                      void (slicePlateScope === 'all_plates'
+                      void (effectiveSlicePlateScope === 'all_plates'
                         ? handleSliceAllPlates()
                         : handleSliceZipExport());
                     }}
                     disabled={isDisabled}
-                    className={`flex-1 !h-9 text-sm inline-flex items-center justify-center gap-1.5 ${hasMenuOptions && !isShiftHeld && slicePlateScope === 'current_plate' ? 'rounded-r-none' : ''} ${isSlicingZip ? 'cursor-wait opacity-70' : ''}`}
+                    className={`flex-1 !h-9 text-sm inline-flex items-center justify-center gap-1.5 ${hasMenuOptions && !isShiftHeld && effectiveSlicePlateScope === 'current_plate' ? 'rounded-r-none' : ''} ${isSlicingZip ? 'cursor-wait opacity-70' : ''}`}
                   >
-                    {slicePlateScope === 'all_plates'
+                    {effectiveSlicePlateScope === 'all_plates'
                       ? <Layers3 className="w-4 h-4 shrink-0" />
                       : <CurrentIcon className="w-4 h-4 shrink-0" />}
                     {isSlicingZip
                       ? _(msg`Slicing…`)
-                      : (slicePlateScope === 'all_plates' ? _(msg`Slice All`) : current.label)}
+                      : (effectiveSlicePlateScope === 'all_plates' ? _(msg`Slice All`) : current.label)}
                   </Button>
-                  {hasMenuOptions && !isShiftHeld && slicePlateScope === 'current_plate' && (
+                  {hasMenuOptions && !isShiftHeld && effectiveSlicePlateScope === 'current_plate' && (
                     <Button
                       variant="primary"
                       size="auto"

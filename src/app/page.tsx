@@ -2832,9 +2832,10 @@ export default function Home() {
     return `${printerProfileId}::${materialProfileId}`;
   }, [activeMaterialProfile?.id, activePrinterProfile?.id]);
 
-  const handleSliceArtifactReady = React.useCallback((
+  /** Records one bed's slice, which is what the workspace and its read-ahead are built from. */
+  const recordPrintingSlice = React.useCallback((
     artifact: SliceExportArtifact,
-    context?: { plateId?: string; totalLayers?: number; savedPath?: string; savedDirectory?: string },
+    context?: { plateId?: string; totalLayers?: number },
   ) => {
     const plateId = context?.plateId ?? scene.activePlateId;
     // A new artifact replaces this bed's slice, so the layers cached from the old one are gone.
@@ -2851,6 +2852,28 @@ export default function Home() {
         },
       };
     });
+  }, [dropPrintingLayerPreviewCache, scene.activePlateId]);
+
+  /**
+   * A batch's plate, recorded as soon as it is sliced.
+   *
+   * Nothing navigates here: the callbacks that walk the app into the printing workspace are the
+   * batch's own, at the end. What this buys is the read-ahead — the workspace's previews for
+   * this bed are read while the other plates are still slicing, so opening it finds them ready.
+   */
+  const handleSlicePlateSliced = React.useCallback((
+    artifact: SliceExportArtifact,
+    context: { plateId?: string; totalLayers: number; savedPath?: string },
+  ) => {
+    recordPrintingSlice(artifact, context);
+  }, [recordPrintingSlice]);
+
+  const handleSliceArtifactReady = React.useCallback((
+    artifact: SliceExportArtifact,
+    context?: { plateId?: string; totalLayers?: number; savedPath?: string; savedDirectory?: string },
+  ) => {
+    const plateId = context?.plateId ?? scene.activePlateId;
+    recordPrintingSlice(artifact, context);
     setPrintingArtifactIsInvalid(false);
     setShowPrintingResliceModal(false);
     // Push a "Sliced Scene" marker to history so we can detect changes after this point
@@ -3021,7 +3044,7 @@ export default function Home() {
       };
       void saveAndNavigate(artifact);
     }
-  }, [dropPrintingLayerPreviewCache, scene]);
+  }, [recordPrintingSlice, scene]);
 
   const handleSlicingBenchmarkComplete = React.useCallback((benchmark: SliceExportResult['benchmark']) => {
     setPrintingSlicingBenchmark(benchmark);
@@ -10469,6 +10492,7 @@ export default function Home() {
               handlePrintingLayerPreviewGenerated: handlePrintingLayerPreviewGenerated,
               handleSlicingFinishedForPrinting: handleSlicingFinishedForPrinting,
               handleSliceArtifactReady: handleSliceArtifactReady,
+              handleSlicePlateSliced: handleSlicePlateSliced,
               handleSlicingBenchmarkComplete: handleSlicingBenchmarkComplete,
               triggerSliceExportRef: triggerSliceExportRef,
               shouldAutoSliceOnExportEntry: shouldAutoSliceOnExportEntry,
