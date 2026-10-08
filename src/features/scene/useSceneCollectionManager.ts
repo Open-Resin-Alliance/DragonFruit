@@ -2950,6 +2950,8 @@ export function useSceneCollectionManager(options?: {
       return model ? isModelPlateLocked(model) : false;
     });
     if (lockedMove) {
+      // Say so: a transform that silently does nothing reads as a broken tool.
+      onBlockedByLockRef.current?.();
       return {
         updated: false,
         supportsChanged: false,
@@ -6901,6 +6903,7 @@ export function useSceneCollectionManager(options?: {
     plateLocked,
     setPlateLocked,
     isPlateLocked,
+    isModelPlateLocked,
     selectedModelIds,
     setSelectedModelIds,
     lastLoadedVoxlFormatChunkedRef,

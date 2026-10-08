@@ -9215,11 +9215,32 @@ export default function Home() {
     transformMgr.disableAutoLiftForManualZMove();
   }, [scene, transformMgr]);
 
+  /** Whether the bed a model stands on refuses edits. */
+  const isModelPlateLocked = React.useCallback((modelId: string) => {
+    const model = scene.models.find((candidate) => candidate.id === modelId);
+    return model ? scene.isModelPlateLocked(model) : false;
+  }, [scene.isModelPlateLocked, scene.models]);
+
+  const notifyPlateLocked = React.useCallback(() => {
+    notifyPlateLockedRef.current();
+  }, []);
+
   const handleTransformStart = React.useCallback((
     operation: 'move' | 'rotate' | 'scale',
     details?: { axis?: 'x' | 'y' | 'z' | 'uniform'; isUniform?: boolean },
   ) => {
     skipNextTransformEndCommitRef.current = null;
+
+    // A locked bed refuses the gesture itself, not just the commit: the gizmo would otherwise
+    // move the model and the store would refuse on release, which reads as a broken gizmo.
+    const modelsBeingTransformed = [
+      ...(scene.activeModelId ? [scene.activeModelId] : []),
+      ...scene.selectedModelIds,
+    ];
+    if (modelsBeingTransformed.some((modelId) => isModelPlateLocked(modelId))) {
+      notifyPlateLockedRef.current();
+      return false;
+    }
 
     if (typeof window !== 'undefined' && supportDragResetRafRef.current !== null) {
       window.cancelAnimationFrame(supportDragResetRafRef.current);
@@ -10836,6 +10857,8 @@ export default function Home() {
             autoLift={transformMgr.autoLift}
             liftDistance={transformMgr.liftDistance}
             autoSnapEnabled={transformMgr.autoSnapEnabled}
+            isModelPlateLocked={isModelPlateLocked}
+            onBlockedByPlateLock={notifyPlateLocked}
             onTransformStart={handleTransformStart}
             onGizmoTransformCommit={handleGizmoTransformCommit}
             onGizmoTransformGroupCommit={handleGizmoTransformGroupCommit}

@@ -524,6 +524,8 @@ export function SceneCanvas({
   autoSnapEnabled = true,
   onTransformChange,
   onTransformStart,
+  isModelPlateLocked,
+  onBlockedByPlateLock,
   onGizmoTransformCommit,
   onGizmoTransformGroupCommit,
   onTransformEnd,
@@ -681,6 +683,10 @@ export function SceneCanvas({
   liftDistance?: number;
   autoSnapEnabled?: boolean;
   onTransformChange?: (position: THREE.Vector3, rotation: THREE.Euler, scale: THREE.Vector3) => void;
+  /** Whether a model's bed refuses edits, so a drag never starts on one. */
+  isModelPlateLocked?: (modelId: string) => boolean;
+  /** Told when a gesture is refused by a plate lock, so the app can say so. */
+  onBlockedByPlateLock?: () => void;
   onTransformStart?: (
     operation: 'move' | 'rotate' | 'scale',
     details?: { axis?: 'x' | 'y' | 'z' | 'uniform'; isUniform?: boolean },
@@ -6151,9 +6157,15 @@ export function SceneCanvas({
   ]);
 
   const handleSelectModeDragStart = React.useCallback((modelId: string, clientX: number, clientY: number) => {
+    // A bed that refuses edits refuses them at the start of the gesture: a drag that moved the
+    // model and snapped it back on release reads as a bug, not as a lock.
+    if (isModelPlateLocked?.(modelId)) {
+      onBlockedByPlateLock?.();
+      return;
+    }
     selectDragCandidateRef.current = { modelId, clientX, clientY };
     setSelectDragPressed(true);
-  }, []);
+  }, [isModelPlateLocked, onBlockedByPlateLock]);
 
   // Support/raft presses in Select mode also grab the model: select its model
   // (so the drag targets it) then start the same XY drag as a model-mesh press.
