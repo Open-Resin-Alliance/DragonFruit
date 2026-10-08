@@ -1718,8 +1718,14 @@ export function SceneCanvas({
 
   const plateLayers = React.useMemo(() => {
     if (!plates || plates.length === 0 || !plateFrames || plateFrames.length === 0) return undefined;
-    return plates.map((plate, index) => {
+    const layers = plates.map((plate, index) => {
       const frame = plateFrames.find((candidate) => candidate.id === plate.id) ?? plateFrames[index];
+      const populated = (models ?? []).some((model) => {
+        const { x, y } = model.transform.position;
+        return frame != null
+          && x >= frame.minX && x <= frame.maxX
+          && y >= frame.minY && y <= frame.maxY;
+      });
       return {
         id: plate.id,
         name: plate.name,
@@ -1727,9 +1733,15 @@ export function SceneCanvas({
         dxMm: frame?.dxMm ?? 0,
         dyMm: frame?.dyMm ?? 0,
         isActive: plate.id === activePlateId,
+        populated,
       };
     });
-  }, [plates, plateFrames, activePlateId, _]);
+
+    // The export workspace shows what is being exported, and nothing is exported from an
+    // empty bed: the beds that hold nothing are not drawn there, along with the buttons that
+    // hang off them. Every other workspace keeps them, because a bed is where a model goes.
+    return mode === 'export' ? layers.filter((layer) => layer.populated) : layers;
+  }, [plates, plateFrames, activePlateId, _, mode, models]);
   const plateLockTitle = _(msg({ message: 'Lock build plate', comment: 'Tooltip on the lock button beside the build plate while it is unlocked. Locking refuses new meshes and moves of the models already on the plate.' }));
   const plateUnlockTitle = _(msg({ message: 'Unlock build plate', comment: 'Tooltip on the lock button beside the build plate while it is locked.' }));
   const defaultPlateClearTitle = _(msg({ message: 'Clear build plate', comment: 'Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.' }));

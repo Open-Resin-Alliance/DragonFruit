@@ -193,11 +193,11 @@ const SLICE_PLATE_SCOPE_OPTIONS: ReadonlyArray<{ value: SlicePlateScope; label: 
   { value: 'current_plate', label: msg`Current Plate` },
 ];
 
-/** The plate scope control, in the panel's own palette: the AA toggles' accent, at a width. */
+/** The plate scope control, dressed as the anti-aliasing Auto/Expert pair above it. */
 const activeSliceScopeStyle: React.CSSProperties = {
-  borderColor: 'var(--accent-secondary-action-border)',
-  background: 'var(--accent-secondary-action-bg-92)',
-  color: 'var(--accent-secondary-action-color)',
+  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+  background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+  color: 'var(--text-strong)',
 };
 
 const idleSliceScopeStyle: React.CSSProperties = {
@@ -1262,8 +1262,8 @@ export function SlicingPanel({
     [plateSliceScopes],
   );
   const singlePlate = populatedPlateScopes.length <= 1;
-  /** Which plates the slice covers: the plate being worked on, or every plate that has one. */
-  const [slicePlateScope, setSlicePlateScope] = useState<SlicePlateScope>('current_plate');
+  /** Which plates the slice covers: every plate that has one, or just the plate in hand. */
+  const [slicePlateScope, setSlicePlateScope] = useState<SlicePlateScope>('all_plates');
   /** The models the slice covers: one plate's, or every visible one. */
   const plateModelIdSet = useMemo(
     () => (activePlateSliceScope ? new Set(activePlateSliceScope.modelIds) : null),
@@ -3470,7 +3470,7 @@ export function SlicingPanel({
                     key={option.value}
                     type="button"
                     aria-pressed={slicePlateScope === option.value}
-                    className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                    className="rounded border px-2 py-1.5 text-center text-xs font-semibold transition-colors"
                     style={slicePlateScope === option.value ? activeSliceScopeStyle : idleSliceScopeStyle}
                     onClick={() => setSlicePlateScope(option.value)}
                   >
@@ -3514,7 +3514,7 @@ export function SlicingPanel({
                       : <CurrentIcon className="w-4 h-4 shrink-0" />}
                     {isSlicingZip
                       ? _(msg`Slicing…`)
-                      : (slicePlateScope === 'all_plates' ? _(msg`Slice all plates`) : current.label)}
+                      : (slicePlateScope === 'all_plates' ? _(msg`Slice All`) : current.label)}
                   </Button>
                   {hasMenuOptions && !isShiftHeld && slicePlateScope === 'current_plate' && (
                     <Button

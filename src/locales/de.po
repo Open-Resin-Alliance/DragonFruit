@@ -459,7 +459,7 @@ msgid "Auto adapts by AA level, Off is fastest, On favors smaller PNG files"
 msgstr ""
 
 #. Tooltip on the arrange button beside the build plate. Runs the standard arrange across every model, 1mm apart, with Z-rotation allowed.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1738
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1750
 msgid "Auto arrange the plate"
 msgstr ""
 
@@ -654,7 +654,7 @@ msgstr ""
 #. View cube face (the side opposite Front), rendered uppercase inside a small 3D cube. Keep it as short as possible.
 #: src/components/layout/FirstRunOnboarding.tsx:278
 #: src/components/layout/OnboardingPrinterLibrary.tsx:279
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1744
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1756
 msgid "Back"
 msgstr ""
 
@@ -789,7 +789,7 @@ msgid "Border Margin"
 msgstr ""
 
 #. View cube face (seen from below), rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1748
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1760
 msgid "Bottom"
 msgstr ""
 
@@ -1057,7 +1057,7 @@ msgstr ""
 #. Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.
 #. Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.
 #: src/app/page.tsx:10473
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1735
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1747
 msgid "Clear build plate"
 msgstr ""
 
@@ -2315,7 +2315,7 @@ msgid "From the community, for the community. Free to use, open to contribute, a
 msgstr ""
 
 #. Orientation label, rendered uppercase on the view cube and on the build plate's front edge. Keep it as short as possible — long words are auto-shrunk to fit and become hard to read.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1740
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1752
 msgid "Front"
 msgstr ""
 
@@ -2887,7 +2887,7 @@ msgid "Leave the collection as it is"
 msgstr ""
 
 #. View cube face, rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1746
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1758
 msgid "Left"
 msgstr ""
 
@@ -3037,7 +3037,7 @@ msgid "LocalStorage Keys"
 msgstr ""
 
 #. Tooltip on the lock button beside the build plate while it is unlocked. Locking refuses new meshes and moves of the models already on the plate.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1733
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1745
 msgid "Lock build plate"
 msgstr ""
 
@@ -4556,7 +4556,7 @@ msgid "Revert Changes"
 msgstr ""
 
 #. View cube face, rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1745
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1757
 msgid "Right"
 msgstr ""
 
@@ -4911,12 +4911,12 @@ msgid "Selected printer is offline"
 msgstr "Ausgewählter Drucker ist offline"
 
 #. Shown while dragging a selection rectangle right to left, which takes every object the rectangle touches. Mirrors the CAD convention; keep it on one short line.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3259
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3271
 msgid "Selection Mode: Contact (Right to Left)"
 msgstr ""
 
 #. Shown while dragging a selection rectangle left to right, which takes only the objects the rectangle fully encloses. Mirrors the CAD convention; keep it on one short line.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3263
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3275
 msgid "Selection Mode: Enclosed (Left to Right)"
 msgstr ""
 
@@ -5118,7 +5118,7 @@ msgid "Slice & Upload"
 msgstr ""
 
 #: src/features/slicing/components/SlicingPanel.tsx:3517
-msgid "Slice all plates"
+msgid "Slice All"
 msgstr ""
 
 #: src/features/organicCut/OrganicCutPanel.tsx:446
@@ -5771,7 +5771,7 @@ msgid "Tool layout"
 msgstr ""
 
 #. View cube face (seen from above), rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1747
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1759
 msgid "Top"
 msgstr ""
 
@@ -5859,7 +5859,7 @@ msgid "Unknown manufacturer"
 msgstr ""
 
 #. Tooltip on the lock button beside the build plate while it is locked.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1734
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1746
 msgid "Unlock build plate"
 msgstr ""
 
@@ -5868,12 +5868,12 @@ msgid "Unlock it to add or move models."
 msgstr ""
 
 #. Tooltip on the arrange button beside the build plate while the plate is locked, which is why it is disabled.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1739
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1751
 msgid "Unlock the plate to arrange it"
 msgstr ""
 
 #. Tooltip on the bin beside the build plate while the plate is locked, which is why it is disabled.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1737
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1749
 msgid "Unlock the plate to clear it"
 msgstr ""
 
