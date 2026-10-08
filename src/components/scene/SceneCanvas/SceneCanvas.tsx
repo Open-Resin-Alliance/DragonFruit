@@ -3649,7 +3649,11 @@ export function SceneCanvas({
   }, [arrangeArrayPreviewItems]);
 
   const hideFootprintOutlineForPreview = React.useMemo(() => {
-    if (mode !== 'prepare' || transformMode !== 'arrange') return false;
+    // Both tools that put ghosts on the plate: a ghost is what the outline would otherwise
+    // be traced under, and drawing the outline for every selected model while the ghosts
+    // are up is the expensive half of the pair. The Duplicate tool is its own rail mode,
+    // so it has to be named here — it was not, which is why its ghosts kept the outlines.
+    if (mode !== 'prepare' || (transformMode !== 'arrange' && transformMode !== 'duplicate')) return false;
 
     const hasArrangePreview = arrangeGhostPreviewGroups.length > 0 || arrangeSupportPreviewDeltas.length > 0;
     const hasDuplicatePreview = effectiveDuplicatePreviewTransforms.length > 0 || !!duplicateActivePreviewTransform;

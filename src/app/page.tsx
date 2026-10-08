@@ -7376,7 +7376,13 @@ export default function Home() {
   }, [displayActiveModelId, scene.activeModelId, transformMgr.transform]);
 
   const supportBoundsByModelId = React.useMemo(() => {
-    if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'arrange') {
+    // Both tools that size a model by what it carries: an arrange packs around supports,
+    // and a duplicate has to leave room for the source's. The Duplicate tool is its own
+    // rail mode, so asking for the Arrange mode here left its previews sized without them.
+    if (
+      scene.mode !== 'prepare'
+      || (transformMgr.transformMode !== 'arrange' && transformMgr.transformMode !== 'duplicate')
+    ) {
       return EMPTY_SUPPORT_BOUNDS_BY_MODEL_ID;
     }
 
@@ -9103,9 +9109,15 @@ export default function Home() {
   React.useEffect(() => {
     let cancelled = false;
 
-    if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'arrange') {
+    // The Duplicate tool is its own rail mode: this effect is what puts ghosts on the
+    // plate for the Duplicate panel, and it reads that panel's settings, so it runs while
+    // that tool is up. (It asked for the Arrange mode, which the tool rail split away from
+    // Duplicate — that left the previews permanently empty, so nothing ghosted and Confirm
+    // Duplicate had nothing to confirm.)
+    if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'duplicate') {
       setDuplicatePreviewTransforms([]);
       setDuplicateSourcePreviewTransform(null);
+      setDuplicateGhostPlateOffsets([]);
       return () => {
         cancelled = true;
       };
@@ -10568,7 +10580,7 @@ export default function Home() {
             duplicatePreviewModel={
               isDuplicating
                 ? duplicateApplySourceModel
-                : (transformMgr.transformMode === 'arrange' ? scene.activeModel : null)
+                : (transformMgr.transformMode === 'duplicate' ? scene.activeModel : null)
             }
             duplicatePreviewTransforms={duplicatePreviewTransforms}
             duplicateActivePreviewTransform={
