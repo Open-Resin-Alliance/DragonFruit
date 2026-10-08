@@ -7,7 +7,7 @@ import { Trans } from '@lingui/react/macro';
 import type { MessageDescriptor } from '@lingui/core';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { ExportManager, ExportOptions } from '../logic/ExportManager';
-import { normalizeExportBaseName, resolveEntirePlateExportBaseName } from '../logic/exportFileNaming';
+import { normalizeExportBaseName } from '../logic/exportFileNaming';
 import { plateNumberPlaceholder } from '@/features/scene/plates/plateMessages';
 import {
   Button,
@@ -254,13 +254,24 @@ export function ExportPanel({
 
   const scopedMeshCount = scopeModels.length;
 
+  /**
+   * The plate being worked on, as a file name: its own name, or its number when it has none.
+   * A bundle and a per-plate run are both exports of beds, so the bed is what they are named
+   * for — the dialog the user renames it in is the only place a name is chosen.
+   */
+  const activePlateFileBaseName = useMemo(() => {
+    const index = Math.max(0, (plateGroups ?? []).findIndex((plate) => plate.id === activePlateId));
+    const plate = plateGroups?.[index];
+    return normalizeExportBaseName(plate?.name?.trim() || plateNumberPlaceholder(index + 1, _));
+  }, [_, activePlateId, plateGroups]);
+
   // The name the native save dialog opens with. The user renames the file there,
   // so this is only a starting suggestion and never displayed in the panel.
   const suggestedFileName = useMemo(
     () => (exportScope === 'active_model'
       ? normalizeExportBaseName(activeModel?.name)
-      : resolveEntirePlateExportBaseName(entirePlateScopeModels)),
-    [activeModel, entirePlateScopeModels, exportScope],
+      : activePlateFileBaseName),
+    [activeModel, activePlateFileBaseName, exportScope],
   );
 
   useEffect(() => {
@@ -475,12 +486,7 @@ export function ExportPanel({
       ? plateGroups
       : [{ id: '', name: '', modelIds: scopeModels.map((model) => model.id) }];
     const groups = plates.map((plate, index) => ({
-      // One bed is the whole export, and the panel calls that choice "Bundle" in every
-      // format: its file is named for the scene rather than for the plate, so a single-plate
-      // export does not come out called "Plate 1".
-      name: plates.length === 1
-        ? suggestedFileName
-        : (plate.name.trim() || plateNumberPlaceholder(index + 1, _)),
+      name: plate.name.trim() || plateNumberPlaceholder(index + 1, _),
       models: scopeModels.filter((model) => plate.modelIds.includes(model.id)),
     }));
 
