@@ -2750,8 +2750,11 @@ export function useSceneCollectionManager(options?: {
       return plateId ? { ...moved, plateId } : moved;
     }));
 
-    if (followedPlateId) {
-      setActivePlateId((active) => (active === followedPlateId ? active : followedPlateId));
+    if (followedPlateId && activePlateIdRef.current !== followedPlateId) {
+      setActivePlateId(followedPlateId);
+      // The drop brings the view with it, the way picking a bed does. The drop, not
+      // the pointer moving: the camera must not jump out from under the drag.
+      setPlateViewRunId((id) => id + 1);
     }
 
     return {
@@ -6551,6 +6554,10 @@ export function useSceneCollectionManager(options?: {
 
     setPlates(remaining);
     setActivePlateId(nextActivePlateId);
+    // Deleting the bed being worked on moves to another one, and the view comes with
+    // it — the same slide picking a bed gives, rather than leaving the camera where the
+    // bed that is now gone used to be.
+    if (activePlateIdRef.current !== nextActivePlateId) setPlateViewRunId((id) => id + 1);
 
     // One entry for the whole move: `deleteModels` is asked not to push its own,
     // because undoing that one alone would bring the models back onto a bed that
@@ -6603,6 +6610,7 @@ export function useSceneCollectionManager(options?: {
 
     setPlates(remaining);
     setActivePlateId(firstPlateId);
+    if (activePlateIdRef.current !== firstPlateId) setPlateViewRunId((id) => id + 1);
 
     await deleteModels(idsInput, { pushHistory: false });
     // The models, the active model and the selection all come from the scene's refs,
