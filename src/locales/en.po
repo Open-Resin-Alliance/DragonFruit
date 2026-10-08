@@ -39,12 +39,12 @@ msgstr "{count, plural, one {# found} other {# found}}"
 msgid "{count, plural, one {# material} other {# materials}}"
 msgstr "{count, plural, one {# material} other {# materials}}"
 
-#: src/features/export/components/ExportPanel.tsx:49
+#: src/features/export/components/ExportPanel.tsx:60
 msgid "{count, plural, one {# mesh will be exported.} other {# meshes will be exported.}}"
 msgstr "{count, plural, one {# mesh will be exported.} other {# meshes will be exported.}}"
 
 #. Warning badge over the viewport when models stick out of the printer build volume.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:230
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:231
 msgid "{count, plural, one {# model out of build volume} other {# models out of build volume}}"
 msgstr "{count, plural, one {# model out of build volume} other {# models out of build volume}}"
 
@@ -78,7 +78,7 @@ msgstr "{done}/{total} processed"
 msgid "{downloaded} / {total} ({pct}%)"
 msgstr "{downloaded} / {total} ({pct}%)"
 
-#: src/app/page.tsx:491
+#: src/app/page.tsx:489
 #: src/components/controls/ModelStatsCard.tsx:207
 msgid "{hours} h {minutes} min"
 msgstr "{hours} h {minutes} min"
@@ -108,13 +108,13 @@ msgstr "{materialName} ({sourceName})"
 msgid "{minutes} min"
 msgstr "{minutes} min"
 
-#: src/app/page.tsx:483
-#: src/app/page.tsx:492
+#: src/app/page.tsx:481
+#: src/app/page.tsx:490
 #: src/components/controls/ModelStatsCard.tsx:208
 msgid "{minutes} min {seconds} s"
 msgstr "{minutes} min {seconds} s"
 
-#: src/features/export/components/ExportPanel.tsx:45
+#: src/features/export/components/ExportPanel.tsx:56
 msgid "{modelName} (hidden)"
 msgstr "{modelName} (hidden)"
 
@@ -184,12 +184,12 @@ msgid "<0>{recordedLabel}</0> builds {0} × {1} × {2} mm."
 msgstr "<0>{recordedLabel}</0> builds {0} × {1} × {2} mm."
 
 #. Approximate estimated print time (the "~" marks it as a rough estimate). {hours}/{mins} are whole-number quantities.
-#: src/app/page.tsx:475
+#: src/app/page.tsx:473
 msgid "~{hours} h {mins} min"
 msgstr "~{hours} h {mins} min"
 
 #. Approximate estimated print time under an hour (the "~" marks it as a rough estimate).
-#: src/app/page.tsx:476
+#: src/app/page.tsx:474
 msgid "~{mins} min"
 msgstr "~{mins} min"
 
@@ -205,11 +205,11 @@ msgstr "3D Mouse"
 msgid "3D mouse navigation controls"
 msgstr "3D mouse navigation controls"
 
-#: src/features/export/components/ExportPanel.tsx:66
+#: src/features/export/components/ExportPanel.tsx:116
 msgid "3MF"
 msgstr "3MF"
 
-#: src/features/export/components/ExportPanel.tsx:66
+#: src/features/export/components/ExportPanel.tsx:116
 msgid "3MF Mesh (.3mf)"
 msgstr "3MF Mesh (.3mf)"
 
@@ -248,7 +248,7 @@ msgstr "Active"
 msgid "ACTIVE"
 msgstr "ACTIVE"
 
-#: src/features/export/components/ExportPanel.tsx:57
+#: src/features/export/components/ExportPanel.tsx:68
 msgid "Active Model"
 msgstr "Active Model"
 
@@ -286,25 +286,21 @@ msgstr "Add another loop and start drawing it. On Cut, every loop is cut togethe
 msgid "Add contacts along the edge or corner a pose bears on, so a leaning part is held against toppling and peel (default on)"
 msgstr "Add contacts along the edge or corner a pose bears on, so a leaning part is held against toppling and peel (default on)"
 
-#: src/app/page.tsx:2399
+#: src/app/page.tsx:2397
 msgid "Add joint"
 msgstr "Add joint"
 
 #. Tooltip on the plus in the Models panel header, which opens the mesh picker.
-#: src/components/controls/ModelManagerPanel.tsx:728
+#: src/components/controls/ModelManagerPanel.tsx:738
 msgid "Add models to the plate"
 msgstr "Add models to the plate"
-
-#: src/features/export/components/ExportPanel.tsx:540
-msgid "Add more models to use Batch Export"
-msgstr "Add more models to use Batch Export"
 
 #: src/components/layout/EmptySceneState.tsx:558
 msgid "Add or switch printer anytime from the top bar."
 msgstr "Add or switch printer anytime from the top bar."
 
 #. Accessible name of the button beside the build plate that will add another plate. Inert for now, so it reads as unavailable to a screen reader too.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1618
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1629
 msgid "Add plate"
 msgstr "Add plate"
 
@@ -349,6 +345,10 @@ msgstr "After an autosave, defer further automatic saves until this interval end
 #: src/components/settings/BackupsSettingsTab.tsx:1010
 msgid "After updating .env, restart the app, then click “I configured it”."
 msgstr "After updating .env, restart the app, then click “I configured it”."
+
+#: src/features/export/components/ExportPanel.tsx:76
+msgid "All Plates"
+msgstr "All Plates"
 
 #: src/features/slicing/components/SlicingPanel.tsx:1864
 msgid "All visible models are outside the build volume."
@@ -404,7 +404,7 @@ msgstr "Apply for Session"
 msgid "Apply this preset to the auto-support settings"
 msgstr "Apply this preset to the auto-support settings"
 
-#: src/app/page.tsx:11155
+#: src/app/page.tsx:11217
 msgid "Are you sure you want to remove every model from the plate?"
 msgstr "Are you sure you want to remove every model from the plate?"
 
@@ -426,15 +426,20 @@ msgstr "Arrange model and transforms"
 msgid "Arrange models on the plate"
 msgstr "Arrange models on the plate"
 
+#. Tooltip on the Arrange panel's plate mode choice. Overflow goes onto new plates, and no other plate is touched.
+#: src/components/controls/ArrangePanel.tsx:195
+msgid "Arrange only the plate being worked on"
+msgstr "Arrange only the plate being worked on"
+
 #: src/components/controls/toolRailEntries.ts:57
 msgid "Array copies across the plate"
 msgstr "Array copies across the plate"
 
-#: src/features/export/components/ExportPanel.tsx:76
+#: src/features/export/components/ExportPanel.tsx:126
 msgid "ASCII"
 msgstr "ASCII"
 
-#: src/features/export/components/ExportPanel.tsx:76
+#: src/features/export/components/ExportPanel.tsx:126
 msgid "ASCII STL"
 msgstr "ASCII STL"
 
@@ -453,7 +458,7 @@ msgid "Auto adapts by AA level, Off is fastest, On favors smaller PNG files"
 msgstr "Auto adapts by AA level, Off is fastest, On favors smaller PNG files"
 
 #. Tooltip on the arrange button beside the build plate. Runs the standard arrange across every model, 1mm apart, with Z-rotation allowed.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1660
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1706
 msgid "Auto arrange the plate"
 msgstr "Auto arrange the plate"
 
@@ -617,7 +622,7 @@ msgstr "Autosave files are available in the DragonFruit desktop build."
 msgid "Autosave idle delay"
 msgstr "Autosave idle delay"
 
-#: src/app/page.tsx:1109
+#: src/app/page.tsx:1107
 msgid "Autosave is not working"
 msgstr "Autosave is not working"
 
@@ -648,7 +653,7 @@ msgstr "Avg island area"
 #. View cube face (the side opposite Front), rendered uppercase inside a small 3D cube. Keep it as short as possible.
 #: src/components/layout/FirstRunOnboarding.tsx:278
 #: src/components/layout/OnboardingPrinterLibrary.tsx:279
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1666
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1712
 msgid "Back"
 msgstr "Back"
 
@@ -746,19 +751,11 @@ msgstr "Balanced supports for general use"
 msgid "Base Flare"
 msgstr "Base Flare"
 
-#: src/features/export/components/ExportPanel.tsx:550
-msgid "Batch Export"
-msgstr "Batch Export"
-
-#: src/features/export/components/ExportPanel.tsx:342
-msgid "Batch export failed. Check console for details."
-msgstr "Batch export failed. Check console for details."
-
 #: src/supports/Curves/CurveSettingsCard.tsx:190
 msgid "Bias (Bottom - Top)"
 msgstr "Bias (Bottom - Top)"
 
-#: src/features/export/components/ExportPanel.tsx:75
+#: src/features/export/components/ExportPanel.tsx:125
 msgid "Binary"
 msgstr "Binary"
 
@@ -766,7 +763,7 @@ msgstr "Binary"
 msgid "Binary Base"
 msgstr "Binary Base"
 
-#: src/features/export/components/ExportPanel.tsx:75
+#: src/features/export/components/ExportPanel.tsx:125
 msgid "Binary STL (recommended)"
 msgstr "Binary STL (recommended)"
 
@@ -791,7 +788,7 @@ msgid "Border Margin"
 msgstr "Border Margin"
 
 #. View cube face (seen from below), rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1670
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1716
 msgid "Bottom"
 msgstr "Bottom"
 
@@ -860,6 +857,10 @@ msgstr "Built-in"
 msgid "Built-in presets cannot be deleted"
 msgstr "Built-in presets cannot be deleted"
 
+#: src/features/export/components/ExportPanel.tsx:92
+msgid "Bundle"
+msgstr "Bundle"
+
 #: src/features/slicing/components/SlicingPanel.tsx:2562
 msgid "Bypassed"
 msgstr "Bypassed"
@@ -881,13 +882,13 @@ msgstr "Camera view mode: {currentLabel}"
 msgid "Can't open this scene"
 msgstr "Can't open this scene"
 
-#: src/app/page.tsx:11116
+#: src/app/page.tsx:11178
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:468
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:664
 #: src/components/controls/AutoSupportPanel.tsx:652
 #: src/components/controls/IslandScanCard.tsx:184
 #: src/components/controls/IslandsPanel.tsx:304
-#: src/components/controls/ModelManagerPanel.tsx:750
+#: src/components/controls/ModelManagerPanel.tsx:760
 #: src/components/modals/AaSupportWarningModal.tsx:40
 #: src/components/printers/PrinterVariantPickerModal.tsx:695
 #: src/components/settings/FleetManagement.tsx:442
@@ -1053,12 +1054,12 @@ msgstr "Clear All failed. Check console for details."
 
 #. Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.
 #. Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.
-#: src/app/page.tsx:10418
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1657
+#: src/app/page.tsx:10472
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1703
 msgid "Clear build plate"
 msgstr "Clear build plate"
 
-#: src/app/page.tsx:11105
+#: src/app/page.tsx:11167
 msgid "Clear Build Plate?"
 msgstr "Clear Build Plate?"
 
@@ -1066,7 +1067,7 @@ msgstr "Clear Build Plate?"
 msgid "Clear Override"
 msgstr "Clear Override"
 
-#: src/app/page.tsx:11146
+#: src/app/page.tsx:11208
 msgid "Clear Plate"
 msgstr "Clear Plate"
 
@@ -1101,7 +1102,7 @@ msgstr "Client ID"
 msgid "Close"
 msgstr "Close"
 
-#: src/app/page.tsx:11111
+#: src/app/page.tsx:11173
 msgid "Close clear-plate confirmation"
 msgstr "Close clear-plate confirmation"
 
@@ -1113,7 +1114,7 @@ msgstr "Close dialog"
 msgid "Close material anti-aliasing settings"
 msgstr "Close material anti-aliasing settings"
 
-#: src/components/controls/ModelManagerPanel.tsx:744
+#: src/components/controls/ModelManagerPanel.tsx:754
 #: src/components/modals/AaSupportWarningModal.tsx:34
 #: src/components/modals/ObsoleteVoxlVersionModal.tsx:40
 #: src/components/modals/ScenePrinterMismatchModal.tsx:55
@@ -1190,8 +1191,8 @@ msgstr "Coincident"
 msgid "Collapse card"
 msgstr "Collapse card"
 
-#: src/components/controls/ModelManagerPanel.tsx:851
-#: src/components/controls/ModelManagerPanel.tsx:957
+#: src/components/controls/ModelManagerPanel.tsx:861
+#: src/components/controls/ModelManagerPanel.tsx:967
 msgid "Collapse folder"
 msgstr "Collapse folder"
 
@@ -1208,7 +1209,7 @@ msgid "Color Scheme"
 msgstr "Color Scheme"
 
 #. Hover text on the add-plate button beside the build plate. The app has one plate for now, so the button says so instead of doing nothing.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1619
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1630
 msgid "Coming Soon!"
 msgstr "Coming Soon!"
 
@@ -1250,7 +1251,7 @@ msgstr "Configure island detection parameters"
 msgid "Configure Networking Later"
 msgstr "Configure Networking Later"
 
-#: src/app/page.tsx:11104
+#: src/app/page.tsx:11166
 msgid "Confirm clearing the build plate"
 msgstr "Confirm clearing the build plate"
 
@@ -1258,7 +1259,7 @@ msgstr "Confirm clearing the build plate"
 msgid "Confirm delete snapshot"
 msgstr "Confirm delete snapshot"
 
-#: src/app/page.tsx:11103
+#: src/app/page.tsx:11165
 msgid "Confirm deleting the plate"
 msgstr "Confirm deleting the plate"
 
@@ -1356,7 +1357,7 @@ msgstr "Contour"
 msgid "Contoured regions"
 msgstr "Contoured regions"
 
-#: src/app/page.tsx:8283
+#: src/app/page.tsx:8289
 msgid "Converting support data and model metadata"
 msgstr "Converting support data and model metadata"
 
@@ -1464,6 +1465,10 @@ msgstr "Crisp text and details."
 #: src/features/slicing/components/SlicingPanel.tsx:3613
 msgid "Current material"
 msgstr "Current material"
+
+#: src/features/export/components/ExportPanel.tsx:77
+msgid "Current Plate"
+msgstr "Current Plate"
 
 #: src/components/layout/EmptySceneState.tsx:80
 msgid "Currently displaying nothing at maximum fidelity."
@@ -1594,10 +1599,10 @@ msgstr "Delete {count} presets?"
 msgid "Delete Backup Snapshot"
 msgstr "Delete Backup Snapshot"
 
-#: src/app/page.tsx:11146
+#: src/app/page.tsx:11208
 #: src/components/controls/ModelManagerPanel.tsx:477
-#: src/components/controls/ModelManagerPanel.tsx:738
-#: src/components/controls/ModelManagerPanel.tsx:759
+#: src/components/controls/ModelManagerPanel.tsx:748
+#: src/components/controls/ModelManagerPanel.tsx:769
 msgid "Delete plate"
 msgstr "Delete plate"
 
@@ -1632,12 +1637,12 @@ msgid "Delete this model's existing supports and place the new ones"
 msgstr "Delete this model's existing supports and place the new ones"
 
 #. Tooltip on the bin beside the build plate when the plate can go: it removes the bed and the models standing on it. Undo brings them back.
-#: src/app/page.tsx:10417
+#: src/app/page.tsx:10471
 msgid "Delete this plate"
 msgstr "Delete this plate"
 
-#: src/app/page.tsx:11105
-#: src/components/controls/ModelManagerPanel.tsx:739
+#: src/app/page.tsx:11167
+#: src/components/controls/ModelManagerPanel.tsx:749
 msgid "Delete this plate?"
 msgstr "Delete this plate?"
 
@@ -1843,7 +1848,7 @@ msgstr "DragonFruit will <0>download, verify and install</0> the update, then re
 msgid "Drop supported files"
 msgstr "Drop supported files"
 
-#: src/app/page.tsx:10370
+#: src/app/page.tsx:10422
 msgid "Drop supported files to import"
 msgstr "Drop supported files to import"
 
@@ -1880,7 +1885,7 @@ msgstr "Edit material profile"
 msgid "Edit printer profile"
 msgstr "Edit printer profile"
 
-#: src/app/page.tsx:2405
+#: src/app/page.tsx:2403
 msgid "Editor"
 msgstr "Editor"
 
@@ -1959,7 +1964,7 @@ msgstr "Engine"
 msgid "Enter your printer's IP address"
 msgstr "Enter your printer's IP address"
 
-#: src/features/export/components/ExportPanel.tsx:56
+#: src/features/export/components/ExportPanel.tsx:67
 msgid "Entire Plate"
 msgstr "Entire Plate"
 
@@ -2028,8 +2033,8 @@ msgstr "Existing Supports Detected"
 msgid "Expand card"
 msgstr "Expand card"
 
-#: src/components/controls/ModelManagerPanel.tsx:851
-#: src/components/controls/ModelManagerPanel.tsx:957
+#: src/components/controls/ModelManagerPanel.tsx:861
+#: src/components/controls/ModelManagerPanel.tsx:967
 msgid "Expand folder"
 msgstr "Expand folder"
 
@@ -2060,36 +2065,41 @@ msgstr "Expert"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:407
 #: src/components/layout/TopBar.tsx:610
-#: src/features/export/components/ExportPanel.tsx:362
-#: src/features/export/components/ExportPanel.tsx:384
+#: src/features/export/components/ExportPanel.tsx:486
+#: src/features/export/components/ExportPanel.tsx:508
 msgid "Export"
 msgstr "Export"
 
-#: src/features/export/components/ExportPanel.tsx:80
+#: src/features/export/components/ExportPanel.tsx:130
 msgid "Export as 3MF"
 msgstr "Export as 3MF"
 
-#: src/features/export/components/ExportPanel.tsx:81
+#: src/features/export/components/ExportPanel.tsx:131
 msgid "Export as STL"
 msgstr "Export as STL"
 
-#: src/features/export/components/ExportPanel.tsx:540
-msgid "Export each visible model and its supports into separate files in a folder"
-msgstr "Export each visible model and its supports into separate files in a folder"
-
-#: src/features/export/components/ExportPanel.tsx:268
+#: src/features/export/components/ExportPanel.tsx:353
+#: src/features/export/components/ExportPanel.tsx:447
 msgid "Export failed. Check console for details."
 msgstr "Export failed. Check console for details."
 
-#: src/features/export/components/ExportPanel.tsx:452
+#: src/features/export/components/ExportPanel.tsx:604
 msgid "Export format"
 msgstr "Export format"
 
-#: src/features/export/components/ExportPanel.tsx:82
+#: src/features/export/components/ExportPanel.tsx:646
+msgid "Export layout"
+msgstr "Export layout"
+
+#: src/features/export/components/ExportPanel.tsx:572
+msgid "Export plates"
+msgstr "Export plates"
+
+#: src/features/export/components/ExportPanel.tsx:132
 msgid "Export Scene File"
 msgstr "Export Scene File"
 
-#: src/features/export/components/ExportPanel.tsx:410
+#: src/features/export/components/ExportPanel.tsx:534
 msgid "Export scope"
 msgstr "Export scope"
 
@@ -2097,11 +2107,7 @@ msgstr "Export scope"
 msgid "Export the selected preset as a JSON file"
 msgstr "Export the selected preset as a JSON file"
 
-#: src/features/export/components/ExportPanel.tsx:545
-msgid "Exporting Individually…"
-msgstr "Exporting Individually…"
-
-#: src/features/export/components/ExportPanel.tsx:525
+#: src/features/export/components/ExportPanel.tsx:710
 msgid "Exporting…"
 msgstr "Exporting…"
 
@@ -2306,7 +2312,7 @@ msgid "From the community, for the community. Free to use, open to contribute, a
 msgstr "From the community, for the community. Free to use, open to contribute, and shaped by the people who print with it."
 
 #. Orientation label, rendered uppercase on the view cube and on the build plate's front edge. Keep it as short as possible — long words are auto-shrunk to fit and become hard to read.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1662
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1708
 msgid "Front"
 msgstr "Front"
 
@@ -2370,7 +2376,7 @@ msgid "GitHub OAuth popup opened."
 msgstr "GitHub OAuth popup opened."
 
 #. Tooltip on the build plate's name widget while it is still unnamed.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1617
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1628
 msgid "Give this build plate a name"
 msgstr "Give this build plate a name"
 
@@ -2447,7 +2453,7 @@ msgstr "Height:"
 msgid "Held against toppling and peel"
 msgstr "Held against toppling and peel"
 
-#: src/components/controls/ModelManagerPanel.tsx:696
+#: src/components/controls/ModelManagerPanel.tsx:706
 msgid "Hide"
 msgstr "Hide"
 
@@ -2611,15 +2617,15 @@ msgstr "Importing your file…"
 msgid "In space, no one can hear you slice."
 msgstr "In space, no one can hear you slice."
 
-#: src/features/export/components/ExportPanel.tsx:491
+#: src/features/export/components/ExportPanel.tsx:670
 msgid "Include Model Mesh"
 msgstr "Include Model Mesh"
 
-#: src/features/export/components/ExportPanel.tsx:505
+#: src/features/export/components/ExportPanel.tsx:684
 msgid "Include Raft"
 msgstr "Include Raft"
 
-#: src/features/export/components/ExportPanel.tsx:498
+#: src/features/export/components/ExportPanel.tsx:677
 msgid "Include Supports"
 msgstr "Include Supports"
 
@@ -2827,7 +2833,7 @@ msgid "Last remote backup"
 msgstr "Last remote backup"
 
 #. {timestamp} is a locale-formatted date and time.
-#: src/app/page.tsx:634
+#: src/app/page.tsx:632
 msgid "Last successful autosave: {timestamp}. Save your project manually."
 msgstr "Last successful autosave: {timestamp}. Save your project manually."
 
@@ -2879,7 +2885,7 @@ msgid "Leave the collection as it is"
 msgstr "Leave the collection as it is"
 
 #. View cube face, rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1668
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1714
 msgid "Left"
 msgstr "Left"
 
@@ -2887,7 +2893,7 @@ msgstr "Left"
 msgid "Length"
 msgstr "Length"
 
-#: src/app/page.tsx:8323
+#: src/app/page.tsx:8329
 msgid "Letting DragonFruit finish its startup animation before loading your scene."
 msgstr "Letting DragonFruit finish its startup animation before loading your scene."
 
@@ -2968,7 +2974,7 @@ msgstr "Loading backup status…"
 msgid "Loading Mesh Files…"
 msgstr "Loading Mesh Files…"
 
-#: src/app/page.tsx:8273
+#: src/app/page.tsx:8279
 #: src/features/scene/sceneImportMessages.ts:23
 msgid "Loading Mesh…"
 msgstr "Loading Mesh…"
@@ -2977,9 +2983,9 @@ msgstr "Loading Mesh…"
 msgid "Loading remote material…"
 msgstr "Loading remote material…"
 
-#: src/app/page.tsx:4478
-#: src/app/page.tsx:8273
-#: src/app/page.tsx:8282
+#: src/app/page.tsx:4476
+#: src/app/page.tsx:8279
+#: src/app/page.tsx:8288
 msgid "Loading Scene…"
 msgstr "Loading Scene…"
 
@@ -3029,7 +3035,7 @@ msgid "LocalStorage Keys"
 msgstr "LocalStorage Keys"
 
 #. Tooltip on the lock button beside the build plate while it is unlocked. Locking refuses new meshes and moves of the models already on the plate.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1655
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1701
 msgid "Lock build plate"
 msgstr "Lock build plate"
 
@@ -3210,7 +3216,7 @@ msgid "Mesh"
 msgstr "Mesh"
 
 #. Badge label next to the number of meshes this export writes. Rendered uppercase; keep it to one short word.
-#: src/features/export/components/ExportPanel.tsx:398
+#: src/features/export/components/ExportPanel.tsx:522
 msgid "Meshes"
 msgstr "Meshes"
 
@@ -3288,7 +3294,7 @@ msgid "Model actions…"
 msgstr "Model actions…"
 
 #. Accessible name of the info button on a model row. The tooltip beside it lists the mesh size and polygon count.
-#: src/components/controls/ModelManagerPanel.tsx:683
+#: src/components/controls/ModelManagerPanel.tsx:693
 msgid "Model details"
 msgstr "Model details"
 
@@ -3312,7 +3318,7 @@ msgstr "Model supports"
 msgid "Model Supports"
 msgstr "Model Supports"
 
-#: src/features/export/components/ExportPanel.tsx:432
+#: src/features/export/components/ExportPanel.tsx:556
 msgid "Model to export"
 msgstr "Model to export"
 
@@ -3326,14 +3332,14 @@ msgstr "Model-Scale Sizing"
 
 #. Section heading of the models context menu. Rendered uppercase.
 #. Title of the panel listing every model loaded into the scene.
-#: src/components/controls/ModelManagerPanel.tsx:718
-#: src/components/controls/ModelManagerPanel.tsx:997
+#: src/components/controls/ModelManagerPanel.tsx:728
+#: src/components/controls/ModelManagerPanel.tsx:1007
 #: src/components/controls/toolRailEntries.ts:66
 #: src/components/controls/toolRailEntries.ts:169
 msgid "Models"
 msgstr "Models"
 
-#: src/components/controls/ModelManagerPanel.tsx:998
+#: src/components/controls/ModelManagerPanel.tsx:1008
 msgid "Models context menu"
 msgstr "Models context menu"
 
@@ -3373,6 +3379,10 @@ msgstr "Move, rotate, and scale"
 #: src/features/organicCut/OrganicCutPanel.tsx:602
 msgid "Moved off centre"
 msgstr "Moved off centre"
+
+#: src/components/controls/ArrangePanel.tsx:186
+msgid "Multi-Plate"
+msgstr "Multi-Plate"
 
 #: src/supports/Settings/components/PresetSelector.tsx:91
 #: src/supports/Settings/components/PresetSelector.tsx:583
@@ -3462,7 +3472,7 @@ msgstr "No AA"
 msgid "No active printer"
 msgstr "No active printer"
 
-#: src/app/page.tsx:1113
+#: src/app/page.tsx:1111
 msgid "No autosave has succeeded this session. Save your project manually."
 msgstr "No autosave has succeeded this session. Save your project manually."
 
@@ -3521,7 +3531,7 @@ msgstr "No material selected"
 msgid "No materials linked to this printer."
 msgstr "No materials linked to this printer."
 
-#: src/features/export/components/ExportPanel.tsx:368
+#: src/features/export/components/ExportPanel.tsx:492
 msgid "No meshes loaded yet. Import a model first, then hop back to Export."
 msgstr "No meshes loaded yet. Import a model first, then hop back to Export."
 
@@ -3535,7 +3545,7 @@ msgstr "No meshes loaded yet. Import a model first, then return to Slicing."
 msgid "No model selected"
 msgstr "No model selected"
 
-#: src/components/controls/ModelManagerPanel.tsx:777
+#: src/components/controls/ModelManagerPanel.tsx:787
 msgid "No models loaded"
 msgstr "No models loaded"
 
@@ -3759,6 +3769,18 @@ msgstr "Onboarding"
 msgid "One does not simply import a mesh... or actually, you just click a button."
 msgstr "One does not simply import a mesh... or actually, you just click a button."
 
+#: src/features/export/components/ExportPanel.tsx:93
+msgid "One file holding every plate together"
+msgstr "One file holding every plate together"
+
+#: src/features/export/components/ExportPanel.tsx:105
+msgid "One file per model"
+msgstr "One file per model"
+
+#: src/features/export/components/ExportPanel.tsx:99
+msgid "One file per plate"
+msgstr "One file per plate"
+
 #: src/features/slicing/components/SlicingPanel.tsx:3879
 msgid "One visible model outside the build volume will be excluded from this slice."
 msgstr "One visible model outside the build volume will be excluded from this slice."
@@ -3826,7 +3848,7 @@ msgstr "Open scene…"
 msgid "Opening"
 msgstr "Opening"
 
-#: src/app/page.tsx:8320
+#: src/app/page.tsx:8326
 msgid "Opening scene…"
 msgstr "Opening scene…"
 
@@ -3924,7 +3946,7 @@ msgstr "Per-workspace camera defaults"
 msgid "Persist dragged panel positions in local storage."
 msgstr "Persist dragged panel positions in local storage."
 
-#: src/features/export/components/ExportPanel.tsx:447
+#: src/features/export/components/ExportPanel.tsx:599
 msgid "Pick a model to export."
 msgstr "Pick a model to export."
 
@@ -3961,17 +3983,25 @@ msgid "Plate {index}"
 msgstr "Plate {index}"
 
 #. What the build plate's name widget shows while the plate has no name of its own, including after the plate is cleared or a new scene is started. The number is the plate's, plural forms come later with multiple plates.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1615
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1626
 msgid "Plate 1"
 msgstr "Plate 1"
 
-#: src/components/controls/ModelManagerPanel.tsx:895
+#: src/components/controls/ArrangePanel.tsx:175
+msgid "Plate Mode"
+msgstr "Plate Mode"
+
+#: src/components/controls/ModelManagerPanel.tsx:905
 msgid "Plate name"
 msgstr "Plate name"
 
 #: src/features/slicing/components/SlicingPanel.tsx:3782
 msgid "Plate preview · Layer {previewSelectedLayer}/{previewTotalLayers}"
 msgstr "Plate preview · Layer {previewSelectedLayer}/{previewTotalLayers}"
+
+#: src/features/export/components/ExportPanel.tsx:98
+msgid "Plates"
+msgstr "Plates"
 
 #: src/features/updater/UpdateCheckerSection.tsx:270
 msgid "Please <0>save your scene and any unsaved progress</0> before continuing."
@@ -4217,7 +4247,7 @@ msgstr "Re-Run Scanline"
 msgid "Re-slice required after profile change"
 msgstr "Re-slice required after profile change"
 
-#: src/app/page.tsx:4479
+#: src/app/page.tsx:4477
 msgid "Reading autosaved scene…"
 msgstr "Reading autosaved scene…"
 
@@ -4352,12 +4382,12 @@ msgid "Rename"
 msgstr "Rename"
 
 #. Tooltip on the pencil beside the build plate's name.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1616
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1627
 msgid "Rename build plate"
 msgstr "Rename build plate"
 
 #: src/components/controls/ModelManagerPanel.tsx:487
-#: src/components/controls/ModelManagerPanel.tsx:920
+#: src/components/controls/ModelManagerPanel.tsx:930
 msgid "Rename folder"
 msgstr "Rename folder"
 
@@ -4365,7 +4395,7 @@ msgstr "Rename folder"
 msgid "Rename model"
 msgstr "Rename model"
 
-#: src/components/controls/ModelManagerPanel.tsx:656
+#: src/components/controls/ModelManagerPanel.tsx:666
 msgid "Rename model base name"
 msgstr "Rename model base name"
 
@@ -4490,8 +4520,8 @@ msgstr "Restore factory defaults"
 msgid "Restore Factory Defaults?"
 msgstr "Restore Factory Defaults?"
 
-#: src/app/page.tsx:4510
-#: src/app/page.tsx:4521
+#: src/app/page.tsx:4508
+#: src/app/page.tsx:4519
 msgid "Restore Failed"
 msgstr "Restore Failed"
 
@@ -4520,7 +4550,7 @@ msgid "Revert Changes"
 msgstr "Revert Changes"
 
 #. View cube face, rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1667
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1713
 msgid "Right"
 msgstr "Right"
 
@@ -4821,7 +4851,7 @@ msgstr "Select a matching material during import instead."
 msgid "Select a material profile first."
 msgstr "Select a material profile first."
 
-#: src/features/export/components/ExportPanel.tsx:434
+#: src/features/export/components/ExportPanel.tsx:558
 msgid "Select a model"
 msgstr "Select a model"
 
@@ -4875,12 +4905,12 @@ msgid "Selected printer is offline"
 msgstr "Selected printer is offline"
 
 #. Shown while dragging a selection rectangle right to left, which takes every object the rectangle touches. Mirrors the CAD convention; keep it on one short line.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3181
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3227
 msgid "Selection Mode: Contact (Right to Left)"
 msgstr "Selection Mode: Contact (Right to Left)"
 
 #. Shown while dragging a selection rectangle left to right, which takes only the objects the rectangle fully encloses. Mirrors the CAD convention; keep it on one short line.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3185
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3231
 msgid "Selection Mode: Enclosed (Left to Right)"
 msgstr "Selection Mode: Enclosed (Left to Right)"
 
@@ -4895,6 +4925,10 @@ msgstr "Send sliced files to UVTools for analysis"
 #: src/features/slicing/components/SlicingPanel.tsx:3422
 msgid "Send to UVTools"
 msgstr "Send to UVTools"
+
+#: src/features/export/components/ExportPanel.tsx:104
+msgid "Separate"
+msgstr "Separate"
 
 #: src/features/scene/sceneImportMessages.ts:113
 msgid "Separating model and support geometry…"
@@ -4971,7 +5005,7 @@ msgstr "Shells:"
 msgid "Shortest Print Time"
 msgstr "Shortest Print Time"
 
-#: src/components/controls/ModelManagerPanel.tsx:696
+#: src/components/controls/ModelManagerPanel.tsx:706
 msgid "Show"
 msgstr "Show"
 
@@ -5255,15 +5289,15 @@ msgstr "Step 1: Run Scanline Scan"
 msgid "Step 2: Enable Debug Visuals (IDs + Voxels)"
 msgstr "Step 2: Enable Debug Visuals (IDs + Voxels)"
 
-#: src/features/export/components/ExportPanel.tsx:67
+#: src/features/export/components/ExportPanel.tsx:117
 msgid "STL"
 msgstr "STL"
 
-#: src/features/export/components/ExportPanel.tsx:470
+#: src/features/export/components/ExportPanel.tsx:622
 msgid "STL encoding"
 msgstr "STL encoding"
 
-#: src/features/export/components/ExportPanel.tsx:67
+#: src/features/export/components/ExportPanel.tsx:117
 msgid "STL Mesh (.stl)"
 msgstr "STL Mesh (.stl)"
 
@@ -5338,7 +5372,7 @@ msgstr "Support would collide with the model geometry."
 msgid "Supported: {extensions}"
 msgstr "Supported: {extensions}"
 
-#: src/app/page.tsx:2405
+#: src/app/page.tsx:2403
 #: src/components/ui/EditorContextMenu.tsx:109
 msgid "Supports"
 msgstr "Supports"
@@ -5433,16 +5467,16 @@ msgstr "Tenon width in millimeters"
 msgid "Tension"
 msgstr "Tension"
 
-#: src/app/page.tsx:4523
+#: src/app/page.tsx:4521
 msgid "The autosave recovery file could not be found."
 msgstr "The autosave recovery file could not be found."
 
-#: src/app/page.tsx:4511
-#: src/app/page.tsx:4524
+#: src/app/page.tsx:4509
+#: src/app/page.tsx:4522
 msgid "The autosaved recovery file is corrupted or unreadable."
 msgstr "The autosaved recovery file is corrupted or unreadable."
 
-#: src/app/page.tsx:1110
+#: src/app/page.tsx:1108
 msgid "The background recovery save failed repeatedly."
 msgstr "The background recovery save failed repeatedly."
 
@@ -5450,7 +5484,7 @@ msgstr "The background recovery save failed repeatedly."
 msgid "The build plate awaits."
 msgstr "The build plate awaits."
 
-#: src/app/page.tsx:11174
+#: src/app/page.tsx:11236
 msgid "The build plate is locked."
 msgstr "The build plate is locked."
 
@@ -5486,12 +5520,12 @@ msgstr "The hole carved in the other half."
 msgid "The inputs and factors the last run sized the supports with"
 msgstr "The inputs and factors the last run sized the supports with"
 
-#: src/app/page.tsx:11154
+#: src/app/page.tsx:11216
 msgid "The models on this plate are deleted with it."
 msgstr "The models on this plate are deleted with it."
 
 #. The count is how many models stand on the plate being deleted.
-#: src/components/controls/ModelManagerPanel.tsx:765
+#: src/components/controls/ModelManagerPanel.tsx:775
 msgid "The models on this plate are deleted with it. Undo brings them back."
 msgstr "The models on this plate are deleted with it. Undo brings them back."
 
@@ -5548,7 +5582,7 @@ msgstr "The resin is ready. Are you?"
 msgid "The saved run policy the settings below are. Selecting one applies it immediately; the rest of the dialog stays staged until you save."
 msgstr "The saved run policy the settings below are. Selecting one applies it immediately; the rest of the dialog stays staged until you save."
 
-#: src/app/page.tsx:4512
+#: src/app/page.tsx:4510
 msgid "The scene importer rejected or could not parse the autosave data."
 msgstr "The scene importer rejected or could not parse the autosave data."
 
@@ -5635,6 +5669,10 @@ msgstr "This model already has supports. How would you like to proceed?"
 msgid "This model is already added."
 msgstr "This model is already added."
 
+#: src/components/controls/ArrangePanel.tsx:197
+msgid "This Plate"
+msgstr "This Plate"
+
 #: src/components/printers/PrinterVariantPickerModal.tsx:432
 msgid "This printer has no setup options."
 msgstr "This printer has no setup options."
@@ -5688,7 +5726,7 @@ msgstr "Tip Ø range"
 msgid "To recover it, open the scene in an older version of DragonFruit and save it again — the re-saved scene will open here."
 msgstr "To recover it, open the scene in an older version of DragonFruit and save it again — the re-saved scene will open here."
 
-#: src/app/page.tsx:2394
+#: src/app/page.tsx:2392
 msgid "Toggle curve"
 msgstr "Toggle curve"
 
@@ -5724,7 +5762,7 @@ msgid "Tool layout"
 msgstr "Tool layout"
 
 #. View cube face (seen from above), rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1669
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1715
 msgid "Top"
 msgstr "Top"
 
@@ -5774,7 +5812,7 @@ msgstr "UI & Theme"
 msgid "Unavailable"
 msgstr "Unavailable"
 
-#: src/app/page.tsx:11108
+#: src/app/page.tsx:11170
 msgid "Undo brings the models back"
 msgstr "Undo brings the models back"
 
@@ -5812,21 +5850,21 @@ msgid "Unknown manufacturer"
 msgstr "Unknown manufacturer"
 
 #. Tooltip on the lock button beside the build plate while it is locked.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1656
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1702
 msgid "Unlock build plate"
 msgstr "Unlock build plate"
 
-#: src/app/page.tsx:11177
+#: src/app/page.tsx:11239
 msgid "Unlock it to add or move models."
 msgstr "Unlock it to add or move models."
 
 #. Tooltip on the arrange button beside the build plate while the plate is locked, which is why it is disabled.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1661
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1707
 msgid "Unlock the plate to arrange it"
 msgstr "Unlock the plate to arrange it"
 
 #. Tooltip on the bin beside the build plate while the plate is locked, which is why it is disabled.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1659
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1705
 msgid "Unlock the plate to clear it"
 msgstr "Unlock the plate to clear it"
 
@@ -5842,7 +5880,7 @@ msgstr "Unsaved changes may be lost."
 msgid "Unsaved Scene Found"
 msgstr "Unsaved Scene Found"
 
-#: src/app/page.tsx:10370
+#: src/app/page.tsx:10422
 msgid "Unsupported file format"
 msgstr "Unsupported file format"
 
@@ -5913,6 +5951,11 @@ msgstr "Use Default Path"
 #: src/components/settings/BackupsSettingsTab.tsx:1025
 msgid "Use existing repo"
 msgstr "Use existing repo"
+
+#. Tooltip on the Arrange panel's plate mode choice. It fills partly used plates around the models already on them.
+#: src/components/controls/ArrangePanel.tsx:184
+msgid "Use the plates the scene already has before adding more"
+msgstr "Use the plates the scene already has before adding more"
 
 #: src/components/layout/EmptySceneState.tsx:549
 msgid "Use without printer"
@@ -6055,11 +6098,11 @@ msgstr "Voxels: Nodes"
 msgid "Voxels: Systems"
 msgstr "Voxels: Systems"
 
-#: src/features/export/components/ExportPanel.tsx:65
+#: src/features/export/components/ExportPanel.tsx:115
 msgid "VOXL"
 msgstr "VOXL"
 
-#: src/features/export/components/ExportPanel.tsx:65
+#: src/features/export/components/ExportPanel.tsx:115
 msgid "VOXL Scene (.voxl)"
 msgstr "VOXL Scene (.voxl)"
 

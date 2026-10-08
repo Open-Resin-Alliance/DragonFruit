@@ -59,6 +59,45 @@
 
 ## Open
 
+### [bug] SceneCanvas ends navigation in an effect that re-runs every render — S · low risk
+- Where: src/components/scene/SceneCanvas/SceneCanvas.tsx, the `useEffect` that ends orbit /
+  wheel gestures when `cameraInteractionCycleEnabled` is false (~line 5403).
+- What: its deps include `handleOrbitEnd`, whose identity changes on every parent render
+  (`onCameraEnd`/`onCameraChange` close over the scene manager), so the effect re-runs every
+  render and calls `setIsOrbitInteracting(false)`/`setIsOrbitRotating(false)` from a passive
+  effect. Bailing setStates still count towards React's nested-update budget, so any other
+  per-render churn in the tree turns this into "Maximum update depth exceeded" (measured:
+  549 effect runs in 3s, and the error fires from this line).
+- Fix: hold the three callbacks in a ref and depend on
+  `[cameraInteractionCycleEnabled, spaceMouseNavigationActive]` — measured 0 errors with the
+  rest of the tree churning. Reverted from the arrange fix because it was not needed there.
+- Context: found while chasing the arrange regression, 2026-10-08. The same file already
+  documents this identity churn in the trackpad-wheel effect.
+
+
+### [bug] Plate delete: redo resurrects the plate's models — S · medium risk
+- Where: src/features/scene/useSceneCollectionManager.ts, `removePlate` (~line 6491).
+- What: the "after" snapshot is captured from `modelsRef.current` a microtask
+  after `deleteModels`, before React commits, so it still holds the deleted
+  models. Measured: 2 plates / 3 models on plate 2 → removePlate → undo (3 models,
+  2 plates ✓) → redo → 3 models on 1 plate (they come back onto plate 1).
+- Why: a redo silently orphans models onto another bed.
+- Fix: `await waitForUiYield()` before capturing the after snapshot — what
+  `deleteModelsAndExtraPlates` (same file, added with the arrange fix) does.
+- Context: verified in the CDP harness, 2026-10-08.
+
+### [bug] Duplicate on a later plate places copies on plate 1 — M · medium risk
+- Where: `handleFillPlateDuplicate` in src/features/scene/arrange/useArrangeManager.ts
+  (~line 1484), the high-precision duplicate preview/apply in src/app/page.tsx (~line 1390
+  and the duplicate preview effect ~9300).
+- What: the fill and the high-precision duplicate derive their frame from
+  `view3dSettings` alone, with no cascade offset, so on plate 2 the copies land in
+  plate 1's coordinates. The same shape the arrange paths had (fixed for arrange by
+  `resolveArrangeFrame` / `plateOffsetMm`).
+- Why: the copy is created, then stands on the wrong bed.
+- Context: inferred from reading the code while fixing arrange — not yet measured;
+  check both duplicate layouts (auto/fill and high precision) on plate 2.
+
 ### [cleanup] Dead imports and components in the page.tsx header — S · low risk
 - Where: src/app/page.tsx, lines ~7-59 (import header).
 - What: ~30 symbols imported and unused — lucide icons, several panels/cards
