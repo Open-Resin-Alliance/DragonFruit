@@ -633,6 +633,11 @@ function formatLastSuccessfulAutosave(
   }), { timestamp });
 }
 
+/** How many layers either side of the one on screen are read ahead. */
+const PRINTING_PREVIEW_PREFETCH_RADIUS = 3;
+/** How many layers of one bed are kept in memory before the oldest are dropped. */
+const PRINTING_PREVIEW_CACHE_LIMIT = 24;
+
 export default function Home() {
   const { _, i18n } = useLingui();
   const { stage, sproutParentingLockHeld } = useLeafPlacementState();
@@ -2472,6 +2477,38 @@ export default function Home() {
     setPrintingLayerPreviewUrls([]);
   }, []);
 
+  /**
+   * Puts one read layer in the cache, and returns its URL.
+   *
+   * The cache owns the URL; the visible array only borrows it, which is why nothing here revokes
+   * the previous one.
+   */
+  const cachePrintingLayerPreview = React.useCallback((
+    plateId: string,
+    layerNumber: number,
+    pngBytes: Uint8Array,
+  ): string => {
+    const bytes = new Uint8Array(pngBytes.length);
+    bytes.set(pngBytes);
+    const url = URL.createObjectURL(new Blob([bytes.buffer], { type: 'image/png' }));
+    const cache = printingLayerPreviewCacheRef.current;
+    const layersForPlate = cache.get(plateId) ?? new Map<number, string>();
+    layersForPlate.set(layerNumber, url);
+    cache.set(plateId, layersForPlate);
+
+    // Scrubbing a tall print would otherwise cache every layer it passes: the oldest go first,
+    // and a layer that is asked for again is simply read again.
+    while (layersForPlate.size > PRINTING_PREVIEW_CACHE_LIMIT) {
+      const oldestLayer = layersForPlate.keys().next();
+      if (oldestLayer.done) break;
+      const oldestUrl = layersForPlate.get(oldestLayer.value);
+      if (oldestUrl) URL.revokeObjectURL(oldestUrl);
+      layersForPlate.delete(oldestLayer.value);
+    }
+
+    return url;
+  }, []);
+
   /** Forgets the cached previews of one bed — or of every bed — and revokes their URLs. */
   const dropPrintingLayerPreviewCache = React.useCallback((plateId?: string) => {
     const cache = printingLayerPreviewCacheRef.current;
@@ -2634,11 +2671,7 @@ export default function Home() {
         const previewBytes = new Uint8Array(pngBytes.length);
         previewBytes.set(pngBytes);
         const blob = new Blob([previewBytes.buffer], { type: 'image/png' });
-        const nextUrl = URL.createObjectURL(blob);
-        const cache = printingLayerPreviewCacheRef.current;
-        const layersForPlate = cache.get(activePlateIdForPreview) ?? new Map<number, string>();
-        layersForPlate.set(layerNumber, nextUrl);
-        cache.set(activePlateIdForPreview, layersForPlate);
+        const nextUrl = cachePrintingLayerPreview(activePlateIdForPreview, layerNumber, pngBytes);
 
         setPrintingLayerPreviewUrls((previous) => {
           const next = previous.slice();
@@ -2662,6 +2695,7 @@ export default function Home() {
       cancelled = true;
     };
   }, [
+    cachePrintingLayerPreview,
     scene.activePlateId,
     scene.mode,
     printingArtifact?.nativeTempPath,
@@ -2689,12 +2723,7 @@ export default function Home() {
       void readPrintLayerPreviewPngFromPath(nativePath, layerNumber, outputFormat)
         .then((pngBytes: Uint8Array) => {
           if (cancelled) return;
-          const bytes = new Uint8Array(pngBytes.length);
-          bytes.set(pngBytes);
-          const url = URL.createObjectURL(new Blob([bytes.buffer], { type: 'image/png' }));
-          const layersForPlate = cache.get(plateId) ?? new Map<number, string>();
-          layersForPlate.set(layerNumber, url);
-          cache.set(plateId, layersForPlate);
+          cachePrintingLayerPreview(plateId, layerNumber, pngBytes);
         })
         .catch(() => {
           // A read that fails is simply not cached: the loader will try again when it is shown.
@@ -2704,7 +2733,57 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [printingDisplayedLayer, printingSlicesByPlateId]);
+  }, [cachePrintingLayerPreview, printingDisplayedLayer, printingSlicesByPlateId]);
+
+  /**
+   * Reads the layers either side of the one on screen.
+   *
+   * A window, not the whole plate: what a scrub needs is the next few layers already in memory,
+   * so releasing the handle lands on one that is there instead of waiting for the archive.
+   */
+  React.useEffect(() => {
+    if (scene.mode !== 'printing') return;
+    const entry = printingSlicesByPlateId[scene.activePlateId];
+    const nativePath = entry?.artifact?.nativeTempPath;
+    const outputFormat = entry?.artifact?.outputFormat;
+    if (!nativePath || !outputFormat) return;
+
+    const plateId = scene.activePlateId;
+    const total = Math.max(1, entry.totalLayers);
+    const centre = Math.max(1, Math.min(total, printingDisplayedLayer));
+    const inFlight = printingLayerPreviewLoadInFlightRef.current;
+    const cache = printingLayerPreviewCacheRef.current;
+
+    const wantedLayers: number[] = [];
+    for (let offset = 1; offset <= PRINTING_PREVIEW_PREFETCH_RADIUS; offset += 1) {
+      if (centre + offset <= total) wantedLayers.push(centre + offset);
+      if (centre - offset >= 1) wantedLayers.push(centre - offset);
+    }
+
+    for (const layerNumber of wantedLayers) {
+      if (cache.get(plateId)?.has(layerNumber)) continue;
+      const inFlightKey = `${plateId}:${layerNumber}`;
+      if (inFlight.has(inFlightKey)) continue;
+      inFlight.add(inFlightKey);
+
+      void readPrintLayerPreviewPngFromPath(nativePath, layerNumber, outputFormat)
+        .then((pngBytes: Uint8Array) => {
+          cachePrintingLayerPreview(plateId, layerNumber, pngBytes);
+        })
+        .catch(() => {
+          // Not cached: the loader reads it again if that layer is the one shown.
+        })
+        .finally(() => {
+          inFlight.delete(inFlightKey);
+        });
+    }
+  }, [
+    cachePrintingLayerPreview,
+    printingDisplayedLayer,
+    printingSlicesByPlateId,
+    scene.activePlateId,
+    scene.mode,
+  ]);
 
   const printingPreviewTargetResolution = React.useMemo(() => {
     const printerWidth = Math.max(1, Math.round(activePrinterProfile?.display?.resolutionX ?? 0));
