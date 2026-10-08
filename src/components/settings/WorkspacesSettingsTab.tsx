@@ -53,7 +53,7 @@ export function WorkspacesSettingsTab({
               3D View
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Build volume boundaries and display resolution hints used across workspaces.
+              Build volume boundaries and display resolution hints used across the workspace.
             </p>
           </div>
         </div>

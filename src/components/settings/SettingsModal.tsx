@@ -1231,8 +1231,8 @@ export function SettingsModal({
       tone: 'primary',
     },
     workspaces: {
-      label: _(msg`Workspaces`),
-      description: _(msg`Per-workspace camera defaults`),
+      label: _(msg`Workspace`),
+      description: _(msg`Build volume bounds, origin, and 3D view resolution`),
       icon: MonitorCog,
       tone: 'primary',
     },

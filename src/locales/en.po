@@ -418,7 +418,7 @@ msgstr "Apply for Session"
 msgid "Apply this preset to the auto-support settings"
 msgstr "Apply this preset to the auto-support settings"
 
-#: src/app/page.tsx:11571
+#: src/app/page.tsx:11594
 msgid "Are you sure you want to remove every model from the plate?"
 msgstr "Are you sure you want to remove every model from the plate?"
 
@@ -849,6 +849,10 @@ msgstr "Build Hierarchy"
 msgid "Build plate"
 msgstr "Build plate"
 
+#: src/components/settings/SettingsModal.tsx:1249
+msgid "Build volume bounds, origin, and 3D view resolution"
+msgstr "Build volume bounds, origin, and 3D view resolution"
+
 #. placeholder {0}: selectedProfilesPrinter.buildVolumeMm?.width ?? '-'
 #. placeholder {1}: selectedProfilesPrinter.buildVolumeMm?.depth ?? '-'
 #. placeholder {2}: selectedProfilesPrinter.buildVolumeMm?.height ?? '-'
@@ -897,7 +901,7 @@ msgstr "Camera view mode: {currentLabel}"
 msgid "Can't open this scene"
 msgstr "Can't open this scene"
 
-#: src/app/page.tsx:11532
+#: src/app/page.tsx:11555
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:468
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:664
 #: src/components/controls/AutoSupportPanel.tsx:652
@@ -1070,12 +1074,12 @@ msgstr "Clear All failed. Check console for details."
 
 #. Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.
 #. Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.
-#: src/app/page.tsx:10824
+#: src/app/page.tsx:10847
 #: src/components/scene/SceneCanvas/SceneCanvas.tsx:1763
 msgid "Clear build plate"
 msgstr "Clear build plate"
 
-#: src/app/page.tsx:11521
+#: src/app/page.tsx:11544
 msgid "Clear Build Plate?"
 msgstr "Clear Build Plate?"
 
@@ -1083,7 +1087,7 @@ msgstr "Clear Build Plate?"
 msgid "Clear Override"
 msgstr "Clear Override"
 
-#: src/app/page.tsx:11562
+#: src/app/page.tsx:11585
 msgid "Clear Plate"
 msgstr "Clear Plate"
 
@@ -1118,7 +1122,7 @@ msgstr "Client ID"
 msgid "Close"
 msgstr "Close"
 
-#: src/app/page.tsx:11527
+#: src/app/page.tsx:11550
 msgid "Close clear-plate confirmation"
 msgstr "Close clear-plate confirmation"
 
@@ -1267,7 +1271,7 @@ msgstr "Configure island detection parameters"
 msgid "Configure Networking Later"
 msgstr "Configure Networking Later"
 
-#: src/app/page.tsx:11520
+#: src/app/page.tsx:11543
 msgid "Confirm clearing the build plate"
 msgstr "Confirm clearing the build plate"
 
@@ -1275,7 +1279,7 @@ msgstr "Confirm clearing the build plate"
 msgid "Confirm delete snapshot"
 msgstr "Confirm delete snapshot"
 
-#: src/app/page.tsx:11519
+#: src/app/page.tsx:11542
 msgid "Confirm deleting the plate"
 msgstr "Confirm deleting the plate"
 
@@ -1616,7 +1620,7 @@ msgstr "Delete {count} presets?"
 msgid "Delete Backup Snapshot"
 msgstr "Delete Backup Snapshot"
 
-#: src/app/page.tsx:11562
+#: src/app/page.tsx:11585
 #: src/components/controls/ModelManagerPanel.tsx:477
 #: src/components/controls/ModelManagerPanel.tsx:748
 #: src/components/controls/ModelManagerPanel.tsx:769
@@ -1654,11 +1658,11 @@ msgid "Delete this model's existing supports and place the new ones"
 msgstr "Delete this model's existing supports and place the new ones"
 
 #. Tooltip on the bin beside the build plate when the plate can go: it removes the bed and the models standing on it. Undo brings them back.
-#: src/app/page.tsx:10823
+#: src/app/page.tsx:10846
 msgid "Delete this plate"
 msgstr "Delete this plate"
 
-#: src/app/page.tsx:11521
+#: src/app/page.tsx:11544
 #: src/components/controls/ModelManagerPanel.tsx:749
 msgid "Delete this plate?"
 msgstr "Delete this plate?"
@@ -1865,7 +1869,7 @@ msgstr "DragonFruit will <0>download, verify and install</0> the update, then re
 msgid "Drop supported files"
 msgstr "Drop supported files"
 
-#: src/app/page.tsx:10770
+#: src/app/page.tsx:10793
 msgid "Drop supported files to import"
 msgstr "Drop supported files to import"
 
@@ -3967,10 +3971,6 @@ msgstr "Passes that run after placement — how much one trunk may carry, and th
 msgid "Paste"
 msgstr "Paste"
 
-#: src/components/settings/SettingsModal.tsx:1249
-msgid "Per-workspace camera defaults"
-msgstr "Per-workspace camera defaults"
-
 #: src/components/settings/GeneralSettingsTab.tsx:277
 msgid "Persist dragged panel positions in local storage."
 msgstr "Persist dragged panel positions in local storage."
@@ -5516,7 +5516,7 @@ msgstr "The background recovery save failed repeatedly."
 msgid "The build plate awaits."
 msgstr "The build plate awaits."
 
-#: src/app/page.tsx:11590
+#: src/app/page.tsx:11613
 msgid "The build plate is locked."
 msgstr "The build plate is locked."
 
@@ -5552,7 +5552,7 @@ msgstr "The hole carved in the other half."
 msgid "The inputs and factors the last run sized the supports with"
 msgstr "The inputs and factors the last run sized the supports with"
 
-#: src/app/page.tsx:11570
+#: src/app/page.tsx:11593
 msgid "The models on this plate are deleted with it."
 msgstr "The models on this plate are deleted with it."
 
@@ -5844,7 +5844,7 @@ msgstr "UI & Theme"
 msgid "Unavailable"
 msgstr "Unavailable"
 
-#: src/app/page.tsx:11524
+#: src/app/page.tsx:11547
 msgid "Undo brings the models back"
 msgstr "Undo brings the models back"
 
@@ -5886,7 +5886,7 @@ msgstr "Unknown manufacturer"
 msgid "Unlock build plate"
 msgstr "Unlock build plate"
 
-#: src/app/page.tsx:11593
+#: src/app/page.tsx:11616
 msgid "Unlock it to add or move models."
 msgstr "Unlock it to add or move models."
 
@@ -5912,7 +5912,7 @@ msgstr "Unsaved changes may be lost."
 msgid "Unsaved Scene Found"
 msgstr "Unsaved Scene Found"
 
-#: src/app/page.tsx:10770
+#: src/app/page.tsx:10793
 msgid "Unsupported file format"
 msgstr "Unsupported file format"
 
@@ -6251,13 +6251,13 @@ msgstr "Wireframe"
 msgid "With great resin comes great responsibility."
 msgstr "With great resin comes great responsibility."
 
+#: src/components/settings/SettingsModal.tsx:1248
+msgid "Workspace"
+msgstr "Workspace"
+
 #: src/components/settings/SettingsModal.tsx:1225
 msgid "Workspace behavior and panel layout"
 msgstr "Workspace behavior and panel layout"
-
-#: src/components/settings/SettingsModal.tsx:1248
-msgid "Workspaces"
-msgstr "Workspaces"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:640
 msgid "Write these settings to the auto-support settings"

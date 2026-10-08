@@ -423,7 +423,7 @@ msgstr ""
 msgid "Apply this preset to the auto-support settings"
 msgstr ""
 
-#: src/app/page.tsx:11571
+#: src/app/page.tsx:11594
 msgid "Are you sure you want to remove every model from the plate?"
 msgstr ""
 
@@ -854,6 +854,10 @@ msgstr ""
 msgid "Build plate"
 msgstr ""
 
+#: src/components/settings/SettingsModal.tsx:1249
+msgid "Build volume bounds, origin, and 3D view resolution"
+msgstr ""
+
 #. placeholder {0}: selectedProfilesPrinter.buildVolumeMm?.width ?? '-'
 #. placeholder {1}: selectedProfilesPrinter.buildVolumeMm?.depth ?? '-'
 #. placeholder {2}: selectedProfilesPrinter.buildVolumeMm?.height ?? '-'
@@ -902,7 +906,7 @@ msgstr ""
 msgid "Can't open this scene"
 msgstr ""
 
-#: src/app/page.tsx:11532
+#: src/app/page.tsx:11555
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:468
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:664
 #: src/components/controls/AutoSupportPanel.tsx:652
@@ -1075,12 +1079,12 @@ msgstr ""
 
 #. Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.
 #. Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.
-#: src/app/page.tsx:10824
+#: src/app/page.tsx:10847
 #: src/components/scene/SceneCanvas/SceneCanvas.tsx:1763
 msgid "Clear build plate"
 msgstr ""
 
-#: src/app/page.tsx:11521
+#: src/app/page.tsx:11544
 msgid "Clear Build Plate?"
 msgstr ""
 
@@ -1088,7 +1092,7 @@ msgstr ""
 msgid "Clear Override"
 msgstr ""
 
-#: src/app/page.tsx:11562
+#: src/app/page.tsx:11585
 msgid "Clear Plate"
 msgstr ""
 
@@ -1123,7 +1127,7 @@ msgstr ""
 msgid "Close"
 msgstr "Zatvoriť"
 
-#: src/app/page.tsx:11527
+#: src/app/page.tsx:11550
 msgid "Close clear-plate confirmation"
 msgstr ""
 
@@ -1272,7 +1276,7 @@ msgstr ""
 msgid "Configure Networking Later"
 msgstr ""
 
-#: src/app/page.tsx:11520
+#: src/app/page.tsx:11543
 msgid "Confirm clearing the build plate"
 msgstr ""
 
@@ -1280,7 +1284,7 @@ msgstr ""
 msgid "Confirm delete snapshot"
 msgstr ""
 
-#: src/app/page.tsx:11519
+#: src/app/page.tsx:11542
 msgid "Confirm deleting the plate"
 msgstr ""
 
@@ -1621,7 +1625,7 @@ msgstr ""
 msgid "Delete Backup Snapshot"
 msgstr ""
 
-#: src/app/page.tsx:11562
+#: src/app/page.tsx:11585
 #: src/components/controls/ModelManagerPanel.tsx:477
 #: src/components/controls/ModelManagerPanel.tsx:748
 #: src/components/controls/ModelManagerPanel.tsx:769
@@ -1659,11 +1663,11 @@ msgid "Delete this model's existing supports and place the new ones"
 msgstr ""
 
 #. Tooltip on the bin beside the build plate when the plate can go: it removes the bed and the models standing on it. Undo brings them back.
-#: src/app/page.tsx:10823
+#: src/app/page.tsx:10846
 msgid "Delete this plate"
 msgstr ""
 
-#: src/app/page.tsx:11521
+#: src/app/page.tsx:11544
 #: src/components/controls/ModelManagerPanel.tsx:749
 msgid "Delete this plate?"
 msgstr ""
@@ -1870,7 +1874,7 @@ msgstr ""
 msgid "Drop supported files"
 msgstr "Hoď podporované súbory"
 
-#: src/app/page.tsx:10770
+#: src/app/page.tsx:10793
 msgid "Drop supported files to import"
 msgstr ""
 
@@ -3972,10 +3976,6 @@ msgstr ""
 msgid "Paste"
 msgstr "Prilepiť"
 
-#: src/components/settings/SettingsModal.tsx:1249
-msgid "Per-workspace camera defaults"
-msgstr ""
-
 #: src/components/settings/GeneralSettingsTab.tsx:277
 msgid "Persist dragged panel positions in local storage."
 msgstr ""
@@ -5521,7 +5521,7 @@ msgstr ""
 msgid "The build plate awaits."
 msgstr "Pracovná plocha ťa čaká."
 
-#: src/app/page.tsx:11590
+#: src/app/page.tsx:11613
 msgid "The build plate is locked."
 msgstr ""
 
@@ -5557,7 +5557,7 @@ msgstr ""
 msgid "The inputs and factors the last run sized the supports with"
 msgstr ""
 
-#: src/app/page.tsx:11570
+#: src/app/page.tsx:11593
 msgid "The models on this plate are deleted with it."
 msgstr ""
 
@@ -5849,7 +5849,7 @@ msgstr ""
 msgid "Unavailable"
 msgstr ""
 
-#: src/app/page.tsx:11524
+#: src/app/page.tsx:11547
 msgid "Undo brings the models back"
 msgstr ""
 
@@ -5891,7 +5891,7 @@ msgstr ""
 msgid "Unlock build plate"
 msgstr ""
 
-#: src/app/page.tsx:11593
+#: src/app/page.tsx:11616
 msgid "Unlock it to add or move models."
 msgstr ""
 
@@ -5917,7 +5917,7 @@ msgstr ""
 msgid "Unsaved Scene Found"
 msgstr ""
 
-#: src/app/page.tsx:10770
+#: src/app/page.tsx:10793
 msgid "Unsupported file format"
 msgstr ""
 
@@ -6256,12 +6256,12 @@ msgstr ""
 msgid "With great resin comes great responsibility."
 msgstr "S veľkou živicou prichádza veľká zodpovednosť."
 
-#: src/components/settings/SettingsModal.tsx:1225
-msgid "Workspace behavior and panel layout"
+#: src/components/settings/SettingsModal.tsx:1248
+msgid "Workspace"
 msgstr ""
 
-#: src/components/settings/SettingsModal.tsx:1248
-msgid "Workspaces"
+#: src/components/settings/SettingsModal.tsx:1225
+msgid "Workspace behavior and panel layout"
 msgstr ""
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:640

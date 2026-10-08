@@ -418,7 +418,7 @@ msgstr "Aplicar a la sesión"
 msgid "Apply this preset to the auto-support settings"
 msgstr "Aplica este preajuste a los ajustes de autosoportes"
 
-#: src/app/page.tsx:11571
+#: src/app/page.tsx:11594
 msgid "Are you sure you want to remove every model from the plate?"
 msgstr "¿Seguro que quieres quitar todos los modelos de la plataforma?"
 
@@ -849,6 +849,10 @@ msgstr "Construir jerarquía"
 msgid "Build plate"
 msgstr "Placa de impresión"
 
+#: src/components/settings/SettingsModal.tsx:1249
+msgid "Build volume bounds, origin, and 3D view resolution"
+msgstr "Límites del volumen de impresión, origen y resolución de la vista 3D"
+
 #. placeholder {0}: selectedProfilesPrinter.buildVolumeMm?.width ?? '-'
 #. placeholder {1}: selectedProfilesPrinter.buildVolumeMm?.depth ?? '-'
 #. placeholder {2}: selectedProfilesPrinter.buildVolumeMm?.height ?? '-'
@@ -897,7 +901,7 @@ msgstr "Modo de vista de la cámara: {currentLabel}"
 msgid "Can't open this scene"
 msgstr "No se puede abrir esta escena"
 
-#: src/app/page.tsx:11532
+#: src/app/page.tsx:11555
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:468
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:664
 #: src/components/controls/AutoSupportPanel.tsx:652
@@ -1070,12 +1074,12 @@ msgstr "«Borrar todo» ha fallado. Mira la consola para más detalles."
 
 #. Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.
 #. Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.
-#: src/app/page.tsx:10824
+#: src/app/page.tsx:10847
 #: src/components/scene/SceneCanvas/SceneCanvas.tsx:1763
 msgid "Clear build plate"
 msgstr "Vaciar la plataforma"
 
-#: src/app/page.tsx:11521
+#: src/app/page.tsx:11544
 msgid "Clear Build Plate?"
 msgstr "¿Vaciar la plataforma?"
 
@@ -1083,7 +1087,7 @@ msgstr "¿Vaciar la plataforma?"
 msgid "Clear Override"
 msgstr "Quitar la anulación"
 
-#: src/app/page.tsx:11562
+#: src/app/page.tsx:11585
 msgid "Clear Plate"
 msgstr "Vaciar plataforma"
 
@@ -1118,7 +1122,7 @@ msgstr "ID de cliente"
 msgid "Close"
 msgstr "Cerrar"
 
-#: src/app/page.tsx:11527
+#: src/app/page.tsx:11550
 msgid "Close clear-plate confirmation"
 msgstr "Cerrar la confirmación de vaciado"
 
@@ -1267,7 +1271,7 @@ msgstr "Configura los parámetros de detección de islas"
 msgid "Configure Networking Later"
 msgstr "Configurar la red más tarde"
 
-#: src/app/page.tsx:11520
+#: src/app/page.tsx:11543
 msgid "Confirm clearing the build plate"
 msgstr "Confirmar el vaciado de la plataforma"
 
@@ -1275,7 +1279,7 @@ msgstr "Confirmar el vaciado de la plataforma"
 msgid "Confirm delete snapshot"
 msgstr "Confirmar el borrado de la instantánea"
 
-#: src/app/page.tsx:11519
+#: src/app/page.tsx:11542
 msgid "Confirm deleting the plate"
 msgstr "Confirmar la eliminación de la plataforma"
 
@@ -1616,7 +1620,7 @@ msgstr "¿Eliminar {count} preajustes?"
 msgid "Delete Backup Snapshot"
 msgstr "Eliminar la instantánea"
 
-#: src/app/page.tsx:11562
+#: src/app/page.tsx:11585
 #: src/components/controls/ModelManagerPanel.tsx:477
 #: src/components/controls/ModelManagerPanel.tsx:748
 #: src/components/controls/ModelManagerPanel.tsx:769
@@ -1654,11 +1658,11 @@ msgid "Delete this model's existing supports and place the new ones"
 msgstr "Elimina los soportes que ya tiene este modelo y coloca los nuevos"
 
 #. Tooltip on the bin beside the build plate when the plate can go: it removes the bed and the models standing on it. Undo brings them back.
-#: src/app/page.tsx:10823
+#: src/app/page.tsx:10846
 msgid "Delete this plate"
 msgstr "Eliminar esta plataforma"
 
-#: src/app/page.tsx:11521
+#: src/app/page.tsx:11544
 #: src/components/controls/ModelManagerPanel.tsx:749
 msgid "Delete this plate?"
 msgstr "¿Eliminar esta plata?"
@@ -1865,7 +1869,7 @@ msgstr "DragonFruit va a <0>descargar, verificar e instalar</0> la actualizació
 msgid "Drop supported files"
 msgstr "Suelta archivos compatibles"
 
-#: src/app/page.tsx:10770
+#: src/app/page.tsx:10793
 msgid "Drop supported files to import"
 msgstr "Suelta aquí los ficheros compatibles para importarlos"
 
@@ -3967,10 +3971,6 @@ msgstr "Pasadas que se ejecutan tras la colocación: cuánto puede cargar un tro
 msgid "Paste"
 msgstr "Pegar"
 
-#: src/components/settings/SettingsModal.tsx:1249
-msgid "Per-workspace camera defaults"
-msgstr "Valores de cámara por espacio de trabajo"
-
 #: src/components/settings/GeneralSettingsTab.tsx:277
 msgid "Persist dragged panel positions in local storage."
 msgstr "Guarda en el almacenamiento local las posiciones de los paneles al arrastrarlos."
@@ -5516,7 +5516,7 @@ msgstr "El guardado de recuperación en segundo plano ha fallado varias veces se
 msgid "The build plate awaits."
 msgstr "La placa de impresión te espera."
 
-#: src/app/page.tsx:11590
+#: src/app/page.tsx:11613
 msgid "The build plate is locked."
 msgstr "La plataforma está bloqueada."
 
@@ -5552,7 +5552,7 @@ msgstr "El hueco tallado en la otra mitad."
 msgid "The inputs and factors the last run sized the supports with"
 msgstr "Los datos y factores con que la última ejecución dimensionó los soportes"
 
-#: src/app/page.tsx:11570
+#: src/app/page.tsx:11593
 msgid "The models on this plate are deleted with it."
 msgstr "Los modelos de esta plataforma se eliminan con ella."
 
@@ -5844,7 +5844,7 @@ msgstr "Interfaz y tema"
 msgid "Unavailable"
 msgstr "No disponible"
 
-#: src/app/page.tsx:11524
+#: src/app/page.tsx:11547
 msgid "Undo brings the models back"
 msgstr "Deshacer devuelve los modelos"
 
@@ -5886,7 +5886,7 @@ msgstr "Fabricante desconocido"
 msgid "Unlock build plate"
 msgstr "Desbloquear la plataforma"
 
-#: src/app/page.tsx:11593
+#: src/app/page.tsx:11616
 msgid "Unlock it to add or move models."
 msgstr "Desbloquéala para añadir o mover modelos."
 
@@ -5912,7 +5912,7 @@ msgstr "Puedes perder los cambios sin guardar."
 msgid "Unsaved Scene Found"
 msgstr "Hay una escena sin guardar"
 
-#: src/app/page.tsx:10770
+#: src/app/page.tsx:10793
 msgid "Unsupported file format"
 msgstr "Formato de fichero no compatible"
 
@@ -6251,13 +6251,13 @@ msgstr "Malla de alambre"
 msgid "With great resin comes great responsibility."
 msgstr "Una gran resina conlleva una gran responsabilidad."
 
+#: src/components/settings/SettingsModal.tsx:1248
+msgid "Workspace"
+msgstr "Espacio de trabajo"
+
 #: src/components/settings/SettingsModal.tsx:1225
 msgid "Workspace behavior and panel layout"
 msgstr "Comportamiento del espacio de trabajo y disposición de los paneles"
-
-#: src/components/settings/SettingsModal.tsx:1248
-msgid "Workspaces"
-msgstr "Espacios de trabajo"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:640
 msgid "Write these settings to the auto-support settings"
