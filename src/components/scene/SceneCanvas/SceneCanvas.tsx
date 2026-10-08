@@ -4228,6 +4228,15 @@ export function SceneCanvas({
     1,
     (activeBuildVolumeSettings?.depthMm ?? 200) + 24,
   );
+  /**
+   * Where to lay the cap plane: over the bed being worked on. The plane spans one build
+   * volume, so left at the origin it covers the first bed and nothing else — which is why the
+   * pink scrubbing stencil appeared on plate 1 while another bed was being sliced.
+   */
+  const crossSectionPlaneOffsetMm = React.useMemo(
+    () => ({ dxMm: activePlateFrame?.dxMm ?? 0, dyMm: activePlateFrame?.dyMm ?? 0 }),
+    [activePlateFrame?.dxMm, activePlateFrame?.dyMm],
+  );
 
   const introControllerBounds = introBoundsSnapshot;
 
@@ -6927,6 +6936,7 @@ export function SceneCanvas({
                   color={clipUpper != null ? '#FFFFFF' : (indicatorPlaneColor ?? '#ec2a77')}
                   planeWidthMm={crossSectionPlaneWidthMm}
                   planeHeightMm={crossSectionPlaneHeightMm}
+                  planeOffsetMm={crossSectionPlaneOffsetMm}
                   capOpacity={clipUpper != null ? 1 : 0.78}
                   capDepthTest={clipUpper != null}
                   glowThicknessMm={clipUpper != null ? 0 : 0.11}
@@ -6952,6 +6962,7 @@ export function SceneCanvas({
                   color="#FFFFFF"
                   planeWidthMm={crossSectionPlaneWidthMm}
                   planeHeightMm={crossSectionPlaneHeightMm}
+                  planeOffsetMm={crossSectionPlaneOffsetMm}
                   capOpacity={1}
                   capDepthTest={false}
                   direction="bottom"
