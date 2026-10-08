@@ -93,6 +93,19 @@ export function ExportPanelStack({
     scene.plateFrames.findIndex((frame) => frame.id === scene.activePlateId),
   );
 
+  // The scene's plates with the models standing on each, for the export panel's plate
+  // scope and its per-plate export. Membership is resolved by the scene, so a model that
+  // was dragged to another bed counts as being there rather than where it was imported.
+  // Names come through as they are: an unnamed plate's placeholder is the panel's to
+  // phrase, and this component is deliberately hook-free so it cannot translate one.
+  const plateGroups = scene.plates.map((plate) => ({
+    id: plate.id,
+    name: plate.name,
+    modelIds: scene.models
+      .filter((model) => scene.resolveModelPlateId(model) === plate.id)
+      .map((model) => model.id),
+  }));
+
   return (
     <>
       <ExportPanel
@@ -101,6 +114,8 @@ export function ExportPanelStack({
         activeModel={scene.activeModel}
         activeModelId={scene.activeModelId}
         selectedModelIds={scene.selectedModelIds}
+        plateGroups={plateGroups}
+        activePlateId={scene.activePlateId}
         onActiveModelChange={scene.setActiveModelId}
         supportsRef={supportsRef}
         captureSceneThumbnailPng={captureExportThumbnailPng}
