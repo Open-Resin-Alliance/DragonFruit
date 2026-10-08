@@ -32,7 +32,10 @@ export type ExportPanelStackProps = {
   canSliceAndUpload: boolean;
   canSliceAndPrint: boolean;
   sliceIntentRef: React.MutableRefObject<SliceIntent>;
-  handleBeforeSliceStart: (intent: SliceIntent) => Promise<boolean>;
+  handleBeforeSliceStart: (
+    intent: SliceIntent,
+    options?: { destinationDirectory?: string; baseName?: string },
+  ) => Promise<boolean>;
   handlePreSliceSceneSave: () => Promise<void>;
   preSliceFileDestinationPathRef: React.MutableRefObject<string | null>;
 };

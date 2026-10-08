@@ -50,7 +50,7 @@ import {
   getSavedUvToolsSettings,
   resolveUvToolsExecutablePath,
 } from '@/components/settings/uvToolsPreferences';
-import { cleanupStalePrintTempArtifacts, cleanupAllPrintTempArtifacts, getSlicerEngineVersion } from '@/features/slicing/tauri/nativeSlicerBridge';
+import { cleanupStalePrintTempArtifacts, cleanupAllPrintTempArtifacts, getSlicerEngineVersion, pickDirectoryWithNativeDialog } from '@/features/slicing/tauri/nativeSlicerBridge';
 import type { AaPreset as AaAutoPreset } from '@/features/slicing/autoAaPhysics';
 import {
   clampBlurSigma,
@@ -107,7 +107,14 @@ interface SlicingPanelProps {
   canUpload?: boolean;
   canPrint?: boolean;
   onSliceIntentChanged?: (intent: SliceIntent) => void;
-  onBeforeSliceStart?: (intent: SliceIntent) => Promise<boolean> | boolean;
+  /**
+   * Runs before each slice. A batch hands it the folder it already picked, so every plate's
+   * file lands in one place and nothing asks the user again.
+   */
+  onBeforeSliceStart?: (
+    intent: SliceIntent,
+    options?: { destinationDirectory?: string; baseName?: string },
+  ) => Promise<boolean> | boolean;
   onBeforeSlicingRun?: () => Promise<void> | void;
   resolveOutputPathForIntent?: (intent: SliceIntent) => string | null | undefined;
 }
@@ -1877,7 +1884,15 @@ export function SlicingPanel({
     selectedRemoteMaterialId,
   ]);
 
-  const handleSliceZipExport = async (scopeOverride?: PlateSliceScope): Promise<boolean> => {
+  const handleSliceZipExport = async (
+    scopeOverride?: PlateSliceScope,
+    /**
+     * Set by the batch: the folder it already picked for every plate's file, so the run does
+     * not ask for a destination per bed, and its output does not drag the app into the
+     * printing workspace between plates.
+     */
+    batch?: { destinationDirectory: string },
+  ): Promise<boolean> => {
     // A batch passes each plate's scope in turn; a plain run uses the active one.
     const scope = scopeOverride ?? activePlateSliceScope;
     const scopeModelIdSet = scope ? new Set(scope.modelIds) : null;
@@ -1911,12 +1926,21 @@ export function SlicingPanel({
 
     if (excludedVisibleModelCount > 0 && !(await requestOutOfBoundsSliceConfirmation())) return false;
 
-    const proceed = await Promise.resolve(onBeforeSliceStart?.(effectiveSliceIntent) ?? true).catch(() => false);
+    // A batch writes files into the folder it picked: the intent menus are the single-plate
+    // flow's, and none of them means "all of them at once".
+    const intentForRun: SliceIntent = batch ? 'file' : effectiveSliceIntent;
+
+    const proceed = await Promise.resolve(
+      onBeforeSliceStart?.(
+        intentForRun,
+        batch ? { destinationDirectory: batch.destinationDirectory, baseName: scopeFilenameBase ?? undefined } : undefined,
+      ) ?? true,
+    ).catch(() => false);
     if (!proceed) {
       return false;
     }
 
-    const resolvedOutputPath = (resolveOutputPathForIntent?.(effectiveSliceIntent) ?? '').trim();
+    const resolvedOutputPath = (resolveOutputPathForIntent?.(intentForRun) ?? '').trim();
 
     setIsSlicingZip(true);
     setCurrentPhase('Preparing');
@@ -2207,6 +2231,9 @@ export function SlicingPanel({
       }
       setIsSlicingZip(false);
       onSlicingBusyChange?.(false);
+      // Handed on for the batch too: the printing workspace is where the sliced plate is
+      // shown, and the run keeps going after the app switches there — the panel unmounting
+      // does not stop a loop that already holds its closure.
       if (slicingSucceeded) {
         setCurrentPhase('Opening');
         setSliceStatus('Opening');
@@ -2227,8 +2254,14 @@ export function SlicingPanel({
     // The beds that hold something, in cascade order. An empty bed has no file of its own, and
     // asking for one would stop the batch on a bed there is nothing to slice.
     if (populatedPlateScopes.length < 2) return;
+
+    // One folder for the run, the way a per-plate export picks one: the plates are sliced one
+    // after another into it, each file named for its plate, and nothing asks again.
+    const destinationDirectory = (await pickDirectoryWithNativeDialog()).trim();
+    if (!destinationDirectory) return;
+
     for (const scope of populatedPlateScopes) {
-      const sliced = await handleSliceZipExport(scope);
+      const sliced = await handleSliceZipExport(scope, { destinationDirectory });
       if (!sliced) break;
     }
   };

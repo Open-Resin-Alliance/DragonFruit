@@ -26,3 +26,17 @@ export function derivePlateOutputPath(chosenPath: string, baseName: string): str
 
   return `${directory}${baseName}${extension}`;
 }
+
+/**
+ * A file in the directory a batch picked, named for the plate it holds.
+ *
+ * The separator follows the directory's own, because the path goes straight to the native
+ * slicer: a Windows slicer handed forward slashes is a second, avoidable failure.
+ */
+export function joinSliceOutputPath(directory: string, baseName: string, extension: string): string {
+  const trimmedDirectory = directory.trim().replace(/[\\/]+$/, '');
+  const separator = trimmedDirectory.includes('\\') ? '\\' : '/';
+  const trimmedExtension = extension.trim().replace(/^\.+/, '');
+  const file = `${baseName.trim() || 'slice_export'}${trimmedExtension ? `.${trimmedExtension}` : ''}`;
+  return `${trimmedDirectory}${separator}${file}`;
+}

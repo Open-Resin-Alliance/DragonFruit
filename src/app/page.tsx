@@ -74,6 +74,7 @@ import { ExportPanel } from '@/features/export/components/ExportPanel';
 import { ExportManager } from '@/features/export/logic/ExportManager';
 import { resolveEntirePlateExportBaseName } from '@/features/export/logic/exportFileNaming';
 import { SlicingPanel, type SliceIntent } from '@/features/slicing/components/SlicingPanel';
+import { joinSliceOutputPath } from '@/features/slicing/plateSliceNaming';
 import { PrintingPanel } from '@/features/printing/components/PrintingPanel';
 import { usePrintingPreviewManager, type PrintingPreviewManagerDeps } from '@/features/printing/usePrintingPreviewManager';
 import { useEditorToasts } from '@/features/notifications/useEditorToasts';
@@ -3990,7 +3991,10 @@ export default function Home() {
     }
   }, [flushAutosave]);
 
-  const handleBeforeSliceStart = React.useCallback(async (intent: SliceIntent): Promise<boolean> => {
+  const handleBeforeSliceStart = React.useCallback(async (
+    intent: SliceIntent,
+    options?: { destinationDirectory?: string; baseName?: string },
+  ): Promise<boolean> => {
     if (shouldReturnToPrintingAfterSliceRef.current) {
       return true;
     }
@@ -4004,6 +4008,16 @@ export default function Home() {
     }
 
     if (intent === 'file' || intent === 'uvtools') {
+      // A batch has already asked for the folder: every plate's file goes into it, named for
+      // the plate it holds, and nothing asks again between beds.
+      const destinationDirectory = options?.destinationDirectory?.trim();
+      if (destinationDirectory) {
+        const baseName = options?.baseName?.trim() || suggestedSliceOutputFilename.replace(/\.[^.]+$/, '');
+        const extension = suggestedSliceOutputFilename.split('.').pop() ?? '';
+        preSliceFileDestinationPathRef.current = joinSliceOutputPath(destinationDirectory, baseName, extension);
+        return true;
+      }
+
       try {
         const destinationPath = await pickSavePathWithNativeDialog(suggestedSliceOutputFilename);
         if (!destinationPath || destinationPath.trim().length === 0) {
