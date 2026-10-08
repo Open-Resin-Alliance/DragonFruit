@@ -7,7 +7,7 @@ import { Trans } from '@lingui/react/macro';
 import type { MessageDescriptor } from '@lingui/core';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { ExportManager, ExportOptions } from '../logic/ExportManager';
-import { normalizeExportBaseName } from '../logic/exportFileNaming';
+import { normalizeExportBaseName, resolvePlateOutputBaseName } from '../logic/exportFileNaming';
 import { plateNumberPlaceholder } from '@/features/scene/plates/plateMessages';
 import {
   Button,
@@ -254,16 +254,23 @@ export function ExportPanel({
 
   const scopedMeshCount = scopeModels.length;
 
+  /** Which plate of the list is being worked on. */
+  const activePlateIndex = useMemo(
+    () => Math.max(0, (plateGroups ?? []).findIndex((plate) => plate.id === activePlateId)),
+    [activePlateId, plateGroups],
+  );
+
   /**
-   * The plate being worked on, as a file name: its own name, or its number when it has none.
-   * A bundle and a per-plate run are both exports of beds, so the bed is what they are named
-   * for — the dialog the user renames it in is the only place a name is chosen.
+   * The plate being worked on, as a file name. A bundle and a per-plate run are both exports
+   * of beds, so a bed is what they are named for — and an unnamed bed in a one-bed scene goes
+   * by its model, which says more than its number does.
    */
-  const activePlateFileBaseName = useMemo(() => {
-    const index = Math.max(0, (plateGroups ?? []).findIndex((plate) => plate.id === activePlateId));
-    const plate = plateGroups?.[index];
-    return normalizeExportBaseName(plate?.name?.trim() || plateNumberPlaceholder(index + 1, _));
-  }, [_, activePlateId, plateGroups]);
+  const activePlateFileBaseName = useMemo(() => resolvePlateOutputBaseName({
+    plateName: (plateGroups ?? [])[activePlateIndex]?.name ?? '',
+    plateNumberLabel: plateNumberPlaceholder(activePlateIndex + 1, _),
+    singlePlate,
+    plateModels: entirePlateScopeModels,
+  }), [_, activePlateIndex, entirePlateScopeModels, plateGroups, singlePlate]);
 
   // The name the native save dialog opens with. The user renames the file there,
   // so this is only a starting suggestion and never displayed in the panel.
@@ -485,10 +492,18 @@ export function ExportPanel({
     const plates = plateGroups && plateGroups.length > 0
       ? plateGroups
       : [{ id: '', name: '', modelIds: scopeModels.map((model) => model.id) }];
-    const groups = plates.map((plate, index) => ({
-      name: plate.name.trim() || plateNumberPlaceholder(index + 1, _),
-      models: scopeModels.filter((model) => plate.modelIds.includes(model.id)),
-    }));
+    const groups = plates.map((plate, index) => {
+      const plateModels = scopeModels.filter((model) => plate.modelIds.includes(model.id));
+      return {
+        name: resolvePlateOutputBaseName({
+          plateName: plate.name ?? '',
+          plateNumberLabel: plateNumberPlaceholder(index + 1, _),
+          singlePlate,
+          plateModels,
+        }),
+        models: plateModels,
+      };
+    });
 
     await exportGroupsToDirectory(groups);
   };

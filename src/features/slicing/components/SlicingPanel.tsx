@@ -8,14 +8,15 @@ import { createPortal } from 'react-dom';
 import { AlertTriangle, ChevronDown, CircleHelp, Cpu, Download, Edit3, ExternalLink, Layers3, Play, Printer, Timer, X } from 'lucide-react';
 import { MouseTooltip } from '@/components/ui/MouseTooltip';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
-import { normalizeExportBaseName } from '@/features/export/logic/exportFileNaming';
+import { normalizeExportBaseName, resolvePlateOutputBaseName } from '@/features/export/logic/exportFileNaming';
 import { Button, Card, CardHeader, IconButton } from '@/components/atoms';
 import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';
-import { derivePlateOutputPath, plateSliceBaseName, type PlateSliceScope } from '@/features/slicing/plateSliceNaming';
+import { derivePlateOutputPath, type PlateSliceScope } from '@/features/slicing/plateSliceNaming';
+import { plateNumberPlaceholder } from '@/features/scene/plates/plateMessages';
 import { MaterialAntiAliasingSection, type MaterialDraft } from '@/components/settings/profileFormAtoms';
 import {
   getActiveMaterialProfile,
@@ -1273,10 +1274,20 @@ export function SlicingPanel({
     return sliceIntent;
   }, [canPrint, canUpload, canUvTools, isShiftHeld, sliceIntent]);
   // 'preview' is always available regardless of network state
-  const sliceFilenameBase = useMemo(
-    () => resolveSliceFilenameBase(visibleModels, activeModel),
-    [activeModel, visibleModels],
-  );
+  // A slice is a plate's output, so it is named for the plate: its own name, or — in a
+  // one-bed scene whose bed has no name — the first model standing on it, which is the
+  // convention the export panel follows too. A scene with no plates falls back to the model.
+  const sliceFilenameBase = useMemo(() => {
+    const scope = plateSliceScopes?.[activePlateSliceIndex] ?? plateSliceScopes?.[0];
+    if (!scope) return resolveSliceFilenameBase(visibleModels, activeModel);
+    const scopeModelIdSet = new Set(scope.modelIds);
+    return resolvePlateOutputBaseName({
+      plateName: scope.plateName,
+      plateNumberLabel: plateNumberPlaceholder(activePlateSliceIndex + 1, _),
+      singlePlate: (plateSliceScopes?.length ?? 1) <= 1,
+      plateModels: models.filter((model) => scopeModelIdSet.has(model.id)),
+    });
+  }, [_, activeModel, activePlateSliceIndex, models, plateSliceScopes, visibleModels]);
 
   useEffect(() => {
     if (!activePrinterProfileId) {
@@ -1838,7 +1849,12 @@ export function SlicingPanel({
       ? models.filter((model) => scopeModelIdSet.has(model.id))
       : models;
     const scopeFilenameBase = scope
-      ? plateSliceBaseName(scope.plateName, scopeModels)
+      ? resolvePlateOutputBaseName({
+          plateName: scope.plateName,
+          plateNumberLabel: plateNumberPlaceholder((plateSliceScopes?.indexOf(scope) ?? 0) + 1, _),
+          singlePlate: (plateSliceScopes?.length ?? 1) <= 1,
+          plateModels: scopeModels,
+        })
       : null;
     if (!activePrinterProfile) {
       alert(_(msg`Select a printer profile first.`));
