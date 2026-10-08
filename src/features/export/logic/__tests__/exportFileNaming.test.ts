@@ -37,14 +37,12 @@ test("a plate's output takes the plate's name when it has one", () => {
   assert.equal(outputName({
     plateName: 'Left bed',
     plateNumberLabel: 'Plate 1',
-    singlePlate: true,
     plateModels: [model('poussin.stl')],
   }), 'Left_bed');
   // The plate's name wins even when its models disagree, and however many beds there are.
   assert.equal(outputName({
     plateName: 'Left bed',
     plateNumberLabel: 'Plate 2',
-    singlePlate: false,
     plateModels: [model('other.stl')],
   }), 'Left_bed');
 });
@@ -53,39 +51,40 @@ test('a lone unnamed bed is named for the model on it', () => {
   assert.equal(outputName({
     plateName: '',
     plateNumberLabel: 'Plate 1',
-    singlePlate: true,
     plateModels: [model('poussin.stl'), model('second.stl')],
   }), 'poussin');
   // Whitespace is not a name either.
   assert.equal(outputName({
     plateName: '   ',
     plateNumberLabel: 'Plate 1',
-    singlePlate: true,
     plateModels: [model('poussin.stl')],
   }), 'poussin');
   // A hidden model is not what the file is named for.
   assert.equal(outputName({
     plateName: '',
     plateNumberLabel: 'Plate 1',
-    singlePlate: true,
     plateModels: [model('hidden.stl', false), model('shown.stl')],
   }), 'shown');
 });
 
-test('a lone unnamed bed with nothing on it still gets a usable name', () => {
+test('every unnamed bed goes by its own first model, however many there are', () => {
+  // Two beds of a batch: each is named for what stands on it, so the files say what they hold.
   assert.equal(outputName({
     plateName: '',
     plateNumberLabel: 'Plate 1',
-    singlePlate: true,
-    plateModels: [],
-  }), 'MyPrint');
-});
-
-test('several unnamed beds are told apart by their number', () => {
+    plateModels: [model('poussin.stl')],
+  }), 'poussin');
   assert.equal(outputName({
     plateName: '',
     plateNumberLabel: 'Plate 2',
-    singlePlate: false,
-    plateModels: [model('poussin.stl')],
+    plateModels: [model('cube.stl'), model('other.stl')],
+  }), 'cube');
+});
+
+test('a bed with nothing on it falls back to its number', () => {
+  assert.equal(outputName({
+    plateName: '',
+    plateNumberLabel: 'Plate 2',
+    plateModels: [],
   }), 'Plate_2');
 });

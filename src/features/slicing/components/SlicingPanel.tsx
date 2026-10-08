@@ -1376,7 +1376,6 @@ export function SlicingPanel({
     return resolvePlateOutputBaseName({
       plateName: scope.plateName,
       plateNumberLabel: plateNumberPlaceholder(activePlateSliceIndex + 1, _),
-      singlePlate,
       plateModels: models.filter((model) => scopeModelIdSet.has(model.id)),
     });
   }, [_, activeModel, activePlateSliceIndex, models, plateSliceScopes, visibleModels]);
@@ -1962,7 +1961,6 @@ export function SlicingPanel({
       ? resolvePlateOutputBaseName({
           plateName: scope.plateName,
           plateNumberLabel: plateNumberPlaceholder((plateSliceScopes?.indexOf(scope) ?? 0) + 1, _),
-          singlePlate,
           plateModels: scopeModels,
         })
       : null;
@@ -2352,7 +2350,6 @@ export function SlicingPanel({
         plateName: scope.plateName,
         plateNumberLabel: plateNumberPlaceholder(populatedPlateScopes.indexOf(scope) + 1, _),
         // The batch resolves each plate for itself; this is only the name it will write.
-        singlePlate: false,
         plateModels: models.filter((model) => scope.modelIds.includes(model.id)),
       }),
       outputExtension,

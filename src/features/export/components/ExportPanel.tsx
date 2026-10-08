@@ -271,7 +271,6 @@ export function ExportPanel({
   const activePlateFileBaseName = useMemo(() => resolvePlateOutputBaseName({
     plateName: (plateGroups ?? [])[activePlateIndex]?.name ?? '',
     plateNumberLabel: plateNumberPlaceholder(activePlateIndex + 1, _),
-    singlePlate,
     plateModels: entirePlateScopeModels,
   }), [_, activePlateIndex, entirePlateScopeModels, plateGroups, singlePlate]);
 
@@ -501,7 +500,6 @@ export function ExportPanel({
         name: resolvePlateOutputBaseName({
           plateName: plate.name ?? '',
           plateNumberLabel: plateNumberPlaceholder(index + 1, _),
-          singlePlate,
           plateModels,
         }),
         models: plateModels,

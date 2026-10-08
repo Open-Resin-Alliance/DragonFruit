@@ -22,20 +22,19 @@ export function resolveEntirePlateExportBaseName(models: LoadedModel[]): string 
 /**
  * The base name one plate's output is written under, for an export and for a slice alike.
  *
- * The plate's own name when it has one. Failing that: a scene with a single bed is named for
- * the first model standing on it, which is what the user is looking at and what a bare
- * "Plate 1" says nothing about; with several beds, the bed's number is what tells the files
- * apart. The caller phrases that number, because it owns the translation.
+ * The plate's own name when it has one. Failing that, the first model standing on it — that is
+ * what the user is looking at, and what a bare "Plate 1" says nothing about. A plate with
+ * nothing on it has no model to go by, and falls back to its number, which the caller phrases
+ * because it owns the translation.
  */
 export function resolvePlateOutputBaseName(options: {
   plateName: string;
   plateNumberLabel: string;
-  singlePlate: boolean;
   /** The models standing on the plate, in the order the caller lists them. */
   plateModels: readonly LoadedModel[];
 }): string {
   const named = options.plateName.trim();
   if (named.length > 0) return normalizeExportBaseName(named);
-  if (options.singlePlate) return resolveEntirePlateExportBaseName([...options.plateModels]);
+  if (options.plateModels.length > 0) return resolveEntirePlateExportBaseName([...options.plateModels]);
   return normalizeExportBaseName(options.plateNumberLabel);
 }
