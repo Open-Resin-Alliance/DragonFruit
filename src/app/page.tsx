@@ -8793,6 +8793,17 @@ export default function Home() {
           transformMgr.transformHook.setPosition(committedTransform.position.x, committedTransform.position.y, committedTransform.position.z);
           transformMgr.transformHook.setRotation(committedTransform.rotation.x, committedTransform.rotation.y, committedTransform.rotation.z);
           transformMgr.transformHook.setScale(committedTransform.scale.x, committedTransform.scale.y, committedTransform.scale.z);
+        } else {
+          // The write was refused, a locked bed being the reason it can be. The hook still holds
+          // where the drag put it, and the canvas renders from the hook once the drag flags clear,
+          // so putting it back on the model's own transform is what snaps the model home.
+          const committedModel = scene.models.find((model) => model.id === scene.activeModelId);
+          if (committedModel) {
+            const { position, rotation, scale } = committedModel.transform;
+            transformMgr.transformHook.setPosition(position.x, position.y, position.z);
+            transformMgr.transformHook.setRotation(rotation.x, rotation.y, rotation.z);
+            transformMgr.transformHook.setScale(scale.x, scale.y, scale.z);
+          }
         }
       }
     }
@@ -9081,7 +9092,19 @@ export default function Home() {
 
     if (options?.pushHistory !== false) invalidatePendingTransformHistory();
     const result = scene.updateModelTransforms(updates, options);
-    if (!result.updated) return;
+    if (!result.updated) {
+      // Refused, a locked bed being the reason it can be: the hook keeps the values that were
+      // asked for, so put it back on the model's own transform rather than leaving the panel
+      // showing a move that did not happen.
+      const activeModelForRevert = scene.activeModel;
+      if (activeModelForRevert) {
+        const { position, rotation, scale } = activeModelForRevert.transform;
+        transformMgr.transformHook.setPosition(position.x, position.y, position.z);
+        transformMgr.transformHook.setRotation(rotation.x, rotation.y, rotation.z);
+        transformMgr.transformHook.setScale(scale.x, scale.y, scale.z);
+      }
+      return;
+    }
 
     const activeUpdate = scene.activeModelId
       ? updates.find((update) => update.id === scene.activeModelId)
