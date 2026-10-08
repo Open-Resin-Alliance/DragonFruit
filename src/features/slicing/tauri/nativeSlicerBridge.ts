@@ -952,6 +952,19 @@ export async function readPrintLayerPreviewPngsFromPath(
   return layers;
 }
 
+/**
+ * Which of these paths already exist on disk, for a caller about to write over them. Without the
+ * desktop runtime nothing is on disk, so nothing exists.
+ */
+export async function existingNativePaths(paths: readonly string[]): Promise<boolean[]> {
+  if (paths.length === 0) return [];
+
+  const core = await loadTauriCore();
+  if (!core) return paths.map(() => false);
+
+  return core.invoke<boolean[]>('existing_paths', { paths: [...paths] });
+}
+
 export async function deletePrintTempArtifactPath(sourcePath: string): Promise<boolean> {
   const core = await loadTauriCore();
   if (!core) {

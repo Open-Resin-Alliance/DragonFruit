@@ -3816,6 +3816,24 @@ async fn read_print_layer_pngs(
     Ok(Response::new(packed))
 }
 
+/// Which of these paths already exist on disk.
+///
+/// For a caller about to write files over them: a batch of plate outputs lands in a folder the
+/// user picked, and that folder may already hold files of the same names from an earlier run.
+#[tauri::command]
+async fn existing_paths(paths: Vec<String>) -> Result<Vec<bool>, String> {
+    let existing = tauri::async_runtime::spawn_blocking(move || {
+        paths
+            .iter()
+            .map(|path| std::path::Path::new(path.trim()).exists())
+            .collect::<Vec<bool>>()
+    })
+    .await
+    .map_err(|err| format!("Path check task failed to join: {err}"))?;
+
+    Ok(existing)
+}
+
 #[tauri::command]
 async fn delete_print_temp_file(source_path: String) -> Result<bool, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -4501,6 +4519,7 @@ fn main() {
             read_print_file_chunk,
             read_print_layer_png,
             read_print_layer_pngs,
+            existing_paths,
             delete_print_temp_file,
             cleanup_stale_print_temp_files,
             cleanup_all_print_temp_files,

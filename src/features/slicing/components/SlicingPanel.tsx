@@ -15,7 +15,7 @@ import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';
-import { derivePlateOutputPath, type PlateSliceScope } from '@/features/slicing/plateSliceNaming';
+import { derivePlateOutputPath, joinSliceOutputPath, type PlateSliceScope } from '@/features/slicing/plateSliceNaming';
 import { plateNumberPlaceholder } from '@/features/scene/plates/plateMessages';
 import { MaterialAntiAliasingSection, type MaterialDraft } from '@/components/settings/profileFormAtoms';
 import {
@@ -39,7 +39,7 @@ import {
   type SliceExportArtifact,
   type SliceExportResult,
 } from '@/features/slicing/sliceExportOrchestrator';
-import { resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
+import { resolveOutputFileExtension, resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
 import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
 import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
 import {
@@ -50,7 +50,7 @@ import {
   getSavedUvToolsSettings,
   resolveUvToolsExecutablePath,
 } from '@/components/settings/uvToolsPreferences';
-import { cleanupStalePrintTempArtifacts, cleanupAllPrintTempArtifacts, getSlicerEngineVersion, pickDirectoryWithNativeDialog } from '@/features/slicing/tauri/nativeSlicerBridge';
+import { cleanupStalePrintTempArtifacts, cleanupAllPrintTempArtifacts, existingNativePaths, getSlicerEngineVersion, pickDirectoryWithNativeDialog } from '@/features/slicing/tauri/nativeSlicerBridge';
 import type { AaPreset as AaAutoPreset } from '@/features/slicing/autoAaPhysics';
 import {
   clampBlurSigma,
@@ -848,6 +848,9 @@ export function SlicingPanel({
   const [pendingAaTarget, setPendingAaTarget] = useState<'Off' | 'Blur' | '3DAA' | null>(null);
   const [aaWarningModelName, setAaWarningModelName] = useState('');
   const [showOutOfBoundsWarningModal, setShowOutOfBoundsWarningModal] = useState(false);
+  /** How many of a batch's files are already on disk, so the user can be asked before writing. */
+  const [overwriteCollisionCount, setOverwriteCollisionCount] = useState(0);
+  const overwriteWarningResolveRef = useRef<((proceed: boolean) => void) | null>(null);
   const outOfBoundsWarningResolveRef = useRef<((proceed: boolean) => void) | null>(null);
   const [aaLevel, setAaLevel] = useState<AaStrengthLevel>(resolveInitialAaLevel);
   const [useCustomAaLevel, setUseCustomAaLevel] = useState<boolean>(() => {
@@ -1325,6 +1328,18 @@ export function SlicingPanel({
     outOfBoundsWarningResolveRef.current = resolve;
     setShowOutOfBoundsWarningModal(true);
   }), []);
+  const requestOverwriteConfirmation = useCallback((collisions: number) => new Promise<boolean>((resolve) => {
+    overwriteWarningResolveRef.current?.(false);
+    overwriteWarningResolveRef.current = resolve;
+    setOverwriteCollisionCount(collisions);
+  }), []);
+  const settleOverwriteConfirmation = useCallback((proceed: boolean) => {
+    const resolve = overwriteWarningResolveRef.current;
+    overwriteWarningResolveRef.current = null;
+    setOverwriteCollisionCount(0);
+    resolve?.(proceed);
+  }, []);
+
   const settleOutOfBoundsSliceConfirmation = useCallback((proceed: boolean) => {
     const resolve = outOfBoundsWarningResolveRef.current;
     outOfBoundsWarningResolveRef.current = null;
@@ -1334,6 +1349,8 @@ export function SlicingPanel({
   useEffect(() => () => {
     outOfBoundsWarningResolveRef.current?.(false);
     outOfBoundsWarningResolveRef.current = null;
+    overwriteWarningResolveRef.current?.(false);
+    overwriteWarningResolveRef.current = null;
   }, []);
   const activePrinterProfileId = (activePrinterProfile?.id ?? '').trim();
   const isShiftHeld = useKeyPressed('shift');
@@ -2322,6 +2339,30 @@ export function SlicingPanel({
     // after another into it, each file named for its plate, and nothing asks again.
     const destinationDirectory = (await pickDirectoryWithNativeDialog()).trim();
     if (!destinationDirectory) return;
+
+    // What the run is about to write, so a folder that already holds any of those names — or a
+    // pair of plates named the same — can be asked about before a file is lost to it.
+    const outputExtension = resolveOutputFileExtension(
+      activePrinterProfile?.display.outputFormat,
+      activePrinterProfile?.display.formatVersion,
+    );
+    const targetPaths = populatedPlateScopes.map((scope) => joinSliceOutputPath(
+      destinationDirectory,
+      resolvePlateOutputBaseName({
+        plateName: scope.plateName,
+        plateNumberLabel: plateNumberPlaceholder(populatedPlateScopes.indexOf(scope) + 1, _),
+        // The batch resolves each plate for itself; this is only the name it will write.
+        singlePlate: false,
+        plateModels: models.filter((model) => scope.modelIds.includes(model.id)),
+      }),
+      outputExtension,
+    ));
+
+    const alreadyOnDisk = await existingNativePaths(targetPaths).catch(() => [] as boolean[]);
+    const clashingWithTheFolder = targetPaths.filter((_, index) => alreadyOnDisk[index] === true).length;
+    const clashingWithEachOther = targetPaths.length - new Set(targetPaths).size;
+    const collisions = clashingWithTheFolder + clashingWithEachOther;
+    if (collisions > 0 && !(await requestOverwriteConfirmation(collisions))) return;
 
     const completed: Array<{
       artifact: SliceExportArtifact;
@@ -4063,6 +4104,45 @@ export function SlicingPanel({
           ) : (
             <Trans comment="{excludedVisibleModelCount} is always 2 or more; the singular case is its own message.">
               <strong style={{ color: 'var(--text-strong)' }}>{excludedVisibleModelCount}</strong> visible models outside the build volume will be excluded from this slice.
+            </Trans>
+          )}
+        </p>
+      </StructuredDialogModal>
+
+      <StructuredDialogModal
+        open={overwriteCollisionCount > 0}
+        ariaLabel="Files will be overwritten"
+        title={<Trans>Overwrite Existing Files?</Trans>}
+        icon={<AlertTriangle className="h-4 w-4" />}
+        iconTone="warning"
+        zIndexClassName="z-[130]"
+        closeAriaLabel="Close modal"
+        onClose={() => settleOverwriteConfirmation(false)}
+        onBackdropClick={() => settleOverwriteConfirmation(false)}
+        actions={(
+          <>
+            <Button
+              variant="secondary"
+              className="!h-9 text-xs"
+              onClick={() => settleOverwriteConfirmation(false)}
+            >
+              <Trans>Cancel</Trans>
+            </Button>
+            <Button
+              className="!h-9 text-xs"
+              onClick={() => settleOverwriteConfirmation(true)}
+            >
+              <Trans>Overwrite and Slice</Trans>
+            </Button>
+          </>
+        )}
+      >
+        <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          {overwriteCollisionCount === 1 ? (
+            <Trans>A file this run writes is already in that folder. Slicing replaces it.</Trans>
+          ) : (
+            <Trans comment="{overwriteCollisionCount} is always 2 or more; the singular case is its own message.">
+              <strong style={{ color: 'var(--text-strong)' }}>{overwriteCollisionCount}</strong> files this run writes are already in that folder. Slicing replaces them.
             </Trans>
           )}
         </p>
