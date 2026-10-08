@@ -2705,9 +2705,23 @@ export default function Home() {
     printingPreviewTotalLayers,
   ]);
 
+/**
+   * The same window, settled.
+   *
+   * Dragging the scrubber changes the layer many times a second, and a read-ahead per change
+   * queues work for layers the drag is already past — which is what makes the drag itself feel
+   * slow. This fires once the layer has stopped moving.
+   */
+  const [settledPrintingLayer, setSettledPrintingLayer] = React.useState(printingDisplayedLayer);
+  React.useEffect(() => {
+    const timer = window.setTimeout(() => setSettledPrintingLayer(printingDisplayedLayer), 180);
+    return () => window.clearTimeout(timer);
+  }, [printingDisplayedLayer]);
+
   /**
    * Reads the layer every other bed would show, so picking that bed has its picture in memory
-   * already. The bed being worked on is read by the effect above.
+   * already. The bed being worked on is read by the effect above; like that one, it waits for the
+   * layer to settle rather than following a drag.
    */
   React.useEffect(() => {
     const cache = printingLayerPreviewCacheRef.current;
@@ -2718,7 +2732,7 @@ export default function Home() {
       const outputFormat = entry.artifact?.outputFormat;
       if (!nativePath || !outputFormat) continue;
 
-      const layerNumber = Math.max(1, Math.min(Math.max(1, entry.totalLayers), printingDisplayedLayer));
+      const layerNumber = Math.max(1, Math.min(Math.max(1, entry.totalLayers), settledPrintingLayer));
       if (cache.get(plateId)?.has(layerNumber)) continue;
 
       void readPrintLayerPreviewPngFromPath(nativePath, layerNumber, outputFormat)
@@ -2734,7 +2748,8 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [cachePrintingLayerPreview, printingDisplayedLayer, printingSlicesByPlateId]);
+  }, [cachePrintingLayerPreview, printingSlicesByPlateId, settledPrintingLayer]);
+
 
   /**
    * Reads the layers either side of the one on screen.
@@ -2751,7 +2766,7 @@ export default function Home() {
 
     const plateId = scene.activePlateId;
     const total = Math.max(1, entry.totalLayers);
-    const centre = Math.max(1, Math.min(total, printingDisplayedLayer));
+    const centre = Math.max(1, Math.min(total, settledPrintingLayer));
     const inFlight = printingLayerPreviewLoadInFlightRef.current;
     const cache = printingLayerPreviewCacheRef.current;
 
@@ -2792,11 +2807,12 @@ export default function Home() {
       });
   }, [
     cachePrintingLayerPreview,
-    printingDisplayedLayer,
     printingSlicesByPlateId,
     scene.activePlateId,
     scene.mode,
+    settledPrintingLayer,
   ]);
+
 
   const printingPreviewTargetResolution = React.useMemo(() => {
     const printerWidth = Math.max(1, Math.round(activePrinterProfile?.display?.resolutionX ?? 0));
@@ -2832,14 +2848,23 @@ export default function Home() {
     return `${printerProfileId}::${materialProfileId}`;
   }, [activeMaterialProfile?.id, activePrinterProfile?.id]);
 
+  /** Which artifact each bed's recorded slice came from, so recording it twice is a no-op. */
+  const recordedSliceArtifactRef = React.useRef<Map<string, SliceExportArtifact>>(new Map());
+
   /** Records one bed's slice, which is what the workspace and its read-ahead are built from. */
   const recordPrintingSlice = React.useCallback((
     artifact: SliceExportArtifact,
     context?: { plateId?: string; totalLayers?: number },
   ) => {
     const plateId = context?.plateId ?? scene.activePlateId;
-    // A new artifact replaces this bed's slice, so the layers cached from the old one are gone.
+
+    // A batch records each plate as it lands and hands the same artifacts over again when it
+    // finishes. Only a different artifact means a different slice, and only then are the layers
+    // cached from the old one — and the read-ahead that has already run for this one — dropped.
+    if (recordedSliceArtifactRef.current.get(plateId) === artifact) return;
+    recordedSliceArtifactRef.current.set(plateId, artifact);
     dropPrintingLayerPreviewCache(plateId);
+
     setPrintingSlicesByPlateId((previous) => {
       const current = previous[plateId];
       return {
