@@ -466,10 +466,57 @@ export function useArrangeManager({
     scene.resolveModelPlateId,
   ]);
 
-  const resolveArrangeVisibleModels = React.useCallback((scope: 'all' | 'selected', explicitSelectedIds?: string[]) => {
-    // An arrange run packs one plate — the one whose tool asked for it, which is the
-    // active one. A scene-wide sweep would pack the other beds' models into this
-    // plate's frame, which is how arranging plate 2 moved its models onto plate 1.
+  /**
+   * The beds a run left empty.
+   *
+   * A run that packs the whole scene fills the early beds and leaves the later ones bare:
+   * fourteen beds of one model become two, and the twelve that hold nothing would otherwise
+   * stand around as empty plates. A bed with nothing on it has nothing to lose — the rule the
+   * plate's own delete already follows — and the caller folds them into the run's history
+   * step, so one undo brings the models and the beds back together.
+   *
+   * The first bed stays (it is the scene's floor), and so do the bed being worked on and any
+   * locked bed: those were named, not merely left over.
+   */
+  const bedsEmptiedByRun = React.useCallback((
+    runModelIds: ReadonlySet<string>,
+    filledPlateIds: ReadonlySet<string>,
+  ): Set<string> => {
+    const emptied = new Set<string>();
+
+    scene.plates.forEach((plate, index) => {
+      if (index === 0) return;
+      if (plate.id === scene.activePlateId) return;
+      if (filledPlateIds.has(plate.id)) return;
+      if (scene.isPlateLocked(plate.id)) return;
+      // Anything standing on it that the run is not moving keeps its bed.
+      const keeps = scene.models.some((model) => (
+        !runModelIds.has(model.id) && scene.resolveModelPlateId(model) === plate.id
+      ));
+      if (!keeps) emptied.add(plate.id);
+    });
+
+    return emptied;
+  }, [
+    scene.activePlateId,
+    scene.isPlateLocked,
+    scene.models,
+    scene.plates,
+    scene.resolveModelPlateId,
+  ]);
+
+  const resolveArrangeVisibleModels = React.useCallback((
+    scope: 'all' | 'selected',
+    explicitSelectedIds?: string[],
+    /**
+     * True when the run spreads across the scene's beds rather than keeping to one, which
+     * is what Arrange All does with Multi-Plate: it packs bed after bed, so every model
+     * standing on a bed is in the run. Left false, a run packs the plate whose tool asked
+     * for it — a scene-wide sweep would pack the other beds' models into this plate's
+     * frame, which is how arranging plate 2 moved its models onto plate 1.
+     */
+    sceneWide = false,
+  ) => {
     const onActivePlate = (model: SceneModel) => (
       scene.resolveModelPlateId(model) === scene.activePlateId
     );
@@ -482,7 +529,7 @@ export function useArrangeManager({
       activePlateId: scene.activePlateId,
       plateCount: scene.plates.length,
     }) === 'loose';
-    const inRun = (model: SceneModel) => onActivePlate(model) || standsOnNoPlate(model);
+    const inRun = (model: SceneModel) => sceneWide || onActivePlate(model) || standsOnNoPlate(model);
 
     if (scope === 'all') {
       return scene.models.filter((m) => m.visible && inRun(m));
@@ -587,7 +634,13 @@ export function useArrangeManager({
     const plateFillModeForRun = overrides?.plateFillMode ?? arrangePlateFillMode;
     if (isAutoArranging) return;
 
-    const visibleModels = resolveArrangeVisibleModels(scope, explicitSelectedIds);
+    // Multi-Plate fills the scene's beds, so the run is the whole scene; This Plate keeps to
+    // the plate whose tool asked for it.
+    const visibleModels = resolveArrangeVisibleModels(
+      scope,
+      explicitSelectedIds,
+      plateFillModeForRun === 'plates',
+    );
 
     if (visibleModels.length <= 1) {
       if (visibleModels.length === 1) {
@@ -1084,6 +1137,18 @@ export function useArrangeManager({
       }
 
       const newPlateCount = passes.filter((pass) => pass.plateId === null).length;
+
+      // The beds this run leaves empty go before the ones it needs are added: the cascade
+      // spaces the beds by how many there are, so the scene has to be settled before the
+      // models are placed, or they are placed against a layout that never existed.
+      const filledPlateIds = new Set(
+        passes
+          .map((pass) => pass.plateId)
+          .filter((plateId): plateId is string => plateId != null),
+      );
+      const emptiedPlateIds = bedsEmptiedByRun(runModelIds, filledPlateIds);
+      if (emptiedPlateIds.size > 0) scene.dropPlates([...emptiedPlateIds]);
+
       const reserved = scene.addPlates(newPlateCount);
 
       // Each pass is shifted into its own bed. The frames come back with the beds because
@@ -1113,7 +1178,7 @@ export function useArrangeManager({
 
       applyArrangeTransforms(
         updates,
-        newPlateCount > 0
+        newPlateCount > 0 || emptiedPlateIds.size > 0
           ? { platesBefore, platesAfter: { plates: reserved.plates, activePlateId: scene.activePlateId } }
           : undefined,
       );
@@ -1126,12 +1191,18 @@ export function useArrangeManager({
       setActiveArrangeOperation(null);
       setArrangeOverlayModelCount(null);
     }
-  }, [arrangeAllowRotateOnZ, arrangeAnchorMode, arrangeSpacingMm, getArrangeTransform, getModelSupportAwareDimensionsMm, isAutoArranging, resolveArrangeBedTargets, resolveArrangeFrame, resolveArrangeVisibleModels, scene, sleep, transformMgr, applyArrangeTransforms]);
+  }, [arrangeAllowRotateOnZ, arrangeAnchorMode, arrangeSpacingMm, bedsEmptiedByRun, getArrangeTransform, getModelSupportAwareDimensionsMm, isAutoArranging, resolveArrangeBedTargets, resolveArrangeFrame, resolveArrangeVisibleModels, scene, sleep, transformMgr, applyArrangeTransforms]);
 
   const handleHighPrecisionArrangeModels = React.useCallback(async (scope: 'all' | 'selected', explicitSelectedIds?: string[]) => {
     if (isAutoArranging) return;
 
-    const visibleModels = resolveArrangeVisibleModels(scope, explicitSelectedIds);
+    // Multi-Plate fills the scene's beds, so the run is the whole scene; This Plate keeps to
+    // the plate whose tool asked for it.
+    const visibleModels = resolveArrangeVisibleModels(
+      scope,
+      explicitSelectedIds,
+      arrangePlateFillMode === 'plates',
+    );
     if (visibleModels.length <= 1) {
       if (visibleModels.length === 1) {
         const model = visibleModels[0];
@@ -1348,6 +1419,17 @@ export function useArrangeManager({
       }
 
       const newPlateCount = passes.filter((pass) => pass.plateId === null).length;
+
+      // The beds this run leaves empty go before the ones it needs are added: see the
+      // standard pass, which has the same shape.
+      const filledPlateIds = new Set(
+        passes
+          .map((pass) => pass.plateId)
+          .filter((plateId): plateId is string => plateId != null),
+      );
+      const emptiedPlateIds = bedsEmptiedByRun(arrangeIdSet, filledPlateIds);
+      if (emptiedPlateIds.size > 0) scene.dropPlates([...emptiedPlateIds]);
+
       const reserved = scene.addPlates(newPlateCount);
 
       let addedPlateIndex = 0;
@@ -1368,7 +1450,7 @@ export function useArrangeManager({
       if (updates.length > 1) {
         applyArrangeTransforms(
           updates,
-          newPlateCount > 0
+          newPlateCount > 0 || emptiedPlateIds.size > 0
             ? { platesBefore, platesAfter: { plates: reserved.plates, activePlateId: scene.activePlateId } }
             : undefined,
         );
@@ -1387,6 +1469,7 @@ export function useArrangeManager({
     arrangeAnchorMode,
     arrangePlateOffset,
     arrangeSpacingMm,
+    bedsEmptiedByRun,
     getArrangeTransform,
     isAutoArranging,
     resolveArrangeBedTargets,

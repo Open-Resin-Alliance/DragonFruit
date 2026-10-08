@@ -6514,6 +6514,43 @@ export function useSceneCollectionManager(options?: {
   }, [modelsShiftedForRelaidPlates, pushSceneSnapshotHistory]);
 
   /**
+   * Drops beds from the scene without touching what stands on them.
+   *
+   * For a run that is about to move every model off them: the models keep their positions
+   * until the run places them, and the beds go first, so the cascade spaces the beds that
+   * remain — and any the run then adds — against the count that is actually left. The models
+   * standing on the beds that stay are shifted with them, the same move adding a bed makes.
+   *
+   * `removePlate` is the one for a delete: it takes the plates' models with it.
+   *
+   * No history of its own: the caller folds the beds into its own step, which one undo then
+   * takes back with the placements.
+   */
+  const dropPlates = useCallback((plateIds: readonly string[]): ScenePlate[] => {
+    const current = platesRef.current;
+    const doomed = new Set(plateIds);
+    const remaining = current.filter((plate) => !doomed.has(plate.id));
+    if (remaining.length === current.length || remaining.length === 0) return current;
+
+    const shiftedModels = modelsShiftedForRelaidPlates(current, remaining, modelsRef.current);
+    // The refs as well as the state: an arrange places its models from the same lists in the
+    // same tick, and a bed list or a model left stale would be placed against the wrong
+    // cascade.
+    platesRef.current = remaining;
+    setPlates(remaining);
+    if (shiftedModels !== modelsRef.current) {
+      modelsRef.current = shiftedModels;
+      setModels(shiftedModels);
+    }
+    if (doomed.has(activePlateIdRef.current)) {
+      setActivePlateId(remaining[0].id);
+      setPlateViewRunId((id) => id + 1);
+    }
+
+    return remaining;
+  }, [modelsShiftedForRelaidPlates]);
+
+  /**
    * Add `count` empty beds after the last one, and report the scene's beds with the frame
    * each ends up at.
    *
@@ -6782,6 +6819,7 @@ export function useSceneCollectionManager(options?: {
     moveModelsToPlate,
     plateOffsetFor,
     addPlates,
+    dropPlates,
     plateFrames,
     modelPlateFrame,
     resolveModelPlateId,
