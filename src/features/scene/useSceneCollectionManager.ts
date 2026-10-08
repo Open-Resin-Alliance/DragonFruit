@@ -199,6 +199,14 @@ type SceneSnapshot = {
    */
   plates?: ScenePlate[];
   activePlateId?: string;
+  /**
+   * The printer the scene was made under. On every snapshot, not only the ones that switch
+   * it: the beds are spaced by the build volume, so an entry taken under one printer and
+   * undone under another lands its models against frames that never applied to them.
+   * `null` is no printer — "use without Printer" — and `undefined` is a snapshot taken
+   * before this was recorded, which leaves the profile alone.
+   */
+  printerProfileId?: string | null;
 };
 
 type SceneSnapshotCaptureOptions = {
@@ -207,6 +215,12 @@ type SceneSnapshotCaptureOptions = {
   /** Record the plate list on this snapshot, for the entries that change it. */
   plates?: ScenePlate[];
   activePlateId?: string;
+  /**
+   * The printer this snapshot belongs to. Defaults to the active one, which is right for
+   * every entry but the "before" of a printer switch: by the time that entry is pushed the
+   * store already holds the new profile.
+   */
+  printerProfileId?: string | null;
 };
 
 type TransformHistorySupportSnapshotOptions = {
@@ -319,11 +333,15 @@ function captureSceneSnapshot(
 ): SceneSnapshot {
   const includeSupportState = options?.includeSupportState ?? false;
   const supportStateOverride = options?.supportStateOverride;
+  const printerProfileId = options?.printerProfileId !== undefined
+    ? options.printerProfileId
+    : (getActivePrinterProfile()?.id ?? null);
 
   return {
     models: models.map(cloneLoadedModel),
     activeModelId,
     selectedModelIds: [...selectedModelIds],
+    printerProfileId,
     ...(includeSupportState
       ? {
           supportState: clonePlainData(supportStateOverride ?? getSnapshot()),
@@ -1914,6 +1932,28 @@ export function useSceneCollectionManager(options?: {
     setModels(snapshot.models.map(cloneLoadedModel));
     setActiveModelId(snapshot.activeModelId);
     setSelectedModelIds([...snapshot.selectedModelIds]);
+
+    // The printer is part of the scene: the beds are spaced by its build volume, so an entry
+    // taken under one printer and undone under another would put every model back against
+    // frames that never applied to it. The layout memory moves with it, or restoring a
+    // snapshot would look like a printer switch to the effect that shifts models with their
+    // beds.
+    if (snapshot.printerProfileId !== undefined) {
+      const printerId = snapshot.printerProfileId;
+      if (printerId && printerId !== (getActivePrinterProfile()?.id ?? null)) {
+        setActivePrinterProfile(printerId);
+      }
+      const restoredPrinter = printerId
+        ? getProfileStoreSnapshot().printerProfiles.find((profile) => profile.id === printerId)
+        : undefined;
+      if (restoredPrinter) {
+        laidOutFootprintRef.current = {
+          printerId,
+          widthMm: restoredPrinter.buildVolumeMm.width,
+          depthMm: restoredPrinter.buildVolumeMm.depth,
+        };
+      }
+    }
 
     // A snapshot that carries beds also carries which one was being worked on,
     // falling back to the first when that plate is one of the ones that went.
@@ -6443,43 +6483,69 @@ export function useSceneCollectionManager(options?: {
    * its plate — which is what a smaller printer used to do to every bed but the first.
    */
   const laidOutFootprintRef = useRef<{
+    printerId: string | null;
     widthMm: number;
     depthMm: number;
-    originMode: View3DSettings['originMode'];
   } | null>(null);
 
   useLayoutEffect(() => {
     const previous = laidOutFootprintRef.current;
     const current = {
+      printerId: activePrinterProfile?.id ?? null,
       widthMm: view3dSettings.widthMm,
       depthMm: view3dSettings.depthMm,
-      originMode: view3dSettings.originMode,
     };
     laidOutFootprintRef.current = current;
-    if (
-      !previous
-      || (previous.widthMm === current.widthMm
-        && previous.depthMm === current.depthMm
-        && previous.originMode === current.originMode)
-    ) {
-      return;
-    }
+    if (!previous) return;
+
+    const printerChanged = previous.printerId !== current.printerId;
+    const footprintChanged = previous.widthMm !== current.widthMm
+      || previous.depthMm !== current.depthMm;
+    if (!printerChanged && !footprintChanged) return;
 
     const currentPlates = platesRef.current;
+    const modelsBefore = modelsRef.current;
     const shiftedModels = modelsShiftedForRelaidPlates(
       currentPlates,
       currentPlates,
-      modelsRef.current,
-      previous,
+      modelsBefore,
+      {
+        widthMm: previous.widthMm,
+        depthMm: previous.depthMm,
+        originMode: view3dSettings.originMode,
+      },
     );
-    if (shiftedModels === modelsRef.current) return;
 
-    setModels(shiftedModels);
-    // The bed being worked on moved with the others, so the view comes along the way it
-    // does when you pick a bed.
-    setPlateViewRunId((id) => id + 1);
+    if (shiftedModels !== modelsBefore) {
+      modelsRef.current = shiftedModels;
+      setModels(shiftedModels);
+      // The bed being worked on moved with the others, so the view comes along the way it
+      // does when you pick a bed.
+      setPlateViewRunId((id) => id + 1);
+    }
+
+    // Only a change of printer is a step worth naming. Editing the build volume of the same
+    // profile moves the beds too, but there is no earlier volume to return to: the profile
+    // itself is not part of the snapshot, only which one is active.
+    if (!printerChanged) return;
+
+    pushSceneSnapshotHistory(
+      captureSceneSnapshot(modelsBefore, activeModelIdRef.current, selectedModelIdsRef.current, {
+        plates: currentPlates,
+        activePlateId: activePlateIdRef.current,
+        printerProfileId: previous.printerId,
+      }),
+      captureSceneSnapshot(shiftedModels, activeModelIdRef.current, selectedModelIdsRef.current, {
+        plates: currentPlates,
+        activePlateId: activePlateIdRef.current,
+        printerProfileId: current.printerId,
+      }),
+      activePrinterProfile ? `Switch to ${activePrinterProfile.name}` : 'Switch Printer',
+    );
   }, [
+    activePrinterProfile,
     modelsShiftedForRelaidPlates,
+    pushSceneSnapshotHistory,
     view3dSettings.depthMm,
     view3dSettings.originMode,
     view3dSettings.widthMm,
