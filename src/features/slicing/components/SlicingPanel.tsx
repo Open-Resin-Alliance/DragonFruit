@@ -98,7 +98,10 @@ interface SlicingPanelProps {
   onSlicingFinished?: (payload: {
     totalLayers: number;
   }) => void;
-  onSliceArtifactReady?: (artifact: SliceExportArtifact) => void;
+  onSliceArtifactReady?: (
+    artifact: SliceExportArtifact,
+    context?: { plateId?: string; totalLayers?: number },
+  ) => void;
   onBenchmarkComplete?: (benchmark: SliceBenchmarkSnapshot) => void;
   onSliceTriggerRef?: React.MutableRefObject<(() => void) | null>;
   shouldAutoSlice?: boolean;
@@ -1888,10 +1891,14 @@ export function SlicingPanel({
     scopeOverride?: PlateSliceScope,
     /**
      * Set by the batch: the folder it already picked for every plate's file, so the run does
-     * not ask for a destination per bed, and its output does not drag the app into the
-     * printing workspace between plates.
+     * not ask for a destination per bed, and the collected artifacts it hands over itself once
+     * the whole batch is done — a switch to the printing workspace mid-batch aborts the run
+     * that is still in flight.
      */
-    batch?: { destinationDirectory: string },
+    batch?: {
+      destinationDirectory: string;
+      completed: Array<{ artifact: SliceExportArtifact; plateId?: string; totalLayers: number }>;
+    },
   ): Promise<boolean> => {
     // A batch passes each plate's scope in turn; a plain run uses the active one.
     const scope = scopeOverride ?? activePlateSliceScope;
@@ -2203,7 +2210,20 @@ export function SlicingPanel({
       setSlicingModalStage('finished');
       slicingSucceeded = true;
       if (result.artifact) {
-        onSliceArtifactReady?.(result.artifact);
+        if (batch) {
+          batch.completed.push({
+            artifact: result.artifact,
+            ...(scope ? { plateId: scope.plateId } : {}),
+            totalLayers: Math.max(
+              1,
+              completedTotalLayers,
+              completedTotalLayersFromResult,
+              result.benchmark.totalLayers ?? 0,
+            ),
+          });
+        } else {
+          onSliceArtifactReady?.(result.artifact, scope ? { plateId: scope.plateId } : undefined);
+        }
       }
       if (result.benchmark) {
         onBenchmarkComplete?.(result.benchmark);
@@ -2231,10 +2251,9 @@ export function SlicingPanel({
       }
       setIsSlicingZip(false);
       onSlicingBusyChange?.(false);
-      // Handed on for the batch too: the printing workspace is where the sliced plate is
-      // shown, and the run keeps going after the app switches there — the panel unmounting
-      // does not stop a loop that already holds its closure.
-      if (slicingSucceeded) {
+      // Handed on for a plain run only: the batch hands its plates over when it is done, which
+      // is also when the app switches to the printing workspace.
+      if (slicingSucceeded && !batch) {
         setCurrentPhase('Opening');
         setSliceStatus('Opening');
         onSlicingFinished?.({ totalLayers: Math.max(completedTotalLayers, completedTotalLayersFromResult, 1) });
@@ -2260,9 +2279,19 @@ export function SlicingPanel({
     const destinationDirectory = (await pickDirectoryWithNativeDialog()).trim();
     if (!destinationDirectory) return;
 
+    const completed: Array<{ artifact: SliceExportArtifact; plateId?: string; totalLayers: number }> = [];
     for (const scope of populatedPlateScopes) {
-      const sliced = await handleSliceZipExport(scope, { destinationDirectory });
+      const sliced = await handleSliceZipExport(scope, { destinationDirectory, completed });
       if (!sliced) break;
+    }
+
+    // The plates are handed over once the batch is done. The first of them is what walks the
+    // app into the printing workspace; doing that per bed would abort the run that follows.
+    for (const entry of completed) {
+      onSliceArtifactReady?.(entry.artifact, {
+        ...(entry.plateId ? { plateId: entry.plateId } : {}),
+        totalLayers: entry.totalLayers,
+      });
     }
   };
 

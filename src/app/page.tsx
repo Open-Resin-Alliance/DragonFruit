@@ -1257,11 +1257,27 @@ export default function Home() {
   const [printingLayerPreviewUrls, setPrintingLayerPreviewUrls] = React.useState<Array<string | null>>([]);
   const printingLayerPreviewLoadInFlightRef = React.useRef<Set<number>>(new Set());
 
-  const [printingPreviewTotalLayers, setPrintingPreviewTotalLayers] = React.useState(0);
-
   const printingPreviewDepsRef = React.useRef<PrintingPreviewManagerDeps>({
     printingPreviewTargetResolution: null,
   });
+  /**
+   * The slice of each bed, by plate id: the printing workspace shows the slice of the bed being
+   * worked on, so a batch of beds is a set of slices rather than whichever finished last. An
+   * entry is made when a run starts, so the layer progress of a bed being sliced has somewhere
+   * to live before its artifact exists.
+   */
+  const [printingSlicesByPlateId, setPrintingSlicesByPlateId] = React.useState<Record<string, {
+    artifact: SliceExportArtifact | null;
+    totalLayers: number;
+  }>>({});
+  const activePrintingSlice = printingSlicesByPlateId[scene.activePlateId] ?? null;
+  const printingArtifact = activePrintingSlice?.artifact ?? null;
+  const printingPreviewTotalLayers = activePrintingSlice?.totalLayers ?? 0;
+  /** Whether any bed has been sliced: the workspace is enterable, the preview is per bed. */
+  const hasSlicedPlate = React.useMemo(
+    () => Object.values(printingSlicesByPlateId).some((entry) => entry.artifact !== null),
+    [printingSlicesByPlateId],
+  );
   const {
     printingSelectedLayer,
     setPrintingSelectedLayer,
@@ -1354,7 +1370,6 @@ export default function Home() {
   const preSliceUploadSelectionRef = React.useRef<{ deviceId: string; materialId?: string } | null>(null);
   const preSliceTargetPickerResolverRef = React.useRef<((selection: { deviceId: string; materialId?: string } | null) => void) | null>(null);
   const preSlicePrintConfirmResolverRef = React.useRef<((confirmed: boolean) => void) | null>(null);
-  const [printingArtifact, setPrintingArtifact] = React.useState<SliceExportArtifact | null>(null);
   const [printingSlicingBenchmark, setPrintingSlicingBenchmark] = React.useState<SliceExportResult['benchmark'] | null>(null);
   const [printingArtifactIsInvalid, setPrintingArtifactIsInvalid] = React.useState(false);
   const slicedArtifactProfileFingerprintRef = React.useRef<string | null>(null);
@@ -2475,7 +2490,13 @@ export default function Home() {
       return next;
     });
 
-    setPrintingPreviewTotalLayers(payload.totalLayers);
+    setPrintingSlicesByPlateId((previous) => {
+      const current = previous[scene.activePlateId];
+      return {
+        ...previous,
+        [scene.activePlateId]: { artifact: current?.artifact ?? null, totalLayers: payload.totalLayers },
+      };
+    });
     setPrintingSelectedLayer((previous) => {
       const nextSelected = !Number.isFinite(previous) || previous <= 0
         ? Math.max(1, Math.min(payload.totalLayers, payload.layerIndex + 1))
@@ -2489,24 +2510,35 @@ export default function Home() {
 
   const handleSlicingFinishedForPrinting = React.useCallback((payload: { totalLayers: number }) => {
     const totalLayers = Math.max(1, payload.totalLayers);
-    setPrintingPreviewTotalLayers(totalLayers);
+    setPrintingSlicesByPlateId((previous) => {
+      const current = previous[scene.activePlateId];
+      return {
+        ...previous,
+        [scene.activePlateId]: { artifact: current?.artifact ?? null, totalLayers },
+      };
+    });
     setPrintingSelectedLayer(1);
     setPrintingDisplayedLayer(1);
     printingSelectedLayerRef.current = 1;
-  }, []);
+  }, [scene.activePlateId]);
 
   const handleSliceRunStartedForPrinting = React.useCallback(() => {
     setShouldAutoSliceOnExportEntry(false);
     clearPrintingLayerPreviewUrls();
-    setPrintingPreviewTotalLayers(0);
     setPrintingSelectedLayer(1);
     setPrintingDisplayedLayer(1);
     printingSelectedLayerRef.current = 1;
-    setPrintingArtifact(null);
+    // Only the bed being sliced loses its plate: a re-slice of one bed does not unslice the
+    // others, and the printing workspace shows whichever bed is being worked on.
+    setPrintingSlicesByPlateId((previous) => {
+      const current = previous[scene.activePlateId];
+      if (!current) return previous;
+      return { ...previous, [scene.activePlateId]: { artifact: null, totalLayers: 0 } };
+    });
     setPrintingArtifactIsInvalid(false);
     slicedArtifactProfileFingerprintRef.current = null;
     setPrintingReadyPlateId(null);
-  }, [clearPrintingLayerPreviewUrls]);
+  }, [clearPrintingLayerPreviewUrls, scene.activePlateId]);
 
   React.useEffect(() => {
     if (scene.mode !== 'printing') return;
@@ -2594,8 +2626,23 @@ export default function Home() {
     return `${printerProfileId}::${materialProfileId}`;
   }, [activeMaterialProfile?.id, activePrinterProfile?.id]);
 
-  const handleSliceArtifactReady = React.useCallback((artifact: SliceExportArtifact) => {
-    setPrintingArtifact(artifact);
+  const handleSliceArtifactReady = React.useCallback((
+    artifact: SliceExportArtifact,
+    context?: { plateId?: string; totalLayers?: number },
+  ) => {
+    const plateId = context?.plateId ?? scene.activePlateId;
+    setPrintingSlicesByPlateId((previous) => {
+      const current = previous[plateId];
+      return {
+        ...previous,
+        [plateId]: {
+          artifact,
+          // A batch hands the totals over with the artifact; a single run streamed them as it
+          // sliced, so the entry already has them.
+          totalLayers: Math.max(1, context?.totalLayers ?? current?.totalLayers ?? 1),
+        },
+      };
+    });
     setPrintingArtifactIsInvalid(false);
     setShowPrintingResliceModal(false);
     // Push a "Sliced Scene" marker to history so we can detect changes after this point
@@ -7054,10 +7101,10 @@ export default function Home() {
     if (scene.models.length === 0 && scene.mode === 'printing') {
       // Reset to prepare mode if we delete the last model while in printing
       scene.setMode('prepare');
-      setPrintingArtifact(null);
+      setPrintingSlicesByPlateId({});
       setPrintingArtifactIsInvalid(false);
     }
-  }, [scene.models.length, scene.mode, scene, printingArtifact]);
+  }, [scene.models.length, scene.mode, scene]);
 
   // Track whether the profile settings modal is currently open so we can
   // defer the printing-workspace kick until after the user closes it.
@@ -7231,7 +7278,10 @@ export default function Home() {
       scene.setMode('prepare');
       return;
     }
-    if (nextMode === 'printing' && !hasPrintingWorkspaceData) {
+    // A sliced bed anywhere is enough to enter the printing workspace: the preview follows the
+    // bed being worked on, so a bed with no slice of its own shows none rather than locking the
+    // workspace behind whichever bed you happen to be standing on.
+    if (nextMode === 'printing' && !hasSlicedPlate) {
       return;
     }
     if (nextMode === 'printing' && printingArtifactIsInvalid && printingArtifact) {
@@ -7239,7 +7289,7 @@ export default function Home() {
       return;
     }
     scene.setMode(nextMode);
-  }, [hasPrintingWorkspaceData, printingArtifact, printingArtifactIsInvalid, scene]);
+  }, [hasSlicedPlate, printingArtifact, printingArtifactIsInvalid, scene]);
 
   const handleAddPrinterFromOnboarding = React.useCallback(() => {
     openProfileSettingsModal('printer', { openPrinterLibrary: true });

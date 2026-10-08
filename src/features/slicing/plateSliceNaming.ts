@@ -1,5 +1,7 @@
 /** What one plate's slice covers, and what its output is called. */
 export type PlateSliceScope = {
+  /** The plate this scope is about, so a sliced plate's output can be shown by plate. */
+  plateId: string;
   /** The plate's own name, or '' when the user has not named it. */
   plateName: string;
   modelIds: readonly string[];

@@ -23,7 +23,14 @@ export type ExportPanelStackProps = {
   handleSliceRunStartedForPrinting: () => void;
   handlePrintingLayerPreviewGenerated: (payload: { layerIndex: number; totalLayers: number; pngBytes: Uint8Array }) => void;
   handleSlicingFinishedForPrinting: (payload: { totalLayers: number }) => void;
-  handleSliceArtifactReady: (artifact: SliceExportArtifact) => void;
+  /**
+   * The sliced plate, handed on with the bed it came from: the printing workspace shows the
+   * slice of the bed being worked on, so a batch of beds needs to say which is which.
+   */
+  handleSliceArtifactReady: (
+    artifact: SliceExportArtifact,
+    context?: { plateId?: string; totalLayers?: number },
+  ) => void;
   handleSlicingBenchmarkComplete: (benchmark: SliceExportResult['benchmark']) => void;
   triggerSliceExportRef: React.MutableRefObject<(() => void) | null>;
   shouldAutoSliceOnExportEntry: boolean;
@@ -78,6 +85,7 @@ export function ExportPanelStack({
   // several plates can be sliced one file per plate.
   const plateSliceScopes = scene.plateFrames.length > 0
     ? scene.plateFrames.map((frame) => ({
+        plateId: frame.id,
         plateName: scene.plates.find((plate) => plate.id === frame.id)?.name ?? '',
         modelIds: scene.models
           .filter((model) => scene.resolveModelPlateId(model) === frame.id)
