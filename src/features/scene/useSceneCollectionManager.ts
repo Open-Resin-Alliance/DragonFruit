@@ -1227,6 +1227,13 @@ export function useSceneCollectionManager(options?: {
   const [plates, setPlates] = useState<ScenePlate[]>(() => [{ id: uuidv4(), name: '' }]);
   /** Which plate is being worked on. */
   const [activePlateId, setActivePlateId] = useState<string>(() => plates[0].id);
+  /**
+   * Bumped when the plate being worked on is switched deliberately — by clicking a bed or
+   * picking one in the Models panel. The view comes along: a plate you picked may be half
+   * off screen. A drag that lands a model on another bed sets the active plate without
+   * this, because the camera must not jump out from under the drag.
+   */
+  const [plateViewRunId, setPlateViewRunId] = useState(0);
   const activePlateIdRef = useRef(activePlateId);
   activePlateIdRef.current = activePlateId;
 
@@ -3008,7 +3015,13 @@ export function useSceneCollectionManager(options?: {
     );
     if (movedPlateIds.size === 1) {
       const [onlyPlateId] = movedPlateIds;
-      setActivePlateId((active) => (active === onlyPlateId ? active : onlyPlateId));
+      if (activePlateIdRef.current !== onlyPlateId) {
+        setActivePlateId(onlyPlateId);
+        // A drag that lands on another bed makes that bed the one you are on, and the view
+        // comes with it — after the drop, never during it, which is why this is the commit
+        // rather than the pointer moving.
+        setPlateViewRunId((id) => id + 1);
+      }
     }
 
     if (!shouldPushHistory) modelsRef.current = nextModels;
@@ -6451,6 +6464,7 @@ export function useSceneCollectionManager(options?: {
     setSelectedModelIds([]);
     setActiveModelId(null);
     setActivePlateId(plateId);
+    setPlateViewRunId((id) => id + 1);
   }, []);
 
   /**
@@ -6647,12 +6661,14 @@ export function useSceneCollectionManager(options?: {
     setPlateName,
     plates,
     activePlateId,
+    plateViewRunId,
     addPlate,
     activatePlate,
     renamePlate,
     removePlate,
     moveModelsToPlate,
     plateOffsetFor,
+    addPlates,
     plateFrames,
     modelPlateFrame,
     resolveModelPlateId,

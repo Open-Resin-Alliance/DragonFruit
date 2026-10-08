@@ -474,6 +474,7 @@ export function SceneCanvas({
   plateFrames,
   activePlateId,
   onActivatePlate,
+  plateViewRunId,
   onAddPlate,
   onRenamePlate,
   resolveModelPlateId,
@@ -606,6 +607,11 @@ export function SceneCanvas({
   /** Which plate is being worked on. */
   activePlateId?: string;
   onActivatePlate?: (plateId: string) => void;
+  /**
+   * Bumped by the scene when the plate being worked on is switched deliberately. The view
+   * pans to that plate: a bed picked out of the cascade may be half off screen.
+   */
+  plateViewRunId?: number;
   onAddPlate?: () => void;
   onRenamePlate?: (plateId: string, name: string) => void;
   /** The plate a model stands on, resolved by the scene. */
@@ -1412,6 +1418,32 @@ export function SceneCanvas({
   const { defaultCamera, orbitTarget, setOrbitTargetFromPoint, introBoundsSnapshot, cameraIntroRunId, cameraHomeResetRunId, resetCameraHome } =
     useStlLoadCameraIntro(models, buildVolumeCenterTarget, { deferIntro: deferCameraIntro });
   const [cameraIntroCompletedRunId, setCameraIntroCompletedRunId] = React.useState(0);
+  /**
+   * Where a plate pan looks: the middle of that bed, on the bed's own plane. The build
+   * volume's centre sits half way up the volume, and pivoting there leaves the plate low
+   * in the view — fine for Home, which is framing the volume, not for moving to a bed.
+   */
+  const plateViewTarget = React.useMemo(() => {
+    const centerX = activeBuildVolumeSettings.originMode === 'front_left' ? activeBuildVolumeSettings.widthMm * 0.5 : 0;
+    const centerY = activeBuildVolumeSettings.originMode === 'front_left' ? activeBuildVolumeSettings.depthMm * 0.5 : 0;
+    return new THREE.Vector3(
+      centerX + (activePlateFrame?.dxMm ?? 0),
+      centerY + (activePlateFrame?.dyMm ?? 0),
+      0,
+    );
+  }, [
+    activeBuildVolumeSettings.depthMm,
+    activeBuildVolumeSettings.originMode,
+    activeBuildVolumeSettings.widthMm,
+    activePlateFrame?.dxMm,
+    activePlateFrame?.dyMm,
+  ]);
+
+  /** What the camera controller needs to pan to the plate that was just picked. */
+  const plateFocus = React.useMemo(
+    () => ({ runId: plateViewRunId ?? 0, center: plateViewTarget }),
+    [plateViewRunId, plateViewTarget],
+  );
   const [cameraHomeResetCompletedRunId, setCameraHomeResetCompletedRunId] = React.useState(0);
 
   const lastHoveredModelPointRef = React.useRef<THREE.Vector3 | null>(null);
@@ -7723,6 +7755,7 @@ export function SceneCanvas({
             cameraRef={cameraRef}
             orbitControlsRef={orbitControlsRef as React.MutableRefObject<{ target: THREE.Vector3; update: () => void } | null>}
             perspectiveFov={perspectiveFov}
+            plateFocus={plateFocus}
           />
         )}
         <CameraIntroController

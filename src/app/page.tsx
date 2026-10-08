@@ -10425,6 +10425,7 @@ export default function Home() {
             plateFrames={scene.plateFrames}
             resolveModelPlateId={scene.resolveModelPlateId}
             activePlateId={scene.activePlateId}
+            plateViewRunId={scene.plateViewRunId}
             onActivatePlate={scene.activatePlate}
             onAddPlate={() => { scene.addPlate(); }}
             onRenamePlate={scene.renamePlate}
