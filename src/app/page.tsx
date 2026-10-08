@@ -1405,6 +1405,8 @@ export default function Home() {
   } | null>(null);
   const [completedSliceIntent, setCompletedSliceIntent] = React.useState<SliceIntent | null>(null);
   const [completedSaveDestinationPath, setCompletedSaveDestinationPath] = React.useState<string | null>(null);
+  /** The folder a batch wrote its plates into: what the finished dialog names as the location. */
+  const [completedSaveDirectory, setCompletedSaveDirectory] = React.useState<string | null>(null);
   const [printingReadyPlateId, setPrintingReadyPlateId] = React.useState<number | null>(null);
   const [printingPrintNowBusy, setPrintingPrintNowBusy] = React.useState(false);
   const [printingUploadDialogOpen, setPrintingUploadDialogOpen] = React.useState(false);
@@ -2628,7 +2630,7 @@ export default function Home() {
 
   const handleSliceArtifactReady = React.useCallback((
     artifact: SliceExportArtifact,
-    context?: { plateId?: string; totalLayers?: number; savedPath?: string },
+    context?: { plateId?: string; totalLayers?: number; savedPath?: string; savedDirectory?: string },
   ) => {
     const plateId = context?.plateId ?? scene.activePlateId;
     setPrintingSlicesByPlateId((previous) => {
@@ -2686,6 +2688,9 @@ export default function Home() {
     const intent = sliceIntentRef.current;
     setCompletedSliceIntent(intent);
     setCompletedSaveDestinationPath(null);
+    // A batch writes several files into one folder, so the finished dialog names the folder
+    // rather than whichever plate's file happened to be last.
+    setCompletedSaveDirectory(context?.savedDirectory?.trim() || null);
     if (intent === 'upload' || intent === 'print') {
       pendingPostSliceActionRef.current = intent;
       setShouldAutoSliceOnExportEntry(false);
@@ -2827,11 +2832,13 @@ export default function Home() {
     }
 
     setSliceCompletedModalData({
-      filePath: completedSaveDestinationPath,
+      // A batch names the folder it wrote to: several plates went into it, and the folder is
+      // what the user needs to find them.
+      filePath: completedSaveDirectory || completedSaveDestinationPath,
       slicingTimeMs,
     });
     setShowSliceCompletedModal(true);
-  }, [completedSliceIntent, completedSaveDestinationPath, printingSlicingBenchmark?.totalElapsedMs]);
+  }, [completedSaveDestinationPath, completedSaveDirectory, completedSliceIntent, printingSlicingBenchmark?.totalElapsedMs]);
 
   const printingOutputSizeLabel = React.useMemo(() => {
     if (!printingArtifact) return '—';

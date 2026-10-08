@@ -29,7 +29,7 @@ export type ExportPanelStackProps = {
    */
   handleSliceArtifactReady: (
     artifact: SliceExportArtifact,
-    context?: { plateId?: string; totalLayers?: number; savedPath?: string },
+    context?: { plateId?: string; totalLayers?: number; savedPath?: string; savedDirectory?: string },
   ) => void;
   handleSlicingBenchmarkComplete: (benchmark: SliceExportResult['benchmark']) => void;
   triggerSliceExportRef: React.MutableRefObject<(() => void) | null>;

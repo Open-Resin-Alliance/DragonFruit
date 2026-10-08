@@ -100,7 +100,7 @@ interface SlicingPanelProps {
   }) => void;
   onSliceArtifactReady?: (
     artifact: SliceExportArtifact,
-    context?: { plateId?: string; totalLayers?: number; savedPath?: string },
+    context?: { plateId?: string; totalLayers?: number; savedPath?: string; savedDirectory?: string },
   ) => void;
   onBenchmarkComplete?: (benchmark: SliceBenchmarkSnapshot) => void;
   onSliceTriggerRef?: React.MutableRefObject<(() => void) | null>;
@@ -2303,6 +2303,7 @@ export function SlicingPanel({
       onSliceArtifactReady?.(entry.artifact, {
         ...(entry.plateId ? { plateId: entry.plateId } : {}),
         ...(entry.savedPath ? { savedPath: entry.savedPath } : {}),
+        savedDirectory: destinationDirectory,
         totalLayers: entry.totalLayers,
       });
     }
