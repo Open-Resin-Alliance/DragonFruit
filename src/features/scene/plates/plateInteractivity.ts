@@ -56,3 +56,30 @@ export function modelPlateScope({
 export function modelAnswersPointer(args: Parameters<typeof modelPlateScope>[0]): boolean {
   return modelPlateScope(args) !== 'other';
 }
+
+/**
+ * Which bed a move should make the one being worked on, if any.
+ *
+ * A move that lands wholly on one plate is a drag onto that bed, so the view follows it.
+ * A move spreading its models over several plates says nothing about which to work on,
+ * and neither does one that put nothing on a bed at all, so both leave the active plate
+ * where it was. `followLandedPlate` is the Multi-Plate setting that turns the following
+ * itself off, for anyone who would rather a drop never move them.
+ *
+ * `explicitPlateId` is for a caller that made the landing itself, in the same step: the
+ * plate list its render still holds does not include a bed created moments ago.
+ */
+export function followedPlateIdForMove({
+  followLandedPlate,
+  explicitPlateId,
+  landedPlateIds,
+}: {
+  followLandedPlate: boolean;
+  explicitPlateId?: string | null;
+  landedPlateIds: ReadonlySet<string>;
+}): string | null {
+  if (!followLandedPlate) return null;
+  if (explicitPlateId) return explicitPlateId;
+  if (landedPlateIds.size !== 1) return null;
+  return [...landedPlateIds][0] ?? null;
+}

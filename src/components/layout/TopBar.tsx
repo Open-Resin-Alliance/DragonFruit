@@ -443,7 +443,7 @@ export function TopBar({
     const handleOpenSettings = (e: Event) => {
       const detail = (e as CustomEvent).detail as { tab?: string } | undefined;
       const tab = detail?.tab as SettingsTabKey | undefined;
-      if (tab && ['general', 'camera', 'workspaces', 'mesh', 'performance', 'spacemouse', 'ui', 'hotkeys', 'plugins', 'experiments', 'sceneAutosave', 'backups', 'uvtools', 'logging', 'updates', 'about'].includes(tab)) {
+      if (tab && ['general', 'camera', 'workspaces', 'multiPlate', 'mesh', 'performance', 'spacemouse', 'ui', 'hotkeys', 'plugins', 'experiments', 'sceneAutosave', 'backups', 'uvtools', 'logging', 'updates', 'about'].includes(tab)) {
         setSettingsInitialTab(tab as SettingsTabKey);
       } else {
         setSettingsInitialTab('general');

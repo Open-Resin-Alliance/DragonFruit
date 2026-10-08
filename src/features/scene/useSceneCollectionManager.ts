@@ -68,6 +68,12 @@ import {
   saveView3DSettings,
   type View3DSettings,
 } from '@/components/settings/view3dPreferences';
+import { followedPlateIdForMove } from '@/features/scene/plates/plateInteractivity';
+import {
+  getMultiPlateSettingsServerSnapshot,
+  getMultiPlateSettingsSnapshot,
+  subscribeToMultiPlateSettings,
+} from '@/components/settings/multiPlatePreferences';
 import {
   getActivePrinterProfile,
   getMaterialProfilesForPrinter,
@@ -1558,6 +1564,17 @@ export function useSceneCollectionManager(options?: {
   const [storedView3dSettings, setView3dSettingsState] = useState<View3DSettings>(() => DEFAULT_VIEW3D_SETTINGS);
   const profileState = useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
   const activePrinterProfile = useMemo(() => getActivePrinterProfile(profileState), [profileState]);
+  /**
+   * Read at drop time rather than only at render: the follow decision is made inside
+   * callbacks with empty dependency lists, so a ref carries the live value.
+   */
+  const multiPlateSettings = useSyncExternalStore(
+    subscribeToMultiPlateSettings,
+    getMultiPlateSettingsSnapshot,
+    getMultiPlateSettingsServerSnapshot,
+  );
+  const followLandedPlateRef = useRef(multiPlateSettings.followLandedPlate);
+  followLandedPlateRef.current = multiPlateSettings.followLandedPlate;
 
   const view3dSettings = useMemo(() => {
     if (!activePrinterProfile) {
@@ -2721,7 +2738,7 @@ export function useSceneCollectionManager(options?: {
     const current = modelsRef.current.find((m) => m.id === id);
     if (current) {
       const plateId = resolveModelPlateIdRef.current({ ...current, transform });
-      if (plateId && plateId !== current.plateId) {
+      if (plateId && plateId !== current.plateId && followLandedPlateRef.current) {
         setActivePlateId((active) => (active === plateId ? active : plateId));
       }
     }
@@ -2848,11 +2865,13 @@ export function useSceneCollectionManager(options?: {
       const plateId = resolveModelPlateIdRef.current({ ...model, transform: nextTransform });
       if (plateId) landedPlateIds.add(plateId);
     }
-    // A drag that lands on another bed makes that bed the one you are working on.
-    // A move spreading the models over several plates says nothing about which to
-    // work on, so the active plate is left alone.
-    const followedPlateId = options?.landedPlateId
-      ?? (landedPlateIds.size === 1 ? [...landedPlateIds][0] : null);
+    // A drag that lands on another bed makes that bed the one you are working on,
+    // which the Multi-Plate setting can turn off.
+    const followedPlateId = followedPlateIdForMove({
+      followLandedPlate: followLandedPlateRef.current,
+      explicitPlateId: options?.landedPlateId,
+      landedPlateIds,
+    });
 
     setModels(prev => prev.map(m => {
       const nextTransform = updateMap.get(m.id);
@@ -3128,23 +3147,23 @@ export function useSceneCollectionManager(options?: {
       return plateId ? { ...moved, plateId } : moved;
     });
 
-    // Follow the moved set when it lands wholly on one plate, which is a drag of
-    // one or a few models onto another bed. A set spread across plates says
-    // nothing about which one to work on, so the active plate is left alone.
+    // Follow the moved set when it lands wholly on one plate, which is a drag of one or a
+    // few models onto another bed. The Multi-Plate setting can turn the following off.
     const movedPlateIds = new Set(
       nextModels
         .filter((model) => updateMap.has(model.id) && model.plateId)
         .map((model) => model.plateId as string),
     );
-    if (movedPlateIds.size === 1) {
-      const [onlyPlateId] = movedPlateIds;
-      if (activePlateIdRef.current !== onlyPlateId) {
-        setActivePlateId(onlyPlateId);
-        // A drag that lands on another bed makes that bed the one you are on, and the view
-        // comes with it — after the drop, never during it, which is why this is the commit
-        // rather than the pointer moving.
-        setPlateViewRunId((id) => id + 1);
-      }
+    const followedPlateId = followedPlateIdForMove({
+      followLandedPlate: followLandedPlateRef.current,
+      landedPlateIds: movedPlateIds,
+    });
+    if (followedPlateId && activePlateIdRef.current !== followedPlateId) {
+      setActivePlateId(followedPlateId);
+      // A drag that lands on another bed makes that bed the one you are on, and the view
+      // comes with it — after the drop, never during it, which is why this is the commit
+      // rather than the pointer moving.
+      setPlateViewRunId((id) => id + 1);
     }
 
     if (!shouldPushHistory) modelsRef.current = nextModels;

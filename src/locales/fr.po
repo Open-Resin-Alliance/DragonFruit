@@ -206,11 +206,11 @@ msgstr "~{mins} min"
 msgid "2D Blur"
 msgstr ""
 
-#: src/components/settings/SettingsModal.tsx:1266
+#: src/components/settings/SettingsModal.tsx:1273
 msgid "3D Mouse"
 msgstr ""
 
-#: src/components/settings/SettingsModal.tsx:1267
+#: src/components/settings/SettingsModal.tsx:1274
 msgid "3D mouse navigation controls"
 msgstr ""
 
@@ -238,12 +238,16 @@ msgstr ""
 msgid "A file this run writes is already in that folder. Slicing replaces it."
 msgstr ""
 
+#: src/components/settings/MultiPlateSettingsTab.tsx:58
+msgid "A model dropped on another bed makes that bed the one you work on."
+msgstr ""
+
 #. <name> is a literal placeholder in the filename, not markup — leave it as-is.
 #: src/components/settings/SceneAutosaveSettingsTab.tsx:367
 msgid "A recovery copy is written beside each saved project, as <name>_autosave.voxl. It uses roughly as much disk as the project itself."
 msgstr ""
 
-#: src/components/settings/SettingsModal.tsx:1314
+#: src/components/settings/SettingsModal.tsx:1321
 msgid "About"
 msgstr ""
 
@@ -620,7 +624,7 @@ msgstr ""
 msgid "Automation"
 msgstr ""
 
-#: src/components/settings/SettingsModal.tsx:1285
+#: src/components/settings/SettingsModal.tsx:1292
 msgid "Autosave and crash recovery behavior"
 msgstr ""
 
@@ -737,7 +741,7 @@ msgstr ""
 msgid "BACKUP_COOKIE_SECRET helper"
 msgstr ""
 
-#: src/components/settings/SettingsModal.tsx:1290
+#: src/components/settings/SettingsModal.tsx:1297
 msgid "Backups"
 msgstr ""
 
@@ -763,6 +767,10 @@ msgstr ""
 
 #: src/supports/Settings/components/BaseFlareSettingsCard.tsx:19
 msgid "Base Flare"
+msgstr ""
+
+#: src/components/settings/MultiPlateSettingsTab.tsx:49
+msgid "Behaviour across the beds of a scene."
 msgstr ""
 
 #: src/supports/Curves/CurveSettingsCard.tsx:190
@@ -849,7 +857,7 @@ msgstr ""
 msgid "Build plate"
 msgstr ""
 
-#: src/components/settings/SettingsModal.tsx:1249
+#: src/components/settings/SettingsModal.tsx:1250
 msgid "Build volume bounds, origin, and 3D view resolution"
 msgstr ""
 
@@ -889,7 +897,7 @@ msgstr ""
 msgid "cached"
 msgstr "en cache"
 
-#: src/components/settings/SettingsModal.tsx:1230
+#: src/components/settings/SettingsModal.tsx:1231
 msgid "Camera"
 msgstr ""
 
@@ -991,7 +999,7 @@ msgstr "Changer de profil d'imprimante nécessite un nouveau laminage"
 msgid "Check Again"
 msgstr ""
 
-#: src/components/settings/SettingsModal.tsx:1309
+#: src/components/settings/SettingsModal.tsx:1316
 msgid "Check for new versions and manage channels"
 msgstr ""
 
@@ -1878,7 +1886,7 @@ msgstr ""
 msgid "Duplicate"
 msgstr ""
 
-#: src/components/settings/SettingsModal.tsx:1279
+#: src/components/settings/SettingsModal.tsx:1286
 msgid "Early-access and experimental features"
 msgstr ""
 
@@ -2068,7 +2076,7 @@ msgid "Experimental Features"
 msgstr ""
 
 #: src/components/settings/ExperimentsSettingsTab.tsx:167
-#: src/components/settings/SettingsModal.tsx:1278
+#: src/components/settings/SettingsModal.tsx:1285
 msgid "Experiments"
 msgstr ""
 
@@ -2308,6 +2316,10 @@ msgstr ""
 msgid "Flip Tenon"
 msgstr ""
 
+#: src/components/settings/MultiPlateSettingsTab.tsx:24
+msgid "Follow the plate a model lands on"
+msgstr ""
+
 #: src/components/settings/SceneAutosaveSettingsTab.tsx:247
 msgid "For continuous edits, save at least this often."
 msgstr ""
@@ -2355,7 +2367,7 @@ msgid "Gap Width"
 msgstr ""
 
 #. Support kind tab. One of four tabs on a narrow row, so keep it to one short word.
-#: src/components/settings/SettingsModal.tsx:1224
+#: src/components/settings/SettingsModal.tsx:1225
 #: src/supports/Settings/components/SidebarPanelTabs.tsx:20
 msgid "General"
 msgstr ""
@@ -2509,7 +2521,7 @@ msgstr ""
 msgid "Horizontal angles are not good for holding up overhangs. They are only good for lateral stability."
 msgstr ""
 
-#: src/components/settings/SettingsModal.tsx:1260
+#: src/components/settings/SettingsModal.tsx:1267
 msgid "Hotkeys"
 msgstr ""
 
@@ -2809,7 +2821,7 @@ msgstr ""
 msgid "Keep the preset"
 msgstr ""
 
-#: src/components/settings/SettingsModal.tsx:1261
+#: src/components/settings/SettingsModal.tsx:1268
 msgid "Keyboard bindings and presets"
 msgstr ""
 
@@ -2973,7 +2985,7 @@ msgstr ""
 msgid "Load Support Data (V2)"
 msgstr ""
 
-#: src/components/settings/SettingsModal.tsx:1273
+#: src/components/settings/SettingsModal.tsx:1280
 msgid "Load vendor profile plugins"
 msgstr ""
 
@@ -3032,7 +3044,7 @@ msgstr ""
 msgid "Local backup sync failed."
 msgstr ""
 
-#: src/components/settings/SettingsModal.tsx:1291
+#: src/components/settings/SettingsModal.tsx:1298
 msgid "Local on-disk backup snapshots"
 msgstr ""
 
@@ -3065,11 +3077,11 @@ msgstr ""
 msgid "Locked"
 msgstr ""
 
-#: src/components/settings/SettingsModal.tsx:1303
+#: src/components/settings/SettingsModal.tsx:1310
 msgid "Log file location and verbosity"
 msgstr ""
 
-#: src/components/settings/SettingsModal.tsx:1302
+#: src/components/settings/SettingsModal.tsx:1309
 msgid "Logging"
 msgstr ""
 
@@ -3230,7 +3242,7 @@ msgstr ""
 #. File type badge on the recent files list. Noun — labels a mesh file (.stl, .obj, .3mf).
 #. View mode: mesh edges drawn over a solid surface, so back edges stay hidden.
 #: src/components/layout/EmptySceneState.tsx:676
-#: src/components/settings/SettingsModal.tsx:1236
+#: src/components/settings/SettingsModal.tsx:1237
 #: src/features/shaders/mesh/types.ts:45
 msgid "Mesh"
 msgstr "Maillage"
@@ -3401,6 +3413,7 @@ msgid "Moved off centre"
 msgstr ""
 
 #: src/components/controls/ArrangePanel.tsx:186
+#: src/components/settings/SettingsModal.tsx:1255
 msgid "Multi-Plate"
 msgstr ""
 
@@ -3697,6 +3710,7 @@ msgstr ""
 #: src/components/settings/GeneralSettingsTab.tsx:509
 #: src/components/settings/GeneralSettingsTab.tsx:526
 #: src/components/settings/LocalBackupsSettingsTab.tsx:863
+#: src/components/settings/MultiPlateSettingsTab.tsx:64
 #: src/components/settings/PerformanceSettingsTab.tsx:145
 #: src/components/settings/PerformanceSettingsTab.tsx:160
 #: src/components/settings/PerformanceSettingsTab.tsx:175
@@ -3764,6 +3778,7 @@ msgstr ""
 #: src/components/settings/GeneralSettingsTab.tsx:508
 #: src/components/settings/GeneralSettingsTab.tsx:525
 #: src/components/settings/LocalBackupsSettingsTab.tsx:862
+#: src/components/settings/MultiPlateSettingsTab.tsx:63
 #: src/components/settings/PerformanceSettingsTab.tsx:144
 #: src/components/settings/PerformanceSettingsTab.tsx:159
 #: src/components/settings/PerformanceSettingsTab.tsx:174
@@ -4015,6 +4030,10 @@ msgstr ""
 msgid "Plate 1"
 msgstr ""
 
+#: src/components/settings/SettingsModal.tsx:1256
+msgid "Plate behaviour across several beds"
+msgstr ""
+
 #: src/components/controls/ArrangePanel.tsx:175
 msgid "Plate Mode"
 msgstr ""
@@ -4027,6 +4046,7 @@ msgstr ""
 msgid "Plate preview · Layer {previewSelectedLayer}/{previewTotalLayers}"
 msgstr ""
 
+#: src/components/settings/MultiPlateSettingsTab.tsx:46
 #: src/features/export/components/ExportPanel.tsx:99
 msgid "Plates"
 msgstr ""
@@ -4043,11 +4063,11 @@ msgstr "Merci de patienter pendant que nous préparons votre scène."
 msgid "Please use: {extensions}"
 msgstr ""
 
-#: src/components/settings/SettingsModal.tsx:1272
+#: src/components/settings/SettingsModal.tsx:1279
 msgid "Plugins"
 msgstr ""
 
-#: src/components/settings/SettingsModal.tsx:1243
+#: src/components/settings/SettingsModal.tsx:1244
 msgid "PNG compression and engine metadata"
 msgstr ""
 
@@ -4219,7 +4239,7 @@ msgstr ""
 msgid "Projected area each support carries — smaller = more, tighter supports (grid spacing ≈ √value)"
 msgstr ""
 
-#: src/components/settings/SettingsModal.tsx:1231
+#: src/components/settings/SettingsModal.tsx:1232
 msgid "Projection and navigation behavior"
 msgstr ""
 
@@ -4794,7 +4814,7 @@ msgid "Scene"
 msgstr "Scène"
 
 #: src/components/settings/SceneAutosaveSettingsTab.tsx:167
-#: src/components/settings/SettingsModal.tsx:1284
+#: src/components/settings/SettingsModal.tsx:1291
 msgid "Scene Autosave"
 msgstr ""
 
@@ -4946,7 +4966,7 @@ msgstr ""
 msgid "Self-Support Angle"
 msgstr ""
 
-#: src/components/settings/SettingsModal.tsx:1297
+#: src/components/settings/SettingsModal.tsx:1304
 msgid "Send sliced files to UVTools for analysis"
 msgstr ""
 
@@ -5004,7 +5024,7 @@ msgstr ""
 msgid "Settings"
 msgstr "Paramètres"
 
-#: src/components/settings/SettingsModal.tsx:1237
+#: src/components/settings/SettingsModal.tsx:1238
 msgid "Shader, rendering options, and selection behavior"
 msgstr ""
 
@@ -5164,7 +5184,7 @@ msgid "Sliced Layers"
 msgstr ""
 
 #: src/components/scene/scanProgressMessages.ts:20
-#: src/components/settings/SettingsModal.tsx:1242
+#: src/components/settings/SettingsModal.tsx:1243
 #: src/features/slicing/components/SlicingPanel.tsx:2485
 #: src/features/slicing/components/SlicingPanel.tsx:2504
 msgid "Slicing"
@@ -5658,7 +5678,7 @@ msgstr ""
 msgid "The update is being installed. DragonFruit will restart automatically."
 msgstr ""
 
-#: src/components/settings/SettingsModal.tsx:1255
+#: src/components/settings/SettingsModal.tsx:1262
 msgid "Theme and custom UI token customization"
 msgstr ""
 
@@ -5834,7 +5854,7 @@ msgstr ""
 msgid "Try again"
 msgstr ""
 
-#: src/components/settings/SettingsModal.tsx:1254
+#: src/components/settings/SettingsModal.tsx:1261
 msgid "UI & Theme"
 msgstr ""
 
@@ -5959,7 +5979,7 @@ msgstr ""
 msgid "Update installed. DragonFruit will restart."
 msgstr ""
 
-#: src/components/settings/SettingsModal.tsx:1308
+#: src/components/settings/SettingsModal.tsx:1315
 msgid "Updates"
 msgstr ""
 
@@ -6012,7 +6032,7 @@ msgstr ""
 msgid "Using Material Settings"
 msgstr ""
 
-#: src/components/settings/SettingsModal.tsx:1296
+#: src/components/settings/SettingsModal.tsx:1303
 msgid "UVTools"
 msgstr ""
 
@@ -6036,7 +6056,7 @@ msgstr ""
 msgid "Version {version} is ready to install"
 msgstr ""
 
-#: src/components/settings/SettingsModal.tsx:1315
+#: src/components/settings/SettingsModal.tsx:1322
 msgid "Version info and project details"
 msgstr ""
 
@@ -6250,11 +6270,11 @@ msgstr ""
 msgid "With great resin comes great responsibility."
 msgstr "Avec une grande résine vient une grande responsabilité."
 
-#: src/components/settings/SettingsModal.tsx:1248
+#: src/components/settings/SettingsModal.tsx:1249
 msgid "Workspace"
 msgstr ""
 
-#: src/components/settings/SettingsModal.tsx:1225
+#: src/components/settings/SettingsModal.tsx:1226
 msgid "Workspace behavior and panel layout"
 msgstr ""
 

@@ -23,8 +23,9 @@ import { UISettingsTab } from './UISettingsTab';
 import { UpdatesSettingsTab } from '@/features/updater/UpdatesSettingsTab';
 import { getUpdateChannel, type UpdateChannel } from '@/features/updater/updateBridge';
 import { WorkspacesSettingsTab } from '@/components/settings/WorkspacesSettingsTab';
+import { MultiPlateSettingsTab } from '@/components/settings/MultiPlateSettingsTab';
 import { PerformanceSettingsTab, type SlicingThumbnailRenderSettings } from '@/components/settings/PerformanceSettingsTab';
-import { AlertTriangle, Check, CloudDownload, Edit3, ExternalLink, FlaskConical, Gamepad2, Github, HardDrive, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Save, Settings2, Trash2, X, Camera, Grid3x3, ArchiveRestore, ScrollText } from 'lucide-react';
+import { AlertTriangle, Check, CloudDownload, Edit3, ExternalLink, FlaskConical, Gamepad2, Github, HardDrive, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Save, Settings2, Trash2, X, Camera, Grid3x3, ArchiveRestore, ScrollText, SquareStack } from 'lucide-react';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import {
   applyThemeCustomColors,
@@ -211,7 +212,7 @@ type SettingsModalProps = {
   initialTab?: SettingsTabKey;
 };
 
-export type SettingsTabKey = 'general' | 'camera' | 'workspaces' | 'mesh' | 'performance' | 'spacemouse' | 'plugins' | 'experiments' | 'sceneAutosave' | 'backups' | 'uvtools' | 'ui' | 'hotkeys' | 'logging' | 'updates' | 'about';
+export type SettingsTabKey = 'general' | 'camera' | 'workspaces' | 'multiPlate' | 'mesh' | 'performance' | 'spacemouse' | 'plugins' | 'experiments' | 'sceneAutosave' | 'backups' | 'uvtools' | 'ui' | 'hotkeys' | 'logging' | 'updates' | 'about';
 type SettingsTabTone = 'primary' | 'secondary';
 
 type SettingsTabMeta = {
@@ -1236,6 +1237,12 @@ export function SettingsModal({
       icon: MonitorCog,
       tone: 'primary',
     },
+    multiPlate: {
+      label: _(msg`Multi-Plate`),
+      description: _(msg`Plate behaviour across several beds`),
+      icon: SquareStack,
+      tone: 'primary',
+    },
     ui: {
       label: _(msg`UI & Theme`),
       description: _(msg`Theme and custom UI token customization`),
@@ -1304,7 +1311,7 @@ export function SettingsModal({
     },
   };
 
-  const sidebarTopTabs: SettingsTabKey[] = ['general', 'camera', 'workspaces', 'mesh', 'performance', 'spacemouse', 'ui', 'hotkeys'];
+  const sidebarTopTabs: SettingsTabKey[] = ['general', 'camera', 'workspaces', 'multiPlate', 'mesh', 'performance', 'spacemouse', 'ui', 'hotkeys'];
   const sidebarBottomTabs: SettingsTabKey[] = ['plugins', 'experiments', 'sceneAutosave', 'backups', 'uvtools', 'logging', 'updates', 'about'];
 
 
@@ -1468,6 +1475,7 @@ export function SettingsModal({
                   onView3dSettingsChange={setDraftView3dSettings}
                 />
               )}
+              {activeTab === 'multiPlate' && <MultiPlateSettingsTab />}
               {activeTab === 'mesh' && (
                 <MeshSettingsTab
                   configuredShaderType={draftShaderType}

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { modelAnswersPointer, modelPlateScope } from '../plateInteractivity';
+import { followedPlateIdForMove, modelAnswersPointer, modelPlateScope } from '../plateInteractivity';
 
 const frames = [
   { id: 'plate-1', minX: -200, minY: -100, maxX: 200, maxY: 100 },
@@ -66,5 +66,49 @@ test('one plate has no other bed to be on, so everything reads as active', () =>
   assert.equal(
     modelPlateScope({ position: { x: 900, y: 900 }, frames: [frames[0]], activePlateId: 'plate-1', plateCount: 1 }),
     'active',
+  );
+});
+
+test('a move landing wholly on one bed makes that bed the one being worked on', () => {
+  assert.equal(
+    followedPlateIdForMove({ followLandedPlate: true, landedPlateIds: new Set(['plate-2']) }),
+    'plate-2',
+  );
+});
+
+test('a move spread over several beds says nothing about which to work on', () => {
+  assert.equal(
+    followedPlateIdForMove({ followLandedPlate: true, landedPlateIds: new Set(['plate-1', 'plate-2']) }),
+    null,
+  );
+});
+
+test('a move that landed nothing on a bed leaves the active plate alone', () => {
+  assert.equal(followedPlateIdForMove({ followLandedPlate: true, landedPlateIds: new Set() }), null);
+});
+
+test('a bed the caller created in the same step is followed even though it is not in the set yet', () => {
+  assert.equal(
+    followedPlateIdForMove({
+      followLandedPlate: true,
+      explicitPlateId: 'plate-3',
+      landedPlateIds: new Set(['plate-1']),
+    }),
+    'plate-3',
+  );
+});
+
+test('with following turned off, no move makes another bed active', () => {
+  assert.equal(
+    followedPlateIdForMove({ followLandedPlate: false, landedPlateIds: new Set(['plate-2']) }),
+    null,
+  );
+  assert.equal(
+    followedPlateIdForMove({
+      followLandedPlate: false,
+      explicitPlateId: 'plate-3',
+      landedPlateIds: new Set(['plate-2']),
+    }),
+    null,
   );
 });
