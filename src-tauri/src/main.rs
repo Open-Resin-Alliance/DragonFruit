@@ -3760,6 +3760,62 @@ async fn read_print_layer_png(
     Ok(Response::new(bytes))
 }
 
+/// Decode a run of layer preview PNGs in one round trip, in parallel.
+///
+/// Each layer costs a file open, an RLE decode and a PNG encode, and the printing workspace
+/// wants the layers either side of the one on screen at once. Doing them here means one IPC
+/// round trip and as many cores as the machine has, rather than one blocking task per layer,
+/// one after another.
+///
+/// The answer is packed as `[u32 little-endian length][bytes]` per layer, in the order asked
+/// for, and an empty entry is a layer that would not decode. It is one binary payload rather
+/// than a list of them, which is what the bridge can hand straight to the caller.
+#[tauri::command]
+async fn read_print_layer_pngs(
+    source_path: String,
+    layer_numbers: Vec<u32>,
+    format_hint: String,
+) -> Result<Response, String> {
+    let packed = tauri::async_runtime::spawn_blocking(move || {
+        if layer_numbers.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let source = std::path::PathBuf::from(source_path.trim());
+        if !source.exists() {
+            return Err("Source print file no longer exists on disk".to_string());
+        }
+        if layer_numbers.iter().any(|number| *number == 0) {
+            return Err("Layer number must be >= 1".to_string());
+        }
+
+        use rayon::prelude::*;
+        let decoded: Vec<Vec<u8>> = layer_numbers
+            .par_iter()
+            .map(|layer_number| {
+                dragonfruit_slicing_engine::engine::read_layer_preview_png_by_format_hint(
+                    &source,
+                    *layer_number,
+                    &format_hint,
+                )
+                .unwrap_or_default()
+            })
+            .collect();
+
+        let mut packed: Vec<u8> = Vec::with_capacity(decoded.iter().map(|bytes| bytes.len() + 4).sum());
+        for bytes in decoded {
+            packed.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+            packed.extend_from_slice(&bytes);
+        }
+
+        Ok(packed)
+    })
+    .await
+    .map_err(|err| format!("Read layers task failed to join: {err}"))??;
+
+    Ok(Response::new(packed))
+}
+
 #[tauri::command]
 async fn delete_print_temp_file(source_path: String) -> Result<bool, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -4444,6 +4500,7 @@ fn main() {
             read_print_file_size,
             read_print_file_chunk,
             read_print_layer_png,
+            read_print_layer_pngs,
             delete_print_temp_file,
             cleanup_stale_print_temp_files,
             cleanup_all_print_temp_files,

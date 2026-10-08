@@ -332,6 +332,7 @@ import {
   pickSavePathWithNativeDialog,
   pickOpenFilesWithNativeDialog,
   readPrintLayerPreviewPngFromPath,
+  readPrintLayerPreviewPngsFromPath,
   readPrintArtifactBytesFromPath,
   savePrintArtifactPathWithNativeDialog,
   savePrintArtifactWithNativeDialog,
@@ -2760,23 +2761,35 @@ export default function Home() {
       if (centre - offset >= 1) wantedLayers.push(centre - offset);
     }
 
+    const missingLayers: number[] = [];
     for (const layerNumber of wantedLayers) {
       if (cache.get(plateId)?.has(layerNumber)) continue;
       const inFlightKey = `${plateId}:${layerNumber}`;
       if (inFlight.has(inFlightKey)) continue;
-      inFlight.add(inFlightKey);
-
-      void readPrintLayerPreviewPngFromPath(nativePath, layerNumber, outputFormat)
-        .then((pngBytes: Uint8Array) => {
-          cachePrintingLayerPreview(plateId, layerNumber, pngBytes);
-        })
-        .catch(() => {
-          // Not cached: the loader reads it again if that layer is the one shown.
-        })
-        .finally(() => {
-          inFlight.delete(inFlightKey);
-        });
+      missingLayers.push(layerNumber);
     }
+    if (missingLayers.length === 0) return;
+
+    const inFlightKeys = missingLayers.map((layerNumber) => `${plateId}:${layerNumber}`);
+    for (const key of inFlightKeys) inFlight.add(key);
+
+    // One round trip for the window: the native side decodes the layers in parallel, which is
+    // the difference between a scrub that waits on one layer at a time and one that does not.
+    void readPrintLayerPreviewPngsFromPath(nativePath, missingLayers, outputFormat)
+      .then((layers: Uint8Array[]) => {
+        missingLayers.forEach((layerNumber, index) => {
+          const pngBytes = layers[index];
+          if (!pngBytes || pngBytes.length === 0) return;
+          cachePrintingLayerPreview(plateId, layerNumber, pngBytes);
+        });
+      })
+      .catch(() => {
+        // An older build without the batch command, or a file that would not decode: the loader
+        // reads the layer again when it is shown, one at a time as before.
+      })
+      .finally(() => {
+        for (const key of inFlightKeys) inFlight.delete(key);
+      });
   }, [
     cachePrintingLayerPreview,
     printingDisplayedLayer,
