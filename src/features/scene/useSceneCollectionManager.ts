@@ -6151,7 +6151,7 @@ export function useSceneCollectionManager(options?: {
     pushSceneSnapshotHistory(
       before,
       after,
-      isSupport ? 'Mark as Support Geometry' : 'Mark as Model Geometry',
+      isSupport ? 'Mark as Support' : 'Mark as Model',
     );
   }, [activeModelId, models, pushSceneSnapshotHistory, selectedModelIds]);
 
