@@ -1255,7 +1255,17 @@ export default function Home() {
     point: null,
   });
   const [printingLayerPreviewUrls, setPrintingLayerPreviewUrls] = React.useState<Array<string | null>>([]);
-  const printingLayerPreviewLoadInFlightRef = React.useRef<Set<number>>(new Set());
+  /** Reads in flight, keyed `${plateId}:${layer}`, so one bed's read cannot block another's. */
+  const printingLayerPreviewLoadInFlightRef = React.useRef<Set<string>>(new Set());
+  /**
+   * Layer previews already read out of an artifact, by bed and layer, and the one owner of those
+   * object URLs.
+   *
+   * Reading a layer is a call into the native archive, and a bed switch empties the visible
+   * array and reads the layer again — that is the small lag on a bed switch. Every read lands
+   * here, and a read that is already here is served from memory instead.
+   */
+  const printingLayerPreviewCacheRef = React.useRef<Map<string, Map<number, string>>>(new Map());
 
   const printingPreviewDepsRef = React.useRef<PrintingPreviewManagerDeps>({
     printingPreviewTargetResolution: null,
@@ -2453,21 +2463,37 @@ export default function Home() {
     ];
   }, [scene.activeModelId, scene.canPasteModel, scene.mode, scene.models, scene.selectedModelIds, supportsCanAddJoint, supportsCanToggleCurve]);
 
+  /**
+   * Drops the visible array without revoking it: those URLs belong to the layer cache, which
+   * hands the same one back when the bed or layer is asked for again.
+   */
   const clearPrintingLayerPreviewUrls = React.useCallback(() => {
     printingLayerPreviewLoadInFlightRef.current.clear();
-    setPrintingLayerPreviewUrls((previous) => {
-      for (const url of previous) {
-        if (url) URL.revokeObjectURL(url);
+    setPrintingLayerPreviewUrls([]);
+  }, []);
+
+  /** Forgets the cached previews of one bed — or of every bed — and revokes their URLs. */
+  const dropPrintingLayerPreviewCache = React.useCallback((plateId?: string) => {
+    const cache = printingLayerPreviewCacheRef.current;
+    if (plateId === undefined) {
+      for (const layers of cache.values()) {
+        for (const url of layers.values()) URL.revokeObjectURL(url);
       }
-      return [];
-    });
+      cache.clear();
+      return;
+    }
+    const layers = cache.get(plateId);
+    if (!layers) return;
+    for (const url of layers.values()) URL.revokeObjectURL(url);
+    cache.delete(plateId);
   }, []);
 
   React.useEffect(() => {
     return () => {
       clearPrintingLayerPreviewUrls();
+      dropPrintingLayerPreviewCache();
     };
-  }, [clearPrintingLayerPreviewUrls]);
+  }, [clearPrintingLayerPreviewUrls, dropPrintingLayerPreviewCache]);
 
   // The streamed previews are of the bed that was sliced, and an entry left at the layer being
   // shown stops the effect below from loading the new bed's own layer. So a change of bed drops
@@ -2478,7 +2504,25 @@ export default function Home() {
     if (printingPreviewPlateIdRef.current === scene.activePlateId) return;
     printingPreviewPlateIdRef.current = scene.activePlateId;
     clearPrintingLayerPreviewUrls();
-  }, [clearPrintingLayerPreviewUrls, scene.activePlateId]);
+
+    // If the bed's layer was read before, it goes up in the same tick: no frame with an empty
+    // preview, and no wait for the native archive.
+    const layerNumber = Math.max(1, Math.min(printingPreviewTotalLayers, printingDisplayedLayer));
+    const cachedUrl = printingLayerPreviewCacheRef.current.get(scene.activePlateId)?.get(layerNumber);
+    if (cachedUrl && layerNumber >= 1) {
+      setPrintingLayerPreviewUrls((previous) => {
+        const next = previous.slice();
+        if (next.length < printingPreviewTotalLayers) next.length = printingPreviewTotalLayers;
+        next[layerNumber - 1] = cachedUrl;
+        return next;
+      });
+    }
+  }, [
+    clearPrintingLayerPreviewUrls,
+    printingDisplayedLayer,
+    printingPreviewTotalLayers,
+    scene.activePlateId,
+  ]);
 
 
   const handlePrintingLayerPreviewGenerated = React.useCallback((payload: {
@@ -2538,6 +2582,9 @@ export default function Home() {
   const handleSliceRunStartedForPrinting = React.useCallback(() => {
     setShouldAutoSliceOnExportEntry(false);
     clearPrintingLayerPreviewUrls();
+    // This bed's slice is about to be replaced, so its cached layers are of a file that is
+    // going away.
+    dropPrintingLayerPreviewCache(scene.activePlateId);
     setPrintingSelectedLayer(1);
     setPrintingDisplayedLayer(1);
     printingSelectedLayerRef.current = 1;
@@ -2551,7 +2598,7 @@ export default function Home() {
     setPrintingArtifactIsInvalid(false);
     slicedArtifactProfileFingerprintRef.current = null;
     setPrintingReadyPlateId(null);
-  }, [clearPrintingLayerPreviewUrls, scene.activePlateId]);
+  }, [clearPrintingLayerPreviewUrls, dropPrintingLayerPreviewCache, scene.activePlateId]);
 
   React.useEffect(() => {
     if (scene.mode !== 'printing') return;
@@ -2562,9 +2609,23 @@ export default function Home() {
     const layerIndex = layerNumber - 1;
     if (printingLayerPreviewUrls[layerIndex]) return;
 
+    const activePlateIdForPreview = scene.activePlateId;
+    const cachedLayerUrl = printingLayerPreviewCacheRef.current.get(activePlateIdForPreview)?.get(layerNumber);
+    if (cachedLayerUrl) {
+      setPrintingLayerPreviewUrls((previous) => {
+        const next = previous.slice();
+        if (next.length < printingPreviewTotalLayers) next.length = printingPreviewTotalLayers;
+        next[layerIndex] = cachedLayerUrl;
+        return next;
+      });
+      return;
+    }
+
+    // Keyed by the bed and layer, so a read already in flight for those is not started twice.
     const inFlight = printingLayerPreviewLoadInFlightRef.current;
-    if (inFlight.has(layerNumber)) return;
-    inFlight.add(layerNumber);
+    const inFlightKey = `${activePlateIdForPreview}:${layerNumber}`;
+    if (inFlight.has(inFlightKey)) return;
+    inFlight.add(inFlightKey);
 
     let cancelled = false;
     void readPrintLayerPreviewPngFromPath(printingArtifact.nativeTempPath, layerNumber, printingArtifact.outputFormat)
@@ -2574,13 +2635,16 @@ export default function Home() {
         previewBytes.set(pngBytes);
         const blob = new Blob([previewBytes.buffer], { type: 'image/png' });
         const nextUrl = URL.createObjectURL(blob);
+        const cache = printingLayerPreviewCacheRef.current;
+        const layersForPlate = cache.get(activePlateIdForPreview) ?? new Map<number, string>();
+        layersForPlate.set(layerNumber, nextUrl);
+        cache.set(activePlateIdForPreview, layersForPlate);
+
         setPrintingLayerPreviewUrls((previous) => {
           const next = previous.slice();
           if (next.length < printingPreviewTotalLayers) {
             next.length = printingPreviewTotalLayers;
           }
-          const prevUrl = next[layerIndex];
-          if (prevUrl) URL.revokeObjectURL(prevUrl);
           next[layerIndex] = nextUrl;
           return next;
         });
@@ -2591,19 +2655,56 @@ export default function Home() {
         }
       })
       .finally(() => {
-        inFlight.delete(layerNumber);
+        inFlight.delete(inFlightKey);
       });
 
     return () => {
       cancelled = true;
     };
   }, [
+    scene.activePlateId,
     scene.mode,
     printingArtifact?.nativeTempPath,
     printingDisplayedLayer,
     printingLayerPreviewUrls,
     printingPreviewTotalLayers,
   ]);
+
+  /**
+   * Reads the layer every other bed would show, so picking that bed has its picture in memory
+   * already. The bed being worked on is read by the effect above.
+   */
+  React.useEffect(() => {
+    const cache = printingLayerPreviewCacheRef.current;
+    let cancelled = false;
+
+    for (const [plateId, entry] of Object.entries(printingSlicesByPlateId)) {
+      const nativePath = entry.artifact?.nativeTempPath;
+      const outputFormat = entry.artifact?.outputFormat;
+      if (!nativePath || !outputFormat) continue;
+
+      const layerNumber = Math.max(1, Math.min(Math.max(1, entry.totalLayers), printingDisplayedLayer));
+      if (cache.get(plateId)?.has(layerNumber)) continue;
+
+      void readPrintLayerPreviewPngFromPath(nativePath, layerNumber, outputFormat)
+        .then((pngBytes: Uint8Array) => {
+          if (cancelled) return;
+          const bytes = new Uint8Array(pngBytes.length);
+          bytes.set(pngBytes);
+          const url = URL.createObjectURL(new Blob([bytes.buffer], { type: 'image/png' }));
+          const layersForPlate = cache.get(plateId) ?? new Map<number, string>();
+          layersForPlate.set(layerNumber, url);
+          cache.set(plateId, layersForPlate);
+        })
+        .catch(() => {
+          // A read that fails is simply not cached: the loader will try again when it is shown.
+        });
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [printingDisplayedLayer, printingSlicesByPlateId]);
 
   const printingPreviewTargetResolution = React.useMemo(() => {
     const printerWidth = Math.max(1, Math.round(activePrinterProfile?.display?.resolutionX ?? 0));
@@ -2644,6 +2745,8 @@ export default function Home() {
     context?: { plateId?: string; totalLayers?: number; savedPath?: string; savedDirectory?: string },
   ) => {
     const plateId = context?.plateId ?? scene.activePlateId;
+    // A new artifact replaces this bed's slice, so the layers cached from the old one are gone.
+    dropPrintingLayerPreviewCache(plateId);
     setPrintingSlicesByPlateId((previous) => {
       const current = previous[plateId];
       return {
@@ -2826,7 +2929,7 @@ export default function Home() {
       };
       void saveAndNavigate(artifact);
     }
-  }, [scene]);
+  }, [dropPrintingLayerPreviewCache, scene]);
 
   const handleSlicingBenchmarkComplete = React.useCallback((benchmark: SliceExportResult['benchmark']) => {
     setPrintingSlicingBenchmark(benchmark);
@@ -7151,9 +7254,10 @@ export default function Home() {
       // Reset to prepare mode if we delete the last model while in printing
       scene.setMode('prepare');
       setPrintingSlicesByPlateId({});
+      dropPrintingLayerPreviewCache();
       setPrintingArtifactIsInvalid(false);
     }
-  }, [scene.models.length, scene.mode, scene]);
+  }, [dropPrintingLayerPreviewCache, scene.models.length, scene.mode, scene]);
 
   // Track whether the profile settings modal is currently open so we can
   // defer the printing-workspace kick until after the user closes it.
