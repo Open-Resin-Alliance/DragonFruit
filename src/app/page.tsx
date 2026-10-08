@@ -2851,6 +2851,32 @@ export default function Home() {
     setShowSliceCompletedModal(true);
   }, [completedSaveDestinationPath, completedSaveDirectory, completedSliceIntent, printingSlicingBenchmark?.totalElapsedMs]);
 
+  /**
+   * What the fast scrub preview draws: the models of the bed being worked on, moved to the
+   * origin the way the slice itself is taken.
+   *
+   * The preview is a top-down look at one bed's build volume, drawn around the origin. Handed
+   * the scene as it stands, it shows the bed that sits at the origin — plate 1 — whatever bed
+   * the preview is really of, which is why scrubbing showed the wrong model on plate 2.
+   */
+  const printingScrubPreviewModels = React.useMemo(() => {
+    const activeFrame = scene.plateFrames.find((frame) => frame.id === scene.activePlateId);
+    const modelsOnPlate = scene.models.filter(
+      (model) => scene.resolveModelPlateId(model) === scene.activePlateId,
+    );
+    if (!activeFrame || (activeFrame.dxMm === 0 && activeFrame.dyMm === 0)) return modelsOnPlate;
+
+    return modelsOnPlate.map((model) => ({
+      ...model,
+      transform: {
+        ...model.transform,
+        position: model.transform.position.clone().add(
+          new THREE.Vector3(-activeFrame.dxMm, -activeFrame.dyMm, 0),
+        ),
+      },
+    }));
+  }, [scene.activePlateId, scene.models, scene.plateFrames, scene.resolveModelPlateId]);
+
   const printingOutputSizeLabel = React.useMemo(() => {
     if (!printingArtifact) return '—';
     const bytes = Math.max(0, printingArtifact.byteSize);
@@ -10824,7 +10850,7 @@ export default function Home() {
             printingPreviewTargetResolution={printingPreviewTargetResolution}
             activePrinterProfile={activePrinterProfile}
             printingPreviewVisualTransform={printingPreviewVisualTransform}
-            models={scene.models}
+            models={printingScrubPreviewModels}
             supportDragGroupRef={supportDragGroupRef}
             supportRenderRefreshNonce={supportRenderRefreshNonce}
             printingPreviewScrubUpscaleTransform={printingPreviewScrubUpscaleTransform}
