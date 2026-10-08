@@ -75,17 +75,6 @@
   documents this identity churn in the trackpad-wheel effect.
 
 
-### [bug] Plate delete: redo resurrects the plate's models — S · medium risk
-- Where: src/features/scene/useSceneCollectionManager.ts, `removePlate` (~line 6491).
-- What: the "after" snapshot is captured from `modelsRef.current` a microtask
-  after `deleteModels`, before React commits, so it still holds the deleted
-  models. Measured: 2 plates / 3 models on plate 2 → removePlate → undo (3 models,
-  2 plates ✓) → redo → 3 models on 1 plate (they come back onto plate 1).
-- Why: a redo silently orphans models onto another bed.
-- Fix: `await waitForUiYield()` before capturing the after snapshot — what
-  `deleteModelsAndExtraPlates` (same file, added with the arrange fix) does.
-- Context: verified in the CDP harness, 2026-10-08.
-
 ### [bug] Duplicate on a later plate places copies on plate 1 — M · medium risk
 - Where: `handleFillPlateDuplicate` in src/features/scene/arrange/useArrangeManager.ts
   (~line 1484), the high-precision duplicate preview/apply in src/app/page.tsx (~line 1390

@@ -6770,7 +6770,13 @@ export function useSceneCollectionManager(options?: {
     // One entry for the whole move: `deleteModels` is asked not to push its own,
     // because undoing that one alone would bring the models back onto a bed that
     // is still gone and land them on another plate.
-    void deleteModels(doomed.map((model) => model.id), { pushHistory: false }).then(() => {
+    void deleteModels(doomed.map((model) => model.id), { pushHistory: false }).then(async () => {
+      // The models, the active model and the selection all come from the scene's refs,
+      // which the delete's `setState`es only refresh once React has committed — a snapshot
+      // taken a microtask early still holds the deleted models, and redo then puts them
+      // back on another bed.
+      await waitForUiYield();
+
       const after = captureSceneSnapshot(modelsRef.current, activeModelIdRef.current, selectedModelIdsRef.current, {
         plates: remaining,
         activePlateId: nextActivePlateId,
