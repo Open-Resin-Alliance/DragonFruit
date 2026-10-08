@@ -6409,6 +6409,20 @@ export function SceneCanvas({
                   : !!model.geometry.meshDefects?.nativeRepairReport?.likely_support_geometry;
                 const modelHoverTintColor = likelySupportGeometry ? likelySupportGeometryTintColor : hoverTintColor;
                 const modelSelectedTintColor = likelySupportGeometry ? likelySupportGeometryTintColor : selectedTintColor;
+                const isModelSelected = isCaptureTintModel
+                  || (
+                    isSelectedModel
+                    && effectiveModelSelected
+                    && (selectionHighlightMode === 'tint' || selectionHighlightMode === 'spotlight')
+                  );
+                // A bed you are not working on is dimmed, and so are the models standing on it —
+                // unless one is selected. The selection tint is what says where it is, and a
+                // dimmed base only muddies the colour the user picked it for; in the export
+                // workspace, where everything on every bed reads as selected, dimming it is the
+                // whole difference between the two beds.
+                const modelMeshColor = modelPlateState?.dimmedColor && !isModelSelected
+                  ? modelPlateState.dimmedColor
+                  : (model.color || meshColor);
                 // Use live drag transform only during active/guarded gizmo interaction.
                 // Otherwise stale refs can mask immediate panel-driven updates (e.g. reset scale).
                 const liveDragTransformForRender = (
@@ -6468,7 +6482,7 @@ export function SceneCanvas({
                       geometry={model.geometry.geometry}
                       clipLower={clipLower}
                       clipUpper={clipUpper}
-                      meshColor={modelPlateState?.dimmedColor ?? (model.color || meshColor)} // Use model color
+                      meshColor={modelMeshColor} // Use model color, dimmed on a bed you are not working on
                       nonManifold={modelIsNonManifold} // Red checkerboard overlay when the model fails the manifold status check
                       meshRef={meshGroupRefCallback}
                       actualMeshRef={actualMeshRefCallback}
@@ -6499,13 +6513,7 @@ export function SceneCanvas({
                       disableRaycast={disableRaycast || !answersPointer || !modelPickerEnabled || !cameraInteractionCycleEnabled}
                       blockSupportPlacement={!cameraInteractionCycleEnabled || isGizmoDragging || blockSupportPlacement}
                       suppressNextClickRef={suppressNextCanvasClickRef}
-                      isSelected={
-                        isCaptureTintModel ||
-                        (
-                          isSelectedModel &&
-                          effectiveModelSelected && (selectionHighlightMode === 'tint' || selectionHighlightMode === 'spotlight')
-                        )
-                      }
+                      isSelected={isModelSelected}
                       isMarqueeCandidate={isMarqueeCandidate}
                       onModelHoverPointChange={onModelHoverPointChange}
                       onModelHoverModelChange={onModelHoverModelChange}
