@@ -634,8 +634,9 @@ function formatLastSuccessfulAutosave(
   }), { timestamp });
 }
 
-/** How many layers either side of the one on screen are read ahead. */
-const PRINTING_PREVIEW_PREFETCH_RADIUS = 3;
+/** How many layers either side of the one on screen a plate's slice reads ahead. */
+const PRINTING_PREVIEW_PREFETCH_RADIUS = 2;
+
 /** How many layers of one bed are kept in memory before the oldest are dropped. */
 const PRINTING_PREVIEW_CACHE_LIMIT = 24;
 
@@ -2705,113 +2706,60 @@ export default function Home() {
     printingPreviewTotalLayers,
   ]);
 
-/**
-   * The same window, settled.
-   *
-   * Dragging the scrubber changes the layer many times a second, and a read-ahead per change
-   * queues work for layers the drag is already past — which is what makes the drag itself feel
-   * slow. This fires once the layer has stopped moving.
-   */
-  const [settledPrintingLayer, setSettledPrintingLayer] = React.useState(printingDisplayedLayer);
-  React.useEffect(() => {
-    const timer = window.setTimeout(() => setSettledPrintingLayer(printingDisplayedLayer), 180);
-    return () => window.clearTimeout(timer);
-  }, [printingDisplayedLayer]);
 
   /**
-   * Reads the layer every other bed would show, so picking that bed has its picture in memory
-   * already. The bed being worked on is read by the effect above; like that one, it waits for the
-   * layer to settle rather than following a drag.
+   * Reads the layers every bed would show, the moment that bed's slice lands.
+   *
+   * This runs while the batch is still slicing, not while anyone is scrubbing — the difference
+   * between a read-ahead that helps and one that competes with the drag. The workspace then opens
+   * with those layers already in memory instead of reading them as the app walks in.
    */
+  const prefetchedPlatesRef = React.useRef<Map<string, SliceExportArtifact>>(new Map());
   React.useEffect(() => {
-    const cache = printingLayerPreviewCacheRef.current;
     let cancelled = false;
 
     for (const [plateId, entry] of Object.entries(printingSlicesByPlateId)) {
       const nativePath = entry.artifact?.nativeTempPath;
       const outputFormat = entry.artifact?.outputFormat;
-      if (!nativePath || !outputFormat) continue;
+      if (!nativePath || !outputFormat || !entry.artifact) continue;
+      // Once per slice: the artifact identity is what says this bed was sliced again.
+      if (prefetchedPlatesRef.current.get(plateId) === entry.artifact) continue;
+      prefetchedPlatesRef.current.set(plateId, entry.artifact);
 
-      const layerNumber = Math.max(1, Math.min(Math.max(1, entry.totalLayers), settledPrintingLayer));
-      if (cache.get(plateId)?.has(layerNumber)) continue;
+      const total = Math.max(1, entry.totalLayers);
+      const centre = Math.max(1, Math.min(total, printingDisplayedLayer));
+      const wantedLayers: number[] = [centre];
+      for (let offset = 1; offset <= PRINTING_PREVIEW_PREFETCH_RADIUS; offset += 1) {
+        if (centre + offset <= total) wantedLayers.push(centre + offset);
+        if (centre - offset >= 1) wantedLayers.push(centre - offset);
+      }
 
-      void readPrintLayerPreviewPngFromPath(nativePath, layerNumber, outputFormat)
-        .then((pngBytes: Uint8Array) => {
+      const missingLayers = wantedLayers.filter(
+        (layerNumber) => !printingLayerPreviewCacheRef.current.get(plateId)?.has(layerNumber),
+      );
+      if (missingLayers.length === 0) continue;
+
+      void readPrintLayerPreviewPngsFromPath(nativePath, missingLayers, outputFormat)
+        .then((layers: Uint8Array[]) => {
           if (cancelled) return;
-          cachePrintingLayerPreview(plateId, layerNumber, pngBytes);
+          missingLayers.forEach((layerNumber, index) => {
+            const pngBytes = layers[index];
+            if (!pngBytes || pngBytes.length === 0) return;
+            cachePrintingLayerPreview(plateId, layerNumber, pngBytes);
+          });
         })
         .catch(() => {
-          // A read that fails is simply not cached: the loader will try again when it is shown.
+          // An older build without the batch command, or a file that would not decode: the loader
+          // reads the layer again when it is shown, one at a time as before.
         });
     }
 
     return () => {
       cancelled = true;
     };
-  }, [cachePrintingLayerPreview, printingSlicesByPlateId, settledPrintingLayer]);
+  }, [cachePrintingLayerPreview, printingDisplayedLayer, printingSlicesByPlateId]);
 
 
-  /**
-   * Reads the layers either side of the one on screen.
-   *
-   * A window, not the whole plate: what a scrub needs is the next few layers already in memory,
-   * so releasing the handle lands on one that is there instead of waiting for the archive.
-   */
-  React.useEffect(() => {
-    if (scene.mode !== 'printing') return;
-    const entry = printingSlicesByPlateId[scene.activePlateId];
-    const nativePath = entry?.artifact?.nativeTempPath;
-    const outputFormat = entry?.artifact?.outputFormat;
-    if (!nativePath || !outputFormat) return;
-
-    const plateId = scene.activePlateId;
-    const total = Math.max(1, entry.totalLayers);
-    const centre = Math.max(1, Math.min(total, settledPrintingLayer));
-    const inFlight = printingLayerPreviewLoadInFlightRef.current;
-    const cache = printingLayerPreviewCacheRef.current;
-
-    const wantedLayers: number[] = [];
-    for (let offset = 1; offset <= PRINTING_PREVIEW_PREFETCH_RADIUS; offset += 1) {
-      if (centre + offset <= total) wantedLayers.push(centre + offset);
-      if (centre - offset >= 1) wantedLayers.push(centre - offset);
-    }
-
-    const missingLayers: number[] = [];
-    for (const layerNumber of wantedLayers) {
-      if (cache.get(plateId)?.has(layerNumber)) continue;
-      const inFlightKey = `${plateId}:${layerNumber}`;
-      if (inFlight.has(inFlightKey)) continue;
-      missingLayers.push(layerNumber);
-    }
-    if (missingLayers.length === 0) return;
-
-    const inFlightKeys = missingLayers.map((layerNumber) => `${plateId}:${layerNumber}`);
-    for (const key of inFlightKeys) inFlight.add(key);
-
-    // One round trip for the window: the native side decodes the layers in parallel, which is
-    // the difference between a scrub that waits on one layer at a time and one that does not.
-    void readPrintLayerPreviewPngsFromPath(nativePath, missingLayers, outputFormat)
-      .then((layers: Uint8Array[]) => {
-        missingLayers.forEach((layerNumber, index) => {
-          const pngBytes = layers[index];
-          if (!pngBytes || pngBytes.length === 0) return;
-          cachePrintingLayerPreview(plateId, layerNumber, pngBytes);
-        });
-      })
-      .catch(() => {
-        // An older build without the batch command, or a file that would not decode: the loader
-        // reads the layer again when it is shown, one at a time as before.
-      })
-      .finally(() => {
-        for (const key of inFlightKeys) inFlight.delete(key);
-      });
-  }, [
-    cachePrintingLayerPreview,
-    printingSlicesByPlateId,
-    scene.activePlateId,
-    scene.mode,
-    settledPrintingLayer,
-  ]);
 
 
   const printingPreviewTargetResolution = React.useMemo(() => {
