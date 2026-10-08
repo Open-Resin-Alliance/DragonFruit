@@ -1256,8 +1256,6 @@ export default function Home() {
   });
   const [printingLayerPreviewUrls, setPrintingLayerPreviewUrls] = React.useState<Array<string | null>>([]);
   const printingLayerPreviewLoadInFlightRef = React.useRef<Set<number>>(new Set());
-  /** Which bed the streamed layer previews belong to, so picking another bed drops them. */
-  const printingLayerPreviewPlateIdRef = React.useRef<string | null>(null);
 
   const printingPreviewDepsRef = React.useRef<PrintingPreviewManagerDeps>({
     printingPreviewTargetResolution: null,
@@ -2471,13 +2469,14 @@ export default function Home() {
     };
   }, [clearPrintingLayerPreviewUrls]);
 
-  // The streamed previews are of one bed. Picking another drops them and the preview loads the
-  // bed being worked on from its own artifact — the same read the slider uses, so the picture
-  // and the layer count cannot come from different beds.
+  // The streamed previews are of the bed that was sliced, and an entry left at the layer being
+  // shown stops the effect below from loading the new bed's own layer. So a change of bed drops
+  // them all: the preview then loads the bed being worked on from its artifact — the same read
+  // the slider uses — instead of waiting for the slider to be moved.
+  const printingPreviewPlateIdRef = React.useRef(scene.activePlateId);
   React.useEffect(() => {
-    const owner = printingLayerPreviewPlateIdRef.current;
-    if (!owner || owner === scene.activePlateId) return;
-    printingLayerPreviewPlateIdRef.current = null;
+    if (printingPreviewPlateIdRef.current === scene.activePlateId) return;
+    printingPreviewPlateIdRef.current = scene.activePlateId;
     clearPrintingLayerPreviewUrls();
   }, [clearPrintingLayerPreviewUrls, scene.activePlateId]);
 
@@ -2486,11 +2485,7 @@ export default function Home() {
     layerIndex: number;
     totalLayers: number;
     pngBytes: Uint8Array;
-  }, context?: { plateId?: string }) => {
-    // The streamed previews belong to the bed that was sliced, which is what lets the workspace
-    // drop them when another bed is picked — otherwise the picture stays on the bed it came
-    // from while the slider follows the one being worked on.
-    printingLayerPreviewPlateIdRef.current = context?.plateId ?? scene.activePlateId;
+  }) => {
     const previewBytes = new Uint8Array(payload.pngBytes.length);
     previewBytes.set(payload.pngBytes);
     const blob = new Blob([previewBytes.buffer], { type: 'image/png' });
@@ -2524,7 +2519,7 @@ export default function Home() {
       setPrintingDisplayedLayer((current) => (current === nextSelected ? current : nextSelected));
       return nextSelected;
     });
-  }, [scene.activePlateId]);
+  }, []);
 
   const handleSlicingFinishedForPrinting = React.useCallback((payload: { totalLayers: number }) => {
     const totalLayers = Math.max(1, payload.totalLayers);

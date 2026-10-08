@@ -90,15 +90,11 @@ interface SlicingPanelProps {
   estimatedVolumeLabelOverride?: string | null;
   captureSceneThumbnailPng?: () => Promise<Uint8Array | null>;
   onSliceRunStarted?: () => void;
-  onLayerPreviewGenerated?: (
-    payload: {
-      layerIndex: number;
-      totalLayers: number;
-      pngBytes: Uint8Array;
-    },
-    /** The bed these previews are of, so the workspace can drop them when another is picked. */
-    context?: { plateId?: string },
-  ) => void;
+  onLayerPreviewGenerated?: (payload: {
+    layerIndex: number;
+    totalLayers: number;
+    pngBytes: Uint8Array;
+  }) => void;
   onSlicingFinished?: (payload: {
     totalLayers: number;
   }) => void;
@@ -2140,7 +2136,7 @@ export function SlicingPanel({
             layerIndex,
             totalLayers,
             pngBytes,
-          }, scope ? { plateId: scope.plateId } : undefined);
+          });
           const blobBytes = Uint8Array.from(pngBytes);
           const blob = new Blob([blobBytes.buffer], { type: 'image/png' });
           const nextUrl = URL.createObjectURL(blob);
