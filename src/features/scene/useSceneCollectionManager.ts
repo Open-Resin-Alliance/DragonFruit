@@ -2947,7 +2947,12 @@ export function useSceneCollectionManager(options?: {
   ) => {
     const lockedMove = updates.some((update) => {
       const model = modelsRef.current.find((candidate) => candidate.id === update.id);
-      return model ? isModelPlateLocked(model) : false;
+      if (!model) return false;
+      // The bed it is leaving, and the bed it would land on: a model dragged onto a locked bed is
+      // refused there, even though the bed it came from takes edits. Refusing the commit leaves
+      // the model where it started, which is what the drag should have done.
+      if (isModelPlateLocked(model)) return true;
+      return isModelPlateLocked({ ...model, transform: update.transform });
     });
     if (lockedMove) {
       // Say so: a transform that silently does nothing reads as a broken tool.
