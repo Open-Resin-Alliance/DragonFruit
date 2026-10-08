@@ -485,6 +485,7 @@ export function SceneCanvas({
   onClearPlate,
   plateClearTitle,
   onArrangePlate,
+  duplicateGhostPlates,
   disableRaycast,
   ambientIntensity,
   directionalIntensity,
@@ -626,6 +627,8 @@ export function SceneCanvas({
   plateClearTitle?: string;
   /** Arranges every model on the plate, from the button beside it. */
   onArrangePlate?: () => void;
+  /** The beds a duplicate preview would need beyond the plate being worked on. */
+  duplicateGhostPlates?: Array<{ dxMm: number; dyMm: number }>;
   disableRaycast?: boolean;
   hideCrossSectionCap?: boolean;
   onCameraChange?: () => void;
@@ -6274,6 +6277,7 @@ export function SceneCanvas({
           ghostPlate={ghostPlateMode === 'off' || !nextPlateFrame
             ? null
             : { ...nextPlateFrame, armed: ghostPlateMode === 'armed' }}
+          duplicateGhostPlates={duplicateGhostPlates}
           onActivatePlate={onActivatePlate}
           onRenamePlate={onRenamePlate}
           onAddPlate={onAddPlate}

@@ -643,6 +643,7 @@ export function Helpers({
   onArrangePlate,
   plates,
   ghostPlate,
+  duplicateGhostPlates,
   onActivatePlate,
   onRenamePlate,
   onAddPlate,
@@ -697,6 +698,12 @@ export function Helpers({
    * is a place rather than a plate yet.
    */
   ghostPlate?: { dxMm: number; dyMm: number; armed: boolean } | null;
+  /**
+   * The beds a duplicate preview would need beyond the plate being worked on, drawn the
+   * same way: a duplicate that overflows fills ghost beds first and only makes them real
+   * when it is confirmed.
+   */
+  duplicateGhostPlates?: Array<{ dxMm: number; dyMm: number }>;
   /** Picking the surface of a plate that is not active makes it the active one. */
   onActivatePlate?: (plateId: string) => void;
   /** Committing a new name for one of the plates above. */
@@ -1318,6 +1325,15 @@ export function Helpers({
       {ghostPlate && (
         <GhostPlateLayer dxMm={ghostPlate.dxMm} dyMm={ghostPlate.dyMm} armed={ghostPlate.armed} shared={shared} />
       )}
+      {duplicateGhostPlates?.map((ghost) => (
+        <GhostPlateLayer
+          key={`duplicate-ghost-${ghost.dxMm}-${ghost.dyMm}`}
+          dxMm={ghost.dxMm}
+          dyMm={ghost.dyMm}
+          armed={false}
+          shared={shared}
+        />
+      ))}
       {plateLayers.map((plate) => {
         const isActive = plate ? plate.isActive : true;
         return (

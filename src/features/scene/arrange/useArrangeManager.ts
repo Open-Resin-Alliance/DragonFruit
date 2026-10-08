@@ -218,6 +218,15 @@ export function useArrangeManager({
     rotation: THREE.Euler;
     scale: THREE.Vector3;
   }>>([]);
+  /**
+   * The beds the duplicate preview would need beyond the plate being worked on, where the
+   * cascade would put them. Drawn faint, and only turned into beds when the duplicate is
+   * confirmed — the preview must not leave beds behind if it is abandoned.
+   */
+  const [duplicateGhostPlateOffsets, setDuplicateGhostPlateOffsets] = React.useState<Array<{
+    dxMm: number;
+    dyMm: number;
+  }>>([]);
   const [arrangeArrayPreviewItems, setArrangeArrayPreviewItems] = React.useState<Array<{
     model: (typeof scene.models)[number];
     transform: {
@@ -1651,6 +1660,14 @@ export function useArrangeManager({
     await sleep(0);
 
     try {
+      // The copies the preview put on ghost beds need those beds to exist first — one
+      // call, so the cascade places them exactly where the ghosts were drawn. The beds go
+      // into the duplicate's own history step, so one undo takes the copies and the beds.
+      const platesBefore = { plates: scene.plates, activePlateId: scene.activePlateId };
+      const reserved = duplicateGhostPlateOffsets.length > 0
+        ? scene.addPlates(duplicateGhostPlateOffsets.length)
+        : null;
+
       const createdIds = scene.duplicateModelWithTransforms(
         scene.activeModelId,
         duplicatePreviewTransforms,
@@ -1702,7 +1719,7 @@ export function useArrangeManager({
       setDuplicateApplySourceModel(null);
       setDuplicateApplySourceTransform(null);
     }
-  }, [duplicatePreviewTransforms, duplicateSourcePreviewTransform, isDuplicating, scene, sleep, transformMgr.transformHook]);
+  }, [duplicateGhostPlateOffsets.length, duplicatePreviewTransforms, duplicateSourcePreviewTransform, isDuplicating, scene, sleep, transformMgr.transformHook]);
 
   const handleFillPlateDuplicate = React.useCallback(async () => {
     if (isDuplicating || isAutoArranging) return;
@@ -2000,6 +2017,8 @@ export function useArrangeManager({
     setIsDuplicating,
     duplicatePreviewTransforms,
     setDuplicatePreviewTransforms,
+    duplicateGhostPlateOffsets,
+    setDuplicateGhostPlateOffsets,
     arrangeArrayPreviewItems,
     setArrangeArrayPreviewItems,
     duplicateSourcePreviewTransform,

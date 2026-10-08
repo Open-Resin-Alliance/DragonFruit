@@ -238,6 +238,7 @@ import {
   type ArrangeModel as HighPrecisionArrangeModel,
 } from '@/features/scene/arrange/highPrecisionArrange';
 import { computeHighPrecisionArrangeResultWorker } from '@/features/scene/arrange/highPrecisionArrangeWorkerClient';
+import { plateCascadeOffsetMm } from '@/features/scene/plates/plateCascade';
 
 // Domain Features
 import { useSceneCollectionManager, SCENE_SLICED, pushSceneSlicedMarker, getSceneSnapshotRegistryBytes } from '@/features/scene/useSceneCollectionManager';
@@ -7745,6 +7746,8 @@ export default function Home() {
     setIsDuplicating,
     duplicatePreviewTransforms,
     setDuplicatePreviewTransforms,
+    duplicateGhostPlateOffsets,
+    setDuplicateGhostPlateOffsets,
     arrangeArrayPreviewItems,
     setArrangeArrayPreviewItems,
     duplicateSourcePreviewTransform,
@@ -9126,6 +9129,7 @@ export default function Home() {
     if (!scene.activeModel) {
       setDuplicatePreviewTransforms([]);
       setDuplicateSourcePreviewTransform(null);
+      setDuplicateGhostPlateOffsets([]);
       return () => {
         cancelled = true;
       };
@@ -9136,6 +9140,7 @@ export default function Home() {
     if (duplicateLayoutMode === 'auto' && duplicatePrecisionMode === 'high_precision') {
       setDuplicatePreviewTransforms([]);
       setDuplicateSourcePreviewTransform(null);
+      setDuplicateGhostPlateOffsets([]);
       return () => {
         cancelled = true;
       };
@@ -9149,6 +9154,9 @@ export default function Home() {
     const slots: THREE.Vector3[] = [];
 
     if (duplicateLayoutMode === 'array') {
+      // A manual array is laid where the user asked for it, so it asks for no beds.
+      setDuplicateGhostPlateOffsets([]);
+
       const countX = Math.max(1, Math.round(duplicateArrayCountX));
       const countY = Math.max(1, Math.round(duplicateArrayCountY));
       const countZ = Math.max(1, Math.round(duplicateArrayCountZ));
@@ -9268,39 +9276,62 @@ export default function Home() {
         blockedPolygons.push(candidatePolygon);
       }
 
+      // The grid is in the plate's own millimetres, so a copy becomes a world position
+      // through where that plate sits: on plate 2 the copies belong on plate 2, not back
+      // on plate 1.
+      const activeOffset = scene.plateOffsetFor(scene.activePlateId);
       for (const center of chosenCenters) {
-        slots.push(new THREE.Vector3(center.x, center.y, model.transform.position.z));
+        slots.push(new THREE.Vector3(
+          center.x + activeOffset.dxMm,
+          center.y + activeOffset.dyMm,
+          model.transform.position.z,
+        ));
       }
 
-      const overflowCount = totalCount - chosenCenters.length;
-      if (overflowCount > 0) {
-        const outsideGap = Math.max(8, spacing);
-        let outsideLeftX = maxX + outsideGap;
-        let outsideY = minY;
-        let currentColumnMaxWidth = 0;
+      // What the plate cannot take goes onto beds this run would add, which the preview
+      // shows as ghosts. Every bed is the same shape and an added bed is empty, so the
+      // same grid places those copies, and the cascade says where each bed lands — the
+      // beds are only created if the duplicate is confirmed.
+      const remaining = Math.max(0, totalCount - chosenCenters.length);
+      const perBed = Math.max(1, maxCols * maxRows);
+      const ghostBeds = remaining > 0 ? Math.ceil(remaining / perBed) : 0;
+      const footprint = { widthMm: scene.view3dSettings.widthMm, depthMm: scene.view3dSettings.depthMm };
+      const ghostOffsets: Array<{ dxMm: number; dyMm: number }> = [];
+      let placedOnGhostBeds = 0;
 
-        for (let i = 0; i < overflowCount; i += 1) {
-          if (outsideY > minY && (outsideY + depth) > maxY) {
-            outsideLeftX += currentColumnMaxWidth + outsideGap;
-            currentColumnMaxWidth = 0;
-            outsideY = minY;
-          }
+      for (let bed = 0; bed < ghostBeds; bed += 1) {
+        const offset = plateCascadeOffsetMm(scene.plates.length + bed, footprint, scene.plates.length + ghostBeds);
+        ghostOffsets.push(offset);
 
+        // Nearest the middle of that bed first, which is where the eye looks for them.
+        const bedCenterX = (minX + maxX) * 0.5 + offset.dxMm;
+        const bedCenterY = (minY + maxY) * 0.5 + offset.dyMm;
+        const orderedCenters = candidateCenters
+          .map((candidate) => ({
+            x: candidate.x,
+            y: candidate.y,
+            distSq: ((candidate.x + offset.dxMm - bedCenterX) ** 2) + ((candidate.y + offset.dyMm - bedCenterY) ** 2),
+          }))
+          .sort((a, b) => a.distSq - b.distSq);
+
+        for (let i = 0; i < orderedCenters.length && placedOnGhostBeds < remaining; i += 1) {
+          const center = orderedCenters[i];
           slots.push(new THREE.Vector3(
-            outsideLeftX + width * 0.5,
-            outsideY + depth * 0.5,
+            center.x + offset.dxMm,
+            center.y + offset.dyMm,
             model.transform.position.z,
           ));
-
-          outsideY += depth + spacing;
-          currentColumnMaxWidth = Math.max(currentColumnMaxWidth, width);
+          placedOnGhostBeds += 1;
         }
       }
+
+      setDuplicateGhostPlateOffsets(ghostOffsets);
     }
 
     if (slots.length <= 1) {
       setDuplicatePreviewTransforms([]);
       setDuplicateSourcePreviewTransform(null);
+      setDuplicateGhostPlateOffsets([]);
       return;
     }
 
@@ -9353,9 +9384,15 @@ export default function Home() {
     duplicateTotalCopies,
     getModelSupportAwareDimensionsMm,
     scene.activeModel,
+    scene.activePlateId,
     scene.models,
     scene.mode,
+    scene.plateOffsetFor,
+    scene.plates,
+    scene.view3dSettings.depthMm,
+    scene.view3dSettings.originMode,
     scene.view3dSettings.safetyMarginMm,
+    scene.view3dSettings.widthMm,
     transformMgr.transformMode,
   ]);
 
@@ -10401,6 +10438,7 @@ export default function Home() {
               // override, so the panel keeps whatever the user set there.
               void handleAutoArrangeModels('all', undefined, { spacingMm: 1, allowRotateOnZ: true, plateFillMode: 'plate' });
             }}
+            duplicateGhostPlates={duplicateGhostPlateOffsets}
             plateLocked={scene.plateLocked}
             onTogglePlateLock={() => scene.setPlateLocked(!scene.plateLocked)}
             plateClearTitle={scene.plates.length > 1 && scene.activePlateId !== scene.plates[0]?.id
