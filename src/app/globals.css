@@ -984,17 +984,3 @@ input[type="number"]:not(.no-spinners):hover::-webkit-outer-spin-button,
   background: color-mix(in srgb, var(--surface-2), var(--accent) 16%);
 }
 
-/* The plate's bin is destructive only when you are about to use it: the same quiet
-   grey as the plate's other buttons until the pointer is on it, red only then. The
-   `:not(:disabled)` guard keeps a locked plate's disabled bin quiet. */
-.plate-trash-button {
-  border-color: color-mix(in srgb, var(--text-muted), transparent 55%);
-  background: color-mix(in srgb, var(--surface-0), transparent 55%);
-  color: var(--text-muted);
-}
-
-.plate-trash-button:hover:not(:disabled) {
-  border-color: color-mix(in srgb, #ef4444, var(--border-subtle) 40%);
-  background: color-mix(in srgb, #ef4444, var(--surface-0) 88%);
-  color: #ef4444;
-}

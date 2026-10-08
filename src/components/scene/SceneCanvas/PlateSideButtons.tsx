@@ -1,50 +1,69 @@
 "use client";
 
-import { Html } from '@react-three/drei';
-import { LayoutGrid, Lock, LockOpen, Plus, Trash2 } from 'lucide-react';
-import { Tooltip } from '@/components/ui/Tooltip';
-
-/**
- * The plate's widgets are looked *at*, not hunted for, so their tooltips wait: a
- * pointer crossing the plate on its way somewhere else should not throw a box over
- * the view. One second is long enough to mean "you stopped here".
- */
-const PLATE_WIDGET_TOOLTIP_DELAY_MS = 1000;
+import * as React from 'react';
+import * as THREE from 'three';
+import { useCursor } from '@react-three/drei';
+import type { IconNode } from 'lucide-react';
+import { __iconNode as layoutGridIcon } from 'lucide-react/dist/esm/icons/layout-grid.js';
+import { __iconNode as lockIcon } from 'lucide-react/dist/esm/icons/lock.js';
+import { __iconNode as lockOpenIcon } from 'lucide-react/dist/esm/icons/lock-open.js';
+import { __iconNode as plusIcon } from 'lucide-react/dist/esm/icons/plus.js';
+import { __iconNode as trash2Icon } from 'lucide-react/dist/esm/icons/trash-2.js';
+import {
+  PLATE_WIDGET_USER_DATA,
+  drawPlateWidgetIcon,
+  roundedRectPath,
+  usePlateWidgetColors,
+  widgetWorldPerCssPixel,
+  type PlateWidgetColors,
+} from './plateWidgetDraw';
 
 type PlateWidgetAnchor = [number, number, number];
+
+/** One button: `h-[104px] w-[104px]`, a `h-14 w-14` icon, `rounded-[5.5px]`, 1px border. */
+const BUTTON_SIZE_CSS = 104;
+const BUTTON_ICON_CSS = 56;
+const BUTTON_RADIUS_CSS = 5.5;
+const BUTTON_BORDER_CSS = 1;
+/** The column's `gap-3`. */
+const COLUMN_GAP_CSS = 12;
+/** Canvas pixels per CSS pixel baked into a button's texture. */
+const TEXTURE_SCALE = 4;
+/** `.plate-trash-button`'s hover red, from globals.css. */
+const DANGER_COLOR = '#ef4444';
 
 /**
  * The buttons beside the build plate: add a plate and lock this one, hanging from the
  * plate's back edge; and the bin, standing on its front edge.
  *
- * Each group is one `Html` because the buttons in it are one column — their spacing
- * is then CSS, not world millimetres. An earlier attempt positioned them as separate
- * anchors and computed the drop in plate millimetres: on a plate viewed at an angle
- * that conversion does not land where the arithmetic says, and the gap came out wrong
- * in both directions. The bin is its own `Html` for the same reason, because one
- * anchor cannot be in two places.
+ * Each button is its own plane in the plate's plane, placed in the CSS pixels the
+ * widget was laid out in and scaled onto the plate by `labelScale`. That keeps the
+ * column's spacing identical to the DOM's flex column — the drop between buttons is
+ * computed in the plate's own plane now, so a plate viewed at an angle cannot shift
+ * it, which is what an earlier attempt at separate HTML anchors got wrong.
+ *
+ * The panels and the lucide icons are painted into canvas textures rather than
+ * written as DOM: DOM always paints over the canvas, so a model standing in front of
+ * the buttons did not hide them. They are planes in the depth buffer now, hidden by
+ * a model the way the plate itself is.
  *
  * The lock is deliberately *not* a document field: a lock is about the session you are
  * working in, not about the file, so it is not written to the scene and does not come
  * back with it.
  *
  * Runs inside the r3f reconciler, where the i18n provider is out of scope, so every
- * string arrives already translated — as the plate's name widget does.
+ * string arrives already translated — as the plate's name widget does. The wording
+ * strings below (`addLabel` and the `*Title`s) were the DOM buttons' `aria-label`s and
+ * tooltips. A mesh can carry neither, so they are no longer read; they stay in the
+ * contract because `SceneEnvironment` builds its props from this type and the page
+ * still translates and passes them.
  */
 export function PlateSideButtons({
-  addLabel,
-  addComingSoonTitle,
   onAdd,
   locked,
-  lockTitle,
-  unlockTitle,
   onToggleLock,
-  arrangeTitle,
-  arrangeDisabledTitle,
   arrangeDisabled,
   onArrangePlate,
-  clearTitle,
-  clearDisabledTitle,
   clearDisabled,
   onClearPlate,
   columnAnchor,
@@ -90,123 +109,218 @@ export function PlateSideButtons({
   /** World units per CSS pixel, scaled to the plate by the caller. */
   labelScale?: number;
 }) {
-  const LockIcon = locked ? Lock : LockOpen;
-
-  const disabledButtonStyle = {
-    borderColor: 'color-mix(in srgb, var(--text-muted), transparent 60%)',
-    background: 'color-mix(in srgb, var(--surface-0), transparent 55%)',
-    color: 'var(--text-muted)',
-    opacity: 0.55,
-  } as const;
-
-  /** A button that is merely available: quiet grey, so locked/disabled stand out. */
-  const quietButtonStyle = {
-    borderColor: 'color-mix(in srgb, var(--text-muted), transparent 55%)',
-    background: 'color-mix(in srgb, var(--surface-0), transparent 55%)',
-    color: 'var(--text-muted)',
-  } as const;
+  const colors = usePlateWidgetColors();
+  const worldPerCssPixel = widgetWorldPerCssPixel(labelScale);
+  const columnStepCss = BUTTON_SIZE_CSS + COLUMN_GAP_CSS;
 
   return (
     <>
-      <Html
-        position={columnAnchor}
-        transform
-        rotation={[0, 0, facingRotation]}
-        scale={labelScale}
-        zIndexRange={[8, 0]}
-        style={{ pointerEvents: 'auto' }}
-      >
-        {/* `Html` centres content on the anchor: shifting right by half the column's
-            width makes the anchor its left edge, and down by half its height makes the
-            anchor its top edge. It then starts on the plate's right edge and hangs
-            beside the plate with their top edges level. */}
-        <div className="flex flex-col items-start gap-3 select-none" style={{ transform: 'translate(50%, 50%)' }}>
-          {/* The tooltip goes on a wrapper, not the button: a disabled button emits no
-              pointer events of its own, so hovering it would show nothing. */}
-          <Tooltip content={onAdd ? addLabel : addComingSoonTitle} maxWidth={200} delayMs={PLATE_WIDGET_TOOLTIP_DELAY_MS}>
-            <button
-              type="button"
-              disabled={!onAdd}
-              onClick={onAdd}
-              onPointerDown={(event) => event.stopPropagation()}
-              aria-label={addLabel}
-              className={`flex h-[104px] w-[104px] items-center justify-center rounded-[5.5px] border transition-[filter,background-color,border-color] duration-150 ${onAdd ? 'cursor-pointer hover:brightness-110' : 'cursor-not-allowed'}`}
-              style={onAdd ? quietButtonStyle : disabledButtonStyle}
-            >
-              <Plus className="h-14 w-14" />
-            </button>
-          </Tooltip>
+      <group position={columnAnchor} rotation={[0, 0, facingRotation]}>
+        <PlateWidgetButton
+          icon={plusIcon}
+          colors={colors}
+          cssX={0}
+          cssY={0}
+          worldPerCssPixel={worldPerCssPixel}
+          onClick={onAdd}
+        />
+        <PlateWidgetButton
+          icon={locked ? lockIcon : lockOpenIcon}
+          colors={colors}
+          cssX={0}
+          cssY={columnStepCss}
+          worldPerCssPixel={worldPerCssPixel}
+          onClick={onToggleLock}
+          locked={locked}
+        />
+        <PlateWidgetButton
+          icon={layoutGridIcon}
+          colors={colors}
+          cssX={0}
+          cssY={columnStepCss * 2}
+          worldPerCssPixel={worldPerCssPixel}
+          onClick={arrangeDisabled ? undefined : onArrangePlate}
+        />
+      </group>
 
-          <Tooltip content={locked ? unlockTitle : lockTitle} maxWidth={220} delayMs={PLATE_WIDGET_TOOLTIP_DELAY_MS}>
-            <button
-              type="button"
-              onClick={onToggleLock}
-              onPointerDown={(event) => event.stopPropagation()}
-              aria-pressed={locked}
-              aria-label={locked ? unlockTitle : lockTitle}
-              className="flex h-[104px] w-[104px] cursor-pointer items-center justify-center rounded-[5.5px] border transition-[filter,background-color,border-color] duration-150 hover:brightness-110"
-              style={locked
-                ? {
-                  // Locked is a state worth noticing, so it wears the accent rather
-                  // than sharing the quiet grey of the button above it.
-                  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
-                  background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)',
-                  color: 'var(--text-strong)',
-                }
-                : quietButtonStyle
-              }
-            >
-              <LockIcon className="h-14 w-14" />
-            </button>
-          </Tooltip>
-
-          <Tooltip content={arrangeDisabled ? arrangeDisabledTitle : arrangeTitle} maxWidth={220} delayMs={PLATE_WIDGET_TOOLTIP_DELAY_MS}>
-            <button
-              type="button"
-              disabled={arrangeDisabled}
-              onClick={onArrangePlate}
-              onPointerDown={(event) => event.stopPropagation()}
-              aria-label={arrangeDisabled ? arrangeDisabledTitle : arrangeTitle}
-              className={`flex h-[104px] w-[104px] items-center justify-center rounded-[5.5px] border transition-[filter,background-color,border-color] duration-150 ${arrangeDisabled ? 'cursor-not-allowed' : 'cursor-pointer hover:brightness-110'}`}
-              style={arrangeDisabled
-                ? disabledButtonStyle
-                : quietButtonStyle}
-            >
-              <LayoutGrid className="h-14 w-14" />
-            </button>
-          </Tooltip>
-        </div>
-      </Html>
-
-      <Html
-        position={clearAnchor}
-        transform
-        rotation={[0, 0, facingRotation]}
-        scale={labelScale}
-        zIndexRange={[8, 0]}
-        style={{ pointerEvents: 'auto' }}
-      >
-        {/* Shifting right by half the width makes the anchor the bin's left edge;
-            shifting *up* by half its height makes the anchor its bottom edge, which is
-            how it stands on the plate's front edge rather than hanging from the back. */}
-        <div className="flex select-none" style={{ transform: 'translate(50%, -50%)' }}>
-          <Tooltip content={clearDisabled ? clearDisabledTitle : clearTitle} maxWidth={220} delayMs={PLATE_WIDGET_TOOLTIP_DELAY_MS}>
-            <button
-              type="button"
-              disabled={clearDisabled}
-              onClick={onClearPlate}
-              onPointerDown={(event) => event.stopPropagation()}
-              aria-label={clearDisabled ? clearDisabledTitle : clearTitle}
-              // Red on hover, quiet otherwise: `.plate-trash-button` in globals.css owns
-              // both, because a hover cannot live in an inline style.
-              className={`plate-trash-button flex h-[104px] w-[104px] items-center justify-center rounded-[5.5px] border transition-[background-color,border-color,color] duration-150 ${clearDisabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
-              style={clearDisabled ? disabledButtonStyle : undefined}
-            >
-              <Trash2 className="h-14 w-14" />
-            </button>
-          </Tooltip>
-        </div>
-      </Html>
+      {/* The bin's anchor is its bottom-left corner, so its top-left corner is one
+          button's height *above* it in CSS pixels, i.e. forward along the plate. */}
+      <group position={clearAnchor} rotation={[0, 0, facingRotation]}>
+        <PlateWidgetButton
+          icon={trash2Icon}
+          colors={colors}
+          cssX={0}
+          cssY={-BUTTON_SIZE_CSS}
+          worldPerCssPixel={worldPerCssPixel}
+          onClick={clearDisabled ? undefined : onClearPlate}
+          destructive
+        />
+      </group>
     </>
   );
+}
+
+/**
+ * One square button of the plate's widget set: a rounded panel with a lucide icon,
+ * painted into a canvas texture so it lives in the depth buffer, answering picks for
+ * the action it stands for and brightening (or reddening) under the pointer the way
+ * its CSS did.
+ */
+function PlateWidgetButton({
+  icon,
+  colors,
+  cssX,
+  cssY,
+  worldPerCssPixel,
+  onClick,
+  locked = false,
+  destructive = false,
+}: {
+  /** The button's lucide icon, as the node data the canvas strokes. */
+  icon: IconNode;
+  colors: PlateWidgetColors;
+  /** Top-left corner of the button, in CSS pixels from the group's anchor. */
+  cssX: number;
+  cssY: number;
+  worldPerCssPixel: number;
+  /** What pressing it does; absent leaves the button greyed and inert. */
+  onClick?: () => void;
+  /** The accent panel the lock wears while the plate is locked. */
+  locked?: boolean;
+  /** Red under the pointer rather than brightened: the bin, which destroys work. */
+  destructive?: boolean;
+}) {
+  const [hovered, setHovered] = React.useState(false);
+  const disabled = !onClick;
+  useCursor(hovered && !disabled);
+
+  const texture = React.useMemo(() => {
+    if (typeof document === 'undefined') return null;
+    const canvas = document.createElement('canvas');
+    canvas.width = BUTTON_SIZE_CSS * TEXTURE_SCALE;
+    canvas.height = BUTTON_SIZE_CSS * TEXTURE_SCALE;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.scale(TEXTURE_SCALE, TEXTURE_SCALE);
+    paintButtonPanel(ctx, { colors, icon, disabled, locked, hovered, destructive });
+    const painted = new THREE.CanvasTexture(canvas);
+    painted.colorSpace = THREE.SRGBColorSpace;
+    return painted;
+  }, [colors, disabled, destructive, hovered, icon, locked]);
+
+  React.useEffect(() => () => texture?.dispose(), [texture]);
+
+  const sizeWorld = BUTTON_SIZE_CSS * worldPerCssPixel;
+  return (
+    <mesh
+      // CSS pixels run down the canvas, which the plate's plane runs backwards in:
+      // the button's centre is half its size right of and below its top-left corner.
+      position={[
+        (cssX + BUTTON_SIZE_CSS / 2) * worldPerCssPixel,
+        -(cssY + BUTTON_SIZE_CSS / 2) * worldPerCssPixel,
+        0,
+      ]}
+      renderOrder={22}
+      userData={PLATE_WIDGET_USER_DATA}
+      onPointerOver={(event) => {
+        event.stopPropagation();
+        setHovered(true);
+      }}
+      onPointerOut={() => setHovered(false)}
+      // The DOM buttons swallowed the pointer so the plate they hang beside never
+      // saw the press; stopping it here keeps a pick on a button a pick on it alone.
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick?.();
+      }}
+    >
+      <planeGeometry args={[sizeWorld, sizeWorld]} />
+      <meshBasicMaterial
+        map={texture ?? undefined}
+        transparent
+        depthWrite={false}
+        side={THREE.DoubleSide}
+        toneMapped={false}
+      />
+    </mesh>
+  );
+}
+
+/**
+ * Paints one button's panel: the inline styles it wore as DOM, and the pointer
+ * feedback `.plate-trash-button` and `hover:brightness-110` used to give it, which a
+ * canvas has to paint itself.
+ */
+function paintButtonPanel(
+  ctx: CanvasRenderingContext2D,
+  { colors, icon, disabled, locked, hovered, destructive }: {
+    colors: PlateWidgetColors;
+    icon: IconNode;
+    disabled: boolean;
+    locked: boolean;
+    hovered: boolean;
+    destructive: boolean;
+  },
+): void {
+  // Stroked on its own centre, so the panel is inset by half a border to keep the
+  // border inside the button, as a CSS border box does.
+  const panel = roundedRectPath(
+    BUTTON_BORDER_CSS / 2,
+    BUTTON_BORDER_CSS / 2,
+    BUTTON_SIZE_CSS - BUTTON_BORDER_CSS,
+    BUTTON_SIZE_CSS - BUTTON_BORDER_CSS,
+    BUTTON_RADIUS_CSS,
+  );
+  // `disabledButtonStyle` carries `opacity: 0.55`, which rides on every part of it.
+  const opacity = disabled ? 0.55 : 1;
+  // The bin only turns red while it can act; a locked plate's stays quiet and grey.
+  const red = destructive && hovered && !disabled;
+
+  // The panel: the quiet button is the plate showing through its own colour, the
+  // locked and the red one the same colour washed over a solid panel.
+  ctx.save();
+  ctx.globalAlpha = opacity * (locked || red ? 1 : 0.45);
+  ctx.fillStyle = locked ? colors.surface1 : colors.surface0;
+  ctx.fill(panel);
+  if (locked || red) {
+    ctx.globalAlpha = opacity * (locked ? 0.15 : 0.12);
+    ctx.fillStyle = locked ? colors.accent : DANGER_COLOR;
+    ctx.fill(panel);
+  }
+  ctx.restore();
+
+  // The border and the icon: grey while quiet, accent while locked, red on the bin
+  // under the pointer.
+  const tint = red ? DANGER_COLOR : locked ? colors.accent : colors.textMuted;
+  ctx.save();
+  ctx.globalAlpha = opacity * (disabled ? 0.4 : red ? 0.6 : locked ? 0.7 : 0.45);
+  ctx.strokeStyle = tint;
+  ctx.lineWidth = BUTTON_BORDER_CSS;
+  ctx.stroke(panel);
+  ctx.restore();
+
+  ctx.save();
+  ctx.globalAlpha = opacity;
+  drawPlateWidgetIcon(
+    ctx,
+    icon,
+    {
+      x: (BUTTON_SIZE_CSS - BUTTON_ICON_CSS) / 2,
+      y: (BUTTON_SIZE_CSS - BUTTON_ICON_CSS) / 2,
+      size: BUTTON_ICON_CSS,
+    },
+    red ? DANGER_COLOR : locked ? colors.textStrong : colors.textMuted,
+  );
+  ctx.restore();
+
+  // `hover:brightness-110`. The bin has its own red hover instead of a lift.
+  if (hovered && !disabled && !red) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-atop';
+    ctx.globalAlpha = 0.08;
+    ctx.fillStyle = '#ffffff';
+    ctx.fill(panel);
+    ctx.restore();
+  }
 }
