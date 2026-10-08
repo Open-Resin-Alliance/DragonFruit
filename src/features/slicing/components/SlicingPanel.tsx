@@ -89,7 +89,8 @@ interface SlicingPanelProps {
   estimatedLayerHeightMmOverride?: number | null;
   estimatedVolumeLabelOverride?: string | null;
   captureSceneThumbnailPng?: () => Promise<Uint8Array | null>;
-  onSliceRunStarted?: () => void;
+  /** A run's first moment, with the bed it is slicing, so per-bed state is dropped for that bed. */
+  onSliceRunStarted?: (context?: { plateId?: string }) => void;
   onLayerPreviewGenerated?: (payload: {
     layerIndex: number;
     totalLayers: number;
@@ -1991,7 +1992,7 @@ export function SlicingPanel({
     setPreviewTotalLayers(0);
     setPreviewSelectedLayer(1);
     onSliceIntentChanged?.(effectiveSliceIntent);
-    onSliceRunStarted?.();
+    onSliceRunStarted?.(scope ? { plateId: scope.plateId } : undefined);
 
     // Fire scene save concurrently — it's best-effort and independent of mesh preparation.
     // The orchestrator uses visibleModels already captured in memory, so there's no ordering dependency.

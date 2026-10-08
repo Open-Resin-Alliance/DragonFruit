@@ -2618,21 +2618,26 @@ export default function Home() {
     printingSelectedLayerRef.current = 1;
   }, [scene.activePlateId]);
 
-  const handleSliceRunStartedForPrinting = React.useCallback(() => {
+  const handleSliceRunStartedForPrinting = React.useCallback((context?: { plateId?: string }) => {
+    // The bed being sliced, not the one being worked on: a batch slices one bed after another
+    // while the workspace's active bed stays put, and clearing by the active bed wiped the entry
+    // of a plate that had already been sliced.
+    const slicedPlateId = context?.plateId ?? scene.activePlateId;
+
     setShouldAutoSliceOnExportEntry(false);
     clearPrintingLayerPreviewUrls();
     // This bed's slice is about to be replaced, so its cached layers are of a file that is
     // going away.
-    dropPrintingLayerPreviewCache(scene.activePlateId);
+    dropPrintingLayerPreviewCache(slicedPlateId);
     setPrintingSelectedLayer(1);
     setPrintingDisplayedLayer(1);
     printingSelectedLayerRef.current = 1;
     // Only the bed being sliced loses its plate: a re-slice of one bed does not unslice the
     // others, and the printing workspace shows whichever bed is being worked on.
     setPrintingSlicesByPlateId((previous) => {
-      const current = previous[scene.activePlateId];
+      const current = previous[slicedPlateId];
       if (!current) return previous;
-      return { ...previous, [scene.activePlateId]: { artifact: null, totalLayers: 0 } };
+      return { ...previous, [slicedPlateId]: { artifact: null, totalLayers: 0 } };
     });
     setPrintingArtifactIsInvalid(false);
     slicedArtifactProfileFingerprintRef.current = null;

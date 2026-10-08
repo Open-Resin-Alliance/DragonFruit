@@ -20,7 +20,7 @@ export type ExportPanelStackProps = {
   excludedSliceModelIds: readonly string[];
   crossSectionLayerHeightMm: number;
   estimatedVolumeMlLabel: string;
-  handleSliceRunStartedForPrinting: () => void;
+  handleSliceRunStartedForPrinting: (context?: { plateId?: string }) => void;
   handlePrintingLayerPreviewGenerated: (payload: { layerIndex: number; totalLayers: number; pngBytes: Uint8Array }) => void;
   handleSlicingFinishedForPrinting: (payload: { totalLayers: number }) => void;
   /**
