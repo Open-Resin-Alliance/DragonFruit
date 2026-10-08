@@ -129,6 +129,13 @@ type PersistedMeshAppearance = {
  */
 const AO_BAKE_CONCURRENCY = 2;
 
+/**
+ * How many beds a paste will add for the copies that do not fit the plate being worked
+ * on. A run adds a bed only when the previous one could not take anything, so this is a
+ * guard against a copy larger than a bed rather than a real limit.
+ */
+const MAX_PASTE_PLATES = 32;
+
 const MESH_APPEARANCE_STORAGE_KEY = 'mesh-appearance-settings';
 
 const DEFAULT_MESH_COLOR = '#a3a3a3';
@@ -4429,6 +4436,7 @@ export function useSceneCollectionManager(options?: {
     const beforeActiveModelId = activeModelId;
     const beforeSelectedModelIds = selectedModelIds;
     const supportStateBefore = getSnapshot();
+    const platesBefore = platesRef.current;
     const entries = modelClipboard;
 
     const centerX = defaultImportCenterXY.x;
@@ -4442,13 +4450,6 @@ export function useSceneCollectionManager(options?: {
     const intersectsRect = (a: Rect2D, b: Rect2D) => {
       return !(a.maxX < b.minX || a.minX > b.maxX || a.maxY < b.minY || a.minY > b.maxY);
     };
-
-    const isRectInsidePlate = (rect: Rect2D) => (
-      rect.minX >= minX
-      && rect.maxX <= maxX
-      && rect.minY >= minY
-      && rect.maxY <= maxY
-    );
 
     const footprintFor = (size: THREE.Vector3, transform: ModelTransform) => {
       const baseW = Math.max(2, Math.abs(size.x * transform.scale.x));
@@ -4604,8 +4605,6 @@ export function useSceneCollectionManager(options?: {
 
     const maxWidth = Math.max(...entryPlacementOffsets.map((entry) => entry.width));
     const maxDepth = Math.max(...entryPlacementOffsets.map((entry) => entry.depth));
-    const stepX = Math.max(4, maxWidth + Math.max(0, spacingMm));
-    const stepY = Math.max(4, maxDepth + Math.max(0, spacingMm));
 
     const blockedRects: Rect2D[] = models
       .filter((model) => model.visible)
@@ -4637,105 +4636,200 @@ export function useSceneCollectionManager(options?: {
         };
       });
 
-    const candidateCenters: Array<{ x: number; y: number; distSq: number }> = [];
-    const halfSpanX = Math.max(Math.abs(centerX - minX), Math.abs(maxX - centerX));
-    const halfSpanY = Math.max(Math.abs(centerY - minY), Math.abs(maxY - centerY));
-    const inPlateRingX = Math.ceil(halfSpanX / stepX) + 2;
-    const inPlateRingY = Math.ceil(halfSpanY / stepY) + 2;
-    const maxInPlateRing = Math.max(inPlateRingX, inPlateRingY);
-    const outsideRings = 12;
-    const maxRing = maxInPlateRing + outsideRings;
+    /**
+     * Places as many of `pending` as the given bed can take, in that bed's own
+     * coordinates, and hands back the ones it could not.
+     *
+     * Only positions that keep a model wholly on the bed count. A copy hanging over the
+     * edge is one the out-of-volume check is right to flag, and a copy out in the void
+     * beside the scene is worse than the bed it should have been given, so anything left
+     * over goes to the next bed — which the caller adds.
+     */
+    /**
+     * Places as many of `pending` as the given bed can take, in that bed's own frame, and
+     * hands back the ones it could not.
+     *
+     * Only positions that keep a copy wholly on the bed count. A copy hanging over the
+     * edge is one the out-of-volume check is right to flag, and a copy out in the void
+     * beside the scene is worse than the bed it should have been given, so anything left
+     * over goes to the next bed — which the caller adds.
+     */
+    const placeIntoBed = (
+      bedRect: Rect2D,
+      bedCenter: { x: number; y: number },
+      blockers: readonly Rect2D[],
+      pending: Array<{ entryIndex: number; placement: PlacementOffsets }>,
+    ): {
+      placed: Array<{ entryIndex: number; x: number; y: number }>;
+      unplaced: Array<{ entryIndex: number; placement: PlacementOffsets }>;
+    } => {
+      if (pending.length === 0) return { placed: [], unplaced: [] };
 
-    for (let ring = 0; ring <= maxRing; ring += 1) {
-      if (ring === 0) {
-        candidateCenters.push({ x: centerX, y: centerY, distSq: 0 });
-        continue;
-      }
+      const isInsideBed = (rect: Rect2D) => (
+        rect.minX >= bedRect.minX
+        && rect.maxX <= bedRect.maxX
+        && rect.minY >= bedRect.minY
+        && rect.maxY <= bedRect.maxY
+      );
 
-      for (let gx = -ring; gx <= ring; gx += 1) {
-        const gyTop = ring;
-        const gyBottom = -ring;
-        const x = centerX + gx * stepX;
+      const stepX = Math.max(4, maxWidth + Math.max(0, spacingMm));
+      const stepY = Math.max(4, maxDepth + Math.max(0, spacingMm));
 
-        const yTop = centerY + gyTop * stepY;
-        const dxTop = x - centerX;
-        const dyTop = yTop - centerY;
-        candidateCenters.push({ x, y: yTop, distSq: (dxTop * dxTop) + (dyTop * dyTop) });
+      // Candidate centres are the grid inside this bed, nearest its middle first.
+      const halfSpanX = Math.max(Math.abs(bedCenter.x - bedRect.minX), Math.abs(bedRect.maxX - bedCenter.x));
+      const halfSpanY = Math.max(Math.abs(bedCenter.y - bedRect.minY), Math.abs(bedRect.maxY - bedCenter.y));
+      const maxRing = Math.max(Math.ceil(halfSpanX / stepX) + 2, Math.ceil(halfSpanY / stepY) + 2);
 
-        if (gyBottom !== gyTop) {
-          const yBottom = centerY + gyBottom * stepY;
-          const dxBottom = x - centerX;
-          const dyBottom = yBottom - centerY;
-          candidateCenters.push({ x, y: yBottom, distSq: (dxBottom * dxBottom) + (dyBottom * dyBottom) });
+      const candidateCenters: Array<{ x: number; y: number; distSq: number }> = [];
+      for (let ring = 0; ring <= maxRing; ring += 1) {
+        if (ring === 0) {
+          candidateCenters.push({ x: bedCenter.x, y: bedCenter.y, distSq: 0 });
+          continue;
+        }
+
+        for (let gx = -ring; gx <= ring; gx += 1) {
+          const x = bedCenter.x + gx * stepX;
+          for (const gy of [ring, -ring]) {
+            const y = bedCenter.y + gy * stepY;
+            candidateCenters.push({ x, y, distSq: ((x - bedCenter.x) ** 2) + ((y - bedCenter.y) ** 2) });
+          }
+        }
+
+        for (let gy = -ring + 1; gy <= ring - 1; gy += 1) {
+          const y = bedCenter.y + gy * stepY;
+          for (const gx of [ring, -ring]) {
+            const x = bedCenter.x + gx * stepX;
+            candidateCenters.push({ x, y, distSq: ((x - bedCenter.x) ** 2) + ((y - bedCenter.y) ** 2) });
+          }
         }
       }
 
-      for (let gy = -ring + 1; gy <= ring - 1; gy += 1) {
-        const gxRight = ring;
-        const gxLeft = -ring;
-        const y = centerY + gy * stepY;
+      candidateCenters.sort((a, b) => a.distSq - b.distSq);
 
-        const xRight = centerX + gxRight * stepX;
-        const dxRight = xRight - centerX;
-        const dyRight = y - centerY;
-        candidateCenters.push({ x: xRight, y, distSq: (dxRight * dxRight) + (dyRight * dyRight) });
+      const placed: Array<{ entryIndex: number; x: number; y: number }> = [];
+      const unplaced: Array<{ entryIndex: number; placement: PlacementOffsets }> = [];
+      const taken: Rect2D[] = [];
 
-        if (gxLeft !== gxRight) {
-          const xLeft = centerX + gxLeft * stepX;
-          const dxLeft = xLeft - centerX;
-          const dyLeft = y - centerY;
-          candidateCenters.push({ x: xLeft, y, distSq: (dxLeft * dxLeft) + (dyLeft * dyLeft) });
+      for (const { entryIndex, placement } of pending) {
+        const rectAt = (x: number, y: number): Rect2D => ({
+          minX: x + placement.minXOffset,
+          maxX: x + placement.maxXOffset,
+          minY: y + placement.minYOffset,
+          maxY: y + placement.maxYOffset,
+        });
+
+        const spot = candidateCenters.find((candidate) => {
+          const rect = rectAt(candidate.x, candidate.y);
+          return isInsideBed(rect)
+            && !blockers.some((blocked) => intersectsRect(rect, blocked))
+            && !taken.some((blocked) => intersectsRect(rect, blocked));
+        });
+
+        if (!spot) {
+          unplaced.push({ entryIndex, placement });
+          continue;
         }
+
+        taken.push(rectAt(spot.x, spot.y));
+        placed.push({ entryIndex, x: spot.x, y: spot.y });
+      }
+
+      return { placed, unplaced };
+    };
+
+    // The plate being worked on is filled first, in world coordinates: the search runs
+    // against its own volume, keeping clear of everything standing on it.
+    const activeOffset = plateOffsetForRef.current(activePlateIdRef.current);
+    /**
+     * Where each copy ended up: in the millimetres of the bed it goes to. A bed is picked
+     * after the plan, not during it, because the beds are all the same shape and one this
+     * paste adds is empty — so what fits on one is known before it exists.
+     */
+    const placedByEntry = new Map<number, { bedId: string | null; slot: number; x: number; y: number }>();
+
+    let pendingPlacements = entries.map((entry, entryIndex) => ({
+      entryIndex,
+      placement: entryPlacementOffsets[entryIndex],
+    }));
+
+    const activePlacements = placeIntoBed(
+      { minX, maxX, minY, maxY },
+      { x: centerX, y: centerY },
+      blockedRects,
+      pendingPlacements,
+    );
+    activePlacements.placed.forEach((entry) => {
+      // The active plate's own millimetres, so a bed that moves under the copies when more
+      // are added takes them with it.
+      placedByEntry.set(entry.entryIndex, {
+        bedId: activePlateIdRef.current,
+        slot: -1,
+        x: entry.x - activeOffset.dxMm,
+        y: entry.y - activeOffset.dyMm,
+      });
+    });
+    pendingPlacements = activePlacements.unplaced;
+
+    // Whatever the plate could not take gets a bed of its own rather than hanging off its
+    // edge or landing in the void beside the scene. The plan runs on the plate's own
+    // frame — every bed is the same shape, and a bed added here is empty — so the beds are
+    // added once, together, with the count the plan needs.
+    const localMinX = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.widthMm * 0.5;
+    const localMinY = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.depthMm * 0.5;
+    const localPlateRect: Rect2D = {
+      minX: localMinX,
+      maxX: localMinX + view3dSettings.widthMm,
+      minY: localMinY,
+      maxY: localMinY + view3dSettings.depthMm,
+    };
+
+    let plannedBeds = 0;
+    while (pendingPlacements.length > 0 && plannedBeds < MAX_PASTE_PLATES) {
+      const bedPlacements = placeIntoBed(
+        localPlateRect,
+        { x: (localPlateRect.minX + localPlateRect.maxX) * 0.5, y: (localPlateRect.minY + localPlateRect.maxY) * 0.5 },
+        [],
+        pendingPlacements,
+      );
+      if (bedPlacements.placed.length === 0) break;
+
+      bedPlacements.placed.forEach((entry) => {
+        placedByEntry.set(entry.entryIndex, { bedId: null, slot: plannedBeds, x: entry.x, y: entry.y });
+      });
+      pendingPlacements = bedPlacements.unplaced;
+      plannedBeds += 1;
+    }
+
+    const reserved = addPlatesRef.current(plannedBeds);
+
+    // A model larger than a bed fits on none of them: it is set down clear of every bed,
+    // the way an arrange sets down what it cannot pack, instead of on top of what does fit.
+    if (pendingPlacements.length > 0) {
+      const localCenterY = localMinY + view3dSettings.depthMm * 0.5;
+      let columnRightX = localMinX - 8;
+
+      for (const { entryIndex, placement } of pendingPlacements) {
+        placedByEntry.set(entryIndex, {
+          bedId: activePlateIdRef.current,
+          slot: -1,
+          x: columnRightX - placement.width * 0.5,
+          y: localCenterY,
+        });
+        columnRightX -= placement.width + Math.max(0, spacingMm);
       }
     }
 
-    candidateCenters.sort((a, b) => a.distSq - b.distSq);
+    // Every copy was planned in its bed's own frame, so its world position is that frame
+    // plus where the bed finally sits — which the additions above have settled.
+    const assignedCenters = entries.map((entry, index) => {
+      const placement = placedByEntry.get(index);
+      if (!placement) return null;
 
-    const assignedCenters: Array<{ x: number; y: number }> = entries.map((entry, entryIndex) => {
-      const placement = entryPlacementOffsets[entryIndex];
+      const bedId = placement.bedId ?? reserved.added[placement.slot]?.id;
+      if (!bedId) return null;
 
-      const makeRectAt = (x: number, y: number): Rect2D => ({
-        minX: x + placement.minXOffset,
-        maxX: x + placement.maxXOffset,
-        minY: y + placement.minYOffset,
-        maxY: y + placement.maxYOffset,
-      });
-
-      // Pass 1: exhaust all valid in-plate positions first.
-      for (const candidate of candidateCenters) {
-        const rect = makeRectAt(candidate.x, candidate.y);
-        if (!isRectInsidePlate(rect)) continue;
-
-        if (blockedRects.some((blocked) => intersectsRect(rect, blocked))) {
-          continue;
-        }
-
-        blockedRects.push(rect);
-        return { x: candidate.x, y: candidate.y };
-      }
-
-      // Pass 2: if in-plate is full, allow outside placements.
-      for (const candidate of candidateCenters) {
-        const rect = makeRectAt(candidate.x, candidate.y);
-
-        if (blockedRects.some((blocked) => intersectsRect(rect, blocked))) {
-          continue;
-        }
-
-        blockedRects.push(rect);
-        return { x: candidate.x, y: candidate.y };
-      }
-
-      // Fallback: if exhaustive candidates are blocked, place further to the right of center.
-      const fallbackX = centerX + (maxRing + 2 + blockedRects.length) * stepX;
-      const fallbackY = centerY;
-      blockedRects.push({
-        minX: fallbackX + placement.minXOffset,
-        maxX: fallbackX + placement.maxXOffset,
-        minY: fallbackY + placement.minYOffset,
-        maxY: fallbackY + placement.maxYOffset,
-      });
-      return { x: fallbackX, y: fallbackY };
+      const offset = reserved.offsets.get(bedId) ?? { dxMm: 0, dyMm: 0 };
+      return { x: placement.x + offset.dxMm, y: placement.y + offset.dyMm };
     });
 
     const createdIds: string[] = [];
@@ -4767,7 +4861,9 @@ export function useSceneCollectionManager(options?: {
       };
     });
 
-    const nextModels = [...models, ...pastedModels];
+    // The live list, not this render's: adding beds for the overflow shifts the models
+    // standing on the beds the cascade re-laid, and the paste must not undo that.
+    const nextModels = [...modelsRef.current, ...pastedModels];
     setModels(nextModels);
 
     if (createdIds.length > 0) {
@@ -4796,11 +4892,24 @@ export function useSceneCollectionManager(options?: {
           endSupportStateBatch();
         }
 
+        // The support state is only part of this step when a copied model brought some
+        // with it: cloning it for a paste that carries none is the expensive half of
+        // pasting into a scene that has supports of its own.
+        const pasteCarriesSupports = entries.some((entry) => entry.supportClipboard != null);
+
         const before = captureSceneSnapshot(beforeModels, beforeActiveModelId, beforeSelectedModelIds, {
-          includeSupportState: true,
-          supportStateOverride: supportStateBefore,
+          includeSupportState: pasteCarriesSupports,
+          ...(pasteCarriesSupports ? { supportStateOverride: supportStateBefore } : {}),
+          ...(plannedBeds > 0
+            ? { plates: platesBefore, activePlateId: activePlateIdRef.current }
+            : {}),
         });
-        const after = captureSceneSnapshot(nextModels, createdIds[0], createdIds, { includeSupportState: true });
+        const after = captureSceneSnapshot(nextModels, createdIds[0], createdIds, {
+          includeSupportState: pasteCarriesSupports,
+          ...(plannedBeds > 0
+            ? { plates: reserved.plates, activePlateId: activePlateIdRef.current }
+            : {}),
+        });
         pushSceneSnapshotHistory(before, after, createdIds.length === 1 ? 'Paste Model' : `Paste ${createdIds.length} Models`);
       });
     }
