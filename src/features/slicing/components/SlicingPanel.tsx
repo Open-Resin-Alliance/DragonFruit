@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLingui } from '@lingui/react';
-import { msg } from '@lingui/core/macro';
+import { msg, plural } from '@lingui/core/macro';
 import { Trans } from '@lingui/react/macro';
 import type { MessageDescriptor } from '@lingui/core';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
@@ -196,6 +196,18 @@ const SLICING_PHASE_LABELS: Record<string, MessageDescriptor> = {
   Cancelled: msg`Cancelled`,
   Cancelling: msg`Cancelling`,
 };
+
+/**
+ * What a finished batch leaves in the status line. A module-scope helper because it interpolates:
+ * a `msg` written inline in a component has its local renamed by React Compiler in production
+ * builds, which desyncs the message id from the compiled catalog.
+ */
+function formatSlicedPlatesStatus(translate: Translate, count: number): string {
+  return translate(msg`${plural(count, {
+    one: 'Sliced # plate.',
+    other: 'Sliced # plates.',
+  })}`);
+}
 
 function formatSlicingPhaseLabel(translate: Translate, phase: string): string {
   const descriptor = SLICING_PHASE_LABELS[phase];
@@ -2230,7 +2242,9 @@ export function SlicingPanel({
 
       setCurrentPhase('Ready');
       setSliceStatus(`Generated ${result.outputFormat} via native Rust backend.`);
-      setSlicingModalStage('finished');
+      // A batch reaches "finished" once, at the end: one plate of several is not the run's end,
+      // and the modal would otherwise announce every plate but the last.
+      if (!batch) setSlicingModalStage('finished');
       slicingSucceeded = true;
       if (result.artifact) {
         if (batch) {
@@ -2319,6 +2333,12 @@ export function SlicingPanel({
       const sliced = await handleSliceZipExport(scope, { destinationDirectory, completed });
       if (!sliced) break;
     }
+
+    // The batch's own end. Every plate reached "Ready" on its own; this is what the modal waits
+    // for, and what the plates handed over below walk the app into the printing workspace with.
+    setCurrentPhase('Ready');
+    setSliceStatus(formatSlicedPlatesStatus(_, completed.length));
+    setSlicingModalStage('finished');
 
     // The plates are handed over once the batch is done. The first of them is what walks the
     // app into the printing workspace; doing that per bed would abort the run that follows.
