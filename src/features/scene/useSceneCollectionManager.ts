@@ -5342,9 +5342,15 @@ export function useSceneCollectionManager(options?: {
           scale: normalized.transform.scale.clone(),
         },
       }));
-      const offPlateCount = sourceCandidates.filter(
-        (c) => !isModelFootprintInsidePlate({ geometry: c.geometry, transform: c.transform }),
-      ).length;
+      const offPlateIndices = sourceCandidates
+        .map((candidate, index) => (
+          isModelFootprintInsidePlate({ geometry: candidate.geometry, transform: candidate.transform })
+            ? -1
+            : index
+        ))
+        .filter((index) => index >= 0);
+      const offPlateIndexSet = new Set(offPlateIndices);
+      const offPlateCount = offPlateIndices.length;
 
       // Preserve authored placement by default. Only auto-arrange if models are off-plate
       // and the user explicitly chooses auto-arrange in the prompt.
@@ -5359,10 +5365,15 @@ export function useSceneCollectionManager(options?: {
         shouldAutoArrangeOnImport = choice === 'auto_arrange';
       }
 
-      // Auto-arrange all models together so they don't overlap, filling the beds the scene has
-      // before reaching for a new one.
-      const assignedCenters = shouldAutoArrangeOnImport
-        ? findFreeSpotCentersForModels(sourceCandidates, 5)
+      // Place what would otherwise land outside every bed, the way a paste places its copies: the
+      // scene's beds are filled first, then a bed is added for what none of them can take. A model
+      // that already stands on a bed keeps the place the file gave it, which is why the search runs
+      // over all of them and only the off-plate results are used: the ones that keep their place
+      // still hold their seats in the plan.
+      const assignedCenters = (shouldAutoArrangeOnImport || offPlateCount > 0)
+        ? findFreeSpotCentersForModels(sourceCandidates, 5).map((center, index) => (
+          shouldAutoArrangeOnImport || offPlateIndexSet.has(index) ? center : null
+        ))
         : [];
 
       if (assignedCenters.length > 0) {
@@ -5383,7 +5394,7 @@ export function useSceneCollectionManager(options?: {
 
         const unseatedIndices = assignedCenters
           .map((center, index) => ({ center, index }))
-          .filter(({ center }) => !bedFrames.some((frame) => (
+          .filter(({ center }) => !!center && !bedFrames.some((frame) => (
             center.x >= frame.minX && center.x <= frame.maxX
             && center.y >= frame.minY && center.y <= frame.maxY
           )))
@@ -5430,9 +5441,12 @@ export function useSceneCollectionManager(options?: {
         };
 
         const assignedCenter = assignedCenters[i] ?? null;
+        // The search seats every model; a model keeps its authored place unless the run is placing
+        // all of them, or this one would have landed outside every bed.
+        const isPlacedBySearch = shouldAutoArrangeOnImport || offPlateIndexSet.has(i);
         const finalPosition = new THREE.Vector3(
-          shouldAutoArrangeOnImport ? (assignedCenter?.x ?? originalPosition.x) : originalPosition.x,
-          shouldAutoArrangeOnImport ? (assignedCenter?.y ?? originalPosition.y) : originalPosition.y,
+          isPlacedBySearch ? (assignedCenter?.x ?? originalPosition.x) : originalPosition.x,
+          isPlacedBySearch ? (assignedCenter?.y ?? originalPosition.y) : originalPosition.y,
           originalPosition.z,
         );
 
