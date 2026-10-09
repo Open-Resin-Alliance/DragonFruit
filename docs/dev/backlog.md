@@ -948,3 +948,60 @@ Still open:
    animation) re-appends every primitive in the scene with the offset, so the
    base batch rebuilds and re-uploads all of its matrices per frame. The offset
    belongs on the group transform, as the overlays already do it.
+
+## Measured: where the baked AO's striping comes from, and what a GPU bake buys
+
+The per-vertex bake's visible trouble is not the tessellation, and it is not the
+ray count on the coarse cases either. Measured on two models, both axes against a
+reference built from the mean of two 64-ray CPU fields, with "roughness" as the
+mean absolute deviation from a vertex's one-ring average (the mesh-space form of
+the striping a zoomed view shows):
+
+| model | path | rays | bake | RMS vs reference | roughness |
+| --- | --- | --- | --- | --- | --- |
+| puck, 768,734 tris | shipped (CPU, fixed fan) | 8 | 0.50 s | 0.05542 | 0.03030 |
+| | new CPU (turned fan) | 32 | 1.90 s | 0.02089 | 0.02341 |
+| | new CPU (turned fan) | 64 | 3.84 s | **0.00769** | 0.01883 |
+| | new CPU, + one graph pass | 64 | + graph | 0.02420 | **0.00871** |
+| | GPU (fixed fan) | 8 | 41 ms | 0.05542 | 0.03030 |
+| | GPU (turned fan) | 64 | 274 ms | 0.01313 | 0.01885 |
+| | GPU, turned + one graph pass | 64 | + graph | 0.02513 | 0.00871 |
+| poussin, 170,790 tris | shipped (CPU, fixed fan) | 8 | 0.07 s | 0.05336 | 0.03231 |
+| | new CPU (turned fan) | 64 | 0.63 s | **0.00710** | 0.01899 |
+| | new CPU, + one graph pass | 64 | + graph | 0.01951 | **0.00980** |
+| | GPU (turned fan) | 64 | 52 ms | 0.01215 | 0.01901 |
+| | GPU, turned + one graph pass | 64 | + graph | 0.02049 | 0.00981 |
+
+The two levers are independent: **rays buy accuracy** (0.055 → 0.008 as 8 becomes
+64) and **one mesh-graph pass buys smoothness** (0.030 → 0.009 roughness) at a
+cost of some accuracy, because the pass averages the field's own sub-millimetre
+variation along with the noise. Decorrelating the fan without a pass is strictly
+worse than leaving it fixed at 8 rays (roughness 0.048 against 0.030) — that is
+the grain a per-vertex rotation shipped once and had to be reverted for; it only
+becomes worth it when a filter follows it, which the mesh graph provides and a
+vertex cloud alone does not.
+
+**The GPU bake is bit-identical to the CPU one at the same fan** (the fixed-8
+rows above agree to five decimals on both models, and 384,324 vertices differ by
+a mean of 0.000000, a maximum of 0.016 on one vertex — the fp grazing-ray class
+the occlusion module already documents). What it is *not* is the 250× that the
+brute-force throughput floor suggested: a naive WGSL BVH traversal gets about
+**80 M rays/s** here (41 ms for 3.07 M rays, 274 ms for 24.6 M), so the win is
+**9–14×**, not two orders of magnitude. That is the cost of incoherent dependent
+loads: an 8 MB tree misses cache at every node visit, and a thread-per-ray walk
+has little to hide it with. Closing that gap needs a cache-friendlier tree
+(quantised nodes), ray batching, or hardware ray tracing.
+
+**Hardware RT exists on this machine and wgpu cannot use it on Windows' default
+backend.** `wgpu` sees the RTX 3080 three ways: Vulkan, which reports
+`EXPERIMENTAL_RAY_QUERY` and acceleration structures true; Dx12 (three adapters)
+and GL, which report both false; plus the `Microsoft Basic Render Driver` CPU
+adapter. macOS has no path at all, in wgpu or on Apple silicon. So the ladder is:
+a compute traversal everywhere, an optional ray-query fast path on Vulkan+RT, and
+the CPU bake as the floor — with the CPU bake's own numbers above as what that
+floor costs.
+
+The unwrap remains the only part of a *textured* AO map that has no GPU story:
+measured at 405 s bounded-chart on the puck, versus seconds for a decimated
+proxy — while the texel bake over the same model is 394 M rays, which this
+traversal would do in ~5 s and a ray-query path in well under one.

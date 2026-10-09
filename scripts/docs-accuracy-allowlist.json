@@ -78,7 +78,8 @@
             "VoxlDocumentCompressionEncoding",
             "SerializeVoxlOptions",
             "VoxlMeshEncoding",
-            "load_voxl_v1_from_bytes"
+            "load_voxl_v1_from_bytes",
+            "EXPERIMENTAL_RAY_QUERY"
       ],
       "paths": [
             "src/supports/generatedSupportRegistrations.ts",
@@ -116,5 +117,6 @@
       "_comment_removed_support_symbols": "updateTrunk / kickstandBefore / kickstandAfter: removed during the registry refactor and cited by name in support-registry-findings.md because the finding IS their removal. updateTrunk became the shared update skeleton; the kickstand* fields left AutoSupportPlan when kickstands joined SupportState.",
       "_comment_removed_pathfinders": "gridAStar / fieldDeterministicSolver / potentialFieldSolver, and the PotentialFieldSolver.ts path: the trunk-routing engines replaced by SmartPlacementV3 (PlacementLogicV3/SmartPlacementV3.ts). ADR-0028 is the decision record for the A* replacement and necessarily names what it replaced; page-tsx-refactor-handoff.md names the two solvers whose pre-existing test failures it recorded. Both files are historical records, so they keep the names instead of being rewritten to pretend the removed code never existed.",
       "_comment_removed_kind_table": "SUPPORT_KINDS: the eight-entry per-panel table in Settings/supportKindState.ts, deleted when the sidebar's panel vocabulary was derived from the registry (Settings/sidebarPanels.ts). support-registry-findings.md cites it by name because the finding IS its removal, and its flags (hasContactCone/hasShaft/hasPlateRoot) are the drift the derived panels removed.",
-      "_comment_rtsp_recovery_protocol_names": "TEARDOWN is the RTSP protocol method name; SO_LINGER, CAP_NET_RAW and TCP_INFO are socket API names, TCP_INFO being the Linux socket-diagnostics option with SIO_TCP_INFO as its Windows counterpart. All four are external to this repo, which drives ffmpeg rather than speaking RTSP itself and touches no raw sockets today. docs/internal/rtsp-session-recovery.md and docs/dev/rtsp-relay.md cite them while describing the printer-side failure mode and the proposed recovery design, so none of them will ever be found in the tree."
+      "_comment_rtsp_recovery_protocol_names": "TEARDOWN is the RTSP protocol method name; SO_LINGER, CAP_NET_RAW and TCP_INFO are socket API names, TCP_INFO being the Linux socket-diagnostics option with SIO_TCP_INFO as its Windows counterpart. All four are external to this repo, which drives ffmpeg rather than speaking RTSP itself and touches no raw sockets today. docs/internal/rtsp-session-recovery.md and docs/dev/rtsp-relay.md cite them while describing the printer-side failure mode and the proposed recovery design, so none of them will ever be found in the tree.",
+      "_comment_gpu_ray_query": "EXPERIMENTAL_RAY_QUERY is wgpu's own feature-flag name, an external API rather than anything in this tree. docs/dev/backlog.md cites it while recording which backends expose hardware ray tracing on the machine the AO bake was measured on, where the name is the thing an implementer would grep for."
 }
