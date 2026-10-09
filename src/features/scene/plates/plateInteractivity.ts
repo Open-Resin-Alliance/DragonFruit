@@ -1,8 +1,8 @@
 /**
  * Where a model stands, relative to the plate being worked on.
  *
- * Only the active plate's models are live: a model on another bed is scenery until
- * you go there. That matters twice over —
+ * Only the active plate's models are live, and a model you have selected: a model on
+ * another bed is scenery until you go there or pick it up. That matters twice over —
  *
  * - **Cost.** Every model that answers the pointer costs a raycast on every pointer
  *   move: ~0.12 ms each with its boundsTree, flat (see
@@ -12,7 +12,8 @@
  *   the plate under it, so what you can act on is obvious.
  *
  * A model on no plate at all stays live and stays bright: it is out of bounds, and
- * dragging it back is the only way to fix it.
+ * dragging it back is the only way to fix it. A selected model on another bed is the
+ * same bargain: it can be dragged on, so it cannot be scenery.
  *
  * One plate is not scoped — there is nowhere else for a model to be — so the
  * single-plate path behaves exactly as it always did.
@@ -52,9 +53,18 @@ export function modelPlateScope({
   return frame.id === activePlateId ? 'active' : 'other';
 }
 
-/** Whether a model answers the pointer: everything except another bed's models. */
-export function modelAnswersPointer(args: Parameters<typeof modelPlateScope>[0]): boolean {
-  return modelPlateScope(args) !== 'other';
+/**
+ * Whether a model answers the pointer.
+ *
+ * Every model but another bed's answers. The exception is a *selected* model: a drag
+ * that lands on a bed which does not become the one being worked on — following the
+ * landed plate is a setting, and it can be off — leaves the model selected and
+ * standing on a bed that is now inactive, and a model that stops answering the
+ * pointer cannot be dragged any further. The selection is what keeps the cost of the
+ * exception bounded: one model answering, not every model on that bed.
+ */
+export function modelAnswersPointer(scope: PlateScope, selected: boolean): boolean {
+  return scope !== 'other' || selected;
 }
 
 /**

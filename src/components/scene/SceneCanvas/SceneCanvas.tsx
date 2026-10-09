@@ -135,7 +135,7 @@ import { PickingProviderWrapper, SelectionSync, useInteractionWarning } from './
 import { CameraClipPlaneStabilizer, CameraProvider, EnableLocalClipping, Helpers, Lights, SceneMoodOverlay } from './SceneEnvironment';
 import { plateNumberPlaceholder } from '@/features/scene/plates/plateMessages';
 import { plateCascadeOffsetMm } from '@/features/scene/plates/plateCascade';
-import { modelPlateScope, type PlateScope } from '@/features/scene/plates/plateInteractivity';
+import { modelAnswersPointer, modelPlateScope, type PlateScope } from '@/features/scene/plates/plateInteractivity';
 import type { PlateFrame, ScenePlate } from '@/features/scene/useSceneCollectionManager';
 import { StlMesh } from './StlMesh';
 import { setClipBounds } from './clipBoundsStore';
@@ -6426,8 +6426,10 @@ export function SceneCanvas({
                 // it. The first is what keeps a scene of full plates from raycasting
                 // every model on it on every move.
                 const modelPlateState = modelPlateStates.get(model.id);
-                const onAnotherPlate = modelPlateState?.scope === 'other';
-                const answersPointer = !onAnotherPlate;
+                // Another bed's models are scenery — except while one is selected: a drag
+                // onto a bed that does not become the one being worked on leaves the model
+                // selected there, and it has to stay draggable. See `modelAnswersPointer`.
+                const answersPointer = modelAnswersPointer(modelPlateState?.scope ?? 'active', isSelectedModel);
                 const suppressModelInteraction = !answersPointer || !modelPickerEnabled || !cameraInteractionCycleEnabled || isGizmoDragging || isPostGizmoInteractionGuardActive || supportGizmoInteractionActive || isOrbitInteracting || isWheelZoomInteracting;
                 const interactionLodEnabled = (isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive) && !isActive;
                 const supportNonSelectedOpacity = mode === 'support' && !!activeModelId && !isActive ? 0.5 : undefined;
