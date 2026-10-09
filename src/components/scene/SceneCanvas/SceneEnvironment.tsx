@@ -2,7 +2,7 @@
 
 import React, { useEffect } from 'react';
 import * as THREE from 'three';
-import { useThree, useFrame } from '@react-three/fiber';
+import { useThree, useFrame, type ThreeEvent } from '@react-three/fiber';
 import { AxisLabels } from '@/components/scene/AxisLabels';
 import { fitFontToWidth } from '@/utils/canvasTextFit';
 import { PlateNameLabel } from './PlateNameLabel';
@@ -408,10 +408,15 @@ function PlateLayer({
   const plateOpacity = shared.buildPlateOpacity * dimFactor;
   const pickable = !isActive && !!onActivate;
   const handleActivate = React.useCallback(
-    (event: { stopPropagation: () => void }) => {
+    (event: ThreeEvent<MouseEvent>) => {
       // The active plate is not pickable (its raycast is off), so this only runs for
       // a plate that is not the one being worked on.
       if (isActive) return;
+      // Only the bed's top surface answers. Seen from below — an orthographic bottom view,
+      // which is where a model is supported from underneath — the ray meets the plate's
+      // underside before the model standing on it, and taking that click would switch beds
+      // instead of selecting the model the click was for. So it is left to fall through.
+      if (!event.face || event.face.normal.z <= 0) return;
       // Picking this plate is what the click is for, so it must not also read as a click
       // on the empty scene behind it.
       event.stopPropagation();
