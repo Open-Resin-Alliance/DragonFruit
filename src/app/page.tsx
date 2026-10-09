@@ -77,7 +77,8 @@ import { SlicingPanel, type SliceIntent } from '@/features/slicing/components/Sl
 import { joinSliceOutputPath } from '@/features/slicing/plateSliceNaming';
 import { PrintingPanel } from '@/features/printing/components/PrintingPanel';
 import { usePrintingPreviewManager, type PrintingPreviewManagerDeps } from '@/features/printing/usePrintingPreviewManager';
-import { useEditorToasts } from '@/features/notifications/useEditorToasts';
+import { useEditorToasts, useTrailingMount } from '@/features/notifications/useEditorToasts';
+import { plateNumberPlaceholder } from '@/features/scene/plates/plateMessages';
 import { ScanProgressBar } from '@/components/scene/ScanProgressBar';
 import { SliceMetricsDebugModal } from '@/features/slicing/components/SliceMetricsDebugModal';
 import { MeshSmoothingSettingsPanel } from '@/features/mesh-smoothing/MeshSmoothingSettingsPanel';
@@ -634,6 +635,19 @@ function formatLastSuccessfulAutosave(
   }), { timestamp });
 }
 
+// Static ICU pattern in a module-level formatter (see AGENTS.md): written inside the
+// component, the React Compiler renames the interpolated local and the message id stops
+// matching the compiled catalogue.
+function formatPlateLockedNotice(
+  translate: (descriptor: MessageDescriptor, values?: Record<string, unknown>) => string,
+  plateName: string,
+): string {
+  return translate(msg({
+    message: '{plateName} is locked.',
+    comment: '{plateName} is the locked build plate, named as the Models panel names it: its own name, or "Plate 1".',
+  }), { plateName });
+}
+
 /** How many layers either side of the one on screen a plate's slice reads ahead. */
 const PRINTING_PREVIEW_PREFETCH_RADIUS = 2;
 
@@ -654,12 +668,15 @@ export default function Home() {
   useUiScale();
   // 1. Scene & Geometry (Multi-Model)
   const [plateLockedNoticeVisible, setPlateLockedNoticeVisible] = React.useState(false);
+  // Which bed refused, so the notice can name it. A refusal is not always about the
+  // one being worked on: a row for another bed, or a drag landing on a locked bed.
+  const [plateLockedNoticePlateId, setPlateLockedNoticePlateId] = React.useState<string | null>(null);
   // What the plate bin is about to do: take the bed you are standing at, or — on
   // the scene's first plate, which has to stay — only empty it.
   const [plateTrashIntent, setPlateTrashIntent] = React.useState<'delete' | 'clear' | null>(null);
   const plateLockedNoticeTimerRef = React.useRef<number | null>(null);
-  const notifyPlateLockedRef = React.useRef<() => void>(() => {});
-  const scene = useSceneCollectionManager({ onBlockedByLock: () => notifyPlateLockedRef.current() });
+  const notifyPlateLockedRef = React.useRef<(plateId?: string) => void>(() => {});
+  const scene = useSceneCollectionManager({ onBlockedByLock: (plateId) => notifyPlateLockedRef.current(plateId) });
 
   /**
    * The build volume of every plate, in world coordinates. Every plate is a valid
@@ -706,11 +723,24 @@ export default function Home() {
   const [showManifoldWarning, setShowManifoldWarning] = React.useState(false);
   // Restarting the timer on every refusal means holding the lock and clicking about
   // keeps one toast on screen rather than stacking them.
-  notifyPlateLockedRef.current = () => {
+  notifyPlateLockedRef.current = (plateId) => {
+    setPlateLockedNoticePlateId(plateId ?? null);
     setPlateLockedNoticeVisible(true);
     if (plateLockedNoticeTimerRef.current !== null) window.clearTimeout(plateLockedNoticeTimerRef.current);
     plateLockedNoticeTimerRef.current = window.setTimeout(() => setPlateLockedNoticeVisible(false), 2600);
   };
+  // The flag hides the toast; this holds the element one transition longer, so the
+  // fade-out has something to run on. See `useTrailingMount`.
+  const plateLockedNoticeMounted = useTrailingMount(plateLockedNoticeVisible);
+  // Named the way the Models panel names a plate: its own name, else its number. The
+  // refusal usually comes from the bed being worked on, but not always, so the id the
+  // manager reports wins over the active one.
+  const plateLockedNoticeLabel = React.useMemo(() => {
+    const plateId = plateLockedNoticePlateId ?? scene.activePlateId;
+    const index = scene.plates.findIndex((plate) => plate.id === plateId);
+    const plate = index >= 0 ? scene.plates[index] : undefined;
+    return plate?.name.trim() || plateNumberPlaceholder((index >= 0 ? index : 0) + 1, _);
+  }, [_, plateLockedNoticePlateId, scene.activePlateId, scene.plates]);
   React.useEffect(() => {
     const flagged = scene.models.filter(
       (model) => model.geometry?.meshDefects?.nativeRepairReport?.model_is_manifold === false,
@@ -11570,21 +11600,21 @@ export default function Home() {
         </div>
       </StructuredDialogModal>
 
-      {plateLockedNoticeVisible && (
+      {plateLockedNoticeMounted && (
         <ToastViewport zIndex={127} offset="1.25rem">
           <Toast
             tone="warning"
             shape="rounded"
             animated
-            visible
+            visible={plateLockedNoticeVisible}
             className="flex items-center max-w-sm pointer-events-auto"
           >
             {/* The padlock leads the first line rather than standing beside the block:
                 centred on two lines of text it read as belonging to neither. */}
-            <span className="flex-1 text-center text-[12px] leading-snug">
+            <span className="flex-1 text-center leading-snug">
               <span className="inline-flex items-center gap-1.5">
                 <Lock className="h-3.5 w-3.5 flex-shrink-0" />
-                {_(msg`The build plate is locked.`)}
+                {formatPlateLockedNotice(_, plateLockedNoticeLabel)}
               </span>
               <br />
               <span style={{ fontWeight: 400, opacity: 0.8 }}>{_(msg`Unlock it to add or move models.`)}</span>
@@ -11603,7 +11633,7 @@ export default function Home() {
             className="flex items-center gap-3 max-w-sm pointer-events-auto"
           >
             <Gamepad2 className="h-4 w-4 flex-shrink-0" />
-            <span className="flex-1 text-[12px] leading-snug">
+            <span className="flex-1 leading-snug">
               New input device detected.<br />
               <span style={{ fontWeight: 400, opacity: 0.8 }}>Go to Settings → 3D Mouse to configure or block it.</span>
             </span>

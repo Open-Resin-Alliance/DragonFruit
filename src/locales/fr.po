@@ -82,7 +82,7 @@ msgstr ""
 msgid "{downloaded} / {total} ({pct}%)"
 msgstr ""
 
-#: src/app/page.tsx:491
+#: src/app/page.tsx:492
 #: src/components/controls/ModelStatsCard.tsx:207
 msgid "{hours} h {minutes} min"
 msgstr "{hours} h {minutes} min"
@@ -112,8 +112,8 @@ msgstr ""
 msgid "{minutes} min"
 msgstr "{minutes} min"
 
-#: src/app/page.tsx:483
-#: src/app/page.tsx:492
+#: src/app/page.tsx:484
+#: src/app/page.tsx:493
 #: src/components/controls/ModelStatsCard.tsx:208
 msgid "{minutes} min {seconds} s"
 msgstr ""
@@ -132,6 +132,11 @@ msgstr ""
 
 #: src/features/slicing/components/SlicingPanel.tsx:166
 msgid "{pixels}px XY · {layers}L Z"
+msgstr ""
+
+#. {plateName} is the locked build plate, named as the Models panel names it: its own name, or "Plate 1".
+#: src/app/page.tsx:648
+msgid "{plateName} is locked."
 msgstr ""
 
 #: src/features/slicing/components/SlicingPanel.tsx:272
@@ -193,12 +198,12 @@ msgid "<0>{recordedLabel}</0> has a build volume of {0} × {1} × {2} mm."
 msgstr ""
 
 #. Approximate estimated print time (the "~" marks it as a rough estimate). {hours}/{mins} are whole-number quantities.
-#: src/app/page.tsx:475
+#: src/app/page.tsx:476
 msgid "~{hours} h {mins} min"
 msgstr "~{hours} h {mins} min"
 
 #. Approximate estimated print time under an hour (the "~" marks it as a rough estimate).
-#: src/app/page.tsx:476
+#: src/app/page.tsx:477
 msgid "~{mins} min"
 msgstr "~{mins} min"
 
@@ -303,7 +308,7 @@ msgstr ""
 msgid "Add contacts along the edge or corner a pose bears on, so a leaning part is held against toppling and peel (default on)"
 msgstr ""
 
-#: src/app/page.tsx:2432
+#: src/app/page.tsx:2462
 msgid "Add joint"
 msgstr "Ajouter une jonction"
 
@@ -422,7 +427,7 @@ msgstr ""
 msgid "Apply this preset to the auto-support settings"
 msgstr ""
 
-#: src/app/page.tsx:11594
+#: src/app/page.tsx:11624
 msgid "Are you sure you want to remove every model from the plate?"
 msgstr ""
 
@@ -640,7 +645,7 @@ msgstr ""
 msgid "Autosave idle delay"
 msgstr ""
 
-#: src/app/page.tsx:1115
+#: src/app/page.tsx:1145
 msgid "Autosave is not working"
 msgstr ""
 
@@ -909,7 +914,7 @@ msgstr ""
 msgid "Can't open this scene"
 msgstr ""
 
-#: src/app/page.tsx:11555
+#: src/app/page.tsx:11585
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:468
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:664
 #: src/components/controls/AutoSupportPanel.tsx:652
@@ -1082,12 +1087,12 @@ msgstr ""
 
 #. Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.
 #. Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.
-#: src/app/page.tsx:10847
+#: src/app/page.tsx:10877
 #: src/components/scene/SceneCanvas/SceneCanvas.tsx:1763
 msgid "Clear build plate"
 msgstr ""
 
-#: src/app/page.tsx:11544
+#: src/app/page.tsx:11574
 msgid "Clear Build Plate?"
 msgstr ""
 
@@ -1095,7 +1100,7 @@ msgstr ""
 msgid "Clear Override"
 msgstr ""
 
-#: src/app/page.tsx:11585
+#: src/app/page.tsx:11615
 msgid "Clear Plate"
 msgstr ""
 
@@ -1130,7 +1135,7 @@ msgstr ""
 msgid "Close"
 msgstr "Fermer"
 
-#: src/app/page.tsx:11550
+#: src/app/page.tsx:11580
 msgid "Close clear-plate confirmation"
 msgstr ""
 
@@ -1279,7 +1284,7 @@ msgstr ""
 msgid "Configure Networking Later"
 msgstr ""
 
-#: src/app/page.tsx:11543
+#: src/app/page.tsx:11573
 msgid "Confirm clearing the build plate"
 msgstr ""
 
@@ -1287,7 +1292,7 @@ msgstr ""
 msgid "Confirm delete snapshot"
 msgstr ""
 
-#: src/app/page.tsx:11542
+#: src/app/page.tsx:11572
 msgid "Confirm deleting the plate"
 msgstr ""
 
@@ -1385,7 +1390,7 @@ msgstr ""
 msgid "Contoured regions"
 msgstr ""
 
-#: src/app/page.tsx:8615
+#: src/app/page.tsx:8645
 msgid "Converting support data and model metadata"
 msgstr ""
 
@@ -1633,7 +1638,7 @@ msgstr ""
 msgid "Delete model"
 msgstr ""
 
-#: src/app/page.tsx:11585
+#: src/app/page.tsx:11615
 #: src/components/controls/ModelManagerPanel.tsx:476
 #: src/components/controls/ModelManagerPanel.tsx:758
 #: src/components/controls/ModelManagerPanel.tsx:779
@@ -1671,11 +1676,11 @@ msgid "Delete this model's existing supports and place the new ones"
 msgstr ""
 
 #. Tooltip on the bin beside the build plate when the plate can go: it removes the bed and the models standing on it. Undo brings them back.
-#: src/app/page.tsx:10846
+#: src/app/page.tsx:10876
 msgid "Delete this plate"
 msgstr ""
 
-#: src/app/page.tsx:11544
+#: src/app/page.tsx:11574
 #: src/components/controls/ModelManagerPanel.tsx:759
 msgid "Delete this plate?"
 msgstr ""
@@ -1882,7 +1887,7 @@ msgstr ""
 msgid "Drop supported files"
 msgstr "Déposez des fichiers pris en charge"
 
-#: src/app/page.tsx:10793
+#: src/app/page.tsx:10823
 msgid "Drop supported files to import"
 msgstr ""
 
@@ -1919,7 +1924,7 @@ msgstr ""
 msgid "Edit printer profile"
 msgstr ""
 
-#: src/app/page.tsx:2438
+#: src/app/page.tsx:2468
 msgid "Editor"
 msgstr "Éditeur"
 
@@ -2874,7 +2879,7 @@ msgid "Last remote backup"
 msgstr ""
 
 #. {timestamp} is a locale-formatted date and time.
-#: src/app/page.tsx:634
+#: src/app/page.tsx:635
 msgid "Last successful autosave: {timestamp}. Save your project manually."
 msgstr ""
 
@@ -2934,7 +2939,7 @@ msgstr ""
 msgid "Length"
 msgstr ""
 
-#: src/app/page.tsx:8655
+#: src/app/page.tsx:8685
 msgid "Letting DragonFruit finish its startup animation before loading your scene."
 msgstr ""
 
@@ -3015,7 +3020,7 @@ msgstr ""
 msgid "Loading Mesh Files…"
 msgstr ""
 
-#: src/app/page.tsx:8605
+#: src/app/page.tsx:8635
 #: src/features/scene/sceneImportMessages.ts:23
 msgid "Loading Mesh…"
 msgstr ""
@@ -3024,9 +3029,9 @@ msgstr ""
 msgid "Loading remote material…"
 msgstr ""
 
-#: src/app/page.tsx:4798
-#: src/app/page.tsx:8605
-#: src/app/page.tsx:8614
+#: src/app/page.tsx:4828
+#: src/app/page.tsx:8635
+#: src/app/page.tsx:8644
 msgid "Loading Scene…"
 msgstr ""
 
@@ -3514,7 +3519,7 @@ msgstr ""
 msgid "No active printer"
 msgstr "Aucune imprimante active"
 
-#: src/app/page.tsx:1119
+#: src/app/page.tsx:1149
 msgid "No autosave has succeeded this session. Save your project manually."
 msgstr ""
 
@@ -3896,7 +3901,7 @@ msgstr "Ouvrir une scène…"
 msgid "Opening"
 msgstr ""
 
-#: src/app/page.tsx:8652
+#: src/app/page.tsx:8682
 msgid "Opening scene…"
 msgstr ""
 
@@ -4304,7 +4309,7 @@ msgstr ""
 msgid "Re-slice required after profile change"
 msgstr "Nouveau laminage requis après changement de profil"
 
-#: src/app/page.tsx:4799
+#: src/app/page.tsx:4829
 msgid "Reading autosaved scene…"
 msgstr ""
 
@@ -4577,8 +4582,8 @@ msgstr ""
 msgid "Restore Factory Defaults?"
 msgstr ""
 
-#: src/app/page.tsx:4830
-#: src/app/page.tsx:4841
+#: src/app/page.tsx:4860
+#: src/app/page.tsx:4871
 msgid "Restore Failed"
 msgstr ""
 
@@ -5432,7 +5437,7 @@ msgstr ""
 msgid "Supported: {extensions}"
 msgstr ""
 
-#: src/app/page.tsx:2438
+#: src/app/page.tsx:2468
 #: src/components/ui/EditorContextMenu.tsx:109
 msgid "Supports"
 msgstr "Supports"
@@ -5527,26 +5532,22 @@ msgstr ""
 msgid "Tension"
 msgstr ""
 
-#: src/app/page.tsx:4843
+#: src/app/page.tsx:4873
 msgid "The autosave recovery file could not be found."
 msgstr ""
 
-#: src/app/page.tsx:4831
-#: src/app/page.tsx:4844
+#: src/app/page.tsx:4861
+#: src/app/page.tsx:4874
 msgid "The autosaved recovery file is corrupted or unreadable."
 msgstr ""
 
-#: src/app/page.tsx:1116
+#: src/app/page.tsx:1146
 msgid "The background recovery save failed repeatedly."
 msgstr ""
 
 #: src/components/layout/EmptySceneState.tsx:69
 msgid "The build plate awaits."
 msgstr "Le plateau d'impression vous attend."
-
-#: src/app/page.tsx:11613
-msgid "The build plate is locked."
-msgstr ""
 
 #: src/components/layout/EmptySceneState.tsx:82
 msgid "The build volume misses you."
@@ -5580,7 +5581,7 @@ msgstr ""
 msgid "The inputs and factors the last run sized the supports with"
 msgstr ""
 
-#: src/app/page.tsx:11593
+#: src/app/page.tsx:11623
 msgid "The models on this plate are deleted with it."
 msgstr ""
 
@@ -5650,7 +5651,7 @@ msgstr "La résine est prête. Et vous ?"
 msgid "The saved run policy the settings below are. Selecting one applies it immediately; the rest of the dialog stays staged until you save."
 msgstr ""
 
-#: src/app/page.tsx:4832
+#: src/app/page.tsx:4862
 msgid "The scene importer rejected or could not parse the autosave data."
 msgstr ""
 
@@ -5794,7 +5795,7 @@ msgstr ""
 msgid "To recover it, open the scene in an older version of DragonFruit and save it again — the re-saved scene will open here."
 msgstr ""
 
-#: src/app/page.tsx:2427
+#: src/app/page.tsx:2457
 msgid "Toggle curve"
 msgstr "Basculer la courbe"
 
@@ -5880,7 +5881,7 @@ msgstr ""
 msgid "Unavailable"
 msgstr ""
 
-#: src/app/page.tsx:11547
+#: src/app/page.tsx:11577
 msgid "Undo brings the models back"
 msgstr ""
 
@@ -5922,7 +5923,7 @@ msgstr ""
 msgid "Unlock build plate"
 msgstr ""
 
-#: src/app/page.tsx:11616
+#: src/app/page.tsx:11646
 msgid "Unlock it to add or move models."
 msgstr ""
 
@@ -5948,7 +5949,7 @@ msgstr ""
 msgid "Unsaved Scene Found"
 msgstr ""
 
-#: src/app/page.tsx:10793
+#: src/app/page.tsx:10823
 msgid "Unsupported file format"
 msgstr ""
 

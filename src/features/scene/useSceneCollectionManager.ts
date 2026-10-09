@@ -1179,8 +1179,13 @@ function scheduleChunkStoreSweep(getModels: () => LoadedModel[]): void {
 }
 
 export function useSceneCollectionManager(options?: {
-  /** Called when the plate's lock refuses a gesture, so the caller can say so. */
-  onBlockedByLock?: () => void;
+  /**
+   * Called when the plate's lock refuses a gesture, so the caller can say so. The
+   * plate that refused arrives with it: a refusal can be about a plate that is not
+   * the active one (a row for another bed, a drag landing on a locked bed), and
+   * saying "the plate" about the wrong bed is worse than saying nothing.
+   */
+  onBlockedByLock?: (plateId?: string) => void;
 }) {
   const { _ } = useLingui();
 
@@ -1330,7 +1335,20 @@ export function useSceneCollectionManager(options?: {
   );
   // Told, not shown: the manager has no UI, so a refused gesture reports through this
   // callback and the page decides what that looks like.
-  const onBlockedByLockRef = useRef<(() => void) | undefined>(undefined);
+  const onBlockedByLockRef = useRef<((plateId?: string) => void) | undefined>(undefined);
+
+  /**
+   * The plate whose lock refused a gesture about `model`: the bed it would land on
+   * when that one is locked, the one it stands on otherwise. Only called once a
+   * guard has already refused, so it always names a bed that really is locked.
+   */
+  const lockedPlateIdFor = useCallback((model: LoadedModel, landedTransform?: LoadedModel['transform']) => {
+    if (landedTransform) {
+      const landedPlateId = modelPlateId({ ...model, transform: landedTransform });
+      if (isPlateLocked(landedPlateId)) return landedPlateId;
+    }
+    return modelPlateId(model);
+  }, [isPlateLocked, modelPlateId]);
   // An empty plate has no name: deleting the last model, or starting a new scene,
   // clears it, and the widget falls back to its default wording. Scoped to a
   // single-plate scene, so a plate you add and name is not emptied out from under
@@ -2338,7 +2356,7 @@ export function useSceneCollectionManager(options?: {
     // duplicate, split) call the setter directly and must keep working.
     const lockedTarget = modelsRef.current.find((model) => model.id === id);
     if (lockedTarget && isModelPlateLocked(lockedTarget)) {
-      onBlockedByLockRef.current?.();
+      onBlockedByLockRef.current?.(lockedPlateIdFor(lockedTarget));
       return;
     }
     setActiveModelId(id);
@@ -2378,7 +2396,7 @@ export function useSceneCollectionManager(options?: {
     // lock is enforced here rather than at each of them. New meshes land on the
     // active plate, so that is the plate whose lock matters.
     if (isActivePlateLocked()) {
-      onBlockedByLockRef.current?.();
+      onBlockedByLockRef.current?.(activePlateIdRef.current);
       return;
     }
     const files = Array.from(filesInput).filter((file) => getMeshExtension(file.name) !== null);
@@ -2784,7 +2802,7 @@ export function useSceneCollectionManager(options?: {
       isModelPlateLocked(currentModel)
       || isModelPlateLocked({ ...currentModel, transform })
     )) {
-      onBlockedByLockRef.current?.();
+      onBlockedByLockRef.current?.(lockedPlateIdFor(currentModel, transform));
       return {
         updated: false,
         supportsChanged: false,
@@ -3044,7 +3062,7 @@ export function useSceneCollectionManager(options?: {
       platesAfter?: { plates: ScenePlate[]; activePlateId: string };
     },
   ) => {
-    const lockedMove = updates.some((update) => {
+    const lockedMove = updates.find((update) => {
       const model = modelsRef.current.find((candidate) => candidate.id === update.id);
       if (!model) return false;
       // The bed it is leaving, and the bed it would land on: a model dragged onto a locked bed is
@@ -3055,7 +3073,8 @@ export function useSceneCollectionManager(options?: {
     });
     if (lockedMove) {
       // Say so: a transform that silently does nothing reads as a broken tool.
-      onBlockedByLockRef.current?.();
+      const refused = modelsRef.current.find((candidate) => candidate.id === lockedMove.id);
+      onBlockedByLockRef.current?.(refused ? lockedPlateIdFor(refused, lockedMove.transform) : undefined);
       return {
         updated: false,
         supportsChanged: false,
