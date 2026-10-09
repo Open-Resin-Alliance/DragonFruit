@@ -4384,8 +4384,15 @@ export function useSceneCollectionManager(options?: {
     // A caller removing a whole plate pushes one entry for the plate and its
     // models together, so it asks this to stay off the stack.
     const shouldPushHistory = options?.pushHistory !== false;
+    // The beds are named in both snapshots: the delete that empties the scene takes the
+    // spare beds with it, and undo has to bring them back with the models.
+    const currentPlates = platesRef.current;
     const before = shouldPushHistory
-      ? captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, { includeSupportState: includeSupportHistory })
+      ? captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, {
+          plates: currentPlates,
+          activePlateId: activePlateIdRef.current,
+          includeSupportState: includeSupportHistory,
+        })
       : null;
 
     existing.forEach((model) => {
@@ -4413,6 +4420,21 @@ export function useSceneCollectionManager(options?: {
 
     const nextActiveModelId = currentActiveModelId && ids.has(currentActiveModelId) ? null : currentActiveModelId;
     const nextSelectedModelIds = currentSelectedModelIds.filter((sid) => !ids.has(sid));
+
+    /**
+     * A scene with nothing left standing is one empty bed, not a scatter of empty ones:
+     * beds exist to hold models, so the delete that empties the scene takes the spare
+     * beds with it. Plate 1 stays — the scene always has a bed under it — and the view
+     * follows, the way it does when the bed being worked on goes.
+     */
+    const emptyingTheScene = nextModels.length === 0 && currentPlates.length > 1;
+    const nextPlates = emptyingTheScene ? currentPlates.slice(0, 1) : currentPlates;
+    const nextActivePlateId = emptyingTheScene ? currentPlates[0].id : activePlateIdRef.current;
+    if (emptyingTheScene) {
+      setPlates(nextPlates);
+      if (activePlateIdRef.current !== nextActivePlateId) setPlateViewRunId((id) => id + 1);
+      setActivePlateId(nextActivePlateId);
+    }
 
     setModels(nextModels);
     setActiveModelId(nextActiveModelId);
@@ -4442,7 +4464,11 @@ export function useSceneCollectionManager(options?: {
     }
 
     if (shouldPushHistory && before) {
-      const after = captureSceneSnapshot(nextModels, nextActiveModelId, nextSelectedModelIds, { includeSupportState: includeSupportHistory });
+      const after = captureSceneSnapshot(nextModels, nextActiveModelId, nextSelectedModelIds, {
+        plates: nextPlates,
+        activePlateId: nextActivePlateId,
+        includeSupportState: includeSupportHistory,
+      });
       const deletedLabel = existing.length === 1
         ? `Delete Model ${existing[0].name}`
         : `Delete ${existing.length} Models`;
