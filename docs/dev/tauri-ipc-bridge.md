@@ -248,6 +248,31 @@ The frontend keeps two bakes in flight (`AO_BAKE_CONCURRENCY` in
 own, but the weld, the tree build and the transfer are serial phases, and in a
 multi-model scene overlapping them is worth more than one model finishing sooner.
 
+### The estimator's second output, and the lean in it (crate only — nothing consumes it yet)
+
+`dragonfruit-mesh-core::vertex_occlusion` also returns the *visibility moment*
+(`VertexVisibility::moment`): the cosine-weighted average of the directions that
+escaped, `(1/N) Σ ωᵢ·(1 − wᵢ)`, in the mesh's own frame. It is three accumulates
+per sample out of the same ray bundle, not a second bake — measured, the bench
+above moves by less than its own run-to-run spread. Two things read it, and they
+are one fact: `normalize(moment)` is the vertex's **bent normal**, and the
+moment's component in the tangent plane is the occlusion field's **gradient** —
+the fan's own moment is the fixed axis `(0, 0, 2/3)·n`, so the blocked and
+unblocked moments are two views of one number. The gradient is what a
+reconstruction carrying the slope needs, and the slope is what the wedge above is
+made of: a chord through three vertex values has a discontinuous slope across
+every edge, and a field that carries the slope does not.
+
+Neither is wired up. `ao_vertex.rs` still returns one `f32` per corner and
+`softClay` still multiplies by `aBakedAo`. What blocks it is a property of the
+fan, measured in the crate's own tests: eight samples do not sum to their axis —
+the mean is 0.057 off it, a **4.85° lean** (16 rays: 0.030, 2.58°; 32: 0.016,
+1.39°; 64: 0.009, 0.75°) — and the lean is *coherent*, the same direction in
+every vertex's own tangent frame, so an open surface would read as uniformly
+tilted rather than as noise. A directional payload wants that decorrelated
+(rotate the fan by a hash of the vertex position, which is free) or a higher ray
+count (which is not).
+
 ## The Rust side of the seam
 
 Where the TS side is a set of wrappers, the native side keeps its cross-command

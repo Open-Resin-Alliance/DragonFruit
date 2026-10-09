@@ -18,6 +18,10 @@
 //! fraction of a cosine-weighted hemisphere that escapes the mesh within the
 //! probe reach — with the probe direction taken from the mesh's own vertex normal
 //! so there is nothing to orient or guess.
+//!
+//! The same bundle also gives the *average escaping direction*, [`VertexVisibility::moment`],
+//! which is the bent normal and the field's gradient in one vector — three
+//! accumulates per sample, no extra rays.
 
 use crate::bvh::Bvh;
 use crate::mesh::{IndexedMesh, Vec3};
@@ -75,7 +79,8 @@ fn hemisphere_samples(rays: usize) -> Vec<Vec3> {
         .collect()
 }
 
-/// One value per *geometry* vertex of the input soup, in the soup's own order.
+/// The bake over a triangle soup: one value and one moment per *corner*, in the
+/// soup's own order, plus the welded vertex count.
 ///
 /// **The weld happens here, once.** An earlier version called
 /// `IndexedMesh::from_triangle_soup` and then rebuilt the corner-to-vertex map
@@ -85,36 +90,92 @@ fn hemisphere_samples(rays: usize) -> Vec<Vec3> {
 /// near-coincident vertices (which is most STL soups at their shared edges) that
 /// shifts occlusion by a vertex, and it renders as misaligned triangles. One
 /// mapping, used in both directions, cannot disagree with itself.
+pub fn bake_visibility_for_soup(
+    positions: &[f32],
+    rays: usize,
+    reach_mm: Option<f32>,
+) -> (VertexVisibility, usize) {
+    let corner_count = positions.len() / 3;
+    if corner_count == 0 {
+        return (VertexVisibility { occlusion: Vec::new(), moment: Vec::new() }, 0);
+    }
+
+    let (mesh, corner_map) =
+        IndexedMesh::from_triangle_soup_with_corner_map(positions, SOUP_MERGE_EPSILON);
+    let welded = bake_vertex_visibility(&mesh, rays, reach_mm);
+
+    // Expanded through the same map, in one pass: two passes would be two
+    // chances to index the occlusion and the moment differently.
+    let mut occlusion = Vec::with_capacity(corner_map.len());
+    let mut moment = Vec::with_capacity(corner_map.len());
+    for id in &corner_map {
+        let index = *id as usize;
+        occlusion.push(welded.occlusion.get(index).copied().unwrap_or(1.0));
+        moment.push(welded.moment.get(index).copied().unwrap_or(Vec3::ZERO));
+    }
+
+    debug_assert_eq!(
+        occlusion.len(),
+        positions.len() / 3,
+        "one value per corner of the soup, in its own order"
+    );
+    debug_assert_eq!(moment.len(), occlusion.len(), "one moment per value");
+    (VertexVisibility { occlusion, moment }, mesh.positions.len())
+}
+
+/// [`bake_visibility_for_soup`], scalar only.
 pub fn bake_vertex_occlusion_for_soup(
     positions: &[f32],
     rays: usize,
     reach_mm: Option<f32>,
 ) -> (Vec<f32>, usize) {
-    let corner_count = positions.len() / 3;
-    if corner_count == 0 {
-        return (Vec::new(), 0);
-    }
-
-    let (mesh, corner_map) =
-        IndexedMesh::from_triangle_soup_with_corner_map(positions, SOUP_MERGE_EPSILON);
-    let welded = bake_vertex_occlusion(&mesh, rays, reach_mm);
-
-    let out: Vec<f32> = corner_map
-        .iter()
-        .map(|id| welded.get(*id as usize).copied().unwrap_or(1.0))
-        .collect();
-
-    debug_assert_eq!(
-        out.len(),
-        positions.len() / 3,
-        "one value per corner of the soup, in its own order"
-    );
-    (out, mesh.positions.len())
+    let (visibility, welded) = bake_visibility_for_soup(positions, rays, reach_mm);
+    (visibility.occlusion, welded)
 }
 
 /// One value per vertex: 1 = open sky, 0 = fully occluded.
 pub fn bake_vertex_occlusion(mesh: &IndexedMesh, rays: usize, reach_mm: Option<f32>) -> Vec<f32> {
     bake_against(mesh, mesh, rays, reach_mm)
+}
+
+/// The bake's full per-vertex output: the scalar occlusion, and the visibility
+/// moment it is derived from.
+///
+/// **The moment is the second thing the same ray bundle can tell us**, and it
+/// costs three accumulates per sample rather than another ray bundle: it is
+/// `(1/N) Σ ωᵢ·(1 − wᵢ)`, the cosine-weighted average of the directions that
+/// escaped, expressed in the mesh's own frame. Its length is therefore at most
+/// the occlusion value, and its direction is the vertex's *bent normal* — a
+/// direction, so that a crease darkens on the side facing its occluder rather
+/// than washing uniformly, and so that interpolating it across a face varies a
+/// vector instead of drawing a chord through a scalar.
+///
+/// The moment's component *in the tangent plane* is the field's gradient, up to
+/// a constant and with the sign flipped: the fan's own moment is the fixed axis
+/// `(0, 0, 2/3)·n`, so the blocked and unblocked moments are two views of one
+/// number and either one determines the other. That is what a reconstruction
+/// carrying the slope needs — a chord through three vertex values has a
+/// discontinuous slope across every edge, which is the wedge a coarse mesh
+/// shows (see "Faces too long to carry a per-vertex field" in
+/// `docs/dev/tauri-ipc-bridge.md`), and a field that carries the slope does not.
+///
+/// A vertex with no usable normal (isolated or degenerate) gets a zero moment,
+/// which reads as "no direction known"; a consumer falls back to the geometric
+/// normal there.
+pub struct VertexVisibility {
+    /// One per vertex: 1 = open sky, 0 = fully occluded.
+    pub occlusion: Vec<f32>,
+    /// `(1/N) Σ ωᵢ·(1 − wᵢ)`, one per vertex, in the mesh's own frame.
+    pub moment: Vec<Vec3>,
+}
+
+/// The bake, keeping the visibility moment [`bake_vertex_occlusion`] discards.
+pub fn bake_vertex_visibility(
+    mesh: &IndexedMesh,
+    rays: usize,
+    reach_mm: Option<f32>,
+) -> VertexVisibility {
+    bake_against_with_visibility(mesh, mesh, rays, reach_mm)
 }
 
 /// Sample `mesh` while casting the rays against `occluder`.
@@ -127,9 +188,24 @@ pub fn bake_against(
     rays: usize,
     reach_mm: Option<f32>,
 ) -> Vec<f32> {
+    bake_against_with_visibility(mesh, occluder, rays, reach_mm).occlusion
+}
+
+/// [`bake_against`] without throwing the moment away.
+///
+/// One implementation rather than two, because the moment has to come from the
+/// same ray bundle as the scalar it qualifies: a second loop would be a second
+/// chance for the two to disagree about the mesh, which is the failure mode
+/// this module has already been bitten by once.
+pub fn bake_against_with_visibility(
+    mesh: &IndexedMesh,
+    occluder: &IndexedMesh,
+    rays: usize,
+    reach_mm: Option<f32>,
+) -> VertexVisibility {
     let vertex_count = mesh.positions.len();
     if vertex_count == 0 {
-        return Vec::new();
+        return VertexVisibility { occlusion: Vec::new(), moment: Vec::new() };
     }
 
     // Vertex normals from the adjacent faces: the bake's probe directions and
@@ -161,53 +237,69 @@ pub fn bake_against(
     let falloff_end = reach * FALLOFF_END;
 
     let mut out = vec![1.0f32; vertex_count];
-    out.par_iter_mut().enumerate().for_each(|(index, value)| {
-        let mut normal = normals[index];
-        if normal.length() < 1e-12 {
-            // Isolated or degenerate vertex: open sky is the honest answer.
-            *value = 1.0;
-            return;
-        }
-        normal = normal.scale(1.0 / normal.length());
-
-        // A stable tangent basis; the fan is cosine weighted, so its rotation
-        // about the normal does not bias the estimate.
-        let mut tangent = Vec3::new(0.0, 0.0, 1.0);
-        if normal.z.abs() > 0.9 {
-            tangent = Vec3::new(1.0, 0.0, 0.0);
-        }
-        let bitangent = normal.cross(tangent);
-        let bitangent = bitangent.scale(1.0 / bitangent.length().max(1e-12));
-        let tangent = bitangent.cross(normal);
-
-        let origin = mesh.positions[index].add(normal.scale(bias));
-        let mut hits = 0.0f32;
-        for sample in &samples {
-            let dir = tangent
-                .scale(sample.x)
-                .add(bitangent.scale(sample.y))
-                .add(normal.scale(sample.z));
-            // Kept even though the basis is orthonormal and the fan is on the unit
-            // sphere, so this should be a no-op: the sum of squares it divides by
-            // carries a rounding error of its own, and without it the directions
-            // shift by ~1e-6, which flips grazing rays onto different triangles.
-            // Measured: 13.7% of one model's values move, by up to 0.038.
-            let dir = dir.scale(1.0 / dir.length().max(1e-12));
-            // Weighted by distance: a surface half a millimetre away blocks most
-            // of the sky behind it, one at the far end of the reach barely counts.
-            // Everything inside the plateau weighs the same, so the traversal is
-            // allowed to stop at the first hit there.
-            if let Some(t) = bvh.ray_nearest_within(occluder, origin, dir, reach, plateau) {
-                // Full weight within the plateau, then a straight taper to nothing
-                // at the end of the reach.
-                let span = (t - plateau) / (falloff_end - plateau).max(1e-6);
-                hits += (1.0 - span).clamp(0.0, 1.0);
+    let mut moments = vec![Vec3::ZERO; vertex_count];
+    out.par_iter_mut()
+        .zip(moments.par_iter_mut())
+        .enumerate()
+        .for_each(|(index, (value, moment))| {
+            let mut normal = normals[index];
+            if normal.length() < 1e-12 {
+                // Isolated or degenerate vertex: open sky is the honest answer,
+                // and there is no direction to point a bent normal at.
+                *value = 1.0;
+                *moment = Vec3::ZERO;
+                return;
             }
-        }
-        *value = 1.0 - hits / samples.len() as f32;
-    });
+            normal = normal.scale(1.0 / normal.length());
 
-    out
+            // A stable tangent basis; the fan is cosine weighted, so its rotation
+            // about the normal does not bias the estimate.
+            let mut tangent = Vec3::new(0.0, 0.0, 1.0);
+            if normal.z.abs() > 0.9 {
+                tangent = Vec3::new(1.0, 0.0, 0.0);
+            }
+            let bitangent = normal.cross(tangent);
+            let bitangent = bitangent.scale(1.0 / bitangent.length().max(1e-12));
+            let tangent = bitangent.cross(normal);
+
+            let origin = mesh.positions[index].add(normal.scale(bias));
+            let mut hits = 0.0f32;
+            // The escaping directions, in mesh space: this is the moment above.
+            // Same loop, same bundle, so the two outputs cannot disagree.
+            let mut escaped = Vec3::ZERO;
+            for sample in &samples {
+                let dir = tangent
+                    .scale(sample.x)
+                    .add(bitangent.scale(sample.y))
+                    .add(normal.scale(sample.z));
+                // Kept even though the basis is orthonormal and the fan is on the unit
+                // sphere, so this should be a no-op: the sum of squares it divides by
+                // carries a rounding error of its own, and without it the directions
+                // shift by ~1e-6, which flips grazing rays onto different triangles.
+                // Measured: 13.7% of one model's values move, by up to 0.038.
+                let dir = dir.scale(1.0 / dir.length().max(1e-12));
+                // Weighted by distance: a surface half a millimetre away blocks most
+                // of the sky behind it, one at the far end of the reach barely counts.
+                // Everything inside the plateau weighs the same, so the traversal is
+                // allowed to stop at the first hit there.
+                let blocked = match bvh.ray_nearest_within(occluder, origin, dir, reach, plateau) {
+                    // Full weight within the plateau, then a straight taper to
+                    // nothing at the end of the reach.
+                    Some(t) => {
+                        let span = (t - plateau) / (falloff_end - plateau).max(1e-6);
+                        (1.0 - span).clamp(0.0, 1.0)
+                    }
+                    None => 0.0,
+                };
+                hits += blocked;
+                escaped = escaped.add(dir.scale(1.0 - blocked));
+            }
+            let sample_count = samples.len() as f32;
+            *value = 1.0 - hits / sample_count;
+            *moment = escaped.scale(1.0 / sample_count);
+        });
+
+    VertexVisibility { occlusion: out, moment: moments }
 }
 
 #[cfg(test)]
@@ -382,13 +474,167 @@ mod tests {
         );
     }
 
+    /// The moment the fan itself produces on an unoccluded surface.
+    ///
+    /// A finite fan's directions do not sum to its axis. Measured on the shipped
+    /// one: 8 rays leave a **0.057 transverse moment, a 4.85° lean**, 16 leave
+    /// 0.030 (2.58°), 32 leave 0.016 (1.39°), 64 leave 0.009 (0.75°) — it falls
+    /// with ray count and it is *coherent*: the same lean in every vertex's own
+    /// tangent frame, so a flat floor reads as uniformly tilted rather than as
+    /// noise. Every directional claim below subtracts it, because on a surface
+    /// with one normal it is the entire reading of a vertex far from its occluder.
+    fn fan_bias() -> Vec3 {
+        let samples = hemisphere_samples(DEFAULT_RAYS);
+        let sum = samples.iter().fold(Vec3::ZERO, |acc, sample| acc.add(*sample));
+        sum.scale(1.0 / samples.len() as f32)
+    }
+
+    /// The visibility moment is a direction integral, and on a surface nothing
+    /// occludes it is the fan's own axis: two thirds of the normal, plus the
+    /// fan's transverse lean and nothing else.
+    ///
+    /// That two thirds is not a tuned number — a cosine-weighted fan over a
+    /// hemisphere has `E[√(1 − u)] = 2/3` for `u` uniform — so the axis pins the
+    /// accumulation and the `1/N` scaling, and the transverse part pins the
+    /// tangent-to-mesh frame: the fan's mean is computed in tangent space and the
+    /// bake's is in mesh space, so a swapped basis fails here.
+    #[test]
+    fn open_surface_moment_is_the_fan_axis() {
+        // A flat plate: two triangles, four vertices, normal +Z, nothing above it.
+        let soup = [
+            0.0f32, 0.0, 0.0, 10.0, 0.0, 0.0, 10.0, 10.0, 0.0, //
+            0.0, 0.0, 0.0, 10.0, 10.0, 0.0, 0.0, 10.0, 0.0,
+        ];
+        let mesh = IndexedMesh::from_triangle_soup(&soup, 1e-5);
+        let visibility = bake_vertex_visibility(&mesh, DEFAULT_RAYS, None);
+        let bias = fan_bias();
+        assert!(
+            bias.length() > 0.05,
+            "the fan's own transverse lean should be documented here, got {}",
+            bias.length(),
+        );
+
+        assert_eq!(visibility.moment.len(), mesh.positions.len());
+        for (index, moment) in visibility.moment.iter().enumerate() {
+            let occlusion = visibility.occlusion[index];
+            assert!(occlusion > 0.999, "the plate should be open, got {occlusion}");
+            assert!(
+                (moment.z - 2.0 / 3.0).abs() < 0.01,
+                "an open surface's moment should sit at 2/3 of its normal, got {moment:?}",
+            );
+            assert!(
+                moment.sub(bias).length() < 1e-4,
+                "an open surface's moment is the fan's own mean and nothing else: \
+                 got {moment:?} against {bias:?}",
+            );
+            assert!(
+                moment.length() <= occlusion + 1e-6,
+                "the moment cannot outrun the occlusion it comes from: {moment:?} at {occlusion}",
+            );
+        }
+    }
+
+    /// The moment's component in the tangent plane is the occlusion field's
+    /// gradient: it leans away from the occluder, and less as the occluder
+    /// recedes, while the occlusion value rises with distance.
+    ///
+    /// This is the invariant a higher-order reconstruction stands on. If the
+    /// moment were only "a direction to shade with" it could point anywhere on a
+    /// surface whose shading is uniform; this is what says it carries the slope,
+    /// so a face can be shaded with the slope rather than with a chord through
+    /// three vertex values.
+    #[test]
+    fn moment_leans_away_from_the_occluder_along_the_rising_field() {
+        // A 1mm-triangulated 40mm floor with a block 6mm tall over its middle.
+        // The reach is 8% of the diagonal, about 4.5mm, so the block's wall is
+        // inside the falloff for the vertices near it and out of it by the end of
+        // the walk, which is what gives the field somewhere to decay.
+        let size = 40.0f32;
+        let step = 1.0f32;
+        let cells = (size / step) as u32;
+        let vertex = |x: u32, y: u32| [x as f32 * step, y as f32 * step, 0.0];
+        let mut soup = Vec::new();
+        for x in 0..cells {
+            for y in 0..cells {
+                let a = vertex(x, y);
+                let b = vertex(x + 1, y);
+                let c = vertex(x + 1, y + 1);
+                let d = vertex(x, y + 1);
+                soup.extend_from_slice(&[a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]]);
+                soup.extend_from_slice(&[a[0], a[1], a[2], c[0], c[1], c[2], d[0], d[1], d[2]]);
+            }
+        }
+        soup.extend(box_soup([10.0, 10.0, 0.2], [30.0, 30.0, 6.0]));
+        let mesh = IndexedMesh::from_triangle_soup(&soup, 1e-5);
+        let visibility = bake_vertex_visibility(&mesh, DEFAULT_RAYS, None);
+
+        // Floor vertices along y = 20, walking out from under the block's +x wall.
+        // The floor's normal is +Z everywhere, so every vertex shares one tangent
+        // frame and the fan's bias is one vector for the whole walk — which is
+        // exactly why it has to come off before the tilt says anything.
+        let bias = fan_bias().x;
+        let mut walk = Vec::new();
+        for x in 31..=37 {
+            let mut best = f32::MAX;
+            let mut nearest = None;
+            for (index, position) in mesh.positions.iter().enumerate() {
+                if position.z.abs() > 1e-6 {
+                    continue;
+                }
+                let distance = (position.x - x as f32).powi(2) + (position.y - 20.0).powi(2);
+                if distance < best {
+                    best = distance;
+                    nearest = Some(index);
+                }
+            }
+            let index = nearest.expect("a floor vertex in the walk");
+            walk.push((x, visibility.occlusion[index], visibility.moment[index].x - bias));
+        }
+
+        // The walk has to span the decay, or the monotonicity below proves nothing.
+        let first = walk.first().unwrap();
+        let last = walk.last().unwrap();
+        assert!(
+            last.1 > first.1 + 0.05,
+            "the walk should cross the falloff, got {} then {}",
+            first.1,
+            last.1,
+        );
+        assert!(
+            first.2 > 0.05,
+            "next to the wall the lean should be unmistakable, got {}",
+            first.2,
+        );
+        assert!(
+            walk[2].2 > 0.0,
+            "the lean should survive past the first vertex, got {} at x={}",
+            walk[2].2,
+            walk[2].0,
+        );
+        for pair in walk.windows(2) {
+            assert!(
+                pair[1].1 >= pair[0].1 - 0.02,
+                "the field should lighten with distance from the block: {:?} then {:?}",
+                (pair[0].0, pair[0].1),
+                (pair[1].0, pair[1].1),
+            );
+            assert!(
+                pair[1].2 <= pair[0].2 + 0.02,
+                "and the lean should fade, not grow: {:?} then {:?}",
+                (pair[0].0, pair[0].2),
+                (pair[1].0, pair[1].2),
+            );
+        }
+    }
+
     #[test]
     fn bake_is_deterministic() {
         let soup = box_soup([0.0, 0.0, 0.0], [12.0, 9.0, 6.0]);
         let mesh = IndexedMesh::from_triangle_soup(&soup, 1e-5);
-        let a = bake_vertex_occlusion(&mesh, DEFAULT_RAYS, None);
-        let b = bake_vertex_occlusion(&mesh, DEFAULT_RAYS, None);
-        assert_eq!(a, b);
+        let a = bake_vertex_visibility(&mesh, DEFAULT_RAYS, None);
+        let b = bake_vertex_visibility(&mesh, DEFAULT_RAYS, None);
+        assert_eq!(a.occlusion, b.occlusion);
+        assert_eq!(a.moment, b.moment);
     }
 
     /// Timing reference: `cargo test -p dragonfruit-mesh-core --release --
