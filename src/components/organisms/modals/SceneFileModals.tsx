@@ -312,6 +312,7 @@ export function SceneFileModals({
           currentPrinterName={scene.printerMismatch.currentName}
           currentBuildVolumeMm={scene.printerMismatch.currentBuildVolumeMm}
           willAddPrinter={scene.printerMismatch.installedProfileId === null}
+          currentIsSmaller={scene.printerMismatch.currentIsSmaller}
           onSwitch={() => scene.resolvePrinterMismatch('switch')}
           onKeep={() => scene.resolvePrinterMismatch('keep')}
         />

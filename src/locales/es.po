@@ -188,7 +188,7 @@ msgstr "<0>{overwriteCollisionCount}</0> archivos que va a escribir este proceso
 #. placeholder {0}: recordedBuildVolumeMm.width
 #. placeholder {1}: recordedBuildVolumeMm.depth
 #. placeholder {2}: recordedBuildVolumeMm.height
-#: src/components/modals/ScenePrinterMismatchModal.tsx:74
+#: src/components/modals/ScenePrinterMismatchModal.tsx:81
 msgid "<0>{recordedLabel}</0> builds {0} × {1} × {2} mm."
 msgstr "<0>{recordedLabel}</0> tiene un volumen de {0} × {1} × {2} mm."
 
@@ -869,9 +869,9 @@ msgstr "Límites del volumen de impresión, origen y resolución de la vista 3D"
 msgid "Build: {0} × {1} × {2} mm"
 msgstr "Volumen: {0} × {1} × {2} mm"
 
-#: src/components/modals/ScenePrinterMismatchModal.tsx:50
-msgid "Built for a bigger printer"
-msgstr "Creada para una impresora más grande"
+#: src/components/modals/ScenePrinterMismatchModal.tsx:55
+msgid "Built for another printer"
+msgstr "Creada para otra impresora"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:285
 #: src/components/controls/autoSupport/AutoSupportPresetSelect.tsx:57
@@ -1145,7 +1145,7 @@ msgstr "Cerrar los ajustes de antialiasing del material"
 #: src/components/controls/ModelManagerPanel.tsx:754
 #: src/components/modals/AaSupportWarningModal.tsx:34
 #: src/components/modals/ObsoleteVoxlVersionModal.tsx:40
-#: src/components/modals/ScenePrinterMismatchModal.tsx:55
+#: src/components/modals/ScenePrinterMismatchModal.tsx:62
 msgid "Close modal"
 msgstr "Cerrar la ventana"
 
@@ -2759,7 +2759,7 @@ msgid "Islands found by BOTH the slice and mesh scans are placed first (they are
 msgstr "Las islas que encuentran AMBOS escaneos, el de capas y el de malla, se colocan primero (son las más seguras)"
 
 #. A printer name, shown in bold.
-#: src/components/modals/ScenePrinterMismatchModal.tsx:90
+#: src/components/modals/ScenePrinterMismatchModal.tsx:106
 msgid "It is not in your printer library, so switching adds <0>{recordedLabel}</0> from this scene."
 msgstr "No está en tu biblioteca de impresoras, así que al cambiar se añadirá <0>{recordedLabel}</0> desde esta escena."
 
@@ -2771,6 +2771,10 @@ msgstr "Parece que DragonFruit se cerró antes de que guardaras la última sesi�
 #: src/components/layout/EmptySceneState.tsx:94
 msgid "It's a trap! ...just kidding, drop your STL."
 msgstr "¡Es una trampa! ...es broma, suelta tu STL."
+
+#: src/components/modals/ScenePrinterMismatchModal.tsx:58
+msgid "Its plates are spaced for that printer"
+msgstr "Sus bandejas están separadas para esa impresora"
 
 #: src/components/layout/EmptySceneState.tsx:104
 msgid "Join the Open Resin Alliance!"
@@ -2792,7 +2796,7 @@ msgstr "JSON cargado. Ahora selecciona el fichero STL original."
 msgid "Just Slice"
 msgstr "Solo laminar"
 
-#: src/components/modals/ScenePrinterMismatchModal.tsx:61
+#: src/components/modals/ScenePrinterMismatchModal.tsx:68
 msgid "Keep {currentPrinterName}"
 msgstr "Mantener {currentPrinterName}"
 
@@ -4819,9 +4823,9 @@ msgstr "Escena"
 msgid "Scene Autosave"
 msgstr "Guardado automático de escenas"
 
-#: src/components/modals/ScenePrinterMismatchModal.tsx:49
-msgid "Scene built for a bigger printer"
-msgstr "Escena creada para una impresora más grande"
+#: src/components/modals/ScenePrinterMismatchModal.tsx:54
+msgid "Scene built for another printer"
+msgstr "Escena creada para otra impresora"
 
 #: src/components/settings/PerformanceSettingsTab.tsx:139
 msgid "Scene mood overlay in thumbnail"
@@ -5445,12 +5449,12 @@ msgstr "Sospechosamente vacío aquí dentro."
 msgid "Swap which cut half receives the tenon and which receives the mortise."
 msgstr "Intercambia qué mitad del corte lleva la espiga y cuál la mortaja."
 
-#: src/components/modals/ScenePrinterMismatchModal.tsx:68
+#: src/components/modals/ScenePrinterMismatchModal.tsx:75
 msgid "Switch to {recordedLabel}"
 msgstr "Cambiar a {recordedLabel}"
 
 #. A printer name, shown in bold.
-#: src/components/modals/ScenePrinterMismatchModal.tsx:96
+#: src/components/modals/ScenePrinterMismatchModal.tsx:112
 msgid "Switch to <0>{recordedLabel}</0> before importing?"
 msgstr "¿Cambiar a <0>{recordedLabel}</0> antes de importar?"
 
@@ -5618,11 +5622,19 @@ msgstr "La impresora ha informado de esta variante."
 #. placeholder {0}: currentBuildVolumeMm.width
 #. placeholder {1}: currentBuildVolumeMm.depth
 #. placeholder {2}: currentBuildVolumeMm.height
-#: src/components/modals/ScenePrinterMismatchModal.tsx:81
+#: src/components/modals/ScenePrinterMismatchModal.tsx:96
+msgid "The printer selected now, <0>{currentPrinterName}</0>, builds {0} × {1} × {2} mm, and this scene was laid out for the other one."
+msgstr "La impresora seleccionada ahora, <0>{currentPrinterName}</0>, construye {0} × {1} × {2} mm, y esta escena se distribuyó para la otra."
+
+#. A printer name, shown in bold.
+#. placeholder {0}: currentBuildVolumeMm.width
+#. placeholder {1}: currentBuildVolumeMm.depth
+#. placeholder {2}: currentBuildVolumeMm.height
+#: src/components/modals/ScenePrinterMismatchModal.tsx:89
 msgid "The printer selected now, <0>{currentPrinterName}</0>, builds {0} × {1} × {2} mm. A plate packed for the larger machine will not fit."
 msgstr "La impresora seleccionada ahora, <0>{currentPrinterName}</0>, tiene un volumen de {0} × {1} × {2} mm. Una plata llena preparada para la máquina más grande no cabrá."
 
-#: src/components/modals/ScenePrinterMismatchModal.tsx:44
+#: src/components/modals/ScenePrinterMismatchModal.tsx:49
 msgid "the printer this scene was built for"
 msgstr "la impresora para la que se creó esta escena"
 
@@ -5733,7 +5745,7 @@ msgstr "Esta impresora no tiene opciones de configuración."
 msgid "This scene is aggressively unoccupied."
 msgstr "Esta escena está agresivamente desocupada."
 
-#: src/components/modals/ScenePrinterMismatchModal.tsx:51
+#: src/components/modals/ScenePrinterMismatchModal.tsx:57
 msgid "This scene may not fit the one selected"
 msgstr "Puede que esta escena no quepa en la seleccionada"
 

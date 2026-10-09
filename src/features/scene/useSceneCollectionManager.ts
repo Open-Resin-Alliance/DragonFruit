@@ -1055,9 +1055,11 @@ export type ObsoleteVoxlScenePrompt = {
 };
 
 /**
- * A scene written for a bigger printer than the one selected. Raised on import
- * so the user can switch before a plate packed for a larger machine is squeezed
- * into a smaller build volume.
+ * A scene written for a printer other than the one selected. Raised on import so
+ * the user can switch before the scene is dropped into a machine its beds were
+ * not laid out for: the plate pitch comes from the build volume, so a scene
+ * packed for another printer lands on the wrong ones, and if that printer is the
+ * bigger the plates do not fit here at all.
  */
 export type PrinterMismatchPrompt = {
   /** The printer the scene carries, whole, so switching can add it when it is missing here. */
@@ -1073,6 +1075,8 @@ export type PrinterMismatchPrompt = {
    * machine has none and switching will add it from the bundle.
    */
   installedProfileId: string | null;
+  /** Whether the selected printer is smaller on some axis, so nothing fits as packed. */
+  currentIsSmaller: boolean;
 };
 
 type MeshRepairConfirmChoice = 'repair' | 'load_as_is' | 'cancel_import';
@@ -5991,25 +5995,30 @@ export function useSceneCollectionManager(options?: {
           setPlates((prev) => prev.map((plate, index) => (index === 0 ? { ...plate, name: legacyName } : plate)));
         }
 
-        // A scene packed for a bigger machine should not be dropped into the
-        // selected one without a word. Read the store fresh rather than the memo,
-        // because this callback can run long after it was created.
+        // A scene built for another printer should not be dropped into this one without
+        // a word: its beds were spaced for the machine it names, and when that machine is
+        // the bigger the plates do not fit here at all. Read the store fresh rather than
+        // the memo, because this callback can run long after it was created.
         const recordedPrinter = document.meta?.printer;
         const recordedVolume = recordedPrinter?.printer.buildVolumeMm;
         const currentPrinter = getActivePrinterProfile(getProfileStoreSnapshot());
-        if (recordedPrinter && recordedVolume && currentPrinter && buildVolumeIsSmaller(currentPrinter, recordedPrinter)) {
+        if (recordedPrinter && recordedVolume && currentPrinter) {
           const installed = findPrinterProfileForBundle(recordedPrinter, getProfileStoreSnapshot());
-          const recordedName = typeof recordedPrinter.printer.name === 'string' && recordedPrinter.printer.name.trim().length > 0
-            ? recordedPrinter.printer.name
-            : undefined;
-          setPrinterMismatch({
-            bundle: recordedPrinter,
-            ...(recordedName ? { recordedName } : {}),
-            recordedBuildVolumeMm: { ...recordedVolume },
-            currentName: currentPrinter.name,
-            currentBuildVolumeMm: { ...currentPrinter.buildVolumeMm },
-            installedProfileId: installed?.id ?? null,
-          });
+          // Resolving to the profile selected now means the scene is already on its printer.
+          if (installed?.id !== currentPrinter.id) {
+            const recordedName = typeof recordedPrinter.printer.name === 'string' && recordedPrinter.printer.name.trim().length > 0
+              ? recordedPrinter.printer.name
+              : undefined;
+            setPrinterMismatch({
+              bundle: recordedPrinter,
+              ...(recordedName ? { recordedName } : {}),
+              recordedBuildVolumeMm: { ...recordedVolume },
+              currentName: currentPrinter.name,
+              currentBuildVolumeMm: { ...currentPrinter.buildVolumeMm },
+              installedProfileId: installed?.id ?? null,
+              currentIsSmaller: buildVolumeIsSmaller(currentPrinter, recordedPrinter),
+            });
+          }
         }
       }
 

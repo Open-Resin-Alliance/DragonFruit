@@ -20,15 +20,19 @@ type ScenePrinterMismatchModalProps = {
   currentBuildVolumeMm: BuildVolumeMm;
   /** True when switching has to add the printer from the scene first. */
   willAddPrinter: boolean;
+  /** True when the selected printer is smaller on some axis, so nothing fits as packed. */
+  currentIsSmaller: boolean;
   onSwitch: () => void;
   onKeep: () => void;
 };
 
 /**
- * Shown when an imported scene was written for a printer with a larger build
- * volume than the one selected. The scene carries that printer whole, so the
- * comparison does not depend on the profile being installed here, and switching
- * can add it when it is not.
+ * Shown when an imported scene was written for a printer other than the one
+ * selected. Its beds are spaced for the printer it names, so the scene lands on
+ * the wrong ones here; when that printer is the bigger, the plates do not fit at
+ * all, which is what the smaller case says. The scene carries that printer whole,
+ * so the comparison does not depend on the profile being installed here, and
+ * switching can add it when it is not.
  */
 export function ScenePrinterMismatchModal({
   isOpen,
@@ -37,6 +41,7 @@ export function ScenePrinterMismatchModal({
   currentPrinterName,
   currentBuildVolumeMm,
   willAddPrinter,
+  currentIsSmaller,
   onSwitch,
   onKeep,
 }: ScenePrinterMismatchModalProps) {
@@ -46,9 +51,11 @@ export function ScenePrinterMismatchModal({
   return (
     <StructuredDialogModal
       open={isOpen}
-      ariaLabel={_(msg`Scene built for a bigger printer`)}
-      title={_(msg`Built for a bigger printer`)}
-      subtitle={_(msg`This scene may not fit the one selected`)}
+      ariaLabel={_(msg`Scene built for another printer`)}
+      title={_(msg`Built for another printer`)}
+      subtitle={currentIsSmaller
+        ? _(msg`This scene may not fit the one selected`)
+        : _(msg`Its plates are spaced for that printer`)}
       icon={<AlertTriangle className="h-4 w-4" />}
       iconTone="warning"
       zIndexClassName="z-[130]"
@@ -78,12 +85,21 @@ export function ScenePrinterMismatchModal({
         </Trans>
       </p>
       <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-        <Trans comment="A printer name, shown in bold.">
-          The printer selected now,{' '}
-          <strong className="text-sm font-medium" style={{ color: 'var(--text-strong)' }}>{currentPrinterName}</strong>
-          , builds {currentBuildVolumeMm.width} × {currentBuildVolumeMm.depth} ×{' '}
-          {currentBuildVolumeMm.height} mm. A plate packed for the larger machine will not fit.
-        </Trans>
+        {currentIsSmaller ? (
+          <Trans comment="A printer name, shown in bold.">
+            The printer selected now,{' '}
+            <strong className="text-sm font-medium" style={{ color: 'var(--text-strong)' }}>{currentPrinterName}</strong>
+            , builds {currentBuildVolumeMm.width} × {currentBuildVolumeMm.depth} ×{' '}
+            {currentBuildVolumeMm.height} mm. A plate packed for the larger machine will not fit.
+          </Trans>
+        ) : (
+          <Trans comment="A printer name, shown in bold.">
+            The printer selected now,{' '}
+            <strong className="text-sm font-medium" style={{ color: 'var(--text-strong)' }}>{currentPrinterName}</strong>
+            , builds {currentBuildVolumeMm.width} × {currentBuildVolumeMm.depth} ×{' '}
+            {currentBuildVolumeMm.height} mm, and this scene was laid out for the other one.
+          </Trans>
+        )}
       </p>
       <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
         {willAddPrinter ? (
