@@ -77,11 +77,12 @@ every raft mesh and the clustering behind them. The clearance is where the model
 stand, not where a gizmo drags them, so it now takes the stored transforms and the
 outline display keeps its own live-transform targets.
 
-Still open: `bakedAoVersion` rides on the `models` entries, so each of the AO
-bakes that run after a load replaces the `models` array and invalidates the
-clearance and the raft with it — 17 rebuilds in the fifteen seconds after a load.
-The version is render-only state read by `StlMesh`; a store of its own would keep
-it out of the scene array.
+Was: `bakedAoVersion` rode on the `models` entries, so each of the AO bakes that
+run after a load replaced the `models` array and invalidated the clearance and the
+raft with it — 17 rebuilds in the fifteen seconds after a load. It is a
+per-geometry counter in `src/features/scene/bakedOcclusion.ts` now, subscribed to
+by `StlMesh`; render-only state read by one component does not belong in the
+scene array.
 
 **And the last one, found by measuring the production build rather than the dev
 server.** The clearance is keyed on the array of visible models, and a re-render

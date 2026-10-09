@@ -6557,7 +6557,6 @@ export function SceneCanvas({
                       matcapVariant={matcapVariant}
                       flatUseVertexColors={flatUseVertexColors}
                       xrayOpacity={xrayOpacity}
-                      bakedAoVersion={model.bakedAoVersion}
                       heatmapMinAngle={heatmapMinAngle}
                       heatmapMaxAngle={heatmapMaxAngle}
                       heatmapColors={heatmapColors ?? emptyHeatmapColors}
