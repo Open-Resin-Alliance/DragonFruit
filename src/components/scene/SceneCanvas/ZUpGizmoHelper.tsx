@@ -178,8 +178,12 @@ function RotationArrow({
   );
 }
 
-/** Home button sits on the bottom-right diagonal, between the right and bottom arrows. */
-const HOME_OFFSET = 0.76;
+/** Home button sits on the bottom-right diagonal, between the right and bottom arrows.
+ *  It has to clear the viewcube's corner sweep, not its faces: as the cube turns with
+ *  the camera a corner reaches half-extent × √3 (30 × 1.73 ≈ 52px), which is what the
+ *  old 0.76 offset collided with. 0.86 puts the button's nearest corner ~6px outside
+ *  that sweep while staying inside the gizmo's bottom margin. */
+const HOME_OFFSET = 0.86;
 const HOME_SIZE = 0.36;
 
 function HomeButton({
