@@ -99,6 +99,25 @@ export function SliceMetricsDebugModal({
     }
   }, [copyPayload]);
 
+  // Isolated IPC bridge timing (#753). The report is also shown in a textarea
+  // because the clipboard may refuse a write that lands long after the click.
+  const [ipcBenchState, setIpcBenchState] = React.useState<'idle' | 'running' | 'done' | 'error'>('idle');
+  const [ipcBenchReport, setIpcBenchReport] = React.useState('');
+
+  const handleRunIpcBench = React.useCallback(async () => {
+    setIpcBenchState('running');
+    try {
+      const { runIpcBench } = await import('@/utils/debug/ipcBench');
+      const text = JSON.stringify(await runIpcBench(), null, 2);
+      setIpcBenchReport(text);
+      setIpcBenchState('done');
+      await navigator.clipboard?.writeText(text).catch(() => { });
+    } catch (err) {
+      setIpcBenchReport(String(err));
+      setIpcBenchState('error');
+    }
+  }, []);
+
   React.useEffect(() => {
     if (copyState === 'idle') return;
     const id = window.setTimeout(() => setCopyState('idle'), 1800);
@@ -198,6 +217,18 @@ export function SliceMetricsDebugModal({
           <div className="flex items-center gap-2">
             <button
               onClick={() => {
+                void handleRunIpcBench();
+              }}
+              disabled={ipcBenchState === 'running'}
+              className="inline-flex h-9 items-center justify-center rounded-lg border px-3 text-xs font-medium transition-colors"
+              style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
+              title="Time the IPC bridge alone (takes up to a minute; result is copied and shown below)"
+            >
+              {ipcBenchState === 'running' ? 'IPC bench…' : ipcBenchState === 'error' ? 'IPC bench failed' : 'IPC bench'}
+            </button>
+
+            <button
+              onClick={() => {
                 void handleCopyMetrics();
               }}
               className="inline-flex h-9 items-center justify-center rounded-lg border px-3 text-xs font-medium transition-colors"
@@ -226,6 +257,16 @@ export function SliceMetricsDebugModal({
         </div>
 
         <div className="p-4 md:p-5 space-y-4">
+          {ipcBenchReport && (
+            <textarea
+              readOnly
+              value={ipcBenchReport}
+              onFocus={(event) => event.currentTarget.select()}
+              className="w-full h-48 rounded-lg border p-2 font-mono text-xs"
+              style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-strong)' }}
+              aria-label="IPC bench report"
+            />
+          )}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
             <MetricCard label="Total wall time" value={formatMs(benchmark.totalElapsedMs)} icon={<Timer className="h-4 w-4" />} />
             <MetricCard label="Core slicing" value={formatMs(benchmark.coreSlicingMs)} icon={<Cpu className="h-4 w-4" />} />

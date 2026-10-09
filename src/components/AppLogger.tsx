@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { startMainThreadHeartbeat } from "@/utils/debug/mainThreadHeartbeat";
 import { logStartupHeader } from "@/utils/debug/startupHeader";
 import { startWebviewHeartbeat } from "@/utils/debug/webviewHeartbeat";
+import { installIpcBenchGlobal } from "@/utils/debug/ipcBench";
 
 /**
  * Attaches the native Tauri log plugin to the browser console so that all
@@ -25,6 +26,7 @@ export function AppLogger() {
 
     const stopHeartbeat = startMainThreadHeartbeat();
     const stopWebviewHeartbeat = startWebviewHeartbeat();
+    installIpcBenchGlobal();
 
     if (!isTauri) {
       logStartupHeader((message) => console.info(message));

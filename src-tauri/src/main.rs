@@ -58,6 +58,7 @@ fn default_dither_device_gamma() -> f64 {
 }
 
 mod experiments;
+mod ipc_bench;
 mod plugin_registry;
 mod webview_watchdog;
 mod window_state;
@@ -4481,6 +4482,9 @@ fn main() {
     builder
         .invoke_handler(tauri::generate_handler![
             webview_watchdog::webview_heartbeat,
+            ipc_bench::ipc_bench_sink,
+            ipc_bench::ipc_bench_source,
+            ipc_bench::ipc_bench_env,
             stage_mesh_binary_start,
             allocate_mesh_stage_path,
             append_mesh_stage_chunk,
