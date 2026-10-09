@@ -57,7 +57,14 @@ const ORIGIN_BIAS_RATIO: f32 = 1e-3;
 /// Vertex-weld tolerance for the input soup, relative to its bounding-box
 /// diagonal. Kept as one constant so the mesh and the corner map cannot be built
 /// with different tolerances.
-const SOUP_MERGE_EPSILON: f32 = 1e-5;
+///
+/// Public because a caller that wants to bake the welded mesh itself — the GPU
+/// path does, since a compute kernel takes an indexed mesh and the bake's job is
+/// per-vertex — has to weld exactly the way the soup entry points do, or the
+/// values come back on a different set of vertices than the corners they will be
+/// attached to.
+pub const SOUP_MERGE_EPSILON: f32 = 1e-5;
+
 /// Fixed cosine-weighted hemisphere fan in tangent space (+Z up), deterministic
 /// so a re-bake reproduces itself. `rays` truncates it.
 ///

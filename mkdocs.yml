@@ -138,6 +138,7 @@ nav:
           - Raft Geometry: dev/raft-geometry.md
           - Scan Positioning: dev/scan-positioning.md
           - Island Detection: dev/island-detection.md
+          - Ambient Occlusion: dev/ambient-occlusion.md
       - Slicing Engine:
           - Overview: dev/slicing-engine/index.md
           - Architecture: dev/slicing-engine/architecture.md

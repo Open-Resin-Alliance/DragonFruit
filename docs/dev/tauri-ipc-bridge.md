@@ -180,6 +180,10 @@ implies collapses the model's own detail.
 
 ### What the material gets: a turned fan, 32 rays, one graph pass
 
+The shipped recipe is the bake with the fan turned per vertex at 32 rays, then one
+graph pass; `dev/ambient-occlusion.md` is the page for it, including the GPU
+accelerator and its fallback ladder. The measurements and the reasoning follow.
+
 `bake_smoothed_occlusion_for_soup` is what `ao_vertex.rs` calls, and it is three
 things stacked, each measured against a reference built from two 64-ray bakes:
 
