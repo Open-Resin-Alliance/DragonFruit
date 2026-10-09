@@ -120,8 +120,8 @@ const MENU_ITEMS: MenuItemDef[] = [
     label: msg`Geometry`,
     icon: Shapes,
     children: [
-      { id: 'mark-as-support-geometry', label: msg`Mark as Support Geometry`, icon: LifeBuoy },
-      { id: 'mark-as-model-geometry',   label: msg`Mark as Model Geometry`,   icon: Box },
+      { id: 'mark-as-support-geometry', label: msg`Mark as Support`, icon: LifeBuoy },
+      { id: 'mark-as-model-geometry',   label: msg`Mark as Model`,   icon: Box },
     ],
   },
   // { id: 'link-models',   label: msg`Link Selected Models`,   icon: Link },

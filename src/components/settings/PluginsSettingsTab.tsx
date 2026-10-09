@@ -344,7 +344,7 @@ export function PluginsSettingsTab() {
 
   return (
     <div className="space-y-3">
-      <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}>
+      <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}>
         <div className="flex items-start gap-2">
           <span
             className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
@@ -419,7 +419,7 @@ export function PluginsSettingsTab() {
                 </div>
               </div>
             </div>
-            <div className="mt-3 rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div className="mt-3 rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
               <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                 <span style={{ color: 'var(--text-strong)' }}>Repo:</span>{' '}
                 {pendingLiabilityInstall.unverifiedRepo?.owner}/{pendingLiabilityInstall.unverifiedRepo?.name}
@@ -514,7 +514,7 @@ export function PluginsSettingsTab() {
             </div>
 
             <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+              <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Identity</div>
                 <div className="mt-2 space-y-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
                   <div><span style={{ color: 'var(--text-strong)' }}>ID:</span> {pendingInstallPreview.manifest.id}</div>
@@ -529,7 +529,7 @@ export function PluginsSettingsTab() {
                 </div>
               </div>
 
-              <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+              <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Origin</div>
                 <div className="mt-2 space-y-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
                   <div className="break-all"><span style={{ color: 'var(--text-strong)' }}>Repo:</span> {pendingInstallPreview.repoUrl}</div>
@@ -544,7 +544,7 @@ export function PluginsSettingsTab() {
             </div>
 
             {pendingInstallPreview.manifest.description && (
-              <div className="mt-3 rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+              <div className="mt-3 rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Description</div>
                 <div className="mt-1.5 text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
                   {pendingInstallPreview.manifest.description}
@@ -630,7 +630,7 @@ export function PluginsSettingsTab() {
         </div>
       )}
 
-      <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+      <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
         <div className="flex items-start gap-2">
           <span
             className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"

@@ -79,24 +79,24 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
     CANVAS: {
         TOOL_SELECT: {
             key: 'q',
-            description: 'Switch canvas tool to Select'
+            description: 'Switch canvas tool to Drag'
         },
         TOOL_MODIFY: {
             key: 'm',
-            description: 'Switch canvas tool to Modify'
+            description: 'Switch canvas tool to Transform'
         },
         TOOL_MODIFY_LOCAL: {
             key: 'm',
             modifier: 'shift',
-            description: 'Switch canvas tool to Modify with the gizmo in the model\'s own axes'
+            description: 'Switch canvas tool to Transform with the gizmo in the model\'s own axes'
         },
         TOOL_SMOOTH: {
             key: 's',
-            description: 'Switch canvas tool to Smooth'
+            description: 'Switch canvas tool to Brush'
         },
         TOOL_ARRANGE: {
             key: 'a',
-            description: 'Switch canvas tool to Arrange'
+            description: 'Switch canvas tool to Arrange, or arrange all when it is already active'
         },
         TOOL_DUPLICATE: {
             key: 'd',

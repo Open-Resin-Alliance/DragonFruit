@@ -4,7 +4,9 @@ import React from 'react';
 import { subscribeHistory } from '@/history/historyStore';
 import { ExportManager } from '@/features/export/logic/ExportManager';
 import { VoxlChunkCache } from '@/features/scene/voxl';
-import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
+import type { VoxlPrinterBundle } from '@/features/scene/voxl';
+import type { PlateOrdering } from '@/features/scene/plates/plateCascade';
+import type { LoadedModel, ScenePlate } from '@/features/scene/useSceneCollectionManager';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -340,22 +342,32 @@ export type UseSceneAutosaveOptions = {
   models: LoadedModel[];
   activeModelId: string | null;
   selectedModelIds: string[];
+  /** The scene's plates, carried into the saved scene's plate list. */
+  plates?: ScenePlate[];
+  /** Which plate was active. */
+  activePlateId?: string;
+  /** The active plate's name, written as the older single-plate shorthand. */
+  plateName?: string;
+  /** The printer this scene is being saved for. */
+  printer?: VoxlPrinterBundle;
+  /** The grid the beds are laid out on, saved with the file. */
+  plateOrdering?: PlateOrdering;
   enabled?: boolean;
   debounceMs?: number;
   cooldownMs?: number;
   capMs?: number;
   preferredSavePath?: string | null;
   /**
-   * Whether the current scene's on-disk format is the chunked VOXL 2.2 layout.
-   * Autosave preserves the inline (pre-2.2) layout only when this is `false`; a
-   * scene that is already 2.2 is never written back to inline (no downgrade).
-   * Defaults to `true` (newest) so an unknown/new scene autosaves as 2.2.
+   * Whether the current scene's on-disk format is the chunked VOXL 3.1 layout.
+   * Autosave preserves the inline (pre-3.1) layout only when this is `false`; a
+   * scene that is already 3.1 is never written back to inline (no downgrade).
+   * Defaults to `true` (newest) so an unknown/new scene autosaves as 3.1.
    */
   sceneFormatChunked?: boolean;
   /**
-   * Fired when autosave had to escalate an inline write to the 2.2 chunked
+   * Fired when autosave had to escalate an inline write to the 3.1 chunked
    * layout (the inline write threw). The owner latches the scene to chunked so
-   * later ticks stop re-attempting — and never downgrade — the now-2.2 file.
+   * later ticks stop re-attempting — and never downgrade — the now-3.1 file.
    */
   onSceneFormatUpgraded?: () => void;
 };
@@ -380,6 +392,11 @@ export function useSceneAutosave({
   models,
   activeModelId,
   selectedModelIds,
+  plates,
+  activePlateId,
+  plateName,
+  printer,
+  plateOrdering,
   enabled = true,
   debounceMs = AUTOSAVE_DEBOUNCE_MS,
   cooldownMs = AUTOSAVE_COOLDOWN_MS,
@@ -400,6 +417,16 @@ export function useSceneAutosave({
   activeModelIdRef.current = activeModelId;
   const selectedModelIdsRef = React.useRef(selectedModelIds);
   selectedModelIdsRef.current = selectedModelIds;
+  const platesRef = React.useRef(plates);
+  platesRef.current = plates;
+  const activePlateIdRef = React.useRef(activePlateId);
+  activePlateIdRef.current = activePlateId;
+  const plateNameRef = React.useRef(plateName);
+  plateNameRef.current = plateName;
+  const printerRef = React.useRef(printer);
+  printerRef.current = printer;
+  const plateOrderingRef = React.useRef(plateOrdering);
+  plateOrderingRef.current = plateOrdering;
   const enabledRef = React.useRef(enabled);
   enabledRef.current = enabled;
   const debounceMsRef = React.useRef(debounceMs);
@@ -534,10 +561,10 @@ export function useSceneAutosave({
         const paths = await getAutosavePaths(preferredSavePathRef.current);
         const { voxlPath } = paths;
 
-        // Format preservation: keep a pre-2.2 file inline, but never downgrade a
-        // file that is already 2.2. If the inline write throws (typically the
+        // Format preservation: keep a pre-3.1 file inline, but never downgrade a
+        // file that is already 3.1. If the inline write throws (typically the
         // MODL string ceiling on snapshots too large to inline), escalate to the
-        // chunked 2.2 layout and latch the scene there so later ticks stop
+        // chunked 3.1 layout and latch the scene there so later ticks stop
         // re-attempting inline.
         // Incremental-write cache (Phase 1): reuse compressed chunks across
         // ticks and skip the disk write entirely when the document fingerprint
@@ -566,6 +593,11 @@ export function useSceneAutosave({
               models: currentModels,
               activeModelId: activeModelIdRef.current,
               selectedModelIds: selectedModelIdsRef.current,
+              plates: platesRef.current,
+              activePlateId: activePlateIdRef.current,
+              plateOrdering: plateOrderingRef.current,
+              plateName: plateNameRef.current,
+              printer: printerRef.current,
             },
             {
               nativePath: voxlPath,
@@ -586,7 +618,7 @@ export function useSceneAutosave({
           try {
             await runExport(false);
           } catch (error) {
-            console.warn('[autosave] Inline VOXL write failed; upgrading scene to the 2.2 chunked layout.', error);
+            console.warn('[autosave] Inline VOXL write failed; upgrading scene to the 3.1 chunked layout.', error);
             onSceneFormatUpgradedRef.current?.();
             sceneFormatChunkedRef.current = true;
             await runExport(true);

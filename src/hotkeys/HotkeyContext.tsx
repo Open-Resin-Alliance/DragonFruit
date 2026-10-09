@@ -1,7 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import { DEFAULT_KEYBINDINGS, HotkeyBinding, HotkeyConfig } from './hotkeyConfig';
+import { DEFAULT_KEYBINDINGS, HotkeyBinding, HotkeyCategory, HotkeyConfig } from './hotkeyConfig';
 
 const HOTKEY_STORAGE_KEY = 'app-hotkeys-config';
 
@@ -27,7 +27,7 @@ export function HotkeyProvider({ children }: { children: React.ReactNode }) {
                 // Merge with defaults to ensure any new keys added to the app are present,
                 // and strip any stored entries whose actions no longer exist in the defaults
                 const cleaned = stripStaleActions(DEFAULT_KEYBINDINGS, parsed);
-                setConfig(prev => deepMerge(prev, cleaned));
+                setConfig(prev => mergeBindings(prev, cleaned));
             }
         } catch (e) {
             console.error('Failed to load hotkeys', e);
@@ -72,7 +72,7 @@ export function HotkeyProvider({ children }: { children: React.ReactNode }) {
     }, []);
 
     const getHotkey = useCallback((category: string, action: string): HotkeyBinding => {
-        return config[category]?.[action] || (DEFAULT_KEYBINDINGS as any)[category]?.[action] || { key: '', description: '' };
+        return config[category]?.[action] || DEFAULT_KEYBINDINGS[category]?.[action] || { key: '', description: '' };
     }, [config]);
 
     return (
@@ -90,43 +90,58 @@ export function useHotkeyConfig() {
     return context;
 }
 
+/** A stored binding, as it comes out of localStorage: it may predate today's shape. */
+type StoredBinding = Partial<HotkeyBinding>;
+type StoredConfig = Record<string, Record<string, StoredBinding>>;
+
 // Strip any stored category entries whose actions don't exist in the current defaults.
 // This automatically cleans up old hotkeys (e.g. APPLY_DETAIL) that have been removed.
-function stripStaleActions(defaults: HotkeyConfig, stored: any): any {
-    const result: any = {};
-    for (const category in stored) {
-        if (!stored.hasOwnProperty(category)) continue;
-        if (!defaults[category]) {
+export function stripStaleActions(defaults: HotkeyConfig, stored: unknown): StoredConfig {
+    // The stored tree is what this provider itself wrote (`JSON.stringify(config)`,
+    // where config is a HotkeyConfig), so it has this shape or is absent.
+    const storedConfig = (stored ?? {}) as StoredConfig;
+    const result: StoredConfig = {};
+    for (const [category, categoryStored] of Object.entries(storedConfig)) {
+        const categoryDefaults = defaults[category];
+        if (!categoryDefaults) {
             // Entire category no longer exists — drop it
             continue;
         }
-        const categoryDefaults = defaults[category];
-        const categoryStored = stored[category];
-        const cleanedCategory: any = {};
-        for (const action in categoryStored) {
-            if (!categoryStored.hasOwnProperty(action)) continue;
-            if (!categoryDefaults[action]) {
+        const cleanedCategory: Record<string, StoredBinding> = {};
+        for (const [action, bindingStored] of Object.entries(categoryStored ?? {})) {
+            const bindingDefaults = categoryDefaults[action];
+            if (!bindingDefaults) {
                 // Action no longer exists in defaults — drop it
                 continue;
             }
-            cleanedCategory[action] = categoryStored[action];
+            // The key and modifier are the user's; the description is the app's own
+            // wording for that action, and it is never editable in the UI. Taking it
+            // from the defaults means renaming a tool reaches profiles that already
+            // have a stored config, instead of leaving the old name in Settings →
+            // Hotkeys for the life of the install.
+            cleanedCategory[action] = {
+                ...(typeof bindingStored?.key === 'string' ? { key: bindingStored.key } : {}),
+                ...(typeof bindingStored?.modifier === 'string' ? { modifier: bindingStored.modifier } : {}),
+                description: bindingDefaults.description,
+            };
         }
         result[category] = cleanedCategory;
     }
     return result;
 }
 
-// Helper to merge stored config with defaults (to pick up new default keys and keep user overrides)
-function deepMerge(defaults: any, stored: any): any {
-    const result = { ...defaults };
-    for (const key in stored) {
-        if (stored.hasOwnProperty(key)) {
-            if (typeof stored[key] === 'object' && stored[key] !== null && !Array.isArray(stored[key])) {
-                result[key] = deepMerge(result[key] || {}, stored[key]);
-            } else {
-                result[key] = stored[key];
-            }
+// Merge the stored bindings over the defaults: a binding the user rebound wins,
+// an action only the defaults know about stands, and because the stored pass has
+// already refreshed every description, an old tool name cannot come back here.
+function mergeBindings(defaults: HotkeyConfig, stored: StoredConfig): HotkeyConfig {
+    const result: HotkeyConfig = { ...defaults };
+    for (const [category, storedActions] of Object.entries(stored)) {
+        const actionDefaults = defaults[category] ?? {};
+        const mergedActions: HotkeyCategory = {};
+        for (const [action, bindingDefaults] of Object.entries(actionDefaults)) {
+            mergedActions[action] = { ...bindingDefaults, ...storedActions[action] };
         }
+        result[category] = mergedActions;
     }
     return result;
 }

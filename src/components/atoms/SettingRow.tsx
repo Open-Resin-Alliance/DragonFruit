@@ -7,8 +7,10 @@ interface SettingRowProps extends Omit<React.HTMLAttributes<HTMLElement>, 'child
   description?: React.ReactNode;
   /**
    * `compact` (the default) tightens the line-heights and the padding for the
-   * settings tabs; `comfortable` is the `py-2` plus roomier text the rows shipped
-   * with before, for the few places whose row height was measured against it.
+   * settings tabs; `comfortable` is the roomier `p-2` plus roomier text the rows
+   * shipped with before, for the few places whose row height was measured
+   * against it. Both densities pad evenly all round, so a trailing control sits
+   * the same distance from the card's right edge as from its top and bottom.
    */
   density?: 'compact' | 'comfortable';
   /** The control on the right. */
@@ -37,6 +39,11 @@ interface SettingRowProps extends Omit<React.HTMLAttributes<HTMLElement>, 'child
  * bordered row), and the row layout lives on the root element because rendered
  * as a `<label>` a wrapper inside it would leave the root inline, laying out
  * roughly twice as tall as the hand-written rows it replaces.
+ *
+ * The bordered card pads evenly on every side, so the trailing control sits the
+ * same distance from the right edge as from the top and bottom. The label alone
+ * gets a hair more room on the left, where text against the border reads cramped
+ * in a way a pill or a field does not.
  */
 export function SettingRow({
   label,
@@ -57,7 +64,7 @@ export function SettingRow({
     <Element
       className={cn(
         'flex items-center justify-between gap-3',
-        bordered && cn('rounded-md border px-2.5', compact ? 'py-1.5' : 'py-2'),
+        bordered && cn('rounded-md border', compact ? 'p-1.5' : 'p-2'),
         className
       )}
       style={{
@@ -72,7 +79,7 @@ export function SettingRow({
       }}
       {...props}
     >
-      <div className="min-w-0">
+      <div className={cn('min-w-0', bordered && 'pl-1')}>
         <div
           className={cn('text-xs font-semibold', compact && 'leading-tight')}
           style={{ color: 'var(--text-strong)' }}

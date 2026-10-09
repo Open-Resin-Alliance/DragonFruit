@@ -1,23 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {
-  buildVoxlDocumentV1,
-  parseVoxlAuto,
-  parseVoxlDocument,
-  serializeVoxlDocument,
-} from '../codec';
+import { parseVoxlAuto } from '../codec';
 import { parseVoxlBinaryV2, serializeVoxlDocumentV2 } from '../codec-v2';
 import { loadMeshGeometry } from '@/hooks/useStlGeometry';
 import type { MeshAnalysisJson, MeshHealthReport } from '@/utils/meshRepair';
-import { meshLike, testInput, testModel } from './voxlTestSupport';
+import { meshLike, readVoxlChunkText, testInput, testModel } from './voxlTestSupport';
 
 /**
- * VOXL V2.4 — baked mesh classification.
+ * VOXL V3.3 — baked mesh classification.
  *
  * The model/support split used to be recomputed on every load: the classifier
  * ran again over triangles it had already classified when the file was saved.
- * V2.4 persists the classify-only report in the `MODL` entry so a reader that
+ * V3.3 persists the classify-only report in the `MODL` entry so a reader that
  * honours it can restore the split without the native round trip. These tests
  * pin the container contract: the writer emits it, the reader returns it whole,
  * and a model that has none stays byte-wise as it was.
@@ -58,19 +53,6 @@ function classification(modelTriangleCount: number | null): MeshHealthReport {
   };
 }
 
-test('VOXL V1 round-trip preserves the baked classification', () => {
-  const baked = classification(3);
-  const input = testInput([
-    testModel('m1', { classification: baked, mesh: { mode: 'external-file', fileName: 'm1.stl' } }),
-  ]);
-
-  const parsed = parseVoxlDocument(serializeVoxlDocument(buildVoxlDocumentV1(input), false, { compression: 'none' }));
-
-  // Whole-report fidelity: the shell count, manifold verdict and split boundary
-  // all come from the report, so a partial round-trip would restore a partial UI.
-  assert.deepEqual(parsed.models[0].classification, baked);
-});
-
 test('VOXL V2 binary round-trip preserves the baked classification', async () => {
   const baked = classification(3);
   const input = testInput([testModel('m1', { classification: baked })]);
@@ -100,10 +82,9 @@ test('a model without a classification writes no classification key', async () =
   const input = testInput([testModel('m1')]);
   const meshBytes = new Map<number, Uint8Array>([[0, meshLike(9)]]);
 
-  const json = serializeVoxlDocument(buildVoxlDocumentV1(input), false, { compression: 'none' });
   const binary = await serializeVoxlDocumentV2(input, meshBytes);
 
-  assert.equal(json.includes('"classification"'), false);
+  assert.equal(readVoxlChunkText(binary, 'MODL').includes('"classification"'), false);
   assert.equal(parseVoxlBinaryV2(binary).document.models[0].classification, undefined);
 });
 

@@ -6,7 +6,7 @@ import {
   serializeVoxlDocumentV2Streaming,
   parseVoxlBinaryV2,
   VOXL_V2,
-  VOXL_V2_SEMANTIC_REVISION,
+  VOXL_V3_SEMANTIC_REVISION,
   VOXL_V2_INLINE_REVISION,
 } from '../codec-v2';
 import { countVoxlChunks, readVoxlVersion, testInput, testModel, withFrozenClock } from './voxlTestSupport';
@@ -129,13 +129,13 @@ test('the chunking flag is byte-neutral for scenes without modifier snapshots', 
   });
 });
 
-test('sourceVersion distinguishes chunked (2.2) from inline (2.1) — the no-downgrade signal', async () => {
+test('sourceVersion distinguishes chunked (3.1) from inline (2.1) — the no-downgrade signal', async () => {
   const model = testModel('m0', { meshModifiers: hollowMods(SOURCE, CAVITY) });
 
   const chunked = await serializeVoxlDocumentV2(testInput([model]), new Map(), undefined, {
     chunkModifierSnapshots: true,
   });
-  assert.equal(parseVoxlBinaryV2(chunked).sourceVersion, VOXL_V2_SEMANTIC_REVISION, 'chunked file reads as 2.2');
+  assert.equal(parseVoxlBinaryV2(chunked).sourceVersion, VOXL_V3_SEMANTIC_REVISION, 'chunked file reads as 3.1');
 
   const inline = await serializeVoxlDocumentV2(testInput([model]), new Map(), undefined, {
     chunkModifierSnapshots: false,

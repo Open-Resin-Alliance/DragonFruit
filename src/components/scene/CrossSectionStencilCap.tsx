@@ -46,6 +46,14 @@ type CrossSectionStencilCapProps = {
   color?: string;
   planeWidthMm: number;
   planeHeightMm: number;
+  /**
+   * Where the bed's volume sits, in world millimetres.
+   *
+   * The cap plane spans a build volume, so it has to be laid over the bed being worked
+   * on: left at the origin it covers the first bed and nothing else, which is why the pink
+   * scrubbing stencil showed up on plate 1 while another bed was sliced.
+   */
+  planeOffsetMm?: { dxMm: number; dyMm: number };
   visible?: boolean;
   capOpacity?: number;
   capDepthTest?: boolean;
@@ -383,6 +391,7 @@ function CrossSectionStencilCapInner({
   color = '#ffffff',
   planeWidthMm,
   planeHeightMm,
+  planeOffsetMm,
   visible = true,
   capOpacity = 1,
   capDepthTest = true,
@@ -935,7 +944,7 @@ function collectStaticStencilEntries(
           <mesh
             geometry={capPlaneGeometry}
             material={glowPlaneMaterial}
-            position={[0, 0, y + Math.max(1e-4, glowThicknessMm)]}
+            position={[planeOffsetMm?.dxMm ?? 0, planeOffsetMm?.dyMm ?? 0, y + Math.max(1e-4, glowThicknessMm)]}
             renderOrder={GLOW_BACK_ORDER}
             frustumCulled
             raycast={() => null}
@@ -943,7 +952,7 @@ function collectStaticStencilEntries(
           <mesh
             geometry={capPlaneGeometry}
             material={glowPlaneMaterial}
-            position={[0, 0, y - Math.max(1e-4, glowThicknessMm)]}
+            position={[planeOffsetMm?.dxMm ?? 0, planeOffsetMm?.dyMm ?? 0, y - Math.max(1e-4, glowThicknessMm)]}
             renderOrder={GLOW_FRONT_ORDER}
             frustumCulled
             raycast={() => null}
@@ -954,7 +963,7 @@ function collectStaticStencilEntries(
       <mesh
         geometry={capPlaneGeometry}
         material={capPlaneMaterial}
-        position={[0, 0, y + effectiveOffsetMm]}
+        position={[planeOffsetMm?.dxMm ?? 0, planeOffsetMm?.dyMm ?? 0, y + effectiveOffsetMm]}
         rotation={effectiveRotationXDeg !== 0 ? [THREE.MathUtils.degToRad(effectiveRotationXDeg), 0, 0] : undefined}
         renderOrder={CAP_ORDER}
         frustumCulled
@@ -983,6 +992,8 @@ const areCrossSectionStencilCapPropsEqual = (
     && prev.color === next.color
     && prev.planeWidthMm === next.planeWidthMm
     && prev.planeHeightMm === next.planeHeightMm
+    && prev.planeOffsetMm?.dxMm === next.planeOffsetMm?.dxMm
+    && prev.planeOffsetMm?.dyMm === next.planeOffsetMm?.dyMm
     && prev.visible === next.visible
     && prev.capOpacity === next.capOpacity
     && prev.capDepthTest === next.capDepthTest

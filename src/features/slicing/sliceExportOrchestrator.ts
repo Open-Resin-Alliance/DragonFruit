@@ -84,6 +84,14 @@ function resolveMeshChunkTargetBytes(initialMeshStagingBytes: number): number {
 export type SliceExportOrchestratorOptions = {
     models: LoadedModel[];
     excludedModelIds?: readonly string[];
+    /**
+     * The build volume of the plate being sliced, in world coordinates. Given
+     * one, the in-bounds filter judges models against their own plate instead of
+     * a volume centred on the origin, which is what a cascade needs.
+     */
+    plateVolumeBoundsMm?: { minX: number; minY: number; maxX: number; maxY: number };
+    /** Where that plate sits in the cascade, so its geometry can be shifted to the origin. */
+    plateOffsetMm?: { dxMm: number; dyMm: number };
     printerProfile: PrinterProfile;
     materialProfile: MaterialProfile;
     filenameBase: string;
@@ -259,7 +267,13 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     const halfWidth = Math.max(1, Number(options.printerProfile.buildVolumeMm.width) || 1) * 0.5;
     const halfDepth = Math.max(1, Number(options.printerProfile.buildVolumeMm.depth) || 1) * 0.5;
     const buildHeight = Math.max(1, Number(options.printerProfile.buildVolumeMm.height) || 1);
-    const buildVolume = new Box3(new Vector3(-halfWidth, -halfDepth, 0), new Vector3(halfWidth, halfDepth, buildHeight));
+    const plateBounds = options.plateVolumeBoundsMm;
+    const buildVolume = plateBounds
+        ? new Box3(
+            new Vector3(plateBounds.minX, plateBounds.minY, 0),
+            new Vector3(plateBounds.maxX, plateBounds.maxY, buildHeight),
+        )
+        : new Box3(new Vector3(-halfWidth, -halfDepth, 0), new Vector3(halfWidth, halfDepth, buildHeight));
     const visibleModels = options.models.filter((model) => {
         if (!model.visible || excludedModelIdSet.has(model.id)) return false;
         const approximate = computeApproxModelWorldBounds(model.geometry, model.transform);
@@ -468,6 +482,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
             printerProfile: options.printerProfile,
             materialProfile: options.materialProfile,
             filenameBase: options.filenameBase,
+            plateOffsetMm: options.plateOffsetMm,
             supportTipShrinkPercent,
             flushBinaryMeshChunk: meshTransferMode === 'streamed'
                 ? handleMeshChunk

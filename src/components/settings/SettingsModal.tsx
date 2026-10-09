@@ -23,8 +23,9 @@ import { UISettingsTab } from './UISettingsTab';
 import { UpdatesSettingsTab } from '@/features/updater/UpdatesSettingsTab';
 import { getUpdateChannel, type UpdateChannel } from '@/features/updater/updateBridge';
 import { WorkspacesSettingsTab } from '@/components/settings/WorkspacesSettingsTab';
+import { MultiPlateSettingsTab } from '@/components/settings/MultiPlateSettingsTab';
 import { PerformanceSettingsTab, type SlicingThumbnailRenderSettings } from '@/components/settings/PerformanceSettingsTab';
-import { AlertTriangle, Check, CloudDownload, Edit3, ExternalLink, FlaskConical, Gamepad2, Github, HardDrive, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Save, Settings2, Trash2, X, Camera, Grid3x3, ArchiveRestore, ScrollText } from 'lucide-react';
+import { AlertTriangle, Check, CloudDownload, Edit3, ExternalLink, FlaskConical, Gamepad2, Github, HardDrive, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Save, Settings2, Trash2, X, Camera, Grid3x3, ArchiveRestore, ScrollText, SquareStack } from 'lucide-react';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import {
   applyThemeCustomColors,
@@ -120,10 +121,11 @@ import {
 import { outputFormatUsesPngLayers } from '@/features/slicing/formats/registry';
 import {
   clearSavedFloatingLayout,
-  isDebugPrimitivesPanelVisibleEnabled,
+  getToolLayout,
   isFloatingLayoutPersistenceEnabled,
-  setDebugPrimitivesPanelVisibleEnabled,
   setFloatingLayoutPersistenceEnabled,
+  setToolLayout,
+  type ToolLayout,
 } from '@/components/layout/floatingLayoutPreferences';
 import {
   DEFAULT_IMPORT_DEFAULTS_SETTINGS,
@@ -201,8 +203,6 @@ type SettingsModalProps = {
   onHoverTintStrengthChange: (value: number) => void;
   selectedTintStrength: number;
   onSelectedTintStrengthChange: (value: number) => void;
-  debugPrimitivesPanelVisible: boolean;
-  onDebugPrimitivesPanelVisibleChange: (value: boolean) => void;
   view3dSettings: View3DSettings;
   onView3dSettingsChange: (settings: View3DSettings) => void;
   slicingThumbnailRenderSettings: SlicingThumbnailRenderSettings;
@@ -212,7 +212,7 @@ type SettingsModalProps = {
   initialTab?: SettingsTabKey;
 };
 
-export type SettingsTabKey = 'general' | 'camera' | 'workspaces' | 'mesh' | 'performance' | 'spacemouse' | 'plugins' | 'experiments' | 'sceneAutosave' | 'backups' | 'uvtools' | 'ui' | 'hotkeys' | 'logging' | 'updates' | 'about';
+export type SettingsTabKey = 'general' | 'camera' | 'workspaces' | 'multiPlate' | 'mesh' | 'performance' | 'spacemouse' | 'plugins' | 'experiments' | 'sceneAutosave' | 'backups' | 'uvtools' | 'ui' | 'hotkeys' | 'logging' | 'updates' | 'about';
 type SettingsTabTone = 'primary' | 'secondary';
 
 type SettingsTabMeta = {
@@ -225,10 +225,9 @@ type SettingsTabMeta = {
 /**
  * One settings sidebar entry: icon, label and its description. The description
  * stays visible; the compactness comes from dropping the icon's own 24px box,
- * `leading-tight`, a 10px description and `px-2.5 py-2`, which matches the inset
- * of the setting rows beside it. That takes the entry from 54px to 48px without
- * hiding anything, and the icon keeps the full glyph size instead of sitting in
- * a box that padded it away from the card edge.
+ * `leading-tight` and `px-2.5 py-2`, which matches the inset of the setting rows
+ * beside it, and the icon keeps the full glyph size instead of sitting in a box
+ * that padded it away from the card edge.
  */
 function SettingsSidebarTab({
   tabId,
@@ -248,7 +247,7 @@ function SettingsSidebarTab({
     <button
       type="button"
       onClick={() => onSelect(tabId)}
-      className="w-full rounded-lg border px-2.5 py-1.5 text-left transition-all duration-150"
+      className="w-full rounded-sm border px-2.5 py-1.5 text-left transition-all duration-150"
       style={active
         ? {
           borderColor: `color-mix(in srgb, ${tabColor}, var(--border-subtle) 35%)`,
@@ -261,9 +260,9 @@ function SettingsSidebarTab({
         }}
     >
       <div className="flex items-center gap-2.5">
-        <Icon className="h-[18px] w-[18px] shrink-0" style={{ color: active ? tabColor : 'var(--text-muted)' }} />
+        <Icon className="h-5 w-5 shrink-0" style={{ color: active ? tabColor : 'var(--text-muted)' }} />
         <span className="min-w-0 flex-1">
-          <span className="block text-sm font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
+          <span className="block text-[15px] font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
             {meta.label}
           </span>
           <TabDescription text={meta.description} />
@@ -333,7 +332,7 @@ function TabDescription({ text }: { text: string }) {
       <Tooltip content={isClipped ? text : null} fullWidth maxWidth={280}>
         <span
           ref={textRef}
-          className="block min-w-0 flex-1 truncate text-[10px] leading-tight"
+          className="block min-w-0 flex-1 truncate text-xs leading-tight"
           style={{ color: 'var(--text-muted)' }}
         >
           {text}
@@ -374,8 +373,6 @@ export function SettingsModal({
   onHoverTintStrengthChange,
   selectedTintStrength,
   onSelectedTintStrengthChange,
-  debugPrimitivesPanelVisible,
-  onDebugPrimitivesPanelVisibleChange,
   view3dSettings,
   onView3dSettingsChange,
   slicingThumbnailRenderSettings,
@@ -479,7 +476,7 @@ export function SettingsModal({
     return savedProfile.isBuiltIn ? '' : savedProfile.name;
   });
   const [draftFloatingLayoutPersistence, setDraftFloatingLayoutPersistence] = useState<boolean>(() => isFloatingLayoutPersistenceEnabled());
-  const [draftDebugPrimitivesPanelVisible, setDraftDebugPrimitivesPanelVisible] = useState<boolean>(() => debugPrimitivesPanelVisible);
+  const [draftToolLayout, setDraftToolLayout] = useState<ToolLayout>(() => getToolLayout());
   const [draftImportDefaults, setDraftImportDefaults] = useState<ImportDefaultsSettings>(() => getSavedImportDefaultsSettings());
   const [draftSpaceMouseSettings, setDraftSpaceMouseSettings] = useState<SpaceMouseSettings>(() => getSavedSpaceMouseSettings());
   const [draftWorkspaceCameraDefaults, setDraftWorkspaceCameraDefaults] = useState<WorkspaceCameraDefaults>(() => getSavedWorkspaceCameraSettings().defaults);
@@ -580,7 +577,7 @@ export function SettingsModal({
     setDraftThemeProfiles(savedThemeProfiles);
     setDraftCustomThemeName(savedThemeProfile.isBuiltIn ? '' : savedThemeProfile.name);
     setDraftFloatingLayoutPersistence(isFloatingLayoutPersistenceEnabled());
-    setDraftDebugPrimitivesPanelVisible(isDebugPrimitivesPanelVisibleEnabled());
+    setDraftToolLayout(getToolLayout());
     setDraftImportDefaults(getSavedImportDefaultsSettings());
     setDraftSpaceMouseSettings(getSavedSpaceMouseSettings());
     setDraftWorkspaceCameraDefaults(getSavedWorkspaceCameraSettings().defaults);
@@ -602,7 +599,6 @@ export function SettingsModal({
     heatmapColors,
     hoverTintStrength,
     selectedTintStrength,
-    debugPrimitivesPanelVisible,
     view3dSettings,
     slicingThumbnailRenderSettings,
     configuredShaderType,
@@ -920,7 +916,6 @@ export function SettingsModal({
     setDraftThemeColors(DEFAULT_THEME_CUSTOM_COLORS);
     setDraftCustomThemeName('');
     setDraftFloatingLayoutPersistence(true);
-    setDraftDebugPrimitivesPanelVisible(false);
     setDraftImportDefaults(DEFAULT_IMPORT_DEFAULTS_SETTINGS);
     setDraftSpaceMouseSettings(DEFAULT_SPACEMOUSE_SETTINGS);
     setDraftWorkspaceCameraDefaults(DEFAULT_WORKSPACE_CAMERA_SETTINGS.defaults);
@@ -989,7 +984,7 @@ export function SettingsModal({
     applyThemePreference(draftThemePreference);
     applyThemeCustomColors(draftThemeColors);
     setFloatingLayoutPersistenceEnabled(draftFloatingLayoutPersistence);
-    setDebugPrimitivesPanelVisibleEnabled(draftDebugPrimitivesPanelVisible);
+    setToolLayout(draftToolLayout);
     saveImportDefaultsSettings(draftImportDefaults);
     saveSpaceMouseSettings(draftSpaceMouseSettings);
     saveCameraProjectionSettings({ mode: draftCameraProjectionMode });
@@ -1014,7 +1009,6 @@ export function SettingsModal({
     const normalized3dView = normalizeView3DSettings(draftView3dSettings);
     saveView3DSettings(normalized3dView);
     onView3dSettingsChange(normalized3dView);
-    onDebugPrimitivesPanelVisibleChange(draftDebugPrimitivesPanelVisible);
     saveLogLevel(draftLogLevel);
 
     if (typeof window !== 'undefined') {
@@ -1049,7 +1043,7 @@ export function SettingsModal({
     draftThemeColors,
     draftThemeProfiles,
     draftFloatingLayoutPersistence,
-    draftDebugPrimitivesPanelVisible,
+    draftToolLayout,
     draftImportDefaults,
     draftSpaceMouseSettings,
     draftCameraProjectionMode,
@@ -1080,7 +1074,6 @@ export function SettingsModal({
     onMeshColorChange,
     onHoverTintStrengthChange,
     onSelectedTintStrengthChange,
-    onDebugPrimitivesPanelVisibleChange,
     onSlicingThumbnailRenderSettingsChange,
     onView3dSettingsChange,
     onConfiguredShaderTypeChange,
@@ -1239,9 +1232,15 @@ export function SettingsModal({
       tone: 'primary',
     },
     workspaces: {
-      label: _(msg`Workspaces`),
-      description: _(msg`Per-workspace camera defaults`),
+      label: _(msg`Workspace`),
+      description: _(msg`Build volume bounds, origin, and 3D view resolution`),
       icon: MonitorCog,
+      tone: 'primary',
+    },
+    multiPlate: {
+      label: _(msg`Multi-Plate`),
+      description: _(msg`Plate behaviour across several beds`),
+      icon: SquareStack,
       tone: 'primary',
     },
     ui: {
@@ -1312,7 +1311,7 @@ export function SettingsModal({
     },
   };
 
-  const sidebarTopTabs: SettingsTabKey[] = ['general', 'camera', 'workspaces', 'mesh', 'performance', 'spacemouse', 'ui', 'hotkeys'];
+  const sidebarTopTabs: SettingsTabKey[] = ['general', 'camera', 'workspaces', 'multiPlate', 'mesh', 'performance', 'spacemouse', 'ui', 'hotkeys'];
   const sidebarBottomTabs: SettingsTabKey[] = ['plugins', 'experiments', 'sceneAutosave', 'backups', 'uvtools', 'logging', 'updates', 'about'];
 
 
@@ -1397,7 +1396,11 @@ export function SettingsModal({
               background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface-1), transparent 6%), color-mix(in srgb, var(--accent-secondary), var(--surface-1) 96%))',
             }}
           >
-            <div className="h-full min-h-0 overflow-y-auto custom-scrollbar pr-1 flex flex-col">
+            {/* No `pr-1` on the scroller: the column's 2.5 already insets the tab
+                cards, and a second inset here stacked on top of the 10px scrollbar
+                gutter, so the cards sat nearly twice as far from the right edge as
+                from the left. */}
+            <div className="h-full min-h-0 overflow-y-auto custom-scrollbar flex flex-col">
               <div className="space-y-1">
                 {sidebarTopTabs.map((tab) => (
                   <SettingsSidebarTab
@@ -1431,9 +1434,9 @@ export function SettingsModal({
                 <GeneralSettingsTab
                   floatingLayoutPersistence={draftFloatingLayoutPersistence}
                   onFloatingLayoutPersistenceChange={setDraftFloatingLayoutPersistence}
+                  toolLayout={draftToolLayout}
+                  onToolLayoutChange={setDraftToolLayout}
                   onResetFloatingLayout={handleResetFloatingLayout}
-                  debugPrimitivesPanelVisible={draftDebugPrimitivesPanelVisible}
-                  onDebugPrimitivesPanelVisibleChange={setDraftDebugPrimitivesPanelVisible}
                   importDefaults={draftImportDefaults}
                   onImportDefaultsChange={setDraftImportDefaults}
                   language={draftLocale}
@@ -1472,6 +1475,7 @@ export function SettingsModal({
                   onView3dSettingsChange={setDraftView3dSettings}
                 />
               )}
+              {activeTab === 'multiPlate' && <MultiPlateSettingsTab />}
               {activeTab === 'mesh' && (
                 <MeshSettingsTab
                   configuredShaderType={draftShaderType}
@@ -1640,7 +1644,7 @@ export function SettingsModal({
                         </div>
                       </div>
 
-                      <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                      <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                         <h5 className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
                           Team & Credits
                         </h5>
@@ -1679,7 +1683,7 @@ export function SettingsModal({
                                       return (
                                         <div
                                           key={person.name}
-                                          className="rounded-lg border px-3 py-2.5"
+                                          className="rounded-md border px-3 py-2.5"
                                           style={{
                                             borderColor: `color-mix(in srgb, ${toneVar}, var(--border-subtle) 45%)`,
                                             background: `color-mix(in srgb, ${toneVar}, var(--surface-0) ${bgMix})`,
@@ -1768,7 +1772,7 @@ export function SettingsModal({
           </div>
         </div>
 
-        <div className="px-4 py-3 flex items-center justify-between gap-2" style={{ borderTop: '1px solid var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 10%)' }}>
+        <div className="px-3 py-3 flex items-center justify-between gap-2" style={{ borderTop: '1px solid var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 10%)' }}>
           <Button
             variant="secondary"
             size="auto"

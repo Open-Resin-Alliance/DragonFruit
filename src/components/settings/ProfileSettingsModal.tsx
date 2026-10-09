@@ -1404,7 +1404,7 @@ export function ProfileSettingsModal({
         onDragEnd={onDragEnd}
         onDragOver={onDragOver}
         onDrop={onDrop}
-        className={`min-w-0 w-full rounded-xl border p-2 transition-all duration-150 ${draggable ? (dragging ? 'opacity-60' : 'cursor-grab active:cursor-grabbing') : ''}`}
+        className={`min-w-0 w-full rounded-md border p-2 transition-all duration-150 ${draggable ? (dragging ? 'opacity-60' : 'cursor-grab active:cursor-grabbing') : ''}`}
         onDoubleClick={onDoubleClick}
         style={active ? activeStyles : inactiveStyles}
       >
@@ -1414,7 +1414,7 @@ export function ProfileSettingsModal({
           className="w-full text-left leading-none"
         >
           <div
-            className="h-[128px] min-h-[128px] max-h-[128px] shrink-0 rounded-lg border overflow-hidden relative"
+            className="h-[128px] min-h-[128px] max-h-[128px] shrink-0 rounded-md border overflow-hidden relative"
             style={{
               borderColor: 'var(--border-subtle)',
               background: printerImageWellBackground,
@@ -3387,7 +3387,7 @@ export function ProfileSettingsModal({
         type="button"
         disabled={isAlreadyAdded}
         onClick={handleToggle}
-        className="rounded-lg border p-2.5 text-left disabled:opacity-55 transition-[background-color,box-shadow,opacity] duration-150"
+        className="rounded-md border p-2.5 text-left disabled:opacity-55 transition-[background-color,box-shadow,opacity] duration-150"
         style={{
           borderColor: 'var(--border-subtle)',
           background: isAlreadyAdded
@@ -3505,7 +3505,7 @@ export function ProfileSettingsModal({
           boxShadow: '0 26px 54px rgba(0,0,0,0.48)',
         }}
       >
-        <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
+        <div className="flex items-center justify-between px-3 py-3 border-b" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
           <div className="flex items-center gap-2.5">
             <span
               className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
@@ -3531,11 +3531,11 @@ export function ProfileSettingsModal({
           </IconButton>
         </div>
 
-        <div className={`px-4 py-3 custom-scrollbar ${hasPrinters ? 'flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex' : 'flex-1 min-h-0 overflow-hidden flex'}`}>
+        <div className={`px-3 py-3 custom-scrollbar ${hasPrinters ? 'flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex' : 'flex-1 min-h-0 overflow-hidden flex'}`}>
           <div className={`flex flex-col gap-3 ${hasPrinters ? 'w-full min-h-full' : 'w-full h-full min-h-0'}`}>
           {isCustomSelectedPrinter && (
             <div
-              className="rounded-lg border px-3 py-2 text-xs flex items-start gap-2"
+              className="rounded-md border px-3 py-2 text-xs flex items-start gap-2"
               style={{
                 borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 30%)',
                 background: 'color-mix(in srgb, #d97706, var(--surface-1) 92%)',
@@ -3550,7 +3550,7 @@ export function ProfileSettingsModal({
           )}
           {!hasPrinters && (
             <div
-              className="rounded-xl border flex-1 h-full min-h-0 flex items-center justify-center px-4 py-10"
+              className="rounded-md border flex-1 h-full min-h-0 flex items-center justify-center px-4 py-10"
               style={{
                 borderColor: 'var(--border-subtle)',
                 background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface-2), transparent 4%), color-mix(in srgb, var(--surface-2), black 8%))',
@@ -3588,7 +3588,7 @@ export function ProfileSettingsModal({
           )}
 
           {hasPrinters && (
-          <section className="rounded-lg border overflow-hidden shrink-0" style={{ borderColor: 'var(--border-subtle)', background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface-1), transparent 8%), var(--surface-1))' }}>
+          <section className="rounded-md border overflow-hidden shrink-0" style={{ borderColor: 'var(--border-subtle)', background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface-1), transparent 8%), var(--surface-1))' }}>
             <div className="p-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
               <div className="flex items-start justify-between gap-2">
                 <div>
@@ -3908,7 +3908,7 @@ export function ProfileSettingsModal({
 
               {shouldRenderFleetRail && managedNetworkPrinters.length === 0 && (
                 <div
-                  className="mt-2 rounded-lg border px-3 py-5 text-center"
+                  className="mt-2 rounded-md border px-3 py-5 text-center"
                   style={{
                     borderColor: 'var(--border-subtle)',
                     background: 'color-mix(in srgb, var(--surface-2), transparent 8%)',
@@ -3932,7 +3932,7 @@ export function ProfileSettingsModal({
               )}
 
               {hasPrinters && (
-              <div className="mt-2.5 rounded-lg border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 8%)' }}>
+              <div className="mt-2.5 rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 8%)' }}>
                 <div className="flex flex-wrap items-center gap-2">
                   {shouldRenderFleetRail ? (
                     <>
@@ -4053,7 +4053,7 @@ export function ProfileSettingsModal({
 
           {hasPrinters && selectedPrinter && (
           <section
-            className="rounded-lg border overflow-hidden flex flex-col min-h-[320px] flex-1 shrink-0"
+            className="rounded-md border overflow-hidden flex flex-col min-h-[320px] flex-1 shrink-0"
             style={{
               borderColor: 'var(--border-subtle)',
               background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface-1), transparent 8%), var(--surface-1))',
@@ -4169,7 +4169,7 @@ export function ProfileSettingsModal({
             <div className="p-3 flex flex-col gap-3 flex-1 min-h-0">
               {shouldUseRemoteOnDeviceMaterials ? (
                 <>
-                  <div className="rounded-xl border overflow-hidden flex flex-col flex-1 min-h-0" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+                  <div className="rounded-md border overflow-hidden flex flex-col flex-1 min-h-0" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
                     <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-2 space-y-1.5">
                       {isLoadingRemoteMaterials && remoteMaterials.length === 0 ? (
                         <div className="h-full flex items-center justify-center text-xs" style={{ color: 'var(--text-muted)' }}>
@@ -4232,7 +4232,7 @@ export function ProfileSettingsModal({
 
                 </>
               ) : shouldShowRemoteMaterialSelectedPrinterOfflineState ? (
-                <div className="rounded-xl border flex-1 min-h-0 flex items-center justify-center px-4 py-5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+                <div className="rounded-md border flex-1 min-h-0 flex items-center justify-center px-4 py-5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
                   <div className="text-center max-w-[520px]">
                     <div className="inline-flex h-12 w-12 items-center justify-center rounded-full border mb-3" style={{ borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 30%)', background: 'color-mix(in srgb, var(--danger), var(--surface-1) 90%)' }}>
                       <WifiOff className="w-5 h-5" style={{ color: 'var(--danger)' }} />
@@ -4262,7 +4262,7 @@ export function ProfileSettingsModal({
                   </div>
                 </div>
               ) : shouldShowRemoteMaterialConnectInfo ? (
-                <div className="rounded-xl border flex-1 min-h-0 flex items-center justify-center px-4 py-5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+                <div className="rounded-md border flex-1 min-h-0 flex items-center justify-center px-4 py-5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
                   <div className="text-center max-w-[520px]">
                     <div className="inline-flex h-12 w-12 items-center justify-center rounded-full border mb-3" style={{ borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 30%)', background: 'color-mix(in srgb, var(--danger), var(--surface-1) 90%)' }}>
                       <WifiOff className="w-5 h-5" style={{ color: 'var(--danger)' }} />
@@ -4288,7 +4288,7 @@ export function ProfileSettingsModal({
                 </div>
               ) : (
                 <>
-              <div className="rounded-xl border overflow-hidden flex flex-col flex-1 min-h-0" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+              <div className="rounded-md border overflow-hidden flex flex-col flex-1 min-h-0" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
                 <div className="grid grid-cols-[1fr_1fr_1.25fr] flex-1 min-h-0 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
                   <div className="border-r min-h-0 flex flex-col" style={{ borderColor: 'var(--border-subtle)' }}>
                     <div className="px-2.5 py-2 text-sm font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Manufacturer</div>
@@ -4411,7 +4411,7 @@ export function ProfileSettingsModal({
                 </div>
               </div>
 
-              <div className="rounded-lg border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 8%)' }}>
+              <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 8%)' }}>
                 <div className="flex flex-wrap items-center gap-2">
                   {selectedMaterialUpdate && (
                     <Button
@@ -4545,7 +4545,7 @@ export function ProfileSettingsModal({
 
               <div className="p-3">
                 <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_340px] gap-3">
-                  <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
+                  <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
                     <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Unit Identity</div>
                     <div className="grid grid-cols-1 gap-2">
                       <LabeledInput
@@ -4566,7 +4566,7 @@ export function ProfileSettingsModal({
                     </div>
                   </div>
 
-                  <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
+                  <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
                     <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Card Thumbnail</div>
                     <div className="h-[220px] w-full rounded-md border overflow-hidden flex items-center justify-center" style={{ borderColor: 'var(--border-subtle)', background: printerImageWellBackground }}>
                       {editingFleetUnitImageDataUrl ? (
@@ -4602,7 +4602,7 @@ export function ProfileSettingsModal({
                 </div>
               </div>
 
-              <div className="px-3 py-2 border-t flex items-center justify-between gap-2 shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="px-2 py-2 border-t flex items-center justify-between gap-2 shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
                 <Button
                   type="button"
                   onClick={handleResetFleetUnitDraft}
@@ -4761,7 +4761,7 @@ export function ProfileSettingsModal({
               </div>
 
               {/* Printer Library footer */}
-              <div className="flex items-center justify-between gap-3 px-4 py-3 border-t shrink-0" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
+              <div className="flex items-center justify-between gap-3 px-3 py-3 border-t shrink-0" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
                 <span className="text-[12px]" style={{ color: 'var(--text-muted)' }}>
                   {selectedLibraryPresetIds.size > 0
                     ? `${selectedLibraryPresetIds.size} printer${selectedLibraryPresetIds.size !== 1 ? 's' : ''} selected`
@@ -4857,7 +4857,7 @@ export function ProfileSettingsModal({
                 )}
               </div>
 
-              <div className="px-3 py-2 border-t flex items-center justify-between gap-2 shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="px-2 py-2 border-t flex items-center justify-between gap-2 shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
                 <Button
                   type="button"
                   onClick={() => {
@@ -4919,7 +4919,7 @@ export function ProfileSettingsModal({
 
               <div className="p-3 space-y-3 overflow-y-auto custom-scrollbar flex-1">
                 {isSelectedPrinterOfficial && (
-                  <div className="rounded-xl border px-3 py-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5" style={{ borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 36%)', background: 'color-mix(in srgb, #d97706, var(--surface-1) 92%)' }}>
+                  <div className="rounded-md border px-3 py-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5" style={{ borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 36%)', background: 'color-mix(in srgb, #d97706, var(--surface-1) 92%)' }}>
                     <div className="flex-1 min-w-[240px]">
                       <div className="text-sm font-semibold inline-flex items-center gap-1.5" style={{ color: 'var(--text-strong)' }}>
                         <AlertTriangle className="w-4 h-4 shrink-0" style={{ color: '#d97706' }} />
@@ -4943,7 +4943,7 @@ export function ProfileSettingsModal({
                   </div>
                 )}
 
-                <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+                <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
                   <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Identity</div>
                   <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_240px] gap-3 md:items-stretch">
                     <div className="space-y-3">
@@ -4961,7 +4961,7 @@ export function ProfileSettingsModal({
                         onChange={(value) => updatePrinterProfile(selectedPrinter.id, { manufacturer: value })}
                       />
 
-                      <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}>
+                      <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}>
                         <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Profile Image</div>
                         <div className="flex items-center gap-2 flex-wrap">
                           <Button
@@ -5004,10 +5004,10 @@ export function ProfileSettingsModal({
                   </div>
                 </div>
 
-                <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+                <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
                   <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Build Volume</div>
                   <div
-                    className="mb-3 rounded-lg border p-2.5 flex flex-wrap items-center justify-between gap-2"
+                    className="mb-3 rounded-md border p-2.5 flex flex-wrap items-center justify-between gap-2"
                     style={{
                       borderColor: 'var(--border-subtle)',
                       background: 'color-mix(in srgb, var(--surface-1), transparent 7%)',
@@ -5120,7 +5120,7 @@ export function ProfileSettingsModal({
                   </div>
                 </div>
 
-                <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+                <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
                   <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Display</div>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
                     <LabeledNumberInput
@@ -5168,7 +5168,7 @@ export function ProfileSettingsModal({
                   </div>
                 </div>
 
-                <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+                <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
                   <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Output</div>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
                     <LabeledSelectInput
@@ -5250,7 +5250,7 @@ export function ProfileSettingsModal({
                 </div>
               </div>
 
-              <div className="px-3 py-2 border-t flex items-center justify-between gap-2 shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="px-2 py-2 border-t flex items-center justify-between gap-2 shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
                 <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
                   Changes are applied immediately.
                 </span>
@@ -5529,7 +5529,7 @@ export function ProfileSettingsModal({
               </div>
 
               {/* Material Library footer */}
-              <div className="flex items-center justify-between gap-3 px-4 py-3 border-t shrink-0" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
+              <div className="flex items-center justify-between gap-3 px-3 py-3 border-t shrink-0" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
                 <span className="text-[12px]" style={{ color: 'var(--text-muted)' }}>
                   {selectedLibraryMaterialKeys.size > 0
                     ? `${selectedLibraryMaterialKeys.size} material${selectedLibraryMaterialKeys.size !== 1 ? 's' : ''} selected`
@@ -5692,7 +5692,7 @@ export function ProfileSettingsModal({
                 )}
               </div>
 
-              <div className="px-3 py-2 border-t flex items-center justify-end gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="px-2 py-2 border-t flex items-center justify-end gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
                 <Button
                   type="button"
                   onClick={() => setIsCreateMaterialOpen(false)}
@@ -5810,12 +5810,12 @@ export function ProfileSettingsModal({
               </div>
 
               <div className="p-3 overflow-y-auto custom-scrollbar flex-1 min-h-0 space-y-3">
-                <div className="rounded-lg border px-3 py-2 text-xs" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}>
+                <div className="rounded-md border px-3 py-2 text-xs" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}>
                   Review the incoming changes before applying this official profile update.
                 </div>
 
                 {selectedPrinterUpdateDiffItems.length > 0 ? (
-                  <div className="rounded-lg border overflow-hidden" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                  <div className="rounded-md border overflow-hidden" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                     <div className="grid grid-cols-[170px_minmax(0,1fr)_minmax(0,1fr)] gap-0 border-b text-[11px] font-semibold uppercase tracking-wide" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
                       <div className="px-2.5 py-2" style={{ borderRight: '1px solid var(--border-subtle)' }}>Field</div>
                       <div className="px-2.5 py-2" style={{ borderRight: '1px solid var(--border-subtle)' }}>Current</div>
@@ -5832,7 +5832,7 @@ export function ProfileSettingsModal({
                     </div>
                   </div>
                 ) : (
-                  <div className="rounded-lg border px-3 py-3 text-xs" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}>
+                  <div className="rounded-md border px-3 py-3 text-xs" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}>
                     No profile field-level changes were detected, but the official version marker will still advance to v{selectedPrinterUpdate.latestVersion}.
                   </div>
                 )}
@@ -6115,7 +6115,7 @@ function RemoteMaterialEditDialog({
               {basicSections.map((section) => (
                 <div
                   key={section.id}
-                  className="rounded-xl border p-3"
+                  className="rounded-md border p-3"
                   style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
                 >
                   <div className="ui-meta font-semibold uppercase tracking-wide mb-2 flex items-center justify-between gap-2">
@@ -6182,7 +6182,7 @@ function RemoteMaterialEditDialog({
                 advancedSections.map((section) => (
                   <div
                     key={section.id}
-                    className="rounded-xl border p-3"
+                    className="rounded-md border p-3"
                     style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
                   >
                     <div className="ui-meta font-semibold uppercase tracking-wide mb-2">{section.title}</div>
@@ -6218,7 +6218,7 @@ function RemoteMaterialEditDialog({
                   </div>
                 ))
               ) : (
-                <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+                <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
                   <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                     No additional advanced controls were found for this profile.
                   </div>
@@ -6229,7 +6229,7 @@ function RemoteMaterialEditDialog({
         </div>
 
         <div
-          className="px-3 py-2 border-t flex items-center justify-between gap-2 shrink-0 sticky bottom-0"
+          className="px-2 py-2 border-t flex items-center justify-between gap-2 shrink-0 sticky bottom-0"
           style={{
             borderColor: 'var(--border-subtle)',
             background: 'color-mix(in srgb, var(--surface-0), transparent 4%)',

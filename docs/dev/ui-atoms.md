@@ -41,7 +41,9 @@ private copy at the call site.
 
 - `SettingRow` — label and description on the left, control on the right,
   optionally in the settings tabs' inset card (`bordered`). Use `as="label"` when
-  the control inside is a native input.
+  the control inside is a native input. A bordered row pads evenly on all four
+  sides, so the control sits the same distance from the card's right edge as from
+  its top and bottom; the label carries a little extra left inset of its own.
 - `Card` / `CardHeader` — the floating panel shell.
 - `Toggle` — the pill switch, with `role="switch"` and `aria-checked`. Pass
   `label` when no visible text names it.

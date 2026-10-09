@@ -3,6 +3,7 @@
 import { useEffect, useState, useLayoutEffect } from 'react';
 import { Heart } from 'lucide-react';
 import { Button } from '@/components/atoms';
+import { Tooltip } from '@/components/ui/Tooltip';
 import fallbackSponsors from '@/components/settings/sponsors.json';
 
 export type Sponsor = {
@@ -40,6 +41,21 @@ export function getSponsorRank(total?: number | null): { tier: string; borderCol
     glow: '0 0 6px rgba(205, 127, 50, 0.25), inset 0 1px 1px rgba(255,255,255,0.3)',
   };
   return { tier: 'supporter', borderColor: 'var(--border-subtle)', glow: 'none' };
+}
+
+// Fallback mark for a sponsor with no avatar image — first letter of the first and
+// last word, with camelCase split so "WickedGrey" → WG and "Kryz Slaughter" → KS.
+// A lone word keeps one letter ("ben" → B), so the mark stays a monogram.
+function sponsorInitials(name: string): string {
+  const letters = name
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean)
+    .map((word) => Array.from(word)[0])
+    .filter((char) => /\p{L}/u.test(char));
+  if (letters.length === 0) return '?';
+  const picked = letters.length === 1 ? letters : [letters[0], letters[letters.length - 1]];
+  return picked.join('').toUpperCase();
 }
 
 // Open Collective collectives for Open Resin Alliance.
@@ -532,61 +548,66 @@ export function SponsorsCarousel() {
             style={{ background: 'linear-gradient(270deg, var(--surface-1) 0%, transparent 100%)' }}
           />
           <div
-            className="sponsors-marquee-track sponsors-marquee-track--animated flex items-center gap-2 py-2 will-change-transform"
+            className="sponsors-marquee-track sponsors-marquee-track--animated flex items-center gap-3 py-2 will-change-transform"
             aria-live="polite"
           >
             {[...sponsors, ...sponsors].map((s, idx) => {
               const isDuplicate = idx >= sponsors.length;
               const isCopyStart = idx % sponsors.length === 0;
               const label = s.name;
+              const initials = sponsorInitials(label);
               const href = s.profile ?? s.website ?? OPENCOLLECTIVE_URL;
               return (
-                <button
-                  key={`${s.name}-${idx}`}
-                  className={`inline-flex shrink-0 flex-col items-center gap-2 min-w-[56px] max-w-[80px] px-1 pt-1 pb-0.5 transition-opacity hover:opacity-80${isCopyStart ? ' ml-6' : ''}`}
-                  onClick={() => openExternal(href)}
-                  style={{ color: 'var(--text-strong)', background: 'none', border: 'none', cursor: 'pointer' }}
-                  aria-label={`${label} — open sponsor profile`}
-                  aria-hidden={isDuplicate ? true : undefined}
-                  tabIndex={isDuplicate ? -1 : 0}
-                >
-                  {s.image ? (
-                    <CachedAvatar
-                      src={s.image}
-                      profile={s.profile}
-                      alt=""
-                      className="h-12 w-12 rounded-full object-cover shrink-0"
-                      totalAmountDonated={s.totalAmountDonated}
-                    />
-                  ) : (
-                    <span
-                      className="inline-flex shrink-0 items-center justify-center rounded-full"
-                      style={{
-                        width: '3rem',
-          boxSizing: 'content-box',
-                        height: '3rem',
-                        // Same constant gutter — label alignment across pills.
-                        padding: '3px',
-                        background: getSponsorRank(s.totalAmountDonated).gradient ?? undefined,
-                        boxShadow: getSponsorRank(s.totalAmountDonated).glow !== 'none' ? getSponsorRank(s.totalAmountDonated).glow : undefined,
-                        borderRadius: '9999px',
-                      }}
-                      aria-hidden="true"
-                    >
+                <Tooltip key={`${s.name}-${idx}`} content={label} maxWidth={220}>
+                  <button
+                    className={`inline-flex shrink-0 items-center justify-center py-1 transition-opacity hover:opacity-80${isCopyStart ? ' ml-6' : ''}`}
+                    onClick={() => openExternal(href)}
+                    style={{ color: 'var(--text-strong)', background: 'none', border: 'none', cursor: 'pointer' }}
+                    aria-label={`${label} — open sponsor profile`}
+                    aria-hidden={isDuplicate ? true : undefined}
+                    tabIndex={isDuplicate ? -1 : 0}
+                  >
+                    {s.image ? (
+                      <CachedAvatar
+                        src={s.image}
+                        profile={s.profile}
+                        alt=""
+                        className="h-12 w-12 rounded-full object-cover shrink-0"
+                        totalAmountDonated={s.totalAmountDonated}
+                      />
+                    ) : (
                       <span
-                        className="inline-flex h-full w-full items-center justify-center rounded-full border"
+                        className="inline-flex shrink-0 items-center justify-center rounded-full"
                         style={{
-                          background: 'var(--surface-1)',
-                          color: getSponsorRank(s.totalAmountDonated).gradient ? getSponsorRank(s.totalAmountDonated).borderColor : 'var(--accent)',
-                          borderColor: 'transparent',
+                          width: '3rem',
+                          boxSizing: 'content-box',
+                          height: '3rem',
+                          // Constant gutter: a ringed avatar and a ring-less one are both 54px.
+                          padding: '3px',
+                          background: getSponsorRank(s.totalAmountDonated).gradient ?? undefined,
+                          boxShadow: getSponsorRank(s.totalAmountDonated).glow !== 'none' ? getSponsorRank(s.totalAmountDonated).glow : undefined,
+                          borderRadius: '9999px',
                         }}
+                        aria-hidden="true"
                       >
-                        <Heart className="h-6 w-6" />
+                        <span
+                          className="inline-flex h-full w-full items-center justify-center rounded-full border"
+                          style={{
+                            background: 'var(--surface-1)',
+                            color: getSponsorRank(s.totalAmountDonated).gradient ? getSponsorRank(s.totalAmountDonated).borderColor : 'var(--accent)',
+                            borderColor: 'transparent',
+                          }}
+                        >
+                          <span
+                            className={`font-semibold leading-none tracking-wide ${initials.length > 1 ? 'text-[15px]' : 'text-[19px]'}`}
+                          >
+                            {initials}
+                          </span>
+                        </span>
                       </span>
-                    </span>
-                  )}
-                  <span className="w-full truncate text-center text-[11px] font-medium leading-tight">{label}</span>
-                </button>
+                    )}
+                  </button>
+                </Tooltip>
               );
             })}
           </div>

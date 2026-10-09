@@ -71,7 +71,14 @@
             "setProgram",
             "renderBufferDirect",
             "drawElements",
-            "drawElementsInstanced"
+            "drawElementsInstanced",
+            "VOXL_V2_SEMANTIC_REVISION",
+            "VoxlCompressedDocumentEnvelopeV1",
+            "VoxlCompressionRef",
+            "VoxlDocumentCompressionEncoding",
+            "SerializeVoxlOptions",
+            "VoxlMeshEncoding",
+            "load_voxl_v1_from_bytes"
       ],
       "paths": [
             "src/supports/generatedSupportRegistrations.ts",
@@ -100,7 +107,9 @@
             "setProgram": "three.js WebGLRenderer internals, cited as the per-object frame cost in docs/dev/backlog.md; external API, not ours",
             "renderBufferDirect": "three.js WebGLRenderer internal, cited as the per-object frame cost in docs/dev/backlog.md; external API, not ours",
             "drawElements": "WebGL context method, cited as how draw calls were counted in docs/dev/performance-debugging.md; external API, not ours",
-            "drawElementsInstanced": "WebGL context method, cited as how draw calls were counted in docs/dev/performance-debugging.md; external API, not ours"
+            "drawElementsInstanced": "WebGL context method, cited as how draw calls were counted in docs/dev/performance-debugging.md; external API, not ours",
+            "VOXL_V2_SEMANTIC_REVISION": "The 2.2 modifier-chunk revision constant, renamed to VOXL_V3_SEMANTIC_REVISION (3.1) in ADR-0042's re-base. ADR-0042 names the old spelling because the record IS the rename.",
+            "removed with VOXL V1": "VoxlCompressedDocumentEnvelopeV1 / VoxlCompressionRef / VoxlDocumentCompressionEncoding / SerializeVoxlOptions / VoxlMeshEncoding, and the Rust CLI's load_voxl_v1_from_bytes: all deleted with VOXL V1 read support, and named by ADR-0043 because the record IS the removal. Reimplementing any of them should be a deliberate decision, not a re-import."
       },
       "_comment_webkit_symbols": "The eight WebKit/JavaScriptCore internals above (javascript_gc_object_count through operationMapHash) are cited by docs/dev/performance-debugging.md as they appear in `sample` output and WebKit's own logs. They belong to the platform, not to this codebase, and will never be found here.",
       "_comment_anchor_constants": "ANCHOR_MIN_* / ANCHOR_SHAFT_MULTIPLIER: removed constants, cited by name in support-registry-findings.md because the finding IS their removal. The values live on the anchor descriptor's autoPlacement and are pinned by __tests__/autoPlacementPolicy.test.ts.",

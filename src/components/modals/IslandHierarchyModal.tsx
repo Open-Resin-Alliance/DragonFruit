@@ -88,7 +88,7 @@ export function IslandHierarchyModal({ islands, isOpen, onClose, layerHeightMm, 
         </div>
 
         {/* Footer */}
-        <div className="px-4 py-3 border-t" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+        <div className="px-3 py-3 border-t" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
           <div className="text-[11px] space-y-1" style={{ color: 'var(--text-muted)' }}>
             <p style={{ color: 'var(--text-strong)' }} className="font-semibold">Legend</p>
             <p>• Root islands have no parent (independent start)</p>

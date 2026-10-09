@@ -54,10 +54,30 @@ export function Toast({
   children,
   ...props
 }: ToastProps) {
+  /**
+   * A transition needs a starting value to move away from, and a toast that is
+   * mounted with `visible` already true has none: the browser paints it in its
+   * final state, so `transition` has nothing to run. Running that toggle on the
+   * next frame instead gives the element one paint in the off state first, which
+   * is what makes the fade-and-rise happen on the way in.
+   *
+   * Before this it depended on the caller: the import toast's guard arrives a
+   * commit before an effect flips its `visible` flag, so it alone animated in,
+   * while every toast whose guard and flag were set in the same tick appeared at
+   * full opacity.
+   */
+  const [entered, setEntered] = React.useState(false);
+  React.useEffect(() => {
+    if (!animated) return;
+    const frame = window.requestAnimationFrame(() => setEntered(true));
+    return () => window.cancelAnimationFrame(frame);
+  }, [animated]);
+  const shown = animated ? entered && visible : visible;
+
   const animationStyle: React.CSSProperties | undefined = animated
     ? {
-        opacity: visible ? 1 : 0,
-        transform: `translateY(${visible ? '0px' : `${enterOffsetPx}px`})`,
+        opacity: shown ? 1 : 0,
+        transform: `translateY(${shown ? '0px' : `${enterOffsetPx}px`})`,
         transition: 'opacity 220ms ease, transform 220ms ease',
       }
     : undefined;

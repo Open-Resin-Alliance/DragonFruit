@@ -5,6 +5,13 @@ import { useCameraFocusHotkey } from '@/hotkeys/useCameraFocusHotkey';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 
+/**
+ * How far below the middle of the view a plate lands when one is picked, as a fraction of
+ * what the camera can see: the models stand above the bed, and that is the space worth
+ * leaving room for.
+ */
+const PLATE_FOCUS_DROP_RATIO = 0.2;
+
 type OrbitLikeControls = {
   target: THREE.Vector3;
   enabled?: boolean;
@@ -22,6 +29,12 @@ type CameraFocusHotkeyControllerProps = {
   hoverPointRef: React.MutableRefObject<THREE.Vector3 | null>;
   setOrbitTargetFromPoint: (point: THREE.Vector3, options?: { animate?: boolean }) => void;
   models: LoadedModel[];
+  /**
+   * Which models F may frame. A model on a bed that is not the one being worked on
+   * is scenery, and framing it would move the camera off the plate you are on to
+   * look at something you cannot even click.
+   */
+  isModelFocusable?: (model: LoadedModel) => boolean;
   activeModelId: string | null;
   selectedModelIds: string[];
   hoveredModelId: string | null;
@@ -29,6 +42,12 @@ type CameraFocusHotkeyControllerProps = {
   cameraRef: React.MutableRefObject<THREE.Camera | null>;
   orbitControlsRef: React.MutableRefObject<{ target: THREE.Vector3; update: () => void } | null>;
   perspectiveFov?: number;
+  /**
+   * A request to move the view to the plate being worked on, bumped when one is clicked:
+   * a click on a bed picks what to work on, and the plate you picked may be off screen.
+   * No radius, so this is a pan — the view keeps its angle and its distance.
+   */
+  plateFocus?: { runId: number; center: THREE.Vector3 };
 };
 
 type FocusTransition = {
@@ -76,9 +95,11 @@ function computeModelWorldBoundingSphere(model: LoadedModel): THREE.Sphere {
 }
 
 export function CameraFocusHotkeyController({
+  plateFocus,
   hoverPointRef,
   setOrbitTargetFromPoint,
   models,
+  isModelFocusable,
   activeModelId,
   selectedModelIds,
   hoveredModelId,
@@ -114,6 +135,11 @@ export function CameraFocusHotkeyController({
       controls.target.copy(transition.endTarget);
       controls.update();
 
+      // Tell the pivot state where the view ended up: it feeds the controls' `target`
+      // prop and the focus hotkey, and a pan that left it pointing at the old plate would
+      // have the next focus start from the wrong place.
+      setOrbitTargetFromPoint(transition.endTarget, { animate: false });
+
       if (typeof transition.prevDamping === 'boolean') controls.enableDamping = transition.prevDamping;
       if (typeof transition.prevEnabled === 'boolean') controls.enabled = transition.prevEnabled;
       transitionRef.current = null;
@@ -123,6 +149,7 @@ export function CameraFocusHotkeyController({
   const snapCameraToPoint = React.useCallback((
     point: THREE.Vector3,
     modelRadius?: number,
+    options?: { durationMs?: number },
   ) => {
     const camera = cameraRef.current;
     const controls = orbitControlsRef.current;
@@ -187,14 +214,56 @@ export function CameraFocusHotkeyController({
       startTarget: controls.target.clone(),
       endTarget,
       startTime: null,
-      durationMs: 260,
+      // The caller can stretch the slide: a far pan benefits from a longer, calmer
+      // ease, while re-framing a model is best kept quick.
+      durationMs: options?.durationMs ?? 260,
       prevDamping,
       prevEnabled,
     };
   }, [cameraRef, orbitControlsRef, perspectiveFov, setOrbitTargetFromPoint]);
 
+  // A clicked plate brings the view with it. The run id and the new active plate's centre
+  // arrive in the same commit, so the pan reads the plate that was picked.
+  const plateFocusRunId = plateFocus?.runId ?? 0;
+  const lastPlateFocusRunIdRef = React.useRef(plateFocusRunId);
+  React.useEffect(() => {
+    if (plateFocusRunId === lastPlateFocusRunIdRef.current) return;
+    lastPlateFocusRunIdRef.current = plateFocusRunId;
+    const center = plateFocus?.center;
+    if (!center) return;
+
+    // No radius: keep the current view distance and angle, and move the pivot — the view
+    // slides across to the plate instead of re-framing it. The slide is eased over longer
+    // the further the view has to travel, so one bed's pitch reads as a glide rather than
+    // a snap, and a small nudge does not crawl.
+    const from = orbitControlsRef.current?.target;
+    const travelMm = from ? from.distanceTo(center) : 0;
+    const durationMs = THREE.MathUtils.clamp(240 + travelMm * 0.6, 260, 440);
+
+    // The pivot lands above the bed, so the plate ends up a fifth of a screen below the
+    // middle: the models stand above it, and that is the space worth looking at. How far
+    // "a fifth of a screen" is in millimetres depends on what the camera can see there.
+    const camera = cameraRef.current;
+    const viewSpanMm = camera instanceof THREE.OrthographicCamera
+      ? (camera.top - camera.bottom)
+      : 2 * (camera && from ? camera.position.distanceTo(from) : 0)
+        * Math.tan(THREE.MathUtils.degToRad(
+          camera instanceof THREE.PerspectiveCamera ? camera.fov : perspectiveFov,
+        ) * 0.5);
+
+    snapCameraToPoint(
+      new THREE.Vector3(center.x, center.y, center.z + viewSpanMm * PLATE_FOCUS_DROP_RATIO),
+      undefined,
+      { durationMs },
+    );
+    // `plateFocus` carries both the run id and the centre; the guard above means only the
+    // run id actually starts a pan.
+  }, [cameraRef, orbitControlsRef, perspectiveFov, plateFocus, plateFocusRunId, snapCameraToPoint]);
+
   const runFocus = React.useCallback(() => {
-    const visibleModels = models.filter((model) => model.visible);
+    const visibleModels = models.filter(
+      (model) => model.visible && (isModelFocusable?.(model) ?? true),
+    );
     const visibleById = new Map(visibleModels.map((model) => [model.id, model] as const));
     const hoverPoint = hoverPointRef.current;
 
@@ -251,7 +320,7 @@ export function CameraFocusHotkeyController({
 
     const bestSphere = computeModelWorldBoundingSphere(bestModel);
     snapCameraToPoint(bestSphere.center, bestSphere.radius);
-  }, [activeModelId, hoveredModelId, models, orbitTarget, selectedModelIds, snapCameraToPoint]);
+  }, [activeModelId, hoveredModelId, isModelFocusable, models, orbitTarget, selectedModelIds, snapCameraToPoint]);
 
   useCameraFocusHotkey(runFocus);
 

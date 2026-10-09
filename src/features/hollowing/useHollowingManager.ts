@@ -30,6 +30,7 @@ import { getRotationQuatTuple, resolveBlockedVoxelValidity } from '@/features/me
 import { toPersistedHolePunchPlacements } from '@/features/hole-punching/holePunchPersistence';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { serializeHollowingModifier } from '@/features/hollowing/hollowingSerialize';
+import { accelerateGeometry } from '@/utils/bvh';
 import {
   buildGeometryVersionKey,
   createGeometryFromPreviewPositions,
@@ -135,6 +136,17 @@ export function useHollowingManager({
   const hollowPreviewWarmupKeyRef = React.useRef<string | null>(null);
   const hollowingSourceByModelIdRef = React.useRef<Map<string, HollowingSourceEntry>>(new Map());
   const cavityGeometryByModelIdRef = React.useRef<Map<string, CavityGeometryEntry>>(new Map());
+  /**
+   * Bumped whenever the cavity map above changes. The map is a ref, so a read of
+   * it does not subscribe anything: without this, a value derived from it —
+   * "is interior view available?" — keeps the answer it had on the last render
+   * that happened for some other reason, and the feature stayed enabled after the
+   * hollow that justified it was reset.
+   */
+  const [cavityGeometryVersion, setCavityGeometryVersion] = React.useState(0);
+  const markCavityGeometryChanged = React.useCallback(() => {
+    setCavityGeometryVersion((version) => version + 1);
+  }, []);
   const bakedHollowingBeforeDraftRef = React.useRef<Map<string, ModelHollowingModifier>>(new Map());
 
   const rememberBakedHollowing = React.useCallback((model: NonNullable<SceneManager['activeModel']>) => {
@@ -180,14 +192,14 @@ export function useHollowingManager({
     hollowingSourceByModelIdRef.current.delete(modelId);
     const cavity = cavityGeometryByModelIdRef.current.get(modelId);
     cavity?.geometry.dispose();
-    cavityGeometryByModelIdRef.current.delete(modelId);
+    if (cavityGeometryByModelIdRef.current.delete(modelId)) markCavityGeometryChanged();
     for (const [key, entry] of hollowPreviewResultCacheRef.current) {
       if (entry.modelId !== modelId) continue;
       disposeHollowPreviewCacheEntry(entry);
       hollowPreviewResultCacheRef.current.delete(key);
     }
     bakedHollowingBeforeDraftRef.current.delete(modelId);
-  }, [clearHollowPreview, hollowPreview?.modelId, scene.activeModelId]);
+  }, [clearHollowPreview, hollowPreview?.modelId, scene.activeModelId, markCavityGeometryChanged]);
 
   const handleApplyHollowing = React.useCallback(() => {
     void (async () => {
@@ -299,6 +311,11 @@ export function useHollowingManager({
           cavityGeometry.computeVertexNormals();
           cavityGeometry.computeBoundingBox();
           cavityGeometry.computeBoundingSphere();
+          // Interior placement builds an SDFCache from whatever mesh the click
+          // hit, and the cavity mesh is one of those. Without a boundsTree the
+          // cache throws and every interior support press dies, so accelerate it
+          // here, where the geometry is born, rather than at each consumer.
+          accelerateGeometry(cavityGeometry);
         }
 
         const sourceSnapshot = snapshotGeometryPositions(sourceGeometry);
@@ -418,6 +435,7 @@ export function useHollowingManager({
         } else {
           cavityGeometryByModelIdRef.current.delete(activeModel.id);
         }
+        markCavityGeometryChanged();
         deps.current.setHolePunchState((previous) => (
           previous.depthMode === 'auto' ? previous : { ...previous, depthMode: 'auto' }
         ));
@@ -436,7 +454,7 @@ export function useHollowingManager({
         setIsApplyingBlockersHollowing(false);
       }
     })();
-  }, [blockedHollowVoxelIndices, hollowingDraftEnabled, hollowingState, isShellOpenFaceSelected, scene]);
+  }, [blockedHollowVoxelIndices, hollowingDraftEnabled, hollowingState, isShellOpenFaceSelected, scene, markCavityGeometryChanged]);
 
   const handleResetHollowing = React.useCallback(() => {
     const activeModel = scene.activeModel;
@@ -717,7 +735,7 @@ export function useHollowingManager({
   }, []);
 
   React.useEffect(() => {
-    if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'hollowing' || !hollowingEditMode) {
+    if ((scene.mode !== 'prepare' && scene.mode !== 'support') || transformMgr.transformMode !== 'hollowing' || !hollowingEditMode) {
       return;
     }
 
@@ -1271,11 +1289,14 @@ export function useHollowingManager({
       hollowingSourceByModelIdRef.current.delete(modelId);
     }
 
+    let removedCavityGeometry = false;
     for (const [modelId, entry] of cavityGeometryByModelIdRef.current.entries()) {
       if (liveIds.has(modelId)) continue;
       entry.geometry.dispose();
       cavityGeometryByModelIdRef.current.delete(modelId);
+      removedCavityGeometry = true;
     }
+    if (removedCavityGeometry) markCavityGeometryChanged();
 
     // If the active model's cavity geometry was just removed, exit interior view
     // so the user doesn't get stuck with no way to toggle it off.
@@ -1294,7 +1315,7 @@ export function useHollowingManager({
     for (const modelId of bakedHollowingBeforeDraftRef.current.keys()) {
       if (!liveIds.has(modelId)) bakedHollowingBeforeDraftRef.current.delete(modelId);
     }
-  }, [scene.models, deps.current.interiorView, deps.current.setInteriorView]);
+  }, [scene.models, deps.current.interiorView, deps.current.setInteriorView, markCavityGeometryChanged]);
 
   // Restore cavity geometry from persisted data for models with baked hollowing.
   React.useEffect(() => {
@@ -1323,9 +1344,13 @@ export function useHollowingManager({
       cavityGeometry.computeVertexNormals();
       cavityGeometry.computeBoundingBox();
       cavityGeometry.computeBoundingSphere();
+      // Same reason as the apply path: interior placement builds an SDFCache
+      // from the cavity mesh, so a restored cavity needs its boundsTree too.
+      accelerateGeometry(cavityGeometry);
       cavityGeometryByModelIdRef.current.set(model.id, { geometry: cavityGeometry });
+      markCavityGeometryChanged();
     }
-  }, [scene.models]);
+  }, [scene.models, scene.activeModelId, markCavityGeometryChanged]);
 
   // Rust echoes back which committed blockers it actually accepted (stale
   // indices that fell off the grid or landed on non-solid voxels are
@@ -1417,7 +1442,7 @@ export function useHollowingManager({
 
   React.useEffect(() => {
     if (!hollowPreview) return;
-    if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'hollowing') {
+    if ((scene.mode !== 'prepare' && scene.mode !== 'support') || transformMgr.transformMode !== 'hollowing') {
       clearHollowPreview();
       return;
     }
@@ -1428,7 +1453,7 @@ export function useHollowingManager({
   }, [clearHollowPreview, hollowPreview, scene.mode, scene.models, transformMgr.transformMode]);
 
   React.useEffect(() => {
-    if (scene.mode === 'prepare' && transformMgr.transformMode === 'hollowing') {
+    if ((scene.mode === 'prepare' || scene.mode === 'support') && transformMgr.transformMode === 'hollowing') {
       return;
     }
     setHollowingEditMode(false);
@@ -1590,7 +1615,7 @@ export function useHollowingManager({
   }, [blockedHollowVoxelIndices, clearHollowPreview, commitBlockedHollowVoxelIndices, editingBlockedHollowVoxelIndices]);
 
   React.useEffect(() => {
-    if (scene.mode !== 'prepare' || transformMgr.transformMode === 'hollowing') {
+    if ((scene.mode !== 'prepare' && scene.mode !== 'support') || transformMgr.transformMode === 'hollowing') {
       return;
     }
 
@@ -1659,6 +1684,7 @@ export function useHollowingManager({
     hollowPreviewWarmupKeyRef,
     hollowingSourceByModelIdRef,
     cavityGeometryByModelIdRef,
+    cavityGeometryVersion,
     defaultHollowingState,
     isHollowingApplied,
     persistedHollowingSignature,

@@ -42,8 +42,16 @@ const STILL_FRAMES_TO_RECOVER = 45; // ~0.75s at 60fps
  * means no animation is running; the "moved while disabled" guard distinguishes
  * a stale animation disable from a legitimate UI disable (gizmo drag, marquee
  * select, placement) that never moves the camera.
+ *
+ * `interactionEnabled` is the app's own answer to whether the camera should
+ * answer the pointer at all, and it is checked first, because the two cases the
+ * guards above cannot tell apart look identical from here: a disable the app
+ * meant, with an animation passing through it — an empty scene flying the view
+ * to the plate it just left — reads exactly like an animation that forgot to
+ * undo itself. What the app wants settles it, and a disable the app means is
+ * never healed.
  */
-export function CameraControlsRecovery() {
+export function CameraControlsRecovery({ interactionEnabled }: { interactionEnabled: boolean }) {
   const { camera, controls } = useThree();
 
   const stillFramesRef = React.useRef(0);
@@ -51,10 +59,25 @@ export function CameraControlsRecovery() {
   const wasDisabledRef = React.useRef(false);
   const lastPosRef = React.useRef<THREE.Vector3 | null>(null);
   const lastTargetRef = React.useRef<THREE.Vector3 | null>(null);
+  const interactionEnabledRef = React.useRef(interactionEnabled);
+  interactionEnabledRef.current = interactionEnabled;
 
   useFrame(() => {
     if (!isOrbitLikeControls(controls)) return;
     const orbit = controls;
+
+    // The app wants the camera still — a scene with nothing to orbit around, a
+    // gizmo drag, a placement — so any disable is deliberate and nothing here is
+    // stale. Forget the window as well: a later legitimate disable should not
+    // inherit movement that happened under this one.
+    if (!interactionEnabledRef.current) {
+      stillFramesRef.current = 0;
+      movedWhileDisabledRef.current = false;
+      wasDisabledRef.current = false;
+      lastPosRef.current = null;
+      lastTargetRef.current = null;
+      return;
+    }
 
     const disabled =
       orbit.enabled === false ||

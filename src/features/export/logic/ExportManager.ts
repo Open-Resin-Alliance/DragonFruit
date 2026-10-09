@@ -1,13 +1,14 @@
 import * as THREE from 'three';
 import { STLExporter } from 'three-stdlib';
-import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
+import type { LoadedModel, ScenePlate } from '@/features/scene/useSceneCollectionManager';
 import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
 import type { MeshHealthReport } from '@/utils/meshRepair';
 import { resolveModelMeshModifiers } from '@/features/mesh-modifiers/meshModifierStore';
 import { KNOWN_SOURCE_EXTENSION_STRIP_RE } from '@/features/plugins/pluginFileTypeExtensions';
-import { buildSupportExportFromStores, serializeVoxlDocumentV2, serializeVoxlDocumentV2Streaming, VoxlSizeLimitError, VoxlUnchangedError, type PrecompressedChunk, type VoxlChunkCache, type VoxlChunkReportEntry } from '@/features/scene/voxl';
+import { buildSupportExportFromStores, serializeVoxlDocumentV2, serializeVoxlDocumentV2Streaming, VoxlSizeLimitError, VoxlUnchangedError, type PrecompressedChunk, type VoxlChunkCache, type VoxlChunkReportEntry, type VoxlPrinterBundle } from '@/features/scene/voxl';
 import { type BakedChunk, meshChunkStore } from '@/features/scene/voxl/meshChunkStore';
 import { buildScopedSupportExportDocument, buildScopedSupportGeometryGroup } from '@/features/export/logic/supportExportReconstruction';
+import { VOXL_PLATE_ORDERING_EXTENSION, type PlateOrdering } from '@/features/scene/plates/plateCascade';
 import { allocateMeshStagePath, exportMeshFile, pickSavePathWithNativeDialog, writeChunkedToNativePath, writeFileAtomicToNativePath, writeFileAtomicStreamedToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { info as logInfo } from '@tauri-apps/plugin-log';
 import { getSnapshot } from '@/supports/state';
@@ -36,17 +37,27 @@ export interface ExportSceneContext {
   models: LoadedModel[];
   activeModelId: string | null;
   selectedModelIds: string[];
+  /** The scene's plates. With them, a save carries a plate list; without them, none. */
+  plates?: ScenePlate[];
+  /** Which plate was active, written as the file's cursor. */
+  activePlateId?: string;
+  /** The active plate's name, written as the older single-plate shorthand. */
+  plateName?: string;
+  /** The printer this scene is being written for, embedded whole, if one is selected. */
+  printer?: VoxlPrinterBundle;
+  /** The grid the beds are laid out on, so re-opening re-lays the same beds. */
+  plateOrdering?: PlateOrdering;
   exportThumbnailPng?: Uint8Array | null;
 }
 
 export interface ExportSceneSaveTarget {
   nativePath?: string | null;
   /**
-   * VOXL 2.2 modifier-snapshot chunking. Omitted/`true` writes the newest
-   * (chunked 2.2) layout — the manual-save default. Autosave passes `false` to
-   * preserve a pre-2.2 file's inline layout, and escalates to `true` itself if
+   * VOXL 3.1 modifier-snapshot chunking. Omitted/`true` writes the newest
+   * (chunked 3.1) layout — the manual-save default. Autosave passes `false` to
+   * preserve a pre-3.1 file's inline layout, and escalates to `true` itself if
    * that write throws (see `useSceneAutosave`). Never write `false` for a file
-   * that is already 2.2 — that would downgrade it.
+   * that is already 3.1 — that would downgrade it.
    */
   chunkModifierSnapshots?: boolean;
   /**
@@ -287,63 +298,6 @@ export class ExportManager {
   /** Backstop for paths that drop models without going through `deleteModels`. */
   static retainModelChunks(modelIds: Iterable<string>): void {
     meshChunkStore.retainOnly(modelIds);
-  }
-
-  private static encodeRleU8(input: Uint8Array): Uint8Array {
-    if (input.length === 0) return new Uint8Array();
-
-    const output: number[] = [];
-    let runValue = input[0];
-    let runCount = 1;
-
-    for (let i = 1; i < input.length; i += 1) {
-      const value = input[i];
-      if (value === runValue && runCount < 255) {
-        runCount += 1;
-      } else {
-        output.push(runCount, runValue);
-        runValue = value;
-        runCount = 1;
-      }
-    }
-
-    output.push(runCount, runValue);
-    return new Uint8Array(output);
-  }
-
-  private static async sha256Hex(bytes: Uint8Array): Promise<string> {
-    if (!globalThis.crypto?.subtle) {
-      throw new Error('SHA-256 hashing is unavailable in this environment.');
-    }
-
-    const digestInput = new ArrayBuffer(bytes.byteLength);
-    new Uint8Array(digestInput).set(bytes);
-    const digest = await globalThis.crypto.subtle.digest('SHA-256', digestInput);
-    const digestBytes = new Uint8Array(digest);
-    let hex = '';
-    for (let i = 0; i < digestBytes.length; i += 1) {
-      hex += digestBytes[i].toString(16).padStart(2, '0');
-    }
-    return hex;
-  }
-
-  private static async buildEmbeddedMeshPayload(model: LoadedModel): Promise<{
-    dataBase64: string;
-    dataEncoding: 'base64-raw' | 'base64-rle-u8';
-    uncompressedSizeBytes: number;
-    sha256: string;
-  }> {
-    const rawBytes = this.exportModelAsEmbeddedBinaryStlBytes(model);
-    const rleBytes = this.encodeRleU8(rawBytes);
-    const useRle = rleBytes.length > 0 && rleBytes.length < rawBytes.length;
-    const payloadBytes = useRle ? rleBytes : rawBytes;
-
-    return {
-      dataBase64: this.toBase64(payloadBytes),
-      dataEncoding: useRle ? 'base64-rle-u8' : 'base64-raw',
-      uncompressedSizeBytes: rawBytes.length,
-      sha256: await this.sha256Hex(rawBytes),
-    };
   }
 
   /**
@@ -1196,7 +1150,10 @@ export class ExportManager {
             visible: boolean;
             color: string;
             polygonCount: number;
-            fileSizeBytes: number;
+            /** The plate the model stands on; see `VoxlModelEntry.plateId`. */
+            plateId?: string;
+            /** Absent when the mesh's size was never recorded; never a stand-in 0. */
+            fileSizeBytes?: number;
             sourcePath?: string;
             nativePreview?: {
               originalTriangleCount: number;
@@ -1238,7 +1195,7 @@ export class ExportManager {
               if (resolvedChunk.stale) staleModelIds.add(model.id);
             }
 
-            // Baked mesh classification (VOXL V2.4): the model/support split the
+            // Baked mesh classification (VOXL V3.3): the model/support split the
             // session already knows, persisted so a reload does not re-run the
             // classifier over the same triangles. Omitted for a stale chunk —
             // those bytes are one bake behind the geometry the report describes,
@@ -1263,7 +1220,12 @@ export class ExportManager {
               visible: model.visible,
               color: model.color,
               polygonCount: model.polygonCount,
-              fileSizeBytes: model.fileSizeBytes ?? 0,
+              // Only when known: writing 0 for an unknown size is what made a
+              // cached or re-opened scene report "0 B" — the field said the mesh
+              // occupies no space rather than that its size was never recorded.
+              ...(typeof model.fileSizeBytes === 'number' && model.fileSizeBytes > 0
+                ? { fileSizeBytes: model.fileSizeBytes }
+                : {}),
               // Preserves sourcePath / nativePreview if present on model
               ...(typeof model.sourcePath === 'string' && model.sourcePath.trim().length > 0
                 ? { sourcePath: model.sourcePath }
@@ -1304,6 +1266,7 @@ export class ExportManager {
               // every saved VOXL silently loses hollowing/hole-punch
               // re-editability (voxl-format-spec.md V2.1 requirement).
               meshModifiers: resolveModelMeshModifiers(model),
+              ...(model.plateId ? { plateId: model.plateId } : {}),
               isSupportGeometry: model.isSupportGeometry,
               linkGroupId: model.linkGroupId,
               classification,
@@ -1339,11 +1302,26 @@ export class ExportManager {
       models,
       activeModelId: sceneContext?.activeModelId ?? null,
       selectedModelIds: sceneContext?.selectedModelIds ?? [],
+      ...(sceneContext?.plates && sceneContext.plates.length > 0
+        ? {
+            plates: sceneContext.plates.map((plate) => ({
+              id: plate.id,
+              ...(plate.name ? { name: plate.name } : {}),
+            })),
+          }
+        : {}),
+      ...(sceneContext?.activePlateId ? { activePlateId: sceneContext.activePlateId } : {}),
       supports,
       meta: {
         generator: 'DragonFruit',
+        ...(sceneContext?.printer ? { printer: sceneContext.printer } : {}),
       },
-      extensions: voxlExtensions,
+      extensions: {
+        ...voxlExtensions,
+        ...(sceneContext?.plateOrdering
+          ? { [VOXL_PLATE_ORDERING_EXTENSION]: sceneContext.plateOrdering }
+          : {}),
+      },
     };
     // The SUPP chunk's bytes are a pure function of the two store snapshots plus
     // the include/scope flags. Key on the snapshot identities so an unchanged
@@ -1357,10 +1335,10 @@ export class ExportManager {
         ].join('|')
       : undefined;
 
-    // `chunkModifierSnapshots` selects the VOXL 2.2 layout (chunked, the default
-    // and the manual-save path) or the pre-2.2 inline layout (autosave preserving
+    // `chunkModifierSnapshots` selects the VOXL 3.1 layout (chunked, the default
+    // and the manual-save path) or the pre-3.1 inline layout (autosave preserving
     // an old file's format). Autosave owns the escalate-on-failure decision so it
-    // can also latch the scene to 2.2 — see `useSceneAutosave`.
+    // can also latch the scene to 3.1 — see `useSceneAutosave`.
     const serializeOptions = {
       precompressed: precompressedMap,
       precompressedOriginal: precompressedOriginalMap,

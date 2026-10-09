@@ -178,17 +178,25 @@ function RotationArrow({
   );
 }
 
-/** Home button sits on the bottom-right diagonal, between the right and bottom arrows. */
-const HOME_OFFSET = 0.76;
-const HOME_SIZE = 0.36;
+/** Home chip sits on the bottom-right diagonal, between the right and bottom arrows.
+ *  Its clearance is measured against the viewcube's corner sweep, not its faces: as the
+ *  cube turns with the camera a corner reaches half-extent × √3 (30 × 1.73 ≈ 52px), and
+ *  that is what a face-sized offset collides with. 0.93 leaves the chip's nearest corner
+ *  ~7px outside that sweep. */
+const HOME_OFFSET = 0.93;
+const HOME_SIZE = 0.47;
 
 function HomeButton({
   position,
   strokeColor,
+  chipColor,
+  chipBorderColor,
   onClick,
 }: {
   position: [number, number, number];
   strokeColor: string;
+  chipColor: string;
+  chipBorderColor: string;
   onClick?: () => void;
 }) {
   const [hover, setHover] = React.useState(false);
@@ -202,16 +210,27 @@ function HomeButton({
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
 
+    // The chip: a rounded square in the app's own surface and hairline, so the glyph
+    // reads as one of its floating buttons rather than a mark drawn on the canvas.
+    const hairline = 1;
+    ctx.clearRect(0, 0, size, size);
+    ctx.beginPath();
+    ctx.roundRect(hairline / 2, hairline / 2, size - hairline, size - hairline, 16);
+    ctx.fillStyle = chipColor;
+    ctx.fill();
+    ctx.lineWidth = hairline;
+    ctx.strokeStyle = chipBorderColor;
+    ctx.stroke();
+
     // Rasterize lucide's House icon (the same one the rest of the UI uses),
     // filled rather than stroked. lucide is stroke-only, so fill the closed
-    // silhouette path and punch the open detail path (the door) out with
-    // destination-out — the filled-home look.
+    // silhouette path and paint the open detail path (the door) in the chip's own
+    // colour — the filled-home look, without a see-through notch in the chip.
     const viewBox = 24;
-    const padding = size * 0.06;
-    const scale = (size - padding * 2) / viewBox;
-    ctx.clearRect(0, 0, size, size);
+    const glyphSize = 50;
+    const scale = glyphSize / viewBox;
     ctx.save();
-    ctx.translate(padding, padding);
+    ctx.translate((size - glyphSize) / 2, (size - glyphSize) / 2);
     ctx.scale(scale, scale);
 
     const paths: { path: Path2D; closed: boolean }[] = [];
@@ -224,14 +243,14 @@ function HomeButton({
     for (const { path, closed } of paths) {
       if (closed) ctx.fill(path);
     }
-    ctx.globalCompositeOperation = 'destination-out';
+    ctx.fillStyle = chipColor;
     for (const { path, closed } of paths) {
       if (!closed) ctx.fill(path);
     }
     ctx.restore();
 
     return new CanvasTexture(canvas);
-  }, [strokeColor]);
+  }, [strokeColor, chipColor, chipBorderColor]);
 
   React.useEffect(() => () => texture?.dispose(), [texture]);
 
@@ -269,12 +288,16 @@ export function ZUpGizmoHelper({
   margin = [80, 80],
   renderPriority = 1,
   accentColor = '#baf72e',
+  chipColor = '#20242c',
+  chipBorderColor = '#3a3f4b',
   onHome,
   onUpdate,
   onTarget,
   children,
 }: GizmoHelperProps & {
   accentColor?: string;
+  chipColor?: string;
+  chipBorderColor?: string;
   onHome?: () => void;
 }) {
   const size = useThree((state) => state.size);
@@ -467,6 +490,8 @@ export function ZUpGizmoHelper({
           <HomeButton
             position={[HOME_OFFSET, -HOME_OFFSET, 0]}
             strokeColor={accentColor}
+            chipColor={chipColor}
+            chipBorderColor={chipBorderColor}
             onClick={onHome}
           />
         </group>

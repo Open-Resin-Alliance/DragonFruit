@@ -5,7 +5,7 @@ import { msg } from '@lingui/core/macro';
 import { Trans } from '@lingui/react/macro';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { useIsLinux } from '@/hooks/usePlatform';
-import { formatPolygonCountCompact } from '@/utils/meshStatsFormatting';
+import { formatFileSize, formatPolygonCountCompact } from '@/utils/meshStatsFormatting';
 import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
 import {
   getActiveMaterialProfile,
@@ -31,6 +31,14 @@ interface ModelStatsCardProps {
   heightMm: number;
   estimatedPrintTimeLabelOverride?: string | null;
   estimatedResinLabelOverride?: string | null;
+  /**
+   * The plate's layer count, as text. Distinct from `numLayers` because a plate
+   * with nothing on it has zero layers, and zero must not fall back to the
+   * scene's own count the way an unknown one does.
+   */
+  estimatedLayerCountLabelOverride?: string | null;
+  /** The same estimate for every plate. Absent when there is only one plate. */
+  estimatedResinTotalLabel?: string | null;
 }
 
 export function ModelStatsCard({
@@ -42,6 +50,8 @@ export function ModelStatsCard({
   heightMm,
   estimatedPrintTimeLabelOverride,
   estimatedResinLabelOverride,
+  estimatedLayerCountLabelOverride,
+  estimatedResinTotalLabel,
 }: ModelStatsCardProps) {
   const { _ } = useLingui();
   const [isFlipped, setIsFlipped] = React.useState(false);
@@ -183,18 +193,6 @@ export function ModelStatsCard({
   }, [activeMaterialProfile, activePrinterProfile]);
 
   // Compute per-model layer counts
-
-  const formatBytes = (bytes: number) => {
-    const abs = Math.max(0, bytes);
-    const KB = 1024;
-    const MB = KB * 1024;
-    const GB = MB * 1024;
-
-    if (abs >= GB) return `${(abs / GB).toFixed(2)} GB`;
-    if (abs >= MB) return `${(abs / MB).toFixed(2)} MB`;
-    if (abs >= KB) return `${(abs / KB).toFixed(1)} KB`;
-    return `${abs.toFixed(0)} B`;
-  };
 
   // Compact duration for the narrow "Est. print time" row. The trailing letters
   // are unit abbreviations — h(ours), min(utes), s(econds) — so "5 s" is five
@@ -540,7 +538,7 @@ export function ModelStatsCard({
 
               <span><Trans>Layers:</Trans></span>
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>
-                {resolvedLayerCount != null ? resolvedLayerCount : '-'}
+                {estimatedLayerCountLabelOverride ?? (resolvedLayerCount != null ? resolvedLayerCount : '-')}
               </span>
 
               <span><Trans comment='Row label on the printer card. "Est." is short for "estimated"; keep the abbreviation terse — the label column is narrow.'>Est. print time:</Trans></span>
@@ -554,6 +552,15 @@ export function ModelStatsCard({
                   ? `${estimatedResinMl.toFixed(2)} ml${estimatedResinCost ? ` (${estimatedResinCost})` : ''}`
                   : '-')}
               </span>
+
+              {estimatedResinTotalLabel != null && (
+                <>
+                  <span><Trans comment='Row label on the printer card: estimated resin for every plate in the scene, beside the row for the plate being worked on. Keep it terse — the label column is narrow.'>Est. resin (all):</Trans></span>
+                  <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>
+                    {estimatedResinTotalLabel}
+                  </span>
+                </>
+              )}
             </div>
 
             <div className="pt-0.5 text-[10px] mt-auto" style={{ color: 'var(--text-muted)' }}>
@@ -576,7 +583,7 @@ export function ModelStatsCard({
 
             <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
               <span><Trans>STL size:</Trans></span>
-              <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model?.fileSizeBytes != null ? formatBytes(model.fileSizeBytes) : '-'}</span>
+              <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model?.fileSizeBytes != null ? formatFileSize(model.fileSizeBytes) : '-'}</span>
 
               <span><Trans>Triangles:</Trans></span>
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model ? formatPolygonCountCompact(model.polygonCount) : '-'}</span>

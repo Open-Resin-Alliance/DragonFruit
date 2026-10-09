@@ -984,4 +984,3 @@ input[type="number"]:not(.no-spinners):hover::-webkit-outer-spin-button,
   background: color-mix(in srgb, var(--surface-2), var(--accent) 16%);
 }
 
-

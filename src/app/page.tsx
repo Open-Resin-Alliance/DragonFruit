@@ -9,7 +9,7 @@ import { detectIsIOS } from '@/hooks/usePlatform';
 import { useUiScale } from '@/hooks/useUiScale';
 import * as THREE from 'three';
 import type { ThreeEvent } from '@react-three/fiber';
-import { AlertTriangle, CheckCircle2, ChevronDown, Download, Gamepad2, LayoutGrid, Loader2, Maximize2, Minimize2, Play, Plus, Printer, Redo2, RefreshCw, Trash2, Undo2, Wrench, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, Download, Gamepad2, LayoutGrid, Loader2, Lock, Maximize2, Minimize2, Play, Plus, Printer, Redo2, RefreshCw, Trash2, Undo2, Wrench, X } from 'lucide-react';
 import { SceneCanvas } from '@/components/scene/SceneCanvas';
 import { SceneOverlays } from '@/components/organisms/scene/SceneOverlays';
 import { FloatingPanelStack } from '@/components/layout/FloatingPanelStack';
@@ -49,9 +49,10 @@ import { IslandVoxelControls } from '@/components/controls/IslandVoxelControls';
 import { TerritoryVoxelControls } from '@/components/controls/TerritoryVoxelControls';
 import { IslandListCard } from '@/components/controls/IslandListCard';
 import { ModelManagerPanel } from '../components/controls/ModelManagerPanel';
-import { DebugPrimitivesPanel } from '@/components/controls/DebugPrimitivesPanel';
+import { ModelsPanel } from '@/components/organisms/panels/ModelsPanel';
 import { ModelStatsCard } from '@/components/controls/ModelStatsCard';
-import { TransformToolbar } from '@/components/controls/TransformToolbar';
+import { ToolRail, TOOL_RAIL_WIDTH_PX } from '@/components/controls/ToolRail';
+import { buildPrepareToolRailEntries, buildSupportToolRailEntries, type SupportRailMode } from '@/components/controls/toolRailEntries';
 import { SnapAngleReadout } from '@/components/gizmo/rotate/SnapAngleReadout';
 import { RotationHintTooltip } from '@/components/gizmo/rotate/RotationHintTooltip';
 import { TransformControls } from '@/components/controls/TransformControls';
@@ -67,14 +68,17 @@ import { contactEndpointsFor, countSupportCollections, knotHostId, spanKnotHostT
 import { LayerSlider } from '@/components/controls/LayerSlider';
 import { PrintingLayerGpuPreview } from '@/components/controls/PrintingLayerGpuPreview';
 import { SupportSidebar } from '@/supports/Settings/SupportSidebar';
+import { getSettings as getSupportDisplaySettings, subscribeToSettings as subscribeToSupportSettings, updateNavigationDiscsOnly } from '@/supports/Settings/state';
 import { useLeafPlacementState } from '@/supports/SupportTypes/Leaf/leafPlacementState';
 import { ExportPanel } from '@/features/export/components/ExportPanel';
 import { ExportManager } from '@/features/export/logic/ExportManager';
 import { resolveEntirePlateExportBaseName } from '@/features/export/logic/exportFileNaming';
 import { SlicingPanel, type SliceIntent } from '@/features/slicing/components/SlicingPanel';
+import { joinSliceOutputPath } from '@/features/slicing/plateSliceNaming';
 import { PrintingPanel } from '@/features/printing/components/PrintingPanel';
 import { usePrintingPreviewManager, type PrintingPreviewManagerDeps } from '@/features/printing/usePrintingPreviewManager';
-import { useEditorToasts } from '@/features/notifications/useEditorToasts';
+import { useEditorToasts, useTrailingMount } from '@/features/notifications/useEditorToasts';
+import { plateNumberPlaceholder } from '@/features/scene/plates/plateMessages';
 import { ScanProgressBar } from '@/components/scene/ScanProgressBar';
 import { SliceMetricsDebugModal } from '@/features/slicing/components/SliceMetricsDebugModal';
 import { MeshSmoothingSettingsPanel } from '@/features/mesh-smoothing/MeshSmoothingSettingsPanel';
@@ -107,7 +111,7 @@ import { buildMirrorSupportTransforms, reflectTransformAcrossWorldAxis } from '@
 import type { MirrorAxis } from '@/features/mirror/types';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { RtspRelayCanvasPlayer } from '@/components/monitoring/RtspRelayCanvasPlayer';
-import { BlockingOverlay, IconButton, Toast, ToastViewport } from '@/components/atoms';
+import { BlockingOverlay, Button, IconButton, Toast, ToastViewport } from '@/components/atoms';
 import { EditorContextMenu, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
@@ -121,8 +125,12 @@ import { UvToolsLaunchingModal } from '@/components/modals/UvToolsLaunchingModal
 import { ZipFilePickerModal } from '@/components/modals/ZipFilePickerModal';
 import { extractFilesFromZip, getFileExtensionLower } from '@/utils/zipImport';
 import {
-  DEBUG_PRIMITIVES_PANEL_VISIBILITY_EVENT,
-  isDebugPrimitivesPanelVisibleEnabled,
+  getToolLayout,
+  isModelsPanelVisibleEnabled,
+  setModelsPanelVisibleEnabled,
+  setToolLayout,
+  TOOL_LAYOUT_EVENT,
+  type ToolLayout,
 } from '@/components/layout/floatingLayoutPreferences';
 
 import { initializeBVH } from '@/utils/bvh';
@@ -231,10 +239,8 @@ import {
   type HullCacheEntry,
   type ArrangeModel as HighPrecisionArrangeModel,
 } from '@/features/scene/arrange/highPrecisionArrange';
-import {
-  computeHighPrecisionArrangeResultWorker,
-  computeHighPrecisionArrangeUpdatesWorker,
-} from '@/features/scene/arrange/highPrecisionArrangeWorkerClient';
+import { computeHighPrecisionArrangeResultWorker } from '@/features/scene/arrange/highPrecisionArrangeWorkerClient';
+import { plateCascadeOffsetMm } from '@/features/scene/plates/plateCascade';
 
 // Domain Features
 import { useSceneCollectionManager, SCENE_SLICED, pushSceneSlicedMarker, getSceneSnapshotRegistryBytes } from '@/features/scene/useSceneCollectionManager';
@@ -251,7 +257,7 @@ import { AutoSupportPanel, getAutoSupportBusy, subscribeAutoSupportBusy, autoSup
 import { installPerfConsoleAPI } from '@/supports/PlacementLogic/Pathfinding/pathfindingPerf';
 import { getUnappliedModifiers } from '@/features/mesh-modifiers/unappliedModifiers';
 import type { UnappliedModifierAction } from '@/components/organisms/modals/ModifierModals';
-import { AutoRotationPanel, getOrientationBusy, subscribeOrientationBusy, OrientElapsed } from '@/components/controls/AutoRotationPanel';
+import { getOrientationBusy, subscribeOrientationBusy, OrientElapsed } from '@/components/controls/AutoRotationPanel';
 import { IslandOverlay } from '@/components/scene/IslandOverlay';
 import { useSupportInteractionManager } from '@/features/supports/useSupportInteractionManager';
 import { useUndoRedoHotkeys } from '@/hotkeys/useUndoRedoHotkeys';
@@ -327,6 +333,7 @@ import {
   pickSavePathWithNativeDialog,
   pickOpenFilesWithNativeDialog,
   readPrintLayerPreviewPngFromPath,
+  readPrintLayerPreviewPngsFromPath,
   readPrintArtifactBytesFromPath,
   savePrintArtifactPathWithNativeDialog,
   savePrintArtifactWithNativeDialog,
@@ -596,7 +603,15 @@ function createModelTransformKey(modelId: string, transform: ModelTransform): st
  */
 const HISTORY_APP_MODES: readonly SupportMode[] = ['prepare', 'analysis', 'support', 'export', 'printing'];
 const HISTORY_TRANSFORM_MODES: readonly TransformMode[] = [
-  'select', 'transform', 'smoothing', 'arrange', 'placeOnFace', 'mirror', 'hollowing', 'organicCut',
+  'select', 'transform', 'smoothing', 'arrange', 'duplicate', 'placeOnFace', 'mirror', 'hollowing', 'organicCut',
+];
+
+/**
+ * The transform modes Prepare's rail offers. Support's Hollowing is deliberately
+ * absent: it is a Support tool now, and Prepare must never restore it.
+ */
+const PREPARE_TOOL_MODES: readonly TransformMode[] = [
+  'select', 'transform', 'placeOnFace', 'mirror', 'duplicate', 'arrange', 'organicCut', 'smoothing',
 ];
 
 function isAppMode(value: string): value is SupportMode {
@@ -620,6 +635,25 @@ function formatLastSuccessfulAutosave(
   }), { timestamp });
 }
 
+// Static ICU pattern in a module-level formatter (see AGENTS.md): written inside the
+// component, the React Compiler renames the interpolated local and the message id stops
+// matching the compiled catalogue.
+function formatPlateLockedNotice(
+  translate: (descriptor: MessageDescriptor, values?: Record<string, unknown>) => string,
+  plateName: string,
+): string {
+  return translate(msg({
+    message: '{plateName} is locked.',
+    comment: '{plateName} is the locked build plate, named as the Models panel names it: its own name, or "Plate 1".',
+  }), { plateName });
+}
+
+/** How many layers either side of the one on screen a plate's slice reads ahead. */
+const PRINTING_PREVIEW_PREFETCH_RADIUS = 2;
+
+/** How many layers of one bed are kept in memory before the oldest are dropped. */
+const PRINTING_PREVIEW_CACHE_LIMIT = 24;
+
 export default function Home() {
   const { _, i18n } = useLingui();
   const { stage, sproutParentingLockHeld } = useLeafPlacementState();
@@ -633,7 +667,52 @@ export default function Home() {
   // Applies the user's saved UI scale via native webview zoom (no-op in browser).
   useUiScale();
   // 1. Scene & Geometry (Multi-Model)
-  const scene = useSceneCollectionManager();
+  const [plateLockedNoticeVisible, setPlateLockedNoticeVisible] = React.useState(false);
+  // Which bed refused, so the notice can name it. A refusal is not always about the
+  // one being worked on: a row for another bed, or a drag landing on a locked bed.
+  const [plateLockedNoticePlateId, setPlateLockedNoticePlateId] = React.useState<string | null>(null);
+  // What the plate bin is about to do: take the bed you are standing at, or — on
+  // the scene's first plate, which has to stay — only empty it.
+  const [plateTrashIntent, setPlateTrashIntent] = React.useState<'delete' | 'clear' | null>(null);
+  const plateLockedNoticeTimerRef = React.useRef<number | null>(null);
+  const notifyPlateLockedRef = React.useRef<(plateId?: string) => void>(() => {});
+  const scene = useSceneCollectionManager({ onBlockedByLock: (plateId) => notifyPlateLockedRef.current(plateId) });
+
+  /**
+   * The build volume of every plate, in world coordinates. Every plate is a valid
+   * build volume, so a model is judged against the plate it stands on rather than
+   * the first one; the plates differ only in where they sit.
+   */
+  const plateVolumeBounds = React.useMemo(() => {
+    if (!scene.view3dSettings.enabled) return null;
+    const { maxZMm } = scene.view3dSettings;
+    return new Map(scene.plateFrames.map((frame) => [frame.id, new THREE.Box3(
+      new THREE.Vector3(frame.minX, frame.minY, 0),
+      new THREE.Vector3(frame.maxX, frame.maxY, maxZMm),
+    )]));
+  }, [scene.plateFrames, scene.view3dSettings.enabled, scene.view3dSettings.maxZMm]);
+
+  /**
+   * The volume a model is judged against: the plate it stands on, resolved by the
+   * scene so a model with no membership of its own is placed by where it is.
+   */
+  const volumeBoundsForModel = React.useCallback((model: (typeof scene.models)[number]): THREE.Box3 | null => {
+    const plateId = scene.resolveModelPlateId(model);
+    return (plateId ? plateVolumeBounds?.get(plateId) : undefined) ?? null;
+  }, [plateVolumeBounds, scene.resolveModelPlateId]);
+
+  /**
+   * The models on the plate being worked on. Layer count, print time and resin
+   * are about the bed you are looking at, not about every bed in the scene.
+   */
+  const activePlateModelIds = React.useMemo(
+    () => new Set(
+      scene.models
+        .filter((model) => scene.resolveModelPlateId(model) === scene.activePlateId)
+        .map((model) => model.id),
+    ),
+    [scene.activePlateId, scene.models, scene.resolveModelPlateId],
+  );
 
   // Warn when an imported mesh fails the manifold_csg validity check — the same
   // models shown with the red striped overlay in the viewport. Only a single
@@ -642,6 +721,26 @@ export default function Home() {
   // the batch does not pop additional modals.
   const warnedManifoldModelIdsRef = React.useRef<Set<string>>(new Set());
   const [showManifoldWarning, setShowManifoldWarning] = React.useState(false);
+  // Restarting the timer on every refusal means holding the lock and clicking about
+  // keeps one toast on screen rather than stacking them.
+  notifyPlateLockedRef.current = (plateId) => {
+    setPlateLockedNoticePlateId(plateId ?? null);
+    setPlateLockedNoticeVisible(true);
+    if (plateLockedNoticeTimerRef.current !== null) window.clearTimeout(plateLockedNoticeTimerRef.current);
+    plateLockedNoticeTimerRef.current = window.setTimeout(() => setPlateLockedNoticeVisible(false), 2600);
+  };
+  // The flag hides the toast; this holds the element one transition longer, so the
+  // fade-out has something to run on. See `useTrailingMount`.
+  const plateLockedNoticeMounted = useTrailingMount(plateLockedNoticeVisible);
+  // Named the way the Models panel names a plate: its own name, else its number. The
+  // refusal usually comes from the bed being worked on, but not always, so the id the
+  // manager reports wins over the active one.
+  const plateLockedNoticeLabel = React.useMemo(() => {
+    const plateId = plateLockedNoticePlateId ?? scene.activePlateId;
+    const index = scene.plates.findIndex((plate) => plate.id === plateId);
+    const plate = index >= 0 ? scene.plates[index] : undefined;
+    return plate?.name.trim() || plateNumberPlaceholder((index >= 0 ? index : 0) + 1, _);
+  }, [_, plateLockedNoticePlateId, scene.activePlateId, scene.plates]);
   React.useEffect(() => {
     const flagged = scene.models.filter(
       (model) => model.geometry?.meshDefects?.nativeRepairReport?.model_is_manifold === false,
@@ -760,6 +859,7 @@ export default function Home() {
     hollowPreviewWarmupKeyRef,
     hollowingSourceByModelIdRef,
     cavityGeometryByModelIdRef,
+    cavityGeometryVersion,
     defaultHollowingState,
     isHollowingApplied,
     persistedHollowingSignature,
@@ -800,7 +900,7 @@ export default function Home() {
   const supportsRef = React.useRef<THREE.Group | null>(null);
   // Hide support geometry in hollowing mode — it just gets in the way.
   React.useEffect(() => {
-    const hidden = scene.mode === 'prepare' && transformMgr.transformMode === 'hollowing';
+    const hidden = (scene.mode === 'prepare' || scene.mode === 'support') && transformMgr.transformMode === 'hollowing';
     if (supportsRef.current) supportsRef.current.visible = !hidden;
   }, [scene.mode, transformMgr.transformMode]);
   // Ref for the drag-wrapper group around supports/rafts (live gizmo transform)
@@ -845,6 +945,11 @@ export default function Home() {
     description?: string;
     supportBefore?: ReturnType<typeof getSupportSnapshot>;
     supportAfter?: ReturnType<typeof getSupportSnapshot>;
+    /**
+     * Set when this gesture created the plate the model landed on, so the bed and
+     * the move are one undo step instead of two.
+     */
+    plateSpawn?: { platesBefore: { id: string; name: string }[]; activePlateIdBefore: string };
   } | null>(null);
   const pendingSelectionPositionHistoryRef = React.useRef<{
     targetIdsKey: string;
@@ -910,9 +1015,9 @@ export default function Home() {
   const [activePluginImportWarning, setActivePluginImportWarning] = React.useState<{ title: string; body: string; storageKey: string } | null>(null);
   const [activeSceneFilePath, setActiveSceneFilePath] = React.useState<string | null>(null);
   const [loadedSceneSaveSource, setLoadedSceneSaveSource] = React.useState<{ name: string; path: string | null } | null>(null);
-  // Save-format tracking: whether the current scene is the chunked VOXL 2.2
+  // Save-format tracking: whether the current scene is the chunked VOXL 3.1
   // layout. Autosave preserves a loaded old file's inline format but never
-  // downgrades a 2.2 file; manual saves always write 2.2 and latch this true.
+  // downgrades a 3.1 file; manual saves always write 3.1 and latch this true.
   // Defaults true (newest) for fresh scenes.
   const [sceneFormatChunked, setSceneFormatChunked] = React.useState(true);
   const [showSceneSaveChoiceModal, setShowSceneSaveChoiceModal] = React.useState(false);
@@ -969,6 +1074,11 @@ export default function Home() {
     models: scene.models,
     activeModelId: scene.activeModelId,
     selectedModelIds: scene.selectedModelIds,
+    plates: scene.plates,
+    activePlateId: scene.activePlateId,
+    plateName: scene.plateName,
+    printer: scene.voxlPrinterBundle ?? undefined,
+    plateOrdering: scene.plateOrdering,
     enabled: sceneAutosaveEnabled,
     debounceMs: sceneAutosaveSettings.debounceMs,
     cooldownMs: sceneAutosaveSettings.cooldownMs,
@@ -983,9 +1093,9 @@ export default function Home() {
     // sidecar follows the project.
     preferredSavePath: activeSceneFilePath,
     sceneFormatChunked,
-    // Inline autosave hit the string ceiling and escalated to 2.2 — latch the
+    // Inline autosave hit the string ceiling and escalated to 3.1 — latch the
     // scene there so later ticks skip the failing inline attempt and never
-    // downgrade the now-2.2 file.
+    // downgrade the now-3.1 file.
     onSceneFormatUpgraded: React.useCallback(() => setSceneFormatChunked(true), []),
   });
 
@@ -1135,8 +1245,35 @@ export default function Home() {
   });
   const [pendingModifierResetAction, setPendingModifierResetAction] = React.useState<PendingModifierResetAction | null>(null);
   const [pendingBlockerResetState, setPendingBlockerResetState] = React.useState<HollowingPanelState | null>(null);
-  const [debugPrimitivesPanelVisible, setDebugPrimitivesPanelVisible] = React.useState<boolean>(false);
+  // Tool rail's `Models` entry. Defaults to shown, which is how the list behaved
+  // before the rail existed; the stored value is applied on mount, not at render,
+  // because localStorage does not exist during the server render.
+  const [modelsPanelVisible, setModelsPanelVisible] = React.useState<boolean>(true);
+  React.useEffect(() => {
+    setModelsPanelVisible(isModelsPanelVisibleEnabled());
+  }, []);
+  // Column on the left edge or bar under the app bar; Settings and the rail's own
+  // context menu both write the preference and announce it. The fold animation
+  // itself lives in `ToolRail`, which measures the entries as the layout lands.
+  const [toolLayout, setToolLayoutState] = React.useState<ToolLayout>('vertical');
+  React.useEffect(() => {
+    setToolLayoutState(getToolLayout());
+
+    const handleToolLayoutChanged = (event: Event) => {
+      setToolLayoutState((event as CustomEvent<{ layout?: ToolLayout }>).detail?.layout ?? getToolLayout());
+    };
+
+    window.addEventListener(TOOL_LAYOUT_EVENT, handleToolLayoutChanged as EventListener);
+    return () => {
+      window.removeEventListener(TOOL_LAYOUT_EVENT, handleToolLayoutChanged as EventListener);
+    };
+  }, []);
   const [editorContextMenuPos, setEditorContextMenuPos] = React.useState<{ x: number; y: number } | null>(null);
+  // Support mode's rail selects one of three tools, like Prepare's selects a
+  // transform mode: the selected tool's panel is the one shown and the others are
+  // hidden with `display: none`, because the window layout profiles resolve against
+  // the set of mounted panels.
+  const [supportRailMode, setSupportRailMode] = React.useState<SupportRailMode>('manual');
   const [editorContextMenuSupportTarget, setEditorContextMenuSupportTarget] = React.useState<{
     segmentId: string;
     point: { x: number; y: number; z: number };
@@ -1156,13 +1293,39 @@ export default function Home() {
     point: null,
   });
   const [printingLayerPreviewUrls, setPrintingLayerPreviewUrls] = React.useState<Array<string | null>>([]);
-  const printingLayerPreviewLoadInFlightRef = React.useRef<Set<number>>(new Set());
-
-  const [printingPreviewTotalLayers, setPrintingPreviewTotalLayers] = React.useState(0);
+  /** Reads in flight, keyed `${plateId}:${layer}`, so one bed's read cannot block another's. */
+  const printingLayerPreviewLoadInFlightRef = React.useRef<Set<string>>(new Set());
+  /**
+   * Layer previews already read out of an artifact, by bed and layer, and the one owner of those
+   * object URLs.
+   *
+   * Reading a layer is a call into the native archive, and a bed switch empties the visible
+   * array and reads the layer again — that is the small lag on a bed switch. Every read lands
+   * here, and a read that is already here is served from memory instead.
+   */
+  const printingLayerPreviewCacheRef = React.useRef<Map<string, Map<number, string>>>(new Map());
 
   const printingPreviewDepsRef = React.useRef<PrintingPreviewManagerDeps>({
     printingPreviewTargetResolution: null,
   });
+  /**
+   * The slice of each bed, by plate id: the printing workspace shows the slice of the bed being
+   * worked on, so a batch of beds is a set of slices rather than whichever finished last. An
+   * entry is made when a run starts, so the layer progress of a bed being sliced has somewhere
+   * to live before its artifact exists.
+   */
+  const [printingSlicesByPlateId, setPrintingSlicesByPlateId] = React.useState<Record<string, {
+    artifact: SliceExportArtifact | null;
+    totalLayers: number;
+  }>>({});
+  const activePrintingSlice = printingSlicesByPlateId[scene.activePlateId] ?? null;
+  const printingArtifact = activePrintingSlice?.artifact ?? null;
+  const printingPreviewTotalLayers = activePrintingSlice?.totalLayers ?? 0;
+  /** Whether any bed has been sliced: the workspace is enterable, the preview is per bed. */
+  const hasSlicedPlate = React.useMemo(
+    () => Object.values(printingSlicesByPlateId).some((entry) => entry.artifact !== null),
+    [printingSlicesByPlateId],
+  );
   const {
     printingSelectedLayer,
     setPrintingSelectedLayer,
@@ -1255,11 +1418,12 @@ export default function Home() {
   const preSliceUploadSelectionRef = React.useRef<{ deviceId: string; materialId?: string } | null>(null);
   const preSliceTargetPickerResolverRef = React.useRef<((selection: { deviceId: string; materialId?: string } | null) => void) | null>(null);
   const preSlicePrintConfirmResolverRef = React.useRef<((confirmed: boolean) => void) | null>(null);
-  const [printingArtifact, setPrintingArtifact] = React.useState<SliceExportArtifact | null>(null);
   const [printingSlicingBenchmark, setPrintingSlicingBenchmark] = React.useState<SliceExportResult['benchmark'] | null>(null);
   const [printingArtifactIsInvalid, setPrintingArtifactIsInvalid] = React.useState(false);
   const slicedArtifactProfileFingerprintRef = React.useRef<string | null>(null);
   const [printingEstimatedResinMl, setPrintingEstimatedResinMl] = React.useState<number | null>(null);
+  /** The same estimate over every plate, shown beside the per-plate one. */
+  const [printingEstimatedResinTotalMl, setPrintingEstimatedResinTotalMl] = React.useState<number | null>(null);
   const printingEstimatedResinMlRef = React.useRef<number | null>(null);
   const [isPrintingEstimatedResinBusy, setIsPrintingEstimatedResinBusy] = React.useState(false);
   const [resinEstimateRefreshTick, setResinEstimateRefreshTick] = React.useState(0);
@@ -1289,6 +1453,8 @@ export default function Home() {
   } | null>(null);
   const [completedSliceIntent, setCompletedSliceIntent] = React.useState<SliceIntent | null>(null);
   const [completedSaveDestinationPath, setCompletedSaveDestinationPath] = React.useState<string | null>(null);
+  /** The folder a batch wrote its plates into: what the finished dialog names as the location. */
+  const [completedSaveDirectory, setCompletedSaveDirectory] = React.useState<string | null>(null);
   const [printingReadyPlateId, setPrintingReadyPlateId] = React.useState<number | null>(null);
   const [printingPrintNowBusy, setPrintingPrintNowBusy] = React.useState(false);
   const [printingUploadDialogOpen, setPrintingUploadDialogOpen] = React.useState(false);
@@ -1702,6 +1868,9 @@ export default function Home() {
     trackSupportCollectionsInHome ? getHomeKickstandCollectionsSnapshot : getEmptyKickstandSnapshot,
   );
   const raftSettingsSnapshot = React.useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
+  // The rail's View entry reads and writes this, so the rail and the scene agree
+  // on the mode without either owning it.
+  const supportDisplaySettings = React.useSyncExternalStore(subscribeToSupportSettings, getSupportDisplaySettings, getSupportDisplaySettings);
   const bracePlacementSnapshot = React.useSyncExternalStore(
     bracePlacementStore.subscribe,
     bracePlacementStore.getSnapshot,
@@ -2138,8 +2307,8 @@ export default function Home() {
   }, [requestDestructiveTransformSupportDeletion]);
 
   const requestOrientSupportDeletionWithContinuation = React.useCallback((onContinue: () => void) => {
-    // Unlike the prepare-mode destructive transforms, orient runs from support
-    // mode, so there is no mode gate — placed supports always force the dialog.
+    // Unlike the prepare-mode destructive transforms, orient always forces the
+    // dialog when placed supports would be invalidated by the rotation.
     if (!scene.activeModelId) return true;
     if (pendingDestructiveTransform) return false;
     const supportCount = getSupportPrimitiveCountForModel(scene.activeModelId);
@@ -2153,6 +2322,35 @@ export default function Home() {
     pendingDestructiveTransformContinueRef.current = onContinue;
     return false;
   }, [getSupportPrimitiveCountForModel, pendingDestructiveTransform, scene]);
+
+  // The scene-owned apply for the Auto Orientation panel, shared by whichever
+  // mode hosts it: re-seat the model to the plate clearance after the rotation
+  // (lift OR drop) so repeated orienting never drifts the model upward, and
+  // record rotate + lift as one history entry.
+  const handleApplyOrientation = React.useCallback((modelId: string, rotation: THREE.Euler) => {
+    const activeModel = scene.activeModel;
+    const current = activeModel?.transform;
+    if (!activeModel || !current) return;
+    const before = {
+      position: current.position.clone(),
+      rotation: current.rotation.clone(),
+      scale: current.scale.clone(),
+    };
+    const after = {
+      position: current.position.clone(),
+      rotation,
+      scale: current.scale.clone(),
+    };
+    // A new down-axis means new extents: seat to the plate clearance after
+    // orientation — lift OR drop — so repeated orienting never drifts the model
+    // upward. One history entry covers rotate + lift.
+    if (activeModel.id === modelId) {
+      const lowestWorldZ = getModelLowestWorldZ({ id: modelId, geometry: activeModel.geometry, transform: after });
+      after.position.z += transformMgr.liftDistance - lowestWorldZ;
+    }
+    scene.updateModelTransform(modelId, after);
+    scene.commitModelTransformHistory(modelId, before, after, 'Apply Orientation Suggestion');
+  }, [scene, transformMgr.liftDistance]);
 
   const handleConfirmDestructiveTransform = React.useCallback(() => {
     const pending = pendingDestructiveTransform;
@@ -2303,21 +2501,98 @@ export default function Home() {
     ];
   }, [scene.activeModelId, scene.canPasteModel, scene.mode, scene.models, scene.selectedModelIds, supportsCanAddJoint, supportsCanToggleCurve]);
 
+  /**
+   * Drops the visible array without revoking it: those URLs belong to the layer cache, which
+   * hands the same one back when the bed or layer is asked for again.
+   */
   const clearPrintingLayerPreviewUrls = React.useCallback(() => {
     printingLayerPreviewLoadInFlightRef.current.clear();
-    setPrintingLayerPreviewUrls((previous) => {
-      for (const url of previous) {
-        if (url) URL.revokeObjectURL(url);
+    setPrintingLayerPreviewUrls([]);
+  }, []);
+
+  /**
+   * Puts one read layer in the cache, and returns its URL.
+   *
+   * The cache owns the URL; the visible array only borrows it, which is why nothing here revokes
+   * the previous one.
+   */
+  const cachePrintingLayerPreview = React.useCallback((
+    plateId: string,
+    layerNumber: number,
+    pngBytes: Uint8Array,
+  ): string => {
+    const bytes = new Uint8Array(pngBytes.length);
+    bytes.set(pngBytes);
+    const url = URL.createObjectURL(new Blob([bytes.buffer], { type: 'image/png' }));
+    const cache = printingLayerPreviewCacheRef.current;
+    const layersForPlate = cache.get(plateId) ?? new Map<number, string>();
+    layersForPlate.set(layerNumber, url);
+    cache.set(plateId, layersForPlate);
+
+    // Scrubbing a tall print would otherwise cache every layer it passes: the oldest go first,
+    // and a layer that is asked for again is simply read again.
+    while (layersForPlate.size > PRINTING_PREVIEW_CACHE_LIMIT) {
+      const oldestLayer = layersForPlate.keys().next();
+      if (oldestLayer.done) break;
+      const oldestUrl = layersForPlate.get(oldestLayer.value);
+      if (oldestUrl) URL.revokeObjectURL(oldestUrl);
+      layersForPlate.delete(oldestLayer.value);
+    }
+
+    return url;
+  }, []);
+
+  /** Forgets the cached previews of one bed — or of every bed — and revokes their URLs. */
+  const dropPrintingLayerPreviewCache = React.useCallback((plateId?: string) => {
+    const cache = printingLayerPreviewCacheRef.current;
+    if (plateId === undefined) {
+      for (const layers of cache.values()) {
+        for (const url of layers.values()) URL.revokeObjectURL(url);
       }
-      return [];
-    });
+      cache.clear();
+      return;
+    }
+    const layers = cache.get(plateId);
+    if (!layers) return;
+    for (const url of layers.values()) URL.revokeObjectURL(url);
+    cache.delete(plateId);
   }, []);
 
   React.useEffect(() => {
     return () => {
       clearPrintingLayerPreviewUrls();
+      dropPrintingLayerPreviewCache();
     };
-  }, [clearPrintingLayerPreviewUrls]);
+  }, [clearPrintingLayerPreviewUrls, dropPrintingLayerPreviewCache]);
+
+  // The streamed previews are of the bed that was sliced, and an entry left at the layer being
+  // shown stops the effect below from loading the new bed's own layer. So a change of bed drops
+  // them all: the preview then loads the bed being worked on from its artifact — the same read
+  // the slider uses — instead of waiting for the slider to be moved.
+  const printingPreviewPlateIdRef = React.useRef(scene.activePlateId);
+  React.useEffect(() => {
+    if (printingPreviewPlateIdRef.current === scene.activePlateId) return;
+    printingPreviewPlateIdRef.current = scene.activePlateId;
+    clearPrintingLayerPreviewUrls();
+
+    // If the bed's layer was read before, it goes up in the same tick: no frame with an empty
+    // preview, and no wait for the native archive.
+    const layerNumber = Math.max(1, Math.min(printingPreviewTotalLayers, printingDisplayedLayer));
+    const cachedUrl = printingLayerPreviewCacheRef.current.get(scene.activePlateId)?.get(layerNumber);
+    if (cachedUrl && layerNumber >= 1) {
+      setPrintingLayerPreviewUrls((previous) => {
+        const next = previous.slice();
+        if (next.length < printingPreviewTotalLayers) next.length = printingPreviewTotalLayers;
+        next[layerNumber - 1] = cachedUrl;
+        return next;
+      });
+    }
+  }, [
+    clearPrintingLayerPreviewUrls,
+    printingDisplayedLayer,
+    printingPreviewTotalLayers,
+    scene.activePlateId,
+  ]);
 
 
   const handlePrintingLayerPreviewGenerated = React.useCallback((payload: {
@@ -2342,7 +2617,13 @@ export default function Home() {
       return next;
     });
 
-    setPrintingPreviewTotalLayers(payload.totalLayers);
+    setPrintingSlicesByPlateId((previous) => {
+      const current = previous[scene.activePlateId];
+      return {
+        ...previous,
+        [scene.activePlateId]: { artifact: current?.artifact ?? null, totalLayers: payload.totalLayers },
+      };
+    });
     setPrintingSelectedLayer((previous) => {
       const nextSelected = !Number.isFinite(previous) || previous <= 0
         ? Math.max(1, Math.min(payload.totalLayers, payload.layerIndex + 1))
@@ -2356,24 +2637,43 @@ export default function Home() {
 
   const handleSlicingFinishedForPrinting = React.useCallback((payload: { totalLayers: number }) => {
     const totalLayers = Math.max(1, payload.totalLayers);
-    setPrintingPreviewTotalLayers(totalLayers);
+    setPrintingSlicesByPlateId((previous) => {
+      const current = previous[scene.activePlateId];
+      return {
+        ...previous,
+        [scene.activePlateId]: { artifact: current?.artifact ?? null, totalLayers },
+      };
+    });
     setPrintingSelectedLayer(1);
     setPrintingDisplayedLayer(1);
     printingSelectedLayerRef.current = 1;
-  }, []);
+  }, [scene.activePlateId]);
 
-  const handleSliceRunStartedForPrinting = React.useCallback(() => {
+  const handleSliceRunStartedForPrinting = React.useCallback((context?: { plateId?: string }) => {
+    // The bed being sliced, not the one being worked on: a batch slices one bed after another
+    // while the workspace's active bed stays put, and clearing by the active bed wiped the entry
+    // of a plate that had already been sliced.
+    const slicedPlateId = context?.plateId ?? scene.activePlateId;
+
     setShouldAutoSliceOnExportEntry(false);
     clearPrintingLayerPreviewUrls();
-    setPrintingPreviewTotalLayers(0);
+    // This bed's slice is about to be replaced, so its cached layers are of a file that is
+    // going away.
+    dropPrintingLayerPreviewCache(slicedPlateId);
     setPrintingSelectedLayer(1);
     setPrintingDisplayedLayer(1);
     printingSelectedLayerRef.current = 1;
-    setPrintingArtifact(null);
+    // Only the bed being sliced loses its plate: a re-slice of one bed does not unslice the
+    // others, and the printing workspace shows whichever bed is being worked on.
+    setPrintingSlicesByPlateId((previous) => {
+      const current = previous[slicedPlateId];
+      if (!current) return previous;
+      return { ...previous, [slicedPlateId]: { artifact: null, totalLayers: 0 } };
+    });
     setPrintingArtifactIsInvalid(false);
     slicedArtifactProfileFingerprintRef.current = null;
     setPrintingReadyPlateId(null);
-  }, [clearPrintingLayerPreviewUrls]);
+  }, [clearPrintingLayerPreviewUrls, dropPrintingLayerPreviewCache, scene.activePlateId]);
 
   React.useEffect(() => {
     if (scene.mode !== 'printing') return;
@@ -2384,9 +2684,23 @@ export default function Home() {
     const layerIndex = layerNumber - 1;
     if (printingLayerPreviewUrls[layerIndex]) return;
 
+    const activePlateIdForPreview = scene.activePlateId;
+    const cachedLayerUrl = printingLayerPreviewCacheRef.current.get(activePlateIdForPreview)?.get(layerNumber);
+    if (cachedLayerUrl) {
+      setPrintingLayerPreviewUrls((previous) => {
+        const next = previous.slice();
+        if (next.length < printingPreviewTotalLayers) next.length = printingPreviewTotalLayers;
+        next[layerIndex] = cachedLayerUrl;
+        return next;
+      });
+      return;
+    }
+
+    // Keyed by the bed and layer, so a read already in flight for those is not started twice.
     const inFlight = printingLayerPreviewLoadInFlightRef.current;
-    if (inFlight.has(layerNumber)) return;
-    inFlight.add(layerNumber);
+    const inFlightKey = `${activePlateIdForPreview}:${layerNumber}`;
+    if (inFlight.has(inFlightKey)) return;
+    inFlight.add(inFlightKey);
 
     let cancelled = false;
     void readPrintLayerPreviewPngFromPath(printingArtifact.nativeTempPath, layerNumber, printingArtifact.outputFormat)
@@ -2395,14 +2709,13 @@ export default function Home() {
         const previewBytes = new Uint8Array(pngBytes.length);
         previewBytes.set(pngBytes);
         const blob = new Blob([previewBytes.buffer], { type: 'image/png' });
-        const nextUrl = URL.createObjectURL(blob);
+        const nextUrl = cachePrintingLayerPreview(activePlateIdForPreview, layerNumber, pngBytes);
+
         setPrintingLayerPreviewUrls((previous) => {
           const next = previous.slice();
           if (next.length < printingPreviewTotalLayers) {
             next.length = printingPreviewTotalLayers;
           }
-          const prevUrl = next[layerIndex];
-          if (prevUrl) URL.revokeObjectURL(prevUrl);
           next[layerIndex] = nextUrl;
           return next;
         });
@@ -2413,19 +2726,77 @@ export default function Home() {
         }
       })
       .finally(() => {
-        inFlight.delete(layerNumber);
+        inFlight.delete(inFlightKey);
       });
 
     return () => {
       cancelled = true;
     };
   }, [
+    cachePrintingLayerPreview,
+    scene.activePlateId,
     scene.mode,
     printingArtifact?.nativeTempPath,
     printingDisplayedLayer,
     printingLayerPreviewUrls,
     printingPreviewTotalLayers,
   ]);
+
+
+  /**
+   * Reads the layers every bed would show, the moment that bed's slice lands.
+   *
+   * This runs while the batch is still slicing, not while anyone is scrubbing — the difference
+   * between a read-ahead that helps and one that competes with the drag. The workspace then opens
+   * with those layers already in memory instead of reading them as the app walks in.
+   */
+  const prefetchedPlatesRef = React.useRef<Map<string, SliceExportArtifact>>(new Map());
+  React.useEffect(() => {
+    let cancelled = false;
+
+    for (const [plateId, entry] of Object.entries(printingSlicesByPlateId)) {
+      const nativePath = entry.artifact?.nativeTempPath;
+      const outputFormat = entry.artifact?.outputFormat;
+      if (!nativePath || !outputFormat || !entry.artifact) continue;
+      // Once per slice: the artifact identity is what says this bed was sliced again.
+      if (prefetchedPlatesRef.current.get(plateId) === entry.artifact) continue;
+      prefetchedPlatesRef.current.set(plateId, entry.artifact);
+
+      const total = Math.max(1, entry.totalLayers);
+      const centre = Math.max(1, Math.min(total, printingDisplayedLayer));
+      const wantedLayers: number[] = [centre];
+      for (let offset = 1; offset <= PRINTING_PREVIEW_PREFETCH_RADIUS; offset += 1) {
+        if (centre + offset <= total) wantedLayers.push(centre + offset);
+        if (centre - offset >= 1) wantedLayers.push(centre - offset);
+      }
+
+      const missingLayers = wantedLayers.filter(
+        (layerNumber) => !printingLayerPreviewCacheRef.current.get(plateId)?.has(layerNumber),
+      );
+      if (missingLayers.length === 0) continue;
+
+      void readPrintLayerPreviewPngsFromPath(nativePath, missingLayers, outputFormat)
+        .then((layers: Uint8Array[]) => {
+          if (cancelled) return;
+          missingLayers.forEach((layerNumber, index) => {
+            const pngBytes = layers[index];
+            if (!pngBytes || pngBytes.length === 0) return;
+            cachePrintingLayerPreview(plateId, layerNumber, pngBytes);
+          });
+        })
+        .catch(() => {
+          // An older build without the batch command, or a file that would not decode: the loader
+          // reads the layer again when it is shown, one at a time as before.
+        });
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [cachePrintingLayerPreview, printingDisplayedLayer, printingSlicesByPlateId]);
+
+
+
 
   const printingPreviewTargetResolution = React.useMemo(() => {
     const printerWidth = Math.max(1, Math.round(activePrinterProfile?.display?.resolutionX ?? 0));
@@ -2461,8 +2832,57 @@ export default function Home() {
     return `${printerProfileId}::${materialProfileId}`;
   }, [activeMaterialProfile?.id, activePrinterProfile?.id]);
 
-  const handleSliceArtifactReady = React.useCallback((artifact: SliceExportArtifact) => {
-    setPrintingArtifact(artifact);
+  /** Which artifact each bed's recorded slice came from, so recording it twice is a no-op. */
+  const recordedSliceArtifactRef = React.useRef<Map<string, SliceExportArtifact>>(new Map());
+
+  /** Records one bed's slice, which is what the workspace and its read-ahead are built from. */
+  const recordPrintingSlice = React.useCallback((
+    artifact: SliceExportArtifact,
+    context?: { plateId?: string; totalLayers?: number },
+  ) => {
+    const plateId = context?.plateId ?? scene.activePlateId;
+
+    // A batch records each plate as it lands and hands the same artifacts over again when it
+    // finishes. Only a different artifact means a different slice, and only then are the layers
+    // cached from the old one — and the read-ahead that has already run for this one — dropped.
+    if (recordedSliceArtifactRef.current.get(plateId) === artifact) return;
+    recordedSliceArtifactRef.current.set(plateId, artifact);
+    dropPrintingLayerPreviewCache(plateId);
+
+    setPrintingSlicesByPlateId((previous) => {
+      const current = previous[plateId];
+      return {
+        ...previous,
+        [plateId]: {
+          artifact,
+          // A batch hands the totals over with the artifact; a single run streamed them as it
+          // sliced, so the entry already has them.
+          totalLayers: Math.max(1, context?.totalLayers ?? current?.totalLayers ?? 1),
+        },
+      };
+    });
+  }, [dropPrintingLayerPreviewCache, scene.activePlateId]);
+
+  /**
+   * A batch's plate, recorded as soon as it is sliced.
+   *
+   * Nothing navigates here: the callbacks that walk the app into the printing workspace are the
+   * batch's own, at the end. What this buys is the read-ahead — the workspace's previews for
+   * this bed are read while the other plates are still slicing, so opening it finds them ready.
+   */
+  const handleSlicePlateSliced = React.useCallback((
+    artifact: SliceExportArtifact,
+    context: { plateId?: string; totalLayers: number; savedPath?: string },
+  ) => {
+    recordPrintingSlice(artifact, context);
+  }, [recordPrintingSlice]);
+
+  const handleSliceArtifactReady = React.useCallback((
+    artifact: SliceExportArtifact,
+    context?: { plateId?: string; totalLayers?: number; savedPath?: string; savedDirectory?: string },
+  ) => {
+    const plateId = context?.plateId ?? scene.activePlateId;
+    recordPrintingSlice(artifact, context);
     setPrintingArtifactIsInvalid(false);
     setShowPrintingResliceModal(false);
     // Push a "Sliced Scene" marker to history so we can detect changes after this point
@@ -2506,6 +2926,9 @@ export default function Home() {
     const intent = sliceIntentRef.current;
     setCompletedSliceIntent(intent);
     setCompletedSaveDestinationPath(null);
+    // A batch writes several files into one folder, so the finished dialog names the folder
+    // rather than whichever plate's file happened to be last.
+    setCompletedSaveDirectory(context?.savedDirectory?.trim() || null);
     if (intent === 'upload' || intent === 'print') {
       pendingPostSliceActionRef.current = intent;
       setShouldAutoSliceOnExportEntry(false);
@@ -2516,7 +2939,12 @@ export default function Home() {
       scene.setMode('printing');
     } else {
       // 'file' or 'uvtools': write to pre-selected destination, then navigate to printing workspace.
-      const destinationPath = preSliceFileDestinationPathRef.current?.trim() || '';
+      // The run writes to the path the pre-slice step chose, so a batch hands that path back
+      // with its artifact: the pre-slice ref holds one path and is spent by the first plate,
+      // and a later plate with no path would be saved again through a dialog.
+      const destinationPath = context?.savedPath?.trim()
+        || preSliceFileDestinationPathRef.current?.trim()
+        || '';
       preSliceFileDestinationPathRef.current = null;
 
       const nativePathForIntent = artifact.nativeTempPath?.trim() || '';
@@ -2625,7 +3053,7 @@ export default function Home() {
       };
       void saveAndNavigate(artifact);
     }
-  }, [scene]);
+  }, [recordPrintingSlice, scene]);
 
   const handleSlicingBenchmarkComplete = React.useCallback((benchmark: SliceExportResult['benchmark']) => {
     setPrintingSlicingBenchmark(benchmark);
@@ -2642,11 +3070,55 @@ export default function Home() {
     }
 
     setSliceCompletedModalData({
-      filePath: completedSaveDestinationPath,
+      // A batch names the folder it wrote to: several plates went into it, and the folder is
+      // what the user needs to find them.
+      filePath: completedSaveDirectory || completedSaveDestinationPath,
       slicingTimeMs,
     });
     setShowSliceCompletedModal(true);
-  }, [completedSliceIntent, completedSaveDestinationPath, printingSlicingBenchmark?.totalElapsedMs]);
+  }, [completedSaveDestinationPath, completedSaveDirectory, completedSliceIntent, printingSlicingBenchmark?.totalElapsedMs]);
+
+  /**
+   * What the fast scrub preview draws: the models of the bed being worked on, moved to the
+   * origin the way the slice itself is taken.
+   *
+   * The preview is a top-down look at one bed's build volume, drawn around the origin. Handed
+   * the scene as it stands, it shows the bed that sits at the origin — plate 1 — whatever bed
+   * the preview is really of, which is why scrubbing showed the wrong model on plate 2.
+   */
+  const printingScrubPreviewModels = React.useMemo(() => {
+    const activeFrame = scene.plateFrames.find((frame) => frame.id === scene.activePlateId);
+    const modelsOnPlate = scene.models.filter(
+      (model) => scene.resolveModelPlateId(model) === scene.activePlateId,
+    );
+    if (!activeFrame || (activeFrame.dxMm === 0 && activeFrame.dyMm === 0)) return modelsOnPlate;
+
+    return modelsOnPlate.map((model) => ({
+      ...model,
+      transform: {
+        ...model.transform,
+        position: model.transform.position.clone().add(
+          new THREE.Vector3(-activeFrame.dxMm, -activeFrame.dyMm, 0),
+        ),
+      },
+    }));
+  }, [scene.activePlateId, scene.models, scene.plateFrames, scene.resolveModelPlateId]);
+
+  /**
+   * The scene shot a plate's file carries, framed on that plate.
+   *
+   * `captureExportThumbnailPng` renders the scene as it stands, framed on the bed being worked
+   * on, so a batch would give every plate the same picture of plate 1. Handing it the bed's own
+   * build volume frames that bed and, through the bounds filter, keeps the other beds' models
+   * out of it.
+   */
+  const captureSliceThumbnailPng = React.useCallback(async (plateId?: string): Promise<Uint8Array | null> => {
+    if (!plateId) return captureExportThumbnailPng();
+    const frame = scene.plateFrames.find((candidate) => candidate.id === plateId);
+    const bounds = plateVolumeBounds?.get(plateId) ?? null;
+    if (!frame || !bounds) return captureExportThumbnailPng();
+    return captureExportThumbnailPng(bounds);
+  }, [captureExportThumbnailPng, plateVolumeBounds, scene.plateFrames]);
 
   const printingOutputSizeLabel = React.useMemo(() => {
     if (!printingArtifact) return '—';
@@ -2801,12 +3273,13 @@ export default function Home() {
       // Use stored transform — bounds don't change on selection.
       // Previously depended on scene.activeModelId, causing recomputation
       // (including computePreciseModelWorldBounds, O(vertices)) on every click.
+      const volume = volumeBoundsForModel(model) ?? resinBuildVolumeBounds;
       const approxBounds = computeApproxModelWorldBounds(model.geometry, model.transform);
-      const bounds = isBoundsOutsideVolume(approxBounds, resinBuildVolumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM)
+      const bounds = isBoundsOutsideVolume(approxBounds, volume, BUILD_VOLUME_BOUNDS_EPS_MM)
         ? computePreciseModelWorldBounds(model.geometry, model.transform)
         : approxBounds;
 
-      if (!isBoundsOutsideVolume(bounds, resinBuildVolumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM)) {
+      if (!isBoundsOutsideVolume(bounds, volume, BUILD_VOLUME_BOUNDS_EPS_MM)) {
         inBoundsModelIds.add(model.id);
       }
     }
@@ -2815,6 +3288,7 @@ export default function Home() {
   }, [
     resinBuildVolumeBounds,
     scene.models,
+    volumeBoundsForModel,
   ]);
 
   /**
@@ -2831,13 +3305,17 @@ export default function Home() {
     const sliceableModelIds = new Set<string>();
 
     for (const model of visibleModels) {
+      // The plate the model stands on is the volume that counts: any plate is a
+      // valid build volume, so a model on the second one is not "outside" just
+      // for being on the second one.
+      const volume = volumeBoundsForModel(model) ?? resinBuildVolumeBounds;
       const approxBounds = computeApproxModelWorldBounds(model.geometry, model.transform);
-      if (isBoundsDisjointFromVolume(approxBounds, resinBuildVolumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM)) continue;
+      if (isBoundsDisjointFromVolume(approxBounds, volume, BUILD_VOLUME_BOUNDS_EPS_MM)) continue;
       // Rotated bounding boxes can overlap even when the actual mesh does not.
-      const bounds = isBoundsOutsideVolume(approxBounds, resinBuildVolumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM)
+      const bounds = isBoundsOutsideVolume(approxBounds, volume, BUILD_VOLUME_BOUNDS_EPS_MM)
         ? computePreciseModelWorldBounds(model.geometry, model.transform)
         : approxBounds;
-      if (!isBoundsDisjointFromVolume(bounds, resinBuildVolumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM)) {
+      if (!isBoundsDisjointFromVolume(bounds, volume, BUILD_VOLUME_BOUNDS_EPS_MM)) {
         sliceableModelIds.add(model.id);
       }
     }
@@ -2846,9 +3324,17 @@ export default function Home() {
   }, [
     resinBuildVolumeBounds,
     scene.models,
+    volumeBoundsForModel,
   ]);
 
   const visibleResinModels = React.useMemo(() => {
+    return scene.models.filter(
+      (model) => model.visible && resinInBoundsModelIdSet.has(model.id) && activePlateModelIds.has(model.id),
+    );
+  }, [activePlateModelIds, resinInBoundsModelIdSet, scene.models]);
+
+  /** Every plate's models, for the scene-wide total beside the per-plate estimate. */
+  const sceneResinModels = React.useMemo(() => {
     return scene.models.filter((model) => model.visible && resinInBoundsModelIdSet.has(model.id));
   }, [resinInBoundsModelIdSet, scene.models]);
   const shouldEstimateResinInBackground = visibleResinModels.length > 0
@@ -3184,10 +3670,11 @@ export default function Home() {
     let cancelled = false;
 
     if (!shouldEstimateResinInBackground) {
-      if (visibleResinModels.length === 0) {
+      if (sceneResinModels.length === 0) {
         lastCompletedResinEstimateSignatureRef.current = '';
         printingEstimatedResinMlRef.current = null;
         setPrintingEstimatedResinMl(null);
+        setPrintingEstimatedResinTotalMl(null);
       }
       setIsPrintingEstimatedResinBusy(false);
       return () => {
@@ -3205,9 +3692,12 @@ export default function Home() {
 
     const run = async () => {
       let totalMl = 0;
+      let sceneTotalMl = 0;
       let found = false;
 
-      for (const model of visibleModels) {
+      // One pass over every plate's models: the active plate's share is the
+      // per-plate figure, and the whole sum is the scene total beside it.
+      for (const model of sceneResinModels) {
         if (cancelled) return;
         const baseMl = await getOrComputeBaseResinMl(model);
         if (cancelled) return;
@@ -3216,7 +3706,9 @@ export default function Home() {
         const sx = Math.abs(model.transform.scale.x || 1);
         const sy = Math.abs(model.transform.scale.y || 1);
         const sz = Math.abs(model.transform.scale.z || 1);
-        totalMl += baseMl * sx * sy * sz;
+        const contribution = baseMl * sx * sy * sz;
+        sceneTotalMl += contribution;
+        if (activePlateModelIds.has(model.id)) totalMl += contribution;
         found = true;
       }
 
@@ -3225,6 +3717,7 @@ export default function Home() {
       const nextValue = found || totalWithSupports > 0 ? totalWithSupports : null;
       printingEstimatedResinMlRef.current = nextValue;
       setPrintingEstimatedResinMl(nextValue);
+      setPrintingEstimatedResinTotalMl(found || sceneTotalMl > 0 ? sceneTotalMl + supportAndRaftResinMl : null);
       lastCompletedResinEstimateSignatureRef.current = compositeSignature;
       setIsPrintingEstimatedResinBusy(false);
     };
@@ -3246,10 +3739,22 @@ export default function Home() {
   const estimatedVolumeMlLabel = React.useMemo(() => {
     const visible = scene.models.filter((model) => model.visible);
     if (visible.length === 0) return '—';
+    // An empty plate is a real answer, not an unknown: it holds no resin. The
+    // scene-wide row beside it still carries the whole figure.
+    if (visibleResinModels.length === 0) return '0.00 ml';
     if (isPrintingEstimatedResinBusy && printingEstimatedResinMl == null) return 'Calculating…';
     if (printingEstimatedResinMl == null) return '—';
     return `${printingEstimatedResinMl.toFixed(2)} ml`;
-  }, [isPrintingEstimatedResinBusy, printingEstimatedResinMl, scene.models]);
+  }, [isPrintingEstimatedResinBusy, printingEstimatedResinMl, scene.models, visibleResinModels.length]);
+
+
+
+  /** The same figure for every plate, shown beside the per-plate one. */
+  const estimatedResinTotalLabel = React.useMemo(() => {
+    if (sceneResinModels.length === 0) return null;
+    if (printingEstimatedResinTotalMl == null) return null;
+    return `${printingEstimatedResinTotalMl.toFixed(2)} ml`;
+  }, [printingEstimatedResinTotalMl, sceneResinModels.length]);
 
   const estimatedPrintTimeLabel = React.useMemo(() => {
     if (!activeMaterialProfile || printingPreviewTotalLayers <= 0) return '—';
@@ -3825,7 +4330,10 @@ export default function Home() {
     }
   }, [flushAutosave]);
 
-  const handleBeforeSliceStart = React.useCallback(async (intent: SliceIntent): Promise<boolean> => {
+  const handleBeforeSliceStart = React.useCallback(async (
+    intent: SliceIntent,
+    options?: { destinationDirectory?: string; baseName?: string },
+  ): Promise<boolean> => {
     if (shouldReturnToPrintingAfterSliceRef.current) {
       return true;
     }
@@ -3839,6 +4347,16 @@ export default function Home() {
     }
 
     if (intent === 'file' || intent === 'uvtools') {
+      // A batch has already asked for the folder: every plate's file goes into it, named for
+      // the plate it holds, and nothing asks again between beds.
+      const destinationDirectory = options?.destinationDirectory?.trim();
+      if (destinationDirectory) {
+        const baseName = options?.baseName?.trim() || suggestedSliceOutputFilename.replace(/\.[^.]+$/, '');
+        const extension = suggestedSliceOutputFilename.split('.').pop() ?? '';
+        preSliceFileDestinationPathRef.current = joinSliceOutputPath(destinationDirectory, baseName, extension);
+        return true;
+      }
+
       try {
         const destinationPath = await pickSavePathWithNativeDialog(suggestedSliceOutputFilename);
         if (!destinationPath || destinationPath.trim().length === 0) {
@@ -4246,6 +4764,11 @@ export default function Home() {
         models: scopeModels,
         activeModelId: scene.activeModelId,
         selectedModelIds: scene.selectedModelIds,
+        plates: scene.plates,
+        activePlateId: scene.activePlateId,
+        plateName: scene.plateName,
+        printer: scene.voxlPrinterBundle ?? undefined,
+        plateOrdering: scene.plateOrdering,
         exportThumbnailPng: exportThumbnailPng ?? undefined,
       },
       {
@@ -4284,8 +4807,8 @@ export default function Home() {
         exportSuccessToastFadeTimeoutRef.current = null;
       }, 3800);
 
-      // Manual save always writes the newest (2.2) layout, so the scene is now
-      // 2.2 on disk — latch it so autosave keeps it there instead of trying to
+      // Manual save always writes the newest (3.1) layout, so the scene is now
+      // 3.1 on disk — latch it so autosave keeps it there instead of trying to
       // preserve a stale inline format and downgrading it.
       setSceneFormatChunked(true);
       markSceneSaveBaseline();
@@ -5319,7 +5842,7 @@ export default function Home() {
   const handleSceneModelSelection = React.useCallback((modelId: string | null, options?: { selectionMode?: 'single' | 'toggle' | 'add' }) => {
     if (modelId == null) {
       if (
-        scene.mode === 'prepare'
+        (scene.mode === 'prepare' || scene.mode === 'support')
         && transformMgr.transformMode === 'hollowing'
         && selectedHolePunchPlacementIds.length > 0
       ) {
@@ -5336,7 +5859,7 @@ export default function Home() {
 
   React.useEffect(() => {
     if (
-      scene.mode !== 'prepare'
+      (scene.mode !== 'prepare' && scene.mode !== 'support')
       || transformMgr.transformMode !== 'hollowing'
       || selectedHolePunchPlacementIds.length === 0
     ) {
@@ -5515,10 +6038,12 @@ export default function Home() {
             }
     );
 
-    const supportHistoryOptions = pending.supportBefore
+    const supportHistoryOptions = (pending.supportBefore || pending.plateSpawn)
       ? {
-          includeSupportState: true,
-          supportBefore: pending.supportBefore,
+          ...(pending.supportBefore
+            ? { includeSupportState: true, supportBefore: pending.supportBefore }
+            : {}),
+          ...(pending.plateSpawn ? { plateSpawn: pending.plateSpawn } : {}),
         }
       : undefined;
 
@@ -6210,25 +6735,6 @@ export default function Home() {
     [],
   );
 
-  React.useEffect(() => {
-    setDebugPrimitivesPanelVisible(isDebugPrimitivesPanelVisibleEnabled());
-
-    const handleDebugPanelVisibilityChanged = (event: Event) => {
-      const customEvent = event as CustomEvent<{ enabled?: boolean }>;
-      const nextEnabled = customEvent.detail?.enabled;
-      if (typeof nextEnabled === 'boolean') {
-        setDebugPrimitivesPanelVisible(nextEnabled);
-      } else {
-        setDebugPrimitivesPanelVisible(isDebugPrimitivesPanelVisibleEnabled());
-      }
-    };
-
-    window.addEventListener(DEBUG_PRIMITIVES_PANEL_VISIBILITY_EVENT, handleDebugPanelVisibilityChanged as EventListener);
-    return () => {
-      window.removeEventListener(DEBUG_PRIMITIVES_PANEL_VISIBILITY_EVENT, handleDebugPanelVisibilityChanged as EventListener);
-    };
-  }, []);
-
   // Sync transform manager when active model changes
   React.useEffect(() => {
     if (scene.activeModelId && scene.activeModel) {
@@ -6469,14 +6975,16 @@ export default function Home() {
   }, [hasAnyEntries, raftSettingsSnapshot.bottomMode, supportStateSnapshot]);
 
   const slicingModels = React.useMemo(
-    () => scene.models.filter((model) => model.visible && sliceableModelIdSet.has(model.id)),
-    [scene.models, sliceableModelIdSet],
+    () => scene.models.filter(
+      (model) => model.visible && sliceableModelIdSet.has(model.id) && activePlateModelIds.has(model.id),
+    ),
+    [activePlateModelIds, scene.models, sliceableModelIdSet],
   );
   const excludedSliceModelIds = React.useMemo(
     () => scene.models
-      .filter((model) => model.visible && !sliceableModelIdSet.has(model.id))
+      .filter((model) => model.visible && activePlateModelIds.has(model.id) && !sliceableModelIdSet.has(model.id))
       .map((model) => model.id),
-    [scene.models, sliceableModelIdSet],
+    [activePlateModelIds, scene.models, sliceableModelIdSet],
   );
 
   // For non-printing workflows, avoid expensive world-triangle projection work by default.
@@ -6886,10 +7394,11 @@ export default function Home() {
     if (scene.models.length === 0 && scene.mode === 'printing') {
       // Reset to prepare mode if we delete the last model while in printing
       scene.setMode('prepare');
-      setPrintingArtifact(null);
+      setPrintingSlicesByPlateId({});
+      dropPrintingLayerPreviewCache();
       setPrintingArtifactIsInvalid(false);
     }
-  }, [scene.models.length, scene.mode, scene, printingArtifact]);
+  }, [dropPrintingLayerPreviewCache, scene.models.length, scene.mode, scene]);
 
   // Track whether the profile settings modal is currently open so we can
   // defer the printing-workspace kick until after the user closes it.
@@ -7063,7 +7572,10 @@ export default function Home() {
       scene.setMode('prepare');
       return;
     }
-    if (nextMode === 'printing' && !hasPrintingWorkspaceData) {
+    // A sliced bed anywhere is enough to enter the printing workspace: the preview follows the
+    // bed being worked on, so a bed with no slice of its own shows none rather than locking the
+    // workspace behind whichever bed you happen to be standing on.
+    if (nextMode === 'printing' && !hasSlicedPlate) {
       return;
     }
     if (nextMode === 'printing' && printingArtifactIsInvalid && printingArtifact) {
@@ -7071,7 +7583,7 @@ export default function Home() {
       return;
     }
     scene.setMode(nextMode);
-  }, [hasPrintingWorkspaceData, printingArtifact, printingArtifactIsInvalid, scene]);
+  }, [hasSlicedPlate, printingArtifact, printingArtifactIsInvalid, scene]);
 
   const handleAddPrinterFromOnboarding = React.useCallback(() => {
     openProfileSettingsModal('printer', { openPrinterLibrary: true });
@@ -7172,12 +7684,13 @@ export default function Home() {
     return scene.models
       .filter((model) => model.visible)
       .filter((model) => {
+        const volume = volumeBoundsForModel(model) ?? buildVolumeBounds;
         const effectiveTransform =
           (scene.activeModelId === model.id && displayActiveModelId === scene.activeModelId)
             ? transformMgr.transform
             : model.transform;
-        const bounds = computeModelWorldBounds(model, effectiveTransform, buildVolumeBounds);
-        return isBoundsOutsideVolume(bounds, buildVolumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM);
+        const bounds = computeModelWorldBounds(model, effectiveTransform, volume);
+        return isBoundsOutsideVolume(bounds, volume, BUILD_VOLUME_BOUNDS_EPS_MM);
       })
       .map((model) => model.id);
   }, [
@@ -7187,6 +7700,7 @@ export default function Home() {
     scene.activeModelId,
     scene.models,
     transformMgr.transform,
+    volumeBoundsForModel,
   ]);
 
   const inBoundsModelIds = React.useMemo(() => {
@@ -7221,7 +7735,13 @@ export default function Home() {
   }, [displayActiveModelId, scene.activeModelId, transformMgr.transform]);
 
   const supportBoundsByModelId = React.useMemo(() => {
-    if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'arrange') {
+    // Both tools that size a model by what it carries: an arrange packs around supports,
+    // and a duplicate has to leave room for the source's. The Duplicate tool is its own
+    // rail mode, so asking for the Arrange mode here left its previews sized without them.
+    if (
+      scene.mode !== 'prepare'
+      || (transformMgr.transformMode !== 'arrange' && transformMgr.transformMode !== 'duplicate')
+    ) {
       return EMPTY_SUPPORT_BOUNDS_BY_MODEL_ID;
     }
 
@@ -7584,6 +8104,8 @@ export default function Home() {
     setIsDuplicating,
     duplicatePreviewTransforms,
     setDuplicatePreviewTransforms,
+    duplicateGhostPlateOffsets,
+    setDuplicateGhostPlateOffsets,
     arrangeArrayPreviewItems,
     setArrangeArrayPreviewItems,
     duplicateSourcePreviewTransform,
@@ -7633,11 +8155,61 @@ export default function Home() {
     };
   });
 
+  // Each rail-bearing workspace remembers the tool it was last on, so a switch
+  // restores that tool instead of carrying the other workspace's mode across.
+  // Prepare keeps one of its rail modes; Support keeps either Hollowing or its
+  // last panel mode.
+  const prepareToolMemoryRef = React.useRef<TransformMode>('select');
+  const supportToolMemoryRef = React.useRef<{ hollowing: boolean; panelMode: SupportRailMode }>({ hollowing: false, panelMode: 'manual' });
+  const lastWorkspaceModeRef = React.useRef(scene.mode);
+
+  // Restore on the transition itself. Declared before the recorders so it reads
+  // the memory before they rewrite it for the workspace being entered.
+  React.useEffect(() => {
+    if (lastWorkspaceModeRef.current === scene.mode) return;
+    lastWorkspaceModeRef.current = scene.mode;
+
+    if (scene.mode === 'prepare') {
+      if (transformMgr.transformMode !== prepareToolMemoryRef.current) {
+        setTransformModeWithMirrorFinalize(prepareToolMemoryRef.current);
+      }
+    } else if (scene.mode === 'support') {
+      const memory = supportToolMemoryRef.current;
+      if (memory.hollowing) {
+        if (transformMgr.transformMode !== 'hollowing') setTransformModeWithMirrorFinalize('hollowing');
+      } else {
+        if (transformMgr.transformMode !== 'select') setTransformModeWithMirrorFinalize('select');
+        if (supportRailMode !== memory.panelMode) setSupportRailMode(memory.panelMode);
+      }
+    }
+  }, [scene.mode, transformMgr.transformMode, setTransformModeWithMirrorFinalize, supportRailMode]);
+
+  React.useEffect(() => {
+    if (scene.mode !== 'prepare') return;
+    if (PREPARE_TOOL_MODES.includes(transformMgr.transformMode)) {
+      prepareToolMemoryRef.current = transformMgr.transformMode;
+    }
+  }, [scene.mode, transformMgr.transformMode]);
+
+  React.useEffect(() => {
+    if (scene.mode !== 'support') return;
+    if (transformMgr.transformMode === 'hollowing') {
+      supportToolMemoryRef.current = { hollowing: true, panelMode: supportToolMemoryRef.current.panelMode };
+    } else {
+      supportToolMemoryRef.current = { hollowing: false, panelMode: supportRailMode };
+    }
+  }, [scene.mode, transformMgr.transformMode, supportRailMode]);
+
   useDeleteHotkey();
   useCameraProjectionHotkey();
-  const hasCavityGeometry = scene.activeModel
-    ? cavityGeometryByModelIdRef.current.has(scene.activeModel.id)
-    : false;
+  // The map is a ref, so it never subscribes this component: `cavityGeometryVersion`
+  // is the reactive half and has to be in the deps, or the answer is whatever it
+  // was on the last render and interior view stays available after the hollow that
+  // justified it is reset.
+  const hasCavityGeometry = React.useMemo(
+    () => (scene.activeModel ? cavityGeometryByModelIdRef.current.has(scene.activeModel.id) : false),
+    [scene.activeModel, cavityGeometryVersion],
+  );
   useInteriorViewHotkey(
     () => setInteriorView((prev) => !prev),
     hasCavityGeometry,
@@ -7704,7 +8276,7 @@ export default function Home() {
     setPendingHolePunchAutoApplyModelId(queue[0]);
   }, [getVisibleModelIdsWithUnappliedHoles, scene.setActiveModelId]);
 
-  // Guide the user to the per-model hole-punch UI (Prepare → Hollow tool).
+  // Guide the user to the per-model hole-punch UI (Support → Hollowing tool).
   const handleGoToHollowTool = React.useCallback(() => {
     setShowUnappliedHolePunchModal(false);
     const { holeIds, hollowIds } = getVisibleModelIdsWithUnappliedModifiers();
@@ -7712,7 +8284,7 @@ export default function Home() {
     if (firstPending) {
       scene.setActiveModelId(firstPending);
     }
-    scene.setMode('prepare');
+    scene.setMode('support');
     setTransformModeWithMirrorFinalize('hollowing');
   }, [getVisibleModelIdsWithUnappliedModifiers, scene.setActiveModelId, scene.setMode, setTransformModeWithMirrorFinalize]);
 
@@ -8125,7 +8697,7 @@ export default function Home() {
   const handleTransformEnd = (
     operation: 'move' | 'rotate' | 'scale',
     finalTransform?: ModelTransform,
-    options?: { skipStoreCommit?: boolean },
+    options?: { skipStoreCommit?: boolean; spawnPlateForDrop?: boolean },
   ) => {
     const stampNow = () => ({ perfMs: performance.now(), epochMs: Date.now() });
     const releasePerf = performance.now();
@@ -8144,6 +8716,26 @@ export default function Home() {
       transformMgr.pendingTransformRef.current = null;
       invalidatePendingTransformHistory();
       return;
+    }
+
+    let spawnedPlateId: string | undefined;
+    if (options?.spawnPlateForDrop) {
+      // The model was let go where the next bed goes, so the bed arrives with it.
+      // Recorded on the pending step, where the history commit folds it in: the
+      // model and the plate it now stands on are one undo.
+      const pendingHistory = pendingTransformHistoryRef.current;
+      const platesBefore = scene.plates;
+      const activePlateIdBefore = scene.activePlateId;
+      if (pendingHistory) {
+        pendingHistory.plateSpawn = { platesBefore, activePlateIdBefore };
+        // The move is told which bed it lands on, because the plate list this
+        // render holds does not have the new one yet: left to resolve for itself it
+        // would keep the model on the old plate and never follow the new one.
+        spawnedPlateId = scene.addPlate({ pushHistory: false });
+      } else {
+        // No transform step to fold into, so the bed is a step of its own.
+        scene.addPlate();
+      }
     }
 
     let transformCommitResult: TransformStoreCommitResult = {
@@ -8206,6 +8798,7 @@ export default function Home() {
           scene.activeModelId,
           committedTransform,
           explicitBeforeTransform,
+          spawnedPlateId ? { landedPlateId: spawnedPlateId } : undefined,
         );
         transformDebugTimelineRef.current.storeUpdatedAt = stampNow();
 
@@ -8232,6 +8825,17 @@ export default function Home() {
           transformMgr.transformHook.setPosition(committedTransform.position.x, committedTransform.position.y, committedTransform.position.z);
           transformMgr.transformHook.setRotation(committedTransform.rotation.x, committedTransform.rotation.y, committedTransform.rotation.z);
           transformMgr.transformHook.setScale(committedTransform.scale.x, committedTransform.scale.y, committedTransform.scale.z);
+        } else {
+          // The write was refused, a locked bed being the reason it can be. The hook still holds
+          // where the drag put it, and the canvas renders from the hook once the drag flags clear,
+          // so putting it back on the model's own transform is what snaps the model home.
+          const committedModel = scene.models.find((model) => model.id === scene.activeModelId);
+          if (committedModel) {
+            const { position, rotation, scale } = committedModel.transform;
+            transformMgr.transformHook.setPosition(position.x, position.y, position.z);
+            transformMgr.transformHook.setRotation(rotation.x, rotation.y, rotation.z);
+            transformMgr.transformHook.setScale(scale.x, scale.y, scale.z);
+          }
         }
       }
     }
@@ -8520,7 +9124,19 @@ export default function Home() {
 
     if (options?.pushHistory !== false) invalidatePendingTransformHistory();
     const result = scene.updateModelTransforms(updates, options);
-    if (!result.updated) return;
+    if (!result.updated) {
+      // Refused, a locked bed being the reason it can be: the hook keeps the values that were
+      // asked for, so put it back on the model's own transform rather than leaving the panel
+      // showing a move that did not happen.
+      const activeModelForRevert = scene.activeModel;
+      if (activeModelForRevert) {
+        const { position, rotation, scale } = activeModelForRevert.transform;
+        transformMgr.transformHook.setPosition(position.x, position.y, position.z);
+        transformMgr.transformHook.setRotation(rotation.x, rotation.y, rotation.z);
+        transformMgr.transformHook.setScale(scale.x, scale.y, scale.z);
+      }
+      return;
+    }
 
     const activeUpdate = scene.activeModelId
       ? updates.find((update) => update.id === scene.activeModelId)
@@ -8654,11 +9270,32 @@ export default function Home() {
     transformMgr.disableAutoLiftForManualZMove();
   }, [scene, transformMgr]);
 
+  /** Whether the bed a model stands on refuses edits. */
+  const isModelPlateLocked = React.useCallback((modelId: string) => {
+    const model = scene.models.find((candidate) => candidate.id === modelId);
+    return model ? scene.isModelPlateLocked(model) : false;
+  }, [scene.isModelPlateLocked, scene.models]);
+
+  const notifyPlateLocked = React.useCallback(() => {
+    notifyPlateLockedRef.current();
+  }, []);
+
   const handleTransformStart = React.useCallback((
     operation: 'move' | 'rotate' | 'scale',
     details?: { axis?: 'x' | 'y' | 'z' | 'uniform'; isUniform?: boolean },
   ) => {
     skipNextTransformEndCommitRef.current = null;
+
+    // A locked bed refuses the gesture itself, not just the commit: the gizmo would otherwise
+    // move the model and the store would refuse on release, which reads as a broken gizmo.
+    const modelsBeingTransformed = [
+      ...(scene.activeModelId ? [scene.activeModelId] : []),
+      ...scene.selectedModelIds,
+    ];
+    if (modelsBeingTransformed.some((modelId) => isModelPlateLocked(modelId))) {
+      notifyPlateLockedRef.current();
+      return false;
+    }
 
     if (typeof window !== 'undefined' && supportDragResetRafRef.current !== null) {
       window.cancelAnimationFrame(supportDragResetRafRef.current);
@@ -8814,7 +9451,13 @@ export default function Home() {
       () => scene.mode === 'prepare' && scene.selectedModelIds.length > 0,
       () => {
         const ids = Array.from(new Set(scene.selectedModelIds));
-        scene.deleteModels(ids);
+        // Select-all means the whole scene: the beds go with the models, so the
+        // scene is left as one empty plate rather than as empty beds.
+        if (isSelectAllModelsActive) {
+          void scene.deleteModelsAndExtraPlates(ids);
+        } else {
+          void scene.deleteModels(ids);
+        }
         setIsSelectAllModelsActive(false);
       },
       30,
@@ -8823,14 +9466,14 @@ export default function Home() {
     return () => {
       unregister();
     };
-  }, [scene]);
+  }, [isSelectAllModelsActive, scene]);
 
   React.useEffect(() => {
     const unregister = registerDeleteHandler(
       () => scene.mode === 'prepare' && isSelectAllModelsActive && scene.models.length > 0,
       () => {
         const ids = scene.models.map((model) => model.id);
-        scene.deleteModels(ids);
+        void scene.deleteModelsAndExtraPlates(ids);
         setIsSelectAllModelsActive(false);
       },
       20,
@@ -8871,9 +9514,15 @@ export default function Home() {
   React.useEffect(() => {
     let cancelled = false;
 
-    if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'arrange') {
+    // The Duplicate tool is its own rail mode: this effect is what puts ghosts on the
+    // plate for the Duplicate panel, and it reads that panel's settings, so it runs while
+    // that tool is up. (It asked for the Arrange mode, which the tool rail split away from
+    // Duplicate — that left the previews permanently empty, so nothing ghosted and Confirm
+    // Duplicate had nothing to confirm.)
+    if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'duplicate') {
       setDuplicatePreviewTransforms([]);
       setDuplicateSourcePreviewTransform(null);
+      setDuplicateGhostPlateOffsets([]);
       return () => {
         cancelled = true;
       };
@@ -8882,6 +9531,7 @@ export default function Home() {
     if (!scene.activeModel) {
       setDuplicatePreviewTransforms([]);
       setDuplicateSourcePreviewTransform(null);
+      setDuplicateGhostPlateOffsets([]);
       return () => {
         cancelled = true;
       };
@@ -8892,6 +9542,7 @@ export default function Home() {
     if (duplicateLayoutMode === 'auto' && duplicatePrecisionMode === 'high_precision') {
       setDuplicatePreviewTransforms([]);
       setDuplicateSourcePreviewTransform(null);
+      setDuplicateGhostPlateOffsets([]);
       return () => {
         cancelled = true;
       };
@@ -8905,6 +9556,9 @@ export default function Home() {
     const slots: THREE.Vector3[] = [];
 
     if (duplicateLayoutMode === 'array') {
+      // A manual array is laid where the user asked for it, so it asks for no beds.
+      setDuplicateGhostPlateOffsets([]);
+
       const countX = Math.max(1, Math.round(duplicateArrayCountX));
       const countY = Math.max(1, Math.round(duplicateArrayCountY));
       const countZ = Math.max(1, Math.round(duplicateArrayCountZ));
@@ -9024,39 +9678,67 @@ export default function Home() {
         blockedPolygons.push(candidatePolygon);
       }
 
+      // The grid is in the plate's own millimetres, so a copy becomes a world position
+      // through where that plate sits: on plate 2 the copies belong on plate 2, not back
+      // on plate 1.
+      const activeOffset = scene.plateOffsetFor(scene.activePlateId);
       for (const center of chosenCenters) {
-        slots.push(new THREE.Vector3(center.x, center.y, model.transform.position.z));
+        slots.push(new THREE.Vector3(
+          center.x + activeOffset.dxMm,
+          center.y + activeOffset.dyMm,
+          model.transform.position.z,
+        ));
       }
 
-      const overflowCount = totalCount - chosenCenters.length;
-      if (overflowCount > 0) {
-        const outsideGap = Math.max(8, spacing);
-        let outsideLeftX = maxX + outsideGap;
-        let outsideY = minY;
-        let currentColumnMaxWidth = 0;
+      // What the plate cannot take goes onto beds this run would add, which the preview
+      // shows as ghosts. Every bed is the same shape and an added bed is empty, so the
+      // same grid places those copies, and the cascade says where each bed lands — the
+      // beds are only created if the duplicate is confirmed.
+      const remaining = Math.max(0, totalCount - chosenCenters.length);
+      const perBed = Math.max(1, maxCols * maxRows);
+      const ghostBeds = remaining > 0 ? Math.ceil(remaining / perBed) : 0;
+      const footprint = { widthMm: scene.view3dSettings.widthMm, depthMm: scene.view3dSettings.depthMm };
+      const ghostOffsets: Array<{ dxMm: number; dyMm: number }> = [];
+      let placedOnGhostBeds = 0;
 
-        for (let i = 0; i < overflowCount; i += 1) {
-          if (outsideY > minY && (outsideY + depth) > maxY) {
-            outsideLeftX += currentColumnMaxWidth + outsideGap;
-            currentColumnMaxWidth = 0;
-            outsideY = minY;
-          }
+      for (let bed = 0; bed < ghostBeds; bed += 1) {
+        const offset = plateCascadeOffsetMm(
+          scene.plates.length + bed,
+          footprint,
+          scene.plates.length + ghostBeds,
+          scene.plateOrdering,
+        );
+        ghostOffsets.push(offset);
 
+        // Nearest the middle of that bed first, which is where the eye looks for them.
+        const bedCenterX = (minX + maxX) * 0.5 + offset.dxMm;
+        const bedCenterY = (minY + maxY) * 0.5 + offset.dyMm;
+        const orderedCenters = candidateCenters
+          .map((candidate) => ({
+            x: candidate.x,
+            y: candidate.y,
+            distSq: ((candidate.x + offset.dxMm - bedCenterX) ** 2) + ((candidate.y + offset.dyMm - bedCenterY) ** 2),
+          }))
+          .sort((a, b) => a.distSq - b.distSq);
+
+        for (let i = 0; i < orderedCenters.length && placedOnGhostBeds < remaining; i += 1) {
+          const center = orderedCenters[i];
           slots.push(new THREE.Vector3(
-            outsideLeftX + width * 0.5,
-            outsideY + depth * 0.5,
+            center.x + offset.dxMm,
+            center.y + offset.dyMm,
             model.transform.position.z,
           ));
-
-          outsideY += depth + spacing;
-          currentColumnMaxWidth = Math.max(currentColumnMaxWidth, width);
+          placedOnGhostBeds += 1;
         }
       }
+
+      setDuplicateGhostPlateOffsets(ghostOffsets);
     }
 
     if (slots.length <= 1) {
       setDuplicatePreviewTransforms([]);
       setDuplicateSourcePreviewTransform(null);
+      setDuplicateGhostPlateOffsets([]);
       return;
     }
 
@@ -9109,9 +9791,15 @@ export default function Home() {
     duplicateTotalCopies,
     getModelSupportAwareDimensionsMm,
     scene.activeModel,
+    scene.activePlateId,
     scene.models,
     scene.mode,
+    scene.plateOffsetFor,
+    scene.plates,
+    scene.view3dSettings.depthMm,
+    scene.view3dSettings.originMode,
     scene.view3dSettings.safetyMarginMm,
+    scene.view3dSettings.widthMm,
     transformMgr.transformMode,
   ]);
 
@@ -9238,7 +9926,7 @@ export default function Home() {
       const isSJustPressed = isSPressed && !wasSPressed;
 
       if (isAJustPressed) {
-        if (scene.mode === 'prepare' && transformMgr.transformMode === 'hollowing') {
+        if ((scene.mode === 'prepare' || scene.mode === 'support') && transformMgr.transformMode === 'hollowing') {
           if (activeHolePunchPlacements.length > 0) {
             const nextIds = activeHolePunchPlacements.map((placement) => placement.id);
             setSelectedHolePunchPlacementIds(nextIds);
@@ -9328,7 +10016,7 @@ export default function Home() {
 
   // Relocated from the early state block: depends on hollowPreview which is now
   // produced by useHollowingManager (declared above, after transformMgr).
-  const shouldForceHollowingXray = scene.mode === 'prepare'
+  const shouldForceHollowingXray = (scene.mode === 'prepare' || scene.mode === 'support')
     && transformMgr.transformMode === 'hollowing'
     && !scene.activeModel?.meshModifiers?.hollowing?.bakedIntoGeometry;
   const effectiveShaderType = (shouldForceHollowingXray || hollowPreview)
@@ -9425,9 +10113,9 @@ export default function Home() {
   }, [defaultHollowingState, hollowingState, pendingBlockerResetState, persistActiveModelModifiers, scene.activeModel]);
 
 
-  const handleTransformToolbarHover = React.useCallback((mode: TransformMode | null) => {
+  const handleToolRailHover = React.useCallback((mode: TransformMode | null) => {
     if (mode === 'hollowing') {
-      if (scene.mode === 'prepare') {
+      if (scene.mode === 'prepare' || scene.mode === 'support') {
         const activeModel = scene.activeModel;
         if (activeModel) {
           const persistedHollowing = activeModel.meshModifiers?.hollowing;
@@ -9593,7 +10281,7 @@ export default function Home() {
   ]);
 
   React.useEffect(() => {
-    if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'hollowing') {
+    if ((scene.mode !== 'prepare' && scene.mode !== 'support') || transformMgr.transformMode !== 'hollowing') {
       return;
     }
 
@@ -9756,8 +10444,6 @@ export default function Home() {
         onHoverTintStrengthChange={scene.setHoverTintStrength}
         selectedTintStrength={scene.selectedTintStrength}
         onSelectedTintStrengthChange={scene.setSelectedTintStrength}
-        debugPrimitivesPanelVisible={debugPrimitivesPanelVisible}
-        onDebugPrimitivesPanelVisibleChange={setDebugPrimitivesPanelVisible}
         view3dSettings={scene.view3dSettings}
         onView3dSettingsChange={scene.setView3dSettings}
         slicingThumbnailRenderSettings={exportThumbnailRenderOptions}
@@ -9797,17 +10483,20 @@ export default function Home() {
 
       <GlobalUpdateIndicator />
 
-      <FloatingPanelStack>
+      <FloatingPanelStack
+        leftInsetPx={scene.models.length > 0 && (scene.mode === 'prepare' || scene.mode === 'support') && toolLayout === 'vertical' ? TOOL_RAIL_WIDTH_PX : 0}
+        railIsColumn={toolLayout === 'vertical'}
+      >
         {scene.mode === 'prepare' ? (
           <>
             {PreparePanelStack({
               scene: scene,
               transformMgr: transformMgr,
-              hollowing: hollowing,
-              holePunch: holePunch,
               arrange: arrange,
               organicCut: organicCut,
               outsidePlateModelIds: outsidePlateModelIds,
+              modelsPanelVisible: modelsPanelVisible,
+              modelsPanelCollapsible: toolLayout === 'horizontal',
               handleModelSelection: handleModelSelection,
               handleModelRangeSelection: handleModelRangeSelection,
               handleGroupSelection: handleGroupSelection,
@@ -9820,10 +10509,10 @@ export default function Home() {
               handleModelListContextMenu: handleModelListContextMenu,
               handleRepairModel: handleRepairModel,
               handleOpenModelSupportsInfo: handleOpenModelSupportsInfo,
+              handleAddModels: () => { void handleOpenMeshDialog(); },
               showEmptySceneDialog: showEmptySceneDialog,
               importOverlayState: importOverlayState,
               modelStatsBottomClearancePx: modelStatsBottomClearancePx,
-              debugPrimitivesPanelVisible: debugPrimitivesPanelVisible,
               ensurePendingTransformHistoryForActiveModel: ensurePendingTransformHistoryForActiveModel,
               requestDestructiveTransformSupportDeletion: requestDestructiveTransformSupportDeletion,
               handleRotationComplete: handleRotationComplete,
@@ -9839,11 +10528,18 @@ export default function Home() {
               setUniformScaling: setUniformScaling,
               localTransformSpace: localTransformSpace,
               setLocalTransformSpace: setLocalTransformSpace,
-              isApplyingHolePunch: isApplyingHolePunch,
-              interiorView: interiorView,
-              hasCavityGeometry: hasCavityGeometry,
               arrangeSpacingMm: arrangeSpacingMm,
               setArrangeSpacingMm: setArrangeSpacingMm,
+              orientationPanel: autoRotationExperimentEnabled
+                ? {
+                  activeModelId: scene.activeModelId ?? undefined,
+                  activeModelName: scene.activeModel?.name,
+                  currentRotation: scene.activeModel?.transform.rotation,
+                  onApplyRotation: handleApplyOrientation,
+                  onBeforeOrientApply: requestOrientSupportDeletionWithContinuation,
+                  onOrientationReport: showOrientationToast,
+                }
+                : null,
             })}
           </>
         ) : scene.mode === 'analysis' ? (
@@ -9860,7 +10556,7 @@ export default function Home() {
               scene: scene,
               slicing: slicing,
               supportsRef: supportsRef,
-              captureExportThumbnailPng: captureExportThumbnailPng,
+              captureExportThumbnailPng: captureSliceThumbnailPng,
               handleExportSuccess: handleExportSuccess,
               showOperationError: showOperationError,
               estimatedSlicerLayerCount: estimatedSlicerLayerCount,
@@ -9871,6 +10567,7 @@ export default function Home() {
               handlePrintingLayerPreviewGenerated: handlePrintingLayerPreviewGenerated,
               handleSlicingFinishedForPrinting: handleSlicingFinishedForPrinting,
               handleSliceArtifactReady: handleSliceArtifactReady,
+              handleSlicePlateSliced: handleSlicePlateSliced,
               handleSlicingBenchmarkComplete: handleSlicingBenchmarkComplete,
               triggerSliceExportRef: triggerSliceExportRef,
               shouldAutoSliceOnExportEntry: shouldAutoSliceOnExportEntry,
@@ -9888,63 +10585,100 @@ export default function Home() {
 
         ) : scene.mode === 'support' ? (
           <>
-            <SupportSidebar key="support-settings" activeModelId={scene.activeModelId} />
-            {autoSupportsExperimentEnabled && (
-              <AutoSupportPanel
-                key="support-auto"
-                islands={islandsPoc}
-                hasGeometry={!!scene.geom}
-                activeModelId={scene.activeModelId ?? undefined}
-                autoLift={transformMgr.autoLift}
-                onAutoLiftChange={handleAutoLiftChange}
-                onBeforeRun={requestModifierDecisionBeforeSupports}
-              />
-            )}
-            {autoRotationExperimentEnabled && (
-              <AutoRotationPanel
-                key="support-rotation"
-                activeModelId={scene.activeModelId ?? undefined}
-                currentRotation={scene.activeModel?.transform.rotation}
-                onApplyRotation={(modelId, rotation) => {
-                  const activeModel = scene.activeModel;
-                  const current = activeModel?.transform;
-                  if (!activeModel || !current) return;
-                  const before = {
-                    position: current.position.clone(),
-                    rotation: current.rotation.clone(),
-                    scale: current.scale.clone(),
-                  };
-                  const after = {
-                    position: current.position.clone(),
-                    rotation,
-                    scale: current.scale.clone(),
-                  };
-                  // A new down-axis means new extents: seat to the plate
-                  // clearance after orientation — lift OR drop — so repeated
-                  // orienting never drifts the model upward. One history entry
-                  // covers rotate + lift.
-                  if (activeModel.id === modelId) {
-                    const lowestWorldZ = getModelLowestWorldZ({ id: modelId, geometry: activeModel.geometry, transform: after });
-                    after.position.z += transformMgr.liftDistance - lowestWorldZ;
-                  }
-                  scene.updateModelTransform(modelId, after);
-                  scene.commitModelTransformHistory(modelId, before, after, 'Apply Orientation Suggestion');
-                }}
-                onBeforeOrientApply={(continueApply) => requestOrientSupportDeletionWithContinuation(continueApply)}
-                onOrientationReport={showOrientationToast}
-                activeModelName={scene.activeModel?.name}
-                blockersActive={transformMgr.transformMode === 'supportBlockers'}
-                onToggleBlockers={() => {
-                  setTransformModeWithMirrorFinalize(transformMgr.transformMode === 'supportBlockers' ? 'select' : 'supportBlockers');
-                }}
-              />
-            )}
-            <IslandsPanel
-              key="support-islands"
-              islands={islandsPoc}
-              hasGeometry={!!scene.geom}
+            {/* Every panel stays mounted and the ones the selected tool does not own
+                are hidden with `display: none` — the window layout profiles resolve
+                against the set of mounted panels, so unmounting one would move every
+                panel anchored to it. */}
+            <ModelsPanel
+              key="support-models"
+              scene={scene}
+              outsidePlateModelIds={outsidePlateModelIds}
+              handleModelSelection={handleModelSelection}
+              handleModelRangeSelection={handleModelRangeSelection}
+              handleGroupSelection={handleGroupSelection}
+              handleGroupSelectedModels={handleGroupSelectedModels}
+              handleUngroupSelectedModels={handleUngroupSelectedModels}
+              handleUngroupFolder={handleUngroupFolder}
+              handleSplitImportGroup={handleSplitImportGroup}
+              handleRenameFolder={handleRenameFolder}
+              handleRenameModel={handleRenameModel}
+              handleModelListContextMenu={handleModelListContextMenu}
+              handleRepairModel={handleRepairModel}
+              handleOpenModelSupportsInfo={handleOpenModelSupportsInfo}
+              handleAddModels={() => { void handleOpenMeshDialog(); }}
+              dimmed={showEmptySceneDialog || importOverlayState.active}
+              hidden={!modelsPanelVisible}
+              collapsible={toolLayout === 'horizontal'}
               bottomClearancePx={modelStatsBottomClearancePx}
             />
+            <div
+              key="support-settings"
+              style={{ display: supportRailMode === 'manual' && transformMgr.transformMode !== 'hollowing' ? undefined : 'none' }}
+            >
+              <SupportSidebar activeModelId={scene.activeModelId} />
+            </div>
+            {autoSupportsExperimentEnabled && (
+              <div
+                key="support-auto"
+                style={{ display: supportRailMode === 'auto' && transformMgr.transformMode !== 'hollowing' ? undefined : 'none' }}
+              >
+                <AutoSupportPanel
+                  islands={islandsPoc}
+                  hasGeometry={!!scene.geom}
+                  activeModelId={scene.activeModelId ?? undefined}
+                  autoLift={transformMgr.autoLift}
+                  onAutoLiftChange={handleAutoLiftChange}
+                  onBeforeRun={requestModifierDecisionBeforeSupports}
+                />
+              </div>
+            )}
+            <div
+              key="support-islands"
+              style={{ display: supportRailMode === 'islands' && transformMgr.transformMode !== 'hollowing' ? undefined : 'none' }}
+            >
+              <IslandsPanel
+                islands={islandsPoc}
+                hasGeometry={!!scene.geom}
+                bottomClearancePx={modelStatsBottomClearancePx}
+              />
+            </div>
+            {scene.geom && transformMgr.transformMode === 'hollowing' && (
+              <>
+                <HollowingPanel
+                  key="support-hollowing"
+                  state={hollowing.hollowingState}
+                  onStateChange={hollowing.handleHollowingStateChange}
+                  onReset={hollowing.requestClearAppliedHollowing}
+                  onResetSettings={hollowing.handleResetHollowingSettings}
+                  onStartEdit={hollowing.handleStartHollowVoxelEditing}
+                  onDoneEdit={hollowing.handleDoneHollowVoxelEditing}
+                  onClearEdit={hollowing.handleClearHollowVoxelEditing}
+                  onApply={() => { void hollowing.handleApplyHollowing(); }}
+                  isApplying={hollowing.isApplyingHollowing}
+                  isPreviewing={hollowing.isPreviewingHollowing}
+                  isApplyingBlockers={hollowing.isApplyingBlockersHollowing || hollowing.isPreviewingHollowing}
+                  canApply={!hollowing.isShellFaceSelectionPending && (hollowing.isHollowingDirty || !hollowing.isHollowingApplied)}
+                  canEdit={!hollowing.isShellFaceSelectionPending && Boolean(scene.activeModel)}
+                  isEditMode={hollowing.hollowingEditMode}
+                  isHollowingApplied={hollowing.isHollowingApplied}
+                  shellFaceSelectionPending={hollowing.isShellFaceSelectionPending}
+                />
+                <HolePunchPanel
+                  key="support-hole-punch"
+                  state={holePunch.holePunchState}
+                  onStateChange={holePunch.handleHolePunchStateChange}
+                  onReset={holePunch.requestResetHolePunch}
+                  onApply={() => { void holePunch.handleApplyHolePunch(); }}
+                  canUseAutoDepth={holePunch.canUseAutoHolePunchDepth}
+                  isApplying={isApplyingHolePunch}
+                  canApply={!hollowing.isShellFaceSelectionPending && (holePunch.isHolePunchDirty || holePunch.holePunchNeedsBake)}
+                  canReset={!hollowing.isShellFaceSelectionPending && holePunch.canResetHolePunch}
+                  disabled={hollowing.hollowingEditMode}
+                  interiorView={interiorView}
+                  interiorViewAvailable={hasCavityGeometry}
+                />
+              </>
+            )}
           </>
         ) : scene.mode === 'printing' ? (
           <>
@@ -10095,6 +10829,47 @@ export default function Home() {
             heatmapMaxAngle={scene.heatmapMaxAngle}
             heatmapColors={scene.heatmapColors}
             interiorView={interiorView}
+            plates={scene.plates}
+            plateFrames={scene.plateFrames}
+            resolveModelPlateId={scene.resolveModelPlateId}
+            activePlateId={scene.activePlateId}
+            plateViewRunId={scene.plateViewRunId}
+            onActivatePlate={scene.activatePlate}
+            onAddPlate={() => { scene.addPlate(); }}
+            onRenamePlate={scene.renamePlate}
+            plateName={scene.plateName}
+            onPlateNameChange={scene.setPlateName}
+            // An empty scene has nothing on its beds, so the bed's name and its buttons would be
+            // pointing at nothing.
+            showPlateName={scene.models.length > 0}
+            showPlateWidgets={scene.models.length > 0}
+            onArrangePlate={() => {
+              // The regular arrange, at the settings this button is for: 1mm apart with
+              // Z-rotation allowed, and to this plate alone — it is the plate's own
+              // button, so it does not go filling the others. Passed as a per-run
+              // override, so the panel keeps whatever the user set there.
+              void handleAutoArrangeModels('all', undefined, { spacingMm: 1, allowRotateOnZ: true, plateFillMode: 'plate' });
+            }}
+            duplicateGhostPlates={duplicateGhostPlateOffsets}
+            plateOrdering={scene.plateOrdering}
+            plateLocked={scene.plateLocked}
+            onTogglePlateLock={() => scene.setPlateLocked(!scene.plateLocked)}
+            plateClearTitle={scene.plates.length > 1 && scene.activePlateId !== scene.plates[0]?.id
+              ? _(msg({ message: 'Delete this plate', comment: 'Tooltip on the bin beside the build plate when the plate can go: it removes the bed and the models standing on it. Undo brings them back.' }))
+              : _(msg({ message: 'Clear build plate', comment: 'Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.' }))}
+            onClearPlate={() => {
+              const plateId = scene.activePlateId;
+              const isFirstPlate = plateId === scene.plates[0]?.id;
+              const intent = scene.plates.length > 1 && !isFirstPlate ? 'delete' : 'clear';
+              // An empty bed has nothing to lose, so it goes straight away; the
+              // confirmation is for the models a delete takes with it.
+              if (intent === 'delete'
+                && !scene.models.some((model) => scene.resolveModelPlateId(model) === plateId)) {
+                scene.removePlate(plateId);
+                return;
+              }
+              setPlateTrashIntent(intent);
+            }}
             cavityGeometryByModelId={new Map(Array.from(cavityGeometryByModelIdRef.current.entries()).map(([id, entry]) => [id, entry.geometry]))}
             disableRaycast={transformMgr.isTransforming}
             hideCrossSectionCap={false}
@@ -10143,6 +10918,8 @@ export default function Home() {
             autoLift={transformMgr.autoLift}
             liftDistance={transformMgr.liftDistance}
             autoSnapEnabled={transformMgr.autoSnapEnabled}
+            isModelPlateLocked={isModelPlateLocked}
+            onBlockedByPlateLock={notifyPlateLocked}
             onTransformStart={handleTransformStart}
             onGizmoTransformCommit={handleGizmoTransformCommit}
             onGizmoTransformGroupCommit={handleGizmoTransformGroupCommit}
@@ -10150,8 +10927,8 @@ export default function Home() {
             onTransformEnd={handleTransformEnd}
             mode={scene.mode}
             onSupportClick={supports.onModelClick}
-            onHolePunchClick={scene.mode === 'prepare' && transformMgr.transformMode === 'hollowing' && !hollowingEditMode ? handleHolePunchClick : undefined}
-            onHolePunchHover={scene.mode === 'prepare' && transformMgr.transformMode === 'hollowing' && !hollowingEditMode ? handleHolePunchHover : undefined}
+            onHolePunchClick={(scene.mode === 'prepare' || scene.mode === 'support') && transformMgr.transformMode === 'hollowing' && !hollowingEditMode ? handleHolePunchClick : undefined}
+            onHolePunchHover={(scene.mode === 'prepare' || scene.mode === 'support') && transformMgr.transformMode === 'hollowing' && !hollowingEditMode ? handleHolePunchHover : undefined}
             onOrganicCutClick={organicCutToolActive ? organicCut.onSurfaceClick : undefined}
             organicCutDragging={organicCut.dragging}
             organicCutKeyGizmo={
@@ -10170,7 +10947,10 @@ export default function Home() {
             onActiveModelChange={handleSceneModelSelection}
             onMarqueeSelectionChange={handleSceneMarqueeSelection}
             placementPreviews={supports.placementPreviews}
-            blockSupportPlacement={supports.isPlacementHardDisabled}
+            // One canvas, one tool: while Hollowing owns the canvas (it is a
+            // Support tool now), support placement, its pathfinding preview and
+            // the placement guide must be off, or they compete for the click.
+            blockSupportPlacement={supports.isPlacementHardDisabled || transformMgr.transformMode === 'hollowing'}
             placementActive={supports.placementActive}
             branchTipPosition={supports.branchPlacement.tipPosition}
             branchHoverPosition={supports.branchPlacement.hoverPosition}
@@ -10190,7 +10970,7 @@ export default function Home() {
             supportDragTransactionId={supportDragTransactionId}
             customPrepareLassoSelection={{
               enabled: Boolean(
-                scene.mode === 'prepare'
+                (scene.mode === 'prepare' || scene.mode === 'support')
                 && transformMgr.transformMode === 'hollowing'
                 && hollowingEditMode
                 && hollowPreview
@@ -10253,7 +11033,7 @@ export default function Home() {
             duplicatePreviewModel={
               isDuplicating
                 ? duplicateApplySourceModel
-                : (transformMgr.transformMode === 'arrange' ? scene.activeModel : null)
+                : (transformMgr.transformMode === 'duplicate' ? scene.activeModel : null)
             }
             duplicatePreviewTransforms={duplicatePreviewTransforms}
             duplicateActivePreviewTransform={
@@ -10331,9 +11111,11 @@ export default function Home() {
                 selectedModelIds={scene.selectedModelIds}
                 inBoundsModelIds={inBoundsModelIds}
                 numLayers={estimatedSlicerLayerCount}
+                estimatedLayerCountLabelOverride={String(estimatedSlicerLayerCount)}
                 heightMm={slicing.heightMm}
                 estimatedPrintTimeLabelOverride={modelStatsEstimatedPrintTimeLabel}
                 estimatedResinLabelOverride={estimatedVolumeMlLabel}
+                estimatedResinTotalLabel={estimatedResinTotalLabel}
               />
             </div>
           )}
@@ -10369,7 +11151,7 @@ export default function Home() {
             printingPreviewTargetResolution={printingPreviewTargetResolution}
             activePrinterProfile={activePrinterProfile}
             printingPreviewVisualTransform={printingPreviewVisualTransform}
-            models={scene.models}
+            models={printingScrubPreviewModels}
             supportDragGroupRef={supportDragGroupRef}
             supportRenderRefreshNonce={supportRenderRefreshNonce}
             printingPreviewScrubUpscaleTransform={printingPreviewScrubUpscaleTransform}
@@ -10383,11 +11165,48 @@ export default function Home() {
         )}
       </div>
 
-      {scene.models.length > 0 && scene.mode === 'prepare' && (
-        <TransformToolbar
-          mode={transformMgr.transformMode}
-          onModeChange={setTransformModeWithMirrorFinalize}
-          onModeHover={handleTransformToolbarHover}
+      {scene.models.length > 0 && (scene.mode === 'prepare' || scene.mode === 'support') && (
+        <ToolRail
+          entries={scene.mode === 'support'
+            ? buildSupportToolRailEntries({
+              mode: supportRailMode,
+              onModeChange: (nextMode) => {
+                setSupportRailMode(nextMode);
+                // Picking a panel tool leaves the Hollowing transform mode, so its
+                // panel gives way to the selected one.
+                if (transformMgr.transformMode === 'hollowing') {
+                  setTransformModeWithMirrorFinalize('select');
+                }
+              },
+              modelsPanelVisible,
+              onToggleModelsPanel: () => {
+                const next = !modelsPanelVisible;
+                setModelsPanelVisible(next);
+                setModelsPanelVisibleEnabled(next);
+              },
+              hollowingActive: transformMgr.transformMode === 'hollowing',
+              onSelectHollowing: () => setTransformModeWithMirrorFinalize('hollowing'),
+              viewMode: supportDisplaySettings.navigationDiscsOnly ? 'lines' : 'full',
+              onViewModeChange: (nextViewMode) => updateNavigationDiscsOnly(nextViewMode === 'lines'),
+              interiorView,
+              // The same gate the X hotkey uses, so the tile and the key agree
+              // on when there is something to look inside.
+              interiorViewAvailable: hasCavityGeometry,
+              onToggleInteriorView: () => setInteriorView((prev) => !prev),
+            })
+            : buildPrepareToolRailEntries({
+              mode: transformMgr.transformMode,
+              onModeChange: setTransformModeWithMirrorFinalize,
+              onModeHover: handleToolRailHover,
+              modelsPanelVisible,
+              onToggleModelsPanel: () => {
+                const next = !modelsPanelVisible;
+                setModelsPanelVisible(next);
+                setModelsPanelVisibleEnabled(next);
+              },
+            })}
+          layout={toolLayout}
+          onLayoutChange={setToolLayout}
         />
       )}
 
@@ -10729,6 +11548,89 @@ export default function Home() {
         />
       )}
 
+      <StructuredDialogModal
+        open={plateTrashIntent !== null}
+        ariaLabel={plateTrashIntent === 'delete'
+          ? _(msg`Confirm deleting the plate`)
+          : _(msg`Confirm clearing the build plate`)}
+        title={plateTrashIntent === 'delete' ? _(msg`Delete this plate?`) : _(msg`Clear Build Plate?`)}
+        // Undo does bring them back, unlike the app's other destructive confirmation,
+        // so it says that instead of "this can't be undone".
+        subtitle={_(msg`Undo brings the models back`)}
+        icon={<Trash2 className="h-4 w-4" />}
+        iconTone={plateTrashIntent === 'delete' ? 'danger' : 'warning'}
+        closeAriaLabel={_(msg`Close clear-plate confirmation`)}
+        onClose={() => setPlateTrashIntent(null)}
+        actions={(
+          <>
+            <Button variant="secondary" onClick={() => setPlateTrashIntent(null)}>
+              {_(msg`Cancel`)}
+            </Button>
+            <Button
+              variant="tinted-danger"
+              className="inline-flex items-center justify-center gap-1.5"
+              onClick={() => {
+                const intent = plateTrashIntent;
+                setPlateTrashIntent(null);
+                if (intent === 'delete') {
+                  // The bed goes with what is on it; `removePlate` carries the models
+                  // away rather than leaving them behind on a plate that is gone.
+                  scene.removePlate(scene.activePlateId);
+                  return;
+                }
+                // Straight to `deleteModels`, deliberately not through
+                // `dispatchDeleteModelAction`: that resolves *the selection*, or one
+                // fallback model, and never "the plate" — so routing a clear through
+                // it deleted whatever happened to be selected (or nothing, with no
+                // active model) while looking like it worked.
+                //
+                // The plate, not the scene: with more than one bed, the bin empties
+                // the one you are working on and leaves the others alone.
+                void scene.deleteModels(
+                  scene.models
+                    .filter((model) => scene.resolveModelPlateId(model) === scene.activePlateId)
+                    .map((model) => model.id),
+                );
+              }}
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              {plateTrashIntent === 'delete' ? _(msg`Delete plate`) : _(msg`Clear Plate`)}
+            </Button>
+          </>
+        )}
+      >
+        <div className="space-y-2">
+          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+            {plateTrashIntent === 'delete'
+              ? _(msg`The models on this plate are deleted with it.`)
+              : _(msg`Are you sure you want to remove every model from the plate?`)}
+          </p>
+        </div>
+      </StructuredDialogModal>
+
+      {plateLockedNoticeMounted && (
+        <ToastViewport zIndex={127} offset="1.25rem">
+          <Toast
+            tone="warning"
+            shape="rounded"
+            animated
+            visible={plateLockedNoticeVisible}
+            className="flex items-center max-w-sm pointer-events-auto"
+          >
+            {/* The padlock leads the first line rather than standing beside the block:
+                centred on two lines of text it read as belonging to neither. */}
+            <span className="flex-1 text-center leading-snug">
+              <span className="inline-flex items-center gap-1.5">
+                <Lock className="h-3.5 w-3.5 flex-shrink-0" />
+                {formatPlateLockedNotice(_, plateLockedNoticeLabel)}
+              </span>
+              <br />
+              <span style={{ fontWeight: 400, opacity: 0.8 }}>{_(msg`Unlock it to add or move models.`)}</span>
+            </span>
+          </Toast>
+        </ToastViewport>
+      )}
+
       {newDeviceToast && (
         <ToastViewport zIndex={127} offset="1.25rem">
           <Toast
@@ -10739,7 +11641,7 @@ export default function Home() {
             className="flex items-center gap-3 max-w-sm pointer-events-auto"
           >
             <Gamepad2 className="h-4 w-4 flex-shrink-0" />
-            <span className="flex-1 text-[12px] leading-snug">
+            <span className="flex-1 leading-snug">
               New input device detected.<br />
               <span style={{ fontWeight: 400, opacity: 0.8 }}>Go to Settings → 3D Mouse to configure or block it.</span>
             </span>

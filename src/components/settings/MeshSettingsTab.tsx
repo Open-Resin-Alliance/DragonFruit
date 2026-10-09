@@ -6,7 +6,7 @@ import { MATCAP_OPTIONS, MESH_SHADER_OPTIONS, type MatcapVariant, type MeshShade
 import { HexColorPicker } from 'react-colorful';
 import { MeshShaderPreviewSlot } from '@/components/settings/meshSettings/MeshShaderPreviewSlot';
 import { MeshShaderPreviewCanvas } from '@/components/settings/meshSettings/MeshShaderPreviewCanvas';
-import { Button, ColorSwatchInput, Input, Select } from '@/components/atoms';
+import { Button, ColorSwatchInput, Input, SegmentedControl, Select, SettingRow } from '@/components/atoms';
 import { Layers, MousePointer2, RotateCcw, SlidersHorizontal } from 'lucide-react';
 
 type PreviewModelConfig = {
@@ -170,7 +170,7 @@ export function MeshSettingsTab({
 
       {/* ── Shader & Preview ─────────────────────────────────── */}
       <section
-        className="rounded-lg border p-3"
+        className="rounded-md border p-3"
         style={{ background: 'var(--surface-1)', borderColor: 'var(--border-subtle)' }}
       >
         <div className="flex items-start gap-2 mb-3">
@@ -319,7 +319,7 @@ export function MeshSettingsTab({
 
             <div className="grid grid-cols-2 gap-2 mt-2">
             {configuredShaderType === 'matcap' && (
-              <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+              <div className="rounded-md border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
                 <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-muted)' }}>
                   Matcap Style
                 </label>
@@ -336,36 +336,26 @@ export function MeshSettingsTab({
             )}
 
             {configuredShaderType === 'flat_unlit' && (
-              <div className="col-span-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>Vertex Colors</div>
-                    <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Sample per-vertex color data when available.</div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => onFlatUseVertexColorsChange(!flatUseVertexColors)}
-                    className="h-9 min-w-[72px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                    style={flatUseVertexColors
-                      ? {
-                          borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                          background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                          color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                        }
-                      : {
-                          borderColor: 'var(--border-subtle)',
-                          background: 'var(--surface-1)',
-                          color: 'var(--text-muted)',
-                        }}
-                  >
-                    {flatUseVertexColors ? 'ON' : 'OFF'}
-                  </button>
-                </div>
-              </div>
+              <SettingRow
+                bordered
+                className="col-span-2"
+                label="Vertex Colors"
+                description="Sample per-vertex color data when available."
+              >
+                <SegmentedControl
+                  label="Vertex Colors"
+                  value={flatUseVertexColors ? 'on' : 'off'}
+                  onChange={(next) => onFlatUseVertexColorsChange(next === 'on')}
+                  options={[
+                    { value: 'off', label: 'OFF' },
+                    { value: 'on', label: 'ON' },
+                  ]}
+                />
+              </SettingRow>
             )}
 
             {showRoughness && (
-              <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+              <div className="rounded-md border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
                 <div className="flex items-center justify-between text-xs mb-1.5">
                   <span className="font-medium" style={{ color: 'var(--text-muted)' }}>Roughness</span>
                   <span className="font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{materialRoughness.toFixed(2)}</span>
@@ -381,7 +371,7 @@ export function MeshSettingsTab({
 
 
             {showLighting && (
-              <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+              <div className="rounded-md border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
                 <div className="flex items-center justify-between text-xs mb-1.5">
                   <span className="font-medium" style={{ color: 'var(--text-muted)' }}>Lightness</span>
                   <span className="font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{lightness.toFixed(2)}</span>
@@ -396,7 +386,7 @@ export function MeshSettingsTab({
             )}
 
             {showLighting && (
-              <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+              <div className="rounded-md border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
                 <div className="flex items-center justify-between text-xs mb-1.5">
                   <span className="font-medium" style={{ color: 'var(--text-muted)' }}>Contrast</span>
                   <span className="font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{contrast.toFixed(2)}</span>
@@ -411,7 +401,7 @@ export function MeshSettingsTab({
             )}
 
             {showBakedAo && (
-              <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+              <div className="rounded-md border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
                 <div className="flex items-center justify-between text-xs mb-1.5">
                   <span className="font-medium" style={{ color: 'var(--text-muted)' }}>Ambient Occlusion</span>
                   <span className="font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{bakedAoIntensity.toFixed(2)}</span>
@@ -426,7 +416,7 @@ export function MeshSettingsTab({
             )}
 
             {configuredShaderType === 'xray' && (
-              <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+              <div className="rounded-md border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
                 <div className="flex items-center justify-between text-xs mb-1.5">
                   <span className="font-medium" style={{ color: 'var(--text-muted)' }}>X-Ray Opacity</span>
                   <span className="font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{xrayOpacity.toFixed(2)}</span>
@@ -442,7 +432,7 @@ export function MeshSettingsTab({
 
             {configuredShaderType === 'overhang_heatmap' && (
               <>
-                <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+                <div className="rounded-md border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
                   <div className="flex items-center justify-between text-xs mb-1.5">
                     <span className="font-medium" style={{ color: 'var(--text-muted)' }}>Min Overhang</span>
                     <span className="font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{heatmapMinAngle}°</span>
@@ -454,7 +444,7 @@ export function MeshSettingsTab({
                     className="ui-range w-full"
                   />
                 </div>
-                <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+                <div className="rounded-md border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
                   <div className="flex items-center justify-between text-xs mb-1.5">
                     <span className="font-medium" style={{ color: 'var(--text-muted)' }}>Max Overhang</span>
                     <span className="font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{heatmapMaxAngle}°</span>
@@ -475,7 +465,7 @@ export function MeshSettingsTab({
 
       {/* ── Selection ────────────────────────────────────────── */}
       <section
-        className="rounded-lg border p-3"
+        className="rounded-md border p-3"
         style={{ background: 'var(--surface-1)', borderColor: 'var(--border-subtle)' }}
       >
         <div className="flex items-start gap-2 mb-3">
@@ -498,7 +488,7 @@ export function MeshSettingsTab({
 
         <div className="grid grid-cols-2 gap-2">
           <div className="min-w-0 space-y-2">
-            <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+            <div className="rounded-md border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
               <div className="flex items-center justify-between mb-2">
                 <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>Colors</div>
                 <Button
@@ -550,7 +540,7 @@ export function MeshSettingsTab({
               </div>
             </div>
 
-            <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+            <div className="rounded-md border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
               <div className="text-xs font-semibold mb-2" style={{ color: 'var(--text-strong)' }}>Tint Intensity</div>
               <div className="space-y-2">
                 <div>
@@ -581,13 +571,17 @@ export function MeshSettingsTab({
             </div>
           </div>
 
-          <div
-            className="rounded-lg border p-2 min-h-[16rem] flex flex-col gap-2"
-            style={{
-              borderColor: 'var(--border-subtle)',
-              background: 'var(--surface-0)',
-            }}
-          >
+          {/* The preview fills the row the Colors / Tint Intensity stack sets. It is
+              positioned absolutely so its own height never stretches that row: a
+              taller preview would otherwise leave the left column short and ragged. */}
+          <div className="relative min-w-0">
+            <div
+              className="absolute inset-0 rounded-lg border p-2 flex flex-col gap-2"
+              style={{
+                borderColor: 'var(--border-subtle)',
+                background: 'var(--surface-0)',
+              }}
+            >
             <div className="flex items-center justify-between gap-2">
               <span className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>Selection Preview</span>
               <span
@@ -643,6 +637,7 @@ export function MeshSettingsTab({
                 onPress={() => setIsPreviewSelected((prev) => !prev)}
                 onCanvasPress={() => setIsPreviewSelected(false)}
               />
+            </div>
             </div>
           </div>
         </div>

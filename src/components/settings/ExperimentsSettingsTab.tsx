@@ -158,7 +158,7 @@ export function ExperimentsSettingsTab({ onExit }: { onExit: () => void }) {
 
   return (
     <div className="space-y-3">
-      <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}>
+      <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}>
         <div className="flex items-start gap-2">
           <span className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 8%)' }}>
             <FlaskConical className="h-4 w-4" style={{ color: 'var(--accent-secondary)' }} />
@@ -196,12 +196,12 @@ export function ExperimentsSettingsTab({ onExit }: { onExit: () => void }) {
                 onChange={(next) => handleToggle(experiment.id, next === 'on')}
                 options={[
                   {
-                    value: 'on',
-                    label: _(msg({ message: 'ON', comment: 'Toggle state on a narrow uppercase button in the Experiments tab. Keep it short — the button is 92px wide.' })),
-                  },
-                  {
                     value: 'off',
                     label: _(msg({ message: 'OFF', comment: 'Toggle state on a narrow uppercase button in the Experiments tab. Keep it short — the button is 92px wide.' })),
+                  },
+                  {
+                    value: 'on',
+                    label: _(msg({ message: 'ON', comment: 'Toggle state on a narrow uppercase button in the Experiments tab. Keep it short — the button is 92px wide.' })),
                   },
                 ]}
               />

@@ -369,7 +369,7 @@ export function OrganicCutPanel({
                 setExpanded((prev) => !prev);
               }}
             />
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Cut</h3>
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}><Trans comment="Title of the panel that splits one model along a drawn seam. The tool rail calls this tool Split; keep the two identical.">Split</Trans></h3>
             <Tooltip
               maxWidth={280}
               content={cutHelpContent}
@@ -378,7 +378,7 @@ export function OrganicCutPanel({
                 type="button"
                 className="inline-flex cursor-help items-center justify-center p-0.5 transition-colors"
                 style={{ color: 'var(--text-muted)' }}
-                aria-label={_(msg`How to use Cut`)}
+                aria-label={_(msg({ message: 'How to use Split', comment: 'Accessible name of the help toggle in the Split panel; the tool is called Split in the tool rail.' }))}
               >
                 <CircleHelp className="h-4 w-4" />
               </button>

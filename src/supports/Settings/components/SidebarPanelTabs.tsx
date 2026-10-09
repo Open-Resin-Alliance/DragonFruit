@@ -89,7 +89,11 @@ export function SidebarPanelTabs({
                         key={tab.tab}
                         type="button"
                         onClick={() => onChange(tab.tab)}
-                        className={`flex h-[34px] cursor-pointer items-center justify-center rounded-md border px-2 transition-all duration-150 hover:brightness-110 hover:shadow-[0_8px_18px_rgba(0,0,0,0.18)] ${showIcons ? 'gap-2' : 'gap-0'}`}
+                        // `pb-[1px]` is an optical nudge, not layout: the label's line
+                        // box measures centred, but the font's descender space leaves
+                        // the capitals reading a hair low. Padding the bottom by a pixel
+                        // shifts the centred content up half of it.
+                        className={`flex h-[34px] cursor-pointer items-center justify-center rounded-[5.5px] border px-2 pb-[1px] transition-all duration-150 hover:brightness-110 hover:shadow-[0_8px_18px_rgba(0,0,0,0.18)] ${showIcons ? 'gap-2' : 'gap-0'}`}
                         style={isActive
                             ? {
                                 background: 'color-mix(in srgb, var(--accent), var(--surface-0) 78%)',

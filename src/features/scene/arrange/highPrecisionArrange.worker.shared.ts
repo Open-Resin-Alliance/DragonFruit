@@ -39,6 +39,7 @@ export type HighPrecisionArrangeWorkerInput = {
   widthMm: number;
   depthMm: number;
   originMode: 'front_left' | 'center';
+  plateOffsetMm?: { dxMm: number; dyMm: number };
   arrangeSpacingMm: number;
   arrangeAllowRotateOnZ: boolean;
   arrangeAnchorMode: 'center' | 'front_left' | 'front_right' | 'back_left' | 'back_right';

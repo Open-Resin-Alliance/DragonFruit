@@ -3914,7 +3914,7 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
           </div>
         </div>
 
-        <div className="px-4 py-3 border-t flex items-center justify-between gap-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+        <div className="px-3 py-3 border-t flex items-center justify-between gap-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
           <div className="flex items-center gap-3 min-w-0">
             <Button
               variant="secondary"

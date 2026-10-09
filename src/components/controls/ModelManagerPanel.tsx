@@ -3,6 +3,8 @@ import {
   Eye,
   EyeOff,
   Box,
+  Plus,
+  LayoutGrid,
   AlertTriangle,
 
   Folder,
@@ -10,11 +12,11 @@ import {
   ChevronRight,
   ChevronDown,
   Pencil,
+  Trash2,
   FolderPlus,
   FolderMinus,
   PanelsTopLeft,
   Info,
-  Crosshair,
   Wrench,
   Scissors,
 } from 'lucide-react';
@@ -22,22 +24,48 @@ import { useLingui } from '@lingui/react';
 import { msg, plural } from '@lingui/core/macro';
 import { Trans } from '@lingui/react/macro';
 import type { MessageDescriptor } from '@lingui/core';
+import { formatFileSize } from '@/utils/meshStatsFormatting';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
-import { Card, CardHeader, IconButton } from '@/components/atoms';
+import { Button, Card, CardHeader, IconButton } from '@/components/atoms';
+import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import { plateNumberPlaceholder } from '@/features/scene/plates/plateMessages';
+import type { ScenePlate } from '@/features/scene/useSceneCollectionManager';
 import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
-import { formatPolygonCountCompact } from '@/utils/meshStatsFormatting';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { ContextMenu, type ContextMenuEntry } from '@/components/ui/ContextMenu';
-import { getCompactListPreference, saveCompactListPreference } from '@/components/controls/compactListPreference';
 
 type SelectMode = 'single' | 'toggle' | 'add';
+
+type Translate = (descriptor: MessageDescriptor, values?: Record<string, unknown>) => string;
+
+/**
+ * What the model row's info button explains: how big the mesh is and how many
+ * polygons it has. Built at module scope because React Compiler renames locals
+ * ahead of the Lingui macro, which desyncs an interpolated message id and leaves
+ * the placeholders raw in production — the same reason page.tsx keeps its
+ * formatters out here.
+ */
+function formatModelInfoTooltip(translate: Translate, model: LoadedModel): string {
+  const polygons = translate(msg`${plural(model.polygonCount, { one: '# polygon', other: '# polygons' })}`);
+  const size = formatFileSize(model.fileSizeBytes);
+  return size ? translate(msg`${size} · ${polygons}`) : polygons;
+}
 
 type GroupSelectMode = 'single' | 'add';
 
 interface ModelManagerPanelProps {
   models: LoadedModel[];
   outsidePlateModelIds?: string[];
+  /** The scene's plates, listed above the models that stand on them. */
+  plates?: readonly ScenePlate[];
+  activePlateId?: string;
+  onActivatePlate?: (plateId: string) => void;
+  onRenamePlate?: (plateId: string, name: string) => void;
+  /** Deleting a plate takes its models with it, so the panel asks first. */
+  onRemovePlate?: (plateId: string) => void;
+  /** Which plate a model stands on, resolved by the scene rather than the hint. */
+  resolveModelPlateId?: (model: LoadedModel) => string;
   activeModelId: string | null;
   selectedModelIds: string[];
   onSelect: (id: string, mode?: SelectMode) => void;
@@ -53,11 +81,21 @@ interface ModelManagerPanelProps {
   onModelContextMenu?: (id: string, position: { x: number; y: number }) => void;
   onRepairModel?: (id: string) => void;
   onOpenSupportsInfo?: (id: string) => void;
+  /** Opens the mesh picker: the plus in the panel header. */
+  onAddModels?: () => void;
   onDelete: (id: string) => void;
   onVisibilityChange: (id: string, visible: boolean) => void;
 
   dimmed?: boolean;
+  /** Kept mounted but not shown, so the window layout keeps its left column. */
+  hidden?: boolean;
   bottomClearancePx?: number;
+  /**
+   * Collapsible only while the tool rail is a bar under the app bar. Pinned under
+   * a rail down the left edge the panel is shown and hidden from that rail alone,
+   * so a 48px collapsed strip would only be a way to lose the list.
+   */
+  collapsible?: boolean;
 }
 
 type GroupedEntry = {
@@ -66,6 +104,17 @@ type GroupedEntry = {
   models: LoadedModel[];
   isGrouped: boolean;
   isSystemGroup?: boolean;
+  /**
+   * Set when the group IS a build plate. A plate groups its models the way a
+   * folder does, but its name and its life belong to the plate list above, so
+   * the folder's own context actions do not apply to it.
+   */
+  isPlateGroup?: boolean;
+  /**
+   * A plate's children: the folders of the models standing on it, or one entry
+   * per ungrouped model. A folder has no children, only models.
+   */
+  children?: GroupedEntry[];
 };
 
 type PanelContextMenuState = {
@@ -75,29 +124,45 @@ type PanelContextMenuState = {
   groupId?: string;
   groupName?: string;
   isSystemGroup?: boolean;
+  /** Set when the menu was opened on a plate, whose actions differ from a folder's. */
+  plateId?: string;
 };
 
 const OUTSIDE_PLATE_GROUP_ID = '__system_outside_plate__';
 
-// Mesh stats shown under a model's name, e.g. "1.37M triangles • 3 shells".
-// Triangle counts are compacted for width, so the plural category comes from the
-// raw number while the compact string is what gets interpolated. The shell count
-// is omitted for single-shell meshes — that is the desired result, not news.
-const formatMeshStats = (
-  model: LoadedModel,
-  translate: (descriptor: MessageDescriptor) => string,
-): string => {
-  const compactTriangles = formatPolygonCountCompact(model.polygonCount);
-  const triangles = translate(msg`${plural(model.polygonCount, {
-    one: `${compactTriangles} triangle`,
-    other: `${compactTriangles} triangles`,
-  })}`);
+/**
+ * The folders inside a set of models: one per import group, and one per model
+ * that belongs to none. A plate's children are built with this, so grouping
+ * models works the same inside a plate as it does at the top level.
+ */
+function buildModelGroups(models: readonly LoadedModel[]): GroupedEntry[] {
+  const map = new Map<string, GroupedEntry>();
 
-  const shells = model.geometry.meshDefects?.nativeRepairReport?.post.component_count;
-  if (shells == null || shells <= 1) return triangles;
+  for (const model of models) {
+    const key = model.groupId ?? `single-${model.id}`;
+    const existing = map.get(key);
+    if (existing) {
+      existing.models.push(model);
+      continue;
+    }
+    map.set(key, {
+      id: key,
+      name: model.groupName ?? model.name,
+      models: [model],
+      isGrouped: !!model.groupId,
+    });
+  }
 
-  return `${triangles} • ${translate(msg`${plural(shells, { one: '# shell', other: '# shells' })}`)}`;
-};
+  return [...map.values()]
+    .map((group) => ({
+      ...group,
+      models: [...group.models].sort((a, b) => a.name.localeCompare(b.name)),
+    }))
+    .sort((a, b) => {
+      if (a.isGrouped !== b.isGrouped) return a.isGrouped ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+}
 
 const splitModelNameSuffix = (name: string): { base: string; suffix: string } => {
   const trimmed = name.trim();
@@ -116,6 +181,12 @@ const splitModelNameSuffix = (name: string): { base: string; suffix: string } =>
 export function ModelManagerPanel({
   models,
   outsidePlateModelIds = [],
+  plates,
+  activePlateId,
+  onActivatePlate,
+  onRenamePlate,
+  onRemovePlate,
+  resolveModelPlateId,
   activeModelId,
   selectedModelIds,
   onSelect,
@@ -130,28 +201,33 @@ export function ModelManagerPanel({
   onModelContextMenu,
   onRepairModel,
   onOpenSupportsInfo,
-  onDelete: _onDelete,
+  onAddModels,
+  onDelete,
   onVisibilityChange,
   dimmed = false,
+  hidden = false,
   bottomClearancePx = 220,
+  collapsible = true,
 }: ModelManagerPanelProps) {
   const { _ } = useLingui();
-  const [expanded, setExpanded] = useFloatingPanelCollapse(true);
+  const [collapseExpanded, setCollapseExpanded] = useFloatingPanelCollapse(true);
+  // Where collapse is not offered the panel is pinned expanded. This has to be a
+  // fallback, not a conjunction: `collapsible && collapseExpanded` reads false in
+  // the column layout and hides the whole body, which is an empty model list.
+  const expanded = collapsible ? collapseExpanded : true;
   const [collapsedGroupIds, setCollapsedGroupIds] = useState<Record<string, boolean>>({});
+  /** The plate being renamed inline, and the text being typed. */
+  const [renamingPlateId, setRenamingPlateId] = useState<string | null>(null);
+  const [plateNameDraft, setPlateNameDraft] = useState('');
+  /** The plate whose deletion is waiting on an answer. */
+  const [platePendingDelete, setPlatePendingDelete] = useState<ScenePlate | null>(null);
   const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
   const [renamingGroupName, setRenamingGroupName] = useState('');
   const [renamingModelId, setRenamingModelId] = useState<string | null>(null);
   const [renamingModelName, setRenamingModelName] = useState('');
   const [renamingModelSuffix, setRenamingModelSuffix] = useState('');
   const [contextMenu, setContextMenu] = useState<PanelContextMenuState | null>(null);
-  const [compactList, setCompactList] = useState(() => getCompactListPreference());
 
-  const toggleCompactList = () => {
-    const next = !compactList;
-    setCompactList(next);
-    saveCompactListPreference(next);
-  };
-  void _onDelete;
   const cardRef = useRef<HTMLDivElement | null>(null);
   const resizeDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
 
@@ -191,34 +267,48 @@ export function ModelManagerPanel({
     const outsideModels = models.filter((model) => outsidePlateSet.has(model.id));
     const inPlateModels = models.filter((model) => !outsidePlateSet.has(model.id));
 
-    const groupedMap = new Map<string, GroupedEntry>();
+    // More than one plate makes the plate the grouping: one folder per plate, in
+    // the cascade's own order, holding the models that stand on it. A single
+    // plate is not worth a folder around everything.
+    if (plates && plates.length > 1 && resolveModelPlateId) {
+      const plateGroups = new Map<string, GroupedEntry>();
+      plates.forEach((plate, index) => {
+        plateGroups.set(plate.id, {
+          id: plate.id,
+          name: plate.name.trim() || plateNumberPlaceholder(index + 1, _),
+          models: [],
+          isGrouped: true,
+          isPlateGroup: true,
+        });
+      });
 
-    inPlateModels.forEach((model) => {
-      const key = model.groupId ?? `single-${model.id}`;
-      const existing = groupedMap.get(key);
-      if (existing) {
-        existing.models.push(model);
-        return;
+      const strays: LoadedModel[] = [];
+      for (const model of inPlateModels) {
+        const group = plateGroups.get(resolveModelPlateId(model));
+        if (group) group.models.push(model);
+        else strays.push(model);
       }
 
-      groupedMap.set(key, {
-        id: key,
-        name: model.groupName ?? model.name,
-        models: [model],
-        isGrouped: !!model.groupId,
-      });
-    });
-
-    return Array.from(groupedMap.values())
-      .map((group) => ({
+      const ordered = [...plateGroups.values()].map((group) => ({
         ...group,
         models: [...group.models].sort((a, b) => a.name.localeCompare(b.name)),
-      }))
-      .sort((a, b) => {
-        if (a.isGrouped !== b.isGrouped) return a.isGrouped ? -1 : 1;
-        return a.name.localeCompare(b.name);
-      })
-      .reduce<GroupedEntry[]>((acc, group) => {
+        children: buildModelGroups(group.models),
+      }));
+
+      const trailing = strays.length > 0 || outsideModels.length > 0
+        ? [{
+            id: OUTSIDE_PLATE_GROUP_ID,
+            name: _(msg({ message: 'Outside plate', comment: 'Name of the automatic folder collecting models that sit outside the build plate.' })),
+            models: [...strays, ...outsideModels].sort((a, b) => a.name.localeCompare(b.name)),
+            isGrouped: true,
+            isSystemGroup: true,
+          } satisfies GroupedEntry]
+        : [];
+
+      return [...ordered, ...trailing];
+    }
+
+    return buildModelGroups(inPlateModels).reduce<GroupedEntry[]>((acc, group) => {
         acc.push(group);
         return acc;
       }, outsideModels.length > 0
@@ -230,7 +320,7 @@ export function ModelManagerPanel({
             isSystemGroup: true,
           }]
         : []);
-  }, [_, models, outsidePlateModelIds]);
+  }, [_, models, outsidePlateModelIds, plates, resolveModelPlateId]);
 
   const contextModelId = contextMenu?.modelId;
   const contextGroupId = contextMenu?.groupId;
@@ -259,7 +349,12 @@ export function ModelManagerPanel({
   const showGroupSection = !!(contextMenu?.groupId || selectedModelIds.length >= 2 || selectedGroupedCount > 0 || !contextMenu?.modelId);
   const showFolderSection = !!contextMenu?.groupId;
 
-  const orderedModelIds = useMemo(() => grouped.flatMap((group) => group.models.map((model) => model.id)), [grouped]);
+  const orderedModelIds = useMemo(
+    () => grouped.flatMap((group) => (group.children
+      ? group.children.flatMap((child) => child.models.map((model) => model.id))
+      : group.models.map((model) => model.id))),
+    [grouped],
+  );
   const computedBottomClearance = Math.max(140, Math.round(bottomClearancePx));
   const panelMaxHeight = `calc(100vh - var(--topbar-height) - ${computedBottomClearance}px)`;
   const panelClassName = dimmed
@@ -268,6 +363,10 @@ export function ModelManagerPanel({
   const panelStyle: React.CSSProperties = {
     ...(dimmed ? { filter: 'grayscale(0.25)' } : {}),
     ...(expanded ? { maxHeight: panelMaxHeight } : {}),
+    // Hidden rather than unmounted: the window layout profiles resolve against
+    // the set of mounted panels, so unmounting this one would move every panel
+    // that is anchored to it.
+    ...(hidden ? { display: 'none' } : {}),
   };
 
   const toggleGroupCollapsed = (groupId: string) => {
@@ -369,6 +468,18 @@ export function ModelManagerPanel({
       },
     );
   }
+  if (contextMenu?.plateId) {
+    contextMenuEntries.push(
+      { id: 'rename-plate', label: <Trans>Rename plate</Trans>, icon: Pencil, startsGroup: true },
+      {
+        id: 'delete-plate',
+        label: <Trans>Delete plate</Trans>,
+        icon: Trash2,
+        // The first plate is the scene's floor; the last one has nowhere to go.
+        disabled: (plates?.length ?? 0) <= 1 || plates?.[0]?.id === contextMenu.plateId,
+      },
+    );
+  }
   if (showFolderSection) {
     contextMenuEntries.push(
       { id: 'select-folder', label: <Trans>Select folder</Trans>, icon: PanelsTopLeft, startsGroup: true },
@@ -395,7 +506,6 @@ export function ModelManagerPanel({
       contextMenuEntries.push({ id: 'model-actions', label: <Trans>Model actions…</Trans>, icon: Box });
     }
   }
-  contextMenuEntries.push({ id: 'toggle-compact-list', label: <Trans>Compact list</Trans>, checked: compactList, startsGroup: true });
 
   const handleContextMenuSelect = (id: string) => {
     switch (id) {
@@ -418,6 +528,38 @@ export function ModelManagerPanel({
       case 'ungroup-folder':
         if (contextMenu?.groupId && onUngroupGroup && !contextMenu.isSystemGroup) onUngroupGroup(contextMenu.groupId);
         break;
+      case 'rename-plate': {
+        const plateId = contextMenu?.plateId;
+        if (plateId && onRenamePlate) {
+          setPlateNameDraft(plates?.find((plate) => plate.id === plateId)?.name ?? '');
+          setRenamingPlateId(plateId);
+        }
+        break;
+      }
+      case 'delete-plate': {
+        const plateId = contextMenu?.plateId;
+        if (plateId && onRemovePlate) {
+          // An empty bed has nothing to lose, so it goes straight away. The
+          // confirmation is for the models a delete takes with it.
+          const holdsModels = resolveModelPlateId
+            ? models.some((model) => resolveModelPlateId(model) === plateId)
+            : true;
+          if (!holdsModels) {
+            onRemovePlate(plateId);
+            break;
+          }
+
+          const index = plates?.findIndex((plate) => plate.id === plateId) ?? 0;
+          const named = plates?.[index]?.name.trim() ?? '';
+          // The wording is settled here, where the plate is known, rather than in
+          // the modal, where the list may already have moved on.
+          setPlatePendingDelete({
+            id: plateId,
+            name: named || plateNumberPlaceholder(index + 1, _),
+          });
+        }
+        break;
+      }
       case 'rename-model':
         if (contextModel) beginRenameModel(contextModel.id, contextModel.name ?? 'Model');
         break;
@@ -430,13 +572,155 @@ export function ModelManagerPanel({
       case 'model-actions':
         if (contextModel && onModelContextMenu && contextMenu) onModelContextMenu(contextModel.id, { x: contextMenu.x, y: contextMenu.y });
         break;
-      case 'toggle-compact-list':
-        toggleCompactList();
-        break;
       default:
         break;
     }
     closeContextMenu();
+  };
+
+  /** One model's row. A folder's models and a plate's ungrouped ones share it. */
+  const renderModelRow = (model: LoadedModel) => {
+    const isSelected = selectedSet.has(model.id);
+    return (
+                  <div
+                    key={model.id}
+                      className="px-2 py-1 rounded border transition-colors flex items-center gap-2 cursor-pointer"
+                      style={isSelected
+                        ? {
+                            background: 'color-mix(in srgb, var(--accent), var(--surface-1) 92%)',
+                            borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 40%)',
+                          }
+                        : {
+                            background: 'var(--surface-1)',
+                            borderColor: 'var(--border-subtle)',
+                          }}
+                    onClick={(e) => {
+                      if (e.shiftKey) {
+                        const anchorId = activeModelId ?? selectedModelIds[selectedModelIds.length - 1] ?? model.id;
+                        const anchorIndex = orderedModelIds.indexOf(anchorId);
+                        const clickedIndex = orderedModelIds.indexOf(model.id);
+
+                        if (anchorIndex >= 0 && clickedIndex >= 0) {
+                          const start = Math.min(anchorIndex, clickedIndex);
+                          const end = Math.max(anchorIndex, clickedIndex);
+                          const rangeIds = orderedModelIds.slice(start, end + 1);
+                          const additive = e.ctrlKey || e.metaKey;
+
+                          if (onSelectRange) {
+                            onSelectRange(rangeIds, model.id, additive ? 'add' : 'replace');
+                          } else {
+                            if (additive) {
+                              rangeIds.forEach((id) => onSelect(id, 'add'));
+                            } else {
+                              onSelect(model.id, 'single');
+                              rangeIds.filter((id) => id !== model.id).forEach((id) => onSelect(id, 'add'));
+                            }
+                          }
+                          return;
+                        }
+                      }
+
+                      const isToggle = e.ctrlKey || e.metaKey;
+                      onSelect(model.id, isToggle ? 'toggle' : 'single');
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setContextMenu({
+                        x: e.clientX,
+                        y: e.clientY,
+                        modelId: model.id,
+                        groupId: model.groupId,
+                        groupName: model.groupName,
+                      });
+                    }}
+                  >
+                    
+                    <div className="flex-1 min-w-0">
+                      {renamingModelId === model.id ? (
+                        <div className="flex w-full min-w-0 items-center gap-1">
+                          <input
+                            value={renamingModelName}
+                            onChange={(e) => setRenamingModelName(e.target.value)}
+                            onClick={(e) => e.stopPropagation()}
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                commitRenameModel();
+                              }
+                              if (e.key === 'Escape') {
+                                e.preventDefault();
+                                cancelRenameModel();
+                              }
+                            }}
+                            onBlur={commitRenameModel}
+                            autoFocus
+                            className="min-w-0 flex-1 rounded border px-1.5 py-0.5 text-xs font-medium"
+                            style={{
+                              borderColor: 'var(--border-subtle)',
+                              background: 'var(--surface-0)',
+                              color: 'var(--text-strong)',
+                            }}
+                            aria-label={_(msg`Rename model base name`)}
+                          />
+                          {renamingModelSuffix && (
+                            <span className="shrink-0 text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>
+                              {renamingModelSuffix}
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <Tooltip content={model.name} fullWidth>
+                          <div className="min-w-0 text-sm font-medium truncate" style={{ color: 'var(--text-strong)' }}>
+                            {model.name}
+                          </div>
+                        </Tooltip>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-0.5">
+                      {onOpenSupportsInfo && (
+                        <Tooltip content={formatModelInfoTooltip(_, model)}>
+                          <IconButton
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onOpenSupportsInfo(model.id);
+                            }}
+                            aria-label={_(msg({ message: 'Model details', comment: 'Accessible name of the info button on a model row. The tooltip beside it lists the mesh size and polygon count.' }))}
+                          >
+                            <Info className="w-3.5 h-3.5" />
+                          </IconButton>
+                        </Tooltip>
+                      )}
+                      <IconButton
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onVisibilityChange(model.id, !model.visible);
+                        }}
+                        title={model.visible ? _(msg`Hide`) : _(msg`Show`)}
+                      >
+                        {model.visible ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                      </IconButton>
+                      <IconButton
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDelete(model.id);
+                        }}
+                        title={_(msg({ message: 'Delete model', comment: 'Tooltip on the trash button on a model row in the Models panel. Deleting is undoable, so it asks nothing first.' }))}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </IconButton>
+
+                    </div>
+                  </div>
+    );
   };
 
   return (
@@ -447,31 +731,63 @@ export function ModelManagerPanel({
       <CardHeader
         left={(
           <>
-            <PanelCollapseToggle expanded={expanded} onToggle={() => setExpanded(!expanded)} />
+            {collapsible && (
+              <PanelCollapseToggle expanded={expanded} onToggle={() => setCollapseExpanded((prev) => !prev)} />
+            )}
             <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
               <Trans comment="Title of the panel listing every model loaded into the scene.">Models</Trans>
             </h3>
           </>
         )}
-        right={(
-          <div
-            className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5"
-            style={{
-              borderColor: 'color-mix(in srgb, var(--accent), transparent 62%)',
-              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-            }}
-            title={_(msg`${plural(models.length, { one: '# model loaded', other: '# models loaded' })}`)}
+        right={onAddModels ? (
+          // The count that used to sit here repeated what the list below already
+          // says, line by line. The slot earns its keep as the way to add more.
+          <IconButton
+            onClick={onAddModels}
+            className="!p-0.5 !text-[var(--text-muted)] hover:!text-[var(--text-strong)] hover:!bg-[var(--surface-2)]"
+            title={_(msg({ message: 'Add models to the plate', comment: 'Tooltip on the plus in the Models panel header, which opens the mesh picker.' }))}
           >
-            <Box className="h-3 w-3" style={{ color: 'var(--accent)' }} />
-            <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-              <Trans comment="Badge label next to the number of loaded models. Rendered uppercase; keep it to one short word.">Count</Trans>
-            </span>
-            <span className="text-xs font-bold tabular-nums" style={{ color: 'var(--text-strong)' }}>
-              {models.length}
-            </span>
-          </div>
-        )}
+            <Plus className="h-3.5 w-3.5" />
+          </IconButton>
+        ) : undefined}
       />
+
+      {platePendingDelete && (
+        <StructuredDialogModal
+          open
+          ariaLabel={_(msg`Delete plate`)}
+          title={_(msg`Delete this plate?`)}
+          subtitle={platePendingDelete.name}
+          icon={<Trash2 className="h-4 w-4" />}
+          iconTone="danger"
+          zIndexClassName="z-[130]"
+          closeAriaLabel={_(msg`Close modal`)}
+          onClose={() => setPlatePendingDelete(null)}
+          onBackdropClick={() => setPlatePendingDelete(null)}
+          actions={(
+            <>
+              <Button variant="secondary" onClick={() => setPlatePendingDelete(null)}>
+                <Trans>Cancel</Trans>
+              </Button>
+              <Button
+                variant="tinted-danger"
+                onClick={() => {
+                  onRemovePlate?.(platePendingDelete.id);
+                  setPlatePendingDelete(null);
+                }}
+              >
+                <Trans>Delete plate</Trans>
+              </Button>
+            </>
+          )}
+        >
+          <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+            <Trans comment="The count is how many models stand on the plate being deleted.">
+              The models on this plate are deleted with it. Undo brings them back.
+            </Trans>
+          </p>
+        </StructuredDialogModal>
+      )}
 
       {expanded && (
         <div className="px-2.5 pt-1 pb-2.5 space-y-2 flex flex-col flex-1 min-h-0">
@@ -482,18 +798,26 @@ export function ModelManagerPanel({
               </div>
             ) : (
               grouped.map((group) => {
-                const isCollapsed = group.isGrouped ? !!collapsedGroupIds[group.id] : false;
+                // Plates start with the one you are working on open and the rest
+                // closed; an explicit toggle still wins.
+                const isCollapsed = group.isGrouped
+                  ? (collapsedGroupIds[group.id] ?? (!!group.isPlateGroup && group.id !== activePlateId))
+                  : false;
                 const selectedCount = group.models.filter((model) => selectedSet.has(model.id)).length;
                 const isGroupFullySelected = selectedCount > 0 && selectedCount === group.models.length;
                 const isGroupPartiallySelected = selectedCount > 0 && !isGroupFullySelected;
                 const showHeader = group.isGrouped;
+                /** The plate being worked on reads as the selected folder. */
+                const isActivePlateGroup = !!group.isPlateGroup && group.id === activePlateId;
                 const showChildren = !showHeader || !isCollapsed;
 
                 return (
                   <div
                     key={group.id}
-                    className={showHeader ? 'space-y-1 rounded-md border p-1' : 'space-y-1'}
-                    style={showHeader
+                    // A plate group is its own row and needs no card around it; a folder
+                    // of models keeps the wrapper that groups it visually.
+                    className={showHeader && !group.isPlateGroup ? 'space-y-1 rounded-md border p-1' : 'space-y-1'}
+                    style={showHeader && !group.isPlateGroup
                       ? {
                           borderColor: 'color-mix(in srgb, var(--border-subtle), var(--accent) 14%)',
                           background: 'color-mix(in srgb, var(--surface-1), var(--accent) 3%)',
@@ -503,7 +827,7 @@ export function ModelManagerPanel({
                     {showHeader && (
                       <div
                         className="px-1.5 py-1 rounded border flex items-center gap-1.5 cursor-pointer transition-colors"
-                        style={isGroupFullySelected
+                        style={isGroupFullySelected || isActivePlateGroup
                           ? {
                               background: 'color-mix(in srgb, var(--accent), var(--surface-2) 90%)',
                               borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
@@ -515,12 +839,19 @@ export function ModelManagerPanel({
                               }
                             : { borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
                         onClick={(e) => {
+                          // A plate group is the plate: clicking its header works on it,
+                          // and then selects the models standing on it like any folder.
+                          if (group.isPlateGroup && onActivatePlate) onActivatePlate(group.id);
                           const mode: GroupSelectMode = (e.ctrlKey || e.metaKey || e.shiftKey) ? 'add' : 'single';
                           selectFolder(group, mode);
                         }}
                         onContextMenu={(e) => {
                           e.preventDefault();
                           e.stopPropagation();
+                          if (group.isPlateGroup) {
+                            setContextMenu({ x: e.clientX, y: e.clientY, plateId: group.id });
+                            return;
+                          }
                           setContextMenu({
                             x: e.clientX,
                             y: e.clientY,
@@ -546,11 +877,44 @@ export function ModelManagerPanel({
 
                         {group.isSystemGroup ? (
                           <AlertTriangle className="w-3.5 h-3.5" style={{ color: '#ff7c88' }} />
-                        ) : isCollapsed
-                          ? <Folder className="w-3.5 h-3.5" style={{ color: 'var(--accent)' }} />
-                          : <FolderOpen className="w-3.5 h-3.5" style={{ color: 'var(--accent)' }} />}
+                        ) : group.isPlateGroup
+                          // A plate is not a folder of models, it is a bed they stand
+                          // on, so it wears a plate rather than a folder.
+                          ? <LayoutGrid className="w-3.5 h-3.5" style={{ color: 'var(--accent)' }} />
+                          : isCollapsed
+                            ? <Folder className="w-3.5 h-3.5" style={{ color: 'var(--accent)' }} />
+                            : <FolderOpen className="w-3.5 h-3.5" style={{ color: 'var(--accent)' }} />}
 
-                        {renamingGroupId === group.id ? (
+                        {renamingPlateId === group.id ? (
+                          <input
+                            autoFocus
+                            value={plateNameDraft}
+                            onChange={(event) => setPlateNameDraft(event.target.value)}
+                            onClick={(event) => event.stopPropagation()}
+                            onBlur={() => {
+                              onRenamePlate?.(group.id, plateNameDraft.trim());
+                              setRenamingPlateId(null);
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault();
+                                onRenamePlate?.(group.id, plateNameDraft.trim());
+                                setRenamingPlateId(null);
+                              }
+                              if (event.key === 'Escape') {
+                                event.preventDefault();
+                                setRenamingPlateId(null);
+                              }
+                            }}
+                            className="flex-1 min-w-0 rounded border px-1.5 py-0.5 text-[11px]"
+                            style={{
+                              borderColor: 'var(--border-subtle)',
+                              background: 'var(--surface-0)',
+                              color: 'var(--text-strong)',
+                            }}
+                            aria-label={_(msg`Plate name`)}
+                          />
+                        ) : renamingGroupId === group.id ? (
                           <input
                             value={renamingGroupName}
                             onChange={(e) => setRenamingGroupName(e.target.value)}
@@ -591,177 +955,50 @@ export function ModelManagerPanel({
                       <div
                         className={showHeader ? 'ml-1.5 space-y-1 pl-1' : 'space-y-1'}
                       >
-                        {group.models.map((model) => {
-                      const isActive = model.id === activeModelId;
-                      const isSelected = selectedSet.has(model.id);
-
-                      return (
-                        <div
-                          key={model.id}
-                            className="p-2 rounded border transition-colors flex items-center gap-2 cursor-pointer"
-                            style={isSelected
-                              ? {
-                                  background: 'color-mix(in srgb, var(--accent), var(--surface-1) 92%)',
-                                  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 40%)',
-                                }
-                              : {
-                                  background: 'var(--surface-1)',
-                                  borderColor: 'var(--border-subtle)',
-                                }}
-                          onClick={(e) => {
-                            if (e.shiftKey) {
-                              const anchorId = activeModelId ?? selectedModelIds[selectedModelIds.length - 1] ?? model.id;
-                              const anchorIndex = orderedModelIds.indexOf(anchorId);
-                              const clickedIndex = orderedModelIds.indexOf(model.id);
-
-                              if (anchorIndex >= 0 && clickedIndex >= 0) {
-                                const start = Math.min(anchorIndex, clickedIndex);
-                                const end = Math.max(anchorIndex, clickedIndex);
-                                const rangeIds = orderedModelIds.slice(start, end + 1);
-                                const additive = e.ctrlKey || e.metaKey;
-
-                                if (onSelectRange) {
-                                  onSelectRange(rangeIds, model.id, additive ? 'add' : 'replace');
-                                } else {
-                                  if (additive) {
-                                    rangeIds.forEach((id) => onSelect(id, 'add'));
-                                  } else {
-                                    onSelect(model.id, 'single');
-                                    rangeIds.filter((id) => id !== model.id).forEach((id) => onSelect(id, 'add'));
-                                  }
-                                }
-                                return;
-                              }
-                            }
-
-                            const isToggle = e.ctrlKey || e.metaKey;
-                            onSelect(model.id, isToggle ? 'toggle' : 'single');
-                          }}
-                          onContextMenu={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            setContextMenu({
-                              x: e.clientX,
-                              y: e.clientY,
-                              modelId: model.id,
-                              groupId: model.groupId,
-                              groupName: model.groupName,
-                            });
-                          }}
-                        >
-                          {!compactList && (isActive
-                            ? (
-                              <div className="p-1 rounded" style={{ background: 'color-mix(in srgb, var(--accent), var(--surface-2) 72%)', color: 'var(--accent)' }}>
-                                <Crosshair className="w-3.5 h-3.5" />
-                              </div>
-                            ) : (
-                              <div className="p-1 rounded" style={isSelected ? { background: 'color-mix(in srgb, var(--accent), var(--surface-2) 82%)', color: 'var(--accent)' } : { background: 'var(--surface-2)', color: 'var(--text-muted)' }}>
-                                <Box className="w-3.5 h-3.5" />
-                              </div>
-                            ))}
-
-                          <div className="flex-1 min-w-0">
-                            {renamingModelId === model.id ? (
-                              <div className="flex w-full min-w-0 items-center gap-1">
-                                <input
-                                  value={renamingModelName}
-                                  onChange={(e) => setRenamingModelName(e.target.value)}
-                                  onClick={(e) => e.stopPropagation()}
-                                  onPointerDown={(e) => e.stopPropagation()}
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter') {
-                                      e.preventDefault();
-                                      commitRenameModel();
-                                    }
-                                    if (e.key === 'Escape') {
-                                      e.preventDefault();
-                                      cancelRenameModel();
-                                    }
+                        {group.children
+                          ? group.children.map((child) => (
+                            <div key={child.id} className="space-y-1">
+                              {child.isGrouped && (
+                                <div
+                                  className="px-1.5 py-1 rounded border flex items-center gap-1.5 cursor-pointer transition-colors"
+                                  style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
+                                  onClick={(e) => {
+                                    const mode: GroupSelectMode = (e.ctrlKey || e.metaKey || e.shiftKey) ? 'add' : 'single';
+                                    selectFolder(child, mode);
                                   }}
-                                  onBlur={commitRenameModel}
-                                  autoFocus
-                                  className="min-w-0 flex-1 rounded border px-1.5 py-0.5 text-xs font-medium"
-                                  style={{
-                                    borderColor: 'var(--border-subtle)',
-                                    background: 'var(--surface-0)',
-                                    color: 'var(--text-strong)',
-                                  }}
-                                  aria-label={_(msg`Rename model base name`)}
-                                />
-                                {renamingModelSuffix && (
-                                  <span className="shrink-0 text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>
-                                    {renamingModelSuffix}
+                                >
+                                  <button
+                                    type="button"
+                                    className="inline-flex items-center justify-center rounded p-0.5 hover:bg-black/20"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      toggleGroupCollapsed(child.id);
+                                    }}
+                                    title={collapsedGroupIds[child.id] ? _(msg`Expand folder`) : _(msg`Collapse folder`)}
+                                  >
+                                    {collapsedGroupIds[child.id]
+                                      ? <ChevronRight className="w-3 h-3" style={{ color: 'var(--text-muted)' }} />
+                                      : <ChevronDown className="w-3 h-3" style={{ color: 'var(--text-muted)' }} />}
+                                  </button>
+                                  {collapsedGroupIds[child.id]
+                                    ? <Folder className="w-3.5 h-3.5" style={{ color: 'var(--accent)' }} />
+                                    : <FolderOpen className="w-3.5 h-3.5" style={{ color: 'var(--accent)' }} />}
+                                  <span className="text-[10px] font-semibold uppercase tracking-wide truncate" style={{ color: 'var(--text-muted)' }}>
+                                    {child.name}
                                   </span>
-                                )}
-                              </div>
-                            ) : (
-                              <Tooltip content={model.name} fullWidth>
-                                <div className="min-w-0 text-xs font-medium truncate" style={{ color: 'var(--text-strong)' }}>
-                                  {model.name}
+                                  <span className="ml-auto text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
+                                    {child.models.length}
+                                  </span>
                                 </div>
-                              </Tooltip>
-                            )}
-                            {!compactList && (
-                              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                                {formatMeshStats(model, _)}
-                              </div>
-                            )}
-                          </div>
-
-                          <div className="flex items-center gap-1">
-                            {onOpenSupportsInfo && (compactList ? (
-                              <IconButton
-                                variant="ghost"
-                                size="xs"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onOpenSupportsInfo(model.id);
-                                }}
-                                title={_(msg`Supports for model`)}
-                              >
-                                <Info className="w-3.5 h-3.5" />
-                              </IconButton>
-                            ) : (
-                              <IconButton
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onOpenSupportsInfo(model.id);
-                                }}
-                                className="!p-1.5"
-                                title={_(msg`Supports for model`)}
-                              >
-                                <Info className="w-3.5 h-3.5" />
-                              </IconButton>
-                            ))}
-                            {compactList ? (
-                              <IconButton
-                                variant="ghost"
-                                size="xs"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onVisibilityChange(model.id, !model.visible);
-                                }}
-                                title={model.visible ? _(msg`Hide`) : _(msg`Show`)}
-                              >
-                                {model.visible ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-                              </IconButton>
-                            ) : (
-                              <IconButton
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onVisibilityChange(model.id, !model.visible);
-                                }}
-                                className="!p-1.5"
-                                title={model.visible ? _(msg`Hide`) : _(msg`Show`)}
-                              >
-                                {model.visible ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-                              </IconButton>
-                            )}
-
-                          </div>
-                        </div>
-                      );
-                    })}
+                              )}
+                              {(!child.isGrouped || !collapsedGroupIds[child.id]) && (
+                                <div className={child.isGrouped ? 'ml-1.5 space-y-1 pl-1' : 'space-y-1'}>
+                                  {child.models.map((model) => renderModelRow(model))}
+                                </div>
+                              )}
+                            </div>
+                          ))
+                          : group.models.map((model) => renderModelRow(model))}
                       </div>
                     )}
                   </div>

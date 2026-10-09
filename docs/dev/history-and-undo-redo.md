@@ -166,6 +166,42 @@ Three payload patterns exist:
   `sceneSnapshotRegistry` (in `useSceneCollectionManager.ts`), which stores the
   heavy `{ before, after }` pairs with a 200-entry + ~300 MB-eviction budget.
 
+### Plates on the scene snapshot
+
+Beds ride on the same snapshot as the models, so an entry that changes the plate
+list records them too: `captureSceneSnapshot` in
+`src/features/scene/useSceneCollectionManager.ts` takes `{ plates, activePlateId }`
+in its options, and `applySceneSnapshot` puts them back — a snapshot that carries
+no plates leaves the list exactly as it is, which is what every models-only entry
+wants.
+
+`addPlate` and `removePlate` push such a snapshot. `removePlate` asks
+`deleteModels` for `{ pushHistory: false }` and pushes the single entry itself:
+undoing a models-only entry alone would bring the models back onto a bed that is
+still gone and leave them on another plate. It keeps its synchronous signature for
+callers and pushes from the deletion's completion, because `deleteModels` yields
+to the UI before it finishes.
+
+### Printer on the scene snapshot
+
+Every snapshot records the printer it was taken under — `captureSceneSnapshot` always fills
+`printerProfileId` from the profile store, and `applySceneSnapshot` puts it back. The beds
+are spaced by the build volume, so an entry taken under one printer and undone under another
+would restore models against frames that never applied to them. `null` is no printer; a
+snapshot with `undefined` was taken before this was recorded and leaves the profile alone.
+
+Switching printers is a step of its own, pushed by the layout effect in
+`useSceneCollectionManager` that watches the profile. That effect is also what shifts the
+models with their beds when the cascade re-spaces them, and it remembers the footprint the
+beds were laid out on in `laidOutFootprintRef`. `applySceneSnapshot` moves that memory along
+with the restored printer: without it, restoring a snapshot would look like a printer switch
+and shift the models a second time. The one entry carries the beds and the models as well as
+the profile, so undo takes the printer, the beds and the models back together.
+
+Editing a profile's build volume is not a step. The profile itself is not part of the
+snapshot, only which one is active, so there is no earlier volume to return to; the models
+still shift when the cascade re-spaces the beds.
+
 ### Geometry replacements with external modifiers
 
 `scene.replaceModelGeometry` in `src/features/scene/useSceneCollectionManager.ts` accepts `{ meshModifiersAfter, meshModifiersBefore? }` for hollowing operations that must undo geometry and externally stored `ModelMeshModifiers` together. Pass the complete modifier value as `meshModifiersAfter` (or `null` to delete it); omit the option for geometry replacements that should not create this history entry. The optional `meshModifiersBefore` overrides the history before-state when Apply follows an unbaked draft: restoring that draft verbatim would bake the hollow again at slice time.

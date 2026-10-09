@@ -421,7 +421,7 @@ export function FleetManagement({
 
       {/* Footer — Auto/Manual toggle + Cancel, hidden on the method chooser. */}
       {method !== null && showAddPrinterFlow && (
-        <div className="flex shrink-0 items-center justify-between gap-3 border-t px-3 py-2" style={{ borderColor: 'var(--border-subtle)' }}>
+        <div className="flex shrink-0 items-center justify-between gap-3 border-t px-2 py-2" style={{ borderColor: 'var(--border-subtle)' }}>
           <SetupModeButton
             mode={method === 'scan' ? 'auto' : 'manual'}
             onSwitch={() => {

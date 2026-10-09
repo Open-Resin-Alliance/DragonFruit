@@ -1,27 +1,41 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import * as THREE from 'three';
-import { Download, Files } from 'lucide-react';
+import { Box, Download } from 'lucide-react';
+import { useLingui } from '@lingui/react';
+import { msg, plural } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
+import type { MessageDescriptor } from '@lingui/core';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { ExportManager, ExportOptions } from '../logic/ExportManager';
-import { normalizeExportBaseName, resolveEntirePlateExportBaseName } from '../logic/exportFileNaming';
+import { normalizeExportBaseName, resolvePlateOutputBaseName } from '../logic/exportFileNaming';
+import { plateNumberPlaceholder } from '@/features/scene/plates/plateMessages';
 import {
   Button,
   Card,
   CardHeader,
-  Input,
   Select,
   SettingRow,
+  Spinner,
   Toggle,
 } from '@/components/atoms';
 import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { pickDirectoryWithNativeDialog } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
+import { Tooltip } from '@/components/ui/Tooltip';
 
 interface ExportPanelProps {
   models: LoadedModel[];
   activeModel: LoadedModel | null;
   activeModelId: string | null;
   selectedModelIds?: string[];
+  /**
+   * The scene's plates with the models standing on each, in cascade order. The "Entire
+   * Plate" scope is all of them or just the active one, and a per-plate export asks for
+   * one file from each.
+   */
+  plateGroups?: ReadonlyArray<{ id: string; name: string; modelIds: readonly string[] }>;
+  /** Which of those plates is being worked on. */
+  activePlateId?: string;
   onActiveModelChange: (modelId: string | null) => void;
   supportsRef?: React.RefObject<THREE.Group | null>;
   captureSceneThumbnailPng?: () => Promise<Uint8Array | null>;
@@ -31,6 +45,117 @@ interface ExportPanelProps {
 }
 
 type ExportScope = 'entire_plate' | 'active_model';
+type ExportPlateScope = 'current_plate' | 'all_plates';
+type ExportLayout = 'bundle' | 'plates' | 'separate';
+
+type Translate = (descriptor: MessageDescriptor, values?: Record<string, unknown>) => string;
+
+// Interpolated messages live in module-level formatters: React Compiler renames
+// locals before the Lingui macro computes the id, so interpolating inside a
+// component leaves the placeholder raw in production builds.
+function formatHiddenModelOptionLabel(translate: Translate, modelName: string): string {
+  return translate(msg`${modelName} (hidden)`);
+}
+
+function formatScopedMeshCountTitle(translate: Translate, count: number): string {
+  return translate(msg`${plural(count, {
+    one: '# mesh will be exported.',
+    other: '# meshes will be exported.',
+  })}`);
+}
+
+const EXPORT_SCOPE_OPTIONS: ReadonlyArray<{ value: ExportScope; label: MessageDescriptor }> = [
+  { value: 'entire_plate', label: msg`Entire Plate` },
+  { value: 'active_model', label: msg`Active Model` },
+];
+
+/**
+ * Which beds the "Entire Plate" scope covers. "Active Model" ignores it: one model is one
+ * model wherever it stands.
+ */
+const EXPORT_PLATE_SCOPE_OPTIONS: ReadonlyArray<{ value: ExportPlateScope; label: MessageDescriptor }> = [
+  { value: 'all_plates', label: msg`All Plates` },
+  { value: 'current_plate', label: msg`Current Plate` },
+];
+
+/**
+ * What one export run writes: one file for the lot, one per plate, or one per model.
+ * `bundle` is a scene, so it only asks for VOXL; 3MF and STL offer the other two.
+ */
+const EXPORT_LAYOUT_OPTIONS: ReadonlyArray<{
+  value: ExportLayout;
+  label: MessageDescriptor;
+  title: MessageDescriptor;
+  formats: readonly ExportOptions['format'][];
+}> = [
+  {
+    value: 'bundle',
+    label: msg`Bundle`,
+    title: msg`One file holding every plate together`,
+    formats: ['voxl'],
+  },
+  {
+    value: 'plates',
+    label: msg`Plates`,
+    title: msg`One file per plate`,
+    formats: ['voxl', '3mf', 'stl'],
+  },
+  {
+    value: 'separate',
+    label: msg`Separate`,
+    title: msg`One file per model`,
+    formats: ['voxl', '3mf', 'stl'],
+  },
+];
+
+const EXPORT_FORMAT_OPTIONS: ReadonlyArray<{
+  value: ExportOptions['format'];
+  label: MessageDescriptor;
+  title: MessageDescriptor;
+}> = [
+  { value: 'voxl', label: msg`VOXL`, title: msg`VOXL Scene (.voxl)` },
+  { value: '3mf', label: msg`3MF`, title: msg`3MF Mesh (.3mf)` },
+  { value: 'stl', label: msg`STL`, title: msg`STL Mesh (.stl)` },
+];
+
+const STL_ENCODING_OPTIONS: ReadonlyArray<{
+  value: 'binary' | 'ascii';
+  label: MessageDescriptor;
+  title: MessageDescriptor;
+}> = [
+  { value: 'binary', label: msg`Binary`, title: msg`Binary STL (recommended)` },
+  { value: 'ascii', label: msg`ASCII`, title: msg`ASCII STL` },
+];
+
+const EXPORT_ACTION_LABELS: Record<ExportOptions['format'], MessageDescriptor> = {
+  '3mf': msg`Export as 3MF`,
+  stl: msg`Export as STL`,
+  voxl: msg`Export Scene File`,
+};
+
+// Active state of the button-row pickers. The geometry is the Support Studio
+// bracing card's Low/Mid/High density selector; the tint is the accent, except
+// for the format row, which carries the secondary theme colour to match the
+// lime action button below it.
+const activeOptionStyle: React.CSSProperties = {
+  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
+  background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)',
+  color: 'var(--text-strong)',
+};
+
+const activeSecondaryOptionStyle: React.CSSProperties = {
+  borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 30%)',
+  background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 85%)',
+  color: 'var(--text-strong)',
+};
+
+/** A row that is showing but has nothing to say: the plate choice under "Active Model". */
+const disabledOptionStyle: React.CSSProperties = {
+  borderColor: 'var(--border-subtle)',
+  background: 'var(--surface-0)',
+  color: 'var(--text-muted)',
+  opacity: 0.6,
+};
 
 function joinNativePath(directory: string, fileName: string): string {
   const trimmedDirectory = directory.trim().replace(/[\\/]+$/, '');
@@ -43,6 +168,8 @@ export function ExportPanel({
   activeModel,
   activeModelId,
   selectedModelIds,
+  plateGroups,
+  activePlateId,
   onActiveModelChange,
   supportsRef,
   captureSceneThumbnailPng,
@@ -50,15 +177,17 @@ export function ExportPanel({
   onExportError,
   onExportProgress,
 }: ExportPanelProps) {
+  const { _ } = useLingui();
   const [isExpanded, setIsExpanded] = useFloatingPanelCollapse(true);
   const [exportScope, setExportScope] = useState<ExportScope>('entire_plate');
-  const [filename, setFilename] = useState(() => normalizeExportBaseName(activeModel?.name));
+  const [plateScope, setPlateScope] = useState<ExportPlateScope>('all_plates');
+  const [exportLayout, setExportLayout] = useState<ExportLayout>('bundle');
   const [isExporting, setIsExporting] = useState(false);
   const [isExportingIndividually, setIsExportingIndividually] = useState(false);
 
   const [options, setOptions] = useState<ExportOptions>({
     filename: '',
-    format: '3mf',
+    format: 'voxl',
     binary: true,
     separateFiles: false,
     includeRaft: true,
@@ -74,16 +203,85 @@ export function ExportPanel({
     }));
   }, [models]);
 
+  /**
+   * Which plate of the list the panel speaks for: the one being worked on, or the first it
+   * knows, which is what an active plate with nothing on it leaves.
+   */
+  const activePlateIndex = useMemo(
+    () => Math.max(0, (plateGroups ?? []).findIndex((plate) => plate.id === activePlateId)),
+    [activePlateId, plateGroups],
+  );
+
+  /**
+   * The models the "Entire Plate" scope covers: the plate being worked on, or every plate
+   * in the scene. Hidden models are only reached when nothing visible is there to export,
+   * which is what the scope has always done.
+   */
+  const entirePlateScopeModels = useMemo(() => {
+    const currentPlateModelIds = (plateGroups ?? [])[activePlateIndex]?.modelIds;
+    const plateModels = plateScope === 'current_plate' && currentPlateModelIds
+      ? models.filter((model) => currentPlateModelIds.includes(model.id))
+      : models;
+    const visiblePlateModels = plateModels.filter((model) => model.visible);
+    return visiblePlateModels.length > 0 ? visiblePlateModels : plateModels;
+  }, [activePlateIndex, models, plateGroups, plateScope]);
+
+  /** One bed is the whole export: there is no "per plate" to offer or to name. */
+  const singlePlate = (plateGroups?.length ?? 0) <= 1;
+
+  /**
+   * The layouts this format offers, for this scene.
+   *
+   * A bundle is a scene, so 3MF and STL have no such thing and their nearest choice is one
+   * file per plate — with a single plate that is one file for everything, which is what the
+   * panel now calls it instead of "Plates".
+   */
+  const layoutOptions = useMemo(() => (
+    EXPORT_LAYOUT_OPTIONS
+      .filter((option) => option.formats.includes(options.format))
+      .filter((option) => !(singlePlate && option.value === 'plates' && options.format === 'voxl'))
+      .map((option) => (singlePlate && option.value === 'plates'
+        ? { ...option, label: msg`Bundle`, title: msg`One file holding everything on the plate` }
+        : option))
+  ), [options.format, singlePlate]);
+
+  // A scene is the only layout that can hold several plates at once, and one bed is the
+  // whole export: with a single plate, "one file per plate" and "one file for the lot" write
+  // the same file, so VOXL hides the duplicate and moves a selection that was on it.
   useEffect(() => {
-    if (exportScope === 'active_model' && activeModel) {
-      setFilename(normalizeExportBaseName(activeModel.name));
+    if (options.format !== 'voxl') {
+      if (exportLayout === 'bundle') setExportLayout('plates');
       return;
     }
+    if (singlePlate && exportLayout === 'plates') setExportLayout('bundle');
+  }, [exportLayout, options.format, singlePlate]);
 
-    if (exportScope === 'entire_plate') {
-      setFilename(resolveEntirePlateExportBaseName(models));
-    }
-  }, [activeModel, exportScope, models]);
+  /** The models the run covers, before the layout decides how to split them up. */
+  const scopeModels = exportScope === 'active_model'
+    ? (activeModel ? [activeModel] : [])
+    : entirePlateScopeModels;
+
+  const scopedMeshCount = scopeModels.length;
+
+  /**
+   * The plate being worked on, as a file name. A bundle and a per-plate run are both exports
+   * of beds, so a bed is what they are named for — and an unnamed bed in a one-bed scene goes
+   * by its model, which says more than its number does.
+   */
+  const activePlateFileBaseName = useMemo(() => resolvePlateOutputBaseName({
+    plateName: (plateGroups ?? [])[activePlateIndex]?.name ?? '',
+    plateNumberLabel: plateNumberPlaceholder(activePlateIndex + 1, _),
+    plateModels: entirePlateScopeModels,
+  }), [_, activePlateIndex, entirePlateScopeModels, plateGroups, singlePlate]);
+
+  // The name the native save dialog opens with. The user renames the file there,
+  // so this is only a starting suggestion and never displayed in the panel.
+  const suggestedFileName = useMemo(
+    () => (exportScope === 'active_model'
+      ? normalizeExportBaseName(activeModel?.name)
+      : activePlateFileBaseName),
+    [activeModel, activePlateFileBaseName, exportScope],
+  );
 
   useEffect(() => {
     if (options.format !== 'voxl') return;
@@ -137,11 +335,6 @@ export function ExportPanel({
   const handleExport = async () => {
     const effectiveOptions = resolveEffectiveOptions();
 
-    const visibleModels = models.filter((model) => model.visible);
-    const scopeModels = exportScope === 'active_model'
-      ? (activeModel ? [activeModel] : [])
-      : (visibleModels.length > 0 ? visibleModels : models);
-
     if (effectiveOptions.includeModel && scopeModels.length === 0) {
       return;
     }
@@ -181,7 +374,7 @@ export function ExportPanel({
           supportsRef?.current || null,
           {
             ...effectiveOptions,
-            filename: filename || 'export',
+            filename: suggestedFileName || 'export',
           },
           {
             models: scopeModels,
@@ -190,12 +383,20 @@ export function ExportPanel({
               ? scopedSelectedModelIds
               : (scopedActiveModelId ? [scopedActiveModelId] : []),
             exportThumbnailPng,
+            // A bundled scene carries its beds, so opening it back up finds the plates
+            // where they were rather than everything piled on the first one.
+            ...(plateGroups && plateGroups.length > 0
+              ? {
+                  plates: plateGroups.map((plate) => ({ id: plate.id, name: plate.name })),
+                  ...(activePlateId ? { activePlateId } : {}),
+                }
+              : {}),
           },
         );
         if (savedPath) onExportSuccess?.(savedPath);
       } catch (err) {
         console.error('Export failed:', err);
-        onExportError?.('Export failed. Check console for details.');
+        onExportError?.(_(msg`Export failed. Check console for details.`));
       } finally {
         setIsExporting(false);
         onExportProgress?.(false);
@@ -203,14 +404,15 @@ export function ExportPanel({
     }, 100);
   };
 
-  const handleExportIndividually = async () => {
+  /**
+   * Writes one file per group into a directory the user picks. Both "Plates" and
+   * "Separate" are this: they differ only in how the models are grouped, and the plate
+   * path names each file for the plate it holds.
+   */
+  const exportGroupsToDirectory = async (groups: Array<{ name: string; models: LoadedModel[] }>) => {
     const effectiveOptions = resolveEffectiveOptions();
-    const visibleModels = models.filter((model) => model.visible);
-    const plateModels = visibleModels.length > 0 ? visibleModels : models;
-
-    if (effectiveOptions.includeModel && plateModels.length === 0) {
-      return;
-    }
+    const exportableGroups = groups.filter((group) => group.models.length > 0);
+    if (effectiveOptions.includeModel && exportableGroups.length === 0) return;
 
     setIsExportingIndividually(true);
     onExportProgress?.(true);
@@ -228,25 +430,36 @@ export function ExportPanel({
       const nameCounts = new Map<string, number>();
       const savedPaths: string[] = [];
 
-      for (const model of plateModels) {
-        const normalizedBaseName = normalizeExportBaseName(model.name || 'model');
+      for (const group of exportableGroups) {
+        const normalizedBaseName = normalizeExportBaseName(group.name || 'model');
         const seenCount = nameCounts.get(normalizedBaseName) ?? 0;
         nameCounts.set(normalizedBaseName, seenCount + 1);
         const dedupedBaseName = seenCount > 0 ? `${normalizedBaseName}_${seenCount + 1}` : normalizedBaseName;
 
         const nativePath = joinNativePath(targetDirectory, `${dedupedBaseName}.${extension}`);
 
+        const exportRoot = new THREE.Group();
+        if (effectiveOptions.includeModel) {
+          group.models.forEach((model) => exportRoot.add(buildModelGroup(model)));
+          exportRoot.updateMatrixWorld(true);
+        }
+
+        const scopedModelIds = group.models.map((model) => model.id);
+        const scopedActiveModelId = scopedModelIds.includes(activeModelId ?? '')
+          ? activeModelId
+          : (scopedModelIds[0] ?? null);
+
         const savedPath = await ExportManager.exportScene(
-          effectiveOptions.includeModel ? buildModelGroup(model) : null,
+          effectiveOptions.includeModel ? exportRoot : null,
           supportsRef?.current || null,
           {
             ...effectiveOptions,
             filename: dedupedBaseName,
           },
           {
-            models: [model],
-            activeModelId: model.id,
-            selectedModelIds: [model.id],
+            models: group.models,
+            activeModelId: scopedActiveModelId,
+            selectedModelIds: scopedModelIds,
             exportThumbnailPng: null,
           },
           {
@@ -268,12 +481,39 @@ export function ExportPanel({
       if (normalized.includes('cancelled by user') || normalized.includes('canceled by user')) {
         return;
       }
-      console.error('Batch export failed:', error);
-      onExportError?.('Batch export failed. Check console for details.');
+      console.error('Grouped export failed:', error);
+      onExportError?.(_(msg`Export failed. Check console for details.`));
     } finally {
       setIsExportingIndividually(false);
       onExportProgress?.(false);
     }
+  };
+
+  /** One file per plate, each named for the plate and holding the models on it. */
+  const handleExportPerPlate = async () => {
+    const plates = plateGroups && plateGroups.length > 0
+      ? plateGroups
+      : [{ id: '', name: '', modelIds: scopeModels.map((model) => model.id) }];
+    const groups = plates.map((plate, index) => {
+      const plateModels = scopeModels.filter((model) => plate.modelIds.includes(model.id));
+      return {
+        name: resolvePlateOutputBaseName({
+          plateName: plate.name ?? '',
+          plateNumberLabel: plateNumberPlaceholder(index + 1, _),
+          plateModels,
+        }),
+        models: plateModels,
+      };
+    });
+
+    await exportGroupsToDirectory(groups);
+  };
+
+  /** One file per model, named for the model. */
+  const handleExportSeparate = async () => {
+    await exportGroupsToDirectory(
+      scopeModels.map((model) => ({ name: model.name || 'model', models: [model] })),
+    );
   };
 
   const isAnyExportInProgress = isExporting || isExportingIndividually;
@@ -289,13 +529,13 @@ export function ExportPanel({
                 expanded={isExpanded}
                 onToggle={() => setIsExpanded((prev) => !prev)}
               />
-              <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Export</h3>
+              <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Export</Trans></h3>
             </>
           )}
         />
         {isExpanded && (
-          <div className="px-3 pb-3 text-xs" style={{ color: 'var(--text-muted)' }}>
-            No meshes loaded yet. Import a model first, then hop back to Export.
+          <div className="px-2.5 pt-1 pb-2.5 text-xs" style={{ color: 'var(--text-muted)' }}>
+            <Trans>No meshes loaded yet. Import a model first, then hop back to Export.</Trans>
           </div>
         )}
       </Card>
@@ -311,164 +551,227 @@ export function ExportPanel({
               expanded={isExpanded}
               onToggle={() => setIsExpanded((prev) => !prev)}
             />
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Export</h3>
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Export</Trans></h3>
           </>
+        )}
+        right={(
+          <Tooltip content={formatScopedMeshCountTitle(_, scopedMeshCount)} maxWidth={220}>
+          <div
+            className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5"
+            style={{
+              borderColor: 'color-mix(in srgb, var(--accent), transparent 62%)',
+              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
+            }}
+          >
+            <Box className="h-3 w-3" style={{ color: 'var(--accent)' }} />
+            <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+              <Trans comment="Badge label next to the number of meshes this export writes. Rendered uppercase; keep it to one short word.">Meshes</Trans>
+            </span>
+            <span className="text-xs font-bold tabular-nums" style={{ color: 'var(--text-strong)' }}>
+              {scopedMeshCount}
+            </span>
+          </div>
+          </Tooltip>
         )}
       />
 
       {isExpanded && (
-      <div className="px-3 pt-2 pb-3 space-y-2.5">
-        {exportScope === 'active_model' && (
-          <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-            <Select
-              value={activeModelId ?? ''}
-              onChange={(e) => onActiveModelChange(e.target.value || null)}
-              className="w-full !h-9 text-sm"
-            >
-              <option value="" disabled>Select a model</option>
-              {modelOptions.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.visible ? model.name : `${model.name} (hidden)`}
-                </option>
+        <div className="px-2.5 pt-1 pb-2.5 space-y-2">
+          <div className="rounded-md border p-2 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div role="group" aria-label={_(msg`Export scope`)} className="grid grid-cols-2 gap-1.5">
+              {EXPORT_SCOPE_OPTIONS.map((option) => (
+                <Button
+                  key={option.value}
+                  variant="secondary"
+                  size="auto"
+                  aria-pressed={exportScope === option.value}
+                  className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                  style={exportScope === option.value ? activeOptionStyle : { background: 'var(--surface-0)' }}
+                  onClick={() => setExportScope(option.value)}
+                >
+                  {_(option.label)}
+                </Button>
               ))}
-            </Select>
-          </div>
-        )}
+            </div>
 
-        {exportScope === 'active_model' && !activeModel ? (
-          <div className="rounded-md border p-2 text-xs" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-1)' }}>
-            Pick a model to export.
+            {exportScope === 'active_model' && (
+              <div className="space-y-0.5">
+                <Select
+                  value={activeModelId ?? ''}
+                  onChange={(e) => onActiveModelChange(e.target.value || null)}
+                  className="w-full"
+                  aria-label={_(msg`Model to export`)}
+                >
+                  <option value="" disabled>{_(msg`Select a model`)}</option>
+                  {modelOptions.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.visible ? model.name : formatHiddenModelOptionLabel(_, model.name)}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            )}
           </div>
-        ) : (
-          <>
+
+          {/* Which beds "Entire Plate" means. Only asked when there is more than one bed
+              to choose between, and it has nothing to say while "Active Model" is the
+              scope: one model is one model wherever it stands. */}
+          {(plateGroups?.length ?? 0) > 1 && (
             <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-              <div className="space-y-1.5">
-                <div className="space-y-0.5">
-                  <label className="text-xs" style={{ color: 'var(--text-muted)' }}>File Name</label>
-                  <Input
-                    type="text"
-                    value={filename}
-                    onChange={(e) => setFilename(e.target.value)}
-                    className="w-full !h-9 text-sm"
-                    placeholder="my_print"
-                  />
-                </div>
+              <div
+                role="group"
+                aria-label={_(msg`Export plates`)}
+                className="grid grid-cols-2 gap-1.5"
+              >
+                {EXPORT_PLATE_SCOPE_OPTIONS.map((option) => {
+                  const isPlateScopeInert = exportScope === 'active_model';
+                  return (
+                    <Button
+                      key={option.value}
+                      variant="secondary"
+                      size="auto"
+                      aria-pressed={plateScope === option.value}
+                      disabled={isPlateScopeInert}
+                      className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                      style={isPlateScopeInert
+                        ? disabledOptionStyle
+                        : (plateScope === option.value ? activeOptionStyle : { background: 'var(--surface-0)' })}
+                      onClick={() => setPlateScope(option.value)}
+                    >
+                      {_(option.label)}
+                    </Button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
-                <div className="space-y-0.5">
-                  <label className="text-xs" style={{ color: 'var(--text-muted)' }}>Export Scope</label>
-                  <Select
-                    value={exportScope}
-                    onChange={(e) => setExportScope(e.target.value as ExportScope)}
-                    className="w-full !h-9 text-sm"
-                  >
-                    <option value="entire_plate">Entire Plate (default)</option>
-                    <option value="active_model">Active Model Only</option>
-                  </Select>
-                </div>
-
-                <div className="space-y-0.5">
-                  <label className="text-xs" style={{ color: 'var(--text-muted)' }}>Format</label>
-                  <Select
-                    value={options.format}
-                    onChange={(e) => setOptions(prev => ({ ...prev, format: e.target.value as ExportOptions['format'] }))}
-                    className="w-full !h-9 text-sm"
-                  >
-                    <option value="3mf">3MF Mesh (.3mf)</option>
-                    <option value="stl">STL Mesh (.stl)</option>
-                    <option value="voxl">VOXL Scene (.voxl)</option>
-                  </Select>
+          {exportScope === 'active_model' && !activeModel ? (
+            <div className="rounded-md border px-2.5 py-2 text-xs" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-1)' }}>
+              <Trans>Pick a model to export.</Trans>
+            </div>
+          ) : (
+            <>
+              <div className="rounded-md border p-2 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                <div role="group" aria-label={_(msg`Export format`)} className="grid grid-cols-3 gap-1.5">
+                  {EXPORT_FORMAT_OPTIONS.map((option) => (
+                    <Tooltip key={option.value} content={_(option.title)} maxWidth={220} wrapperClassName="w-full">
+                    <Button
+                      variant="secondary"
+                      size="auto"
+                      aria-pressed={options.format === option.value}
+                      className="!h-8 w-full whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                      style={options.format === option.value ? activeSecondaryOptionStyle : { background: 'var(--surface-0)' }}
+                      onClick={() => setOptions(prev => ({ ...prev, format: option.value }))}
+                    >
+                      {_(option.label)}
+                    </Button>
+                    </Tooltip>
+                  ))}
                 </div>
 
                 {options.format === 'stl' && (
-                  <div className="space-y-0.5">
-                    <label className="text-xs" style={{ color: 'var(--text-muted)' }}>STL Encoding</label>
-                    <Select
-                      value={options.binary ? 'binary' : 'ascii'}
-                      onChange={(e) => setOptions(prev => ({ ...prev, binary: e.target.value === 'binary' }))}
-                      className="w-full !h-9 text-sm"
-                    >
-                      <option value="binary">Binary STL (recommended)</option>
-                      <option value="ascii">ASCII STL</option>
-                    </Select>
+                  <div role="group" aria-label={_(msg`STL encoding`)} className="grid grid-cols-2 gap-1.5">
+                    {STL_ENCODING_OPTIONS.map((option) => (
+                      <Tooltip key={option.value} content={_(option.title)} maxWidth={220} wrapperClassName="w-full">
+                      <Button
+                        variant="secondary"
+                        size="auto"
+                        aria-pressed={(options.binary ? 'binary' : 'ascii') === option.value}
+                        className="!h-8 w-full whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                        style={(options.binary ? 'binary' : 'ascii') === option.value ? activeOptionStyle : { background: 'var(--surface-0)' }}
+                        onClick={() => setOptions(prev => ({ ...prev, binary: option.value === 'binary' }))}
+                      >
+                        {_(option.label)}
+                      </Button>
+                      </Tooltip>
+                    ))}
                   </div>
                 )}
               </div>
-            </div>
 
-            {options.format !== 'voxl' && (
-              <div className="space-y-1.5">
-                <SettingRow as="label" bordered surface="raised" density="comfortable" label="Include Model Mesh">
-                  <Toggle
-                    checked={options.includeModel}
-                    onChange={(v) => setOptions(prev => ({ ...prev, includeModel: v }))}
-                    size="md"
-                  />
-                </SettingRow>
-                <SettingRow as="label" bordered surface="raised" density="comfortable" label="Include Supports">
-                  <Toggle
-                    checked={options.includeSupports}
-                    onChange={(v) => setOptions(prev => ({ ...prev, includeSupports: v }))}
-                    size="md"
-                  />
-                </SettingRow>
-                <SettingRow as="label" bordered surface="raised" density="comfortable" label="Include Raft">
-                  <Toggle
-                    checked={options.includeRaft}
-                    onChange={(v) => setOptions(prev => ({ ...prev, includeRaft: v }))}
-                    size="md"
-                  />
-                </SettingRow>
+              {/* How one run splits what it writes. A bundle is a single scene, so 3MF and
+                  STL have no such thing — their nearest choice is one file per plate. */}
+              <div className="rounded-md border p-2 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                <div
+                  role="group"
+                  aria-label={_(msg`Export layout`)}
+                  className={`grid gap-1.5 ${layoutOptions.length >= 3 ? 'grid-cols-3' : 'grid-cols-2'}`}
+                >
+                  {layoutOptions
+                    .map((option) => (
+                      <Tooltip key={option.value} content={_(option.title)} maxWidth={220} wrapperClassName="w-full">
+                      <Button
+                        variant="secondary"
+                        size="auto"
+                        aria-pressed={exportLayout === option.value}
+                        className="!h-8 w-full whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                        style={exportLayout === option.value ? activeSecondaryOptionStyle : { background: 'var(--surface-0)' }}
+                        onClick={() => setExportLayout(option.value)}
+                      >
+                        {_(option.label)}
+                      </Button>
+                      </Tooltip>
+                    ))}
+                </div>
               </div>
-            )}
 
-            <Button
-              onClick={handleExport}
-              disabled={isAnyExportInProgress || (options.includeModel && exportScope === 'active_model' && !activeModel)}
-              variant="accent"
-              className={`w-full !h-9 inline-flex items-center justify-center gap-1.5 ${isExporting ? 'cursor-wait opacity-70' : ''}`}
-            >
-              {isExporting ? (
-                <>
-                  <div className="w-3.5 h-3.5 border-2 rounded-full animate-spin" style={{ borderColor: 'color-mix(in srgb, var(--accent-contrast), transparent 65%)', borderTopColor: 'var(--accent-contrast)' }} />
-                  <span>Exporting…</span>
-                </>
-              ) : (
-                <>
-                  <Download className="h-4 w-4" />
-                  <span>
-                    {options.format === 'voxl'
-                      ? 'Export Scene File'
-                      : options.format === '3mf'
-                        ? 'Export as 3MF'
-                        : 'Export as STL'}
-                  </span>
-                </>
+              {options.format !== 'voxl' && (
+                <div className="space-y-1.5">
+                  <SettingRow as="label" bordered surface="raised" label={<Trans>Include Model Mesh</Trans>}>
+                    <Toggle
+                      checked={options.includeModel}
+                      onChange={(v) => setOptions(prev => ({ ...prev, includeModel: v }))}
+                      size="md"
+                    />
+                  </SettingRow>
+                  <SettingRow as="label" bordered surface="raised" label={<Trans>Include Supports</Trans>}>
+                    <Toggle
+                      checked={options.includeSupports}
+                      onChange={(v) => setOptions(prev => ({ ...prev, includeSupports: v }))}
+                      size="md"
+                    />
+                  </SettingRow>
+                  <SettingRow as="label" bordered surface="raised" label={<Trans>Include Raft</Trans>}>
+                    <Toggle
+                      checked={options.includeRaft}
+                      onChange={(v) => setOptions(prev => ({ ...prev, includeRaft: v }))}
+                      size="md"
+                    />
+                  </SettingRow>
+                </div>
               )}
-            </Button>
 
-            <Button
-              onClick={() => { void handleExportIndividually(); }}
-              disabled={isAnyExportInProgress || models.length <= 1}
-              variant="secondary"
-              className={`w-full !h-8 inline-flex items-center justify-center gap-1.5 ${isExportingIndividually ? 'cursor-wait opacity-70' : ''}`}
-              title={models.length <= 1 ? 'Add more models to use Batch Export' : 'Export each visible model and its supports into separate files in a folder'}
-            >
-              {isExportingIndividually ? (
-                <>
-                  <div className="w-3.5 h-3.5 border-2 rounded-full animate-spin" style={{ borderColor: 'color-mix(in srgb, var(--text-strong), transparent 70%)', borderTopColor: 'var(--text-strong)' }} />
-                  <span>Exporting Individually…</span>
-                </>
-              ) : (
-                <>
-                  <Files className="h-4 w-4" />
-                  <span>Batch Export</span>
-                </>
-              )}
-            </Button>
+              <div className="space-y-1.5 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                <Button
+                  onClick={() => {
+                    void (exportLayout === 'bundle'
+                      ? handleExport()
+                      : exportLayout === 'plates'
+                        ? handleExportPerPlate()
+                        : handleExportSeparate());
+                  }}
+                  disabled={isAnyExportInProgress || (options.includeModel && scopeModels.length === 0)}
+                  variant="accent"
+                  className={`w-full gap-1.5 ${isAnyExportInProgress ? 'cursor-wait opacity-70' : ''}`}
+                >
+                  {isAnyExportInProgress ? (
+                    <>
+                      <Spinner size="md" />
+                      <span><Trans>Exporting…</Trans></span>
+                    </>
+                  ) : (
+                    <>
+                      <Download className="h-4 w-4" />
+                      <span>{_(EXPORT_ACTION_LABELS[options.format])}</span>
+                    </>
+                  )}
+                </Button>
+              </div>
 
-          </>
-        )}
-      </div>
+            </>
+          )}
+        </div>
       )}
     </Card>
   );

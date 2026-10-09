@@ -8,7 +8,7 @@ export type ModelHollowingModifier = {
   sourcePositionsBase64?: string;
   sourcePositionCount?: number;
   /**
-   * VOXL 2.2 dedup pointer: the HSRC chunk index this model's source-position
+   * VOXL 3.1 dedup pointer: the HSRC chunk index this model's source-position
    * snapshot lives in, present only on models that SHARE another model's chunk
    * (identical-snapshot dedup). Absent ⇒ the owner's own model index. Set by
    * the codec on read/write; not persisted in-memory outside serialization.
@@ -18,7 +18,7 @@ export type ModelHollowingModifier = {
   cavityPositionsBase64?: string;
   /** Number of vertices in the cavity mesh (count × 3 = float count). */
   cavityPositionCount?: number;
-  /** VOXL 2.2 dedup pointer for the CAVT chunk (see `sourceChunkIndex`). */
+  /** VOXL 3.1 dedup pointer for the CAVT chunk (see `sourceChunkIndex`). */
   cavityChunkIndex?: number;
   blockedVoxelIndices?: number[];
   /** Scene rotation (unit quaternion [x, y, z, w]) captured when
@@ -53,6 +53,6 @@ export type ModelMeshModifiers = {
   holePunchesBakedIntoGeometry?: boolean;
   holePunchSourcePositionsBase64?: string;
   holePunchSourcePositionCount?: number;
-  /** VOXL 2.2 dedup pointer for the PSRC chunk (see `ModelHollowingModifier.sourceChunkIndex`). */
+  /** VOXL 3.1 dedup pointer for the PSRC chunk (see `ModelHollowingModifier.sourceChunkIndex`). */
   holePunchSourceChunkIndex?: number;
 };

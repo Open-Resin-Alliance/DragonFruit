@@ -1,11 +1,11 @@
 # Mesh Smoothing Workflow
 
-Use **Smooth** in Prepare mode to sculpt and clean local surface regions before support generation.
+Use **Brush** in Prepare mode to sculpt and clean local surface regions before support generation.
 
-## 1) Enter Smooth mode
+## 1) Enter Brush mode
 
 1. Switch to **Prepare**.
-2. Choose **Smooth** from the transform toolbar.
+2. Choose **Brush** in the tool rail on the left edge.
 3. Select the model to edit.
 
 ## 2) Configure brush dynamics
@@ -45,4 +45,4 @@ Set paint highlight color using:
 
 ![Smoothing workflow placeholder](../assets/placeholders/workflow-mesh-smoothing.png)
 
-> Screenshot placeholder: Smooth mode brush cursor and smoothing settings panel.
+> Screenshot placeholder: Brush mode cursor and smoothing settings panel.

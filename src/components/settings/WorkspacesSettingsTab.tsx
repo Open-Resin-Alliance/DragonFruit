@@ -9,7 +9,7 @@ import {
 } from '@/features/profiles/profileStore';
 import { Layers3 } from 'lucide-react';
 import { NumberInput } from '@/components/ui/NumberInput';
-import { SegmentedControl } from '@/components/atoms';
+import { SegmentedControl, SettingRow } from '@/components/atoms';
 import type { View3DSettings } from '@/components/settings/view3dPreferences';
 
 interface WorkspacesSettingsTabProps {
@@ -32,7 +32,7 @@ export function WorkspacesSettingsTab({
   return (
     <div className="space-y-3">
       <section
-        className="rounded-lg border p-3"
+        className="rounded-md border p-3"
         style={{
           background: 'var(--surface-1)',
           borderColor: 'var(--border-subtle)',
@@ -53,12 +53,12 @@ export function WorkspacesSettingsTab({
               3D View
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Build volume boundaries and display resolution hints used across workspaces.
+              Build volume boundaries and display resolution hints used across the workspace.
             </p>
           </div>
         </div>
 
-        <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+        <div className="mt-3">
           {isBuildVolumeManagedByPrinter ? (
             <div className="rounded-md border px-2 py-1.5" style={{ borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)', background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 94%)' }}>
               <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
@@ -67,25 +67,21 @@ export function WorkspacesSettingsTab({
             </div>
           ) : (
             <>
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                    Enable build volume bounds
-                  </div>
-                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                    Shows a faint printer volume outline and enables out-of-bounds checks.
-                  </div>
-                </div>
+              <SettingRow
+                bordered
+                label="Enable build volume bounds"
+                description="Shows a faint printer volume outline and enables out-of-bounds checks."
+              >
                 <SegmentedControl
                   label="Enable build volume bounds"
                   value={view3dSettings.enabled ? 'on' : 'off'}
                   onChange={(next) => patchView3dSettings({ enabled: next === 'on' })}
                   options={[
-                    { value: 'on', label: 'ON' },
                     { value: 'off', label: 'OFF' },
+                    { value: 'on', label: 'ON' },
                   ]}
                 />
-              </div>
+              </SettingRow>
 
               {view3dSettings.enabled && (
                 <>
@@ -133,52 +129,22 @@ export function WorkspacesSettingsTab({
               </div>
             </div>
 
-            <div className="col-span-2 rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Build volume origin
-              </div>
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                Choose where XYZ 0,0,0 is located for the printer volume.
-              </div>
-              <div className="mt-2 flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => patchView3dSettings({ originMode: 'center' })}
-                  className="h-10 min-w-[140px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                  style={view3dSettings.originMode === 'center'
-                    ? {
-                        borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                        color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                      }
-                    : {
-                        borderColor: 'var(--border-subtle)',
-                        background: 'var(--surface-1)',
-                        color: 'var(--text-muted)',
-                      }}
-                >
-                  Center
-                </button>
-                <button
-                  type="button"
-                  onClick={() => patchView3dSettings({ originMode: 'front_left' })}
-                  className="h-10 min-w-[140px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                  style={view3dSettings.originMode === 'front_left'
-                    ? {
-                        borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                        color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                      }
-                    : {
-                        borderColor: 'var(--border-subtle)',
-                        background: 'var(--surface-1)',
-                        color: 'var(--text-muted)',
-                      }}
-                >
-                  Front-left corner
-                </button>
-              </div>
-            </div>
+            <SettingRow
+              bordered
+              className="col-span-2"
+              label="Build volume origin"
+              description="Choose where XYZ 0,0,0 is located for the printer volume."
+            >
+              <SegmentedControl
+                label="Build volume origin"
+                value={view3dSettings.originMode}
+                onChange={(next) => patchView3dSettings({ originMode: next })}
+                options={[
+                  { value: 'center', label: 'Center' },
+                  { value: 'front_left', label: 'Front-left corner' },
+                ]}
+              />
+            </SettingRow>
 
             <label className="text-xs" style={{ color: 'var(--text-muted)' }}>
               Screen Width (px)
@@ -209,196 +175,114 @@ export function WorkspacesSettingsTab({
             </>
           )}
 
-          <div className="mt-2 flex items-center justify-between gap-3 rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Show out-of-bounds warnings
-              </div>
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                Warn when any visible model extends beyond the configured build volume.
-              </div>
-            </div>
+          <SettingRow
+            bordered
+            className="mt-2"
+            label="Show out-of-bounds warnings"
+            description="Warn when any visible model extends beyond the configured build volume."
+          >
             <SegmentedControl
               label="Show out-of-bounds warnings"
               value={view3dSettings.showViolationWarning ? 'on' : 'off'}
               onChange={(next) => patchView3dSettings({ showViolationWarning: next === 'on' })}
               options={[
-                { value: 'on', label: 'ON' },
                 { value: 'off', label: 'OFF' },
+                { value: 'on', label: 'ON' },
               ]}
             />
-          </div>
+          </SettingRow>
 
-          <div className="mt-2 flex items-center justify-between gap-3 rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Show model bounding boxes
-              </div>
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                Debug overlay: draws world-space bounds for each visible model (red if out-of-bounds).
-              </div>
-            </div>
+          <SettingRow
+            bordered
+            className="mt-2"
+            label="Show model bounding boxes"
+            description="Debug overlay: draws world-space bounds for each visible model (red if out-of-bounds)."
+          >
             <SegmentedControl
               label="Show model bounding boxes"
               value={view3dSettings.showModelBoundingBoxes ? 'on' : 'off'}
               onChange={(next) => patchView3dSettings({ showModelBoundingBoxes: next === 'on' })}
               options={[
-                { value: 'on', label: 'ON' },
                 { value: 'off', label: 'OFF' },
+                { value: 'on', label: 'ON' },
               ]}
             />
-          </div>
+          </SettingRow>
 
-          <div className="mt-2 flex items-center justify-between gap-3 rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Show slice SAT bounding mesh
-              </div>
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                SAT debug overlay for nesting and diagnostics.
-              </div>
-            </div>
+          <SettingRow
+            bordered
+            className="mt-2"
+            label="Show slice SAT bounding mesh"
+            description="SAT debug overlay for nesting and diagnostics."
+          >
             <SegmentedControl
               label="Show slice SAT bounding mesh"
               value={view3dSettings.showSliceSatBoundingMesh ? 'on' : 'off'}
               onChange={(next) => patchView3dSettings({ showSliceSatBoundingMesh: next === 'on' })}
               options={[
-                { value: 'on', label: 'ON' },
                 { value: 'off', label: 'OFF' },
+                { value: 'on', label: 'ON' },
               ]}
             />
-          </div>
+          </SettingRow>
 
           {view3dSettings.showSliceSatBoundingMesh && (
-            <div className="mt-2 flex items-center justify-between gap-3 rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-              <div>
-                <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  SAT debug scope
-                </div>
-                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                  Show SAT mesh on the active model only, or on all visible models.
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => patchView3dSettings({ showSliceSatBoundingMeshForAllModels: !view3dSettings.showSliceSatBoundingMeshForAllModels })}
-                className="h-10 min-w-[130px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                style={view3dSettings.showSliceSatBoundingMeshForAllModels
-                  ? {
-                      borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                      color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                    }
-                  : {
-                      borderColor: 'var(--border-subtle)',
-                      background: 'var(--surface-1)',
-                      color: 'var(--text-muted)',
-                    }}
-              >
-                {view3dSettings.showSliceSatBoundingMeshForAllModels ? 'ALL MODELS' : 'ACTIVE ONLY'}
-              </button>
-            </div>
+            <SettingRow
+              bordered
+              className="mt-2"
+              label="SAT debug scope"
+              description="Show SAT mesh on the active model only, or on all visible models."
+            >
+              <SegmentedControl
+                label="SAT debug scope"
+                value={view3dSettings.showSliceSatBoundingMeshForAllModels ? 'all' : 'active'}
+                onChange={(next) => patchView3dSettings({ showSliceSatBoundingMeshForAllModels: next === 'all' })}
+                options={[
+                  { value: 'active', label: 'ACTIVE ONLY' },
+                  { value: 'all', label: 'ALL MODELS' },
+                ]}
+              />
+            </SettingRow>
           )}
 
           {view3dSettings.showSliceSatBoundingMesh && (
-            <div className="mt-2 rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                SAT mode
-              </div>
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                Choose accurate convex-hull SAT for nesting, or experimental slice-derived SAT for diagnostics.
-              </div>
-
-              <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => patchView3dSettings({ sliceSatBoundingMeshMode: 'accurate_hull' })}
-                  className="h-10 min-w-[180px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                  style={view3dSettings.sliceSatBoundingMeshMode === 'accurate_hull'
-                    ? {
-                        borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                        color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                      }
-                    : {
-                        borderColor: 'var(--border-subtle)',
-                        background: 'var(--surface-1)',
-                        color: 'var(--text-muted)',
-                      }}
-                >
-                  Accurate Hull-based SAT
-                </button>
-                <button
-                  type="button"
-                  onClick={() => patchView3dSettings({ sliceSatBoundingMeshMode: 'experimental_slice' })}
-                  className="h-10 min-w-[200px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                  style={view3dSettings.sliceSatBoundingMeshMode === 'experimental_slice'
-                    ? {
-                        borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                        color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                      }
-                    : {
-                        borderColor: 'var(--border-subtle)',
-                        background: 'var(--surface-1)',
-                        color: 'var(--text-muted)',
-                      }}
-                >
-                  Experimental Slice-based SAT
-                </button>
-              </div>
+            <>
+              <SettingRow
+                bordered
+                className="mt-2"
+                label="SAT mode"
+                description="Choose accurate convex-hull SAT for nesting, or experimental slice-derived SAT for diagnostics."
+              >
+                <SegmentedControl
+                  label="SAT mode"
+                  value={view3dSettings.sliceSatBoundingMeshMode}
+                  onChange={(next) => patchView3dSettings({ sliceSatBoundingMeshMode: next })}
+                  options={[
+                    { value: 'accurate_hull', label: 'Accurate Hull-based SAT' },
+                    { value: 'experimental_slice', label: 'Experimental Slice-based SAT' },
+                  ]}
+                />
+              </SettingRow>
 
               {view3dSettings.sliceSatBoundingMeshMode === 'experimental_slice' && (
-                <div className="mt-2 flex items-center justify-between gap-3 rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-                  <div>
-                    <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                      Experimental slice display
-                    </div>
-                    <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                      Pick how the experimental slice-derived SAT is visualized.
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => patchView3dSettings({ experimentalSliceSatBoundingMeshRenderMode: 'shaded' })}
-                      className="h-10 min-w-[90px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                      style={view3dSettings.experimentalSliceSatBoundingMeshRenderMode === 'shaded'
-                        ? {
-                            borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                            background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                            color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                          }
-                        : {
-                            borderColor: 'var(--border-subtle)',
-                            background: 'var(--surface-1)',
-                            color: 'var(--text-muted)',
-                          }}
-                    >
-                      Shaded
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => patchView3dSettings({ experimentalSliceSatBoundingMeshRenderMode: 'wireframe' })}
-                      className="h-10 min-w-[90px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                      style={view3dSettings.experimentalSliceSatBoundingMeshRenderMode === 'wireframe'
-                        ? {
-                            borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                            background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                            color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                          }
-                        : {
-                            borderColor: 'var(--border-subtle)',
-                            background: 'var(--surface-1)',
-                            color: 'var(--text-muted)',
-                          }}
-                    >
-                      Wireframe
-                    </button>
-                  </div>
-                </div>
+                <SettingRow
+                  bordered
+                  className="mt-2"
+                  label="Experimental slice display"
+                  description="Pick how the experimental slice-derived SAT is visualized."
+                >
+                  <SegmentedControl
+                    label="Experimental slice display"
+                    value={view3dSettings.experimentalSliceSatBoundingMeshRenderMode}
+                    onChange={(next) => patchView3dSettings({ experimentalSliceSatBoundingMeshRenderMode: next })}
+                    options={[
+                      { value: 'shaded', label: 'Shaded' },
+                      { value: 'wireframe', label: 'Wireframe' },
+                    ]}
+                  />
+                </SettingRow>
               )}
-            </div>
+            </>
           )}
         </div>
 

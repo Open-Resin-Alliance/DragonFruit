@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildSupportExportFromStores, buildVoxlDocumentV1, parseVoxlDocument, serializeVoxlDocument } from '../codec';
+import { buildSupportExportFromStores } from '../codec';
+import { parseVoxlBinaryV2, serializeVoxlDocumentV2 } from '../codec-v2';
 import { getSnapshot, loadFromImportFormat, resetStore, resetKickstandsInState} from '@/supports/state';
 import { readKickstands } from '@/supports/__tests__/helpers/kickstandFixture';
 import {
@@ -36,7 +37,7 @@ function almostEqual(a: number, b: number, epsilon = 1e-6): boolean {
     return Math.abs(a - b) <= epsilon;
 }
 
-test('VOXL support roundtrip preserves imported leaf and brace normalization intent', () => {
+test('VOXL support roundtrip preserves imported leaf and brace normalization intent', async () => {
     resetStore();
     resetKickstandsInState();
 
@@ -190,7 +191,7 @@ test('VOXL support roundtrip preserves imported leaf and brace normalization int
     assert.strictEqual(normalizedSnapshot.knots['k-right']?.normalizationHint, 'braceImported', 'Brace end knot should persist brace intent after initial load');
 
     const supports = buildSupportExportFromStores(normalizedSnapshot);
-    const document = buildVoxlDocumentV1({
+    const binary = await serializeVoxlDocumentV2({
         models: [
             {
                 id: 'model-1',
@@ -208,10 +209,9 @@ test('VOXL support roundtrip preserves imported leaf and brace normalization int
         activeModelId: 'model-1',
         selectedModelIds: ['model-1'],
         supports,
-    });
+    }, new Map());
 
-    const serialized = serializeVoxlDocument(document, true, { compression: 'none' });
-    const parsed = parseVoxlDocument(serialized);
+    const parsed = parseVoxlBinaryV2(binary).document;
 
     resetStore();
     resetKickstandsInState();

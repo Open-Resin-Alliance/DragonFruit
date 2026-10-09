@@ -84,7 +84,9 @@ export function ViewTypeDropdown({
         title={resolvedTitle}
         options={dropdownOptions}
         className="space-y-0"
-        selectClassName={`${iconOnly ? '!h-8 !w-8 !p-0' : '!h-8 !py-1.5 !pl-2 !pr-7 text-xs'} ${fullWidth ? 'w-full' : ''}`}
+        // `!h-9` matches the adjacent topbar buttons (Button's `md` shape), so the
+        // trigger's top and bottom edges sit on the same lines as theirs.
+        selectClassName={`${iconOnly ? '!h-9 !w-9 !p-0' : '!h-9 !py-1.5 !pl-2 !pr-7 text-xs'} ${fullWidth ? 'w-full' : ''}`}
         chevronClassName="right-1.5"
         hideChevron={iconOnly}
         menuAlign="right"

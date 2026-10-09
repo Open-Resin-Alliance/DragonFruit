@@ -66,7 +66,7 @@ export function PerformanceSettingsTab({
     <div className="space-y-3">
       {/* Slicing Engine Metadata */}
       <section
-        className="rounded-lg border p-3"
+        className="rounded-md border p-3"
         style={{
           background: 'var(--surface-1)',
           borderColor: 'var(--border-subtle)',
@@ -107,7 +107,7 @@ export function PerformanceSettingsTab({
       </section>
 
       <section
-        className="rounded-lg border p-3"
+        className="rounded-md border p-3"
         style={{
           background: 'var(--surface-1)',
           borderColor: 'var(--border-subtle)',
@@ -141,8 +141,8 @@ export function PerformanceSettingsTab({
             <SegmentedControl
               label={_(msg`Background gradient`)}
               options={[
-                { value: 'on', label: _(msg`ON`) },
                 { value: 'off', label: _(msg`OFF`) },
+                { value: 'on', label: _(msg`ON`) },
               ]}
               value={thumbnailSettings.includeGradient ? 'on' : 'off'}
               onChange={(next) => patchThumbnailSettings({ includeGradient: next === 'on' })}
@@ -156,8 +156,8 @@ export function PerformanceSettingsTab({
             <SegmentedControl
               label={_(msg`Build plate`)}
               options={[
-                { value: 'on', label: _(msg`ON`) },
                 { value: 'off', label: _(msg`OFF`) },
+                { value: 'on', label: _(msg`ON`) },
               ]}
               value={thumbnailSettings.includeBuildPlate ? 'on' : 'off'}
               onChange={(next) => patchThumbnailSettings({ includeBuildPlate: next === 'on' })}
@@ -171,8 +171,8 @@ export function PerformanceSettingsTab({
             <SegmentedControl
               label={_(msg`Grid`)}
               options={[
-                { value: 'on', label: _(msg`ON`) },
                 { value: 'off', label: _(msg`OFF`) },
+                { value: 'on', label: _(msg`ON`) },
               ]}
               value={thumbnailSettings.includeGrid ? 'on' : 'off'}
               onChange={(next) => patchThumbnailSettings({ includeGrid: next === 'on' })}
@@ -183,7 +183,7 @@ export function PerformanceSettingsTab({
 
       {showPngCompressionControls && (
         <section
-          className="rounded-lg border p-3"
+          className="rounded-md border p-3"
           style={{
             background: 'var(--surface-1)',
             borderColor: 'var(--border-subtle)',
@@ -237,7 +237,7 @@ export function PerformanceSettingsTab({
 
       {/* Temp File Cleanup Section */}
       <section
-        className="rounded-lg border p-3"
+        className="rounded-md border p-3"
         style={{
           background: 'var(--surface-1)',
           borderColor: 'var(--border-subtle)',

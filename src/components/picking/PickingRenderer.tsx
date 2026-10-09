@@ -413,7 +413,12 @@ export function PickingRenderer({
     if (isIdleHover && !moved && !sceneMoved) return;
 
     const measuredFps = 1000 / Math.max(1, smoothedFrameMsRef.current);
-    const dynamicMaxHz = 120;
+    // Picking follows the frame rate, so it is as responsive as the display allows:
+    // on a 165 Hz monitor it picks at 165, not at the 30 Hz floor the config names.
+    // The ceiling is only there to bound an unthrottled render loop measuring
+    // hundreds of frames a second, which picking would then pay for on every one of
+    // them. 240 is above every display in use and still bounds it.
+    const dynamicMaxHz = 240;
 
     const activeHoverHz = Math.min(
       dynamicMaxHz,

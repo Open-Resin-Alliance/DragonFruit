@@ -61,7 +61,7 @@ export function SegmentedControl<T extends string>({
             title={option.title}
             onClick={() => onChange(option.value)}
             className={cn(
-              'ui-segmented-option inline-flex items-center justify-center rounded-md border font-semibold uppercase tracking-wide transition-colors',
+              'ui-segmented-option inline-flex items-center justify-center rounded-sm border font-semibold uppercase tracking-wide transition-colors',
               optionSizeClassMap[size],
               fullWidth && 'flex-1'
             )}

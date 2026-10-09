@@ -116,8 +116,14 @@ function findInteriorCavityHit(
 ): THREE.Intersection | null {
   const rc = _interiorCavityRaycaster;
   rc.ray.copy(ray);
+  // The ray comes from the camera, so its origin sits wherever the current zoom
+  // puts it — hundreds of scene units away, and the number grows without bound as
+  // the user zooms out. An absolute bound here silently misses the cavity (the
+  // first hit is simply out of range) and both the hole-punch and the support
+  // press then bail, which is what "interior placement stopped working" looks
+  // like. `firstHitOnly` already makes this cheap, so there is no bound to keep.
   rc.near = 0;
-  rc.far = 500;
+  rc.far = Infinity;
   (rc as any).firstHitOnly = true;
 
   const mesh = _interiorCavityRaycastMesh;
@@ -1034,7 +1040,7 @@ if (uDitherAmount > 0.0) {
             return;
           }
 
-          if (mode === 'prepare' && transformMode === 'hollowing' && onHolePunchClick) {
+          if ((mode === 'prepare' || mode === 'support') && transformMode === 'hollowing' && onHolePunchClick) {
             const shouldOnlySelect = suppressNextHolePunchClickRef.current || !isActiveModel;
             suppressNextHolePunchClickRef.current = false;
             if (shouldOnlySelect) {
@@ -1137,7 +1143,7 @@ if (uDitherAmount > 0.0) {
         }}
         onPointerMove={(e) => {
           if (isSupportShiftGesture(e)) {
-            if (mode === 'prepare' && transformMode === 'hollowing' && onHolePunchHover) {
+            if ((mode === 'prepare' || mode === 'support') && transformMode === 'hollowing' && onHolePunchHover) {
               onHolePunchHover(null);
             }
             if (!hasExternalHoverSource) schedulePointerHover(false);
@@ -1156,7 +1162,7 @@ if (uDitherAmount > 0.0) {
           // the model in the ray should not suppress model hover.
           const firstIsGizmo = e.intersections[0]?.object.userData?.isGizmoHandle === true;
           if (shouldSuppressModelInteraction || isGizmoHoverCategory || firstIsGizmo) {
-            if (mode === 'prepare' && transformMode === 'hollowing' && onHolePunchHover) {
+            if ((mode === 'prepare' || mode === 'support') && transformMode === 'hollowing' && onHolePunchHover) {
               onHolePunchHover(null);
             }
             if (!hasExternalHoverSource) schedulePointerHover(false);
@@ -1168,7 +1174,7 @@ if (uDitherAmount > 0.0) {
 
           const isTopMostIntersection = e.intersections[0]?.object === e.object;
           if (!isTopMostIntersection) {
-            if (mode === 'prepare' && transformMode === 'hollowing' && onHolePunchHover) {
+            if ((mode === 'prepare' || mode === 'support') && transformMode === 'hollowing' && onHolePunchHover) {
               onHolePunchHover(null);
             }
             if (!hasExternalHoverSource) schedulePointerHover(false);
@@ -1197,7 +1203,7 @@ if (uDitherAmount > 0.0) {
           if (propagateForNonModel && !primaryInClippedZone) {
             // Non-model is visible but model hit is in visible zone — suppress
             // model hover and don't consume the event.
-            if (mode === 'prepare' && transformMode === 'hollowing' && onHolePunchHover) {
+            if ((mode === 'prepare' || mode === 'support') && transformMode === 'hollowing' && onHolePunchHover) {
               onHolePunchHover(null);
             }
             if (!hasExternalHoverSource) schedulePointerHover(false);
@@ -1240,7 +1246,7 @@ if (uDitherAmount > 0.0) {
             emitImmediateModelHover(modelId);
           }
 
-          if (mode === 'prepare' && transformMode === 'hollowing' && onHolePunchHover) {
+          if ((mode === 'prepare' || mode === 'support') && transformMode === 'hollowing' && onHolePunchHover) {
             let hoverHit: THREE.Intersection | null = e as unknown as THREE.Intersection;
             if (primaryInClippedZone) {
               const fallback = findClipAwareHit(e.ray, e.object, clipLower, clipUpper, e.distance);
@@ -1344,7 +1350,7 @@ if (uDitherAmount > 0.0) {
           onModelHoverModelChange?.(null);
           emitImmediateModelHover(null);
 
-          if (mode === 'prepare' && transformMode === 'hollowing' && onHolePunchHover) {
+          if ((mode === 'prepare' || mode === 'support') && transformMode === 'hollowing' && onHolePunchHover) {
             onHolePunchHover(null);
           }
 
@@ -1362,6 +1368,13 @@ if (uDitherAmount > 0.0) {
         onPointerDown={(e) => {
           if (isSupportShiftGesture(e)) {
             return;
+          }
+
+          // The hole-punch click must know whether this press already selected
+          // the model: in Support the hollowing tool owns the canvas, so only
+          // its suppress flag is set here, not Prepare's selection dance.
+          if (!shouldSuppressModelInteraction && mode === 'support' && transformMode === 'hollowing' && onHolePunchClick && e.button === 0) {
+            suppressNextHolePunchClickRef.current = !isActiveModel;
           }
 
           if (!shouldSuppressModelInteraction && mode === 'prepare' && e.button === 0) {

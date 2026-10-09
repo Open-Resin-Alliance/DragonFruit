@@ -3,7 +3,7 @@
 
 import React, { useState, useEffect, useLayoutEffect, useSyncExternalStore } from 'react';
 import ReactDOM from 'react-dom';
-import { Check, Eye, Save, RotateCcw, Sparkles, Wrench, WandSparkles, Sailboat, Grid3X3, Pickaxe } from 'lucide-react';
+import { Check, Save, RotateCcw, Sparkles, Wrench, WandSparkles, Sailboat, Grid3X3, Pickaxe } from 'lucide-react';
 import { usePresetHotkeys } from '@/hotkeys/usePresetHotkeys';
 import { useLingui } from '@lingui/react';
 import { formatAutoBraceStatus, formatBracesCleared } from '../autoBracing/autoBraceMessages';
@@ -21,7 +21,6 @@ import {
     updateAutoBracingSettings,
     updateAutoSupportSettings,
     updateDevToolsEnabled,
-    updateNavigationDiscsOnly,
 } from './state';
 import {
     subscribe as subscribeToSupportState,
@@ -189,8 +188,6 @@ export function SupportSidebar({ activeModelId = null }: { activeModelId?: strin
     const autoBraceStatusTimeoutRef = React.useRef<number | null>(null);
     const autoBracingHotkeyWasActiveRef = React.useRef(false);
     const isAdaptiveConeAngle = (settings.tip.coneAngleMode ?? 'normal') === 'adaptive';
-    /** The eye button's state: contact discs solid, every member a line. */
-    const discsOnlyView = settings.navigationDiscsOnly;
     const sidebarPanelState = React.useSyncExternalStore(subscribeToSidebarPanel, getSidebarPanelSnapshot, getSidebarPanelSnapshot);
     const activePanel = sidebarPanelState.panel;
     const useAdaptiveIconCompactDisplay = isAdaptiveConeAngle && activePanel === DEFAULT_SIDEBAR_PANEL;
@@ -1199,13 +1196,6 @@ export function SupportSidebar({ activeModelId = null }: { activeModelId?: strin
                 )}
                 right={(
                     <div className="inline-flex items-center gap-1">
-                        <IconButton
-                            onClick={() => updateNavigationDiscsOnly(!discsOnlyView)}
-                            className={`!p-0.5 transition-colors ${discsOnlyView ? '!bg-sky-600/25 !text-sky-300' : '!text-[var(--text-muted)] hover:!text-[var(--text-strong)] hover:!bg-[var(--surface-2)]'}`}
-                            title={discsOnlyView ? _(msg`Show full supports`) : _(msg`Contact discs only, supports as lines`)}
-                        >
-                            <Eye className="h-3.5 w-3.5" />
-                        </IconButton>
                         <IconButton
                             onClick={handleSave}
                             className={`!p-0.5 transition-colors ${saveStatus === 'saved' ? '!bg-green-600/30 !text-green-400' : saveStatus === 'error' ? '!bg-red-600/30 !text-red-400' : '!text-green-400/70 hover:!text-green-400 hover:!bg-green-600/15'}`}
