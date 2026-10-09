@@ -158,7 +158,7 @@ export function SceneAutosaveSettingsTab() {
 
   return (
     <div className="space-y-3">
-      <section className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+      <section className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
         <div className="flex items-start gap-2.5">
           <span className="inline-flex h-8 w-8 items-center justify-center rounded-md border" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 8%)' }}>
             <HardDrive className="h-4 w-4" style={{ color: 'var(--accent)' }} />
@@ -180,8 +180,8 @@ export function SceneAutosaveSettingsTab() {
             <SegmentedControl
               label={_(msg`Enable scene autosave`)}
               options={[
-                { value: 'on', label: _(msg`ON`) },
                 { value: 'off', label: _(msg`OFF`) },
+                { value: 'on', label: _(msg`ON`) },
               ]}
               value={settings.enabled ? 'on' : 'off'}
               onChange={(next) => setSettings((prev) => ({ ...prev, enabled: next === 'on' }))}
@@ -267,7 +267,7 @@ export function SceneAutosaveSettingsTab() {
         </div>
       </section>
 
-      <section className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+      <section className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
         <div className="flex items-start gap-2">
           <IconChip size="md" tone="warning" icon={AlertTriangle} />
           <div className="flex-1">
@@ -286,8 +286,8 @@ export function SceneAutosaveSettingsTab() {
           <SegmentedControl
             label={_(msg`Recovery prompt on startup`)}
             options={[
-              { value: 'on', label: _(msg`ON`) },
               { value: 'off', label: _(msg`OFF`) },
+              { value: 'on', label: _(msg`ON`) },
             ]}
             value={settings.recoveryPromptEnabled ? 'on' : 'off'}
             onChange={(next) => setSettings((prev) => ({ ...prev, recoveryPromptEnabled: next === 'on' }))}
@@ -295,7 +295,7 @@ export function SceneAutosaveSettingsTab() {
         </SettingRow>
       </section>
 
-      <section className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+      <section className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
         <div className="flex items-start gap-2">
           <span className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 8%)' }}>
             <HardDrive className="h-4 w-4" style={{ color: 'var(--accent)' }} />

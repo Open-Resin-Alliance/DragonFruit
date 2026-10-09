@@ -3,13 +3,14 @@
 import React from 'react';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
-import { Bug, ClipboardCopy, Database, HelpCircle, Languages, LayoutGrid, RotateCcw, ZoomIn } from 'lucide-react';
+import { ArrowLeft, ArrowUp, Bug, ClipboardCopy, Database, HelpCircle, Languages, LayoutGrid, PanelTop, RotateCcw, ZoomIn } from 'lucide-react';
 import { Button, SegmentedControl, SettingRow } from '@/components/atoms';
 import { LanguageSwitcher } from '@/components/ui/LanguageSwitcher';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { type Locale } from '@/i18n';
 import type { ImportDefaultsSettings } from '@/features/scene/importDefaultsPreferences';
+import type { RaftBottomMode } from '@/supports/Rafts/Crenelated/RaftTypes';
 import {
   FLOATING_LAYOUT_DEBUG_REQUEST_EVENT,
   FLOATING_LAYOUT_STORAGE_KEY,
@@ -37,8 +38,6 @@ interface GeneralSettingsTabProps {
   toolLayout: ToolLayout;
   onToolLayoutChange: (value: ToolLayout) => void;
   onResetFloatingLayout: () => void;
-  debugPrimitivesPanelVisible: boolean;
-  onDebugPrimitivesPanelVisibleChange: (enabled: boolean) => void;
   importDefaults: ImportDefaultsSettings;
   onImportDefaultsChange: (next: ImportDefaultsSettings) => void;
   language: Locale;
@@ -51,8 +50,6 @@ export function GeneralSettingsTab({
   toolLayout,
   onToolLayoutChange,
   onResetFloatingLayout,
-  debugPrimitivesPanelVisible,
-  onDebugPrimitivesPanelVisibleChange,
   importDefaults,
   onImportDefaultsChange,
   language,
@@ -139,7 +136,7 @@ export function GeneralSettingsTab({
   return (
     <div className="space-y-3">
       <section
-        className="rounded-lg border p-3"
+        className="rounded-md border p-3"
         style={{
           background: 'var(--surface-1)',
           borderColor: 'var(--border-subtle)',
@@ -176,7 +173,7 @@ export function GeneralSettingsTab({
       </section>
 
       <section
-        className="rounded-lg border p-3"
+        className="rounded-md border p-3"
         style={{
           background: 'var(--surface-1)',
           borderColor: 'var(--border-subtle)',
@@ -244,7 +241,58 @@ export function GeneralSettingsTab({
       </section>
 
       <section
-        className="rounded-lg border p-3"
+        className="rounded-md border p-3"
+        style={{
+          background: 'var(--surface-1)',
+          borderColor: 'var(--border-subtle)',
+        }}
+      >
+        <div className="flex items-start gap-2">
+          <span
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
+            style={{
+              borderColor: 'var(--border-subtle)',
+              background: 'color-mix(in srgb, var(--surface-2), transparent 8%)',
+            }}
+          >
+            <PanelTop className="h-4 w-4" style={{ color: 'var(--accent)' }} />
+          </span>
+          <div className="flex-1">
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+              Toolbar
+            </h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              Park the tools in a column on the left edge, or in a bar centred under the app bar.
+            </p>
+          </div>
+        </div>
+
+        <SettingRow
+          bordered
+          className="mt-3"
+          label={_(msg`Toolbar position`)}
+          description={_(msg`A left column or a bar centred under the app bar.`)}
+        >
+          <SelectDropdown<ToolLayout>
+            value={toolLayout}
+            options={[
+              { value: 'horizontal', label: _(msg`Top`) },
+              { value: 'vertical', label: _(msg`Left`) },
+            ]}
+            onChange={(next) => onToolLayoutChange(next)}
+            ariaLabel="Toolbar position"
+            title="Toolbar position"
+            className="w-36"
+            menuAlign="right"
+            leadingDisplay={toolLayout === 'horizontal'
+              ? <ArrowUp className="w-4 h-4" />
+              : <ArrowLeft className="w-4 h-4" />}
+          />
+        </SettingRow>
+      </section>
+
+      <section
+        className="rounded-md border p-3"
         style={{
           background: 'var(--surface-1)',
           borderColor: 'var(--border-subtle)',
@@ -279,28 +327,11 @@ export function GeneralSettingsTab({
           <SegmentedControl
             label={_(msg`Remember window positions`)}
             options={[
-              { value: 'on', label: _(msg`ON`) },
               { value: 'off', label: _(msg`OFF`) },
+              { value: 'on', label: _(msg`ON`) },
             ]}
             value={floatingLayoutPersistence ? 'on' : 'off'}
             onChange={(next) => onFloatingLayoutPersistenceChange(next === 'on')}
-          />
-        </SettingRow>
-
-        <SettingRow
-          bordered
-          className="mt-2"
-          label={_(msg`Tool layout`)}
-          description={_(msg`Park the tools in a column on the left edge, or in a bar centred under the app bar.`)}
-        >
-          <SegmentedControl
-            label={_(msg`Tool layout`)}
-            options={[
-              { value: 'vertical', label: _(msg`Vertical`) },
-              { value: 'horizontal', label: _(msg`Horizontal`) },
-            ]}
-            value={toolLayout}
-            onChange={(next) => onToolLayoutChange(next === 'horizontal' ? 'horizontal' : 'vertical')}
           />
         </SettingRow>
 
@@ -320,26 +351,10 @@ export function GeneralSettingsTab({
             Reset
           </Button>
         </SettingRow>
-
-        <SettingRow
-          bordered
-          className="mt-2"
-          label={_(msg`Show Debug Primitives panel`)}
-          description={_(msg`Toggle visibility of the Prepare-mode debug primitive window.`)}
-        >
-          <SegmentedControl
-            label={_(msg`Show Debug Primitives panel`)}
-            options={[
-              { value: 'on', label: _(msg`ON`) },
-              { value: 'off', label: _(msg`OFF`) },
-            ]}
-            value={debugPrimitivesPanelVisible ? 'on' : 'off'}
-            onChange={(next) => onDebugPrimitivesPanelVisibleChange(next === 'on')}
-          />
-        </SettingRow>
       </section>
+
       <section
-        className="rounded-lg border p-3"
+        className="rounded-md border p-3"
         style={{
           background: 'var(--surface-1)',
           borderColor: 'var(--border-subtle)',
@@ -374,8 +389,8 @@ export function GeneralSettingsTab({
           <SegmentedControl
             label={_(msg`Show support tooltips`)}
             options={[
-              { value: 'on', label: _(msg`ON`) },
               { value: 'off', label: _(msg`OFF`) },
+              { value: 'on', label: _(msg`ON`) },
             ]}
             value={supportHelpEnabled ? 'on' : 'off'}
             onChange={(next) => {
@@ -388,7 +403,7 @@ export function GeneralSettingsTab({
       </section>
 
       <section
-        className="rounded-lg border p-3"
+        className="rounded-md border p-3"
         style={{
           background: 'var(--surface-1)',
           borderColor: 'var(--border-subtle)',
@@ -414,49 +429,30 @@ export function GeneralSettingsTab({
           </div>
         </div>
 
-        <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-            Default Raft Base
-          </div>
-          <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-            Chooses raft bottom mode for imported supports.
-          </div>
-
-          <div className="mt-2 grid grid-cols-3 gap-1.5">
-            {([
-              { value: 'off', label: 'Off' },
-              { value: 'line', label: 'Line' },
-              { value: 'solid', label: 'Solid' },
-            ] as const).map((option) => {
-              const isActive = importDefaults.raftBottomMode === option.value;
-              return (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => onImportDefaultsChange({
-                    ...importDefaults,
-                    raftBottomMode: option.value,
-                    rootsEnabled: option.value === 'line' ? true : importDefaults.rootsEnabled,
-                  })}
-                  className="h-9 rounded-md border text-[12px] font-semibold transition-colors"
-                  style={isActive
-                    ? {
-                        borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                        color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                      }
-                    : {
-                        borderColor: 'var(--border-subtle)',
-                        background: 'var(--surface-1)',
-                        color: 'var(--text-muted)',
-                      }}
-                >
-                  {option.label}
-                </button>
-              );
+        <SettingRow
+          bordered
+          className="mt-3"
+          label={_(msg`Default Raft Base`)}
+          description={_(msg`Chooses raft bottom mode for imported supports.`)}
+        >
+          <SelectDropdown<RaftBottomMode>
+            value={importDefaults.raftBottomMode}
+            options={[
+              { value: 'off', label: _(msg`Off`) },
+              { value: 'line', label: _(msg`Line`) },
+              { value: 'solid', label: _(msg`Solid`) },
+            ]}
+            onChange={(next) => onImportDefaultsChange({
+              ...importDefaults,
+              raftBottomMode: next,
+              rootsEnabled: next === 'line' ? true : importDefaults.rootsEnabled,
             })}
-          </div>
-        </div>
+            ariaLabel="Default Raft Base"
+            title="Default Raft Base"
+            className="w-36"
+            menuAlign="right"
+          />
+        </SettingRow>
 
         {importDefaults.raftBottomMode === 'solid' ? (
           <SettingRow
@@ -468,8 +464,8 @@ export function GeneralSettingsTab({
             <SegmentedControl
               label={_(msg`Default Raft Wall`)}
               options={[
-                { value: 'on', label: _(msg`ON`) },
                 { value: 'off', label: _(msg`OFF`) },
+                { value: 'on', label: _(msg`ON`) },
               ]}
               value={importDefaults.raftWallEnabled ? 'on' : 'off'}
               onChange={(next) => onImportDefaultsChange({ ...importDefaults, raftWallEnabled: next === 'on' })}
@@ -487,8 +483,8 @@ export function GeneralSettingsTab({
             <SegmentedControl
               label={_(msg`Roots Enabled on Import`)}
               options={[
-                { value: 'on', label: _(msg`ON`) },
                 { value: 'off', label: _(msg`OFF`) },
+                { value: 'on', label: _(msg`ON`) },
               ]}
               value={importDefaults.rootsEnabled ? 'on' : 'off'}
               onChange={(next) => onImportDefaultsChange({ ...importDefaults, rootsEnabled: next === 'on' })}
@@ -505,8 +501,8 @@ export function GeneralSettingsTab({
           <SegmentedControl
             label={_(msg`Auto-Repair`)}
             options={[
-              { value: 'on', label: _(msg`ON`) },
               { value: 'off', label: _(msg`OFF`) },
+              { value: 'on', label: _(msg`ON`) },
             ]}
             value={importDefaults.autoRepair ? 'on' : 'off'}
             onChange={(next) => onImportDefaultsChange({ ...importDefaults, autoRepair: next === 'on' })}
@@ -522,8 +518,8 @@ export function GeneralSettingsTab({
           <SegmentedControl
             label={_(msg`Auto-Repair Scenes`)}
             options={[
-              { value: 'on', label: _(msg`ON`) },
               { value: 'off', label: _(msg`OFF`) },
+              { value: 'on', label: _(msg`ON`) },
             ]}
             value={importDefaults.autoRepairScenes ? 'on' : 'off'}
             onChange={(next) => onImportDefaultsChange({ ...importDefaults, autoRepairScenes: next === 'on' })}

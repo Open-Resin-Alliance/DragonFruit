@@ -386,7 +386,7 @@ export function OnboardingPrinterLibrary({ onAdded, onBack }: OnboardingPrinterL
 
       {/* Footer */}
       <div
-        className="flex shrink-0 items-center justify-between gap-3 border-t px-4 py-3"
+        className="flex shrink-0 items-center justify-between gap-3 border-t px-3 py-3"
         style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}
       >
         <span className="text-[12px]" style={{ color: 'var(--text-muted)' }}>

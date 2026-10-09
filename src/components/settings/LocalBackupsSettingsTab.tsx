@@ -687,7 +687,7 @@ export function LocalBackupsSettingsTab() {
 
   if (!desktopAvailable) {
     return (
-      <div className="rounded-lg border p-3 text-xs" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}>
+      <div className="rounded-md border p-3 text-xs" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}>
         <Trans>Local on-disk backups are currently available in the DragonFruit desktop build only.</Trans>
       </div>
     );
@@ -708,7 +708,7 @@ export function LocalBackupsSettingsTab() {
 
   return (
     <div className="space-y-3">
-      <section className="relative rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+      <section className="relative rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
         <div className="flex items-start gap-2.5">
           <span className="inline-flex h-8 w-8 items-center justify-center rounded-md border" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 8%)' }}>
             <HardDrive className="h-4 w-4" style={{ color: 'var(--accent)' }} />
@@ -801,7 +801,7 @@ export function LocalBackupsSettingsTab() {
         </div>
       </section>
 
-      <section className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+      <section className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
         <div className="flex items-start gap-2">
           <span
             className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
@@ -859,8 +859,8 @@ export function LocalBackupsSettingsTab() {
               <SegmentedControl
                 label={_(msg`Enable automatic backups`)}
                 options={[
-                  { value: 'on', label: <Trans>ON</Trans> },
                   { value: 'off', label: <Trans>OFF</Trans> },
+                  { value: 'on', label: <Trans>ON</Trans> },
                 ]}
                 value={autoSyncEnabled ? 'on' : 'off'}
                 onChange={(next) => setAutoSyncEnabled(next === 'on')}
@@ -1136,7 +1136,7 @@ export function LocalBackupsSettingsTab() {
                     ))}
                   </aside>
 
-                  <div className="h-full min-h-0 rounded-lg border p-3 overflow-hidden flex flex-col" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                  <div className="h-full min-h-0 rounded-md border p-3 overflow-hidden flex flex-col" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                     {snapshotModalTab === 'overview' && (
                       <div className="h-full min-h-0 overflow-auto custom-scrollbar pr-1">
                         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">

@@ -8,6 +8,8 @@ import type { CameraFeelPreset } from '@/components/settings/cameraFeelPreferenc
 import type { CameraTrackpadModifierKey, CameraTrackpadPrimaryAction } from '@/components/settings/cameraTrackpadPreferences';
 import type { CameraScopeMode, WorkspaceCameraDefaults } from '@/components/settings/workspaceCameraPreferences';
 import { FOV_MIN, FOV_MAX } from '@/components/settings/cameraFovPreferences';
+import { SegmentedControl, SettingRow } from '@/components/atoms';
+import { SelectDropdown } from '@/components/ui/SelectDropdown';
 
 interface CameraSettingsTabProps {
   cameraScope: CameraScopeMode;
@@ -72,7 +74,7 @@ export function CameraSettingsTab({
   return (
     <div className="space-y-3">
       <section
-        className="rounded-lg border p-3"
+        className="rounded-md border p-3"
         style={{
           background: 'var(--surface-1)',
           borderColor: 'var(--border-subtle)',
@@ -98,276 +100,128 @@ export function CameraSettingsTab({
           </div>
         </div>
 
-        <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Camera scope
-              </div>
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                Choose one global projection mode for every workspace, or set projection defaults per workspace.
-              </div>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => onCameraScopeChange('global')}
-                className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                style={usingGlobalScope
-                  ? {
-                      borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                      color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                    }
-                  : {
-                      borderColor: 'var(--border-subtle)',
-                      background: 'var(--surface-1)',
-                      color: 'var(--text-muted)',
-                    }}
-              >
-                Global
-              </button>
-              <button
-                type="button"
-                onClick={() => onCameraScopeChange('workspace')}
-                className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                style={usingWorkspaceScope
-                  ? {
-                      borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                      color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                    }
-                  : {
-                      borderColor: 'var(--border-subtle)',
-                      background: 'var(--surface-1)',
-                      color: 'var(--text-muted)',
-                    }}
-              >
-                Workspace
-              </button>
-            </div>
-          </div>
-        </div>
+        <SettingRow
+          bordered
+          className="mt-3"
+          label="Camera scope"
+          description="Choose one global projection mode for every workspace, or set projection defaults per workspace."
+        >
+          <SegmentedControl
+            label="Camera scope"
+            value={cameraScope}
+            onChange={(next) => onCameraScopeChange(next as CameraScopeMode)}
+            options={[
+              { value: 'global', label: 'Global' },
+              { value: 'workspace', label: 'Workspace' },
+            ]}
+          />
+        </SettingRow>
 
         {usingGlobalScope && (
-          <div
-            className="mt-2 rounded-md border p-2.5"
-            style={{
-              borderColor: 'var(--border-subtle)',
-              background: 'var(--surface-0)',
-            }}
-          >
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Projection mode
-                </div>
-                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                  Use one projection mode everywhere when global scope is active.
-                </div>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => onCameraProjectionModeChange('orthographic')}
-                  className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                  style={cameraProjectionMode === 'orthographic'
-                    ? {
-                        borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                        color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                      }
-                    : {
-                        borderColor: 'var(--border-subtle)',
-                        background: 'var(--surface-1)',
-                        color: 'var(--text-muted)',
-                      }}
-                >
-                  Ortho
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onCameraProjectionModeChange('perspective')}
-                  className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                  style={cameraProjectionMode === 'perspective'
-                    ? {
-                        borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                        color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                      }
-                    : {
-                        borderColor: 'var(--border-subtle)',
-                        background: 'var(--surface-1)',
-                        color: 'var(--text-muted)',
-                      }}
-                >
-                  Perspective
-                </button>
-              </div>
-            </div>
+          <div className="mt-2 space-y-1.5">
+            <SettingRow
+              bordered
+              label="Projection mode"
+              description="Use one projection mode everywhere when global scope is active."
+            >
+              <SegmentedControl
+                label="Projection mode"
+                value={cameraProjectionMode}
+                onChange={(next) => onCameraProjectionModeChange(next as CameraProjectionMode)}
+                options={[
+                  { value: 'orthographic', label: 'Ortho' },
+                  { value: 'perspective', label: 'Perspective' },
+                ]}
+              />
+            </SettingRow>
 
             {cameraProjectionMode === 'perspective' && (
-              <div className="mt-2.5 space-y-0.5">
-                <label className="text-xs flex justify-between" style={{ color: 'var(--text-muted)' }}>
-                  <span>Field of view</span>
-                  <span style={{ color: 'var(--text-strong)' }}>{perspectiveFov}°</span>
-                </label>
-                <input
-                  type="range"
-                  min={FOV_MIN}
-                  max={FOV_MAX}
-                  step={1}
-                  value={perspectiveFov}
-                  onChange={(e) => onPerspectiveFovChange(parseInt(e.target.value, 10))}
-                  className="ui-range w-full"
-                />
+              <div className="rounded-md border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+                <div className="space-y-0.5">
+                  <label className="text-xs flex justify-between" style={{ color: 'var(--text-muted)' }}>
+                    <span>Field of view</span>
+                    <span style={{ color: 'var(--text-strong)' }}>{perspectiveFov}°</span>
+                  </label>
+                  <input
+                    type="range"
+                    min={FOV_MIN}
+                    max={FOV_MAX}
+                    step={1}
+                    value={perspectiveFov}
+                    onChange={(e) => onPerspectiveFovChange(parseInt(e.target.value, 10))}
+                    className="ui-range w-full"
+                  />
+                </div>
               </div>
             )}
           </div>
         )}
 
         {usingWorkspaceScope && (
-          <div
-            className="mt-2 rounded-md border p-2.5"
-            style={{
-              borderColor: 'var(--border-subtle)',
-              background: 'var(--surface-0)',
-            }}
-          >
-            <div>
+          <div className="mt-2 space-y-1.5">
+            <div className="rounded-md border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
               <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                 Workspace camera defaults
               </div>
               <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                 Pick the default projection mode used when you enter each workspace.
               </div>
-            </div>
 
-            <div className="mt-2 grid grid-cols-2 gap-1.5 md:grid-cols-4">
-              {workspaceMeta.map((workspace) => {
-                const active = activeWorkspace === workspace.key;
-                return (
-                  <button
-                    key={workspace.key}
-                    type="button"
-                    onClick={() => setActiveWorkspace(workspace.key)}
-                    className="h-10 rounded-md border px-2 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                    style={active
-                      ? {
-                          borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                          background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                          color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                        }
-                      : {
-                          borderColor: 'var(--border-subtle)',
-                          background: 'var(--surface-1)',
-                          color: 'var(--text-muted)',
-                        }}
-                  >
-                    {workspace.label}
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                {workspaceMeta.find((workspace) => workspace.key === activeWorkspace)?.label} default camera
-              </div>
-              <div className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-                {workspaceMeta.find((workspace) => workspace.key === activeWorkspace)?.hint}
-              </div>
-
-              <div className="mt-2 flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => onWorkspaceCameraModeChange(activeWorkspace, 'orthographic')}
-                  className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                  style={workspaceCameraDefaults[activeWorkspace] === 'orthographic'
-                    ? {
-                        borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                        color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                      }
-                    : {
-                        borderColor: 'var(--border-subtle)',
-                        background: 'var(--surface-1)',
-                        color: 'var(--text-muted)',
-                      }}
-                >
-                  Ortho
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onWorkspaceCameraModeChange(activeWorkspace, 'perspective')}
-                  className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                  style={workspaceCameraDefaults[activeWorkspace] === 'perspective'
-                    ? {
-                        borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                        color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                      }
-                    : {
-                        borderColor: 'var(--border-subtle)',
-                        background: 'var(--surface-1)',
-                        color: 'var(--text-muted)',
-                      }}
-                >
-                  Perspective
-                </button>
+              <div className="mt-2">
+                <SegmentedControl<SupportMode>
+                  label="Workspace camera defaults"
+                  fullWidth
+                  value={activeWorkspace}
+                  onChange={(next) => setActiveWorkspace(next)}
+                  options={workspaceMeta.map((workspace) => ({ value: workspace.key, label: workspace.label }))}
+                />
               </div>
             </div>
+
+            <SettingRow
+              bordered
+              label={`${workspaceMeta.find((workspace) => workspace.key === activeWorkspace)?.label} default camera`}
+              description={workspaceMeta.find((workspace) => workspace.key === activeWorkspace)?.hint}
+            >
+              <SegmentedControl
+                label={`${workspaceMeta.find((workspace) => workspace.key === activeWorkspace)?.label} default camera`}
+                value={workspaceCameraDefaults[activeWorkspace]}
+                onChange={(next) => onWorkspaceCameraModeChange(activeWorkspace, next as CameraProjectionMode)}
+                options={[
+                  { value: 'orthographic', label: 'Ortho' },
+                  { value: 'perspective', label: 'Perspective' },
+                ]}
+              />
+            </SettingRow>
           </div>
         )}
 
-        <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Camera feel
-              </div>
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                Controls smoothing and movement acceleration while orbiting, panning, and zooming.
-              </div>
-            </div>
-            <div className="flex items-center gap-1.5">
-              {([
-                { key: 'raw', label: 'Raw' },
-                { key: 'precise', label: 'Precise' },
-                { key: 'balanced', label: 'Balanced' },
-                { key: 'fast', label: 'Fast' },
-              ] as Array<{ key: CameraFeelPreset; label: string }>).map((option) => {
-                const active = cameraFeelPreset === option.key;
-                return (
-                  <button
-                    key={option.key}
-                    type="button"
-                    onClick={() => onCameraFeelPresetChange(option.key)}
-                    className="h-10 min-w-[104px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                    style={active
-                      ? {
-                          borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                          background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                          color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                        }
-                      : {
-                          borderColor: 'var(--border-subtle)',
-                          background: 'var(--surface-1)',
-                          color: 'var(--text-muted)',
-                        }}
-                  >
-                    {option.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </div>
+        <SettingRow
+          bordered
+          className="mt-2"
+          label="Camera feel"
+          description="Controls smoothing and movement acceleration while orbiting, panning, and zooming."
+        >
+          <SelectDropdown<CameraFeelPreset>
+            value={cameraFeelPreset}
+            options={[
+              { value: 'raw', label: 'Raw' },
+              { value: 'precise', label: 'Precise' },
+              { value: 'balanced', label: 'Balanced' },
+              { value: 'fast', label: 'Fast' },
+            ]}
+            onChange={(next) => onCameraFeelPresetChange(next)}
+            ariaLabel="Camera feel"
+            title="Camera feel"
+            className="w-36"
+            menuAlign="right"
+          />
+        </SettingRow>
       </section>
 
       {/* ── Rendering — Higher Contrast Model Edges ── */}
       <section
-        className="rounded-lg border p-3"
+        className="rounded-md border p-3"
         style={{
           background: 'var(--surface-1)',
           borderColor: 'var(--border-subtle)',
@@ -393,40 +247,26 @@ export function CameraSettingsTab({
           </div>
         </div>
 
-        <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Edge lines
-              </div>
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                Draws black outlines along hard edges of the model for better visual clarity.
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => onHigherContrastModelEdgesChange?.(!higherContrastModelEdges)}
-              className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-              style={higherContrastModelEdges
-                ? {
-                    borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                    color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                  }
-                : {
-                    borderColor: 'var(--border-subtle)',
-                    background: 'var(--surface-1)',
-                    color: 'var(--text-muted)',
-                  }}
-            >
-              {higherContrastModelEdges ? 'On' : 'Off'}
-            </button>
-          </div>
-        </div>
+        <SettingRow
+          bordered
+          className="mt-3"
+          label="Edge lines"
+          description="Draws black outlines along hard edges of the model for better visual clarity."
+        >
+          <SegmentedControl
+            label="Edge lines"
+            value={higherContrastModelEdges ? 'on' : 'off'}
+            onChange={(next) => onHigherContrastModelEdgesChange?.(next === 'on')}
+            options={[
+              { value: 'off', label: 'OFF' },
+              { value: 'on', label: 'ON' },
+            ]}
+          />
+        </SettingRow>
       </section>
 
       <section
-        className="rounded-lg border p-3"
+        className="rounded-md border p-3"
         style={{
           background: 'var(--surface-1)',
           borderColor: 'var(--border-subtle)',
@@ -452,93 +292,46 @@ export function CameraSettingsTab({
           </div>
         </div>
 
-        <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Trackpad navigation mode
-              </div>
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                Two-finger gestures can pan or orbit directly on a trackpad. Pinch-to-zoom stays available either way.
-              </div>
-            </div>
-            <div className="flex items-center gap-1.5">
-              {([
-                { key: 'off', label: 'Off' },
-                { key: 'pan', label: 'Pan' },
-                { key: 'orbit', label: 'Orbit' },
-              ] as Array<{ key: CameraTrackpadPrimaryAction; label: string }>).map((option) => {
-                const active = cameraTrackpadPrimaryAction === option.key;
-                return (
-                  <button
-                    key={option.key}
-                    type="button"
-                    onClick={() => onCameraTrackpadPrimaryActionChange(option.key)}
-                    className="h-10 min-w-[96px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                    style={active
-                      ? {
-                          borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                          background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                          color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                        }
-                      : {
-                          borderColor: 'var(--border-subtle)',
-                          background: 'var(--surface-1)',
-                          color: 'var(--text-muted)',
-                        }}
-                  >
-                    {option.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+        <div className="mt-3 space-y-1.5">
+          <SettingRow
+            bordered
+            label="Trackpad navigation mode"
+            description="What a two-finger drag does. Pinch-to-zoom still works either way."
+          >
+            <SelectDropdown<CameraTrackpadPrimaryAction>
+              value={cameraTrackpadPrimaryAction}
+              options={[
+                { value: 'off', label: 'Off' },
+                { value: 'pan', label: 'Pan' },
+                { value: 'orbit', label: 'Orbit' },
+              ]}
+              onChange={(next) => onCameraTrackpadPrimaryActionChange(next)}
+              ariaLabel="Trackpad navigation mode"
+              title="Trackpad navigation mode"
+              className="w-36"
+              menuAlign="right"
+            />
+          </SettingRow>
 
           {cameraTrackpadPrimaryAction !== 'off' && (
             <>
-              <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                      Alternate gesture modifier
-                    </div>
-                    <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                      Hold this key to temporarily switch two-finger drag to {cameraTrackpadPrimaryAction === 'pan' ? 'orbit' : 'pan'}.
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    {([
-                      { key: 'alt', label: 'Option' },
-                      { key: 'shift', label: 'Shift' },
-                    ] as Array<{ key: CameraTrackpadModifierKey; label: string }>).map((option) => {
-                      const active = cameraTrackpadModifierKey === option.key;
-                      return (
-                        <button
-                          key={option.key}
-                          type="button"
-                          onClick={() => onCameraTrackpadModifierKeyChange(option.key)}
-                          className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                          style={active
-                            ? {
-                                borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                                background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                                color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                              }
-                            : {
-                                borderColor: 'var(--border-subtle)',
-                                background: 'var(--surface-1)',
-                                color: 'var(--text-muted)',
-                              }}
-                        >
-                          {option.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
+              <SettingRow
+                bordered
+                label="Alternate gesture modifier"
+                description={`Hold this key to temporarily switch two-finger drag to ${cameraTrackpadPrimaryAction === 'pan' ? 'orbit' : 'pan'}.`}
+              >
+                <SegmentedControl
+                  label="Alternate gesture modifier"
+                  value={cameraTrackpadModifierKey}
+                  onChange={(next) => onCameraTrackpadModifierKeyChange(next as CameraTrackpadModifierKey)}
+                  options={[
+                    { value: 'alt', label: 'Option' },
+                    { value: 'shift', label: 'Shift' },
+                  ]}
+                />
+              </SettingRow>
 
-              <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+              <div className="rounded-md border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
                 <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                   Trackpad acceleration
                 </div>

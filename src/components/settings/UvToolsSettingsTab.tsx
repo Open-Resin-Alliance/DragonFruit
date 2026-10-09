@@ -79,7 +79,7 @@ export function UvToolsSettingsTab({
   return (
     <div className="space-y-3">
       <section
-        className="rounded-lg border p-3"
+        className="rounded-md border p-3"
         style={{
           background: 'var(--surface-1)',
           borderColor: 'var(--border-subtle)',
@@ -115,8 +115,8 @@ export function UvToolsSettingsTab({
           <SegmentedControl
             label={_(msg`Enable UVTools Integration`)}
             options={[
-              { value: 'on', label: _(msg`ON`) },
               { value: 'off', label: _(msg`OFF`) },
+              { value: 'on', label: _(msg`ON`) },
             ]}
             value={uvToolsSettings.enabled ? 'on' : 'off'}
             onChange={(next) => onUvToolsSettingsChange({ ...uvToolsSettings, enabled: next === 'on' })}

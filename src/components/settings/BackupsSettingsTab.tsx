@@ -890,7 +890,7 @@ export function BackupsSettingsTab() {
 
   return (
     <div className="space-y-3">
-      <section className="relative rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+      <section className="relative rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
         {!loadingStatus && !backupsConfigured && (
           <div
             className="absolute right-3 top-3 z-10 rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide"
@@ -958,7 +958,7 @@ export function BackupsSettingsTab() {
           </div>
 
         {!setupComplete && (
-          <div className="mt-3 rounded-lg border p-3" style={{ borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 54%)', background: 'color-mix(in srgb, var(--accent), var(--surface-1) 95%)' }}>
+          <div className="mt-3 rounded-md border p-3" style={{ borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 54%)', background: 'color-mix(in srgb, var(--accent), var(--surface-1) 95%)' }}>
             <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}><Trans>Onboarding</Trans></div>
             <h4 className="mt-0.5 text-sm font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Set up private backups</Trans></h4>
             <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
@@ -1117,7 +1117,7 @@ export function BackupsSettingsTab() {
       </section>
 
       {setupComplete && (
-        <section className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+        <section className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
           <div className="flex items-center gap-2">
             <RefreshCcw className="h-4 w-4" style={{ color: 'var(--accent-secondary)' }} />
             <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Backup Management</Trans></h4>
@@ -1213,8 +1213,8 @@ export function BackupsSettingsTab() {
                   value={autoSyncEnabled ? 'on' : 'off'}
                   onChange={(value) => setAutoSyncEnabled(value === 'on')}
                   options={[
-                    { value: 'on', label: <Trans>ON</Trans> },
                     { value: 'off', label: <Trans>OFF</Trans> },
+                    { value: 'on', label: <Trans>ON</Trans> },
                   ]}
                 />
               </SettingRow>
@@ -1400,7 +1400,7 @@ export function BackupsSettingsTab() {
                     ))}
                   </aside>
 
-                  <div className="h-full min-h-0 rounded-lg border p-3 overflow-hidden flex flex-col" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                  <div className="h-full min-h-0 rounded-md border p-3 overflow-hidden flex flex-col" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                     {snapshotModalTab === 'overview' && (
                       <div className="h-full min-h-0 overflow-auto custom-scrollbar pr-1">
                         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">

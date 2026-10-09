@@ -670,7 +670,7 @@ export function PrinterVariantPickerModal({
         {/* Footer — hidden on the method chooser; the header X handles closing. */}
         {mode !== 'choose' && (
         <div
-          className="flex shrink-0 items-center justify-between gap-3 border-t px-3 py-2"
+          className="flex shrink-0 items-center justify-between gap-3 border-t px-2 py-2"
           style={{ borderColor: 'var(--border-subtle)' }}
         >
           <SetupModeButton

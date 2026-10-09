@@ -3484,7 +3484,7 @@ export function SlicingPanel({
                 }}
               />
             </div>
-            <div className="px-3 py-2 border-t flex items-center justify-end gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
+            <div className="px-2 py-2 border-t flex items-center justify-end gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
               <Button
                 variant="secondary"
                 size="auto"
@@ -3557,7 +3557,7 @@ export function SlicingPanel({
                 }}
               />
             </div>
-            <div className="px-3 py-2 border-t flex items-center justify-between gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
+            <div className="px-2 py-2 border-t flex items-center justify-between gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
               <Button
                 variant="secondary"
                 size="auto"

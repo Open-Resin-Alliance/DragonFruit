@@ -52,7 +52,7 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
   return (
     <div className="space-y-3">
       <section
-        className="rounded-lg border p-3"
+        className="rounded-md border p-3"
         style={{
           background: 'var(--surface-1)',
           borderColor: 'var(--border-subtle)',
@@ -87,8 +87,8 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
           <SegmentedControl
             label={_(msg`Enable 3D Mouse`)}
             options={[
-              { value: 'on', label: _(msg`ON`) },
               { value: 'off', label: _(msg`OFF`) },
+              { value: 'on', label: _(msg`ON`) },
             ]}
             value={settings.enabled ? 'on' : 'off'}
             onChange={(next) => onChange({ enabled: next === 'on' })}
@@ -188,7 +188,7 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
 
       {!navlibActive && (
       <section
-        className="rounded-lg border p-3"
+        className="rounded-md border p-3"
         style={{
           background: 'var(--surface-1)',
           borderColor: 'var(--border-subtle)',
@@ -289,8 +289,8 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
           <SegmentedControl
             label={_(msg`Dominant axis mode`)}
             options={[
-              { value: 'on', label: _(msg`ON`) },
               { value: 'off', label: _(msg`OFF`) },
+              { value: 'on', label: _(msg`ON`) },
             ]}
             value={settings.dominantAxis ? 'on' : 'off'}
             onChange={(next) => onChange({ dominantAxis: next === 'on' })}
@@ -301,7 +301,7 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
 
       {!navlibActive && (
       <section
-        className="rounded-lg border p-3"
+        className="rounded-md border p-3"
         style={{
           background: 'var(--surface-1)',
           borderColor: 'var(--border-subtle)',
