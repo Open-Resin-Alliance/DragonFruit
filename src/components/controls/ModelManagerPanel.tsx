@@ -202,7 +202,7 @@ export function ModelManagerPanel({
   onRepairModel,
   onOpenSupportsInfo,
   onAddModels,
-  onDelete: _onDelete,
+  onDelete,
   onVisibilityChange,
   dimmed = false,
   hidden = false,
@@ -228,7 +228,6 @@ export function ModelManagerPanel({
   const [renamingModelSuffix, setRenamingModelSuffix] = useState('');
   const [contextMenu, setContextMenu] = useState<PanelContextMenuState | null>(null);
 
-  void _onDelete;
   const cardRef = useRef<HTMLDivElement | null>(null);
   const resizeDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
 
@@ -680,7 +679,7 @@ export function ModelManagerPanel({
                       )}
                     </div>
 
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-0.5">
                       {onOpenSupportsInfo && (
                         <Tooltip content={formatModelInfoTooltip(_, model)}>
                           <IconButton
@@ -706,6 +705,17 @@ export function ModelManagerPanel({
                         title={model.visible ? _(msg`Hide`) : _(msg`Show`)}
                       >
                         {model.visible ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                      </IconButton>
+                      <IconButton
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDelete(model.id);
+                        }}
+                        title={_(msg({ message: 'Delete model', comment: 'Tooltip on the trash button on a model row in the Models panel. Deleting is undoable, so it asks nothing first.' }))}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
                       </IconButton>
 
                     </div>

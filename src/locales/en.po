@@ -308,7 +308,7 @@ msgid "Add joint"
 msgstr "Add joint"
 
 #. Tooltip on the plus in the Models panel header, which opens the mesh picker.
-#: src/components/controls/ModelManagerPanel.tsx:738
+#: src/components/controls/ModelManagerPanel.tsx:748
 msgid "Add models to the plate"
 msgstr "Add models to the plate"
 
@@ -915,7 +915,7 @@ msgstr "Can't open this scene"
 #: src/components/controls/AutoSupportPanel.tsx:652
 #: src/components/controls/IslandScanCard.tsx:184
 #: src/components/controls/IslandsPanel.tsx:304
-#: src/components/controls/ModelManagerPanel.tsx:760
+#: src/components/controls/ModelManagerPanel.tsx:770
 #: src/components/modals/AaSupportWarningModal.tsx:40
 #: src/components/printers/PrinterVariantPickerModal.tsx:695
 #: src/components/settings/FleetManagement.tsx:442
@@ -1142,7 +1142,7 @@ msgstr "Close dialog"
 msgid "Close material anti-aliasing settings"
 msgstr "Close material anti-aliasing settings"
 
-#: src/components/controls/ModelManagerPanel.tsx:754
+#: src/components/controls/ModelManagerPanel.tsx:764
 #: src/components/modals/AaSupportWarningModal.tsx:34
 #: src/components/modals/ObsoleteVoxlVersionModal.tsx:40
 #: src/components/modals/ScenePrinterMismatchModal.tsx:62
@@ -1219,8 +1219,8 @@ msgstr "Coincident"
 msgid "Collapse card"
 msgstr "Collapse card"
 
-#: src/components/controls/ModelManagerPanel.tsx:861
-#: src/components/controls/ModelManagerPanel.tsx:967
+#: src/components/controls/ModelManagerPanel.tsx:871
+#: src/components/controls/ModelManagerPanel.tsx:977
 msgid "Collapse folder"
 msgstr "Collapse folder"
 
@@ -1628,10 +1628,15 @@ msgstr "Delete {count} presets?"
 msgid "Delete Backup Snapshot"
 msgstr "Delete Backup Snapshot"
 
+#. Tooltip on the trash button on a model row in the Models panel. Deleting is undoable, so it asks nothing first.
+#: src/components/controls/ModelManagerPanel.tsx:716
+msgid "Delete model"
+msgstr "Delete model"
+
 #: src/app/page.tsx:11585
-#: src/components/controls/ModelManagerPanel.tsx:477
-#: src/components/controls/ModelManagerPanel.tsx:748
-#: src/components/controls/ModelManagerPanel.tsx:769
+#: src/components/controls/ModelManagerPanel.tsx:476
+#: src/components/controls/ModelManagerPanel.tsx:758
+#: src/components/controls/ModelManagerPanel.tsx:779
 msgid "Delete plate"
 msgstr "Delete plate"
 
@@ -1671,7 +1676,7 @@ msgid "Delete this plate"
 msgstr "Delete this plate"
 
 #: src/app/page.tsx:11544
-#: src/components/controls/ModelManagerPanel.tsx:749
+#: src/components/controls/ModelManagerPanel.tsx:759
 msgid "Delete this plate?"
 msgstr "Delete this plate?"
 
@@ -2062,8 +2067,8 @@ msgstr "Existing Supports Detected"
 msgid "Expand card"
 msgstr "Expand card"
 
-#: src/components/controls/ModelManagerPanel.tsx:861
-#: src/components/controls/ModelManagerPanel.tsx:967
+#: src/components/controls/ModelManagerPanel.tsx:871
+#: src/components/controls/ModelManagerPanel.tsx:977
 msgid "Expand folder"
 msgstr "Expand folder"
 
@@ -2444,7 +2449,7 @@ msgstr "Grid spacing on slopes at the self-support angle — higher = sparser"
 msgid "Grid Threshold"
 msgstr "Grid Threshold"
 
-#: src/components/controls/ModelManagerPanel.tsx:460
+#: src/components/controls/ModelManagerPanel.tsx:459
 msgid "Group selected"
 msgstr "Group selected"
 
@@ -2486,7 +2491,7 @@ msgstr "Height:"
 msgid "Held against toppling and peel"
 msgstr "Held against toppling and peel"
 
-#: src/components/controls/ModelManagerPanel.tsx:706
+#: src/components/controls/ModelManagerPanel.tsx:705
 msgid "Hide"
 msgstr "Hide"
 
@@ -3326,12 +3331,12 @@ msgstr "Mode"
 msgid "Model {index}/{total}: {modelName}"
 msgstr "Model {index}/{total}: {modelName}"
 
-#: src/components/controls/ModelManagerPanel.tsx:507
+#: src/components/controls/ModelManagerPanel.tsx:506
 msgid "Model actions…"
 msgstr "Model actions…"
 
 #. Accessible name of the info button on a model row. The tooltip beside it lists the mesh size and polygon count.
-#: src/components/controls/ModelManagerPanel.tsx:693
+#: src/components/controls/ModelManagerPanel.tsx:692
 msgid "Model details"
 msgstr "Model details"
 
@@ -3369,14 +3374,14 @@ msgstr "Model-Scale Sizing"
 
 #. Section heading of the models context menu. Rendered uppercase.
 #. Title of the panel listing every model loaded into the scene.
-#: src/components/controls/ModelManagerPanel.tsx:728
-#: src/components/controls/ModelManagerPanel.tsx:1007
+#: src/components/controls/ModelManagerPanel.tsx:738
+#: src/components/controls/ModelManagerPanel.tsx:1017
 #: src/components/controls/toolRailEntries.ts:66
 #: src/components/controls/toolRailEntries.ts:169
 msgid "Models"
 msgstr "Models"
 
-#: src/components/controls/ModelManagerPanel.tsx:1008
+#: src/components/controls/ModelManagerPanel.tsx:1018
 msgid "Models context menu"
 msgstr "Models context menu"
 
@@ -3583,7 +3588,7 @@ msgstr "No meshes loaded yet. Import a model first, then return to Slicing."
 msgid "No model selected"
 msgstr "No model selected"
 
-#: src/components/controls/ModelManagerPanel.tsx:787
+#: src/components/controls/ModelManagerPanel.tsx:797
 msgid "No models loaded"
 msgstr "No models loaded"
 
@@ -3914,8 +3919,8 @@ msgstr "Output"
 
 #. Name of the automatic folder collecting models that sit outside the build plate.
 #. Name of the automatic folder collecting models that sit outside the build plate.
-#: src/components/controls/ModelManagerPanel.tsx:302
-#: src/components/controls/ModelManagerPanel.tsx:318
+#: src/components/controls/ModelManagerPanel.tsx:301
+#: src/components/controls/ModelManagerPanel.tsx:317
 msgid "Outside plate"
 msgstr "Outside plate"
 
@@ -4043,7 +4048,7 @@ msgstr "Plate behaviour across several beds"
 msgid "Plate Mode"
 msgstr "Plate Mode"
 
-#: src/components/controls/ModelManagerPanel.tsx:905
+#: src/components/controls/ModelManagerPanel.tsx:915
 msgid "Plate name"
 msgstr "Plate name"
 
@@ -4439,20 +4444,20 @@ msgstr "Rename"
 msgid "Rename build plate"
 msgstr "Rename build plate"
 
-#: src/components/controls/ModelManagerPanel.tsx:487
-#: src/components/controls/ModelManagerPanel.tsx:930
+#: src/components/controls/ModelManagerPanel.tsx:486
+#: src/components/controls/ModelManagerPanel.tsx:940
 msgid "Rename folder"
 msgstr "Rename folder"
 
-#: src/components/controls/ModelManagerPanel.tsx:493
+#: src/components/controls/ModelManagerPanel.tsx:492
 msgid "Rename model"
 msgstr "Rename model"
 
-#: src/components/controls/ModelManagerPanel.tsx:666
+#: src/components/controls/ModelManagerPanel.tsx:665
 msgid "Rename model base name"
 msgstr "Rename model base name"
 
-#: src/components/controls/ModelManagerPanel.tsx:474
+#: src/components/controls/ModelManagerPanel.tsx:473
 msgid "Rename plate"
 msgstr "Rename plate"
 
@@ -4486,7 +4491,7 @@ msgstr "Reopen {0}"
 msgid "Repair"
 msgstr "Repair"
 
-#: src/components/controls/ModelManagerPanel.tsx:496
+#: src/components/controls/ModelManagerPanel.tsx:495
 msgid "Repair mesh…"
 msgstr "Repair mesh…"
 
@@ -4921,7 +4926,7 @@ msgstr "Select a printer profile to view details."
 msgid "Select a printer to detect its model."
 msgstr "Select a printer to detect its model."
 
-#: src/components/controls/ModelManagerPanel.tsx:486
+#: src/components/controls/ModelManagerPanel.tsx:485
 msgid "Select folder"
 msgstr "Select folder"
 
@@ -5058,7 +5063,7 @@ msgstr "Shells:"
 msgid "Shortest Print Time"
 msgstr "Shortest Print Time"
 
-#: src/components/controls/ModelManagerPanel.tsx:706
+#: src/components/controls/ModelManagerPanel.tsx:705
 msgid "Show"
 msgstr "Show"
 
@@ -5291,7 +5296,7 @@ msgid "Split the model along a drawn seam"
 msgstr "Split the model along a drawn seam"
 
 #. Context menu action: split a multi-body 3MF import into independent models.
-#: src/components/controls/ModelManagerPanel.tsx:501
+#: src/components/controls/ModelManagerPanel.tsx:500
 msgid "Split to bodies"
 msgstr "Split to bodies"
 
@@ -5581,7 +5586,7 @@ msgid "The models on this plate are deleted with it."
 msgstr "The models on this plate are deleted with it."
 
 #. The count is how many models stand on the plate being deleted.
-#: src/components/controls/ModelManagerPanel.tsx:775
+#: src/components/controls/ModelManagerPanel.tsx:785
 msgid "The models on this plate are deleted with it. Undo brings them back."
 msgstr "The models on this plate are deleted with it. Undo brings them back."
 
@@ -5880,11 +5885,11 @@ msgstr "Unavailable"
 msgid "Undo brings the models back"
 msgstr "Undo brings the models back"
 
-#: src/components/controls/ModelManagerPanel.tsx:488
+#: src/components/controls/ModelManagerPanel.tsx:487
 msgid "Ungroup folder"
 msgstr "Ungroup folder"
 
-#: src/components/controls/ModelManagerPanel.tsx:466
+#: src/components/controls/ModelManagerPanel.tsx:465
 msgid "Ungroup selected"
 msgstr "Ungroup selected"
 
