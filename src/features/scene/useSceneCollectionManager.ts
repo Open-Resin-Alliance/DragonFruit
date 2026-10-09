@@ -5908,25 +5908,48 @@ export function useSceneCollectionManager(options?: {
         sourceTransformsByModelId.set(imported.id, cloneTransform(imported.transform));
       }
 
+      // The file's models stand where its own printer's beds were laid out, and the cascade
+      // spaces beds by the build volume: on any other printer every bed but the first is
+      // somewhere else, so the models have to make the same move. A model centred on plate 2
+      // stays centred on plate 2. The file's supports follow their models, because the shift
+      // is the delta against the transforms captured above.
+      const recordedLayoutMm = document.meta?.printer?.printer.buildVolumeMm;
+      if (recordedLayoutMm && scenePlates.plates.length > 1) {
+        const filePlates = scenePlates.plates.map((plate) => ({ id: plate.id, name: plate.name ?? '' }));
+        const shifted = modelsShiftedForRelaidPlates(filePlates, filePlates, importedModels, {
+          widthMm: recordedLayoutMm.width,
+          depthMm: recordedLayoutMm.depth,
+          originMode: view3dSettings.originMode,
+        });
+        if (shifted !== importedModels) importedModels.splice(0, importedModels.length, ...shifted);
+      }
+
       // "Off-plate" means standing on none of the file's beds, not off the bed being worked
       // on: reading the active one alone called every model on any other bed out of bounds,
-      // which in a multi-plate scene is the whole point of the file.
+      // which in a multi-plate scene is the whole point of the file. A file that names no
+      // plates of its own leaves the beds already here in place, so those are the ones.
       const localBedMinX = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.widthMm * 0.5;
       const localBedMinY = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.depthMm * 0.5;
-      const importedBedRects: Rect2D[] = scenePlates.plates.map((plate, index) => {
+      const bedRectAt = (index: number, count: number): Rect2D => {
         const { dxMm, dyMm } = plateCascadeOffsetMm(index, {
           widthMm: view3dSettings.widthMm,
           depthMm: view3dSettings.depthMm,
-        }, scenePlates.plates.length);
+        }, count);
         return {
           minX: localBedMinX + dxMm,
           maxX: localBedMinX + dxMm + view3dSettings.widthMm,
           minY: localBedMinY + dyMm,
           maxY: localBedMinY + dyMm + view3dSettings.depthMm,
         };
-      });
+      };
+      const importedBedRects: Rect2D[] = scenePlates.plates.map((plate, index) => (
+        bedRectAt(index, scenePlates.plates.length)
+      ));
+      const bedRectsForImport = importedBedRects.length > 0
+        ? importedBedRects
+        : platesRef.current.map((plate, index, all) => bedRectAt(index, all.length));
       const offPlateImportedModels = importedModels.filter(
-        (model) => !rectStandsOnAnyBed(modelFootprintRect(model), importedBedRects),
+        (model) => !rectStandsOnAnyBed(modelFootprintRect(model), bedRectsForImport),
       );
       const shouldPromptForPlacement = offPlateImportedModels.length > 0 && !options?.suppressPlacementPrompt;
 
