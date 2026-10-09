@@ -4321,6 +4321,17 @@ export function SceneCanvas({
   const isHomeResetAnimating = cameraHomeResetRunId > cameraHomeResetCompletedRunId;
   const hasModelsOnPlate = models.length > 0;
   const cameraInteractionCycleEnabled = hasModelsOnPlate && !isIntroAnimating && !isHomeResetAnimating;
+  /**
+   * Whether the camera answers the pointer at all. Named once because two things need
+   * the same answer: the props OrbitControls is handed, and the stale-disable recovery,
+   * which has to know when a disable is the app's own rather than an animation's.
+   */
+  const cameraInteractionEnabled = cameraInteractionCycleEnabled
+    && !((mode === 'prepare' || mode === 'support') && transformMode === 'supportBlockers' && blockerStrokeActive)
+    && !isGizmoDragging
+    && !isMarqueeSelecting
+    && !isPlacementActive
+    && !organicCutDragging;
   const isDropAnimating = Object.keys(entryDropOffsets).length > 0;
   const dynamicDpr: [number, number] = isLinux
     ? [1, 1]
@@ -7751,14 +7762,7 @@ export function SceneCanvas({
           // Orthographic wheel is a real dolly handled in onTrackpadWheel; letting
           // OrbitControls also zoom would fight the derived frustum.
           enableZoom={cameraProjectionMode === 'perspective'}
-          enabled={
-            cameraInteractionCycleEnabled
-            && !((mode === 'prepare' || mode === 'support') && transformMode === 'supportBlockers' && blockerStrokeActive)
-            && !isGizmoDragging
-            && !isMarqueeSelecting
-            && !isPlacementActive
-            && !organicCutDragging
-          }
+          enabled={cameraInteractionEnabled}
           onStart={handleOrbitStart}
           onChange={handleOrbitChange}
           onEnd={handleOrbitEnd}
@@ -7851,7 +7855,7 @@ export function SceneCanvas({
           lastEventAtRef={trackpadPoseLastEventAtRef}
           tauMs={cameraTrackpadPoseTauMs}
         />
-        <CameraControlsRecovery />
+        <CameraControlsRecovery interactionEnabled={cameraInteractionEnabled} />
         <CameraFocusController selectedIslandId={overlaySelectedIslandId ?? null} islandMarkers={islandMarkers ?? []} onClearSelection={onClearSelection} />
         {mode === 'support' && supportPathfindingDebugState.enabled && (
           <SupportPathfindingDebugOverlay snapshot={supportPathfindingDebugState.snapshot} />
