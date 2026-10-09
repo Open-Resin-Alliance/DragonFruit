@@ -20,7 +20,7 @@
 //! so there is nothing to orient or guess.
 //!
 //! The same bundle also gives the *average escaping direction*, [`VertexVisibility::moment`],
-//! which is the bent normal and the field's gradient in one vector — three
+//! which is the vertex's bent normal and points along the field's slope — three
 //! accumulates per sample, no extra rays.
 
 use crate::bvh::Bvh;
@@ -183,14 +183,22 @@ pub fn bake_vertex_occlusion(mesh: &IndexedMesh, rays: usize, reach_mm: Option<f
 /// than washing uniformly, and so that interpolating it across a face varies a
 /// vector instead of drawing a chord through a scalar.
 ///
-/// The moment's component *in the tangent plane* is the field's gradient, up to
-/// a constant and with the sign flipped: the fan's own moment is the fixed axis
-/// `(0, 0, 2/3)·n`, so the blocked and unblocked moments are two views of one
-/// number and either one determines the other. That is what a reconstruction
-/// carrying the slope needs — a chord through three vertex values has a
-/// discontinuous slope across every edge, which is the wedge a coarse mesh
-/// shows (see "Faces too long to carry a per-vertex field" in
-/// `docs/dev/tauri-ipc-bridge.md`), and a field that carries the slope does not.
+/// Its tangential part *points* along the field's slope, and it is not the
+/// slope. A direction moment weights every blocked direction equally, while the
+/// derivative of the field weights each by how far away its occluder sits,
+/// because moving the receiver moves a far silhouette less than a near one.
+/// Carrying that distance explicitly does not close the gap either: measured
+/// against the field's own finite difference on a floor facing a wall, a blocked
+/// moment weighted by `w/t` runs from 0.6 of the slope next to the wall to more
+/// than 50 at the end of the reach, because what is left in it is the falloff
+/// weighting's own derivative. So the moment is a *direction* to reconstruct
+/// with, not a gradient, and the slope a reconstruction wants is still open.
+///
+/// What the slope is for is the wedge a coarse face shows: a chord through three
+/// vertex values has a discontinuous slope across every edge, and a
+/// reconstruction carrying the slope does not
+/// (see "Faces too long to carry a per-vertex field" in
+/// `docs/dev/tauri-ipc-bridge.md`). That page has the numbers above.
 ///
 /// A vertex with no usable normal (isolated or degenerate) gets a zero moment,
 /// which reads as "no direction known"; a consumer falls back to the geometric
@@ -609,15 +617,16 @@ mod tests {
         );
     }
 
-    /// The moment's component in the tangent plane is the occlusion field's
-    /// gradient: it leans away from the occluder, and less as the occluder
-    /// recedes, while the occlusion value rises with distance.
+    /// The moment's component in the tangent plane leans away from the occluder,
+    /// and less as the occluder recedes, while the occlusion value rises with
+    /// distance. It tracks the field's slope rather than being it (see
+    /// [`VertexVisibility::moment`] for what it is not), and this is the part of
+    /// that claim that holds: on the rise out of a crease it points the right way
+    /// and fades as the field flattens.
     ///
-    /// This is the invariant a higher-order reconstruction stands on. If the
-    /// moment were only "a direction to shade with" it could point anywhere on a
-    /// surface whose shading is uniform; this is what says it carries the slope,
-    /// so a face can be shaded with the slope rather than with a chord through
-    /// three vertex values.
+    /// If the moment were only "a direction to shade with" it could point
+    /// anywhere on a surface whose shading is uniform, and the first assertion
+    /// below would be arbitrary.
     #[test]
     fn moment_leans_away_from_the_occluder_along_the_rising_field() {
         // A 1mm-triangulated 40mm floor with a block 6mm tall over its middle.

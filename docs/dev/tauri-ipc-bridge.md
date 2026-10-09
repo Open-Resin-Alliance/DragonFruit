@@ -277,6 +277,23 @@ nothing at all on a sphere (measured, in the crate's tests). What remains is
 per-vertex error of the same 0.057, incoherent now; a gradient signal a mild
 crease produces is a few tenths, so it stays above it.
 
+**The moment is a direction, not the slope, and the difference is not a
+constant.** A direction moment weights every blocked direction equally; the
+derivative of the field weights each by how far away its occluder is, because
+moving the receiver moves a far silhouette less than a near one. For a
+differential occluder patch the two kernels differ by exactly `1/|d|`, so a
+blocked moment weighted by `w/t` was accumulated as a slope — and measured
+against the field's own box-smoothed finite difference on a 0.2mm floor facing a
+6mm wall, the ratio between them runs 0.6, 0.6, 2.5, 4.0, 4.7, 5.9, 8.6, 12.3,
+21.8, 56 across ten stations from the wall out to the reach. The 4 the
+differential case predicts is there in the middle of that run and nowhere else,
+because past it what the accumulator is differentiating is the falloff weighting
+and not the geometry, and next to the wall the occluder subtends a solid angle
+the differential case does not describe. So the moment is what a reconstruction
+should take its *direction* from, and an estimator of the slope itself is still
+open. It was reverted rather than shipped: nothing consumes a payload whose
+magnitude is off by two orders of magnitude at the ends of its range.
+
 ## The Rust side of the seam
 
 Where the TS side is a set of wrappers, the native side keeps its cross-command
