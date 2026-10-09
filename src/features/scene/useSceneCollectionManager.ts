@@ -68,7 +68,7 @@ import {
   saveView3DSettings,
   type View3DSettings,
 } from '@/components/settings/view3dPreferences';
-import { followedPlateIdForMove } from '@/features/scene/plates/plateInteractivity';
+import { followedPlateIdForMove, rectStandsOnAnyBed } from '@/features/scene/plates/plateInteractivity';
 import {
   getMultiPlateSettingsServerSnapshot,
   getMultiPlateSettingsSnapshot,
@@ -1777,24 +1777,27 @@ export function useSceneCollectionManager(options?: {
     };
   }, [footprintForTransform]);
 
-  const isModelFootprintInsidePlate = useCallback((
+  /** A model's footprint where it stands, as a world rect. Every bed test starts from it. */
+  const modelFootprintRect = useCallback((
     model: Pick<LoadedModel, 'geometry' | 'transform'>,
-  ) => {
+  ): Rect2D => {
     const placement = buildMeshPlacementOffsets(
       { x: model.transform.position.x, y: model.transform.position.y },
       model.geometry.size,
       model.transform,
     );
 
-    const modelRect: Rect2D = {
+    return {
       minX: model.transform.position.x + placement.minXOffset,
       maxX: model.transform.position.x + placement.maxXOffset,
       minY: model.transform.position.y + placement.minYOffset,
       maxY: model.transform.position.y + placement.maxYOffset,
     };
+  }, [buildMeshPlacementOffsets]);
 
-    return isRectInsidePlate(modelRect);
-  }, [buildMeshPlacementOffsets, isRectInsidePlate]);
+  const isModelFootprintInsidePlate = useCallback((
+    model: Pick<LoadedModel, 'geometry' | 'transform'>,
+  ) => isRectInsidePlate(modelFootprintRect(model)), [isRectInsidePlate, modelFootprintRect]);
 
   const findFreeSpotCentersForModels = useCallback((
     incomingModels: Array<Pick<LoadedModel, 'geometry' | 'transform'>>,
@@ -5901,7 +5904,26 @@ export function useSceneCollectionManager(options?: {
         sourceTransformsByModelId.set(imported.id, cloneTransform(imported.transform));
       }
 
-      const offPlateImportedModels = importedModels.filter((model) => !isModelFootprintInsidePlate(model));
+      // "Off-plate" means standing on none of the file's beds, not off the bed being worked
+      // on: reading the active one alone called every model on any other bed out of bounds,
+      // which in a multi-plate scene is the whole point of the file.
+      const localBedMinX = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.widthMm * 0.5;
+      const localBedMinY = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.depthMm * 0.5;
+      const importedBedRects: Rect2D[] = scenePlates.plates.map((plate, index) => {
+        const { dxMm, dyMm } = plateCascadeOffsetMm(index, {
+          widthMm: view3dSettings.widthMm,
+          depthMm: view3dSettings.depthMm,
+        }, scenePlates.plates.length);
+        return {
+          minX: localBedMinX + dxMm,
+          maxX: localBedMinX + dxMm + view3dSettings.widthMm,
+          minY: localBedMinY + dyMm,
+          maxY: localBedMinY + dyMm + view3dSettings.depthMm,
+        };
+      });
+      const offPlateImportedModels = importedModels.filter(
+        (model) => !rectStandsOnAnyBed(modelFootprintRect(model), importedBedRects),
+      );
       const shouldPromptForPlacement = offPlateImportedModels.length > 0 && !options?.suppressPlacementPrompt;
 
       // Preserve authored placement by default. Only auto-arrange if models are off-plate

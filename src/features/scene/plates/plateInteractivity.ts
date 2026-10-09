@@ -83,3 +83,23 @@ export function followedPlateIdForMove({
   if (landedPlateIds.size !== 1) return null;
   return [...landedPlateIds][0] ?? null;
 }
+
+/** An axis-aligned rect in world XY: a bed's build volume, or a footprint on it. */
+export type PlateRect = { minX: number; minY: number; maxX: number; maxY: number };
+
+/**
+ * Whether a footprint stands on one of the beds, which is what "on a plate" means.
+ *
+ * A model between two beds, or beyond the last one, stands on none of them. Asking the bed
+ * being worked on instead reads every model on any other bed as off-plate, and in a
+ * multi-plate scene that is every model sitting exactly where the file put it. Touching a
+ * bed's edge counts, matching the plate frames the rest of the scene uses.
+ */
+export function rectStandsOnAnyBed(rect: PlateRect, beds: readonly PlateRect[]): boolean {
+  return beds.some((bed) => (
+    rect.minX >= bed.minX
+    && rect.maxX <= bed.maxX
+    && rect.minY >= bed.minY
+    && rect.maxY <= bed.maxY
+  ));
+}
