@@ -62,6 +62,8 @@
     "tauri:bundle:windows": "node scripts/tauri-build.mjs --target x86_64-pc-windows-msvc --bundles msi,nsis",
     "tauri:dev": "node scripts/tauri-dev.mjs",
     "test": "node --import tsx --test 'src/**/*.test.{ts,tsx}' 'plugins/**/*.test.{ts,tsx}'",
+    "pretest:dom": "npm run generate:plugin-registry && npm run generate:builtin-simple-plugins && npm run generate:support-registrations && npm run generate:support-renderers",
+    "test:dom": "node --import tsx --import ./scripts/test-dom/register.mjs --test 'src/**/*.dom-test.tsx'",
     "test:watch": "node --import tsx --test --watch 'src/**/*.test.{ts,tsx}' 'plugins/**/*.test.{ts,tsx}'",
     "generate:support-registrations": "node scripts/generate-support-registrations.mjs",
     "generate:support-renderers": "node scripts/generate-support-renderers.mjs",
@@ -98,6 +100,9 @@
     "zustand": "^5.0.8"
   },
   "devDependencies": {
+    "@babel/core": "^7.29.7",
+    "@happy-dom/global-registrator": "^20.14.6",
+    "@lingui/babel-plugin-lingui-macro": "^6.3.0",
     "@lingui/cli": "^6.3.0",
     "@lingui/swc-plugin": "^6.4.0",
     "@tailwindcss/postcss": "^4.1.16",
@@ -108,6 +113,7 @@
     "@types/react-dom": "^19.2.2",
     "@types/three": "^0.181.0",
     "babel-plugin-react-compiler": "1.0.0",
+    "esbuild": "^0.25.12",
     "eslint": "^9.39.3",
     "eslint-config-next": "^16.3.8",
     "tailwindcss": "^4.1.16",
