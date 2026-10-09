@@ -63,9 +63,10 @@ pub fn refine_coarse_faces(mesh: IndexedMesh) -> IndexedMesh {
     }
     // Bounded, and spent on the longest edges first: refining a dense hard-surface
     // part all the way to its own detail scale measured 8.31x the triangles and
-    // 11x the bake, which is not a trade a shading term gets to make.
-    let budget = (mesh.triangles.len() as f32 * dragonfruit_mesh_core::refine::DEFAULT_GROWTH_LIMIT)
-        as usize;
+    // 11x the bake, which is not a trade a shading term gets to make. The budget
+    // is `refinement_budget`'s, not a bare fraction: on a coarse mesh a fraction
+    // of a small count is no budget at all.
+    let budget = dragonfruit_mesh_core::refine::refinement_budget(mesh.triangles.len());
     dragonfruit_mesh_core::refine::refine_long_edges_with_budget(
         &mesh,
         max_edge,
@@ -77,6 +78,77 @@ pub fn refine_coarse_faces(mesh: IndexedMesh) -> IndexedMesh {
 /// Default merge epsilon used when reading unindexed soup (STL). Expressed
 /// as a fraction of the mesh bbox diagonal.
 pub const DEFAULT_MERGE_EPSILON: f32 = 1e-5;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dragonfruit_mesh_core::refine::{longest_edge, refinement_budget, MAX_EDGE_DIAGONAL_FRACTION};
+
+    fn box_soup(min: [f32; 3], max: [f32; 3]) -> Vec<f32> {
+        let c = [
+            [min[0], min[1], min[2]],
+            [max[0], min[1], min[2]],
+            [max[0], max[1], min[2]],
+            [min[0], max[1], min[2]],
+            [min[0], min[1], max[2]],
+            [max[0], min[1], max[2]],
+            [max[0], max[1], max[2]],
+            [min[0], max[1], max[2]],
+        ];
+        let faces: [[usize; 4]; 6] = [
+            [0, 1, 2, 3],
+            [4, 5, 6, 7],
+            [0, 1, 5, 4],
+            [1, 2, 6, 5],
+            [2, 3, 7, 6],
+            [3, 0, 4, 7],
+        ];
+        let mut out = Vec::new();
+        for f in faces {
+            for tri in [[f[0], f[1], f[2]], [f[0], f[2], f[3]]] {
+                for i in tri {
+                    out.extend_from_slice(&c[i]);
+                }
+            }
+        }
+        out
+    }
+
+    /// A coarse model is the model refinement exists for, so it has to reach the
+    /// target like any other.
+    ///
+    /// The growth fraction alone refuses: measured before the headroom, this block
+    /// came out at 14 triangles with its longest edge untouched at 169.71mm,
+    /// 48.7x the 3.49mm target, so every big face still carried its occlusion as
+    /// one straight ramp. The faces are planar, so nothing about the shape changes.
+    #[test]
+    fn a_coarse_block_is_refined_to_the_target() {
+        let mesh = IndexedMesh::from_triangle_soup(&box_soup([0.0; 3], [120.0, 120.0, 40.0]), 1e-5);
+        let triangles_before = mesh.triangles.len();
+        let volume_before = mesh.signed_volume();
+        let diagonal = mesh.bbox().diag();
+        let target = diagonal * MAX_EDGE_DIAGONAL_FRACTION;
+
+        let refined = refine_coarse_faces(mesh);
+
+        let longest = longest_edge(&refined);
+        assert!(
+            longest <= target * 1.05,
+            "a coarse block should come out at the target: longest {longest}mm against {target}mm",
+        );
+        assert!(
+            refined.triangles.len() <= refinement_budget(triangles_before),
+            "and inside the budget: {} triangles against {}",
+            refined.triangles.len(),
+            refinement_budget(triangles_before),
+        );
+        let volume_after = refined.signed_volume();
+        assert!(
+            (volume_after - volume_before).abs() < volume_before.abs() * 1e-4,
+            "subdividing planar faces must not change the shape: {volume_before} -> {volume_after}",
+        );
+    }
+}
 
 /// Write a mesh's triangle soup to `path` as raw little-endian f32 positions,
 /// matching the staging format used by `src-tauri`.

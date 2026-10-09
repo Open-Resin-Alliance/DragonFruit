@@ -243,6 +243,36 @@ went from 16.8mm to 1.1mm, its vertices from 1608 to 10261, the model from 150k 
 10ms. Meshes that are already fine are returned untouched, so the common case pays
 one pass over the triangles and nothing else.
 
+**Two paths escaped it, and one of them escaped the budget too.** A VOXL scene
+carries its models' original STL bytes in its MESH chunks, and the loader handed
+them to three's `STLLoader` in the renderer (`loadStlGeometryFromBuffer`), which
+is neither the native file dispatcher nor the plugin command, so a scene's models
+were never refined at all. The same call now asks `refine_mesh_soup`, which also
+gives them the welded, crease-split normals the native loaders produce, and it
+asks only below `REFINE_MAX_TRIANGLES` (400k): the command costs twice the mesh in
+traffic, and a mesh with faces too long for the field is a mesh with few of them,
+so the meshes that need it are the ones small enough to send. Above that limit a
+large mesh with a few huge faces still goes unrefined, which is a real gap and the
+rarer one.
+
+The budget was the second half. It was `1.3x` the *current* triangle count, spent
+longest-edge-first, which is proportional to the mesh that most needs it: measured
+on a 12-triangle 120mm block, `1.3x` bought 14 triangles and left the longest edge
+untouched at 169.71mm, 48.7x the 3.49mm target, so the model that most shows the
+wedge was the one refinement could not touch. `refinement_budget` now returns the
+larger of that fraction and a 250k-triangle headroom, which is invisible on the
+2.13M-triangle parts the fraction exists to protect (the fraction allows 639k
+there). Measured after: the 20-triangle plate-and-boss goes to 9856 triangles with
+its longest edge at 2.67mm, against a 3.40mm target, and the reported 768,734-
+triangle figure to 772,626 with its longest edge from 4.20mm to 0.81mm (+0.5%).
+
+What that is worth at the shading: rendering the plate-and-boss before and after,
+the field the coarse mesh draws differs from the refined one by a mean of 0.014,
+a p99 of 0.113 and up to 0.448, and the difference is a star of wedges radiating
+from the one dark vertex the plate's fan puts under the boss. The refined field
+has no such structure. Subdivision of planar faces changes no geometry: the block's
+signed volume is identical before and after.
+
 The frontend keeps two bakes in flight (`AO_BAKE_CONCURRENCY` in
 `useSceneCollectionManager.ts`): each command is parallel across vertices on its
 own, but the weld, the tree build and the transfer are serial phases, and in a

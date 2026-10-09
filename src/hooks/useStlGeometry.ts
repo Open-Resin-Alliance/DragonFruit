@@ -11,6 +11,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { accelerateGeometry } from '@/utils/bvh';
 import { computeFlatteningPlanes, type FlatteningPlane } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
 import { repairGeometryWithManifold } from '@/utils/manifoldRepair';
+import { REFINE_MAX_TRIANGLES, refineCoarseFaces } from '@/utils/tauriMeshBridge';
 import {
   analyzeFromGeometry,
   applyRepairedPositions,
@@ -972,17 +973,39 @@ export async function loadStlGeometry(fileUrl: string, options: ProcessGeometryO
   });
 }
 
+/**
+ * Parse a complete binary STL already in memory and prepare it for the scene.
+ *
+ * This is where a VOXL scene's embedded mesh arrives: the MESH chunk is the
+ * original STL bytes, and `loadMeshGeometry` routes them here rather than to the
+ * native file loaders. Those refine coarse faces and return welded, crease-split
+ * normals as they read; a buffer parsed by three does neither, so the same
+ * command the plugin import asks is asked here, and only when the mesh is small
+ * enough for the round trip to be free (see `REFINE_MAX_TRIANGLES`). The command
+ * returns the normals it welded, which is why the caller then has to skip
+ * `computeVertexNormals`.
+ */
 export async function loadStlGeometryFromBuffer(buffer: Uint8Array, options: ProcessGeometryOptions = {}): Promise<GeometryWithBounds> {
-  return new Promise((resolve, reject) => {
+  const loader = new STLLoader();
+  const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
+  const source = loader.parse(arrayBuffer);
+
+  let geometry = source;
+  let refined = false;
+  const triangles = (source.getAttribute('position')?.count ?? 0) / 3;
+  if (triangles > 0 && triangles <= REFINE_MAX_TRIANGLES) {
     try {
-      const loader = new STLLoader();
-      const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
-      const geometry = loader.parse(arrayBuffer);
-      processGeometry(geometry, options).then(resolve).catch(reject);
-    } catch (err) {
-      reject(err);
+      const result = await refineCoarseFaces(source);
+      if (result) {
+        geometry = result;
+        refined = true;
+      }
+    } catch (error) {
+      console.warn('[loadStlGeometry] buffer geometry left unrefined', error);
     }
-  });
+  }
+
+  return processGeometry(geometry, refined ? { ...options, _skipComputeNormals: true } : options);
 }
 
 function collectMergedGeometryFromObject3d(root: THREE.Object3D, sourceLabel: '3MF' | 'OBJ'): THREE.BufferGeometry {

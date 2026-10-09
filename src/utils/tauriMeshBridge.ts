@@ -110,6 +110,22 @@ export async function readPositionsFromCommand(
 }
 
 /**
+ * How large a mesh may be for [`refineCoarseFaces`] to be worth asking about.
+ *
+ * The command sends the whole soup and returns positions *and* normals, so it
+ * costs twice the mesh in traffic. A mesh with faces too long for the field is a
+ * mesh with few of them — the target is a fraction of the model's own diagonal,
+ * so a coarse face is a big face — which is what makes this gate cheap in
+ * practice: the meshes that need refining are the ones small enough to send.
+ *
+ * Above it, a mesh is left as it arrived. That is a real limit, and it is the
+ * right way round: a dense mesh has nothing to split, and a *large* mesh with a
+ * few huge faces is rarer than the import cost of treating every dense one as if
+ * it were coarse.
+ */
+export const REFINE_MAX_TRIANGLES = 400_000;
+
+/**
  * Ask the native side to refine geometry an importer built in the renderer.
  *
  * Only the importers that build geometry themselves need this: the native loaders
