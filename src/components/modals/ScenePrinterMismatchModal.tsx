@@ -80,7 +80,7 @@ export function ScenePrinterMismatchModal({
       <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
         <Trans comment="A printer name, shown in bold.">
           <strong className="text-sm font-medium" style={{ color: 'var(--text-strong)' }}>{recordedLabel}</strong>{' '}
-          builds {recordedBuildVolumeMm.width} × {recordedBuildVolumeMm.depth} ×{' '}
+          has a build volume of {recordedBuildVolumeMm.width} × {recordedBuildVolumeMm.depth} ×{' '}
           {recordedBuildVolumeMm.height} mm.
         </Trans>
       </p>
@@ -89,14 +89,14 @@ export function ScenePrinterMismatchModal({
           <Trans comment="A printer name, shown in bold.">
             The printer selected now,{' '}
             <strong className="text-sm font-medium" style={{ color: 'var(--text-strong)' }}>{currentPrinterName}</strong>
-            , builds {currentBuildVolumeMm.width} × {currentBuildVolumeMm.depth} ×{' '}
+            , has a build volume of {currentBuildVolumeMm.width} × {currentBuildVolumeMm.depth} ×{' '}
             {currentBuildVolumeMm.height} mm. A plate packed for the larger machine will not fit.
           </Trans>
         ) : (
           <Trans comment="A printer name, shown in bold.">
             The printer selected now,{' '}
             <strong className="text-sm font-medium" style={{ color: 'var(--text-strong)' }}>{currentPrinterName}</strong>
-            , builds {currentBuildVolumeMm.width} × {currentBuildVolumeMm.depth} ×{' '}
+            , has a build volume of {currentBuildVolumeMm.width} × {currentBuildVolumeMm.depth} ×{' '}
             {currentBuildVolumeMm.height} mm, and this scene was laid out for the other one.
           </Trans>
         )}
