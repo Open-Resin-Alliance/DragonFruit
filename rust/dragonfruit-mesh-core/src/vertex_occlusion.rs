@@ -60,6 +60,9 @@ const ORIGIN_BIAS_RATIO: f32 = 1e-3;
 const SOUP_MERGE_EPSILON: f32 = 1e-5;
 /// Fixed cosine-weighted hemisphere fan in tangent space (+Z up), deterministic
 /// so a re-bake reproduces itself. `rays` truncates it.
+///
+/// The fan is one table, shared by every vertex; what differs per vertex is the
+/// basis it is laid into and the turn [`fan_rotation`] gives it.
 fn hemisphere_samples(rays: usize) -> Vec<Vec3> {
     let count = rays.clamp(1, 32);
     (0..count)
@@ -77,6 +80,36 @@ fn hemisphere_samples(rays: usize) -> Vec<Vec3> {
             )
         })
         .collect()
+}
+
+/// How far to turn one vertex's fan about its own normal.
+///
+/// A finite fan's directions do not sum to its axis, and the shortfall is the
+/// same in every vertex's own tangent frame: eight samples leave a transverse
+/// moment of 0.057, a 4.85° lean, even on a surface whose true bent normal is its
+/// geometric normal everywhere. That is a coherent error rather than noise, it is
+/// the size of the gradient a mild crease produces, and on an open surface it is
+/// the whole reading. Turning the fan per vertex makes it incoherent, which is
+/// the error the scalar bake has always lived with, for a sine and a cosine per
+/// vertex.
+///
+/// A hash of the *position*, not of the vertex index: the fan has to be a
+/// function of the mesh and not of the order the mesh happened to be welded in,
+/// or two corners that weld to one vertex could take different fans and a
+/// re-import would reshuffle the field. The position is quantised at a thousandth
+/// of the reach first, to keep the hash off the last bits of a coordinate that
+/// corners within the weld tolerance of each other disagree about.
+fn fan_rotation(position: Vec3, reach: f32) -> f32 {
+    let quantum = (reach * 1e-3).max(f32::MIN_POSITIVE);
+    let mut hash: u32 = 0x9e37_79b9;
+    for axis in [position.x, position.y, position.z] {
+        let cell = (axis / quantum).round() as i64 as u64;
+        hash ^= (cell as u32) ^ ((cell >> 32) as u32);
+        hash = hash.wrapping_mul(0x85eb_ca6b);
+        hash ^= hash >> 13;
+    }
+    // A full turn, so no direction is preferred.
+    (hash as f32 / u32::MAX as f32) * std::f32::consts::TAU
 }
 
 /// The bake over a triangle soup: one value and one moment per *corner*, in the
@@ -261,6 +294,14 @@ pub fn bake_against_with_visibility(
             let bitangent = normal.cross(tangent);
             let bitangent = bitangent.scale(1.0 / bitangent.length().max(1e-12));
             let tangent = bitangent.cross(normal);
+            // This vertex's turn about its own normal, so the fan's own error is
+            // incoherent rather than a lean the whole surface shares.
+            let angle = fan_rotation(mesh.positions[index], reach);
+            let (sin, cos) = angle.sin_cos();
+            let (tangent, bitangent) = (
+                tangent.scale(cos).add(bitangent.scale(sin)),
+                bitangent.scale(cos).sub(tangent.scale(sin)),
+            );
 
             let origin = mesh.positions[index].add(normal.scale(bias));
             let mut hits = 0.0f32;
@@ -474,47 +515,65 @@ mod tests {
         );
     }
 
-    /// The moment the fan itself produces on an unoccluded surface.
+    /// The moment the fan itself produces on an unoccluded surface, at one
+    /// vertex.
     ///
     /// A finite fan's directions do not sum to its axis. Measured on the shipped
     /// one: 8 rays leave a **0.057 transverse moment, a 4.85° lean**, 16 leave
-    /// 0.030 (2.58°), 32 leave 0.016 (1.39°), 64 leave 0.009 (0.75°) — it falls
-    /// with ray count and it is *coherent*: the same lean in every vertex's own
-    /// tangent frame, so a flat floor reads as uniformly tilted rather than as
-    /// noise. Every directional claim below subtracts it, because on a surface
-    /// with one normal it is the entire reading of a vertex far from its occluder.
+    /// 0.030 (2.58°), 32 leave 0.016 (1.39°), 64 leave 0.009 (0.75°). It falls
+    /// with ray count, and every vertex used to lean the same way — which is why
+    /// [`fan_rotation`] turns the fan per vertex, and why the tests below care
+    /// about the *average* lean over a surface as much as its size.
     fn fan_bias() -> Vec3 {
         let samples = hemisphere_samples(DEFAULT_RAYS);
         let sum = samples.iter().fold(Vec3::ZERO, |acc, sample| acc.add(*sample));
         sum.scale(1.0 / samples.len() as f32)
     }
 
-    /// The visibility moment is a direction integral, and on a surface nothing
-    /// occludes it is the fan's own axis: two thirds of the normal, plus the
-    /// fan's transverse lean and nothing else.
+    /// An open surface's moment is the fan's own axis at every vertex — two
+    /// thirds of the normal — and, across vertices, the fan's transverse lean in
+    /// a different direction at each one, so it averages away instead of tilting
+    /// the surface.
     ///
-    /// That two thirds is not a tuned number — a cosine-weighted fan over a
-    /// hemisphere has `E[√(1 − u)] = 2/3` for `u` uniform — so the axis pins the
-    /// accumulation and the `1/N` scaling, and the transverse part pins the
-    /// tangent-to-mesh frame: the fan's mean is computed in tangent space and the
-    /// bake's is in mesh space, so a swapped basis fails here.
+    /// The two thirds is not a tuned number: a cosine-weighted fan over a
+    /// hemisphere has `E[√(1 − u)] = 2/3` for `u` uniform, so the axis pins the
+    /// accumulation and the `1/N` scaling, and the transverse magnitude pins the
+    /// tangent-to-mesh frame — the fan's mean is computed in tangent space and the
+    /// bake's is in mesh space, so a swapped basis or a mis-applied turn fails
+    /// here. The average is the whole point of the turn: before it, this surface
+    /// leaned 4.85° in one shared direction.
     #[test]
     fn open_surface_moment_is_the_fan_axis() {
-        // A flat plate: two triangles, four vertices, normal +Z, nothing above it.
-        let soup = [
-            0.0f32, 0.0, 0.0, 10.0, 0.0, 0.0, 10.0, 10.0, 0.0, //
-            0.0, 0.0, 0.0, 10.0, 10.0, 0.0, 0.0, 10.0, 0.0,
-        ];
+        // A flat 20mm plate of 1mm triangles: 441 vertices, one normal (+Z),
+        // nothing above it, and enough of them for an average to mean something.
+        let size = 20.0f32;
+        let step = 1.0f32;
+        let cells = (size / step) as u32;
+        let vertex = |x: u32, y: u32| [x as f32 * step, y as f32 * step, 0.0];
+        let mut soup = Vec::new();
+        for x in 0..cells {
+            for y in 0..cells {
+                let a = vertex(x, y);
+                let b = vertex(x + 1, y);
+                let c = vertex(x + 1, y + 1);
+                let d = vertex(x, y + 1);
+                soup.extend_from_slice(&[a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]]);
+                soup.extend_from_slice(&[a[0], a[1], a[2], c[0], c[1], c[2], d[0], d[1], d[2]]);
+            }
+        }
         let mesh = IndexedMesh::from_triangle_soup(&soup, 1e-5);
         let visibility = bake_vertex_visibility(&mesh, DEFAULT_RAYS, None);
-        let bias = fan_bias();
-        assert!(
-            bias.length() > 0.05,
-            "the fan's own transverse lean should be documented here, got {}",
-            bias.length(),
-        );
 
+        let lean = fan_bias();
+        assert!(
+            lean.length() > 0.05,
+            "the fan's own transverse lean should be documented here, got {}",
+            lean.length(),
+        );
         assert_eq!(visibility.moment.len(), mesh.positions.len());
+
+        let mut transverse_sum = Vec3::ZERO;
+        let mut transverse_abs = 0.0f32;
         for (index, moment) in visibility.moment.iter().enumerate() {
             let occlusion = visibility.occlusion[index];
             assert!(occlusion > 0.999, "the plate should be open, got {occlusion}");
@@ -522,16 +581,32 @@ mod tests {
                 (moment.z - 2.0 / 3.0).abs() < 0.01,
                 "an open surface's moment should sit at 2/3 of its normal, got {moment:?}",
             );
+            // The turn is about the normal, so it cannot change the length: every
+            // vertex still carries the fan's own lean, just somewhere else.
             assert!(
-                moment.sub(bias).length() < 1e-4,
-                "an open surface's moment is the fan's own mean and nothing else: \
-                 got {moment:?} against {bias:?}",
+                (moment.length() - lean.length()).abs() < 1e-4,
+                "the turn should preserve the fan's own lean: {moment:?} against {lean:?}",
             );
             assert!(
                 moment.length() <= occlusion + 1e-6,
                 "the moment cannot outrun the occlusion it comes from: {moment:?} at {occlusion}",
             );
+            transverse_sum = transverse_sum.add(Vec3::new(moment.x, moment.y, 0.0));
+            transverse_abs += moment.x.hypot(moment.y);
         }
+        let count = visibility.moment.len() as f32;
+        let averaged = Vec3::new(transverse_sum.x, transverse_sum.y, 0.0).length() / count;
+        assert!(
+            transverse_abs / count > 0.04,
+            "each vertex should still carry the lean, got {}",
+            transverse_abs / count,
+        );
+        assert!(
+            averaged < 0.01,
+            "the leans should point in every direction and average away, got {averaged} \
+             against {} at one vertex",
+            lean.length(),
+        );
     }
 
     /// The moment's component in the tangent plane is the occlusion field's
@@ -568,27 +643,35 @@ mod tests {
         let mesh = IndexedMesh::from_triangle_soup(&soup, 1e-5);
         let visibility = bake_vertex_visibility(&mesh, DEFAULT_RAYS, None);
 
-        // Floor vertices along y = 20, walking out from under the block's +x wall.
-        // The floor's normal is +Z everywhere, so every vertex shares one tangent
-        // frame and the fan's bias is one vector for the whole walk — which is
-        // exactly why it has to come off before the tilt says anything.
-        let bias = fan_bias().x;
+        // Floor vertices walking out from under the block's +x wall, averaged
+        // over the five lines at y = 18..22: the wall is uniform along y, so the
+        // signal is the same at every line, while the fan's error is per-vertex
+        // now and averages down with them. One line alone leaves the residual
+        // 0.057/√1 of the fan competing with the signal a few millimetres out.
+        let lines = [18.0f32, 19.0, 20.0, 21.0, 22.0];
         let mut walk = Vec::new();
         for x in 31..=37 {
-            let mut best = f32::MAX;
-            let mut nearest = None;
-            for (index, position) in mesh.positions.iter().enumerate() {
-                if position.z.abs() > 1e-6 {
-                    continue;
+            let mut occlusion = 0.0f32;
+            let mut tilt = 0.0f32;
+            for line in lines {
+                let mut best = f32::MAX;
+                let mut nearest = None;
+                for (index, position) in mesh.positions.iter().enumerate() {
+                    if position.z.abs() > 1e-6 {
+                        continue;
+                    }
+                    let distance = (position.x - x as f32).powi(2) + (position.y - line).powi(2);
+                    if distance < best {
+                        best = distance;
+                        nearest = Some(index);
+                    }
                 }
-                let distance = (position.x - x as f32).powi(2) + (position.y - 20.0).powi(2);
-                if distance < best {
-                    best = distance;
-                    nearest = Some(index);
-                }
+                let index = nearest.expect("a floor vertex in the walk");
+                occlusion += visibility.occlusion[index];
+                tilt += visibility.moment[index].x;
             }
-            let index = nearest.expect("a floor vertex in the walk");
-            walk.push((x, visibility.occlusion[index], visibility.moment[index].x - bias));
+            let samples = lines.len() as f32;
+            walk.push((x, occlusion / samples, tilt / samples));
         }
 
         // The walk has to span the decay, or the monotonicity below proves nothing.
@@ -606,24 +689,29 @@ mod tests {
             first.2,
         );
         assert!(
-            walk[2].2 > 0.0,
-            "the lean should survive past the first vertex, got {} at x={}",
-            walk[2].2,
-            walk[2].0,
+            last.2.abs() < 0.35 * first.2,
+            "and it should be gone by the end of the walk, got {} against {} near the wall",
+            last.2,
+            first.2,
         );
-        for pair in walk.windows(2) {
+        for (step, pair) in walk.windows(2).enumerate() {
             assert!(
                 pair[1].1 >= pair[0].1 - 0.02,
                 "the field should lighten with distance from the block: {:?} then {:?}",
                 (pair[0].0, pair[0].1),
                 (pair[1].0, pair[1].1),
             );
-            assert!(
-                pair[1].2 <= pair[0].2 + 0.02,
-                "and the lean should fade, not grow: {:?} then {:?}",
-                (pair[0].0, pair[0].2),
-                (pair[1].0, pair[1].2),
-            );
+            // Near the wall the signal runs the reading, so the lean has to fall;
+            // past it the fan's own per-vertex error is all that is left of the
+            // tilt and only the bound above says anything.
+            if step < 3 {
+                assert!(
+                    pair[1].2 <= pair[0].2 + 0.02,
+                    "and the lean should fade, not grow: {:?} then {:?}",
+                    (pair[0].0, pair[0].2),
+                    (pair[1].0, pair[1].2),
+                );
+            }
         }
     }
 

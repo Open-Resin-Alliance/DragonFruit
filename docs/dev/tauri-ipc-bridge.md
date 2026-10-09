@@ -264,14 +264,18 @@ made of: a chord through three vertex values has a discontinuous slope across
 every edge, and a field that carries the slope does not.
 
 Neither is wired up. `ao_vertex.rs` still returns one `f32` per corner and
-`softClay` still multiplies by `aBakedAo`. What blocks it is a property of the
-fan, measured in the crate's own tests: eight samples do not sum to their axis —
-the mean is 0.057 off it, a **4.85° lean** (16 rays: 0.030, 2.58°; 32: 0.016,
-1.39°; 64: 0.009, 0.75°) — and the lean is *coherent*, the same direction in
-every vertex's own tangent frame, so an open surface would read as uniformly
-tilted rather than as noise. A directional payload wants that decorrelated
-(rotate the fan by a hash of the vertex position, which is free) or a higher ray
-count (which is not).
+`softClay` still multiplies by `aBakedAo`. The fan that produces both is turned
+per vertex (`fan_rotation`: a hash of the vertex position, quantised at a
+thousandth of the reach, so the fan follows the mesh rather than the order it was
+welded in), because eight samples do not sum to their axis — the mean is 0.057
+off it, a **4.85° lean** (16 rays: 0.030, 2.58°; 32: 0.016, 1.39°; 64: 0.009,
+0.75°) — and it used to be the *same* lean in every vertex's own tangent frame,
+so an open surface leaned 4.85° in one direction rather than reading as noise.
+The turn costs a sine and a cosine per vertex and moves the scalar field itself
+by less than 0.002 on the mean and 0.006 at p5 of two occluding fixtures, and by
+nothing at all on a sphere (measured, in the crate's tests). What remains is
+per-vertex error of the same 0.057, incoherent now; a gradient signal a mild
+crease produces is a few tenths, so it stays above it.
 
 ## The Rust side of the seam
 
