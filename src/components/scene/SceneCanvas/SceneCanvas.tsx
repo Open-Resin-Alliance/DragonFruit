@@ -1667,6 +1667,8 @@ export function SceneCanvas({
     face: '#1f2937',
     text: '#f8fafc',
     accent: '#baf72e',
+    chip: '#20242c',
+    chipBorder: '#3a3f4b',
   });
     // Orientation labels are resolved out here, in the React tree, and handed to
   // the 3D helpers as props — those live inside the r3f reconciler, where the
@@ -2415,9 +2417,19 @@ export function SceneCanvas({
       // --surface-1 is the panel background; --text-strong is primary text.
       const face = tryColor('--surface-1', '#1f2937');
       const text = tryColor('--text-strong', '#f8fafc');
+      // The home chip wears the same surface and hairline as the app's own floating
+      // buttons, so it reads as a control rather than a stray glyph.
+      const chip = tryColor('--surface-0', '#20242c');
+      const chipBorder = tryColor('--border-subtle', '#3a3f4b');
       setGizmoColors((prev) => {
-        if (prev.face === face && prev.text === text && prev.accent === accent) return prev;
-        return { face, text, accent };
+        if (
+          prev.face === face
+          && prev.text === text
+          && prev.accent === accent
+          && prev.chip === chip
+          && prev.chipBorder === chipBorder
+        ) return prev;
+        return { face, text, accent, chip, chipBorder };
       });
     };
 
@@ -7772,8 +7784,10 @@ export function SceneCanvas({
         {!thumbnailCaptureActive && cameraInteractionCycleEnabled && (
           <ZUpGizmoHelper
             alignment="bottom-right"
-            margin={mode === 'printing' ? [72, 72] : [nonPrintingViewCubeRightMargin, 72]}
+            margin={mode === 'printing' ? [80, 80] : [nonPrintingViewCubeRightMargin, 80]}
             accentColor={gizmoColors.accent}
+            chipColor={gizmoColors.chip}
+            chipBorderColor={gizmoColors.chipBorder}
             onHome={resetCameraHome}
           >
             <ZUpGizmoViewcube
