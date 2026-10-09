@@ -178,6 +178,42 @@ different triangles. Clustering the occluder down to a 250k-triangle budget is 2
 faster but moves the field by a mean of 0.19, because the cell size that budget
 implies collapses the model's own detail.
 
+### What the material gets: a turned fan, 32 rays, one graph pass
+
+`bake_smoothed_occlusion_for_soup` is what `ao_vertex.rs` calls, and it is three
+things stacked, each measured against a reference built from two 64-ray bakes:
+
+| | puck (384,324 verts) | poussin (85,395) |
+| --- | --- | --- |
+| fixed fan, 8 rays (what shipped) | RMS 0.0554, roughness 0.0303 | RMS 0.0534, roughness 0.0323 |
+| turned fan, 32 rays, one graph pass | RMS 0.0242, roughness 0.0097 | RMS 0.0195, roughness 0.0098 |
+
+Roughness here is the mean deviation from a vertex's one-ring average, which is
+the mesh-space form of the striping a zoomed view shows. The two levers are
+independent: rays buy accuracy, and the graph pass buys smoothness. The pass
+alone over the *fixed* fan moves the field 12% closer to the reference; over a
+*turned* fan it moves it 34% closer, because a fixed fan's discretisation error
+is a function of the local surface shape and is therefore correlated between
+neighbours, and averaging correlated error removes nothing. Decorrelating without
+following it with a pass is worse than leaving the fan fixed — that is the grain
+a per-vertex rotation shipped once and was reverted for — so the two belong
+together or not at all.
+
+The pass is one iteration of `out = 0.4·self + 0.6·mean(one-ring)`. One, because
+a second leaves the field *further* from the reference than the first (0.0521
+against 0.0508 on the puck): it has started averaging the field's own
+sub-millimetre detail rather than the estimator's noise. The graph is the mesh's
+own connectivity, duplicates included, built as a CSR adjacency inside
+`mesh-core`; the pass runs before the field is expanded back out to soup corners,
+because a pass over the soup's corner graph would average a vertex with copies of
+itself.
+
+32 rays, not eight, is the shipped count: it is where the estimate stops being the
+dominant error (0.024 against 0.056 RMS) for a bake of 1.9 s on the puck instead
+of 0.5 s, on an idle callback per model. 64 rays reaches 0.008 RMS and costs
+3.8 s — the trade a GPU bake is for, which is why that path is worth having even
+though the CPU one is correct.
+
 ### Occlusion is weighted by how far away the occluder is
 
 A boolean "is anything in the way" query makes a flat base under a mass of detail

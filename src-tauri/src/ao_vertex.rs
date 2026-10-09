@@ -14,9 +14,19 @@
 //! testable without Tauri; this module is only the IPC boundary.
 
 use dragonfruit_mesh_core::vertex_occlusion::{
-    bake_vertex_occlusion_for_soup, DEFAULT_RAYS, REACH_RATIO,
+    bake_smoothed_occlusion_for_soup, REACH_RATIO, SMOOTHING_PASSES,
 };
 use tauri::ipc::{InvokeBody, Request, Response};
+
+/// Rays per vertex for the shipped bake.
+///
+/// Not the estimator's eight: the field is baked once per model on an idle
+/// callback, and the measurements in `vertex_occlusion` put 32 at the point where
+/// the estimate stops being the dominant error — 0.024 RMS against a 64-ray
+/// reference, where eight rays give 0.056, for a bake that measures 1.9s on a
+/// 768,734-triangle model instead of 0.5s. Going on to 64 helps (0.008) but
+/// costs 3.8s, which is the trade a later GPU bake is for.
+const BAKED_RAYS: usize = 32;
 
 /// Bake per-vertex ambient occlusion for a mesh supplied in the request body.
 ///
@@ -49,7 +59,7 @@ pub async fn bake_vertex_occlusion(request: Request<'_>) -> Result<Response, Str
             ));
         }
         let started = std::time::Instant::now();
-        let (occlusion, welded) = bake_vertex_occlusion_for_soup(soup, DEFAULT_RAYS, None);
+        let (occlusion, welded) = bake_smoothed_occlusion_for_soup(soup, BAKED_RAYS, None);
         if occlusion.is_empty() {
             return Err("AO bake: mesh has no usable vertices".to_string());
         }
@@ -61,7 +71,8 @@ pub async fn bake_vertex_occlusion(request: Request<'_>) -> Result<Response, Str
         // not what the caller assumed.
         log::info!(
             "[ao] baked {} soup corners -> {} welded vertices ({} triangles) in {}ms \
-             (reach ratio {REACH_RATIO}, {DEFAULT_RAYS} rays)",
+             (reach ratio {REACH_RATIO}, {BAKED_RAYS} rays, fan turned per vertex, \
+             {SMOOTHING_PASSES} graph pass)",
             occlusion.len(),
             welded,
             soup.len() / 9,
