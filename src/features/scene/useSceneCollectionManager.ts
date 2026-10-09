@@ -5,7 +5,13 @@ import { refineCoarseFaces } from '@/utils/tauriMeshBridge';
 import { loadMeshGeometry, load3mfGeometryMergedWithSplitData, processGeometry, type GeometryWithBounds, type ProcessGeometryOptions } from '@/hooks/useStlGeometry';
 import type { MeshHealthReport, MeshAnalysisJson } from '@/utils/meshRepair';
 import { computeFlatteningPlanes } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
-import { plateCascadeOffsetMm } from '@/features/scene/plates/plateCascade';
+import {
+  DYNAMIC_PLATE_ORDERING,
+  VOXL_PLATE_ORDERING_EXTENSION,
+  plateCascadeOffsetMm,
+  readPlateOrdering,
+  type PlateOrdering,
+} from '@/features/scene/plates/plateCascade';
 import { detectObsoleteVoxlVersion, isVoxlBinaryV2, meshChunkStore, parseVoxlBinaryV2, readScenePlates, readSidecarFileBytes, resolveOriginalRefSidecar, VoxlObsoleteVersionError, type VoxlDocumentV1, type VoxlMeshRef } from '@/features/scene/voxl';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
 import { getSnapshot, loadFromImportFormat, mergeFromImportFormat, reassignAllSupportModelIds, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
@@ -72,6 +78,7 @@ import { followedPlateIdForMove, rectStandsOnAnyBed } from '@/features/scene/pla
 import {
   getMultiPlateSettingsServerSnapshot,
   getMultiPlateSettingsSnapshot,
+  plateOrderingFor,
   subscribeToMultiPlateSettings,
 } from '@/components/settings/multiPlatePreferences';
 import {
@@ -1597,6 +1604,13 @@ export function useSceneCollectionManager(options?: {
   );
   const followLandedPlateRef = useRef(multiPlateSettings.followLandedPlate);
   followLandedPlateRef.current = multiPlateSettings.followLandedPlate;
+  /** The grid the beds are laid out on, in the shape the cascade reads. */
+  const plateOrdering = useMemo<PlateOrdering>(() => plateOrderingFor(multiPlateSettings), [multiPlateSettings]);
+  /** Read inside callbacks that must not be rebuilt when the layout changes. */
+  const plateOrderingRef = useRef(plateOrdering);
+  plateOrderingRef.current = plateOrdering;
+  /** The ordering the models' positions were last laid out under. */
+  const appliedPlateOrderingRef = useRef(plateOrdering);
 
   const view3dSettings = useMemo(() => {
     if (!activePrinterProfile) {
@@ -1722,10 +1736,11 @@ export function useSceneCollectionManager(options?: {
     const { dxMm, dyMm } = plateCascadeOffsetMm(index, {
       widthMm: view3dSettings.widthMm,
       depthMm: view3dSettings.depthMm,
-    }, plates.length);
+    }, plates.length, plateOrdering);
     return new THREE.Vector2(localX + dxMm, localY + dyMm);
   }, [
     activePlateId,
+    plateOrdering,
     plates,
     view3dSettings.depthMm,
     view3dSettings.originMode,
@@ -1744,7 +1759,7 @@ export function useSceneCollectionManager(options?: {
     const { dxMm, dyMm } = plateCascadeOffsetMm(index, {
       widthMm: view3dSettings.widthMm,
       depthMm: view3dSettings.depthMm,
-    }, plates.length);
+    }, plates.length, plateOrdering);
     const minX = (view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.widthMm * 0.5) + dxMm;
     const minY = (view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.depthMm * 0.5) + dyMm;
     return {
@@ -1753,7 +1768,7 @@ export function useSceneCollectionManager(options?: {
       minY,
       maxY: minY + view3dSettings.depthMm,
     };
-  }, [activePlateId, plates, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
+  }, [activePlateId, plateOrdering, plates, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
 
   const isRectInsidePlate = useCallback((rect: Rect2D) => {
     return (
@@ -5936,9 +5951,17 @@ export function useSceneCollectionManager(options?: {
       if (recordedLayoutMm && scenePlates.plates.length > 1) {
         const filePlates = scenePlates.plates.map((plate) => ({ id: plate.id, name: plate.name ?? '' }));
         const shifted = modelsShiftedForRelaidPlates(filePlates, filePlates, importedModels, {
-          widthMm: recordedLayoutMm.width,
-          depthMm: recordedLayoutMm.depth,
-          originMode: view3dSettings.originMode,
+          laidOut: {
+            widthMm: recordedLayoutMm.width,
+            depthMm: recordedLayoutMm.depth,
+            originMode: view3dSettings.originMode,
+          },
+          // The grid the file's beds were laid out on, which is what its model positions
+          // are measured against. A file that does not say was written under the dynamic
+          // grid, the only one there was. Without this, opening a scene in the other
+          // ordering would leave every model standing where its bed no longer is.
+          wasOrdering: readPlateOrdering(document.extensions?.[VOXL_PLATE_ORDERING_EXTENSION])
+            ?? DYNAMIC_PLATE_ORDERING,
         });
         if (shifted !== importedModels) importedModels.splice(0, importedModels.length, ...shifted);
       }
@@ -5953,7 +5976,7 @@ export function useSceneCollectionManager(options?: {
         const { dxMm, dyMm } = plateCascadeOffsetMm(index, {
           widthMm: view3dSettings.widthMm,
           depthMm: view3dSettings.depthMm,
-        }, count);
+        }, count, plateOrderingRef.current);
         return {
           minX: localBedMinX + dxMm,
           maxX: localBedMinX + dxMm + view3dSettings.widthMm,
@@ -6621,7 +6644,7 @@ export function useSceneCollectionManager(options?: {
     return plateCascadeOffsetMm(index, {
       widthMm: view3dSettings.widthMm,
       depthMm: view3dSettings.depthMm,
-    }, platesRef.current.length);
+    }, platesRef.current.length, plateOrderingRef.current);
   }, [view3dSettings.widthMm, view3dSettings.depthMm]);
 
   /**
@@ -6661,20 +6684,26 @@ export function useSceneCollectionManager(options?: {
     before: readonly ScenePlate[],
     after: readonly ScenePlate[],
     models: readonly LoadedModel[],
-    laidOut?: { widthMm: number; depthMm: number; originMode: View3DSettings['originMode'] },
+    options?: {
+      /** The footprint the models were laid out against, when it is not the current one. */
+      laidOut?: { widthMm: number; depthMm: number; originMode: View3DSettings['originMode'] };
+      /** The ordering those beds were laid out under, when it is not the current one. */
+      wasOrdering?: PlateOrdering;
+    },
   ): LoadedModel[] => {
     if (after.length <= 1) return models as LoadedModel[];
 
     const { widthMm, depthMm, originMode } = view3dSettings;
     const footprint = { widthMm, depthMm };
-    const was = laidOut ?? { widthMm, depthMm, originMode };
+    const was = options?.laidOut ?? { widthMm, depthMm, originMode };
+    const nowOrdering = plateOrderingRef.current;
     const wasMinX = was.originMode === 'front_left' ? 0 : -was.widthMm * 0.5;
     const wasMinY = was.originMode === 'front_left' ? 0 : -was.depthMm * 0.5;
 
     const shifts = new Map<string, { dxMm: number; dyMm: number }>();
     const frames = before.map((plate, index) => {
-      const from = plateCascadeOffsetMm(index, was, before.length);
-      const to = plateCascadeOffsetMm(index, footprint, after.length);
+      const from = plateCascadeOffsetMm(index, was, before.length, options?.wasOrdering ?? nowOrdering);
+      const to = plateCascadeOffsetMm(index, footprint, after.length, nowOrdering);
       if (from.dxMm !== to.dxMm || from.dyMm !== to.dyMm) {
         shifts.set(plate.id, { dxMm: to.dxMm - from.dxMm, dyMm: to.dyMm - from.dyMm });
       }
@@ -6743,9 +6772,11 @@ export function useSceneCollectionManager(options?: {
       currentPlates,
       modelsBefore,
       {
-        widthMm: previous.widthMm,
-        depthMm: previous.depthMm,
-        originMode: view3dSettings.originMode,
+        laidOut: {
+          widthMm: previous.widthMm,
+          depthMm: previous.depthMm,
+          originMode: view3dSettings.originMode,
+        },
       },
     );
 
@@ -6783,6 +6814,36 @@ export function useSceneCollectionManager(options?: {
     view3dSettings.originMode,
     view3dSettings.widthMm,
   ]);
+
+  /**
+   * Switching the layout moves every bed but the first, so the models standing on them
+   * move too: left where they were, each would belong to whichever bed the new layout
+   * put under that spot. The same shift the plate-add path applies, told which ordering
+   * the positions were laid out under, because that is the layout they are leaving.
+   *
+   * No history entry: the ordering is a setting, not scene content, so there is no
+   * earlier document state to return to — the way a build volume edit moves the beds
+   * without being a step of its own.
+   */
+  useEffect(() => {
+    const previous = appliedPlateOrderingRef.current;
+    if (previous.mode === plateOrdering.mode && previous.columns === plateOrdering.columns) return;
+    appliedPlateOrderingRef.current = plateOrdering;
+
+    const currentPlates = platesRef.current;
+    if (currentPlates.length <= 1) return;
+
+    const modelsBefore = modelsRef.current;
+    const shiftedModels = modelsShiftedForRelaidPlates(currentPlates, currentPlates, modelsBefore, {
+      wasOrdering: previous,
+    });
+    if (shiftedModels === modelsBefore) return;
+
+    modelsRef.current = shiftedModels;
+    setModels(shiftedModels);
+    // The bed being worked on moved with the others, so the view comes along.
+    setPlateViewRunId((id) => id + 1);
+  }, [modelsShiftedForRelaidPlates, plateOrdering]);
 
   const addPlate = useCallback((options?: { pushHistory?: boolean }): string => {
     const plate: ScenePlate = { id: uuidv4(), name: '' };
@@ -6889,7 +6950,7 @@ export function useSceneCollectionManager(options?: {
 
     const offsets = new Map<string, { dxMm: number; dyMm: number }>();
     settled.forEach((plate, index) => {
-      offsets.set(plate.id, plateCascadeOffsetMm(index, footprint, settled.length));
+      offsets.set(plate.id, plateCascadeOffsetMm(index, footprint, settled.length, plateOrderingRef.current));
     });
 
     return { plates: settled, added: addedPlates, offsets };
@@ -6924,7 +6985,7 @@ export function useSceneCollectionManager(options?: {
     const footprint = { widthMm, depthMm };
 
     return plates.map((plate, index) => {
-      const { dxMm, dyMm } = plateCascadeOffsetMm(index, footprint, plates.length);
+      const { dxMm, dyMm } = plateCascadeOffsetMm(index, footprint, plates.length, plateOrdering);
       return {
         id: plate.id,
         index,
@@ -6936,7 +6997,7 @@ export function useSceneCollectionManager(options?: {
         maxY: localMinY + dyMm + depthMm,
       };
     });
-  }, [plates, view3dSettings]);
+  }, [plateOrdering, plates, view3dSettings]);
 
   /**
    * The plate a model stands on.
@@ -7084,14 +7145,15 @@ export function useSceneCollectionManager(options?: {
     if (targetIndex < 0) return;
 
     const footprint = { widthMm: view3dSettings.widthMm, depthMm: view3dSettings.depthMm };
-    const target = plateCascadeOffsetMm(targetIndex, footprint, plateList.length);
+    const ordering = plateOrderingRef.current;
+    const target = plateCascadeOffsetMm(targetIndex, footprint, plateList.length, ordering);
     const wanted = new Set(modelIds);
 
     for (const model of modelsRef.current) {
       if (!wanted.has(model.id)) continue;
       const sourcePlateId = resolveModelPlateIdRef.current(model);
       const sourceIndex = Math.max(0, plateList.findIndex((plate) => plate.id === sourcePlateId));
-      const source = plateCascadeOffsetMm(sourceIndex, footprint, plateList.length);
+      const source = plateCascadeOffsetMm(sourceIndex, footprint, plateList.length, ordering);
       const dx = target.dxMm - source.dxMm;
       const dy = target.dyMm - source.dyMm;
       if (dx === 0 && dy === 0) continue;
@@ -7125,6 +7187,8 @@ export function useSceneCollectionManager(options?: {
     plateOffsetFor,
     addPlates,
     dropPlates,
+    /** The grid the beds are laid out on, for the callers that draw one that is not there yet. */
+    plateOrdering,
     plateFrames,
     modelPlateFrame,
     resolveModelPlateId,

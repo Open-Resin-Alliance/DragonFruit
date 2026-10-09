@@ -8,6 +8,7 @@ import { KNOWN_SOURCE_EXTENSION_STRIP_RE } from '@/features/plugins/pluginFileTy
 import { buildSupportExportFromStores, serializeVoxlDocumentV2, serializeVoxlDocumentV2Streaming, VoxlSizeLimitError, VoxlUnchangedError, type PrecompressedChunk, type VoxlChunkCache, type VoxlChunkReportEntry, type VoxlPrinterBundle } from '@/features/scene/voxl';
 import { type BakedChunk, meshChunkStore } from '@/features/scene/voxl/meshChunkStore';
 import { buildScopedSupportExportDocument, buildScopedSupportGeometryGroup } from '@/features/export/logic/supportExportReconstruction';
+import { VOXL_PLATE_ORDERING_EXTENSION, type PlateOrdering } from '@/features/scene/plates/plateCascade';
 import { allocateMeshStagePath, exportMeshFile, pickSavePathWithNativeDialog, writeChunkedToNativePath, writeFileAtomicToNativePath, writeFileAtomicStreamedToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { info as logInfo } from '@tauri-apps/plugin-log';
 import { getSnapshot } from '@/supports/state';
@@ -44,6 +45,8 @@ export interface ExportSceneContext {
   plateName?: string;
   /** The printer this scene is being written for, embedded whole, if one is selected. */
   printer?: VoxlPrinterBundle;
+  /** The grid the beds are laid out on, so re-opening re-lays the same beds. */
+  plateOrdering?: PlateOrdering;
   exportThumbnailPng?: Uint8Array | null;
 }
 
@@ -1313,7 +1316,12 @@ export class ExportManager {
         generator: 'DragonFruit',
         ...(sceneContext?.printer ? { printer: sceneContext.printer } : {}),
       },
-      extensions: voxlExtensions,
+      extensions: {
+        ...voxlExtensions,
+        ...(sceneContext?.plateOrdering
+          ? { [VOXL_PLATE_ORDERING_EXTENSION]: sceneContext.plateOrdering }
+          : {}),
+      },
     };
     // The SUPP chunk's bytes are a pure function of the two store snapshots plus
     // the include/scope flags. Key on the snapshot identities so an unchanged

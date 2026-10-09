@@ -212,6 +212,10 @@ msgstr "~{hours} h {mins} min"
 msgid "~{mins} min"
 msgstr "~{mins} min"
 
+#: src/components/settings/MultiPlateSettingsTab.tsx:96
+msgid "1-2-3-4 across, then the next row. Adding a bed never moves the ones already placed."
+msgstr ""
+
 #: src/features/slicing/components/SlicingPanel.tsx:1555
 msgid "2D Blur"
 msgstr ""
@@ -248,7 +252,7 @@ msgstr ""
 msgid "A file this run writes is already in that folder. Slicing replaces it."
 msgstr ""
 
-#: src/components/settings/MultiPlateSettingsTab.tsx:58
+#: src/components/settings/MultiPlateSettingsTab.tsx:61
 msgid "A model dropped on another bed makes that bed the one you work on."
 msgstr ""
 
@@ -313,7 +317,7 @@ msgstr ""
 msgid "Add contacts along the edge or corner a pose bears on, so a leaning part is held against toppling and peel (default on)"
 msgstr ""
 
-#: src/app/page.tsx:2462
+#: src/app/page.tsx:2463
 msgid "Add joint"
 msgstr "Pridať Kĺb"
 
@@ -327,7 +331,7 @@ msgid "Add or switch printer anytime from the top bar."
 msgstr "Pridaj alebo vymeň tlačiareň kedykoľvek na vrchnej lište."
 
 #. Accessible name of the button beside the build plate that will add another plate. Inert for now, so it reads as unavailable to a screen reader too.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1677
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1680
 msgid "Add plate"
 msgstr ""
 
@@ -432,7 +436,7 @@ msgstr ""
 msgid "Apply this preset to the auto-support settings"
 msgstr ""
 
-#: src/app/page.tsx:11624
+#: src/app/page.tsx:11632
 msgid "Are you sure you want to remove every model from the plate?"
 msgstr ""
 
@@ -486,7 +490,7 @@ msgid "Auto adapts by AA level, Off is fastest, On favors smaller PNG files"
 msgstr ""
 
 #. Tooltip on the arrange button beside the build plate. Runs the standard arrange across every model, 1mm apart, with Z-rotation allowed.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1766
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1774
 msgid "Auto arrange the plate"
 msgstr ""
 
@@ -650,7 +654,7 @@ msgstr ""
 msgid "Autosave idle delay"
 msgstr ""
 
-#: src/app/page.tsx:1145
+#: src/app/page.tsx:1146
 msgid "Autosave is not working"
 msgstr ""
 
@@ -681,7 +685,7 @@ msgstr ""
 #. View cube face (the side opposite Front), rendered uppercase inside a small 3D cube. Keep it as short as possible.
 #: src/components/layout/FirstRunOnboarding.tsx:278
 #: src/components/layout/OnboardingPrinterLibrary.tsx:279
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1772
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1780
 msgid "Back"
 msgstr ""
 
@@ -779,7 +783,11 @@ msgstr ""
 msgid "Base Flare"
 msgstr ""
 
-#: src/components/settings/MultiPlateSettingsTab.tsx:49
+#: src/components/settings/MultiPlateSettingsTab.tsx:95
+msgid "Beds per row"
+msgstr ""
+
+#: src/components/settings/MultiPlateSettingsTab.tsx:52
 msgid "Behaviour across the beds of a scene."
 msgstr ""
 
@@ -820,7 +828,7 @@ msgid "Border Margin"
 msgstr ""
 
 #. View cube face (seen from below), rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1776
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1784
 msgid "Bottom"
 msgstr ""
 
@@ -919,7 +927,7 @@ msgstr ""
 msgid "Can't open this scene"
 msgstr ""
 
-#: src/app/page.tsx:11585
+#: src/app/page.tsx:11593
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:468
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:664
 #: src/components/controls/AutoSupportPanel.tsx:652
@@ -1092,12 +1100,12 @@ msgstr ""
 
 #. Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.
 #. Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.
-#: src/app/page.tsx:10877
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1763
+#: src/app/page.tsx:10885
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1771
 msgid "Clear build plate"
 msgstr ""
 
-#: src/app/page.tsx:11574
+#: src/app/page.tsx:11582
 msgid "Clear Build Plate?"
 msgstr ""
 
@@ -1105,7 +1113,7 @@ msgstr ""
 msgid "Clear Override"
 msgstr ""
 
-#: src/app/page.tsx:11615
+#: src/app/page.tsx:11623
 msgid "Clear Plate"
 msgstr ""
 
@@ -1140,7 +1148,7 @@ msgstr ""
 msgid "Close"
 msgstr "Zatvoriť"
 
-#: src/app/page.tsx:11580
+#: src/app/page.tsx:11588
 msgid "Close clear-plate confirmation"
 msgstr ""
 
@@ -1247,7 +1255,7 @@ msgid "Color Scheme"
 msgstr ""
 
 #. Hover text on the add-plate button beside the build plate. The app has one plate for now, so the button says so instead of doing nothing.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1678
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1681
 msgid "Coming Soon!"
 msgstr ""
 
@@ -1289,7 +1297,7 @@ msgstr ""
 msgid "Configure Networking Later"
 msgstr ""
 
-#: src/app/page.tsx:11573
+#: src/app/page.tsx:11581
 msgid "Confirm clearing the build plate"
 msgstr ""
 
@@ -1297,7 +1305,7 @@ msgstr ""
 msgid "Confirm delete snapshot"
 msgstr ""
 
-#: src/app/page.tsx:11572
+#: src/app/page.tsx:11580
 msgid "Confirm deleting the plate"
 msgstr ""
 
@@ -1395,7 +1403,7 @@ msgstr ""
 msgid "Contoured regions"
 msgstr ""
 
-#: src/app/page.tsx:8645
+#: src/app/page.tsx:8647
 msgid "Converting support data and model metadata"
 msgstr ""
 
@@ -1643,7 +1651,7 @@ msgstr ""
 msgid "Delete model"
 msgstr ""
 
-#: src/app/page.tsx:11615
+#: src/app/page.tsx:11623
 #: src/components/controls/ModelManagerPanel.tsx:476
 #: src/components/controls/ModelManagerPanel.tsx:758
 #: src/components/controls/ModelManagerPanel.tsx:779
@@ -1681,11 +1689,11 @@ msgid "Delete this model's existing supports and place the new ones"
 msgstr ""
 
 #. Tooltip on the bin beside the build plate when the plate can go: it removes the bed and the models standing on it. Undo brings them back.
-#: src/app/page.tsx:10876
+#: src/app/page.tsx:10884
 msgid "Delete this plate"
 msgstr ""
 
-#: src/app/page.tsx:11574
+#: src/app/page.tsx:11582
 #: src/components/controls/ModelManagerPanel.tsx:759
 msgid "Delete this plate?"
 msgstr ""
@@ -1892,13 +1900,18 @@ msgstr ""
 msgid "Drop supported files"
 msgstr "Hoď podporované súbory"
 
-#: src/app/page.tsx:10823
+#: src/app/page.tsx:10830
 msgid "Drop supported files to import"
 msgstr ""
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:391
 #: src/components/controls/toolRailEntries.ts:57
 msgid "Duplicate"
+msgstr ""
+
+#: src/components/settings/MultiPlateSettingsTab.tsx:84
+msgctxt "Plate ordering mode: a grid that grows to stay square."
+msgid "Dynamic"
 msgstr ""
 
 #: src/components/settings/SettingsModal.tsx:1286
@@ -1929,7 +1942,7 @@ msgstr ""
 msgid "Edit printer profile"
 msgstr ""
 
-#: src/app/page.tsx:2468
+#: src/app/page.tsx:2469
 msgid "Editor"
 msgstr "Editor"
 
@@ -2297,6 +2310,11 @@ msgstr ""
 msgid "Fit Tolerance"
 msgstr ""
 
+#: src/components/settings/MultiPlateSettingsTab.tsx:83
+msgctxt "Plate ordering mode: a fixed number of beds per row."
+msgid "Fixed"
+msgstr ""
+
 #: src/features/organicCut/OrganicCutPanel.tsx:448
 msgid "Flat"
 msgstr ""
@@ -2331,7 +2349,7 @@ msgstr ""
 msgid "Flip Tenon"
 msgstr ""
 
-#: src/components/settings/MultiPlateSettingsTab.tsx:24
+#: src/components/settings/MultiPlateSettingsTab.tsx:26
 msgid "Follow the plate a model lands on"
 msgstr ""
 
@@ -2360,7 +2378,7 @@ msgid "From the community, for the community. Free to use, open to contribute, a
 msgstr ""
 
 #. Orientation label, rendered uppercase on the view cube and on the build plate's front edge. Keep it as short as possible — long words are auto-shrunk to fit and become hard to read.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1768
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1776
 msgid "Front"
 msgstr ""
 
@@ -2424,7 +2442,7 @@ msgid "GitHub OAuth popup opened."
 msgstr ""
 
 #. Tooltip on the build plate's name widget while it is still unnamed.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1676
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1679
 msgid "Give this build plate a name"
 msgstr ""
 
@@ -2461,6 +2479,10 @@ msgstr ""
 
 #: src/components/controls/ModelManagerPanel.tsx:459
 msgid "Group selected"
+msgstr ""
+
+#: src/components/settings/MultiPlateSettingsTab.tsx:78
+msgid "Growing grid, or a fixed row length."
 msgstr ""
 
 #: src/features/organicCut/OrganicCutPanel.tsx:584
@@ -2937,7 +2959,7 @@ msgid "Leave the collection as it is"
 msgstr ""
 
 #. View cube face, rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1774
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1782
 msgid "Left"
 msgstr ""
 
@@ -2945,7 +2967,7 @@ msgstr ""
 msgid "Length"
 msgstr ""
 
-#: src/app/page.tsx:8685
+#: src/app/page.tsx:8687
 msgid "Letting DragonFruit finish its startup animation before loading your scene."
 msgstr ""
 
@@ -3026,7 +3048,7 @@ msgstr ""
 msgid "Loading Mesh Files…"
 msgstr ""
 
-#: src/app/page.tsx:8635
+#: src/app/page.tsx:8637
 #: src/features/scene/sceneImportMessages.ts:23
 msgid "Loading Mesh…"
 msgstr ""
@@ -3035,9 +3057,9 @@ msgstr ""
 msgid "Loading remote material…"
 msgstr ""
 
-#: src/app/page.tsx:4828
-#: src/app/page.tsx:8635
-#: src/app/page.tsx:8644
+#: src/app/page.tsx:4830
+#: src/app/page.tsx:8637
+#: src/app/page.tsx:8646
 msgid "Loading Scene…"
 msgstr ""
 
@@ -3087,7 +3109,7 @@ msgid "LocalStorage Keys"
 msgstr ""
 
 #. Tooltip on the lock button beside the build plate while it is unlocked. Locking refuses new meshes and moves of the models already on the plate.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1761
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1769
 msgid "Lock build plate"
 msgstr ""
 
@@ -3525,7 +3547,7 @@ msgstr ""
 msgid "No active printer"
 msgstr "Žiadne aktívne tlačiarne"
 
-#: src/app/page.tsx:1149
+#: src/app/page.tsx:1150
 msgid "No autosave has succeeded this session. Save your project manually."
 msgstr ""
 
@@ -3730,7 +3752,7 @@ msgstr ""
 #: src/components/settings/GeneralSettingsTab.tsx:509
 #: src/components/settings/GeneralSettingsTab.tsx:526
 #: src/components/settings/LocalBackupsSettingsTab.tsx:863
-#: src/components/settings/MultiPlateSettingsTab.tsx:64
+#: src/components/settings/MultiPlateSettingsTab.tsx:67
 #: src/components/settings/PerformanceSettingsTab.tsx:145
 #: src/components/settings/PerformanceSettingsTab.tsx:160
 #: src/components/settings/PerformanceSettingsTab.tsx:175
@@ -3798,7 +3820,7 @@ msgstr ""
 #: src/components/settings/GeneralSettingsTab.tsx:508
 #: src/components/settings/GeneralSettingsTab.tsx:525
 #: src/components/settings/LocalBackupsSettingsTab.tsx:862
-#: src/components/settings/MultiPlateSettingsTab.tsx:63
+#: src/components/settings/MultiPlateSettingsTab.tsx:66
 #: src/components/settings/PerformanceSettingsTab.tsx:144
 #: src/components/settings/PerformanceSettingsTab.tsx:159
 #: src/components/settings/PerformanceSettingsTab.tsx:174
@@ -3907,7 +3929,7 @@ msgstr "Otvoriť scénu…"
 msgid "Opening"
 msgstr ""
 
-#: src/app/page.tsx:8682
+#: src/app/page.tsx:8684
 msgid "Opening scene…"
 msgstr ""
 
@@ -4046,7 +4068,7 @@ msgid "Plate {index}"
 msgstr ""
 
 #. What the build plate's name widget shows while the plate has no name of its own, including after the plate is cleared or a new scene is started. The number is the plate's, plural forms come later with multiple plates.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1674
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1677
 msgid "Plate 1"
 msgstr ""
 
@@ -4062,11 +4084,15 @@ msgstr ""
 msgid "Plate name"
 msgstr ""
 
+#: src/components/settings/MultiPlateSettingsTab.tsx:27
+msgid "Plate Ordering"
+msgstr ""
+
 #: src/features/slicing/components/SlicingPanel.tsx:4004
 msgid "Plate preview · Layer {previewSelectedLayer}/{previewTotalLayers}"
 msgstr ""
 
-#: src/components/settings/MultiPlateSettingsTab.tsx:46
+#: src/components/settings/MultiPlateSettingsTab.tsx:49
 #: src/features/export/components/ExportPanel.tsx:99
 msgid "Plates"
 msgstr ""
@@ -4315,7 +4341,7 @@ msgstr ""
 msgid "Re-slice required after profile change"
 msgstr "Znovu nasekanie je potrebné po zmene v profile"
 
-#: src/app/page.tsx:4829
+#: src/app/page.tsx:4831
 msgid "Reading autosaved scene…"
 msgstr ""
 
@@ -4450,7 +4476,7 @@ msgid "Rename"
 msgstr ""
 
 #. Tooltip on the pencil beside the build plate's name.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1675
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1678
 msgid "Rename build plate"
 msgstr ""
 
@@ -4588,8 +4614,8 @@ msgstr ""
 msgid "Restore Factory Defaults?"
 msgstr ""
 
-#: src/app/page.tsx:4860
-#: src/app/page.tsx:4871
+#: src/app/page.tsx:4862
+#: src/app/page.tsx:4873
 msgid "Restore Failed"
 msgstr ""
 
@@ -4618,7 +4644,7 @@ msgid "Revert Changes"
 msgstr ""
 
 #. View cube face, rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1773
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1781
 msgid "Right"
 msgstr ""
 
@@ -4973,12 +4999,12 @@ msgid "Selected printer is offline"
 msgstr "Vybraná tlačiareň je offline"
 
 #. Shown while dragging a selection rectangle right to left, which takes every object the rectangle touches. Mirrors the CAD convention; keep it on one short line.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3287
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3295
 msgid "Selection Mode: Contact (Right to Left)"
 msgstr ""
 
 #. Shown while dragging a selection rectangle left to right, which takes only the objects the rectangle fully encloses. Mirrors the CAD convention; keep it on one short line.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3291
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3299
 msgid "Selection Mode: Enclosed (Left to Right)"
 msgstr ""
 
@@ -5443,7 +5469,7 @@ msgstr ""
 msgid "Supported: {extensions}"
 msgstr ""
 
-#: src/app/page.tsx:2468
+#: src/app/page.tsx:2469
 #: src/components/ui/EditorContextMenu.tsx:109
 msgid "Supports"
 msgstr "Podpery"
@@ -5538,16 +5564,16 @@ msgstr ""
 msgid "Tension"
 msgstr ""
 
-#: src/app/page.tsx:4873
+#: src/app/page.tsx:4875
 msgid "The autosave recovery file could not be found."
 msgstr ""
 
-#: src/app/page.tsx:4861
-#: src/app/page.tsx:4874
+#: src/app/page.tsx:4863
+#: src/app/page.tsx:4876
 msgid "The autosaved recovery file is corrupted or unreadable."
 msgstr ""
 
-#: src/app/page.tsx:1146
+#: src/app/page.tsx:1147
 msgid "The background recovery save failed repeatedly."
 msgstr ""
 
@@ -5587,7 +5613,7 @@ msgstr ""
 msgid "The inputs and factors the last run sized the supports with"
 msgstr ""
 
-#: src/app/page.tsx:11623
+#: src/app/page.tsx:11631
 msgid "The models on this plate are deleted with it."
 msgstr ""
 
@@ -5657,7 +5683,7 @@ msgstr "Živica je pripravená. Si ty?"
 msgid "The saved run policy the settings below are. Selecting one applies it immediately; the rest of the dialog stays staged until you save."
 msgstr ""
 
-#: src/app/page.tsx:4862
+#: src/app/page.tsx:4864
 msgid "The scene importer rejected or could not parse the autosave data."
 msgstr ""
 
@@ -5801,7 +5827,7 @@ msgstr ""
 msgid "To recover it, open the scene in an older version of DragonFruit and save it again — the re-saved scene will open here."
 msgstr ""
 
-#: src/app/page.tsx:2457
+#: src/app/page.tsx:2458
 msgid "Toggle curve"
 msgstr "Prepnúť Krivku"
 
@@ -5837,7 +5863,7 @@ msgid "Tool layout"
 msgstr ""
 
 #. View cube face (seen from above), rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1775
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1783
 msgid "Top"
 msgstr ""
 
@@ -5887,7 +5913,7 @@ msgstr ""
 msgid "Unavailable"
 msgstr ""
 
-#: src/app/page.tsx:11577
+#: src/app/page.tsx:11585
 msgid "Undo brings the models back"
 msgstr ""
 
@@ -5925,21 +5951,21 @@ msgid "Unknown manufacturer"
 msgstr ""
 
 #. Tooltip on the lock button beside the build plate while it is locked.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1762
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1770
 msgid "Unlock build plate"
 msgstr ""
 
-#: src/app/page.tsx:11646
+#: src/app/page.tsx:11654
 msgid "Unlock it to add or move models."
 msgstr ""
 
 #. Tooltip on the arrange button beside the build plate while the plate is locked, which is why it is disabled.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1767
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1775
 msgid "Unlock the plate to arrange it"
 msgstr ""
 
 #. Tooltip on the bin beside the build plate while the plate is locked, which is why it is disabled.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1765
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1773
 msgid "Unlock the plate to clear it"
 msgstr ""
 
@@ -5955,7 +5981,7 @@ msgstr ""
 msgid "Unsaved Scene Found"
 msgstr ""
 
-#: src/app/page.tsx:10823
+#: src/app/page.tsx:10830
 msgid "Unsupported file format"
 msgstr ""
 

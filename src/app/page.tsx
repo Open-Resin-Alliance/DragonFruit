@@ -1078,6 +1078,7 @@ export default function Home() {
     activePlateId: scene.activePlateId,
     plateName: scene.plateName,
     printer: scene.voxlPrinterBundle ?? undefined,
+    plateOrdering: scene.plateOrdering,
     enabled: sceneAutosaveEnabled,
     debounceMs: sceneAutosaveSettings.debounceMs,
     cooldownMs: sceneAutosaveSettings.cooldownMs,
@@ -4767,6 +4768,7 @@ export default function Home() {
         activePlateId: scene.activePlateId,
         plateName: scene.plateName,
         printer: scene.voxlPrinterBundle ?? undefined,
+        plateOrdering: scene.plateOrdering,
         exportThumbnailPng: exportThumbnailPng ?? undefined,
       },
       {
@@ -9700,7 +9702,12 @@ export default function Home() {
       let placedOnGhostBeds = 0;
 
       for (let bed = 0; bed < ghostBeds; bed += 1) {
-        const offset = plateCascadeOffsetMm(scene.plates.length + bed, footprint, scene.plates.length + ghostBeds);
+        const offset = plateCascadeOffsetMm(
+          scene.plates.length + bed,
+          footprint,
+          scene.plates.length + ghostBeds,
+          scene.plateOrdering,
+        );
         ghostOffsets.push(offset);
 
         // Nearest the middle of that bed first, which is where the eye looks for them.
@@ -10844,6 +10851,7 @@ export default function Home() {
               void handleAutoArrangeModels('all', undefined, { spacingMm: 1, allowRotateOnZ: true, plateFillMode: 'plate' });
             }}
             duplicateGhostPlates={duplicateGhostPlateOffsets}
+            plateOrdering={scene.plateOrdering}
             plateLocked={scene.plateLocked}
             onTogglePlateLock={() => scene.setPlateLocked(!scene.plateLocked)}
             plateClearTitle={scene.plates.length > 1 && scene.activePlateId !== scene.plates[0]?.id

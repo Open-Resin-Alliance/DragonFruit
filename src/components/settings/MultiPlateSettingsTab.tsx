@@ -5,6 +5,8 @@ import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import { SquareStack } from 'lucide-react';
 import { SegmentedControl, SettingRow } from '@/components/atoms';
+import { NumberInput } from '@/components/ui/NumberInput';
+import { MAX_FIXED_PLATE_COLUMNS } from '@/features/scene/plates/plateCascade';
 import {
   getMultiPlateSettingsSnapshot,
   saveMultiPlateSettings,
@@ -22,6 +24,7 @@ export function MultiPlateSettingsTab() {
   );
 
   const followLandedPlateLabel = _(msg`Follow the plate a model lands on`);
+  const plateOrderingLabel = _(msg`Plate Ordering`);
 
   return (
     <section
@@ -67,6 +70,44 @@ export function MultiPlateSettingsTab() {
           onChange={(next) => setSettings(saveMultiPlateSettings({ followLandedPlate: next === 'on' }))}
         />
       </SettingRow>
+
+      <SettingRow
+        bordered
+        className="mt-3"
+        label={plateOrderingLabel}
+        description={_(msg`Growing grid, or a fixed row length.`)}
+      >
+        <SegmentedControl
+          label={plateOrderingLabel}
+          options={[
+            { value: 'fixed', label: _(msg({ message: 'Fixed', context: 'Plate ordering mode: a fixed number of beds per row.' })) },
+            { value: 'dynamic', label: _(msg({ message: 'Dynamic', context: 'Plate ordering mode: a grid that grows to stay square.' })) },
+          ]}
+          value={settings.plateOrdering}
+          onChange={(next) => setSettings(saveMultiPlateSettings({ plateOrdering: next === 'fixed' ? 'fixed' : 'dynamic' }))}
+        />
+      </SettingRow>
+
+      {settings.plateOrdering === 'fixed' && (
+        <SettingRow
+          bordered
+          className="mt-3"
+          label={_(msg`Beds per row`)}
+          description={_(msg`1-2-3-4 across, then the next row. Adding a bed never moves the ones already placed.`)}
+        >
+          <NumberInput
+            min={1}
+            max={MAX_FIXED_PLATE_COLUMNS}
+            step={1}
+            value={settings.fixedPlateColumns}
+            onChange={(next) => {
+              if (!Number.isFinite(next)) return;
+              setSettings(saveMultiPlateSettings({ fixedPlateColumns: next }));
+            }}
+            className="ui-input h-[34px] w-[120px] py-1.5 pl-2.5 pr-5 text-sm"
+          />
+        </SettingRow>
+      )}
     </section>
   );
 }
