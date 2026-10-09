@@ -1,7 +1,6 @@
 import React from 'react';
 import { ModelManagerPanel } from '@/components/controls/ModelManagerPanel';
 import { ModelsPanel } from '@/components/organisms/panels/ModelsPanel';
-import { DebugPrimitivesPanel } from '@/components/controls/DebugPrimitivesPanel';
 import { AutoRotationPanel } from '@/components/controls/AutoRotationPanel';
 import { TransformControls } from '@/components/controls/TransformControls';
 import { ArrangePanel } from '@/components/controls/ArrangePanel';
@@ -39,8 +38,6 @@ export type PreparePanelStackProps = {
   modelsPanelVisible: boolean;
   /** The model list is collapsible only while the tool rail is a bar. */
   modelsPanelCollapsible: boolean;
-
-  debugPrimitivesPanelVisible: boolean;
 
   /**
    * The Auto Orientation panel, rendered beneath the Transform controls and only
@@ -94,7 +91,6 @@ export function PreparePanelStack({
   modelStatsBottomClearancePx,
   modelsPanelVisible,
   modelsPanelCollapsible,
-  debugPrimitivesPanelVisible,
   orientationPanel,
   ensurePendingTransformHistoryForActiveModel,
   requestDestructiveTransformSupportDeletion,
@@ -192,14 +188,6 @@ export function PreparePanelStack({
         collapsible={modelsPanelCollapsible}
         bottomClearancePx={modelStatsBottomClearancePx}
       />
-
-      {debugPrimitivesPanelVisible && (
-        <DebugPrimitivesPanel
-          key="prepare-debug-primitives"
-          onAdd={scene.addDebugPrimitive}
-          onClear={scene.clearDebugModels}
-        />
-      )}
 
       {scene.geom && transformMgr.transformMode === 'transform' && (
         <TransformControls

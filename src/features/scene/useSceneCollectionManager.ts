@@ -1,11 +1,10 @@
 import { useState, useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { useLingui } from '@lingui/react';
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { refineCoarseFaces } from '@/utils/tauriMeshBridge';
 import { loadMeshGeometry, load3mfGeometryMergedWithSplitData, processGeometry, type GeometryWithBounds, type ProcessGeometryOptions } from '@/hooks/useStlGeometry';
 import type { MeshHealthReport, MeshAnalysisJson } from '@/utils/meshRepair';
-import { computeFlatteningPlanes, type FlatteningPlane } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
+import { computeFlatteningPlanes } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
 import { isVoxlBinaryV2, meshChunkStore, parseVoxlBinaryV2, parseVoxlDocument, readSidecarFileBytes, resolveOriginalRefSidecar, type VoxlDocumentV1, type VoxlMeshRef, type PrecompressedChunk } from '@/features/scene/voxl';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
 import { getSnapshot, loadFromImportFormat, mergeFromImportFormat, reassignAllSupportModelIds, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
@@ -958,16 +957,6 @@ export interface LoadedModel {
   bakedAoVersion?: number;
 }
 
-type DebugPrimitiveType =
-  | 'pillar'
-  | 'merge_y'
-  | 'split_y'
-  | 'earlobe'
-  | 'bridge'
-  | 'finger_palm_arm';
-
-type DebugPrimitiveSizePreset = 'small' | 'medium' | 'large';
-
 import { deleteSupportsForModel, getSupportsForModel, type ModelSupportIds } from '@/supports/PlacementLogic/SupportModelLinker';
 import { contactEndpointsFor, MODEL_ID_COLLECTION_KEYS, SUPPORT_COLLECTION_KEYS, SUPPORT_TYPES } from '@/supports/supportTypeRegistry';
 import { beginSupportStateBatch, endSupportStateBatch } from '@/supports/state';
@@ -1275,7 +1264,6 @@ export function useSceneCollectionManager(options?: {
   const sceneImportPlacementResolveRef = useRef<((choice: SceneImportPlacementChoice) => void) | null>(null);
   const meshRepairConfirmResolveRef = useRef<((choice: MeshRepairConfirmChoice) => void) | null>(null);
 
-  const isDebugModelName = useCallback((name: string) => name.startsWith('[Debug]'), []);
   const deferredAccelerationQueueRef = useRef<THREE.BufferGeometry[]>([]);
   const deferredAccelerationProcessingRef = useRef(false);
   const deferredAccelerationPausedRef = useRef(false);
@@ -1411,181 +1399,6 @@ export function useSceneCollectionManager(options?: {
       }
     };
   }, []);
-
-  const getDebugPresetDims = useCallback((preset: DebugPrimitiveSizePreset) => {
-    switch (preset) {
-      case 'small':
-        return { height: 20, radius: 2.5, span: 10 };
-      case 'large':
-        return { height: 60, radius: 6, span: 25 };
-      case 'medium':
-      default:
-        return { height: 40, radius: 4, span: 16 };
-    }
-  }, []);
-
-  const buildDebugGeometry = useCallback((type: DebugPrimitiveType, preset: DebugPrimitiveSizePreset): GeometryWithBounds => {
-    const { height, radius, span } = getDebugPresetDims(preset);
-
-    const parts: THREE.BufferGeometry[] = [];
-
-    const makeCylinderZ = (r: number, h: number, radialSegments = 24) => {
-      const g = new THREE.CylinderGeometry(r, r, h, radialSegments, 1, false);
-      // CylinderGeometry is Y-up; rotate so height is Z-up
-      g.rotateX(Math.PI / 2);
-      return g;
-    };
-
-    const makeBox = (x: number, y: number, z: number) => new THREE.BoxGeometry(x, y, z);
-    const makeSphere = (r: number, segments = 24) => new THREE.SphereGeometry(r, segments, segments);
-
-    const applyTransform = (g: THREE.BufferGeometry, position: THREE.Vector3, rotation: THREE.Euler) => {
-      const m = new THREE.Matrix4().makeRotationFromEuler(rotation);
-      m.setPosition(position);
-      g.applyMatrix4(m);
-      return g;
-    };
-
-    if (type === 'pillar') {
-      parts.push(makeCylinderZ(radius, height));
-    }
-
-    if (type === 'merge_y') {
-      const branchH = height * 0.7;
-      const topH = height * 0.5;
-      const tilt = 0.45;
-      const xOff = span * 0.35;
-      const mergeZ = -height * 0.05;
-
-      parts.push(applyTransform(makeCylinderZ(radius, branchH), new THREE.Vector3(-xOff, 0, -branchH * 0.25), new THREE.Euler(0, +tilt, 0)));
-      parts.push(applyTransform(makeCylinderZ(radius, branchH), new THREE.Vector3(+xOff, 0, -branchH * 0.25), new THREE.Euler(0, -tilt, 0)));
-      parts.push(applyTransform(makeCylinderZ(radius, topH), new THREE.Vector3(0, 0, mergeZ + topH * 0.35), new THREE.Euler(0, 0, 0)));
-    }
-
-    if (type === 'split_y') {
-      const trunkH = height * 0.6;
-      const branchH = height * 0.55;
-      const tilt = 0.45;
-      const xOff = span * 0.35;
-      const splitZ = height * 0.05;
-
-      parts.push(applyTransform(makeCylinderZ(radius, trunkH), new THREE.Vector3(0, 0, -trunkH * 0.15), new THREE.Euler(0, 0, 0)));
-      parts.push(applyTransform(makeCylinderZ(radius, branchH), new THREE.Vector3(-xOff, 0, splitZ + branchH * 0.15), new THREE.Euler(0, -tilt, 0)));
-      parts.push(applyTransform(makeCylinderZ(radius, branchH), new THREE.Vector3(+xOff, 0, splitZ + branchH * 0.15), new THREE.Euler(0, +tilt, 0)));
-    }
-
-    if (type === 'earlobe') {
-      const massR = radius * 2.0;
-      const nubR = radius * 0.8;
-      parts.push(applyTransform(makeSphere(massR), new THREE.Vector3(0, 0, 0), new THREE.Euler(0, 0, 0)));
-      parts.push(applyTransform(makeSphere(nubR), new THREE.Vector3(span * 0.55, 0, -height * 0.1), new THREE.Euler(0, 0, 0)));
-      parts.push(applyTransform(makeCylinderZ(radius * 1.2, height * 0.6), new THREE.Vector3(0, 0, -height * 0.55), new THREE.Euler(0, 0, 0)));
-    }
-
-    if (type === 'bridge') {
-      const block = span * 0.6;
-      const blockH = height * 0.5;
-      const gap = span * 0.2;
-      const bridgeW = gap + radius * 1.2;
-      const bridgeT = radius * 0.5;
-      parts.push(applyTransform(makeBox(block, block, blockH), new THREE.Vector3(-(block + gap) * 0.5, 0, 0), new THREE.Euler(0, 0, 0)));
-      parts.push(applyTransform(makeBox(block, block, blockH), new THREE.Vector3(+(block + gap) * 0.5, 0, 0), new THREE.Euler(0, 0, 0)));
-      parts.push(applyTransform(makeBox(bridgeW, bridgeT, bridgeT), new THREE.Vector3(0, 0, 0), new THREE.Euler(0, 0, 0)));
-    }
-
-    if (type === 'finger_palm_arm') {
-      const fingerR = radius * 0.7;
-      const palmW = span * 0.9;
-      const palmT = radius * 2;
-      const armR = radius * 1.2;
-
-      parts.push(applyTransform(makeCylinderZ(fingerR, height * 0.6), new THREE.Vector3(-span * 0.35, 0, -height * 0.25), new THREE.Euler(0, 0, 0)));
-      parts.push(applyTransform(makeCylinderZ(fingerR, height * 0.6), new THREE.Vector3(0, 0, -height * 0.25), new THREE.Euler(0, 0, 0)));
-      parts.push(applyTransform(makeCylinderZ(fingerR, height * 0.6), new THREE.Vector3(+span * 0.35, 0, -height * 0.25), new THREE.Euler(0, 0, 0)));
-      parts.push(applyTransform(makeBox(palmW, palmW * 0.5, palmT), new THREE.Vector3(0, 0, height * 0.05), new THREE.Euler(0, 0, 0)));
-      parts.push(applyTransform(makeCylinderZ(armR, height * 0.9), new THREE.Vector3(0, 0, height * 0.55), new THREE.Euler(0, 0, 0)));
-    }
-
-    const merged = mergeGeometries(parts, false);
-    if (!merged) {
-      throw new Error('Failed to merge debug primitive geometry');
-    }
-
-    const geometry = new THREE.BufferGeometry().copy(merged);
-
-    geometry.computeVertexNormals();
-    geometry.computeBoundingBox();
-
-    // Match STL normalization approach so all downstream logic behaves the same.
-    const preBBox = geometry.boundingBox ? geometry.boundingBox.clone() : new THREE.Box3();
-    const preCenter = preBBox.getCenter(new THREE.Vector3());
-    geometry.translate(-preCenter.x, -preBBox.min.y, -preCenter.z);
-    geometry.computeBoundingBox();
-
-    accelerateGeometry(geometry);
-
-    const bbox = geometry.boundingBox ? geometry.boundingBox.clone() : new THREE.Box3();
-    const center = bbox.getCenter(new THREE.Vector3());
-    const size = bbox.getSize(new THREE.Vector3());
-    const flatteningPlanes = computeFlatteningPlanes(geometry);
-
-    return { geometry, bbox, center, size, flatteningPlanes };
-  }, [getDebugPresetDims]);
-
-  const addDebugPrimitive = useCallback((type: DebugPrimitiveType, preset: DebugPrimitiveSizePreset) => {
-    const typeLabelMap: Record<DebugPrimitiveType, string> = {
-      pillar: 'Pillar',
-      merge_y: 'Merge Y',
-      split_y: 'Split Y',
-      earlobe: 'Earlobe',
-      bridge: 'Bridge',
-      finger_palm_arm: 'Finger → Palm → Arm'
-    };
-
-    const geom = buildDebugGeometry(type, preset);
-
-    const color = '#a3a3a3';
-    clearPaintToBase(geom.geometry, new THREE.Color(color));
-
-    const heightOffset = geom.center.z - geom.bbox.min.z;
-    const initialZ = heightOffset;
-
-    const id = uuidv4();
-    const model: LoadedModel = {
-      id,
-      name: `[Debug] ${typeLabelMap[type]}`,
-      fileUrl: '',
-      geometry: geom,
-      transform: {
-        position: new THREE.Vector3(0, 0, initialZ),
-        rotation: new THREE.Euler(0, 0, 0),
-        scale: new THREE.Vector3(1, 1, 1)
-      },
-      visible: true,
-      color,
-      polygonCount: geom.geometry.getAttribute('position').count / 3
-    };
-
-    setModels(prev => [...prev, model]);
-    setActiveModelId(id);
-  }, [buildDebugGeometry]);
-
-  const clearDebugModels = useCallback(() => {
-    setModels(prev => {
-      for (const m of prev) {
-        if (isDebugModelName(m.name)) {
-          tryRevokeObjectUrl(m.fileUrl);
-        }
-      }
-      return prev.filter(m => !isDebugModelName(m.name));
-    });
-
-    setActiveModelId(prevId => {
-      if (!prevId) return prevId;
-      const stillExists = models.some(m => m.id === prevId && !isDebugModelName(m.name));
-      return stillExists ? prevId : null;
-    });
-  }, [isDebugModelName, models, tryRevokeObjectUrl]);
 
   // Lighting controls (Global)
   const [ambientIntensity, setAmbientIntensity] = useState<number>(DEFAULT_AMBIENT_INTENSITY);
@@ -6164,10 +5977,6 @@ export function useSceneCollectionManager(options?: {
     importPluginSceneFile: handleImportPluginSceneFile,
     importSceneFile,
     importSceneFiles,
-    onImportSceneChange,
-
-    // Debug primitives
-    addDebugPrimitive,
-    clearDebugModels
+    onImportSceneChange
   };
 }

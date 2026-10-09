@@ -50,7 +50,6 @@ import { TerritoryVoxelControls } from '@/components/controls/TerritoryVoxelCont
 import { IslandListCard } from '@/components/controls/IslandListCard';
 import { ModelManagerPanel } from '../components/controls/ModelManagerPanel';
 import { ModelsPanel } from '@/components/organisms/panels/ModelsPanel';
-import { DebugPrimitivesPanel } from '@/components/controls/DebugPrimitivesPanel';
 import { ModelStatsCard } from '@/components/controls/ModelStatsCard';
 import { ToolRail, TOOL_RAIL_WIDTH_PX } from '@/components/controls/ToolRail';
 import { buildPrepareToolRailEntries, buildSupportToolRailEntries, type SupportRailMode } from '@/components/controls/toolRailEntries';
@@ -124,9 +123,7 @@ import { UvToolsLaunchingModal } from '@/components/modals/UvToolsLaunchingModal
 import { ZipFilePickerModal } from '@/components/modals/ZipFilePickerModal';
 import { extractFilesFromZip, getFileExtensionLower } from '@/utils/zipImport';
 import {
-  DEBUG_PRIMITIVES_PANEL_VISIBILITY_EVENT,
   getToolLayout,
-  isDebugPrimitivesPanelVisibleEnabled,
   isModelsPanelVisibleEnabled,
   setModelsPanelVisibleEnabled,
   setToolLayout,
@@ -1165,7 +1162,6 @@ export default function Home() {
   });
   const [pendingModifierResetAction, setPendingModifierResetAction] = React.useState<PendingModifierResetAction | null>(null);
   const [pendingBlockerResetState, setPendingBlockerResetState] = React.useState<HollowingPanelState | null>(null);
-  const [debugPrimitivesPanelVisible, setDebugPrimitivesPanelVisible] = React.useState<boolean>(false);
   // Tool rail's `Models` entry. Defaults to shown, which is how the list behaved
   // before the rail existed; the stored value is applied on mount, not at render,
   // because localStorage does not exist during the server render.
@@ -6301,25 +6297,6 @@ export default function Home() {
     [],
   );
 
-  React.useEffect(() => {
-    setDebugPrimitivesPanelVisible(isDebugPrimitivesPanelVisibleEnabled());
-
-    const handleDebugPanelVisibilityChanged = (event: Event) => {
-      const customEvent = event as CustomEvent<{ enabled?: boolean }>;
-      const nextEnabled = customEvent.detail?.enabled;
-      if (typeof nextEnabled === 'boolean') {
-        setDebugPrimitivesPanelVisible(nextEnabled);
-      } else {
-        setDebugPrimitivesPanelVisible(isDebugPrimitivesPanelVisibleEnabled());
-      }
-    };
-
-    window.addEventListener(DEBUG_PRIMITIVES_PANEL_VISIBILITY_EVENT, handleDebugPanelVisibilityChanged as EventListener);
-    return () => {
-      window.removeEventListener(DEBUG_PRIMITIVES_PANEL_VISIBILITY_EVENT, handleDebugPanelVisibilityChanged as EventListener);
-    };
-  }, []);
-
   // Sync transform manager when active model changes
   React.useEffect(() => {
     if (scene.activeModelId && scene.activeModel) {
@@ -9897,8 +9874,6 @@ export default function Home() {
         onHoverTintStrengthChange={scene.setHoverTintStrength}
         selectedTintStrength={scene.selectedTintStrength}
         onSelectedTintStrengthChange={scene.setSelectedTintStrength}
-        debugPrimitivesPanelVisible={debugPrimitivesPanelVisible}
-        onDebugPrimitivesPanelVisibleChange={setDebugPrimitivesPanelVisible}
         view3dSettings={scene.view3dSettings}
         onView3dSettingsChange={scene.setView3dSettings}
         slicingThumbnailRenderSettings={exportThumbnailRenderOptions}
@@ -9968,7 +9943,6 @@ export default function Home() {
               showEmptySceneDialog: showEmptySceneDialog,
               importOverlayState: importOverlayState,
               modelStatsBottomClearancePx: modelStatsBottomClearancePx,
-              debugPrimitivesPanelVisible: debugPrimitivesPanelVisible,
               ensurePendingTransformHistoryForActiveModel: ensurePendingTransformHistoryForActiveModel,
               requestDestructiveTransformSupportDeletion: requestDestructiveTransformSupportDeletion,
               handleRotationComplete: handleRotationComplete,
