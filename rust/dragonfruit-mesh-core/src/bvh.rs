@@ -23,14 +23,35 @@ const LEAF_FLAG: u32 = 1 << 31;
 /// `log2(that) + 1` deep, so this covers any mesh a u32 face index can address.
 const STACK_DEPTH: usize = 64;
 
-#[derive(Clone, Copy, Debug)]
-struct FlatNode {
-    min: [f32; 3],
-    max: [f32; 3],
+/// One node of the flat tree, laid out for a GPU as much as for this crate.
+///
+/// `#[repr(C)]` and `Pod` are deliberate: the same bytes are uploaded to a
+/// compute shader as a storage buffer, so the field order, the sizes and the
+/// padding are a contract, not an implementation detail. It is 32 bytes:
+///
+/// | offset | field | meaning |
+/// | --- | --- | --- |
+/// | 0 | `min` | AABB lower corner (`f32[3]`) |
+/// | 12 | `max` | AABB upper corner (`f32[3]`) |
+/// | 24 | `a` | internal: left child index; leaf: first index into `faces` |
+/// | 28 | `b` | internal: right child index; leaf: `LEAF_FLAG \| face count` |
+///
+/// A traversal must read it exactly as [`Bvh::ray_nearest_within`] does, because
+/// the two are required to agree: the GPU bake is checked against the CPU bake
+/// on the same mesh, so a shader that mirrors this wrongly shows up as a value
+/// mismatch rather than as a subtle visual difference.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct FlatNode {
+    /// AABB lower corner. Not rotated with the transform: the tree is built in
+    /// the mesh's own space, and so is every query against it.
+    pub min: [f32; 3],
+    /// AABB upper corner.
+    pub max: [f32; 3],
     /// Internal: left child index. Leaf: first index into `faces`.
-    a: u32,
-    /// Internal: right child index. Leaf: `LEAF_FLAG | face count`.
-    b: u32,
+    pub a: u32,
+    /// Internal: right child index. Leaf: `leaf_flag` or a face count.
+    pub b: u32,
 }
 
 impl FlatNode {
@@ -50,6 +71,20 @@ pub struct Bvh {
     /// Triangle indices, grouped by leaf.
     faces: Vec<u32>,
     root: u32,
+}
+
+/// The tree's storage as a GPU sees it. [`Bvh::gpu_layout`] carries the contract
+/// a traversal has to satisfy, and the test below is that traversal written in
+/// Rust — the reference a WGSL port is checked against.
+pub struct BvhGpuLayout<'a> {
+    /// 32 bytes per node, [`FlatNode`]'s own layout.
+    pub nodes: &'a [FlatNode],
+    /// Triangle indices, one contiguous run per leaf.
+    pub faces: &'a [u32],
+    /// Index of the root node.
+    pub root: u32,
+    /// The bit in [`FlatNode::b`] that marks a leaf.
+    pub leaf_flag: u32,
 }
 
 impl Bvh {
@@ -112,6 +147,35 @@ impl Bvh {
                 stack[depth + 1] = node.b;
                 depth += 2;
             }
+        }
+    }
+
+    /// The tree as a compute shader consumes it: the nodes, the faces they point
+    /// at, the root, and the leaf flag.
+    ///
+    /// **A shader must mirror [`Self::ray_nearest_within`], not re-derive it.**
+    /// What it has to reproduce is this, and nothing else:
+    ///
+    /// - `nodes` is a binary tree; each node's `min`/`max` is an AABB in the
+    ///   mesh's own space, and the query ray is intersected with it by the
+    ///   ordinary slab test.
+    /// - `node.b & layout.leaf_flag != 0` marks a leaf, whose triangles are
+    ///   `faces[node.a .. node.a + (node.b & !leaf_flag)]`.
+    /// - the search returns the nearest hit within `max_distance`, except that a
+    ///   hit at or under `saturate_at` may be returned the moment it is found:
+    ///   any such hit weights full strength, so *which* one is not part of the
+    ///   contract, only the distance's clamp.
+    ///
+    /// The GPU bake is checked against the CPU bake on the same mesh, so a
+    /// shader that mirrors this wrongly shows up as a value mismatch rather than
+    /// as a subtle visual difference. The test below is that mirror written in
+    /// Rust, and it is the reference the WGSL traversal is ported from.
+    pub fn gpu_layout(&self) -> BvhGpuLayout<'_> {
+        BvhGpuLayout {
+            nodes: &self.nodes,
+            faces: &self.faces,
+            root: self.root,
+            leaf_flag: LEAF_FLAG,
         }
     }
 
@@ -586,4 +650,210 @@ fn interval_on_line(p0: f32, p1: f32, p2: f32, d0: f32, d1: f32, d2: f32) -> (f3
         }
     }
     (lo, hi)
+}
+#[cfg(test)]
+mod gpu_layout_tests {
+    use super::*;
+    use crate::mesh::{IndexedMesh, Vec3};
+
+    fn box_soup(min: [f32; 3], max: [f32; 3]) -> Vec<f32> {
+        let c = [
+            [min[0], min[1], min[2]],
+            [max[0], min[1], min[2]],
+            [max[0], max[1], min[2]],
+            [min[0], max[1], min[2]],
+            [min[0], min[1], max[2]],
+            [max[0], min[1], max[2]],
+            [max[0], max[1], max[2]],
+            [min[0], max[1], max[2]],
+        ];
+        let faces: [[usize; 4]; 6] = [
+            [0, 1, 2, 3],
+            [4, 5, 6, 7],
+            [0, 1, 5, 4],
+            [1, 2, 6, 5],
+            [2, 3, 7, 6],
+            [3, 0, 4, 7],
+        ];
+        let mut out = Vec::new();
+        for f in faces {
+            for tri in [[f[0], f[1], f[2]], [f[0], f[2], f[3]]] {
+                for i in tri {
+                    out.extend_from_slice(&c[i]);
+                }
+            }
+        }
+        out
+    }
+
+    fn fixture() -> IndexedMesh {
+        let mut soup = box_soup([0.0, 0.0, 0.0], [20.0, 20.0, 4.0]);
+        soup.extend(box_soup([0.0, 8.5, 4.0], [20.0, 9.0, 10.0]));
+        soup.extend(box_soup([0.0, 11.0, 4.0], [20.0, 11.5, 10.0]));
+        IndexedMesh::from_triangle_soup(&soup, 1e-5)
+    }
+
+    /// Slab test against one node's AABB: the entry distance, or infinity when
+    /// the ray misses it or enters past `max`.
+    fn slab_entry(origin: Vec3, inv: Vec3, node: &FlatNode, max: f32) -> f32 {
+        let mut lo = f32::NEG_INFINITY;
+        let mut hi = f32::INFINITY;
+        for axis in 0..3 {
+            let o = [origin.x, origin.y, origin.z][axis];
+            let i = [inv.x, inv.y, inv.z][axis];
+            let t0 = (node.min[axis] - o) * i;
+            let t1 = (node.max[axis] - o) * i;
+            lo = lo.max(t0.min(t1));
+            hi = hi.min(t0.max(t1));
+        }
+        if hi < lo.max(0.0) || lo > max {
+            f32::INFINITY
+        } else {
+            lo.max(0.0)
+        }
+    }
+
+    /// The traversal a compute shader is ported from. Deliberately written
+    /// against the public layout only, so it is the proof that the layout and the
+    /// documented contract are enough to reimplement the query.
+    fn mirror_nearest(
+        layout: &BvhGpuLayout<'_>,
+        mesh: &IndexedMesh,
+        origin: Vec3,
+        dir: Vec3,
+        max_distance: f32,
+        saturate_at: f32,
+    ) -> Option<f32> {
+        if layout.nodes.is_empty() {
+            return None;
+        }
+        let inv = Vec3::new(1.0 / dir.x, 1.0 / dir.y, 1.0 / dir.z);
+        let mut best = max_distance;
+        let mut found = false;
+        let mut stack = [0u32; 64];
+        let mut depth = 1usize;
+        stack[0] = layout.root;
+        while depth > 0 {
+            depth -= 1;
+            let node = layout.nodes[stack[depth] as usize];
+            if !slab_entry(origin, inv, &node, best).is_finite() {
+                continue;
+            }
+            if node.b & layout.leaf_flag != 0 {
+                let count = (node.b & !layout.leaf_flag) as usize;
+                for k in 0..count {
+                    let face = layout.faces[node.a as usize + k];
+                    let [a, b, c] = mesh.tri_positions(face);
+                    if let Some(t) = ray_tri(origin, dir, a, b, c) {
+                        if t >= 0.0 {
+                            if t <= saturate_at {
+                                return Some(t);
+                            }
+                            if t < best {
+                                best = t;
+                                found = true;
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+            stack[depth] = node.a;
+            stack[depth + 1] = node.b;
+            depth += 2;
+        }
+        if found {
+            Some(best)
+        } else {
+            None
+        }
+    }
+
+    #[test]
+    fn the_node_contract_is_thirty_two_bytes_without_padding() {
+        assert_eq!(std::mem::size_of::<FlatNode>(), 32);
+        assert_eq!(std::mem::align_of::<FlatNode>(), 4);
+        // What the shader reads has to be exactly what an upload writes.
+        let node = FlatNode {
+            min: [1.0, 2.0, 3.0],
+            max: [4.0, 5.0, 6.0],
+            a: 7,
+            b: 8,
+        };
+        let bytes: &[u8] = bytemuck::bytes_of(&node);
+        assert_eq!(bytes.len(), 32);
+        assert_eq!(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]), 1.0);
+        assert_eq!(u32::from_le_bytes([bytes[24], bytes[25], bytes[26], bytes[27]]), 7);
+        assert_eq!(u32::from_le_bytes([bytes[28], bytes[29], bytes[30], bytes[31]]), 8);
+    }
+
+    #[test]
+    fn the_leaf_runs_cover_every_triangle_exactly_once() {
+        let mesh = fixture();
+        let bvh = Bvh::build(&mesh);
+        let layout = bvh.gpu_layout();
+        let mut seen = vec![0u32; mesh.triangles.len()];
+        let mut stack = vec![layout.root];
+        while let Some(index) = stack.pop() {
+            let node = layout.nodes[index as usize];
+            if node.b & layout.leaf_flag != 0 {
+                let count = (node.b & !layout.leaf_flag) as usize;
+                for k in 0..count {
+                    seen[layout.faces[node.a as usize + k] as usize] += 1;
+                }
+            } else {
+                stack.push(node.a);
+                stack.push(node.b);
+            }
+        }
+        assert!(
+            seen.iter().all(|c| *c == 1),
+            "a shader indexes faces by leaf run, so every triangle has to appear once: {seen:?}"
+        );
+    }
+
+    #[test]
+    fn the_mirror_traversal_agrees_with_the_crate() {
+        let mesh = fixture();
+        let bvh = Bvh::build(&mesh);
+        let layout = bvh.gpu_layout();
+        let reach = 6.0f32;
+        let plateau = 1.0f32;
+
+        let mut seed = 0x1234_5678u32;
+        let mut next = || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) as f32 / (1 << 24) as f32
+        };
+
+        let mut compared = 0;
+        let mut hits = 0;
+        for _ in 0..512 {
+            let origin = Vec3::new(next() * 20.0, next() * 20.0, 1e-3);
+            let u1 = next().max(1e-3);
+            let phi = std::f32::consts::TAU * next();
+            let dir = Vec3::new(
+                u1.sqrt() * phi.cos(),
+                u1.sqrt() * phi.sin(),
+                (1.0 - u1).sqrt(),
+            );
+            let ours = bvh.ray_nearest_within(&mesh, origin, dir, reach, plateau);
+            let theirs = mirror_nearest(&layout, &mesh, origin, dir, reach, plateau);
+            match (ours, theirs) {
+                (None, None) => {}
+                (Some(a), Some(b)) => {
+                    // Any hit inside the plateau may be returned, so the clamp is
+                    // the comparable quantity, not the distance itself.
+                    assert!(
+                        (a.min(plateau) - b.min(plateau)).abs() < 1e-3,
+                        "origin {origin:?} dir {dir:?}: crate {a} vs mirror {b}"
+                    );
+                    hits += 1;
+                }
+                (a, b) => panic!("disagreement on whether there is a hit: {a:?} vs {b:?}"),
+            }
+            compared += 1;
+        }
+        assert!(compared > 500 && hits > 50, "the test has to actually hit things: {hits} hits");
+    }
 }
