@@ -7784,7 +7784,7 @@ export function SceneCanvas({
         {!thumbnailCaptureActive && cameraInteractionCycleEnabled && (
           <ZUpGizmoHelper
             alignment="bottom-right"
-            margin={mode === 'printing' ? [80, 80] : [nonPrintingViewCubeRightMargin, 80]}
+            margin={mode === 'printing' ? [82, 82] : [nonPrintingViewCubeRightMargin, 82]}
             accentColor={gizmoColors.accent}
             chipColor={gizmoColors.chip}
             chipBorderColor={gizmoColors.chipBorder}
