@@ -181,9 +181,9 @@ function RotationArrow({
 /** Home chip sits on the bottom-right diagonal, between the right and bottom arrows.
  *  Its clearance is measured against the viewcube's corner sweep, not its faces: as the
  *  cube turns with the camera a corner reaches half-extent × √3 (30 × 1.73 ≈ 52px), and
- *  that is what a face-sized offset collides with. 0.97 leaves the chip's nearest corner
- *  ~10px outside that sweep. */
-const HOME_OFFSET = 0.97;
+ *  that is what a face-sized offset collides with. 0.95 leaves the chip's nearest corner
+ *  ~9px outside that sweep. */
+const HOME_OFFSET = 0.95;
 const HOME_SIZE = 0.47;
 
 function HomeButton({
