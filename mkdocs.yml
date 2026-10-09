@@ -104,6 +104,7 @@ nav:
           - Architecture: dev/architecture-overview.md
           - page.tsx Refactor Handoff: dev/page-tsx-refactor-handoff.md
           - Contributing: dev/contributing.md
+          - DOM Tests: dev/dom-tests.md
           - Preview Builds and CI Permissions: dev/preview-builds.md
           - Localization (i18n): dev/localization.md
           - Backlog and Known Gotchas: dev/backlog.md

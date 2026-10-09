@@ -79,7 +79,8 @@
             "SerializeVoxlOptions",
             "VoxlMeshEncoding",
             "load_voxl_v1_from_bytes",
-            "EXPERIMENTAL_RAY_QUERY"
+            "EXPERIMENTAL_RAY_QUERY",
+            "mockIPC"
       ],
       "paths": [
             "src/supports/generatedSupportRegistrations.ts",
@@ -95,6 +96,7 @@
             "src/supports/PlacementLogic/Pathfinding/PotentialFieldSolver.ts"
       ],
       "_reasons": {
+            "tauri test mocks": "mockIPC is exported by @tauri-apps/api/mocks; docs/dev/dom-tests.md names it as the way a DOM test fakes the native bridge, and no test uses it yet.",
             "schematic names": "registerX/subscribeX/getX* and the Gadget* family are invented stand-ins in walkthroughs (registration-seams.md, state-and-stores.md, support-type-extension.md), not real symbols.",
             "external symbols": "n_coords and n_indices are fields of the third-party LYS mesh format, cited by docs/dev/lys-mesh-extraction-spec.md. n_indices previously matched by coincidence inside pure_down_indices() in the retired dragonfruit-astar crate, which is why its removal exposed the gap; version_comparator is a tauri-plugin-updater API.",
             "deliberately removed": "kerf_mm is named in organic-cut-surface-redesign.md precisely to record that it is gone. satisfiesMinAngleFromHorizontal was the flat angle test in the grid attach path and auto-supports.md names it to record that the length-aware allowance replaced it.",
