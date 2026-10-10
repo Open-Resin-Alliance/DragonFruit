@@ -901,9 +901,12 @@ pub fn classify_support_split(
     };
 
     // Patch the pre-analysis with the real component count and build the
-    // post-analysis (identical since only triangle order changed).
+    // post-analysis from it. Classification only reorders triangles, so every field
+    // but the component count is identical by construction, and recomputing it
+    // walked the whole mesh a second time for nothing (a bbox pass and a signed
+    // volume pass, once per classify, per model).
     report.pre.connected_components = component_count;
-    report.post = minimal_analysis(&mesh, component_count);
+    report.post = report.pre.clone();
     report.fully_repaired = true;
     report.residual_issues = Vec::new();
 
