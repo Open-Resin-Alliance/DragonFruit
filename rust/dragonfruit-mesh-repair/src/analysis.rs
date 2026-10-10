@@ -299,6 +299,33 @@ pub fn minimal_analysis(mesh: &IndexedMesh, component_count: usize) -> MeshAnaly
     }
 }
 
+/// Whether a mesh is manifold, and what is wrong if it is not.
+///
+/// Manifold means no edge and no vertex carries more than two faces. A boundary is
+/// **not** a defect: a surface with a border is still a manifold, and treating an
+/// open mesh as non-manifold is what painted valid models red. Nor is this
+/// `manifold_csg`'s opinion about whether it can build a solid, which is a
+/// different question and one it answers no to for plenty of meshes that print
+/// fine.
+pub fn topology_verdict(mesh: &IndexedMesh) -> (bool, Option<String>) {
+    if mesh.triangles.is_empty() {
+        return (true, None);
+    }
+    let topo = Topology::build(mesh);
+    let non_manifold_edges = topo.non_manifold_edges().len();
+    let non_manifold_vertices = count_non_manifold_vertices(mesh, &topo);
+    if non_manifold_edges == 0 && non_manifold_vertices == 0 {
+        (true, None)
+    } else {
+        (
+            false,
+            Some(format!(
+                "{non_manifold_edges} non-manifold edge(s), {non_manifold_vertices} non-manifold vertex(es)"
+            )),
+        )
+    }
+}
+
 fn count_non_manifold_vertices(mesh: &IndexedMesh, topo: &Topology) -> usize {
     let mut count = 0usize;
     for (vi, faces) in topo.vertex_faces.iter().enumerate() {

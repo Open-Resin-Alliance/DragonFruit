@@ -22,19 +22,16 @@ pub struct MeshHealthReport {
     /// geometry has no spatial split (all one group, or repair did not run).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_triangle_count: Option<usize>,
-    /// Result of feeding the model section (the first `model_triangle_count`
-    /// triangles, or the whole mesh when there is no split) through the
-    /// `manifold_csg` backend and checking its status. `Some(true)` = a valid
-    /// manifold (`NoError`), `Some(false)` = the CSG backend reported *any*
-    /// non-manifold status — not just an open/non-closed mesh but also
-    /// non-finite vertices, out-of-bounds indices, etc. (the UI renders such a
-    /// model red), `None` = the check did not run (manifold backend disabled or
-    /// no geometry).
+    /// Whether the model section's own topology is manifold: no edge and no vertex
+    /// carries more than two faces. `Some(false)` means those counts are non-zero,
+    /// and the UI renders such a model red. A boundary is not a defect, so an open
+    /// surface is still a manifold; this is not `manifold_csg`'s opinion of whether
+    /// it can build a solid. `None` when no geometry was measured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_is_manifold: Option<bool>,
-    /// The specific `manifold_csg` status string when `model_is_manifold` is
-    /// `Some(false)` (e.g. `manifold3d status: NotManifold`), for diagnostics.
-    /// `None` when the model is a valid manifold or the check did not run.
+    /// What is non-manifold about the model section when `model_is_manifold` is
+    /// `Some(false)`, as counts a user can act on (e.g. "3 non-manifold edge(s),
+    /// 0 non-manifold vertex(es)"). `None` when the section is manifold.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_manifold_status: Option<String>,
     /// If any defect classes remain after repair, they are listed here as

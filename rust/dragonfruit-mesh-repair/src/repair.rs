@@ -18,7 +18,7 @@ use ahash::{AHashMap, AHashSet};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::analysis::{analyze, minimal_analysis, MeshAnalysis};
+use crate::analysis::{analyze, analyze_lightweight, MeshAnalysis};
 use crate::arrangement::corefine_self_intersections;
 use crate::core::bvh::Bvh;
 use crate::core::halfedge::{edge_key, Topology};
@@ -745,26 +745,21 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
     report.fully_repaired = residuals.is_empty();
     report.residual_issues = residuals;
 
-    // Final validity gate: feed the model section (everything before the
-    // support split, or the whole mesh when there is no split) through the
-    // manifold_csg backend and inspect its status — the same check hollowing
-    // and hole-punching rely on. Any non-manifold status (not just a
-    // non-closed mesh) flags the model, and the frontend renders it red instead
-    // of the usual model color. If the model is still not a valid manifold after
-    // repair, the repair is reported as unsuccessful in the summary.
-    #[cfg(feature = "manifold")]
-    {
-        record_model_manifold_status(&mesh, &mut report);
-        if report.model_is_manifold == Some(false) {
-            let detail = report
-                .model_manifold_status
-                .clone()
-                .unwrap_or_else(|| "non-manifold model".into());
-            report
-                .residual_issues
-                .push(format!("model is still not a valid manifold after repair ({detail})"));
-            report.fully_repaired = false;
-        }
+    // Final validity gate: the model section's own topology decides whether the
+    // model is manifold, and the frontend renders a non-manifold model red instead
+    // of the usual model colour. Boundary is not a defect, so an open-but-valid
+    // model is not flagged; if the model is still not manifold after the repair ran,
+    // the repair is reported as unsuccessful in the summary.
+    record_model_manifold_verdict(&mesh, &mut report);
+    if report.model_is_manifold == Some(false) {
+        let detail = report
+            .model_manifold_status
+            .clone()
+            .unwrap_or_else(|| "non-manifold model".into());
+        report
+            .residual_issues
+            .push(format!("model is still not a valid manifold after repair ({detail})"));
+        report.fully_repaired = false;
     }
 
     report.total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
@@ -774,8 +769,8 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
 
 /// Extract the model section — the first `model_tri_count` triangles, or every
 /// triangle when there is no split — into a standalone [`IndexedMesh`] with
-/// compacted (zero-based) vertex indices so it can be fed to `manifold_csg`.
-#[cfg(feature = "manifold")]
+/// compacted (zero-based) vertex indices, so the section can be measured on its
+/// own rather than as part of the model-plus-supports mesh.
 fn extract_model_section_submesh(mesh: &IndexedMesh, model_tri_count: Option<usize>) -> IndexedMesh {
     let tri_end = model_tri_count
         .map(|n| n.min(mesh.triangles.len()))
@@ -802,52 +797,20 @@ fn extract_model_section_submesh(mesh: &IndexedMesh, model_tri_count: Option<usi
     }
 }
 
-/// Runs the model section through the manifold_csg backend and returns its
-/// status. `manifold_csg::Manifold::from_mesh_f32` rejects *any* mesh the CSG
-/// backend flags — not only open/non-closed geometry but also `NotManifold`,
-/// `NonFiniteVertex`, `VertexOutOfBounds`, etc. — returning
-/// `Err(CsgError::ManifoldStatus(..))`, which is exactly the gate the hollowing
-/// and hole-punching paths rely on. `Ok(())` means a valid, non-empty manifold;
-/// `Err(reason)` carries the specific CSG status string.
-#[cfg(feature = "manifold")]
-fn model_section_manifold_status(
-    mesh: &IndexedMesh,
-    model_tri_count: Option<usize>,
-) -> Result<(), String> {
-    use manifold_csg::Manifold;
-
-    let model = extract_model_section_submesh(mesh, model_tri_count);
-    if model.triangles.is_empty() || model.positions.is_empty() {
-        return Err("empty model section".into());
-    }
-
-    let positions: Vec<f32> = model.positions.iter().flat_map(|v| [v.x, v.y, v.z]).collect();
-    let indices: Vec<u32> = model.triangles.iter().flat_map(|t| *t).collect();
-
-    // Any non-`NoError` CSG status surfaces here as `Err` and is treated as a
-    // failed manifold check, regardless of which non-manifold condition it is.
-    let model = Manifold::from_mesh_f32(&positions, 3, &indices).map_err(|e| e.to_string())?;
-    if model.is_empty() || model.num_tri() == 0 {
-        return Err("manifold became empty".into());
-    }
-    Ok(())
-}
-
-/// Records the model section's manifold status onto `report`
-/// (`model_is_manifold` + `model_manifold_status`). Shared by the full repair
-/// routine and the lightweight classify pass.
-#[cfg(feature = "manifold")]
-fn record_model_manifold_status(mesh: &IndexedMesh, report: &mut MeshHealthReport) {
-    match model_section_manifold_status(mesh, report.model_triangle_count) {
-        Ok(()) => {
-            report.model_is_manifold = Some(true);
-            report.model_manifold_status = None;
-        }
-        Err(reason) => {
-            report.model_is_manifold = Some(false);
-            report.model_manifold_status = Some(reason);
-        }
-    }
+/// Records the model section's manifold verdict onto `report`
+/// (`model_is_manifold` + `model_manifold_status`), from its own topology. Shared
+/// by the full repair routine and the classify pass.
+///
+/// The verdict is about the model section, not the whole mesh: a support touches
+/// the model and shares vertices with it, so counting the whole mesh would flag
+/// every supported file. Nor is it `manifold_csg`'s opinion of whether it can build
+/// a solid, which is a different question and says no to plenty of meshes that
+/// print fine.
+fn record_model_manifold_verdict(mesh: &IndexedMesh, report: &mut MeshHealthReport) {
+    let section = extract_model_section_submesh(mesh, report.model_triangle_count);
+    let (is_manifold, detail) = crate::analysis::topology_verdict(&section);
+    report.model_is_manifold = Some(is_manifold);
+    report.model_manifold_status = detail;
 }
 
 /// Lightweight model/support section classification pass.
@@ -861,11 +824,11 @@ pub fn classify_support_split(
 ) -> ClassificationOutcome {
     let t_start = std::time::Instant::now();
 
-    // Pre-analysis with placeholder component count — the classifier
-    // computes union-find internally and returns the real count, which
-    // we use for both pre and post (classification only reorders
-    // triangles; topology — and therefore component count — is unchanged).
-    let pre = minimal_analysis(&mesh, 0);
+    // Real topology, not `minimal_analysis`: the report's non-manifold and boundary
+    // counts are read by the repair confirm modal and the report modal, and the
+    // classifier's own report was handing them zeros. `analyze_lightweight` skips
+    // only self-intersection detection, which no classify consumer uses.
+    let pre = analyze_lightweight(&mesh);
     let mut report = MeshHealthReport::new(pre);
 
     if options.assume_support_geometry == Some(true) {
@@ -910,11 +873,9 @@ pub fn classify_support_split(
     report.fully_repaired = true;
     report.residual_issues = Vec::new();
 
-    // Same final manifold-status gate as the full repair routine: feed the
-    // model section through manifold_csg and flag any non-manifold status so
-    // the frontend can render a non-manifold model red.
-    #[cfg(feature = "manifold")]
-    record_model_manifold_status(&mesh, &mut report);
+    // Same manifold verdict as the full repair routine, from the model section's
+    // own topology, so the frontend can render a non-manifold model red.
+    record_model_manifold_verdict(&mesh, &mut report);
 
     report.total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
 
@@ -3094,6 +3055,57 @@ mod tests {
         };
         let outcome = repair(mesh, &options);
         assert!(outcome.report.likely_support_geometry);
+    }
+
+    /// A surface with a border is still a manifold. The verdict used to ask
+    /// `manifold_csg` whether it could build a solid, which says no to an open mesh,
+    /// so valid models rendered red and a good repair could be thrown away.
+    #[test]
+    fn an_open_but_manifold_surface_is_not_flagged() {
+        // One welded quad: two triangles, four boundary edges, no non-manifold edge.
+        let mesh = IndexedMesh {
+            positions: vec![
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(1.0, 1.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+            ],
+            triangles: vec![[0, 1, 2], [0, 2, 3]],
+        };
+
+        let outcome = classify_support_split(mesh, &RepairOptions::default());
+
+        assert_eq!(outcome.report.model_is_manifold, Some(true));
+        assert_eq!(outcome.report.model_manifold_status, None);
+        // The counts are the real ones now, not the zeros `minimal_analysis` left.
+        assert_eq!(outcome.report.post.boundary_edges, 4);
+        assert_eq!(outcome.report.post.non_manifold_edges, 0);
+    }
+
+    /// Three triangles sharing one edge is what non-manifold actually means, and it
+    /// still has to be reported.
+    #[test]
+    fn a_fan_on_a_shared_edge_is_flagged() {
+        let mesh = IndexedMesh {
+            positions: vec![
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                Vec3::new(0.0, -1.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+            ],
+            triangles: vec![[0, 1, 2], [1, 0, 3], [0, 1, 4]],
+        };
+
+        let outcome = classify_support_split(mesh, &RepairOptions::default());
+
+        assert_eq!(outcome.report.model_is_manifold, Some(false));
+        assert!(outcome.report.post.non_manifold_edges > 0, "the shared edge is non-manifold");
+        assert!(outcome
+            .report
+            .model_manifold_status
+            .as_deref()
+            .is_some_and(|detail| detail.contains("non-manifold edge")));
     }
 
     /// A file can carry non-finite positions, and every float comparison on the
