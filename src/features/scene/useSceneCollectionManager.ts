@@ -6301,6 +6301,16 @@ export function useSceneCollectionManager(options?: {
       return false;
     }
 
+    // A mesh entry recorded before the on-disk path was tracked carries no
+    // sourcePath, so it can only be restored from the cached blob and the native
+    // loader is skipped. Re-importing the file records the path and heals it.
+    if (entry.kind === 'mesh' && !entry.sourcePath) {
+      console.warn(
+        '[SceneCollection] Recent mesh entry has no on-disk path; restoring from cache. ' +
+        'Re-import the file to enable the native loader for it.',
+      );
+    }
+
     // Recovered file is empty and there is no disk path to fall back to — the
     // entry is broken (e.g. created before sourcePath was tracked for meshes).
     if (entry.kind === 'mesh' && file.size === 0) {

@@ -409,13 +409,22 @@ export function useImportExportManager({
     setTimeout(resolve, 0);
   }), []);
 
-  const createPathBackedStlFile = React.useCallback((sourcePath: string, name: string, sizeBytes?: number | null): File => {
-    const file = new File([], name, {
+  /**
+   * A mesh File that carries its on-disk path, so the native loader can read it
+   * directly instead of the renderer parsing bytes in the webview.
+   *
+   * STL passes no bytes: the path is the whole story, and a 4M-triangle STL
+   * never enters webview memory. OBJ and 3MF still pass their bytes, because the
+   * renderer's own loaders remain the fallback until the native loader has proven
+   * itself on every file they accept.
+   */
+  const createPathBackedMeshFile = React.useCallback((sourcePath: string, name: string, sizeBytes?: number | null, bytes?: ArrayBuffer): File => {
+    const file = new File(bytes ? [new Uint8Array(bytes)] : [], name, {
       type: getDroppedFileMimeType(name),
       lastModified: Date.now(),
     });
     (file as File & { filePath?: string }).filePath = sourcePath;
-    // A path-backed file holds no bytes, so its own `size` is 0 — which is how
+    // A byte-less file holds no data, so its own `size` is 0 — which is how
     // every readout of an STL imported on desktop said "0 B". The native picker
     // reports only the path, so the length comes from the core's metadata command.
     // Read it here rather than at the display, because `size` is what the model is
@@ -473,13 +482,10 @@ export function useImportExportManager({
           const name = resolvedName;
           if (getFileExtensionLower(name) === '.stl') {
             // Metadata only: the STL path stays path-backed and never reads the mesh.
-            files.push(createPathBackedStlFile(sourcePath, name, await readNativeFileSize(sourcePath)));
+            files.push(createPathBackedMeshFile(sourcePath, name, await readNativeFileSize(sourcePath)));
           } else {
             const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
-            files.push(new File([new Uint8Array(bytes)], name, {
-              type: getDroppedFileMimeType(name),
-              lastModified: Date.now(),
-            }));
+            files.push(createPathBackedMeshFile(sourcePath, name, null, bytes));
           }
         } catch (error) {
           console.warn(`[Picker] Failed reading picked file path: ${entry.path}`, error);
@@ -502,7 +508,7 @@ export function useImportExportManager({
       console.warn(`[Picker] Native ${category} picker failed, falling back to web input.`, error);
       return null;
     }
-  }, [createPathBackedStlFile, deps.current.isDesktopRuntime, waitForUiTick]);
+  }, [createPathBackedMeshFile, deps.current.isDesktopRuntime, waitForUiTick]);
 
   const pickFilesWithWebInput = React.useCallback((accept: string, multiple: boolean): Promise<File[]> => {
     return new Promise((resolve) => {
@@ -954,13 +960,10 @@ export function useImportExportManager({
           const name = getFileNameFromPath(sourcePath);
           if (getFileExtensionLower(name) === '.stl') {
             // Metadata only: the STL path stays path-backed and never reads the mesh.
-            files.push(createPathBackedStlFile(sourcePath, name, await readNativeFileSize(sourcePath)));
+            files.push(createPathBackedMeshFile(sourcePath, name, await readNativeFileSize(sourcePath)));
           } else {
             const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
-            files.push(new File([new Uint8Array(bytes)], name, {
-              type: getDroppedFileMimeType(name),
-              lastModified: Date.now(),
-            }));
+            files.push(createPathBackedMeshFile(sourcePath, name, null, bytes));
           }
         } catch (error) {
           console.warn(`[DragDrop] Failed reading dropped file path: ${sourcePath}`, error);
@@ -971,7 +974,7 @@ export function useImportExportManager({
     } catch {
       return [] as File[];
     }
-  }, [createPathBackedStlFile]);
+  }, [createPathBackedMeshFile]);
 
   const sceneModeRef = React.useRef(scene.mode);
   const createFilesFromTauriDroppedPathsRef = React.useRef(createFilesFromTauriDroppedPaths);
