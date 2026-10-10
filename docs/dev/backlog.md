@@ -470,9 +470,9 @@ brightness** even under a hard key light (measured in a headless render of the
 real loader output). It is a real defect and it had to go, but it is not what the
 report was about.
 
-**2. A repaired geometry kept no normals at all.** `repairGeometryWithManifold`
-rewrites positions and index in place and deletes the now-stale `normal`
-attribute, with a comment saying the caller must recompute. It does not set
+**2. A repaired geometry kept no normals at all.** The Manifold repair rewrote
+positions and index in place and deleted the now-stale `normal` attribute, with a
+comment saying the caller must recompute. It did not set
 `nativeModifiedGeometry`, and STL loading passes `_skipComputeNormals: true`
 because the loader "already computed them" — so `processGeometry` skipped the
 recompute and the model shaded from a zeroed attribute. That is precisely the
