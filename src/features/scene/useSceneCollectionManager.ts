@@ -2536,6 +2536,10 @@ export function useSceneCollectionManager(options?: {
           // Shared loading options for all mesh types
           const loadOptions = {
             nativeProcessingMode: getSavedImportDefaultsSettings().autoRepair ? 'auto' : 'none',
+            // The scene finalizes BVH + flattening planes on idle and bakes the AO
+            // from its sweep, so an import does not pay for them before the model is
+            // on screen.
+            deferHeavyPostProcessing: true,
             filePath: (file as File & { filePath?: string }).filePath,
             onNativeProcessingStage: (stage: string) => {
               if (stage === 'repairing') {
@@ -3752,6 +3756,24 @@ export function useSceneCollectionManager(options?: {
       }
     });
   }, [deferAccelerateGeometry]);
+
+  /**
+   * An import that asked to defer its heavy post-processing (BVH + flattening
+   * planes) is finalized here, the same way a geometry swap is. The AO bake needs
+   * no scheduling: the sweep above covers any geometry with no `aBakedAo`, a
+   * deferred one included.
+   *
+   * The marker is cleared in place, which is what makes this run once per model:
+   * it is a hint for this scheduler, not state, and the effect would otherwise
+   * queue the same model on every `models` change.
+   */
+  useEffect(() => {
+    for (const model of models) {
+      if (!model.geometry.postProcessingDeferred) continue;
+      model.geometry.postProcessingDeferred = undefined;
+      finalizeModelGeometryPostProcessing(model.id);
+    }
+  }, [models, finalizeModelGeometryPostProcessing]);
 
   const setModelVisibility = useCallback((id: string, visible: boolean) => {
     setModels(prev => prev.map(m =>
@@ -5832,6 +5854,7 @@ export function useSceneCollectionManager(options?: {
             geometry = await loadMeshGeometry(bytes, embeddedName, {
               ...(bakedClassification ? { bakedClassification } : {}),
               nativeProcessingMode: autoRepairScenes ? 'auto' : 'none',
+              deferHeavyPostProcessing: true,
               assumeSupportGeometry: model.isSupportGeometry,
               skipClassification: model.isSupportGeometry,
             onNativeProcessingStage: (stage) => {

@@ -8,7 +8,7 @@ import { ThreeMFLoader } from 'three/examples/jsm/loaders/3MFLoader.js';
 import { Fast3MFLoader, fast3mfBuilder } from 'fast-3mf-loader';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { loadMeshFileFromNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
+import { loadMeshBytes, loadMeshFileFromNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { accelerateGeometry } from '@/utils/bvh';
 import { computeFlatteningPlanes, type FlatteningPlane } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
 import { REFINE_MAX_TRIANGLES, refineCoarseFaces } from '@/utils/tauriMeshBridge';
@@ -46,6 +46,9 @@ export type GeometryWithBounds = {
   center: THREE.Vector3;
   size: THREE.Vector3;
   flatteningPlanes: FlatteningPlane[];
+  /** Set when the caller asked to defer the BVH, the flattening planes and the AO
+   *  bake to idle work (`deferHeavyPostProcessing`). */
+  postProcessingDeferred?: boolean;
   /** Present when defective vertex data was detected and auto-repaired */
   meshDefects?: MeshDefects;
   /**
@@ -151,6 +154,12 @@ export interface ProcessGeometryOptions {
    * knows the overlay is unwanted (e.g. a slicing-only geometry).
    */
   computeEdgeGeometry?: boolean;
+  /** Leave the BVH build, the flattening-plane pass and the AO bake to the
+   *  caller's idle work, so an import does not pay for them before the model is on
+   *  screen. The scene's `finalizeModelGeometryPostProcessing` takes the first two
+   *  and its AO sweep takes the third; the result carries
+   *  `postProcessingDeferred` so the caller knows to schedule them. */
+  deferHeavyPostProcessing?: boolean;
   /** Skip `computeVertexNormals()` - the geometry already has a `normal` attribute */
   _skipComputeNormals?: boolean;
   _isTauriRuntime?: () => boolean;
@@ -563,10 +572,14 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   await new Promise<void>(r => setTimeout(r, 0));
 
   // Add BVH acceleration for fast raycasting (critical for support placement)
-  console.log(`[${new Date().toISOString()}] [processGeometry] Starting BVH Construction`);
-  const startBVH = performance.now();
-  accelerateGeometry(geometry);
-  console.log(`[${new Date().toISOString()}] [processGeometry] BVH Construction finished. Took ${(performance.now() - startBVH).toFixed(2)}ms`);
+  if (options.deferHeavyPostProcessing) {
+    console.log(`[${new Date().toISOString()}] [processGeometry] BVH Construction deferred to the idle pass`);
+  } else {
+    console.log(`[${new Date().toISOString()}] [processGeometry] Starting BVH Construction`);
+    const startBVH = performance.now();
+    accelerateGeometry(geometry);
+    console.log(`[${new Date().toISOString()}] [processGeometry] BVH Construction finished. Took ${(performance.now() - startBVH).toFixed(2)}ms`);
+  }
 
   const bbox = geometry.boundingBox ? geometry.boundingBox.clone() : new THREE.Box3();
   const center = bbox.getCenter(new THREE.Vector3());
@@ -579,7 +592,12 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   // decimation still processes every vertex, adding measurable time and
   // allocations for meshes with 15M+ vertices.
   let flatteningPlanes: FlatteningPlane[];
-  if (options._isNativePreview || sourceVertexCount >= HUGE_STL_VERTEX_THRESHOLD) {
+  if (options.deferHeavyPostProcessing) {
+    // The scene's finalizeModelGeometryPostProcessing computes these on idle; the
+    // import must not block on a pass only Place on Face reads.
+    console.log(`[${new Date().toISOString()}] [processGeometry] Flattening Planes deferred to the idle pass`);
+    flatteningPlanes = [];
+  } else if (options._isNativePreview || sourceVertexCount >= HUGE_STL_VERTEX_THRESHOLD) {
     console.warn(
       `[processGeometry] Skipping flattening planes for huge mesh (` +
       `${sourceVertexCount.toLocaleString()} vertices).`,
@@ -617,15 +635,31 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   // native work while prep is synchronous, but it put a request on the wire while
   // the geometry was still being worked on, and the occlusion came back scattered
   // across the surface.
-  const baked = await bakeAndAttachOcclusionForGeometry(geometry).catch((error) => {
-    console.warn('[ao] bake during prep failed', error);
-    return false;
-  });
+  //
+  // A deferred import skips it and leaves the field to the scene's AO sweep, which
+  // keys on geometries with no `aBakedAo` and already keeps a bake in flight out of
+  // its queue. The model renders unbaked until that lands, which is the same state
+  // a restored or swapped geometry starts in.
+  const baked = options.deferHeavyPostProcessing
+    ? false
+    : await bakeAndAttachOcclusionForGeometry(geometry).catch((error) => {
+        console.warn('[ao] bake during prep failed', error);
+        return false;
+      });
   if (baked) {
     console.log(`[${new Date().toISOString()}] [processGeometry] Baked occlusion attached during prep`);
   }
 
-  return { geometry, bbox, center, size, flatteningPlanes, edgeGeometry, ...(shouldSurfaceDefects ? { meshDefects } : {}) };
+  return {
+    geometry,
+    bbox,
+    center,
+    size,
+    flatteningPlanes,
+    edgeGeometry,
+    ...(options.deferHeavyPostProcessing ? { postProcessingDeferred: true } : {}),
+    ...(shouldSurfaceDefects ? { meshDefects } : {}),
+  };
 }
 
 /** Number of bytes per triangle in a binary STL: 12 byte normal + 36 byte vertices + 2 byte attribute */
@@ -1005,6 +1039,32 @@ async function loadNativeMeshBodies(filePath: string | undefined): Promise<THREE
   }
 }
 
+/**
+ * Whether this import wants the loader's classification.
+ *
+ * A classify-only import does: it has nothing else to run. One that may
+ * auto-repair does not, because that pass classifies too. Nor does a mesh already
+ * known to be support-only, which skips classification entirely.
+ */
+function wantsLoaderClassification(options: ProcessGeometryOptions): boolean {
+  if (options.skipClassification) return false;
+  const mode = options.nativeProcessingMode ?? 'auto';
+  return mode === 'none' || mode === 'classify-only';
+}
+
+/** The byte-source twin of {@link loadNativeMeshBodies}: null means fall back. */
+async function loadNativeMeshBytes(buffer: Uint8Array, classify: boolean): Promise<DecodedMesh | null> {
+  if (!isTauriRuntime()) return null;
+  try {
+    const decoded = decodeDfmx(await loadMeshBytes(buffer, classify));
+    return decoded.bodies.length > 0 ? decoded : null;
+  } catch (error) {
+    console.warn('[loadMeshFile] native byte load failed; falling back to the renderer loaders.', error);
+    void logNativeWarning(`[loadMeshFile] native byte load failed; using the renderer loaders: ${String(error)}`);
+    return null;
+  }
+}
+
 /** Merge native bodies into one geometry, preserving their relative positions. */
 function mergeBodyGeometries(bodies: THREE.BufferGeometry[]): THREE.BufferGeometry {
   if (bodies.length === 1) return bodies[0];
@@ -1020,11 +1080,8 @@ export async function loadStlGeometry(fileUrl: string, options: ProcessGeometryO
   if (isTauriRuntime() && options.filePath) {
     // A classify-only import has nothing left to run: ask the loader to classify
     // so it ships the report and the geometry already section-ordered, rather
-    // than staging the mesh back for the same answer. An import that may
-    // auto-repair does not — that pass classifies too, and it repairs.
-    const nativeMode = options.nativeProcessingMode ?? 'auto';
-    const wantClassification = nativeMode === 'none' || nativeMode === 'classify-only';
-    const nativeResult = await loadStlViaTauri(options.filePath, wantClassification);
+    // than staging the mesh back for the same answer.
+    const nativeResult = await loadStlViaTauri(options.filePath, wantsLoaderClassification(options));
     if (nativeResult) {
       // Normals are already computed — skip computeVertexNormals in processGeometry
       const processed = await processGeometry(nativeResult.geometry, {
@@ -1085,6 +1142,19 @@ export async function loadStlGeometry(fileUrl: string, options: ProcessGeometryO
  * `computeVertexNormals`.
  */
 export async function loadStlGeometryFromBuffer(buffer: Uint8Array, options: ProcessGeometryOptions = {}): Promise<GeometryWithBounds> {
+  // Native first when there is one: a single round trip parses, refines and
+  // classifies the bytes, where the renderer path parses in JS and then stages the
+  // mesh back for the classifier. A VOXL model or a file out of a zip arrives as
+  // bytes, so it never has a path for `load_mesh_file` to use.
+  const decoded = await loadNativeMeshBytes(buffer, wantsLoaderClassification(options));
+  if (decoded) {
+    return processGeometry(mergeBodyGeometries(decoded.bodies), {
+      ...options,
+      _skipComputeNormals: true,
+      ...(decoded.report ? { bakedClassification: decoded.report } : {}),
+    });
+  }
+
   const loader = new STLLoader();
   const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
   const source = loader.parse(arrayBuffer);

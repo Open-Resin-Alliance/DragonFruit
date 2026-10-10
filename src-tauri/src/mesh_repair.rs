@@ -1677,27 +1677,7 @@ pub async fn load_mesh_file(file_path: String, classify: Option<bool>) -> Result
     // repair pass classifies too, and that report is the one that matters.
     let want_classify = classify.unwrap_or(true) && bodies.len() == 1;
     let (bodies, metadata_json) = if want_classify {
-        let started = std::time::Instant::now();
-        let outcome = classify_support_split(
-            bodies.into_iter().next().expect("length checked above"),
-            &RepairOptions::default(),
-        );
-        log::info!(
-            "[load_mesh_file] classified in {}ms (model section {:?} triangles)",
-            started.elapsed().as_millis(),
-            outcome.report.model_triangle_count,
-        );
-        // The report timestamps its own sub-steps, so the share each pass holds is
-        // visible without a profiler: total minus the split step is the analysis
-        // and manifold work around it.
-        for step in &outcome.report.steps {
-            log::info!("[load_mesh_file]   step {} in {:.1}ms", step.name, step.elapsed_ms);
-        }
-        log::info!(
-            "[load_mesh_file]   native report total {:.1}ms",
-            outcome.report.total_ms
-        );
-        (vec![outcome.mesh], serde_json::to_string(&outcome.report).ok())
+        classify_single_body(bodies.into_iter().next().expect("length checked above"))
     } else {
         (bodies, None)
     };
@@ -1705,6 +1685,79 @@ pub async fn load_mesh_file(file_path: String, classify: Option<bool>) -> Result
     let tri_count: usize = bodies.iter().map(|body| body.triangles.len()).sum();
     encode_mesh_bodies(&bodies, tri_count as u32, false, None, metadata_json.as_deref())
         .map(Response::new)
+}
+
+/// Parse a mesh's bytes with the native loader, for a source that has no on-disk
+/// path: a VOXL's embedded mesh chunk, or a file expanded out of a zip. The body
+/// is the raw file (binary or ASCII STL today), exactly the bytes the path loader
+/// would have read, and the response is the same `DFMX` payload `load_mesh_file`
+/// writes, classification tail included.
+///
+/// A raw-body command cannot also take JSON arguments, so its one option rides in
+/// a header: `x-mesh-classify: 0` skips the classifier for a caller that will
+/// repair, because that pass classifies too. Absent means classify.
+#[tauri::command]
+pub async fn load_mesh_bytes(request: tauri::ipc::Request<'_>) -> Result<Response, String> {
+    let classify = request
+        .headers()
+        .get("x-mesh-classify")
+        .and_then(|value| value.to_str().ok())
+        .map_or(true, |value| value.trim() != "0");
+    let bytes = match request.body() {
+        tauri::ipc::InvokeBody::Raw(bytes) => bytes.clone(),
+        tauri::ipc::InvokeBody::Json(_) => {
+            return Err("load_mesh_bytes expects a raw binary body".into())
+        }
+    };
+    log::info!(
+        "[load_mesh_bytes] Starting native mesh load from {} bytes",
+        bytes.len()
+    );
+    load_mesh_bytes_response(&bytes, classify).map(Response::new)
+}
+
+/// The pipeline behind `load_mesh_bytes`: parse the file's bytes, refine, classify
+/// when asked, and encode the same `DFMX` payload the path loader writes.
+fn load_mesh_bytes_response(bytes: &[u8], classify: bool) -> Result<Vec<u8>, String> {
+    let mesh = io::stl::parse_bytes(bytes)
+        .map_err(|e| format!("Failed to parse mesh bytes: {e}"))?;
+    let mesh = io::refine_coarse_faces(mesh);
+    let (bodies, metadata_json) = if classify {
+        classify_single_body(mesh)
+    } else {
+        (vec![mesh], None)
+    };
+
+    let tri_count: usize = bodies.iter().map(|body| body.triangles.len()).sum();
+    encode_mesh_bodies(&bodies, tri_count as u32, false, None, metadata_json.as_deref())
+}
+
+/// Classify one body: section-ordered mesh plus the report as JSON.
+///
+/// Both loaders share this, so a file and a byte payload produce the same report
+/// for the same mesh, and the report rides the `DFMX` metadata tail either way.
+fn classify_single_body(mesh: IndexedMesh) -> (Vec<IndexedMesh>, Option<String>) {
+    let started = std::time::Instant::now();
+    let outcome = classify_support_split(mesh, &RepairOptions::default());
+    log::info!(
+        "[load_mesh] classified in {}ms (model section {:?} triangles)",
+        started.elapsed().as_millis(),
+        outcome.report.model_triangle_count,
+    );
+    // The report timestamps its own sub-steps, so the share each pass holds is
+    // visible without a profiler: total minus the split step is the analysis and
+    // manifold work around it.
+    for step in &outcome.report.steps {
+        log::info!("[load_mesh]   step {} in {:.1}ms", step.name, step.elapsed_ms);
+    }
+    log::info!(
+        "[load_mesh]   native report total {:.1}ms",
+        outcome.report.total_ms
+    );
+    (
+        vec![outcome.mesh],
+        serde_json::to_string(&outcome.report).ok(),
+    )
 }
 
 /// DragonFruit Mesh Transfer (DFMX) Binary IPC Protocol Specification:
@@ -1794,7 +1847,7 @@ fn encode_mesh_bodies(
     }
 
     log::info!(
-        "[load_mesh_file] {} bodies, {} triangles, {:.1} MB payload, {} B metadata",
+        "[load_mesh] {} bodies, {} triangles, {:.1} MB payload, {} B metadata",
         bodies.len(),
         total_triangles,
         (response_len - MESH_RESPONSE_HEADER_BYTES) as f64 / 1_000_000.0,
@@ -2521,6 +2574,29 @@ mod tests {
 
         let _ = std::fs::remove_file(&stl_path);
         let _ = std::fs::remove_file(&obj_path);
+    }
+
+    /// A byte source has no path, so `load_mesh_bytes` carries the whole pipeline:
+    /// parse, refine, classify, encode the same payload the path loader writes.
+    #[test]
+    fn test_load_mesh_bytes_parses_refines_and_classifies() {
+        let mut stl = vec![0u8; 84];
+        stl[80..84].copy_from_slice(&3u32.to_le_bytes());
+        stl.extend(std::iter::repeat_n(0u8, 3 * 50));
+
+        let classified = load_mesh_bytes_response(&stl, true).unwrap();
+        assert_eq!(&classified[0..4], b"DFMX");
+        assert_eq!(u32::from_le_bytes(classified[12..16].try_into().unwrap()), 1);
+        let metadata_len = u32::from_le_bytes(classified[24..28].try_into().unwrap()) as usize;
+        assert!(metadata_len > 0, "classify should attach a report");
+        let json = std::str::from_utf8(&classified[classified.len() - metadata_len..]).unwrap();
+        assert!(json.starts_with("{\"version\""));
+
+        // A caller that will repair asks for no report and gets no tail.
+        let plain = load_mesh_bytes_response(&stl, false).unwrap();
+        assert_eq!(&plain[0..4], b"DFMX");
+        assert_eq!(u32::from_le_bytes(plain[24..28].try_into().unwrap()), 0);
+        assert_eq!(plain.len(), 32 + 8 + 3 * 72);
     }
 
     #[test]

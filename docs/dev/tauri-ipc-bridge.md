@@ -370,7 +370,7 @@ should take its *direction* from, and an estimator of the slope itself is still
 open. It was reverted rather than shipped: nothing consumes a payload whose
 magnitude is off by two orders of magnitude at the ends of its range.
 
-## Native mesh loading (`load_mesh_file`)
+## Native mesh loading (`load_mesh_file`, `load_mesh_bytes`)
 
 One command reads a mesh from disk in Rust and hands it to the renderer as the
 `DFMX` binary payload specified in `dev/mesh-wire-formats.md`: a 32-byte header,
@@ -391,6 +391,29 @@ matters.
 
 Materials and units are dropped, matching the renderer's loaders. The TS seam is
 `loadMeshFileFromNativePath` in `nativeSlicerBridge.ts`.
+
+`load_mesh_bytes` is the twin for a source with no on-disk path — a VOXL's
+embedded mesh chunk, or a file expanded out of a zip. The body is the raw file
+(binary or ASCII STL), and the response is the same `DFMX` payload, so both share
+one decoder. Its `classify` flag rides in an `x-mesh-classify` header, because a
+raw-body command cannot also take JSON arguments. The TS seam is `loadMeshBytes`.
+
+Both loaders classify a single-body load when asked, so an import that will not
+repair has nothing left to run: the geometry arrives section-ordered, the report
+rides the metadata tail, and the frontend passes it to `processGeometry` as
+`bakedClassification`. Which imports ask is `wantsLoaderClassification`
+(`useStlGeometry.ts`): a classify-only import does; one that may auto-repair does
+not, because that pass classifies too.
+
+### Deferred post-processing
+
+An import passes `deferHeavyPostProcessing`, so `processGeometry` does not build
+the BVH, compute the flattening planes, or await the AO bake before the model is
+on screen. The result carries `postProcessingDeferred`, and
+`useSceneCollectionManager` finalizes it the same way it does a geometry swap:
+`finalizeModelGeometryPostProcessing` builds the BVH and schedules the planes on
+idle, and the AO sweep picks up a geometry with no `aBakedAo`. `hasPendingBackgroundGeometryWork`
+reports while that queue is still draining.
 
 ## The Rust side of the seam
 

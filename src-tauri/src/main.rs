@@ -4597,6 +4597,7 @@ fn main() {
             mesh_repair::mesh_organic_cut_read_tenon,
             mesh_repair::mesh_repair_read_positions,
             mesh_repair::load_mesh_file,
+            mesh_repair::load_mesh_bytes,
             updater_channel::check_updates,
             updater_channel::perform_update,
             updater_channel::get_saved_update_channel,

@@ -66,6 +66,10 @@ single-body preview there (flagging `IS_PREVIEW` and filling the model count),
 and an oversized ASCII STL is refused. The TS seam is
 `loadMeshFileFromNativePath` (`src/features/slicing/tauri/nativeSlicerBridge.ts`).
 
+`load_mesh_bytes` is the same pipeline for a source with no on-disk path — a VOXL
+model's embedded mesh chunk, or a file expanded out of a zip. It takes the file's
+bytes in the request body and writes the same payload, so both share one decoder.
+
 ## What DFMX deliberately drops
 
 Matching the renderer's own loaders, so a cutover does not move geometry:
