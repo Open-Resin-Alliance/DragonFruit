@@ -1411,6 +1411,13 @@ export function useSceneCollectionManager(options?: {
   // Models whose AO volume bake is queued or awaiting the native round trip.
   // Part of hasPendingBackgroundGeometryWork.
   const pendingAoBakeRef = useRef(0);
+  // Geometries with a bake in flight. The attribute lands only when the bake
+  // resolves, so without this the queue rebuilt on a later `models` change would
+  // send the same soup a second time — measured as 25 bakes of one mesh in three
+  // seconds under a models-change storm, and as the one-second pair on a restored
+  // model. Keyed on the geometry, so a repair that swaps in a new one is not
+  // skipped.
+  const pendingAoGeometriesRef = useRef<Set<THREE.BufferGeometry>>(new Set());
   const trackedGeometriesRef = useRef<Set<THREE.BufferGeometry>>(new Set());
 
   const tryRevokeObjectUrl = useCallback((url: string) => {
@@ -3649,7 +3656,10 @@ export function useSceneCollectionManager(options?: {
         // Re-bake when the geometry was replaced (repair, boolean cut, hole
         // punch): the attribute lives on the old geometry, so without this the
         // new shape would be shaded with the old shape's occlusion.
-        return geometry.getAttribute(BAKED_OCCLUSION_ATTRIBUTE) === undefined;
+        if (geometry.getAttribute(BAKED_OCCLUSION_ATTRIBUTE) !== undefined) return false;
+        // A bake already in flight for this geometry has not attached yet, so it
+        // would look identical to "never baked" and be sent a second time.
+        return !pendingAoGeometriesRef.current.has(geometry);
       })
       .map((model) => model.id);
     if (queue.length === 0) return;
@@ -3670,11 +3680,15 @@ export function useSceneCollectionManager(options?: {
         const id = queue.shift();
         if (!id) return;
         const model = modelsRef.current.find((m) => m.id === id);
+        const geometry = model?.geometry.geometry;
+        if (geometry) pendingAoGeometriesRef.current.add(geometry);
         try {
-          if (model) {
-            const geometry = model.geometry.geometry;
+          if (geometry) {
             const occlusion = await bakeOcclusionForGeometry(geometry);
-            if (occlusion && !cancelled) {
+            // Attach whatever came back even if this run was superseded: the
+            // values belong to this geometry, and discarding them is what left
+            // it looking unbaked and re-queueable on the next `models` change.
+            if (occlusion) {
               const attribute = new THREE.BufferAttribute(occlusion, 1);
               attribute.setUsage(THREE.StaticDrawUsage);
               geometry.setAttribute(BAKED_OCCLUSION_ATTRIBUTE, attribute);
@@ -3690,6 +3704,7 @@ export function useSceneCollectionManager(options?: {
           // unoccluded look it has today.
           console.warn('[ao] bake failed', error);
         } finally {
+          if (geometry) pendingAoGeometriesRef.current.delete(geometry);
           pendingAoBakeRef.current = Math.max(0, pendingAoBakeRef.current - 1);
         }
       }

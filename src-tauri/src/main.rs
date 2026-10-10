@@ -4367,6 +4367,16 @@ fn main() {
             // surfacing real update failures to the user, so suppress the
             // Rust-side noise here.
             .level_for("tauri_plugin_updater", log::LevelFilter::Off)
+            // The Vulkan loader hands wgpu every implicit layer installed on the
+            // machine, and a third-party overlay whose manifest is missing or
+            // whose layer violates the loader's naming policy is reported as an
+            // ERROR on the instance we asked for — Epic's EOS layer, Samsung's
+            // Galaxy overlay, Overwolf's OBS hook. None of it is ours and none of
+            // it is actionable, and every record is mirrored into the webview
+            // console by the log plugin, where it reads as an application crash.
+            // wgpu failures we can act on come back as `Err` from our own calls
+            // (`dragonfruit-ao-gpu` logs its fallback itself).
+            .level_for("wgpu_hal", log::LevelFilter::Off)
             .max_file_size(5_000_000)
             .rotation_strategy(RotationStrategy::KeepOne)
             .build()
