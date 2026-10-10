@@ -24,6 +24,7 @@ import { getBuiltinComplexPluginFileTypeHandlers } from '@/features/plugins/buil
 import type { PluginFileTypeDefinition } from '@/features/plugins/complexPluginContracts';
 import type { PluginFileTypeHandler } from '@/features/plugins/pluginFileTypeBridge';
 import { accelerateGeometry, disposeGeometryBVH } from '@/utils/bvh';
+import { runWithConcurrency } from '@/utils/runWithConcurrency';
 import { BAKED_OCCLUSION_ATTRIBUTE, DEFAULT_BAKED_OCCLUSION_INTENSITY, bakeOcclusionForGeometry, bumpBakedOcclusionVersion, canBakeOcclusion, setBakedOcclusionIntensity } from '@/features/scene/bakedOcclusion';
 import { eulerFromGlobalEuler, quaternionFromGlobalEuler } from '@/utils/rotation';
 import { v4 as uuidv4 } from 'uuid';
@@ -43,9 +44,6 @@ import {
   importDetailProcessedCount,
   importDetailRecombiningGeometry,
   importDetailSeparatingGeometry,
-  importDetailVoxlAutoRepairing,
-  importDetailVoxlClassifying,
-  importDetailVoxlInspecting,
   importDetailVoxlModel,
   importLabelAutoRepairing,
   importLabelClassifying,
@@ -141,6 +139,14 @@ type PersistedMeshAppearance = {
  * another model's ray pass, not about using more cores per model.
  */
 const AO_BAKE_CONCURRENCY = 2;
+
+/**
+ * VOXL meshes built at once. Same reasoning as the bake concurrency: each build is
+ * a native round trip with serial phases (parse, refine, classify) around a parallel
+ * one (the bake), and both commands share one rayon pool, so two is where one
+ * model's serial phase starts running during another's.
+ */
+const VOXL_BUILD_CONCURRENCY = 2;
 
 /**
  * How many beds a paste will add for the copies that do not fit the plate being worked
@@ -5763,6 +5769,63 @@ export function useSceneCollectionManager(options?: {
       const builtGeometryByHash = new Map<string, GeometryWithBounds>();
       let dedupHits = 0;
 
+      // Build every unique mesh, a couple at a time, before the placement loop.
+      // Placement stays in order below because it depends on what is already on the
+      // plate; building does not. Each build is a native round trip with serial
+      // phases (parse, refine, classify) around a parallel one, so two in flight let
+      // one model's serial phase run during another's. The hash is computed here once
+      // per model and reused by the loop, so neither the content hash nor the
+      // integrity check is paid twice.
+      const buildOptionsFor = (model: (typeof document.models)[number]): ProcessGeometryOptions => ({
+        ...(autoRepairScenes || !model.classification ? {} : { bakedClassification: model.classification }),
+        nativeProcessingMode: autoRepairScenes ? 'auto' : 'none',
+        assumeSupportGeometry: model.isSupportGeometry,
+        skipClassification: model.isSupportGeometry,
+      });
+      const hashByModelId = new Map<string, string>();
+      const uniqueBuilds = new Map<
+        string,
+        { bytes: Uint8Array; name: string; model: (typeof document.models)[number] }
+      >();
+      for (const model of document.models) {
+        const meshRef = model.mesh;
+        const bytes = resolvedMeshBytes.get(model.id);
+        if (!meshRef || meshRef.mode !== 'embedded-chunk' || !bytes) continue;
+        const declaredSha = typeof meshRef.sha256 === 'string' && meshRef.sha256.trim().length > 0
+          ? meshRef.sha256.trim().toLowerCase()
+          : undefined;
+        const contentHash = declaredSha ?? (await sha256Hex(bytes));
+        hashByModelId.set(model.id, contentHash);
+        if (builtGeometryByHash.has(contentHash) || uniqueBuilds.has(contentHash)) continue;
+        uniqueBuilds.set(contentHash, {
+          bytes,
+          name: meshRef.fileName?.trim() || `${model.name || 'model'}.stl`,
+          model,
+        });
+      }
+      if (uniqueBuilds.size > 0) {
+        let finished = 0;
+        const buildCount = uniqueBuilds.size;
+        await runWithConcurrency([...uniqueBuilds], VOXL_BUILD_CONCURRENCY, async ([hash, spec]) => {
+          try {
+            const built = await loadMeshGeometry(spec.bytes, spec.name, buildOptionsFor(spec.model));
+            builtGeometryByHash.set(hash, built);
+          } catch (error) {
+            // The loop below reports the model as skipped; one mesh that will not
+            // build is not worth failing the whole scene over.
+            console.error(`[SceneCollection] Failed building VOXL mesh "${spec.model.name}"`, error);
+          }
+          finished += 1;
+          setImportProgress({
+            active: true,
+            type: 'scene',
+            label: importLabelVoxlScene(_),
+            detail: importDetailVoxlModel(finished, buildCount, spec.model.name, _),
+            progress: null,
+          });
+        });
+      }
+
       for (let i = 0; i < document.models.length; i += 1) {
         const model = document.models[i];
         const meshRef = model.mesh;
@@ -5804,7 +5867,8 @@ export function useSceneCollectionManager(options?: {
             typeof meshRef.sha256 === 'string' && meshRef.sha256.trim().length > 0
               ? meshRef.sha256.trim().toLowerCase()
               : undefined;
-          const contentHash = declaredSha ?? (await sha256Hex(bytes));
+          // Computed by the build pass above; the fallback covers a model it skipped.
+          const contentHash = hashByModelId.get(model.id) ?? declaredSha ?? (await sha256Hex(bytes));
 
           const cached = builtGeometryByHash.get(contentHash);
           let geometry: GeometryWithBounds;
@@ -5824,56 +5888,9 @@ export function useSceneCollectionManager(options?: {
                 throw new Error('VOXL integrity check failed (SHA-256 mismatch).');
               }
             }
-
-            const embeddedName = meshRef.fileName?.trim() || `${model.name || 'model'}.stl`;
-
-            // Baked classification (VOXL V3.3): the file carries the model/support
-            // split this mesh was saved with, so skip the classifier instead of
-            // re-deriving it. Auto-repair supersedes it — a repair pass produces
-            // its own report for the geometry it rebuilt.
-            const bakedClassification = autoRepairScenes ? undefined : model.classification;
-
-            geometry = await loadMeshGeometry(bytes, embeddedName, {
-              ...(bakedClassification ? { bakedClassification } : {}),
-              nativeProcessingMode: autoRepairScenes ? 'auto' : 'none',
-              assumeSupportGeometry: model.isSupportGeometry,
-              skipClassification: model.isSupportGeometry,
-            onNativeProcessingStage: (stage) => {
-              if (stage === 'repairing') {
-                setImportProgress({
-                  active: true,
-                  type: 'scene',
-                  label: importLabelVoxlScene(_),
-                  detail: importDetailVoxlAutoRepairing(i + 1, document.models.length, model.name, _),
-                  progress: null,
-                });
-                return;
-              }
-
-              if (stage === 'analyzing') {
-                setImportProgress({
-                  active: true,
-                  type: 'scene',
-                  label: importLabelVoxlScene(_),
-                  detail: importDetailVoxlInspecting(i + 1, document.models.length, model.name, _),
-                  progress: null,
-                });
-                return;
-              }
-
-              if (stage === 'classifying') {
-                setImportProgress({
-                  active: true,
-                  type: 'scene',
-                  label: importLabelVoxlScene(_),
-                  detail: importDetailVoxlClassifying(i + 1, document.models.length, model.name, _),
-                  progress: null,
-                });
-              }
-            },
-            });
-            // Cache the freshly-built mesh so identical copies clone it.
-            builtGeometryByHash.set(contentHash, geometry);
+            // The build pass above builds every unique mesh; reaching here means that
+            // build failed, and it already logged why.
+            throw new Error(`VOXL mesh for "${model.name}" did not build.`);
           }
 
           let resolvedId = model.id;
