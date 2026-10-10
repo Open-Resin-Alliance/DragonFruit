@@ -547,6 +547,25 @@ export async function pickOpenFilesWithNativeDialog(
   });
 }
 
+/**
+ * Parse a mesh file of any supported format on the native side and return the
+ * `DFST` payload: a 64-byte header, then positions and corner normals as 9
+ * `f32` per triangle. The layout is documented in `useStlGeometry.ts` alongside
+ * the STL-specific `load_stl_file` decoder.
+ *
+ * The native dispatcher refines coarse faces and returns welded, crease-split
+ * normals, so the geometry matches what every other import path sees. Desktop
+ * only — throws outside the Tauri runtime.
+ */
+export async function loadMeshFileFromNativePath(filePath: string): Promise<ArrayBuffer> {
+  const core = await loadTauriCore();
+  if (!core) {
+    throw new Error('Native mesh loading is only available in DragonFruit Desktop (Tauri runtime).');
+  }
+
+  return core.invoke<ArrayBuffer>('load_mesh_file', { filePath });
+}
+
 export async function writeBytesToNativePath(
   destinationPath: string,
   bytes: Uint8Array,

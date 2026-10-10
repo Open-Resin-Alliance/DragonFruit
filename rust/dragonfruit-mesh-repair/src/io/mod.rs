@@ -29,6 +29,29 @@ pub fn load_mesh_from_path(path: &Path) -> Result<IndexedMesh, MeshRepairError> 
     Ok(refine_coarse_faces(mesh))
 }
 
+/// Load every body a file declares, each refined.
+///
+/// STL, OBJ and the staged formats describe a single mesh, so this returns one
+/// body for them. A 3MF describes one body per `<build><item>` expanded through
+/// its components, each with its composed transform baked into the vertices —
+/// see [`three_mf::load_bodies`]. Refinement is applied per body for the same
+/// reason it is applied in [`load_mesh_from_path`]: a body is what the frontend
+/// indexes its split data by, so each has to reach the renderer at the density
+/// the single-mesh path would give it.
+pub fn load_mesh_bodies_from_path(path: &Path) -> Result<Vec<IndexedMesh>, MeshRepairError> {
+    let is_three_mf = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("3mf"));
+    if is_three_mf {
+        return Ok(three_mf::load_bodies(path)?
+            .into_iter()
+            .map(refine_coarse_faces)
+            .collect());
+    }
+    Ok(vec![load_mesh_from_path(path)?])
+}
+
 /// Subdivide faces that are too long for the model's own size.
 ///
 /// A mesh can be valid and still too coarse to carry anything sampled per vertex.

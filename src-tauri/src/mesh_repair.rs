@@ -11,6 +11,10 @@
 //!   optionally reorders model/support sections and returns a report JSON.
 //! - `mesh_repair_read_positions` — raw-binary response of the current staged
 //!   positions (little-endian f32, 9 per triangle), for frontend hydration.
+//! - `load_stl_file` — parse an STL and return one body in the single-mesh
+//!   `DFST` wire format, with the huge-STL preview path.
+//! - `load_mesh_file` — parse `stl`/`obj`/`3mf` and return its bodies (one per
+//!   build item for 3MF) in the multi-body `DFMX` wire format.
 
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
@@ -1525,7 +1529,7 @@ pub async fn mesh_repair_read_positions() -> Result<Response, String> {
 /// Parses a binary or ASCII STL file in Rust and returns the vertex positions
 /// and per-vertex normals as a flat byte buffer.
 ///
-/// Byte layout: a 16-byte `DFST` header containing flags and the original/output
+/// Byte layout: a 64-byte `DFST` header containing flags and the original/output
 /// triangle counts, followed by little-endian f32 positions and normals.
 ///
 /// Processing the file in Rust avoids loading the entire raw STL into the
@@ -1621,6 +1625,31 @@ pub async fn load_stl_file(
     encode_stl_response(&mesh, tri_count as u32, false, None).map(Response::new)
 }
 
+/// Parse a mesh file of any supported format and return its bodies in the
+/// `DFMX` wire format that [`encode_mesh_bodies`] writes: a 32-byte header,
+/// a body table, then one positions+normals soup per body.
+///
+/// [`load_stl_file`] carries the STL-specific huge-file preview/decimation path
+/// and the single-body `DFST` payload. This is the format-agnostic,
+/// multi-body entry point: it dispatches through `io::load_mesh_bodies_from_path`
+/// (`stl`/`obj` give one body; `3mf` gives one per build item expanded through
+/// its components, with transforms baked), so refinement and the welded,
+/// crease-split normals are the same ones every other import path gets.
+/// Materials and units are dropped, matching the renderer's loaders.
+#[tauri::command]
+pub async fn load_mesh_file(file_path: String) -> Result<Response, String> {
+    log::info!("[load_mesh_file] Starting native mesh load: {file_path}");
+
+    // Through the dispatcher, not a format loader: `load_mesh_bodies_from_path`
+    // refines coarse faces per body before anything derives data from the mesh,
+    // and resolves a 3MF's build items into one body each.
+    let bodies = io::load_mesh_bodies_from_path(std::path::Path::new(&file_path))
+        .map_err(|e| format!("Failed to load mesh '{}': {e}", file_path))?;
+
+    let tri_count: usize = bodies.iter().map(|body| body.triangles.len()).sum();
+    encode_mesh_bodies(&bodies, tri_count as u32, false, None).map(Response::new)
+}
+
 /// DragonFruit Streaming Transfer (DFST) Binary IPC Protocol Specification:
 /// Header Length: 64 Bytes Total (Single header at index 0 per STL payload)
 ///
@@ -1639,6 +1668,130 @@ pub async fn load_stl_file(
 const STL_RESPONSE_MAGIC: &[u8; 4] = b"DFST";
 const STL_RESPONSE_HEADER_BYTES: usize = 64;
 const STL_RESPONSE_FLAG_PREVIEW: u32 = 1;
+
+/// DragonFruit Mesh Transfer (DFMX) Binary IPC Protocol Specification:
+/// Format Version: 1
+///
+/// The multi-body counterpart to `DFST`, written by `load_mesh_file` because a
+/// 3MF describes several bodies. Versioned, so an encoding flag (quantized
+/// positions, compression) can be added without breaking readers.
+///
+/// Header (32 bytes):
+///   0 ..  3 : ASCII Magic "DFMX" (0x44464D58)
+///   4 ..  7 : Version u32 LE (currently 1)
+///   8 .. 11 : Flags u32 LE (Bit 0: IS_PREVIEW)
+///  12 .. 15 : Body count u32 LE
+///  16 .. 19 : Original input triangle count u32 LE
+///  20 .. 23 : Model section triangle count u32 LE (0 when absent)
+///  24 .. 31 : Reserved (8 bytes, zero)
+///
+/// Body table: `bodyCount` entries of 8 bytes each, in payload order:
+///   0 .. 3 : Triangle count u32 LE
+///   4 .. 7 : Reserved (zero; an encoding/vertex-count slot for v2)
+///
+/// Payload: each body in table order, positions then normals, 9 f32 per
+/// triangle each (72 bytes/triangle), matching `DFST`'s soup.
+const MESH_RESPONSE_MAGIC: &[u8; 4] = b"DFMX";
+const MESH_RESPONSE_VERSION: u32 = 1;
+const MESH_RESPONSE_HEADER_BYTES: usize = 32;
+const MESH_RESPONSE_BODY_ENTRY_BYTES: usize = 8;
+const MESH_RESPONSE_FLAG_PREVIEW: u32 = 1;
+/// Positions plus normals, both 9 f32 per triangle.
+const SOUP_BYTES_PER_TRIANGLE: usize = 9 * std::mem::size_of::<f32>() * 2;
+
+fn encode_mesh_bodies(
+    bodies: &[IndexedMesh],
+    original_triangle_count: u32,
+    is_preview: bool,
+    model_triangle_count: Option<u32>,
+) -> Result<Vec<u8>, String> {
+    let total_triangles: usize = bodies.iter().map(|body| body.triangles.len()).sum();
+    let response_len = MESH_RESPONSE_HEADER_BYTES
+        .checked_add(bodies.len() * MESH_RESPONSE_BODY_ENTRY_BYTES)
+        .and_then(|size| size.checked_add(total_triangles * SOUP_BYTES_PER_TRIANGLE))
+        .ok_or_else(|| "DFMX response size overflow".to_string())?;
+
+    let mut result = Vec::new();
+    result.try_reserve_exact(response_len).map_err(|_| {
+        format!(
+            "Not enough memory for the mesh response ({:.2} GB)",
+            response_len as f64 / 1_000_000_000.0
+        )
+    })?;
+    result.extend_from_slice(MESH_RESPONSE_MAGIC);
+    result.extend_from_slice(&MESH_RESPONSE_VERSION.to_le_bytes());
+    result.extend_from_slice(
+        &(if is_preview {
+            MESH_RESPONSE_FLAG_PREVIEW
+        } else {
+            0
+        })
+        .to_le_bytes(),
+    );
+    result.extend_from_slice(&(bodies.len() as u32).to_le_bytes());
+    result.extend_from_slice(&original_triangle_count.to_le_bytes());
+    result.extend_from_slice(&model_triangle_count.unwrap_or(0).to_le_bytes());
+    result.extend_from_slice(&[0u8; 8]);
+    for body in bodies {
+        result.extend_from_slice(&(body.triangles.len() as u32).to_le_bytes());
+        result.extend_from_slice(&[0u8; 4]);
+    }
+    result.resize(response_len, 0);
+
+    let mut offset = MESH_RESPONSE_HEADER_BYTES + bodies.len() * MESH_RESPONSE_BODY_ENTRY_BYTES;
+    for body in bodies {
+        let len = body.triangles.len() * SOUP_BYTES_PER_TRIANGLE;
+        write_soup(body, &mut result[offset..offset + len]);
+        offset += len;
+    }
+
+    log::info!(
+        "[load_mesh_file] {} bodies, {} triangles, {:.1} MB payload",
+        bodies.len(),
+        total_triangles,
+        (response_len - MESH_RESPONSE_HEADER_BYTES) as f64 / 1_000_000.0,
+    );
+    Ok(result)
+}
+
+/// Write a mesh's soup — positions (9 f32 per triangle), then welded,
+/// crease-split corner normals — into `out`, which must be exactly
+/// `triangleCount * 72` bytes.
+fn write_soup(mesh: &IndexedMesh, out: &mut [u8]) {
+    let positions_len = mesh.triangles.len() * 9 * std::mem::size_of::<f32>();
+    let (position_output, normal_output) = out.split_at_mut(positions_len);
+    position_output
+        .par_chunks_mut(9 * std::mem::size_of::<f32>())
+        .zip(mesh.triangles.par_iter())
+        .for_each(|(output, triangle)| {
+            let vertices = [
+                mesh.positions[triangle[0] as usize],
+                mesh.positions[triangle[1] as usize],
+                mesh.positions[triangle[2] as usize],
+            ];
+            for (vertex_output, vertex) in output.chunks_exact_mut(12).zip(vertices) {
+                vertex_output[0..4].copy_from_slice(&vertex.x.to_le_bytes());
+                vertex_output[4..8].copy_from_slice(&vertex.y.to_le_bytes());
+                vertex_output[8..12].copy_from_slice(&vertex.z.to_le_bytes());
+            }
+        });
+    // Smooth vertex normals, averaged over the welded mesh and split at creases:
+    // see `dragonfruit_mesh_core::normals` for why both halves matter.
+    let normals = dragonfruit_mesh_core::normals::corner_normals(mesh);
+    normal_output
+        .par_chunks_mut(9 * std::mem::size_of::<f32>())
+        .zip(mesh.triangles.par_iter().enumerate())
+        .for_each(|(output, (face, _))| {
+            for (normal_output, normal) in output
+                .chunks_exact_mut(12)
+                .zip(normals[face * 3..face * 3 + 3].iter())
+            {
+                normal_output[0..4].copy_from_slice(&normal.x.to_le_bytes());
+                normal_output[4..8].copy_from_slice(&normal.y.to_le_bytes());
+                normal_output[8..12].copy_from_slice(&normal.z.to_le_bytes());
+            }
+        });
+}
 
 fn encode_stl_response(
     mesh: &IndexedMesh,
@@ -1675,40 +1828,7 @@ fn encode_stl_response(
     if let Some(mtc) = model_triangle_count {
         result[32..36].copy_from_slice(&mtc.to_le_bytes());
     }
-    let (position_output, normal_output) =
-        result[STL_RESPONSE_HEADER_BYTES..].split_at_mut(positions_len);
-    position_output
-        .par_chunks_mut(9 * std::mem::size_of::<f32>())
-        .zip(mesh.triangles.par_iter())
-        .for_each(|(output, triangle)| {
-            let vertices = [
-                mesh.positions[triangle[0] as usize],
-                mesh.positions[triangle[1] as usize],
-                mesh.positions[triangle[2] as usize],
-            ];
-            for (vertex_output, vertex) in output.chunks_exact_mut(12).zip(vertices) {
-                vertex_output[0..4].copy_from_slice(&vertex.x.to_le_bytes());
-                vertex_output[4..8].copy_from_slice(&vertex.y.to_le_bytes());
-                vertex_output[8..12].copy_from_slice(&vertex.z.to_le_bytes());
-            }
-        });
-    // Smooth vertex normals, averaged over the welded mesh and split at creases:
-    // see `dragonfruit_mesh_core::normals` for why both halves matter.
-    let normals = dragonfruit_mesh_core::normals::corner_normals(mesh);
-
-    normal_output
-        .par_chunks_mut(9 * std::mem::size_of::<f32>())
-        .zip(mesh.triangles.par_iter().enumerate())
-        .for_each(|(output, (face, _))| {
-            for (normal_output, normal) in output
-                .chunks_exact_mut(12)
-                .zip(normals[face * 3..face * 3 + 3].iter())
-            {
-                normal_output[0..4].copy_from_slice(&normal.x.to_le_bytes());
-                normal_output[4..8].copy_from_slice(&normal.y.to_le_bytes());
-                normal_output[8..12].copy_from_slice(&normal.z.to_le_bytes());
-            }
-        });
+    write_soup(mesh, &mut result[STL_RESPONSE_HEADER_BYTES..]);
 
     log::info!(
         "[load_stl_file] {} triangles, {} MB positions + {} MB normals",
@@ -2308,5 +2428,112 @@ mod tests {
         };
         let model_tri_count = u32::from_le_bytes(bytes[32..36].try_into().unwrap());
         assert_eq!(model_tri_count, 6);
+    }
+
+    #[test]
+    fn test_load_mesh_file_dispatches_by_extension() {
+        use std::io::Write;
+        use tauri::ipc::IpcResponse;
+
+        let dir = std::env::temp_dir();
+        let stl_path = dir.join("test_load_mesh_file.stl");
+        let obj_path = dir.join("test_load_mesh_file.obj");
+
+        // Binary STL with three degenerate (all-zero) triangles: a zero diagonal,
+        // so the dispatcher's refinement no-ops and the count is exact.
+        {
+            let mut file = std::fs::File::create(&stl_path).unwrap();
+            let mut header = [0u8; 84];
+            header[80..84].copy_from_slice(&3u32.to_le_bytes());
+            file.write_all(&header).unwrap();
+            for _ in 0..3 {
+                file.write_all(&[0u8; 50]).unwrap();
+            }
+        }
+        // OBJ with one triangle, whose edges are far longer than the refinement
+        // target, so the load proves it went through `io::load_mesh_from_path`.
+        std::fs::write(&obj_path, b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n").unwrap();
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let raw = |resp: Result<Response, String>| match resp.unwrap().body().unwrap() {
+            tauri::ipc::InvokeResponseBody::Raw(b) => b,
+            _ => panic!("Expected Raw body"),
+        };
+        // DFMX: body count at 12, body table at 32 (8 bytes each), then soups.
+        let u32_at = |bytes: &[u8], at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+        let bodies = |bytes: &[u8]| u32_at(bytes, 12);
+        let body_triangles = |bytes: &[u8], index: usize| u32_at(bytes, 32 + index * 8);
+        let described_len = |bytes: &[u8]| {
+            let count = bodies(bytes) as usize;
+            (0..count).fold(32 + count * 8, |sum, i| {
+                sum + body_triangles(bytes, i) as usize * 72
+            })
+        };
+
+        let stl = raw(rt.block_on(load_mesh_file(
+            stl_path.to_str().unwrap().to_string(),
+        )));
+        assert_eq!(&stl[0..4], b"DFMX");
+        assert_eq!(u32_at(&stl, 4), 1, "DFMX version");
+        assert_eq!(bodies(&stl), 1);
+        assert_eq!(body_triangles(&stl, 0), 3);
+        assert_eq!(stl.len(), described_len(&stl));
+
+        let obj = raw(rt.block_on(load_mesh_file(
+            obj_path.to_str().unwrap().to_string(),
+        )));
+        assert_eq!(&obj[0..4], b"DFMX");
+        assert_eq!(bodies(&obj), 1);
+        assert!(
+            body_triangles(&obj, 0) > 1,
+            "the coarse OBJ should have been refined"
+        );
+        assert_eq!(obj.len(), described_len(&obj));
+
+        // An unsupported extension is an error, not a panic.
+        let bad = dir.join("test_load_mesh_file.xyz");
+        assert!(rt
+            .block_on(load_mesh_file(bad.to_str().unwrap().to_string()))
+            .is_err());
+
+        let _ = std::fs::remove_file(&stl_path);
+        let _ = std::fs::remove_file(&obj_path);
+    }
+
+    #[test]
+    fn test_encode_mesh_bodies_lays_out_every_body() {
+        let bodies = vec![
+            IndexedMesh {
+                positions: vec![
+                    Vec3::new(0.0, 0.0, 0.0),
+                    Vec3::new(1.0, 0.0, 0.0),
+                    Vec3::new(0.0, 1.0, 0.0),
+                ],
+                triangles: vec![[0, 1, 2]],
+            },
+            IndexedMesh {
+                positions: vec![Vec3::new(0.0, 0.0, 0.0); 4],
+                triangles: vec![[0, 1, 2], [0, 2, 3]],
+            },
+        ];
+        let bytes = encode_mesh_bodies(&bodies, 3, false, None).unwrap();
+
+        assert_eq!(&bytes[0..4], b"DFMX");
+        assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 1);
+        assert_eq!(u32::from_le_bytes(bytes[12..16].try_into().unwrap()), 2);
+        assert_eq!(u32::from_le_bytes(bytes[16..20].try_into().unwrap()), 3);
+        // Body table records each body's triangle count, in payload order.
+        assert_eq!(u32::from_le_bytes(bytes[32..36].try_into().unwrap()), 1);
+        assert_eq!(u32::from_le_bytes(bytes[40..44].try_into().unwrap()), 2);
+        assert_eq!(bytes.len(), 32 + 2 * 8 + 3 * 72);
+
+        // Body 1's soup starts after body 0's 72 bytes; its first vertex is the
+        // origin it was built with, so the offsets are not simply concatenated
+        // in the wrong direction.
+        let body1 = 32 + 2 * 8 + 72;
+        assert_eq!(
+            f32::from_le_bytes(bytes[body1..body1 + 4].try_into().unwrap()),
+            0.0
+        );
     }
 }
