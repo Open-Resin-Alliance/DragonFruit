@@ -23,6 +23,27 @@ buffer: staging is process-wide state that repair, punching and hollowing write,
 so a bake that read it could compute occlusion for a different mesh than the one
 the values get attached to. See `tauri-ipc-bridge.md` for that seam's rules.
 
+## Where the bake is requested
+
+Two call sites, and both must leave the geometry with `aBakedAo`:
+
+- `processGeometry` (`src/hooks/useStlGeometry.ts`) bakes at the end of prep, so
+  a model's first frame already carries the field. Every import goes through
+  prep, which makes this the one that covers the common case.
+- The idle sweep in `useSceneCollectionManager.ts` is the net for a geometry
+  that never went through prep — one restored from a project, or one swapped in
+  by a repair, a boolean cut or a hole punch.
+
+`aBakedAo` is the queue's only key, so the sweep must not re-issue a bake whose
+result has not landed yet: a geometry with a bake in flight has no attribute, and
+looks exactly like one that was never baked. The sweep therefore keeps the
+geometries it has on the wire (`pendingAoGeometriesRef`) out of its queue, and
+attaches whatever comes back even when the effect run that started it was
+superseded — the values belong to that geometry, and discarding them is what left
+it unbaked and re-queueable on the next `models` change. Both halves are needed:
+without the first, one `models` change during a bake sends the soup twice; without
+the second, the same model is re-baked on every later change.
+
 ## The shipped recipe
 
 `bake_smoothed_occlusion_for_soup` is what the command calls: the estimator with

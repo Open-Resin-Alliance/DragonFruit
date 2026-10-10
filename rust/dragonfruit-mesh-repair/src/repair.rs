@@ -901,9 +901,12 @@ pub fn classify_support_split(
     };
 
     // Patch the pre-analysis with the real component count and build the
-    // post-analysis (identical since only triangle order changed).
+    // post-analysis from it. Classification only reorders triangles, so every field
+    // but the component count is identical by construction, and recomputing it
+    // walked the whole mesh a second time for nothing (a bbox pass and a signed
+    // volume pass, once per classify, per model).
     report.pre.connected_components = component_count;
-    report.post = minimal_analysis(&mesh, component_count);
+    report.post = report.pre.clone();
     report.fully_repaired = true;
     report.residual_issues = Vec::new();
 
@@ -1073,11 +1076,7 @@ fn try_solidify_via_manifold_union(
 
     let model_seed = (0..n_comps)
         .filter(|&cid| comp_tri_count[cid] >= 4 && comp_max_z[cid] > raft_z_cut)
-        .max_by(|&a, &b| {
-            comp_max_z[a]
-                .partial_cmp(&comp_max_z[b])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        .max_by(|&a, &b| comp_max_z[a].total_cmp(&comp_max_z[b]));
     let model_min_tris = model_seed
         .map(|seed| (comp_tri_count[seed] / 8).max(MODEL_MIN_TRIS_FLOOR))
         .unwrap_or(MODEL_MIN_TRIS_FLOOR);
@@ -1635,7 +1634,7 @@ fn attempt_non_manifold_face_cleanup(
 
         // If all faces happen to share one direction, keep the two largest.
         if keep.len() < 2 {
-            ranked_all.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            ranked_all.sort_by(|a, b| b.1.total_cmp(&a.1));
             for (fi, _) in ranked_all.into_iter().take(2) {
                 keep.insert(fi);
             }
@@ -2786,7 +2785,7 @@ fn keep_largest_components(mesh: &mut IndexedMesh, keep_n: usize) -> usize {
         .enumerate()
         .map(|(i, v)| (i as u32, v.abs()))
         .collect();
-    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
     let keep: ahash::AHashSet<u32> = ranked.into_iter().take(keep_n).map(|(i, _)| i).collect();
 
     let before = mesh.triangles.len();
@@ -3095,6 +3094,34 @@ mod tests {
         };
         let outcome = repair(mesh, &options);
         assert!(outcome.report.likely_support_geometry);
+    }
+
+    /// A file can carry non-finite positions, and every float comparison on the
+    /// way through must still be a total order. `partial_cmp(..).unwrap_or(Equal)`
+    /// is not one, and Rust's sort panics on it ("user-provided comparison function
+    /// does not correctly implement a total order") rather than returning a wrong
+    /// order. That shipped as a crash on a 960k model with 12% non-finite values.
+    #[test]
+    fn classify_tolerates_non_finite_positions() {
+        let positions: Vec<Vec3> = (0..768)
+            .map(|i| {
+                let value = i as f32;
+                Vec3::new(
+                    if i % 7 == 0 { f32::NAN } else { (value * 0.37).sin() * value },
+                    if i % 11 == 0 { f32::INFINITY } else { (value * 0.53).cos() * value },
+                    if i % 13 == 0 { f32::NEG_INFINITY } else { value },
+                )
+            })
+            .collect();
+        let triangles: Vec<[u32; 3]> = (0..positions.len() as u32 - 3)
+            .map(|i| [i, i + 1, i + 2])
+            .collect();
+        let mesh = IndexedMesh { positions, triangles };
+
+        let outcome = classify_support_split(mesh, &RepairOptions::default());
+
+        // The contract is that it returns at all, on garbage input.
+        assert_eq!(outcome.mesh.triangles.len(), 765);
     }
 
     #[test]

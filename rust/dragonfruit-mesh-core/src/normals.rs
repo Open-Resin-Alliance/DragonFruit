@@ -14,6 +14,7 @@
 //! because neighbouring faces there are within the threshold of each other.
 
 use crate::mesh::{IndexedMesh, Vec3};
+use rayon::prelude::*;
 
 /// Faces further apart than this at a shared vertex get separate normals.
 ///
@@ -36,7 +37,7 @@ pub fn corner_normals(mesh: &IndexedMesh) -> Vec<Vec3> {
     // angles up to 180 degrees and rendering as speckle.
     let raw: Vec<Vec3> = mesh
         .triangles
-        .iter()
+        .par_iter()
         .map(|triangle| {
             let a = mesh.positions[triangle[0] as usize];
             let b = mesh.positions[triangle[1] as usize];
@@ -52,35 +53,60 @@ pub fn corner_normals(mesh: &IndexedMesh) -> Vec<Vec3> {
             Vec3::ZERO
         }
     };
-    let face_normals: Vec<Vec3> = raw.iter().map(|face| unit(*face)).collect();
+    let face_normals: Vec<Vec3> = raw.par_iter().map(|face| unit(*face)).collect();
 
-    let mut incident: Vec<Vec<u32>> = vec![Vec::new(); mesh.positions.len()];
-    for (index, triangle) in mesh.triangles.iter().enumerate() {
+    // Incident faces per vertex, as one flat CSR pair rather than a `Vec` per
+    // vertex. The per-vertex form is ~420k allocations on a dense model, and it
+    // dominated the encode: a 960k-triangle payload spent 8 s in this function
+    // against 0.5 s for the classifier. The fill walks faces in order, so a
+    // vertex's slice is still ascending by face index and every sum below
+    // accumulates in the same order as before — the output is unchanged bit for
+    // bit, which the crease tests pin.
+    let vertex_count = mesh.positions.len();
+    let mut incident_offsets = vec![0u32; vertex_count + 1];
+    for triangle in &mesh.triangles {
         for vertex in triangle {
-            incident[*vertex as usize].push(index as u32);
+            incident_offsets[*vertex as usize + 1] += 1;
         }
     }
-
-    let mut out = Vec::with_capacity(mesh.triangles.len() * 3);
+    for index in 1..incident_offsets.len() {
+        incident_offsets[index] += incident_offsets[index - 1];
+    }
+    let mut fill = incident_offsets.clone();
+    let mut incident = vec![0u32; incident_offsets[vertex_count] as usize];
     for (face, triangle) in mesh.triangles.iter().enumerate() {
-        let own = face_normals[face];
         for vertex in triangle {
-            let mut sum = Vec3::ZERO;
-            for &other in &incident[*vertex as usize] {
-                let other_normal = face_normals[other as usize];
-                if own.dot(other_normal) < crease_cosine {
-                    continue;
-                }
-                sum = sum.add(other_normal);
-            }
-            let length = sum.length();
-            out.push(if length > 1e-12 {
-                sum.scale(1.0 / length)
-            } else {
-                own
-            });
+            let slot = &mut fill[*vertex as usize];
+            incident[*slot as usize] = face as u32;
+            *slot += 1;
         }
     }
+
+    let mut out = vec![Vec3::ZERO; mesh.triangles.len() * 3];
+    out.par_chunks_mut(3)
+        .zip(mesh.triangles.par_iter().enumerate())
+        .for_each(|(corner_output, (face, triangle))| {
+            let own = face_normals[face];
+            for (corner, vertex) in triangle.iter().enumerate() {
+                let vertex = *vertex as usize;
+                let start = incident_offsets[vertex] as usize;
+                let end = incident_offsets[vertex + 1] as usize;
+                let mut sum = Vec3::ZERO;
+                for &other in &incident[start..end] {
+                    let other_normal = face_normals[other as usize];
+                    if own.dot(other_normal) < crease_cosine {
+                        continue;
+                    }
+                    sum = sum.add(other_normal);
+                }
+                let length = sum.length();
+                corner_output[corner] = if length > 1e-12 {
+                    sum.scale(1.0 / length)
+                } else {
+                    own
+                };
+            }
+        });
     out
 }
 

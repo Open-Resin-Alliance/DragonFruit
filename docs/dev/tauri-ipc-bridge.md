@@ -370,6 +370,52 @@ should take its *direction* from, and an estimator of the slope itself is still
 open. It was reverted rather than shipped: nothing consumes a payload whose
 magnitude is off by two orders of magnitude at the ends of its range.
 
+## Native mesh loading (`load_mesh_file`, `load_mesh_bytes`)
+
+One command reads a mesh from disk in Rust and hands it to the renderer as the
+`DFMX` binary payload specified in `dev/mesh-wire-formats.md`: a 32-byte header,
+a body table, then one positions-and-normals soup per body.
+
+`load_mesh_file` takes `filePath` and an optional `classify` (default true). It
+dispatches through `io::load_mesh_bodies_from_path` — `stl`/`obj` give one body;
+`3mf` gives one per `<build><item>` expanded through its components, with
+transforms baked — refines coarse faces per body, and adds one STL-only step in
+front: a mesh too large to render (its triangle count read from the binary-STL
+header) is decimated into a preview, and an oversized ASCII STL is refused.
+
+With `classify` true and a single body, the loader also runs the model/support
+classifier and ships its report in the payload's metadata tail, so a classify-only
+import has nothing left to stage or round-trip. A caller that will repair passes
+`classify: false`: that pass classifies too, and its report is the one that
+matters.
+
+Materials and units are dropped, matching the renderer's loaders. The TS seam is
+`loadMeshFileFromNativePath` in `nativeSlicerBridge.ts`.
+
+`load_mesh_bytes` is the twin for a source with no on-disk path — a VOXL's
+embedded mesh chunk, or a file expanded out of a zip. The body is the raw file
+(binary or ASCII STL), and the response is the same `DFMX` payload, so both share
+one decoder. Its `classify` flag rides in an `x-mesh-classify` header, because a
+raw-body command cannot also take JSON arguments. The TS seam is `loadMeshBytes`.
+
+Both loaders classify a single-body load when asked, so an import that will not
+repair has nothing left to run: the geometry arrives section-ordered, the report
+rides the metadata tail, and the frontend passes it to `processGeometry` as
+`bakedClassification`. Which imports ask is `wantsLoaderClassification`
+(`useStlGeometry.ts`): a classify-only import does; one that may auto-repair does
+not, because that pass classifies too.
+
+### Deferred post-processing
+
+Not used. An import builds its BVH, computes its flattening planes and awaits its
+AO bake inside `processGeometry`, while the import's progress modal is up.
+Deferring them to idle was tried and reverted: the work is the same either way, and
+paying it while the user is already waiting beats stuttering while they interact.
+
+`finalizeModelGeometryPostProcessing` and the AO sweep remain for the paths that
+genuinely need them: a geometry swapped in by a repair, a boolean cut or a hole
+punch, and a model restored from a project.
+
 ## The Rust side of the seam
 
 Where the TS side is a set of wrappers, the native side keeps its cross-command

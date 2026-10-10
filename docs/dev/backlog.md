@@ -455,7 +455,7 @@ mistaken for broken baked ambient occlusion. Three separate causes, on the same
 path, none of them in the occlusion estimator:
 
 **1. The loader baked the file's per-face normals into the render.**
-`encode_stl_response` wrote one triangle's normal onto all three of its corners.
+The STL response encoder wrote one triangle's normal onto all three of its corners.
 An STL has no vertex normals, so this looked faithful, but with
 `flatShading={false}` three *interpolates* a constant and every face is lit by its
 own orientation. Measured on `poussin.stl` (150k triangles, 75k welded vertices),
@@ -470,9 +470,9 @@ brightness** even under a hard key light (measured in a headless render of the
 real loader output). It is a real defect and it had to go, but it is not what the
 report was about.
 
-**2. A repaired geometry kept no normals at all.** `repairGeometryWithManifold`
-rewrites positions and index in place and deletes the now-stale `normal`
-attribute, with a comment saying the caller must recompute. It does not set
+**2. A repaired geometry kept no normals at all.** The Manifold repair rewrote
+positions and index in place and deleted the now-stale `normal` attribute, with a
+comment saying the caller must recompute. It did not set
 `nativeModifiedGeometry`, and STL loading passes `_skipComputeNormals: true`
 because the loader "already computed them" — so `processGeometry` skipped the
 recompute and the model shaded from a zeroed attribute. That is precisely the

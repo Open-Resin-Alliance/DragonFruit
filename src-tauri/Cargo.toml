@@ -116,6 +116,16 @@ strip = "none"  # keep debug info for crash reports; strip handled by Tauri bund
 opt-level = 3
 
 # The wildcard above only covers registry deps; path deps need explicit entries.
+# The two mesh crates are in every import's hot path — weld, refine, normals and
+# the model/support classifier — and unoptimized they cost seconds on a 1M-triangle
+# model (a 69 MB payload took 7 s to encode). Their neighbours (islands, the GPU
+# bake, organic cut) should join them as they land in profiling.
+[profile.dev.package.dragonfruit-mesh-repair]
+opt-level = 3
+
+[profile.dev.package.dragonfruit-mesh-core]
+opt-level = 3
+
 [profile.dev.package.dragonfruit-slicing-engine]
 opt-level = 3
 

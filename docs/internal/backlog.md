@@ -211,12 +211,6 @@
 - Context: ADR-0025 (`docs/adr/`) records the full audit and disposition; it is
   `status: proposed` and this is its unexecuted phase 1. Do not re-derive.
 
-### [cleanup] Stale DFST header size in a doc comment — S · low risk
-- Where: src-tauri/src/mesh_repair.rs, the comment above the DFST spec.
-- What: one comment says "a 16-byte `DFST` header"; the spec below it and
-  `STL_RESPONSE_HEADER_BYTES` both say 64. The constant is right.
-- Why: trivial, but it is the kind of thing someone trusts while writing a reader.
-
 ### [docs] Candidate ADR: empirical sizing over physics-based — S · low risk
 - Where: src/supports/autoSupport/parameterSizing.ts (header comment), and the
   reverted physics work in the auto-supports history.

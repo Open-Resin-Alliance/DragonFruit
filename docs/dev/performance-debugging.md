@@ -166,6 +166,17 @@ report at a human rate.
 feeds it every Rust log record. Anything logged from a hot path arrives there
 too. Check what already exists before adding an instrument.
 
+**`wgpu_hal` is filtered off, on purpose.** The Vulkan loader hands wgpu every
+implicit layer on the machine, and a third-party overlay whose manifest is missing
+or whose layer breaks the loader's naming policy is reported as an ERROR on the
+instance we asked for (Epic's EOS layer, Samsung's Galaxy overlay, Overwolf's OBS
+hook). Those records are mirrored into the webview console by the log plugin and
+read as application crashes, so `src-tauri/src/main.rs` sets
+`.level_for("wgpu_hal", log::LevelFilter::Off)`. Nothing from wgpu reaches the log
+unless you raise that line — do it while diagnosing an adapter or device problem,
+then put it back. The AO path's own failures come from `dragonfruit-ao-gpu` and
+`ao_vertex.rs`, which log under `dragonfruit_desktop`.
+
 **`structuredClone` costs ~10 µs per call whatever the size.** A support snapshot
 is thousands of small records, so a whole-state `structuredClone` pays that fixed
 cost per entity: ~57 ms for a 9,000-entity scene against ~20 ms for

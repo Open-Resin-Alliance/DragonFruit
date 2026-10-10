@@ -24,6 +24,7 @@ import { getBuiltinComplexPluginFileTypeHandlers } from '@/features/plugins/buil
 import type { PluginFileTypeDefinition } from '@/features/plugins/complexPluginContracts';
 import type { PluginFileTypeHandler } from '@/features/plugins/pluginFileTypeBridge';
 import { accelerateGeometry, disposeGeometryBVH } from '@/utils/bvh';
+import { runWithConcurrency } from '@/utils/runWithConcurrency';
 import { BAKED_OCCLUSION_ATTRIBUTE, DEFAULT_BAKED_OCCLUSION_INTENSITY, bakeOcclusionForGeometry, bumpBakedOcclusionVersion, canBakeOcclusion, setBakedOcclusionIntensity } from '@/features/scene/bakedOcclusion';
 import { eulerFromGlobalEuler, quaternionFromGlobalEuler } from '@/utils/rotation';
 import { v4 as uuidv4 } from 'uuid';
@@ -43,9 +44,6 @@ import {
   importDetailProcessedCount,
   importDetailRecombiningGeometry,
   importDetailSeparatingGeometry,
-  importDetailVoxlAutoRepairing,
-  importDetailVoxlClassifying,
-  importDetailVoxlInspecting,
   importDetailVoxlModel,
   importLabelAutoRepairing,
   importLabelClassifying,
@@ -141,6 +139,14 @@ type PersistedMeshAppearance = {
  * another model's ray pass, not about using more cores per model.
  */
 const AO_BAKE_CONCURRENCY = 2;
+
+/**
+ * VOXL meshes built at once. Same reasoning as the bake concurrency: each build is
+ * a native round trip with serial phases (parse, refine, classify) around a parallel
+ * one (the bake), and both commands share one rayon pool, so two is where one
+ * model's serial phase starts running during another's.
+ */
+const VOXL_BUILD_CONCURRENCY = 2;
 
 /**
  * How many beds a paste will add for the copies that do not fit the plate being worked
@@ -1411,6 +1417,13 @@ export function useSceneCollectionManager(options?: {
   // Models whose AO volume bake is queued or awaiting the native round trip.
   // Part of hasPendingBackgroundGeometryWork.
   const pendingAoBakeRef = useRef(0);
+  // Geometries with a bake in flight. The attribute lands only when the bake
+  // resolves, so without this the queue rebuilt on a later `models` change would
+  // send the same soup a second time — measured as 25 bakes of one mesh in three
+  // seconds under a models-change storm, and as the one-second pair on a restored
+  // model. Keyed on the geometry, so a repair that swaps in a new one is not
+  // skipped.
+  const pendingAoGeometriesRef = useRef<Set<THREE.BufferGeometry>>(new Set());
   const trackedGeometriesRef = useRef<Set<THREE.BufferGeometry>>(new Set());
 
   const tryRevokeObjectUrl = useCallback((url: string) => {
@@ -3649,7 +3662,10 @@ export function useSceneCollectionManager(options?: {
         // Re-bake when the geometry was replaced (repair, boolean cut, hole
         // punch): the attribute lives on the old geometry, so without this the
         // new shape would be shaded with the old shape's occlusion.
-        return geometry.getAttribute(BAKED_OCCLUSION_ATTRIBUTE) === undefined;
+        if (geometry.getAttribute(BAKED_OCCLUSION_ATTRIBUTE) !== undefined) return false;
+        // A bake already in flight for this geometry has not attached yet, so it
+        // would look identical to "never baked" and be sent a second time.
+        return !pendingAoGeometriesRef.current.has(geometry);
       })
       .map((model) => model.id);
     if (queue.length === 0) return;
@@ -3666,32 +3682,41 @@ export function useSceneCollectionManager(options?: {
     };
 
     const bakeOne = async () => {
-      while (!cancelled) {
-        const id = queue.shift();
-        if (!id) return;
-        const model = modelsRef.current.find((m) => m.id === id);
-        try {
-          if (model) {
-            const geometry = model.geometry.geometry;
-            const occlusion = await bakeOcclusionForGeometry(geometry);
-            if (occlusion && !cancelled) {
-              const attribute = new THREE.BufferAttribute(occlusion, 1);
-              attribute.setUsage(THREE.StaticDrawUsage);
-              geometry.setAttribute(BAKED_OCCLUSION_ATTRIBUTE, attribute);
-              // The store, not the `models` array: replacing that array here
-              // invalidated everything derived from it — the clearance map and
-              // the raft rebuilt on every bake that landed. See
-              // `bumpBakedOcclusionVersion`.
-              bumpBakedOcclusionVersion(geometry);
-            }
+      if (cancelled) return;
+      const id = queue.shift();
+      if (!id) return;
+      const model = modelsRef.current.find((m) => m.id === id);
+      const geometry = model?.geometry.geometry;
+      if (geometry) pendingAoGeometriesRef.current.add(geometry);
+      try {
+        if (geometry) {
+          const occlusion = await bakeOcclusionForGeometry(geometry);
+          // Attach whatever came back even if this run was superseded: the
+          // values belong to this geometry, and discarding them is what left
+          // it looking unbaked and re-queueable on the next `models` change.
+          if (occlusion) {
+            const attribute = new THREE.BufferAttribute(occlusion, 1);
+            attribute.setUsage(THREE.StaticDrawUsage);
+            geometry.setAttribute(BAKED_OCCLUSION_ATTRIBUTE, attribute);
+            // The store, not the `models` array: replacing that array here
+            // invalidated everything derived from it — the clearance map and
+            // the raft rebuilt on every bake that landed. See
+            // `bumpBakedOcclusionVersion`.
+            bumpBakedOcclusionVersion(geometry);
           }
-        } catch (error) {
-          // A failed bake is not worth surfacing: the model simply keeps the
-          // unoccluded look it has today.
-          console.warn('[ao] bake failed', error);
-        } finally {
-          pendingAoBakeRef.current = Math.max(0, pendingAoBakeRef.current - 1);
         }
+      } catch (error) {
+        // A failed bake is not worth surfacing: the model simply keeps the
+        // unoccluded look it has today.
+        console.warn('[ao] bake failed', error);
+      } finally {
+        if (geometry) pendingAoGeometriesRef.current.delete(geometry);
+        pendingAoBakeRef.current = Math.max(0, pendingAoBakeRef.current - 1);
+        // One model per idle callback, not a loop over the queue. The soup copy
+        // and the attribute attach are main-thread work, so chaining bakes back to
+        // back is what made a fifteen-model scene stutter for the whole drain
+        // rather than between models. Interaction always outranks this.
+        scheduleIdle(() => void bakeOne());
       }
     };
 
@@ -5744,6 +5769,63 @@ export function useSceneCollectionManager(options?: {
       const builtGeometryByHash = new Map<string, GeometryWithBounds>();
       let dedupHits = 0;
 
+      // Build every unique mesh, a couple at a time, before the placement loop.
+      // Placement stays in order below because it depends on what is already on the
+      // plate; building does not. Each build is a native round trip with serial
+      // phases (parse, refine, classify) around a parallel one, so two in flight let
+      // one model's serial phase run during another's. The hash is computed here once
+      // per model and reused by the loop, so neither the content hash nor the
+      // integrity check is paid twice.
+      const buildOptionsFor = (model: (typeof document.models)[number]): ProcessGeometryOptions => ({
+        ...(autoRepairScenes || !model.classification ? {} : { bakedClassification: model.classification }),
+        nativeProcessingMode: autoRepairScenes ? 'auto' : 'none',
+        assumeSupportGeometry: model.isSupportGeometry,
+        skipClassification: model.isSupportGeometry,
+      });
+      const hashByModelId = new Map<string, string>();
+      const uniqueBuilds = new Map<
+        string,
+        { bytes: Uint8Array; name: string; model: (typeof document.models)[number] }
+      >();
+      for (const model of document.models) {
+        const meshRef = model.mesh;
+        const bytes = resolvedMeshBytes.get(model.id);
+        if (!meshRef || meshRef.mode !== 'embedded-chunk' || !bytes) continue;
+        const declaredSha = typeof meshRef.sha256 === 'string' && meshRef.sha256.trim().length > 0
+          ? meshRef.sha256.trim().toLowerCase()
+          : undefined;
+        const contentHash = declaredSha ?? (await sha256Hex(bytes));
+        hashByModelId.set(model.id, contentHash);
+        if (builtGeometryByHash.has(contentHash) || uniqueBuilds.has(contentHash)) continue;
+        uniqueBuilds.set(contentHash, {
+          bytes,
+          name: meshRef.fileName?.trim() || `${model.name || 'model'}.stl`,
+          model,
+        });
+      }
+      if (uniqueBuilds.size > 0) {
+        let finished = 0;
+        const buildCount = uniqueBuilds.size;
+        await runWithConcurrency([...uniqueBuilds], VOXL_BUILD_CONCURRENCY, async ([hash, spec]) => {
+          try {
+            const built = await loadMeshGeometry(spec.bytes, spec.name, buildOptionsFor(spec.model));
+            builtGeometryByHash.set(hash, built);
+          } catch (error) {
+            // The loop below reports the model as skipped; one mesh that will not
+            // build is not worth failing the whole scene over.
+            console.error(`[SceneCollection] Failed building VOXL mesh "${spec.model.name}"`, error);
+          }
+          finished += 1;
+          setImportProgress({
+            active: true,
+            type: 'scene',
+            label: importLabelVoxlScene(_),
+            detail: importDetailVoxlModel(finished, buildCount, spec.model.name, _),
+            progress: null,
+          });
+        });
+      }
+
       for (let i = 0; i < document.models.length; i += 1) {
         const model = document.models[i];
         const meshRef = model.mesh;
@@ -5785,7 +5867,8 @@ export function useSceneCollectionManager(options?: {
             typeof meshRef.sha256 === 'string' && meshRef.sha256.trim().length > 0
               ? meshRef.sha256.trim().toLowerCase()
               : undefined;
-          const contentHash = declaredSha ?? (await sha256Hex(bytes));
+          // Computed by the build pass above; the fallback covers a model it skipped.
+          const contentHash = hashByModelId.get(model.id) ?? declaredSha ?? (await sha256Hex(bytes));
 
           const cached = builtGeometryByHash.get(contentHash);
           let geometry: GeometryWithBounds;
@@ -5805,56 +5888,9 @@ export function useSceneCollectionManager(options?: {
                 throw new Error('VOXL integrity check failed (SHA-256 mismatch).');
               }
             }
-
-            const embeddedName = meshRef.fileName?.trim() || `${model.name || 'model'}.stl`;
-
-            // Baked classification (VOXL V3.3): the file carries the model/support
-            // split this mesh was saved with, so skip the classifier instead of
-            // re-deriving it. Auto-repair supersedes it — a repair pass produces
-            // its own report for the geometry it rebuilt.
-            const bakedClassification = autoRepairScenes ? undefined : model.classification;
-
-            geometry = await loadMeshGeometry(bytes, embeddedName, {
-              ...(bakedClassification ? { bakedClassification } : {}),
-              nativeProcessingMode: autoRepairScenes ? 'auto' : 'none',
-              assumeSupportGeometry: model.isSupportGeometry,
-              skipClassification: model.isSupportGeometry,
-            onNativeProcessingStage: (stage) => {
-              if (stage === 'repairing') {
-                setImportProgress({
-                  active: true,
-                  type: 'scene',
-                  label: importLabelVoxlScene(_),
-                  detail: importDetailVoxlAutoRepairing(i + 1, document.models.length, model.name, _),
-                  progress: null,
-                });
-                return;
-              }
-
-              if (stage === 'analyzing') {
-                setImportProgress({
-                  active: true,
-                  type: 'scene',
-                  label: importLabelVoxlScene(_),
-                  detail: importDetailVoxlInspecting(i + 1, document.models.length, model.name, _),
-                  progress: null,
-                });
-                return;
-              }
-
-              if (stage === 'classifying') {
-                setImportProgress({
-                  active: true,
-                  type: 'scene',
-                  label: importLabelVoxlScene(_),
-                  detail: importDetailVoxlClassifying(i + 1, document.models.length, model.name, _),
-                  progress: null,
-                });
-              }
-            },
-            });
-            // Cache the freshly-built mesh so identical copies clone it.
-            builtGeometryByHash.set(contentHash, geometry);
+            // The build pass above builds every unique mesh; reaching here means that
+            // build failed, and it already logged why.
+            throw new Error(`VOXL mesh for "${model.name}" did not build.`);
           }
 
           let resolvedId = model.id;
@@ -6284,6 +6320,16 @@ export function useSceneCollectionManager(options?: {
     if (!file) {
       console.warn('[SceneCollection] Unable to restore recent file from local cache.');
       return false;
+    }
+
+    // A mesh entry recorded before the on-disk path was tracked carries no
+    // sourcePath, so it can only be restored from the cached blob and the native
+    // loader is skipped. Re-importing the file records the path and heals it.
+    if (entry.kind === 'mesh' && !entry.sourcePath) {
+      console.warn(
+        '[SceneCollection] Recent mesh entry has no on-disk path; restoring from cache. ' +
+        'Re-import the file to enable the native loader for it.',
+      );
     }
 
     // Recovered file is empty and there is no disk path to fall back to — the
