@@ -457,7 +457,7 @@ fn build_rec(
             1 => (a.2.y, b.2.y),
             _ => (a.2.z, b.2.z),
         };
-        av.partial_cmp(&bv).unwrap_or(std::cmp::Ordering::Equal)
+        av.total_cmp(&bv)
     });
     let (left_slice, right_slice) = prims.split_at_mut(mid);
 

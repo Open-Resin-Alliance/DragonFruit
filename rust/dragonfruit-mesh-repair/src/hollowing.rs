@@ -2126,7 +2126,7 @@ fn sort_points_around_axis(points: &mut [Vec3; 4], center: Vec3, axis: Vec3) {
         let db = (*b).sub(center);
         let aa = da.dot(v).atan2(da.dot(u));
         let ab = db.dot(v).atan2(db.dot(u));
-        aa.partial_cmp(&ab).unwrap_or(std::cmp::Ordering::Equal)
+        aa.total_cmp(&ab)
     });
 }
 
@@ -4353,7 +4353,7 @@ fn hole_axis_and_length(
     distances
         .iter()
         .copied()
-        .min_by(|(da, _), (db, _)| da.partial_cmp(db).unwrap_or(std::cmp::Ordering::Equal))
+        .min_by(|(da, _), (db, _)| da.total_cmp(db))
         .map(|(length, axis)| (axis, length.max(tolerance_mm * 2.0)))
         .unwrap_or((Vec3::new(0.0, 0.0, -1.0), tolerance_mm * 2.0))
 }

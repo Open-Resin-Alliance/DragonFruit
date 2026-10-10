@@ -598,7 +598,7 @@ fn refine_face_with_segments(
                 inserts.push((param_on_segment(pts[pi], pa, pb), pi));
             }
         }
-        inserts.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap_or(std::cmp::Ordering::Equal));
+        inserts.sort_by(|x, y| x.0.total_cmp(&y.0));
         let mut prev = a;
         for (_, pi) in inserts {
             if pi != prev {

@@ -111,11 +111,11 @@ pub fn refine_long_edges_with_budget(
             .into_iter()
             .map(|(key, (span, faces, _))| (key, span, faces))
             .collect();
-        candidates.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(a.0.cmp(&b.0))
-        });
+        // `total_cmp`, not `partial_cmp`: a mesh can carry non-finite positions,
+        // and a comparator that maps NaN to `Equal` is not a total order — Rust's
+        // sort panics on one ("does not correctly implement a total order") rather
+        // than producing a wrong order. For finite spans the two agree.
+        candidates.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
 
         // Each admitted edge costs one triangle in every face that touches it,
         // including a face that is already splitting: its second long edge makes

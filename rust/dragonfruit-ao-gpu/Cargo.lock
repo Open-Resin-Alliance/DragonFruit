@@ -201,7 +201,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfruit-mesh-core"
-version = "0.8.1"
+version = "0.8.3"
 dependencies = [
  "ahash",
  "bytemuck",
