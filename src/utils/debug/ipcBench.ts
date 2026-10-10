@@ -9,7 +9,8 @@
  * using the handler's arrival timestamp.
  *
  * Usage: the "IPC bench" button in the slice metrics modal, or
- * `await window.__dfIpcBench()` from devtools. Both copy the JSON report.
+ * `await window.__dfIpcBench()` from devtools. Both copy the JSON report, and it
+ * is also written to the platform log file (useful in builds without devtools).
  */
 
 type Invoke = <T>(cmd: string, args?: unknown, opts?: { headers?: Record<string, string> }) => Promise<T>;
@@ -210,8 +211,12 @@ export async function runIpcBench(log: (line: string) => void = console.info): P
     if (report.uploadFit) {
         log(`[ipc-bench] upload fit: ${report.uploadFit.fixedMs.toFixed(2)} ms + bytes at ${report.uploadFit.mibPerSec.toFixed(1)} MiB/s`);
     }
-    // One line, so it lands whole in the platform log file via the attached console.
-    log(`[ipc-bench] report ${JSON.stringify(report)}`);
+    // Written through the log plugin explicitly: console output from the webview
+    // does not reach the platform log file (attachConsole only forwards the
+    // other way, Rust → console). One line, so it lands whole.
+    const line = `[ipc-bench] report ${JSON.stringify(report)}`;
+    log(line);
+    await import('@tauri-apps/plugin-log').then(({ info }) => info(line)).catch(() => { });
     return report;
 }
 
