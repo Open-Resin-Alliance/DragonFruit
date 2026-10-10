@@ -46,9 +46,6 @@ export type GeometryWithBounds = {
   center: THREE.Vector3;
   size: THREE.Vector3;
   flatteningPlanes: FlatteningPlane[];
-  /** Set when the caller asked to defer the BVH, the flattening planes and the AO
-   *  bake to idle work (`deferHeavyPostProcessing`). */
-  postProcessingDeferred?: boolean;
   /** Present when defective vertex data was detected and auto-repaired */
   meshDefects?: MeshDefects;
   /**
@@ -154,12 +151,6 @@ export interface ProcessGeometryOptions {
    * knows the overlay is unwanted (e.g. a slicing-only geometry).
    */
   computeEdgeGeometry?: boolean;
-  /** Leave the BVH build, the flattening-plane pass and the AO bake to the
-   *  caller's idle work, so an import does not pay for them before the model is on
-   *  screen. The scene's `finalizeModelGeometryPostProcessing` takes the first two
-   *  and its AO sweep takes the third; the result carries
-   *  `postProcessingDeferred` so the caller knows to schedule them. */
-  deferHeavyPostProcessing?: boolean;
   /** Skip `computeVertexNormals()` - the geometry already has a `normal` attribute */
   _skipComputeNormals?: boolean;
   _isTauriRuntime?: () => boolean;
@@ -572,14 +563,10 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   await new Promise<void>(r => setTimeout(r, 0));
 
   // Add BVH acceleration for fast raycasting (critical for support placement)
-  if (options.deferHeavyPostProcessing) {
-    console.log(`[${new Date().toISOString()}] [processGeometry] BVH Construction deferred to the idle pass`);
-  } else {
-    console.log(`[${new Date().toISOString()}] [processGeometry] Starting BVH Construction`);
-    const startBVH = performance.now();
-    accelerateGeometry(geometry);
-    console.log(`[${new Date().toISOString()}] [processGeometry] BVH Construction finished. Took ${(performance.now() - startBVH).toFixed(2)}ms`);
-  }
+  console.log(`[${new Date().toISOString()}] [processGeometry] Starting BVH Construction`);
+  const startBVH = performance.now();
+  accelerateGeometry(geometry);
+  console.log(`[${new Date().toISOString()}] [processGeometry] BVH Construction finished. Took ${(performance.now() - startBVH).toFixed(2)}ms`);
 
   const bbox = geometry.boundingBox ? geometry.boundingBox.clone() : new THREE.Box3();
   const center = bbox.getCenter(new THREE.Vector3());
@@ -592,12 +579,7 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   // decimation still processes every vertex, adding measurable time and
   // allocations for meshes with 15M+ vertices.
   let flatteningPlanes: FlatteningPlane[];
-  if (options.deferHeavyPostProcessing) {
-    // The scene's finalizeModelGeometryPostProcessing computes these on idle; the
-    // import must not block on a pass only Place on Face reads.
-    console.log(`[${new Date().toISOString()}] [processGeometry] Flattening Planes deferred to the idle pass`);
-    flatteningPlanes = [];
-  } else if (options._isNativePreview || sourceVertexCount >= HUGE_STL_VERTEX_THRESHOLD) {
+  if (options._isNativePreview || sourceVertexCount >= HUGE_STL_VERTEX_THRESHOLD) {
     console.warn(
       `[processGeometry] Skipping flattening planes for huge mesh (` +
       `${sourceVertexCount.toLocaleString()} vertices).`,
@@ -630,36 +612,19 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
 
   const shouldSurfaceDefects = meshDefects.hasDefects || meshDefects.nativeRepairReport != null;
   // The model is not added to the scene until this resolves, so its first frame
-  // already carries the occlusion. It runs here, after the rest of prep, rather
-  // than concurrently with it: starting it earlier is faster, because the bake is
-  // native work while prep is synchronous, but it put a request on the wire while
-  // the geometry was still being worked on, and the occlusion came back scattered
-  // across the surface.
-  //
-  // A deferred import skips it and leaves the field to the scene's AO sweep, which
-  // keys on geometries with no `aBakedAo` and already keeps a bake in flight out of
-  // its queue. The model renders unbaked until that lands, which is the same state
-  // a restored or swapped geometry starts in.
-  const baked = options.deferHeavyPostProcessing
-    ? false
-    : await bakeAndAttachOcclusionForGeometry(geometry).catch((error) => {
-        console.warn('[ao] bake during prep failed', error);
-        return false;
-      });
+  // already carries the occlusion, and the import's progress modal is still up
+  // while it runs. Deferring it to idle was tried and reverted: the work is the
+  // same either way, and paying it while the user is already waiting beats
+  // stuttering while they are interacting with the scene.
+  const baked = await bakeAndAttachOcclusionForGeometry(geometry).catch((error) => {
+    console.warn('[ao] bake during prep failed', error);
+    return false;
+  });
   if (baked) {
     console.log(`[${new Date().toISOString()}] [processGeometry] Baked occlusion attached during prep`);
   }
 
-  return {
-    geometry,
-    bbox,
-    center,
-    size,
-    flatteningPlanes,
-    edgeGeometry,
-    ...(options.deferHeavyPostProcessing ? { postProcessingDeferred: true } : {}),
-    ...(shouldSurfaceDefects ? { meshDefects } : {}),
-  };
+  return { geometry, bbox, center, size, flatteningPlanes, edgeGeometry, ...(shouldSurfaceDefects ? { meshDefects } : {}) };
 }
 
 /** Number of bytes per triangle in a binary STL: 12 byte normal + 36 byte vertices + 2 byte attribute */

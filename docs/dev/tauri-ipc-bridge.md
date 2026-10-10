@@ -407,13 +407,14 @@ not, because that pass classifies too.
 
 ### Deferred post-processing
 
-An import passes `deferHeavyPostProcessing`, so `processGeometry` does not build
-the BVH, compute the flattening planes, or await the AO bake before the model is
-on screen. The result carries `postProcessingDeferred`, and
-`useSceneCollectionManager` finalizes it the same way it does a geometry swap:
-`finalizeModelGeometryPostProcessing` builds the BVH and schedules the planes on
-idle, and the AO sweep picks up a geometry with no `aBakedAo`. `hasPendingBackgroundGeometryWork`
-reports while that queue is still draining.
+Not used. An import builds its BVH, computes its flattening planes and awaits its
+AO bake inside `processGeometry`, while the import's progress modal is up.
+Deferring them to idle was tried and reverted: the work is the same either way, and
+paying it while the user is already waiting beats stuttering while they interact.
+
+`finalizeModelGeometryPostProcessing` and the AO sweep remain for the paths that
+genuinely need them: a geometry swapped in by a repair, a boolean cut or a hole
+punch, and a model restored from a project.
 
 ## The Rust side of the seam
 

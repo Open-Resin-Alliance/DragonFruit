@@ -2536,10 +2536,6 @@ export function useSceneCollectionManager(options?: {
           // Shared loading options for all mesh types
           const loadOptions = {
             nativeProcessingMode: getSavedImportDefaultsSettings().autoRepair ? 'auto' : 'none',
-            // The scene finalizes BVH + flattening planes on idle and bakes the AO
-            // from its sweep, so an import does not pay for them before the model is
-            // on screen.
-            deferHeavyPostProcessing: true,
             filePath: (file as File & { filePath?: string }).filePath,
             onNativeProcessingStage: (stage: string) => {
               if (stage === 'repairing') {
@@ -3680,37 +3676,41 @@ export function useSceneCollectionManager(options?: {
     };
 
     const bakeOne = async () => {
-      while (!cancelled) {
-        const id = queue.shift();
-        if (!id) return;
-        const model = modelsRef.current.find((m) => m.id === id);
-        const geometry = model?.geometry.geometry;
-        if (geometry) pendingAoGeometriesRef.current.add(geometry);
-        try {
-          if (geometry) {
-            const occlusion = await bakeOcclusionForGeometry(geometry);
-            // Attach whatever came back even if this run was superseded: the
-            // values belong to this geometry, and discarding them is what left
-            // it looking unbaked and re-queueable on the next `models` change.
-            if (occlusion) {
-              const attribute = new THREE.BufferAttribute(occlusion, 1);
-              attribute.setUsage(THREE.StaticDrawUsage);
-              geometry.setAttribute(BAKED_OCCLUSION_ATTRIBUTE, attribute);
-              // The store, not the `models` array: replacing that array here
-              // invalidated everything derived from it — the clearance map and
-              // the raft rebuilt on every bake that landed. See
-              // `bumpBakedOcclusionVersion`.
-              bumpBakedOcclusionVersion(geometry);
-            }
+      if (cancelled) return;
+      const id = queue.shift();
+      if (!id) return;
+      const model = modelsRef.current.find((m) => m.id === id);
+      const geometry = model?.geometry.geometry;
+      if (geometry) pendingAoGeometriesRef.current.add(geometry);
+      try {
+        if (geometry) {
+          const occlusion = await bakeOcclusionForGeometry(geometry);
+          // Attach whatever came back even if this run was superseded: the
+          // values belong to this geometry, and discarding them is what left
+          // it looking unbaked and re-queueable on the next `models` change.
+          if (occlusion) {
+            const attribute = new THREE.BufferAttribute(occlusion, 1);
+            attribute.setUsage(THREE.StaticDrawUsage);
+            geometry.setAttribute(BAKED_OCCLUSION_ATTRIBUTE, attribute);
+            // The store, not the `models` array: replacing that array here
+            // invalidated everything derived from it — the clearance map and
+            // the raft rebuilt on every bake that landed. See
+            // `bumpBakedOcclusionVersion`.
+            bumpBakedOcclusionVersion(geometry);
           }
-        } catch (error) {
-          // A failed bake is not worth surfacing: the model simply keeps the
-          // unoccluded look it has today.
-          console.warn('[ao] bake failed', error);
-        } finally {
-          if (geometry) pendingAoGeometriesRef.current.delete(geometry);
-          pendingAoBakeRef.current = Math.max(0, pendingAoBakeRef.current - 1);
         }
+      } catch (error) {
+        // A failed bake is not worth surfacing: the model simply keeps the
+        // unoccluded look it has today.
+        console.warn('[ao] bake failed', error);
+      } finally {
+        if (geometry) pendingAoGeometriesRef.current.delete(geometry);
+        pendingAoBakeRef.current = Math.max(0, pendingAoBakeRef.current - 1);
+        // One model per idle callback, not a loop over the queue. The soup copy
+        // and the attribute attach are main-thread work, so chaining bakes back to
+        // back is what made a fifteen-model scene stutter for the whole drain
+        // rather than between models. Interaction always outranks this.
+        scheduleIdle(() => void bakeOne());
       }
     };
 
@@ -3756,24 +3756,6 @@ export function useSceneCollectionManager(options?: {
       }
     });
   }, [deferAccelerateGeometry]);
-
-  /**
-   * An import that asked to defer its heavy post-processing (BVH + flattening
-   * planes) is finalized here, the same way a geometry swap is. The AO bake needs
-   * no scheduling: the sweep above covers any geometry with no `aBakedAo`, a
-   * deferred one included.
-   *
-   * The marker is cleared in place, which is what makes this run once per model:
-   * it is a hint for this scheduler, not state, and the effect would otherwise
-   * queue the same model on every `models` change.
-   */
-  useEffect(() => {
-    for (const model of models) {
-      if (!model.geometry.postProcessingDeferred) continue;
-      model.geometry.postProcessingDeferred = undefined;
-      finalizeModelGeometryPostProcessing(model.id);
-    }
-  }, [models, finalizeModelGeometryPostProcessing]);
 
   const setModelVisibility = useCallback((id: string, visible: boolean) => {
     setModels(prev => prev.map(m =>
@@ -5854,7 +5836,6 @@ export function useSceneCollectionManager(options?: {
             geometry = await loadMeshGeometry(bytes, embeddedName, {
               ...(bakedClassification ? { bakedClassification } : {}),
               nativeProcessingMode: autoRepairScenes ? 'auto' : 'none',
-              deferHeavyPostProcessing: true,
               assumeSupportGeometry: model.isSupportGeometry,
               skipClassification: model.isSupportGeometry,
             onNativeProcessingStage: (stage) => {

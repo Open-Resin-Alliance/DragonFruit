@@ -87,16 +87,19 @@ export async function bakeOcclusionForGeometry(
     { headers: { 'Content-Type': 'application/octet-stream' } },
   );
 
-  const bytes = payload instanceof ArrayBuffer
-    ? new Uint8Array(payload)
-    : payload instanceof Uint8Array
-      ? payload
-      : new Uint8Array(payload);
-  // Copy into an aligned buffer: the IPC buffer is not guaranteed to outlive the
-  // call, and a Float32Array view needs 4-byte alignment.
-  const copy = new Uint8Array(bytes.byteLength);
-  copy.set(bytes);
-  const cornerValues = new Float32Array(copy.buffer);
+  // One f32 per soup corner. An ArrayBuffer off the IPC channel is ours and
+  // 4-byte aligned, so that *is* the values; a view or a plain array is neither,
+  // and one copy is what makes it viewable. The corner array is transient either
+  // way, because the per-vertex attribute is built from it below.
+  let cornerValues: Float32Array;
+  if (payload instanceof ArrayBuffer && payload.byteLength % 4 === 0) {
+    cornerValues = new Float32Array(payload);
+  } else {
+    const view = payload instanceof Uint8Array ? payload : new Uint8Array(payload);
+    const copy = new Uint8Array(view.byteLength);
+    copy.set(view);
+    cornerValues = new Float32Array(copy.buffer);
+  }
 
   const values = mapCornerValuesToVertices(cornerValues, geometry);
   if (!values) {
