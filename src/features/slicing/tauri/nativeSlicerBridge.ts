@@ -548,22 +548,39 @@ export async function pickOpenFilesWithNativeDialog(
 }
 
 /**
+ * The IPC layer hands back an `ArrayBuffer` over the custom protocol, but its
+ * `postMessage` fallback — taken when that protocol fails — returns a view or a
+ * plain number array. Normalise so a caller reads the payload one way.
+ */
+function toPayloadBytes(payload: ArrayBuffer | ArrayBufferView | number[]): Uint8Array {
+  if (payload instanceof ArrayBuffer) return new Uint8Array(payload);
+  if (ArrayBuffer.isView(payload)) {
+    return new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength);
+  }
+  return Uint8Array.from(payload);
+}
+
+/**
  * Parse a mesh file of any supported format on the native side and return the
- * `DFST` payload: a 64-byte header, then positions and corner normals as 9
- * `f32` per triangle. The layout is documented in `useStlGeometry.ts` alongside
- * the STL-specific `load_stl_file` decoder.
+ * `DFMX` payload: a 32-byte header, a body table, then positions and corner
+ * normals as 9 `f32` per triangle for each body. The layout is specified in
+ * `docs/dev/mesh-wire-formats.md`.
  *
- * The native dispatcher refines coarse faces and returns welded, crease-split
+ * The native loader refines coarse faces and returns welded, crease-split
  * normals, so the geometry matches what every other import path sees. Desktop
  * only — throws outside the Tauri runtime.
  */
-export async function loadMeshFileFromNativePath(filePath: string): Promise<ArrayBuffer> {
+export async function loadMeshFileFromNativePath(filePath: string, classify?: boolean): Promise<Uint8Array> {
   const core = await loadTauriCore();
   if (!core) {
     throw new Error('Native mesh loading is only available in DragonFruit Desktop (Tauri runtime).');
   }
 
-  return core.invoke<ArrayBuffer>('load_mesh_file', { filePath });
+  const payload = await core.invoke<ArrayBuffer | Uint8Array | number[]>('load_mesh_file', {
+    filePath,
+    ...(classify === undefined ? {} : { classify }),
+  });
+  return toPayloadBytes(payload);
 }
 
 export async function writeBytesToNativePath(

@@ -1,72 +1,52 @@
-# Mesh Wire Formats (DFST, DFMX)
+# Mesh Wire Format (DFMX)
 
-Two binary payloads carry a mesh across the Tauri IPC boundary from Rust to the
-renderer. Both are little-endian and both end in the same *soup*: positions
-(9 `f32` per triangle), then per-corner normals (9 `f32` per triangle,
-welded and split at creases — see `dragonfruit_mesh_core::normals`). They differ
-in the header and in how many meshes the payload can hold.
+One binary payload carries a mesh from Rust to the renderer: `DFMX`, written by
+`encode_mesh_bodies` and returned by the `load_mesh_file` command. It is
+little-endian, versioned, and holds one or more *bodies*. Each body ends in the
+same soup: positions (9 `f32` per triangle), then per-corner normals (9 `f32` per
+triangle, welded and split at creases — see `dragonfruit_mesh_core::normals`).
+Write it through `write_soup`, which owns the one implementation of the soup
+layout so the encoder cannot drift from the reader.
 
-| | `DFST` | `DFMX` |
-| --- | --- | --- |
-| magic | `DFST` (`0x44465354`) | `DFMX` (`0x44464D58`) |
-| header | 64 bytes | 32 bytes + body table |
-| bodies | exactly one | one or more |
-| versioned | no | yes (version 1) |
-| written by | `encode_stl_response` | `encode_mesh_bodies` |
-| command | `load_stl_file` | `load_mesh_file` |
-| decoded by | `loadStlViaTauri` | not wired yet |
-
-Write both through `write_soup`, which owns the one implementation of the soup
-layout (positions then normals) so the two encoders cannot drift.
-
-## DFST — single-mesh (STL)
-
-Written by `encode_stl_response` in `src-tauri/src/mesh_repair.rs` and returned
-by the `load_stl_file` command; decoded in `loadStlViaTauri`
-(`src/hooks/useStlGeometry.ts`).
-
-| Offset | Size | Field |
-| --- | --- | --- |
-| 0..3 | 4 | magic `DFST` |
-| 4..7 | 4 | flags — bit 0 `IS_PREVIEW` |
-| 8..11 | 4 | original input triangle count |
-| 12..15 | 4 | output (preview) triangle count |
-| 16..31 | 16 | reserved ("bounding-box extents" in the comment; never written) |
-| 32..35 | 4 | model-section triangle count — written only when a preview carries one |
-| 36..63 | 28 | reserved, zero |
-
-Payload from byte 64: one body, positions then normals, `outputTriangleCount`
-triangles. The reader derives the block boundary from the triangle count — there
-is no length scalar. It is **not versioned**, and the reader rejects any length
-other than `64 + triangles * 72`.
-
-## DFMX — multi-body (universal loader)
-
-Written by `encode_mesh_bodies` and returned by `load_mesh_file` because a 3MF
-describes several bodies. It is **versioned**, so an encoding change (quantized
-positions, compression) can be added as v2 without breaking v1 readers.
+## Layout
 
 Header (32 bytes):
 
 | Offset | Size | Field |
 | --- | --- | --- |
-| 0..3 | 4 | magic `DFMX` |
+| 0..3 | 4 | magic `DFMX` (`0x44464D58`) |
 | 4..7 | 4 | version — `1` |
 | 8..11 | 4 | flags — bit 0 `IS_PREVIEW` |
 | 12..15 | 4 | body count |
 | 16..19 | 4 | original input triangle count |
 | 20..23 | 4 | model-section triangle count (`0` when absent) |
-| 24..31 | 8 | reserved, zero |
+| 24..27 | 4 | metadata JSON byte length (`0` when absent) |
+| 28..31 | 4 | reserved, zero |
 
-Body table: `bodyCount` entries of 8 bytes, in payload order —
-triangle count (4 bytes) and 4 reserved bytes (an encoding / vertex-count slot
-kept for v2).
+Body table: `bodyCount` entries of 8 bytes, in payload order — triangle count
+(4 bytes) and 4 reserved bytes (an encoding / vertex-count slot kept for v2).
 
-Payload: each body in table order, positions then normals, 9 `f32` per triangle
-each. Offsets are derived from the table; there is no per-body offset scalar.
+Payload: each body in table order, positions then normals. Offsets are derived
+from the table; there is no per-body offset scalar. The metadata JSON, when
+present, is the last `metadataLength` bytes — a reader that does not know the key
+reads the bodies and ignores the tail.
+
+The metadata is the classification report for the load. `load_mesh_file`
+classifies a **single-body** load itself, when the caller asks for it, and ships
+the report here, so the frontend has nothing to stage or round-trip for the
+common case: the geometry arrives section-ordered, and the frontend passes the
+report to `processGeometry` as its `bakedClassification`, which skips the native
+classify pass entirely. A caller that will repair passes `classify: false`. A
+multi-body 3MF is left to the frontend, whose merged geometry is its own
+construction.
 
 Because bodies are laid out as separate soups, a body's vertices are not welded
 *across* bodies — matching a 3MF, where each build item is an independent solid.
+
+The reader is `decodeDfmx` (`src/hooks/useStlGeometry.ts`), which returns the
+bodies plus the header facts a preview needs (flags, original and model counts).
+It gives each body its own `ArrayBuffer`: `processGeometry` translates a geometry
+in place to centre it, so bodies sharing one buffer would drag each other around.
 
 ## Bodies come from the loader, not this format
 
@@ -79,13 +59,16 @@ What counts as a body is the loader's decision:
   `<build><item>` expanded through its components, with the composed transform
   baked into the vertices (`three_mf::load_bodies`).
 
-`load_mesh_file` calls the body dispatcher and encodes the result. Nothing on the
-frontend consumes `DFMX` yet — `loadMeshFileFromNativePath`
-(`src/features/slicing/tauri/nativeSlicerBridge.ts`) returns the raw payload.
+`load_mesh_file` calls the body dispatcher, with one format-specific step in
+front of it: `stl_special_case_response`. A binary STL announces its triangle
+count in its 84-byte header, so a mesh too large to render is decimated into a
+single-body preview there (flagging `IS_PREVIEW` and filling the model count),
+and an oversized ASCII STL is refused. The TS seam is
+`loadMeshFileFromNativePath` (`src/features/slicing/tauri/nativeSlicerBridge.ts`).
 
 ## What DFMX deliberately drops
 
-Matching the renderer's own 3MF loaders, so a cutover does not move geometry:
+Matching the renderer's own loaders, so a cutover does not move geometry:
 
 - **Units.** Neither loader scales by the model `unit=` attribute; geometry is
   in raw file units.
@@ -96,15 +79,21 @@ Matching the renderer's own 3MF loaders, so a cutover does not move geometry:
 
 ## Compression and encoding
 
-Neither format is compressed, and there is no LZ4 anywhere in the repo. The
+The payload is not compressed, and there is no LZ4 anywhere in the repo. The
 in-tree codecs are deflate (`flate2`, `zip`, and VOXL's `zlib` code — see
 `dev/voxl-format-spec.md`) and zstd (via `plugins/lumen`). Compressing an IPC
-payload would also cost a decompress pass and a fresh allocation on the JS side,
-which is what the current zero-copy `Float32Array` views over the response
-buffer avoid. If payload size becomes the problem, the cheaper levers are
-quantized positions (the slice path already has `quantized_u16` with a
-`meshQuantization` box) and an index buffer — both addable as a DFMX version bump
-or via the reserved table slot.
+payload would also cost a decompress pass and a fresh allocation on the JS side.
+If payload size becomes the problem, the cheaper levers are quantized positions
+(the slice path already has `quantized_u16` with a `meshQuantization` box) and an
+index buffer — both addable as a version bump or via the reserved table slot.
+
+## Superseded: DFST
+
+An earlier single-mesh `DFST` payload carried the STL path, with the preview
+counts in a 64-byte header. It was retired when the STL load folded into
+`load_mesh_file`: `DFMX` carries the same facts (flag, original count, model
+count) plus any number of bodies, so one format now serves every input.
+ADR-0027 keeps the DFST decision as the record of why the preview path exists.
 
 ## Related pages
 

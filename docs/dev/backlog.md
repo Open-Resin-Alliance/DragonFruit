@@ -455,7 +455,7 @@ mistaken for broken baked ambient occlusion. Three separate causes, on the same
 path, none of them in the occlusion estimator:
 
 **1. The loader baked the file's per-face normals into the render.**
-`encode_stl_response` wrote one triangle's normal onto all three of its corners.
+The STL response encoder wrote one triangle's normal onto all three of its corners.
 An STL has no vertex normals, so this looked faithful, but with
 `flatShading={false}` three *interpolates* a constant and every face is lit by its
 own orientation. Measured on `poussin.stl` (150k triangles, 75k welded vertices),

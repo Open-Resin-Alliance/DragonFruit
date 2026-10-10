@@ -8,9 +8,9 @@ import { ThreeMFLoader } from 'three/examples/jsm/loaders/3MFLoader.js';
 import { Fast3MFLoader, fast3mfBuilder } from 'fast-3mf-loader';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { loadMeshFileFromNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { accelerateGeometry } from '@/utils/bvh';
 import { computeFlatteningPlanes, type FlatteningPlane } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
-import { repairGeometryWithManifold } from '@/utils/manifoldRepair';
 import { REFINE_MAX_TRIANGLES, refineCoarseFaces } from '@/utils/tauriMeshBridge';
 import {
   analyzeFromGeometry,
@@ -29,10 +29,6 @@ export type MeshDefects = {
   repairedFloats: number;
   /** Total vertex count in the position buffer */
   totalVertices: number;
-  /** Whether Manifold WASM successfully rebuilt the mesh topology */
-  repairedByManifold?: boolean;
-  /** Number of degenerate triangles collapsed by Manifold */
-  degeneratesRemoved?: number;
   /** Full health report from the native Rust repair engine (Tauri only) */
   nativeRepairReport?: MeshHealthReport;
   /** When the repaired mesh has a model/support split (model_triangle_count in the report),
@@ -136,7 +132,7 @@ export interface ProcessGeometryOptions {
   assumeSupportGeometry?: boolean;
   /** Skip nonessential analysis for a native reduced-detail preview. @internal */
   _isNativePreview?: boolean;
-  /** Model section boundary offset extracted directly from the DFST binary IPC header. @internal */
+  /** Model section boundary offset extracted directly from the DFMX binary IPC header. @internal */
   _nativeModelTriangleCount?: number;
   /** Skip classification/repair in Tauri when loading a pre-repaired mesh */
   skipClassification?: boolean;
@@ -474,7 +470,8 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
 
         const { report } = effectiveResult;
         console.log(
-          `[processGeometry] Native ${classifyOnly ? 'classification' : usedFallbackClassification ? 'repair/classification (fallback classify applied)' : 'repair/classification'} finished in ${(performance.now() - nativeStart).toFixed(2)}ms. ` +
+          `[processGeometry] Native ${classifyOnly ? 'classification' : usedFallbackClassification ? 'repair/classification (fallback classify applied)' : 'repair/classification'} finished in ${(performance.now() - nativeStart).toFixed(2)}ms ` +
+          `(rust ${report.total_ms.toFixed(1)}ms; the rest is soup expand + staging IPC + apply). ` +
           `pre=${report.pre.triangle_count}t/${report.pre.non_manifold_edges}nme/${report.pre.boundary_edges}be, ` +
           `post=${report.post.triangle_count}t/${report.post.non_manifold_edges}nme/${report.post.boundary_edges}be, ` +
           `watertight=${report.post.is_watertight}`,
@@ -511,25 +508,6 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
     } finally {
       options.onNativeProcessingStage?.('postprocess');
     }
-  } else if (meshDefects.hasDefects) {
-    // Attempt full topology repair via Manifold (welds open edges, collapses
-    // degenerate triangles, rebuilds a valid watertight solid).
-    console.log(`[${new Date().toISOString()}] [processGeometry] Attempting Manifold repair`);
-    const startManifold = performance.now();
-    const repairStats = await repairGeometryWithManifold(geometry);
-    if (repairStats) {
-      console.log(
-        `[processGeometry] Manifold repair succeeded in ${(performance.now() - startManifold).toFixed(2)}ms.` +
-        ` Merged edges: ${repairStats.manifoldMergedEdges}, degenerates removed: ${repairStats.degeneratesRemoved}`,
-      );
-      meshDefects = {
-        ...meshDefects,
-        repairedByManifold: true,
-        degeneratesRemoved: repairStats.degeneratesRemoved,
-      };
-    } else {
-      console.warn(`[processGeometry] Manifold repair unavailable or failed — using NaN-sanitized geometry.`);
-    }
   }
 
   // Baked classification: restore what a native classify-only pass would have
@@ -556,12 +534,11 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
 
   // A geometry with no `normal` attribute at all must be given one, whatever the
   // caller asked for: `_skipComputeNormals` means "the loader already computed
-  // them", and the Manifold fallback invalidates that promise by rewriting the
-  // positions and index and deleting the stale normals for the caller to
-  // recompute (see `repairGeometryWithManifold`). Without this the repaired
-  // geometry kept no normals, so it shaded from a zeroed attribute — which reads
-  // as garbage on exactly the imports that needed repair, and is easy to mistake
-  // for the baked occlusion being wrong.
+  // them", and a native repair invalidates that promise by rewriting the
+  // positions and index and dropping the stale normals for the caller to
+  // recompute. Without this the repaired geometry kept no normals, so it shaded
+  // from a zeroed attribute — which reads as garbage on exactly the imports that
+  // needed repair, and is easy to mistake for the baked occlusion being wrong.
   if (!options._skipComputeNormals || nativeModifiedGeometry || !geometry.getAttribute('normal')) {
     console.log(`[${new Date().toISOString()}] [processGeometry] Computing Normals${nativeModifiedGeometry ? ' (geometry modified by native processing)' : geometry.getAttribute('normal') ? '' : ' (geometry has none)'}`);
     geometry.computeVertexNormals();
@@ -838,87 +815,202 @@ type NativeStlLoadResult = {
   previewTriangleCount: number;
   modelTriangleCount?: number;
   isPreview: boolean;
+  /** The classification the native loader already ran, for a single-body load. */
+  bakedClassification?: MeshHealthReport;
 };
 
-/**
- * DragonFruit Streaming Transfer (DFST) Binary IPC Protocol Specification:
- * Header Length: 64 Bytes Total (Single header at index 0 per STL payload)
- * 
- * Byte Offsets:
- *   0 ..  3 : ASCII Magic "DFST" (0x44465354)
- *   4 ..  7 : Flags u32 (Bit 0: IS_PREVIEW)
- *   8 .. 11 : Original Input Triangle Count (u32 LE)
- *  12 .. 15 : Output Preview Triangle Count (u32 LE)
- *  16 .. 31 : Reserved / Bounding Box Extents (16 bytes)
- *  32 .. 35 : Model Section Triangle Count / Boundary Offset (u32 LE)
- *  36 .. 63 : Reserved Metadata Padding (28 bytes)
- * 
- * Payload (starts at Byte 64):
- *   64 .. 64 + (previewTriangleCount * 36) : Positions (Float32Array, 9 floats per triangle)
- *   64 + (previewTriangleCount * 36) .. End : Normals (Float32Array, 9 floats per triangle)
- */
-const STL_RESPONSE_HEADER_BYTES = 64;
-
-async function loadStlViaTauri(filePath: string): Promise<NativeStlLoadResult | null> {
+async function loadStlViaTauri(filePath: string, classify: boolean): Promise<NativeStlLoadResult | null> {
   try {
-    const { invoke } = await import('@tauri-apps/api/core');
-    const bytes = await invoke<ArrayBuffer>('load_stl_file', { filePath });
+    const bytes = await loadMeshFileFromNativePath(filePath, classify);
     if (!bytes || bytes.byteLength === 0) return null;
-
-    if (bytes.byteLength < STL_RESPONSE_HEADER_BYTES) return null;
-    const header = new DataView(bytes, 0, STL_RESPONSE_HEADER_BYTES);
-    const hasMagic = header.getUint8(0) === 0x44
-      && header.getUint8(1) === 0x46
-      && header.getUint8(2) === 0x53
-      && header.getUint8(3) === 0x54;
-    if (!hasMagic) throw new Error('Native STL loader returned an unsupported response.');
-
-    const flags = header.getUint32(4, true);
-    const originalTriangleCount = header.getUint32(8, true);
-    const previewTriangleCount = header.getUint32(12, true);
-    const modelTriangleCount = header.getUint32(32, true);
-
-    const triangleBytes = previewTriangleCount * 18 * Float32Array.BYTES_PER_ELEMENT;
-    const expectedBytes = STL_RESPONSE_HEADER_BYTES + triangleBytes;
-    if (previewTriangleCount === 0 || bytes.byteLength !== expectedBytes) {
-      throw new Error('Native STL loader returned a truncated response.');
-    }
-
-    const positions = new Float32Array(bytes, STL_RESPONSE_HEADER_BYTES, previewTriangleCount * 9);
-    const normals = new Float32Array(
-      bytes,
-      STL_RESPONSE_HEADER_BYTES + previewTriangleCount * 9 * Float32Array.BYTES_PER_ELEMENT,
-      previewTriangleCount * 9,
-    );
-
-    const geometry = new THREE.BufferGeometry();
-    // Both attributes retain the IPC ArrayBuffer. Avoiding slice() here removes
-    // two full-size allocation spikes immediately after the native transfer.
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+    const decoded = decodeDfmx(bytes);
+    const geometry = mergeBodyGeometries(decoded.bodies);
 
     console.log(
-      `[loadStlGeometry] Tauri Rust parser loaded ${previewTriangleCount.toLocaleString()} triangles ` +
+      `[loadStlGeometry] Native loader loaded ${decoded.previewTriangleCount.toLocaleString()} triangles ` +
       `(${(bytes.byteLength / 1_000_000).toFixed(0)} MB IPC transfer).`,
     );
-    if ((flags & 1) !== 0) {
+    if (decoded.isPreview) {
       console.warn(
         `[loadStlGeometry] Using a reduced native preview: ` +
-        `${originalTriangleCount.toLocaleString()} -> ${previewTriangleCount.toLocaleString()} triangles.`,
+        `${decoded.originalTriangleCount.toLocaleString()} -> ` +
+        `${decoded.previewTriangleCount.toLocaleString()} triangles.`,
       );
     }
     return {
       geometry,
-      originalTriangleCount,
-      previewTriangleCount,
-      modelTriangleCount: modelTriangleCount > 0 ? modelTriangleCount : undefined,
-      isPreview: (flags & 1) !== 0,
+      originalTriangleCount: decoded.originalTriangleCount,
+      previewTriangleCount: decoded.previewTriangleCount,
+      modelTriangleCount: decoded.modelTriangleCount,
+      isPreview: decoded.isPreview,
+      bakedClassification: decoded.report,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error('[loadStlGeometry] Tauri Rust parser failed.', error);
+    console.error('[loadStlGeometry] Native STL loading failed.', error);
     throw new Error(message || 'Native STL loading failed.');
   }
+}
+
+// ---------------------------------------------------------------------------
+// DFMX — the multi-body native payload. The layout is specified in
+// docs/dev/mesh-wire-formats.md; keep these offsets in step with it.
+// ---------------------------------------------------------------------------
+const MESH_RESPONSE_HEADER_BYTES = 32;
+const MESH_RESPONSE_BODY_ENTRY_BYTES = 8;
+const SOUP_BYTES_PER_TRIANGLE = 9 * Float32Array.BYTES_PER_ELEMENT * 2;
+
+/** One decoded native payload: its bodies plus the header facts the STL preview
+ *  path needs. */
+export type DecodedMesh = {
+  bodies: THREE.BufferGeometry[];
+  /** The payload's preview bit: the body (or bodies) are a decimation. */
+  isPreview: boolean;
+  /** Triangles in the file the payload was made from. */
+  originalTriangleCount: number;
+  /** Triangles actually in this payload. */
+  previewTriangleCount: number;
+  /** Model-section triangles for a preview, when the loader classified them. */
+  modelTriangleCount?: number;
+  /** The classification report the loader produced for a single-body load, when
+   *  it did. Passing this to `processGeometry` skips the native classify pass. */
+  report?: MeshHealthReport;
+};
+
+/**
+ * Decode a DFMX payload into one geometry per body.
+ *
+ * Each body gets its own ArrayBuffer. `processGeometry` translates a geometry in
+ * place to centre it, so bodies sharing one buffer would drag each other around;
+ * the copy is what the renderer loaders already pay per mesh.
+ */
+export function decodeDfmx(payload: Uint8Array | ArrayBuffer): DecodedMesh {
+  const bytes = payload instanceof Uint8Array ? payload : new Uint8Array(payload);
+  if (bytes.byteLength < MESH_RESPONSE_HEADER_BYTES) {
+    throw new Error('Native mesh loader returned a truncated DFMX header.');
+  }
+  const header = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const magic = String.fromCharCode(
+    header.getUint8(0), header.getUint8(1), header.getUint8(2), header.getUint8(3),
+  );
+  if (magic !== 'DFMX') {
+    throw new Error(`Native mesh loader returned an unsupported payload (${magic}).`);
+  }
+  if (header.getUint32(4, true) !== 1) {
+    throw new Error('Native mesh loader returned an unsupported DFMX version.');
+  }
+
+  const bodyCount = header.getUint32(12, true);
+  let offset = MESH_RESPONSE_HEADER_BYTES + bodyCount * MESH_RESPONSE_BODY_ENTRY_BYTES;
+  const bodies: THREE.BufferGeometry[] = [];
+  let previewTriangleCount = 0;
+  for (let index = 0; index < bodyCount; index += 1) {
+    const triangleCount = header.getUint32(
+      MESH_RESPONSE_HEADER_BYTES + index * MESH_RESPONSE_BODY_ENTRY_BYTES, true,
+    );
+    const soupBytes = triangleCount * SOUP_BYTES_PER_TRIANGLE;
+    if (offset + soupBytes > bytes.byteLength) {
+      throw new Error('Native mesh loader returned a truncated DFMX body.');
+    }
+    const soup = bytes.slice(offset, offset + soupBytes);
+    const corners = triangleCount * 9;
+    const geometry = new THREE.BufferGeometry();
+    // `soup` is its own copy, so these views are aligned and outlive the payload.
+    geometry.setAttribute(
+      'position',
+      new THREE.BufferAttribute(new Float32Array(soup.buffer, soup.byteOffset, corners), 3),
+    );
+    geometry.setAttribute(
+      'normal',
+      new THREE.BufferAttribute(
+        new Float32Array(
+          soup.buffer, soup.byteOffset + corners * Float32Array.BYTES_PER_ELEMENT, corners,
+        ),
+        3,
+      ),
+    );
+    bodies.push(geometry);
+    previewTriangleCount += triangleCount;
+    offset += soupBytes;
+  }
+
+  const modelTriangleCount = header.getUint32(20, true);
+  const metadataLength = header.getUint32(24, true);
+  let report: MeshHealthReport | undefined;
+  if (metadataLength > 0 && metadataLength <= bytes.byteLength) {
+    const json = new TextDecoder().decode(bytes.subarray(bytes.byteLength - metadataLength));
+    try {
+      report = JSON.parse(json) as MeshHealthReport;
+    } catch (error) {
+      // A report we cannot read is not worth failing the mesh over: dropping it
+      // sends the caller back to the staging classify pass, which is correct.
+      console.warn('[loadMeshFile] could not parse the native classification report.', error);
+    }
+  }
+
+  return {
+    bodies,
+    isPreview: (header.getUint32(8, true) & 1) !== 0,
+    originalTriangleCount: header.getUint32(16, true),
+    previewTriangleCount,
+    modelTriangleCount: modelTriangleCount > 0 ? modelTriangleCount : undefined,
+    report,
+  };
+}
+
+/**
+ * Log through the platform log plugin, the one channel that reaches the log
+ * file: `attachConsole` mirrors Rust records into DevTools only, so a plain
+ * `console.*` from here never appears next to the Rust lines.
+ *
+ * The import is dynamic because `@tauri-apps/plugin-log` has no meaning in the
+ * web build — the same reason `AppLogger` resolves it at call time. Best-effort:
+ * outside Tauri there is nothing to log to and the console line stands alone.
+ */
+async function logNativeWarning(message: string): Promise<void> {
+  try {
+    const log = await import('@tauri-apps/plugin-log');
+    await log.warn(message);
+  } catch {
+    // Not a Tauri runtime; the console line beside this already says the same.
+  }
+}
+
+/**
+ * Load every body of a mesh file natively. Tauri with an on-disk path only;
+ * returns null everywhere else (and on any failure) so the caller falls back to
+ * the renderer's own loaders.
+ */
+async function loadNativeMeshBodies(filePath: string | undefined): Promise<THREE.BufferGeometry[] | null> {
+  if (!isTauriRuntime()) return null;
+  if (!filePath) {
+    // The native loader reads from disk, so a File with no path — a zip entry or
+    // a synthesized file — can only go through the renderer's own loaders.
+    console.warn('[loadMeshFile] no on-disk path for this file; using the renderer loaders.');
+    void logNativeWarning('[loadMeshFile] no on-disk path for this file; using the renderer loaders.');
+    return null;
+  }
+  try {
+    // This path does not consume the report yet, so do not pay for the classify.
+    const decoded = decodeDfmx(await loadMeshFileFromNativePath(filePath, false));
+    if (decoded.bodies.length === 0) return null;
+    console.log(
+      `[${new Date().toISOString()}] [loadMeshFile] native loader returned ${decoded.bodies.length} bodies`,
+    );
+    return decoded.bodies;
+  } catch (error) {
+    console.warn('[loadMeshFile] native mesh load failed; falling back to the renderer loaders.', error);
+    void logNativeWarning(`[loadMeshFile] native mesh load failed; using the renderer loaders: ${String(error)}`);
+    return null;
+  }
+}
+
+/** Merge native bodies into one geometry, preserving their relative positions. */
+function mergeBodyGeometries(bodies: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  if (bodies.length === 1) return bodies[0];
+  const merged = mergeGeometries(bodies, false);
+  if (!merged) throw new Error('Failed to merge mesh bodies.');
+  return merged;
 }
 
 export async function loadStlGeometry(fileUrl: string, options: ProcessGeometryOptions = {}): Promise<GeometryWithBounds> {
@@ -926,7 +1018,13 @@ export async function loadStlGeometry(fileUrl: string, options: ProcessGeometryO
   // It reads the file directly from disk, computes normals, and avoids
   // holding the raw STL bytes in webview memory — critical for huge files.
   if (isTauriRuntime() && options.filePath) {
-    const nativeResult = await loadStlViaTauri(options.filePath);
+    // A classify-only import has nothing left to run: ask the loader to classify
+    // so it ships the report and the geometry already section-ordered, rather
+    // than staging the mesh back for the same answer. An import that may
+    // auto-repair does not — that pass classifies too, and it repairs.
+    const nativeMode = options.nativeProcessingMode ?? 'auto';
+    const wantClassification = nativeMode === 'none' || nativeMode === 'classify-only';
+    const nativeResult = await loadStlViaTauri(options.filePath, wantClassification);
     if (nativeResult) {
       // Normals are already computed — skip computeVertexNormals in processGeometry
       const processed = await processGeometry(nativeResult.geometry, {
@@ -934,6 +1032,7 @@ export async function loadStlGeometry(fileUrl: string, options: ProcessGeometryO
         _skipComputeNormals: true,
         _isNativePreview: nativeResult.isPreview,
         _nativeModelTriangleCount: nativeResult.modelTriangleCount,
+        ...(nativeResult.bakedClassification ? { bakedClassification: nativeResult.bakedClassification } : {}),
         ...(nativeResult.isPreview ? { nativeProcessingMode: 'none' as const } : {}),
       });
       if (nativeResult.isPreview) {
@@ -1078,6 +1177,11 @@ async function tryLoadFast3mf(fileUrl: string): Promise<THREE.Group | null> {
 }
 
 export async function load3mfGeometry(fileUrl: string, options?: ProcessGeometryOptions): Promise<GeometryWithBounds> {
+  const nativeBodies = await loadNativeMeshBodies(options?.filePath);
+  if (nativeBodies) {
+    return processGeometry(mergeBodyGeometries(nativeBodies), options);
+  }
+
   // Try the fast SAX/worker-based loader first for large archives
   const fastGroup = await tryLoadFast3mf(fileUrl);
   if (fastGroup) {
@@ -1221,6 +1325,21 @@ export async function load3mfGeometryMergedWithSplitData(
   fileUrl: string,
   options?: ProcessGeometryOptions,
 ): Promise<{ merged: GeometryWithBounds; splitBodies: GeometryWithBounds[] }> {
+  const nativeBodies = await loadNativeMeshBodies(options?.filePath);
+  if (nativeBodies) {
+    const merged = await processGeometry(mergeBodyGeometries(nativeBodies), options);
+    // With one body the merged geometry *is* that body, and the split result is
+    // discarded by the caller. Re-processing it would run prep (and the AO bake)
+    // a second time on the same geometry.
+    const splitBodies: GeometryWithBounds[] = [];
+    if (nativeBodies.length > 1) {
+      for (const body of nativeBodies) {
+        splitBodies.push(await processGeometry(body, options));
+      }
+    }
+    return { merged, splitBodies };
+  }
+
   // Get raw individual geometries with their world transforms applied
   const getRawGeometries = async (group: THREE.Group): Promise<THREE.BufferGeometry[]> => {
     group.updateMatrixWorld(true);
@@ -1253,9 +1372,13 @@ export async function load3mfGeometryMergedWithSplitData(
       const merged = await processGeometry(mergedBuf, options);
 
       // Process each body independently (with centering) → split bodies
+      // One body means the merged geometry is that body, and the caller drops a
+      // one-entry split list, so processing it again only re-runs prep and the bake.
       const splitBodies: GeometryWithBounds[] = [];
-      for (const raw of rawGeoms) {
-        splitBodies.push(await processGeometry(raw, options));
+      if (rawGeoms.length > 1) {
+        for (const raw of rawGeoms) {
+          splitBodies.push(await processGeometry(raw, options));
+        }
       }
 
       return { merged, splitBodies };
@@ -1289,8 +1412,10 @@ export async function load3mfGeometryMergedWithSplitData(
           const merged = await processGeometry(mergedBuf, options);
 
           const splitBodies: GeometryWithBounds[] = [];
-          for (const raw of rawGeoms) {
-            splitBodies.push(await processGeometry(raw, options));
+          if (rawGeoms.length > 1) {
+            for (const raw of rawGeoms) {
+              splitBodies.push(await processGeometry(raw, options));
+            }
           }
 
           resolve({ merged, splitBodies });
@@ -1305,6 +1430,11 @@ export async function load3mfGeometryMergedWithSplitData(
 }
 
 export async function loadObjGeometry(fileUrl: string, options?: ProcessGeometryOptions): Promise<GeometryWithBounds> {
+  const nativeBodies = await loadNativeMeshBodies(options?.filePath);
+  if (nativeBodies) {
+    return processGeometry(mergeBodyGeometries(nativeBodies), options);
+  }
+
   return new Promise((resolve, reject) => {
     const loader = new OBJLoader();
     console.log(`[${new Date().toISOString()}] [loadObjGeometry] OBJLoader load for ${fileUrl}`);

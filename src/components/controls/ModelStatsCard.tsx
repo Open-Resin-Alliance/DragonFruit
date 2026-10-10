@@ -599,23 +599,13 @@ export function ModelStatsCard({
               <div
                 className="flex items-start gap-1.5 rounded px-2 py-1 text-[10px]"
                 style={{
-                  background: model.geometry.meshDefects.repairedByManifold
-                    ? 'color-mix(in srgb, #22c55e, var(--surface-1) 84%)'
-                    : 'color-mix(in srgb, #f59e0b, var(--surface-1) 82%)',
-                  color: model.geometry.meshDefects.repairedByManifold
-                    ? 'color-mix(in srgb, #22c55e, var(--text-strong) 20%)'
-                    : 'color-mix(in srgb, #f59e0b, var(--text-strong) 20%)',
-                  border: model.geometry.meshDefects.repairedByManifold
-                    ? '1px solid color-mix(in srgb, #22c55e, transparent 55%)'
-                    : '1px solid color-mix(in srgb, #f59e0b, transparent 55%)',
+                  background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 82%)',
+                  color: 'color-mix(in srgb, #f59e0b, var(--text-strong) 20%)',
+                  border: '1px solid color-mix(in srgb, #f59e0b, transparent 55%)',
                 }}
               >
-                <span>{model.geometry.meshDefects.repairedByManifold ? '✓' : '⚠'}</span>
-                <span>
-                  {model.geometry.meshDefects.repairedByManifold
-                    ? <Trans>Auto-repaired — {model.geometry.meshDefects.repairedFloats} errors</Trans>
-                    : <Trans>Defective — {model.geometry.meshDefects.repairedFloats} errors</Trans>}
-                </span>
+                <span>⚠</span>
+                <span><Trans>Defective — {model.geometry.meshDefects.repairedFloats} errors</Trans></span>
               </div>
             )}
 

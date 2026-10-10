@@ -370,25 +370,27 @@ should take its *direction* from, and an estimator of the slope itself is still
 open. It was reverted rather than shipped: nothing consumes a payload whose
 magnitude is off by two orders of magnitude at the ends of its range.
 
-## Native mesh loading (`load_stl_file`, `load_mesh_file`)
+## Native mesh loading (`load_mesh_file`)
 
-Two commands read a mesh from disk in Rust and hand it to the renderer as a
-binary payload whose layout is specified in `dev/mesh-wire-formats.md`.
+One command reads a mesh from disk in Rust and hands it to the renderer as the
+`DFMX` binary payload specified in `dev/mesh-wire-formats.md`: a 32-byte header,
+a body table, then one positions-and-normals soup per body.
 
-- `load_stl_file` is the STL path: it probes the binary-STL header and, for a
-  mesh above its trigger triangle count, runs the classify + budget decimation
-  preview and sets the preview bit. It returns the single-mesh `DFST` payload,
-  decoded by `loadStlViaTauri` in `src/hooks/useStlGeometry.ts`.
-- `load_mesh_file` is the format-agnostic, multi-body counterpart: it takes only
-  `filePath` and returns the `DFMX` payload (a body table plus one soup per
-  body). It dispatches through `io::load_mesh_bodies_from_path` — `stl`/`obj`
-  give one body; `3mf` gives one per `<build><item>` expanded through its
-  components, with transforms baked. Nothing on the frontend consumes it yet.
+`load_mesh_file` takes `filePath` and an optional `classify` (default true). It
+dispatches through `io::load_mesh_bodies_from_path` — `stl`/`obj` give one body;
+`3mf` gives one per `<build><item>` expanded through its components, with
+transforms baked — refines coarse faces per body, and adds one STL-only step in
+front: a mesh too large to render (its triangle count read from the binary-STL
+header) is decimated into a preview, and an oversized ASCII STL is refused.
 
-Both go through a dispatcher, never a format loader, so a loaded mesh always
-carries the coarse-face refinement and the welded, crease-split normals described
-above. The TS seam is `loadMeshFileFromNativePath` in `nativeSlicerBridge.ts`.
-Materials and units are dropped, matching the renderer's loaders.
+With `classify` true and a single body, the loader also runs the model/support
+classifier and ships its report in the payload's metadata tail, so a classify-only
+import has nothing left to stage or round-trip. A caller that will repair passes
+`classify: false`: that pass classifies too, and its report is the one that
+matters.
+
+Materials and units are dropped, matching the renderer's loaders. The TS seam is
+`loadMeshFileFromNativePath` in `nativeSlicerBridge.ts`.
 
 ## The Rust side of the seam
 
