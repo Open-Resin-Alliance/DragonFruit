@@ -178,6 +178,46 @@ different triangles. Clustering the occluder down to a 250k-triangle budget is 2
 faster but moves the field by a mean of 0.19, because the cell size that budget
 implies collapses the model's own detail.
 
+### What the material gets: a turned fan, 32 rays, one graph pass
+
+The shipped recipe is the bake with the fan turned per vertex at 32 rays, then one
+graph pass; `dev/ambient-occlusion.md` is the page for it, including the GPU
+accelerator and its fallback ladder. The measurements and the reasoning follow.
+
+`bake_smoothed_occlusion_for_soup` is what `ao_vertex.rs` calls, and it is three
+things stacked, each measured against a reference built from two 64-ray bakes:
+
+| | puck (384,324 verts) | poussin (85,395) |
+| --- | --- | --- |
+| fixed fan, 8 rays (what shipped) | RMS 0.0554, roughness 0.0303 | RMS 0.0534, roughness 0.0323 |
+| turned fan, 32 rays, one graph pass | RMS 0.0242, roughness 0.0097 | RMS 0.0195, roughness 0.0098 |
+
+Roughness here is the mean deviation from a vertex's one-ring average, which is
+the mesh-space form of the striping a zoomed view shows. The two levers are
+independent: rays buy accuracy, and the graph pass buys smoothness. The pass
+alone over the *fixed* fan moves the field 12% closer to the reference; over a
+*turned* fan it moves it 34% closer, because a fixed fan's discretisation error
+is a function of the local surface shape and is therefore correlated between
+neighbours, and averaging correlated error removes nothing. Decorrelating without
+following it with a pass is worse than leaving the fan fixed — that is the grain
+a per-vertex rotation shipped once and was reverted for — so the two belong
+together or not at all.
+
+The pass is one iteration of `out = 0.4·self + 0.6·mean(one-ring)`. One, because
+a second leaves the field *further* from the reference than the first (0.0521
+against 0.0508 on the puck): it has started averaging the field's own
+sub-millimetre detail rather than the estimator's noise. The graph is the mesh's
+own connectivity, duplicates included, built as a CSR adjacency inside
+`mesh-core`; the pass runs before the field is expanded back out to soup corners,
+because a pass over the soup's corner graph would average a vertex with copies of
+itself.
+
+32 rays, not eight, is the shipped count: it is where the estimate stops being the
+dominant error (0.024 against 0.056 RMS) for a bake of 1.9 s on the puck instead
+of 0.5 s, on an idle callback per model. 64 rays reaches 0.008 RMS and costs
+3.8 s — the trade a GPU bake is for, which is why that path is worth having even
+though the CPU one is correct.
+
 ### Occlusion is weighted by how far away the occluder is
 
 A boolean "is anything in the way" query makes a flat base under a mass of detail
@@ -243,10 +283,92 @@ went from 16.8mm to 1.1mm, its vertices from 1608 to 10261, the model from 150k 
 10ms. Meshes that are already fine are returned untouched, so the common case pays
 one pass over the triangles and nothing else.
 
+**Two paths escaped it, and one of them escaped the budget too.** A VOXL scene
+carries its models' original STL bytes in its MESH chunks, and the loader handed
+them to three's `STLLoader` in the renderer (`loadStlGeometryFromBuffer`), which
+is neither the native file dispatcher nor the plugin command, so a scene's models
+were never refined at all. The same call now asks `refine_mesh_soup`, which also
+gives them the welded, crease-split normals the native loaders produce, and it
+asks only below `REFINE_MAX_TRIANGLES` (400k): the command costs twice the mesh in
+traffic, and a mesh with faces too long for the field is a mesh with few of them,
+so the meshes that need it are the ones small enough to send. Above that limit a
+large mesh with a few huge faces still goes unrefined, which is a real gap and the
+rarer one.
+
+The budget was the second half. It was `1.3x` the *current* triangle count, spent
+longest-edge-first, which is proportional to the mesh that most needs it: measured
+on a 12-triangle 120mm block, `1.3x` bought 14 triangles and left the longest edge
+untouched at 169.71mm, 48.7x the 3.49mm target, so the model that most shows the
+wedge was the one refinement could not touch. `refinement_budget` now returns the
+larger of that fraction and a 250k-triangle headroom, which is invisible on the
+2.13M-triangle parts the fraction exists to protect (the fraction allows 639k
+there). Measured after: the 20-triangle plate-and-boss goes to 9856 triangles with
+its longest edge at 2.67mm, against a 3.40mm target, and the reported 768,734-
+triangle figure to 772,626 with its longest edge from 4.20mm to 0.81mm (+0.5%).
+
+What that is worth at the shading: rendering the plate-and-boss before and after,
+the field the coarse mesh draws differs from the refined one by a mean of 0.014,
+a p99 of 0.113 and up to 0.448, and the difference is a star of wedges radiating
+from the one dark vertex the plate's fan puts under the boss. The refined field
+has no such structure. Subdivision of planar faces changes no geometry: the block's
+signed volume is identical before and after.
+
 The frontend keeps two bakes in flight (`AO_BAKE_CONCURRENCY` in
 `useSceneCollectionManager.ts`): each command is parallel across vertices on its
 own, but the weld, the tree build and the transfer are serial phases, and in a
 multi-model scene overlapping them is worth more than one model finishing sooner.
+
+### The estimator's second output, and the lean in it (crate only — nothing consumes it yet)
+
+`dragonfruit-mesh-core::vertex_occlusion` also returns the *visibility moment*
+(`VertexVisibility::moment`): the cosine-weighted average of the directions that
+escaped, `(1/N) Σ ωᵢ·(1 − wᵢ)`, in the mesh's own frame. It is three accumulates
+per sample out of the same ray bundle, not a second bake — measured, the bench
+above moves by less than its own run-to-run spread. Two things read it, and they
+are one fact: `normalize(moment)` is the vertex's **bent normal**, and the
+moment's component in the tangent plane is the occlusion field's **gradient** —
+the fan's own moment is the fixed axis `(0, 0, 2/3)·n`, so the blocked and
+unblocked moments are two views of one number. The gradient is what a
+reconstruction carrying the slope needs, and the slope is what the wedge above is
+made of: a chord through three vertex values has a discontinuous slope across
+every edge, and a field that carries the slope does not.
+
+Neither is wired up. `ao_vertex.rs` still returns one `f32` per corner and
+`softClay` still multiplies by `aBakedAo`. What blocks it is a property of the
+fan, measured in the crate's own tests: eight samples do not sum to their axis —
+the mean is 0.057 off it, a **4.85° lean** (16 rays: 0.030, 2.58°; 32: 0.016,
+1.39°; 64: 0.009, 0.75°) — and the lean is *coherent*, the same direction in
+every vertex's own tangent frame, so an open surface would read as uniformly
+tilted rather than as noise. A directional payload wants that decorrelated, or a
+higher ray count (which is not free).
+
+Doing the decorrelation by rotating each vertex's fan by a hash of its position
+was tried and reverted. It does turn the lean into incoherent error, and the
+scalar's mean moved by only 0.002 and its p5 by 0.006 on two occluding fixtures —
+the wrong measurement, because it says the field did not *shift*, not that it
+stopped being *smooth*. Incoherent at the vertex scale is grain wherever the
+screen resolves single triangles as pixels: on the model this was reported
+against, 768,734 triangles on a 24mm figure, a zoomed view puts several pixels on
+one triangle and the surface speckles. A directional payload wants error that
+stays smooth across neighbours, which the per-vertex hash is exactly the opposite
+of.
+
+**The moment is a direction, not the slope, and the difference is not a
+constant.** A direction moment weights every blocked direction equally; the
+derivative of the field weights each by how far away its occluder is, because
+moving the receiver moves a far silhouette less than a near one. For a
+differential occluder patch the two kernels differ by exactly `1/|d|`, so a
+blocked moment weighted by `w/t` was accumulated as a slope — and measured
+against the field's own box-smoothed finite difference on a 0.2mm floor facing a
+6mm wall, the ratio between them runs 0.6, 0.6, 2.5, 4.0, 4.7, 5.9, 8.6, 12.3,
+21.8, 56 across ten stations from the wall out to the reach. The 4 the
+differential case predicts is there in the middle of that run and nowhere else,
+because past it what the accumulator is differentiating is the falloff weighting
+and not the geometry, and next to the wall the occluder subtends a solid angle
+the differential case does not describe. So the moment is what a reconstruction
+should take its *direction* from, and an estimator of the slope itself is still
+open. It was reverted rather than shipped: nothing consumes a payload whose
+magnitude is off by two orders of magnitude at the ends of its range.
 
 ## The Rust side of the seam
 

@@ -13,10 +13,43 @@
 //! The bake itself lives in `dragonfruit-mesh-core::vertex_occlusion` so it is
 //! testable without Tauri; this module is only the IPC boundary.
 
+use dragonfruit_mesh_core::mesh::IndexedMesh;
 use dragonfruit_mesh_core::vertex_occlusion::{
-    bake_vertex_occlusion_for_soup, DEFAULT_RAYS, REACH_RATIO,
+    bake_smoothed_occlusion_for_soup, REACH_RATIO, SMOOTHING_PASSES, SOUP_MERGE_EPSILON,
 };
 use tauri::ipc::{InvokeBody, Request, Response};
+
+/// Rays per vertex for the shipped bake.
+///
+/// Not the estimator's eight: the field is baked once per model on an idle
+/// callback, and the measurements in `vertex_occlusion` put 32 at the point where
+/// the estimate stops being the dominant error — 0.024 RMS against a 64-ray
+/// reference, where eight rays give 0.056, for a bake that measures 1.78s on a
+/// 768,734-triangle model instead of 0.64s. Going on to 64 helps (0.008) and
+/// costs 3.8s on the CPU, which is exactly what the GPU path is for: the same 32
+/// rays measure 0.14s there.
+const BAKED_RAYS: usize = 32;
+
+/// The bake on the GPU, when this machine has an adapter.
+///
+/// The compute kernel takes the welded mesh, so this welds the soup with the same
+/// tolerance the CPU soup entry points use and expands the per-vertex values back
+/// through the corner map — the values have to land on the corners the frontend
+/// attaches them to. Any failure returns `Err` and the caller falls back to the
+/// CPU recipe: the GPU is only ever a faster way to the same field.
+fn bake_on_gpu(soup: &[f32], rays: usize) -> Result<(Vec<f32>, usize), String> {
+    let (mesh, corner_map) =
+        IndexedMesh::from_triangle_soup_with_corner_map(soup, SOUP_MERGE_EPSILON);
+    if mesh.positions.is_empty() {
+        return Err("mesh has no usable vertices".into());
+    }
+    let values = dragonfruit_ao_gpu::bake_smoothed(&mesh, rays)?;
+    let out: Vec<f32> = corner_map
+        .iter()
+        .map(|id| values.get(*id as usize).copied().unwrap_or(1.0))
+        .collect();
+    Ok((out, mesh.positions.len()))
+}
 
 /// Bake per-vertex ambient occlusion for a mesh supplied in the request body.
 ///
@@ -49,7 +82,25 @@ pub async fn bake_vertex_occlusion(request: Request<'_>) -> Result<Response, Str
             ));
         }
         let started = std::time::Instant::now();
-        let (occlusion, welded) = bake_vertex_occlusion_for_soup(soup, DEFAULT_RAYS, None);
+        // The GPU when this machine has one, the CPU recipe otherwise, and the
+        // CPU recipe again if the GPU fails mid-flight. The two produce the same
+        // field — the turn is a different hash on each side, nothing else — so
+        // which one ran is a performance fact, not a look.
+        let mut adapter = "";
+        let (occlusion, welded) = if dragonfruit_ao_gpu::available() {
+            match bake_on_gpu(soup, BAKED_RAYS) {
+                Ok(values) => {
+                    adapter = dragonfruit_ao_gpu::adapter_name().unwrap_or("gpu");
+                    values
+                }
+                Err(error) => {
+                    log::warn!("[ao] GPU bake failed ({error}); using the CPU recipe");
+                    bake_smoothed_occlusion_for_soup(soup, BAKED_RAYS, None)
+                }
+            }
+        } else {
+            bake_smoothed_occlusion_for_soup(soup, BAKED_RAYS, None)
+        };
         if occlusion.is_empty() {
             return Err("AO bake: mesh has no usable vertices".to_string());
         }
@@ -61,11 +112,13 @@ pub async fn bake_vertex_occlusion(request: Request<'_>) -> Result<Response, Str
         // not what the caller assumed.
         log::info!(
             "[ao] baked {} soup corners -> {} welded vertices ({} triangles) in {}ms \
-             (reach ratio {REACH_RATIO}, {DEFAULT_RAYS} rays)",
+             (reach ratio {REACH_RATIO}, {BAKED_RAYS} rays, fan turned per vertex, \
+             {SMOOTHING_PASSES} graph pass, {})",
             occlusion.len(),
             welded,
             soup.len() / 9,
             started.elapsed().as_millis(),
+            if adapter.is_empty() { "cpu" } else { adapter },
         );
         let mut out = Vec::with_capacity(occlusion.len() * 4);
         for value in &occlusion {

@@ -16,8 +16,8 @@
 use dragonfruit_mesh_core::mesh::IndexedMesh;
 use dragonfruit_mesh_core::normals::corner_normals;
 use dragonfruit_mesh_core::refine::{
-    longest_edge, refine_long_edges_with_budget, DEFAULT_GROWTH_LIMIT,
-    MAX_EDGE_DIAGONAL_FRACTION, MAX_PASSES,
+    longest_edge, refine_long_edges_with_budget, refinement_budget, MAX_EDGE_DIAGONAL_FRACTION,
+    MAX_PASSES,
 };
 use dragonfruit_mesh_repair::io::DEFAULT_MERGE_EPSILON;
 use tauri::ipc::{InvokeBody, Request, Response};
@@ -58,7 +58,7 @@ pub async fn refine_mesh_soup(request: Request<'_>) -> Result<Response, String> 
         .sqrt();
         let max_edge = diagonal * MAX_EDGE_DIAGONAL_FRACTION;
         let refined = if diagonal.is_finite() && diagonal > 0.0 && longest_edge(&mesh) > max_edge {
-            let budget = (mesh.triangles.len() as f32 * DEFAULT_GROWTH_LIMIT) as usize;
+            let budget = refinement_budget(mesh.triangles.len());
             refine_long_edges_with_budget(&mesh, max_edge, MAX_PASSES, budget)
         } else {
             mesh

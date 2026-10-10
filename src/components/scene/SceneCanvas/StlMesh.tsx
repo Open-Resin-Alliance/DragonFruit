@@ -29,7 +29,7 @@ import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { emitImmediateModelHover } from '@/supports/interaction/pointerOcclusion';
 import { MARQUEE_CANDIDATE_TINT_FACTOR } from '@/utils/marqueeCandidateTint';
 import { getSupportPlacementGuideZ } from './supportPlacementGuideStore';
-import { BAKED_OCCLUSION_ATTRIBUTE, bakedOcclusionStrength } from '@/features/scene/bakedOcclusion';
+import { BAKED_OCCLUSION_ATTRIBUTE, bakedOcclusionStrength, bakedOcclusionVersion, getBakedOcclusionServerVersion, subscribeToBakedOcclusionVersions } from '@/features/scene/bakedOcclusion';
 
 // Scratch raycaster reused for clip-zone fallback raycasts.
 const _clipFallbackRaycaster = new THREE.Raycaster();
@@ -235,7 +235,6 @@ function StlMeshComponent({
   blockerEditMode = false,
   interiorView = false,
   cavityGeometry,
-  bakedAoVersion,
   children,
 }: {
   geometry: THREE.BufferGeometry;
@@ -265,10 +264,6 @@ function StlMeshComponent({
   interiorView?: boolean;
   /** Interior cavity mesh to render as solid in Interior View Mode. */
   cavityGeometry?: THREE.BufferGeometry | null;
-  /** Bumped by the background bake when `aBakedAo` lands on `geometry`. The
-   *  geometry keeps its identity, so this prop — not the geometry — is what
-   *  re-runs the attribute detection below. */
-  bakedAoVersion?: number;
   transform?: ModelTransform | null;
   mode?: SupportMode;
   transformMode?: TransformMode;
@@ -406,12 +401,18 @@ function StlMeshComponent({
   }, [geometry]);
 
   // Baked per-vertex occlusion (see docs/dev/backlog.md). The bake attaches the
-  // attribute in the background, so a model can gain it while mounted —
-  // `bakedAoVersion` is what re-runs this memo, because the geometry object
-  // itself keeps its identity.
+  // attribute in the background, so a model can gain it while mounted, and the
+  // geometry object keeps its identity — the store's per-geometry counter is what
+  // re-runs this memo. It is subscribed to rather than read from the `models`
+  // array, which every landing bake used to replace and invalidate the clearance
+  // map and the raft with.
+  const bakedAoVersion = React.useSyncExternalStore(
+    subscribeToBakedOcclusionVersions,
+    () => bakedOcclusionVersion(geometry),
+    getBakedOcclusionServerVersion,
+  );
   const bakedAoStrength = React.useMemo(() => {
     const occlusion = geometry.getAttribute(BAKED_OCCLUSION_ATTRIBUTE);
-    void bakedAoVersion;
     return occlusion && occlusion.count === geometry.getAttribute('position').count
       ? bakedOcclusionStrength(bakedAoIntensity)
       : 0;

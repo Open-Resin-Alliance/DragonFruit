@@ -1,0 +1,14 @@
+[package]
+name = "dragonfruit-ao-gpu"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+dragonfruit-mesh-core = { path = "../dragonfruit-mesh-core" }
+wgpu = "29"
+pollster = "0.4"
+bytemuck = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+dragonfruit-mesh-core = { path = "../dragonfruit-mesh-core" }

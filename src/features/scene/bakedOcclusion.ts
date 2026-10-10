@@ -187,3 +187,43 @@ export async function bakeAndAttachOcclusionForGeometry(
   geometry.setAttribute(BAKED_OCCLUSION_ATTRIBUTE, attribute);
   return true;
 }
+
+/**
+ * Which bake a geometry's `aBakedAo` came from.
+ *
+ * The attribute lands on a geometry that is already in the scene and keeps its
+ * identity, so nothing about the geometry tells React to look again; this is the
+ * signal that it changed. Keyed by the geometry, not by the model: the attribute
+ * belongs to the geometry, a model's geometry can be swapped, and a model that is
+ * deleted takes its counter with it instead of needing one.
+ *
+ * It used to ride on the `models` entries, which meant every bake that landed
+ * replaced that array — and everything derived from it rebuilt: the clearance map
+ * and the raft together measured **17 rebuilds in the fifteen seconds after a
+ * load**. This is render-only state read by `StlMesh`, so it belongs in a store
+ * of its own.
+ */
+const bakedAoVersionByGeometry = new WeakMap<THREE.BufferGeometry, number>();
+const bakedAoVersionListeners = new Set<() => void>();
+
+/** Announce that this geometry now carries a fresh `aBakedAo`. */
+export function bumpBakedOcclusionVersion(geometry: THREE.BufferGeometry): void {
+  bakedAoVersionByGeometry.set(geometry, bakedOcclusionVersion(geometry) + 1);
+  bakedAoVersionListeners.forEach((listener) => listener());
+}
+
+export function bakedOcclusionVersion(geometry: THREE.BufferGeometry): number {
+  return bakedAoVersionByGeometry.get(geometry) ?? 0;
+}
+
+export function subscribeToBakedOcclusionVersions(listener: () => void): () => void {
+  bakedAoVersionListeners.add(listener);
+  return () => {
+    bakedAoVersionListeners.delete(listener);
+  };
+}
+
+/** The server snapshot: no bake has landed in a render that has no window. */
+export function getBakedOcclusionServerVersion(): number {
+  return 0;
+}

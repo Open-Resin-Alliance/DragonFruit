@@ -24,7 +24,7 @@ import { getBuiltinComplexPluginFileTypeHandlers } from '@/features/plugins/buil
 import type { PluginFileTypeDefinition } from '@/features/plugins/complexPluginContracts';
 import type { PluginFileTypeHandler } from '@/features/plugins/pluginFileTypeBridge';
 import { accelerateGeometry, disposeGeometryBVH } from '@/utils/bvh';
-import { BAKED_OCCLUSION_ATTRIBUTE, DEFAULT_BAKED_OCCLUSION_INTENSITY, bakeOcclusionForGeometry, canBakeOcclusion, setBakedOcclusionIntensity } from '@/features/scene/bakedOcclusion';
+import { BAKED_OCCLUSION_ATTRIBUTE, DEFAULT_BAKED_OCCLUSION_INTENSITY, bakeOcclusionForGeometry, bumpBakedOcclusionVersion, canBakeOcclusion, setBakedOcclusionIntensity } from '@/features/scene/bakedOcclusion';
 import { eulerFromGlobalEuler, quaternionFromGlobalEuler } from '@/utils/rotation';
 import { v4 as uuidv4 } from 'uuid';
 import {
@@ -977,10 +977,6 @@ export interface LoadedModel {
   manualZMoveOverride?: boolean;
   isSupportGeometry?: boolean;
   linkGroupId?: string;
-  /** Bumped when the background bake attaches `aBakedAo` to this model's
-   *  geometry. `StlMesh` is memoised on props and the geometry object keeps its
-   *  identity, so this counter is what tells the material to start using it. */
-  bakedAoVersion?: number;
 }
 
 import { deleteSupportsForModel, getSupportsForModel, type ModelSupportIds } from '@/supports/PlacementLogic/SupportModelLinker';
@@ -1100,10 +1096,6 @@ type ModelClipboardEntry = {
   supportClipboard: SupportClipboardPayload | null;
   isSupportGeometry?: boolean;
   linkGroupId?: string;
-  /** Bumped when the background bake attaches `aBakedAo` to this model's
-   *  geometry. `StlMesh` is memoised on props and the geometry object keeps its
-   *  identity, so this counter is what tells the material to start using it. */
-  bakedAoVersion?: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -3686,11 +3678,11 @@ export function useSceneCollectionManager(options?: {
               const attribute = new THREE.BufferAttribute(occlusion, 1);
               attribute.setUsage(THREE.StaticDrawUsage);
               geometry.setAttribute(BAKED_OCCLUSION_ATTRIBUTE, attribute);
-              setModels((prev) => prev.map((m) => (
-                m.id === id && m.geometry.geometry === geometry
-                  ? { ...m, bakedAoVersion: (m.bakedAoVersion ?? 0) + 1 }
-                  : m
-              )));
+              // The store, not the `models` array: replacing that array here
+              // invalidated everything derived from it — the clearance map and
+              // the raft rebuilt on every bake that landed. See
+              // `bumpBakedOcclusionVersion`.
+              bumpBakedOcclusionVersion(geometry);
             }
           }
         } catch (error) {
@@ -3715,7 +3707,7 @@ export function useSceneCollectionManager(options?: {
       scheduleIdle(() => void bakeOne());
     }
     return () => { cancelled = true; };
-  }, [models, setModels, bakedAoIntensity]);
+  }, [models, bakedAoIntensity]);
 
   const finalizeModelGeometryPostProcessing = useCallback((id: string) => {
     const target = modelsRef.current.find((m) => m.id === id);
