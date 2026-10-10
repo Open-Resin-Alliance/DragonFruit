@@ -37,6 +37,19 @@ jobs:
       - name: Run tests
         run: npm test
 
+      # Compiled app modules for the DOM tests. Entries are keyed by content
+      # inside the directory and pruned after two weeks unused, so one rolling
+      # cache is enough; a cold run costs ~20 s more.
+      - name: Restore the DOM test compile cache
+        uses: actions/cache@v4
+        with:
+          path: node_modules/.cache/dragonfruit-dom-tests
+          key: dom-test-compile-${{ github.sha }}
+          restore-keys: dom-test-compile-
+
+      - name: Run DOM tests
+        run: npm run test:dom
+
   docs:
     name: Docs accuracy
     runs-on: ubuntu-latest
