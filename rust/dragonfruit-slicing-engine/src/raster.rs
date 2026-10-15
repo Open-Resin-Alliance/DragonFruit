@@ -4106,6 +4106,7 @@ pub fn blur_gray_rle_streaming_with_bounds(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SupportHaloProfile {
+    Donut,
     Linear,
     Exponential,
     Gaussian,
@@ -4114,17 +4115,397 @@ pub enum SupportHaloProfile {
 impl SupportHaloProfile {
     pub fn from_str_lossy(raw: &str) -> Self {
         match raw.trim().to_ascii_lowercase().as_str() {
+            "linear" | "lin" => Self::Linear,
             "exponential" | "exp" => Self::Exponential,
             "gaussian" | "gauss" => Self::Gaussian,
-            _ => Self::Linear,
+            "donut" | "annular" | "moat" | _ => Self::Donut,
         }
     }
 }
 
+pub const NUM_HALO_DIAMETER_BUCKETS: usize = 16;
+const HALO_BUCKET_NONE: u8 = 0xFF;
+
+pub const BAYER_8X8: [[u8; 8]; 8] = [
+    [ 0, 32,  8, 40,  2, 34, 10, 42],
+    [48, 16, 56, 24, 50, 18, 58, 26],
+    [12, 44,  4, 36, 14, 46,  6, 38],
+    [60, 28, 52, 20, 62, 30, 54, 22],
+    [ 3, 35, 11, 43,  1, 33,  9, 41],
+    [51, 19, 59, 27, 49, 17, 57, 25],
+    [15, 47,  7, 39, 13, 45,  5, 37],
+    [63, 31, 55, 23, 61, 29, 53, 21],
+];
+
+pub fn build_inverse_gamma_lut(gamma: f32) -> [u8; 256] {
+    let g = gamma.clamp(1.0, 5.0);
+    let mut lut = [0u8; 256];
+    if (g - 1.0).abs() < 1e-4 {
+        for (i, v) in lut.iter_mut().enumerate() {
+            *v = i as u8;
+        }
+        return lut;
+    }
+    let inv_gamma = 1.0 / g;
+    for e in 1..256 {
+        let linear_e = (e as f32) / 255.0;
+        lut[e] = (linear_e.powf(inv_gamma) * 255.0).round().clamp(1.0, 254.0) as u8;
+    }
+    lut[255] = 255;
+    lut
+}
+
+pub fn build_halo_dither_lut(
+    palette: &crate::dither::DitherPaletteV3,
+    gamma: f32,
+) -> Box<[[[u8; 8]; 256]; 8]> {
+    let mut lut = Box::new([[[0u8; 8]; 256]; 8]);
+    let g = gamma.clamp(1.0, 5.0);
+    let levels = palette.target_bytes.len();
+    if levels < 2 {
+        return lut;
+    }
+    for py in 0..8usize {
+        for px in 0..8usize {
+            lut[py][0][px] = 0;
+            lut[py][255][px] = 255;
+            let thresh = (BAYER_8X8[py][px] as f32 + 0.5) / 64.0;
+            for v in 1..255usize {
+                let e = ((v as f32) / 255.0).powf(g);
+                let mut k = 0usize;
+                while k + 1 < levels - 1 && palette.target_energy[k + 1] < e {
+                    k += 1;
+                }
+                let e_lo = palette.target_energy[k];
+                let e_hi = palette.target_energy[k + 1];
+                let frac = if e_hi > e_lo {
+                    ((e - e_lo) / (e_hi - e_lo)).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                lut[py][v][px] = if frac > thresh {
+                    palette.target_bytes[k + 1]
+                } else {
+                    palette.target_bytes[k]
+                };
+            }
+        }
+    }
+    lut
+}
+
+pub fn evaluate_tip_diameter_halo_scales(d_mm: f32, d_max_mm: f32) -> (f32, f32) {
+    let d_max = d_max_mm.max(0.45);
+    if !d_mm.is_finite() || d_mm >= d_max {
+        return (0.0, 0.0);
+    }
+    let d = d_mm.max(0.0);
+    let d_min = 0.20f32;
+    let d_ref = 0.40f32;
+
+    let s_r = if d <= d_min {
+        4.0 / 3.0
+    } else if d <= d_ref {
+        let t = ((d - d_min) / (d_ref - d_min)).clamp(0.0, 1.0);
+        (4.0 / 3.0) - (1.0 / 3.0) * t
+    } else {
+        let u = ((d - d_ref) / (d_max - d_ref)).clamp(0.0, 1.0);
+        (1.0 / 3.0) + (2.0 / 3.0) * (1.0 - u) * (1.0 - u)
+    };
+
+    let s_e = if d <= d_min {
+        1.00
+    } else if d <= d_ref {
+        let t = ((d - d_min) / (d_ref - d_min)).clamp(0.0, 1.0);
+        1.00 - 0.15 * t
+    } else {
+        let u = ((d - d_ref) / (d_max - d_ref)).clamp(0.0, 1.0);
+        let c = (core::f32::consts::FRAC_PI_2 * u).cos();
+        0.85 * c * c
+    };
+
+    (s_r, s_e)
+}
+
+#[derive(Clone)]
 struct SupportHaloRowKernel {
     dy: isize,
     interior_val: u8,
     caps: Vec<(usize, u8)>,
+}
+
+#[derive(Clone, Default)]
+struct SupportHaloBucketKernel {
+    row_kernels: Vec<SupportHaloRowKernel>,
+}
+
+#[derive(Clone)]
+pub struct SupportHaloPrecalc {
+    pub pitch_x_mm: f32,
+    pub pitch_y_mm: f32,
+    pub ref_radius_mm: f32,
+    pub max_tip_diameter_mm: f32,
+    pub tips_only: bool,
+    pub max_rx_px: usize,
+    pub max_ry_px: usize,
+    pub max_tip_dx_px: usize,
+    pub max_tip_dy_px: usize,
+    buckets: [SupportHaloBucketKernel; NUM_HALO_DIAMETER_BUCKETS],
+    dither_lut: Option<Box<[[[u8; 8]; 256]; 8]>>,
+}
+
+#[inline]
+fn eval_halo_intensity_anisotropic(
+    dx: usize,
+    dy: usize,
+    pitch_x_mm: f32,
+    pitch_y_mm: f32,
+    target_radius_mm: f32,
+    max_intensity_u8: u8,
+    energy_scale: f32,
+    profile: SupportHaloProfile,
+    inv_gamma_lut: &[u8; 256],
+) -> u8 {
+    if dx == 0 && dy == 0 {
+        return 255;
+    }
+    if target_radius_mm <= 0.0 || max_intensity_u8 == 0 || energy_scale <= 0.0 {
+        return 0;
+    }
+    let rx_mm = (dx as f32) * pitch_x_mm;
+    let ry_mm = (dy as f32) * pitch_y_mm;
+    let r_mm = rx_mm.hypot(ry_mm);
+    if r_mm > target_radius_mm + 1e-5 {
+        return 0;
+    }
+
+    let p_min = pitch_x_mm.min(pitch_y_mm).max(1e-4);
+    let p_max = pitch_x_mm.max(pitch_y_mm).max(1e-4);
+    let cos_t = rx_mm / r_mm.max(1e-6);
+    let sin_t = ry_mm / r_mm.max(1e-6);
+    let p_theta = (pitch_x_mm * cos_t).hypot(pitch_y_mm * sin_t);
+    let eta_pack = (p_theta / p_max).clamp(0.1, 1.0);
+
+    let d_equiv = r_mm / p_min;
+    let r_equiv = (target_radius_mm / p_min).max(1.0);
+
+    match profile {
+        SupportHaloProfile::Donut => {
+            let f_donut = if r_equiv <= 1.5 {
+                1.0
+            } else {
+                let denom = (target_radius_mm - 0.5 * p_min).max(p_min);
+                let u = ((r_mm - p_min).max(0.0) / denom).clamp(0.0, 1.0);
+                let u_peak = 2.0 / 5.5;
+                if u <= 0.0 {
+                    0.25
+                } else if u <= u_peak {
+                    let s = (core::f32::consts::FRAC_PI_2 * (u / u_peak)).sin();
+                    0.25 + 0.75 * s * s
+                } else {
+                    let c =
+                        (core::f32::consts::FRAC_PI_2 * ((u - u_peak) / (1.0 - u_peak))).cos();
+                    c * c
+                }
+            };
+            let e_idx = ((max_intensity_u8 as f32) * energy_scale * f_donut * eta_pack)
+                .round()
+                .clamp(0.0, 255.0) as usize;
+            inv_gamma_lut[e_idx]
+        }
+        SupportHaloProfile::Linear => {
+            let linear_t = ((r_equiv + 1.0 - d_equiv) / (r_equiv + 1.0)).clamp(0.0, 1.0);
+            ((max_intensity_u8 as f32) * energy_scale * linear_t * eta_pack)
+                .round()
+                .clamp(0.0, 255.0) as u8
+        }
+        SupportHaloProfile::Exponential => {
+            let linear_t = ((r_equiv + 1.0 - d_equiv) / (r_equiv + 1.0)).clamp(0.0, 1.0);
+            let alpha = ((-1.5 * (d_equiv - 1.0) / r_equiv).exp() * linear_t).clamp(0.0, 1.0);
+            ((max_intensity_u8 as f32) * energy_scale * alpha * eta_pack)
+                .round()
+                .clamp(0.0, 255.0) as u8
+        }
+        SupportHaloProfile::Gaussian => {
+            let sigma = (0.5 * r_equiv).max(0.5);
+            let alpha = (-(d_equiv * d_equiv) / (2.0 * sigma * sigma))
+                .exp()
+                .clamp(0.0, 1.0);
+            ((max_intensity_u8 as f32) * energy_scale * alpha * eta_pack)
+                .round()
+                .clamp(0.0, 255.0) as u8
+        }
+    }
+}
+
+fn build_anisotropic_halo_row_kernels(
+    pitch_x_mm: f32,
+    pitch_y_mm: f32,
+    target_radius_mm: f32,
+    max_intensity_u8: u8,
+    energy_scale: f32,
+    profile: SupportHaloProfile,
+    inv_gamma_lut: &[u8; 256],
+) -> (Vec<SupportHaloRowKernel>, usize, usize) {
+    if target_radius_mm <= 0.0 || max_intensity_u8 == 0 || energy_scale <= 0.0 {
+        return (Vec::new(), 0, 0);
+    }
+    let rx_max = ((target_radius_mm / pitch_x_mm.max(1e-4)).floor() as usize).clamp(1, 24);
+    let ry_max = ((target_radius_mm / pitch_y_mm.max(1e-4)).floor() as usize).clamp(1, 24);
+    let r_y_isize = ry_max as isize;
+    let mut kernels = Vec::with_capacity(2 * ry_max + 1);
+    let mut actual_max_rx = 0usize;
+    let mut actual_max_ry = 0usize;
+
+    for dy in -r_y_isize..=r_y_isize {
+        let dy_abs = dy.unsigned_abs();
+        let interior_val = if dy == 0 {
+            255
+        } else {
+            eval_halo_intensity_anisotropic(
+                0,
+                dy_abs,
+                pitch_x_mm,
+                pitch_y_mm,
+                target_radius_mm,
+                max_intensity_u8,
+                energy_scale,
+                profile,
+                inv_gamma_lut,
+            )
+        };
+        if dy_abs > 0 && interior_val > 0 {
+            actual_max_ry = actual_max_ry.max(dy_abs);
+        }
+        let mut caps = Vec::with_capacity(rx_max);
+        for dx in 1..=rx_max {
+            let val = eval_halo_intensity_anisotropic(
+                dx,
+                dy_abs,
+                pitch_x_mm,
+                pitch_y_mm,
+                target_radius_mm,
+                max_intensity_u8,
+                energy_scale,
+                profile,
+                inv_gamma_lut,
+            );
+            if val > 0 {
+                caps.push((dx, val));
+                actual_max_rx = actual_max_rx.max(dx);
+                actual_max_ry = actual_max_ry.max(dy_abs);
+            }
+        }
+        if interior_val > 0 || !caps.is_empty() {
+            kernels.push(SupportHaloRowKernel {
+                dy,
+                interior_val,
+                caps,
+            });
+        }
+    }
+
+    (kernels, actual_max_rx, actual_max_ry)
+}
+
+impl SupportHaloPrecalc {
+    pub fn from_job(
+        job: &crate::types::SliceJobV3,
+        dither_palette: Option<&crate::dither::DitherPaletteV3>,
+    ) -> Option<Self> {
+        if !job.support_halo_active() {
+            return None;
+        }
+        let (pitch_x_mm, pitch_y_mm) = job.effective_output_pixel_pitch_mm();
+        let ref_radius_mm = job.effective_support_halo_ref_radius_mm();
+        let max_intensity_u8 = job.effective_support_halo_max_intensity_u8();
+        if ref_radius_mm <= 0.0 || max_intensity_u8 == 0 {
+            return None;
+        }
+        let profile = SupportHaloProfile::from_str_lossy(&job.support_halo_profile);
+        let gamma = job.effective_support_halo_gamma();
+        let inv_gamma_lut = build_inverse_gamma_lut(gamma);
+        let tips_only = job.support_halo_is_tips_only();
+        let max_tip_diameter_mm = job.effective_support_halo_max_tip_diameter_mm();
+        let (max_tip_dx_px, max_tip_dy_px) = job
+            .effective_support_halo_max_tip_diameter_px_xy()
+            .map(|(dx, dy)| (dx as usize, dy as usize))
+            .unwrap_or((0, 0));
+
+        let mut buckets: [SupportHaloBucketKernel; NUM_HALO_DIAMETER_BUCKETS] =
+            std::array::from_fn(|_| SupportHaloBucketKernel::default());
+        let mut max_rx_px = 0usize;
+        let mut max_ry_px = 0usize;
+
+        if tips_only {
+            let step_mm = max_tip_diameter_mm / (NUM_HALO_DIAMETER_BUCKETS as f32);
+            for b in 0..NUM_HALO_DIAMETER_BUCKETS {
+                let d_rep_mm = if b + 1 < NUM_HALO_DIAMETER_BUCKETS {
+                    ((b + 1) as f32) * step_mm
+                } else {
+                    ((b as f32) + 0.5) * step_mm
+                };
+                let (s_r, s_e) = evaluate_tip_diameter_halo_scales(d_rep_mm, max_tip_diameter_mm);
+                let target_r_mm = ref_radius_mm * s_r;
+                let (row_kernels, rx, ry) = build_anisotropic_halo_row_kernels(
+                    pitch_x_mm,
+                    pitch_y_mm,
+                    target_r_mm,
+                    max_intensity_u8,
+                    s_e,
+                    profile,
+                    &inv_gamma_lut,
+                );
+                max_rx_px = max_rx_px.max(rx);
+                max_ry_px = max_ry_px.max(ry);
+                buckets[b] = SupportHaloBucketKernel { row_kernels };
+            }
+        } else {
+            let (row_kernels, rx, ry) = build_anisotropic_halo_row_kernels(
+                pitch_x_mm,
+                pitch_y_mm,
+                ref_radius_mm,
+                max_intensity_u8,
+                1.0,
+                profile,
+                &inv_gamma_lut,
+            );
+            max_rx_px = rx;
+            max_ry_px = ry;
+            buckets[0] = SupportHaloBucketKernel { row_kernels };
+        }
+
+        if max_rx_px == 0 && max_ry_px == 0 {
+            return None;
+        }
+
+        let dither_lut = match dither_palette {
+            Some(p) => Some(build_halo_dither_lut(p, gamma)),
+            None => job.effective_dither_bit_depth().map(|bit_depth| {
+                let mut identity_lut = [0u8; 256];
+                for i in 0..256 {
+                    identity_lut[i] = i as u8;
+                }
+                let owned_palette =
+                    crate::dither::DitherPaletteV3::new(&identity_lut, gamma as f64, bit_depth);
+                build_halo_dither_lut(&owned_palette, gamma)
+            }),
+        };
+
+        Some(Self {
+            pitch_x_mm,
+            pitch_y_mm,
+            ref_radius_mm,
+            max_tip_diameter_mm,
+            tips_only,
+            max_rx_px,
+            max_ry_px,
+            max_tip_dx_px,
+            max_tip_dy_px,
+            buckets,
+            dither_lut,
+        })
+    }
 }
 
 #[inline]
@@ -4140,18 +4521,36 @@ fn eval_halo_intensity(
     if d > r_f || max_intensity_u8 == 0 {
         return 0;
     }
-    let linear_t = ((r_f + 1.0 - d) / (r_f + 1.0)).clamp(0.0, 1.0);
-    let alpha = match profile {
-        SupportHaloProfile::Linear => linear_t,
+    match profile {
+        SupportHaloProfile::Donut => {
+            let inv_gamma = build_inverse_gamma_lut(3.0);
+            eval_halo_intensity_anisotropic(
+                d.round().max(1.0) as usize,
+                0,
+                1.0,
+                1.0,
+                r_f,
+                max_intensity_u8,
+                1.0,
+                SupportHaloProfile::Donut,
+                &inv_gamma,
+            )
+        }
+        SupportHaloProfile::Linear => {
+            let linear_t = ((r_f + 1.0 - d) / (r_f + 1.0)).clamp(0.0, 1.0);
+            ((max_intensity_u8 as f32) * linear_t).round().clamp(0.0, 255.0) as u8
+        }
         SupportHaloProfile::Exponential => {
-            ((-1.5 * (d - 1.0) / r_f.max(1.0)).exp() * linear_t).clamp(0.0, 1.0)
+            let linear_t = ((r_f + 1.0 - d) / (r_f + 1.0)).clamp(0.0, 1.0);
+            let alpha = ((-1.5 * (d - 1.0) / r_f.max(1.0)).exp() * linear_t).clamp(0.0, 1.0);
+            ((max_intensity_u8 as f32) * alpha).round().clamp(0.0, 255.0) as u8
         }
         SupportHaloProfile::Gaussian => {
             let sigma = (0.5 * r_f).max(0.5);
-            (-(d * d) / (2.0 * sigma * sigma)).exp().clamp(0.0, 1.0)
+            let alpha = (-(d * d) / (2.0 * sigma * sigma)).exp().clamp(0.0, 1.0);
+            ((max_intensity_u8 as f32) * alpha).round().clamp(0.0, 255.0) as u8
         }
-    };
-    ((max_intensity_u8 as f32) * alpha).round().clamp(0.0, 255.0) as u8
+    }
 }
 
 fn build_euclidean_halo_row_kernels(
@@ -4159,7 +4558,7 @@ fn build_euclidean_halo_row_kernels(
     max_intensity_u8: u8,
     profile: SupportHaloProfile,
 ) -> Vec<SupportHaloRowKernel> {
-    let r = radius_px.clamp(1, 8) as isize;
+    let r = radius_px.clamp(1, 16) as isize;
     let r_f = r as f32;
     let r_sq = r * r;
     let mut kernels = Vec::with_capacity((2 * r + 1) as usize);
@@ -4197,6 +4596,7 @@ struct SupportRowSpan {
     x_start: usize,
     x_end: usize,
     emit_halo: bool,
+    bucket_idx: u8,
 }
 
 fn find_root_span(parent: &mut [usize], mut i: usize) -> usize {
@@ -4209,20 +4609,6 @@ fn find_root_span(parent: &mut [usize], mut i: usize) -> usize {
 }
 
 /// Evaluates 2D Thin Cross-Section Gating (`tips_only`) over horizontal support spans.
-///
-/// 1. **2D Connected-Component Bounding-Box Gate**:
-///    Any 8-connected 2D support component whose bounding box satisfies
-///    `width <= max_d` and `height <= max_d` emits halo on all its spans.
-/// 2. **Local 2D Thin-Protrusion / Neck Gate (Polar-Cap Suppression)**:
-///    For components exceeding `max_d` (e.g. thick trunks, rafts, or thin tips
-///    touching a wider body), any span with chord width `> max_d` suppresses halo.
-///    For spans with chord width `<= max_d` inside a large component, a 2-pass
-///    vertical distance sweep (`dist_to_wide`) checks whether the span is within
-///    `cap_look_rows = (max_d / 2) + 2` 8-connected rows of a wide chord (`> max_d`).
-///    By circle geometry, the North/South polar scanline cap of ANY circular trunk
-///    of diameter `D > max_d` has height `< max_d / 2`, so polar caps are always
-///    suppressed (`emit_halo = false`), while genuine thin protrusions extending
-///    beyond `cap_look_rows` still emit halo (`emit_halo = true`).
 fn gate_thin_support_spans(spans: &mut [SupportRowSpan], max_d_px: u32) {
     let n = spans.len();
     if n == 0 {
@@ -4243,7 +4629,6 @@ fn gate_thin_support_spans(spans: &mut [SupportRowSpan], max_d_px: u32) {
         })
         .collect();
 
-    // Group spans into contiguous row ranges `(row_y, start_idx, end_idx)`.
     let mut rows: Vec<(usize, usize, usize)> = Vec::new();
     let mut r_start = 0usize;
     for i in 1..=n {
@@ -4253,7 +4638,6 @@ fn gate_thin_support_spans(spans: &mut [SupportRowSpan], max_d_px: u32) {
         }
     }
 
-    // Pass 1: Top-down 8-connected Union-Find + downward distance from wide chords.
     for r_idx in 1..rows.len() {
         let (prev_y, p0, p1) = rows[r_idx - 1];
         let (curr_y, c0, c1) = rows[r_idx];
@@ -4269,7 +4653,6 @@ fn gate_thin_support_spans(spans: &mut [SupportRowSpan], max_d_px: u32) {
             }
             let mut scan_p = p;
             while scan_p < p1 && spans[scan_p].x_start <= cx1 {
-                // 8-connected overlap: `[px0, px1 - 1]` touches `[cx0, cx1 - 1]` iff `px0 <= cx1 && cx0 <= px1`.
                 let ra = find_root_span(&mut parent, scan_p);
                 let rb = find_root_span(&mut parent, c);
                 if ra != rb {
@@ -4288,7 +4671,6 @@ fn gate_thin_support_spans(spans: &mut [SupportRowSpan], max_d_px: u32) {
         }
     }
 
-    // Pass 2: Bottom-up upward distance from wide chords.
     for r_idx in (0..rows.len().saturating_sub(1)).rev() {
         let (curr_y, c0, c1) = rows[r_idx];
         let (next_y, n0, n1) = rows[r_idx + 1];
@@ -4313,7 +4695,6 @@ fn gate_thin_support_spans(spans: &mut [SupportRowSpan], max_d_px: u32) {
         }
     }
 
-    // Compute 2D bounding boxes per connected component root.
     let mut comp_min_x = vec![usize::MAX; n];
     let mut comp_max_x = vec![0usize; n];
     let mut comp_min_y = vec![usize::MAX; n];
@@ -4337,9 +4718,396 @@ fn gate_thin_support_spans(spans: &mut [SupportRowSpan], max_d_px: u32) {
             spans[i].emit_halo = true;
         } else {
             let span_w = spans[i].x_end - spans[i].x_start;
-            spans[i].emit_halo =
-                span_w <= max_d && dist_to_wide[i] > cap_look_rows && dist_to_wide[i] < inf_dist / 2;
+            spans[i].emit_halo = span_w <= max_d
+                && dist_to_wide[i] > cap_look_rows
+                && dist_to_wide[i] < inf_dist / 2;
         }
+    }
+}
+
+fn classify_support_spans_with_precalc(spans: &mut [SupportRowSpan], precalc: &SupportHaloPrecalc) {
+    let n = spans.len();
+    if n == 0 {
+        return;
+    }
+    if !precalc.tips_only {
+        for s in spans.iter_mut() {
+            s.emit_halo = true;
+            s.bucket_idx = 0;
+        }
+        return;
+    }
+
+    let max_dx = precalc.max_tip_dx_px.max(1);
+    let max_dy = precalc.max_tip_dy_px.max(1);
+    let d_max_mm = precalc.max_tip_diameter_mm;
+    let step_mm = (d_max_mm / (NUM_HALO_DIAMETER_BUCKETS as f32)).max(1e-4);
+    let inf_dist = u32::MAX / 2;
+
+    let mut parent: Vec<usize> = (0..n).collect();
+    let mut dist_to_wide: Vec<u32> = spans
+        .iter()
+        .map(|s| {
+            let span_w = s.x_end - s.x_start;
+            let span_w_mm = (span_w as f32) * precalc.pitch_x_mm;
+            if span_w > max_dx || span_w_mm >= d_max_mm - 1e-5 {
+                0
+            } else {
+                inf_dist
+            }
+        })
+        .collect();
+
+    let mut rows: Vec<(usize, usize, usize)> = Vec::new();
+    let mut r_start = 0usize;
+    for i in 1..=n {
+        if i == n || spans[i].y != spans[r_start].y {
+            rows.push((spans[r_start].y, r_start, i));
+            r_start = i;
+        }
+    }
+
+    for r_idx in 1..rows.len() {
+        let (prev_y, p0, p1) = rows[r_idx - 1];
+        let (curr_y, c0, c1) = rows[r_idx];
+        if prev_y + 1 != curr_y {
+            continue;
+        }
+        let mut p = p0;
+        for c in c0..c1 {
+            let cx0 = spans[c].x_start;
+            let cx1 = spans[c].x_end;
+            while p < p1 && spans[p].x_end < cx0 {
+                p += 1;
+            }
+            let mut scan_p = p;
+            while scan_p < p1 && spans[scan_p].x_start <= cx1 {
+                let ra = find_root_span(&mut parent, scan_p);
+                let rb = find_root_span(&mut parent, c);
+                if ra != rb {
+                    if ra < rb {
+                        parent[rb] = ra;
+                    } else {
+                        parent[ra] = rb;
+                    }
+                }
+                let cand = dist_to_wide[scan_p].saturating_add(1);
+                if cand < dist_to_wide[c] {
+                    dist_to_wide[c] = cand;
+                }
+                scan_p += 1;
+            }
+        }
+    }
+
+    for r_idx in (0..rows.len().saturating_sub(1)).rev() {
+        let (curr_y, c0, c1) = rows[r_idx];
+        let (next_y, n0, n1) = rows[r_idx + 1];
+        if curr_y + 1 != next_y {
+            continue;
+        }
+        let mut nx = n0;
+        for c in c0..c1 {
+            let cx0 = spans[c].x_start;
+            let cx1 = spans[c].x_end;
+            while nx < n1 && spans[nx].x_end < cx0 {
+                nx += 1;
+            }
+            let mut scan_n = nx;
+            while scan_n < n1 && spans[scan_n].x_start <= cx1 {
+                let cand = dist_to_wide[scan_n].saturating_add(1);
+                if cand < dist_to_wide[c] {
+                    dist_to_wide[c] = cand;
+                }
+                scan_n += 1;
+            }
+        }
+    }
+
+    let mut comp_min_x = vec![usize::MAX; n];
+    let mut comp_max_x = vec![0usize; n];
+    let mut comp_min_y = vec![usize::MAX; n];
+    let mut comp_max_y = vec![0usize; n];
+
+    for i in 0..n {
+        let r = find_root_span(&mut parent, i);
+        let s = &spans[i];
+        comp_min_x[r] = comp_min_x[r].min(s.x_start);
+        comp_max_x[r] = comp_max_x[r].max(s.x_end - 1);
+        comp_min_y[r] = comp_min_y[r].min(s.y);
+        comp_max_y[r] = comp_max_y[r].max(s.y);
+    }
+
+    let cap_look_rows = ((max_dy / 2) + 2) as u32;
+    let map_d_to_bucket = |d_mm: f32| -> u8 {
+        if d_mm >= d_max_mm - 1e-5 {
+            HALO_BUCKET_NONE
+        } else {
+            (((d_mm / step_mm).round() as usize).saturating_sub(1))
+                .min(NUM_HALO_DIAMETER_BUCKETS - 1) as u8
+        }
+    };
+
+    for i in 0..n {
+        let r = parent[i];
+        let comp_w = comp_max_x[r] - comp_min_x[r] + 1;
+        let comp_h = comp_max_y[r] - comp_min_y[r] + 1;
+        let comp_d_mm =
+            ((comp_w as f32) * precalc.pitch_x_mm).max((comp_h as f32) * precalc.pitch_y_mm);
+        if comp_w <= max_dx && comp_h <= max_dy && comp_d_mm < d_max_mm - 1e-5 {
+            let b = map_d_to_bucket(comp_d_mm);
+            spans[i].bucket_idx = b;
+            spans[i].emit_halo = b != HALO_BUCKET_NONE;
+        } else {
+            let span_w = spans[i].x_end - spans[i].x_start;
+            let span_d_mm = (span_w as f32) * precalc.pitch_x_mm;
+            if span_w <= max_dx
+                && span_d_mm < d_max_mm - 1e-5
+                && dist_to_wide[i] > cap_look_rows
+                && dist_to_wide[i] < inf_dist / 2
+            {
+                let b = map_d_to_bucket(span_d_mm);
+                spans[i].bucket_idx = b;
+                spans[i].emit_halo = b != HALO_BUCKET_NONE;
+            } else {
+                spans[i].bucket_idx = HALO_BUCKET_NONE;
+                spans[i].emit_halo = false;
+            }
+        }
+    }
+}
+
+pub fn apply_euclidean_radial_halo_rle_with_precalc(
+    support_runs: &[crate::rle::RleRun],
+    width: usize,
+    height: usize,
+    precalc: &SupportHaloPrecalc,
+) -> Vec<crate::rle::RleRun> {
+    use crate::rle::{emit_row, emit_zero_rows, RleAccum};
+
+    let rx_pad = precalc.max_rx_px;
+    let ry_pad = precalc.max_ry_px;
+    if width == 0
+        || height == 0
+        || (rx_pad == 0 && ry_pad == 0)
+        || support_runs.is_empty()
+    {
+        return support_runs.to_vec();
+    }
+
+    let total_pixels = width * height;
+    let mut abs_pos = 0usize;
+    let mut spans: Vec<SupportRowSpan> = Vec::new();
+    let mut min_x = width;
+    let mut max_x = 0usize;
+    let mut min_y = height;
+    let mut max_y = 0usize;
+
+    for run in support_runs {
+        let len = run.length as usize;
+        if len == 0 {
+            continue;
+        }
+        if run.value == 0 {
+            abs_pos = abs_pos.saturating_add(len);
+            continue;
+        }
+
+        let mut rem = len;
+        while rem > 0 && abs_pos < total_pixels {
+            let in_y = abs_pos / width;
+            let x_start = abs_pos % width;
+            let take = rem.min(width - x_start);
+            let x_end = x_start + take;
+
+            min_x = min_x.min(x_start);
+            max_x = max_x.max(x_end - 1);
+            min_y = min_y.min(in_y);
+            max_y = max_y.max(in_y);
+
+            if let Some(last) = spans.last_mut() {
+                if last.y == in_y && last.x_end == x_start {
+                    last.x_end = x_end;
+                } else {
+                    spans.push(SupportRowSpan {
+                        y: in_y,
+                        x_start,
+                        x_end,
+                        emit_halo: true,
+                        bucket_idx: 0,
+                    });
+                }
+            } else {
+                spans.push(SupportRowSpan {
+                    y: in_y,
+                    x_start,
+                    x_end,
+                    emit_halo: true,
+                    bucket_idx: 0,
+                });
+            }
+
+            abs_pos += take;
+            rem -= take;
+        }
+    }
+
+    if spans.is_empty() {
+        return support_runs.to_vec();
+    }
+
+    classify_support_spans_with_precalc(&mut spans, precalc);
+
+    let roi_min_x = min_x.saturating_sub(rx_pad);
+    let roi_max_x = (max_x + rx_pad).min(width - 1);
+    let roi_min_y = min_y.saturating_sub(ry_pad);
+    let roi_max_y = (max_y + ry_pad).min(height - 1);
+    let roi_w = roi_max_x - roi_min_x + 1;
+    let right_zeros = width - 1 - roi_max_x;
+
+    let ring_cap = 2 * ry_pad + 1;
+    let mut ring = vec![0u8; ring_cap * roi_w];
+    let mut slot_dirty = vec![false; ring_cap];
+
+    let mut out_rle = RleAccum::new();
+    emit_zero_rows(&mut out_rle, roi_min_y, width);
+
+    let flush_ring_row = |target_y: usize,
+                          ring: &mut [u8],
+                          slot_dirty: &mut [bool],
+                          out_rle: &mut RleAccum| {
+        let slot = (target_y - roi_min_y) % ring_cap;
+        if !slot_dirty[slot] {
+            emit_zero_rows(out_rle, 1, width);
+        } else {
+            let slot_offset = slot * roi_w;
+            let row_slice = &mut ring[slot_offset..slot_offset + roi_w];
+            if let Some(ref dither_lut) = precalc.dither_lut {
+                let lut_row = &dither_lut[target_y & 7];
+                for (ix, px) in row_slice.iter_mut().enumerate() {
+                    let v = *px;
+                    if v > 0 && v < 255 {
+                        *px = lut_row[v as usize][(roi_min_x + ix) & 7];
+                    }
+                }
+            }
+            if roi_min_x > 0 {
+                out_rle.push_run(roi_min_x as u32, 0);
+            }
+            emit_row(out_rle, row_slice);
+            if right_zeros > 0 {
+                out_rle.push_run(right_zeros as u32, 0);
+            }
+            row_slice.fill(0);
+            slot_dirty[slot] = false;
+        }
+    };
+
+    let mut next_unflushed_y = roi_min_y;
+
+    for span in &spans {
+        let in_y = span.y;
+        let x_start = span.x_start;
+        let x_end = span.x_end;
+
+        while next_unflushed_y + ry_pad < in_y && next_unflushed_y <= roi_max_y {
+            flush_ring_row(next_unflushed_y, &mut ring, &mut slot_dirty, &mut out_rle);
+            next_unflushed_y += 1;
+        }
+
+        let ix0 = x_start - roi_min_x;
+        let ix1 = x_end - roi_min_x;
+
+        if !span.emit_halo || span.bucket_idx == HALO_BUCKET_NONE {
+            let slot = (in_y - roi_min_y) % ring_cap;
+            slot_dirty[slot] = true;
+            let row_slice = &mut ring[slot * roi_w..(slot + 1) * roi_w];
+            row_slice[ix0..ix1].fill(255);
+            continue;
+        }
+
+        let row_kernels = &precalc.buckets[span.bucket_idx as usize].row_kernels;
+        if row_kernels.is_empty() {
+            let slot = (in_y - roi_min_y) % ring_cap;
+            slot_dirty[slot] = true;
+            let row_slice = &mut ring[slot * roi_w..(slot + 1) * roi_w];
+            row_slice[ix0..ix1].fill(255);
+            continue;
+        }
+
+        for rk in row_kernels {
+            let ty_isize = in_y as isize + rk.dy;
+            if ty_isize < roi_min_y as isize || ty_isize > roi_max_y as isize {
+                continue;
+            }
+            let ty = ty_isize as usize;
+            let slot = (ty - roi_min_y) % ring_cap;
+            slot_dirty[slot] = true;
+            let row_slice = &mut ring[slot * roi_w..(slot + 1) * roi_w];
+
+            if rk.interior_val == 255 {
+                row_slice[ix0..ix1].fill(255);
+            } else if rk.interior_val > 0 {
+                for px in &mut row_slice[ix0..ix1] {
+                    if rk.interior_val > *px {
+                        *px = rk.interior_val;
+                    }
+                }
+            }
+
+            for &(dx, cap_val) in &rk.caps {
+                if let Some(lx) = x_start.checked_sub(dx) {
+                    if lx >= roi_min_x {
+                        let idx = lx - roi_min_x;
+                        if cap_val > row_slice[idx] {
+                            row_slice[idx] = cap_val;
+                        }
+                    }
+                }
+                let rx = x_end - 1 + dx;
+                if rx <= roi_max_x {
+                    let idx = rx - roi_min_x;
+                    if cap_val > row_slice[idx] {
+                        row_slice[idx] = cap_val;
+                    }
+                }
+            }
+        }
+    }
+
+    while next_unflushed_y <= roi_max_y {
+        flush_ring_row(next_unflushed_y, &mut ring, &mut slot_dirty, &mut out_rle);
+        next_unflushed_y += 1;
+    }
+
+    emit_zero_rows(&mut out_rle, height - 1 - roi_max_y, width);
+    out_rle.finish()
+}
+
+pub fn apply_euclidean_radial_halo_dense_with_precalc(
+    support_mask: &mut [u8],
+    width: usize,
+    height: usize,
+    precalc: &SupportHaloPrecalc,
+) {
+    if width == 0
+        || height == 0
+        || (precalc.max_rx_px == 0 && precalc.max_ry_px == 0)
+        || support_mask.len() < width * height
+    {
+        return;
+    }
+    let runs = encode_mask_to_rle(&support_mask[..width * height], width, height);
+    let halo_runs = apply_euclidean_radial_halo_rle_with_precalc(&runs, width, height, precalc);
+    let mut cursor = 0usize;
+    let total = width * height;
+    for run in halo_runs {
+        if cursor >= total {
+            break;
+        }
+        let take = (run.length as usize).min(total - cursor);
+        support_mask[cursor..cursor + take].fill(run.value);
+        cursor += take;
     }
 }
 
@@ -4354,7 +5122,7 @@ pub fn apply_euclidean_radial_halo_rle(
 ) -> Vec<crate::rle::RleRun> {
     use crate::rle::{emit_row, emit_zero_rows, RleAccum};
 
-    let radius = radius_px.min(8) as usize;
+    let radius = radius_px.min(16) as usize;
     if width == 0
         || height == 0
         || radius == 0
@@ -4403,6 +5171,7 @@ pub fn apply_euclidean_radial_halo_rle(
                         x_start,
                         x_end,
                         emit_halo: true,
+                        bucket_idx: 0,
                     });
                 }
             } else {
@@ -4411,6 +5180,7 @@ pub fn apply_euclidean_radial_halo_rle(
                     x_start,
                     x_end,
                     emit_halo: true,
+                    bucket_idx: 0,
                 });
             }
 
@@ -4546,7 +5316,7 @@ pub fn apply_euclidean_radial_halo_dense(
     profile: SupportHaloProfile,
     max_tip_diameter_px: Option<u32>,
 ) {
-    let radius = radius_px.min(8);
+    let radius = radius_px.min(16);
     if width == 0
         || height == 0
         || radius == 0
@@ -4822,6 +5592,211 @@ mod tests {
             })
             .count();
         assert_eq!(trunk_halo_count, 0);
+    }
+
+    #[test]
+    fn donut_profile_suppresses_inner_ring_and_peaks_at_annular_collar() {
+        let width = 31usize;
+        let height = 31usize;
+        let mut mask = vec![0u8; width * height];
+        mask[15 * width + 15] = 255;
+        let support_runs = encode_mask_to_rle(&mask, width, height);
+
+        let job = SliceJobV3 {
+            source_width_px: width as u32,
+            source_height_px: height as u32,
+            width_px: width as u32,
+            height_px: height as u32,
+            build_width_mm: (width as f32) * 0.025,
+            build_depth_mm: (height as f32) * 0.025,
+            support_halo_enabled: true,
+            support_halo_radius_px: 6,
+            support_halo_max_intensity_percent: 25.0,
+            support_halo_profile: "donut".to_string(),
+            support_halo_scope: "full_supports".to_string(),
+            dither_device_gamma: 3.0,
+            ..Default::default()
+        };
+
+        let precalc = super::SupportHaloPrecalc::from_job(&job, None)
+            .expect("donut precalc should be active");
+        let halo_runs = super::apply_euclidean_radial_halo_rle_with_precalc(
+            &support_runs,
+            width,
+            height,
+            &precalc,
+        );
+        let out = expand_rle_to_mask(&halo_runs, width * height);
+
+        // Core at d = 0 must remain 255
+        assert_eq!(out[15 * width + 15], 255);
+
+        // Inner moat at d = 1: E_moat = 0.25 * 0.25 -> e = 16 -> gamma=3.0 PWM = 101
+        let d1 = out[15 * width + 16];
+        assert_eq!(d1, 101, "inner moat (d=1) should map to gamma-3 PWM 101, got {d1}");
+
+        // Annular collar peak at d = 3 (~0.45 R): E_peak = 0.25 -> e = 64 -> gamma=3.0 PWM = 161
+        let d3 = out[15 * width + 18];
+        assert_eq!(d3, 161, "annular collar peak (d=3) should map to gamma-3 PWM 161, got {d3}");
+        assert!(d3 > d1, "annular collar peak ({d3}) must exceed inner moat ({d1})");
+
+        // Outer skirt at d = 4, 5, 6 must monotonically decay toward 0 and remain active at d = 6
+        let d4 = out[15 * width + 19];
+        let d5 = out[15 * width + 20];
+        let d6 = out[15 * width + 21];
+        let d7 = out[15 * width + 22];
+        assert!(d3 > d4 && d4 > d5 && d5 > d6 && d6 > 0);
+        assert_eq!(d7, 0);
+    }
+
+    #[test]
+    fn anisotropic_pixel_pitch_scales_x_and_y_reach_and_packing_energy() {
+        let width = 41usize;
+        let height = 41usize;
+        let mut mask = vec![0u8; width * height];
+        mask[20 * width + 20] = 255;
+        let support_runs = encode_mask_to_rle(&mask, width, height);
+
+        // Simulate 19 um X pitch vs 24 um Y pitch (e.g. Elegoo Saturn 4 Ultra 16K / 12K class)
+        let pitch_x = 0.019f32;
+        let pitch_y = 0.024f32;
+        let job = SliceJobV3 {
+            source_width_px: width as u32,
+            source_height_px: height as u32,
+            width_px: width as u32,
+            height_px: height as u32,
+            build_width_mm: (width as f32) * pitch_x,
+            build_depth_mm: (height as f32) * pitch_y,
+            support_halo_enabled: true,
+            support_halo_radius_px: 8, // R_ref_mm = 8 * 0.019 = 0.152 mm
+            support_halo_max_intensity_percent: 25.0,
+            support_halo_profile: "donut".to_string(),
+            support_halo_scope: "full_supports".to_string(),
+            dither_device_gamma: 3.0,
+            ..Default::default()
+        };
+
+        let precalc = super::SupportHaloPrecalc::from_job(&job, None)
+            .expect("anisotropic precalc should be active");
+        let halo_runs = super::apply_euclidean_radial_halo_rle_with_precalc(
+            &support_runs,
+            width,
+            height,
+            &precalc,
+        );
+        let out = expand_rle_to_mask(&halo_runs, width * height);
+
+        let max_dx = (1..=16usize)
+            .filter(|&dx| out[20 * width + (20 + dx)] > 0)
+            .max()
+            .unwrap_or(0);
+        let max_dy = (1..=16usize)
+            .filter(|&dy| out[(20 + dy) * width + 20] > 0)
+            .max()
+            .unwrap_or(0);
+
+        // X reach must be 8 px (8 * 0.019 = 0.152 mm), Y reach must be 6 px (6 * 0.024 = 0.144 mm <= 0.152 mm < 7 * 0.024 = 0.168 mm)
+        assert_eq!(max_dx, 8, "X-axis reach should be 8 px at 19um pitch");
+        assert_eq!(max_dy, 6, "Y-axis reach should be 6 px at 24um pitch");
+        assert!(
+            ((max_dx as f32) * pitch_x - (max_dy as f32) * pitch_y).abs() <= pitch_y,
+            "Physical reach in mm along X and Y must match within 1 pixel pitch"
+        );
+
+        // Peak intensity along X must be attenuated by sub-pixel packing factor (19/24) relative to Y peak
+        let peak_x = (1..=max_dx)
+            .map(|dx| out[20 * width + (20 + dx)])
+            .max()
+            .unwrap_or(0);
+        let peak_y = (1..=max_dy)
+            .map(|dy| out[(20 + dy) * width + 20])
+            .max()
+            .unwrap_or(0);
+        assert!(
+            peak_x < peak_y,
+            "X-axis peak PWM ({peak_x}) should be attenuated relative to Y-axis peak PWM ({peak_y}) due to denser X sub-pixel packing"
+        );
+    }
+
+    #[test]
+    fn continuous_tip_diameter_scaling_expands_020mm_tip_and_tapers_toward_dmax() {
+        let (sr_020, se_020) = super::evaluate_tip_diameter_halo_scales(0.20, 0.80);
+        let (sr_040, se_040) = super::evaluate_tip_diameter_halo_scales(0.40, 0.80);
+        let (sr_060, se_060) = super::evaluate_tip_diameter_halo_scales(0.60, 0.80);
+        let (sr_080, se_080) = super::evaluate_tip_diameter_halo_scales(0.80, 0.80);
+
+        assert!((sr_020 - 4.0 / 3.0).abs() < 1e-4 && (se_020 - 1.00).abs() < 1e-4);
+        assert!((sr_040 - 1.0).abs() < 1e-4 && (se_040 - 0.85).abs() < 1e-4);
+        assert!((sr_060 - 0.50).abs() < 1e-4 && (se_060 - 0.425).abs() < 1e-4);
+        assert_eq!((sr_080, se_080), (0.0, 0.0));
+
+        // Verify end-to-end 2D mask behavior on a 0.025 mm/px grid (R_ref = 6 px = 0.15 mm):
+        // - 0.20 mm tip (8 px box) gets 4/3 * 6 = 8 px halo reach and peak PWM 161
+        // - 0.40 mm tip (16 px box) gets 1.0 * 6 = 6 px halo reach and scaled peak PWM
+        // - 0.60 mm neck (24 px box) gets 0.5 * 6 = 3 px halo reach and tapered peak PWM
+        // - 0.85 mm trunk (34 px box) gets 0 halo reach
+        let width = 200usize;
+        let height = 60usize;
+        let mut mask = vec![0u8; width * height];
+        let mut stamp_square = |cx: usize, cy: usize, size: usize| {
+            let x0 = cx - size / 2;
+            let y0 = cy - size / 2;
+            for y in y0..(y0 + size) {
+                for x in x0..(x0 + size) {
+                    mask[y * width + x] = 255;
+                }
+            }
+        };
+        stamp_square(25, 30, 8);   // 0.20 mm tip (x: 21..29)
+        stamp_square(70, 30, 16);  // 0.40 mm tip (x: 62..78)
+        stamp_square(120, 30, 24); // 0.60 mm neck (x: 108..132)
+        stamp_square(170, 30, 34); // 0.85 mm trunk (x: 153..187)
+
+        let support_runs = encode_mask_to_rle(&mask, width, height);
+        let job = SliceJobV3 {
+            source_width_px: width as u32,
+            source_height_px: height as u32,
+            width_px: width as u32,
+            height_px: height as u32,
+            build_width_mm: (width as f32) * 0.025,
+            build_depth_mm: (height as f32) * 0.025,
+            support_halo_enabled: true,
+            support_halo_radius_px: 6, // R_ref = 0.15 mm
+            support_halo_max_intensity_percent: 25.0,
+            support_halo_profile: "donut".to_string(),
+            support_halo_scope: "tips_only".to_string(),
+            support_halo_max_tip_diameter_mm: 0.80,
+            dither_device_gamma: 3.0,
+            ..Default::default()
+        };
+
+        let precalc = super::SupportHaloPrecalc::from_job(&job, None).unwrap();
+        let halo_runs = super::apply_euclidean_radial_halo_rle_with_precalc(
+            &support_runs,
+            width,
+            height,
+            &precalc,
+        );
+        let out = expand_rle_to_mask(&halo_runs, width * height);
+
+        let reach_right = |x_right_edge: usize| -> usize {
+            (1..=12usize)
+                .filter(|&dx| {
+                    let v = out[30 * width + x_right_edge + dx];
+                    v > 0 && v < 255
+                })
+                .max()
+                .unwrap_or(0)
+        };
+        let reach_020 = reach_right(28);
+        let reach_040 = reach_right(77);
+        let reach_060 = reach_right(131);
+        let reach_085 = reach_right(186);
+
+        assert_eq!(reach_020, 8, "0.20 mm tip should expand to 8 px (0.20 mm) reach");
+        assert_eq!(reach_040, 6, "0.40 mm tip should have 6 px (0.15 mm) reference reach");
+        assert_eq!(reach_060, 3, "0.60 mm neck should taper to 3 px (0.075 mm) reach");
+        assert_eq!(reach_085, 0, "0.85 mm trunk (>= 0.80 mm) must emit zero halo");
     }
 
     #[test]

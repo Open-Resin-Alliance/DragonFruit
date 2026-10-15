@@ -82,11 +82,11 @@ fn default_dither_device_gamma() -> f64 {
 }
 
 fn default_support_halo_max_intensity_percent() -> f32 {
-    50.0
+    25.0
 }
 
 fn default_support_halo_profile() -> String {
-    "linear".to_string()
+    "donut".to_string()
 }
 
 fn default_support_halo_scope() -> String {
@@ -94,7 +94,7 @@ fn default_support_halo_scope() -> String {
 }
 
 fn default_support_halo_max_tip_diameter_mm() -> f32 {
-    0.75
+    0.80
 }
 
 fn dynamic_minimum_alpha_lut(percent: f32) -> Option<[u8; 256]> {
@@ -405,17 +405,31 @@ impl SliceJobV3 {
         if !self.support_halo_enabled {
             return 0;
         }
-        self.support_halo_radius_px.clamp(0, 8)
+        self.support_halo_radius_px.clamp(0, 16)
+    }
+
+    #[inline]
+    pub fn effective_support_halo_max_intensity_percent(&self) -> f32 {
+        if self.support_halo_max_intensity_percent.is_finite() {
+            self.support_halo_max_intensity_percent.clamp(0.0, 100.0)
+        } else {
+            default_support_halo_max_intensity_percent()
+        }
     }
 
     #[inline]
     pub fn effective_support_halo_max_intensity_u8(&self) -> u8 {
-        let pct = if self.support_halo_max_intensity_percent.is_finite() {
-            self.support_halo_max_intensity_percent.clamp(0.0, 100.0)
-        } else {
-            50.0
-        };
+        let pct = self.effective_support_halo_max_intensity_percent();
         ((pct / 100.0) * 255.0).round().clamp(0.0, 255.0) as u8
+    }
+
+    #[inline]
+    pub fn effective_support_halo_gamma(&self) -> f32 {
+        if self.dither_device_gamma.is_finite() && self.dither_device_gamma >= 1.0 {
+            (self.dither_device_gamma as f32).clamp(1.0, 5.0)
+        } else {
+            3.0
+        }
     }
 
     #[inline]
@@ -442,11 +456,7 @@ impl SliceJobV3 {
     }
 
     #[inline]
-    pub fn effective_support_halo_max_tip_diameter_px(&self) -> Option<u32> {
-        if !self.support_halo_is_tips_only() {
-            return None;
-        }
-        let d_mm = self.effective_support_halo_max_tip_diameter_mm();
+    pub fn effective_output_pixel_pitch_mm(&self) -> (f32, f32) {
         let ssaa_factor = if self.height_px > 0 && self.source_height_px >= self.height_px {
             (self.source_height_px / self.height_px).max(1)
         } else {
@@ -464,9 +474,36 @@ impl SliceJobV3 {
         } else {
             pitch_x
         };
-        let pitch = pitch_x.min(pitch_y).max(0.005);
-        let max_px = (d_mm / pitch).ceil().max(1.0) as u32;
-        Some(max_px)
+        (pitch_x.max(0.001), pitch_y.max(0.001))
+    }
+
+    #[inline]
+    pub fn effective_output_pixel_pitch_xy_mm(&self) -> (f32, f32) {
+        self.effective_output_pixel_pitch_mm()
+    }
+
+    #[inline]
+    pub fn effective_support_halo_max_tip_diameter_px_xy(&self) -> Option<(u32, u32)> {
+        if !self.support_halo_is_tips_only() {
+            return None;
+        }
+        let d_mm = self.effective_support_halo_max_tip_diameter_mm();
+        let (pitch_x, pitch_y) = self.effective_output_pixel_pitch_mm();
+        let max_dx = (d_mm / pitch_x).ceil().max(1.0) as u32;
+        let max_dy = (d_mm / pitch_y).ceil().max(1.0) as u32;
+        Some((max_dx, max_dy))
+    }
+
+    #[inline]
+    pub fn effective_support_halo_max_tip_diameter_px(&self) -> Option<u32> {
+        self.effective_support_halo_max_tip_diameter_px_xy()
+            .map(|(dx, dy)| dx.max(dy))
+    }
+
+    #[inline]
+    pub fn effective_support_halo_ref_radius_mm(&self) -> f32 {
+        let (px, py) = self.effective_output_pixel_pitch_mm();
+        (self.effective_support_halo_radius_px() as f32) * px.min(py)
     }
 
     /// Computes `model_triangle_count` when support triangles require a

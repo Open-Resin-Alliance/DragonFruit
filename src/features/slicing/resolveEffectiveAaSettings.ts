@@ -16,9 +16,10 @@ export interface EffectiveAaSettings {
     tipOffsetMm: number;
     tipOffsetMode: 'disabled' | 'auto' | 'manual';
     supportHaloEnabled: boolean;
+    supportHaloAuto: boolean;
     supportHaloRadiusPx: number;
     supportHaloMaxIntensityPercent: number;
-    supportHaloProfile: 'linear' | 'exponential' | 'gaussian';
+    supportHaloProfile: 'donut' | 'linear' | 'exponential' | 'gaussian';
     supportHaloScope: 'tips_only' | 'full_supports';
     supportHaloMaxTipDiameterMm: number;
 }
@@ -50,23 +51,35 @@ export function resolveEffectiveAaSettings(
         : computePhysicalAaConfig(activePreset, safePitchX, safeLayerH, safePitchY);
 
     const supportHaloEnabled = Boolean(settings.supportHaloEnabled);
-    const supportHaloRadiusPx = settings.supportHaloRadiusPx != null && Number.isFinite(Number(settings.supportHaloRadiusPx))
-        ? Math.max(0, Math.min(8, Math.round(Number(settings.supportHaloRadiusPx))))
-        : 2;
-    const supportHaloMaxIntensityPercent = settings.supportHaloMaxIntensityPercent != null && Number.isFinite(Number(settings.supportHaloMaxIntensityPercent))
-        ? Math.max(0, Math.min(100, Number(settings.supportHaloMaxIntensityPercent)))
-        : 50;
-    const supportHaloProfile: 'linear' | 'exponential' | 'gaussian' =
-        settings.supportHaloProfile === 'exponential' || settings.supportHaloProfile === 'gaussian'
+    const supportHaloAuto = settings.supportHaloAuto !== false;
+    const supportHaloRadiusPx = supportHaloAuto
+        ? 3
+        : (settings.supportHaloRadiusPx != null && Number.isFinite(Number(settings.supportHaloRadiusPx))
+            ? Math.max(0, Math.min(16, Math.round(Number(settings.supportHaloRadiusPx))))
+            : 3);
+    const supportHaloMaxIntensityPercent = supportHaloAuto
+        ? 25
+        : (settings.supportHaloMaxIntensityPercent != null && Number.isFinite(Number(settings.supportHaloMaxIntensityPercent))
+            ? Math.max(0, Math.min(100, Number(settings.supportHaloMaxIntensityPercent)))
+            : 25);
+    const supportHaloProfile: 'donut' | 'linear' | 'exponential' | 'gaussian' = supportHaloAuto
+        ? 'donut'
+        : (settings.supportHaloProfile === 'donut'
+            || settings.supportHaloProfile === 'linear'
+            || settings.supportHaloProfile === 'exponential'
+            || settings.supportHaloProfile === 'gaussian'
             ? settings.supportHaloProfile
-            : 'linear';
-    const supportHaloScope: 'tips_only' | 'full_supports' =
-        settings.supportHaloScope === 'full_supports'
+            : 'donut');
+    const supportHaloScope: 'tips_only' | 'full_supports' = supportHaloAuto
+        ? 'tips_only'
+        : (settings.supportHaloScope === 'full_supports'
             ? 'full_supports'
-            : 'tips_only';
-    const supportHaloMaxTipDiameterMm = settings.supportHaloMaxTipDiameterMm != null && Number.isFinite(Number(settings.supportHaloMaxTipDiameterMm))
-        ? Math.max(0.1, Math.min(5.0, Number(settings.supportHaloMaxTipDiameterMm)))
-        : 0.75;
+            : 'tips_only');
+    const supportHaloMaxTipDiameterMm = supportHaloAuto
+        ? 0.8
+        : (settings.supportHaloMaxTipDiameterMm != null && Number.isFinite(Number(settings.supportHaloMaxTipDiameterMm))
+            ? Math.max(0.1, Math.min(5.0, Number(settings.supportHaloMaxTipDiameterMm)))
+            : 0.8);
 
     const enableCustom = Boolean(settings.enableCustomSettings);
     const enableOverride = enableCustom && Boolean(settings.enableOverride);
@@ -89,6 +102,7 @@ export function resolveEffectiveAaSettings(
             tipOffsetMm: autoTipOffset,
             tipOffsetMode: 'auto',
             supportHaloEnabled,
+            supportHaloAuto,
             supportHaloRadiusPx,
             supportHaloMaxIntensityPercent,
             supportHaloProfile,
@@ -150,6 +164,7 @@ export function resolveEffectiveAaSettings(
         tipOffsetMm: effectiveTipOffset,
         tipOffsetMode: settings.tipOffsetMode ?? 'auto',
         supportHaloEnabled,
+        supportHaloAuto,
         supportHaloRadiusPx,
         supportHaloMaxIntensityPercent,
         supportHaloProfile,

@@ -46,7 +46,7 @@ export type NativeSolidSliceJobEnvelope = {
   supportHaloEnabled?: boolean;
   supportHaloRadiusPx?: number;
   supportHaloMaxIntensityPercent?: number;
-  supportHaloProfile?: 'linear' | 'exponential' | 'gaussian';
+  supportHaloProfile?: 'donut' | 'linear' | 'exponential' | 'gaussian';
   supportHaloScope?: 'tips_only' | 'full_supports';
   supportHaloMaxTipDiameterMm?: number;
   containerCompressionLevel?: number;
@@ -106,7 +106,7 @@ type NativeSolidSliceMetadataPayload = {
   support_halo_enabled: boolean;
   support_halo_radius_px: number;
   support_halo_max_intensity_percent: number;
-  support_halo_profile: 'linear' | 'exponential' | 'gaussian';
+  support_halo_profile: 'donut' | 'linear' | 'exponential' | 'gaussian';
   support_halo_scope: 'tips_only' | 'full_supports';
   support_halo_max_tip_diameter_mm: number;
   container_compression_level: number;
@@ -216,7 +216,7 @@ export function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): Nativ
       'supportHaloMaxIntensityPercent',
       job.supportHaloMaxIntensityPercent
     ),
-    support_halo_profile: job.supportHaloProfile ?? 'linear',
+    support_halo_profile: job.supportHaloProfile ?? 'donut',
     support_halo_scope: job.supportHaloScope ?? 'tips_only',
     support_halo_max_tip_diameter_mm: clampSliceJobNumber(
       'supportHaloMaxTipDiameterMm',

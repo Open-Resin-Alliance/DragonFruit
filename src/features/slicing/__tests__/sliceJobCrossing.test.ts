@@ -169,10 +169,10 @@ test('maps and clamps support halo fields with safe defaults', () => {
   });
   assert.equal(defaulted.support_halo_enabled, false);
   assert.equal(defaulted.support_halo_radius_px, 0);
-  assert.equal(defaulted.support_halo_max_intensity_percent, 50);
-  assert.equal(defaulted.support_halo_profile, 'linear');
+  assert.equal(defaulted.support_halo_max_intensity_percent, 25);
+  assert.equal(defaulted.support_halo_profile, 'donut');
   assert.equal(defaulted.support_halo_scope, 'tips_only');
-  assert.equal(defaulted.support_halo_max_tip_diameter_mm, 0.75);
+  assert.equal(defaulted.support_halo_max_tip_diameter_mm, 0.8);
 });
 
 test('the struct parser actually found the crossing', () => {

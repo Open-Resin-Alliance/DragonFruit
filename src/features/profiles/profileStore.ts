@@ -257,9 +257,10 @@ export type MaterialAntiAliasingSettings = {
     tipOffsetDisplayInUi: boolean;
     supportTipShrinkPercent: number;
     supportHaloEnabled: boolean;
+    supportHaloAuto: boolean;
     supportHaloRadiusPx: number;
     supportHaloMaxIntensityPercent: number;
-    supportHaloProfile: 'linear' | 'exponential' | 'gaussian';
+    supportHaloProfile: 'donut' | 'linear' | 'exponential' | 'gaussian';
     supportHaloScope: 'tips_only' | 'full_supports';
     supportHaloMaxTipDiameterMm: number;
 };
@@ -296,12 +297,35 @@ export const DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS: MaterialAntiAliasingSettin
     tipOffsetDisplayInUi: false,
     supportTipShrinkPercent: 10,
     supportHaloEnabled: false,
-    supportHaloRadiusPx: 2,
-    supportHaloMaxIntensityPercent: 50,
-    supportHaloProfile: 'linear',
+    supportHaloAuto: true,
+    supportHaloRadiusPx: 3,
+    supportHaloMaxIntensityPercent: 25,
+    supportHaloProfile: 'donut',
     supportHaloScope: 'tips_only',
-    supportHaloMaxTipDiameterMm: 0.75,
+    supportHaloMaxTipDiameterMm: 0.8,
 };
+
+export function getAutoSupportHaloResetPatch(coarsePitchMm?: number): Pick<
+    MaterialAntiAliasingSettings,
+    | 'supportHaloRadiusPx'
+    | 'supportHaloMaxIntensityPercent'
+    | 'supportHaloProfile'
+    | 'supportHaloScope'
+    | 'supportHaloMaxTipDiameterMm'
+> {
+    const supportHaloRadiusPx = (typeof coarsePitchMm === 'number' && Number.isFinite(coarsePitchMm) && coarsePitchMm > 0)
+        ? Math.max(1, Math.min(16, Math.round(0.15 / coarsePitchMm)))
+        : DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloRadiusPx;
+    return {
+        supportHaloRadiusPx,
+        supportHaloMaxIntensityPercent: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloMaxIntensityPercent,
+        supportHaloProfile: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloProfile,
+        supportHaloScope: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloScope,
+        supportHaloMaxTipDiameterMm: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloMaxTipDiameterMm,
+    };
+}
+
+export const buildAutoSupportHaloDefaults = getAutoSupportHaloResetPatch;
 
 const MATERIAL_PROFILE_LOCAL_OVERRIDE_KEYS = new Set<keyof MaterialProfile>([
     'layerHeightMm',
@@ -383,12 +407,22 @@ export function sanitizeMaterialAntiAliasingSettings(input: unknown): MaterialAn
     const tipOffsetMode = source.tipOffsetMode === 'auto' || source.tipOffsetMode === 'manual' || source.tipOffsetMode === 'disabled'
         ? source.tipOffsetMode
         : defaults.tipOffsetMode;
-    const supportHaloProfile = source.supportHaloProfile === 'exponential' || source.supportHaloProfile === 'gaussian'
-        ? source.supportHaloProfile
-        : defaults.supportHaloProfile;
-    const supportHaloScope = source.supportHaloScope === 'full_supports'
-        ? 'full_supports'
-        : defaults.supportHaloScope;
+    const supportHaloAuto = typeof source.supportHaloAuto === 'boolean'
+        ? source.supportHaloAuto
+        : defaults.supportHaloAuto;
+    const supportHaloProfile = supportHaloAuto
+        ? defaults.supportHaloProfile
+        : (source.supportHaloProfile === 'donut'
+            || source.supportHaloProfile === 'linear'
+            || source.supportHaloProfile === 'exponential'
+            || source.supportHaloProfile === 'gaussian'
+            ? source.supportHaloProfile
+            : defaults.supportHaloProfile);
+    const supportHaloScope = supportHaloAuto
+        ? defaults.supportHaloScope
+        : (source.supportHaloScope === 'full_supports'
+            ? 'full_supports'
+            : defaults.supportHaloScope);
 
     const enableCustomSettings = typeof source.enableCustomSettings === 'boolean'
         ? source.enableCustomSettings
@@ -432,15 +466,16 @@ export function sanitizeMaterialAntiAliasingSettings(input: unknown): MaterialAn
         supportHaloEnabled: typeof source.supportHaloEnabled === 'boolean'
             ? source.supportHaloEnabled
             : defaults.supportHaloEnabled,
-        supportHaloRadiusPx: source.supportHaloRadiusPx == null
+        supportHaloAuto,
+        supportHaloRadiusPx: supportHaloAuto || source.supportHaloRadiusPx == null
             ? defaults.supportHaloRadiusPx
-            : Math.round(clampNumber(source.supportHaloRadiusPx, defaults.supportHaloRadiusPx, 0, 8)),
-        supportHaloMaxIntensityPercent: source.supportHaloMaxIntensityPercent == null
+            : Math.round(clampNumber(source.supportHaloRadiusPx, defaults.supportHaloRadiusPx, 1, 16)),
+        supportHaloMaxIntensityPercent: supportHaloAuto || source.supportHaloMaxIntensityPercent == null
             ? defaults.supportHaloMaxIntensityPercent
-            : clampNumber(source.supportHaloMaxIntensityPercent, defaults.supportHaloMaxIntensityPercent, 0, 100),
+            : clampNumber(source.supportHaloMaxIntensityPercent, defaults.supportHaloMaxIntensityPercent, 5, 100),
         supportHaloProfile,
         supportHaloScope,
-        supportHaloMaxTipDiameterMm: source.supportHaloMaxTipDiameterMm == null
+        supportHaloMaxTipDiameterMm: supportHaloAuto || source.supportHaloMaxTipDiameterMm == null
             ? defaults.supportHaloMaxTipDiameterMm
             : clampNumber(source.supportHaloMaxTipDiameterMm, defaults.supportHaloMaxTipDiameterMm, 0.1, 5.0),
     };

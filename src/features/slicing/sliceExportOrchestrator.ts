@@ -187,7 +187,7 @@ export type SliceExportResult = {
             supportHaloEnabled: boolean;
             supportHaloRadiusPx: number;
             supportHaloMaxIntensityPercent: number;
-            supportHaloProfile: 'linear' | 'exponential' | 'gaussian';
+            supportHaloProfile: 'donut' | 'linear' | 'exponential' | 'gaussian';
             supportHaloScope: 'tips_only' | 'full_supports';
             supportHaloMaxTipDiameterMm: number;
             triangleFloatCount: number;

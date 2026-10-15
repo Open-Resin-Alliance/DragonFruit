@@ -349,20 +349,20 @@ enum SliceCommands {
         /// Enable Support Halo (sub-cure radial halo around support cross-sections)
         #[arg(long)]
         support_halo: bool,
-        /// Support Halo radial reach in pixels (0-8)
+        /// Support Halo radial reach in pixels (0-16)
         #[arg(long, default_value = "0")]
         support_halo_radius_px: u32,
         /// Support Halo maximum cure intensity (percent, 0-100)
-        #[arg(long, default_value = "50.0")]
+        #[arg(long, default_value = "25.0")]
         support_halo_max_intensity: f32,
-        /// Support Halo decay profile (linear, exponential, gaussian)
-        #[arg(long, default_value = "linear")]
+        /// Support Halo decay profile (donut, linear, exponential, gaussian)
+        #[arg(long, default_value = "donut")]
         support_halo_profile: String,
         /// Support Halo scope (tips_only, full_support)
         #[arg(long, default_value = "tips_only")]
         support_halo_scope: String,
         /// Support Halo maximum cross-section diameter in mm for tips_only scope (0.10-5.0)
-        #[arg(long, default_value = "0.75")]
+        #[arg(long, default_value = "0.80")]
         support_halo_max_tip_diameter_mm: f32,
         /// X-axis sub-pixel packing mode.
         ///

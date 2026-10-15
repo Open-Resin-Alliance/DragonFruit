@@ -231,6 +231,7 @@ fn rasterize_layer_rle_with_support_split(
     layer: u32,
     compute_area_stats: bool,
     model_triangle_count: usize,
+    halo_precalc: Option<&crate::raster::SupportHaloPrecalc>,
 ) -> (Vec<RleRun>, Option<Vec<RleRun>>, LayerAreaStatsV3) {
     let mut model_layer_indices = Vec::with_capacity(layer_candidates.len());
     let mut support_layer_indices = Vec::with_capacity(layer_candidates.len());
@@ -327,15 +328,12 @@ fn rasterize_layer_rle_with_support_split(
         );
     }
 
-    if job.support_halo_active() {
-        support_runs = crate::raster::apply_euclidean_radial_halo_rle(
+    if let Some(precalc) = halo_precalc {
+        support_runs = crate::raster::apply_euclidean_radial_halo_rle_with_precalc(
             &support_runs,
             out_width,
             out_height,
-            job.effective_support_halo_radius_px(),
-            job.effective_support_halo_max_intensity_u8(),
-            crate::raster::SupportHaloProfile::from_str_lossy(&job.support_halo_profile),
-            job.effective_support_halo_max_tip_diameter_px(),
+            precalc,
         );
     }
 
@@ -816,6 +814,8 @@ pub fn render_layers_rle(
     let progress = AtomicU32::new(0);
     let support_split_model_triangle_count =
         support_split_model_triangle_count.filter(|&count| count > 0 && count < triangles.len());
+    let halo_precalc = crate::raster::SupportHaloPrecalc::from_job(job, None);
+    let halo_precalc_ref = halo_precalc.as_ref();
 
     let (tx, rx) = std::sync::mpsc::sync_channel::<
         Result<(u32, Vec<RleRun>, Option<Vec<RleRun>>, LayerAreaStatsV3), SlicerV3Error>,
@@ -857,6 +857,7 @@ pub fn render_layers_rle(
                                             layer,
                                             compute_area_stats,
                                             model_triangle_count,
+                                            halo_precalc_ref,
                                         )
                                     } else {
                                         let (runs, stats) = rasterize_layer_rle(
@@ -978,6 +979,8 @@ pub fn render_layers_rle_encoded(
     let progress = AtomicU32::new(0);
     let support_split_model_triangle_count =
         support_split_model_triangle_count.filter(|&count| count > 0 && count < triangles.len());
+    let halo_precalc = crate::raster::SupportHaloPrecalc::from_job(job, None);
+    let halo_precalc_ref = halo_precalc.as_ref();
 
     let (tx, rx) = std::sync::mpsc::sync_channel::<
         Result<(u32, Vec<u8>, LayerAreaStatsV3), SlicerV3Error>,
@@ -1017,6 +1020,7 @@ pub fn render_layers_rle_encoded(
                                             layer,
                                             compute_area_stats,
                                             model_triangle_count,
+                                            halo_precalc_ref,
                                         )
                                     } else {
                                         let (runs, stats) = rasterize_layer_rle(

@@ -58,11 +58,11 @@ fn default_dither_device_gamma() -> f64 {
 }
 
 fn default_support_halo_max_intensity_percent() -> f32 {
-    50.0
+    25.0
 }
 
 fn default_support_halo_profile() -> String {
-    "linear".to_string()
+    "donut".to_string()
 }
 
 fn default_support_halo_scope() -> String {
@@ -70,7 +70,7 @@ fn default_support_halo_scope() -> String {
 }
 
 fn default_support_halo_max_tip_diameter_mm() -> f32 {
-    0.75
+    0.80
 }
 
 mod experiments;

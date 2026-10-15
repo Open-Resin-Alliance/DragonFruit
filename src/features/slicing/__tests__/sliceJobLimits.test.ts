@@ -10,7 +10,7 @@ test('holds each field to its own bounds', () => {
   assert.equal(clampSliceJobNumber('blurBrushSigmaX', 0), 0.05);
   assert.equal(clampSliceJobNumber('blurBrushSigmaX', 1000), 16);
   assert.equal(clampSliceJobNumber('zBlendMaxAlphaPercent', 150), 100);
-  assert.equal(clampSliceJobNumber('supportHaloRadiusPx', 25), 8);
+  assert.equal(clampSliceJobNumber('supportHaloRadiusPx', 25), 16);
   assert.equal(clampSliceJobNumber('supportHaloRadiusPx', -2), 0);
   assert.equal(clampSliceJobNumber('supportHaloMaxIntensityPercent', 140), 100);
   assert.equal(clampSliceJobNumber('supportHaloMaxIntensityPercent', -5), 0);
@@ -38,6 +38,9 @@ test('substitutes the fallback for a missing or non-numeric input', () => {
   assert.equal(clampSliceJobNumber('zBlurSigma', null), 0.5);
   assert.equal(clampSliceJobNumber('zBlendLookBack', 'not a number'), 2);
   assert.equal(clampSliceJobNumber('zBlendMaxAlphaPercent', Number.NaN), 90);
+  assert.equal(clampSliceJobNumber('supportHaloRadiusPx', undefined), 0);
+  assert.equal(clampSliceJobNumber('supportHaloMaxIntensityPercent', undefined), 25);
+  assert.equal(clampSliceJobNumber('supportHaloMaxTipDiameterMm', undefined), 0.8);
 });
 
 test('never returns a non-finite number', () => {

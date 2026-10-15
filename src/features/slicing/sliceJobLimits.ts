@@ -31,9 +31,9 @@ export const SLICE_JOB_LIMITS = {
   zBlendMaxAlphaPercent: { min: 0, max: 100, fallback: 90 },
   minimumAaAlphaPercent: { min: 0, max: 100, fallback: 0 },
   modelTriangleCount: { min: 0, snap: 'floor', fallback: 0 },
-  supportHaloRadiusPx: { min: 0, max: 8, snap: 'round', fallback: 0 },
-  supportHaloMaxIntensityPercent: { min: 0, max: 100, fallback: 50 },
-  supportHaloMaxTipDiameterMm: { min: 0.1, max: 5.0, fallback: 0.75 },
+  supportHaloRadiusPx: { min: 0, max: 16, snap: 'round', fallback: 0 },
+  supportHaloMaxIntensityPercent: { min: 0, max: 100, fallback: 25 },
+  supportHaloMaxTipDiameterMm: { min: 0.1, max: 5.0, fallback: 0.8 },
   containerCompressionLevel: { min: 0, max: 9, snap: 'round', fallback: 2 },
 } as const satisfies Record<string, SliceJobLimit>;
 

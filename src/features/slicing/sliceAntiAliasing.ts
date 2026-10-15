@@ -65,9 +65,10 @@ export type SliceAntiAliasingOptions = {
   antiAliasingMode: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage';
   supportTipShrinkPercent: number;
   supportHaloEnabled: boolean;
+  supportHaloAuto: boolean;
   supportHaloRadiusPx: number;
   supportHaloMaxIntensityPercent: number;
-  supportHaloProfile: 'linear' | 'exponential' | 'gaussian';
+  supportHaloProfile: 'donut' | 'linear' | 'exponential' | 'gaussian';
   supportHaloScope: 'tips_only' | 'full_supports';
   supportHaloMaxTipDiameterMm: number;
   blurBrushRadiusPx: number;
@@ -323,28 +324,40 @@ export function resolveSliceAntiAliasing(input: SliceAntiAliasingInput): SliceAn
 
   const minimumAaAlpha = resolveMinimumAaAlpha(printerProfile, materialProfile, override);
 
-  const supportHaloRadiusPx = clampSliceJobNumber(
-    'supportHaloRadiusPx',
-    settings.supportHaloRadiusPx != null && Number.isFinite(Number(settings.supportHaloRadiusPx))
-      ? Number(settings.supportHaloRadiusPx)
-      : DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloRadiusPx,
-  );
-  const supportHaloMaxIntensityPercent = clampSliceJobNumber(
-    'supportHaloMaxIntensityPercent',
-    settings.supportHaloMaxIntensityPercent,
-  );
-  const supportHaloProfile: 'linear' | 'exponential' | 'gaussian' =
-    settings.supportHaloProfile === 'exponential' || settings.supportHaloProfile === 'gaussian'
-      ? settings.supportHaloProfile
-      : 'linear';
-  const supportHaloScope: 'tips_only' | 'full_supports' =
-    settings.supportHaloScope === 'full_supports'
-      ? 'full_supports'
-      : 'tips_only';
-  const supportHaloMaxTipDiameterMm = clampSliceJobNumber(
-    'supportHaloMaxTipDiameterMm',
-    settings.supportHaloMaxTipDiameterMm,
-  );
+  const supportHaloAuto = settings.supportHaloAuto !== false;
+  const supportHaloRadiusPx = supportHaloAuto
+    ? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloRadiusPx
+    : clampSliceJobNumber(
+        'supportHaloRadiusPx',
+        settings.supportHaloRadiusPx != null && Number.isFinite(Number(settings.supportHaloRadiusPx))
+          ? Number(settings.supportHaloRadiusPx)
+          : DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloRadiusPx,
+      );
+  const supportHaloMaxIntensityPercent = supportHaloAuto
+    ? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloMaxIntensityPercent
+    : clampSliceJobNumber(
+        'supportHaloMaxIntensityPercent',
+        settings.supportHaloMaxIntensityPercent,
+      );
+  const supportHaloProfile: 'donut' | 'linear' | 'exponential' | 'gaussian' = supportHaloAuto
+    ? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloProfile
+    : (settings.supportHaloProfile === 'donut'
+        || settings.supportHaloProfile === 'linear'
+        || settings.supportHaloProfile === 'exponential'
+        || settings.supportHaloProfile === 'gaussian'
+        ? settings.supportHaloProfile
+        : DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloProfile);
+  const supportHaloScope: 'tips_only' | 'full_supports' = supportHaloAuto
+    ? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloScope
+    : (settings.supportHaloScope === 'full_supports'
+        ? 'full_supports'
+        : 'tips_only');
+  const supportHaloMaxTipDiameterMm = supportHaloAuto
+    ? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloMaxTipDiameterMm
+    : clampSliceJobNumber(
+        'supportHaloMaxTipDiameterMm',
+        settings.supportHaloMaxTipDiameterMm,
+      );
 
   return {
     options: {
@@ -353,6 +366,7 @@ export function resolveSliceAntiAliasing(input: SliceAntiAliasingInput): SliceAn
       antiAliasingMode,
       supportTipShrinkPercent: settings.supportTipShrinkPercent,
       supportHaloEnabled: settings.supportHaloEnabled === true,
+      supportHaloAuto,
       supportHaloRadiusPx,
       supportHaloMaxIntensityPercent,
       supportHaloProfile,
@@ -431,9 +445,10 @@ export type SliceJobAntiAliasing = {
    */
   supportTipShrinkPercent: number;
   supportHaloEnabled: boolean;
+  supportHaloAuto: boolean;
   supportHaloRadiusPx: number;
   supportHaloMaxIntensityPercent: number;
-  supportHaloProfile: 'linear' | 'exponential' | 'gaussian';
+  supportHaloProfile: 'donut' | 'linear' | 'exponential' | 'gaussian';
   supportHaloScope: 'tips_only' | 'full_supports';
   supportHaloMaxTipDiameterMm: number;
   /** See `SliceAntiAliasing.warnings`. Not part of the job. */
@@ -479,41 +494,56 @@ export function resolveSliceJobAntiAliasing(input: {
     ?? haloSettings?.supportHaloEnabled
     ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloEnabled,
   );
-  const rawHaloRadiusPx = options.supportHaloRadiusPx
-    ?? haloSettings?.supportHaloRadiusPx
-    ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloRadiusPx;
+  const supportHaloAuto = (
+    options.supportHaloAuto
+    ?? haloSettings?.supportHaloAuto
+    ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloAuto
+  ) !== false;
+  const rawHaloRadiusPx = supportHaloAuto
+    ? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloRadiusPx
+    : (options.supportHaloRadiusPx
+      ?? haloSettings?.supportHaloRadiusPx
+      ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloRadiusPx);
   const supportHaloRadiusPx = clampSliceJobNumber(
     'supportHaloRadiusPx',
     rawHaloRadiusPx != null && Number.isFinite(Number(rawHaloRadiusPx))
       ? Number(rawHaloRadiusPx)
       : DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloRadiusPx,
   );
-  const supportHaloMaxIntensityPercent = clampSliceJobNumber(
-    'supportHaloMaxIntensityPercent',
-    options.supportHaloMaxIntensityPercent
-    ?? haloSettings?.supportHaloMaxIntensityPercent
-    ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloMaxIntensityPercent,
-  );
-  const rawHaloProfile = options.supportHaloProfile
-    ?? haloSettings?.supportHaloProfile
-    ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloProfile;
-  const supportHaloProfile: 'linear' | 'exponential' | 'gaussian' =
-    rawHaloProfile === 'exponential' || rawHaloProfile === 'gaussian'
+  const supportHaloMaxIntensityPercent = supportHaloAuto
+    ? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloMaxIntensityPercent
+    : clampSliceJobNumber(
+        'supportHaloMaxIntensityPercent',
+        options.supportHaloMaxIntensityPercent
+        ?? haloSettings?.supportHaloMaxIntensityPercent
+        ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloMaxIntensityPercent,
+      );
+  const rawHaloProfile = supportHaloAuto
+    ? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloProfile
+    : (options.supportHaloProfile
+      ?? haloSettings?.supportHaloProfile
+      ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloProfile);
+  const supportHaloProfile: 'donut' | 'linear' | 'exponential' | 'gaussian' =
+    rawHaloProfile === 'donut' || rawHaloProfile === 'linear' || rawHaloProfile === 'exponential' || rawHaloProfile === 'gaussian'
       ? rawHaloProfile
-      : 'linear';
-  const rawHaloScope = options.supportHaloScope
-    ?? haloSettings?.supportHaloScope
-    ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloScope;
+      : 'donut';
+  const rawHaloScope = supportHaloAuto
+    ? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloScope
+    : (options.supportHaloScope
+      ?? haloSettings?.supportHaloScope
+      ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloScope);
   const supportHaloScope: 'tips_only' | 'full_supports' =
     rawHaloScope === 'full_supports'
       ? 'full_supports'
       : 'tips_only';
-  const supportHaloMaxTipDiameterMm = clampSliceJobNumber(
-    'supportHaloMaxTipDiameterMm',
-    options.supportHaloMaxTipDiameterMm
-    ?? haloSettings?.supportHaloMaxTipDiameterMm
-    ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloMaxTipDiameterMm,
-  );
+  const supportHaloMaxTipDiameterMm = supportHaloAuto
+    ? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloMaxTipDiameterMm
+    : clampSliceJobNumber(
+        'supportHaloMaxTipDiameterMm',
+        options.supportHaloMaxTipDiameterMm
+        ?? haloSettings?.supportHaloMaxTipDiameterMm
+        ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloMaxTipDiameterMm,
+      );
 
   return {
     antiAliasingLevel: options.antiAliasingLevel ?? 'Off',
@@ -541,6 +571,7 @@ export function resolveSliceJobAntiAliasing(input: {
     ),
     supportTipShrinkPercent,
     supportHaloEnabled,
+    supportHaloAuto,
     supportHaloRadiusPx,
     supportHaloMaxIntensityPercent,
     supportHaloProfile,

@@ -517,10 +517,7 @@ struct SupportMaskContext {
     triangles: Vec<crate::geometry::Triangle>,
     layer_index: crate::index::LayerIndex,
     model_triangle_count: usize,
-    halo_radius_px: u32,
-    halo_max_intensity_u8: u8,
-    halo_profile: crate::raster::SupportHaloProfile,
-    halo_max_tip_diameter_px: Option<u32>,
+    halo_precalc: Option<crate::raster::SupportHaloPrecalc>,
     support_candidates: Vec<usize>,
 }
 
@@ -578,12 +575,7 @@ impl SupportMaskContext {
             triangles,
             layer_index,
             model_triangle_count,
-            halo_radius_px: job.effective_support_halo_radius_px(),
-            halo_max_intensity_u8: job.effective_support_halo_max_intensity_u8(),
-            halo_profile: crate::raster::SupportHaloProfile::from_str_lossy(
-                &job.support_halo_profile,
-            ),
-            halo_max_tip_diameter_px: job.effective_support_halo_max_tip_diameter_px(),
+            halo_precalc: crate::raster::SupportHaloPrecalc::from_job(job, None),
             support_candidates: Vec::new(),
         })
     }
@@ -614,26 +606,23 @@ impl SupportMaskContext {
 
         let width = self.support_job.effective_render_width_px() as usize;
         let height = self.support_job.source_height_px as usize;
-        let r = if self.halo_radius_px > 0 && self.halo_max_intensity_u8 > 0 {
-            crate::raster::apply_euclidean_radial_halo_dense(
+        let (rx, ry) = if let Some(ref precalc) = self.halo_precalc {
+            crate::raster::apply_euclidean_radial_halo_dense_with_precalc(
                 &mut mask,
                 width,
                 height,
-                self.halo_radius_px,
-                self.halo_max_intensity_u8,
-                self.halo_profile,
-                self.halo_max_tip_diameter_px,
+                precalc,
             );
-            self.halo_radius_px as usize
+            (precalc.max_rx_px, precalc.max_ry_px)
         } else {
-            0
+            (0, 0)
         };
 
-        let min_x = (stats.min_x.max(0) as usize).saturating_sub(r);
-        let max_x = ((stats.max_x.max(stats.min_x).max(0) as usize) + r)
+        let min_x = (stats.min_x.max(0) as usize).saturating_sub(rx);
+        let max_x = ((stats.max_x.max(stats.min_x).max(0) as usize) + rx)
             .min(width.saturating_sub(1));
-        let min_y = (stats.min_y.max(0) as usize).saturating_sub(r);
-        let max_y = ((stats.max_y.max(stats.min_y).max(0) as usize) + r)
+        let min_y = (stats.min_y.max(0) as usize).saturating_sub(ry);
+        let max_y = ((stats.max_y.max(stats.min_y).max(0) as usize) + ry)
             .min(height.saturating_sub(1));
         let bounds = (min_x, max_x, min_y, max_y);
         let row_width = max_x - min_x + 1;
@@ -3742,13 +3731,13 @@ pub fn slice_and_rasterize_rle_blocks_v3(
     let support_job_ref = support_job.as_ref();
     let tail_cure_lut_ref = tail_cure_lut.as_ref();
     let encode_block_fn_ref = encode_block_fn.as_ref();
-    let halo_max_tip_diameter_px = job.effective_support_halo_max_tip_diameter_px();
-    let seam_halo_radius = blur_radius.max(if job.support_halo_active() {
-        (job.effective_support_halo_radius_px() as usize)
-            .saturating_add(halo_max_tip_diameter_px.unwrap_or(0) as usize)
-    } else {
-        0
-    });
+    let halo_precalc = crate::raster::SupportHaloPrecalc::from_job(job, None);
+    let halo_precalc_ref = halo_precalc.as_ref();
+    let seam_halo_radius = blur_radius.max(
+        halo_precalc_ref
+            .map(|p| p.max_rx_px.saturating_add(p.max_tip_dx_px))
+            .unwrap_or(0),
+    );
 
     let produce_layer = |layer: u32| -> Result<
         (Vec<crate::pipeline::RleBlockPayload>, LayerAreaStatsV3),
@@ -3902,17 +3891,12 @@ pub fn slice_and_rasterize_rle_blocks_v3(
                 } else {
                     support_super.clone()
                 };
-                if job.support_halo_active() {
-                    support_runs = crate::raster::apply_euclidean_radial_halo_rle(
+                if let Some(precalc) = halo_precalc_ref {
+                    support_runs = crate::raster::apply_euclidean_radial_halo_rle_with_precalc(
                         &support_runs,
                         wid_w,
                         out_height,
-                        job.effective_support_halo_radius_px(),
-                        job.effective_support_halo_max_intensity_u8(),
-                        crate::raster::SupportHaloProfile::from_str_lossy(
-                            &job.support_halo_profile,
-                        ),
-                        halo_max_tip_diameter_px,
+                        precalc,
                     );
                 }
                 final_runs = merge_rle_max(final_runs, &support_runs);
@@ -6154,6 +6138,92 @@ mod tests {
                 }
             }
             assert!(support_core_count > 0);
+        }
+    }
+
+    #[test]
+    fn predithered_halo_lut_quantizes_to_3bit_and_4bit_palette_bytes() {
+        let mut flat = Vec::<f32>::new();
+        // 0..12: Model box on the left
+        push_box_triangles(&mut flat, -2.0, 0.0, 0.0, 2.0, 1.0, 1.0);
+        // 12..24: Thin support tip on the right (0.25 mm diameter)
+        push_box_triangles(&mut flat, 2.0, 0.0, 0.0, 2.0, 0.25, 0.25);
+
+        for (bit_depth, expected_len) in [(3u32, 8usize), (4u32, 16usize)] {
+            let job = SliceJobV3 {
+                output_format: ".png".to_string(),
+                source_width_px: 128,
+                source_height_px: 128,
+                width_px: 128,
+                height_px: 128,
+                x_packing_mode: "none".to_string(),
+                build_width_mm: 6.4,
+                build_depth_mm: 6.4,
+                layer_height_mm: 1.0,
+                total_layers: 2,
+                png_compression_strategy: "fastest".to_string(),
+                container_compression_level: 0,
+                anti_aliasing_level: "2x".to_string(),
+                anti_aliasing_mode: "Coverage".to_string(),
+                blur_brush_radius_px: 0,
+                aa_on_supports: false,
+                model_triangle_count: 12,
+                support_halo_enabled: true,
+                support_halo_radius_px: 6,
+                support_halo_max_intensity_percent: 25.0,
+                support_halo_profile: "donut".to_string(),
+                support_halo_scope: "tips_only".to_string(),
+                support_halo_max_tip_diameter_mm: 0.80,
+                dither_enabled: true,
+                dither_bit_depth: Some(bit_depth),
+                dither_device_gamma: 3.0,
+                triangles_xyz: flat.clone(),
+                metadata_json: "{}".to_string(),
+                ..Default::default()
+            };
+
+            let mut identity = [0u8; 256];
+            for (i, v) in identity.iter_mut().enumerate() {
+                *v = i as u8;
+            }
+            let palette = crate::dither::DitherPaletteV3::new(&identity, 3.0, bit_depth);
+            assert_eq!(palette.target_bytes.len(), expected_len);
+
+            let mut layers = Vec::new();
+            super::slice_and_rasterize_rle_encoded_v3(
+                &job,
+                false,
+                std::sync::Arc::new(|_layer, runs| {
+                    Ok(expand_rle_to_mask(runs, 128 * 128))
+                }),
+                |_idx, mask| {
+                    layers.push(mask);
+                    Ok(())
+                },
+                None,
+                None,
+            )
+            .expect("dithered halo slice should succeed");
+
+            let mask = &layers[0];
+            let mut halo_non_zero_count = 0usize;
+            for y in 0..128usize {
+                for x in 64..128usize {
+                    let v = mask[y * 128 + x];
+                    if v > 0 && v < 255 {
+                        halo_non_zero_count += 1;
+                    }
+                    assert!(
+                        palette.target_bytes.contains(&v),
+                        "bit_depth={bit_depth}: halo pixel ({x},{y}) value {v} is not in hardware palette {:?}",
+                        palette.target_bytes
+                    );
+                }
+            }
+            assert!(
+                halo_non_zero_count > 0,
+                "bit_depth={bit_depth}: support tip halo region must contain non-zero quantized halo pixels"
+            );
         }
     }
 

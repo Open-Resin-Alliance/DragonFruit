@@ -19,6 +19,7 @@ import {
     type MaterialProfile,
     type PrinterOutputFormat,
     getActivePrinterProfile,
+    getAutoSupportHaloResetPatch,
     getProfileStoreSnapshot,
 } from '@/features/profiles/profileStore';
 import {
@@ -1511,32 +1512,48 @@ export function MaterialAntiAliasingSection({ draft, onChange, lockActivationTog
                         label="Support Contact Halo"
                         helpText="Generates an outward radial sub-threshold exposure collar around support contacts in Void space to reinforce tips against peel forces without changing model boundaries."
                         checked={settings.supportHaloEnabled}
-                        onChange={(value) => updateAaSettings({ supportHaloEnabled: value })}
+                        onChange={(value) => {
+                            if (value && settings.supportHaloAuto !== false) {
+                                updateAaSettings({ supportHaloEnabled: true, supportHaloAuto: true, ...getAutoSupportHaloResetPatch() });
+                            } else {
+                                updateAaSettings({ supportHaloEnabled: value });
+                            }
+                        }}
                     />
                     {settings.supportHaloEnabled && (
                         <>
+                            <LabeledToggleInput
+                                label="Automatic Halo Settings"
+                                helpText="Automatically applies the calibrated Donut anti-dilation moat profile, 25% peak intensity, 0.80 mm tip cutoff, and pitch-adaptive radius. Toggling resets halo parameters to defaults."
+                                checked={settings.supportHaloAuto !== false}
+                                onChange={(value) => updateAaSettings({ supportHaloAuto: value, ...getAutoSupportHaloResetPatch() })}
+                            />
                             <LabeledNumberInput
                                 label="Halo Radius (px)"
-                                helpText="Outward radial collar width in pixels around targeted support geometry (1 to 8 px)."
+                                helpText="Outward radial collar width in pixels around targeted support geometry (1 to 16 px)."
+                                disabled={settings.supportHaloAuto !== false}
                                 step={1}
                                 precision={0}
                                 value={settings.supportHaloRadiusPx}
-                                onChange={(value) => updateAaSettings({ supportHaloRadiusPx: Math.round(clampAaNumber(value, 2, 1, 8)) })}
+                                onChange={(value) => updateAaSettings({ supportHaloRadiusPx: Math.round(clampAaNumber(value, 3, 1, 16)) })}
                             />
                             <LabeledNumberInput
                                 label="Halo Max Intensity (%)"
                                 helpText="Peak grayscale intensity at the immediate boundary of the support core (5% to 100%)."
+                                disabled={settings.supportHaloAuto !== false}
                                 step={5}
                                 precision={0}
                                 value={settings.supportHaloMaxIntensityPercent}
-                                onChange={(value) => updateAaSettings({ supportHaloMaxIntensityPercent: Math.round(clampAaNumber(value, 50, 5, 100)) })}
+                                onChange={(value) => updateAaSettings({ supportHaloMaxIntensityPercent: Math.round(clampAaNumber(value, 25, 5, 100)) })}
                             />
                             <AaSelectDropdown
                                 label="Halo Falloff Profile"
                                 value={settings.supportHaloProfile}
+                                disabled={settings.supportHaloAuto !== false}
                                 helpText="Radial attenuation curve from support boundary to outer halo edge."
-                                onChange={(value) => updateAaSettings({ supportHaloProfile: value as 'linear' | 'exponential' | 'gaussian' })}
+                                onChange={(value) => updateAaSettings({ supportHaloProfile: value as 'donut' | 'linear' | 'exponential' | 'gaussian' })}
                                 options={[
+                                    { value: 'donut', label: 'Donut (Anti-Dilation Moat)' },
                                     { value: 'linear', label: 'Linear' },
                                     { value: 'exponential', label: 'Exponential (Cure-Matched)' },
                                     { value: 'gaussian', label: 'Gaussian' },
@@ -1545,6 +1562,7 @@ export function MaterialAntiAliasingSection({ draft, onChange, lockActivationTog
                             <AaSelectDropdown
                                 label="Halo Target Scope"
                                 value={settings.supportHaloScope}
+                                disabled={settings.supportHaloAuto !== false}
                                 helpText="Restricts the halo collar to narrow contact tips or applies it across all support geometry."
                                 onChange={(value) => updateAaSettings({ supportHaloScope: value as 'tips_only' | 'full_supports' })}
                                 options={[
@@ -1556,10 +1574,11 @@ export function MaterialAntiAliasingSection({ draft, onChange, lockActivationTog
                                 <LabeledNumberInput
                                     label="Max Tip Diameter (mm)"
                                     helpText="Maximum cross-sectional diameter of support islands eligible for tip halo generation."
+                                    disabled={settings.supportHaloAuto !== false}
                                     step={0.05}
                                     precision={2}
                                     value={settings.supportHaloMaxTipDiameterMm}
-                                    onChange={(value) => updateAaSettings({ supportHaloMaxTipDiameterMm: clampAaNumber(value, 0.75, 0.1, 5.0) })}
+                                    onChange={(value) => updateAaSettings({ supportHaloMaxTipDiameterMm: clampAaNumber(value, 0.8, 0.1, 5.0) })}
                                 />
                             )}
                         </>
@@ -1934,32 +1953,48 @@ function MaterialAntiAliasingSectionDense({ draft, onChange }: MaterialAntiAlias
                         label="Support Contact Halo"
                         helpText="Generates an outward radial sub-threshold exposure collar around support contacts in Void space to reinforce tips against peel forces without changing model boundaries."
                         checked={settings.supportHaloEnabled}
-                        onChange={(value) => updateAaSettings({ supportHaloEnabled: value })}
+                        onChange={(value) => {
+                            if (value && settings.supportHaloAuto !== false) {
+                                updateAaSettings({ supportHaloEnabled: true, supportHaloAuto: true, ...getAutoSupportHaloResetPatch() });
+                            } else {
+                                updateAaSettings({ supportHaloEnabled: value });
+                            }
+                        }}
                     />
                     {settings.supportHaloEnabled && (
                         <>
+                            <LabeledToggleInput
+                                label="Automatic Halo Settings"
+                                helpText="Automatically applies the calibrated Donut anti-dilation moat profile, 25% peak intensity, 0.80 mm tip cutoff, and pitch-adaptive radius. Toggling resets halo parameters to defaults."
+                                checked={settings.supportHaloAuto !== false}
+                                onChange={(value) => updateAaSettings({ supportHaloAuto: value, ...getAutoSupportHaloResetPatch() })}
+                            />
                             <LabeledNumberInput
                                 label="Halo Radius (px)"
-                                helpText="Outward radial collar width in pixels around targeted support geometry (1 to 8 px)."
+                                helpText="Outward radial collar width in pixels around targeted support geometry (1 to 16 px)."
+                                disabled={settings.supportHaloAuto !== false}
                                 step={1}
                                 precision={0}
                                 value={settings.supportHaloRadiusPx}
-                                onChange={(value) => updateAaSettings({ supportHaloRadiusPx: Math.round(clampAaNumber(value, 2, 1, 8)) })}
+                                onChange={(value) => updateAaSettings({ supportHaloRadiusPx: Math.round(clampAaNumber(value, 3, 1, 16)) })}
                             />
                             <LabeledNumberInput
                                 label="Halo Max Intensity (%)"
                                 helpText="Peak grayscale intensity at the immediate boundary of the support core (5% to 100%)."
+                                disabled={settings.supportHaloAuto !== false}
                                 step={5}
                                 precision={0}
                                 value={settings.supportHaloMaxIntensityPercent}
-                                onChange={(value) => updateAaSettings({ supportHaloMaxIntensityPercent: Math.round(clampAaNumber(value, 50, 5, 100)) })}
+                                onChange={(value) => updateAaSettings({ supportHaloMaxIntensityPercent: Math.round(clampAaNumber(value, 25, 5, 100)) })}
                             />
                             <AaSelectDropdown
                                 label="Halo Falloff Profile"
                                 value={settings.supportHaloProfile}
+                                disabled={settings.supportHaloAuto !== false}
                                 helpText="Radial attenuation curve from support boundary to outer halo edge."
-                                onChange={(value) => updateAaSettings({ supportHaloProfile: value as 'linear' | 'exponential' | 'gaussian' })}
+                                onChange={(value) => updateAaSettings({ supportHaloProfile: value as 'donut' | 'linear' | 'exponential' | 'gaussian' })}
                                 options={[
+                                    { value: 'donut', label: 'Donut (Anti-Dilation Moat)' },
                                     { value: 'linear', label: 'Linear' },
                                     { value: 'exponential', label: 'Exponential (Cure-Matched)' },
                                     { value: 'gaussian', label: 'Gaussian' },
@@ -1968,6 +2003,7 @@ function MaterialAntiAliasingSectionDense({ draft, onChange }: MaterialAntiAlias
                             <AaSelectDropdown
                                 label="Halo Target Scope"
                                 value={settings.supportHaloScope}
+                                disabled={settings.supportHaloAuto !== false}
                                 helpText="Restricts the halo collar to narrow contact tips or applies it across all support geometry."
                                 onChange={(value) => updateAaSettings({ supportHaloScope: value as 'tips_only' | 'full_supports' })}
                                 options={[
@@ -1979,10 +2015,11 @@ function MaterialAntiAliasingSectionDense({ draft, onChange }: MaterialAntiAlias
                                 <LabeledNumberInput
                                     label="Max Tip Diameter (mm)"
                                     helpText="Maximum cross-sectional diameter of support islands eligible for tip halo generation."
+                                    disabled={settings.supportHaloAuto !== false}
                                     step={0.05}
                                     precision={2}
                                     value={settings.supportHaloMaxTipDiameterMm}
-                                    onChange={(value) => updateAaSettings({ supportHaloMaxTipDiameterMm: clampAaNumber(value, 0.75, 0.1, 5.0) })}
+                                    onChange={(value) => updateAaSettings({ supportHaloMaxTipDiameterMm: clampAaNumber(value, 0.8, 0.1, 5.0) })}
                                 />
                             )}
                         </>
@@ -2242,31 +2279,46 @@ function MaterialAntiAliasingSectionLegacy({ draft, onChange }: MaterialAntiAlia
                     <LabeledToggleInput
                         label="Support Contact Halo"
                         checked={settings.supportHaloEnabled}
-                        onChange={(value) => updateAaSettings({ supportHaloEnabled: value })}
+                        onChange={(value) => {
+                            if (value && settings.supportHaloAuto !== false) {
+                                updateAaSettings({ supportHaloEnabled: true, supportHaloAuto: true, ...getAutoSupportHaloResetPatch() });
+                            } else {
+                                updateAaSettings({ supportHaloEnabled: value });
+                            }
+                        }}
                     />
                     <AaInlineHelp>Generates an outward radial sub-threshold exposure collar around support contacts in Void space to reinforce tips against peel forces without changing model boundaries.</AaInlineHelp>
 
                     {settings.supportHaloEnabled && (
                         <>
+                            <LabeledToggleInput
+                                label="Automatic Halo Settings"
+                                checked={settings.supportHaloAuto !== false}
+                                onChange={(value) => updateAaSettings({ supportHaloAuto: value, ...getAutoSupportHaloResetPatch() })}
+                            />
                             <LabeledNumberInput
                                 label="Halo Radius (px)"
+                                disabled={settings.supportHaloAuto !== false}
                                 step={1}
                                 precision={0}
                                 value={settings.supportHaloRadiusPx}
-                                onChange={(value) => updateAaSettings({ supportHaloRadiusPx: Math.round(clampAaNumber(value, 2, 1, 8)) })}
+                                onChange={(value) => updateAaSettings({ supportHaloRadiusPx: Math.round(clampAaNumber(value, 3, 1, 16)) })}
                             />
                             <LabeledNumberInput
                                 label="Halo Max Intensity (%)"
+                                disabled={settings.supportHaloAuto !== false}
                                 step={5}
                                 precision={0}
                                 value={settings.supportHaloMaxIntensityPercent}
-                                onChange={(value) => updateAaSettings({ supportHaloMaxIntensityPercent: Math.round(clampAaNumber(value, 50, 5, 100)) })}
+                                onChange={(value) => updateAaSettings({ supportHaloMaxIntensityPercent: Math.round(clampAaNumber(value, 25, 5, 100)) })}
                             />
                             <SelectDropdown
                                 label="Halo Falloff Profile"
                                 value={settings.supportHaloProfile}
-                                onChange={(value) => updateAaSettings({ supportHaloProfile: value as 'linear' | 'exponential' | 'gaussian' })}
+                                disabled={settings.supportHaloAuto !== false}
+                                onChange={(value) => updateAaSettings({ supportHaloProfile: value as 'donut' | 'linear' | 'exponential' | 'gaussian' })}
                                 options={[
+                                    { value: 'donut', label: 'Donut (Anti-Dilation Moat)' },
                                     { value: 'linear', label: 'Linear' },
                                     { value: 'exponential', label: 'Exponential (Cure-Matched)' },
                                     { value: 'gaussian', label: 'Gaussian' },
@@ -2278,6 +2330,7 @@ function MaterialAntiAliasingSectionLegacy({ draft, onChange }: MaterialAntiAlia
                             <SelectDropdown
                                 label="Halo Target Scope"
                                 value={settings.supportHaloScope}
+                                disabled={settings.supportHaloAuto !== false}
                                 onChange={(value) => updateAaSettings({ supportHaloScope: value as 'tips_only' | 'full_supports' })}
                                 options={[
                                     { value: 'tips_only', label: 'Contact Tips Only' },
@@ -2290,10 +2343,11 @@ function MaterialAntiAliasingSectionLegacy({ draft, onChange }: MaterialAntiAlia
                             {settings.supportHaloScope === 'tips_only' && (
                                 <LabeledNumberInput
                                     label="Max Tip Diameter (mm)"
+                                    disabled={settings.supportHaloAuto !== false}
                                     step={0.05}
                                     precision={2}
                                     value={settings.supportHaloMaxTipDiameterMm}
-                                    onChange={(value) => updateAaSettings({ supportHaloMaxTipDiameterMm: clampAaNumber(value, 0.75, 0.1, 5.0) })}
+                                    onChange={(value) => updateAaSettings({ supportHaloMaxTipDiameterMm: clampAaNumber(value, 0.8, 0.1, 5.0) })}
                                 />
                             )}
                         </>
