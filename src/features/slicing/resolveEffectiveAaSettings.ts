@@ -17,7 +17,8 @@ export interface EffectiveAaSettings {
     tipOffsetMode: 'disabled' | 'auto' | 'manual';
     supportHaloEnabled: boolean;
     supportHaloAuto: boolean;
-    supportHaloRadiusPx: number;
+    supportHaloRadiusMm: number;
+    supportHaloInverseScalePercent: number;
     supportHaloMaxIntensityPercent: number;
     supportHaloProfile: 'donut' | 'linear' | 'exponential' | 'gaussian';
     supportHaloScope: 'tips_only' | 'full_supports';
@@ -52,11 +53,16 @@ export function resolveEffectiveAaSettings(
 
     const supportHaloEnabled = Boolean(settings.supportHaloEnabled);
     const supportHaloAuto = settings.supportHaloAuto !== false;
-    const supportHaloRadiusPx = supportHaloAuto
-        ? 3
-        : (settings.supportHaloRadiusPx != null && Number.isFinite(Number(settings.supportHaloRadiusPx))
-            ? Math.max(0, Math.min(16, Math.round(Number(settings.supportHaloRadiusPx))))
-            : 3);
+    const supportHaloRadiusMm = supportHaloAuto
+        ? 0.15
+        : (settings.supportHaloRadiusMm != null && Number.isFinite(Number(settings.supportHaloRadiusMm))
+            ? Math.max(0.02, Math.min(0.50, Number(settings.supportHaloRadiusMm)))
+            : 0.15);
+    const supportHaloInverseScalePercent = supportHaloAuto
+        ? 100
+        : (settings.supportHaloInverseScalePercent != null && Number.isFinite(Number(settings.supportHaloInverseScalePercent))
+            ? Math.max(0, Math.min(200, Math.round(Number(settings.supportHaloInverseScalePercent))))
+            : 100);
     const supportHaloMaxIntensityPercent = supportHaloAuto
         ? 25
         : (settings.supportHaloMaxIntensityPercent != null && Number.isFinite(Number(settings.supportHaloMaxIntensityPercent))
@@ -103,7 +109,8 @@ export function resolveEffectiveAaSettings(
             tipOffsetMode: 'auto',
             supportHaloEnabled,
             supportHaloAuto,
-            supportHaloRadiusPx,
+            supportHaloRadiusMm,
+            supportHaloInverseScalePercent,
             supportHaloMaxIntensityPercent,
             supportHaloProfile,
             supportHaloScope,
@@ -165,7 +172,8 @@ export function resolveEffectiveAaSettings(
         tipOffsetMode: settings.tipOffsetMode ?? 'auto',
         supportHaloEnabled,
         supportHaloAuto,
-        supportHaloRadiusPx,
+        supportHaloRadiusMm,
+        supportHaloInverseScalePercent,
         supportHaloMaxIntensityPercent,
         supportHaloProfile,
         supportHaloScope,

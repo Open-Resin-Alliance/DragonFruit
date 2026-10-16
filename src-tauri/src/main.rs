@@ -57,6 +57,14 @@ fn default_dither_device_gamma() -> f64 {
     3.0
 }
 
+fn default_support_halo_radius_mm() -> f32 {
+    0.0
+}
+
+fn default_support_halo_inverse_scale_percent() -> f32 {
+    100.0
+}
+
 fn default_support_halo_max_intensity_percent() -> f32 {
     25.0
 }
@@ -671,6 +679,10 @@ struct SliceJobMetadata {
     support_halo_enabled: bool,
     #[serde(default)]
     support_halo_radius_px: u32,
+    #[serde(default = "default_support_halo_radius_mm")]
+    support_halo_radius_mm: f32,
+    #[serde(default = "default_support_halo_inverse_scale_percent")]
+    support_halo_inverse_scale_percent: f32,
     #[serde(default = "default_support_halo_max_intensity_percent")]
     support_halo_max_intensity_percent: f32,
     #[serde(default = "default_support_halo_profile")]
@@ -1679,6 +1691,8 @@ async fn slice_solid_native_to_temp_path(
             aa_on_supports: meta.aa_on_supports,
             support_halo_enabled: meta.support_halo_enabled,
             support_halo_radius_px: meta.support_halo_radius_px,
+            support_halo_radius_mm: meta.support_halo_radius_mm,
+            support_halo_inverse_scale_percent: meta.support_halo_inverse_scale_percent,
             support_halo_max_intensity_percent: meta.support_halo_max_intensity_percent,
             support_halo_profile: meta.support_halo_profile,
             support_halo_scope: meta.support_halo_scope,

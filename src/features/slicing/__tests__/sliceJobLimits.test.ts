@@ -12,6 +12,10 @@ test('holds each field to its own bounds', () => {
   assert.equal(clampSliceJobNumber('zBlendMaxAlphaPercent', 150), 100);
   assert.equal(clampSliceJobNumber('supportHaloRadiusPx', 25), 16);
   assert.equal(clampSliceJobNumber('supportHaloRadiusPx', -2), 0);
+  assert.equal(clampSliceJobNumber('supportHaloRadiusMm', 1.25), 0.5);
+  assert.equal(clampSliceJobNumber('supportHaloRadiusMm', -0.1), 0);
+  assert.equal(clampSliceJobNumber('supportHaloInverseScalePercent', 350), 200);
+  assert.equal(clampSliceJobNumber('supportHaloInverseScalePercent', -20), 0);
   assert.equal(clampSliceJobNumber('supportHaloMaxIntensityPercent', 140), 100);
   assert.equal(clampSliceJobNumber('supportHaloMaxIntensityPercent', -5), 0);
   assert.equal(clampSliceJobNumber('supportHaloMaxTipDiameterMm', 0.01), 0.1);
@@ -30,6 +34,7 @@ test('snaps before applying the bounds', () => {
 test('leaves unsnapped fields fractional', () => {
   assert.equal(clampSliceJobNumber('zBlurSigma', 1.25), 1.25);
   assert.equal(clampSliceJobNumber('zBlendMinimumAlphaPercent', 33.5), 33.5);
+  assert.equal(clampSliceJobNumber('supportHaloRadiusMm', 0.18), 0.18);
   assert.equal(clampSliceJobNumber('supportHaloMaxTipDiameterMm', 0.75), 0.75);
 });
 
@@ -39,6 +44,8 @@ test('substitutes the fallback for a missing or non-numeric input', () => {
   assert.equal(clampSliceJobNumber('zBlendLookBack', 'not a number'), 2);
   assert.equal(clampSliceJobNumber('zBlendMaxAlphaPercent', Number.NaN), 90);
   assert.equal(clampSliceJobNumber('supportHaloRadiusPx', undefined), 0);
+  assert.equal(clampSliceJobNumber('supportHaloRadiusMm', undefined), 0.15);
+  assert.equal(clampSliceJobNumber('supportHaloInverseScalePercent', undefined), 100);
   assert.equal(clampSliceJobNumber('supportHaloMaxIntensityPercent', undefined), 25);
   assert.equal(clampSliceJobNumber('supportHaloMaxTipDiameterMm', undefined), 0.8);
 });

@@ -349,9 +349,15 @@ enum SliceCommands {
         /// Enable Support Halo (sub-cure radial halo around support cross-sections)
         #[arg(long)]
         support_halo: bool,
-        /// Support Halo radial reach in pixels (0-16)
+        /// Support Halo radial reach in pixels (0-16, legacy fallback)
         #[arg(long, default_value = "0")]
         support_halo_radius_px: u32,
+        /// Support Halo reference radial reach in mm at a 0.40mm tip (0.02-0.50)
+        #[arg(long, default_value = "0.15")]
+        support_halo_radius_mm: f32,
+        /// Support Halo inverse tip-size scaling strength in percent (0-200)
+        #[arg(long, alias = "support-halo-inverse-scale", default_value = "100.0")]
+        support_halo_inverse_scale_percent: f32,
         /// Support Halo maximum cure intensity (percent, 0-100)
         #[arg(long, default_value = "25.0")]
         support_halo_max_intensity: f32,
@@ -1183,6 +1189,8 @@ fn cmd_slice_run(
     aa_on_supports: bool,
     support_halo: bool,
     support_halo_radius_px: u32,
+    support_halo_radius_mm: f32,
+    support_halo_inverse_scale_percent: f32,
     support_halo_max_intensity: f32,
     support_halo_profile: &str,
     support_halo_scope: &str,
@@ -1305,6 +1313,8 @@ fn cmd_slice_run(
             aa_on_supports,
             support_halo_enabled: support_halo,
             support_halo_radius_px,
+            support_halo_radius_mm,
+            support_halo_inverse_scale_percent,
             support_halo_max_intensity_percent: support_halo_max_intensity,
             support_halo_profile: support_halo_profile.to_string(),
             support_halo_scope: support_halo_scope.to_string(),
@@ -1412,6 +1422,8 @@ fn cmd_slice_run(
         "support_halo": {
             "enabled": job.support_halo_enabled,
             "radius_px": job.support_halo_radius_px,
+            "radius_mm": job.support_halo_radius_mm,
+            "inverse_scale_percent": job.support_halo_inverse_scale_percent,
             "max_intensity_percent": job.support_halo_max_intensity_percent,
             "profile": job.support_halo_profile,
             "scope": job.support_halo_scope,
@@ -1998,6 +2010,7 @@ fn main() {
                 anti_aliasing_mode, blur_brush_radius_px, blur_brush_kernel, blur_brush_sigma_x,
                 blur_brush_sigma_y, z_blur_radius_layers, z_blur_kernel, z_blur_sigma,
                 z_blend_look_back, aa_on_supports, support_halo, support_halo_radius_px,
+                support_halo_radius_mm, support_halo_inverse_scale_percent,
                 support_halo_max_intensity, support_halo_profile, support_halo_scope,
                 support_halo_max_tip_diameter_mm, x_packing_mode, mirror_x, mirror_y,
                 format_version, min_aa_alpha, dither, dither_bit_depth, dither_device_gamma,
@@ -2007,7 +2020,8 @@ fn main() {
                     &anti_aliasing_mode, blur_brush_radius_px, &blur_brush_kernel,
                     blur_brush_sigma_x, blur_brush_sigma_y, z_blur_radius_layers,
                     &z_blur_kernel, z_blur_sigma, z_blend_look_back, aa_on_supports,
-                    support_halo, support_halo_radius_px, support_halo_max_intensity,
+                    support_halo, support_halo_radius_px, support_halo_radius_mm,
+                    support_halo_inverse_scale_percent, support_halo_max_intensity,
                     &support_halo_profile, &support_halo_scope, support_halo_max_tip_diameter_mm,
                     &x_packing_mode, mirror_x, mirror_y, &format_version,
                     min_aa_alpha, dither, dither_bit_depth, dither_device_gamma,
@@ -2060,6 +2074,10 @@ mod cli_tests {
             "--support-halo",
             "--support-halo-radius-px",
             "5",
+            "--support-halo-radius-mm",
+            "0.22",
+            "--support-halo-inverse-scale-percent",
+            "150.0",
             "--support-halo-max-intensity",
             "62.5",
             "--support-halo-profile",
@@ -2077,6 +2095,8 @@ mod cli_tests {
                     SliceCommands::Run {
                         support_halo,
                         support_halo_radius_px,
+                        support_halo_radius_mm,
+                        support_halo_inverse_scale_percent,
                         support_halo_max_intensity,
                         support_halo_profile,
                         support_halo_scope,
@@ -2086,6 +2106,8 @@ mod cli_tests {
             } => {
                 assert!(support_halo);
                 assert_eq!(support_halo_radius_px, 5);
+                assert!((support_halo_radius_mm - 0.22).abs() < 1e-4);
+                assert!((support_halo_inverse_scale_percent - 150.0).abs() < 1e-4);
                 assert!((support_halo_max_intensity - 62.5).abs() < 1e-4);
                 assert_eq!(support_halo_profile, "gaussian");
                 assert_eq!(support_halo_scope, "tips_only");

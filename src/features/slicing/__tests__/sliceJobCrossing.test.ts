@@ -98,6 +98,8 @@ function completeEnvelope(): NativeSolidSliceJobEnvelope {
     modelTriangleCount: 10_000_000,
     supportHaloEnabled: true,
     supportHaloRadiusPx: 4,
+    supportHaloRadiusMm: 0.22,
+    supportHaloInverseScalePercent: 80,
     supportHaloMaxIntensityPercent: 60,
     supportHaloProfile: 'gaussian',
     supportHaloScope: 'tips_only',
@@ -153,6 +155,8 @@ test('maps and clamps support halo fields with safe defaults', () => {
   const full = toNativeMetadataPayload(completeEnvelope());
   assert.equal(full.support_halo_enabled, true);
   assert.equal(full.support_halo_radius_px, 4);
+  assert.equal(full.support_halo_radius_mm, 0.22);
+  assert.equal(full.support_halo_inverse_scale_percent, 80);
   assert.equal(full.support_halo_max_intensity_percent, 60);
   assert.equal(full.support_halo_profile, 'gaussian');
   assert.equal(full.support_halo_scope, 'tips_only');
@@ -162,6 +166,8 @@ test('maps and clamps support halo fields with safe defaults', () => {
     ...completeEnvelope(),
     supportHaloEnabled: undefined,
     supportHaloRadiusPx: undefined,
+    supportHaloRadiusMm: undefined,
+    supportHaloInverseScalePercent: undefined,
     supportHaloMaxIntensityPercent: undefined,
     supportHaloProfile: undefined,
     supportHaloScope: undefined,
@@ -169,6 +175,8 @@ test('maps and clamps support halo fields with safe defaults', () => {
   });
   assert.equal(defaulted.support_halo_enabled, false);
   assert.equal(defaulted.support_halo_radius_px, 0);
+  assert.equal(defaulted.support_halo_radius_mm, 0.15);
+  assert.equal(defaulted.support_halo_inverse_scale_percent, 100);
   assert.equal(defaulted.support_halo_max_intensity_percent, 25);
   assert.equal(defaulted.support_halo_profile, 'donut');
   assert.equal(defaulted.support_halo_scope, 'tips_only');

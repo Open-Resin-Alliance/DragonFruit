@@ -1476,6 +1476,7 @@ mod tests {
         "z_blur_radius_layers": 1, "z_blur_kernel": "box", "z_blur_sigma": 0.5,
         "aa_on_supports": false,
         "support_halo_enabled": true, "support_halo_radius_px": 4,
+        "support_halo_radius_mm": 0.18, "support_halo_inverse_scale_percent": 125.0,
         "support_halo_max_intensity_percent": 65.0, "support_halo_profile": "exponential",
         "support_halo_scope": "tips_only", "support_halo_max_tip_diameter_mm": 0.9,
         "minimum_aa_alpha_percent": 35,
@@ -1499,6 +1500,8 @@ mod tests {
         assert_eq!(job.anti_aliasing_mode, "Vertical2");
         assert!(job.support_halo_enabled);
         assert_eq!(job.support_halo_radius_px, 4);
+        assert!((job.support_halo_radius_mm - 0.18).abs() < 1e-4);
+        assert!((job.support_halo_inverse_scale_percent - 125.0).abs() < 1e-4);
         assert!((job.support_halo_max_intensity_percent - 65.0).abs() < 1e-4);
         assert_eq!(job.support_halo_profile, "exponential");
         assert_eq!(job.support_halo_scope, "tips_only");

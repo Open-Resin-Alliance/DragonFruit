@@ -81,6 +81,14 @@ fn default_dither_device_gamma() -> f64 {
     3.0
 }
 
+fn default_support_halo_radius_mm() -> f32 {
+    0.0
+}
+
+fn default_support_halo_inverse_scale_percent() -> f32 {
+    100.0
+}
+
 fn default_support_halo_max_intensity_percent() -> f32 {
     25.0
 }
@@ -212,13 +220,19 @@ pub struct SliceJobV3 {
     /// Enable Euclidean radial grayscale cure halo around support cross-sections.
     #[serde(default)]
     pub support_halo_enabled: bool,
-    /// Outer Euclidean radius of the support halo in output pixels (0..=8).
+    /// Outer Euclidean radius of the support halo in output pixels (legacy fallback, 0..=16).
     #[serde(default)]
     pub support_halo_radius_px: u32,
+    /// Reference outer Euclidean radius of the support halo in millimeters at a 0.40 mm tip (0.02..=0.50).
+    #[serde(default = "default_support_halo_radius_mm")]
+    pub support_halo_radius_mm: f32,
+    /// Inverse tip-diameter scaling strength in percent (0..=200; 100% = full dynamic scaling, 0% = fixed radius).
+    #[serde(default = "default_support_halo_inverse_scale_percent")]
+    pub support_halo_inverse_scale_percent: f32,
     /// Peak grayscale intensity at the first halo ring as a percentage of 255 (0..=100).
     #[serde(default = "default_support_halo_max_intensity_percent")]
     pub support_halo_max_intensity_percent: f32,
-    /// Radial falloff curve (`linear`, `exponential`, `gaussian`).
+    /// Radial falloff curve (`donut`, `linear`, `exponential`, `gaussian`).
     #[serde(default = "default_support_halo_profile")]
     pub support_halo_profile: String,
     /// Target support geometry scope (`tips_only`, `full_supports`).
@@ -324,6 +338,8 @@ impl Default for SliceJobV3 {
             model_triangle_count: 0,
             support_halo_enabled: false,
             support_halo_radius_px: 0,
+            support_halo_radius_mm: default_support_halo_radius_mm(),
+            support_halo_inverse_scale_percent: default_support_halo_inverse_scale_percent(),
             support_halo_max_intensity_percent: default_support_halo_max_intensity_percent(),
             support_halo_profile: default_support_halo_profile(),
             support_halo_scope: default_support_halo_scope(),
@@ -401,9 +417,29 @@ impl SliceJobV3 {
     }
 
     #[inline]
+    pub fn effective_support_halo_inverse_scale_percent(&self) -> f32 {
+        if self.support_halo_inverse_scale_percent.is_finite() {
+            self.support_halo_inverse_scale_percent.clamp(0.0, 200.0)
+        } else {
+            default_support_halo_inverse_scale_percent()
+        }
+    }
+
+    #[inline]
     pub fn effective_support_halo_radius_px(&self) -> u32 {
         if !self.support_halo_enabled {
             return 0;
+        }
+        if self.support_halo_radius_mm.is_finite() && self.support_halo_radius_mm > 0.0 {
+            let (px, py) = self.effective_output_pixel_pitch_mm();
+            let ref_mm = self.support_halo_radius_mm.clamp(0.02, 0.50);
+            let max_scale = if self.support_halo_is_tips_only() {
+                (1.0 + (1.0 / 3.0) * (self.effective_support_halo_inverse_scale_percent() / 100.0))
+                    .clamp(1.0, 2.5)
+            } else {
+                1.0
+            };
+            return ((ref_mm * max_scale / px.min(py).max(1e-4)).ceil() as u32).clamp(1, 48);
         }
         self.support_halo_radius_px.clamp(0, 16)
     }
@@ -434,7 +470,8 @@ impl SliceJobV3 {
 
     #[inline]
     pub fn support_halo_active(&self) -> bool {
-        self.effective_support_halo_radius_px() > 0
+        self.support_halo_enabled
+            && self.effective_support_halo_ref_radius_mm() > 0.0
             && self.effective_support_halo_max_intensity_u8() > 0
     }
 
@@ -502,8 +539,17 @@ impl SliceJobV3 {
 
     #[inline]
     pub fn effective_support_halo_ref_radius_mm(&self) -> f32 {
-        let (px, py) = self.effective_output_pixel_pitch_mm();
-        (self.effective_support_halo_radius_px() as f32) * px.min(py)
+        if !self.support_halo_enabled {
+            return 0.0;
+        }
+        if self.support_halo_radius_mm.is_finite() && self.support_halo_radius_mm > 0.0 {
+            return self.support_halo_radius_mm.clamp(0.0, 0.50);
+        }
+        if self.support_halo_radius_px > 0 {
+            let (px, py) = self.effective_output_pixel_pitch_mm();
+            return (self.support_halo_radius_px.min(16) as f32) * px.min(py);
+        }
+        0.0
     }
 
     /// Computes `model_triangle_count` when support triangles require a

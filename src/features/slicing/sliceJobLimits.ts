@@ -32,6 +32,8 @@ export const SLICE_JOB_LIMITS = {
   minimumAaAlphaPercent: { min: 0, max: 100, fallback: 0 },
   modelTriangleCount: { min: 0, snap: 'floor', fallback: 0 },
   supportHaloRadiusPx: { min: 0, max: 16, snap: 'round', fallback: 0 },
+  supportHaloRadiusMm: { min: 0, max: 0.5, fallback: 0.15 },
+  supportHaloInverseScalePercent: { min: 0, max: 200, fallback: 100 },
   supportHaloMaxIntensityPercent: { min: 0, max: 100, fallback: 25 },
   supportHaloMaxTipDiameterMm: { min: 0.1, max: 5.0, fallback: 0.8 },
   containerCompressionLevel: { min: 0, max: 9, snap: 'round', fallback: 2 },

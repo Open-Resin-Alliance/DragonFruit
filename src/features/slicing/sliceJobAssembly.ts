@@ -522,24 +522,6 @@ export function buildNativeSliceJob(assembled: AssembledSliceJob, options: {
     antiAliasing.antiAliasingLevel,
     assembled.layerDataKind === 'png',
   );
-  const effectiveWidthPx = assembled.sourceWidthPx > 0 ? assembled.sourceWidthPx : assembled.widthPx;
-  const effectiveHeightPx = assembled.sourceHeightPx > 0 ? assembled.sourceHeightPx : assembled.heightPx;
-  let supportHaloRadiusPx = antiAliasing.supportHaloRadiusPx;
-  if (
-    antiAliasing.supportHaloEnabled
-    && antiAliasing.supportHaloAuto
-    && assembled.buildWidthMm > 0
-    && assembled.buildDepthMm > 0
-    && effectiveWidthPx > 0
-    && effectiveHeightPx > 0
-  ) {
-    const pitchX = assembled.buildWidthMm / effectiveWidthPx;
-    const pitchY = assembled.buildDepthMm / effectiveHeightPx;
-    const coarsePitchMm = Math.max(pitchX, pitchY);
-    if (Number.isFinite(coarsePitchMm) && coarsePitchMm > 0) {
-      supportHaloRadiusPx = Math.max(1, Math.min(16, Math.round(0.15 / coarsePitchMm)));
-    }
-  }
   return {
     outputFormat: assembled.outputFormat,
     formatVersion: assembled.formatVersion,
@@ -575,7 +557,8 @@ export function buildNativeSliceJob(assembled: AssembledSliceJob, options: {
     ditherDeviceGamma: assembled.ditherDeviceGamma,
     modelTriangleCount: options.modelTriangleCount,
     supportHaloEnabled: antiAliasing.supportHaloEnabled,
-    supportHaloRadiusPx,
+    supportHaloRadiusMm: antiAliasing.supportHaloRadiusMm,
+    supportHaloInverseScalePercent: antiAliasing.supportHaloInverseScalePercent,
     supportHaloMaxIntensityPercent: antiAliasing.supportHaloMaxIntensityPercent,
     supportHaloProfile: antiAliasing.supportHaloProfile,
     supportHaloScope: antiAliasing.supportHaloScope,

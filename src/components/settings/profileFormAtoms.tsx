@@ -18,6 +18,7 @@ import {
     type MaterialAntiAliasingSettings,
     type MaterialProfile,
     type PrinterOutputFormat,
+    computeSupportHaloReferenceRow,
     getActivePrinterProfile,
     getAutoSupportHaloResetPatch,
     getProfileStoreSnapshot,
@@ -920,6 +921,94 @@ function AaInlineHelp({ children }: { children: React.ReactNode }) {
     return <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>{children}</p>;
 }
 
+const SUPPORT_HALO_REFERENCE_TIPS = [
+    { label: '0.20 mm (Fine)', tipMm: 0.20 },
+    { label: '0.40 mm (Med)', tipMm: 0.40 },
+    { label: '0.60 mm (Heavy)', tipMm: 0.60 },
+] as const;
+
+function SupportHaloReferenceTable({ settings }: { settings: MaterialAntiAliasingSettings }) {
+    const { pxX, pxY } = React.useMemo(() => {
+        const storeState = getProfileStoreSnapshot();
+        const printer = getActivePrinterProfile(storeState);
+        if (!printer) {
+            return { pxX: 0.019, pxY: 0.024 };
+        }
+        const resolvedX = printer.pixelSize?.x
+            ? printer.pixelSize.x / 1000
+            : (printer.buildVolumeMm?.width ?? 218.88) / Math.max(1, printer.display?.resolutionX ?? 11520);
+        const resolvedY = printer.pixelSize?.y
+            ? printer.pixelSize.y / 1000
+            : (printer.buildVolumeMm?.depth ?? 122.88) / Math.max(1, printer.display?.resolutionY ?? 5120);
+        return {
+            pxX: Number.isFinite(resolvedX) && resolvedX > 0 ? resolvedX : 0.019,
+            pxY: Number.isFinite(resolvedY) && resolvedY > 0 ? resolvedY : 0.024,
+        };
+    }, []);
+
+    const rows = React.useMemo(
+        () => SUPPORT_HALO_REFERENCE_TIPS.map((item) => ({
+            ...item,
+            metrics: computeSupportHaloReferenceRow(item.tipMm, settings, pxX, pxY),
+        })),
+        [settings, pxX, pxY],
+    );
+
+    const isFixedMode = settings.supportHaloAuto === false && Math.round(settings.supportHaloInverseScalePercent) === 0;
+
+    return (
+        <div
+            className="rounded-lg border p-2 text-[11px] space-y-1.5"
+            style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+        >
+            <div className="flex items-center justify-between gap-2">
+                <span className="font-semibold" style={{ color: 'var(--text-strong)' }}>
+                    Effective Halo by 2D Blob Ø ({isFixedMode ? 'Fixed Radius Mode' : `${settings.supportHaloAuto !== false ? 100 : Math.round(settings.supportHaloInverseScalePercent)}% Inverse Scaling`})
+                </span>
+                <span style={{ color: 'var(--text-muted)' }}>
+                    Pitch {(pxX * 1000).toFixed(0)}×{(pxY * 1000).toFixed(0)} µm
+                </span>
+            </div>
+            <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                    <thead>
+                        <tr className="border-b" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
+                            <th className="py-1 pr-2 font-medium">2D Blob Ø</th>
+                            <th className="py-1 px-1.5 font-medium">Halo Radius</th>
+                            <th className="py-1 px-1.5 font-medium">Total Ø</th>
+                            <th className="py-1 px-1.5 font-medium">Pixels (X×Y)</th>
+                            <th className="py-1 pl-1.5 font-medium text-right">Peak Dose</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {rows.map(({ label, metrics }) => (
+                            <tr
+                                key={label}
+                                className="border-b last:border-b-0 tabular-nums"
+                                style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-strong)' }}
+                            >
+                                <td className="py-1 pr-2 font-medium">{label}</td>
+                                {metrics.gatedOff ? (
+                                    <td colSpan={4} className="py-1 px-1.5 italic" style={{ color: 'var(--text-muted)' }}>
+                                        Gated Off (≥ {(settings.supportHaloAuto !== false ? 0.8 : settings.supportHaloMaxTipDiameterMm).toFixed(2)} mm)
+                                    </td>
+                                ) : (
+                                    <>
+                                        <td className="py-1 px-1.5">{metrics.haloRadiusMm.toFixed(2)} mm</td>
+                                        <td className="py-1 px-1.5">{metrics.totalDiameterMm.toFixed(2)} mm</td>
+                                        <td className="py-1 px-1.5">{metrics.pixelsX}×{metrics.pixelsY} px</td>
+                                        <td className="py-1 pl-1.5 text-right">{metrics.peakIntensityPercent}% ({metrics.peakPwmU8})</td>
+                                    </>
+                                )}
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+}
+
 export function MaterialAntiAliasingSection({ draft, onChange, lockActivationToggles = false, printerDitherBitDepth = null, printerPanelBitDepth = null }: MaterialAntiAliasingSectionProps) {
     const settings = {
         ...DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
@@ -1524,22 +1613,31 @@ export function MaterialAntiAliasingSection({ draft, onChange, lockActivationTog
                         <>
                             <LabeledToggleInput
                                 label="Automatic Halo Settings"
-                                helpText="Automatically applies the calibrated Donut anti-dilation moat profile, 25% peak intensity, 0.80 mm tip cutoff, and pitch-adaptive radius. Toggling resets halo parameters to defaults."
+                                helpText="Automatically applies the calibrated Donut anti-dilation moat profile, 0.15 mm reference radius @ 0.40mm tip, 100% inverse blob-size scaling, 25% peak intensity, and 0.80 mm tip cutoff. Toggling resets halo parameters to defaults."
                                 checked={settings.supportHaloAuto !== false}
                                 onChange={(value) => updateAaSettings({ supportHaloAuto: value, ...getAutoSupportHaloResetPatch() })}
                             />
                             <LabeledNumberInput
-                                label="Halo Radius (px)"
-                                helpText="Outward radial collar width in pixels around targeted support geometry (1 to 16 px)."
+                                label="Halo Radius @ 0.40mm Tip (mm)"
+                                helpText="Reference outward radial collar width in millimeters around a 0.40 mm 2D support blob (0.02 to 0.50 mm)."
                                 disabled={settings.supportHaloAuto !== false}
-                                step={1}
+                                step={0.01}
+                                precision={2}
+                                value={settings.supportHaloRadiusMm}
+                                onChange={(value) => updateAaSettings({ supportHaloRadiusMm: Number(clampAaNumber(value, 0.15, 0.02, 0.50).toFixed(2)) })}
+                            />
+                            <LabeledNumberInput
+                                label="Inverse Blob-Size Scaling (%)"
+                                helpText="100% = inverse blob-size scaling (0.20mm -> 0.20mm, 0.40mm -> 0.15mm, 0.60mm -> 0.08mm); 0% = fixed radius across all gated tips."
+                                disabled={settings.supportHaloAuto !== false || settings.supportHaloScope === 'full_supports'}
+                                step={10}
                                 precision={0}
-                                value={settings.supportHaloRadiusPx}
-                                onChange={(value) => updateAaSettings({ supportHaloRadiusPx: Math.round(clampAaNumber(value, 3, 1, 16)) })}
+                                value={settings.supportHaloInverseScalePercent}
+                                onChange={(value) => updateAaSettings({ supportHaloInverseScalePercent: Math.round(clampAaNumber(value, 100, 0, 200)) })}
                             />
                             <LabeledNumberInput
                                 label="Halo Max Intensity (%)"
-                                helpText="Peak grayscale intensity at the immediate boundary of the support core (5% to 100%)."
+                                helpText="Peak grayscale intensity at the annular peak of the support collar (5% to 100%)."
                                 disabled={settings.supportHaloAuto !== false}
                                 step={5}
                                 precision={0}
@@ -1573,7 +1671,7 @@ export function MaterialAntiAliasingSection({ draft, onChange, lockActivationTog
                             {settings.supportHaloScope === 'tips_only' && (
                                 <LabeledNumberInput
                                     label="Max Tip Diameter (mm)"
-                                    helpText="Maximum cross-sectional diameter of support islands eligible for tip halo generation."
+                                    helpText="Maximum 2D area-equivalent blob diameter of support islands eligible for tip halo generation."
                                     disabled={settings.supportHaloAuto !== false}
                                     step={0.05}
                                     precision={2}
@@ -1581,6 +1679,7 @@ export function MaterialAntiAliasingSection({ draft, onChange, lockActivationTog
                                     onChange={(value) => updateAaSettings({ supportHaloMaxTipDiameterMm: clampAaNumber(value, 0.8, 0.1, 5.0) })}
                                 />
                             )}
+                            <SupportHaloReferenceTable settings={settings} />
                         </>
                     )}
                 </div>
@@ -1965,22 +2064,31 @@ function MaterialAntiAliasingSectionDense({ draft, onChange }: MaterialAntiAlias
                         <>
                             <LabeledToggleInput
                                 label="Automatic Halo Settings"
-                                helpText="Automatically applies the calibrated Donut anti-dilation moat profile, 25% peak intensity, 0.80 mm tip cutoff, and pitch-adaptive radius. Toggling resets halo parameters to defaults."
+                                helpText="Automatically applies the calibrated Donut anti-dilation moat profile, 0.15 mm reference radius @ 0.40mm tip, 100% inverse blob-size scaling, 25% peak intensity, and 0.80 mm tip cutoff. Toggling resets halo parameters to defaults."
                                 checked={settings.supportHaloAuto !== false}
                                 onChange={(value) => updateAaSettings({ supportHaloAuto: value, ...getAutoSupportHaloResetPatch() })}
                             />
                             <LabeledNumberInput
-                                label="Halo Radius (px)"
-                                helpText="Outward radial collar width in pixels around targeted support geometry (1 to 16 px)."
+                                label="Halo Radius @ 0.40mm Tip (mm)"
+                                helpText="Reference outward radial collar width in millimeters around a 0.40 mm 2D support blob (0.02 to 0.50 mm)."
                                 disabled={settings.supportHaloAuto !== false}
-                                step={1}
+                                step={0.01}
+                                precision={2}
+                                value={settings.supportHaloRadiusMm}
+                                onChange={(value) => updateAaSettings({ supportHaloRadiusMm: Number(clampAaNumber(value, 0.15, 0.02, 0.50).toFixed(2)) })}
+                            />
+                            <LabeledNumberInput
+                                label="Inverse Blob-Size Scaling (%)"
+                                helpText="100% = inverse blob-size scaling (0.20mm -> 0.20mm, 0.40mm -> 0.15mm, 0.60mm -> 0.08mm); 0% = fixed radius across all gated tips."
+                                disabled={settings.supportHaloAuto !== false || settings.supportHaloScope === 'full_supports'}
+                                step={10}
                                 precision={0}
-                                value={settings.supportHaloRadiusPx}
-                                onChange={(value) => updateAaSettings({ supportHaloRadiusPx: Math.round(clampAaNumber(value, 3, 1, 16)) })}
+                                value={settings.supportHaloInverseScalePercent}
+                                onChange={(value) => updateAaSettings({ supportHaloInverseScalePercent: Math.round(clampAaNumber(value, 100, 0, 200)) })}
                             />
                             <LabeledNumberInput
                                 label="Halo Max Intensity (%)"
-                                helpText="Peak grayscale intensity at the immediate boundary of the support core (5% to 100%)."
+                                helpText="Peak grayscale intensity at the annular peak of the support collar (5% to 100%)."
                                 disabled={settings.supportHaloAuto !== false}
                                 step={5}
                                 precision={0}
@@ -2014,7 +2122,7 @@ function MaterialAntiAliasingSectionDense({ draft, onChange }: MaterialAntiAlias
                             {settings.supportHaloScope === 'tips_only' && (
                                 <LabeledNumberInput
                                     label="Max Tip Diameter (mm)"
-                                    helpText="Maximum cross-sectional diameter of support islands eligible for tip halo generation."
+                                    helpText="Maximum 2D area-equivalent blob diameter of support islands eligible for tip halo generation."
                                     disabled={settings.supportHaloAuto !== false}
                                     step={0.05}
                                     precision={2}
@@ -2022,6 +2130,7 @@ function MaterialAntiAliasingSectionDense({ draft, onChange }: MaterialAntiAlias
                                     onChange={(value) => updateAaSettings({ supportHaloMaxTipDiameterMm: clampAaNumber(value, 0.8, 0.1, 5.0) })}
                                 />
                             )}
+                            <SupportHaloReferenceTable settings={settings} />
                         </>
                     )}
                 </div>
@@ -2297,12 +2406,20 @@ function MaterialAntiAliasingSectionLegacy({ draft, onChange }: MaterialAntiAlia
                                 onChange={(value) => updateAaSettings({ supportHaloAuto: value, ...getAutoSupportHaloResetPatch() })}
                             />
                             <LabeledNumberInput
-                                label="Halo Radius (px)"
+                                label="Halo Radius @ 0.40mm Tip (mm)"
                                 disabled={settings.supportHaloAuto !== false}
-                                step={1}
+                                step={0.01}
+                                precision={2}
+                                value={settings.supportHaloRadiusMm}
+                                onChange={(value) => updateAaSettings({ supportHaloRadiusMm: Number(clampAaNumber(value, 0.15, 0.02, 0.50).toFixed(2)) })}
+                            />
+                            <LabeledNumberInput
+                                label="Inverse Blob-Size Scaling (%)"
+                                disabled={settings.supportHaloAuto !== false || settings.supportHaloScope === 'full_supports'}
+                                step={10}
                                 precision={0}
-                                value={settings.supportHaloRadiusPx}
-                                onChange={(value) => updateAaSettings({ supportHaloRadiusPx: Math.round(clampAaNumber(value, 3, 1, 16)) })}
+                                value={settings.supportHaloInverseScalePercent}
+                                onChange={(value) => updateAaSettings({ supportHaloInverseScalePercent: Math.round(clampAaNumber(value, 100, 0, 200)) })}
                             />
                             <LabeledNumberInput
                                 label="Halo Max Intensity (%)"
@@ -2350,6 +2467,7 @@ function MaterialAntiAliasingSectionLegacy({ draft, onChange }: MaterialAntiAlia
                                     onChange={(value) => updateAaSettings({ supportHaloMaxTipDiameterMm: clampAaNumber(value, 0.8, 0.1, 5.0) })}
                                 />
                             )}
+                            <SupportHaloReferenceTable settings={settings} />
                         </>
                     )}
                 </div>

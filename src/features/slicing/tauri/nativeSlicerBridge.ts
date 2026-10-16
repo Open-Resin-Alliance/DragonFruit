@@ -45,6 +45,8 @@ export type NativeSolidSliceJobEnvelope = {
   modelTriangleCount: number;
   supportHaloEnabled?: boolean;
   supportHaloRadiusPx?: number;
+  supportHaloRadiusMm?: number;
+  supportHaloInverseScalePercent?: number;
   supportHaloMaxIntensityPercent?: number;
   supportHaloProfile?: 'donut' | 'linear' | 'exponential' | 'gaussian';
   supportHaloScope?: 'tips_only' | 'full_supports';
@@ -105,6 +107,8 @@ type NativeSolidSliceMetadataPayload = {
   model_triangle_count: number;
   support_halo_enabled: boolean;
   support_halo_radius_px: number;
+  support_halo_radius_mm: number;
+  support_halo_inverse_scale_percent: number;
   support_halo_max_intensity_percent: number;
   support_halo_profile: 'donut' | 'linear' | 'exponential' | 'gaussian';
   support_halo_scope: 'tips_only' | 'full_supports';
@@ -212,6 +216,11 @@ export function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): Nativ
     model_triangle_count: clampSliceJobNumber('modelTriangleCount', job.modelTriangleCount),
     support_halo_enabled: job.supportHaloEnabled ?? false,
     support_halo_radius_px: clampSliceJobNumber('supportHaloRadiusPx', job.supportHaloRadiusPx),
+    support_halo_radius_mm: clampSliceJobNumber('supportHaloRadiusMm', job.supportHaloRadiusMm),
+    support_halo_inverse_scale_percent: clampSliceJobNumber(
+      'supportHaloInverseScalePercent',
+      job.supportHaloInverseScalePercent
+    ),
     support_halo_max_intensity_percent: clampSliceJobNumber(
       'supportHaloMaxIntensityPercent',
       job.supportHaloMaxIntensityPercent
