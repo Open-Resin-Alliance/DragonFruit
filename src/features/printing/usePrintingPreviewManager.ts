@@ -564,28 +564,23 @@ export function usePrintingPreviewManager({
     const viewport = printingPreviewViewportRef.current;
     if (!canvas || !viewport) return;
 
-    const rect = viewport.getBoundingClientRect();
-    const viewportWidth = Math.max(1, Math.round(rect.width));
-    const viewportHeight = Math.max(1, Math.round(rect.height));
-    const dpr = Math.max(1, window.devicePixelRatio || 1);
-    const canvasWidth = Math.max(1, Math.round(viewportWidth * dpr));
-    const canvasHeight = Math.max(1, Math.round(viewportHeight * dpr));
+    // Drawn again whenever the pane changes size: the canvas keeps the pixel size it was given,
+    // and CSS stretches it to the new box until something redraws it.
+    const draw = (image: HTMLImageElement) => {
+      const rect = viewport.getBoundingClientRect();
+      const viewportWidth = Math.max(1, Math.round(rect.width));
+      const viewportHeight = Math.max(1, Math.round(rect.height));
+      const dpr = Math.max(1, window.devicePixelRatio || 1);
+      const canvasWidth = Math.max(1, Math.round(viewportWidth * dpr));
+      const canvasHeight = Math.max(1, Math.round(viewportHeight * dpr));
 
-    if (canvas.width !== canvasWidth || canvas.height !== canvasHeight) {
-      canvas.width = canvasWidth;
-      canvas.height = canvasHeight;
-    }
+      if (canvas.width !== canvasWidth || canvas.height !== canvasHeight) {
+        canvas.width = canvasWidth;
+        canvas.height = canvasHeight;
+      }
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const renderNonce = ++printingPreviewCanvasRenderNonceRef.current;
-    let cancelled = false;
-    const image = new Image();
-    image.decoding = 'async';
-    image.onload = () => {
-      if (cancelled) return;
-      if (renderNonce !== printingPreviewCanvasRenderNonceRef.current) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return false;
 
       const naturalWidth = Math.max(1, image.naturalWidth || 1);
       const naturalHeight = Math.max(1, image.naturalHeight || 1);
@@ -605,12 +600,32 @@ export function usePrintingPreviewManager({
       ctx.scale(printingPreviewMirrorScale.x, printingPreviewMirrorScale.y);
       ctx.drawImage(image, -drawWidth * 0.5, -drawHeight * 0.5, drawWidth, drawHeight);
       ctx.restore();
+      return true;
+    };
+
+    const renderNonce = ++printingPreviewCanvasRenderNonceRef.current;
+    let cancelled = false;
+    let loaded: HTMLImageElement | null = null;
+    const image = new Image();
+    image.decoding = 'async';
+    image.onload = () => {
+      if (cancelled) return;
+      if (renderNonce !== printingPreviewCanvasRenderNonceRef.current) return;
+      if (!draw(image)) return;
+      loaded = image;
       setIsPrintingSettledCanvasReady(true);
     };
+    const resizeObserver = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(() => {
+          if (!cancelled && loaded) draw(loaded);
+        });
+    resizeObserver?.observe(viewport);
     image.src = selectedPrintingLayerPreviewUrl;
 
     return () => {
       cancelled = true;
+      resizeObserver?.disconnect();
     };
   }, [
     printingPreviewMirrorScale.x,
