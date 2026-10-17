@@ -6208,7 +6208,7 @@ msgstr "Resumen"
 
 #: src/features/slicing/components/SlicingPanel.tsx:3157
 msgid "Overwrite and Slice"
-msgstr "Sobrescribir y cortar"
+msgstr "Sobrescribir y laminar"
 
 #: src/features/slicing/components/SlicingPanel.tsx:3137
 msgid "Overwrite Existing Files?"
@@ -8303,7 +8303,7 @@ msgstr "Laminar y subir"
 
 #: src/features/slicing/components/SlicingPanel.tsx:2727
 msgid "Slice All"
-msgstr "Cortar todo"
+msgstr "Laminar todo"
 
 #: src/features/organicCut/OrganicCutPanel.tsx:466
 msgid "Slice along a single flat plane derived from your points."
