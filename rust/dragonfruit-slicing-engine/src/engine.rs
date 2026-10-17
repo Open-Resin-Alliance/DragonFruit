@@ -11,6 +11,7 @@ use crate::geometry::{parse_triangles, project_triangles_inplace};
 use crate::index::build_layer_index;
 use crate::metrics::{add_elapsed, EncodeStageCounters, SlicingPerfV3};
 use crate::pipeline::{render_layers_bounded, render_layers_rle, render_layers_rle_encoded};
+use crate::pulp_simd::{load_u8_as_u32, sat_add_u32, sat_mul_u32, u32_lanes, Backend, U32Divider};
 use crate::raster::{
     apply_blur_postprocess_inplace_with_roi, blur_gray_rle_streaming,
     blur_gray_rle_streaming_with_bounds, downsample_binary_rle_to_gray_rle,
@@ -356,7 +357,146 @@ fn merge_nonzero_bounds(current: &mut RleNonzeroBounds, next: RleNonzeroBounds) 
     }
 }
 
+#[inline]
+fn bounded_z_blur_sum_fits(weight_sum: Option<u32>) -> bool {
+    // Every byte is at most 255. With nonnegative weights, each product and
+    // partial sum is bounded by 255 * sum(weights). Include the rounding bias
+    // from that same contributing-source sum, not absent neighbors or ROI hits.
+    weight_sum
+        .and_then(|weight_sum| {
+            weight_sum
+                .checked_mul(255)
+                .and_then(|sum| sum.checked_add(weight_sum / 2))
+        })
+        .is_some()
+}
+
+#[inline(always)]
+fn accumulate_z_blur<S: pulp::Simd, const UNIT_WEIGHT: bool, const BOUNDED_WEIGHT: bool>(
+    simd: S,
+    accum: S::u32s,
+    values: S::u32s,
+    weight: u32,
+) -> S::u32s {
+    if UNIT_WEIGHT {
+        simd.add_u32s(accum, values)
+    } else if BOUNDED_WEIGHT {
+        simd.add_u32s(accum, simd.mul_u32s(values, simd.splat_u32s(weight)))
+    } else {
+        sat_add_u32(simd, accum, sat_mul_u32(simd, values, simd.splat_u32s(weight)))
+    }
+}
+
+#[inline(always)]
+fn normalize_z_blur<S: pulp::Simd, const BOUNDED_WEIGHT: bool>(
+    simd: S,
+    accum: S::u32s,
+    divider: U32Divider,
+) -> S::u32s {
+    let bias = divider.denominator / 2;
+    #[cfg(debug_assertions)]
+    if !BOUNDED_WEIGHT {
+        // Native SIMD addition wraps. Preserve the old scalar debug panic for
+        // unbounded saturation without a redundant release-build lane prescan.
+        for &sum in pulp::bytemuck::cast_slice::<S::u32s, u32>(std::slice::from_ref(&accum)) {
+            let _ = sum + bias;
+        }
+    }
+    let rounded = simd.add_u32s(accum, simd.splat_u32s(bias));
+    // Replace lane-by-lane integer division with an exact multiply-high quotient
+    // and remainder correction, then clamp all lanes before byte emission.
+    simd.min_u32s(divider.divide_simd(simd, rounded), simd.splat_u32s(255))
+}
+
+#[inline(always)]
+fn blur_z_rle_row<S: pulp::Simd, const UNIT_WEIGHT: bool, const BOUNDED_WEIGHT: bool>(
+    simd: S,
+    sources: &[(u32, &[crate::rle::RleRun], RleNonzeroBounds)],
+    source_rows: &[Vec<u8>],
+    divider: U32Divider,
+    out_row: &mut [u8],
+) {
+    let lanes = u32_lanes::<S>();
+    let vector_end = out_row.len() - out_row.len() % lanes;
+    for x in (0..vector_end).step_by(lanes) {
+        let mut accum = simd.splat_u32s(0);
+        for ((weight, _, _), row) in sources.iter().zip(source_rows.iter()) {
+            let values = load_u8_as_u32(simd, &row[x..x + lanes]);
+            accum = accumulate_z_blur::<S, UNIT_WEIGHT, BOUNDED_WEIGHT>(simd, accum, values, *weight);
+        }
+        let values = normalize_z_blur::<S, BOUNDED_WEIGHT>(simd, accum, divider);
+        let values = pulp::bytemuck::cast_slice::<S::u32s, u32>(std::slice::from_ref(&values));
+        for (dst, &value) in out_row[x..x + lanes].iter_mut().zip(values) {
+            *dst = value as u8;
+        }
+    }
+    for x in vector_end..out_row.len() {
+        let mut accum = 0u32;
+        for ((weight, _, _), row) in sources.iter().zip(source_rows.iter()) {
+            let value = row[x] as u32;
+            if UNIT_WEIGHT {
+                accum += value;
+            } else if BOUNDED_WEIGHT {
+                accum += value * *weight;
+            } else {
+                accum = accum.saturating_add(value.saturating_mul(*weight));
+            }
+        }
+        out_row[x] = divider.divide(accum + divider.denominator / 2).min(255) as u8;
+    }
+}
+
+struct RleZBlur<'a> {
+    center: &'a PerturbRleModelLayer,
+    history: &'a [Arc<PerturbRleModelLayer>],
+    future: &'a [Arc<PerturbRleModelLayer>],
+    radius: usize,
+    weights: &'a [u32],
+    width: usize,
+    height: usize,
+}
+
+impl pulp::WithSimd for RleZBlur<'_> {
+    type Output = Vec<crate::rle::RleRun>;
+
+    #[inline(always)]
+    fn with_simd<S: pulp::Simd>(self, simd: S) -> Self::Output {
+        apply_z_weighted_blur_to_rle_layer_with_simd(
+            simd,
+            self.center,
+            self.history,
+            self.future,
+            self.radius,
+            self.weights,
+            self.width,
+            self.height,
+        )
+    }
+}
+
 fn apply_z_weighted_blur_to_rle_layer(
+    center: &PerturbRleModelLayer,
+    history: &[Arc<PerturbRleModelLayer>],
+    future: &[Arc<PerturbRleModelLayer>],
+    radius: usize,
+    weights: &[u32],
+    width: usize,
+    height: usize,
+) -> Vec<crate::rle::RleRun> {
+    Backend::detected().dispatch(RleZBlur {
+        center,
+        history,
+        future,
+        radius,
+        weights,
+        width,
+        height,
+    })
+}
+
+#[inline(always)]
+fn apply_z_weighted_blur_to_rle_layer_with_simd<S: pulp::Simd>(
+    simd: S,
     center: &PerturbRleModelLayer,
     history: &[Arc<PerturbRleModelLayer>],
     future: &[Arc<PerturbRleModelLayer>],
@@ -404,11 +544,18 @@ fn apply_z_weighted_blur_to_rle_layer(
     let left_zeros = roi_min_x;
     let right_zeros = width - 1 - roi_max_x;
 
-    let denom = sources
+    let weight_sum = sources
         .iter()
-        .map(|(weight, _, _)| *weight)
-        .sum::<u32>()
+        .try_fold(0u32, |sum, (weight, _, _)| sum.checked_add(*weight));
+    let bounded_weights = bounded_z_blur_sum_fits(weight_sum);
+    // Preserve the general path's existing denominator-overflow behavior.
+    let denom = weight_sum
+        .unwrap_or_else(|| sources.iter().map(|(weight, _, _)| *weight).sum::<u32>())
         .max(1);
+    // Present-source weights define one constant denominator for the whole layer,
+    // including cropped rows and missing neighbors. Reuse its divider on every row.
+    let divider = U32Divider::new(denom);
+    let unit_weights = bounded_weights && sources.iter().all(|(weight, _, _)| *weight == 1);
     let mut decoders: Vec<RleRowDecoder<'_>> = sources
         .iter()
         .map(|(_, runs, _)| RleRowDecoder::new(runs))
@@ -428,14 +575,12 @@ fn apply_z_weighted_blur_to_rle_layer(
             decoder.decode_next_row_span(width, roi_min_x, row);
         }
 
-        for x in 0..roi_w {
-            let mut accum = 0u32;
-            for ((weight, _, _), row) in sources.iter().zip(source_rows.iter()) {
-                let value = row[x];
-                accum = accum.saturating_add((value as u32).saturating_mul(*weight));
-            }
-
-            out_row[x] = ((accum + denom / 2) / denom).min(255) as u8;
+        if unit_weights {
+            blur_z_rle_row::<S, true, true>(simd, &sources, &source_rows, divider, &mut out_row);
+        } else if bounded_weights {
+            blur_z_rle_row::<S, false, true>(simd, &sources, &source_rows, divider, &mut out_row);
+        } else {
+            blur_z_rle_row::<S, false, false>(simd, &sources, &source_rows, divider, &mut out_row);
         }
 
         if out_row.iter().all(|&value| value == 0) {
@@ -1127,7 +1272,110 @@ fn blit_gray_mask_into_local(
     }
 }
 
+#[inline(always)]
+fn accumulate_z_dense_span<S: pulp::Simd, const UNIT_WEIGHT: bool, const BOUNDED_WEIGHT: bool>(
+    simd: S,
+    accum: &mut [u32],
+    coverage: &mut [u8],
+    row: &[u8],
+    weight: u32,
+) {
+    let lanes = u32_lanes::<S>();
+    let (vectors, tail) = S::as_mut_simd_u32s(accum);
+    let vector_end = vectors.len() * lanes;
+    for (sum, pixels) in vectors.iter_mut().zip(row.chunks_exact(lanes)) {
+        let values = load_u8_as_u32(simd, pixels);
+        *sum = accumulate_z_blur::<S, UNIT_WEIGHT, BOUNDED_WEIGHT>(simd, *sum, values, weight);
+    }
+    for (sum, &value) in tail.iter_mut().zip(&row[vector_end..]) {
+        let value = value as u32;
+        if UNIT_WEIGHT {
+            *sum += value;
+        } else if BOUNDED_WEIGHT {
+            *sum += value * weight;
+        } else {
+            *sum = sum.saturating_add(value.saturating_mul(weight));
+        }
+    }
+    for (hit, &value) in coverage.iter_mut().zip(row) {
+        *hit |= value;
+    }
+}
+
+#[inline(always)]
+fn finalize_z_dense_row<S: pulp::Simd, const BOUNDED_WEIGHT: bool>(
+    simd: S,
+    accum: &[u32],
+    coverage: &[u8],
+    divider: U32Divider,
+    out_row: &mut [u8],
+) {
+    let lanes = u32_lanes::<S>();
+    let (vectors, tail) = S::as_simd_u32s(accum);
+    let vector_end = vectors.len() * lanes;
+    for (i, &sum) in vectors.iter().enumerate() {
+        let x = i * lanes;
+        let values = normalize_z_blur::<S, BOUNDED_WEIGHT>(simd, sum, divider);
+        let hits = load_u8_as_u32(simd, &coverage[x..x + lanes]);
+        let previous = load_u8_as_u32(simd, &out_row[x..x + lanes]);
+        // Preserve uncovered pixels with a vector selection, rather than
+        // extracting each sum, branching on coverage and reinserting a quotient.
+        let values = simd.select_u32s(simd.equal_u32s(hits, simd.splat_u32s(0)), previous, values);
+        let values = pulp::bytemuck::cast_slice::<S::u32s, u32>(std::slice::from_ref(&values));
+        for (dst, &value) in out_row[x..x + lanes].iter_mut().zip(values) {
+            *dst = value as u8;
+        }
+    }
+    for ((dst, &sum), &hit) in out_row[vector_end..].iter_mut().zip(tail).zip(&coverage[vector_end..]) {
+        if hit != 0 {
+            *dst = divider.divide(sum + divider.denominator / 2).min(255) as u8;
+        }
+    }
+}
+
+struct DenseZBlur<'a> {
+    center: &'a mut PostProcessedLayer,
+    history: &'a VecDeque<ZBlurHistoryLayer>,
+    future: &'a VecDeque<PostProcessedLayer>,
+    radius: usize,
+    weights: &'a [u32],
+}
+
+impl pulp::WithSimd for DenseZBlur<'_> {
+    type Output = ();
+
+    #[inline(always)]
+    fn with_simd<S: pulp::Simd>(self, simd: S) {
+        apply_z_weighted_blur_to_processed_layer_with_simd(
+            simd,
+            self.center,
+            self.history,
+            self.future,
+            self.radius,
+            self.weights,
+        );
+    }
+}
+
 fn apply_z_weighted_blur_to_processed_layer(
+    center: &mut PostProcessedLayer,
+    history: &VecDeque<ZBlurHistoryLayer>,
+    future: &VecDeque<PostProcessedLayer>,
+    radius: usize,
+    weights: &[u32],
+) {
+    Backend::detected().dispatch(DenseZBlur {
+        center,
+        history,
+        future,
+        radius,
+        weights,
+    });
+}
+
+#[inline(always)]
+fn apply_z_weighted_blur_to_processed_layer_with_simd<S: pulp::Simd>(
+    simd: S,
     center: &mut PostProcessedLayer,
     history: &VecDeque<ZBlurHistoryLayer>,
     future: &VecDeque<PostProcessedLayer>,
@@ -1174,53 +1422,61 @@ fn apply_z_weighted_blur_to_processed_layer(
     let mut out = vec![0u8; final_row_width.saturating_mul(final_row_count)];
     blit_gray_mask_into_local(&mut out, final_bounds, center_mask_view);
 
-    let denom: u32 = sources.iter().map(|(w, _)| *w).sum::<u32>().max(1);
+    let weight_sum = sources
+        .iter()
+        .try_fold(0u32, |sum, (weight, _)| sum.checked_add(*weight));
+    let bounded_weights = bounded_z_blur_sum_fits(weight_sum);
+    // Preserve the general path's existing denominator-overflow behavior.
+    let denom = weight_sum
+        .unwrap_or_else(|| sources.iter().map(|(weight, _)| *weight).sum::<u32>())
+        .max(1);
+    // Cropping changes coverage, not the present-source denominator. Construct
+    // its exact divider once per layer and share it with vector and tail emission.
+    let divider = U32Divider::new(denom);
+    let unit_weights = bounded_weights && sources.iter().all(|(weight, _)| *weight == 1);
+    // Source-major traversal matches the manual kernel: one crop per source
+    // row, with bounded scratch reused across the complete operation.
+    let blur_row_width = bounds_row_width(blur_bounds);
+    let mut accum = vec![0u32; blur_row_width];
+    let mut coverage = vec![0u8; blur_row_width];
     for y in blur_bounds.2..=blur_bounds.3 {
+        accum.fill(0);
+        coverage.fill(0);
         let mut row_min_x = usize::MAX;
         let mut row_max_x = 0usize;
-        let mut has_coverage = false;
-        for (_, mask) in &sources {
-            if let Some((row, start_x)) = mask.row_span(y, blur_bounds.0, blur_bounds.1) {
-                let mut first_non_zero = None;
-                let mut last_non_zero = None;
-                for (idx, &value) in row.iter().enumerate() {
-                    if value > 0 {
-                        if first_non_zero.is_none() {
-                            first_non_zero = Some(idx);
-                        }
-                        last_non_zero = Some(idx);
-                    }
-                }
-
-                if let (Some(first), Some(last)) = (first_non_zero, last_non_zero) {
-                    has_coverage = true;
-                    row_min_x = row_min_x.min(start_x + first);
-                    row_max_x = row_max_x.max(start_x + last);
-                }
+        for (weight, mask) in &sources {
+            let Some((row, start_x)) = mask.row_span(y, blur_bounds.0, blur_bounds.1) else {
+                continue;
+            };
+            row_min_x = row_min_x.min(start_x);
+            row_max_x = row_max_x.max(start_x + row.len() - 1);
+            let start = start_x - blur_bounds.0;
+            let end = start + row.len();
+            if unit_weights {
+                accumulate_z_dense_span::<S, true, true>(
+                    simd, &mut accum[start..end], &mut coverage[start..end], row, *weight,
+                );
+            } else if bounded_weights {
+                accumulate_z_dense_span::<S, false, true>(
+                    simd, &mut accum[start..end], &mut coverage[start..end], row, *weight,
+                );
+            } else {
+                accumulate_z_dense_span::<S, false, false>(
+                    simd, &mut accum[start..end], &mut coverage[start..end], row, *weight,
+                );
             }
         }
-        if !has_coverage || row_min_x > row_max_x {
+        if row_min_x > row_max_x {
             continue;
         }
-
-        for x in row_min_x..=row_max_x {
-            let mut coverage_hit = false;
-            let mut accum = 0u32;
-            for (w, mask) in &sources {
-                let value = mask.sample(x, y);
-                if value > 0 {
-                    coverage_hit = true;
-                }
-                accum = accum.saturating_add((value as u32).saturating_mul(*w));
-            }
-            if !coverage_hit {
-                continue;
-            }
-
-            let blurred = ((accum + (denom / 2)) / denom).min(255) as u8;
-            let local_y = y - final_bounds.2;
-            let local_x = x - final_bounds.0;
-            out[local_y * final_row_width + local_x] = blurred;
+        let start = row_min_x - blur_bounds.0;
+        let end = row_max_x - blur_bounds.0 + 1;
+        let out_start = (y - final_bounds.2) * final_row_width + row_min_x - final_bounds.0;
+        let out_row = &mut out[out_start..out_start + end - start];
+        if bounded_weights {
+            finalize_z_dense_row::<S, true>(simd, &accum[start..end], &coverage[start..end], divider, out_row);
+        } else {
+            finalize_z_dense_row::<S, false>(simd, &accum[start..end], &coverage[start..end], divider, out_row);
         }
     }
 
@@ -5315,6 +5571,441 @@ mod tests {
     use super::ssaa_downsample_min_alpha_u8;
     use crate::rle::expand_rle_to_mask;
     use crate::types::SliceJobV3;
+    use super::{
+        Backend, BoundedBinaryMask, BoundedGrayMask, DenseZBlur, PendingLayer,
+        PerturbRleModelLayer, PostProcessedLayer, RleZBlur, ZBlurHistoryLayer,
+    };
+    use std::collections::VecDeque;
+    use std::sync::Arc;
+
+    fn z_blur_test_layer(mask: BoundedGrayMask) -> PostProcessedLayer {
+        let bounds = mask.bounds();
+        PostProcessedLayer {
+            seq: 0,
+            layer: PendingLayer {
+                layer_index: 0,
+                mask: BoundedGrayMask::empty(),
+                mask_bounds: bounds,
+                topology: BoundedBinaryMask::empty(),
+                topology_bounds: None,
+                topology_non_empty: false,
+                model_non_empty: false,
+                backward_applied: false,
+                backward_seed_bounds: None,
+                support_mask: None,
+                apply_model_aa: false,
+            },
+            mask,
+            active_bounds: bounds,
+            z_blend_backward_ns: 0,
+            z_blend_forward_ns: 0,
+            cross_blend_ns: 0,
+            cross_blend_touched_pixels: 0,
+            cross_blend_contributing_layers: 0,
+            post_blur_ns: 0,
+            dither_ns: 0,
+            tail_remap_ns: 0,
+            support_merge_ns: 0,
+        }
+    }
+
+    fn z_blur_test_runs(pixels: &[u8]) -> Vec<crate::rle::RleRun> {
+        let mut runs = crate::rle::RleAccum::new();
+        crate::rle::emit_row(&mut runs, pixels);
+        runs.finish()
+    }
+
+    fn z_blur_test_rle_layer(
+        mask: &BoundedGrayMask,
+        width: usize,
+        height: usize,
+    ) -> PerturbRleModelLayer {
+        let pixels = mask.clone().into_full_frame(width, height);
+        PerturbRleModelLayer {
+            runs: z_blur_test_runs(&pixels),
+            bounds: nonzero_bounds(&pixels, width, height),
+        }
+    }
+
+    #[test]
+    fn z_blur_sparse_bounds_zero_rows_and_tails_match_exact_pixels_and_runs() {
+        for backend in Backend::supported_for_tests() {
+            for span_width in [1, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 33] {
+                let width = 2 * span_width + 3;
+                let height = 6;
+                let final_bounds = (0, width - 1, 0, height - 1);
+                let mut center_rows = vec![0; 3 * span_width];
+                center_rows[..span_width].fill(80);
+                for x in (0..span_width).step_by(2) {
+                    center_rows[2 * span_width + x] = 200;
+                }
+                let center_mask = BoundedGrayMask::from_rows(
+                    (2, span_width + 1, 2, 4),
+                    center_rows,
+                );
+                let mut prior_rows = vec![40; 2 * span_width];
+                prior_rows[span_width..].fill(120);
+                let prior_mask = BoundedGrayMask::from_rows(
+                    (0, span_width - 1, 1, 2),
+                    prior_rows,
+                );
+                let next_mask = BoundedGrayMask::from_rows(
+                    (span_width + 3, width - 1, 4, 4),
+                    vec![160; span_width],
+                );
+
+                // Exact hand-chosen averages: 40/4, 120/4, 80/2,
+                // (80/2 + 120/4), 200/2, and 160/4. Missing distance-2
+                // neighbors do not contribute to the denominator.
+                let mut expected = vec![0; width * height];
+                expected[width..width + span_width].fill(10);
+                for x in 0..width {
+                    expected[2 * width + x] = match (x < span_width, (2..span_width + 2).contains(&x)) {
+                        (true, true) => 70,
+                        (true, false) => 30,
+                        (false, true) => 40,
+                        (false, false) => 0,
+                    };
+                }
+                for x in (0..span_width).step_by(2) {
+                    expected[4 * width + 2 + x] = 100;
+                }
+                expected[4 * width + span_width + 3..5 * width].fill(40);
+                let weights = [1024, 512, 1];
+
+                let rle_center = z_blur_test_rle_layer(&center_mask, width, height);
+                let rle_history = [Arc::new(z_blur_test_rle_layer(&prior_mask, width, height))];
+                let rle_future = [Arc::new(z_blur_test_rle_layer(&next_mask, width, height))];
+                let runs = backend.dispatch(RleZBlur {
+                    center: &rle_center,
+                    history: &rle_history,
+                    future: &rle_future,
+                    radius: 2,
+                    weights: &weights,
+                    width,
+                    height,
+                });
+                assert_eq!(expand_rle_to_mask(&runs, width * height), expected);
+                assert_eq!(runs, z_blur_test_runs(&expected));
+                assert_eq!(
+                    super::nonzero_bounds_from_rle_runs(&runs, width, height),
+                    Some((0, width - 1, 1, 4)),
+                );
+
+                let mut center = z_blur_test_layer(center_mask.clone());
+                center.active_bounds = Some(final_bounds);
+                let history = VecDeque::from([ZBlurHistoryLayer { mask: prior_mask.clone() }]);
+                let future = VecDeque::from([z_blur_test_layer(next_mask.clone())]);
+                backend.dispatch(DenseZBlur {
+                    center: &mut center,
+                    history: &history,
+                    future: &future,
+                    radius: 2,
+                    weights: &weights,
+                });
+                assert_eq!(center.active_bounds, Some(final_bounds));
+                assert_eq!(center.mask.bounds(), Some(final_bounds));
+                assert_eq!(center.mask.into_full_frame(width, height), expected);
+
+                // Exercise unit, bounded weighted and unsafe weighted rows with
+                // cropped sources, absent distance-2 neighbors and vector tails.
+                let source_pixels = [
+                    center_mask.clone().into_full_frame(width, height),
+                    prior_mask.clone().into_full_frame(width, height),
+                    next_mask.clone().into_full_frame(width, height),
+                ];
+                let max_weight_sum = ((2 * u32::MAX as u64 + 1) / 511) as u32;
+                for (weights, bounded) in [
+                    ([1, 1, 1], true),
+                    ([0, 0, u32::MAX], true),
+                    ([2, 3, u32::MAX], true),
+                    ([16_000_000, 1, 1], true),
+                    ([max_weight_sum - 2, 1, u32::MAX], true),
+                    ([max_weight_sum - 1, 1, u32::MAX], false),
+                    ([u32::MAX / 255 - 2, 1, u32::MAX], false),
+                ] {
+                    let weight_sum = weights[0] + 2 * weights[1];
+                    assert_eq!(super::bounded_z_blur_sum_fits(Some(weight_sum)), bounded);
+                    let denom = weight_sum.max(1);
+                    let expected: Vec<u8> = (0..width * height)
+                        .map(|idx| {
+                            let sum = (source_pixels[0][idx] as u32)
+                                .saturating_mul(weights[0])
+                                .saturating_add((source_pixels[1][idx] as u32).saturating_mul(weights[1]))
+                                .saturating_add((source_pixels[2][idx] as u32).saturating_mul(weights[1]));
+                            ((sum + denom / 2) / denom).min(255) as u8
+                        })
+                        .collect();
+                    let runs = backend.dispatch(RleZBlur {
+                        center: &rle_center,
+                        history: &rle_history,
+                        future: &rle_future,
+                        radius: 2,
+                        weights: &weights,
+                        width,
+                        height,
+                    });
+                    assert_eq!(runs, z_blur_test_runs(&expected));
+
+                    let mut center = z_blur_test_layer(center_mask.clone());
+                    center.active_bounds = Some(final_bounds);
+                    backend.dispatch(DenseZBlur {
+                        center: &mut center,
+                        history: &history,
+                        future: &future,
+                        radius: 2,
+                        weights: &weights,
+                    });
+                    assert_eq!(center.active_bounds, Some(final_bounds));
+                    assert_eq!(center.mask.bounds(), Some(final_bounds));
+                    assert_eq!(center.mask.into_full_frame(width, height), expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn z_blur_rounding_thresholds_and_coverage_holes_match_scalar_reference() {
+        let max_weight_sum = ((2 * u32::MAX as u64 + 1) / 511) as u32;
+        for backend in Backend::supported_for_tests() {
+            for width in [17, 33] {
+                let bounds = (0, width - 1, 0, 0);
+                let pixels: Vec<u8> = (0..width)
+                    .map(|x| [0, 1, 1, 2, 3, 127, 128, 254, 255, 0][x % 10])
+                    .collect();
+                let prior_pixels: Vec<u8> = (0..width)
+                    .map(|x| [0, 0, 1, 0, 1, 128, 127, 255, 254, 0][x % 10])
+                    .collect();
+                let mask = BoundedGrayMask::from_rows(bounds, pixels.clone());
+                let prior_mask = BoundedGrayMask::from_rows(bounds, prior_pixels.clone());
+                let rle_center = z_blur_test_rle_layer(&mask, width, 1);
+                let rle_history = [Arc::new(z_blur_test_rle_layer(&prior_mask, width, 1))];
+                let history = VecDeque::from([ZBlurHistoryLayer { mask: prior_mask }]);
+                // Cover half-up ties, both sides of quotient boundaries, numerators
+                // near u32::MAX, ignored-but-covered pixels and vector/tail holes.
+                // The huge distance-2 weight must be excluded with its absent sources.
+                for weights in [
+                    [1, 1, u32::MAX],
+                    [1, 3, u32::MAX],
+                    [2, 3, u32::MAX],
+                    [1024, 137, u32::MAX],
+                    [max_weight_sum - 1, 1, u32::MAX],
+                    [0, 1, u32::MAX],
+                    [1, 0, u32::MAX],
+                ] {
+                    let denom = weights[0] + weights[1];
+                    let expected: Vec<u8> = pixels.iter().zip(&prior_pixels)
+                        .map(|(&center, &prior)| {
+                            let sum = center as u32 * weights[0] + prior as u32 * weights[1];
+                            ((sum + denom / 2) / denom).min(255) as u8
+                        })
+                        .collect();
+                    let runs = backend.dispatch(RleZBlur {
+                        center: &rle_center,
+                        history: &rle_history,
+                        future: &[],
+                        radius: 2,
+                        weights: &weights,
+                        width,
+                        height: 1,
+                    });
+                    assert_eq!(runs, z_blur_test_runs(&expected));
+                    assert_eq!(
+                        super::nonzero_bounds_from_rle_runs(&runs, width, 1),
+                        nonzero_bounds(&expected, width, 1),
+                    );
+                    let mut center = z_blur_test_layer(mask.clone());
+                    backend.dispatch(DenseZBlur {
+                        center: &mut center,
+                        history: &history,
+                        future: &VecDeque::new(),
+                        radius: 2,
+                        weights: &weights,
+                    });
+                    assert_eq!(center.active_bounds, Some(bounds));
+                    assert_eq!(center.mask.bounds(), Some(bounds));
+                    assert_eq!(center.mask.into_full_frame(width, 1), expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn z_blur_weighted_accumulation_and_unit_bounds_cover_overflow_edges() {
+        let max_unit_sources = ((2 * u32::MAX as u64 + 1) / 511) as usize;
+        assert!(super::bounded_z_blur_sum_fits(u32::try_from(max_unit_sources).ok()));
+        assert!(!super::bounded_z_blur_sum_fits(u32::try_from(max_unit_sources + 1).ok()));
+        assert!(!super::bounded_z_blur_sum_fits(u32::try_from(usize::MAX).ok()));
+        assert!(!super::bounded_z_blur_sum_fits(None));
+        assert!(super::bounded_z_blur_sum_fits(Some(0)));
+        // This sum still admits every byte product, but not rounding at 255.
+        assert!(255u32.checked_mul(max_unit_sources as u32 + 1).is_some());
+
+        struct WeightedAccumulation {
+            initial: u32,
+            weight: u32,
+            offset: usize,
+        }
+        impl pulp::WithSimd for WeightedAccumulation {
+            type Output = ();
+
+            fn with_simd<S: pulp::Simd>(self, simd: S) {
+                let mut values = simd.splat_u32s(0);
+                let input = pulp::bytemuck::cast_slice_mut::<S::u32s, u32>(
+                    std::slice::from_mut(&mut values),
+                );
+                for (idx, value) in input.iter_mut().enumerate() {
+                    *value = [0, 1, 2, 127, 255][(idx + self.offset) % 5];
+                }
+                // Test saturation before normalization: the general path's
+                // existing unchecked rounding addition is intentionally unchanged.
+                let accum = super::accumulate_z_blur::<S, false, false>(
+                    simd,
+                    simd.splat_u32s(self.initial),
+                    values,
+                    self.weight,
+                );
+                let input = pulp::bytemuck::cast_slice::<S::u32s, u32>(std::slice::from_ref(&values));
+                let sums = pulp::bytemuck::cast_slice::<S::u32s, u32>(std::slice::from_ref(&accum));
+                for (&value, &sum) in input.iter().zip(sums) {
+                    assert_eq!(sum, self.initial.saturating_add(value.saturating_mul(self.weight)));
+                }
+            }
+        }
+
+        for backend in Backend::supported_for_tests() {
+            for initial in [0, u32::MAX - 1] {
+                for weight in [0, 1, u32::MAX / 255, u32::MAX / 255 + 1, u32::MAX] {
+                    for offset in 0..5 {
+                        backend.dispatch(WeightedAccumulation { initial, weight, offset });
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn z_blur_weight_bound_and_saturating_fallback_preserve_rounding_overflow() {
+        let max_weight_sum = ((2 * u32::MAX as u64 + 1) / 511) as u32;
+        for backend in Backend::supported_for_tests() {
+            for width in [1, 17, 33] {
+                let height = 1;
+                let bounds = (0, width - 1, 0, 0);
+                let mask = BoundedGrayMask::from_rows(bounds, vec![255; width]);
+                let rle_center = z_blur_test_rle_layer(&mask, width, height);
+                let rle_history = [Arc::new(z_blur_test_rle_layer(&mask, width, height))];
+                let history = VecDeque::from([ZBlurHistoryLayer { mask: mask.clone() }]);
+                // Last safe rounded numerator, rounding-only overflow, product
+                // saturation, addition saturation, and denominator-sum overflow.
+                for weights in [
+                    [max_weight_sum - 1, 1],
+                    [max_weight_sum, 1],
+                    [17_000_000, 1],
+                    [8_500_000, 8_500_000],
+                    [u32::MAX, 1],
+                ] {
+                    let expected = std::panic::catch_unwind(|| {
+                        let denom = weights.iter().copied().sum::<u32>().max(1);
+                        let sum = 255u32.saturating_mul(weights[0])
+                            .saturating_add(255u32.saturating_mul(weights[1]));
+                        vec![((sum + denom / 2) / denom).min(255) as u8; width]
+                    });
+                    let panics = expected.is_err();
+                    let runs = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        backend.dispatch(RleZBlur {
+                            center: &rle_center,
+                            history: &rle_history,
+                            future: &[],
+                            radius: 1,
+                            weights: &weights,
+                            width,
+                            height,
+                        })
+                    }));
+                    assert_eq!(runs.is_err(), panics);
+                    if !panics {
+                        assert_eq!(runs.unwrap(), z_blur_test_runs(expected.as_ref().unwrap()));
+                    }
+
+                    let mut center = z_blur_test_layer(mask.clone());
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        backend.dispatch(DenseZBlur {
+                            center: &mut center,
+                            history: &history,
+                            future: &VecDeque::new(),
+                            radius: 1,
+                            weights: &weights,
+                        });
+                    }));
+                    assert_eq!(result.is_err(), panics);
+                    if !panics {
+                        assert_eq!(center.active_bounds, Some(bounds));
+                        assert_eq!(center.mask.into_full_frame(width, height), *expected.as_ref().unwrap());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn z_blur_missing_neighbors_preserve_center_and_empty_neighbors_dilute_it() {
+        let width = 17;
+        let height = 3;
+        for backend in Backend::supported_for_tests() {
+            for nonzero in [false, true] {
+                let mut pixels = vec![0; width * height];
+                if nonzero {
+                    pixels[width..2 * width].fill(255);
+                }
+                let bounds = (0, width - 1, 0, height - 1);
+                let mask = BoundedGrayMask::from_rows(bounds, pixels.clone());
+                let rle_center = z_blur_test_rle_layer(&mask, width, height);
+                let weights = [1, 1, 1];
+                for include_empty_neighbor in [false, true] {
+                    let mut expected = pixels.clone();
+                    if include_empty_neighbor && nonzero {
+                        expected[width..2 * width].fill(128);
+                    }
+                    let rle_history: Vec<_> = if include_empty_neighbor {
+                        vec![Arc::new(PerturbRleModelLayer {
+                            runs: vec![crate::rle::RleRun { length: (width * height) as u32, value: 0 }],
+                            bounds: None,
+                        })]
+                    } else {
+                        Vec::new()
+                    };
+                    let runs = backend.dispatch(RleZBlur {
+                        center: &rle_center,
+                        history: &rle_history,
+                        future: &[],
+                        radius: 2,
+                        weights: &weights,
+                        width,
+                        height,
+                    });
+                    assert_eq!(runs, z_blur_test_runs(&expected));
+
+                    let mut center = z_blur_test_layer(mask.clone());
+                    let history = if include_empty_neighbor {
+                        VecDeque::from([ZBlurHistoryLayer { mask: BoundedGrayMask::empty() }])
+                    } else {
+                        VecDeque::new()
+                    };
+                    backend.dispatch(DenseZBlur {
+                        center: &mut center,
+                        history: &history,
+                        future: &VecDeque::new(),
+                        radius: 2,
+                        weights: &weights,
+                    });
+                    assert_eq!(center.active_bounds, Some(bounds));
+                    assert_eq!(center.mask.bounds(), Some(bounds));
+                    assert_eq!(center.mask.into_full_frame(width, height), expected);
+                }
+            }
+        }
+    }
+
 
     fn push_box_triangles(
         out: &mut Vec<f32>,

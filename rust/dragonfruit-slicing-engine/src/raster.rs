@@ -4,6 +4,7 @@
 //! solids and avoid spurious bridge/void artifacts.
 
 use crate::geometry::Triangle;
+use crate::pulp_simd::{self, Backend};
 use crate::types::{LayerAreaStatsV3, SliceJobV3};
 use crate::zaa;
 use rayon::prelude::*;
@@ -101,6 +102,30 @@ struct RowSpan {
     b: f32,
     start: usize,
     end: usize,
+}
+
+/// Emit the union of sorted inclusive spans, clipped to a column window.
+/// RleAccum merges adjacent equal values, including across row boundaries.
+#[inline]
+fn emit_binary_row_spans(
+    rle: &mut crate::rle::RleAccum,
+    spans: &[RowSpan],
+    window_start: usize,
+    window_width: usize,
+) {
+    let window_end = window_start + window_width;
+    let mut cursor = window_start;
+    for span in spans {
+        let start = span.start.max(window_start).max(cursor);
+        let end = span.end.saturating_add(1).min(window_end);
+        if start >= end {
+            continue;
+        }
+        rle.push_run((start - cursor) as u32, 0);
+        rle.push_run((end - start) as u32, 255);
+        cursor = end;
+    }
+    rle.push_run((window_end - cursor) as u32, 0);
 }
 
 #[derive(Debug)]
@@ -1199,6 +1224,351 @@ fn recompute_layer_stats_from_mask(
     stats
 }
 
+// Horizontal box sums have a loop-carried dependency; column updates do not.
+// Scalar and oversized-radius rows add the full sum before u16 ring truncation.
+#[inline(always)]
+fn box_horizontal_row<const ADD_COLUMNS: bool>(
+    source: &[u8], radius: usize, ring_row: &mut [u16], columns: &mut [u32],
+) {
+    debug_assert_eq!(source.len(), ring_row.len());
+    debug_assert_eq!(source.len(), columns.len());
+    let width = source.len();
+    let mut sum: u32 = source[..=radius.min(width - 1)].iter().map(|&b| b as u32).sum();
+    let write = |out: &mut u16, column: &mut u32, sum: u32| {
+        *out = sum as u16;
+        if ADD_COLUMNS { *column += sum; }
+    };
+    // Split at the two window edges so each source range is proven in bounds.
+    let left_start = radius.min(width);
+    let right_start = radius.saturating_add(1).min(width);
+    let right_end = width - right_start;
+    let first_end = left_start.min(right_end);
+    let middle_end = left_start.max(right_end);
+    for ((out, column), &right) in ring_row[..first_end].iter_mut()
+        .zip(&mut columns[..first_end]).zip(&source[right_start..right_start + first_end])
+    {
+        write(out, column, sum);
+        sum += right as u32;
+    }
+    if left_start <= right_end {
+        for (((out, column), &left), &right) in ring_row[first_end..middle_end].iter_mut()
+            .zip(&mut columns[first_end..middle_end])
+            .zip(&source[..middle_end - first_end])
+            .zip(&source[right_start + first_end..right_start + middle_end])
+        {
+            write(out, column, sum);
+            sum -= left as u32;
+            sum += right as u32;
+        }
+    } else {
+        for (out, column) in ring_row[first_end..middle_end].iter_mut()
+            .zip(&mut columns[first_end..middle_end])
+        {
+            write(out, column, sum);
+        }
+    }
+    for ((out, column), &left) in ring_row[middle_end..].iter_mut()
+        .zip(&mut columns[middle_end..])
+        .zip(&source[middle_end.saturating_sub(radius)..width.saturating_sub(radius)])
+    {
+        write(out, column, sum);
+        sum -= left as u32;
+    }
+}
+
+#[inline(always)]
+fn box_update_columns<S: pulp::Simd, const SUBTRACT: bool>(simd: S, columns: &mut [u32], row: &[u16]) {
+    debug_assert_eq!(columns.len(), row.len());
+    let lanes = pulp_simd::u32_lanes::<S>();
+    let (vectors, tail) = S::as_mut_simd_u32s(columns);
+    let end = vectors.len() * lanes;
+    for (column, values) in vectors.iter_mut().zip(row[..end].chunks_exact(lanes)) {
+        let value = pulp_simd::load_u16_as_u32(simd, values);
+        *column = if SUBTRACT { simd.sub_u32s(*column, value) } else { simd.add_u32s(*column, value) };
+    }
+    for (column, &value) in tail.iter_mut().zip(&row[end..]) {
+        if SUBTRACT { *column -= value as u32; } else { *column += value as u32; }
+    }
+}
+
+struct BoxNormalizeDenominators<'a> {
+    horizontal: &'a [u32],
+    uniform_start: usize,
+    uniform_end: usize,
+    vertical: u32,
+    uniform: pulp_simd::U32Divider,
+}
+
+impl<'a> BoxNormalizeDenominators<'a> {
+    fn new(horizontal: &'a [u32]) -> Self {
+        let largest = *horizontal.iter().max().expect("nonempty box row");
+        let uniform_start = horizontal.iter().position(|&d| d == largest).unwrap();
+        let uniform_end = horizontal.iter().rposition(|&d| d == largest).unwrap() + 1;
+        Self {
+            horizontal, uniform_start, uniform_end, vertical: 0,
+            uniform: pulp_simd::U32Divider::new(1),
+        }
+    }
+
+    #[inline(always)]
+    fn set_vertical(&mut self, vertical: u32) {
+        if self.vertical != vertical {
+            self.vertical = vertical;
+            // The image-global horizontal plateau shares one exact reciprocal;
+            // interior rows reuse it too. Cropping never changes edge attenuation.
+            self.uniform = pulp_simd::U32Divider::new(
+                (self.horizontal[self.uniform_start] * vertical).max(1));
+        }
+    }
+
+    #[inline(always)]
+    fn divider(&self, x: usize) -> pulp_simd::U32Divider {
+        if (self.uniform_start..self.uniform_end).contains(&x) {
+            self.uniform
+        } else {
+            pulp_simd::U32Divider::new((self.horizontal[x] * self.vertical).max(1))
+        }
+    }
+
+    #[inline(always)]
+    fn vectors<S: pulp::Simd>(&self, simd: S, x: usize) -> (S::u32s, S::u32s, S::u32s) {
+        let lanes = pulp_simd::u32_lanes::<S>();
+        if x >= self.uniform_start && x + lanes <= self.uniform_end {
+            return (simd.splat_u32s(self.uniform.denominator),
+                simd.splat_u32s(self.uniform.multiplier), simd.splat_u32s(self.uniform.denominator / 2));
+        }
+        // Only a boundary tile needs differing lane denominators. Keep its
+        // metadata on the stack, rather than allocating a denominator matrix.
+        let mut denominators = simd.splat_u32s(1);
+        let mut multipliers = simd.splat_u32s(0);
+        let mut biases = simd.splat_u32s(0);
+        let d = pulp::bytemuck::cast_slice_mut::<S::u32s, u32>(std::slice::from_mut(&mut denominators));
+        let m = pulp::bytemuck::cast_slice_mut::<S::u32s, u32>(std::slice::from_mut(&mut multipliers));
+        let b = pulp::bytemuck::cast_slice_mut::<S::u32s, u32>(std::slice::from_mut(&mut biases));
+        for lane in 0..lanes {
+            let divider = self.divider(x + lane);
+            d[lane] = divider.denominator;
+            m[lane] = divider.multiplier;
+            b[lane] = divider.denominator / 2;
+        }
+        (denominators, multipliers, biases)
+    }
+}
+
+#[inline(always)]
+fn box_normalize_vector<S: pulp::Simd>(
+    simd: S, sum: S::u32s, denominators: (S::u32s, S::u32s, S::u32s), min_alpha: u8,
+) -> S::u32s {
+    let (denominator, multiplier, bias) = denominators;
+    #[cfg(debug_assertions)]
+    {
+        // Pulp addition wraps; retain the old scalar debug overflow panic.
+        let sums = pulp::bytemuck::cast_slice::<S::u32s, u32>(std::slice::from_ref(&sum));
+        let biases = pulp::bytemuck::cast_slice::<S::u32s, u32>(std::slice::from_ref(&bias));
+        for (&sum, &bias) in sums.iter().zip(biases) { let _ = sum + bias; }
+    }
+    // Exact multiply-high/remainder correction replaces scalar (sum+d/2)/d;
+    // rounding, byte clipping, and the strict min-alpha comparison are unchanged.
+    let raw = pulp_simd::divide_u32s(simd, simd.add_u32s(sum, bias), denominator, multiplier);
+    let value = simd.min_u32s(raw, simd.splat_u32s(255));
+    simd.select_u32s(simd.less_than_u32s(value, simd.splat_u32s(min_alpha as u32)), simd.splat_u32s(0), value)
+}
+
+#[inline(always)]
+fn box_store_vector<S: pulp::Simd>(values: S::u32s, row: &mut [u8]) -> bool {
+    let values = pulp::bytemuck::cast_slice::<S::u32s, u32>(std::slice::from_ref(&values));
+    let mut all_zero = true;
+    for (out, &value) in row.iter_mut().zip(values) {
+        *out = value as u8;
+        all_zero &= value == 0;
+    }
+    all_zero
+}
+
+#[inline(always)]
+fn box_normalize_row<S: pulp::Simd>(
+    simd: S, columns: &[u32], denominators: &mut BoxNormalizeDenominators<'_>,
+    v_denom: u32, min_alpha: u8, row: &mut [u8],
+) -> bool {
+    denominators.set_vertical(v_denom);
+    let lanes = pulp_simd::u32_lanes::<S>();
+    let (vectors, tail) = S::as_simd_u32s(columns);
+    let end = vectors.len() * lanes;
+    let mut all_zero = true;
+    for (x, &sum) in vectors.iter().enumerate() {
+        let x = x * lanes;
+        let value = box_normalize_vector(simd, sum, denominators.vectors(simd, x), min_alpha);
+        all_zero &= box_store_vector::<S>(value, &mut row[x..x + lanes]);
+    }
+    for (lane, (&sum, out)) in tail.iter().zip(&mut row[end..]).enumerate() {
+        let divider = denominators.divider(end + lane);
+        let value = divider.divide(sum + divider.denominator / 2).min(255) as u8;
+        *out = if value < min_alpha { 0 } else { value };
+        all_zero &= *out == 0;
+    }
+    all_zero
+}
+
+struct BoxSequentialBlur<'a> {
+    mask: &'a mut [u8],
+    width: usize,
+    roi_min_x: usize,
+    roi_min_y: usize,
+    roi_w: usize,
+    roi_h: usize,
+    radius: usize,
+    min_alpha_u8: u8,
+    h_denom: &'a [u32],
+    v_denom: &'a [u32],
+}
+
+impl pulp::WithSimd for BoxSequentialBlur<'_> {
+    type Output = ();
+
+    #[inline(always)]
+    fn with_simd<S: pulp::Simd>(self, simd: S) {
+        if pulp_simd::u32_lanes::<S>() == 1 || self.radius > 127 {
+            box_sequential_blur_with_simd::<S, true>(self, simd);
+        } else {
+            box_sequential_blur_with_simd::<S, false>(self, simd);
+        }
+    }
+}
+
+#[inline(always)]
+fn box_sequential_blur_with_simd<S: pulp::Simd, const ADD_COLUMNS: bool>(
+    operation: BoxSequentialBlur<'_>, simd: S,
+) {
+    let BoxSequentialBlur {
+        mask, width, roi_min_x, roi_min_y, roi_w, roi_h, radius, min_alpha_u8, h_denom, v_denom,
+    } = operation;
+    // Single forward pass; ring holds at most (2r+1) rows of horizontal
+    // sums.  O(roi_w × roi_h) time, O(radius × roi_w) extra memory.
+    let ring_cap = 2 * radius + 1;
+    let mut ring = vec![0u16; ring_cap * roi_w];
+    let mut col_sums = vec![0u32; roi_w];
+    let mut ring_head = 0usize;
+    let mut ring_len = 0usize;
+    let mut denominators = BoxNormalizeDenominators::new(h_denom);
+
+    for add_row in 0..roi_h + radius {
+        if add_row < roi_h {
+            let new_slot = (ring_head + ring_len) % ring_cap;
+            let slot_start = new_slot * roi_w;
+            let src_y = roi_min_y + add_row;
+            let src_row_start = src_y * width + roi_min_x;
+            let src = &mask[src_row_start..src_row_start + roi_w];
+
+            let ring_row = &mut ring[slot_start..slot_start + roi_w];
+            box_horizontal_row::<ADD_COLUMNS>(src, radius, ring_row, &mut col_sums);
+            if !ADD_COLUMNS { box_update_columns::<S, false>(simd, &mut col_sums, ring_row); }
+            ring_len += 1;
+        }
+
+        if add_row >= radius {
+            let out_row = add_row - radius;
+            let dst_y = roi_min_y + out_row;
+            let dst_row_start = dst_y * width + roi_min_x;
+            let row_out = &mut mask[dst_row_start..dst_row_start + roi_w];
+            box_normalize_row(simd, &col_sums, &mut denominators, v_denom[out_row], min_alpha_u8, row_out);
+
+            if out_row >= radius {
+                let evict_start = ring_head * roi_w;
+                let row = &ring[evict_start..evict_start + roi_w];
+                box_update_columns::<S, true>(simd, &mut col_sums, row);
+                ring_head = (ring_head + 1) % ring_cap;
+                ring_len -= 1;
+            }
+        }
+    }
+}
+
+struct BoxVerticalColumns<'a> {
+    hpass: &'a [u16],
+    mask_ptr: usize,
+    width: usize,
+    roi_min_x: usize,
+    roi_min_y: usize,
+    roi_w: usize,
+    roi_h: usize,
+    x_start: usize,
+    x_end: usize,
+    radius: usize,
+    min_alpha: u8,
+    h_denom: &'a [u32],
+    v_denom: &'a [u32],
+}
+
+impl pulp::WithSimd for BoxVerticalColumns<'_> {
+    type Output = ();
+
+    #[inline(always)]
+    fn with_simd<S: pulp::Simd>(self, simd: S) {
+        let lanes = pulp_simd::u32_lanes::<S>();
+        let mut denominators = BoxNormalizeDenominators::new(&self.h_denom[self.x_start..self.x_end]);
+        let mut x = self.x_start;
+        while self.radius <= 127 && x + lanes <= self.x_end {
+            let mut sum = simd.splat_u32s(0);
+            for y in 0..=self.radius.min(self.roi_h - 1) {
+                sum = simd.add_u32s(sum, pulp_simd::load_u16_as_u32(simd, &self.hpass[y * self.roi_w + x..]));
+            }
+            let mut vertical = 0;
+            let mut metadata = (simd.splat_u32s(1), simd.splat_u32s(0), simd.splat_u32s(0));
+            for y in 0..self.roi_h {
+                if vertical != self.v_denom[y] {
+                    vertical = self.v_denom[y];
+                    denominators.set_vertical(vertical);
+                    // Reuse the complete tile's divisors down the vertical
+                    // plateau, including horizontal image-border lanes.
+                    metadata = denominators.vectors(simd, x - self.x_start);
+                }
+                let value = box_normalize_vector(simd, sum, metadata, self.min_alpha);
+                // Each task owns a disjoint column block; H-pass is read-only.
+                let row = unsafe {
+                    std::slice::from_raw_parts_mut((self.mask_ptr as *mut u8)
+                        .add((self.roi_min_y + y) * self.width + self.roi_min_x + x), lanes)
+                };
+                box_store_vector::<S>(value, row);
+                let bot = y + self.radius + 1;
+                if bot < self.roi_h {
+                    sum = simd.add_u32s(sum, pulp_simd::load_u16_as_u32(simd, &self.hpass[bot * self.roi_w + x..]));
+                }
+                if y >= self.radius {
+                    sum = simd.sub_u32s(sum, pulp_simd::load_u16_as_u32(simd, &self.hpass[(y - self.radius) * self.roi_w + x..]));
+                }
+            }
+            x += lanes;
+        }
+        for x in x..self.x_end {
+            let mut sum = 0u32;
+            for y in 0..=self.radius.min(self.roi_h - 1) {
+                sum += self.hpass[y * self.roi_w + x] as u32;
+            }
+            let mut vertical = 0;
+            let mut divider = pulp_simd::U32Divider::new(1);
+            for y in 0..self.roi_h {
+                if vertical != self.v_denom[y] {
+                    vertical = self.v_denom[y];
+                    denominators.set_vertical(vertical);
+                    divider = denominators.divider(x - self.x_start);
+                }
+                let blurred = divider.divide(sum + divider.denominator / 2).min(255) as u8;
+                unsafe {
+                    *(self.mask_ptr as *mut u8).add((self.roi_min_y + y) * self.width + self.roi_min_x + x) =
+                        if blurred < self.min_alpha { 0 } else { blurred };
+                }
+                let bot = y + self.radius + 1;
+                if bot < self.roi_h {
+                    sum += self.hpass[bot * self.roi_w + x] as u32;
+                }
+                if y >= self.radius {
+                    sum -= self.hpass[(y - self.radius) * self.roi_w + x] as u32;
+                }
+            }
+        }
+    }
+}
+
 fn apply_edge_box_blur_to_mask_in_roi(
     mask: &mut [u8],
     width: usize,
@@ -1209,6 +1579,24 @@ fn apply_edge_box_blur_to_mask_in_roi(
     roi_max_x: usize,
     roi_min_y: usize,
     roi_max_y: usize,
+) {
+    apply_edge_box_blur_to_mask_in_roi_with_backend(
+        mask, width, height, radius, min_alpha_u8,
+        roi_min_x, roi_max_x, roi_min_y, roi_max_y, Backend::detected(),
+    );
+}
+
+fn apply_edge_box_blur_to_mask_in_roi_with_backend(
+    mask: &mut [u8],
+    width: usize,
+    height: usize,
+    radius: usize,
+    min_alpha_u8: u8,
+    roi_min_x: usize,
+    roi_max_x: usize,
+    roi_min_y: usize,
+    roi_max_y: usize,
+    backend: Backend,
 ) {
     if radius == 0
         || width == 0
@@ -1259,67 +1647,10 @@ fn apply_edge_box_blur_to_mask_in_roi(
         .collect();
 
     if !use_par {
-        // ── Sequential ring-buffer path ───────────────────────────────────
-        // Single forward pass; ring holds at most (2r+1) rows of horizontal
-        // sums.  O(roi_w × roi_h) time, O(radius × roi_w) extra memory.
-        let ring_cap = 2 * radius + 1;
-        let mut ring = vec![0u16; ring_cap * roi_w];
-        let mut col_sums = vec![0u32; roi_w];
-        let mut ring_head = 0usize;
-        let mut ring_len = 0usize;
-
-        for add_row in 0..roi_h + radius {
-            if add_row < roi_h {
-                let new_slot = (ring_head + ring_len) % ring_cap;
-                let slot_start = new_slot * roi_w;
-                let src_y = roi_min_y + add_row;
-                let src_row_start = src_y * width + roi_min_x;
-                let src = &mask[src_row_start..src_row_start + roi_w];
-
-                let mut sum = 0u32;
-                let init_end = radius.min(roi_w - 1);
-                for &b in &src[0..=init_end] {
-                    sum += b as u32;
-                }
-                for ix in 0..roi_w {
-                    ring[slot_start + ix] = sum as u16;
-                    col_sums[ix] += sum;
-                    if ix >= radius {
-                        sum -= src[ix - radius] as u32;
-                    }
-                    let r1 = ix + radius + 1;
-                    if r1 < roi_w {
-                        sum += src[r1] as u32;
-                    }
-                }
-                ring_len += 1;
-            }
-
-            if add_row >= radius {
-                let out_row = add_row - radius;
-                let dst_y = roi_min_y + out_row;
-                let dst_row_start = dst_y * width + roi_min_x;
-                let row_out = &mut mask[dst_row_start..dst_row_start + roi_w];
-                for ix in 0..roi_w {
-                    let denom = (h_denom[ix] * v_denom[out_row]).max(1);
-                    let raw = (col_sums[ix] + denom / 2) / denom;
-                    let mut val = raw.min(255) as u8;
-                    if val < min_alpha_u8 {
-                        val = 0;
-                    }
-                    row_out[ix] = val;
-                }
-
-                if out_row >= radius {
-                    let evict_start = ring_head * roi_w;
-                    for ix in 0..roi_w {
-                        col_sums[ix] -= ring[evict_start + ix] as u32;
-                    }
-                    ring_head = (ring_head + 1) % ring_cap;
-                    ring_len -= 1;
-                }
-            }
-        }
+        backend.dispatch(BoxSequentialBlur {
+            mask, width, roi_min_x, roi_min_y, roi_w, roi_h, radius, min_alpha_u8,
+            h_denom: &h_denom, v_denom: &v_denom,
+        });
         return;
     }
 
@@ -1371,47 +1702,30 @@ fn apply_edge_box_blur_to_mask_in_roi(
                 }
             });
 
-        let hpass_ptr = hpass.as_ptr() as usize;
         // Let a queued nested blur run here so the regression test exercises the
         // reentrant case deterministically; compiled out in non-test builds.
         #[cfg(test)]
         rayon::yield_now();
 
-        // V-pass: parallel over columns.
-        // Safety: each parallel task writes to a distinct column of `mask`;
-        // writes at `(roi_min_y + roi_y) * width + roi_min_x + roi_x` are
-        // non-overlapping for different `roi_x` values.
-        (0..roi_w).into_par_iter().for_each(|roi_x| {
-            // SAFETY: see comment above.
-            let hp = hpass_ptr as *const u16;
-            let mp = mask_ptr as *mut u8;
-            let mut col_sum = 0u32;
-            let init_end = radius.min(roi_h - 1);
-            for roi_y in 0..=init_end {
-                col_sum += unsafe { *hp.add(roi_y * roi_w + roi_x) } as u32;
-            }
-            for roi_y in 0..roi_h {
-                let denom = (h_denom[roi_x] * v_denom[roi_y]).max(1);
-                let raw = (col_sum + denom / 2) / denom;
-                let mut val = raw.min(255) as u8;
-                // Zero out pixels below the min-alpha floor rather than clamping
-                // them up — see original function for full rationale.
-                if val < min_alpha_u8 {
-                    val = 0;
-                }
-                // SAFETY: column roi_x, disjoint from all other parallel tasks.
-                unsafe {
-                    *mp.add((roi_min_y + roi_y) * width + roi_min_x + roi_x) = val;
-                }
-                // Slide vertical window down.
-                let bot = roi_y + radius + 1;
-                if bot < roi_h {
-                    col_sum += unsafe { *hp.add(bot * roi_w + roi_x) } as u32;
-                }
-                if roi_y >= radius {
-                    col_sum -= unsafe { *hp.add((roi_y - radius) * roi_w + roi_x) } as u32;
-                }
-            }
+        // V-pass tasks own disjoint column blocks. Dispatch inside each Rayon
+        // worker, so its entire vector loop runs in the CPU-gated scope.
+        (0..roi_w.div_ceil(64)).into_par_iter().for_each(|block| {
+            let x_start = block * 64;
+            backend.dispatch(BoxVerticalColumns {
+                hpass: &hpass,
+                mask_ptr,
+                width,
+                roi_min_x,
+                roi_min_y,
+                roi_w,
+                roi_h,
+                x_start,
+                x_end: (x_start + 64).min(roi_w),
+                radius,
+                min_alpha: min_alpha_u8,
+                h_denom: &h_denom,
+                v_denom: &v_denom,
+            });
         });
         HPASS.with(|cell| {
             let mut cached = cell.borrow_mut();
@@ -1452,6 +1766,158 @@ fn weighted_blur_axis_denom(index: usize, max_index: usize, radius: usize, weigh
     denom.max(1)
 }
 
+struct GaussianHorizontalRow<'a> {
+    source: &'a [u8],
+    output: &'a mut [u32],
+    roi_min_x: usize,
+    weights: &'a [u32],
+}
+
+impl pulp::WithSimd for GaussianHorizontalRow<'_> {
+    type Output = ();
+
+    #[inline(always)]
+    fn with_simd<S: pulp::Simd>(self, simd: S) {
+        let radius = self.weights.len() - 1;
+        let lanes = pulp_simd::u32_lanes::<S>();
+        let mut local_x = 0;
+        while local_x < self.output.len() {
+            let x = self.roi_min_x + local_x;
+            if x >= radius && local_x + lanes <= self.output.len()
+                && x + lanes <= self.source.len().saturating_sub(radius)
+            {
+                let mut sum = pulp_simd::sat_mul_u32(simd,
+                    pulp_simd::load_u8_as_u32(simd, &self.source[x..]), simd.splat_u32s(self.weights[0]));
+                for dist in 1..=radius {
+                    let weight = simd.splat_u32s(self.weights[dist]);
+                    let left = pulp_simd::sat_mul_u32(simd, pulp_simd::load_u8_as_u32(simd, &self.source[x - dist..]), weight);
+                    let right = pulp_simd::sat_mul_u32(simd, pulp_simd::load_u8_as_u32(simd, &self.source[x + dist..]), weight);
+                    sum = pulp_simd::sat_add_u32(simd, pulp_simd::sat_add_u32(simd, sum, left), right);
+                }
+                // All terms are nonnegative: saturating each u32 term/add is
+                // identical to the original u64 sum followed by the u32 clamp.
+                S::as_mut_simd_u32s(&mut self.output[local_x..local_x + lanes]).0[0] = sum;
+                local_x += lanes;
+            } else {
+                let mut sum = (self.weights[0] as u64).saturating_mul(self.source[x] as u64);
+                for dist in 1..=radius {
+                    let weight = self.weights[dist] as u64;
+                    if let Some(left) = x.checked_sub(dist) {
+                        sum = sum.saturating_add(weight.saturating_mul(self.source[left] as u64));
+                    }
+                    if let Some(right) = x.checked_add(dist) {
+                        if right < self.source.len() {
+                            sum = sum.saturating_add(weight.saturating_mul(self.source[right] as u64));
+                        }
+                    }
+                }
+                self.output[local_x] = sum.min(u32::MAX as u64) as u32;
+                local_x += 1;
+            }
+        }
+    }
+}
+
+#[inline(always)]
+fn gaussian_normalize_vector<S: pulp::Simd>(
+    simd: S, sum: S::u64s, x_denoms: &[u64], y_denom: u64,
+    uniform: Option<pulp_simd::U64ByteDivider>, min_alpha: u8, output: &mut [u8],
+) {
+    // Only the clipped byte quotient is needed. Cached multiply-high constants
+    // on narrow vectors, or eight vector compare/subtract steps on wide vectors,
+    // replace scalar (sum+d/2)/d without reducing Gaussian precision.
+    let value = if let Some(divider) = uniform {
+        #[cfg(debug_assertions)]
+        for &sum in pulp::bytemuck::cast_slice::<S::u64s, u64>(std::slice::from_ref(&sum)) {
+            let _ = sum + divider.denominator / 2;
+        }
+        divider.divide_simd(simd, simd.add_u64s(sum, simd.splat_u64s(divider.denominator / 2)))
+    } else {
+        let mut denominator = simd.splat_u64s(1);
+        let mut bias = simd.splat_u64s(0);
+        let d = pulp::bytemuck::cast_slice_mut::<S::u64s, u64>(std::slice::from_mut(&mut denominator));
+        let b = pulp::bytemuck::cast_slice_mut::<S::u64s, u64>(std::slice::from_mut(&mut bias));
+        for lane in 0..pulp_simd::u64_lanes::<S>() {
+            d[lane] = x_denoms[lane].saturating_mul(y_denom).max(1);
+            b[lane] = d[lane] / 2;
+        }
+        #[cfg(debug_assertions)]
+        {
+            // Bias addition is deliberately not saturating, just as before.
+            let sums = pulp::bytemuck::cast_slice::<S::u64s, u64>(std::slice::from_ref(&sum));
+            for (&sum, &bias) in sums.iter().zip(b.iter()) { let _ = sum + bias; }
+        }
+        pulp_simd::divide_u64s_to_u8(simd, simd.add_u64s(sum, bias), denominator)
+    };
+    let value = simd.select_u64s(simd.less_than_u64s(value, simd.splat_u64s(min_alpha as u64)), simd.splat_u64s(0), value);
+    let values = pulp::bytemuck::cast_slice::<S::u64s, u64>(std::slice::from_ref(&value));
+    for (out, &value) in output.iter_mut().zip(values) {
+        *out = value as u8;
+    }
+}
+
+struct GaussianVerticalRow<'a> {
+    ring: &'a std::collections::VecDeque<(usize, Vec<u32>)>,
+    output: &'a mut [u8],
+    out_y: usize,
+    weights: &'a [u32],
+    x_denoms: &'a [u64],
+    y_denom: u64,
+    uniform_start: usize,
+    uniform_end: usize,
+    uniform_divider: pulp_simd::U64ByteDivider,
+    min_alpha: u8,
+}
+
+impl pulp::WithSimd for GaussianVerticalRow<'_> {
+    type Output = ();
+
+    #[inline(always)]
+    fn with_simd<S: pulp::Simd>(self, simd: S) {
+        let lanes = pulp_simd::u32_lanes::<S>();
+        let wide_lanes = pulp_simd::u64_lanes::<S>();
+        let end = if lanes == 1 { 0 } else { self.output.len() / lanes * lanes };
+        for x in (0..end).step_by(lanes) {
+            let mut lo = simd.splat_u64s(0);
+            let mut hi = simd.splat_u64s(0);
+            for (row_y, row) in self.ring {
+                let dist = row_y.abs_diff(self.out_y);
+                if dist < self.weights.len() {
+                    let (product_lo, product_hi) = pulp_simd::widening_mul_u32_to_u64(simd,
+                        S::as_simd_u32s(&row[x..x + lanes]).0[0], simd.splat_u32s(self.weights[dist]));
+                    lo = pulp_simd::sat_add_u64(simd, lo, product_lo);
+                    hi = pulp_simd::sat_add_u64(simd, hi, product_hi);
+                }
+            }
+            let uniform_lo = (x >= self.uniform_start && x + wide_lanes <= self.uniform_end)
+                .then_some(self.uniform_divider);
+            gaussian_normalize_vector(simd, lo, &self.x_denoms[x..], self.y_denom,
+                uniform_lo, self.min_alpha, &mut self.output[x..x + wide_lanes]);
+            let high_x = x + wide_lanes;
+            let uniform_hi = (high_x >= self.uniform_start && x + lanes <= self.uniform_end)
+                .then_some(self.uniform_divider);
+            gaussian_normalize_vector(simd, hi, &self.x_denoms[high_x..], self.y_denom,
+                uniform_hi, self.min_alpha, &mut self.output[high_x..x + lanes]);
+        }
+        for x in end..self.output.len() {
+            let mut sum = 0u64;
+            for (row_y, row) in self.ring {
+                let dist = row_y.abs_diff(self.out_y);
+                if dist < self.weights.len() {
+                    sum = sum.saturating_add((self.weights[dist] as u64).saturating_mul(row[x] as u64));
+                }
+            }
+            let divider = if (self.uniform_start..self.uniform_end).contains(&x) {
+                self.uniform_divider
+            } else {
+                pulp_simd::U64ByteDivider::new(self.x_denoms[x].saturating_mul(self.y_denom).max(1))
+            };
+            let blurred = divider.divide(sum + divider.denominator / 2);
+            self.output[x] = if blurred < self.min_alpha { 0 } else { blurred };
+        }
+    }
+}
+
 fn apply_edge_gaussian_blur_to_mask_in_roi(
     mask: &mut [u8],
     width: usize,
@@ -1464,6 +1930,26 @@ fn apply_edge_gaussian_blur_to_mask_in_roi(
     roi_max_x: usize,
     roi_min_y: usize,
     roi_max_y: usize,
+) {
+    apply_edge_gaussian_blur_to_mask_in_roi_with_backend(
+        mask, width, height, radius, sigma_x, sigma_y, min_alpha_u8,
+        roi_min_x, roi_max_x, roi_min_y, roi_max_y, Backend::detected(),
+    );
+}
+
+fn apply_edge_gaussian_blur_to_mask_in_roi_with_backend(
+    mask: &mut [u8],
+    width: usize,
+    height: usize,
+    radius: usize,
+    sigma_x: f64,
+    sigma_y: f64,
+    min_alpha_u8: u8,
+    roi_min_x: usize,
+    roi_max_x: usize,
+    roi_min_y: usize,
+    roi_max_y: usize,
+    backend: Backend,
 ) {
     if radius == 0
         || width == 0
@@ -1487,6 +1973,12 @@ fn apply_edge_gaussian_blur_to_mask_in_roi(
     let y_denoms: Vec<u64> = (roi_min_y..=roi_max_y)
         .map(|y| weighted_blur_axis_denom(y, height - 1, radius, &weights_y))
         .collect();
+    let largest_x_denom = *x_denoms.iter().max().unwrap();
+    let uniform_start = x_denoms.iter().position(|&d| d == largest_x_denom).unwrap();
+    let uniform_end = uniform_start + x_denoms[uniform_start..].iter()
+        .take_while(|&&d| d == largest_x_denom).count();
+    let mut last_y_denom = 0;
+    let mut uniform_divider = pulp_simd::U64ByteDivider::new(1);
 
     let source = mask.to_vec();
     let mut out = vec![0u8; mask.len()];
@@ -1498,44 +1990,37 @@ fn apply_edge_gaussian_blur_to_mask_in_roi(
             let y = roi_min_y + add_row;
             let row_start = y * width;
             let mut hrow = vec![0u32; roi_w];
-            for local_x in 0..roi_w {
-                let x = roi_min_x + local_x;
-                let mut accum = (weights_x[0] as u64).saturating_mul(source[row_start + x] as u64);
-                for dist in 1..=radius {
-                    let w = weights_x[dist] as u64;
-                    if let Some(left_x) = x.checked_sub(dist) {
-                        accum = accum.saturating_add(w.saturating_mul(source[row_start + left_x] as u64));
-                    }
-                    if let Some(right_x) = x.checked_add(dist) {
-                        if right_x < width {
-                            accum = accum.saturating_add(w.saturating_mul(source[row_start + right_x] as u64));
-                        }
-                    }
-                }
-                hrow[local_x] = accum.min(u32::MAX as u64) as u32;
-            }
+            backend.dispatch(GaussianHorizontalRow {
+                source: &source[row_start..row_start + width],
+                output: &mut hrow,
+                roi_min_x,
+                weights: &weights_x,
+            });
             ring.push_back((y, hrow));
         }
 
         if add_row >= radius {
             let out_y = roi_min_y + (add_row - radius);
             let y_denom = y_denoms[out_y - roi_min_y];
-            let row_start = out_y * width;
-            for local_x in 0..roi_w {
-                let x_denom = x_denoms[local_x];
-                let denom = x_denom.saturating_mul(y_denom).max(1);
-                let mut accum = 0u64;
-                for (row_y, hrow) in &ring {
-                    let dist = row_y.abs_diff(out_y);
-                    if dist > radius {
-                        continue;
-                    }
-                    accum = accum.saturating_add((weights_y[dist] as u64).saturating_mul(hrow[local_x] as u64));
-                }
-
-                let blurred = ((accum + (denom / 2)) / denom).min(255) as u8;
-                out[row_start + roi_min_x + local_x] = if blurred < min_alpha_u8 { 0 } else { blurred };
+            if last_y_denom != y_denom {
+                last_y_denom = y_denom;
+                // Reuse the global horizontal/vertical plateau denominator
+                // across pixels and rows, retaining cropped-edge attenuation.
+                uniform_divider = pulp_simd::U64ByteDivider::new(largest_x_denom.saturating_mul(y_denom).max(1));
             }
+            let row_start = out_y * width;
+            backend.dispatch(GaussianVerticalRow {
+                ring: &ring,
+                output: &mut out[row_start + roi_min_x..row_start + roi_min_x + roi_w],
+                out_y,
+                weights: &weights_y,
+                x_denoms: &x_denoms,
+                y_denom,
+                uniform_start,
+                uniform_end,
+                uniform_divider,
+                min_alpha: min_alpha_u8,
+            });
 
             if out_y >= radius {
                 ring.pop_front();
@@ -2840,8 +3325,8 @@ pub fn rasterize_layer_rle(
     let mut active_edges: Vec<ActiveEdge> = Vec::with_capacity(segments.len().min(256));
     let mut merge_scratch: Vec<ActiveEdge> = Vec::with_capacity(segments.len().min(256));
 
-    // Single-row scratch buffer — width bytes max (7680 at 8 K).
-    let mut row_buf = vec![0u8; width];
+    // Keep the previous spans for winding repair/coherence and direct emission.
+    let mut prev_spans: Vec<RowSpan> = Vec::new();
     let mut current_physical_y = first_physical_y;
     // last_emitted_py: the most recent physical row fully committed to `rle`.
     // Starts at first_physical_y - 1 (we just emitted zeros 0..first_physical_y).
@@ -2852,8 +3337,7 @@ pub fn rasterize_layer_rle(
     // zero-rows for any skipped rows up to (but not including) `next_py`.
     macro_rules! flush_up_to {
         ($next_py:expr) => {{
-            emit_row(&mut rle, &row_buf);
-            row_buf.fill(0);
+            emit_binary_row_spans(&mut rle, &prev_spans, 0, width);
             last_emitted_py = current_physical_y;
 
             let next = $next_py;
@@ -2865,7 +3349,6 @@ pub fn rasterize_layer_rle(
         }};
     }
 
-    let mut prev_spans: Vec<RowSpan> = Vec::new();
     for y in y_start..y_end_exclusive {
         let physical_y = y;
 
@@ -2892,8 +3375,6 @@ pub fn rasterize_layer_rle(
         let spans = build_row_spans_nonzero_ctx(&active_edges, width, true, Some(&prev_spans));
 
         for span in spans.iter().copied() {
-            row_buf[span.start..=span.end].fill(255);
-
             let filled = (span.end - span.start + 1) as u32;
             stats.total_solid_pixels = stats.total_solid_pixels.saturating_add(filled);
             min_x = min_x.min(span.start as i32);
@@ -3362,15 +3843,17 @@ pub fn rasterize_layer_rle_block(
     let mut active_edges: Vec<ActiveEdge> = Vec::with_capacity(segments.len().min(256));
     let mut merge_scratch: Vec<ActiveEdge> = Vec::with_capacity(segments.len().min(256));
 
-    let mut row_buf = vec![0u8; wwidth];
+    let mut current_spans: Vec<RowSpan> = Vec::new();
     let mut current_physical_y = first_physical_y;
     #[allow(unused_assignments)]
     let mut last_emitted_py = first_physical_y.wrapping_sub(1);
 
     macro_rules! flush_up_to {
         ($next_py:expr) => {{
-            emit_row(&mut rle, &row_buf);
-            row_buf.fill(0);
+            emit_binary_row_spans(&mut rle, &current_spans, wstart, wwidth);
+            // The block path has no previous-row coherence dependency. Release
+            // these spans before building the next row, with no scratch buffer.
+            current_spans = Vec::new();
             last_emitted_py = current_physical_y;
 
             let next = $next_py;
@@ -3406,14 +3889,12 @@ pub fn rasterize_layer_rle_block(
 
         let spans = build_row_spans_nonzero_ctx(&active_edges, full_width, true, None);
 
-        for span in spans {
+        for span in spans.iter().copied() {
             let s = span.start.max(wstart);
             let e = span.end.min(wend - 1);
             if s > e {
                 continue;
             }
-            row_buf[s - wstart..=e - wstart].fill(255);
-
             let filled = (e - s + 1) as u32;
             stats.total_solid_pixels = stats.total_solid_pixels.saturating_add(filled);
             min_x = min_x.min(s as i32);
@@ -3421,6 +3902,7 @@ pub fn rasterize_layer_rle_block(
             min_y = min_y.min(physical_y as i32);
             max_y = max_y.max(physical_y as i32);
         }
+        current_spans = spans;
 
         for edge in &mut active_edges {
             edge.x += edge.dx_dy;
@@ -3869,6 +4351,53 @@ pub fn blur_gray_rle_streaming_with_bounds(
     Vec<crate::rle::RleRun>,
     Option<(usize, usize, usize, usize)>,
 ) {
+    blur_gray_rle_streaming_with_bounds_and_backend(
+        runs, width, height, radius, min_alpha_u8, Backend::detected(),
+    )
+}
+
+fn blur_gray_rle_streaming_with_bounds_and_backend(
+    runs: &[crate::rle::RleRun],
+    width: usize,
+    height: usize,
+    radius: usize,
+    min_alpha_u8: u8,
+    backend: Backend,
+) -> (
+    Vec<crate::rle::RleRun>,
+    Option<(usize, usize, usize, usize)>,
+) {
+    backend.dispatch(BoxRleBlur { runs, width, height, radius, min_alpha_u8 })
+}
+
+struct BoxRleBlur<'a> {
+    runs: &'a [crate::rle::RleRun],
+    width: usize,
+    height: usize,
+    radius: usize,
+    min_alpha_u8: u8,
+}
+
+impl pulp::WithSimd for BoxRleBlur<'_> {
+    type Output = (Vec<crate::rle::RleRun>, Option<(usize, usize, usize, usize)>);
+
+    #[inline(always)]
+    fn with_simd<S: pulp::Simd>(self, simd: S) -> Self::Output {
+        // Select once: native safe-radius rows use independent SIMD columns;
+        // scalar and oversized rows retain fused full-u32 horizontal additions.
+        if pulp_simd::u32_lanes::<S>() == 1 || self.radius > 127 {
+            box_rle_blur_with_simd::<S, true>(self, simd)
+        } else {
+            box_rle_blur_with_simd::<S, false>(self, simd)
+        }
+    }
+}
+
+#[inline(always)]
+fn box_rle_blur_with_simd<S: pulp::Simd, const ADD_COLUMNS: bool>(
+    operation: BoxRleBlur<'_>, simd: S,
+) -> (Vec<crate::rle::RleRun>, Option<(usize, usize, usize, usize)>) {
+    let BoxRleBlur { runs, width, height, radius, min_alpha_u8 } = operation;
     use crate::rle::{emit_row, emit_zero_rows, RleAccum};
 
     if width == 0 || height == 0 {
@@ -3923,6 +4452,7 @@ pub fn blur_gray_rle_streaming_with_bounds(
 
     let mut ring_head = 0usize;
     let mut ring_len = 0usize;
+    let mut denominators = BoxNormalizeDenominators::new(&h_denom);
 
     // RLE decode state.
     let mut run_idx = 0usize;
@@ -3998,22 +4528,9 @@ pub fn blur_gray_rle_streaming_with_bounds(
             let new_slot = (ring_head + ring_len) % ring_cap;
             let slot_start = new_slot * roi_w;
 
-            let mut sum = 0u32;
-            let init_end = radius.min(roi_w - 1);
-            for &b in &decode_buf[..=init_end] {
-                sum += b as u32;
-            }
-            for ix in 0..roi_w {
-                ring[slot_start + ix] = sum as u16; // safe: max = 255×(2r+1) ≤ u16::MAX for r≤127
-                col_sums[ix] += sum;
-                if ix >= radius {
-                    sum -= decode_buf[ix - radius] as u32;
-                }
-                let r1 = ix + radius + 1;
-                if r1 < roi_w {
-                    sum += decode_buf[r1] as u32;
-                }
-            }
+            let ring_row = &mut ring[slot_start..slot_start + roi_w];
+            box_horizontal_row::<ADD_COLUMNS>(&decode_buf, radius, ring_row, &mut col_sums);
+            if !ADD_COLUMNS { box_update_columns::<S, false>(simd, &mut col_sums, ring_row); }
             ring_len += 1;
         }
 
@@ -4026,19 +4543,7 @@ pub fn blur_gray_rle_streaming_with_bounds(
             let v_denom_val =
                 (1 + radius.min(global_out_y) + radius.min(height - 1 - global_out_y)) as u32;
 
-            let mut all_zero = true;
-            for ix in 0..roi_w {
-                let denom = (h_denom[ix] * v_denom_val).max(1);
-                let raw = (col_sums[ix] + denom / 2) / denom;
-                let mut val = raw.min(255) as u8;
-                if val > 0 && val < min_alpha_u8 {
-                    val = 0;
-                }
-                emit_buf[ix] = val;
-                if val > 0 {
-                    all_zero = false;
-                }
-            }
+            let all_zero = box_normalize_row(simd, &col_sums, &mut denominators, v_denom_val, min_alpha_u8, &mut emit_buf);
 
             if all_zero {
                 emit_zero_rows(&mut out_rle, 1, width);
@@ -4074,9 +4579,8 @@ pub fn blur_gray_rle_streaming_with_bounds(
             // Evict the oldest ring row once the full vertical window is in use.
             if out_row >= radius {
                 let evict_start = ring_head * roi_w;
-                for ix in 0..roi_w {
-                    col_sums[ix] -= ring[evict_start + ix] as u32;
-                }
+                let row = &ring[evict_start..evict_start + roi_w];
+                box_update_columns::<S, true>(simd, &mut col_sums, row);
                 ring_head = (ring_head + 1) % ring_cap;
                 ring_len -= 1;
             }
@@ -5446,5 +5950,382 @@ mod tests {
         assert_eq!(ssaa_stats.max_x, base_stats.max_x);
         assert_eq!(ssaa_stats.min_y, base_stats.min_y);
         assert_eq!(ssaa_stats.max_y, base_stats.max_y);
+    }
+    // Direct 2-D definition, not a separable/ring-buffer implementation. The
+    // source Y range is the ROI, while X taps may read beyond the output ROI.
+    fn gaussian_definition(
+        source: &[u8], width: usize, height: usize, radius: usize,
+        sigma_x: f64, sigma_y: f64, min_alpha: u8,
+        roi: (usize, usize, usize, usize),
+    ) -> Vec<u8> {
+        let weight = |distance: usize, sigma: f64| -> u128 {
+            let sigma = sigma.max(0.05);
+            (1024.0 * (-(distance as f64).powi(2) / (2.0 * sigma.powi(2))).exp())
+                .round().max(1.0) as u128
+        };
+        let mut expected = vec![0; source.len()];
+        for y in roi.2..=roi.3 {
+            for x in roi.0..=roi.1 {
+                let mut numerator = 0u128;
+                let mut denominator = 0u128;
+                for sy in y.saturating_sub(radius)..=y.saturating_add(radius).min(height - 1) {
+                    for sx in x.saturating_sub(radius)..=x.saturating_add(radius).min(width - 1) {
+                        let coefficient = weight(x.abs_diff(sx), sigma_x) * weight(y.abs_diff(sy), sigma_y);
+                        denominator += coefficient;
+                        if (roi.2..=roi.3).contains(&sy) {
+                            numerator += source[sy * width + sx] as u128 * coefficient;
+                        }
+                    }
+                }
+                let value = ((numerator + denominator / 2) / denominator).min(255) as u8;
+                expected[y * width + x] = if value < min_alpha { 0 } else { value };
+            }
+        }
+        expected
+    }
+
+    #[test]
+    fn gaussian_pixels_match_2d_definition_on_every_supported_backend() {
+        let cases = [
+            (1, 5, 3, 0.01, 1.1, (0, 0, 0, 4)),
+            (3, 2, 4, 1.5, 0.3, (0, 2, 0, 1)),
+            (37, 7, 2, 1.25, 1.8, (3, 35, 0, 5)),
+            (73, 9, 3, 2.4, 0.7, (1, 67, 0, 8)),
+            // Oversized radii leave only image-border denominators, including
+            // varying-denominator vectors and an odd scalar tail.
+            (17, 3, 127, 80.0, 0.7, (0, 16, 0, 2)),
+            (17, 3, 128, 80.0, 0.7, (0, 16, 0, 2)),
+            (17, 3, 257, 0.3, 160.0, (1, 15, 0, 2)),
+            // Interior ROI lengths straddle the native 4/8/16-u32 widths;
+            // each scratch row contains exactly full vectors or a scalar tail.
+            (7, 5, 2, 1.25, 1.8, (2, 4, 0, 4)),
+            (8, 5, 2, 1.25, 1.8, (2, 5, 0, 4)),
+            (9, 5, 2, 1.25, 1.8, (2, 6, 0, 4)),
+            (11, 5, 2, 1.25, 1.8, (2, 8, 0, 4)),
+            (12, 5, 2, 1.25, 1.8, (2, 9, 0, 4)),
+            (13, 5, 2, 1.25, 1.8, (2, 10, 0, 4)),
+            (19, 5, 2, 1.25, 1.8, (2, 16, 0, 4)),
+            (20, 5, 2, 1.25, 1.8, (2, 17, 0, 4)),
+            (21, 5, 2, 1.25, 1.8, (2, 18, 0, 4)),
+        ];
+        for (width, height, radius, sigma_x, sigma_y, roi) in cases {
+            // Asymmetric grayscale data also exercises nonzero source taps
+            // outside a cropped output ROI and unaligned source-row starts.
+            let source: Vec<u8> = (0..width * height)
+                .map(|i| ((i * 47 + i / width * 13 + 11) % 256) as u8).collect();
+            for min_alpha in [0, 64, 180, 255] {
+                let expected = gaussian_definition(&source, width, height, radius, sigma_x, sigma_y, min_alpha, roi);
+                for backend in crate::pulp_simd::Backend::supported_for_tests() {
+                    let mut actual = source.clone();
+                    super::apply_edge_gaussian_blur_to_mask_in_roi_with_backend(
+                        &mut actual, width, height, radius, sigma_x, sigma_y, min_alpha,
+                        roi.0, roi.1, roi.2, roi.3, backend,
+                    );
+                    assert_eq!(actual, expected, "Gaussian pixels: {width}x{height}, radius {radius}, floor {min_alpha}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn gaussian_cropped_top_preserves_existing_attenuation() {
+        // sigma=1 gives integer weights [1024, 621]. The omitted top source
+        // row still contributes to the denominator; the second output retains
+        // only the last ring row, matching the existing cropped-top behavior.
+        let expected = [vec![0; 37], vec![185; 37], vec![159; 37]].concat();
+        for backend in crate::pulp_simd::Backend::supported_for_tests() {
+            let mut actual = vec![255; 37 * 3];
+            super::apply_edge_gaussian_blur_to_mask_in_roi_with_backend(
+                &mut actual, 37, 3, 1, 1.0, 1.0, 0, 0, 36, 1, 2, backend,
+            );
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn gaussian_emission_preserves_saturation_large_denominators_and_alpha_ties() {
+        let weight = u32::MAX;
+        let weights = [weight, weight];
+        for width in [1, 3, 7, 8, 9, 16, 17, 37] {
+            let values = [u32::MAX, 0, 1, 127, 128, u32::MAX / 2, 2];
+            let divisors = [1, u64::MAX, u64::MAX / 2, 3 * weight as u64,
+                3 * weight as u64, 1, 3 * weight as u64];
+            let row: Vec<u32> = (0..width).map(|x| values[x % values.len()]).collect();
+            let ring: std::collections::VecDeque<_> = (0..3).map(|y| (y, row.clone())).collect();
+            for uniform in [false, true] {
+                let x_denoms: Vec<u64> = (0..width).map(|x| {
+                    if uniform { 1 } else { divisors[x % divisors.len()] }
+                }).collect();
+                for min_alpha in [0, 127, 128, 255] {
+                    let expected: Vec<u8> = row.iter().zip(&x_denoms).map(|(&value, &denom)| {
+                        // Independent widened definition: accumulation saturates
+                        // at u64::MAX, then exact rounding and byte clipping apply.
+                        let sum = (3 * value as u128 * weight as u128).min(u64::MAX as u128) as u64;
+                        let value = ((sum + denom / 2) / denom).min(255) as u8;
+                        if value < min_alpha { 0 } else { value }
+                    }).collect();
+                    for backend in crate::pulp_simd::Backend::supported_for_tests() {
+                        let mut actual = vec![0; width];
+                        backend.dispatch(super::GaussianVerticalRow {
+                            ring: &ring, output: &mut actual, out_y: 1, weights: &weights,
+                            x_denoms: &x_denoms, y_denom: 1, uniform_start: 0,
+                            uniform_end: if uniform { width } else { 1 },
+                            uniform_divider: crate::pulp_simd::U64ByteDivider::new(1), min_alpha,
+                        });
+                        assert_eq!(actual, expected, "Gaussian emission: width {width}, floor {min_alpha}, {backend:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    fn box_definition(source: &[u8], width: usize, height: usize, radius: usize, min_alpha: u8) -> Vec<u8> {
+        let mut expected = vec![0; source.len()];
+        for y in 0..height {
+            for x in 0..width {
+                let mut numerator = 0u64;
+                let mut denominator = 0u64;
+                for sy in y.saturating_sub(radius)..=y.saturating_add(radius).min(height - 1) {
+                    for sx in x.saturating_sub(radius)..=x.saturating_add(radius).min(width - 1) {
+                        numerator += source[sy * width + sx] as u64;
+                        denominator += 1;
+                    }
+                }
+                let value = ((numerator + denominator / 2) / denominator) as u8;
+                expected[y * width + x] = if value < min_alpha { 0 } else { value };
+            }
+        }
+        expected
+    }
+
+    #[test]
+    fn box_pixels_rle_and_bounds_match_on_every_supported_backend() {
+        for width in [1, 3, 4, 5, 7, 8, 9, 15, 16, 17, 37, 73] {
+            let height = 9;
+            let mut source = vec![0; width * height];
+            for y in 2..7 {
+                for x in 0..width {
+                    if width <= 3 || (3..width - 2).contains(&x) {
+                        source[y * width + x] = ((x * 47 + y * 13 + 11) % 256) as u8;
+                    }
+                }
+            }
+            let runs = encode_mask_to_rle(&source, width, height);
+            for (radius, min_alpha) in [(1, 0), (2, 64), (5, 180)] {
+                let expected = box_definition(&source, width, height, radius, min_alpha);
+                let expected_runs = encode_mask_to_rle(&expected, width, height);
+                let mut expected_bounds: Option<(usize, usize, usize, usize)> = None;
+                for (i, &value) in expected.iter().enumerate() {
+                    if value != 0 {
+                        let (x, y) = (i % width, i / width);
+                        expected_bounds = Some(match expected_bounds {
+                            Some((a, b, c, d)) => (a.min(x), b.max(x), c.min(y), d.max(y)),
+                            None => (x, x, y, y),
+                        });
+                    }
+                }
+                for backend in crate::pulp_simd::Backend::supported_for_tests() {
+                    let mut actual = source.clone();
+                    super::apply_edge_box_blur_to_mask_in_roi_with_backend(
+                        &mut actual, width, height, radius, min_alpha, 0, width - 1, 0, height - 1, backend,
+                    );
+                    assert_eq!(actual, expected);
+                    let (actual_runs, actual_bounds) = super::blur_gray_rle_streaming_with_bounds_and_backend(
+                        &runs, width, height, radius, min_alpha, backend,
+                    );
+                    assert_eq!(actual_runs, expected_runs);
+                    assert_eq!(actual_bounds, expected_bounds);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn parallel_box_pixels_match_2d_average_on_every_supported_backend() {
+        let (width, height) = (1025, 977);
+        let source: Vec<u8> = (0..width * height)
+            .map(|i| ((i % width * 19 + i / width * 7) % 256) as u8).collect();
+        let expected = box_definition(&source, width, height, 1, 64);
+        for backend in crate::pulp_simd::Backend::supported_for_tests() {
+            let mut actual = source.clone();
+            super::apply_edge_box_blur_to_mask_in_roi_with_backend(
+                &mut actual, width, height, 1, 64, 0, width - 1, 0, height - 1, backend,
+            );
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn box_cropped_roi_retains_global_border_counts_on_every_backend() {
+        let (width, height) = (37usize, 9usize);
+        let roi = (5usize, 34usize, 2usize, 7usize);
+        let source: Vec<u8> = (0..width * height)
+            .map(|i| ((i * 47 + i / width * 13 + 11) % 256) as u8).collect();
+        for radius in [1usize, 5, 128] {
+            for min_alpha in [0, 64, 180] {
+                let mut expected = source.clone();
+                for y in roi.2..=roi.3 {
+                    for x in roi.0..=roi.1 {
+                        let left = x.saturating_sub(radius);
+                        let right = x.saturating_add(radius).min(width - 1);
+                        let top = y.saturating_sub(radius);
+                        let bottom = y.saturating_add(radius).min(height - 1);
+                        let denom = ((right - left + 1) * (bottom - top + 1)) as u64;
+                        let mut sum = 0u64;
+                        for sy in top.max(roi.2)..=bottom.min(roi.3) {
+                            for sx in left.max(roi.0)..=right.min(roi.1) {
+                                sum += source[sy * width + sx] as u64;
+                            }
+                        }
+                        let value = ((sum + denom / 2) / denom).min(255) as u8;
+                        expected[y * width + x] = if value < min_alpha { 0 } else { value };
+                    }
+                }
+                for backend in crate::pulp_simd::Backend::supported_for_tests() {
+                    let mut actual = source.clone();
+                    super::apply_edge_box_blur_to_mask_in_roi_with_backend(
+                        &mut actual, width, height, radius, min_alpha, roi.0, roi.1, roi.2, roi.3, backend,
+                    );
+                    assert_eq!(actual, expected, "cropped box: radius {radius}, floor {min_alpha}, {backend:?}");
+                }
+            }
+        }
+    }
+
+    fn assert_box_stream_consumer(
+        source: &[u8], width: usize, height: usize, radius: usize, min_alpha: u8, expected: &[u8],
+    ) {
+        let runs = encode_mask_to_rle(source, width, height);
+        let expected_runs = encode_mask_to_rle(expected, width, height);
+        let mut expected_bounds: Option<(usize, usize, usize, usize)> = None;
+        for (i, &value) in expected.iter().enumerate() {
+            if value != 0 {
+                let (x, y) = (i % width, i / width);
+                expected_bounds = Some(match expected_bounds {
+                    Some((a, b, c, d)) => (a.min(x), b.max(x), c.min(y), d.max(y)),
+                    None => (x, x, y, y),
+                });
+            }
+        }
+        for backend in crate::pulp_simd::Backend::supported_for_tests() {
+            let (actual_runs, bounds) = super::blur_gray_rle_streaming_with_bounds_and_backend(
+                &runs, width, height, radius, min_alpha, backend,
+            );
+            assert_eq!(expand_rle_to_mask(&actual_runs, width * height), expected,
+                "streamed pixels: {width}x{height}, radius {radius}, floor {min_alpha}, {backend:?}");
+            assert_eq!(actual_runs, expected_runs);
+            assert_eq!(bounds, expected_bounds);
+        }
+    }
+
+    #[test]
+    fn box_stream_exact_tail_tiny_and_clipped_rows_match_every_backend() {
+        for width in [1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65] {
+            for height in [1, 2, 9] {
+                let source: Vec<u8> = (0..width * height)
+                    .map(|i| (1 + (i % width * 47 + i / width * 13) % 255) as u8).collect();
+                for (radius, min_alpha) in [(1, 0), (2, 64), (5, 180), (127, 0), (128, 180), (129, 255)] {
+                    let expected = box_definition(&source, width, height, radius, min_alpha);
+                    assert_box_stream_consumer(&source, width, height, radius, min_alpha, &expected);
+                }
+            }
+        }
+        // Exact and tail ROI widths with zero padding on every image edge.
+        // Also clip the expanded support against the left/top and right/bottom.
+        for roi_w in [5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65] {
+            let (width, height) = (roi_w + 16, 15);
+            for (left, top) in [(9, 6), (0, 0), (width - roi_w + 4, 12)] {
+                let mut source = vec![0; width * height];
+                for y in top..top + 3 {
+                    for x in left..left + roi_w - 4 {
+                        source[y * width + x] = (32 + (x * 47 + y * 13) % 224) as u8;
+                    }
+                }
+                for min_alpha in [0, 64, 180] {
+                    let expected = box_definition(&source, width, height, 2, min_alpha);
+                    assert_box_stream_consumer(&source, width, height, 2, min_alpha, &expected);
+                }
+            }
+        }
+        let zero = vec![0; 33 * 3];
+        assert_box_stream_consumer(&zero, 33, 3, 2, 64, &zero);
+        let source = vec![1; 17 * 2];
+        assert_box_stream_consumer(&source, 17, 2, 0, 180, &source);
+    }
+
+    // Independent prefix-sum reference for the preserved oversized-radius
+    // contract: add full horizontal sums, but evict their u16 ring values.
+    fn box_ring_precision_definition(
+        source: &[u8], width: usize, height: usize, radius: usize, min_alpha: u8,
+    ) -> Vec<u8> {
+        let mut horizontal = vec![0u32; source.len()];
+        let mut row_prefix = vec![0u32; width + 1];
+        for y in 0..height {
+            for x in 0..width {
+                row_prefix[x + 1] = row_prefix[x] + source[y * width + x] as u32;
+            }
+            for x in 0..width {
+                let left = x.saturating_sub(radius);
+                let right = (x + radius + 1).min(width);
+                horizontal[y * width + x] = row_prefix[right] - row_prefix[left];
+            }
+        }
+        let mut expected = vec![0; source.len()];
+        let mut full_prefix = vec![0u64; height + 1];
+        let mut truncated_prefix = vec![0u64; height + 1];
+        for x in 0..width {
+            for y in 0..height {
+                let sum = horizontal[y * width + x];
+                full_prefix[y + 1] = full_prefix[y] + sum as u64;
+                truncated_prefix[y + 1] = truncated_prefix[y] + (sum as u16) as u64;
+            }
+            let h_denom = 1 + radius.min(x) + radius.min(width - 1 - x);
+            for y in 0..height {
+                let top = y.saturating_sub(radius);
+                let bottom = (y + radius + 1).min(height);
+                let numerator = full_prefix[bottom] - truncated_prefix[top];
+                let denom = (h_denom * (bottom - top)) as u64;
+                let value = ((numerator + denom / 2) / denom).min(255) as u8;
+                expected[y * width + x] = if value < min_alpha { 0 } else { value };
+            }
+        }
+        expected
+    }
+
+    #[test]
+    fn box_stream_radius_127_128_129_preserves_ring_eviction_precision() {
+        for radius in [127, 128, 129] {
+            for width in [255, 256, 257, 258, 259, 260, 271, 272, 273] {
+                let height = 2 * radius + 3;
+                let source: Vec<u8> = (0..width * height).map(|i| {
+                    if i / width <= radius { 255 } else { (32 + (i % width * 19 + i / width * 7) % 160) as u8 }
+                }).collect();
+                for min_alpha in [0, 180] {
+                    let expected = box_ring_precision_definition(&source, width, height, radius, min_alpha);
+                    assert_box_stream_consumer(&source, width, height, radius, min_alpha, &expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn large_box_radius_retains_full_addition_before_u16_eviction() {
+        // A 259-pixel sum of 255 is 66045, exceeding u16. Ring storage may
+        // truncate it, but sequential/streaming additions must not truncate it.
+        let (width, height) = (259, 2);
+        let source = vec![255; width * height];
+        let runs = encode_mask_to_rle(&source, width, height);
+        for backend in crate::pulp_simd::Backend::supported_for_tests() {
+            let mut actual = source.clone();
+            super::apply_edge_box_blur_to_mask_in_roi_with_backend(
+                &mut actual, width, height, 129, 0, 0, width - 1, 0, height - 1, backend,
+            );
+            assert_eq!(actual, source);
+            let (actual_runs, bounds) = super::blur_gray_rle_streaming_with_bounds_and_backend(
+                &runs, width, height, 129, 0, backend,
+            );
+            assert_eq!(actual_runs, runs);
+            assert_eq!(bounds, Some((0, width - 1, 0, height - 1)));
+        }
     }
 }
