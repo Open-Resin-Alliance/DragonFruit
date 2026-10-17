@@ -251,8 +251,15 @@ margins — merged over the defaults), the same JSON-fed path `--printer` uses;
 `--raft` then overrides just the bottom mode. Supports and rafts need a printer;
 without `--printer` only the model geometry is sliced.
 
-It needs the generated plugin registry (`npm run generate:plugin-registry` and
-`npm run generate:builtin-simple-plugins`); the other commands do not.
+It needs the generated plugin and support registries (`npm run generate:plugin-registry`,
+`generate:builtin-simple-plugins`, `generate:support-registrations` and
+`generate:support-renderers`); the other commands do not.
+
+`npm run check:scene-slice` runs it end to end, and CI runs that on every pull
+request: a cube through `scene create`, `add-model`, `place-on-platform` and
+`scene slice` with the Saturn 2 bundle, checking the layer and triangle counts
+the Rust slicer reports. It generates the registries itself but needs the
+release build of `dragonfruit-cli`.
 
 Not covered: plugin metadata payloads such as the
 VOXL scene in `.lumen`, and thumbnails.

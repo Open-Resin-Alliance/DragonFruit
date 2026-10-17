@@ -1366,17 +1366,18 @@ function releaseHeap(): void {
   if (typeof g === 'function') g();
 }
 
-// `scene slice` builds its job with the app's own code, which reads the plugin
-// registry. Load it only for this command, so the others keep working on a
-// checkout where the registry has not been generated.
-function loadSceneSliceJob(): typeof import('./cli/sceneSliceJob') {
+// `scene slice` builds its job and its mesh with the app's own code, which reads
+// the generated plugin and support registries. Load it only for this command, so
+// the others keep working on a checkout where they have not been generated.
+function requireSceneSliceModule<T>(path: string): T {
   try {
-    return createRequire(import.meta.url)('./cli/sceneSliceJob');
+    return createRequire(import.meta.url)(path);
   } catch (err) {
     if (/generated/i.test(String((err as Error).message))) {
       throw new Error(
-        'scene slice needs the generated plugin registry. Run '
-        + '`npm run generate:plugin-registry && npm run generate:builtin-simple-plugins` first.\n'
+        'scene slice needs the generated registries. Run '
+        + '`npm run generate:plugin-registry && npm run generate:builtin-simple-plugins'
+        + ' && npm run generate:support-registrations && npm run generate:support-renderers` first.\n'
         + `(${(err as Error).message})`,
       );
     }
@@ -1384,11 +1385,15 @@ function loadSceneSliceJob(): typeof import('./cli/sceneSliceJob') {
   }
 }
 
+function loadSceneSliceJob(): typeof import('./cli/sceneSliceJob') {
+  return requireSceneSliceModule('./cli/sceneSliceJob');
+}
+
 // Assembling the slice mesh pulls in THREE and the slicing stores, so load it
 // only for `scene slice` (keeps the header's "no THREE" promise for every other
 // command).
 function loadSceneSliceMesh(): typeof import('./cli/sceneSliceMesh') {
-  return createRequire(import.meta.url)('./cli/sceneSliceMesh');
+  return requireSceneSliceModule('./cli/sceneSliceMesh');
 }
 
 async function sceneSlice(args: ReturnType<typeof parseArgs>): Promise<void> {
