@@ -7359,8 +7359,8 @@ export function useSceneCollectionManager(options?: {
   /**
    * The models, moved with their beds when the grid is re-laid.
    *
-   * Plates are numbered by position, so a new one can shuffle the plates already
-   * placed. A model left where its bed used to be would quietly belong to whichever
+   * Plates are numbered by position, so adding or removing one can shuffle the plates
+   * already placed. A model left where its bed used to be would quietly belong to whichever
    * plate now covers that spot, so each one is shifted by exactly how far its own
    * plate moved. A model on no plate stays where it was put: it was dragged off a bed
    * deliberately and is not standing on anything that moved.
@@ -7393,7 +7393,10 @@ export function useSceneCollectionManager(options?: {
     const shifts = new Map<string, { dxMm: number; dyMm: number }>();
     const frames = before.map((plate, index) => {
       const from = plateCascadeOffsetMm(index, was, before.length, options?.wasOrdering ?? nowOrdering);
-      const to = plateCascadeOffsetMm(index, footprint, after.length, nowOrdering);
+      // By id, not by index: a bed taken out of the middle moves every one after it a slot
+      // down. A bed that is gone takes its models with it, so they have nowhere to move.
+      const afterIndex = after.findIndex((candidate) => candidate.id === plate.id);
+      const to = afterIndex < 0 ? from : plateCascadeOffsetMm(afterIndex, footprint, after.length, nowOrdering);
       if (from.dxMm !== to.dxMm || from.dyMm !== to.dyMm) {
         shifts.set(plate.id, { dxMm: to.dxMm - from.dxMm, dyMm: to.dyMm - from.dyMm });
       }
@@ -7744,7 +7747,15 @@ export function useSceneCollectionManager(options?: {
       activePlateId: activePlateIdRef.current,
     });
 
+    // The beds after it move up a slot, and their models with them; the doomed models stay
+    // put for the delete below to find.
+    const shiftedModels = modelsShiftedForRelaidPlates(current, remaining, modelsRef.current);
+    platesRef.current = remaining;
     setPlates(remaining);
+    if (shiftedModels !== modelsRef.current) {
+      modelsRef.current = shiftedModels;
+      setModels(shiftedModels);
+    }
     setActivePlateId(nextActivePlateId);
     // Deleting the bed being worked on moves to another one, and the view comes with
     // it — the same slide picking a bed gives, rather than leaving the camera where the
@@ -7769,7 +7780,7 @@ export function useSceneCollectionManager(options?: {
     });
 
     return true;
-  }, [deleteModels, pushSceneSnapshotHistory]);
+  }, [deleteModels, modelsShiftedForRelaidPlates, pushSceneSnapshotHistory]);
 
   /**
    * Delete the models *and* every bed but the first.
