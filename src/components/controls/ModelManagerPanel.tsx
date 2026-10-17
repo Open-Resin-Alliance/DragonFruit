@@ -372,10 +372,12 @@ export function ModelManagerPanel({
     ...(hidden ? { display: 'none' } : {}),
   };
 
-  const toggleGroupCollapsed = (groupId: string) => {
+  // Flips what the row shows. A plate the user has not touched has no entry yet and is shown
+  // folded unless it is the active one, so flipping the bare entry folded it again.
+  const toggleGroupCollapsed = (groupId: string, collapsedNow = !!collapsedGroupIds[groupId]) => {
     setCollapsedGroupIds((prev) => ({
       ...prev,
-      [groupId]: !prev[groupId],
+      [groupId]: !collapsedNow,
     }));
   };
 
@@ -874,7 +876,7 @@ export function ModelManagerPanel({
                           className="inline-flex items-center justify-center rounded p-0.5 hover:bg-black/20"
                           onClick={(e) => {
                             e.stopPropagation();
-                            toggleGroupCollapsed(group.id);
+                            toggleGroupCollapsed(group.id, isCollapsed);
                           }}
                           title={isCollapsed ? _(msg`Expand folder`) : _(msg`Collapse folder`)}
                         >
