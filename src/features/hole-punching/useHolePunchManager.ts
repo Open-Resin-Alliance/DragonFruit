@@ -1,5 +1,11 @@
 import React from 'react';
+import { useLingui } from '@lingui/react';
 import * as THREE from 'three';
+import {
+  holePunchDesktopOnlyMessage,
+  holePunchFailedMessage,
+  holePunchSourceMissingMessage,
+} from '@/features/hollowing/hollowingMessages';
 import type { ThreeEvent } from '@react-three/fiber';
 import type { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
 import type { useTransformManager } from '@/features/transform/useTransformManager';
@@ -125,6 +131,7 @@ export function useHolePunchManager({
   clearFinalizing,
   nextPaint,
 }: UseHolePunchManagerOptions) {
+  const { _ } = useLingui();
   const [holePunchState, setHolePunchState] = React.useState<HolePunchPanelState>({
     radiusMm: 2.0,
     radiusYMm: undefined,
@@ -1102,7 +1109,7 @@ export function useHolePunchManager({
           });
 
           if (!restoredFromSnapshot) {
-            showOperationError('Hole punch source snapshot is missing or invalid. Re-apply cannot continue.');
+            showOperationError(holePunchSourceMissingMessage(_));
             return;
           }
 
@@ -1203,7 +1210,7 @@ export function useHolePunchManager({
           if (ownsSourceGeometry) {
             sourceGeometry.dispose();
           }
-          showOperationError('Hole punching is available in DragonFruit Desktop only.');
+          showOperationError(holePunchDesktopOnlyMessage(_));
           return;
         }
 
@@ -1212,7 +1219,7 @@ export function useHolePunchManager({
           if (ownsSourceGeometry) {
             sourceGeometry.dispose();
           }
-          showOperationError('Hole punching is available in DragonFruit Desktop only.');
+          showOperationError(holePunchDesktopOnlyMessage(_));
           return;
         }
 
@@ -1278,13 +1285,13 @@ export function useHolePunchManager({
         hollowingSourceByModelIdRef.current.delete(activeModel.id);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        showOperationError(`Hole punching failed: ${message}`);
+        showOperationError(holePunchFailedMessage(message, _));
         clearFinalizing();
       } finally {
         setIsApplyingHolePunch(false);
       }
     })();
-  }, [activeHolePunchPlacements, beginFinalizing, clearFinalizing, nextPaint, persistActiveModelModifiers, scene, sleep]);
+  }, [_, activeHolePunchPlacements, beginFinalizing, clearFinalizing, nextPaint, persistActiveModelModifiers, scene, sleep]);
 
   React.useEffect(() => {
     if (!pendingHolePunchAutoApplyModelId) return;

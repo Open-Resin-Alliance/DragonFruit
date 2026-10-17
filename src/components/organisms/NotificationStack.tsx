@@ -22,6 +22,16 @@ function formatOrientedLabel(
   }), { modelName });
 }
 
+function formatSavedToLabel(
+  translate: (descriptor: MessageDescriptor, values?: Record<string, unknown>) => string,
+  path: string,
+): string {
+  return translate(msg({
+    message: 'Saved to: {path}',
+    comment: '{path} is where the exported file was written.',
+  }), { path });
+}
+
 type IdText = { id: number; text: string };
 
 export type NotificationStackProps = {
@@ -165,7 +175,7 @@ export function NotificationStack({
         <ToastViewport zIndex={125} offset="1.25rem">
           <Toast tone="success" animated visible={isExportSuccessToastVisible} className="flex items-center gap-2">
             <CheckCircle2 className="h-4 w-4" />
-            Saved to: {exportSuccessToast.path}
+            {formatSavedToLabel(_, exportSuccessToast.path)}
           </Toast>
         </ToastViewport>
       )}

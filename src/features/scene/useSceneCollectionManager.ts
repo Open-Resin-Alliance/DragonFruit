@@ -61,7 +61,26 @@ import {
   importLabelScenes,
   importLabelSplittingSupports,
   importLabelVoxlScene,
+  alertSceneImportFailed,
+  reportAutoRepaired,
+  reportImportedScene,
+  reportMergeSupportsFailed,
+  reportNoSceneImportHandler,
   reportRestoredModel,
+  reportScanFailed,
+  reportScanned,
+  reportSceneFilesAllFailed,
+  reportSceneFilesImported,
+  reportSceneFilesPartlyImported,
+  reportSceneImportFailed,
+  reportSplitSupportsFailed,
+  reportSupportJsonFailed,
+  reportSupportJsonImported,
+  reportSupportJsonUnsupported,
+  reportUnsupportedSceneFile,
+  reportVoxlImportFailed,
+  reportVoxlNoMeshes,
+  reportVoxlUnsupportedVersion,
 } from '@/features/scene/sceneImportMessages';
 import { duplicatedModelName, pastedModelName } from '@/features/scene/modelCopyNames';
 import {
@@ -2971,7 +2990,7 @@ export function useSceneCollectionManager(options?: {
             const anyResidual = attentionReports.some(({ report }) => !report.fully_repaired);
             setPendingMeshRepairReports(attentionReports);
             emitSceneImportReport(
-              'Auto Repaired - Click for Details',
+              reportAutoRepaired(_),
               anyResidual ? 'warning' : 'success',
               { durationMs: 10_000, clickAction: 'openMeshRepairReport' },
             );
@@ -4363,7 +4382,7 @@ export function useSceneCollectionManager(options?: {
     pushSceneSnapshotHistory(before, after, splitSupportsLabel(source.name));
     } catch (e) {
       console.error(e);
-      emitSceneImportReport('Failed to split supports', 'error');
+      emitSceneImportReport(reportSplitSupportsFailed(_), 'error');
     } finally {
       setImportProgress({ active: false, type: null, label: '', detail: '', progress: null });
     }
@@ -4565,7 +4584,7 @@ export function useSceneCollectionManager(options?: {
       pushSceneSnapshotHistory(before, after, mergeSupportsLabel(mergedModel.name));
     } catch (e) {
       console.error(e);
-      emitSceneImportReport('Failed to merge supports', 'error');
+      emitSceneImportReport(reportMergeSupportsFailed(_), 'error');
     } finally {
       setImportProgress({ active: false, type: null, label: '', detail: '', progress: null });
     }
@@ -4612,7 +4631,7 @@ export function useSceneCollectionManager(options?: {
         setMeshRepairReports([reportEntry]);
       } else {
         setPendingMeshRepairReports([]);
-        emitSceneImportReport(`Scanned ${model.name}.`, 'success');
+        emitSceneImportReport(reportScanned(model.name, _), 'success');
       }
 
       return true;
@@ -4620,7 +4639,7 @@ export function useSceneCollectionManager(options?: {
       console.error('[scanModelForSupportsInPlace] Scan failed:', err);
       setPendingMeshRepairReports([]);
       const message = err instanceof Error ? err.message : String(err);
-      emitSceneImportReport(`Scan failed: ${message}`, 'error', { durationMs: 6_000 });
+      emitSceneImportReport(reportScanFailed(message, _), 'error', { durationMs: 6_000 });
       return false;
     } finally {
       setImportProgress({ active: false, type: null, label: '', detail: '', progress: null });
@@ -5672,20 +5691,18 @@ export function useSceneCollectionManager(options?: {
   const handleImportPluginSceneFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     const extension = getSceneExtension(file.name);
     if (!extension || extension === '.voxl') {
-      const unsupportedMessage = `Unsupported scene file: ${file.name}`;
-      console.warn(`[SceneCollection] ${unsupportedMessage}`);
+      console.warn(`[SceneCollection] Unsupported scene file: ${file.name}`);
       if (!options?.suppressReport) {
-        emitSceneImportReport(unsupportedMessage, 'error');
+        emitSceneImportReport(reportUnsupportedSceneFile(file.name, _), 'error');
       }
       return false;
     }
 
     const pluginImport = scenePluginImportHandlersByExtension.get(extension.toLowerCase());
     if (!pluginImport) {
-      const missingHandlerMessage = `No registered scene import handler for ${extension}.`;
-      console.warn(`[SceneCollection] ${missingHandlerMessage}`);
+      console.warn(`[SceneCollection] No registered scene import handler for ${extension}.`);
       if (!options?.suppressReport) {
-        emitSceneImportReport(missingHandlerMessage, 'error');
+        emitSceneImportReport(reportNoSceneImportHandler(extension, _), 'error');
       }
       return false;
     }
@@ -6182,12 +6199,8 @@ export function useSceneCollectionManager(options?: {
         0,
       );
       if (!options?.suppressReport) {
-        const sourceLabel = extension.slice(1).toUpperCase();
-        const modelLabel = newModels.length === 1 ? '1 model' : `${newModels.length} models`;
         emitSceneImportReport(
-          totalSupportCount > 0
-            ? `Imported ${sourceLabel} scene: ${modelLabel}, ${totalSupportCount} supports.`
-            : `Imported ${sourceLabel} scene: ${modelLabel}.`,
+          reportImportedScene(extension.slice(1).toUpperCase(), newModels.length, totalSupportCount, 0, _),
           'success',
         );
       }
@@ -6198,10 +6211,10 @@ export function useSceneCollectionManager(options?: {
       console.error('[SceneCollection] Failed to process plugin scene geometry:', err);
       const msg = err instanceof Error ? err.message : String(err);
       if (!options?.suppressReport) {
-        emitSceneImportReport(`Scene import failed: ${msg}`, 'error');
+        emitSceneImportReport(reportSceneImportFailed(msg, _), 'error');
       }
       if (!options?.suppressReport && typeof window !== 'undefined') {
-        window.alert(`Import Scene failed:\n${msg}`);
+        window.alert(alertSceneImportFailed(msg, _));
       }
       return false;
     } finally {
@@ -6669,15 +6682,11 @@ export function useSceneCollectionManager(options?: {
 
       const importedSupportCount = countSupportEntries(document.supports);
       const importedModelCount = importedModels.length;
-      const modelNoun = importedModelCount === 1 ? 'model' : 'models';
-      const skippedNoun = skippedModels === 1 ? 'model' : 'models';
-      const supportsClause = importedSupportCount > 0 ? `, ${importedSupportCount} supports` : '';
-      const skippedClause = skippedModels > 0 ? `, skipped ${skippedModels} ${skippedNoun}` : '';
 
       if (importedModelCount > 0) {
         if (!options?.suppressReport) {
           emitSceneImportReport(
-            `Imported VOXL scene: ${importedModelCount} ${modelNoun}${supportsClause}${skippedClause}.`,
+            reportImportedScene('VOXL', importedModelCount, importedSupportCount, skippedModels, _),
             skippedModels > 0 ? 'warning' : 'success',
           );
         }
@@ -6686,7 +6695,7 @@ export function useSceneCollectionManager(options?: {
       if (importedModels.length === 0) {
         console.warn('[SceneCollection] VOXL import completed without importable meshes (expected embedded-chunk meshes).');
         if (!options?.suppressReport) {
-          emitSceneImportReport('VOXL import finished with no importable meshes.', 'warning');
+          emitSceneImportReport(reportVoxlNoMeshes(_), 'warning');
         }
         return false;
       }
@@ -6699,16 +6708,16 @@ export function useSceneCollectionManager(options?: {
         // explained rather than reported as a parse failure.
         setObsoleteVoxlScene({ fileName: file.name, detected: error.detected });
         if (!options?.suppressReport) {
-          emitSceneImportReport(`Could not open ${file.name}: unsupported VOXL version.`, 'warning');
+          emitSceneImportReport(reportVoxlUnsupportedVersion(file.name, _), 'warning');
         }
         return false;
       }
       const message = error instanceof Error ? error.message : String(error);
       if (!options?.suppressReport) {
-        emitSceneImportReport(`VOXL import failed: ${message}`, 'error');
+        emitSceneImportReport(reportVoxlImportFailed(message, _), 'error');
       }
       if (!options?.suppressReport && typeof window !== 'undefined') {
-        window.alert(`Import VOXL failed:\n${message}`);
+        window.alert(alertSceneImportFailed(message, _));
       }
       return false;
     } finally {
@@ -6795,11 +6804,11 @@ export function useSceneCollectionManager(options?: {
     });
 
     if (failureCount === 0) {
-      emitSceneImportReport(`Imported ${successCount} scene files.`, 'success');
+      emitSceneImportReport(reportSceneFilesImported(successCount, _), 'success');
     } else if (successCount > 0) {
-      emitSceneImportReport(`Imported ${successCount}/${files.length} scene files (${failureCount} failed).`, 'warning');
+      emitSceneImportReport(reportSceneFilesPartlyImported(successCount, files.length, failureCount, _), 'warning');
     } else {
-      emitSceneImportReport(`Scene import failed for all ${files.length} files.`, 'error');
+      emitSceneImportReport(reportSceneFilesAllFailed(files.length, _), 'error');
     }
     return successCount > 0;
   }, [_, emitSceneImportReport, getSceneExtension, importSceneFile, trackRecentOpenedFiles, waitForUiYield]);
@@ -6903,17 +6912,17 @@ export function useSceneCollectionManager(options?: {
       const json = JSON.parse(text) as unknown;
       const parsed = asDragonfruitImportFormat(json);
       if (!parsed) {
-        emitSceneImportReport('Support import failed: unsupported support JSON format.', 'error');
+        emitSceneImportReport(reportSupportJsonUnsupported(_), 'error');
         return;
       }
 
       applyImportDefaultsToRaftState();
       loadFromImportFormat(parsed);
-      emitSceneImportReport('Imported support data.', 'success');
+      emitSceneImportReport(reportSupportJsonImported(_), 'success');
 
     } catch (err) {
       console.error('[SceneCollection] Failed to import support JSON:', err);
-      emitSceneImportReport('Support import failed.', 'error');
+      emitSceneImportReport(reportSupportJsonFailed(_), 'error');
     }
   }, [emitSceneImportReport]);
 

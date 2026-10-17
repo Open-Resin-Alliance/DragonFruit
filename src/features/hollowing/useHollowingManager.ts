@@ -1,5 +1,14 @@
 import React from 'react';
+import { useLingui } from '@lingui/react';
 import * as THREE from 'three';
+import {
+  hollowingDesktopOnlyMessage,
+  hollowingFailedMessage,
+  hollowingPreviewDesktopOnlyMessage,
+  hollowingPreviewFailedMessage,
+  hollowingRemoveUnavailableMessage,
+  shellModeNeedsFaceMessage,
+} from '@/features/hollowing/hollowingMessages';
 import { SCENE_MODELS_SNAPSHOT_APPLY, type useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
 import { subscribeHistoryOperations } from '@/history/historyStore';
 import type { useTransformManager } from '@/features/transform/useTransformManager';
@@ -116,6 +125,7 @@ export function useHollowingManager({
   transformMgr,
   deps,
 }: UseHollowingManagerOptions) {
+  const { _ } = useLingui();
   const [isPreviewingHollowing, setIsPreviewingHollowing] = React.useState(false);
   const [hollowPreview, setHollowPreview] = React.useState<HollowPreviewState | null>(null);
   const [hollowingState, setHollowingState] = React.useState<HollowingPanelState>({
@@ -218,7 +228,7 @@ export function useHollowingManager({
       if (!shouldApply) return;
 
       if (hollowingState.mode === 'shell_open_face' && !isShellOpenFaceSelected) {
-        deps.current.showOperationError('Pick the face to open before applying Shell mode.');
+        deps.current.showOperationError(shellModeNeedsFaceMessage(_));
         return;
       }
 
@@ -285,7 +295,7 @@ export function useHollowingManager({
           ? await hollowApplyFromCapturedSource(options)
           : await hollowFromGeometry(sourceGeometry, options);
         if (!result) {
-          deps.current.showOperationError('Hollowing is available in DragonFruit Desktop only.');
+          deps.current.showOperationError(hollowingDesktopOnlyMessage(_));
           return;
         }
 
@@ -456,14 +466,14 @@ export function useHollowingManager({
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        deps.current.showOperationError(`Hollowing failed: ${message}`);
+        deps.current.showOperationError(hollowingFailedMessage(message, _));
         deps.current.clearFinalizing();
       } finally {
         setIsApplyingHollowing(false);
         setIsApplyingBlockersHollowing(false);
       }
     })();
-  }, [blockedHollowVoxelIndices, hollowingDraftEnabled, hollowingState, isShellOpenFaceSelected, scene, markCavityGeometryChanged]);
+  }, [_, blockedHollowVoxelIndices, hollowingDraftEnabled, hollowingState, isShellOpenFaceSelected, scene, markCavityGeometryChanged]);
 
   const handleResetHollowing = React.useCallback(() => {
     const activeModel = scene.activeModel;
@@ -479,7 +489,7 @@ export function useHollowingManager({
       })();
 
     if (!sourceEntry) {
-      deps.current.showOperationError('Cannot remove hollowing: original geometry is unavailable.');
+      deps.current.showOperationError(hollowingRemoveUnavailableMessage(_));
       return;
     }
     const nextModifiers: ModelMeshModifiers = {
@@ -511,7 +521,7 @@ export function useHollowingManager({
     setHollowingEditMode(false);
     setBlockedHollowVoxelIndices([]);
     setEditingBlockedHollowVoxelIndices([]);
-  }, [defaultHollowingState, releaseHollowingCachesForModel, scene.activeModel]);
+  }, [_, defaultHollowingState, releaseHollowingCachesForModel, scene.activeModel]);
 
   const handleClearAppliedHollowing = React.useCallback(() => {
     const activeModel = scene.activeModel;
@@ -527,7 +537,7 @@ export function useHollowingManager({
       })();
 
     if (!sourceEntry) {
-      deps.current.showOperationError('Cannot remove hollowing: original geometry is unavailable.');
+      deps.current.showOperationError(hollowingRemoveUnavailableMessage(_));
       return;
     }
     const nextModifiers: ModelMeshModifiers = {
@@ -554,7 +564,7 @@ export function useHollowingManager({
     setHollowingEditMode(false);
     setBlockedHollowVoxelIndices([]);
     setEditingBlockedHollowVoxelIndices([]);
-  }, [releaseHollowingCachesForModel, scene.activeModel]);
+  }, [_, releaseHollowingCachesForModel, scene.activeModel]);
 
   const handleResetHollowingSettings = React.useCallback(() => {
     setHollowingState(defaultHollowingState);
@@ -1192,7 +1202,7 @@ export function useHollowingManager({
       );
       if (!staged) {
         if (notifyUnavailable) {
-          deps.current.showOperationError('Hollowing preview is available in DragonFruit Desktop only.');
+          deps.current.showOperationError(hollowingPreviewDesktopOnlyMessage(_));
         }
         return;
       }
@@ -1200,7 +1210,7 @@ export function useHollowingManager({
       const result = await hollowPreviewFromCapturedSource(options);
       if (!result) {
         if (notifyUnavailable) {
-          deps.current.showOperationError('Hollowing preview is available in DragonFruit Desktop only.');
+          deps.current.showOperationError(hollowingPreviewDesktopOnlyMessage(_));
         }
         return;
       }
@@ -1254,7 +1264,7 @@ export function useHollowingManager({
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (notifyUnavailable) {
-        deps.current.showOperationError(`Hollowing preview failed: ${message}`);
+        deps.current.showOperationError(hollowingPreviewFailedMessage(message, _));
       } else {
         console.warn('[Hollowing] Debounced preview failed:', message);
       }
@@ -1264,7 +1274,7 @@ export function useHollowingManager({
         setIsApplyingBlockersHollowing(false);
       }
     }
-  }, [cacheHollowPreviewResult, scene.models]);
+  }, [_, cacheHollowPreviewResult, scene.models]);
 
   React.useEffect(() => {
     return () => {
