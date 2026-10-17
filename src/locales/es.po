@@ -2749,7 +2749,7 @@ msgstr "Eliminar modelos y placas"
 #: src/components/controls/ModelManagerPanel.tsx:766
 #: src/components/controls/ModelManagerPanel.tsx:787
 msgid "Delete plate"
-msgstr "Eliminar plata"
+msgstr "Eliminar placa"
 
 #: src/features/scene/sceneHistoryLabels.ts:214
 msgctxt "Undo history entry"
@@ -6310,7 +6310,7 @@ msgstr "Modo de placas"
 
 #: src/components/controls/ModelManagerPanel.tsx:923
 msgid "Plate name"
-msgstr "Nombre de la plata"
+msgstr "Nombre de la placa"
 
 #: src/components/settings/MultiPlateSettingsTab.tsx:27
 msgid "Plate Ordering"
@@ -7042,7 +7042,7 @@ msgstr "Renombrar el nombre base del modelo"
 
 #: src/components/controls/ModelManagerPanel.tsx:476
 msgid "Rename plate"
-msgstr "Renombrar plata"
+msgstr "Renombrar placa"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:453
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:454
@@ -8827,7 +8827,7 @@ msgstr "Los modelos de esta placa se eliminan con ella."
 #. The count is how many models stand on the plate being deleted.
 #: src/components/controls/ModelManagerPanel.tsx:793
 msgid "The models on this plate are deleted with it. Undo brings them back."
-msgstr "Los modelos de esta plata se eliminan con ella. Deshacer los recupera."
+msgstr "Los modelos de esta placa se eliminan con ella. Deshacer los recupera."
 
 #: src/features/organicCut/OrganicCutColorsSection.tsx:26
 msgid "The mortise's silhouette lines."
