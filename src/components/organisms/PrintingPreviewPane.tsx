@@ -239,7 +239,12 @@ export function PrintingPreviewPane({
                 {!selectedPrintingLayerPreviewUrl && printingPreviewTotalLayers === 0 && (
                   <div
                     className="absolute inset-0 rounded border border-dashed flex items-center justify-center text-xs"
-                    style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
+                    style={{
+                      borderColor: 'var(--border-subtle)',
+                      color: 'var(--text-muted)',
+                      // The box is flipped to undo a mirrored display; text has nothing to undo.
+                      transform: `scale(${activePrinterProfile?.display?.mirrorX === true ? -1 : 1}, ${activePrinterProfile?.display?.mirrorY === true ? -1 : 1})`,
+                    }}
                   >
                     <Trans>No preview available yet.</Trans>
                   </div>
