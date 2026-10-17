@@ -247,7 +247,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
 
   const commitThumbEdit = React.useCallback(() => {
     if (!editingThumb) return;
-    const parsed = parseFloat(editRawValue);
+    const parsed = fmt.parse(editRawValue);
     if (!isNaN(parsed) && parsed >= 0) {
       const lhMm = layerHeightMm ?? 0;
       const targetLayer = (editMode === 'mm' && lhMm > 0)
@@ -257,21 +257,21 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
       else emitLowerChange(targetLayer);
     }
     setEditingThumb(null);
-  }, [editingThumb, editRawValue, editMode, layerHeightMm, emitChange, emitLowerChange]);
+  }, [editingThumb, editRawValue, editMode, layerHeightMm, emitChange, emitLowerChange, fmt]);
 
   const switchEditMode = React.useCallback((newMode: 'layer' | 'mm') => {
     if (newMode === editMode || !layerHeightMm || layerHeightMm <= 0) return;
-    const current = parseFloat(editRawValue);
+    const current = fmt.parse(editRawValue);
     if (!isNaN(current) && current >= 0) {
       if (newMode === 'mm') {
-        setEditRawValue((current * layerHeightMm).toFixed(3).replace(/\.?0+$/, ''));
+        setEditRawValue(fmt.number(current * layerHeightMm, { maximumFractionDigits: 3, useGrouping: false }));
       } else {
         setEditRawValue(String(Math.round(current / layerHeightMm)));
       }
     }
     setEditMode(newMode);
     requestAnimationFrame(() => { editInputRef.current?.select(); });
-  }, [editMode, editRawValue, layerHeightMm]);
+  }, [editMode, editRawValue, layerHeightMm, fmt]);
 
   // Auto-focus the input when a thumb edit popover opens
   React.useEffect(() => {
