@@ -96,6 +96,17 @@ test('Overlap resolution: Ctrl+Alt leaf activates and Alt branch suppresses', ()
     assert.equal(isActionActiveSync('SUPPORTS', 'BRANCH_PLACEMENT'), false, 'Ctrl+Alt press should suppress BRANCH_PLACEMENT');
 });
 
+test('Alt+Q keeps both branch placement and force placement active', () => {
+    hotkeyStore.getState().clearKeys();
+    hotkeyStore.getState().pressKey('Alt');
+    hotkeyStore.getState().pressKey('q', { altKey: true });
+
+    assert.equal(isActionActiveSync('SUPPORTS', 'BRANCH_PLACEMENT'), true, 'Alt must keep branch placement active');
+    assert.equal(isActionActiveSync('SUPPORTS', 'FORCE_PLACE_SUPPORT'), true, 'Q must force placement while Alt is held');
+
+    hotkeyStore.getState().clearKeys();
+});
+
 test('Hotkey Registry: ignores keys when typing in input or textarea', () => {
     hotkeyStore.getState().clearKeys();
     const cleanup = setupHotkeyListeners();

@@ -17,6 +17,7 @@ import { useEffect, useCallback, useMemo, useRef, useSyncExternalStore } from 'r
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
+import { useActionActive } from '@/hotkeys/hotkeyStore';
 import { matchesConfiguredHotkeyUp } from '@/hotkeys/hotkeyConfig';
 import { addSupportEntity, subscribe, getSnapshot, addKnot, addSupportEntityWithHistory } from '../../state';
 import { buildContactBridge, parsePrefixedSegmentId, selectTypeForPlacement } from '../../supportTypeRegistry';
@@ -129,6 +130,7 @@ export function BranchPlacementController() {
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
     const immediateModelHoverId = useImmediateModelHoverId();
     const { getHotkey } = useHotkeyConfig();
+    const forcePlaceActive = useActionActive('SUPPORTS', 'FORCE_PLACE_SUPPORT');
     const branchFamilyBinding = getHotkey('SUPPORTS', 'BRANCH_PLACEMENT');
     const rawHoveringSupportTarget = isSupportTargetHoverCategory(supportState.hoveredCategory);
     const isHoveringSupportTarget = rawHoveringSupportTarget && immediateModelHoverId === null;
@@ -640,7 +642,7 @@ export function BranchPlacementController() {
                                      ...supportDataForEntity(kind, entity),
                                      id: 'preview-meshlink',
                                      startPos: entity.segments[0]?.bottomJoint?.pos ?? tipPosition,
-                                     error: built.error as LimitationCode | undefined,
+                                     error: forcePlaceActive ? undefined : built.error as LimitationCode | undefined,
                                  });
                              }
                         }
@@ -731,7 +733,7 @@ export function BranchPlacementController() {
                     mesh: resolveTipMesh(),
                     manual: true,
                 });
-                if (!built || built.error) return;
+                if (!built || (built.error && !forcePlaceActive)) return;
                 addSupportEntityWithHistory(
                     kind,
                     markPlacementSurface(kind, built.entity, placementSurface),
@@ -792,7 +794,7 @@ export function BranchPlacementController() {
 
         window.addEventListener('click', handleClick, true);
         return () => window.removeEventListener('click', handleClick, true);
-    }, [isActive, stage, tipPosition, tipNormal, modelId, placementSurface, resetSnapping, resolveTipMesh, gl]);
+    }, [isActive, stage, tipPosition, tipNormal, modelId, placementSurface, resetSnapping, resolveTipMesh, gl, forcePlaceActive]);
 
     // Reset snapping when deactivated
     useEffect(() => {

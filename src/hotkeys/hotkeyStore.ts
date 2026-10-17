@@ -38,7 +38,14 @@ export const hotkeyStore = createStore<HotkeyState>((set) => ({
 
         const claimed = normalizeKey(normalized);
         const nextCombo = new Set(state.comboKeys);
-        if (modifiers && otherModifierHeld(normalized, modifiers)) {
+        // Only a real configured combination claims the key. Holding another
+        // modifier while pressing a hold action (Alt+Q, for example) must not
+        // suppress the bare binding: Q is not part of an Alt+Q shortcut.
+        if (
+            modifiers
+            && otherModifierHeld(normalized, modifiers)
+            && hasConfiguredComboFor(claimed, next, state.config)
+        ) {
             nextCombo.add(claimed);
         } else {
             nextCombo.delete(claimed);
@@ -103,6 +110,39 @@ const SELF_MODIFIER_FLAG: Record<string, keyof HotkeyModifierFlags> = {
     command: 'metaKey',
     os: 'metaKey',
 };
+
+/**
+ * Whether a binding with this base key and at least one modifier is fully
+ * active. Used to tell a real combination (Ctrl+A) apart from a hold action
+ * pressed while an unrelated modifier happens to be down (Alt+Q).
+ */
+function hasConfiguredComboFor(
+    key: string,
+    activeKeys: ReadonlySet<string>,
+    config: HotkeyConfig,
+): boolean {
+    const normalizedActiveKeys = new Set<string>();
+    for (const activeKey of activeKeys) {
+        normalizedActiveKeys.add(normalizeKey(activeKey));
+    }
+
+    for (const category of Object.values(config)) {
+        for (const binding of Object.values(category)) {
+            if (!binding.modifier) continue;
+            if (normalizeKey(binding.key) !== key) continue;
+            const required = getRequiredKeys(binding);
+            let matched = true;
+            for (const requiredKey of required) {
+                if (!normalizedActiveKeys.has(requiredKey)) {
+                    matched = false;
+                    break;
+                }
+            }
+            if (matched) return true;
+        }
+    }
+    return false;
+}
 
 function otherModifierHeld(key: string, flags: HotkeyModifierFlags): boolean {
     const self = SELF_MODIFIER_FLAG[key];

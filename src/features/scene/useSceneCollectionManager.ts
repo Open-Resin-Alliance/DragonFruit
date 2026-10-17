@@ -17,7 +17,7 @@ import {
 } from '@/features/scene/plates/plateCascade';
 import { detectObsoleteVoxlVersion, isVoxlBinaryV2, meshChunkStore, parseVoxlBinaryV2, readScenePlates, readSidecarFileBytes, resolveOriginalRefSidecar, VoxlObsoleteVersionError, type VoxlDocumentV1, type VoxlMeshRef } from '@/features/scene/voxl';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
-import { getSnapshot, loadFromImportFormat, mergeFromImportFormat, reassignAllSupportModelIds, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
+import { getSnapshot, loadFromImportFormat, mergeFromImportFormat, reassignAllSupportModelIds, resetStore, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { peekUndo } from '@/history/historyStore';
 import { createTypedHistory } from '@/history/typedHistory';
@@ -2275,10 +2275,15 @@ export function useSceneCollectionManager(options?: {
         : (plates[0]?.id ?? prev)));
     }
 
-    // setSupportSnapshot restores kickstands with everything else -- they are
-    // ordinary SupportState collections, and their roots and host knots ride in
-    // `roots` and `knots`.
-    if (snapshot.supportState) {
+    // Supports cannot outlive the models that own them. A snapshot taken while
+    // the scene was empty can still carry a support state from an earlier step;
+    // restoring it would leave unselectable supports on the plate.
+    if (snapshot.models.length === 0) {
+      resetStore();
+    } else if (snapshot.supportState) {
+      // setSupportSnapshot restores kickstands with everything else -- they are
+      // ordinary SupportState collections, and their roots and host knots ride in
+      // `roots` and `knots`.
       setSupportSnapshot(clonePlainData(snapshot.supportState));
     }
   }, []);
@@ -7742,6 +7747,7 @@ export function useSceneCollectionManager(options?: {
     const before = captureSceneSnapshot(modelsRef.current, activeModelIdRef.current, selectedModelIdsRef.current, {
       plates: current,
       activePlateId: activePlateIdRef.current,
+      includeSupportState: true,
     });
 
     setPlates(remaining);
@@ -7764,6 +7770,7 @@ export function useSceneCollectionManager(options?: {
       const after = captureSceneSnapshot(modelsRef.current, activeModelIdRef.current, selectedModelIdsRef.current, {
         plates: remaining,
         activePlateId: nextActivePlateId,
+        includeSupportState: true,
       });
       pushSceneSnapshotHistory(before, after, deletePlateLabel(current.findIndex((plate) => plate.id === plateId) + 1));
     });
@@ -7804,6 +7811,7 @@ export function useSceneCollectionManager(options?: {
     const before = captureSceneSnapshot(modelsRef.current, activeModelIdRef.current, selectedModelIdsRef.current, {
       plates: current,
       activePlateId: activePlateIdRef.current,
+      includeSupportState: true,
     });
 
     setPlates(remaining);
@@ -7820,6 +7828,7 @@ export function useSceneCollectionManager(options?: {
     const after = captureSceneSnapshot(modelsRef.current, activeModelIdRef.current, selectedModelIdsRef.current, {
       plates: remaining,
       activePlateId: firstPlateId,
+      includeSupportState: true,
     });
     pushSceneSnapshotHistory(before, after, DELETE_MODELS_AND_PLATES_LABEL);
   }, [deleteModels, pushSceneSnapshotHistory, waitForUiYield]);

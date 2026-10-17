@@ -5,6 +5,8 @@ import { useEffect } from 'react';
 import { clearHistory, getUndoCount, redo, undo } from '@/history/historyStore';
 import { renderWithProviders, settle } from '@/utils/__tests__/helpers/renderDom';
 import { useSceneCollectionManager } from '../useSceneCollectionManager';
+import { addRoot, addSupportEntity, getSnapshot, resetStore } from '@/supports/state';
+import { DEFAULT_TIP_PROFILE } from '@/supports/SupportPrimitives/ContactCone/types';
 
 type Scene = ReturnType<typeof useSceneCollectionManager>;
 
@@ -64,6 +66,29 @@ async function loadCube(scene: () => Scene, name = 'cube.stl') {
   await waitFor(() => scene().models.length === before + 1, 'the cube to load');
   await settle(50);
   return scene().models[scene().models.length - 1];
+}
+
+function seedSupport(modelId: string) {
+  resetStore();
+  addRoot({
+    id: 'root-a', modelId,
+    transform: { pos: { x: 0, y: 0, z: 0 }, rot: { x: 0, y: 0, z: 0, w: 1 } },
+    diameter: 3, diskHeight: 0.5, coneHeight: 1.5,
+  } as never);
+  addSupportEntity('trunk', {
+    id: 'trunk-a', modelId, rootId: 'root-a',
+    segments: [{
+      id: 'seg-ta', diameter: 1,
+      bottomJoint: { id: 'seg-ta-bj', pos: { x: 0, y: 0, z: 0 }, diameter: 1 },
+      topJoint: { id: 'seg-ta-tj', pos: { x: 0, y: 0, z: 4 }, diameter: 1 },
+    }],
+    contactCone: {
+      id: 'cone-ta', socketJointId: 'cone-ta-socket',
+      pos: { x: 0, y: 0, z: 4 }, normal: { x: 0, y: 0, z: 1 },
+      surfaceNormal: { x: 0, y: 0, z: 1 }, diameter: 1, height: 1,
+      profile: { ...DEFAULT_TIP_PROFILE },
+    },
+  } as never);
 }
 
 /** Undoes the newest entry, then redoes it, checking `read()` lands on each value. */
@@ -154,6 +179,40 @@ test('scene edits from the model list land in undo history', async (t) => {
       assert.equal(getUndoCount(), 1);
       await assertUndoRedo(geometries, originals, repaired);
     });
+  } finally {
+    await tree.unmount();
+  }
+});
+
+test('undoing to an empty scene clears supports left by the snapshot', async () => {
+  const { tree, scene } = await mountScene();
+  try {
+    const cube = await loadCube(scene);
+    seedSupport(cube.id);
+    await settle(20);
+
+    assert.equal(scene().copyModel(cube.id), true);
+    await settle(100);
+    await scene().deleteModels([cube.id]);
+    await settle(100);
+
+    // An empty scene cannot own supports. Seed the stale state an earlier history
+    // step could leave behind, then take the snapshot that returns to empty.
+    seedSupport('orphan-model');
+    await settle(20);
+
+    clearHistory();
+    const pasted = scene().pasteCopiedModelsAutoArrange();
+    assert.equal(pasted.length, 1);
+    await waitFor(() => scene().models.length === 1, 'the pasted model to land');
+    await settle(100);
+
+    undo();
+    await settle(100);
+
+    assert.equal(scene().models.length, 0, 'undo should empty the scene');
+    assert.equal(Object.keys(getSnapshot().roots).length, 0, 'orphaned roots remain');
+    assert.equal(Object.keys(getSnapshot().trunks).length, 0, 'orphaned trunks remain');
   } finally {
     await tree.unmount();
   }
