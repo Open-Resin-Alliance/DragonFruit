@@ -56,6 +56,10 @@ export function PrintingPanel({
   const [revealSavedPathError, setRevealSavedPathError] = React.useState<string | null>(null);
 
   const isDesktopRuntime = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+  // The slicer names its output from the scene, in ASCII for the printers that need it; a file
+  // the user saved goes by the name they gave it in the save dialog.
+  const savedFileName = savedFilePath?.split(/[\\/]/).pop()?.trim() || null;
+  const displayedFileName = savedFileName ?? outputName;
   const savedPathForReveal = React.useMemo(() => {
     const trimmed = savedFilePath?.trim();
     return trimmed && trimmed.length > 0 ? trimmed : null;
@@ -112,8 +116,8 @@ export function PrintingPanel({
 
         <div className="rounded-md border p-2.5 space-y-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
           <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Generated file</div>
-          <div className="text-sm font-semibold truncate" title={outputName ?? 'No generated file yet'} style={{ color: 'var(--text-strong)' }}>
-            {outputName ?? 'No generated file yet'}
+          <div className="text-sm font-semibold truncate" title={displayedFileName ?? 'No generated file yet'} style={{ color: 'var(--text-strong)' }}>
+            {displayedFileName ?? 'No generated file yet'}
           </div>
           <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
             {outputFormat ?? '—'} • {outputSizeLabel}
