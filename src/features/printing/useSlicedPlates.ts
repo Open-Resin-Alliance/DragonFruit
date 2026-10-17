@@ -1,6 +1,5 @@
 import React from 'react';
 import { subscribeHistoryChanges } from '@/history/historyStore';
-import { SCENE_SLICED } from '@/features/scene/useSceneCollectionManager';
 import {
   readPrintLayerPreviewPngFromPath,
   readPrintLayerPreviewPngsFromPath,
@@ -72,12 +71,10 @@ export function useSlicedPlates<Model extends object>({
   React.useEffect(() => () => slicedPlates.clear(), [slicedPlates]);
 
   // A history entry is only a signal; the models it changed are known after the render it
-  // caused, which is when the effect below compares them. The marker the slice itself pushes is
-  // not an edit, and neither is undoing it.
+  // caused, which is when the effect below compares them.
   const [historyEditTick, setHistoryEditTick] = React.useState(0);
   React.useEffect(() => {
-    const unsubscribe = subscribeHistoryChanges((change) => {
-      if (change.actionType === SCENE_SLICED) return;
+    const unsubscribe = subscribeHistoryChanges(() => {
       setHistoryEditTick((tick) => tick + 1);
     });
     return () => {

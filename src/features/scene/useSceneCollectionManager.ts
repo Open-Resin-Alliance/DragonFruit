@@ -113,7 +113,6 @@ import {
   repairModelsLabel,
   SCENE_CHANGE_LABEL,
   showModelLabel,
-  SLICE_SCENE_LABEL,
   splitModelLabel,
   splitSupportsLabel,
   SWITCH_PRINTER_LABEL,
@@ -255,11 +254,6 @@ const RECENT_FILES_DB_NAME = 'dragonfruit-recent-files';
 const RECENT_FILES_DB_VERSION = 1;
 const RECENT_FILES_STORE_NAME = 'files';
 export const SCENE_MODELS_SNAPSHOT_APPLY = 'scene_models_snapshot_apply' as const;
-// A marker pushed after a slice so change-detection can tell whether the scene
-// was edited since. It carries no undo behaviour, but it still lands on the undo
-// stack, so it must have a (pass-through) handler — otherwise undoing onto it
-// would strand the stack. Exported so the push site keys off the same constant.
-export const SCENE_SLICED = 'SCENE_SLICED' as const;
 const SCENE_HISTORY_MAX_SNAPSHOTS = 200;
 // Belt-and-suspenders alongside the count cap above: a handful of
 // full-resolution geometry swaps (e.g. repeated hollowing on a large model)
@@ -275,17 +269,10 @@ type SceneSnapshotPayload = { key: string; modelId?: string };
 /** Action→payload map for the scene history domain. */
 type SceneHistoryPayloadMap = {
   [SCENE_MODELS_SNAPSHOT_APPLY]: SceneSnapshotPayload;
-  [SCENE_SLICED]: Record<string, never>;
 };
 const sceneHistory = createTypedHistory<SceneHistoryPayloadMap>({
   [SCENE_MODELS_SNAPSHOT_APPLY]: SCENE_CHANGE_LABEL,
-  [SCENE_SLICED]: SLICE_SCENE_LABEL,
 });
-
-/** Push the post-slice marker used to detect edits made after a slice. */
-export function pushSceneSlicedMarker(): void {
-  sceneHistory.push({ type: SCENE_SLICED, payload: {} });
-}
 
 type SceneSnapshot = {
   models: LoadedModel[];
@@ -2336,14 +2323,8 @@ export function useSceneCollectionManager(options?: {
       },
     );
 
-    // Pass-through: the slice marker carries no undo behaviour, but registering
-    // it keeps undo/redo moving it between stacks instead of stranding an entry
-    // with no handler.
-    const unregisterSceneSliced = sceneHistory.register(SCENE_SLICED, () => true);
-
     return () => {
       unregisterSceneModelsHistory();
-      unregisterSceneSliced();
     };
   }, [applySceneSnapshot]);
 
