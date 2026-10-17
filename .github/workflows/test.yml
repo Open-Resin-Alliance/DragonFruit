@@ -157,11 +157,15 @@ jobs:
           workspaces: ./rust/dragonfruit-cli -> target
           save-if: ${{ github.ref == 'refs/heads/dev' }}
 
-      - name: Build the Rust CLI
-        run: cargo build --release --locked --manifest-path rust/dragonfruit-cli/Cargo.toml
-
       - name: Install dependencies
         run: npm ci
+
+      # The engine compiles the plugins' encoders through a generated module.
+      - name: Generate the plugin registry
+        run: npm run generate:plugin-registry
+
+      - name: Build the Rust CLI
+        run: cargo build --release --locked --manifest-path rust/dragonfruit-cli/Cargo.toml
 
       # The TS CLI end to end, started the way its usage line says: a cube
       # through create, add-model, place-on-platform and slice.
