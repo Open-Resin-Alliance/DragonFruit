@@ -127,6 +127,51 @@ jobs:
       - name: Compare grid-mode auto-support metrics with the grid baseline
         run: npm run bench:auto-supports -- --grid --baseline scripts/bench/auto-support-baseline-grid.json --check
 
+  scene-slice:
+    name: CLI scene slice
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # The slicing engine compiles the plugins' encoders in.
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22.23.2"
+          cache: npm
+
+      - name: Install the pinned Rust toolchain
+        run: |
+          channel=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
+          rustup toolchain install "$channel" --profile minimal
+          rustup default "$channel"
+
+      # Saved from dev only, so pull requests restore it without each adding
+      # an entry of their own.
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./rust/dragonfruit-cli -> target
+          save-if: ${{ github.ref == 'refs/heads/dev' }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The engine compiles the plugins' encoders through a generated module.
+      - name: Generate the plugin registry
+        run: npm run generate:plugin-registry
+
+      - name: Build the Rust CLI
+        run: cargo build --release --locked --manifest-path rust/dragonfruit-cli/Cargo.toml
+
+      # The TS CLI end to end, started the way its usage line says: a cube
+      # through create, add-model, place-on-platform and slice.
+      - name: Slice a scene with the TS CLI
+        run: npm run check:scene-slice
+
   cargo-locks:
     name: Cargo lockfiles
     runs-on: ubuntu-latest
