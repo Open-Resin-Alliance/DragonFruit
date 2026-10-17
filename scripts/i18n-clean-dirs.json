@@ -98,6 +98,7 @@
             "src/features/mirror",
             "src/features/organicCut",
             "src/features/placeOnFace",
+            "src/features/printing",
             "src/features/scene",
             "src/features/shaders",
             "src/features/slicing/components/LutCurveEditor.tsx",
