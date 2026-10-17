@@ -231,8 +231,9 @@ export interface SupportTypeDescriptor {
     /**
      * Whether a kickstand's host knot may ride this type's segments.
      *
-     * Trunk and branch: a kickstand braces a shaft standing in the print. Read
-     * through `KICKSTAND_HOST_TYPES`, or `KICKSTAND_HOST_BY_TYPE` for the union.
+     * A kickstand braces a span standing in the print: another kickstand, or a
+     * brace, whose knots ride its pseudo-shaft. Read through
+     * `KICKSTAND_HOST_TYPES`, or `KICKSTAND_HOST_BY_TYPE` for the union.
      */
     hostsKickstand: boolean;
     /**
@@ -779,7 +780,7 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         repairsHostDiameterOnAdd: false,
         mayReachSideways: true,
         canBeGridHost: false,
-        hostsKickstand: false,
+        hostsKickstand: true,
         isAutoPlaced: true,
         hasSegments: true,
         label: 'Twigs',
@@ -823,7 +824,7 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         repairsHostDiameterOnAdd: false,
         mayReachSideways: false,
         canBeGridHost: false,
-        hostsKickstand: false,
+        hostsKickstand: true,
         isAutoPlaced: true,
         hasSegments: true,
         label: 'Sticks',
@@ -873,7 +874,7 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         repairsHostDiameterOnAdd: false,
         mayReachSideways: false,
         canBeGridHost: false,
-        hostsKickstand: false,
+        hostsKickstand: true,
         isAutoPlaced: false,
         hasSegments: false,
         label: 'Braces',
@@ -930,7 +931,7 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         repairsHostDiameterOnAdd: false,
         mayReachSideways: false,
         canBeGridHost: false,
-        hostsKickstand: false,
+        hostsKickstand: true,
         isAutoPlaced: true,
         hasSegments: true,
         label: 'Stumps',
@@ -982,7 +983,7 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         repairsHostDiameterOnAdd: false,
         mayReachSideways: false,
         canBeGridHost: false,
-        hostsKickstand: false,
+        hostsKickstand: true,
         isAutoPlaced: false,
         hasSegments: true,
         label: 'Kickstands',
@@ -2232,7 +2233,7 @@ export const JOINT_DRAG_PREVIEW_BY_TYPE = {
     leaf: false,
     twig: false,
     stick: false,
-    brace: false,
+    brace: true,
     stump: false,
     kickstand: true,
 } as const satisfies Record<SupportTypeId, boolean>;
@@ -2562,16 +2563,21 @@ export function typesDeclaringOwnHistoryEntryWithoutUpdate(): readonly SupportTy
  * Mirrors each descriptor's `hostsKickstand` with the literals kept, so the host
  * union narrows instead of widening to every type. `derivedTypeSubsets.test.ts`
  * holds the two in step.
+ *
+ * A kickstand's host knot rides a shaft, so the types that carry one are the
+ * hosts: those with real segments, plus a brace, whose span is a selectable
+ * pseudo-shaft. A leaf is the one knot host left out -- its pseudo-shaft is a
+ * contact cone, not a span.
  */
 export const KICKSTAND_HOST_BY_TYPE = {
     trunk: true,
     branch: true,
     leaf: false,
-    twig: false,
-    stick: false,
-    brace: false,
-    stump: false,
-    kickstand: false,
+    twig: true,
+    stick: true,
+    brace: true,
+    stump: true,
+    kickstand: true,
 } as const satisfies Record<SupportTypeId, boolean>;
 
 /** The types a kickstand's host knot may ride. */
@@ -2582,6 +2588,16 @@ export type KickstandHostTypeId = {
 export const KICKSTAND_HOST_TYPES: readonly KickstandHostTypeId[] =
     (Object.keys(KICKSTAND_HOST_BY_TYPE) as SupportTypeId[])
         .filter((id): id is KickstandHostTypeId => KICKSTAND_HOST_BY_TYPE[id]);
+
+/**
+ * The types leaf sprouting may hang a knot on.
+ *
+ * Sprouting walks each host's real `segments`, so this is the kickstand hosts
+ * that declare `hasSegments`. A brace hosts a kickstand on its selectable span
+ * but carries no segments, so it is excluded here.
+ */
+export const LEAF_SPROUT_HOST_TYPES: readonly KickstandHostTypeId[] =
+    KICKSTAND_HOST_TYPES.filter((id) => getSupportTypeDescriptor(id).hasSegments);
 
 /** Whether an untrusted `kind` names a type a kickstand may host on. */
 export function isKickstandHostType(kind: string): kind is KickstandHostTypeId {

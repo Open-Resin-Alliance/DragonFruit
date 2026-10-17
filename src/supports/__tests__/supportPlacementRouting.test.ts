@@ -13,7 +13,7 @@ import {
     resolveActivePlacementTypeId,
     resolveSupportPlacementRouting,
 } from '../interaction/shared/placement/hotkeys/supportPlacementRouting';
-import { BRANCH_FAMILY_MEMBER_TYPES, getSupportTypeDescriptor, KICKSTAND_HOST_TYPES, MODEL_SURFACE_GESTURE_TYPES, PLACEMENT_MODE_OWNER_TYPES, placementModeOwnerDrift, SUPPORT_TYPES } from '../supportTypeRegistry';
+import { BRANCH_FAMILY_MEMBER_TYPES, getSupportTypeDescriptor, isSpanKnotHost, KICKSTAND_HOST_TYPES, LEAF_SPROUT_HOST_TYPES, MODEL_SURFACE_GESTURE_TYPES, PLACEMENT_MODE_OWNER_TYPES, placementModeOwnerDrift, SUPPORT_TYPES } from '../supportTypeRegistry';
 import type { SupportPlacementActive, SupportPlacementPreviews } from '../rendering';
 import type { PlacementOwnerTypeId } from '../interaction/shared/placement/hotkeys/supportPlacementRouting';
 import { PLACEMENT_FAMILY_BY_BINDING } from '../interaction/shared/placement/hotkeys/supportPlacementHotkeyTypes';
@@ -163,16 +163,23 @@ test('every owner the router answers with is a registry-declared one', () => {
 });
 
 /**
- * The host set leaf sprouting walks is the kickstand-host set. Sprouting hangs a
- * knot off a host's SEGMENT, so every member must be a shaft.
+ * The host set leaf sprouting walks is the kickstand-host set narrowed to the
+ * types with real segments. Sprouting hangs a knot off a host's SEGMENT, and a
+ * brace hosts a kickstand on its selectable span but carries none.
  */
 test('every host leaf sprouting may hang a knot on has segments', () => {
-    assert.ok(KICKSTAND_HOST_TYPES.length > 0, 'a leaf sprout needs at least one host');
-    for (const typeId of KICKSTAND_HOST_TYPES) {
+    assert.ok(LEAF_SPROUT_HOST_TYPES.length > 0, 'a leaf sprout needs at least one host');
+    for (const typeId of LEAF_SPROUT_HOST_TYPES) {
         assert.equal(
             getSupportTypeDescriptor(typeId).hasSegments,
             true,
             `${typeId} is walked for a sprout knot but declares no segments to hang it on`,
+        );
+    }
+    for (const typeId of KICKSTAND_HOST_TYPES.filter(isSpanKnotHost)) {
+        assert.ok(
+            !LEAF_SPROUT_HOST_TYPES.includes(typeId),
+            `${typeId} hosts on a span, so leaf sprouting must not walk it`,
         );
     }
 });

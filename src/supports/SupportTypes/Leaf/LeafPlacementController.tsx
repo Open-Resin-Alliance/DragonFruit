@@ -20,7 +20,7 @@ import { clearSupportSelection } from '../../interaction/shared/selection/select
 import { canResolveSupportPlacementBindingFromModifierState, getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByModifierState } from '../../interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
 import { usePlacementSnappingSession } from '../../interaction/shared/placement/snapping/usePlacementSnappingSession';
 import { buildKickstandPathSnapTargets, buildPrimarySnapTargetIndex, ALL_SNAP_TYPES, buildSupportPathSnapTargets } from '../../interaction/shared/placement/snapping/supportPathTargets';
-import { getSupportTypeDescriptor, KICKSTAND_HOST_TYPES, parseSegmentSelectionId, resolveSupportTypeIdOf, type SupportCollectionKey } from '../../supportTypeRegistry';
+import { getSupportTypeDescriptor, LEAF_SPROUT_HOST_TYPES, parseSegmentSelectionId, resolveSupportTypeIdOf, type SupportCollectionKey } from '../../supportTypeRegistry';
 import { LEAF_PLACEMENT_OWNER } from '../../interaction/shared/placement/hotkeys/supportPlacementRouting';
 import { projectPointToSnapTargetPath, projectRayToSnapTargetPath, selectNearestPathTarget } from '../../interaction/shared/placement/snapping/pathProjection';
 import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
@@ -555,15 +555,13 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                     let isBottom = false;
 
                     /**
-                     * The types whose shafts may host a sprout knot.
+                     * The types whose real segments may host a sprout knot.
                      *
-                     * Read from the registry's declared shaft hosts -- the
-                     * types a hosted knot may ride (`hostsKickstand`, the
-                     * same shafts a leaf sprouts from: a support standing in
-                     * the print with segments to hang a knot on) -- rather
-                     * than spelled, so a renamed type moves with it.
+                     * A brace hosts a kickstand on its selectable span, but it
+                     * carries no segments for this walk, so the registry keeps
+                     * it out of the leaf set.
                      */
-                    const leafSproutHosts = KICKSTAND_HOST_TYPES;
+                    const leafSproutHosts = LEAF_SPROUT_HOST_TYPES;
 
                     for (const typeId of leafSproutHosts) {
                         const key = getSupportTypeDescriptor(typeId).location.key as SupportCollectionKey;

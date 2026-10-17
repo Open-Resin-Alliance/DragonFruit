@@ -275,8 +275,10 @@ scene center-xy <voxl> --id <model-id> [--json]
 
 ### 3C. LYS Import
 
-**Observe:** `useLysImport.ts` handles `.lys` file parsing. It's a Lychee slicer format
-with embedded mesh data + support state. The import pipeline:
+**Observe:** `fileTypeHandlers.ts` is the non-React `.lys` import bridge:
+`LysParser.ts` parses the container and decodes mesh geometry, and
+`LysConverter.ts` converts support data into `DragonfruitImportFormat`. It's a
+Lychee slicer format with embedded mesh data + support state. The import pipeline:
 1. Parse LYS JSON
 2. Extract mesh geometry
 3. Build `DragonfruitImportFormat` for supports
@@ -285,7 +287,7 @@ with embedded mesh data + support state. The import pipeline:
 The LYS parser is in TypeScript and uses THREE.js for geometry construction.
 For CLI: parse LYS → extract to VOXL (same interchange format).
 
-**Decision:** Import `useLysImport` logic. THREE.js works in Node.
+**Decision:** Reuse `fileTypeHandlers.ts`, `LysParser.ts`, and `LysConverter.ts`. THREE.js works in Node.
 
 **Test:**
 ```bash

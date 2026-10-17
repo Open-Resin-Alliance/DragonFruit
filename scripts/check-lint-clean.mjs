@@ -19,6 +19,7 @@
  */
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 
 const projectRoot = process.cwd();
@@ -91,10 +92,19 @@ async function uninitializedSubmodules(directories) {
 }
 
 function runEslint(directories) {
+      // Run the installed ESLint through this Node binary rather than `npx`:
+      // Windows has no extensionless `npx` to spawn, and shelling out would add
+      // quoting hazards for directory names.
+      const require = createRequire(import.meta.url);
+      const eslintBin = path.join(
+            path.dirname(require.resolve('eslint/package.json')),
+            'bin',
+            'eslint.js',
+      );
       return new Promise((resolve, reject) => {
             const child = spawn(
-                  'npx',
-                  ['eslint', '--max-warnings', '0', ...directories],
+                  process.execPath,
+                  [eslintBin, '--max-warnings', '0', ...directories],
                   { cwd: projectRoot, stdio: 'inherit' },
             );
             child.on('error', reject);

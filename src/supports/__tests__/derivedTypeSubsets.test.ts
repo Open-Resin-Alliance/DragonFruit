@@ -8,6 +8,7 @@ import {
     KICKSTAND_HOST_BY_TYPE,
     KICKSTAND_HOST_TYPES,
     SUPPORT_TYPES,
+    isSpanKnotHost,
     type AutoPlacedTypeId,
     type JointRemovalTypeId,
     type KickstandHostTypeId,
@@ -31,6 +32,15 @@ test('the kickstand host set is exactly the types declaring hostsKickstand', () 
     const declared = idsFlagged((descriptor) => descriptor.hostsKickstand);
     assert.deepEqual([...KICKSTAND_HOST_TYPES].sort(), declared);
     assert.deepEqual(idsSet(KICKSTAND_HOST_BY_TYPE), declared);
+});
+
+test('a kickstand hosts on every type carrying a shaft, and only those', () => {
+    // A host knot rides a shaft: real segments, or a brace's selectable span.
+    // A leaf declares a knot host too, but its pseudo-shaft is a contact cone.
+    const carriesAShaft = idsFlagged(
+        (descriptor) => descriptor.hasSegments || isSpanKnotHost(descriptor.id),
+    );
+    assert.deepEqual(idsSet(KICKSTAND_HOST_BY_TYPE), carriesAShaft);
 });
 
 test('the auto-placed set is exactly the types declaring isAutoPlaced', () => {

@@ -34,7 +34,7 @@ fundamental architecture changes. Revisit when requirements change.
 
 | Operation | Reason |
 |-----------|--------|
-| `scene import-lys` | LYS import (`useLysImport.ts`, `LysParser.ts`, `LysConverter.ts`) is ~1000 lines with THREE.js geometry construction for mesh loading. Could work in Node.js with THREE but needs significant wiring. Lower priority since VOXL is the primary interchange format |
+| `scene import-lys` | LYS import (`fileTypeHandlers.ts`, `LysParser.ts`, `LysConverter.ts`) is ~1000 lines with THREE.js geometry construction for mesh loading. Could work in Node.js with THREE but needs significant wiring. Lower priority since VOXL is the primary interchange format |
 | 3MF import (read) | No existing Rust or TS reader that produces `positions.bin`. The GUI uses `loadMeshGeometry` which delegates to THREE.js loaders. Would need a Rust 3MF parser crate or porting the XML parsing |
 
 ## Unused Internal APIs

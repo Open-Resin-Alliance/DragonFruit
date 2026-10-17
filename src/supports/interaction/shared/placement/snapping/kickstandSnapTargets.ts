@@ -3,7 +3,9 @@ import type { SupportState, Segment } from '../../../../types';
 import type { SupportCollectionKey } from '../../../../supportTypeRegistry';
 import {
     getSupportTypeDescriptor,
+    isSpanKnotHost,
     KICKSTAND_HOST_TYPES,
+    knotHostId,
     type KickstandHostTypeId,
 } from '../../../../supportTypeRegistry';
 import { buildPrimarySnapTargetIndex, buildSupportPathSnapTargets } from './supportPathTargets';
@@ -19,8 +21,12 @@ export interface KickstandSnapTargetMeta {
 }
 
 interface KickstandHostEntity {
+    id: string;
     modelId: string;
-    segments: Segment[];
+    /** A brace hosts on its span rather than on segments, so it carries none. */
+    segments?: Segment[];
+    /** A span host sizes its shaft from its own profile. */
+    profile?: { diameter: number };
     /** Only the types that own a root declare one; the rest are anchored elsewhere. */
     rootId?: string;
 }
@@ -46,7 +52,26 @@ export function buildKickstandSnapTargetMetaIndex(
     for (const typeId of KICKSTAND_HOST_TYPES) {
         const collection = collections[getSupportTypeDescriptor(typeId).location.key];
         for (const entity of Object.values(collection ?? {})) {
-            for (const segment of entity.segments) {
+            // A span host carries no segments: its shaft is the pseudo-segment
+            // between its two knots, which is how the path targets name it too.
+            if (isSpanKnotHost(typeId)) {
+                const segmentId = knotHostId(typeId, entity.id);
+                const target = targetById.get(segmentId);
+                if (!target?.pathSegment) continue;
+
+                map.set(segmentId, {
+                    segmentId,
+                    supportKind: typeId,
+                    modelId: entity.modelId,
+                    diameterMm: entity.profile?.diameter ?? target.pathSegment.radius * 2,
+                    minT: 0,
+                    target,
+                    hostRootId: entity.rootId,
+                });
+                continue;
+            }
+
+            for (const segment of entity.segments ?? []) {
                 const target = targetById.get(segment.id);
                 if (!target?.pathSegment) continue;
 
