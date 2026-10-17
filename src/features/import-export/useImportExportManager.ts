@@ -138,12 +138,12 @@ export function useImportExportManager({
 
   const importSceneFilesWithPluginWarning = React.useCallback(async (
     filesInput: FileList | File[],
-    options?: { resultingScenePath?: string | null; sourcePaths?: Array<string | null | undefined> },
+    options?: { resultingScenePath?: string | null; sourcePaths?: Array<string | null | undefined>; pluginWarningConfirmed?: boolean },
   ): Promise<boolean> => {
     const sceneFiles = Array.from(filesInput);
     if (sceneFiles.length === 0) return false;
 
-    const proceed = await maybeConfirmPluginImportWarning(sceneFiles);
+    const proceed = options?.pluginWarningConfirmed || await maybeConfirmPluginImportWarning(sceneFiles);
     if (!proceed) return false;
 
     // Fresh imports can emit a burst of history/model-count changes while meshes are
@@ -356,6 +356,7 @@ export function useImportExportManager({
           const importedFromSource = await importSceneFilesWithPluginWarning([restoredFile], {
             resultingScenePath: sourcePath,
             sourcePaths: [sourcePath],
+            pluginWarningConfirmed: true,
           });
 
           if (importedFromSource) {
