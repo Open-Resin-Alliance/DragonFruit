@@ -738,10 +738,15 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
 
             {/* Progress fill */}
             <div
-              className="absolute left-1/2 -translate-x-1/2 w-1.5 rounded-full transition-[background,box-shadow] duration-200"
+              className="absolute left-1/2 -translate-x-1/2 w-1.5 rounded-full"
               style={{
                 bottom: `${lowerPercent ?? 0}%`,
                 height: `${percent - (lowerPercent ?? 0)}%`,
+                // The thumbs ease to a new value; the fill eases with them, or a wheel step
+                // moves it at once and leaves the thumb to catch up.
+                transition: isDraggingThumb
+                  ? 'background 200ms, box-shadow 200ms'
+                  : 'bottom 170ms cubic-bezier(0.22, 1, 0.36, 1), height 170ms cubic-bezier(0.22, 1, 0.36, 1), background 200ms, box-shadow 200ms',
                 background: crossSectionEnabled
                   ? 'linear-gradient(180deg, color-mix(in srgb, var(--accent), white 14%), var(--accent))'
                   : 'linear-gradient(180deg, color-mix(in srgb, var(--text-muted), white 10%), var(--text-muted))',
