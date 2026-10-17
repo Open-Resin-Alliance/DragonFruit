@@ -247,7 +247,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
 
   const commitThumbEdit = React.useCallback(() => {
     if (!editingThumb) return;
-    const parsed = parseFloat(editRawValue);
+    const parsed = fmt.parse(editRawValue);
     if (!isNaN(parsed) && parsed >= 0) {
       const lhMm = layerHeightMm ?? 0;
       const targetLayer = (editMode === 'mm' && lhMm > 0)
@@ -257,21 +257,21 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
       else emitLowerChange(targetLayer);
     }
     setEditingThumb(null);
-  }, [editingThumb, editRawValue, editMode, layerHeightMm, emitChange, emitLowerChange]);
+  }, [editingThumb, editRawValue, editMode, layerHeightMm, emitChange, emitLowerChange, fmt]);
 
   const switchEditMode = React.useCallback((newMode: 'layer' | 'mm') => {
     if (newMode === editMode || !layerHeightMm || layerHeightMm <= 0) return;
-    const current = parseFloat(editRawValue);
+    const current = fmt.parse(editRawValue);
     if (!isNaN(current) && current >= 0) {
       if (newMode === 'mm') {
-        setEditRawValue((current * layerHeightMm).toFixed(3).replace(/\.?0+$/, ''));
+        setEditRawValue(fmt.number(current * layerHeightMm, { maximumFractionDigits: 3, useGrouping: false }));
       } else {
         setEditRawValue(String(Math.round(current / layerHeightMm)));
       }
     }
     setEditMode(newMode);
     requestAnimationFrame(() => { editInputRef.current?.select(); });
-  }, [editMode, editRawValue, layerHeightMm]);
+  }, [editMode, editRawValue, layerHeightMm, fmt]);
 
   // Auto-focus the input when a thumb edit popover opens
   React.useEffect(() => {
@@ -592,6 +592,17 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     }
   }, []);
 
+  // Only a jump glides. A wheel or arrow step lands where it is: eased, every step of a
+  // scroll restarts the glide, and the thumb trails the layer the viewport already shows.
+  const [glide, setGlide] = React.useState({ value, lowerValue, eased: false });
+  if (glide.value !== value || glide.lowerValue !== lowerValue) {
+    const near = 2 * (step || 1);
+    const eased = Math.abs(value - glide.value) > near
+      || Math.abs((lowerValue ?? 0) - (glide.lowerValue ?? 0)) > near;
+    setGlide({ value, lowerValue, eased });
+  }
+  const easesPosition = glide.eased && !isDraggingThumb;
+
   const thumbColor = crossSectionEnabled ? 'var(--accent)' : 'var(--text-muted)';
   const percent = Math.min(100, Math.max(0, ((value - min) / Math.max(1, (max - min))) * 100));
   const lowerPercent = lowerValue != null
@@ -738,10 +749,14 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
 
             {/* Progress fill */}
             <div
-              className="absolute left-1/2 -translate-x-1/2 w-1.5 rounded-full transition-[background,box-shadow] duration-200"
+              className="absolute left-1/2 -translate-x-1/2 w-1.5 rounded-full"
               style={{
                 bottom: `${lowerPercent ?? 0}%`,
                 height: `${percent - (lowerPercent ?? 0)}%`,
+                // Glides with the thumbs, or it reaches a jump's end while they are still on the way.
+                transition: easesPosition
+                  ? 'bottom 170ms cubic-bezier(0.22, 1, 0.36, 1), height 170ms cubic-bezier(0.22, 1, 0.36, 1), background 200ms, box-shadow 200ms'
+                  : 'background 200ms, box-shadow 200ms',
                 background: crossSectionEnabled
                   ? 'linear-gradient(180deg, color-mix(in srgb, var(--accent), white 14%), var(--accent))'
                   : 'linear-gradient(180deg, color-mix(in srgb, var(--text-muted), white 10%), var(--text-muted))',
@@ -758,7 +773,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                 className="absolute left-1/2 -translate-x-1/2 -translate-y-1/2"
                 style={{
                   top: `${100 - lowerPercent}%`,
-                  transition: isDraggingThumb ? 'none' : 'top 170ms cubic-bezier(0.22, 1, 0.36, 1)',
+                  transition: easesPosition ? 'top 170ms cubic-bezier(0.22, 1, 0.36, 1)' : 'none',
                 }}
               >
                 <div className="relative">
@@ -855,7 +870,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
               className="absolute left-1/2 -translate-x-1/2 -translate-y-1/2"
               style={{
                 top: `${100 - percent}%`,
-                transition: isDraggingThumb ? 'none' : 'top 170ms cubic-bezier(0.22, 1, 0.36, 1)',
+                transition: easesPosition ? 'top 170ms cubic-bezier(0.22, 1, 0.36, 1)' : 'none',
               }}
             >
               <div className="relative">

@@ -137,6 +137,8 @@ export function PrintingPreviewPane({
             background: 'color-mix(in srgb, var(--surface-1), transparent 6%)',
             cursor: printingPreviewCursor,
             touchAction: 'none',
+            // The layer box below sizes itself from this one's content box.
+            containerType: 'size',
           }}
           onWheel={handlePrintingPreviewWheel}
           onPointerDown={handlePrintingPreviewPointerDown}
@@ -159,9 +161,10 @@ export function PrintingPreviewPane({
                 className="block rounded relative"
                 style={{
                   aspectRatio: aspectRatio.toString(),
-                  width: '100%',
-                  maxWidth: '100%',
-                  maxHeight: '100%',
+                  // Fitted to whichever side runs out first. A width of 100% capped by
+                  // max-height keeps the full width and drops the ratio, which stretched the
+                  // GPU layer while the PNG over it stayed letterboxed at the right shape.
+                  width: `min(100cqw, 100cqh * ${aspectRatio})`,
                   transform: printingPreviewVisualTransform || 'none',
                   transformOrigin: 'center center',
                   willChange: 'transform',
@@ -236,7 +239,12 @@ export function PrintingPreviewPane({
                 {!selectedPrintingLayerPreviewUrl && printingPreviewTotalLayers === 0 && (
                   <div
                     className="absolute inset-0 rounded border border-dashed flex items-center justify-center text-xs"
-                    style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
+                    style={{
+                      borderColor: 'var(--border-subtle)',
+                      color: 'var(--text-muted)',
+                      // The box is flipped to undo a mirrored display; text has nothing to undo.
+                      transform: `scale(${activePrinterProfile?.display?.mirrorX === true ? -1 : 1}, ${activePrinterProfile?.display?.mirrorY === true ? -1 : 1})`,
+                    }}
                   >
                     <Trans>No preview available yet.</Trans>
                   </div>

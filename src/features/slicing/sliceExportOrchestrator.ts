@@ -6,6 +6,7 @@ import { buildSolidSliceMeshForWasm } from './rasterLayerZipExport';
 import { attachJobMetadataPayloads, getJobMetadataPayloadDeclarations } from './jobMetadataPayloads';
 import { prepareLoadedModelsForOutput } from '@/features/mesh-modifiers/prepareModelGeometry';
 import { resolveOutputFileExtension, resolveSlicingFormatDefinition } from './formats/registry';
+import { asciiFileBaseName } from './plateSliceNaming';
 import { getSavedSlicingPerformanceSettings } from '@/components/settings/performancePreferences';
 import {
     encodeStagePathHeader,
@@ -236,13 +237,6 @@ export type SliceExportResult = {
         };
     };
 };
-
-function safeFilenameBase(raw: string): string {
-    const trimmed = raw.trim();
-    if (!trimmed) return 'slice_export';
-    const cleaned = trimmed.replace(/[^a-z0-9-_]+/gi, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
-    return cleaned || 'slice_export';
-}
 
 /**
  * Orchestrates export via DragonFruit Desktop native slicer.
@@ -631,7 +625,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         options.printerProfile.display.outputFormat,
         options.printerProfile.display.formatVersion,
     ) || format.outputFormat.replace(/^\./, '') || 'slice';
-    const outputName = `${safeFilenameBase(options.filenameBase)}.${printerExt}`;
+    const outputName = `${asciiFileBaseName(options.filenameBase)}.${printerExt}`;
 
     const totalElapsedMs = performance.now() - orchestratorStartMs;
     options.onProgress?.(progressTotal, progressTotal, 'Handoff');

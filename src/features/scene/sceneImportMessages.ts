@@ -10,7 +10,7 @@
  * stable. See `printingMonitorFormat.ts` for the same pattern.
  */
 
-import { msg } from '@lingui/core/macro';
+import { msg, plural } from '@lingui/core/macro';
 import type { MessageDescriptor } from '@lingui/core';
 
 type Translate = (descriptor: MessageDescriptor) => string;
@@ -190,4 +190,105 @@ export function dropOverlaySupportedFormats(extensions: string, translate: Trans
 
 export function dropOverlayUnsupportedFormats(extensions: string, translate: Translate): string {
   return translate(msg`Please use: ${extensions}`);
+}
+
+// ---------------------------------------------------------------------------
+// Reports — the toast once an import or a scene edit is done
+// ---------------------------------------------------------------------------
+
+export function reportAutoRepaired(translate: Translate): string {
+  return translate(msg`Auto-repaired. Click for details.`);
+}
+
+export function reportSplitSupportsFailed(translate: Translate): string {
+  return translate(msg`Failed to split supports`);
+}
+
+export function reportMergeSupportsFailed(translate: Translate): string {
+  return translate(msg`Failed to merge supports`);
+}
+
+export function reportScanned(modelName: string, translate: Translate): string {
+  return translate(msg`Scanned ${modelName}.`);
+}
+
+export function reportScanFailed(message: string, translate: Translate): string {
+  return translate(msg`Scan failed: ${message}`);
+}
+
+export function reportUnsupportedSceneFile(fileName: string, translate: Translate): string {
+  return translate(msg`Unsupported scene file: ${fileName}`);
+}
+
+/** `extension` is the file's, with its dot, e.g. ".lys". */
+export function reportNoSceneImportHandler(extension: string, translate: Translate): string {
+  return translate(msg`No registered scene import handler for ${extension}.`);
+}
+
+/**
+ * The summary after a scene file loads. `format` is the file type in capitals, e.g. "VOXL";
+ * the support count and the skipped-model count are left out when they are zero.
+ */
+export function reportImportedScene(
+  format: string,
+  modelCount: number,
+  supportCount: number,
+  skippedCount: number,
+  translate: Translate,
+): string {
+  if (supportCount > 0 && skippedCount > 0) {
+    return translate(msg`Imported ${format} scene: ${plural(modelCount, { one: '# model', other: '# models' })}, ${plural(supportCount, { one: '# support', other: '# supports' })}, skipped ${plural(skippedCount, { one: '# model', other: '# models' })}.`);
+  }
+  if (supportCount > 0) {
+    return translate(msg`Imported ${format} scene: ${plural(modelCount, { one: '# model', other: '# models' })}, ${plural(supportCount, { one: '# support', other: '# supports' })}.`);
+  }
+  if (skippedCount > 0) {
+    return translate(msg`Imported ${format} scene: ${plural(modelCount, { one: '# model', other: '# models' })}, skipped ${plural(skippedCount, { one: '# model', other: '# models' })}.`);
+  }
+  return translate(msg`Imported ${format} scene: ${plural(modelCount, { one: '# model', other: '# models' })}.`);
+}
+
+export function reportSceneImportFailed(message: string, translate: Translate): string {
+  return translate(msg`Scene import failed: ${message}`);
+}
+
+export function reportVoxlNoMeshes(translate: Translate): string {
+  return translate(msg`VOXL import finished with no importable meshes.`);
+}
+
+export function reportVoxlUnsupportedVersion(fileName: string, translate: Translate): string {
+  return translate(msg`Could not open ${fileName}: unsupported VOXL version.`);
+}
+
+export function reportVoxlImportFailed(message: string, translate: Translate): string {
+  return translate(msg`VOXL import failed: ${message}`);
+}
+
+export function reportSceneFilesImported(count: number, translate: Translate): string {
+  return translate(msg`${plural(count, { one: 'Imported # scene file.', other: 'Imported # scene files.' })}`);
+}
+
+export function reportSceneFilesPartlyImported(imported: number, total: number, failed: number, translate: Translate): string {
+  return translate(msg`Imported ${imported}/${total} scene files (${failed} failed).`);
+}
+
+export function reportSceneFilesAllFailed(total: number, translate: Translate): string {
+  return translate(msg`${plural(total, { one: 'Scene import failed.', other: 'Scene import failed for all # files.' })}`);
+}
+
+export function reportSupportJsonUnsupported(translate: Translate): string {
+  return translate(msg`Support import failed: unsupported support JSON format.`);
+}
+
+export function reportSupportJsonImported(translate: Translate): string {
+  return translate(msg`Imported support data.`);
+}
+
+export function reportSupportJsonFailed(translate: Translate): string {
+  return translate(msg`Support import failed.`);
+}
+
+/** The blocking dialog a failed scene import raises; `message` is the error's own text. */
+export function alertSceneImportFailed(message: string, translate: Translate): string {
+  return translate(msg`Scene import failed:\n${message}`);
 }

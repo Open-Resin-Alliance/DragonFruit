@@ -74,7 +74,7 @@ import { ExportPanel } from '@/features/export/components/ExportPanel';
 import { ExportManager } from '@/features/export/logic/ExportManager';
 import { resolveEntirePlateExportBaseName } from '@/features/export/logic/exportFileNaming';
 import { SlicingPanel, type SliceIntent } from '@/features/slicing/components/SlicingPanel';
-import { joinSliceOutputPath } from '@/features/slicing/plateSliceNaming';
+import { joinSliceOutputPath, sliceFileBaseName } from '@/features/slicing/plateSliceNaming';
 import { PrintingPanel } from '@/features/printing/components/PrintingPanel';
 import { usePrintingPreviewManager } from '@/features/printing/usePrintingPreviewManager';
 import { useEditorToasts, useTrailingMount } from '@/features/notifications/useEditorToasts';
@@ -250,7 +250,7 @@ import { computeHighPrecisionArrangeResultWorker } from '@/features/scene/arrang
 import { plateCascadeOffsetMm } from '@/features/scene/plates/plateCascade';
 
 // Domain Features
-import { useSceneCollectionManager, pushSceneSlicedMarker, getSceneSnapshotRegistryBytes } from '@/features/scene/useSceneCollectionManager';
+import { useSceneCollectionManager, getSceneSnapshotRegistryBytes } from '@/features/scene/useSceneCollectionManager';
 import { useSupportHistoryHandlers } from '@/supports/history/useSupportHistoryHandlers';
 import { useNativeSpaceMouseLifecycle } from '@/components/scene/camera/useNativeSpaceMouseLifecycle';
 import { useSlicingManager } from '@/features/slicing/useSlicingManager';
@@ -2663,8 +2663,6 @@ export default function Home() {
     const plateId = context?.plateId ?? scene.activePlateId;
     recordPrintingSlice(artifact, context);
     setShowPrintingResliceModal(false);
-    // Push a "Sliced Scene" marker to history so we can detect changes after this point
-    pushSceneSlicedMarker();
     setPrintingSendStatusText(null);
     setPrintingSendProgress(0);
     setPrintingSendStageText(null);
@@ -4126,18 +4124,22 @@ export default function Home() {
     }
 
     if (intent === 'file' || intent === 'uvtools') {
-      // A batch has already asked for the folder: every plate's file goes into it, named for
-      // the plate it holds, and nothing asks again between beds.
+      // Named for the plate it holds, as the slicer names it, and not for whichever model
+      // happens to be selected.
+      const extension = suggestedSliceOutputFilename.split('.').pop() ?? '';
+      const baseName = sliceFileBaseName(options?.baseName ?? '')
+        || suggestedSliceOutputFilename.replace(/\.[^.]+$/, '');
+
+      // A batch has already asked for the folder: every plate's file goes into it, and nothing
+      // asks again between beds.
       const destinationDirectory = options?.destinationDirectory?.trim();
       if (destinationDirectory) {
-        const baseName = options?.baseName?.trim() || suggestedSliceOutputFilename.replace(/\.[^.]+$/, '');
-        const extension = suggestedSliceOutputFilename.split('.').pop() ?? '';
         preSliceFileDestinationPathRef.current = joinSliceOutputPath(destinationDirectory, baseName, extension);
         return true;
       }
 
       try {
-        const destinationPath = await pickSavePathWithNativeDialog(suggestedSliceOutputFilename);
+        const destinationPath = await pickSavePathWithNativeDialog(extension ? `${baseName}.${extension}` : baseName);
         if (!destinationPath || destinationPath.trim().length === 0) {
           return false;
         }

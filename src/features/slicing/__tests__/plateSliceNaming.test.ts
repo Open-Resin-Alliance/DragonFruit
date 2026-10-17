@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { derivePlateOutputPath, joinSliceOutputPath } from '../plateSliceNaming';
+import { asciiFileBaseName, joinSliceOutputPath, sliceFileBaseName } from '../plateSliceNaming';
 
 test('a batch file lands in the chosen folder, named for its plate', () => {
   assert.equal(
@@ -17,22 +17,19 @@ test('a batch file lands in the chosen folder, named for its plate', () => {
   assert.equal(joinSliceOutputPath('/tmp/out', '', ''), '/tmp/out/slice_export');
 });
 
-test('a sibling output path keeps the directory and the extension', () => {
-  assert.equal(
-    derivePlateOutputPath('C:\\prints\\scene.ctb', 'Left_bed'),
-    'C:\\prints\\Left_bed.ctb',
-  );
-  assert.equal(
-    derivePlateOutputPath('/home/paul/scene.ctb', 'Right_bed'),
-    '/home/paul/Right_bed.ctb',
-  );
+test('a plate name keeps its letters and loses what a file system refuses', () => {
+  assert.equal(sliceFileBaseName('Arañita_(copia)'), 'Arañita_(copia)');
+  assert.equal(sliceFileBaseName('Left/right: bed?'), 'Left_right_ bed_');
+  assert.equal(joinSliceOutputPath('/tmp', 'a/b', 'ctb'), '/tmp/a_b.ctb');
 });
 
-test('a chosen path with no extension still yields a sibling', () => {
-  assert.equal(derivePlateOutputPath('/home/paul/scene', 'Left_bed'), '/home/paul/Left_bed');
-});
-
-test('no chosen path leaves the destination to the caller', () => {
-  assert.equal(derivePlateOutputPath('', 'Left_bed'), null);
-  assert.equal(derivePlateOutputPath('   ', 'Left_bed'), null);
+test('an ASCII file name spells out what it can before it drops the rest', () => {
+  assert.equal(asciiFileBaseName('Arañita (copia)'), 'Aranita_copia');
+  assert.equal(asciiFileBaseName('Düsseldórf'), 'Dusseldorf');
+  assert.equal(asciiFileBaseName('Straße Łódź Ærøskøbing'), 'Strasse_Lodz_AEroskobing');
+  // A ligature and a full-width letter come apart into plain ones.
+  assert.equal(asciiFileBaseName('ﬁle ＡＢ'), 'file_AB');
+  // What has no Latin spelling still goes, and an empty name still yields a file.
+  assert.equal(asciiFileBaseName('蜘蛛 spider'), 'spider');
+  assert.equal(asciiFileBaseName('  '), 'slice_export');
 });

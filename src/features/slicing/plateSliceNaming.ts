@@ -12,21 +12,47 @@ export type PlateSliceScope = {
 };
 
 /**
- * A sibling of the chosen output path under a different base name, keeping its
- * directory and extension. Null when no path was chosen, which leaves the
- * destination to the caller's own flow.
+ * A plate's name as a file name: a character no file system takes, a path separator among
+ * them, becomes an underscore. Everything else stays, accents and spaces included.
  */
-export function derivePlateOutputPath(chosenPath: string, baseName: string): string | null {
-  const trimmed = chosenPath.trim();
-  if (!trimmed) return null;
+export function sliceFileBaseName(name: string): string {
+  return name.replace(/[<>:"/\\|?*]+/g, '_').trim();
+}
 
-  const separator = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'));
-  const directory = separator >= 0 ? trimmed.slice(0, separator + 1) : '';
-  const file = separator >= 0 ? trimmed.slice(separator + 1) : trimmed;
-  const dot = file.lastIndexOf('.');
-  const extension = dot > 0 ? file.slice(dot) : '';
+/**
+ * Latin letters that are their own letter rather than a base letter with a mark on it, so
+ * Unicode decomposition leaves them alone. Each becomes what a reader would type without it.
+ */
+const ASCII_LETTER_APPROXIMATIONS: Readonly<Record<string, string>> = {
+  ß: 'ss', ẞ: 'SS',
+  æ: 'ae', Æ: 'AE',
+  œ: 'oe', Œ: 'OE',
+  ø: 'o', Ø: 'O',
+  ł: 'l', Ł: 'L',
+  đ: 'd', Đ: 'D',
+  ð: 'd', Ð: 'D',
+  þ: 'th', Þ: 'Th',
+  ħ: 'h', Ħ: 'H',
+  ı: 'i',
+  ĸ: 'k',
+};
 
-  return `${directory}${baseName}${extension}`;
+/**
+ * A name as an ASCII file name, for the files that go to a printer: some firmwares cannot
+ * show or open anything else. What has a near ASCII spelling is given it first — ñ is n, ü
+ * is u, ß is ss — and only what is left becomes an underscore, so "Arañita (copia)" is
+ * "Aranita_copia" rather than "Ara_ita_copia".
+ */
+export function asciiFileBaseName(raw: string): string {
+  const approximated = raw
+    .trim()
+    // Compatibility decomposition splits a letter from its marks, and a ligature or a
+    // full-width form into plain letters; the marks then go.
+    .normalize('NFKD')
+    .replace(/\p{M}+/gu, '')
+    .replace(/[\u0080-\u{10FFFF}]/gu, (letter) => ASCII_LETTER_APPROXIMATIONS[letter] ?? letter);
+  const cleaned = approximated.replace(/[^a-z0-9-_]+/gi, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
+  return cleaned || 'slice_export';
 }
 
 /**
@@ -39,6 +65,6 @@ export function joinSliceOutputPath(directory: string, baseName: string, extensi
   const trimmedDirectory = directory.trim().replace(/[\\/]+$/, '');
   const separator = trimmedDirectory.includes('\\') ? '\\' : '/';
   const trimmedExtension = extension.trim().replace(/^\.+/, '');
-  const file = `${baseName.trim() || 'slice_export'}${trimmedExtension ? `.${trimmedExtension}` : ''}`;
+  const file = `${sliceFileBaseName(baseName) || 'slice_export'}${trimmedExtension ? `.${trimmedExtension}` : ''}`;
   return `${trimmedDirectory}${separator}${file}`;
 }

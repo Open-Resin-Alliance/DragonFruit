@@ -15,7 +15,7 @@ import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';
-import { derivePlateOutputPath, joinSliceOutputPath, type PlateSliceScope } from '@/features/slicing/plateSliceNaming';
+import { joinSliceOutputPath, type PlateSliceScope } from '@/features/slicing/plateSliceNaming';
 import { plateNumberPlaceholder } from '@/features/scene/plates/plateMessages';
 import { MaterialAntiAliasingSection, type MaterialDraft } from '@/components/settings/profileFormAtoms';
 import {
@@ -1870,10 +1870,14 @@ export function SlicingPanel({
     // flow's, and none of them means "all of them at once".
     const intentForRun: SliceIntent = batch ? 'file' : effectiveSliceIntent;
 
+    // The name the slice is written under, also offered in the save dialog so the two agree.
+    const outputBaseName = scopeFilenameBase ?? sliceFilenameBase;
     const proceed = await Promise.resolve(
       onBeforeSliceStart?.(
         intentForRun,
-        batch ? { destinationDirectory: batch.destinationDirectory, baseName: scopeFilenameBase ?? undefined } : undefined,
+        batch
+          ? { destinationDirectory: batch.destinationDirectory, baseName: outputBaseName }
+          : { baseName: outputBaseName },
       ) ?? true,
     ).catch(() => false);
     if (!proceed) {
@@ -1937,13 +1941,6 @@ export function SlicingPanel({
         }
       }
 
-      // A plate's file is named for the plate, beside the chosen path; a plain
-      // run keeps the name and destination it always had.
-      const outputBaseName = scopeFilenameBase ?? (sliceFilenameBase || activePrinterProfile.name || 'slice_export');
-      const scopeOutputPath = scopeFilenameBase
-        ? derivePlateOutputPath(resolvedOutputPath, scopeFilenameBase)
-        : null;
-
       const result = await runSliceExportOrchestrator({
         models: scopeModels,
         excludedModelIds,
@@ -1955,10 +1952,11 @@ export function SlicingPanel({
           : {}),
         printerProfile: activePrinterProfile,
         materialProfile: materialProfileForSlicing,
-        filenameBase: outputBaseName,
-        outputPath: (scopeOutputPath ?? resolvedOutputPath).trim().length > 0
-          ? (scopeOutputPath ?? resolvedOutputPath)
-          : null,
+        filenameBase: outputBaseName || activePrinterProfile.name || 'slice_export',
+        // Written where the save step said, under the name the user kept or typed there: a
+        // plate's name went into that path already, as the dialog's suggestion or as a batch's
+        // file name. Renaming it here wrote the file a second time beside the chosen one.
+        outputPath: resolvedOutputPath.length > 0 ? resolvedOutputPath : null,
         antiAliasing: {
           preset: aaAutoPreset,
           override: sessionAaOverrideDraft,

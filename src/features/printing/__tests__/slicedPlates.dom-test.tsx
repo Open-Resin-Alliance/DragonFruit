@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { resolveObjectURL } from 'node:buffer';
 import test from 'node:test';
 import { useEffect } from 'react';
-import { clearHistory, pushHistory, undo } from '@/history/historyStore';
+import { clearHistory, pushHistory } from '@/history/historyStore';
 import { renderWithProviders, settle } from '@/utils/__tests__/helpers/renderDom';
-import { pushSceneSlicedMarker, useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
+import { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
 import type { SliceExportArtifact } from '@/features/slicing/sliceExportOrchestrator';
 import { isSlicedPlateStale, sliceProfileFingerprint } from '../slicedPlates';
 import { useSlicedPlates, type SlicedPlatesView } from '../useSlicedPlates';
@@ -103,14 +103,9 @@ test('a slice goes stale when its own plate is edited, not when another one is',
     clearHistory();
     view().slicedPlates.record(plate1, artifact('one'), { totalLayers: 10, profileFingerprint: FINGERPRINT });
     view().slicedPlates.record(plate2, artifact('two'), { totalLayers: 10, profileFingerprint: FINGERPRINT });
-    pushSceneSlicedMarker();
     await settle(20);
-    assert.equal(stale(plate1), false, 'the marker the slice pushes is not an edit');
+    assert.equal(stale(plate1), false, 'recording a slice is not an edit');
     assert.equal(stale(plate2), false);
-
-    undo();
-    await settle(20);
-    assert.equal(stale(plate1), false, 'undoing that marker is not an edit either');
 
     scene().setModelVisibility(second.id, false);
     await settle(20);

@@ -61,7 +61,26 @@ import {
   importLabelScenes,
   importLabelSplittingSupports,
   importLabelVoxlScene,
+  alertSceneImportFailed,
+  reportAutoRepaired,
+  reportImportedScene,
+  reportMergeSupportsFailed,
+  reportNoSceneImportHandler,
   reportRestoredModel,
+  reportScanFailed,
+  reportScanned,
+  reportSceneFilesAllFailed,
+  reportSceneFilesImported,
+  reportSceneFilesPartlyImported,
+  reportSceneImportFailed,
+  reportSplitSupportsFailed,
+  reportSupportJsonFailed,
+  reportSupportJsonImported,
+  reportSupportJsonUnsupported,
+  reportUnsupportedSceneFile,
+  reportVoxlImportFailed,
+  reportVoxlNoMeshes,
+  reportVoxlUnsupportedVersion,
 } from '@/features/scene/sceneImportMessages';
 import { duplicatedModelName, pastedModelName } from '@/features/scene/modelCopyNames';
 import {
@@ -94,7 +113,6 @@ import {
   repairModelsLabel,
   SCENE_CHANGE_LABEL,
   showModelLabel,
-  SLICE_SCENE_LABEL,
   splitModelLabel,
   splitSupportsLabel,
   SWITCH_PRINTER_LABEL,
@@ -236,11 +254,6 @@ const RECENT_FILES_DB_NAME = 'dragonfruit-recent-files';
 const RECENT_FILES_DB_VERSION = 1;
 const RECENT_FILES_STORE_NAME = 'files';
 export const SCENE_MODELS_SNAPSHOT_APPLY = 'scene_models_snapshot_apply' as const;
-// A marker pushed after a slice so change-detection can tell whether the scene
-// was edited since. It carries no undo behaviour, but it still lands on the undo
-// stack, so it must have a (pass-through) handler — otherwise undoing onto it
-// would strand the stack. Exported so the push site keys off the same constant.
-export const SCENE_SLICED = 'SCENE_SLICED' as const;
 const SCENE_HISTORY_MAX_SNAPSHOTS = 200;
 // Belt-and-suspenders alongside the count cap above: a handful of
 // full-resolution geometry swaps (e.g. repeated hollowing on a large model)
@@ -256,17 +269,10 @@ type SceneSnapshotPayload = { key: string; modelId?: string };
 /** Action→payload map for the scene history domain. */
 type SceneHistoryPayloadMap = {
   [SCENE_MODELS_SNAPSHOT_APPLY]: SceneSnapshotPayload;
-  [SCENE_SLICED]: Record<string, never>;
 };
 const sceneHistory = createTypedHistory<SceneHistoryPayloadMap>({
   [SCENE_MODELS_SNAPSHOT_APPLY]: SCENE_CHANGE_LABEL,
-  [SCENE_SLICED]: SLICE_SCENE_LABEL,
 });
-
-/** Push the post-slice marker used to detect edits made after a slice. */
-export function pushSceneSlicedMarker(): void {
-  sceneHistory.push({ type: SCENE_SLICED, payload: {} });
-}
 
 type SceneSnapshot = {
   models: LoadedModel[];
@@ -452,6 +458,26 @@ function paintModelBaseColor(model: LoadedModel, color: string): void {
 function hasSupportsForModel(modelId: string, supportState: SupportState): boolean {
   const supportIds = getSupportsForModel(supportState, modelId);
   return Object.values(supportIds).some((ids) => ids.length > 0);
+}
+
+/**
+ * Supports are kept in world space, apart from their model, so a relayout of the beds that
+ * slides a model has to slide its supports by the same move, or they stay standing where the
+ * bed used to be. A model the relayout left alone keeps its transform object, and is skipped.
+ */
+function shiftSupportsWithModels(before: readonly LoadedModel[], after: readonly LoadedModel[]): void {
+  if (before === after) return;
+  const previous = new Map(before.map((model) => [model.id, model.transform]));
+  for (const model of after) {
+    const was = previous.get(model.id);
+    if (was && was !== model.transform) transformSupportsForModel(model.id, was, model.transform);
+  }
+}
+
+/** The support store, for a snapshot of `models`, when any of them has supports to restore. */
+function supportStateFor(models: readonly LoadedModel[]): SupportState | undefined {
+  const supportState = getSnapshot();
+  return models.some((model) => hasSupportsForModel(model.id, supportState)) ? supportState : undefined;
 }
 
 function estimateGeometryBytes(geometry: THREE.BufferGeometry): number {
@@ -2297,14 +2323,8 @@ export function useSceneCollectionManager(options?: {
       },
     );
 
-    // Pass-through: the slice marker carries no undo behaviour, but registering
-    // it keeps undo/redo moving it between stacks instead of stranding an entry
-    // with no handler.
-    const unregisterSceneSliced = sceneHistory.register(SCENE_SLICED, () => true);
-
     return () => {
       unregisterSceneModelsHistory();
-      unregisterSceneSliced();
     };
   }, [applySceneSnapshot]);
 
@@ -2971,7 +2991,7 @@ export function useSceneCollectionManager(options?: {
             const anyResidual = attentionReports.some(({ report }) => !report.fully_repaired);
             setPendingMeshRepairReports(attentionReports);
             emitSceneImportReport(
-              'Auto Repaired - Click for Details',
+              reportAutoRepaired(_),
               anyResidual ? 'warning' : 'success',
               { durationMs: 10_000, clickAction: 'openMeshRepairReport' },
             );
@@ -4363,7 +4383,7 @@ export function useSceneCollectionManager(options?: {
     pushSceneSnapshotHistory(before, after, splitSupportsLabel(source.name));
     } catch (e) {
       console.error(e);
-      emitSceneImportReport('Failed to split supports', 'error');
+      emitSceneImportReport(reportSplitSupportsFailed(_), 'error');
     } finally {
       setImportProgress({ active: false, type: null, label: '', detail: '', progress: null });
     }
@@ -4565,7 +4585,7 @@ export function useSceneCollectionManager(options?: {
       pushSceneSnapshotHistory(before, after, mergeSupportsLabel(mergedModel.name));
     } catch (e) {
       console.error(e);
-      emitSceneImportReport('Failed to merge supports', 'error');
+      emitSceneImportReport(reportMergeSupportsFailed(_), 'error');
     } finally {
       setImportProgress({ active: false, type: null, label: '', detail: '', progress: null });
     }
@@ -4612,7 +4632,7 @@ export function useSceneCollectionManager(options?: {
         setMeshRepairReports([reportEntry]);
       } else {
         setPendingMeshRepairReports([]);
-        emitSceneImportReport(`Scanned ${model.name}.`, 'success');
+        emitSceneImportReport(reportScanned(model.name, _), 'success');
       }
 
       return true;
@@ -4620,7 +4640,7 @@ export function useSceneCollectionManager(options?: {
       console.error('[scanModelForSupportsInPlace] Scan failed:', err);
       setPendingMeshRepairReports([]);
       const message = err instanceof Error ? err.message : String(err);
-      emitSceneImportReport(`Scan failed: ${message}`, 'error', { durationMs: 6_000 });
+      emitSceneImportReport(reportScanFailed(message, _), 'error', { durationMs: 6_000 });
       return false;
     } finally {
       setImportProgress({ active: false, type: null, label: '', detail: '', progress: null });
@@ -5672,20 +5692,18 @@ export function useSceneCollectionManager(options?: {
   const handleImportPluginSceneFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     const extension = getSceneExtension(file.name);
     if (!extension || extension === '.voxl') {
-      const unsupportedMessage = `Unsupported scene file: ${file.name}`;
-      console.warn(`[SceneCollection] ${unsupportedMessage}`);
+      console.warn(`[SceneCollection] Unsupported scene file: ${file.name}`);
       if (!options?.suppressReport) {
-        emitSceneImportReport(unsupportedMessage, 'error');
+        emitSceneImportReport(reportUnsupportedSceneFile(file.name, _), 'error');
       }
       return false;
     }
 
     const pluginImport = scenePluginImportHandlersByExtension.get(extension.toLowerCase());
     if (!pluginImport) {
-      const missingHandlerMessage = `No registered scene import handler for ${extension}.`;
-      console.warn(`[SceneCollection] ${missingHandlerMessage}`);
+      console.warn(`[SceneCollection] No registered scene import handler for ${extension}.`);
       if (!options?.suppressReport) {
-        emitSceneImportReport(missingHandlerMessage, 'error');
+        emitSceneImportReport(reportNoSceneImportHandler(extension, _), 'error');
       }
       return false;
     }
@@ -6182,12 +6200,8 @@ export function useSceneCollectionManager(options?: {
         0,
       );
       if (!options?.suppressReport) {
-        const sourceLabel = extension.slice(1).toUpperCase();
-        const modelLabel = newModels.length === 1 ? '1 model' : `${newModels.length} models`;
         emitSceneImportReport(
-          totalSupportCount > 0
-            ? `Imported ${sourceLabel} scene: ${modelLabel}, ${totalSupportCount} supports.`
-            : `Imported ${sourceLabel} scene: ${modelLabel}.`,
+          reportImportedScene(extension.slice(1).toUpperCase(), newModels.length, totalSupportCount, 0, _),
           'success',
         );
       }
@@ -6198,10 +6212,10 @@ export function useSceneCollectionManager(options?: {
       console.error('[SceneCollection] Failed to process plugin scene geometry:', err);
       const msg = err instanceof Error ? err.message : String(err);
       if (!options?.suppressReport) {
-        emitSceneImportReport(`Scene import failed: ${msg}`, 'error');
+        emitSceneImportReport(reportSceneImportFailed(msg, _), 'error');
       }
       if (!options?.suppressReport && typeof window !== 'undefined') {
-        window.alert(`Import Scene failed:\n${msg}`);
+        window.alert(alertSceneImportFailed(msg, _));
       }
       return false;
     } finally {
@@ -6669,15 +6683,11 @@ export function useSceneCollectionManager(options?: {
 
       const importedSupportCount = countSupportEntries(document.supports);
       const importedModelCount = importedModels.length;
-      const modelNoun = importedModelCount === 1 ? 'model' : 'models';
-      const skippedNoun = skippedModels === 1 ? 'model' : 'models';
-      const supportsClause = importedSupportCount > 0 ? `, ${importedSupportCount} supports` : '';
-      const skippedClause = skippedModels > 0 ? `, skipped ${skippedModels} ${skippedNoun}` : '';
 
       if (importedModelCount > 0) {
         if (!options?.suppressReport) {
           emitSceneImportReport(
-            `Imported VOXL scene: ${importedModelCount} ${modelNoun}${supportsClause}${skippedClause}.`,
+            reportImportedScene('VOXL', importedModelCount, importedSupportCount, skippedModels, _),
             skippedModels > 0 ? 'warning' : 'success',
           );
         }
@@ -6686,7 +6696,7 @@ export function useSceneCollectionManager(options?: {
       if (importedModels.length === 0) {
         console.warn('[SceneCollection] VOXL import completed without importable meshes (expected embedded-chunk meshes).');
         if (!options?.suppressReport) {
-          emitSceneImportReport('VOXL import finished with no importable meshes.', 'warning');
+          emitSceneImportReport(reportVoxlNoMeshes(_), 'warning');
         }
         return false;
       }
@@ -6699,16 +6709,16 @@ export function useSceneCollectionManager(options?: {
         // explained rather than reported as a parse failure.
         setObsoleteVoxlScene({ fileName: file.name, detected: error.detected });
         if (!options?.suppressReport) {
-          emitSceneImportReport(`Could not open ${file.name}: unsupported VOXL version.`, 'warning');
+          emitSceneImportReport(reportVoxlUnsupportedVersion(file.name, _), 'warning');
         }
         return false;
       }
       const message = error instanceof Error ? error.message : String(error);
       if (!options?.suppressReport) {
-        emitSceneImportReport(`VOXL import failed: ${message}`, 'error');
+        emitSceneImportReport(reportVoxlImportFailed(message, _), 'error');
       }
       if (!options?.suppressReport && typeof window !== 'undefined') {
-        window.alert(`Import VOXL failed:\n${message}`);
+        window.alert(alertSceneImportFailed(message, _));
       }
       return false;
     } finally {
@@ -6795,11 +6805,11 @@ export function useSceneCollectionManager(options?: {
     });
 
     if (failureCount === 0) {
-      emitSceneImportReport(`Imported ${successCount} scene files.`, 'success');
+      emitSceneImportReport(reportSceneFilesImported(successCount, _), 'success');
     } else if (successCount > 0) {
-      emitSceneImportReport(`Imported ${successCount}/${files.length} scene files (${failureCount} failed).`, 'warning');
+      emitSceneImportReport(reportSceneFilesPartlyImported(successCount, files.length, failureCount, _), 'warning');
     } else {
-      emitSceneImportReport(`Scene import failed for all ${files.length} files.`, 'error');
+      emitSceneImportReport(reportSceneFilesAllFailed(files.length, _), 'error');
     }
     return successCount > 0;
   }, [_, emitSceneImportReport, getSceneExtension, importSceneFile, trackRecentOpenedFiles, waitForUiYield]);
@@ -6903,17 +6913,17 @@ export function useSceneCollectionManager(options?: {
       const json = JSON.parse(text) as unknown;
       const parsed = asDragonfruitImportFormat(json);
       if (!parsed) {
-        emitSceneImportReport('Support import failed: unsupported support JSON format.', 'error');
+        emitSceneImportReport(reportSupportJsonUnsupported(_), 'error');
         return;
       }
 
       applyImportDefaultsToRaftState();
       loadFromImportFormat(parsed);
-      emitSceneImportReport('Imported support data.', 'success');
+      emitSceneImportReport(reportSupportJsonImported(_), 'success');
 
     } catch (err) {
       console.error('[SceneCollection] Failed to import support JSON:', err);
-      emitSceneImportReport('Support import failed.', 'error');
+      emitSceneImportReport(reportSupportJsonFailed(_), 'error');
     }
   }, [emitSceneImportReport]);
 
@@ -7359,8 +7369,8 @@ export function useSceneCollectionManager(options?: {
   /**
    * The models, moved with their beds when the grid is re-laid.
    *
-   * Plates are numbered by position, so a new one can shuffle the plates already
-   * placed. A model left where its bed used to be would quietly belong to whichever
+   * Plates are numbered by position, so adding or removing one can shuffle the plates
+   * already placed. A model left where its bed used to be would quietly belong to whichever
    * plate now covers that spot, so each one is shifted by exactly how far its own
    * plate moved. A model on no plate stays where it was put: it was dragged off a bed
    * deliberately and is not standing on anything that moved.
@@ -7393,7 +7403,10 @@ export function useSceneCollectionManager(options?: {
     const shifts = new Map<string, { dxMm: number; dyMm: number }>();
     const frames = before.map((plate, index) => {
       const from = plateCascadeOffsetMm(index, was, before.length, options?.wasOrdering ?? nowOrdering);
-      const to = plateCascadeOffsetMm(index, footprint, after.length, nowOrdering);
+      // By id, not by index: a bed taken out of the middle moves every one after it a slot
+      // down. A bed that is gone takes its models with it, so they have nowhere to move.
+      const afterIndex = after.findIndex((candidate) => candidate.id === plate.id);
+      const to = afterIndex < 0 ? from : plateCascadeOffsetMm(afterIndex, footprint, after.length, nowOrdering);
       if (from.dxMm !== to.dxMm || from.dyMm !== to.dyMm) {
         shifts.set(plate.id, { dxMm: to.dxMm - from.dxMm, dyMm: to.dyMm - from.dyMm });
       }
@@ -7457,6 +7470,7 @@ export function useSceneCollectionManager(options?: {
 
     const currentPlates = platesRef.current;
     const modelsBefore = modelsRef.current;
+    const supportStateBefore = supportStateFor(modelsBefore);
     const shiftedModels = modelsShiftedForRelaidPlates(
       currentPlates,
       currentPlates,
@@ -7471,6 +7485,7 @@ export function useSceneCollectionManager(options?: {
     );
 
     if (shiftedModels !== modelsBefore) {
+      shiftSupportsWithModels(modelsBefore, shiftedModels);
       modelsRef.current = shiftedModels;
       setModels(shiftedModels);
       // The bed being worked on moved with the others, so the view comes along the way it
@@ -7488,11 +7503,14 @@ export function useSceneCollectionManager(options?: {
         plates: currentPlates,
         activePlateId: activePlateIdRef.current,
         printerProfileId: previous.printerId,
+        includeSupportState: supportStateBefore !== undefined,
+        supportStateOverride: supportStateBefore,
       }),
       captureSceneSnapshot(shiftedModels, activeModelIdRef.current, selectedModelIdsRef.current, {
         plates: currentPlates,
         activePlateId: activePlateIdRef.current,
         printerProfileId: current.printerId,
+        includeSupportState: supportStateBefore !== undefined,
       }),
       activePrinterProfile ? switchPrinterLabel(activePrinterProfile.name) : SWITCH_PRINTER_LABEL,
     );
@@ -7529,6 +7547,7 @@ export function useSceneCollectionManager(options?: {
     });
     if (shiftedModels === modelsBefore) return;
 
+    shiftSupportsWithModels(modelsBefore, shiftedModels);
     modelsRef.current = shiftedModels;
     setModels(shiftedModels);
     // The bed being worked on moved with the others, so the view comes along.
@@ -7539,25 +7558,36 @@ export function useSceneCollectionManager(options?: {
     const plate: ScenePlate = { id: uuidv4(), name: '' };
     const current = platesRef.current;
     const next = [...current, plate];
-    const shiftedModels = modelsShiftedForRelaidPlates(current, next, modelsRef.current);
+    const modelsBefore = modelsRef.current;
+    const shiftedModels = modelsShiftedForRelaidPlates(current, next, modelsBefore);
 
     if (options?.pushHistory === false) {
       setPlates(next);
-      if (shiftedModels !== modelsRef.current) setModels(shiftedModels);
+      if (shiftedModels !== modelsBefore) {
+        shiftSupportsWithModels(modelsBefore, shiftedModels);
+        setModels(shiftedModels);
+      }
       return plate.id;
     }
 
-    const before = captureSceneSnapshot(modelsRef.current, activeModelIdRef.current, selectedModelIdsRef.current, {
+    const supportStateBefore = supportStateFor(modelsBefore);
+    const before = captureSceneSnapshot(modelsBefore, activeModelIdRef.current, selectedModelIdsRef.current, {
       plates: current,
       activePlateId: activePlateIdRef.current,
+      includeSupportState: supportStateBefore !== undefined,
+      supportStateOverride: supportStateBefore,
     });
 
     setPlates(next);
-    if (shiftedModels !== modelsRef.current) setModels(shiftedModels);
+    if (shiftedModels !== modelsBefore) {
+      shiftSupportsWithModels(modelsBefore, shiftedModels);
+      setModels(shiftedModels);
+    }
 
     const after = captureSceneSnapshot(shiftedModels, activeModelIdRef.current, selectedModelIdsRef.current, {
       plates: next,
       activePlateId: activePlateIdRef.current,
+      includeSupportState: supportStateBefore !== undefined,
     });
     pushSceneSnapshotHistory(before, after, addPlateLabel(next.length));
     return plate.id;
@@ -7589,6 +7619,7 @@ export function useSceneCollectionManager(options?: {
     platesRef.current = remaining;
     setPlates(remaining);
     if (shiftedModels !== modelsRef.current) {
+      shiftSupportsWithModels(modelsRef.current, shiftedModels);
       modelsRef.current = shiftedModels;
       setModels(shiftedModels);
     }
@@ -7739,12 +7770,26 @@ export function useSceneCollectionManager(options?: {
       (model) => resolveModelPlateIdRef.current(model) === plateId,
     );
     const nextActivePlateId = activePlateIdRef.current === plateId ? remaining[0].id : activePlateIdRef.current;
+    // The supports too: the delete takes the doomed models' supports, and the shift moves the
+    // others', so an undo without them would leave both where the delete put them.
+    const supportStateBefore = supportStateFor(modelsRef.current);
     const before = captureSceneSnapshot(modelsRef.current, activeModelIdRef.current, selectedModelIdsRef.current, {
       plates: current,
       activePlateId: activePlateIdRef.current,
+      includeSupportState: supportStateBefore !== undefined,
+      supportStateOverride: supportStateBefore,
     });
 
+    // The beds after it move up a slot, and their models and supports with them; the doomed
+    // models stay put for the delete below to find.
+    const shiftedModels = modelsShiftedForRelaidPlates(current, remaining, modelsRef.current);
+    platesRef.current = remaining;
     setPlates(remaining);
+    if (shiftedModels !== modelsRef.current) {
+      shiftSupportsWithModels(modelsRef.current, shiftedModels);
+      modelsRef.current = shiftedModels;
+      setModels(shiftedModels);
+    }
     setActivePlateId(nextActivePlateId);
     // Deleting the bed being worked on moves to another one, and the view comes with
     // it — the same slide picking a bed gives, rather than leaving the camera where the
@@ -7764,12 +7809,13 @@ export function useSceneCollectionManager(options?: {
       const after = captureSceneSnapshot(modelsRef.current, activeModelIdRef.current, selectedModelIdsRef.current, {
         plates: remaining,
         activePlateId: nextActivePlateId,
+        includeSupportState: supportStateBefore !== undefined,
       });
       pushSceneSnapshotHistory(before, after, deletePlateLabel(current.findIndex((plate) => plate.id === plateId) + 1));
     });
 
     return true;
-  }, [deleteModels, pushSceneSnapshotHistory]);
+  }, [deleteModels, modelsShiftedForRelaidPlates, pushSceneSnapshotHistory]);
 
   /**
    * Delete the models *and* every bed but the first.

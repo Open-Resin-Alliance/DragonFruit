@@ -12,8 +12,9 @@
  * identity with the locale, so the compiler recomputes. Helpers outside
  * components take `fmt` as an argument.
  *
- * Only for display. Input values, serialization, file names and logs keep
- * `toFixed`/`String`, which stay parseable.
+ * Serialization, file names and logs keep `toFixed`/`String`, which stay
+ * parseable. A field that shows the user a locale number reads it back with
+ * `parseDecimal`.
  */
 
 const formatters = new Map<string, Intl.NumberFormat>();
@@ -37,11 +38,23 @@ export function formatFixed(value: number, fractionDigits: number, locale: strin
   });
 }
 
+/**
+ * Reads a number typed into a field: the locale's decimal separator, or a ".",
+ * which is what a number pad or a habit often types. NaN when it isn't one.
+ */
+export function parseDecimal(text: string, locale: string): number {
+  const separator = formatNumber(1.5, locale).charAt(1);
+  const normalized = separator === '.' ? text.trim() : text.trim().replaceAll(separator, '.');
+  return normalized === '' ? Number.NaN : Number.parseFloat(normalized);
+}
+
 /** Number formatting bound to one locale; see `localeFormat`. */
 export interface LocaleFormat {
   readonly locale: string;
   number(value: number, options?: Intl.NumberFormatOptions): string;
   fixed(value: number, fractionDigits: number): string;
+  /** `parseDecimal` for this locale. */
+  parse(text: string): number;
 }
 
 const localeFormats = new Map<string, LocaleFormat>();
@@ -57,6 +70,7 @@ export function localeFormat(locale: string): LocaleFormat {
       locale,
       number: (value, options) => formatNumber(value, locale, options),
       fixed: (value, fractionDigits) => formatFixed(value, fractionDigits, locale),
+      parse: (text) => parseDecimal(text, locale),
     };
     localeFormats.set(locale, format);
   }
