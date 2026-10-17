@@ -1,4 +1,5 @@
 import JSZip from 'jszip';
+import { asciiFileBaseName } from '@/features/slicing/plateSliceNaming';
 import * as THREE from 'three';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { type MaterialProfile, type PrinterProfile, getActiveMaterialProfile, getActivePrinterProfile } from '@/features/profiles/profileStore';
@@ -244,13 +245,6 @@ function sameIndexSet(a: number[] | null, b: number[]): boolean {
     if (a[i] !== b[i]) return false;
   }
   return true;
-}
-
-function safeFilenameBase(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) return 'slice_export';
-  const cleaned = trimmed.replace(/[^a-z0-9-_]+/gi, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
-  return cleaned || 'slice_export';
 }
 
 function triggerBlobDownload(blob: Blob, filename: string): void {
@@ -2371,7 +2365,7 @@ export async function exportRasterLayerZip(options: RasterLayerZipExportOptions)
 
   throwIfAborted(options.abortSignal);
 
-  const outputName = `${safeFilenameBase(options.filenameBase)}_layers.zip`;
+  const outputName = `${asciiFileBaseName(options.filenameBase)}_layers.zip`;
   if (options.outputMode !== 'return') {
     triggerBlobDownload(outputBlob, outputName);
   }
