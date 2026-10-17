@@ -592,6 +592,17 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     }
   }, []);
 
+  // Only a jump glides. A wheel or arrow step lands where it is: eased, every step of a
+  // scroll restarts the glide, and the thumb trails the layer the viewport already shows.
+  const [glide, setGlide] = React.useState({ value, lowerValue, eased: false });
+  if (glide.value !== value || glide.lowerValue !== lowerValue) {
+    const near = 2 * (step || 1);
+    const eased = Math.abs(value - glide.value) > near
+      || Math.abs((lowerValue ?? 0) - (glide.lowerValue ?? 0)) > near;
+    setGlide({ value, lowerValue, eased });
+  }
+  const easesPosition = glide.eased && !isDraggingThumb;
+
   const thumbColor = crossSectionEnabled ? 'var(--accent)' : 'var(--text-muted)';
   const percent = Math.min(100, Math.max(0, ((value - min) / Math.max(1, (max - min))) * 100));
   const lowerPercent = lowerValue != null
@@ -742,11 +753,10 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
               style={{
                 bottom: `${lowerPercent ?? 0}%`,
                 height: `${percent - (lowerPercent ?? 0)}%`,
-                // The thumbs ease to a new value; the fill eases with them, or a wheel step
-                // moves it at once and leaves the thumb to catch up.
-                transition: isDraggingThumb
-                  ? 'background 200ms, box-shadow 200ms'
-                  : 'bottom 170ms cubic-bezier(0.22, 1, 0.36, 1), height 170ms cubic-bezier(0.22, 1, 0.36, 1), background 200ms, box-shadow 200ms',
+                // Glides with the thumbs, or it reaches a jump's end while they are still on the way.
+                transition: easesPosition
+                  ? 'bottom 170ms cubic-bezier(0.22, 1, 0.36, 1), height 170ms cubic-bezier(0.22, 1, 0.36, 1), background 200ms, box-shadow 200ms'
+                  : 'background 200ms, box-shadow 200ms',
                 background: crossSectionEnabled
                   ? 'linear-gradient(180deg, color-mix(in srgb, var(--accent), white 14%), var(--accent))'
                   : 'linear-gradient(180deg, color-mix(in srgb, var(--text-muted), white 10%), var(--text-muted))',
@@ -763,7 +773,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                 className="absolute left-1/2 -translate-x-1/2 -translate-y-1/2"
                 style={{
                   top: `${100 - lowerPercent}%`,
-                  transition: isDraggingThumb ? 'none' : 'top 170ms cubic-bezier(0.22, 1, 0.36, 1)',
+                  transition: easesPosition ? 'top 170ms cubic-bezier(0.22, 1, 0.36, 1)' : 'none',
                 }}
               >
                 <div className="relative">
@@ -860,7 +870,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
               className="absolute left-1/2 -translate-x-1/2 -translate-y-1/2"
               style={{
                 top: `${100 - percent}%`,
-                transition: isDraggingThumb ? 'none' : 'top 170ms cubic-bezier(0.22, 1, 0.36, 1)',
+                transition: easesPosition ? 'top 170ms cubic-bezier(0.22, 1, 0.36, 1)' : 'none',
               }}
             >
               <div className="relative">
