@@ -3998,18 +3998,21 @@ async fn launch_external_process(exe_path: String, file_arg: String) -> Result<(
     }
 
     // A macOS `.app` bundle is a directory: it has to be started through
-    // `open -a`, which hands the file to the already-running instance if there
-    // is one. A bare executable (a CLI on PATH, or the binary inside the
-    // bundle) still spawns directly.
+    // `open -a`. The file goes in as a command-line argument, not as a file to
+    // open: UVtools declares no document types, so it ignores the open-document
+    // event that `open -a <app> <file>` sends. `-n` starts a new instance,
+    // since one already running would never see the arguments. A bare
+    // executable (a CLI on PATH, or the binary inside the bundle) still spawns
+    // directly.
     #[cfg(target_os = "macos")]
     if std::path::Path::new(&exe_path)
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("app"))
     {
         let mut command = std::process::Command::new("open");
-        command.arg("-a").arg(&exe_path);
+        command.arg("-n").arg("-a").arg(&exe_path);
         if !file_arg.is_empty() {
-            command.arg(&file_arg);
+            command.arg("--args").arg(&file_arg);
         }
         command
             .spawn()
