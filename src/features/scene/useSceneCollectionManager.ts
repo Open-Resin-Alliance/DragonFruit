@@ -473,6 +473,26 @@ function hasSupportsForModel(modelId: string, supportState: SupportState): boole
   return Object.values(supportIds).some((ids) => ids.length > 0);
 }
 
+/**
+ * Supports are kept in world space, apart from their model, so a relayout of the beds that
+ * slides a model has to slide its supports by the same move, or they stay standing where the
+ * bed used to be. A model the relayout left alone keeps its transform object, and is skipped.
+ */
+function shiftSupportsWithModels(before: readonly LoadedModel[], after: readonly LoadedModel[]): void {
+  if (before === after) return;
+  const previous = new Map(before.map((model) => [model.id, model.transform]));
+  for (const model of after) {
+    const was = previous.get(model.id);
+    if (was && was !== model.transform) transformSupportsForModel(model.id, was, model.transform);
+  }
+}
+
+/** The support store, for a snapshot of `models`, when any of them has supports to restore. */
+function supportStateFor(models: readonly LoadedModel[]): SupportState | undefined {
+  const supportState = getSnapshot();
+  return models.some((model) => hasSupportsForModel(model.id, supportState)) ? supportState : undefined;
+}
+
 function estimateGeometryBytes(geometry: THREE.BufferGeometry): number {
   let total = 0;
   for (const key in geometry.attributes) {
@@ -7469,6 +7489,7 @@ export function useSceneCollectionManager(options?: {
 
     const currentPlates = platesRef.current;
     const modelsBefore = modelsRef.current;
+    const supportStateBefore = supportStateFor(modelsBefore);
     const shiftedModels = modelsShiftedForRelaidPlates(
       currentPlates,
       currentPlates,
@@ -7483,6 +7504,7 @@ export function useSceneCollectionManager(options?: {
     );
 
     if (shiftedModels !== modelsBefore) {
+      shiftSupportsWithModels(modelsBefore, shiftedModels);
       modelsRef.current = shiftedModels;
       setModels(shiftedModels);
       // The bed being worked on moved with the others, so the view comes along the way it
@@ -7500,11 +7522,14 @@ export function useSceneCollectionManager(options?: {
         plates: currentPlates,
         activePlateId: activePlateIdRef.current,
         printerProfileId: previous.printerId,
+        includeSupportState: supportStateBefore !== undefined,
+        supportStateOverride: supportStateBefore,
       }),
       captureSceneSnapshot(shiftedModels, activeModelIdRef.current, selectedModelIdsRef.current, {
         plates: currentPlates,
         activePlateId: activePlateIdRef.current,
         printerProfileId: current.printerId,
+        includeSupportState: supportStateBefore !== undefined,
       }),
       activePrinterProfile ? switchPrinterLabel(activePrinterProfile.name) : SWITCH_PRINTER_LABEL,
     );
@@ -7541,6 +7566,7 @@ export function useSceneCollectionManager(options?: {
     });
     if (shiftedModels === modelsBefore) return;
 
+    shiftSupportsWithModels(modelsBefore, shiftedModels);
     modelsRef.current = shiftedModels;
     setModels(shiftedModels);
     // The bed being worked on moved with the others, so the view comes along.
@@ -7551,25 +7577,36 @@ export function useSceneCollectionManager(options?: {
     const plate: ScenePlate = { id: uuidv4(), name: '' };
     const current = platesRef.current;
     const next = [...current, plate];
-    const shiftedModels = modelsShiftedForRelaidPlates(current, next, modelsRef.current);
+    const modelsBefore = modelsRef.current;
+    const shiftedModels = modelsShiftedForRelaidPlates(current, next, modelsBefore);
 
     if (options?.pushHistory === false) {
       setPlates(next);
-      if (shiftedModels !== modelsRef.current) setModels(shiftedModels);
+      if (shiftedModels !== modelsBefore) {
+        shiftSupportsWithModels(modelsBefore, shiftedModels);
+        setModels(shiftedModels);
+      }
       return plate.id;
     }
 
-    const before = captureSceneSnapshot(modelsRef.current, activeModelIdRef.current, selectedModelIdsRef.current, {
+    const supportStateBefore = supportStateFor(modelsBefore);
+    const before = captureSceneSnapshot(modelsBefore, activeModelIdRef.current, selectedModelIdsRef.current, {
       plates: current,
       activePlateId: activePlateIdRef.current,
+      includeSupportState: supportStateBefore !== undefined,
+      supportStateOverride: supportStateBefore,
     });
 
     setPlates(next);
-    if (shiftedModels !== modelsRef.current) setModels(shiftedModels);
+    if (shiftedModels !== modelsBefore) {
+      shiftSupportsWithModels(modelsBefore, shiftedModels);
+      setModels(shiftedModels);
+    }
 
     const after = captureSceneSnapshot(shiftedModels, activeModelIdRef.current, selectedModelIdsRef.current, {
       plates: next,
       activePlateId: activePlateIdRef.current,
+      includeSupportState: supportStateBefore !== undefined,
     });
     pushSceneSnapshotHistory(before, after, addPlateLabel(next.length));
     return plate.id;
@@ -7601,6 +7638,7 @@ export function useSceneCollectionManager(options?: {
     platesRef.current = remaining;
     setPlates(remaining);
     if (shiftedModels !== modelsRef.current) {
+      shiftSupportsWithModels(modelsRef.current, shiftedModels);
       modelsRef.current = shiftedModels;
       setModels(shiftedModels);
     }
@@ -7751,17 +7789,23 @@ export function useSceneCollectionManager(options?: {
       (model) => resolveModelPlateIdRef.current(model) === plateId,
     );
     const nextActivePlateId = activePlateIdRef.current === plateId ? remaining[0].id : activePlateIdRef.current;
+    // The supports too: the delete takes the doomed models' supports, and the shift moves the
+    // others', so an undo without them would leave both where the delete put them.
+    const supportStateBefore = supportStateFor(modelsRef.current);
     const before = captureSceneSnapshot(modelsRef.current, activeModelIdRef.current, selectedModelIdsRef.current, {
       plates: current,
       activePlateId: activePlateIdRef.current,
+      includeSupportState: supportStateBefore !== undefined,
+      supportStateOverride: supportStateBefore,
     });
 
-    // The beds after it move up a slot, and their models with them; the doomed models stay
-    // put for the delete below to find.
+    // The beds after it move up a slot, and their models and supports with them; the doomed
+    // models stay put for the delete below to find.
     const shiftedModels = modelsShiftedForRelaidPlates(current, remaining, modelsRef.current);
     platesRef.current = remaining;
     setPlates(remaining);
     if (shiftedModels !== modelsRef.current) {
+      shiftSupportsWithModels(modelsRef.current, shiftedModels);
       modelsRef.current = shiftedModels;
       setModels(shiftedModels);
     }
@@ -7784,6 +7828,7 @@ export function useSceneCollectionManager(options?: {
       const after = captureSceneSnapshot(modelsRef.current, activeModelIdRef.current, selectedModelIdsRef.current, {
         plates: remaining,
         activePlateId: nextActivePlateId,
+        includeSupportState: supportStateBefore !== undefined,
       });
       pushSceneSnapshotHistory(before, after, deletePlateLabel(current.findIndex((plate) => plate.id === plateId) + 1));
     });
