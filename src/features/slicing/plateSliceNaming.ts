@@ -12,21 +12,11 @@ export type PlateSliceScope = {
 };
 
 /**
- * A sibling of the chosen output path under a different base name, keeping its
- * directory and extension. Null when no path was chosen, which leaves the
- * destination to the caller's own flow.
+ * A plate's name as a file name: a character no file system takes, a path separator among
+ * them, becomes an underscore. Everything else stays, accents and spaces included.
  */
-export function derivePlateOutputPath(chosenPath: string, baseName: string): string | null {
-  const trimmed = chosenPath.trim();
-  if (!trimmed) return null;
-
-  const separator = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'));
-  const directory = separator >= 0 ? trimmed.slice(0, separator + 1) : '';
-  const file = separator >= 0 ? trimmed.slice(separator + 1) : trimmed;
-  const dot = file.lastIndexOf('.');
-  const extension = dot > 0 ? file.slice(dot) : '';
-
-  return `${directory}${baseName}${extension}`;
+export function sliceFileBaseName(name: string): string {
+  return name.replace(/[<>:"/\\|?*]+/g, '_').trim();
 }
 
 /**
@@ -39,6 +29,6 @@ export function joinSliceOutputPath(directory: string, baseName: string, extensi
   const trimmedDirectory = directory.trim().replace(/[\\/]+$/, '');
   const separator = trimmedDirectory.includes('\\') ? '\\' : '/';
   const trimmedExtension = extension.trim().replace(/^\.+/, '');
-  const file = `${baseName.trim() || 'slice_export'}${trimmedExtension ? `.${trimmedExtension}` : ''}`;
+  const file = `${sliceFileBaseName(baseName) || 'slice_export'}${trimmedExtension ? `.${trimmedExtension}` : ''}`;
   return `${trimmedDirectory}${separator}${file}`;
 }
