@@ -97,6 +97,49 @@ test('hollowing edits land in undo history', async (t) => {
     await settle(50);
     const hollowingModifier = () => current().scene.getModelMeshModifiers(modelId)?.hollowing;
 
+    await t.test('ordinary pose edits do not warm hollowing, and intent warmup stays unmaterialized', async () => {
+      const tauriWindow = window as unknown as { __TAURI_INTERNALS__?: unknown };
+      tauriWindow.__TAURI_INTERNALS__ ??= {};
+      const calls: string[] = [];
+      const original = current().scene.models[0].transform;
+      mockIPC((cmd) => {
+        calls.push(cmd);
+        if (cmd === 'mesh_hollow_preview_from_captured_source') return '{}';
+        if (cmd === 'mesh_hollow_preview_read_positions') {
+          return new Uint8Array(new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]).buffer);
+        }
+        if (cmd.startsWith('mesh_hollow_preview_read_')) throw new Error('no optional data');
+        return null;
+      });
+      try {
+        const changed = { position: original.position.clone(), rotation: original.rotation.clone(), scale: original.scale.clone() };
+        changed.rotation.y += 0.4;
+        changed.scale.multiplyScalar(1.2);
+        current().scene.setModelTransformRaw(modelId, changed);
+        await settle(80);
+        assert.equal(calls.filter(cmd => cmd.startsWith('mesh_hollow_preview_')).length, 0);
+        await current().hollowing.primeHollowPreviewCache(current().scene.models[0]);
+        assert.ok(calls.includes('mesh_hollow_preview_from_captured_source'), 'the bridge works for explicit intent');
+        await settle(80);
+        const key = current().hollowing.buildHollowPreviewRequest(current().scene.models[0]).previewKey;
+        const entry = current().hollowing.hollowPreviewResultCacheRef.current.get(key);
+        assert.ok(entry);
+        assert.equal(entry.previewGeometry, null, 'idle time does not build unused render geometry');
+        const materialized = current().hollowing.materializeHollowPreviewCacheEntry(key);
+        assert.ok(materialized);
+        assert.ok(materialized.previewGeometry);
+        assert.ok(materialized.previewGeometry.getAttribute('normal'));
+        assert.ok(materialized.previewGeometry.boundingBox);
+        materialized.previewGeometry.dispose();
+        current().hollowing.hollowPreviewResultCacheRef.current.clear();
+      } finally {
+        clearMocks();
+        delete tauriWindow.__TAURI_INTERNALS__;
+        current().scene.setModelTransformRaw(modelId, original);
+        await settle(20);
+      }
+    });
+
     await t.test('a run of settings edits is one step', async () => {
       clearHistory();
       for (const shellThicknessMm of [2.2, 2.4, 2.6]) {
