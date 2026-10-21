@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { STLExporter } from 'three-stdlib';
+import { encodeEmbeddedStl } from './encodeEmbeddedStl';
 import type { LoadedModel, ScenePlate } from '@/features/scene/useSceneCollectionManager';
 import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
 import type { MeshHealthReport } from '@/utils/meshRepair';
@@ -211,22 +211,8 @@ export class ExportManager {
     return scopedClone;
   }
 
-  private static exportModelAsEmbeddedBinaryStlBytes(model: LoadedModel): Uint8Array {
-    const localGroup = new THREE.Group();
-    const mesh = new THREE.Mesh(model.geometry.geometry);
-    const centerOffset = model.geometry.center;
-    mesh.position.set(-centerOffset.x, -centerOffset.y, -centerOffset.z);
-    localGroup.add(mesh);
-    localGroup.updateMatrixWorld(true);
-
-    const exporter = new STLExporter();
-    const result = exporter.parse(localGroup, { binary: true });
-    if (!(result instanceof DataView)) {
-      throw new Error('Expected binary STL payload while exporting VOXL embedded mesh.');
-    }
-
-    const bytes = new Uint8Array(result.buffer, result.byteOffset, result.byteLength);
-    return new Uint8Array(bytes);
+  private static exportModelAsEmbeddedBinaryStlBytes(model: LoadedModel): Promise<Uint8Array> {
+    return encodeEmbeddedStl(model.geometry.geometry, model.geometry.center);
   }
 
   /**
