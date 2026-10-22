@@ -185,7 +185,7 @@ The landing project has two pages and one grid:
 | Page | Source | Data |
 |---|---|---|
 | `/` | `website/src/pages/index.astro` | none at build time; `website/src/lib/release-feed.ts` narrows the download button to the visitor's platform in the browser. |
-| `/builds/` | `website/src/pages/builds.astro` | two lists, both read **at build time**: the developer build from the updater's own `latest-dev.json` at the site root, and the branch previews from the GitHub releases API. Each section degrades on its own. |
+| `/builds/` | `website/src/pages/builds.astro` | the developer build is read **at build time** from the updater's own `latest-dev.json` at the site root. Branch previews are also built into the page, then refreshed in the browser from the GitHub releases API (`website/src/lib/preview-feed.ts`). Each section degrades on its own. |
 | the screenshot grid, below *What it does* | `website/src/components/ScreenshotGrid.astro` | none — four images, one per view, laid out two by two with none of them paged. A click opens one full size in a `<dialog>`, with its caption and arrows under it: the arrows (and Left/Right) step to the next image without closing, and wrap at either end. That lightbox is the only script on the landing page, and without JavaScript the grid is still a grid. |
 
 The split is deliberate and worth keeping:
@@ -197,8 +197,12 @@ The split is deliberate and worth keeping:
 - **Anything that has to be right without JavaScript is built, not fetched.** The
   previews list is rendered at build time and degrades to a note plus a link to
   GitHub if the API was unreachable — an empty list would read as "there are no
-  builds". `releases.ts` takes an optional token for that build request (the deploy
-  workflow passes `GITHUB_TOKEN`); the browser never sees it.
+  builds". Then `preview-feed.ts` refreshes it from the public releases API and
+  caches the answer for two minutes, because a preview release is deleted and
+  recreated on every push; the build snapshot would otherwise name releases that
+  no longer exist. `releases.ts` takes an optional token for the build request (the
+  deploy workflow passes `GITHUB_TOKEN`); the browser request is unauthenticated,
+  and a failed one leaves the built list alone.
 - **The download button is an enhancement.** The built markup already carries a
   working link to the latest release and a line saying where the number came from,
   and every failure path leaves the built page exactly as it is.
