@@ -60,5 +60,5 @@ Building, extending and debugging DragonFruit:
 
 ## Maintenance
 
-- [Where this site is built](dev/site-and-landing.md) — the landing page, the documentation
-  build, and the single Pages artifact they are published as.
+- [Where this site is built](dev/site-and-landing.md) — the landing page, the
+  documentation viewer, and the single Pages artifact they are published as.
