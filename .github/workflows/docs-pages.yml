@@ -1,4 +1,4 @@
-name: Deploy Docs (MkDocs)
+name: Deploy Site
 
 on:
   workflow_dispatch:
@@ -7,11 +7,9 @@ on:
       - main
     paths:
       - docs/**
-      - mkdocs.yml
       - website/**
-      - scripts/generate-doc-redirects.mjs
+      - scripts/materialize-doc-placeholder-assets.mjs
       - .github/workflows/docs-pages.yml
-      - docs/requirements.txt
   workflow_run:
     workflows:
       - Release
@@ -49,22 +47,12 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: docs/requirements.txt
-
       - name: Setup Node
         uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: website/package-lock.json
-
-      - name: Install docs dependencies
-        run: pip install -r docs/requirements.txt
 
       - name: Install site dependencies
         working-directory: website
@@ -77,23 +65,15 @@ jobs:
         id: pages
         uses: actions/configure-pages@v6
 
-      # The documentation is half the artifact, under `/docs/`; the landing page
-      # below is the other half and owns the root. See docs/dev/site-and-landing.md.
-      - name: Build docs site
-        run: mkdocs build --strict --site-dir site/docs
-
-      - name: Build landing page
+      # One build owns the landing page at the root and the documentation under
+      # `/docs/`. See docs/dev/site-and-landing.md.
+      - name: Build site
         working-directory: website
         run: npm run build
         env:
           # Raises the GitHub API rate limit for the page that lists branch
           # previews. Build-time only: it never reaches the browser bundle.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Compose the site
-        run: |
-          cp -R website/dist/. site/
-          node scripts/generate-doc-redirects.mjs site
 
       - name: Inject updater JSONs into site
         uses: actions/github-script@v9
@@ -209,14 +189,14 @@ jobs:
 
             for (const result of results) {
               validateUpdaterFeed(result.name, result.content);
-              fs.writeFileSync(`site/${result.name}`, result.content);
-              core.info(`Wrote site/${result.name}`);
+              fs.writeFileSync(`website/dist/${result.name}`, result.content);
+              core.info(`Wrote website/dist/${result.name}`);
             }
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5
         with:
-          path: site
+          path: website/dist
 
       - name: Deploy to GitHub Pages
         id: deployment

@@ -26,13 +26,8 @@ src-tauri/gen/
 # generated artifacts
 **/generated*
 
-# mkdocs Material social-plugin cache (fonts + generated card images).
-# A stale/empty font cache here breaks `mkdocs build` (infinite recursion in the
-# social plugin), so never commit it.
-/.cache/
-# The composed Pages artifact: the landing page at the root, the MkDocs
-# documentation under /docs/ (see docs/dev/site-and-landing.md).
-/site/
+# The site: landing page and documentation, one Astro build
+# (see docs/dev/site-and-landing.md).
 /website/dist/
 /website/node_modules/
 /website/.astro/

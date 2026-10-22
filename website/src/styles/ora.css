@@ -185,14 +185,12 @@ html {
 /*
  * Cross-document page transitions, the native half of what openresin.org does:
  * a same-origin navigation fades instead of cutting, and the browser animates it
- * from the two documents themselves. It is opted into here *and* in the docs
- * theme (`docs/stylesheets/dragonfruit-theme.css`) because both pages have to
- * agree, which is what makes the fade work in both directions - the landing into
- * the manual and back.
+ * from the two documents themselves. The landing page and the documentation are
+ * one Astro project, so every page agrees on this rule by loading this stylesheet.
  *
- * No router is involved: this is a real navigation with a view transition
- * wrapped around it, so the MkDocs half keeps its own scripts and search instead
- * of being swapped into an Astro document.
+ * No router is involved: this is a real navigation with a view transition wrapped
+ * around it, so the documentation keeps its own scripts and search state instead
+ * of being swapped into the previous page's document.
  */
 @view-transition {
   navigation: auto;

@@ -23,8 +23,8 @@ export const LINKS = {
 } as const;
 
 /**
- * The documentation is MkDocs, built into `docs/` of this same site, so every
- * link to it is written through `docs()` and moves with that one constant.
+ * The documentation is rendered by this Astro site under `/docs/`, so every link
+ * to it is written through `docs()` and moves with that one constant.
  */
 export const DOCS_BASE = '/docs';
 
@@ -38,6 +38,7 @@ export interface NavItem {
 }
 
 export const NAV: readonly NavItem[] = [
+  { label: 'Home', href: '/' },
   { label: 'Documentation', href: docs() },
   { label: 'Translations', href: LINKS.translate, external: true },
 ];

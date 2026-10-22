@@ -1,0 +1,19 @@
+---
+import DocsLayout from '../../layouts/DocsLayout.astro';
+import { loadDocsIndex, renderDoc } from '../../lib/docs';
+
+export async function getStaticPaths() {
+  const { pages } = loadDocsIndex();
+  return pages.map((page) => ({
+    params: { slug: page.slug === 'index' ? undefined : page.slug.replace(/\/index$/, '') },
+    props: { slug: page.slug },
+  }));
+}
+
+const { slug } = Astro.props;
+const page = await renderDoc(slug);
+---
+
+<DocsLayout page={page}>
+  <Fragment set:html={page.html} />
+</DocsLayout>

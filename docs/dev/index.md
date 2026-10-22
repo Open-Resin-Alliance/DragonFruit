@@ -43,7 +43,7 @@ Three that are easy to get wrong and fail silently:
 
 ## Keeping these pages true
 
-`npm run check:docs` verifies that every path and symbol these pages cite still exists, bans pinned line numbers, and keeps the MkDocs nav in sync. It runs in CI. What it cannot check is whether a page's *description of behaviour* is still right — that needs a human reading the code beside the page, and it is where every real error found so far has been.
+`npm run check:docs` verifies that every path and symbol these pages cite still exists, bans pinned line numbers, and keeps the site nav in sync. It runs in CI. What it cannot check is whether a page's *description of behaviour* is still right — that needs a human reading the code beside the page, and it is where every real error found so far has been.
 
 New developer-facing interfaces ship with documentation here; that rule and its checklist are in `AGENTS.md`.
 

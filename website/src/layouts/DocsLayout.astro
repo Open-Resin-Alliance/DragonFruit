@@ -1,0 +1,439 @@
+---
+import Base from './Base.astro';
+import DocsNav from '../components/docs/DocsNav.astro';
+import { loadDocsIndex, type DocsPage } from '../lib/docs';
+import { shortSummary } from '../lib/og';
+import '../styles/docs.css';
+
+interface Props {
+  page: DocsPage;
+}
+
+const { page } = Astro.props;
+const nav = loadDocsIndex().nav.filter((node) => node.slug !== 'index');
+---
+
+<Base
+  title={page.title}
+  description={page.description}
+  cardSummary={shortSummary(page.description, 120)}
+  cardMeta="Documentation"
+>
+  <div class="shell shell--wide docs-shell">
+    <div class="docs-mobile-bar">
+      <button
+        class="docs-mobile-bar__button"
+        type="button"
+        data-docs-nav-toggle
+        aria-controls="docs-nav-panel"
+        aria-expanded="false"
+      >
+        Contents
+      </button>
+      <button class="docs-mobile-bar__button" type="button" data-docs-search-open>
+        Search
+      </button>
+    </div>
+
+    <button class="docs-scrim" type="button" data-docs-nav-close aria-label="Close documentation navigation" tabindex="-1"></button>
+
+    <aside class="docs-sidebar" id="docs-nav-panel" data-docs-sidebar>
+      <div class="docs-sidebar__head">
+        <a class="docs-sidebar__title" href="/docs/">Documentation</a>
+        <button class="docs-search-button" type="button" data-docs-search-open>
+          <span>Search docs</span>
+          <kbd>/</kbd>
+        </button>
+      </div>
+
+      <nav class="docs-nav" aria-label="Documentation">
+        <DocsNav nodes={nav} currentSlug={page.slug} />
+      </nav>
+    </aside>
+
+    <div class="docs-main">
+      <nav class="docs-crumbs" aria-label="Breadcrumb">
+        <a href="/">Home</a>
+        <span aria-hidden="true">/</span>
+        <a href="/docs/">Docs</a>
+        {
+          page.trail.map((label) => (
+            <>
+              <span aria-hidden="true">/</span>
+              <span>{label}</span>
+            </>
+          ))
+        }
+        <span aria-hidden="true">/</span>
+        <span aria-current="page">{page.label}</span>
+      </nav>
+
+      <article class="prose docs-article">
+        <slot />
+      </article>
+
+      <nav class="docs-pager" aria-label="Documentation pages">
+        {
+          page.prev ? (
+            <a class="docs-pager__link docs-pager__link--prev" href={page.prev.url}>
+              <span class="docs-pager__direction">Previous</span>
+              <span class="docs-pager__label">{page.prev.label}</span>
+            </a>
+          ) : (
+            <span />
+          )
+        }
+        {
+          page.next && (
+            <a class="docs-pager__link docs-pager__link--next" href={page.next.url}>
+              <span class="docs-pager__direction">Next</span>
+              <span class="docs-pager__label">{page.next.label}</span>
+            </a>
+          )
+        }
+      </nav>
+    </div>
+
+    <aside class="docs-toc" data-docs-toc>
+      {
+        page.toc.length > 0 && (
+          <>
+            <p class="docs-toc__title">On this page</p>
+            <ol class="docs-toc__list">
+              {page.toc.map((heading) => (
+                <li class={`docs-toc__item docs-toc__item--${heading.depth}`}>
+                  <a href={`#${heading.slug}`}>{heading.text}</a>
+                </li>
+              ))}
+            </ol>
+          </>
+        )
+      }
+    </aside>
+  </div>
+
+  <dialog class="docs-search" data-docs-search aria-label="Search the documentation">
+    <div class="docs-search__panel">
+      <div class="docs-search__head">
+        <input
+          class="docs-search__input"
+          type="search"
+          placeholder="Search the documentation"
+          autocomplete="off"
+          spellcheck="false"
+          data-docs-search-input
+          aria-label="Search the documentation"
+        />
+        <button class="docs-search__close" type="button" data-docs-search-close aria-label="Close search">
+          Esc
+        </button>
+      </div>
+      <div class="docs-search__results" data-docs-search-results>
+        <p class="docs-search__empty">Search titles, headings and page text.</p>
+      </div>
+    </div>
+  </dialog>
+
+  <script>
+    // The mobile drawer.
+    (() => {
+      const sidebar = document.querySelector('[data-docs-sidebar]');
+      const toggle = document.querySelector('[data-docs-nav-toggle]');
+      if (!(sidebar instanceof HTMLElement) || !(toggle instanceof HTMLElement)) return;
+
+      const setOpen = (open: boolean) => {
+        sidebar.toggleAttribute('data-open', open);
+        document.body.toggleAttribute('data-docs-nav-open', open);
+        toggle.setAttribute('aria-expanded', String(open));
+      };
+
+      toggle.addEventListener('click', () => setOpen(!sidebar.hasAttribute('data-open')));
+      document.addEventListener('click', (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        if (target.closest('[data-docs-nav-close]') || target.closest('.docs-nav a')) setOpen(false);
+      });
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && sidebar.hasAttribute('data-open')) setOpen(false);
+      });
+    })();
+
+    // Search is a dialog over the page, opened from either search button or with `/`.
+    (() => {
+      const dialog = document.querySelector('[data-docs-search]');
+      if (!(dialog instanceof HTMLDialogElement)) return;
+      const input = dialog.querySelector('[data-docs-search-input]');
+      const results = dialog.querySelector('[data-docs-search-results]');
+      if (!(input instanceof HTMLInputElement) || !(results instanceof HTMLElement)) return;
+
+      let entriesPromise: Promise<SearchEntry[]> | undefined;
+
+      interface SearchEntry {
+        url: string;
+        title: string;
+        text: string;
+        headings: { slug: string; text: string }[];
+      }
+
+      const loadEntries = () => {
+        entriesPromise ??= fetch('/docs/search-index.json')
+          .then((response) => (response.ok ? response.json() : Promise.reject(new Error(String(response.status)))))
+          .then((value) => value as SearchEntry[]);
+        return entriesPromise;
+      };
+
+      const normalise = (value: string) =>
+        value.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
+
+      const snippetFor = (entry: SearchEntry, terms: string[]) => {
+        const text = entry.text.replace(/\s+/g, ' ');
+        const lower = normalise(text);
+        let at = -1;
+        for (const term of terms) {
+          const found = lower.indexOf(term);
+          if (found !== -1 && (at === -1 || found < at)) at = found;
+        }
+        if (at === -1) return text.slice(0, 160) + (text.length > 160 ? '…' : '');
+        const start = Math.max(0, at - 70);
+        const end = Math.min(text.length, at + 130);
+        return `${start > 0 ? '…' : ''}${text.slice(start, end).trim()}${end < text.length ? '…' : ''}`;
+      };
+
+      type SearchResult = { entry: SearchEntry; score: number; anchor: string | undefined };
+
+      const search = async (query: string): Promise<SearchResult[]> => {
+        const terms = normalise(query).split(/\s+/).filter(Boolean);
+        if (terms.length === 0) return [];
+
+        const entries = await loadEntries();
+        return entries
+            .map((entry) => {
+              const title = normalise(entry.title);
+              const headingMatch = entry.headings.find((heading) =>
+                terms.every((term) => normalise(heading.text).includes(term)),
+              );
+              const anyHeading = entry.headings.find((heading) =>
+                terms.some((term) => normalise(heading.text).includes(term)),
+              );
+              const text = normalise(entry.text);
+              if (!terms.every((term) => title.includes(term) || text.includes(term))) return null;
+
+              let score = 0;
+              for (const term of terms) {
+                if (title === term) score += 120;
+                else if (title.includes(term)) score += 80;
+                if (entry.headings.some((heading) => normalise(heading.text).includes(term))) score += 35;
+                if (text.includes(term)) score += 8;
+              }
+              if (headingMatch) score += 40;
+              if (normalise(query).length > 2 && text.includes(normalise(query))) score += 25;
+
+              return { entry, score, anchor: (headingMatch ?? anyHeading)?.slug };
+            })
+            .filter((result): result is SearchResult => result !== null)
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 12);
+      };
+
+      let sequence = 0;
+
+      const render = (query: string) => {
+        const current = ++sequence;
+        if (query.trim().length === 0) {
+          results.replaceChildren(Object.assign(document.createElement('p'), {
+            className: 'docs-search__empty',
+            textContent: 'Search titles, headings and page text.',
+          }));
+          return;
+        }
+
+        search(query)
+          .then((matches) => {
+            if (current !== sequence) return;
+            if (matches.length === 0) {
+              results.replaceChildren(Object.assign(document.createElement('p'), {
+                className: 'docs-search__empty',
+                textContent: `No results for “${query}”.`,
+              }));
+              return;
+            }
+
+            const list = document.createElement('div');
+            list.className = 'docs-search__list';
+            for (const { entry, anchor } of matches) {
+              const link = document.createElement('a');
+              link.className = 'docs-search__result';
+              link.href = anchor ? `${entry.url}#${anchor}` : entry.url;
+
+              const title = document.createElement('span');
+              title.className = 'docs-search__result-title';
+              title.textContent = entry.title;
+
+              const context = document.createElement('span');
+              context.className = 'docs-search__result-context';
+              const heading = entry.headings.find((item) => item.slug === anchor);
+              context.textContent = heading ? heading.text : entry.url;
+
+              const snippet = document.createElement('span');
+              snippet.className = 'docs-search__result-snippet';
+              snippet.textContent = snippetFor(entry, normalise(query).split(/\s+/).filter(Boolean));
+
+              link.append(title, context, snippet);
+              list.append(link);
+            }
+            results.replaceChildren(list);
+          })
+          .catch(() => {
+            if (current !== sequence) return;
+            results.replaceChildren(Object.assign(document.createElement('p'), {
+              className: 'docs-search__empty',
+              textContent: 'The search index could not be loaded.',
+            }));
+          });
+      };
+
+      let timer: number | undefined;
+      input.addEventListener('input', () => {
+        window.clearTimeout(timer);
+        timer = window.setTimeout(() => render(input.value), 110);
+      });
+
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'ArrowDown' || event.key === 'Enter') {
+          const first = results.querySelector<HTMLAnchorElement>('a.docs-search__result');
+          if (first) {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              first.click();
+            } else {
+              event.preventDefault();
+              first.focus();
+            }
+          }
+        }
+      });
+
+      const open = () => {
+        if (!dialog.open) dialog.showModal();
+        input.focus();
+        input.select();
+      };
+
+      document.addEventListener('click', (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        if (target.closest('[data-docs-search-open]')) {
+          event.preventDefault();
+          open();
+          return;
+        }
+        if (target.closest('[data-docs-search-close]')) {
+          dialog.close();
+          return;
+        }
+        if (target === dialog) dialog.close();
+      });
+
+      document.addEventListener('keydown', (event) => {
+        if (event.key === '/' && !event.metaKey && !event.ctrlKey && !event.altKey) {
+          const target = event.target;
+          const typing =
+            target instanceof HTMLInputElement ||
+            target instanceof HTMLTextAreaElement ||
+            target instanceof HTMLSelectElement ||
+            (target instanceof HTMLElement && target.isContentEditable);
+          if (!typing) {
+            event.preventDefault();
+            open();
+          }
+          return;
+        }
+        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+          event.preventDefault();
+          open();
+        }
+      });
+
+      dialog.addEventListener('close', () => input.blur());
+      // A page that is left open in the background should not keep an old query
+      // highlighted when it comes back; the dialog does not reload the document.
+      dialog.addEventListener('click', (event) => {
+        if (event.target === dialog) dialog.close();
+      });
+    })();
+
+    // Code blocks: a language label and a copy button, added only when a reader can
+    // actually use the button.
+    (() => {
+      for (const pre of document.querySelectorAll<HTMLPreElement>('.prose pre')) {
+        if (pre.closest('.code-block')) continue;
+        const code = pre.querySelector('code');
+        if (!code) continue;
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'code-block';
+
+        const bar = document.createElement('div');
+        bar.className = 'code-block__bar';
+
+        const language = pre.dataset.language;
+        if (language && language !== 'plaintext' && language !== 'text') {
+          const label = document.createElement('span');
+          label.className = 'code-block__language';
+          label.textContent = language;
+          bar.append(label);
+        }
+
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'code-block__copy';
+        button.textContent = 'Copy';
+        button.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(code.textContent ?? '');
+            button.textContent = 'Copied';
+          } catch {
+            button.textContent = 'Copy failed';
+          }
+          window.setTimeout(() => {
+            button.textContent = 'Copy';
+          }, 1600);
+        });
+        bar.append(button);
+
+        pre.before(wrapper);
+        wrapper.append(bar, pre);
+      }
+    })();
+
+    // Mark the TOC entry for the section currently being read.
+    (() => {
+      const links = [...document.querySelectorAll<HTMLAnchorElement>('[data-docs-toc] a[href^="#"]')];
+      if (links.length === 0) return;
+
+      const byId = new Map(
+        links
+          .map((link) => [decodeURIComponent(link.hash.slice(1)), link] as const)
+          .filter(([id]) => document.getElementById(id) !== null),
+      );
+      const headings = [...byId.keys()].map((id) => document.getElementById(id)!);
+
+      const setActive = (id: string) => {
+        for (const [headingId, link] of byId) {
+          if (headingId === id) link.setAttribute('aria-current', 'location');
+          else link.removeAttribute('aria-current');
+        }
+      };
+
+      const observer = new IntersectionObserver(
+        (entries) => {
+          const visible = entries.filter((entry) => entry.isIntersecting);
+          if (visible.length > 0) setActive(visible[0].target.id);
+        },
+        { rootMargin: '-15% 0px -70% 0px', threshold: [0, 1] },
+      );
+      for (const heading of headings) observer.observe(heading);
+    })();
+
+  </script>
+</Base>

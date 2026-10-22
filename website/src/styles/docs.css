@@ -1,0 +1,898 @@
+/* ==========================================================================
+   The documentation viewer.
+
+   The tokens, type and surfaces are `ora.css`'s; this file is the part that is
+   about reading a manual: a nav column, a measured prose column, a section TOC,
+   and the dialog that searches all of it. It is imported only by DocsLayout, so
+   the landing page carries none of it.
+   ========================================================================== */
+
+.docs-shell {
+  display: grid;
+  grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr) minmax(11rem, 14.5rem);
+  gap: clamp(1.75rem, 3.2vw, 4rem);
+  align-items: start;
+  padding-block: 2.25rem 5rem;
+}
+
+/* --------------------------------------------------------------------------
+   Sidebar
+   -------------------------------------------------------------------------- */
+
+.docs-sidebar {
+  position: sticky;
+  top: calc(var(--header-block-size) + 1.5rem);
+  max-block-size: calc(100dvh - var(--header-block-size) - 3rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 1.25rem 2rem 0;
+  border-right: 1px solid var(--border);
+  scrollbar-width: thin;
+}
+
+.docs-sidebar__head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  margin-bottom: 1.5rem;
+}
+
+.docs-sidebar__title {
+  font-size: 1.0625rem;
+  font-weight: 620;
+  letter-spacing: -0.018em;
+  color: var(--ink);
+}
+
+.docs-sidebar__title:hover {
+  color: var(--accent);
+}
+
+.docs-search-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  inline-size: 100%;
+  padding: 0.45rem 0.6rem 0.45rem 0.7rem;
+  font-size: 0.8125rem;
+  color: var(--muted);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color 0.16s var(--ease), border-color 0.16s var(--ease), background-color 0.16s var(--ease);
+}
+
+.docs-search-button:hover {
+  color: var(--ink);
+  border-color: var(--border-strong);
+}
+
+.docs-search-button kbd {
+  padding: 0.05rem 0.35rem;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--muted-2);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.docs-nav__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.docs-nav__list .docs-nav__list {
+  margin-top: 0.05rem;
+  padding-inline-start: 0.55rem;
+}
+
+.docs-nav__details {
+  margin-block: 0.35rem 0;
+}
+
+.docs-nav__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.35rem 0.65rem;
+  font-family: var(--font-mono);
+  font-size: 0.6563rem;
+  font-weight: 500;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+  cursor: pointer;
+  list-style: none;
+  transition: color 0.14s var(--ease), background-color 0.14s var(--ease);
+}
+
+.docs-nav__summary::-webkit-details-marker {
+  display: none;
+}
+
+.docs-nav__summary::after {
+  content: '';
+  flex: none;
+  inline-size: 0.4rem;
+  block-size: 0.4rem;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.15s var(--ease);
+}
+
+.docs-nav__details[open] > .docs-nav__summary::after {
+  transform: rotate(45deg);
+}
+
+.docs-nav__summary:hover {
+  color: var(--ink);
+  background: var(--bg-inset);
+}
+
+.docs-nav__link {
+  display: block;
+  padding: 0.32rem 0.65rem;
+  font-size: 0.9rem;
+  line-height: 1.35;
+  color: var(--muted);
+  transition: color 0.14s var(--ease), background-color 0.14s var(--ease);
+}
+
+.docs-nav__link:hover {
+  color: var(--ink);
+  background: var(--bg-inset);
+}
+
+.docs-nav__link[aria-current='page'] {
+  color: var(--ink);
+  background: var(--bg-inset);
+  box-shadow: inset 2px 0 0 var(--brand-pink);
+}
+
+/* --------------------------------------------------------------------------
+   Article
+   -------------------------------------------------------------------------- */
+
+.docs-main {
+  min-inline-size: 0;
+}
+
+.docs-crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 1.4rem;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.02em;
+  color: var(--muted-2);
+}
+
+.docs-crumbs a {
+  color: var(--muted);
+  transition: color 0.14s var(--ease);
+}
+
+.docs-crumbs a:hover {
+  color: var(--accent);
+}
+
+.docs-crumbs [aria-current='page'] {
+  color: var(--muted);
+}
+
+.docs-article {
+  max-inline-size: 78ch;
+}
+
+.prose {
+  color: var(--ink-soft);
+  font-size: 1rem;
+  line-height: 1.72;
+}
+
+.prose > :first-child {
+  margin-top: 0;
+}
+
+.prose h1 {
+  margin: 0 0 1.5rem;
+  font-size: clamp(2rem, 1.55rem + 2vw, 2.9rem);
+  line-height: 1.08;
+  color: var(--ink);
+}
+
+.prose h2 {
+  margin: 2.9rem 0 0.95rem;
+  padding-top: 0.15rem;
+  font-size: clamp(1.35rem, 1.15rem + 0.8vw, 1.75rem);
+  color: var(--ink);
+  scroll-margin-top: 5.5rem;
+}
+
+.prose h3 {
+  margin: 2.1rem 0 0.7rem;
+  font-size: 1.25rem;
+  color: var(--ink);
+  scroll-margin-top: 5.5rem;
+}
+
+.prose h4 {
+  margin: 1.75rem 0 0.6rem;
+  font-size: 1rem;
+  color: var(--ink);
+}
+
+.prose p,
+.prose ul,
+.prose ol,
+.prose blockquote,
+.prose pre,
+.prose figure,
+.prose .docs-table {
+  margin-block: 1.05rem;
+}
+
+.prose ul,
+.prose ol {
+  padding-inline-start: 1.45rem;
+}
+
+.prose li {
+  margin-block: 0.35rem;
+  padding-inline-start: 0.15rem;
+}
+
+.prose li::marker {
+  color: var(--muted-2);
+}
+
+.prose li > p {
+  margin-block: 0.4rem;
+}
+
+.prose li > ul,
+.prose li > ol {
+  margin-block: 0.35rem;
+}
+
+.prose a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-decoration-color: color-mix(in oklab, var(--accent) 45%, transparent);
+  text-underline-offset: 2px;
+  transition: color 0.14s var(--ease), text-decoration-color 0.14s var(--ease);
+}
+
+.prose a:hover {
+  color: var(--accent-hover);
+  text-decoration-color: currentColor;
+}
+
+.prose strong {
+  color: var(--ink);
+  font-weight: 620;
+}
+
+.prose blockquote {
+  padding: 0.15rem 0 0.15rem 1.1rem;
+  color: var(--muted);
+  border-inline-start: 3px solid var(--border-strong);
+}
+
+.prose blockquote > :first-child {
+  margin-top: 0;
+}
+
+.prose blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.prose hr {
+  margin-block: 2.5rem;
+}
+
+.prose img {
+  margin: 1.6rem auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.prose figure {
+  margin-inline: 0;
+}
+
+.prose figcaption {
+  margin-top: 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* Tables scroll instead of widening the column. The wrapper is added by the
+   renderer (`tablesPlugin` in src/lib/docs.ts). */
+.docs-table {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+}
+
+.prose .docs-table table {
+  inline-size: 100%;
+  margin: 0;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.prose th,
+.prose td {
+  padding: 0.55rem 0.85rem;
+  text-align: start;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+
+.prose th {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: var(--bg-inset);
+  white-space: nowrap;
+}
+
+.prose tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.prose tbody tr:hover {
+  background: color-mix(in oklab, var(--bg-inset) 60%, transparent);
+}
+
+.prose :not(pre) > code {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.prose kbd {
+  padding: 0.08rem 0.4rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+}
+
+/* Code blocks. Sätteri writes the token colours as --shiki-light/--shiki-dark
+   custom properties on each span, which is what lets one highlight follow the
+   theme without a second render. */
+.prose pre {
+  padding: 1rem 1.1rem;
+  overflow-x: auto;
+  font-size: 0.8125rem;
+  line-height: 1.62;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  tab-size: 2;
+}
+
+.prose .astro-code {
+  background-color: var(--shiki-light-bg, var(--code-bg));
+  color: var(--shiki-light, var(--ink));
+}
+
+.prose .astro-code span {
+  color: var(--shiki-light, inherit);
+}
+
+:root[data-theme='dark'] .prose .astro-code {
+  background-color: var(--shiki-dark-bg, var(--code-bg));
+  color: var(--shiki-dark, var(--ink));
+}
+
+:root[data-theme='dark'] .prose .astro-code span {
+  color: var(--shiki-dark, inherit);
+}
+
+.code-block {
+  margin-block: 1.15rem;
+  overflow: hidden;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.code-block pre {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+.code-block__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-block-size: 2.15rem;
+  padding: 0.25rem 0.45rem 0.25rem 0.85rem;
+  background: var(--bg-inset);
+  border-bottom: 1px solid var(--border);
+}
+
+.code-block__language {
+  font-family: var(--font-mono);
+  font-size: 0.6563rem;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+}
+
+.code-block__copy {
+  padding: 0.2rem 0.55rem;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color 0.14s var(--ease), background-color 0.14s var(--ease), border-color 0.14s var(--ease);
+}
+
+.code-block__copy:hover {
+  color: var(--ink);
+  background: var(--bg-raised);
+  border-color: var(--border);
+}
+
+/* Heading permalinks. They are real links in the HTML, not a script, so copying a
+   URL still works without JavaScript. */
+.prose .docs-anchor {
+  margin-inline-start: 0.35rem;
+  color: var(--muted-2);
+  font-weight: 400;
+  text-decoration: none;
+  opacity: 0;
+  transition: opacity 0.14s var(--ease), color 0.14s var(--ease);
+}
+
+.prose h2:hover .docs-anchor,
+.prose h3:hover .docs-anchor,
+.prose h4:hover .docs-anchor,
+.prose .docs-anchor:focus-visible {
+  opacity: 1;
+}
+
+.prose .docs-anchor:hover {
+  color: var(--accent);
+}
+
+/* --------------------------------------------------------------------------
+   Admonitions
+   -------------------------------------------------------------------------- */
+
+.admonition {
+  margin-block: 1.5rem;
+  padding: 0.95rem 1.15rem;
+  background: color-mix(in oklab, var(--admonition-color, var(--accent)) 6%, var(--bg-raised));
+  /* A flat tinted panel with one accent rule. No outline and no radius: a
+     rounded left border curves into a visible hook at each end, which reads as
+     a rendering artefact rather than a deliberate shape. */
+  border: 0;
+  border-inline-start: 3px solid var(--admonition-color, var(--accent));
+  border-radius: 0;
+}
+
+.prose .admonition > * + * {
+  margin-top: 0.55rem;
+}
+
+.prose .admonition > :last-child {
+  margin-bottom: 0;
+}
+
+.prose .admonition-title {
+  margin: 0 0 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: color-mix(in oklab, var(--admonition-color, var(--accent)) 72%, var(--ink));
+}
+
+.admonition-title code {
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.admonition--note,
+.admonition--info {
+  --admonition-color: #2563eb;
+}
+
+.admonition--tip,
+.admonition--hint,
+.admonition--success {
+  --admonition-color: var(--yes);
+}
+
+.admonition--warning,
+.admonition--caution,
+.admonition--attention {
+  --admonition-color: #b45309;
+}
+
+.admonition--danger,
+.admonition--error,
+.admonition--failure,
+.admonition--bug {
+  --admonition-color: var(--no);
+}
+
+.admonition--example,
+.admonition--quote,
+.admonition--abstract,
+.admonition--summary,
+.admonition--question {
+  --admonition-color: var(--accent);
+}
+
+/* --------------------------------------------------------------------------
+   Section TOC
+   -------------------------------------------------------------------------- */
+
+.docs-toc {
+  position: sticky;
+  top: calc(var(--header-block-size) + 1.5rem);
+  max-block-size: calc(100dvh - var(--header-block-size) - 3rem);
+  overflow-y: auto;
+  padding-left: 1.25rem;
+  border-left: 1px solid var(--border);
+  scrollbar-width: thin;
+}
+
+.docs-toc__title {
+  margin-bottom: 0.75rem;
+  font-family: var(--font-mono);
+  font-size: 0.6563rem;
+  font-weight: 500;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+}
+
+.docs-toc__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.docs-toc__item a {
+  display: block;
+  padding: 0.25rem 0 0.25rem 0.65rem;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: var(--muted);
+  border-left: 2px solid transparent;
+  margin-left: -0.8rem;
+  transition: color 0.14s var(--ease), border-color 0.14s var(--ease);
+}
+
+.docs-toc__item--3 a {
+  padding-left: 1.35rem;
+  font-size: 0.78125rem;
+}
+
+.docs-toc__item a:hover {
+  color: var(--ink);
+}
+
+.docs-toc__item a[aria-current='location'] {
+  color: var(--ink);
+  border-left-color: var(--brand-pink);
+}
+
+/* --------------------------------------------------------------------------
+   Previous / next
+   -------------------------------------------------------------------------- */
+
+.docs-pager {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 3.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+}
+
+.docs-pager__link {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: border-color 0.16s var(--ease), background-color 0.16s var(--ease), transform 0.16s var(--ease);
+}
+
+.docs-pager__link:hover {
+  background: var(--bg-raised);
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+}
+
+.docs-pager__link--next {
+  text-align: end;
+}
+
+.docs-pager__direction {
+  font-family: var(--font-mono);
+  font-size: 0.6563rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+}
+
+.docs-pager__label {
+  font-size: 0.9rem;
+  font-weight: 550;
+  color: var(--ink);
+}
+
+/* --------------------------------------------------------------------------
+   Mobile navigation
+   -------------------------------------------------------------------------- */
+
+.docs-mobile-bar {
+  display: none;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.docs-mobile-bar__button {
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8125rem;
+  font-weight: 550;
+  color: var(--muted);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.docs-mobile-bar__button:hover {
+  color: var(--ink);
+  border-color: var(--border-strong);
+}
+
+.docs-scrim {
+  display: none;
+}
+
+@media (max-width: 1180px) {
+  .docs-shell {
+    grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr);
+  }
+
+  .docs-toc {
+    display: none;
+  }
+}
+
+@media (max-width: 960px) {
+  .docs-shell {
+    display: block;
+    padding-block: 1rem 4rem;
+  }
+
+  .docs-mobile-bar {
+    display: flex;
+    position: sticky;
+    top: calc(var(--header-block-size) + 0.75rem);
+    z-index: 30;
+    margin-bottom: 1.25rem;
+  }
+
+  .docs-sidebar {
+    position: fixed;
+    z-index: 45;
+    inset-block: var(--header-block-size) 0;
+    inset-inline-start: 0;
+    inline-size: min(20rem, 88vw);
+    max-block-size: none;
+    padding: 1.25rem 1rem 2rem;
+    background: var(--bg);
+    border-right: 1px solid var(--border);
+    box-shadow: var(--shadow);
+    transform: translateX(-102%);
+    visibility: hidden;
+    transition: transform 0.2s var(--ease), visibility 0.2s;
+  }
+
+  .docs-sidebar[data-open] {
+    transform: none;
+    visibility: visible;
+  }
+
+  body[data-docs-nav-open] {
+    overflow: hidden;
+  }
+
+  body[data-docs-nav-open] .docs-scrim {
+    display: block;
+    position: fixed;
+    z-index: 44;
+    inset: var(--header-block-size) 0 0;
+    inline-size: 100%;
+    border: 0;
+    background: rgb(0 0 0 / 0.35);
+    cursor: pointer;
+  }
+
+  .docs-crumbs {
+    margin-top: 0.25rem;
+  }
+}
+
+@media (max-width: 640px) {
+  .docs-article {
+    max-inline-size: none;
+  }
+
+  .prose {
+    font-size: 0.9688rem;
+  }
+
+  .docs-pager {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .docs-pager__link--next {
+    text-align: start;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Search dialog
+   -------------------------------------------------------------------------- */
+
+.docs-search {
+  inline-size: min(44rem, calc(100vw - 2rem));
+  max-block-size: min(72dvh, 44rem);
+  margin: 12dvh auto auto;
+  padding: 0;
+  overflow: hidden;
+  color: var(--ink);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+}
+
+.docs-search::backdrop {
+  background: rgb(0 0 0 / 0.45);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+}
+
+.docs-search__panel {
+  display: flex;
+  flex-direction: column;
+  max-block-size: min(72dvh, 44rem);
+}
+
+.docs-search__head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.docs-search__input {
+  flex: 1;
+  min-inline-size: 0;
+  padding: 0.35rem 0.25rem;
+  font-size: 1.0625rem;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  outline: 0;
+}
+
+.docs-search__input::placeholder {
+  color: var(--muted-2);
+}
+
+.docs-search__close {
+  padding: 0.2rem 0.45rem;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--muted-2);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.docs-search__close:hover {
+  color: var(--ink);
+  border-color: var(--border-strong);
+}
+
+.docs-search__results {
+  overflow-y: auto;
+  padding: 0.5rem;
+  overscroll-behavior: contain;
+}
+
+.docs-search__empty {
+  padding: 1.25rem 0.85rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.docs-search__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.docs-search__result {
+  display: flex;
+  flex-direction: column;
+  gap: 0.16rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: var(--radius-sm);
+  transition: background-color 0.12s var(--ease);
+}
+
+.docs-search__result:hover,
+.docs-search__result:focus-visible {
+  background: var(--bg-inset);
+}
+
+.docs-search__result-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.docs-search__result-context {
+  font-family: var(--font-mono);
+  font-size: 0.6563rem;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+}
+
+.docs-search__result-snippet {
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
