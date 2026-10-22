@@ -23,7 +23,7 @@ const {
 } = Astro.props;
 
 const canonical = new URL(Astro.url.pathname, Astro.site).href;
-const pageTitle = title === SITE.name ? `${SITE.name} — ${SITE.tagline}` : `${title} · ${SITE.name}`;
+const pageTitle = title === SITE.name ? `${SITE.name} – ${SITE.org}` : `${title} · ${SITE.name}`;
 
 /* The card is rendered at build time by src/og/, from these three values, and its URL
    carries a digest of them so a crawler sees a new image when the words change and the

@@ -1,6 +1,5 @@
 export const SITE = {
   name: 'DragonFruit',
-  tagline: 'Open-source, high-performance slicer for resin 3D printers',
   /** What the project says about itself, in the hero and again in the footer. */
   motto:
     'From the community, for the community. Free to use, open to contribute, and shaped by the people who print with it.',
