@@ -1,41 +1,34 @@
 /**
  * The documentation viewer's build-time data layer.
  *
- * The Markdown under `docs/` is the documentation: this module reads it, turns the
- * handful of MkDocs-isms it still contains (admonitions, `.md` links) into HTML the
- * site can render, and exposes the navigation the viewer paints. Rendering happens
- * with Astro's own Sätteri pipeline pieces so code blocks, heading ids and tables
- * behave exactly as they do in a normal Astro Markdown page.
+ * The Markdown under `docs/` is the documentation. A deployed site can be built
+ * from `dev` while its default documentation comes from `main`, so this module
+ * reads one or more snapshots prepared by `scripts/prepare-docs-versions.mjs`
+ * (`website/.docs-versions/<id>/`) and renders every version through the same
+ * pipeline. A snapshot from before this viewer existed is valid: the nav falls
+ * back to that ref's `mkdocs.yml`.
  *
  * Nothing here is imported by the browser: `renderDoc()` runs while the page is
- * built, and `buildSearchIndex()` is what the `/docs/search-index.json` endpoint
- * serialises.
+ * built, and `buildSearchIndex()` is what the search endpoint serialises.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import Slugger from 'github-slugger';
 import { markdownToHtml, type HastPluginDefinition } from 'satteri';
+import { parse as parseYaml } from 'yaml';
 import { satteriCreateHighlightFn, satteriHighlightPlugin } from '@astrojs/markdown-satteri';
-import docsNav from '../data/docs-nav.json';
+import localNav from '../data/docs-nav.json';
 
-/* Astro bundles this module for the prerender step, so `import.meta.url` would be
-   the build chunk rather than this file. The project is normally built from
-   `website/`; accepting the repository root too keeps `astro build --root website`
-   working. */
-const DOCS_DIR = (() => {
-  const found = [
-    path.resolve(process.cwd(), '..', 'docs'),
-    path.resolve(process.cwd(), 'docs'),
-    path.resolve(process.cwd(), 'website', 'docs'),
-  ].find((candidate) => fs.existsSync(candidate));
-  if (!found) throw new Error(`Could not find the docs/ directory from ${process.cwd()}`);
-  return found;
-})();
-const REPO_ROOT = path.dirname(DOCS_DIR);
+const WEBSITE_ROOT =
+  [process.cwd(), path.resolve(process.cwd(), 'website')].find((candidate) =>
+    fs.existsSync(path.join(candidate, 'astro.config.mjs')),
+  ) ?? process.cwd();
+const REPO_ROOT = path.dirname(WEBSITE_ROOT);
+const LOCAL_DOCS_DIR = path.join(REPO_ROOT, 'docs');
+const VERSIONS_DIR = path.join(WEBSITE_ROOT, '.docs-versions');
+const MANIFEST_FILE = path.join(VERSIONS_DIR, 'manifest.json');
 const DOCS_PREFIX = '/docs';
-const DEFAULT_NAV = docsNav as NavFile;
-const EXCLUDED_DIRECTORIES = new Set(DEFAULT_NAV.exclude ?? []);
 
 export interface NavItem {
   label: string;
@@ -47,6 +40,21 @@ export interface NavItem {
 interface NavFile {
   exclude?: string[];
   items: NavItem[];
+}
+
+interface ManifestVersion {
+  id: string;
+  label: string;
+  version?: string;
+  root: string;
+  exclude?: string[];
+  ref?: string;
+}
+
+interface Manifest {
+  default: string;
+  exclude?: string[];
+  versions: ManifestVersion[];
 }
 
 export interface DocsNavNode {
@@ -62,7 +70,36 @@ export interface DocsHeading {
   text: string;
 }
 
+export interface DocsVersion {
+  id: string;
+  label: string;
+  /** The branch's release number, when it has one; dev is rolling and does not. */
+  version?: string;
+  default: boolean;
+  /** `/docs` for the default version, `/docs/versions/<id>` otherwise. */
+  prefix: string;
+  root: string;
+  exclude: string[];
+  items: NavItem[];
+  nav: DocsNavNode[];
+}
+
+export interface DocsVersionInfo {
+  id: string;
+  label: string;
+  version?: string;
+  default: boolean;
+  prefix: string;
+  homeUrl: string;
+}
+
+export interface DocsVersionLink extends DocsVersionInfo {
+  url: string;
+  current: boolean;
+}
+
 export interface DocsPageMeta {
+  versionId: string;
   slug: string;
   file: string;
   url: string;
@@ -79,12 +116,17 @@ export interface DocsPage extends DocsPageMeta {
   html: string;
   headings: DocsHeading[];
   toc: DocsHeading[];
+  version: DocsVersionInfo;
+  versions: DocsVersionLink[];
+  searchIndexUrl: string;
+  noindex: boolean;
 }
 
 export interface DocsIndex {
+  versions: DocsVersion[];
+  defaultVersion: DocsVersion;
   pages: DocsPageMeta[];
-  bySlug: Map<string, DocsPageMeta>;
-  nav: DocsNavNode[];
+  byKey: Map<string, DocsPageMeta>;
 }
 
 export class DocsBuildError extends Error {
@@ -94,56 +136,43 @@ export class DocsBuildError extends Error {
   }
 }
 
+const versionKey = (versionId: string, slug: string) => `${versionId}\u0000${slug}`;
+
 /** `/docs/` for the index, `/docs/foo/bar/` for a page, `/docs/foo/` for its index. */
-export function docsUrl(slug: string): string {
-  if (slug === 'index') return `${DOCS_PREFIX}/`;
-  if (slug.endsWith('/index')) return `${DOCS_PREFIX}/${slug.slice(0, -'/index'.length)}/`;
-  return `${DOCS_PREFIX}/${slug}/`;
+export function docsUrl(version: Pick<DocsVersion, 'prefix'>, slug: string): string {
+  if (slug === 'index') return `${version.prefix}/`;
+  if (slug.endsWith('/index')) return `${version.prefix}/${slug.slice(0, -'/index'.length)}/`;
+  return `${version.prefix}/${slug}/`;
 }
-/** Every Markdown file the site publishes, as absolute paths. */
-function collectDocFiles(directory = DOCS_DIR): string[] {
+
+/** Every Markdown file a version publishes, as absolute paths. */
+function collectDocFiles(root: string, excluded: Set<string>): string[] {
   const files: string[] = [];
-  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-    if (entry.name.startsWith('.')) continue;
-    const full = path.join(directory, entry.name);
-    if (entry.isDirectory()) {
-      if (EXCLUDED_DIRECTORIES.has(entry.name)) continue;
-      files.push(...collectDocFiles(full));
-      continue;
+  const walk = (directory: string) => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (entry.name.startsWith('.')) continue;
+      const full = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        if (excluded.has(entry.name)) continue;
+        walk(full);
+        continue;
+      }
+      if (entry.isFile() && entry.name.endsWith('.md')) files.push(full);
     }
-    if (entry.isFile() && entry.name.endsWith('.md')) files.push(full);
-  }
+  };
+  walk(root);
   return files;
 }
 
-function flattenNav(items: NavItem[], trail: string[] = []): DocsPageMeta[] {
-  const pages: DocsPageMeta[] = [];
-  for (const item of items) {
-    if (item.slug) {
-      const file = path.join(DOCS_DIR, `${item.slug}.md`);
-      pages.push({
-        slug: item.slug,
-        file,
-        url: docsUrl(item.slug),
-        label: item.label,
-        trail,
-      });
-      continue;
-    }
-    pages.push(...flattenNav(item.items ?? [], [...trail, item.label]));
-  }
-  return pages;
-}
-
-function buildNav(items: NavItem[]): DocsNavNode[] {
+function buildNav(items: NavItem[], version: Pick<DocsVersion, 'prefix'>): DocsNavNode[] {
   const nodes: DocsNavNode[] = [];
   for (const item of items) {
     if (item.slug) {
-      nodes.push({ label: item.label, slug: item.slug, url: docsUrl(item.slug) });
+      nodes.push({ label: item.label, slug: item.slug, url: docsUrl(version, item.slug) });
       continue;
     }
     if (item.href) continue;
-    nodes.push({ label: item.label, children: buildNav(item.items ?? []) });
+    nodes.push({ label: item.label, children: buildNav(item.items ?? [], version) });
   }
   return nodes;
 }
@@ -154,33 +183,159 @@ export function navContainsSlug(node: DocsNavNode, slug: string): boolean {
   return node.children?.some((child) => navContainsSlug(child, slug)) ?? false;
 }
 
+function flattenNav(items: NavItem[], version: DocsVersion, trail: string[] = []): DocsPageMeta[] {
+  const pages: DocsPageMeta[] = [];
+  for (const item of items) {
+    if (item.slug) {
+      pages.push({
+        versionId: version.id,
+        slug: item.slug,
+        file: path.join(version.root, `${item.slug}.md`),
+        url: docsUrl(version, item.slug),
+        label: item.label,
+        trail,
+      });
+      continue;
+    }
+    pages.push(...flattenNav(item.items ?? [], version, [...trail, item.label]));
+  }
+  return pages;
+}
+
+function mkdocsNav(value: unknown): NavItem[] {
+  if (!Array.isArray(value)) return [];
+  const items: NavItem[] = [];
+
+  for (const entry of value) {
+    if (typeof entry === 'string') {
+      const slug = entry.replace(/\.md$/, '');
+      items.push({ label: path.posix.basename(slug), slug });
+      continue;
+    }
+    if (!entry || typeof entry !== 'object') continue;
+
+    for (const [label, target] of Object.entries(entry)) {
+      if (typeof target === 'string') {
+        if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(target)) items.push({ label, href: target });
+        else items.push({ label, slug: target.replace(/^\.?\//, '').replace(/\.md$/, '') });
+        continue;
+      }
+      if (Array.isArray(target)) items.push({ label, items: mkdocsNav(target) });
+    }
+  }
+
+  return items;
+}
+
+function mkdocsExclude(value: unknown): string[] {
+  const values = Array.isArray(value) ? value : typeof value === 'string' ? value.split(/\r?\n/) : [];
+  return values
+    .map((entry) => String(entry).trim().replace(/\/$/, ''))
+    .filter((entry) => entry !== '' && !entry.startsWith('#'));
+}
+
+/**
+ * A snapshot's nav. The current branch has `docs-nav.json`; an older ref has
+ * `mkdocs.yml`, and that is all the viewer needs from it.
+ */
+function readNav(sourceRoot: string): { items: NavItem[]; exclude: string[] } {
+  const navFile = path.join(sourceRoot, 'website/src/data/docs-nav.json');
+  if (fs.existsSync(navFile)) {
+    const nav = JSON.parse(fs.readFileSync(navFile, 'utf8')) as NavFile;
+    return { items: nav.items, exclude: nav.exclude ?? ['internal'] };
+  }
+
+  const mkdocsFile = path.join(sourceRoot, 'mkdocs.yml');
+  if (fs.existsSync(mkdocsFile)) {
+    const config = parseYaml(fs.readFileSync(mkdocsFile, 'utf8')) as {
+      nav?: unknown;
+      exclude_docs?: unknown;
+    };
+    const exclude = mkdocsExclude(config.exclude_docs);
+    return { items: mkdocsNav(config.nav), exclude: exclude.length > 0 ? exclude : ['internal'] };
+  }
+
+  throw new Error(`${sourceRoot} has neither website/src/data/docs-nav.json nor mkdocs.yml`);
+}
+
+function loadVersions(): { versions: DocsVersion[]; defaultVersion: DocsVersion } {
+  let versions: DocsVersion[];
+
+  if (fs.existsSync(MANIFEST_FILE)) {
+    const manifest = JSON.parse(fs.readFileSync(MANIFEST_FILE, 'utf8')) as Manifest;
+    versions = manifest.versions.map((entry) => {
+      const sourceRoot = path.join(VERSIONS_DIR, entry.root);
+      const nav = readNav(sourceRoot);
+      const isDefault = entry.id === manifest.default;
+      return {
+        id: entry.id,
+        label: entry.label,
+        version: entry.version,
+        default: isDefault,
+        prefix: isDefault ? DOCS_PREFIX : `${DOCS_PREFIX}/versions/${entry.id}`,
+        root: path.join(sourceRoot, 'docs'),
+        exclude: entry.exclude ?? manifest.exclude ?? nav.exclude,
+        items: nav.items,
+        nav: [],
+      };
+    });
+  } else {
+    const nav = localNav as NavFile;
+    versions = [
+      {
+        id: 'current',
+        label: 'Current',
+        default: true,
+        prefix: DOCS_PREFIX,
+        root: LOCAL_DOCS_DIR,
+        exclude: nav.exclude ?? ['internal'],
+        items: nav.items,
+        nav: [],
+      },
+    ];
+  }
+
+  for (const version of versions) version.nav = buildNav(version.items, version);
+
+  const defaultVersion = versions.find((version) => version.default) ?? versions[0];
+  if (!defaultVersion) throw new Error('No documentation versions were prepared');
+  return { versions, defaultVersion };
+}
+
 function buildIndex(): DocsIndex {
-  const pages = flattenNav(DEFAULT_NAV.items);
-  const files = collectDocFiles();
-  const bySlug = new Map(pages.map((page) => [page.slug, page]));
-  const listedFiles = new Set(pages.map((page) => page.slug));
+  const { versions, defaultVersion } = loadVersions();
+  const pages: DocsPageMeta[] = [];
+  const byKey = new Map<string, DocsPageMeta>();
 
-  for (const page of pages) {
-    if (!fs.existsSync(page.file)) {
-      throw new DocsBuildError(page.file, `"${page.label}" is listed in docs-nav.json but the page does not exist`);
+  for (const version of versions) {
+    const versionPages = flattenNav(version.items, version);
+    const listed = new Set(versionPages.map((page) => page.slug));
+    const excluded = new Set(version.exclude);
+
+    for (const page of versionPages) {
+      if (!fs.existsSync(page.file)) {
+        throw new DocsBuildError(page.file, `"${page.label}" is listed in the nav but the page does not exist`);
+      }
     }
+
+    for (const file of collectDocFiles(version.root, excluded)) {
+      const slug = path.relative(version.root, file).split(path.sep).join('/').replace(/\.md$/, '');
+      if (!listed.has(slug)) {
+        throw new DocsBuildError(file, `page is not listed in the ${version.label} documentation nav`);
+      }
+    }
+
+    versionPages.forEach((page, index) => {
+      const prev = versionPages[index - 1];
+      const next = versionPages[index + 1];
+      if (prev) page.prev = { label: prev.label, url: prev.url };
+      if (next) page.next = { label: next.label, url: next.url };
+      pages.push(page);
+      byKey.set(versionKey(version.id, page.slug), page);
+    });
   }
 
-  for (const file of files) {
-    const slug = path.relative(DOCS_DIR, file).split(path.sep).join('/').replace(/\.md$/, '');
-    if (!listedFiles.has(slug)) {
-      throw new DocsBuildError(file, 'page is not listed in website/src/data/docs-nav.json');
-    }
-  }
-
-  pages.forEach((page, index) => {
-    const prev = pages[index - 1];
-    const next = pages[index + 1];
-    if (prev) page.prev = { label: prev.label, url: prev.url };
-    if (next) page.next = { label: next.label, url: next.url };
-  });
-
-  return { pages, bySlug, nav: buildNav(DEFAULT_NAV.items) };
+  return { versions, defaultVersion, pages, byKey };
 }
 
 let indexCache: DocsIndex | undefined;
@@ -188,7 +343,7 @@ let pageCache: Map<string, DocsPage> | undefined;
 
 export function loadDocsIndex(): DocsIndex {
   /* A nav entry added in dev should not need a server restart; a production build
-     reads the directory once and renders every page against that snapshot. */
+     reads the snapshots once and renders every page against that index. */
   if (process.env.NODE_ENV !== 'production') return buildIndex();
   indexCache ??= buildIndex();
   return indexCache;
@@ -311,19 +466,23 @@ function splitTarget(target: string): { pathPart: string; suffix: string } {
 }
 
 /** A local target resolved the way MkDocs resolved it, or a build error when it is missing. */
-function resolveLocalTarget(filePath: string, rawPath: string): { file: string; relative: string } {
+function resolveLocalTarget(
+  filePath: string,
+  rawPath: string,
+  version: DocsVersion,
+): { file: string; relative: string } {
   const decoded = decodeURIComponent(rawPath);
   const candidates = [
     path.resolve(path.dirname(filePath), decoded),
-    path.resolve(DOCS_DIR, decoded.replace(/^\/+/, '')),
+    path.resolve(version.root, decoded.replace(/^\/+/, '')),
   ];
 
   for (const candidate of candidates) {
     if (!fs.existsSync(candidate)) continue;
-    const insideDocs = path.relative(DOCS_DIR, candidate);
+    const insideDocs = path.relative(version.root, candidate);
     if (insideDocs === '' || insideDocs.startsWith('..') || path.isAbsolute(insideDocs)) continue;
     const relative = insideDocs.split(path.sep).join('/');
-    if (EXCLUDED_DIRECTORIES.has(relative.split('/')[0])) {
+    if (version.exclude.includes(relative.split('/')[0])) {
       throw new DocsBuildError(filePath, `links to unpublished documentation: ${rawPath}`);
     }
     return { file: candidate, relative };
@@ -332,27 +491,32 @@ function resolveLocalTarget(filePath: string, rawPath: string): { file: string; 
   throw new DocsBuildError(filePath, `link target does not exist: ${rawPath}`);
 }
 
-function rewriteLocalUrl(filePath: string, target: string, kind: 'link' | 'image'): string {
+function rewriteLocalUrl(
+  filePath: string,
+  target: string,
+  kind: 'link' | 'image',
+  version: DocsVersion,
+): string {
   if (!target || target.startsWith('#') || EXTERNAL_LINK.test(target)) return target;
   if (target.startsWith('/')) return target;
 
   const { pathPart, suffix } = splitTarget(target);
   if (!pathPart) return target;
 
-  const { file, relative } = resolveLocalTarget(filePath, pathPart);
+  const { file, relative } = resolveLocalTarget(filePath, pathPart, version);
 
   if (file.endsWith('.md')) {
-    return docsUrl(relative.replace(/\.md$/, '')) + suffix;
+    return docsUrl(version, relative.replace(/\.md$/, '')) + suffix;
   }
 
   if (kind === 'link' && fs.statSync(file).isDirectory()) {
-    return `${DOCS_PREFIX}/${relative.replace(/\/$/, '')}/` + suffix;
+    return `${version.prefix}/${relative.replace(/\/$/, '')}/` + suffix;
   }
 
-  return `${DOCS_PREFIX}/${relative}` + suffix;
+  return `${version.prefix}/${relative}` + suffix;
 }
 
-function linksPlugin(filePath: string): HastPluginDefinition {
+function linksPlugin(filePath: string, version: DocsVersion): HastPluginDefinition {
   return {
     name: 'docs-links',
     element: [
@@ -360,14 +524,18 @@ function linksPlugin(filePath: string): HastPluginDefinition {
         filter: ['a'],
         visit(node, ctx) {
           const href = node.properties?.href;
-          if (typeof href === 'string') ctx.setProperty(node, 'href', rewriteLocalUrl(filePath, href, 'link'));
+          if (typeof href === 'string') {
+            ctx.setProperty(node, 'href', rewriteLocalUrl(filePath, href, 'link', version));
+          }
         },
       },
       {
         filter: ['img'],
         visit(node, ctx) {
           const src = node.properties?.src;
-          if (typeof src === 'string') ctx.setProperty(node, 'src', rewriteLocalUrl(filePath, src, 'image'));
+          if (typeof src === 'string') {
+            ctx.setProperty(node, 'src', rewriteLocalUrl(filePath, src, 'image', version));
+          }
         },
       },
     ],
@@ -458,18 +626,33 @@ function trimDescription(value: string): string {
   return `${(space > 140 ? cut.slice(0, space) : cut).replace(/[,;:.]$/, '')}…`;
 }
 
-async function renderOne(meta: DocsPageMeta): Promise<DocsPage> {
+async function renderOne(meta: DocsPageMeta, version: DocsVersion, index: DocsIndex): Promise<DocsPage> {
   const source = fs.readFileSync(meta.file, 'utf8');
   const state: RenderState = { headings: [], slugger: new Slugger() };
 
   const result = await markdownToHtml(preprocessAdmonitions(source), {
     features: { gfm: true, rawHtml: true },
     fileURL: pathToFileURL(meta.file),
-    hastPlugins: [linksPlugin(meta.file), headingsPlugin(state), tablesPlugin(), ...highlightPlugin],
+    hastPlugins: [linksPlugin(meta.file, version), headingsPlugin(state), tablesPlugin(), ...highlightPlugin],
   });
 
   const title = state.headings.find((heading) => heading.depth === 1)?.text ?? meta.label;
   const description = trimDescription(firstParagraph(result.html)) || `${meta.label} — DragonFruit documentation.`;
+  const homeUrl = docsUrl(version, 'index');
+
+  const versions = index.versions.map((candidate): DocsVersionLink => {
+    const target = index.byKey.get(versionKey(candidate.id, meta.slug));
+    return {
+      id: candidate.id,
+      label: candidate.label,
+      version: candidate.version,
+      default: candidate.default,
+      prefix: candidate.prefix,
+      homeUrl: docsUrl(candidate, 'index'),
+      url: target?.url ?? docsUrl(candidate, 'index'),
+      current: candidate.id === version.id,
+    };
+  });
 
   return {
     ...meta,
@@ -478,23 +661,38 @@ async function renderOne(meta: DocsPageMeta): Promise<DocsPage> {
     html: result.html,
     headings: state.headings,
     toc: state.headings.filter((heading) => heading.depth >= 2 && heading.depth <= 3),
+    version: {
+      id: version.id,
+      label: version.label,
+      version: version.version,
+      default: version.default,
+      prefix: version.prefix,
+      homeUrl,
+    },
+    versions,
+    searchIndexUrl: `${version.prefix}/search-index.json`,
+    noindex: !version.default,
   };
 }
 
-export async function renderDoc(slug: string): Promise<DocsPage> {
+export async function renderDoc(versionId: string, slug: string): Promise<DocsPage> {
   const index = loadDocsIndex();
-  const meta = index.bySlug.get(slug);
-  if (!meta) throw new Error(`Unknown documentation page: ${slug}`);
+  const version = index.versions.find((candidate) => candidate.id === versionId);
+  if (!version) throw new Error(`Unknown documentation version: ${versionId}`);
+
+  const meta = index.byKey.get(versionKey(versionId, slug));
+  if (!meta) throw new Error(`Unknown documentation page: ${versionId}/${slug}`);
 
   if (process.env.NODE_ENV !== 'production') {
-    return renderOne(meta);
+    return renderOne(meta, version, index);
   }
 
   pageCache ??= new Map();
-  let page = pageCache.get(slug);
+  const key = versionKey(versionId, slug);
+  let page = pageCache.get(key);
   if (!page) {
-    page = await renderOne(meta);
-    pageCache.set(slug, page);
+    page = await renderOne(meta, version, index);
+    pageCache.set(key, page);
   }
   return page;
 }
@@ -506,11 +704,12 @@ export interface SearchEntry {
   headings: { slug: string; text: string }[];
 }
 
-export async function buildSearchIndex(): Promise<SearchEntry[]> {
+export async function buildSearchIndex(versionId?: string): Promise<SearchEntry[]> {
   const index = loadDocsIndex();
+  const target = versionId ?? index.defaultVersion.id;
   const entries: SearchEntry[] = [];
-  for (const meta of index.pages) {
-    const page = await renderDoc(meta.slug);
+  for (const meta of index.pages.filter((page) => page.versionId === target)) {
+    const page = await renderDoc(meta.versionId, meta.slug);
     entries.push({
       url: page.url,
       title: page.title,

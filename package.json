@@ -52,6 +52,7 @@
     "precheck:scene-slice": "npm run generate:plugin-registry && npm run generate:builtin-simple-plugins && npm run generate:support-registrations && npm run generate:support-renderers",
     "pretest": "npm run generate:plugin-registry && npm run generate:builtin-simple-plugins && npm run generate:support-registrations && npm run generate:support-renderers",
     "scan:support-types": "tsx scripts/scan-support-type-references.ts",
+    "prepare:docs-versions": "node scripts/prepare-docs-versions.mjs",
     "sync:contributors": "node scripts/sync-contributors.mjs",
     "sync:sponsors": "node scripts/sync-sponsors.mjs",
     "sync:version": "node scripts/sync-app-version.mjs",

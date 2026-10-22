@@ -10,7 +10,9 @@ interface Props {
 }
 
 const { page } = Astro.props;
-const nav = loadDocsIndex().nav.filter((node) => node.slug !== 'index');
+const docsIndex = loadDocsIndex();
+const currentVersion = docsIndex.versions.find((version) => version.id === page.version.id) ?? docsIndex.defaultVersion;
+const nav = currentVersion.nav.filter((node) => node.slug !== 'index');
 ---
 
 <Base
@@ -18,6 +20,7 @@ const nav = loadDocsIndex().nav.filter((node) => node.slug !== 'index');
   description={page.description}
   cardSummary={shortSummary(page.description, 120)}
   cardMeta="Documentation"
+  noindex={page.noindex}
 >
   <div class="shell shell--wide docs-shell">
     <div class="docs-mobile-bar">
@@ -39,7 +42,29 @@ const nav = loadDocsIndex().nav.filter((node) => node.slug !== 'index');
 
     <aside class="docs-sidebar" id="docs-nav-panel" data-docs-sidebar>
       <div class="docs-sidebar__head">
-        <a class="docs-sidebar__title" href="/docs/">Documentation</a>
+        <div class="docs-sidebar__heading">
+          <a class="docs-sidebar__title" href={page.version.homeUrl}>Documentation</a>
+          {
+            page.versions.length > 1 && (
+              <details class="docs-version">
+                <summary title="Documentation version">
+                  <span class="visually-hidden">Documentation version: </span>
+                  <strong>{page.version.label}</strong>
+                </summary>
+                <ul class="docs-version__list">
+                  {page.versions.map((version) => (
+                    <li>
+                      <a href={version.url} aria-current={version.current ? 'true' : undefined}>
+                        {version.label}
+                        {version.version ? ` (${version.version})` : ''}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )
+          }
+        </div>
         <button class="docs-search-button" type="button" data-docs-search-open>
           <span>Search docs</span>
           <kbd>/</kbd>
@@ -55,7 +80,15 @@ const nav = loadDocsIndex().nav.filter((node) => node.slug !== 'index');
       <nav class="docs-crumbs" aria-label="Breadcrumb">
         <a href="/">Home</a>
         <span aria-hidden="true">/</span>
-        <a href="/docs/">Docs</a>
+        <a href={page.version.homeUrl}>Docs</a>
+        {
+          !page.version.default && (
+            <>
+              <span aria-hidden="true">/</span>
+              <span>{page.version.label}</span>
+            </>
+          )
+        }
         {
           page.trail.map((label) => (
             <>
@@ -112,7 +145,12 @@ const nav = loadDocsIndex().nav.filter((node) => node.slug !== 'index');
     </aside>
   </div>
 
-  <dialog class="docs-search" data-docs-search aria-label="Search the documentation">
+  <dialog
+    class="docs-search"
+    data-docs-search
+    data-docs-search-index={page.searchIndexUrl}
+    aria-label="Search the documentation"
+  >
     <div class="docs-search__panel">
       <div class="docs-search__head">
         <input
@@ -176,7 +214,7 @@ const nav = loadDocsIndex().nav.filter((node) => node.slug !== 'index');
       }
 
       const loadEntries = () => {
-        entriesPromise ??= fetch('/docs/search-index.json')
+        entriesPromise ??= fetch(dialog.dataset.docsSearchIndex ?? '/docs/search-index.json')
           .then((response) => (response.ok ? response.json() : Promise.reject(new Error(String(response.status)))))
           .then((value) => value as SearchEntry[]);
         return entriesPromise;

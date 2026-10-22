@@ -15,12 +15,14 @@ piece lives, how the Markdown becomes pages, and what to run before pushing.
 | `website/` | The Astro site. Builds to `website/dist/`. |
 | `website/src/pages/index.astro` | The landing page. |
 | `website/src/pages/builds.astro` | The developer build and branch previews. |
-| `website/src/pages/docs/[...slug].astro` | One route for every documentation page. |
-| `website/src/pages/docs/search-index.json.ts` | The search index the dialog fetches. |
-| `website/src/layouts/DocsLayout.astro` | The viewer: sidebar, breadcrumbs, TOC, pager, search dialog. |
-| `website/src/lib/docs.ts` | Reads `docs/`, renders Markdown, rewrites and validates links, builds the index. |
-| `website/src/data/docs-nav.json` | The documentation nav — the one list of published pages. |
-| `website/src/integrations/docs.mjs` | Serves `docs/assets` in dev and copies it into the build; watches `docs/` for edits. |
+| `website/src/pages/docs/[...slug].astro` | The default version's pages. |
+| `website/src/pages/docs/versions/` | Alternate version pages and their search endpoints. |
+| `website/src/pages/docs/search-index.json.ts` | The default version's search index. |
+| `website/src/layouts/DocsLayout.astro` | The viewer: version switcher, sidebar, breadcrumbs, TOC, pager, search dialog. |
+| `website/src/lib/docs.ts` | Reads the version snapshots, renders Markdown, rewrites and validates links, builds each index. |
+| `website/src/data/docs-nav.json` | The current branch's nav. Older refs fall back to their own `mkdocs.yml`. |
+| `website/.docs-versions/` | Generated snapshots: one `docs/` per ref. Gitignored. |
+| `website/src/integrations/docs.mjs` | Serves and copies each version's assets; watches the docs directories for edits. |
 | `website/src/styles/docs.css` | The viewer's own styles; the landing page does not load it. |
 | `website/src/styles/ora.css` | The design language — tokens, layout shell, buttons, surfaces. |
 | `website/src/assets/wordmark.svg` | The wordmark, inlined by `Wordmark.astro` so the part of it drawn in white can follow the theme. |
@@ -34,6 +36,7 @@ piece lives, how the Markdown becomes pages, and what to run before pushing.
 | `website/astro.config.mjs` | Site URL, integrations, and the legacy document redirects. |
 | `scripts/check-docs-accuracy.mjs` | The docs gate: cited paths and symbols, dead links, nav coverage. |
 | `scripts/materialize-doc-placeholder-assets.mjs` | Creates the not-yet-supplied screenshot placeholders. |
+| `scripts/prepare-docs-versions.mjs` | Exports the configured refs' `docs/` into `website/.docs-versions/`. |
 | `.github/workflows/docs-pages.yml` | Builds the site, injects the updater feeds, deploys. |
 
 `docs/internal/` is versioned but not published: `docs-nav.json` lists `internal`
@@ -64,9 +67,21 @@ node scripts/materialize-doc-placeholder-assets.mjs
 (cd website && npm run build)
 ```
 
-`astro dev` serves the docs assets straight from `docs/assets/`, so editing a
-screenshot needs no copy step. `docs/` is watched: saving a Markdown file reloads
-the page and re-reads it.
+By default `astro dev` reads the branch's own `docs/` as a single version, which is
+what you want while editing it. To preview the deployed version switcher, export
+the refs first:
+
+```bash
+node scripts/prepare-docs-versions.mjs     # main (default) and dev
+(cd website && npm run dev)
+```
+
+`website/.docs-versions/` is generated and gitignored; delete it to go back to
+editing the working tree's docs directly.
+
+`astro dev` serves each version's assets from its own source directory, so editing
+a screenshot needs no copy step. The docs directories are watched: saving a
+Markdown file reloads the page and re-reads it.
 
 ## The viewer
 
@@ -76,13 +91,42 @@ The route is `website/src/pages/docs/[...slug].astro`; `getStaticPaths` asks
 and `docs/reference/support-anatomy/index.md` becomes
 `/docs/reference/support-anatomy/`.
 
+### Versions
+
+The deployed site does not fetch documentation at runtime. `scripts/prepare-docs-versions.mjs`
+exports the `docs/` tree (and either `website/src/data/docs-nav.json` or `mkdocs.yml`)
+from each configured ref into `website/.docs-versions/<id>/`, and the build renders
+those snapshots with the viewer code from the branch being deployed. That is what
+lets a site built from `dev` show `main`'s documentation, and it works for refs
+from before this viewer existed: their nav comes from `mkdocs.yml`.
+
+`main` is the default even when the site is built from `dev`. Its pages keep the
+ordinary URLs (`/docs/getting-started/installation/`). Every other version lives
+under `/docs/versions/<id>/`, carries `noindex`, and gets its own search index and
+asset directory. The switcher beside the **Documentation** heading links to the
+same page in the other version when that page exists, or to the version's index.
+The main entry carries the latest stable release number; dev is rolling and has no
+number.
+
+`DOCS_VERSIONS` (comma separated) and `DOCS_DEFAULT` decide what the CI step
+exports. The default is `main,dev` with `main` as default:
+
+```bash
+DOCS_VERSIONS=main,dev,release/1.0 DOCS_DEFAULT=main node scripts/prepare-docs-versions.mjs
+```
+
+Only refs listed there are built. That is deliberate: rendering arbitrary branch
+Markdown would execute untrusted HTML in the deployed site, and a runtime fetch
+would spend GitHub's unauthenticated rate limit. Add a ref to the CI variable when
+it needs a switcher entry.
+
 Rendering uses Astro's Sätteri processor pieces, not a second Markdown stack:
 GFM tables, Shiki-highlighted fences, heading ids and a table scroll wrapper all
 come from the same pipeline a normal Astro Markdown page uses. On top of that,
 the loader:
 
-- rewrites relative `.md` links to `/docs/…/` and validates that the target exists;
-- rewrites relative images to `/docs/assets/…` and validates that the file exists;
+- rewrites relative `.md` links to the version's `/docs/…/` prefix and validates that the target exists;
+- rewrites relative images to the version's assets URL and validates that the file exists;
 - turns MkDocs admonitions (`!!! note "Title"` plus an indented body) into HTML
   blocks with their body still parsed as Markdown;
 - adds heading permalinks (`#`) and the `On this page` TOC;
@@ -90,20 +134,23 @@ the loader:
   for the page's metadata and its social card.
 
 A page is not reachable by accident. The loader fails the build if a Markdown file
-is missing from `docs-nav.json`, or if the nav names a file that is not there. Add
-a page by creating the Markdown and a nav entry at the same time; `npm run
-check:docs` checks the same invariant.
+is missing from the version's nav, or if the nav names a file that is not there.
+On a branch with this viewer that is `docs-nav.json`; an older snapshot's
+`mkdocs.yml` serves the same purpose. Add a page by creating the Markdown and a
+nav entry at the same time; `npm run check:docs` checks the same invariant for the
+working tree.
 
-`docs/assets/` is copied to `/docs/assets/` by the build integration, so a new
-image is referenced relatively from the Markdown and needs no second copy under
-`website/public`.
+Each version's `docs/assets/` is copied to its own URL prefix by the build
+integration, so a new image is referenced relatively from the Markdown and needs
+no second copy under `website/public`.
 
 ### Search
 
-`website/src/pages/docs/search-index.json.ts` renders every page and emits one
-JSON entry per page: URL, title, plain text and headings. The dialog in
-`DocsLayout.astro` fetches it on first use and scores title, heading and body
-matches; the index is a build artifact, not a service. It is around 1 MB raw on
+Each version has its own `search-index.json` under its URL prefix. It renders
+every page in that version and emits one JSON entry per page: URL, title, plain
+text and headings. The dialog in `DocsLayout.astro` reads the current version's
+index from its `data-docs-search-index` attribute on first use and scores title,
+heading and body matches; the index is a build artifact, not a service. It is around 1 MB raw on
 the current docs and compresses well — if it becomes a problem, trim code blocks
 from `stripHtml` before reaching for a search service.
 
@@ -111,8 +158,8 @@ from `stripHtml` before reaching for a search service.
 
 The documentation used to live at the site root (`/getting-started/installation/`)
 before it moved under `/docs/`. Those URLs are in Discord threads, issue comments
-and search results, so `astro.config.mjs` builds a redirect for each page in
-`docs-nav.json`: a `<meta http-equiv="refresh">` page with `noindex` and a
+and search results, so `astro.config.mjs` builds a redirect for each page in the
+default version: a `<meta http-equiv="refresh">` page with `noindex` and a
 canonical link to the new URL. They need no separate script and no post-build step,
 and once the old URLs are gone from the wild the `redirects` map can be deleted.
 

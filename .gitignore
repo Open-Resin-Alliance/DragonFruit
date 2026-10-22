@@ -29,6 +29,7 @@ src-tauri/gen/
 # The site: landing page and documentation, one Astro build
 # (see docs/dev/site-and-landing.md).
 /website/dist/
+/website/.docs-versions/
 /website/node_modules/
 /website/.astro/
 /docs/assets/placeholders/*png

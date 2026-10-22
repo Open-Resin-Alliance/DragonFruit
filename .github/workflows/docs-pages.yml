@@ -9,6 +9,7 @@ on:
       - docs/**
       - website/**
       - scripts/materialize-doc-placeholder-assets.mjs
+      - scripts/prepare-docs-versions.mjs
       - .github/workflows/docs-pages.yml
   workflow_run:
     workflows:
@@ -64,6 +65,16 @@ jobs:
       - name: Configure GitHub Pages
         id: pages
         uses: actions/configure-pages@v6
+
+      # `main` is the default documentation even when this build runs from `dev`.
+      # The script exports both refs into website/.docs-versions/; add more refs
+      # to DOCS_VERSIONS when they need a switcher entry.
+      - name: Prepare documentation versions
+        run: node scripts/prepare-docs-versions.mjs
+        env:
+          DOCS_VERSIONS: main,dev
+          DOCS_DEFAULT: main
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # One build owns the landing page at the root and the documentation under
       # `/docs/`. See docs/dev/site-and-landing.md.

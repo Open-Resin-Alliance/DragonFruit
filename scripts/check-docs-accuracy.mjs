@@ -52,6 +52,7 @@ async function* walk(dir) {
       for (const entry of entries) {
             const fullPath = path.join(dir, entry.name);
             if (entry.name === 'node_modules' || entry.name === 'target' || entry.name === '.git') continue;
+            if (entry.name === '.docs-versions' || entry.name === 'dist' || entry.name === '.astro') continue;
             if (entry.isDirectory()) {
                   yield* walk(fullPath);
                   continue;

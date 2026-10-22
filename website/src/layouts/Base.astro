@@ -13,6 +13,8 @@ interface Props {
   cardSummary?: string;
   /** A short label for the card's right corner, for pages that have two of a kind. */
   cardMeta?: string;
+  /** Alternate documentation versions are branch snapshots, not the indexed pages. */
+  noindex?: boolean;
 }
 
 const {
@@ -20,6 +22,7 @@ const {
   description = SITE.description,
   cardSummary = title === SITE.name ? SITE.motto : description,
   cardMeta,
+  noindex = false,
 } = Astro.props;
 
 const canonical = new URL(Astro.url.pathname, Astro.site).href;
@@ -59,6 +62,7 @@ const website = {
     <title>{pageTitle}</title>
     <meta name="description" content={description} />
     <link rel="canonical" href={canonical} />
+    {noindex && <meta name="robots" content="noindex" />}
     <meta name="generator" content={Astro.generator} />
 
     {/* Google Search only accepts bitmap favicons (PNG, ICO, …), so the PNG is

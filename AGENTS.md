@@ -107,8 +107,11 @@ GitHub Pages artifact:
   `website/src/pages/builds.astro`).
 - **The documentation** is the `docs/` Markdown rendered by the site's own
   viewer under `/docs/` (`website/src/pages/docs/[...slug].astro`,
-  `website/src/lib/docs.ts`, `website/src/layouts/DocsLayout.astro`). `docs-nav.json` is its nav; no MkDocs, no
-  Python, no second build.
+  `website/src/lib/docs.ts`, `website/src/layouts/DocsLayout.astro`). CI exports
+  `main` and `dev` snapshots with `scripts/prepare-docs-versions.mjs`; `main` is
+  the default even when the site is built from `dev`, and a switcher offers the
+  other branch. `docs-nav.json` is the current branch's nav; older refs use their
+  own `mkdocs.yml`.
 
 `cd website && npm run dev` serves both halves at http://localhost:4321;
 `npm run check` plus `npm run build` is the gate (there is no test suite). The

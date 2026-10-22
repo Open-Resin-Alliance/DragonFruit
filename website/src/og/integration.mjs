@@ -57,6 +57,9 @@ export default function socialCards() {
              gets no card. Astro's stub starts with this exact title; a documentation
              page can mention `http-equiv="refresh"` while explaining the redirects. */
           if (source.startsWith('<!doctype html><title>Redirecting to:')) continue;
+          /* Alternate docs versions are noindex branch snapshots; a card for one is
+             both unnecessary and a second card for the same words. */
+          if (source.includes('<meta name="robots" content="noindex">')) continue;
 
           const title = fromHtml(source, /<meta name="card:title" content="([^"]*)"/) ?? 'DragonFruit';
 
