@@ -25,6 +25,7 @@ piece lives, how the Markdown becomes pages, and what to run before pushing.
 | `website/src/styles/ora.css` | The design language — tokens, layout shell, buttons, surfaces. |
 | `website/src/assets/wordmark.svg` | The wordmark, inlined by `Wordmark.astro` so the part of it drawn in white can follow the theme. |
 | `website/public/brand/` | The emblem (`simple_icon.svg`) and the social card. |
+| `website/public/favicon.png` | The bitmap favicon Google Search reads. `favicon.svg` is the original for browsers; Google does not support SVG favicons. |
 | `website/public/media/` | The four screenshots in the landing page grid, re-encoded from the marketing renders. |
 | `website/src/og/` | The social cards: a build hook, the renderer, the fonts and the emblem PNG. |
 | `website/src/lib/og.ts` | Where a card lives, and the digest its URL carries. |
@@ -157,6 +158,15 @@ points at keeps resolving.
   neither woff2 nor a variable font's `fvar` table. `website/src/og/brand/mark.png`
   is the emblem rasterised from `public/brand/simple_icon.svg`; regenerate it at
   256 px with `sharp` if the emblem changes.
+
+### Search metadata
+
+`Base.astro` puts a `WebSite` JSON-LD block on the home page only. Google Search takes
+the site name for the whole domain from that block; without it the system falls back
+to the hostname, which is why search results can read `dragonfruit-slicer.com`. The
+block names the site `DragonFruit Resin Slicer` and offers `DragonFruit` as an
+alternate. The favicon PNG is the bitmap Google reads; the SVG beside it is for
+browsers, because Google does not accept SVG favicons.
 
 ## The screenshots
 

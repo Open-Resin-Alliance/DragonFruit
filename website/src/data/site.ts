@@ -1,5 +1,7 @@
 export const SITE = {
   name: 'DragonFruit',
+  /** The name Google Search should use for the site, not the app's short name. */
+  siteName: 'DragonFruit Resin Slicer',
   /** What the project says about itself, in the hero and again in the footer. */
   motto:
     'From the community, for the community. Free to use, open to contribute, and shaped by the people who print with it.',

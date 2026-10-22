@@ -38,6 +38,17 @@ const socialImage = new URL(
   `${ogImagePath(card.pathname)}?v=${cardFingerprint(card)}`,
   Astro.site,
 ).href;
+
+/* Google Search only reads WebSite structured data from the site's home page. The
+   name there is the one it will use for the whole domain; without it the system
+   falls back to the hostname. `alternateName` gives it the short brand too. */
+const website = {
+  '@context': 'https://schema.org',
+  '@type': 'WebSite',
+  name: SITE.siteName,
+  alternateName: ['DragonFruit', 'DragonFruit Slicer'],
+  url: new URL('/', Astro.site).href,
+};
 ---
 
 <!doctype html>
@@ -50,10 +61,14 @@ const socialImage = new URL(
     <link rel="canonical" href={canonical} />
     <meta name="generator" content={Astro.generator} />
 
-    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    {/* Google Search only accepts bitmap favicons (PNG, ICO, …), so the PNG is
+        listed first and the SVG follows for browsers that can use it. */}
+    <link rel="icon" href="/favicon.png" type="image/png" sizes="512x512" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" sizes="any" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 
     <meta property="og:type" content="website" />
-    <meta property="og:site_name" content={SITE.name} />
+    <meta property="og:site_name" content={SITE.siteName} />
     <meta property="og:title" content={pageTitle} />
     <meta property="og:description" content={description} />
     <meta property="og:url" content={canonical} />
@@ -74,6 +89,12 @@ const socialImage = new URL(
     {cardMeta && <meta name="card:meta" content={cardMeta} />}
 
     <meta name="theme-color" content="#ec2a77" />
+
+    {
+      Astro.url.pathname === '/' && (
+        <script type="application/ld+json" set:html={JSON.stringify(website)} />
+      )
+    }
 
     <script is:inline>
       // Theme bootstrap: applied before the first paint, so a reader who chose the
