@@ -8,7 +8,7 @@ msgstr ""
 "Language: fr\n"
 "Project-Id-Version: dragonfruit\n"
 "Report-Msgid-Bugs-To: \n"
-"PO-Revision-Date: 2026-10-22 13:00\n"
+"PO-Revision-Date: 2026-10-22 14:51\n"
 "Last-Translator: \n"
 "Language-Team: French\n"
 "Plural-Forms: nplurals=2; plural=(n > 1);\n"
@@ -86,7 +86,7 @@ msgstr "Anti-aliasing : rien à faire"
 #. Cross-sectional area stats for the current print layer: "Area Σ" = total/summed solid area (Σ is the mathematical summation symbol, usually kept as-is); "Min"/"Max" = smallest/largest single contiguous area, abbreviating "Minimum"/"Maximum".
 #: src/app/page.tsx:22286
 msgid "Area Σ {totalAreaLabel} • Min {minAreaLabel} • Max {maxAreaLabel}"
-msgstr ""
+msgstr "Zone Σ  {totalAreaLabel} • Min {minAreaLabel} • Max {maxAreaLabel}"
 
 #: src/components/controls/TransformToolbar.tsx:35
 msgid "Arrange"
@@ -179,7 +179,7 @@ msgstr "Fais-le ou ne le fais pas, mais il n'y a pas d'essai... en fait, il faut
 
 #: src/components/layout/EmptySceneState.tsx:74
 msgid "Drag a file in. The platform is judging you."
-msgstr ""
+msgstr "Faites glisser un fichier ici. La plateforme vous juge."
 
 #. "DragonFruit" is the product name and should stay untranslated/unchanged.
 #: src/components/layout/TopBar.tsx:799
@@ -431,7 +431,7 @@ msgstr "Tous les trancheurs ne sont pas égaux. Celui-ci est libre !"
 
 #: src/components/layout/EmptySceneState.tsx:65
 msgid "Nothing to see here. Yet."
-msgstr ""
+msgstr "Rien à voir ici. Pour l'instant."
 
 #: src/components/layout/TopBar.tsx:563
 #: src/components/layout/TopBar.tsx:1012
@@ -524,7 +524,7 @@ msgstr "Impression"
 #. "Slice"/"re-slice" is the 3D-printing step that converts a model into printer instructions (G-code). This dialog warns that switching printer profile invalidates the already-sliced file.
 #: src/components/layout/TopBar.tsx:1266
 msgid "Re-slice required after profile change"
-msgstr ""
+msgstr "Un nouveau tranchage est nécessaire après un changement de profil."
 
 #: src/components/layout/EmptySceneState.tsx:59
 msgid "Ready for your next adventure?"
@@ -705,12 +705,12 @@ msgstr "On va avoir besoin d'une plus grande plaque."
 
 #: src/components/layout/EmptySceneState.tsx:61
 msgid "What are we printing today?"
-msgstr "Qu'imprimons-nous aujourd'hui?"
+msgstr "Qu'imprimons-nous aujourd'hui ?"
 
 #. Paraphrase of the Joker's line from The Dark Knight (2008): "Why so serious?"
 #: src/components/layout/EmptySceneState.tsx:81
 msgid "Why so empty?"
-msgstr "Pourquoi cet air si vide?"
+msgstr "Pourquoi cet air si vide ?"
 
 #: src/components/layout/TopBar.tsx:1176
 msgid "Window controls"
