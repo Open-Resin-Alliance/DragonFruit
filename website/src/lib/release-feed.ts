@@ -37,12 +37,13 @@ function isMobile(): boolean {
 
 export function initReleaseFeed(): void {
   const button = document.querySelector<HTMLAnchorElement>('[data-download-primary]');
-  const version = document.querySelector('[data-download-version]');
+  const version = document.querySelector<HTMLAnchorElement>('[data-download-version]');
   if (!button || !version) return;
 
   if (isMobile()) {
     button.href = REPO_URL;
     button.textContent = 'View on GitHub';
+    version.href = RELEASES_URL;
     version.textContent = 'Desktop installers for Windows, macOS and Linux.';
     return;
   }
@@ -57,6 +58,7 @@ export function initReleaseFeed(): void {
       button.href = asset?.browser_download_url ?? release.html_url ?? RELEASES_URL;
       if (asset && platform) button.textContent = `Download for ${PLATFORMS[platform].label}`;
 
+      version.href = release.html_url ?? RELEASES_URL;
       version.textContent = `${tag} · released ${formatDate(release.published_at)}`;
     })
     .catch(() => {

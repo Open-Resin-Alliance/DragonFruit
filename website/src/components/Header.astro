@@ -1,10 +1,16 @@
 ---
 import ThemeToggle from './ThemeToggle.astro';
 import DiscordIcon from './DiscordIcon.astro';
+import Wordmark from './Wordmark.astro';
 import { LINKS, NAV, SITE } from '../data/site';
 
 const path = Astro.url.pathname;
-const isActive = (href: string) => path === href || path.startsWith(`${href}/`);
+const isActive = (href: string) => {
+  // `/docs/` is both a tab and the root of every documentation URL, so compare
+  // against the prefix without its trailing slash.
+  const base = href !== '/' && href.endsWith('/') ? href.slice(0, -1) : href;
+  return path === base || path === href || path.startsWith(`${base}/`);
+};
 const githubIcon = 'M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1.1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.5-1.3-5.5-5.9 0-1.3.5-2.4 1.2-3.2-.1-.3-.5-1.5.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0c2.3-1.5 3.3-1.2 3.3-1.2.6 1.7.2 2.9.1 3.2a4.6 4.6 0 0 1 1.2 3.2c0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3Z';
 ---
 
@@ -12,6 +18,7 @@ const githubIcon = 'M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4
   <div class="shell site-header__inner">
     <a class="brand" href="/" aria-label={`${SITE.name} home`}>
       <img class="brand__icon" src="/brand/simple_icon.svg" alt="" width="32" height="32" />
+      <Wordmark size="9rem" />
     </a>
 
     <button
@@ -41,9 +48,9 @@ const githubIcon = 'M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4
                 {item.label}
                 {
                   /* The mark is an element rather than a pseudo-element because a view
-                     transition cannot name one: this is what the Router morphs from the
-                     tab you were on to the tab you are on, so the bar travels between
-                     them instead of blinking in the new place. */
+                     transition cannot name one: this is what the cross-document
+                     transition morphs from the tab you were on to the tab you are on,
+                     so the bar travels between them instead of blinking. */
                   isActive(item.href) && <span class="site-nav__mark" aria-hidden="true" />
                 }
               </a>
@@ -129,12 +136,19 @@ const githubIcon = 'M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4
   .brand {
     display: inline-flex;
     align-items: center;
+    gap: 0.45rem;
     margin-right: auto;
   }
 
   .brand__icon {
-    block-size: 2rem;
+    block-size: 1.75rem;
     inline-size: auto;
+  }
+
+  /* The wordmark's box is centred on the emblem's, but the glyphs' optical centre
+     sits above the box because of the descender in "g". Drop it those few pixels. */
+  .brand :global(.wordmark) {
+    transform: translateY(0.1875rem);
   }
 
   .site-nav {
@@ -173,6 +187,10 @@ const githubIcon = 'M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4
   }
 
   .site-nav__mark {
+    /* The one named element in the header. A cross-document view transition matches
+       it by name on both sides, so the bar travels from the old tab to the new one
+       instead of disappearing and reappearing. */
+    view-transition-name: nav-mark;
     position: absolute;
     inset-inline: 0.7rem;
     bottom: 0.1rem;

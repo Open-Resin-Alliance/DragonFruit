@@ -95,6 +95,15 @@ jobs:
         working-directory: website
         run: npm run check
 
+      # The build renders main and dev snapshots. The script materializes the
+      # placeholder screenshots each snapshot links, so a clean checkout builds.
+      - name: Prepare documentation versions
+        run: node scripts/prepare-docs-versions.mjs
+        env:
+          DOCS_VERSIONS: main,dev
+          DOCS_DEFAULT: main
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build the site
         working-directory: website
         run: npm run build

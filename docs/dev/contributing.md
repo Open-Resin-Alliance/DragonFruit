@@ -27,7 +27,7 @@ Run `npm run check:docs`. It is the same check CI runs, and it covers:
 - every code symbol a document cites exists in the codebase
 - no page pins a line number — they drift within a week; name the symbol instead
 - relative links between pages resolve
-- the MkDocs nav lists every published page, and every nav entry has a file
+- the site nav (`website/src/data/docs-nav.json`) lists every published page, and every nav entry has a file
 
 Symbol verification needs the plugin submodules (`git submodule update --init`);
 without them the check says so and skips that part rather than reporting false
@@ -36,5 +36,7 @@ failures.
 Deliberate exceptions go in `scripts/docs-accuracy-allowlist.json`, each with a
 reason. An unexplained entry is how a checker quietly stops catching things.
 
-Building the site locally (`mkdocs build --strict`) is still worth doing before
-merging a large documentation change.
+Building the site locally (`cd website && npm run build`) is still worth doing
+before merging a large documentation change. It renders every page through the
+same viewer production uses, and fails on a missing image or a dead relative
+link.

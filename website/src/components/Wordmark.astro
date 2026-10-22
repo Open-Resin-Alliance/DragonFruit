@@ -1,6 +1,13 @@
 ---
 import raw from '../assets/wordmark.svg?raw';
 
+interface Props {
+  /** The rendered width. The SVG keeps its aspect ratio. */
+  size?: string;
+}
+
+const { size = 'min(420px, 78vw)' } = Astro.props;
+
 /**
  * The DragonFruit wordmark, inlined so its letterforms can follow the theme.
  *
@@ -11,18 +18,24 @@ import raw from '../assets/wordmark.svg?raw';
  */
 const svg = raw
   .replaceAll('fill:white', 'fill:currentColor')
+  /* The source file is cropped to the ink, which puts the descender in "Dragon"
+     on the bottom edge. Give it a little air so the loop of the g is not shaved
+     off by the SVG's own viewport. */
+  .replace('viewBox="0 0 1772 304"', 'viewBox="0 -6 1772 316"')
   // The wrapper carries the accessible name; the drawing itself is decoration.
   .replace('<svg ', '<svg aria-hidden="true" ');
 ---
 
-<span class="wordmark" role="img" aria-label="DragonFruit"><Fragment set:html={svg} /></span>
+<span class="wordmark" style={`--wordmark-size: ${size}`} role="img" aria-label="DragonFruit">
+  <Fragment set:html={svg} />
+</span>
 
 <style>
   .wordmark {
     display: block;
     color: var(--ink);
     /* The file is 1772×304 with a `100%` box, so the width decides the size. */
-    inline-size: min(420px, 78vw);
+    inline-size: var(--wordmark-size);
   }
 
   .wordmark :global(svg) {

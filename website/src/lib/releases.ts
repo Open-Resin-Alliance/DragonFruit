@@ -98,6 +98,26 @@ export function pickAsset(assets: Asset[], platform: PlatformKey): Asset | null 
   return best?.asset ?? null;
 }
 
+/** A preview release as the builds page paints it. */
+export interface PreviewBuild {
+  tag: string;
+  url: string;
+  date: string;
+  assets: { label: string; url: string }[];
+}
+
+export function toPreviewBuild(release: Release): PreviewBuild {
+  return {
+    tag: release.tag_name ?? 'build',
+    url: release.html_url ?? RELEASES_URL,
+    date: formatDate(release.published_at),
+    assets: PLATFORM_KEYS.map((key) => {
+      const asset = pickAsset(release.assets ?? [], key);
+      return asset ? { label: PLATFORMS[key].label, url: asset.browser_download_url } : null;
+    }).filter((asset): asset is { label: string; url: string } => asset !== null),
+  };
+}
+
 /** The branch previews of the last fortnight, newest first. */
 export function recentPreviews(releases: Release[]): Release[] {
   const cutoff = Date.now() - PREVIEW_WINDOW_MS;
