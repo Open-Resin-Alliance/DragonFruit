@@ -172,7 +172,8 @@ for (const ref of versions) {
     version: ref === 'main' ? mainlineVersion ?? undefined : undefined,
     root,
     exclude: ['internal'],
-    ref: resolved,
+    ref,
+    resolved,
   });
   console.log(`[docs-versions] ${ref} as ${id} <- ${resolved}`);
 }
