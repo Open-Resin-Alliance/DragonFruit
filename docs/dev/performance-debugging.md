@@ -6,6 +6,26 @@ you point at your own machine when you need a call stack.
 
 ## In-app scaffolding
 
+### Hollowing warmup should follow tool intent, not ordinary pose edits
+
+The hollowing preview key includes rotation and scale. Priming on each active
+model change launches unused previews while translating, rotating or scaling in
+other tools. The automatic effect has been removed; explicit tool hover can
+still prime result buffers through `primeHollowPreviewCache`.
+
+Warmup no longer schedules `materializeHollowPreviewCacheEntry` in an idle
+callback. That callback used to copy the preview and compute normals, a bounding
+box and a bounding sphere synchronously; a native dense-scene profile sampled
+the path during roughly 340–517 ms long tasks. Idle scheduling does not make
+this work interruptible.
+
+The render geometry is still materialized on actual preview use. First opening
+the tool may pay that cost; explicit hollowing is not made incremental by this
+change. Preview keys, output, cache ownership and history semantics are unchanged.
+The DOM regression checks ordinary pose edits issue no native preview commands,
+intent warmup retains raw buffers without geometry after idle time, and explicit
+materialization still builds normals and bounds.
+
 ### Main-thread stall detector
 
 `src/utils/debug/mainThreadHeartbeat.ts` is the UI's equivalent of a database

@@ -1122,16 +1122,8 @@ export function useHollowingManager({
         previewKey,
       );
 
-      const scheduleMaterialize = typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function'
-        ? (cb: () => void) => window.requestIdleCallback(() => cb())
-        : (cb: () => void) => window.setTimeout(cb, 0);
-      scheduleMaterialize(() => {
-        try {
-          materializeHollowPreviewCacheEntry(previewKey);
-        } catch (error) {
-          console.warn('[Hollowing] Failed to materialize cached preview geometry:', error);
-        }
-      });
+      // Keep the result buffers warm, but build normals/bounds only when the
+      // user opens the preview. An idle callback still blocks the next gesture.
     } catch (error) {
       console.warn('[Hollowing] Warm preview prime failed:', error);
     } finally {
@@ -1139,7 +1131,7 @@ export function useHollowingManager({
         hollowPreviewWarmupKeyRef.current = null;
       }
     }
-  }, [buildHollowPreviewRequest, cacheHollowPreviewResult, materializeHollowPreviewCacheEntry]);
+  }, [buildHollowPreviewRequest, cacheHollowPreviewResult]);
 
   const runHollowPreview = React.useCallback(async ({
     activeModel,
@@ -1638,44 +1630,9 @@ export function useHollowingManager({
     setIsApplyingBlockersHollowing(true);
   }, [blockedHollowVoxelIndices, clearHollowPreview, commitBlockedHollowVoxelIndices, editingBlockedHollowVoxelIndices]);
 
-  React.useEffect(() => {
-    if ((scene.mode !== 'prepare' && scene.mode !== 'support') || transformMgr.transformMode === 'hollowing') {
-      return;
-    }
-
-    const activeModel = scene.activeModel;
-    if (!activeModel) {
-      return;
-    }
-
-    const persistedHollowing = activeModel.meshModifiers?.hollowing;
-    const warmupState: HollowingPanelState = persistedHollowing?.enabled
-      ? {
-          mode: persistedHollowing.mode === 'shell_open_face' ? 'cavity' : persistedHollowing.mode,
-          voxelSizeMm: persistedHollowing.voxelSizeMm,
-          shellThicknessMm: persistedHollowing.shellThicknessMm,
-          infillMode: persistedHollowing.infillMode ?? defaultHollowingState.infillMode,
-          infillCellMm: persistedHollowing.infillCellMm ?? defaultHollowingState.infillCellMm,
-          infillBeamRadiusMm: persistedHollowing.infillBeamRadiusMm ?? defaultHollowingState.infillBeamRadiusMm,
-          openFace: persistedHollowing.openFace,
-        }
-      : defaultHollowingState;
-
-    const previewRequest = buildHollowPreviewRequest(activeModel, warmupState);
-    if (hollowPreviewResultCacheRef.current.has(previewRequest.previewKey)
-      || hollowPreviewWarmupKeyRef.current === previewRequest.previewKey) {
-      return;
-    }
-
-    void primeHollowPreviewCache(activeModel, warmupState);
-  }, [
-    buildHollowPreviewRequest,
-    defaultHollowingState,
-    primeHollowPreviewCache,
-    scene.activeModel,
-    scene.mode,
-    transformMgr.transformMode,
-  ]);
+  // Do not prime on every active-model/pose change. Preview options contain
+  // rotation and scale, so ordinary edits otherwise launch unused hollow jobs.
+  // The explicit tool-hover path can still prime result buffers on user intent.
 
   return {
     isPreviewingHollowing,
