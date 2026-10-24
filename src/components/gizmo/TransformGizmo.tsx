@@ -615,6 +615,7 @@ export function TransformGizmo({
               suppressHover={suppressHover}
               opacityScale={partOpacityScale('ring-x')}
               interactionsEnabled={partIsInteractable('ring-x')}
+              enableLighting={enableLighting}
               suppressAxisAnimations={suppressAxisAnimations}
               disableRingBillboard={disableRingBillboard}
               gizmoPosition={posVec}
@@ -638,6 +639,7 @@ export function TransformGizmo({
               suppressHover={suppressHover}
               opacityScale={partOpacityScale('ring-y')}
               interactionsEnabled={partIsInteractable('ring-y')}
+              enableLighting={enableLighting}
               suppressAxisAnimations={suppressAxisAnimations}
               disableRingBillboard={disableRingBillboard}
               gizmoPosition={posVec}
@@ -661,6 +663,7 @@ export function TransformGizmo({
               suppressHover={suppressHover}
               opacityScale={partOpacityScale('ring-z')}
               interactionsEnabled={partIsInteractable('ring-z')}
+              enableLighting={enableLighting}
               suppressAxisAnimations={suppressAxisAnimations}
               disableRingBillboard={disableRingBillboard}
               gizmoPosition={posVec}
@@ -687,6 +690,7 @@ export function TransformGizmo({
               suppressHover={suppressHover}
               opacityScale={partOpacityScale('scale-x')}
               interactionsEnabled={partIsInteractable('scale-x')}
+              enableLighting={enableLighting}
               isUniform={uniformScaling}
               gizmoPosition={posVec}
               worldAxisDir={worldAxisDirs.x}
@@ -707,6 +711,7 @@ export function TransformGizmo({
               suppressHover={suppressHover}
               opacityScale={partOpacityScale('scale-y')}
               interactionsEnabled={partIsInteractable('scale-y')}
+              enableLighting={enableLighting}
               isUniform={uniformScaling}
               gizmoPosition={posVec}
               worldAxisDir={worldAxisDirs.y}
@@ -727,6 +732,7 @@ export function TransformGizmo({
               suppressHover={suppressHover}
               opacityScale={partOpacityScale('scale-z')}
               interactionsEnabled={partIsInteractable('scale-z')}
+              enableLighting={enableLighting}
               isUniform={uniformScaling}
               gizmoPosition={posVec}
               worldAxisDir={worldAxisDirs.z}

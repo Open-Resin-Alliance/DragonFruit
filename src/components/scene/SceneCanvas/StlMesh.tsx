@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { usePicking } from '@/components/picking';
 import { MeshShaderMaterial, type MeshShaderType } from '@/features/shaders/mesh';
+import { applyBoundsTint, createBoundsTintUniforms } from '@/features/shaders/mesh/boundsTint';
 import { isKeyPressedSync } from '@/hotkeys/hotkeyStore';
 import { OpaqueWireOverlayMaterial } from '@/features/shaders/mesh/opaqueWireMesh';
 import {
@@ -771,8 +772,20 @@ if (uDitherAmount > 0.0) {
     return 1;
   }, [revealGhostOpacity, supportNonSelectedOpacity]);
 
+  const inlineBoundsTint = baseShaderType === 'soft_clay'
+    && !(interiorView && cavityGeometry)
+    && typeof revealGhostOpacity !== 'number'
+    && typeof supportNonSelectedOpacity !== 'number';
+  const boundsTint = React.useMemo(() => createBoundsTintUniforms(), []);
+  React.useLayoutEffect(() => {
+    boundsTint.uBoundsTintEnabled.value = inlineBoundsTint && showOutOfBoundsOverlay && outOfBoundsMin && outOfBoundsMax ? 1 : 0;
+    if (outOfBoundsMin) boundsTint.uBoundsTintMin.value.copy(outOfBoundsMin);
+    if (outOfBoundsMax) boundsTint.uBoundsTintMax.value.copy(outOfBoundsMax);
+    boundsTint.uBoundsTintColor.value.set(outOfBoundsStripeColor ?? '#b6ff2e');
+  }, [boundsTint, inlineBoundsTint, showOutOfBoundsOverlay, outOfBoundsMin, outOfBoundsMax, outOfBoundsStripeColor]);
+
   const outOfBoundsMaterial = React.useMemo(() => {
-    if (!showOutOfBoundsOverlay || !outOfBoundsMin || !outOfBoundsMax) return null;
+    if (inlineBoundsTint || !showOutOfBoundsOverlay || !outOfBoundsMin || !outOfBoundsMax) return null;
 
     const material = new THREE.ShaderMaterial({
       transparent: true,
@@ -824,7 +837,7 @@ if (uDitherAmount > 0.0) {
     });
 
     return material;
-  }, [outOfBoundsMax, outOfBoundsMin, outOfBoundsStripeColor, showOutOfBoundsOverlay]);
+  }, [inlineBoundsTint, outOfBoundsMax, outOfBoundsMin, outOfBoundsStripeColor, showOutOfBoundsOverlay]);
 
   const supportPlacementGuideMaterial = React.useMemo(() => {
     const material = new THREE.ShaderMaterial({
@@ -1525,6 +1538,7 @@ if (uDitherAmount > 0.0) {
             heatmapMaxAngle={heatmapMaxAngle}
             heatmapColors={heatmapColors}
             bakedAoStrength={bakedAoStrength}
+            boundsTint={boundsTint}
           />
         )}
       </mesh>
@@ -1606,6 +1620,7 @@ if (uDitherAmount > 0.0) {
             clippingPlanes={planes}
             side={THREE.FrontSide}
             polygonOffset
+            onBeforeCompile={(shader) => applyBoundsTint(shader, boundsTint)}
             polygonOffsetFactor={-1}
             polygonOffsetUnits={-1}
           />

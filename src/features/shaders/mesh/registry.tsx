@@ -7,6 +7,7 @@ import { NormalDebugMaterial } from './normalDebug';
 import { WireframeMaterial } from './wireframe';
 import { XrayMaterial } from './xray';
 import { OverhangHeatmapMaterial } from './overhangHeatmap';
+import type { BoundsTintUniforms } from './boundsTint';
 
 export function MeshShaderMaterial({
   shaderType,
@@ -27,6 +28,7 @@ export function MeshShaderMaterial({
   matcapVariant,
   flatUseVertexColors,
   bakedAoStrength,
+  boundsTint,
 }: {
   shaderType: MeshShaderType;
   isSelected: boolean;
@@ -48,6 +50,7 @@ export function MeshShaderMaterial({
   /** Forwarded to `soft_clay` only: how much of the geometry's baked per-vertex
    *  occlusion to apply. Other view modes are diagnostics and ignore it. */
   bakedAoStrength?: number;
+  boundsTint?: BoundsTintUniforms;
 }) {
   switch (shaderType) {
     case 'flat_unlit':
@@ -149,6 +152,7 @@ export function MeshShaderMaterial({
           materialRoughness={materialRoughness}
           clippingPlanes={clippingPlanes}
           bakedAoStrength={bakedAoStrength}
+          boundsTint={boundsTint}
         />
       );
   }

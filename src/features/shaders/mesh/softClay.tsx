@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import React from 'react';
 import { blendTintColor, clampTintStrength } from './tint';
+import { applyBoundsTint, createBoundsTintUniforms, type BoundsTintUniforms } from './boundsTint';
 
 
 export function SoftClayMaterial({
@@ -15,6 +16,7 @@ export function SoftClayMaterial({
   materialRoughness,
   clippingPlanes,
   bakedAoStrength = 0,
+  boundsTint,
 }: {
   isSelected: boolean;
   isHovered: boolean;
@@ -32,6 +34,7 @@ export function SoftClayMaterial({
    *  gates it through this uniform, so unbaked meshes are untouched rather than
    *  needing a branch. */
   bakedAoStrength?: number;
+  boundsTint?: BoundsTintUniforms;
 }) {
   const baseColor = meshColor ?? '#a3a3a3';
   const selectedStrength = clampTintStrength(selectedTintStrength, 0.70);
@@ -47,6 +50,7 @@ export function SoftClayMaterial({
   // live through a ref, or a model compiles against the fallback volume and
   // never picks up its own occlusion.
   const uniformsRef = React.useRef<Record<string, { value: unknown }> | null>(null);
+  const inactiveBoundsTint = React.useMemo(() => createBoundsTintUniforms(), []);
   React.useEffect(() => {
     const uniforms = uniformsRef.current;
     if (!uniforms) return;
@@ -112,6 +116,7 @@ export function SoftClayMaterial({
             gl_FragColor.rgb *= mix(1.0, clamp(vBakedAo, 0.0, 1.0), uBakedAoStrength);
           `,
         );
+        applyBoundsTint(shader, boundsTint ?? inactiveBoundsTint);
       }}
     />
   );

@@ -18,6 +18,7 @@ interface GizmoScaleProps {
   suppressHover?: boolean;
   opacityScale?: number;
   interactionsEnabled?: boolean;
+  enableLighting?: boolean;
   isUniform?: boolean;
   gizmoPosition: THREE.Vector3;
   /**
@@ -45,6 +46,7 @@ export function GizmoScale({
   suppressHover = false,
   opacityScale = 1,
   interactionsEnabled = true,
+  enableLighting = true,
   isUniform: isUniformProp = true,
   gizmoPosition,
   worldAxisDir,
@@ -329,7 +331,7 @@ export function GizmoScale({
       </group>
 
       {/* Point light at hexagon to cast colored light on model */}
-      {!isDimmed && (
+      {enableLighting && !isDimmed && (
         <pointLight
           position={position}
           color={isActive ? GIZMO_COLORS.active : effectiveHovered ? GIZMO_COLORS.hover : axisColors.end}
