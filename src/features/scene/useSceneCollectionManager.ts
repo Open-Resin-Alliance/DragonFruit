@@ -27,7 +27,7 @@ import {
 } from '@/features/scene/plates/plateLayout';
 import { detectObsoleteVoxlVersion, isVoxlBinaryV2, meshChunkStore, parseVoxlBinaryV2, readScenePlates, readSidecarFileBytes, resolveOriginalRefSidecar, VoxlObsoleteVersionError, type VoxlDocumentV1, type VoxlMeshRef, type VoxlMeshRange } from '@/features/scene/voxl';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
-import { getSnapshot, loadFromImportFormat, mergeFromImportFormat, reassignAllSupportModelIds, resetStore, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
+import { getSnapshot, loadFromImportFormat, mergeFromImportFormat, reassignAllSupportModelIds, removeSupportEntitiesForModel, resetStore, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { peekUndo } from '@/history/historyStore';
 import { createTypedHistory } from '@/history/typedHistory';
@@ -1101,7 +1101,7 @@ export interface LoadedModel {
   linkGroupId?: string;
 }
 
-import { deleteSupportsForModel, getSupportsForModel, type ModelSupportIds } from '@/supports/PlacementLogic/SupportModelLinker';
+import { getSupportsForModel, type ModelSupportIds } from '@/supports/PlacementLogic/SupportModelLinker';
 import { contactEndpointsFor, MODEL_ID_COLLECTION_KEYS, SUPPORT_COLLECTION_KEYS, SUPPORT_TYPES } from '@/supports/supportTypeRegistry';
 import { beginSupportStateBatch, endSupportStateBatch } from '@/supports/state';
 import {
@@ -4859,23 +4859,13 @@ export function useSceneCollectionManager(options?: {
     ids.forEach((id) => deleteStoredMeshModifiers(id));
 
     // Clean up associated supports before capturing the "after" snapshot so undo/redo remains atomic.
-    const supportState = getSnapshot();
     let totalRemovedSupports = 0;
     if (includeSupportHistory) {
+      // Each call reads the live store, so a model whose supports hang off an
+      // earlier one in this list is already gone by its turn.
       ids.forEach((id) => {
-        totalRemovedSupports += deleteSupportsForModel(supportState, id);
+        totalRemovedSupports += removeSupportEntitiesForModel(id);
       });
-
-      // Defensive pass: guarantee no orphaned supports survive model deletion.
-      for (const modelId of ids) {
-        const remaining = getSupportsForModel(getSnapshot(), modelId);
-        const hasRemainingSupports = MODEL_ID_COLLECTION_KEYS
-          .some((key) => remaining[key].length > 0);
-
-        if (hasRemainingSupports) {
-          totalRemovedSupports += deleteSupportsForModel(getSnapshot(), modelId);
-        }
-      }
     }
 
     if (shouldPushHistory && before) {
@@ -4923,7 +4913,7 @@ export function useSceneCollectionManager(options?: {
     let totalRemovedSupports = 0;
     const supportState = getSnapshot();
     targetIds.forEach((modelId) => {
-      totalRemovedSupports += deleteSupportsForModel(supportState, modelId);
+      totalRemovedSupports += removeSupportEntitiesForModel(modelId);
     });
 
     const after = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, { includeSupportState: true });

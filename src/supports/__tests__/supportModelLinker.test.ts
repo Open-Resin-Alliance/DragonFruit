@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { addSupportEntity, getSnapshot, resetStore } from '../state';
-import { deleteSupportsForModel, getSupportsForModel } from '../PlacementLogic/SupportModelLinker';
+import { addKnot, addRoot, addSupportEntity, getSnapshot, removeSupportEntitiesForModel, resetStore } from '../state';
+import { getSupportsForModel } from '../PlacementLogic/SupportModelLinker';
 
 function makeTwig(id: string, modelId: string) {
   return {
@@ -66,11 +66,42 @@ describe('SupportModelLinker', () => {
     const before = getSupportsForModel(getSnapshot(), 'model-a');
     assert.strictEqual(before.twigs.length, 1, 'Expected one twig mapped to model-a before deletion');
 
-    const removedCount = deleteSupportsForModel(getSnapshot(), 'model-a');
+    const removedCount = removeSupportEntitiesForModel('model-a');
     assert.ok(removedCount >= 1, 'Expected at least one support entity removal for model-a');
 
     const afterState = getSnapshot();
     assert.ok(!afterState.twigs['twig-a'], 'Twig for deleted model should be removed');
     assert.ok(!!afterState.twigs['twig-b'], 'Twig for other models should remain');
+  });
+
+  it('takes a dependent of another model that hung off the deleted one', () => {
+    resetStore();
+    addRoot({
+      id: 'root-a', modelId: 'model-a',
+      transform: { pos: { x: 0, y: 0, z: 0 }, rot: { x: 0, y: 0, z: 0, w: 1 } },
+      diameter: 3, diskHeight: 0.5, coneHeight: 1.5,
+    } as never);
+    addSupportEntity('trunk', {
+      id: 'trunk-a', modelId: 'model-a', rootId: 'root-a',
+      segments: [makeTwig('trunk-a', 'model-a').segments[0]],
+    } as never);
+    addKnot({
+      id: 'knot-shared', parentShaftId: 'trunk-a-seg', t: 0.5,
+      pos: { x: 0, y: 0, z: 1.5 }, diameter: 0.7,
+    } as never);
+    addSupportEntity('branch', {
+      id: 'branch-b', modelId: 'model-b', parentKnotId: 'knot-shared',
+      segments: [makeTwig('branch-b', 'model-b').segments[0]],
+    } as never);
+
+    removeSupportEntitiesForModel('model-a');
+
+    const after = getSnapshot();
+    assert.ok(!after.trunks['trunk-a'], 'the deleted model shaft is gone');
+    assert.ok(
+      !after.branches['branch-b'],
+      'the other model branch hung off that shaft, so it goes rather than dangling',
+    );
+    assert.ok(!after.knots['knot-shared'], 'and the knot it hung from');
   });
 });

@@ -3,12 +3,10 @@ import { useFrame } from '@react-three/fiber';
 import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
-import { addSupportEntity, subscribe, getSnapshot, addKnot } from '../../state';
-import { pushSupportHistory } from '@/supports/history/supportHistory';
+import { addSupportEntityWithHistory, asOneSupportEdit, subscribe, getSnapshot, addKnot } from '../../state';
 import type { SnapTarget } from '../../interaction/SnappingManager';
 import type { Brace, Knot, Segment, Vec3 } from '../../types';
 import { braceSnapConeType, knotHostId, parseSegmentSelectionId, SUPPORT_TYPES, type SupportTypeId } from '../../supportTypeRegistry';
-import { addAction } from '../../history/actionTypes';
 import { getSettings, getAutoBracingSettings } from '../../Settings/state';
 import { bracePlacementStore, useBracePlacementState } from './bracePlacementState';
 import { branchPlacementStore } from '../Branch/branchPlacementState';
@@ -205,6 +203,40 @@ export function BracePlacementController() {
             return hostDiameterMm + 0.1;
         },
         [twigBySegmentId]
+    );
+
+    /** Writes a brace between two prepared endpoint knots, as one edit. */
+    const commitBrace = useCallback(
+        (
+            startKnotAt: Omit<Knot, 'id'>,
+            endKnotAt: Omit<Knot, 'id'>,
+            modelId: string,
+            placementSurface: 'interior' | 'exterior' | undefined,
+            // The span reads the HOSTS' diameters, not the knots', which carry
+            // their host's joint offset on top.
+            spanDiameter: number,
+        ) => {
+            const startKnot: Knot = { id: uuidv4(), ...startKnotAt };
+            const endKnot: Knot = { id: uuidv4(), ...endKnotAt };
+            const brace: Brace = {
+                id: uuidv4(),
+                typeId: 'brace',
+                modelId,
+                startKnotId: startKnot.id,
+                endKnotId: endKnot.id,
+                placementSurface,
+                profile: { diameter: spanDiameter },
+            };
+
+            // One write, and the registry shapes the payload: a knot named here
+            // could stop matching the field a brace's cascade declares.
+            asOneSupportEdit(() => {
+                addKnot(startKnot);
+                addKnot(endKnot);
+                addSupportEntityWithHistory('brace', brace, { startKnot, endKnot });
+            });
+        },
+        [],
     );
 
     const isValidEndSegment = useCallback(
@@ -851,56 +883,26 @@ export function BracePlacementController() {
                 const startDiam = Math.min(start.hostDiameterMm ?? fallback, braceDia);
                 const endDiam = Math.min(endSnap.hostDiameterMm ?? fallback, braceDia);
 
-                const braceId = uuidv4();
-                const startKnotId = uuidv4();
-                const endKnotId = uuidv4();
-
-                const startKnot: Knot = {
-                    id: startKnotId,
-                    parentShaftId: knotHostId(start.kind as SupportTypeId, start.entityId!),
-                    t: start.coneT,
-                    pos: start.snappedPos,
-                    diameter: startDiam + 0.1,
-                };
-
-                const endKnot: Knot = {
-                    id: endKnotId,
-                    parentShaftId: endSnap.segmentId,
-                    t: endSnap.t,
-                    pos: endSnap.snappedPos,
-                    diameter: resolveBraceEndpointKnotDiameter(endSnap.segmentId, endDiam),
-                };
-
-                const modelId = start.ownerModelId ?? endSnap.ownerModelId ?? 'unknown';
-                const placementSurface = resolveBracePlacementSurface(
-                    leafPlacementSurfaceById.get(start.entityId),
-                    endSnap.segmentId ? segmentPlacementSurfaceById.get(endSnap.segmentId) : undefined,
+                commitBrace(
+                    {
+                        parentShaftId: knotHostId(start.kind as SupportTypeId, start.entityId!),
+                        t: start.coneT,
+                        pos: start.snappedPos,
+                        diameter: startDiam + 0.1,
+                    },
+                    {
+                        parentShaftId: endSnap.segmentId,
+                        t: endSnap.t,
+                        pos: endSnap.snappedPos,
+                        diameter: resolveBraceEndpointKnotDiameter(endSnap.segmentId, endDiam),
+                    },
+                    start.ownerModelId ?? endSnap.ownerModelId ?? 'unknown',
+                    resolveBracePlacementSurface(
+                        leafPlacementSurfaceById.get(start.entityId),
+                        endSnap.segmentId ? segmentPlacementSurfaceById.get(endSnap.segmentId) : undefined,
+                    ),
+                    Math.min(startDiam, endDiam),
                 );
-
-                const brace: Brace = {
-                    id: braceId,
-                    typeId: 'brace',
-                    modelId,
-                    startKnotId,
-                    endKnotId,
-                    placementSurface,
-                    profile: {
-                        diameter: Math.min(startDiam, endDiam),
-                    },
-                };
-
-                addKnot(startKnot);
-                addKnot(endKnot);
-                addSupportEntity(brace);
-
-                pushSupportHistory({
-                    type: addAction('brace'),
-                    payload: {
-                        brace,
-                        startKnot,
-                        endKnot,
-                    },
-                });
 
                 bracePlacementStore.finalize();
                 bracePlacementStore.reset();
@@ -926,56 +928,26 @@ export function BracePlacementController() {
             const startDiam = Math.min(start.hostDiameterMm ?? fallback, braceDia);
             const endDiam = Math.min(endSnap.hostDiameterMm ?? fallback, braceDia);
 
-            const braceId = uuidv4();
-            const startKnotId = uuidv4();
-            const endKnotId = uuidv4();
-
-            const startKnot: Knot = {
-                id: startKnotId,
-                parentShaftId: start.segmentId,
-                t: start.t,
-                pos: start.snappedPos,
-                diameter: resolveBraceEndpointKnotDiameter(start.segmentId, startDiam),
-            };
-
-            const endKnot: Knot = {
-                id: endKnotId,
-                parentShaftId: endSnap.segmentId,
-                t: endSnap.t,
-                pos: endSnap.snappedPos,
-                diameter: resolveBraceEndpointKnotDiameter(endSnap.segmentId, endDiam),
-            };
-
-            const modelId = startModelId ?? endModelId ?? 'unknown';
-            const placementSurface = resolveBracePlacementSurface(
-                segmentPlacementSurfaceById.get(start.segmentId),
-                endSnap.segmentId ? segmentPlacementSurfaceById.get(endSnap.segmentId) : undefined,
+            commitBrace(
+                {
+                    parentShaftId: start.segmentId,
+                    t: start.t,
+                    pos: start.snappedPos,
+                    diameter: resolveBraceEndpointKnotDiameter(start.segmentId, startDiam),
+                },
+                {
+                    parentShaftId: endSnap.segmentId,
+                    t: endSnap.t,
+                    pos: endSnap.snappedPos,
+                    diameter: resolveBraceEndpointKnotDiameter(endSnap.segmentId, endDiam),
+                },
+                startModelId ?? endModelId ?? 'unknown',
+                resolveBracePlacementSurface(
+                    segmentPlacementSurfaceById.get(start.segmentId),
+                    endSnap.segmentId ? segmentPlacementSurfaceById.get(endSnap.segmentId) : undefined,
+                ),
+                Math.min(startDiam, endDiam),
             );
-
-            const brace: Brace = {
-                id: braceId,
-                typeId: 'brace',
-                modelId,
-                startKnotId,
-                endKnotId,
-                placementSurface,
-                profile: {
-                    diameter: Math.min(startDiam, endDiam),
-                },
-            };
-
-            addKnot(startKnot);
-            addKnot(endKnot);
-            addSupportEntity(brace);
-
-            pushSupportHistory({
-                type: addAction('brace'),
-                payload: {
-                    brace,
-                    startKnot,
-                    endKnot,
-                },
-            });
 
             bracePlacementStore.finalize();
             bracePlacementStore.reset();
@@ -984,7 +956,7 @@ export function BracePlacementController() {
 
         window.addEventListener('shaft-click', handleShaftClick as EventListener, true);
         return () => window.removeEventListener('shaft-click', handleShaftClick as EventListener, true);
-    }, [altActive, stage, start, branchFamilyBinding, resolveSnapFromClick, isValidEndSegment, segmentMeta, leafPlacementSurfaceById, segmentPlacementSurfaceById, resolveBracePlacementSurface]);
+    }, [altActive, stage, start, branchFamilyBinding, resolveSnapFromClick, isValidEndSegment, segmentMeta, leafPlacementSurfaceById, segmentPlacementSurfaceById, resolveBracePlacementSurface, commitBrace]);
 
     useEffect(() => {
         const handleLeafClick = (evt: Event) => {
@@ -1041,55 +1013,26 @@ export function BracePlacementController() {
                 const startDiam = Math.min(start.hostDiameterMm ?? fallback, braceDia);
                 const endDiam = Math.min(endSnap.hostDiameterMm ?? fallback, braceDia);
 
-                const braceId = uuidv4();
-                const startKnotId = uuidv4();
-                const endKnotId = uuidv4();
-
-                const startKnot: Knot = {
-                    id: startKnotId,
-                    parentShaftId: knotHostId(start.kind as SupportTypeId, start.entityId!),
-                    t: start.coneT,
-                    pos: start.snappedPos,
-                    diameter: startDiam + 0.1,
-                };
-
-                const endKnot: Knot = {
-                    id: endKnotId,
-                    parentShaftId: coneHostId,
-                    t: endSnap.coneT,
-                    pos: endSnap.snappedPos,
-                    diameter: endDiam + 0.1,
-                };
-
-                const modelId = startModelId ?? endModelId ?? 'unknown';
-                const placementSurface = resolveBracePlacementSurface(
-                    leafPlacementSurfaceById.get(start.entityId),
-                    leafPlacementSurfaceById.get(leafId),
+                commitBrace(
+                    {
+                        parentShaftId: knotHostId(start.kind as SupportTypeId, start.entityId!),
+                        t: start.coneT,
+                        pos: start.snappedPos,
+                        diameter: startDiam + 0.1,
+                    },
+                    {
+                        parentShaftId: coneHostId,
+                        t: endSnap.coneT,
+                        pos: endSnap.snappedPos,
+                        diameter: endDiam + 0.1,
+                    },
+                    startModelId ?? endModelId ?? 'unknown',
+                    resolveBracePlacementSurface(
+                        leafPlacementSurfaceById.get(start.entityId),
+                        leafPlacementSurfaceById.get(leafId),
+                    ),
+                    Math.min(startDiam, endDiam),
                 );
-                const brace: Brace = {
-                    id: braceId,
-                    typeId: 'brace',
-                    modelId,
-                    startKnotId,
-                    endKnotId,
-                    placementSurface,
-                    profile: {
-                        diameter: Math.min(startDiam, endDiam),
-                    },
-                };
-
-                addKnot(startKnot);
-                addKnot(endKnot);
-                addSupportEntity(brace);
-
-                pushSupportHistory({
-                    type: addAction('brace'),
-                    payload: {
-                        brace,
-                        startKnot,
-                        endKnot,
-                    },
-                });
 
                 bracePlacementStore.finalize();
                 bracePlacementStore.reset();
@@ -1110,55 +1053,26 @@ export function BracePlacementController() {
             const startDiam = start.hostDiameterMm ?? fallback;
             const endDiam = endSnap.hostDiameterMm ?? fallback;
 
-            const braceId = uuidv4();
-            const startKnotId = uuidv4();
-            const endKnotId = uuidv4();
-
-            const startKnot: Knot = {
-                id: startKnotId,
-                parentShaftId: start.segmentId,
-                t: start.t,
-                pos: start.snappedPos,
-                diameter: resolveBraceEndpointKnotDiameter(start.segmentId, startDiam),
-            };
-
-            const endKnot: Knot = {
-                id: endKnotId,
-                parentShaftId: coneHostId,
-                t: endSnap.coneT,
-                pos: endSnap.snappedPos,
-                diameter: endDiam + 0.1,
-            };
-
-            const modelId = startModelId ?? endModelId ?? 'unknown';
-            const placementSurface = resolveBracePlacementSurface(
-                segmentPlacementSurfaceById.get(start.segmentId),
-                leafPlacementSurfaceById.get(leafId),
+            commitBrace(
+                {
+                    parentShaftId: start.segmentId,
+                    t: start.t,
+                    pos: start.snappedPos,
+                    diameter: resolveBraceEndpointKnotDiameter(start.segmentId, startDiam),
+                },
+                {
+                    parentShaftId: coneHostId,
+                    t: endSnap.coneT,
+                    pos: endSnap.snappedPos,
+                    diameter: endDiam + 0.1,
+                },
+                startModelId ?? endModelId ?? 'unknown',
+                resolveBracePlacementSurface(
+                    segmentPlacementSurfaceById.get(start.segmentId),
+                    leafPlacementSurfaceById.get(leafId),
+                ),
+                Math.min(startDiam, endDiam),
             );
-            const brace: Brace = {
-                id: braceId,
-                typeId: 'brace',
-                modelId,
-                startKnotId,
-                endKnotId,
-                placementSurface,
-                profile: {
-                    diameter: Math.min(startDiam, endDiam),
-                },
-            };
-
-            addKnot(startKnot);
-            addKnot(endKnot);
-            addSupportEntity(brace);
-
-            pushSupportHistory({
-                type: addAction('brace'),
-                payload: {
-                    brace,
-                    startKnot,
-                    endKnot,
-                },
-            });
 
             bracePlacementStore.finalize();
             bracePlacementStore.reset();
@@ -1166,7 +1080,7 @@ export function BracePlacementController() {
 
         window.addEventListener('brace-leaf-click', handleLeafClick as EventListener, true);
         return () => window.removeEventListener('brace-leaf-click', handleLeafClick as EventListener, true);
-    }, [altActive, stage, start, branchFamilyBinding, resolveLeafSnapFromClick, resolveSnapFromClick, leafPlacementSurfaceById, segmentPlacementSurfaceById, resolveBracePlacementSurface]);
+    }, [altActive, stage, start, branchFamilyBinding, resolveLeafSnapFromClick, resolveSnapFromClick, leafPlacementSurfaceById, segmentPlacementSurfaceById, resolveBracePlacementSurface, commitBrace]);
 
     return null;
 }

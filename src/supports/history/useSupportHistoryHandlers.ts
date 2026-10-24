@@ -1,14 +1,16 @@
 import { useEffect } from 'react';
 import {
-  SUPPORT_REPLACE_TRUNK,
   SUPPORT_EDIT_REPLACE,
+  SUPPORT_MULTI_DELETE,
   SUPPORT_AUTO_BRACE_REPLACE,
   SUPPORT_AUTO_PLACE,
   SUPPORT_BLOCKER_STROKE,
   SupportReplaceStatePayload,
 } from './actionTypes';
 import { registerSupportHistoryHandler } from './supportHistory';
-import { removeSupportEntity, updateKnot, setSnapshot, getSnapshot } from '../state';
+import { registerPendingHistorySource } from '../../history/historyStore';
+import { cancelPendingSupportEditHistory, flushSupportEditHistory } from './supportEditHistory';
+import { asOneSupportEdit, removeSupportEntity, updateKnot, setSnapshot, getSnapshot } from '../state';
 import { setSupportBlockedTriangles } from '../autoSupport/supportBlockers';
 import { clearSupportSelection } from '../interaction/shared/selection/selectionController';
 import { getSupportTypeBySelectionCategory, getSupportTypeDescriptor, parsePrefixedSegmentId, restoreToCollection, updateSupportEntity, SHAFTED_COLLECTION_KEYS, SUPPORT_PRIMITIVE_COLLECTIONS, removalShapeFor, SUPPORT_TYPES, type SupportCollectionKey, type SupportEntityIn, type SupportTypeDescriptor, type SupportTypeId } from '../supportTypeRegistry';
@@ -90,25 +92,14 @@ function payloadFields(descriptor: SupportTypeDescriptor): {
   };
 }
 
-/**
- * The removed entity a payload is keyed on.
- *
- * Normally the declared `self` field. Callers may omit it and send only the
- * type's collection list -- the branch remove path does -- so fall back to the
- * first entry there rather than refusing the entry.
- */
+/** The removed entity a payload is keyed on, under the type's declared `self`. */
 function seedEntity(
   descriptor: SupportTypeDescriptor,
   payload: unknown,
 ): { id: string } | null {
   const fields = payload as Record<string, unknown> | null | undefined;
-  if (!fields) return null;
-
-  const seed = fields[payloadFields(descriptor).self] as { id?: string } | undefined;
-  if (seed?.id) return seed as { id: string };
-
-  const list = fields[descriptor.location.key] as { id: string }[] | undefined;
-  return list?.length ? list[0] : null;
+  const seed = fields?.[payloadFields(descriptor).self] as { id?: string } | undefined;
+  return seed?.id ? (seed as { id: string }) : null;
 }
 
 /** Puts a removal payload back, walking the collections its shape declares. */
@@ -118,7 +109,11 @@ function restoreRemoved(descriptor: SupportTypeDescriptor, payload: unknown): vo
 
   // Hosts first: a leaf cannot be re-added before the knot it hangs from.
   for (const [collection, field] of cascade) {
-    for (const name of Array.isArray(field) ? field : [field as string]) {
+    // A named slot carries the seed's own member; anything the cascade reached
+    // beyond it is recorded under the collection itself.
+    const slots = Array.isArray(field) ? [...field] : [field as string];
+    const names = slots.includes(collection) ? slots : [...slots, collection];
+    for (const name of names) {
       const value = fields[name];
       if (!value) continue;
       for (const entity of Array.isArray(value) ? value : [value]) {
@@ -132,33 +127,58 @@ function restoreRemoved(descriptor: SupportTypeDescriptor, payload: unknown): vo
 }
 
 /**
- * Knot and trunk edits some payloads carry alongside the entity.
- *
- * Adding a branch can resize its host knot and rewrite the trunk it hangs from;
- * those edits invert with the entity rather than separately.
+ * Runs one inversion as a single store write, then reports it applied. An
+ * inversion can delete what was selected, so the selection is checked too.
  */
-function applyHostEdits(payload: unknown, direction: 'undo' | 'redo'): void {
-  const fields = payload as {
-    knotUpdates?: { before: SupportEntityIn<'knots'>; after: SupportEntityIn<'knots'> }[];
-    hostUpdate?: { typeId: SupportTypeId; before: { id: string }; after: { id: string } };
-  } | null | undefined;
-  if (!fields) return;
+function asOneEdit(apply: () => void): true {
+  asOneSupportEdit(() => {
+    apply();
+    if (getSnapshot().selectedId && !selectionExistsInSnapshot()) clearSupportSelection();
+  });
+  return true;
+}
 
-  for (const update of fields.knotUpdates ?? []) {
+/**
+ * The host entity a payload re-solved, applied BEFORE its knots return: a knot
+ * restored first would project onto the host's edited geometry.
+ *
+ * The host's own type travels WITH the repair, so this restores the right
+ * collection without naming one.
+ */
+function applyHostUpdate(payload: unknown, direction: 'undo' | 'redo'): void {
+  const hostUpdate = (payload as {
+    hostUpdate?: { typeId: SupportTypeId; before: { id: string }; after: { id: string } };
+  } | null | undefined)?.hostUpdate;
+  if (!hostUpdate) return;
+  updateSupportEntity(hostUpdate.typeId, direction === 'undo' ? hostUpdate.before : hostUpdate.after);
+}
+
+/** Knot edits a payload carries, applied after the entities are back. */
+function applyKnotUpdates(payload: unknown, direction: 'undo' | 'redo'): void {
+  const knotUpdates = (payload as {
+    knotUpdates?: { before: SupportEntityIn<'knots'>; after: SupportEntityIn<'knots'> }[];
+  } | null | undefined)?.knotUpdates;
+  for (const update of knotUpdates ?? []) {
     updateKnot(direction === 'undo' ? update.before : update.after);
-  }
-  // The host's own type travels WITH the repair, so this restores the right
-  // collection without naming one. (It was `trunkUpdate`, and history is
-  // in-memory only -- nothing serialises a payload -- so the field was free to
-  // stop naming a type.)
-  const hostUpdate = fields.hostUpdate;
-  if (hostUpdate) {
-    updateSupportEntity(hostUpdate.typeId, direction === 'undo' ? hostUpdate.before : hostUpdate.after);
   }
 }
 
+/** Actions whose payload is a before/after state pair. */
+const snapshotActions = [
+  SUPPORT_EDIT_REPLACE,
+  SUPPORT_MULTI_DELETE,
+  SUPPORT_AUTO_BRACE_REPLACE,
+  SUPPORT_AUTO_PLACE,
+] as const;
+
 export function registerSupportHistoryHandlers(): () => void {
   const unregisters = [
+    // Support snapshots are queued to an idle callback, so the store has to
+    // land them before any other push and drop them when it clears.
+    registerPendingHistorySource({
+      flush: flushSupportEditHistory,
+      cancel: cancelPendingSupportEditHistory,
+    }),
     // Add and remove handlers, derived from the registry.
     //
     // Every type's pair inverts the same way: an add undoes by removing the
@@ -167,18 +187,32 @@ export function registerSupportHistoryHandlers(): () => void {
       registerSupportHistoryHandler(descriptor.historyAdd, (payload, direction) => {
         const seed = seedEntity(descriptor, payload);
         if (!seed) return false;
-        if (direction === 'undo') removeSupportEntity(descriptor.id, seed.id);
-        else restoreRemoved(descriptor, payload);
-        applyHostEdits(payload, direction);
-        return true;
+        return asOneEdit(() => {
+          if (direction === 'undo') {
+            removeSupportEntity(descriptor.id, seed.id);
+            applyHostUpdate(payload, direction);
+            applyKnotUpdates(payload, direction);
+          } else {
+            applyHostUpdate(payload, direction);
+            restoreRemoved(descriptor, payload);
+            applyKnotUpdates(payload, direction);
+          }
+        });
       }),
       registerSupportHistoryHandler(descriptor.historyRemove, (payload, direction) => {
         const seed = seedEntity(descriptor, payload);
         if (!seed) return false;
-        if (direction === 'undo') restoreRemoved(descriptor, payload);
-        else removeSupportEntity(descriptor.id, seed.id);
-        applyHostEdits(payload, direction);
-        return true;
+        return asOneEdit(() => {
+          if (direction === 'undo') {
+            applyHostUpdate(payload, direction);
+            restoreRemoved(descriptor, payload);
+            applyKnotUpdates(payload, direction);
+          } else {
+            removeSupportEntity(descriptor.id, seed.id);
+            applyHostUpdate(payload, direction);
+            applyKnotUpdates(payload, direction);
+          }
+        });
       }),
     ]),
     // Update handlers, for the types that record a before/after edit of their
@@ -195,31 +229,11 @@ export function registerSupportHistoryHandlers(): () => void {
         return true;
       })]
       : [])),
-    registerSupportHistoryHandler(SUPPORT_REPLACE_TRUNK, (payload, direction) => {
-      if (!payload?.before || !payload?.after) return false;
-      clearSupportSelection();
-      if (direction === 'undo') {
-        setSnapshot(payload.before);
-      } else {
-        setSnapshot(payload.after);
-      }
-      return true;
-    }),
-    registerSupportHistoryHandler(SUPPORT_EDIT_REPLACE, (payload, direction) => {
+    ...snapshotActions.map((type) => registerSupportHistoryHandler(type, (payload, direction) => {
       if (!payload?.before || !payload?.after) return false;
       applySnapshotHistory(payload, direction);
       return true;
-    }),
-    registerSupportHistoryHandler(SUPPORT_AUTO_BRACE_REPLACE, (payload, direction) => {
-      if (!payload?.before || !payload?.after) return false;
-      applySnapshotHistory(payload, direction);
-      return true;
-    }),
-    registerSupportHistoryHandler(SUPPORT_AUTO_PLACE, (payload, direction) => {
-      if (!payload?.before || !payload?.after) return false;
-      applySnapshotHistory(payload, direction);
-      return true;
-    }),
+    })),
     registerSupportHistoryHandler(SUPPORT_BLOCKER_STROKE, (payload, direction) => {
       if (!payload || !payload.modelId) return false;
       setSupportBlockedTriangles(payload.modelId, direction === 'undo' ? payload.before : payload.after);

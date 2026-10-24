@@ -1116,12 +1116,12 @@ export function resolveKnotDiameter(
  */
 export const SUPPORT_REMOVAL_SHAPES = {
     trunk: { self: 'trunk', cascade: { roots: 'roots', branches: 'branches', braces: 'braces', kickstands: 'kickstands', leaves: 'leaves', knots: 'knots' } },
-    branch: { self: 'branch', cascade: { branches: 'branches', braces: 'braces', kickstands: 'kickstands', leaves: 'leaves', knots: 'knots' } },
-    leaf: { self: 'leaf', cascade: { knots: 'knot' } },
-    twig: { self: 'twig', cascade: { knots: 'knots', leaves: 'leaves' } },
-    stick: { self: 'stick', cascade: { knots: 'knots', leaves: 'leaves' } },
-    brace: { self: 'brace', cascade: { knots: ['startKnot', 'endKnot'] } },
-    stump: { self: 'stump', cascade: { knots: 'knots', leaves: 'leaves' } },
+    branch: { self: 'branch', cascade: { roots: 'roots', branches: 'branches', braces: 'braces', kickstands: 'kickstands', leaves: 'leaves', knots: 'knots' } },
+    leaf: { self: 'leaf', cascade: { knots: 'knot', branches: 'branches', braces: 'braces', kickstands: 'kickstands', leaves: 'leaves', roots: 'roots' } },
+    twig: { self: 'twig', cascade: { roots: 'roots', branches: 'branches', braces: 'braces', kickstands: 'kickstands', knots: 'knots', leaves: 'leaves' } },
+    stick: { self: 'stick', cascade: { roots: 'roots', branches: 'branches', braces: 'braces', kickstands: 'kickstands', knots: 'knots', leaves: 'leaves' } },
+    brace: { self: 'brace', cascade: { knots: ['startKnot', 'endKnot'], branches: 'branches', braces: 'braces', leaves: 'leaves', kickstands: 'kickstands', roots: 'roots' } },
+    stump: { self: 'stump', cascade: { roots: 'roots', branches: 'branches', braces: 'braces', kickstands: 'kickstands', knots: 'knots', leaves: 'leaves' } },
     kickstand: { self: 'kickstand', cascade: { roots: 'roots', knots: 'knots', braces: 'braces', leaves: 'leaves', branches: 'branches', kickstands: 'kickstands' } },
     // `satisfies` keeps the literal narrowing the result types read, while
     // making a renamed type a compile error here rather than at the call site.
@@ -1134,6 +1134,24 @@ export const SUPPORT_REMOVAL_SHAPES = {
  */
 export function removalShapeFor(typeId: SupportTypeId): { self: string; cascade: Record<string, string | readonly string[]> } {
     return (SUPPORT_REMOVAL_SHAPES as Record<SupportTypeId, { self: string; cascade: Record<string, string | readonly string[]> }>)[typeId];
+}
+
+/**
+ * An add payload's extras for one cascade collection, under the field that
+ * type declares for it.
+ *
+ * The name differs per type -- a leaf declares `knot`, a branch `knots` -- and
+ * a caller that guesses records nothing its redo can restore. Positional slots
+ * (a brace's two knots) are named individually, so they are the caller's.
+ */
+export function cascadeExtras(
+    typeId: SupportTypeId,
+    collection: SupportCollectionKey,
+    entities: readonly unknown[],
+): Record<string, unknown> {
+    const field = removalShapeFor(typeId).cascade[collection];
+    if (typeof field !== 'string' || entities.length === 0) return {};
+    return { [field]: field.endsWith('s') ? [...entities] : entities[0] };
 }
 
 /**
@@ -2322,6 +2340,13 @@ export function exportGroupName(typeId: SupportTypeId, entityId: string): string
     return `${singular.charAt(0).toUpperCase()}${singular.slice(1)}_${entityId}`;
 }
 
+/** The declared pseudo-shaft prefixes, read once rather than per knot. */
+const KNOT_HOST_PREFIXES: readonly (readonly [string, SupportTypeId])[] = SUPPORT_TYPES.flatMap(
+    (descriptor) => (descriptor.knotHostPrefix
+        ? [[descriptor.knotHostPrefix, descriptor.id] as const]
+        : []),
+);
+
 /**
  * Split a knot's `parentShaftId` into the type it rides and that entity's id,
  * or null when it names a real shaft segment.
@@ -2333,10 +2358,9 @@ export function exportGroupName(typeId: SupportTypeId, entityId: string): string
 export function parseKnotHostId(
     parentShaftId: string,
 ): { typeId: SupportTypeId; entityId: string } | null {
-    for (const descriptor of SUPPORT_TYPES) {
-        const prefix = descriptor.knotHostPrefix;
-        if (!prefix || !parentShaftId.startsWith(prefix)) continue;
-        return { typeId: descriptor.id, entityId: parentShaftId.slice(prefix.length) };
+    for (const [prefix, typeId] of KNOT_HOST_PREFIXES) {
+        if (!parentShaftId.startsWith(prefix)) continue;
+        return { typeId, entityId: parentShaftId.slice(prefix.length) };
     }
     return null;
 }

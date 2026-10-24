@@ -6,6 +6,20 @@ import { leafPlacementStore, useLeafPlacementState } from './leafPlacementState'
 import { useActionActive } from '@/hotkeys/hotkeyStore';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { getSnapshot, removeKnotById } from '../../state';
+import { subscribeHistoryChanges } from '@/history/historyStore';
+
+/** Drops the junction hub knot when the fan ends without a leaf on it. */
+function discardUnclaimedJunctionHub(): void {
+    const snap = leafPlacementStore.getSnapshot();
+    if (!snap.junctionHubId) return;
+
+    if (snap.junctionHubIsNew) {
+        const claimed = Object.values(getSnapshot().leaves)
+            .some((leaf) => leaf.parentKnotId === snap.junctionHubId);
+        if (!claimed) removeKnotById(snap.junctionHubId);
+    }
+    leafPlacementStore.setJunctionHub(null, null);
+}
 
 export const LEAF_HOTKEY_REARM_EVENT = 'support-leaf-hotkey-rearm';
 
@@ -24,37 +38,27 @@ export function useLeafPlacement() {
     // Sync sprouted parenting lock key state to store
     useEffect(() => {
         leafPlacementStore.setSproutParentingLockHeld(sproutedLockActive);
-        if (!sproutedLockActive) {
-            const snap = leafPlacementStore.getSnapshot();
-            if (snap.junctionHubId) {
-                if (snap.junctionHubIsNew) {
-                    const leaves = Object.values(getSnapshot().leaves);
-                    const hasLeaves = leaves.some(leaf => leaf.parentKnotId === snap.junctionHubId);
-                    if (!hasLeaves) {
-                        removeKnotById(snap.junctionHubId);
-                    }
-                }
-                leafPlacementStore.setJunctionHub(null, null);
-                leafPlacementStore.reset();
-            }
+        if (!sproutedLockActive && leafPlacementStore.getSnapshot().junctionHubId) {
+            discardUnclaimedJunctionHub();
+            leafPlacementStore.reset();
         }
     }, [sproutedLockActive]);
+
+    // An undo can take the leaf that staged the hub, leaving a knot nothing
+    // claims; the entry cannot restore it because it was written after.
+    useEffect(() => {
+        const unsubscribe = subscribeHistoryChanges((change) => {
+            if (change.kind === 'push') return;
+            discardUnclaimedJunctionHub();
+        });
+        return () => { unsubscribe(); };
+    }, []);
 
     // Escape to cancel
     useEscapeToClose(
         state.stage === 'awaitingBase' || state.stage === 'awaitingSproutTip',
         () => {
-            const snap = leafPlacementStore.getSnapshot();
-            if (snap.junctionHubId) {
-                if (snap.junctionHubIsNew) {
-                    const leaves = Object.values(getSnapshot().leaves);
-                    const hasLeaves = leaves.some(leaf => leaf.parentKnotId === snap.junctionHubId);
-                    if (!hasLeaves) {
-                        removeKnotById(snap.junctionHubId);
-                    }
-                }
-                leafPlacementStore.setJunctionHub(null, null);
-            }
+            discardUnclaimedJunctionHub();
             leafPlacementStore.reset();
         },
     );

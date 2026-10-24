@@ -62,8 +62,6 @@ function appendHistoryDebugEvent(kind: HistoryDebugEventKind, action?: HistoryAc
     undoCount: undoStack.length,
     redoCount: redoStack.length,
     payloadBytes: action ? estimatePayloadBytes(action.payload) : undefined,
-    stackBytes: undoStack.reduce((sum, a) => sum + estimatePayloadBytes(a.payload), 0)
-      + redoStack.reduce((sum, a) => sum + estimatePayloadBytes(a.payload), 0),
   });
 
   while (historyDebugLog.length > HISTORY_DEBUG_LOG_LIMIT) {
@@ -88,7 +86,40 @@ export function setHistoryOriginProvider(provider: (() => HistoryOrigin) | null)
   };
 }
 
+/** Domains that queue their own entries; drained before any push, dropped on clear. */
+interface PendingHistorySource {
+  flush: () => void;
+  cancel: () => void;
+}
+
+const pendingSources = new Set<PendingHistorySource>();
+
+export function registerPendingHistorySource(source: PendingHistorySource) {
+  pendingSources.add(source);
+  return () => pendingSources.delete(source);
+}
+
+let flushingPending = false;
+
+/** Lands every queued entry, so what follows pushes on top of it. */
+function flushPendingSources() {
+  if (flushingPending) return;
+  flushingPending = true;
+  try {
+    pendingSources.forEach((source) => {
+      try {
+        source.flush();
+      } catch (err) {
+        console.error('[HistoryStore] pending source flush error', err);
+      }
+    });
+  } finally {
+    flushingPending = false;
+  }
+}
+
 export function pushHistory(action: HistoryAction) {
+  flushPendingSources();
   // An explicit origin wins — a domain that knows better than "wherever the user
   // happens to be" can say so; everything else gets stamped here.
   if (!action.origin && originProvider) {
@@ -161,6 +192,14 @@ export function redo() {
 }
 
 export function clearHistory() {
+  // A queued entry would otherwise land after the clear and refill the stack.
+  pendingSources.forEach((source) => {
+    try {
+      source.cancel();
+    } catch (err) {
+      console.error('[HistoryStore] pending source cancel error', err);
+    }
+  });
   undoStack.length = 0;
   redoStack.length = 0;
   appendHistoryDebugEvent('clear-history');

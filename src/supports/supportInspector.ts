@@ -52,7 +52,7 @@ export interface SupportInspection {
     dependents: { collection: SupportCollectionKey; id: string }[];
     /** Everything removing this would take, excluding the entity itself. */
     cascadeCount: number;
-    /** Any declared field whose id resolves to nothing. */
+    /** Any declared field resolving to nothing, or to something itself broken. */
     danglingLinks: SupportLink[];
 }
 
@@ -89,6 +89,27 @@ function linksOf(state: InspectorState, collection: SupportCollectionKey, id: st
         links.push({ field: edge.field, to: edge.to, ownership: edge.ownership, id: value, resolved });
     }
     return links;
+}
+
+/**
+ * The links an entity cannot stand on: unresolved, or naming something whose
+ * own links are. Walks hosts transitively; `seen` stops a cycle.
+ */
+function brokenLinksOf(
+    state: InspectorState,
+    collection: SupportCollectionKey,
+    id: string,
+    seen: Set<string> = new Set(),
+): SupportLink[] {
+    const key = `${collection}:${id}`;
+    if (seen.has(key)) return [];
+    seen.add(key);
+
+    return linksOf(state, collection, id).filter((link) => {
+        if (!link.resolved) return true;
+        if (link.ownership !== 'hostedBy' || link.to === 'segment') return false;
+        return brokenLinksOf(state, link.to as SupportCollectionKey, link.id, seen).length > 0;
+    });
 }
 
 /** Everything whose declared edges point at this entity. */
@@ -178,7 +199,7 @@ export function inspectSupport(state: InspectorState, id: string): SupportInspec
             links: linksOf(state, collection, id),
             dependents: dependentsOf(state, collection, id),
             cascadeCount: Math.max(0, collectCascade(state, [{ collection, id }]).size - 1),
-            danglingLinks: linksOf(state, collection, id).filter((link) => !link.resolved),
+            danglingLinks: brokenLinksOf(state, collection, id),
         };
     }
 
@@ -203,7 +224,7 @@ export function inspectSupport(state: InspectorState, id: string): SupportInspec
         links,
         dependents: dependentsOf(state, collection, id),
         cascadeCount: Math.max(0, collectCascade(state, [{ collection, id }]).size - 1),
-        danglingLinks: links.filter((link) => !link.resolved),
+        danglingLinks: brokenLinksOf(state, collection, id),
     };
 }
 

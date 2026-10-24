@@ -19,9 +19,9 @@ export const removeAction = <T extends SupportTypeId>(typeId: T): RemoveAction<T
 export const SUPPORT_UPDATE_TRUNK = 'support:update-trunk' as const;
 export const SUPPORT_UPDATE_BRANCH = 'support:update-branch' as const;
 
-export const SUPPORT_REPLACE_TRUNK = 'support:replace-trunk' as const;
 export const SUPPORT_AUTO_BRACE_REPLACE = 'support:auto-brace-replace' as const;
 export const SUPPORT_EDIT_REPLACE = 'support:edit-replace' as const;
+export const SUPPORT_MULTI_DELETE = 'support:multi-delete' as const;
 export const SUPPORT_AUTO_PLACE = 'support:auto-place' as const;
 export const SUPPORT_BLOCKER_STROKE = 'support:blocker-stroke' as const;
 
@@ -104,11 +104,6 @@ export interface SupportKickstandPayload {
   knots: KickstandBuildResult['hostKnot'];
 }
 
-export interface SupportReplaceTrunkPayload {
-  before: SupportState;
-  after: SupportState;
-}
-
 export interface SupportReplaceStatePayload {
   before: SupportState;
   after: SupportState;
@@ -174,8 +169,8 @@ export type SupportHistoryPayloadMap =
   & {
     [SUPPORT_UPDATE_TRUNK]: SupportTrunkUpdatePayload;
     [SUPPORT_UPDATE_BRANCH]: SupportBranchUpdatePayload;
-    [SUPPORT_REPLACE_TRUNK]: SupportReplaceTrunkPayload;
     [SUPPORT_EDIT_REPLACE]: SupportReplaceStatePayload;
+    [SUPPORT_MULTI_DELETE]: SupportReplaceStatePayload;
     [SUPPORT_AUTO_BRACE_REPLACE]: SupportReplaceStatePayload;
     [SUPPORT_AUTO_PLACE]: SupportReplaceStatePayload;
     [SUPPORT_BLOCKER_STROKE]: SupportBlockerStrokePayload;
