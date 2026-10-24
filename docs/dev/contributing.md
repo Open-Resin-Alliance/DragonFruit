@@ -21,6 +21,31 @@ Update docs when changing:
 
 ## Validation
 
+### Unit and DOM tests
+
+Use the pinned Node version from `package.json`, then run:
+
+```bash
+npm test
+npm run test:dom
+npm run test:watch
+```
+
+These commands use `scripts/run-tests.mjs` to discover files through Node's
+filesystem glob API, avoiding shell-dependent quoting on Windows. Unit tests
+match `src/**/*.test.{ts,tsx}` and `plugins/**/*.test.{ts,tsx}`; DOM tests match
+`src/**/*.dom-test.tsx`. Discovery fails with a nonzero exit code if the
+selected suite contains no files. The launcher keeps the existing tsx and
+suite-specific preloads and returns the child runner's exit status.
+
+Run the commands from the repository root. Extra Node test-runner options are
+forwarded before the discovered files, for example
+`npm test -- --test-concurrency=4` or
+`npm run test:dom -- --test-concurrency=1`. Watch mode uses the same discovery
+and Node's built-in `--watch` option. No extra test framework is involved.
+
+### Documentation
+
 Run `npm run check:docs`. It is the same check CI runs, and it covers:
 
 - every repo path a document cites exists
