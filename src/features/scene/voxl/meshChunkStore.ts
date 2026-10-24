@@ -128,6 +128,11 @@ interface OwnerEntry {
   sha256: string;
 }
 
+interface BakeFlight {
+  signature: string;
+  promise: Promise<BakedChunk>;
+}
+
 const ownerKey = (modelId: string, slot: ChunkSlot): string => `${slot}:${modelId}`;
 
 export class MeshChunkStore {
@@ -136,11 +141,10 @@ export class MeshChunkStore {
   private readonly chunkStore = new Map<string, BlobEntry>();
 
   /**
-   * In-flight bakes keyed on owner+signature. Two ticks racing the same model —
-   * an explicit save landing on top of an autosave, say — must produce one
-   * compression, not two.
+   * The latest bake per owner. Matching signatures share the promise; replacing
+   * or deleting the entry invalidates older work without retaining tombstones.
    */
-  private readonly inFlight = new Map<string, Promise<BakedChunk>>();
+  private readonly inFlight = new Map<string, BakeFlight>();
 
   private compressions = 0;
 
@@ -149,7 +153,8 @@ export class MeshChunkStore {
   private evictions = 0;
 
   /**
-   * Returns true if any geometry bake operation is currently running in-flight.
+   * Returns true while a live owner has pending bake work. Invalidated work may
+   * still finish for its caller, but can no longer populate this store.
    */
   isBakeInFlight(): boolean {
     return this.inFlight.size > 0;
@@ -174,7 +179,7 @@ export class MeshChunkStore {
   }
 
   /**
-   * The in-flight bake for this exact owner+signature, if one is running.
+   * The current bake for this exact owner+signature, if one is running.
    *
    * Exposed so a tick can *wait* on a bake that a finalization hook already
    * started rather than starting a second one — which is what makes the bounded
@@ -182,7 +187,8 @@ export class MeshChunkStore {
    * coalescing mechanism living outside the store.
    */
   pending(modelId: string, signature: string, slot: ChunkSlot = 'preview'): Promise<BakedChunk> | null {
-    return this.inFlight.get(`${ownerKey(modelId, slot)}@${signature}`) ?? null;
+    const flight = this.inFlight.get(ownerKey(modelId, slot));
+    return flight?.signature === signature ? flight.promise : null;
   }
 
   /**
@@ -214,69 +220,81 @@ export class MeshChunkStore {
 
     const cached = this.lookup(request.modelId, request.signature, slot);
     if (cached) {
+      // A request can return to a cached signature while a different bake waits.
+      this.inFlight.delete(key);
       this.hits += 1;
       return cached;
     }
 
-    const flightKey = `${key}@${request.signature}`;
-    const existing = this.inFlight.get(flightKey);
-    if (existing) return existing;
+    const existing = this.inFlight.get(key);
+    if (existing?.signature === request.signature) return existing.promise;
 
-    const flight = (async (): Promise<BakedChunk> => {
-      let raw: Uint8Array | undefined;
-      let sha256: string;
-      
-      if (request.precompressed && request.precompressed.sha256) {
-        sha256 = request.precompressed.sha256;
-      } else if (request.precompressed) {
-        // If we have precompressed data but no hash, hash the uncompressed data if available, 
-        // but since we don't have it, we'll hash the compressed data for uniqueness.
-        // Actually, we should hash the uncompressed data, but we can't.
-        // If it's precompressed, we must have a way to uniquely identify it. Let's just hash the compressed blob as fallback.
-        sha256 = await sha256Hex(request.precompressed.data);
-      } else {
-        raw = await request.encode();
-        sha256 = await sha256Hex(raw);
-      }
+    const flight: BakeFlight = {
+      signature: request.signature,
+      // Publish the entry before even a precompressed, known-hash bake can run.
+      promise: Promise.resolve().then(async (): Promise<BakedChunk> => {
+        let raw: Uint8Array | undefined;
+        let sha256: string;
+        let encoded = false;
 
-      let blob = this.chunkStore.get(sha256);
-      if (!blob) {
-        // Level-2 miss: this content has never been seen.
-        if (request.precompressed) {
-          blob = {
-            data: request.precompressed.data,
-            compression: request.precompressed.compression,
-            uncompressedSize: request.precompressed.uncompressedSize,
-            refs: 0
-          };
-          this.chunkStore.set(sha256, blob);
-          // Don't increment compressions counter since we didn't compress anything
+        if (request.precompressed && request.precompressed.sha256) {
+          sha256 = request.precompressed.sha256;
+        } else if (request.precompressed) {
+          // If we have precompressed data but no hash, hash the uncompressed data if available,
+          // but since we don't have it, we'll hash the compressed data for uniqueness.
+          // Actually, we should hash the uncompressed data, but we can't.
+          // If it's precompressed, we must have a way to uniquely identify it. Let's just hash the compressed blob as fallback.
+          sha256 = await sha256Hex(request.precompressed.data);
         } else {
-          let data = raw!;
-          let compression = CHUNK_COMPRESSION_NONE;
-          if (raw!.length > MIN_COMPRESSIBLE_BYTES) {
-            const compressed = await compressAsync(raw!);
-            if (compressed.length < raw!.length) {
-              data = compressed;
-              compression = CHUNK_COMPRESSION_ZLIB;
-            }
-          }
-          blob = { data, compression, uncompressedSize: raw!.length, refs: 0 };
-          this.chunkStore.set(sha256, blob);
-          this.compressions += 1;
+          raw = await request.encode();
+          sha256 = await sha256Hex(raw);
         }
-      }
 
-      this.adopt(key, request.signature, sha256);
+        let blob = this.chunkStore.get(sha256);
+        if (!blob) {
+          // Level-2 miss: this content has never been seen.
+          if (request.precompressed) {
+            blob = {
+              data: request.precompressed.data,
+              compression: request.precompressed.compression,
+              uncompressedSize: request.precompressed.uncompressedSize,
+              refs: 0
+            };
+            // Don't increment compressions counter since we didn't compress anything
+          } else {
+            encoded = true;
+            let data = raw!;
+            let compression = CHUNK_COMPRESSION_NONE;
+            if (raw!.length > MIN_COMPRESSIBLE_BYTES) {
+              const compressed = await compressAsync(raw!);
+              if (compressed.length < raw!.length) {
+                data = compressed;
+                compression = CHUNK_COMPRESSION_ZLIB;
+              }
+            }
+            blob = { data, compression, uncompressedSize: raw!.length, refs: 0 };
+          }
+        }
 
-      return { sha256, data: blob.data, compression: blob.compression, uncompressedSize: blob.uncompressedSize };
-    })();
+        if (this.inFlight.get(key) === flight) {
+          if (encoded) this.compressions += 1;
+          // Another owner may have interned these bytes while compression awaited.
+          // Keep its canonical object and refs rather than replacing them with zero.
+          const canonical = this.chunkStore.get(sha256);
+          if (canonical) blob = canonical;
+          else this.chunkStore.set(sha256, blob);
+          this.adopt(key, request.signature, sha256);
+        }
 
-    this.inFlight.set(flightKey, flight);
+        return { sha256, data: blob.data, compression: blob.compression, uncompressedSize: blob.uncompressedSize };
+      }),
+    };
+
+    this.inFlight.set(key, flight);
     try {
-      return await flight;
+      return await flight.promise;
     } finally {
-      this.inFlight.delete(flightKey);
+      if (this.inFlight.get(key) === flight) this.inFlight.delete(key);
     }
   }
 
@@ -302,7 +320,8 @@ export class MeshChunkStore {
    */
   retainOnly(modelIds: Iterable<string>): void {
     const keep = new Set(modelIds);
-    for (const key of [...this.contentByOwner.keys()]) {
+    const owners = new Set([...this.contentByOwner.keys(), ...this.inFlight.keys()]);
+    for (const key of owners) {
       const modelId = key.slice(key.indexOf(':') + 1);
       if (!keep.has(modelId)) this.releaseOwner(key);
     }
@@ -345,6 +364,7 @@ export class MeshChunkStore {
   }
 
   private releaseOwner(key: string): void {
+    this.inFlight.delete(key);
     const owner = this.contentByOwner.get(key);
     if (!owner) return;
     this.contentByOwner.delete(key);
