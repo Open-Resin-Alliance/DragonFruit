@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
+import { meshSurfaceHighestZ } from '@/utils/meshSurfaceLowestZ';
 import { useSceneFileExtensionLabels } from '@/features/plugins/pluginFileTypeExtensions';
 import { msg, plural } from '@lingui/core/macro';
 import { useLingui } from '@lingui/react';
@@ -6868,18 +6869,8 @@ export default function Home() {
         quaternionFromGlobalEuler(t.rotation),
         t.scale,
       );
-      const me = matrix.elements;
-      // worldZ = me[2]*vcx + me[6]*vcy + me[10]*vcz + me[14]
-      const a = me[2], b = me[6], c = me[10], d = me[14];
-      const src = position.array as Float32Array | number[];
-      const count = position.count;
-      for (let i = 0; i < count; i++) {
-        const vx = src[i * 3] - center.x;
-        const vy = src[i * 3 + 1] - center.y;
-        const vz = src[i * 3 + 2] - center.z;
-        const worldZ = a * vx + b * vy + c * vz + d;
-        if (worldZ > maxZ) maxZ = worldZ;
-      }
+      matrix.multiply(new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z));
+      maxZ = Math.max(maxZ, meshSurfaceHighestZ(model.geometry.geometry, matrix));
     }
     return maxZ;
   }, [slicingModels]);

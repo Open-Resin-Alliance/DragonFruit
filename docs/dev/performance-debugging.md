@@ -6,6 +6,33 @@ you point at your own machine when you need a call stack.
 
 ## In-app scaffolding
 
+### Exact surface height queries using the existing BVH
+
+`src/utils/meshSurfaceLowestZ.ts` provides `meshSurfaceLowestZ(geometry, matrix)`
+and `meshSurfaceHighestZ(geometry, matrix)` for exact rendered-triangle extrema.
+Minimum traversal prunes BVH nodes by a conservative transformed-box Z bound,
+then evaluates triangle vertices in surviving leaves. Maximum reflects the Z
+row of a cloned matrix and reuses minimum traversal. Caller geometry and matrix
+are never mutated; no positions are copied, reordered or reindexed.
+
+Use the same model-local centering transform as rendering, for example:
+
+```ts
+const bottom = meshSurfaceLowestZ(geometry, modelWorldMatrix);
+const top = meshSurfaceHighestZ(geometry, modelWorldMatrix);
+```
+
+Callers include live grounding, selection Lift/Drop, transform-manager snapping
+and Z range, and the accurate layer ceiling. The ceiling retains its zero floor.
+The existing scan remains the fallback when no BVH is available; aligned Z uses
+the existing fast path. BVH lifetime/version invalidation stays with the existing
+geometry owner. These helpers do not create or update acceleration structures.
+
+Tests compare extrema against vertex scans across rotation, translation and
+nonuniform/mirrored scale, check geometry/matrix immutability and fallback, and
+verify a dense query visits substantially fewer triangle vertices. These are
+surface extrema, not potentially inflated transformed bounding-box corners.
+
 ### Main-thread stall detector
 
 `src/utils/debug/mainThreadHeartbeat.ts` is the UI's equivalent of a database
