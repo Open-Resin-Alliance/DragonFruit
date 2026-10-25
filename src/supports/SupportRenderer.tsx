@@ -48,6 +48,9 @@ import './detailRenderer/registerBuiltinDetailRenderers';
 import { detailRenderersFor, type DetailRendererContext } from './detailRenderer/seam';
 import { InstancedShaftGroup, type InstancedShaft } from './SupportPrimitives/Shaft/InstancedShaftGroup';
 import { InstancedJointGroup, type InstancedJoint } from './SupportPrimitives/Joint/InstancedJointGroup';
+import { InstancedJointBatch } from './instanced/InstancedJointBatch';
+import { SUPPORT_INSTANCED_JOINTS } from './instanced/flags';
+import { buildJointSlotIndex } from './instanced/jointSlots';
 import { InstancedRootsGroup, type InstancedRoot } from './SupportPrimitives/Roots/InstancedRootsGroup';
 import { inlineRootBatchInstance } from './SupportPrimitives/Roots/inlineRootBatch';
 import { batchesInView, BATCHED_PASSES } from './rendering/batchCoverage';
@@ -2199,6 +2202,23 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     ]);
 
     /**
+     * The one instanced joint batch's slot list: the producer's joints
+     * flattened, in its draw order, so slot index is instance id.
+     *
+     * `sceneBatchedJointGroups` already applied model visibility, the
+     * selected-support exclusion, the leaf host-knot set, the model drop offset
+     * and the scene diameter blend, and it re-derives through
+     * `leafJointsBySupport` when `renderKnotsById` changes — so a knot-drag
+     * preview moves the batch's balls without a second dependency here.
+     *
+     * Null while the flag is off: the legacy per-colour batches and the two
+     * joint overlays keep rendering exactly as they did.
+     */
+    const jointSlotIndex = useMemo(() => (
+        SUPPORT_INSTANCED_JOINTS ? buildJointSlotIndex(sceneBatchedJointGroups) : null
+    ), [sceneBatchedJointGroups]);
+
+    /**
      * Groups a type's unselected shafts by model and colour for instanced
      * drawing.
      */
@@ -2552,6 +2572,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     ]);
 
     const hoveredSupportOverlayJoints = useMemo(() => {
+        // The instanced batch draws the hover state per instance; a second mesh
+        // over the same balls would double-draw them.
+        if (SUPPORT_INSTANCED_JOINTS) return [] as InstancedJoint[];
         if (!hoveredSupportJointSet) return [] as InstancedJoint[];
 
         return hoveredSupportJointSet.joints.map((joint) => ({
@@ -2696,6 +2719,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [additionalMarqueeHoveredSupportIds, contactConesBySupport, applyDropToVec3Like]);
 
     const marqueeHoveredOverlayJoints = useMemo(() => {
+        // The instanced batch draws the marquee state per instance; see
+        // hoveredSupportOverlayJoints.
+        if (SUPPORT_INSTANCED_JOINTS) return [] as InstancedJoint[];
         if (additionalMarqueeHoveredSupportIds.length === 0) return [] as InstancedJoint[];
 
         const overlays: InstancedJoint[] = [];
@@ -3393,7 +3419,19 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 them at all. Unmounted, not faded: a zero-alpha batch left mounted
                 for picking is what kept showing joint spheres after a mode switch,
                 because the fade is a material prop on an already-built mesh. */}
-            {!simpleRender && sceneBatchedJointGroups.map((group) => (
+            {!simpleRender && (jointSlotIndex ? (
+                <InstancedJointBatch
+                    index={jointSlotIndex}
+                    hoveredSupportId={hoveredSupportJointSet?.supportId ?? null}
+                    marqueeSupportIds={additionalMarqueeHoveredSupportIds}
+                    clippingPlanes={clippingPlanes.length > 0 ? clippingPlanes : null}
+                    transparent={ghostTransparent}
+                    opacity={ghostOpacityClamped}
+                    onJointClick={isPointerInteractable ? handleSceneBatchedJointClick : undefined}
+                    onJointPointerMove={isPointerInteractable ? handleSceneBatchedJointPointerMove : undefined}
+                    onJointPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                />
+            ) : sceneBatchedJointGroups.map((group) => (
                 <group key={`scene-joint-batch:${group.color}`}>
                     <InstancedJointGroup
                         joints={group.joints}
@@ -3407,7 +3445,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         onJointPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
                     />
                 </group>
-            ))}
+            )))}
             {Object.entries(sceneBatchedRootGroupsByType).flatMap(([typeId, groups]) => groups.map((group) => (
                 <group key={`scene-${typeId}-root-batch:${group.color}`}>
                     <InstancedRootsGroup
@@ -3600,7 +3638,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 />
             )}
 
-            {!debugSimple && hoveredSupportOverlayJoints.length > 0 && hoveredSupportJointSet && (
+            {!SUPPORT_INSTANCED_JOINTS && !debugSimple && hoveredSupportOverlayJoints.length > 0 && hoveredSupportJointSet && (
                 <InstancedJointGroup
                     key={`scene-joint-hover-overlay:${hoveredSupportJointSet.supportId}:${hoveredSupportOverlayJoints.length}`}
                     joints={hoveredSupportOverlayJoints}
@@ -3663,7 +3701,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 />
             )}
 
-            {!debugSimple && marqueeHoveredOverlayJoints.length > 0 && (
+            {!SUPPORT_INSTANCED_JOINTS && !debugSimple && marqueeHoveredOverlayJoints.length > 0 && (
                 <InstancedJointGroup
                     key={`scene-marquee-overlay-joints:${marqueeHoveredSupportIds.join(':')}:${marqueeHoveredOverlayJoints.length}`}
                     joints={marqueeHoveredOverlayJoints}

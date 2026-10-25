@@ -1,6 +1,3 @@
-import type { InstancedContactCone } from '../SupportPrimitives/ContactCone/InstancedContactConeGroup';
-import type { InstancedJoint } from '../SupportPrimitives/Joint/InstancedJointGroup';
-import type { InstancedRoot } from '../SupportPrimitives/Roots/InstancedRootsGroup';
 import type { InstancedShaft } from '../SupportPrimitives/Shaft/InstancedShaftGroup';
 import type { ProxyModelGeometry } from '../SupportProxyMeshLayer';
 import type {

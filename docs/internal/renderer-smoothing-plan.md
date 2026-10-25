@@ -16,8 +16,14 @@ holds 165 fps with ~404 calls and 14.2M triangles.
   use the proxy; all-model merge is deferred until the Phase 2 instanced static
   path can serve Prepare too (otherwise it is throwaway work).
 - Phase 2 wave 1 landed: slot records, flag codec, capacity-managed batch core,
-  and a joints-only integration map. Wave 2 in progress: joint slots and the
-  uint-attribute material decision.
+  and a joints-only integration map.
+- Phase 2 wave 2 landed: joint slots from `sceneBatchedJointGroups`, per-instance
+  colour on the batch core, and the joints-only `InstancedJointBatch` behind
+  `SUPPORT_INSTANCED_JOINTS` (on for testing). One draw for all unselected
+  joints, capacity growth without remount, index raycast at tolerance 0, hover
+  and marquee as colour + matrix writes, legacy overlays skipped in that branch.
+  Pending: visual/pointer parity check on the supported scene, then shafts,
+  cones/roots, and the drag writer.
 
 **Correction from the joint map:** Support mode does not consume
 `collectProxyPrimitives`. `SupportRenderer` resolves its own batches
