@@ -857,6 +857,31 @@ export function SupportSidebar({ activeModelId = null }: { activeModelId?: strin
 
     const supportGeometryFieldsDefault = (
         <div className="space-y-2.5">
+            <div className="space-y-1 min-w-0" {...fieldFocusProps('tip.type', () => setAnatomyPreviewActiveSettingKey('tip.type'), (e) => {
+                const next = e.relatedTarget as Node | null;
+                if (next && e.currentTarget.contains(next)) return;
+                setAnatomyPreviewActiveSettingKey(null);
+            })}>
+                <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title={_(msg`Contact Type`)}>{_(msg`Contact Type`)}</div>
+                <SelectDropdown
+                    value={settings.tip.type ?? 'disk'}
+                    onChange={(value) => updateTipProfile({ type: value as 'disk' | 'sphere' })}
+                    options={[
+                        { value: 'disk', label: _(msg`Contact Disk`) },
+                        { value: 'sphere', label: _(msg`Contact Sphere`) },
+                    ]}
+                    className="space-y-0"
+                    selectClassName="w-full min-w-0 h-8 px-2.5 pr-10 text-xs sm:text-sm truncate"
+                    menuClassName="!min-w-[9.5rem]"
+                    selectStyle={activeKey === 'tip.type'
+                        ? {
+                            borderColor: 'var(--accent)',
+                            boxShadow: '0 0 0 1px color-mix(in srgb, var(--accent), white 8%) inset, 0 0 0 2px color-mix(in srgb, var(--accent), transparent 72%)',
+                        }
+                        : undefined}
+                />
+            </div>
+
             <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('tip.contactDiameterMm')}>
                 <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title={_(msg`Contact Diameter`)}>{_(msg`Contact Diameter`)}</div>
                 <div className="relative">
@@ -1022,6 +1047,31 @@ export function SupportSidebar({ activeModelId = null }: { activeModelId?: strin
 
     const supportGeometryFieldsCompactTrunk = (
         <div className="space-y-2.5">
+            <div className="space-y-1 min-w-0" {...fieldFocusProps('tip.type', () => setAnatomyPreviewActiveSettingKey('tip.type'), (e) => {
+                const next = e.relatedTarget as Node | null;
+                if (next && e.currentTarget.contains(next)) return;
+                setAnatomyPreviewActiveSettingKey(null);
+            })}>
+                <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title={_(msg`Contact Type`)}>{_(msg`Contact Type`)}</div>
+                <SelectDropdown
+                    value={settings.tip.type ?? 'disk'}
+                    onChange={(value) => updateTipProfile({ type: value as 'disk' | 'sphere' })}
+                    options={[
+                        { value: 'disk', label: _(msg`Contact Disk`) },
+                        { value: 'sphere', label: _(msg`Contact Sphere`) },
+                    ]}
+                    className="space-y-0"
+                    selectClassName="w-full min-w-0 h-8 px-2.5 pr-10 text-xs sm:text-sm truncate"
+                    menuClassName="!min-w-[9.5rem]"
+                    selectStyle={activeKey === 'tip.type'
+                        ? {
+                            borderColor: 'var(--accent)',
+                            boxShadow: '0 0 0 1px color-mix(in srgb, var(--accent), white 8%) inset, 0 0 0 2px color-mix(in srgb, var(--accent), transparent 72%)',
+                        }
+                        : undefined}
+                />
+            </div>
+
             <div className={compactTrunkPairClass}>
                 <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('tip.contactDiameterMm')}>
                     <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title={_(msg`Contact Diameter`)}>{_(msg`Contact Diameter`)}</div>

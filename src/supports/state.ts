@@ -3462,39 +3462,35 @@ function applyTipSettingsToConeProfile(
     options?: { includeBodyAndLength?: boolean },
 ): SupportTipProfile {
     const includeBodyAndLength = options?.includeBodyAndLength ?? true;
-    const baseProfile = includeBodyAndLength
-        ? {
-            ...profile,
-            contactDiameterMm: tip.contactDiameterMm,
-            bodyDiameterMm: tip.bodyDiameterMm,
-            lengthMm: tip.lengthMm,
-            penetrationMm: tip.penetrationMm,
-        }
-        : {
-            ...profile,
-            contactDiameterMm: tip.contactDiameterMm,
-            penetrationMm: tip.penetrationMm,
-        };
+    const nextType = tip.type ?? profile.type;
+    const bodyDiameterMm = includeBodyAndLength ? tip.bodyDiameterMm : profile.bodyDiameterMm;
+    const lengthMm = includeBodyAndLength ? tip.lengthMm : profile.lengthMm;
 
-    if (profile.type === 'disk') {
+    if (nextType === 'sphere') {
         return {
-            ...baseProfile,
-            type: 'disk',
-            diskThicknessMm: tip.diskThicknessMm ?? profile.diskThicknessMm,
-            maxStandoffMm: tip.maxStandoffMm ?? profile.maxStandoffMm,
-            standoffAngleThreshold: tip.standoffAngleThreshold ?? profile.standoffAngleThreshold,
-        };
-    }
-
-    if (profile.type === 'sphere') {
-        return {
-            ...baseProfile,
             type: 'sphere',
-            sphereRadiusRatio: tip.sphereRadiusRatio ?? profile.sphereRadiusRatio,
+            contactDiameterMm: tip.contactDiameterMm,
+            bodyDiameterMm,
+            lengthMm,
+            penetrationMm: tip.penetrationMm,
+            sphereRadiusRatio: tip.sphereRadiusRatio
+                ?? (profile.type === 'sphere' ? profile.sphereRadiusRatio : 1.5),
         };
     }
 
-    return baseProfile;
+    return {
+        type: 'disk',
+        contactDiameterMm: tip.contactDiameterMm,
+        bodyDiameterMm,
+        lengthMm,
+        penetrationMm: tip.penetrationMm,
+        diskThicknessMm: tip.diskThicknessMm
+            ?? (profile.type === 'disk' ? profile.diskThicknessMm : 0.1),
+        maxStandoffMm: tip.maxStandoffMm
+            ?? (profile.type === 'disk' ? profile.maxStandoffMm : 1.5),
+        standoffAngleThreshold: tip.standoffAngleThreshold
+            ?? (profile.type === 'disk' ? profile.standoffAngleThreshold : Math.PI / 4),
+    };
 }
 
 /**

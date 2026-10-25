@@ -103,12 +103,24 @@ function buildTipProfile(
     settings: ReturnType<typeof getSettings>,
     overrides: TrunkBuildInput['overrides'],
 ): SupportTipProfile {
-    return {
-        type: 'disk',
+    const shared = {
         contactDiameterMm: overrides?.tipContactDiameterMm ?? settings.tip.contactDiameterMm,
         bodyDiameterMm: overrides?.tipBodyDiameterMm ?? settings.tip.bodyDiameterMm,
         lengthMm: overrides?.tipLengthMm ?? settings.tip.lengthMm,
         penetrationMm: settings.tip.penetrationMm,
+    };
+
+    if (settings.tip.type === 'sphere') {
+        return {
+            ...shared,
+            type: 'sphere',
+            sphereRadiusRatio: settings.tip.sphereRadiusRatio ?? 1.5,
+        };
+    }
+
+    return {
+        ...shared,
+        type: 'disk',
         diskThicknessMm: settings.tip.diskThicknessMm ?? 0.1,
         maxStandoffMm: settings.tip.maxStandoffMm ?? 1.5,
         standoffAngleThreshold: settings.tip.standoffAngleThreshold ?? (Math.PI / 4),

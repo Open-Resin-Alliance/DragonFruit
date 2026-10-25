@@ -9,7 +9,7 @@ The contact cone is the terminal piece that interfaces a support with the model.
 
 ## Geometry
 
-- Tip: the small contact face that touches the model.
+- Tip: the small contact face that touches the model — the flat micro-disc (`ContactDiskProfile`) or the spherical cap (`ContactSphereProfile`), chosen by the **Contact Type** selector in the support settings.
 - Cone body: the tapered section between the tip and socket.
 - Socket side: connects directly to a joint, with no shaft between them.
 

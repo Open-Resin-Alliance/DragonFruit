@@ -45,14 +45,18 @@ export function buildStumpData(input: StumpBuildInput): StumpBuildResult {
 
     const effectiveConeAxis = coneAxis ?? tipNormal;
     const tipProfile: SupportTipProfile = {
-        type: 'disk',
         contactDiameterMm: settings.tip.contactDiameterMm,
         bodyDiameterMm: settings.tip.bodyDiameterMm,
         lengthMm: settings.tip.lengthMm,
         penetrationMm: settings.tip.penetrationMm,
-        diskThicknessMm: 0.1,
-        maxStandoffMm: 1.5,
-        standoffAngleThreshold: Math.PI / 4,
+        ...(settings.tip.type === 'sphere'
+            ? { type: 'sphere' as const, sphereRadiusRatio: settings.tip.sphereRadiusRatio ?? 1.5 }
+            : {
+                type: 'disk' as const,
+                diskThicknessMm: 0.1,
+                maxStandoffMm: 1.5,
+                standoffAngleThreshold: Math.PI / 4,
+            }),
     };
 
     // Compute raft vertical offset (must match RootsRenderer logic)

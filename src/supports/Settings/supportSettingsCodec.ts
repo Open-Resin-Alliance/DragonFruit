@@ -75,7 +75,9 @@ export function encodeSupportSettingsHex(settings: SupportSettings): string {
     const flags =
         (coneModeBits & 0b11)
         | ((normalized.shaft.isStraight ? 1 : 0) << 2)
-        | ((normalized.baseFlare.enabled ? 1 : 0) << 3);
+        | ((normalized.baseFlare.enabled ? 1 : 0) << 3)
+        // Bit 4: tip shape. Absent in pre-existing payloads, where it reads as disk.
+        | ((normalized.tip.type === 'sphere' ? 1 : 0) << 4);
 
     const values: number[] = [
         encodeScaled(normalized.tip.contactDiameterMm, 1000),
@@ -116,6 +118,7 @@ export function decodeSupportSettingsHex(hex: string, base?: SupportSettings): S
     const coneModeBits = flags & 0b11;
     const isStraight = ((flags >> 2) & 0b1) === 1;
     const flareEnabled = ((flags >> 3) & 0b1) === 1;
+    const tipType = ((flags >> 4) & 0b1) === 1 ? 'sphere' : 'disk';
 
     let offset = 2;
     const read = () => {
@@ -129,6 +132,7 @@ export function decodeSupportSettingsHex(hex: string, base?: SupportSettings): S
         tip: {
             ...mergedBase.tip,
             shape: 'cone',
+            type: tipType,
             contactDiameterMm: decodeScaled(read(), 1000),
             bodyDiameterMm: decodeScaled(read(), 1000),
             lengthMm: decodeScaled(read(), 1000),
@@ -170,6 +174,7 @@ export function decodeSupportSettingsHex(hex: string, base?: SupportSettings): S
 export function areSupportGeometrySettingsEqual(a: SupportSettings, b: SupportSettings): boolean {
     return (
         a.tip.contactDiameterMm === b.tip.contactDiameterMm
+        && (a.tip.type ?? 'disk') === (b.tip.type ?? 'disk')
         && a.tip.bodyDiameterMm === b.tip.bodyDiameterMm
         && a.tip.lengthMm === b.tip.lengthMm
         && a.tip.penetrationMm === b.tip.penetrationMm

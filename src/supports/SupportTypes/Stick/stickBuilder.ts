@@ -79,14 +79,18 @@ export function buildStick(input: StickBuildInput): StickBuildResult {
     const shaftDiameter = input.shaftDiameterMm ?? settings.shaft.diameterMm;
 
     const tipProfile: SupportTipProfile = {
-        type: 'disk',
         contactDiameterMm: tipContactDiameterMm,
         bodyDiameterMm: settings.tip.bodyDiameterMm,
         lengthMm: settings.tip.lengthMm,
         penetrationMm: settings.tip.penetrationMm,
-        diskThicknessMm: settings.tip.diskThicknessMm ?? 0.1,
-        maxStandoffMm: settings.tip.maxStandoffMm ?? 1.5,
-        standoffAngleThreshold: settings.tip.standoffAngleThreshold ?? Math.PI / 4,
+        ...(settings.tip.type === 'sphere'
+            ? { type: 'sphere' as const, sphereRadiusRatio: settings.tip.sphereRadiusRatio ?? 1.5 }
+            : {
+                type: 'disk' as const,
+                diskThicknessMm: settings.tip.diskThicknessMm ?? 0.1,
+                maxStandoffMm: settings.tip.maxStandoffMm ?? 1.5,
+                standoffAngleThreshold: settings.tip.standoffAngleThreshold ?? Math.PI / 4,
+            }),
     };
 
     const jointDiameter = getJointDiameter(shaftDiameter);

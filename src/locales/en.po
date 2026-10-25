@@ -631,20 +631,20 @@ msgid "Active print thumbnail"
 msgstr "Active print thumbnail"
 
 #: src/supports/Settings/components/TipSettingsCard.tsx:62
-#: src/supports/Settings/SupportSidebar.tsx:912
-#: src/supports/Settings/SupportSidebar.tsx:1076
+#: src/supports/Settings/SupportSidebar.tsx:940
+#: src/supports/Settings/SupportSidebar.tsx:1129
 msgid "Adaptive"
 msgstr "Adaptive"
 
-#: src/supports/Settings/SupportSidebar.tsx:917
-#: src/supports/Settings/SupportSidebar.tsx:1081
+#: src/supports/Settings/SupportSidebar.tsx:945
+#: src/supports/Settings/SupportSidebar.tsx:1134
 msgid "Adaptive mode"
 msgstr "Adaptive mode"
 
-#: src/supports/Settings/SupportSidebar.tsx:935
-#: src/supports/Settings/SupportSidebar.tsx:936
-#: src/supports/Settings/SupportSidebar.tsx:1098
-#: src/supports/Settings/SupportSidebar.tsx:1099
+#: src/supports/Settings/SupportSidebar.tsx:963
+#: src/supports/Settings/SupportSidebar.tsx:964
+#: src/supports/Settings/SupportSidebar.tsx:1151
+#: src/supports/Settings/SupportSidebar.tsx:1152
 msgid "Adaptive offset"
 msgstr "Adaptive offset"
 
@@ -1030,7 +1030,7 @@ msgstr "Authorize DragonFruit so backups can be saved into your private reposito
 msgid "Auto"
 msgstr "Auto"
 
-#: src/components/controls/TransformControls.tsx:303
+#: src/components/controls/TransformControls.tsx:305
 msgctxt "Auto-lift toggle"
 msgid "Auto"
 msgstr "Auto"
@@ -1048,7 +1048,7 @@ msgstr "Auto arrange the plate"
 msgid "Auto Brace complete: {generated, plural, one {# brace generated} other {# braces generated}}, {removed, plural, one {# legacy brace removed} other {# legacy braces removed}}."
 msgstr "Auto Brace complete: {generated, plural, one {# brace generated} other {# braces generated}}, {removed, plural, one {# legacy brace removed} other {# legacy braces removed}}."
 
-#: src/supports/Settings/SupportSidebar.tsx:610
+#: src/supports/Settings/SupportSidebar.tsx:613
 msgid "Auto Brace failed. Check console for details."
 msgstr "Auto Brace failed. Check console for details."
 
@@ -1698,7 +1698,7 @@ msgctxt "Placement anchor"
 msgid "Center"
 msgstr "Center"
 
-#: src/components/controls/TransformControls.tsx:274
+#: src/components/controls/TransformControls.tsx:276
 msgid "Center Selection"
 msgstr "Center Selection"
 
@@ -1852,7 +1852,7 @@ msgstr "Clear"
 msgid "Clear All"
 msgstr "Clear All"
 
-#: src/supports/Settings/SupportSidebar.tsx:631
+#: src/supports/Settings/SupportSidebar.tsx:634
 msgid "Clear All failed. Check console for details."
 msgstr "Clear All failed. Check console for details."
 
@@ -2197,10 +2197,10 @@ msgstr "Compression"
 msgid "Computing placements and resolving collisions."
 msgstr "Computing placements and resolving collisions."
 
-#: src/supports/Settings/SupportSidebar.tsx:898
-#: src/supports/Settings/SupportSidebar.tsx:898
-#: src/supports/Settings/SupportSidebar.tsx:1062
-#: src/supports/Settings/SupportSidebar.tsx:1062
+#: src/supports/Settings/SupportSidebar.tsx:926
+#: src/supports/Settings/SupportSidebar.tsx:926
+#: src/supports/Settings/SupportSidebar.tsx:1115
+#: src/supports/Settings/SupportSidebar.tsx:1115
 msgid "Cone Angle"
 msgstr "Cone Angle"
 
@@ -2213,9 +2213,9 @@ msgstr "Cone Angle Mode"
 msgid "Cone H"
 msgstr "Cone H"
 
-#: src/supports/Settings/SupportSidebar.tsx:1001
-#: src/supports/Settings/SupportSidebar.tsx:1159
-#: src/supports/Settings/SupportSidebar.tsx:1159
+#: src/supports/Settings/SupportSidebar.tsx:1029
+#: src/supports/Settings/SupportSidebar.tsx:1212
+#: src/supports/Settings/SupportSidebar.tsx:1212
 msgid "Cone Height"
 msgstr "Cone Height"
 
@@ -2336,28 +2336,42 @@ msgid "Contact"
 msgstr "Contact"
 
 #: src/supports/Settings/components/PresetCard.tsx:132
-#: src/supports/Settings/SupportSidebar.tsx:874
-#: src/supports/Settings/SupportSidebar.tsx:874
-#: src/supports/Settings/SupportSidebar.tsx:1039
-#: src/supports/Settings/SupportSidebar.tsx:1039
+#: src/supports/Settings/SupportSidebar.tsx:902
+#: src/supports/Settings/SupportSidebar.tsx:902
+#: src/supports/Settings/SupportSidebar.tsx:1092
+#: src/supports/Settings/SupportSidebar.tsx:1092
 msgid "Contact Cone Length"
 msgstr "Contact Cone Length"
 
 #: src/supports/Settings/components/PresetCard.tsx:115
-#: src/supports/Settings/SupportSidebar.tsx:858
-#: src/supports/Settings/SupportSidebar.tsx:858
-#: src/supports/Settings/SupportSidebar.tsx:1024
-#: src/supports/Settings/SupportSidebar.tsx:1024
+#: src/supports/Settings/SupportSidebar.tsx:886
+#: src/supports/Settings/SupportSidebar.tsx:886
+#: src/supports/Settings/SupportSidebar.tsx:1077
+#: src/supports/Settings/SupportSidebar.tsx:1077
 msgid "Contact Diameter"
 msgstr "Contact Diameter"
 
 #: src/supports/Settings/components/TipSettingsCard.tsx:43
+#: src/supports/Settings/SupportSidebar.tsx:870
+#: src/supports/Settings/SupportSidebar.tsx:1060
 msgid "Contact Disk"
 msgstr "Contact Disk"
 
 #: src/supports/PlacementLogic/SupportLimitations.tsx:13
 msgid "Contact point is lower than the stump root — the shaft would extend below the root joint."
 msgstr "Contact point is lower than the stump root — the shaft would extend below the root joint."
+
+#: src/supports/Settings/SupportSidebar.tsx:871
+#: src/supports/Settings/SupportSidebar.tsx:1061
+msgid "Contact Sphere"
+msgstr "Contact Sphere"
+
+#: src/supports/Settings/SupportSidebar.tsx:865
+#: src/supports/Settings/SupportSidebar.tsx:865
+#: src/supports/Settings/SupportSidebar.tsx:1055
+#: src/supports/Settings/SupportSidebar.tsx:1055
+msgid "Contact Type"
+msgstr "Contact Type"
 
 #. Confirms proceeding with the profile change despite the re-slice warning above (paired with "Keep current profiles", which cancels).
 #: src/components/layout/FirstRunOnboarding.tsx:287
@@ -2442,7 +2456,7 @@ msgstr "Could not read printer data."
 msgid "Could not reopen this file from cache."
 msgstr "Could not reopen this file from cache."
 
-#: src/features/scene/useSceneCollectionManager.ts:7246
+#: src/features/scene/useSceneCollectionManager.ts:7241
 msgid "Could not restore the model."
 msgstr "Could not restore the model."
 
@@ -2574,7 +2588,7 @@ msgstr "Curve name"
 msgid "Curve Settings"
 msgstr "Curve Settings"
 
-#: src/supports/Settings/SupportSidebar.tsx:1221
+#: src/supports/Settings/SupportSidebar.tsx:1274
 msgid "Curves"
 msgstr "Curves"
 
@@ -3136,7 +3150,7 @@ msgstr "DragonFruit stores backups in your own private GitHub repository. We int
 msgid "DragonFruit will <0>download, verify and install</0> the update, then restart automatically."
 msgstr "DragonFruit will <0>download, verify and install</0> the update, then restart automatically."
 
-#: src/components/controls/TransformControls.tsx:352
+#: src/components/controls/TransformControls.tsx:354
 msgctxt "Drop button"
 msgid "Drop"
 msgstr "Drop"
@@ -3912,7 +3926,7 @@ msgstr "Grid spacing on slopes at the self-support angle — higher = sparser"
 msgid "Grid Threshold"
 msgstr "Grid Threshold"
 
-#: src/components/controls/TransformControls.tsx:370
+#: src/components/controls/TransformControls.tsx:372
 msgctxt "Group rotation toggle"
 msgid "Group"
 msgstr "Group"
@@ -4806,12 +4820,12 @@ msgstr "Letting DragonFruit finish its startup animation before loading your sce
 msgid "Lifecycle (Merge Status)"
 msgstr "Lifecycle (Merge Status)"
 
-#: src/components/controls/TransformControls.tsx:335
+#: src/components/controls/TransformControls.tsx:337
 msgctxt "Lift button"
 msgid "Lift"
 msgstr "Lift"
 
-#: src/components/controls/TransformControls.tsx:284
+#: src/components/controls/TransformControls.tsx:286
 msgctxt "Transform panel section"
 msgid "Lift"
 msgstr "Lift"
@@ -4971,7 +4985,7 @@ msgstr "Loading thumbnail…"
 msgid "loading…"
 msgstr "loading…"
 
-#: src/components/controls/TransformControls.tsx:152
+#: src/components/controls/TransformControls.tsx:154
 msgctxt "Gizmo space toggle"
 msgid "Local"
 msgstr "Local"
@@ -5027,8 +5041,8 @@ msgid "Lock waypoint"
 msgstr "Lock waypoint"
 
 #: src/supports/Settings/components/TipSettingsCard.tsx:61
-#: src/supports/Settings/SupportSidebar.tsx:911
-#: src/supports/Settings/SupportSidebar.tsx:1075
+#: src/supports/Settings/SupportSidebar.tsx:939
+#: src/supports/Settings/SupportSidebar.tsx:1128
 msgid "Locked"
 msgstr "Locked"
 
@@ -5489,7 +5503,7 @@ msgstr "Mortise (near faces)"
 msgid "Mortise edges"
 msgstr "Mortise edges"
 
-#: src/components/controls/TransformControls.tsx:219
+#: src/components/controls/TransformControls.tsx:221
 msgctxt "Transform panel section"
 msgid "Move"
 msgstr "Move"
@@ -5503,7 +5517,7 @@ msgstr "Move {modelName}"
 msgid "Move and place models on the plate"
 msgstr "Move and place models on the plate"
 
-#: src/components/controls/TransformControls.tsx:148
+#: src/components/controls/TransformControls.tsx:150
 msgid "Move and rotate along the model's own axes instead of the build plate's"
 msgstr "Move and rotate along the model's own axes instead of the build plate's"
 
@@ -5842,7 +5856,7 @@ msgstr "No resin selected"
 msgid "No snapshots yet. Run \"Backup Now\" to create your first local snapshot."
 msgstr "No snapshots yet. Run \"Backup Now\" to create your first local snapshot."
 
-#: src/features/scene/useSceneCollectionManager.ts:7219
+#: src/features/scene/useSceneCollectionManager.ts:7214
 msgid "No source file to restore this model from."
 msgstr "No source file to restore this model from."
 
@@ -5880,8 +5894,8 @@ msgid "Non-manifold verts"
 msgstr "Non-manifold verts"
 
 #: src/supports/Settings/components/TipSettingsCard.tsx:60
-#: src/supports/Settings/SupportSidebar.tsx:910
-#: src/supports/Settings/SupportSidebar.tsx:1074
+#: src/supports/Settings/SupportSidebar.tsx:938
+#: src/supports/Settings/SupportSidebar.tsx:1127
 msgid "Normal"
 msgstr "Normal"
 
@@ -6001,10 +6015,10 @@ msgstr "Offline Layer Height"
 msgid "Offline layer height override in micrometers"
 msgstr "Offline layer height override in micrometers"
 
-#: src/supports/Settings/SupportSidebar.tsx:900
-#: src/supports/Settings/SupportSidebar.tsx:900
-#: src/supports/Settings/SupportSidebar.tsx:1064
-#: src/supports/Settings/SupportSidebar.tsx:1064
+#: src/supports/Settings/SupportSidebar.tsx:928
+#: src/supports/Settings/SupportSidebar.tsx:928
+#: src/supports/Settings/SupportSidebar.tsx:1117
+#: src/supports/Settings/SupportSidebar.tsx:1117
 msgid "Offset"
 msgstr "Offset"
 
@@ -6062,7 +6076,7 @@ msgstr "ON (Required)"
 msgid "On-Face"
 msgstr "On-Face"
 
-#: src/components/controls/TransformControls.tsx:289
+#: src/components/controls/TransformControls.tsx:291
 msgid "On, models stay this far above the build plate after every move or rotation. Off, they rest on the plate. Scaling keeps the current bottom height."
 msgstr "On, models stay this far above the build plate after every move or rotation. Off, they rest on the plate. Scaling keeps the current bottom height."
 
@@ -7134,11 +7148,11 @@ msgstr "Remesh {modelName}"
 msgid "Remesh confirmation"
 msgstr "Remesh confirmation"
 
-#: src/features/scene/useSceneCollectionManager.ts:7410
+#: src/features/scene/useSceneCollectionManager.ts:7405
 msgid "Remesh failed: {message}"
 msgstr "Remesh failed: {message}"
 
-#: src/features/scene/useSceneCollectionManager.ts:7383
+#: src/features/scene/useSceneCollectionManager.ts:7378
 msgid "Remesh needs the desktop app."
 msgstr "Remesh needs the desktop app."
 
@@ -7501,7 +7515,7 @@ msgid "Reset Layout"
 msgstr "Reset Layout"
 
 #: src/app/page.tsx:9142
-#: src/components/controls/TransformControls.tsx:440
+#: src/components/controls/TransformControls.tsx:442
 msgid "Reset Rotation"
 msgstr "Reset Rotation"
 
@@ -7510,7 +7524,7 @@ msgid "Reset saved window layout"
 msgstr "Reset saved window layout"
 
 #: src/app/page.tsx:9142
-#: src/components/controls/TransformControls.tsx:590
+#: src/components/controls/TransformControls.tsx:592
 msgid "Reset Scale"
 msgstr "Reset Scale"
 
@@ -7576,7 +7590,7 @@ msgid "Restore as Current"
 msgstr "Restore as Current"
 
 #: src/features/mesh-smoothing/MeshSmoothingSettingsPanel.tsx:206
-#: src/supports/Settings/SupportSidebar.tsx:1207
+#: src/supports/Settings/SupportSidebar.tsx:1260
 msgid "Restore defaults"
 msgstr "Restore defaults"
 
@@ -7664,9 +7678,9 @@ msgstr "Roads? Where we're printing, we don't need roads."
 msgid "Root Disk H"
 msgstr "Root Disk H"
 
-#: src/supports/Settings/SupportSidebar.tsx:986
-#: src/supports/Settings/SupportSidebar.tsx:1144
-#: src/supports/Settings/SupportSidebar.tsx:1144
+#: src/supports/Settings/SupportSidebar.tsx:1014
+#: src/supports/Settings/SupportSidebar.tsx:1197
+#: src/supports/Settings/SupportSidebar.tsx:1197
 msgid "Root Disk Height"
 msgstr "Root Disk Height"
 
@@ -7674,10 +7688,10 @@ msgstr "Root Disk Height"
 msgid "Roots"
 msgstr "Roots"
 
-#: src/supports/Settings/SupportSidebar.tsx:970
-#: src/supports/Settings/SupportSidebar.tsx:970
-#: src/supports/Settings/SupportSidebar.tsx:1127
-#: src/supports/Settings/SupportSidebar.tsx:1127
+#: src/supports/Settings/SupportSidebar.tsx:998
+#: src/supports/Settings/SupportSidebar.tsx:998
+#: src/supports/Settings/SupportSidebar.tsx:1180
+#: src/supports/Settings/SupportSidebar.tsx:1180
 msgid "Roots Diameter"
 msgstr "Roots Diameter"
 
@@ -7686,7 +7700,7 @@ msgstr "Roots Diameter"
 msgid "Roots Enabled on Import"
 msgstr "Roots Enabled on Import"
 
-#: src/components/controls/TransformControls.tsx:374
+#: src/components/controls/TransformControls.tsx:376
 msgctxt "Transform panel section"
 msgid "Rotate"
 msgstr "Rotate"
@@ -7701,7 +7715,7 @@ msgctxt "Undo history entry"
 msgid "Rotate hole"
 msgstr "Rotate hole"
 
-#: src/components/controls/TransformControls.tsx:366
+#: src/components/controls/TransformControls.tsx:368
 msgid "Rotate the selection as one block around its centre; turn off to rotate each model in place"
 msgstr "Rotate the selection as one block around its centre; turn off to rotate each model in place"
 
@@ -7791,7 +7805,7 @@ msgstr "Save current settings to this preset"
 msgid "Save Error"
 msgstr "Save Error"
 
-#: src/supports/Settings/SupportSidebar.tsx:1200
+#: src/supports/Settings/SupportSidebar.tsx:1253
 msgid "Save failed"
 msgstr "Save failed"
 
@@ -7824,7 +7838,7 @@ msgstr "Save scene as…"
 msgid "Save scene options"
 msgstr "Save scene options"
 
-#: src/supports/Settings/SupportSidebar.tsx:1200
+#: src/supports/Settings/SupportSidebar.tsx:1253
 msgid "Save settings"
 msgstr "Save settings"
 
@@ -7838,7 +7852,7 @@ msgid "Save webcam snapshot"
 msgstr "Save webcam snapshot"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:637
-#: src/supports/Settings/SupportSidebar.tsx:1200
+#: src/supports/Settings/SupportSidebar.tsx:1253
 msgid "Saved"
 msgstr "Saved"
 
@@ -7863,7 +7877,7 @@ msgstr "Saved!"
 msgid "Saving…"
 msgstr "Saving…"
 
-#: src/components/controls/TransformControls.tsx:449
+#: src/components/controls/TransformControls.tsx:451
 msgctxt "Transform panel section"
 msgid "Scale"
 msgstr "Scale"
@@ -8503,11 +8517,11 @@ msgstr "Shrink-Wrap {modelName}"
 msgid "Shrink-Wrap confirmation"
 msgstr "Shrink-Wrap confirmation"
 
-#: src/features/scene/useSceneCollectionManager.ts:7464
+#: src/features/scene/useSceneCollectionManager.ts:7459
 msgid "Shrink-Wrap failed: {message}"
 msgstr "Shrink-Wrap failed: {message}"
 
-#: src/features/scene/useSceneCollectionManager.ts:7437
+#: src/features/scene/useSceneCollectionManager.ts:7432
 msgid "Shrink-Wrap needs the desktop app."
 msgstr "Shrink-Wrap needs the desktop app."
 
@@ -8990,7 +9004,7 @@ msgstr "Support settings and presets"
 msgid "Support Size"
 msgstr "Support Size"
 
-#: src/supports/Settings/SupportSidebar.tsx:1192
+#: src/supports/Settings/SupportSidebar.tsx:1245
 msgid "Support Studio"
 msgstr "Support Studio"
 
@@ -9601,7 +9615,7 @@ msgid "Transferred"
 msgstr "Transferred"
 
 #: src/components/controls/toolRailEntries.ts:50
-#: src/components/controls/TransformControls.tsx:206
+#: src/components/controls/TransformControls.tsx:208
 msgid "Transform"
 msgstr "Transform"
 
@@ -9622,10 +9636,10 @@ msgid "Triangles:"
 msgstr "Triangles:"
 
 #: src/supports/Settings/components/PresetCard.tsx:149
-#: src/supports/Settings/SupportSidebar.tsx:950
-#: src/supports/Settings/SupportSidebar.tsx:950
-#: src/supports/Settings/SupportSidebar.tsx:1112
-#: src/supports/Settings/SupportSidebar.tsx:1112
+#: src/supports/Settings/SupportSidebar.tsx:978
+#: src/supports/Settings/SupportSidebar.tsx:978
+#: src/supports/Settings/SupportSidebar.tsx:1165
+#: src/supports/Settings/SupportSidebar.tsx:1165
 msgid "Trunk Diameter"
 msgstr "Trunk Diameter"
 
@@ -9675,7 +9689,7 @@ msgstr "Ungroup folder"
 msgid "Ungroup selected"
 msgstr "Ungroup selected"
 
-#: src/components/controls/TransformControls.tsx:467
+#: src/components/controls/TransformControls.tsx:469
 msgctxt "Uniform scaling toggle"
 msgid "Uniform"
 msgstr "Uniform"
