@@ -121,4 +121,4 @@ export const SUPPORT_DETAIL_DRAG_PREVIEW: boolean = true;
  * legacy` in a consumer to the legacy branch and report the instanced branch as
  * dead code.
  */
-export const SUPPORT_INSTANCED_DRAG: boolean = false;
+export const SUPPORT_INSTANCED_DRAG: boolean = true;
