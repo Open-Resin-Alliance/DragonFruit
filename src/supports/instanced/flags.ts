@@ -78,3 +78,19 @@ export const SUPPORT_INSTANCED_CONES: boolean = true;
  * Declared `boolean`, not `false`, for the same reason as the joint flag.
  */
 export const SUPPORT_INSTANCED_ROOTS: boolean = true;
+
+/**
+ * Whether a joint drag keeps the preview out of the scene's render lists.
+ *
+ * The dragged support is drawn by its detail renderer, which already subscribes
+ * to the part-drag preview and moves itself. Substituting the preview entity in
+ * `renderListByType` as well rebuilt every producer and rewrote every instanced
+ * batch on each 25 ms publish; with this on, the scene lists keep the committed
+ * entity for the gesture and only the detail renderer (and the joint/contact
+ * gizmo) follows the pointer.
+ *
+ * The preview knot overrides still move leaf host knots, so a leaf hanging on the
+ * dragged support still follows; dependent branches remain frozen exactly as
+ * before. Turn off to restore the old whole-scene substitution.
+ */
+export const SUPPORT_DETAIL_DRAG_PREVIEW: boolean = true;

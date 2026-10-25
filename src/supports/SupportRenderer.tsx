@@ -53,6 +53,7 @@ import { InstancedShaftBatch } from './instanced/InstancedShaftBatch';
 import { InstancedContactConeBatch } from './instanced/InstancedContactConeBatch';
 import { InstancedRootBatch } from './instanced/InstancedRootBatch';
 import {
+    SUPPORT_DETAIL_DRAG_PREVIEW,
     SUPPORT_INSTANCED_CONES,
     SUPPORT_INSTANCED_JOINTS,
     SUPPORT_INSTANCED_ROOTS,
@@ -1674,6 +1675,15 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         ? { typeId: activeJointDragPreview.kind as SupportTypeId, support: activeJointDragPreview.support as { id: string } }
         : null), [activeJointDragPreview]);
 
+    /**
+     * The preview substituted into the scene's render lists. With the detail
+     * renderer owning its own preview, the list keeps the committed entity: the
+     * preview would otherwise invalidate every producer and rewrite every
+     * instanced batch on each publish, which was the per-frame cost of a joint
+     * drag. Null here is stable, so the list memo does not re-run at all.
+     */
+    const previewEntityForLists = SUPPORT_DETAIL_DRAG_PREVIEW ? null : activePreviewEntity;
+
     const renderLeavesById = useMemo(() => {
         if (previewLeavesById.size === 0) return state.leaves;
         const leaves = Object.create(state.leaves) as typeof state.leaves;
@@ -1763,8 +1773,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 list = list.map((entity) => knotDragOverridesById.get(entity.id) ?? entity);
             }
 
-            if (activePreviewEntity?.typeId === descriptor.id) {
-                const preview = activePreviewEntity.support as SupportEntityAny;
+            if (previewEntityForLists?.typeId === descriptor.id) {
+                const preview = previewEntityForLists.support as SupportEntityAny;
                 let replaced = false;
                 const next = list.map((entity) => {
                     if (entity.id !== preview.id) return entity;
@@ -1790,7 +1800,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return lists;
-    }, [stableState, knotDragOverridesById, activePreviewEntity, interiorView, matchesInteriorContact, matchesInteriorBrace]);
+    }, [stableState, knotDragOverridesById, previewEntityForLists, interiorView, matchesInteriorContact, matchesInteriorBrace]);
 
     /*
      * Thin typed reads of `renderListByType`, for the call sites below that
