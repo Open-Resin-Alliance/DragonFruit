@@ -53,14 +53,14 @@ no support work in a profile; full-plate calls in the tens; visuals unchanged.
 ### Slice contracts (first wave)
 
 - `src/supports/prepare/types.ts` (parent-owned, read-only): shared types.
-- `src/supports/prepare/mergedSupportGeometry.ts` (agent A): pure builder.
+- Merged-support geometry module under `src/supports/prepare/` (agent A): pure builder.
   - Input `ProxyModelGeometry` (type-only import from `SupportProxyMeshLayer`).
   - Output `MergedSupportGeometry { geometry, triangles, modelId? }`.
   - Same proxy fidelity: straight/tapered shafts, curved bezier tubes, roots
     (disk/cone/sphere), joints (sphere), contact cones (disk/body/tip, profile
     disk/sphere/legacy), world space, two groups.
   - No React, no R3F, no edits to existing files.
-- `src/supports/prepare/PrepareSupportMesh.tsx` (agent B): R3F mesh component.
+- Prepare support mesh component under `src/supports/prepare/` (agent B).
   - Takes merged geometry + final body/disk colors, opacity, clipping, visible,
     optional out-of-bounds material, optional model-level handlers.
   - Renders one mesh per material group (or one mesh with `material` array),
