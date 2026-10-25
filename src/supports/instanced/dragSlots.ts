@@ -422,7 +422,19 @@ export function buildJointDragSlotMap(
   const joints = buildJointSlots(entity, binding, descriptor.segmentsCarryBothJoints);
   if (joints.length === 0) return null;
 
-  const draggedSegments = buildSegmentSlots(entity, typeId, hosts, dragAdjacentSegmentIndices(binding, segments));
+  // Every segment of the support goes into the private batch, not only the
+  // adjacent ones that move. Suppressing only the moving segments left the rest
+  // of the support drawn by its detail renderer at the committed position while
+  // the batch drew the moving part at the preview — one support, two
+  // representations, and the old shaft stayed visible beside the new one. The
+  // batch writes the unmoved segments at their committed endpoints, so the whole
+  // support is one coherent draw.
+  const draggedSegments = buildSegmentSlots(
+    entity,
+    typeId,
+    hosts,
+    segments.map((_, index) => index),
+  );
   const { cones, coneBodyBuckets, coneNibCount } = buildConeSlots(entity, typeId);
   const knotBalls = buildKnotBallSlots(
     entity,
