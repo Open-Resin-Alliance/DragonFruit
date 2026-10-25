@@ -15,8 +15,16 @@ holds 165 fps with ~404 calls and 14.2M triangles.
   active-model integration behind `PREPARE_MERGED_SUPPORTS`. Other models still
   use the proxy; all-model merge is deferred until the Phase 2 instanced static
   path can serve Prepare too (otherwise it is throwaway work).
-- Phase 2 wave 1 in progress: slot records, flag codec, capacity-managed batch
-  core, and a joints-only integration map.
+- Phase 2 wave 1 landed: slot records, flag codec, capacity-managed batch core,
+  and a joints-only integration map. Wave 2 in progress: joint slots and the
+  uint-attribute material decision.
+
+**Correction from the joint map:** Support mode does not consume
+`collectProxyPrimitives`. `SupportRenderer` resolves its own batches
+(`sceneBatchedJointGroups` and siblings) with Support-specific filters, diameter
+blends and drop offsets. Phase 2 slot records for Support mode must be built
+from those resolved outputs, not the proxy collector; the collector stays the
+Prepare/merged/static source.
 
 ## What is already landed
 
