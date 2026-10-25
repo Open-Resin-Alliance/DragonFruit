@@ -30,6 +30,7 @@ import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { emitImmediateModelHover } from '@/supports/interaction/pointerOcclusion';
 import { MARQUEE_CANDIDATE_TINT_FACTOR } from '@/utils/marqueeCandidateTint';
 import { getSupportPlacementGuideZ } from './supportPlacementGuideStore';
+import { useOptimisticSelectedModelId } from './optimisticModelSelection';
 import { BAKED_OCCLUSION_ATTRIBUTE, bakedOcclusionStrength, bakedOcclusionVersion, getBakedOcclusionServerVersion, subscribeToBakedOcclusionVersions } from '@/features/scene/bakedOcclusion';
 
 // Scratch raycaster reused for clip-zone fallback raycasts.
@@ -337,6 +338,15 @@ function StlMeshComponent({
   children?: React.ReactNode;
 }) {
   // Access GPU picking state to detect gizmo hover
+  // A viewport click announces its model before the page selection render
+  // lands; only the clicked mesh changes tint for that frame.
+  const optimisticSelectedModelId = useOptimisticSelectedModelId();
+  // A pending single-selection click is authoritative for the tint, so the
+  // previous model clears in the same frame instead of waiting for the commit.
+  const isEffectivelySelected = optimisticSelectedModelId !== null
+    ? optimisticSelectedModelId === modelId
+    : !!isSelected;
+
   // Note: This works because StlMesh is rendered inside PickingProvider
   const { hit } = usePicking(); // Import usePicking at top if not already used inside StlMesh
   const [isPointerHovered, setIsPointerHovered] = React.useState(false);
@@ -747,7 +757,7 @@ if (uDitherAmount > 0.0) {
     const selectionStrength = Math.min(1, Math.max(0.88, selectedTintStrength ?? 0.75));
     const hoverStrength = Math.min(1, Math.max(0.65, hoverTintStrength ?? 0.5));
 
-    if (isSelected) {
+    if (isEffectivelySelected) {
       return base.clone().lerp(supportTint, selectionStrength).getStyle();
     }
 
@@ -760,7 +770,7 @@ if (uDitherAmount > 0.0) {
     }
 
     return base.getStyle();
-  }, [hoverTintStrength, isHoveredModel, isMarqueeHovered, isSelected, selectedTintStrength]);
+  }, [hoverTintStrength, isHoveredModel, isMarqueeHovered, isEffectivelySelected, selectedTintStrength]);
 
   const supportSectionOpacity = React.useMemo(() => {
     if (typeof revealGhostOpacity === 'number') {
@@ -1515,7 +1525,7 @@ if (uDitherAmount > 0.0) {
         ) : (
           <MeshShaderMaterial
             shaderType={baseShaderType}
-            isSelected={!!isSelected}
+            isSelected={isEffectivelySelected}
             isHovered={isHoveredModel || isMarqueeHovered}
             useVertexColors={hasVertexColorAttribute}
             hoverTintColor={hoverTintColor}
@@ -1543,7 +1553,7 @@ if (uDitherAmount > 0.0) {
           <mesh geometry={cavityGeometry} position={meshLocalOffset} renderOrder={1} raycast={() => null}>
             <MeshShaderMaterial
               shaderType={baseShaderType}
-              isSelected={!!isSelected}
+              isSelected={isEffectivelySelected}
               isHovered={isHoveredModel || isMarqueeHovered}
               useVertexColors={false}
               hoverTintColor={hoverTintColor}

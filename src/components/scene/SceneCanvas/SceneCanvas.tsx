@@ -121,6 +121,7 @@ import {
   orthoWheelRadiusScale,
 } from '@/components/scene/camera/orthoDolly';
 import { useMarqueeSelectionHandlers } from './useMarqueeSelectionHandlers';
+import { getOptimisticSelectedModelId, setOptimisticSelectedModelId } from './optimisticModelSelection';
 import {
   marqueeModeForDrag,
   marqueeRectForDrag,
@@ -1719,18 +1720,50 @@ export function SceneCanvas({
     };
   }, [modelPickerEnabled, onModelHoverModelChange]);
 
+  // Clicking a model in the viewport must tint it on the next frame, not after
+  // the page has re-rendered around the new selection. The meshes subscribe to
+  // the optimistic id themselves, while the selection update that every panel
+  // reads is a transition, so the browser can paint the tint before that render
+  // runs. Cleared as soon as the real selection lands (or after the store's
+  // fallback timeout if the plate refuses it), so it never becomes a second
+  // source of truth.
+  React.useEffect(() => {
+    const optimisticId = getOptimisticSelectedModelId();
+    if (!optimisticId) return;
+    if (selectedModelIds?.length === 1 && selectedModelIds[0] === optimisticId) {
+      setOptimisticSelectedModelId(null);
+      return;
+    }
+    // A different selection arrived first: it owns the tint now.
+    if (selectedModelIds && selectedModelIds.length > 0) {
+      setOptimisticSelectedModelId(null);
+    }
+  }, [selectedModelIds]);
+
+  const selectModelFromScene = React.useCallback((modelId: string | null, options?: { selectionMode?: 'single' | 'toggle' | 'add' }) => {
+    if (!onActiveModelChange) return;
+    const selectionMode = options?.selectionMode ?? 'single';
+    if (modelId && selectionMode === 'single' && !isModelPlateLocked?.(modelId)) {
+      setOptimisticSelectedModelId(modelId);
+      React.startTransition(() => onActiveModelChange(modelId, options));
+      return;
+    }
+    if (!modelId) setOptimisticSelectedModelId(null);
+    onActiveModelChange(modelId, options);
+  }, [isModelPlateLocked, onActiveModelChange]);
+
   const selectModelFromPointerHit = React.useCallback((modelId: string | null | undefined) => {
     if (mode !== 'prepare') return;
     if (!modelId || !onActiveModelChange) return;
 
-    onActiveModelChange(modelId);
+    selectModelFromScene(modelId);
     window.__modelClickGuardUntil = performance.now() + 48;
     window.dispatchEvent(new CustomEvent('model-clicked', { detail: { modelId } }));
     window.__modelClickedThisFrame = true;
     window.setTimeout(() => {
       window.__modelClickedThisFrame = false;
     }, 0);
-  }, [mode, onActiveModelChange]);
+  }, [mode, onActiveModelChange, selectModelFromScene]);
 
   React.useEffect(() => {
     const handleSupportModelPointerSelect = (event: Event) => {
@@ -4731,7 +4764,7 @@ export function SceneCanvas({
           return;
         }
 
-        onActiveModelChange(null);
+        selectModelFromScene(null);
         window.dispatchEvent(new CustomEvent('model-deselected'));
       }
 
@@ -4739,7 +4772,7 @@ export function SceneCanvas({
     });
 
     return unsubscribe;
-  }, [activeModelId, mode, onActiveModelChange, selectedModelIds]);
+  }, [activeModelId, mode, selectModelFromScene, selectedModelIds]);
 
   React.useEffect(() => {
     if (mode !== 'support') {
@@ -4837,7 +4870,7 @@ export function SceneCanvas({
 
     if (mode === 'prepare') {
       if (onActiveModelChange) {
-        onActiveModelChange(null);
+        selectModelFromScene(null);
       }
       window.dispatchEvent(new CustomEvent('model-deselected'));
       return;
@@ -4847,7 +4880,7 @@ export function SceneCanvas({
       if (supportStateForBounds.hoveredCategory === 'contactDisk') return;
       clearSupportSelection();
     }
-  }, [cameraInteractionCycleEnabled, isMarqueeSelecting, mode, onActiveModelChange, spaceMouseNavigationActive, supportStateForBounds.hoveredCategory, isPlacementActive]);
+  }, [cameraInteractionCycleEnabled, isMarqueeSelecting, mode, onActiveModelChange, selectModelFromScene, spaceMouseNavigationActive, supportStateForBounds.hoveredCategory, isPlacementActive]);
 
   React.useEffect(() => {
     updateCameraBelowBuildPlate();
@@ -6354,10 +6387,10 @@ export function SceneCanvas({
     if (mode !== 'prepare' || transformMode !== 'select') return;
     if (!modelId) return;
     if (onActiveModelChange) {
-      onActiveModelChange(modelId, { selectionMode: 'single' });
+      selectModelFromScene(modelId, { selectionMode: 'single' });
     }
     handleSelectModeDragStart(modelId, clientX, clientY);
-  }, [handleSelectModeDragStart, mode, onActiveModelChange, transformMode]);
+  }, [handleSelectModeDragStart, mode, onActiveModelChange, selectModelFromScene, transformMode]);
 
   // Window-level pointer tracking for the select-mode drag: candidate presses
   // only start moving once the pointer crosses the drag threshold, and moves /
@@ -6732,7 +6765,7 @@ export function SceneCanvas({
                       onSmoothingGeometryActivate={onSmoothingGeometryActivate}
                       onSupportClick={onSupportClick}
                       onSupportHover={handleSupportHover}
-                      onActiveModelChange={onActiveModelChange}
+                      onActiveModelChange={selectModelFromScene}
                       onSelectModeDragStart={handleSelectModeDragStart}
                       disableRaycast={
                         disableRaycast
