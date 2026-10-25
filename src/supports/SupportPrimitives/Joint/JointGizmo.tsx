@@ -15,8 +15,28 @@ import { commitJointDragSupport, computeJointDragSupportPreview, publishJointDra
 import { resolveShaftAnchor } from '../Knot/segmentEndpoints';
 import { resolveDraggedContacts } from './resolveDraggedContacts';
 import { moveJointLabel } from '@/supports/history/supportHistoryLabels';
+import { useFrame } from '@react-three/fiber';
+import { SUPPORT_INSTANCED_DRAG } from '../../instanced/flags';
+import { findJointDragBinding } from '../../instanced/dragSlots';
+import {
+    beginJointDrag,
+    clearJointDragSession,
+    clearJointDragSessionAfterFrame,
+    endJointDrag,
+    getJointDragSession,
+    getLastJointDragPreview,
+    writeJointDragFrame,
+    type JointDragSceneContext,
+    type JointDragSlotEntity,
+} from '../../instanced/instanceDragWriter';
+import { suppressPrimitivesForJointDrag } from '../../instanced/dragSuppression';
 
-export function JointGizmo() {
+export function JointGizmo({
+    sceneRef,
+}: {
+    /** The scene values a joint drag needs; see `JointDragSceneContext`. */
+    sceneRef?: React.MutableRefObject<JointDragSceneContext | null>;
+} = {}) {
     const MOVE_DELTA_EPS_SQ = 1e-12;
     const state = useSyncExternalStore(subscribe, getSnapshot);
     const selectedId = state.selectedId;
@@ -38,6 +58,8 @@ export function JointGizmo() {
     const moveRafRef = useRef<number | null>(null);
     const gizmoTargetRef = useRef<THREE.Group>(null);
     const jointDragPosition = useJointDragPosition(selectedId ?? '');
+    /** Whether this gizmo gesture draws through the instanced drag batch. */
+    const instancedDragRef = useRef(false);
 
     const cloneObj = <T,>(obj: T | null | undefined): T | null => obj ? JSON.parse(JSON.stringify(obj)) : null;
 
@@ -47,6 +69,13 @@ export function JointGizmo() {
             if (moveRafRef.current !== null) {
                 window.cancelAnimationFrame(moveRafRef.current);
                 moveRafRef.current = null;
+            }
+            // A gizmo unmounting mid-gesture is a dead gesture: no instance and
+            // no hidden primitive may survive it.
+            if (instancedDragRef.current) {
+                instancedDragRef.current = false;
+                endJointDrag();
+                clearJointDragSession();
             }
             setJointInteractionLock(false, 0);
         };
@@ -124,11 +153,53 @@ export function JointGizmo() {
         if (!joint) return;
         setJointInteractionLock(true);
         dragPosRef.current = new THREE.Vector3(joint.pos.x, joint.pos.y, joint.pos.z);
+        instancedDragRef.current = false;
+
+        // A bezier (curve mode) or a type whose contacts are disks returns null
+        // here and keeps the legacy preview: `isInstanceableJointDrag` decides.
+        if (SUPPORT_INSTANCED_DRAG && owner && descriptor && result) {
+            const segments = (result.entity as { segments?: Segment[] }).segments ?? [];
+            const binding = findJointDragBinding(segments, joint.id);
+            const scene = sceneRef?.current ?? null;
+            if (binding) {
+                const entityRecord = result.entity as unknown as Record<string, unknown>;
+                const declaredHosts = resolveDeclaredHosts(owner.typeId, entityRecord);
+                const modelId = typeof entityRecord.modelId === 'string' ? entityRecord.modelId : undefined;
+                const slotMap = beginJointDrag({
+                    entity: result.entity as unknown as JointDragSlotEntity,
+                    binding,
+                    hosts: {
+                        root: descriptor.ownsRoot ? declaredHosts.root : undefined,
+                        hostKnot: descriptor.lower.kind === 'knot' ? declaredHosts.hostKnot : undefined,
+                    },
+                    hostKnots: scene?.hostKnots ?? [],
+                    sharedJointSlotById: scene?.sharedJointSlotById ?? null,
+                    dropOffsetZ: scene?.dropOffsetZFor?.(modelId) ?? 0,
+                });
+                if (slotMap) {
+                    suppressPrimitivesForJointDrag(slotMap);
+                    instancedDragRef.current = true;
+                }
+            }
+        }
 
         // Trunk records its own typed history entry instead.
         if (descriptor && !descriptor.ownsEditHistoryEntry) {
             initialEditSnapshotRef.current = captureSupportEditSnapshot();
         }
+    };
+
+    /**
+     * One instanced frame, or a clean drop back to the detail path when a reset
+     * or a cancel released the session between moves.
+     */
+    const writeInstancedFrame = (entity: unknown) => {
+        const session = getJointDragSession();
+        if (!session || session.ended) {
+            instancedDragRef.current = false;
+            return;
+        }
+        writeJointDragFrame(entity as JointDragSlotEntity);
     };
 
     const applyMoveDelta = useCallback((delta: THREE.Vector3) => {
@@ -171,7 +242,11 @@ export function JointGizmo() {
                 contextStart: resolveShaftAnchor(owner.typeId, { root, hostKnot: declaredHosts.hostKnot }) ?? undefined,
             });
 
-            if (livePreviewOf<typeof next>(owner.typeId) !== next) {
+            if (instancedDragRef.current) {
+                // The batch draws it; no preview event, no React commit. The
+                // gizmo's own position stays imperative below.
+                writeInstancedFrame(next);
+            } else if (livePreviewOf<typeof next>(owner.typeId) !== next) {
                 setLivePreview(owner.typeId, next);
                 publishJointDragSupportPreview(owner.typeId, next);
             }
@@ -185,8 +260,12 @@ export function JointGizmo() {
             const moved = updateSegmentsJointPos(entity.segments as any[], joint.id, newPos) as Segment[];
             const next = resolveDraggedContacts(owner.typeId, entity, joint.id, moved);
 
-            setLivePreview(owner.typeId, next);
-            emitSupportDragPreview(owner.typeId, next.id, next);
+            if (instancedDragRef.current) {
+                writeInstancedFrame(next);
+            } else {
+                setLivePreview(owner.typeId, next);
+                emitSupportDragPreview(owner.typeId, next.id, next);
+            }
 
             const snapped = getJointPosInSegments(next.segments as any[], joint.id);
             if (snapped) gizmoPos = snapped;
@@ -240,12 +319,28 @@ export function JointGizmo() {
         dragPosRef.current = null;
         pendingDeltaRef.current.set(0, 0, 0);
 
+        /**
+         * What this release commits. The fast path never published a preview, so
+         * the last frame the batch drew IS the entity to commit — reading the
+         * live preview ref would commit the pre-drag entity.
+         */
+        const instancedPreview = instancedDragRef.current
+            ? getLastJointDragPreview<JointDragSupport>()
+            : null;
+        if (instancedDragRef.current) {
+            // The final frame is the one `flushPendingMove` just wrote; end the
+            // gesture, then write the store in this same handler.
+            endJointDrag();
+            instancedDragRef.current = false;
+        }
+
         // A type that owns its history entry records a TYPED before/after entry.
         // The action's payload type is per-action, so this one stays typed rather
         // than dispatched; the action comes off the descriptor that declares it.
         if (initialOwnHistoryRef.current && owner
             && descriptor!.ownsEditHistoryEntry && descriptor!.historyUpdate) {
-            const committed = livePreviewOf<JointDragSupport>(owner.typeId)
+            const committed = instancedPreview
+                ?? livePreviewOf<JointDragSupport>(owner.typeId)
                 ?? getSupportEntity(owner.typeId, owner.id) as JointDragSupport | null;
             if (committed) {
                 const applied = cloneObj(commitJointDragSupport(owner.typeId, committed as never));
@@ -267,7 +362,8 @@ export function JointGizmo() {
         // commit writes the entity back and clears its preview, which is what
         // the twig and stick arms did with two calls of their own.
         if (initialEditSnapshotRef.current && owner) {
-            const committed = livePreviewOf<JointDragSupport>(owner.typeId)
+            const committed = instancedPreview
+                ?? livePreviewOf<JointDragSupport>(owner.typeId)
                 ?? getSupportEntity(owner.typeId, owner.id) as JointDragSupport | null;
             if (committed) commitJointDragSupport(owner.typeId, committed as never);
 
@@ -280,6 +376,9 @@ export function JointGizmo() {
         }
 
         livePreviewRef.current = null;
+        // The suppression clear and the store write above are one commit; the
+        // session itself goes one frame later, after that commit has painted.
+        if (instancedPreview) clearJointDragSessionAfterFrame();
     };
 
     // Sync gizmo group position to joint.pos, but only when not dragging.
@@ -292,6 +391,24 @@ export function JointGizmo() {
         if (dragPosRef.current !== null) return; // skip during active drag
         gizmoTargetRef.current.position.set(joint.pos.x, joint.pos.y, joint.pos.z);
     }, [joint?.pos.x, joint?.pos.y, joint?.pos.z]);
+
+    /**
+     * A joint-ball drag no longer publishes a position event in the fast path, so
+     * the gizmo follows the batch's own last frame instead: one imperative write
+     * per frame, no React state. The gizmo's own gesture is excluded — it sets
+     * the position directly in `applyMoveDelta`.
+     */
+    useFrame(() => {
+        if (!SUPPORT_INSTANCED_DRAG) return;
+        if (dragPosRef.current !== null) return;
+        if (!gizmoTargetRef.current) return;
+        const session = getJointDragSession();
+        if (!session || session.ended) return;
+        const preview = getLastJointDragPreview<{ segments: Segment[] }>();
+        if (!preview) return;
+        const pos = getJointPosInSegments(preview.segments, session.slotMap.jointId);
+        if (pos) gizmoTargetRef.current.position.set(pos.x, pos.y, pos.z);
+    });
 
     if (!joint) return null;
 

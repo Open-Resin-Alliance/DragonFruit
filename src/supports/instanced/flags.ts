@@ -94,3 +94,31 @@ export const SUPPORT_INSTANCED_ROOTS: boolean = true;
  * before. Turn off to restore the old whole-scene substitution.
  */
 export const SUPPORT_DETAIL_DRAG_PREVIEW: boolean = true;
+
+/**
+ * Step 4: a joint drag's preview drawn by a private instanced batch instead of
+ * the dragged support's detail renderers.
+ *
+ * Off (the rollback) keeps the whole gesture on the detail path: the dragged
+ * support's `JointRenderer`/`ShaftRenderer`/`ContactConeRenderer` follow the
+ * 25 ms part-drag preview, and nothing mounts the drag batch. On, the
+ * interaction begins a drag session, suppresses exactly those primitives with
+ * `visible={false}` (never by unmounting them, so the GPU pick registrations
+ * survive the gesture) and writes one instance per moved primitive per frame —
+ * two React commits per gesture (begin and release) instead of two per 25 ms
+ * frame.
+ *
+ * Both entry points gate on it (`useJointInteraction` and `JointGizmo`), and it
+ * only starts a session when `isInstanceableJointDrag` accepts the entity: a
+ * twig, a brace, a stump, a leaf or a bezier segment returns null and keeps the
+ * legacy preview byte for byte. The gate lives in the interaction layer, not in
+ * the batch: `beginJointDrag` and `InstancedJointDragBatch` are inert until
+ * something calls them, and a reader that gated them again here could not test
+ * them with the flag off.
+ *
+ * Declared `boolean`, not `false`, for the same reason as the joint flag: a
+ * literal type would let TypeScript narrow every `SUPPORT_INSTANCED_DRAG ? new :
+ * legacy` in a consumer to the legacy branch and report the instanced branch as
+ * dead code.
+ */
+export const SUPPORT_INSTANCED_DRAG: boolean = false;

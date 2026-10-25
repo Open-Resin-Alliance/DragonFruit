@@ -38,15 +38,23 @@ test('the joint material injects instanceMatrix into the stock standard program'
   );
 
   // Applied after the chunk that declares `transformed`, and to the normal
-  // before the stock normal matrix.
+  // before the stock normal matrix. The instance scale is non-uniform for a
+  // tapered shaft or a cone, so the normal goes through three's own
+  // non-uniform-scale correction rather than a bare `mat3(instanceMatrix)`.
   assert.ok(shader.vertexShader.includes(
     'transformed = ( instanceMatrix * vec4( transformed, 1.0 ) ).xyz;',
   ));
   assert.ok(shader.vertexShader.includes(
-    'objectNormal = mat3( instanceMatrix ) * objectNormal;',
+    'mat3 instanceNormalMatrix = mat3( instanceMatrix );',
+  ));
+  assert.ok(shader.vertexShader.includes(
+    'objectNormal = instanceNormalMatrix * objectNormal;',
+  ));
+  assert.ok(shader.vertexShader.includes(
+    'dot( instanceNormalMatrix[0], instanceNormalMatrix[0] ),',
   ));
   assert.ok(
-    shader.vertexShader.indexOf('mat3( instanceMatrix )')
+    shader.vertexShader.indexOf('mat3 instanceNormalMatrix')
       > shader.vertexShader.indexOf('#include <beginnormal_vertex>'),
   );
 

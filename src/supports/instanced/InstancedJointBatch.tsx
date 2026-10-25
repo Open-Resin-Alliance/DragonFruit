@@ -51,6 +51,14 @@ export interface InstancedJointBatchProps {
   onJointClick?: (joint: InstancedJoint, event: ThreeEvent<MouseEvent>) => void;
   onJointPointerMove?: (joint: InstancedJoint, event: ThreeEvent<PointerEvent>) => void;
   onJointPointerOut?: (joint: InstancedJoint | null, event: ThreeEvent<PointerEvent>) => void;
+  /**
+   * The mounted batch, or null when it unmounts.
+   *
+   * The joint-drag writer moves the leaf host-knot balls that ride the dragged
+   * support's own segments through THIS batch — they are scene geometry, so it
+   * must not own or resize them. Nobody else needs the handle.
+   */
+  onBatchReady?: (batch: SupportInstanceBatch | null) => void;
 }
 
 type JointBatchResources = {
@@ -81,6 +89,7 @@ export function InstancedJointBatch({
   onJointClick,
   onJointPointerMove,
   onJointPointerOut,
+  onBatchReady,
 }: InstancedJointBatchProps) {
   const [resources, setResources] = useState<JointBatchResources | null>(null);
   const appliedStatesRef = useRef<Map<number, InstancedJointVisualState>>(new Map());
@@ -106,6 +115,15 @@ export function InstancedJointBatch({
       material.dispose();
     };
   }, []);
+
+  // Hand the batch to whoever draws rider geometry through it (the joint-drag
+  // writer moves leaf host-knot balls on the dragged support's segments). Null
+  // on unmount so a released handle is never written into.
+  useLayoutEffect(() => {
+    if (!resources) return;
+    onBatchReady?.(resources.batch);
+    return () => onBatchReady?.(null);
+  }, [resources, onBatchReady]);
 
   // Same values the parent's traversal applies to every mesh under its group.
   // Repeated here so the batch is correct on the commit it mounts, which is one

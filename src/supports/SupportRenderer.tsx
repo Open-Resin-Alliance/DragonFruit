@@ -55,10 +55,15 @@ import { InstancedRootBatch } from './instanced/InstancedRootBatch';
 import {
     SUPPORT_DETAIL_DRAG_PREVIEW,
     SUPPORT_INSTANCED_CONES,
+    SUPPORT_INSTANCED_DRAG,
     SUPPORT_INSTANCED_JOINTS,
     SUPPORT_INSTANCED_ROOTS,
     SUPPORT_INSTANCED_SHAFTS,
 } from './instanced/flags';
+import { InstancedJointDragBatch } from './instanced/InstancedJointDragBatch';
+import type { JointDragSceneContext } from './instanced/instanceDragWriter';
+import type { DragHostKnot, JointDragSlotMap } from './instanced/dragSlots';
+import type { SupportInstanceBatch } from './instanced/supportInstanceBatch';
 import { buildJointSlotIndex } from './instanced/jointSlots';
 import { buildConeSlotIndex } from './instanced/coneSlots';
 import { buildRootSlotIndex, type RootSlotGroup } from './instanced/rootSlots';
@@ -1335,8 +1340,26 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         // eslint-disable-next-line react-hooks/exhaustive-deps -- the collections it walks, not the snapshot: a hover ran this walk over every root for nothing.
     }, supportCollectionRefs(state, interactionHooksEnabled));
 
+    /**
+     * The scene-owned values a joint drag needs, published for the gesture
+     * layer. A ref, not a prop or a context value: `useJointInteraction` runs
+     * before the producer memos below exist, and the gesture reads it at pointer
+     * down, long after this render's layout effect has filled it.
+     */
+    const jointDragSceneRef = React.useRef<JointDragSceneContext | null>(null);
+    /**
+     * The scene's joint batch, handed up by `InstancedJointBatch`. The drag
+     * writer moves the leaf host-knot balls that ride the dragged support's own
+     * segments through it — they are scene geometry and never resized here.
+     */
+    const [sceneJointBatch, setSceneJointBatch] = React.useState<SupportInstanceBatch | null>(null);
+    const handleSceneJointBatchReady = React.useCallback(
+        (batch: SupportInstanceBatch | null) => setSceneJointBatch(batch),
+        [],
+    );
+
     // Enable joint dragging
-    useJointInteraction(isInteractable);
+    useJointInteraction(isInteractable, jointDragSceneRef);
     // Enable knot sliding
     useKnotInteraction(isInteractable);
 
@@ -2294,6 +2317,43 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     ), [sceneBatchedJointGroups]);
 
     /**
+     * The scene knots as a joint drag needs them: the writer moves the leaf
+     * host-knot balls that ride the dragged support's own segments, because
+     * those are scene-batch instances and would otherwise freeze mid-drag.
+     *
+     * Positions stay in entity space; the writer applies the model drop itself.
+     */
+    const jointDragHostKnots = React.useMemo<DragHostKnot[]>(() => {
+        if (!SUPPORT_INSTANCED_DRAG) return [];
+        const knots: DragHostKnot[] = [];
+        for (const knot of Object.values(state.knots)) {
+            knots.push({
+                id: knot.id,
+                parentShaftId: knot.parentShaftId,
+                pos: knot.pos,
+                ...(knot.t !== undefined ? { t: knot.t } : {}),
+                ...(knot.diameter !== undefined ? { diameter: knot.diameter } : {}),
+            });
+        }
+        return knots;
+    }, [state.knots]);
+
+    const jointDragScene = React.useMemo<JointDragSceneContext>(() => ({
+        hostKnots: jointDragHostKnots,
+        // The scene batch's instance per joint id, so a knot ball on a moving
+        // segment can be written at the instance the scene already draws it.
+        sharedJointSlotById: jointSlotIndex?.byPrimitive ?? null,
+        dropOffsetZFor: resolveModelDropOffsetZ,
+    }), [jointDragHostKnots, jointSlotIndex, resolveModelDropOffsetZ]);
+
+    React.useLayoutEffect(() => {
+        jointDragSceneRef.current = jointDragScene;
+        return () => {
+            jointDragSceneRef.current = null;
+        };
+    }, [jointDragScene]);
+
+    /**
      * Groups a type's unselected shafts by model and colour for instanced
      * drawing.
      */
@@ -3138,6 +3198,19 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         resolveBaseColor,
     ]);
 
+    /**
+     * The dragged support's colour, for the drag batch's non-joint primitives.
+     * Joints ignore it — `JointRenderer` gives a selected support blue/grey.
+     */
+    const resolveJointDragPreviewColor = React.useCallback(
+        (slotMap: JointDragSlotMap) => resolveDetailSupportColor(
+            slotMap.typeId,
+            slotMap.supportId,
+            slotMap.modelId,
+        ),
+        [resolveDetailSupportColor],
+    );
+
     /** The props every detail renderer takes identically. */
     /**
      * The props every detail renderer takes, for one entity.
@@ -3605,7 +3678,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             <JointCreationManager />
 
             {/* Joint Gizmo */}
-            <JointGizmo />
+            <JointGizmo sceneRef={jointDragSceneRef} />
             {/* Knot Gizmo (for sliding knots along shafts) */}
             <KnotGizmo />
             <BezierGizmoManager />
@@ -3625,6 +3698,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     onJointClick={isPointerInteractable ? handleSceneBatchedJointClick : undefined}
                     onJointPointerMove={isPointerInteractable ? handleSceneBatchedJointPointerMove : undefined}
                     onJointPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                    onBatchReady={SUPPORT_INSTANCED_DRAG ? handleSceneJointBatchReady : undefined}
                 />
             ) : sceneBatchedJointGroups.map((group) => (
                 <group key={`scene-joint-batch:${group.color}`}>
@@ -3641,6 +3715,28 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     />
                 </group>
             )))}
+            {/*
+              The joint drag's own geometry, mounted beside the scene joint batch
+              so the transparent sort order is unchanged. It draws nothing
+              without a live gesture (its own store subscription decides), never
+              enters the pick clone, and its instances are written per frame by
+              `writeJointDragFrame` — no React commit per frame.
+
+              No clipping planes on purpose: a joint drag only starts on a
+              selected support, and every draggable type's detail group is
+              clip-exempt (`noClipping`, always for trunk/branch and on selection
+              for the rest), so the batch has to draw unclipped to match what the
+              detail renderers show in a cross-section.
+            */}
+            {SUPPORT_INSTANCED_DRAG && !simpleRender && (
+                <InstancedJointDragBatch
+                    sharedJointBatch={sceneJointBatch}
+                    resolveColor={resolveJointDragPreviewColor}
+                    transparent={ghostTransparent}
+                    opacity={ghostOpacityClamped}
+                    renderOrder={ghostRenderOrder}
+                />
+            )}
             {rootSlotIndex ? (
                 <InstancedRootBatch
                     index={rootSlotIndex}

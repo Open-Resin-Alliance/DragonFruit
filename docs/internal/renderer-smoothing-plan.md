@@ -45,6 +45,25 @@ holds 165 fps with ~404 calls and 14.2M triangles.
   the supports the batch owns. Pending: visual/pointer parity check on the
   supported scene, then the drag writer.
 
+- Phase 2 wave 5 landed behind `SUPPORT_INSTANCED_DRAG` (on for testing): the
+  joint drag's preview is a private instanced batch instead of a React preview
+  event. `useJointInteraction` / `JointGizmo` open a session with
+  `beginJointDrag` (null for a twig, brace, stump, leaf or any bezier segment —
+  those keep the 25 ms detail preview byte for byte), and the writer moves the
+  dragged support's joints (resolved diameter, blue/grey), its adjacent segments
+  (16-segment, per-taper-ratio buckets), its cones (body/tip/nib) and the leaf
+  host-knot balls that ride its own segments through the SHARED scene joint batch.
+  The detail `JointRenderer` visual mesh, `ShaftRenderer` visual mesh and
+  `ContactConeRenderer` group are hidden with `visible={false}` from the
+  drag-suppression store — never unmounted, so their pick registrations and ids
+  survive the gesture — and `endJointDrag` clears the suppression in the same
+  handler as the store write. Both commits read `getLastJointDragPreview()`.
+  Per gesture: 2 React commits instead of two `flushSync` per 25 ms frame, and no
+  producer or batch re-layout for the rest of the scene.
+  Pending: A/B the drag's visual parity (cone aim against the disk solve, disk
+  profile contact drawn by the batch nib rather than `ContactDiskRenderer`, the
+  gizmo following the batch imperatively) and record draw calls per drag frame.
+
 **Correction from the joint map:** Support mode does not consume
 `collectProxyPrimitives`. `SupportRenderer` resolves its own batches
 (`sceneBatchedJointGroups` and siblings) with Support-specific filters, diameter

@@ -1,6 +1,6 @@
 import { resolveSegmentEndpoints, resolveShaftAnchor, type ShaftEntity } from '../Knot/segmentEndpoints';
 import { resolveDraggedContacts } from './resolveDraggedContacts';
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, type MutableRefObject } from 'react';
 import * as THREE from 'three';
 import { useThree, useFrame } from '@react-three/fiber';
 import { usePicking } from '@/components/picking';
@@ -19,10 +19,23 @@ import {
     isJointInteractionLocked,
     setJointInteractionLock,
 } from './jointDragRuntime';
-import { commitJointDragSupport, computeJointDragSupportPreview, JOINT_DRAG_COMMIT_TYPES, JOINT_DRAG_HOSTED_SHAFT_TYPES, publishJointDragSupportPreview, shouldCommitJointDrag } from './jointDragController';
+import { commitJointDragSupport, computeJointDragSupportPreview, JOINT_DRAG_COMMIT_TYPES, JOINT_DRAG_HOSTED_SHAFT_TYPES, publishJointDragSupportPreview, shouldCommitJointDrag, type JointDragSupport } from './jointDragController';
 import { subscribeSupportInteractionReset } from '../../interaction/supportInteractionReset';
 import { setPickRayFromCamera } from '@/components/scene/camera/pickRay';
 import { moveJointLabel } from '@/supports/history/supportHistoryLabels';
+import { SUPPORT_INSTANCED_DRAG } from '../../instanced/flags';
+import {
+    beginJointDrag,
+    clearJointDragSession,
+    clearJointDragSessionAfterFrame,
+    endJointDrag,
+    getJointDragSession,
+    getLastJointDragPreview,
+    writeJointDragFrame,
+    type JointDragSceneContext,
+    type JointDragSlotEntity,
+} from '../../instanced/instanceDragWriter';
+import { suppressPrimitivesForJointDrag } from '../../instanced/dragSuppression';
 
 /**
  * Hook to handle joint interaction (dragging/moving).
@@ -31,7 +44,10 @@ import { moveJointLabel } from '@/supports/history/supportHistoryLabels';
  * Usage: Call this hook once in your main scene component (e.g. SupportRenderer).
  * It monitors the picking state and handles drag operations for any 'joint' object.
  */
-export function useJointInteraction(enabled: boolean = true) {
+export function useJointInteraction(
+    enabled: boolean = true,
+    dragSceneRef?: MutableRefObject<JointDragSceneContext | null>,
+) {
     const MIN_DRAG_DELTA_SQ = 1e-6; // ~0.001mm positional epsilon to drop high-frequency jitter churn
     const MIN_PUBLISHED_CLAMPED_DELTA_SQ = 1e-8;
     const DRAG_SNAP_MM = 0.001;
@@ -91,6 +107,12 @@ export function useJointInteraction(enabled: boolean = true) {
     const activeJointBindingRef = useRef<{ jointId: string; segmentIndex: number; jointKey: 'topJoint' | 'bottomJoint' } | null>(null);
     const jointDragUpdatePendingRef = useRef(false);
     const jointDragListenersAttachedRef = useRef(false);
+    /**
+     * Whether this gesture draws through the instanced drag batch instead of
+     * publishing a React preview. Set once at drag start (a null slot map keeps
+     * the gesture on the detail path), cleared at release.
+     */
+    const instancedDragRef = useRef(false);
     const activeConstraintRootRef = useRef<Roots | undefined>(undefined);
     const activeConstraintStartRef = useRef<Vec3 | undefined>(undefined);
     const dragGestureSelectionAtStartRef = useRef<string | null>(null);
@@ -198,6 +220,21 @@ export function useJointInteraction(enabled: boolean = true) {
         lastPublishedClampedJointPosRef.current = { x: clampedPos.x, y: clampedPos.y, z: clampedPos.z };
     }, []);
 
+    /**
+     * One instanced frame: matrices only, no React.
+     *
+     * A reset can release the session between frames; the gesture is then dead,
+     * so it drops back to the detail path rather than writing into nothing.
+     */
+    const writeInstancedJointDragFrame = (entity: unknown) => {
+        const session = getJointDragSession();
+        if (!session || session.ended) {
+            instancedDragRef.current = false;
+            return;
+        }
+        writeJointDragFrame(entity as JointDragSlotEntity);
+    };
+
     const markJointDragUpdatePending = useCallback(() => {
         if (!activeJointId.current) return;
         jointDragUpdatePendingRef.current = true;
@@ -228,6 +265,13 @@ export function useJointInteraction(enabled: boolean = true) {
 
         if (activeSupport.current) {
             clearSupportDragPreview(activeSupport.current.typeId, activeSupport.current.id);
+        }
+
+        // A reset or unmount in the middle of a gesture must not leave instances
+        // or hidden detail primitives behind: this clears both.
+        if (instancedDragRef.current || getJointDragSession()) {
+            clearJointDragSession();
+            instancedDragRef.current = false;
         }
 
         activeJointId.current = null;
@@ -289,28 +333,46 @@ export function useJointInteraction(enabled: boolean = true) {
     useEffect(() => {
         if (typeof window === 'undefined') return;
 
-        const markForceEndDrag = () => {
+        /**
+         * Mark the gesture finished.
+         *
+         * `cancelled` is the edge with no follow-up: a pointercancel, a window
+         * blur or a hidden tab may never flip `isDragging`, so the release
+         * effect never runs and an instanced gesture would keep its instances
+         * and leave the detail primitives hidden. Those edges tear the session
+         * down here; a normal pointerup still goes through the release effect,
+         * which writes the final frame before ending it.
+         */
+        const markForceEndDrag = (cancelled: boolean) => () => {
             if (!activeJointId.current) return;
             forceEndDragRef.current = true;
-        };
-
-        const handleVisibilityChange = () => {
-            if (document.visibilityState === 'hidden') {
-                markForceEndDrag();
+            if (cancelled && instancedDragRef.current) {
+                instancedDragRef.current = false;
+                endJointDrag();
+                clearJointDragSession();
             }
         };
 
-        window.addEventListener('pointerup', markForceEndDrag, true);
-        window.addEventListener('pointercancel', markForceEndDrag, true);
-        window.addEventListener('mouseup', markForceEndDrag, true);
-        window.addEventListener('blur', markForceEndDrag);
+        const handleForceEnd = markForceEndDrag(false);
+        const handleCancelledEnd = markForceEndDrag(true);
+
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'hidden') {
+                handleCancelledEnd();
+            }
+        };
+
+        window.addEventListener('pointerup', handleForceEnd, true);
+        window.addEventListener('pointercancel', handleCancelledEnd, true);
+        window.addEventListener('mouseup', handleForceEnd, true);
+        window.addEventListener('blur', handleCancelledEnd);
         document.addEventListener('visibilitychange', handleVisibilityChange);
 
         return () => {
-            window.removeEventListener('pointerup', markForceEndDrag, true);
-            window.removeEventListener('pointercancel', markForceEndDrag, true);
-            window.removeEventListener('mouseup', markForceEndDrag, true);
-            window.removeEventListener('blur', markForceEndDrag);
+            window.removeEventListener('pointerup', handleForceEnd, true);
+            window.removeEventListener('pointercancel', handleCancelledEnd, true);
+            window.removeEventListener('mouseup', handleForceEnd, true);
+            window.removeEventListener('blur', handleCancelledEnd);
             document.removeEventListener('visibilitychange', handleVisibilityChange);
         };
     }, []);
@@ -357,7 +419,7 @@ export function useJointInteraction(enabled: boolean = true) {
             // Only shafted types reach here: findShaftOwnerOfJoint searches
             // segments, and the owner names its own type.
             const foundParent = owner
-                ? getSupportEntity(owner.typeId, owner.id) as { id: string; segments: Segment[] } | null
+                ? getSupportEntity(owner.typeId, owner.id) as (ShaftEntity & { modelId?: string }) | null
                 : null;
             const foundJointPos = owner?.pos ?? null;
 
@@ -405,7 +467,7 @@ export function useJointInteraction(enabled: boolean = true) {
                 // plate-rooted shaft owns, or the knot a knot-lowered one hangs
                 // from. Read off the declared edges, so the field each lives in is
                 // not restated here.
-                const declaredHosts = resolveDeclaredHosts(owner.typeId, foundParent as Record<string, unknown>);
+                const declaredHosts = resolveDeclaredHosts(owner.typeId, foundParent as unknown as Record<string, unknown>);
                 const hostRoot = descriptor.ownsRoot ? declaredHosts.root : undefined;
                 const hostKnot = descriptor.lower.kind === 'knot' ? declaredHosts.hostKnot : undefined;
 
@@ -462,6 +524,32 @@ export function useJointInteraction(enabled: boolean = true) {
                     dragOffset.current.set(0, 0, 0);
                 }
 
+                // The gesture is fully established: the binding, the host pair and
+                // the plane are known. Open the instanced session, or leave the
+                // gesture on the detail path — a null slot map is the fallback,
+                // never an error.
+                instancedDragRef.current = false;
+                if (SUPPORT_INSTANCED_DRAG) {
+                    const binding = activeJointBindingRef.current;
+                    const scene = dragSceneRef?.current ?? null;
+                    if (binding) {
+                        const slotMap = beginJointDrag({
+                            entity: foundParent,
+                            binding,
+                            hosts: { root: hostRoot, hostKnot },
+                            hostKnots: scene?.hostKnots ?? [],
+                            sharedJointSlotById: scene?.sharedJointSlotById ?? null,
+                            dropOffsetZ: scene?.dropOffsetZFor?.(foundParent.modelId) ?? 0,
+                        });
+                        if (slotMap) {
+                            // One commit: the batch mounts and the detail primitives
+                            // hide. Every frame after this writes instances only.
+                            suppressPrimitivesForJointDrag(slotMap);
+                            instancedDragRef.current = true;
+                        }
+                    }
+                }
+
                 // Drag started
             }
         }
@@ -497,6 +585,18 @@ export function useJointInteraction(enabled: boolean = true) {
             // preview is clamped against the host / contacts; committing the raw
             // plane hit re-solves from a different point and lands elsewhere.
             const committedDragPos = lastPreviewedJointPosRef.current ?? lastDragPos.current;
+            /**
+             * The preview entity this release commits, and the store write it
+             * performs. In the fast path the entity is the last frame the drag
+             * batch drew — what the operator last saw — and the write is deferred
+             * until that frame is the drawn one and the session has ended.
+             */
+            let committedPreview: JointDragSupport | null = null;
+            let writeCommittedSupport: (() => void) | null = null;
+            const lastDrawnPreview = instancedDragRef.current
+                ? getLastJointDragPreview<JointDragSupport>()
+                : null;
+
             if (committedDragPos && shouldCommitJointDrag(dragStartJointPos.current, committedDragPos)) {
                 if (JOINT_DRAG_HOSTED_SHAFT_TYPES.has(activeSupport.current?.typeId as SupportTypeId)) {
                     // A hosted shaft recomputes identically; the arms differed
@@ -511,7 +611,7 @@ export function useJointInteraction(enabled: boolean = true) {
                         const contextStart = activeConstraintStartRef.current
                             ?? resolveShaftAnchor(typeId, declared) ?? undefined;
 
-                        const resolved = computeJointDragSupportPreview({
+                        const resolved = lastDrawnPreview ?? computeJointDragSupportPreview({
                             kind: typeId as never,
                             support: support as never,
                             jointId: activeJointIdAtEnd,
@@ -521,7 +621,10 @@ export function useJointInteraction(enabled: boolean = true) {
                             contextStart,
                         });
 
-                        commitJointDragSupport(typeId as never, resolved, { stripDiskLengthOverride: true });
+                        committedPreview = resolved;
+                        writeCommittedSupport = () => {
+                            commitJointDragSupport(typeId as never, resolved as never, { stripDiskLengthOverride: true });
+                        };
                     }
                 } else if (activeSupport.current) {
                     // A type contacting the model at both ends re-solves those
@@ -531,10 +634,33 @@ export function useJointInteraction(enabled: boolean = true) {
                     const entity = getSupportEntity(typeId, id) as { segments: Segment[] } | null;
                     if (entity) {
                         const moved = updateSegmentsJointPos(entity.segments as any[], activeJointIdAtEnd, committedDragPos) as Segment[];
-                        updateSupportEntity(typeId, resolveDraggedContacts(typeId, entity, activeJointIdAtEnd, moved) as never);
+                        const next = lastDrawnPreview
+                            ?? resolveDraggedContacts(typeId, entity, activeJointIdAtEnd, moved);
+                        committedPreview = next as JointDragSupport;
+                        writeCommittedSupport = () => {
+                            updateSupportEntity(typeId, next as never);
+                        };
                     }
                 }
             }
+
+            // Write the final committed frame, then end the gesture: the private
+            // instances empty and the detail primitives draw again, all in this
+            // handler, so the release paints the committed geometry exactly once.
+            let endedInstancedDrag = false;
+            if (instancedDragRef.current) {
+                const finalFrame = committedPreview ?? getLastJointDragPreview<JointDragSlotEntity>();
+                if (finalFrame) writeInstancedJointDragFrame(finalFrame);
+                endJointDrag();
+                instancedDragRef.current = false;
+                endedInstancedDrag = true;
+            }
+
+            writeCommittedSupport?.();
+
+            // The suppression clear and this store write are one React commit;
+            // the session itself goes one frame later, after it has painted.
+            if (endedInstancedDrag) clearJointDragSessionAfterFrame();
 
             // A type that owns its history entry pushes a TYPED action; the
             // payload map is keyed per action, so the push stays narrow and the
@@ -610,21 +736,33 @@ export function useJointInteraction(enabled: boolean = true) {
 
             setJointInteractionLock(false);
         }
-    }, [isDragging, hit, camera, pointer, raycaster, controls, applyInteractionWarning, resolveJointBinding, markJointDragUpdatePending]);
+    }, [isDragging, hit, camera, pointer, raycaster, controls, applyInteractionWarning, resolveJointBinding, markJointDragUpdatePending, dragSceneRef]);
 
+    /**
+     * Record the joint position the preview shows, and emit it unless the
+     * instanced path owns the frame.
+     *
+     * The instanced drag batch draws the position itself, so a position event
+     * would be three React setters (`JointRenderer`, `ContactConeRenderer`,
+     * `JointGizmo`) per frame — the other half of what this path removes. The
+     * bookkeeping still runs every frame: `lastPreviewedJointPosRef` is what the
+     * release commits from, and it must be the position the operator saw.
+     */
     const emitPreviewJointPos = (clampedPos: Vec3 | null, rawPos: Vec3) => {
         const stablePos = clampedPos ?? lastResolvedJointPosRef.current ?? rawPos;
         const prev = lastEmittedPreviewJointPosRef.current;
-        if (prev
+        const unchanged = !!prev
             && Math.abs(prev.x - stablePos.x) < MIN_DRAG_DELTA_SQ
             && Math.abs(prev.y - stablePos.y) < MIN_DRAG_DELTA_SQ
-            && Math.abs(prev.z - stablePos.z) < MIN_DRAG_DELTA_SQ) {
-            return;
-        }
+            && Math.abs(prev.z - stablePos.z) < MIN_DRAG_DELTA_SQ;
 
-        lastResolvedJointPosRef.current = { x: stablePos.x, y: stablePos.y, z: stablePos.z };
-        lastEmittedPreviewJointPosRef.current = { x: stablePos.x, y: stablePos.y, z: stablePos.z };
+        if (!unchanged) {
+            lastResolvedJointPosRef.current = { x: stablePos.x, y: stablePos.y, z: stablePos.z };
+            lastEmittedPreviewJointPosRef.current = { x: stablePos.x, y: stablePos.y, z: stablePos.z };
+        }
         lastPreviewedJointPosRef.current = { x: stablePos.x, y: stablePos.y, z: stablePos.z };
+
+        if (unchanged || instancedDragRef.current) return;
         emitJointDragPositionPreview(activeJointId.current!, stablePos);
     };
 
@@ -694,7 +832,12 @@ export function useJointInteraction(enabled: boolean = true) {
                     }) as { id: string; segments: Segment[] };
 
                     const clamped = resolveJointPosById(next.segments, activeJointId.current!);
-                    if (shouldPublishForClampedPos(clamped) && !previewAlreadyShown(typeId, id, next)) {
+                    if (instancedDragRef.current) {
+                        // The fast path: the batch moves, the scene's lists and
+                        // batches do not. The jitter gate above already dropped
+                        // frames that would rewrite identical matrices.
+                        writeInstancedJointDragFrame(next);
+                    } else if (shouldPublishForClampedPos(clamped) && !previewAlreadyShown(typeId, id, next)) {
                         if (getSupportTypeDescriptor(typeId).jointDragUsesLivePreview) setLivePreview(next);
                         const nowMs = performance.now();
                         if (nowMs - lastPreviewPublishAtRef.current >= DRAG_PREVIEW_MIN_INTERVAL_MS) {
@@ -714,7 +857,9 @@ export function useJointInteraction(enabled: boolean = true) {
                         { id: string; segments: Segment[] };
 
                     const clamped = resolveJointPosById(next.segments, activeJointId.current!);
-                    if (shouldPublishForClampedPos(clamped) && !previewAlreadyShown(typeId, id, next)) {
+                    if (instancedDragRef.current) {
+                        writeInstancedJointDragFrame(next);
+                    } else if (shouldPublishForClampedPos(clamped) && !previewAlreadyShown(typeId, id, next)) {
                         if (getSupportTypeDescriptor(typeId).jointDragUsesLivePreview) setLivePreview(next);
                         const nowMs = performance.now();
                         if (nowMs - lastPreviewPublishAtRef.current >= DRAG_PREVIEW_MIN_INTERVAL_MS) {

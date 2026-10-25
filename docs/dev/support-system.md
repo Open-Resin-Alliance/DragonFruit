@@ -52,6 +52,22 @@ See [Adding a New Support Type](support-type-extension.md) for which steps are r
 
 **Unselected contact cones and plate roots are one capacity batch per shape ratio, plus a fixed primitive each.** `InstancedContactConeBatch` (behind `SUPPORT_INSTANCED_CONES`) draws every unselected cone's frustum as one mesh per quantized body/contact ratio plus one tip-ball batch and one nib batch; `InstancedRootBatch` (behind `SUPPORT_INSTANCED_ROOTS`) does the same for roots with one cone batch per quantized ratio plus one disk and one top-ball batch. The ratio is the one dimension an instance matrix cannot carry, so it lives in the geometry; the *profile* does not split a batch — `sphere` and `legacy` cones draw body and tip, a `disk` cone adds the nib, and the nib's material carries the legacy `polygonOffset 1/1` or it z-fights the plate. Both slot lists come from the groups `SupportRenderer` already resolved (`sceneBatchedContactConeGroups`, `sceneBatchedRootGroupsByType`), so visibility, selection exclusion, the drop offset and the colour are the producer's. The root writer applies `ROOT_RENDER_LIFT_MM`; the cone writer takes the nib depth from the active material profile (`useContactPenetrationResolver`), because that follows the profile store rather than the scene. Hover and marquee are a per-instance colour with **no** matrix scale — the legacy overlays drew the same geometry at the same transform. Picking keeps the legacy asymmetry: only a root **disk** answers the pointer (the root cone and ball were `raycast={() => null}`), while a cone's body mesh indexes its whole silhouette — two body half-segments, a tip-ball stub and the nib's span, all sharing the body instance id — so the inert tip and nib meshes lose no hits. Both indexes run at tolerance 0: Support mode has never given cones or roots a grab radius.
 
+**A joint drag draws through its own batch, not through the scene's.** While a
+joint is dragged, `InstancedJointDragBatch` (behind `SUPPORT_INSTANCED_DRAG`)
+draws exactly the dragged support's moved geometry — its joints at the resolved
+detail diameter (blue for the dragged one, grey for its siblings), its adjacent
+segments, its contact cone — from a private slot map built once at drag start
+(`buildJointDragSlotMap`). The detail `JointRenderer` visual mesh,
+`ShaftRenderer` visual mesh and `ContactConeRenderer` group are hidden with
+`visible={false}` from the drag-suppression store rather than unmounted, so
+their GPU pick registrations and pick ids survive the gesture. The writer
+(`instanceDragWriter`) holds no React: `beginJointDrag` / `writeJointDragFrame` /
+`endJointDrag` are an imperative transaction, and both a drag that starts on the
+joint ball and one that goes through `JointGizmo` commit from
+`getLastJointDragPreview()` — the preview the operator last saw. Types the
+predicate rejects (a twig's contact disks, a brace, a stump, a leaf, any bezier
+segment) never open a session and keep the 25 ms detail preview unchanged.
+
 **The batches are one tiled set, not a live set plus a scenery set.** The split
 existed because one batch per kind had bounds covering every plate; with tiles
 each handful of primitives has its own sphere, so the split culled nothing. It

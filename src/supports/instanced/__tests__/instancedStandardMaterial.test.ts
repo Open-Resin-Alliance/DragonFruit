@@ -39,11 +39,17 @@ test('a shaft batch material injects the two shared steps and nothing else', () 
   assert.ok(shader.vertexShader.includes(
     'transformed = ( instanceMatrix * vec4( transformed, 1.0 ) ).xyz;',
   ));
+  // A tapered shaft or a cone has an axial normal component and a non-uniform
+  // instance scale, so the normal takes three's own non-uniform-scale
+  // correction — the exact rule the legacy `<instancedMesh>` buckets get.
   assert.ok(shader.vertexShader.includes(
-    'objectNormal = mat3( instanceMatrix ) * objectNormal;',
+    'mat3 instanceNormalMatrix = mat3( instanceMatrix );',
   ));
-  // Tapered shafts draw the legacy bucket's cone geometry, so the normal has to
-  // stay the legacy `mat3(instanceMatrix)` rule: a synthesised cone normal would
-  // be a second shading path for the same shape.
+  assert.ok(shader.vertexShader.includes(
+    'objectNormal /= vec3(',
+  ));
+  assert.ok(shader.vertexShader.includes(
+    'objectNormal = instanceNormalMatrix * objectNormal;',
+  ));
   assert.equal(shader.fragmentShader, stock.fragmentShader);
 });

@@ -15,13 +15,11 @@ import * as THREE from 'three';
  *    matrix itself. It is deliberately the same attribute three reserves
  *    (`instanceMatrix`), declared by us, because the define is what is missing,
  *    not the binding.
- * 2. The normal transform for the same matrix. `mat3(instanceMatrix)` is three's
- *    own rule for a non-uniformly scaled instance and it is what the legacy
- *    `<instancedMesh>` batches get. A tapered shaft is a cone, whose true normal
- *    has a component along the axis, so this is *not* the cone's exact normal —
- *    it is the exact normal the legacy cone bucket shaded with. Reproducing that
- *    rule is the parity requirement; synthesising a cone normal here would be a
- *    second shading path that differs from the shape it replaced.
+ * 2. The normal transform for the same matrix, including three's
+ *    non-uniform-scale correction (divide by the squared column lengths). A
+ *    tapered shaft or a cone has an axial normal component; without the
+ *    correction the instance scale stretches it and the shape shades wrong.
+ *    This is the exact rule the legacy `<instancedMesh>` buckets get.
  *
  * There is no per-instance emissive: one material carries one `emissive`
  * uniform, and the hover/marquee lift is approximated in the instance colour
@@ -40,8 +38,22 @@ import * as THREE from 'three';
 const INSTANCE_MATRIX_APPLICATION = /* glsl */ `
 	transformed = ( instanceMatrix * vec4( transformed, 1.0 ) ).xyz;`;
 
+/**
+ * Three's own instanced-normal rule, verbatim from `defaultnormal_vertex`: a
+ * non-uniform instance scale must divide each normal component by the squared
+ * length of its matrix column before multiplying, or a cone's slanted normals
+ * are stretched with the instance and shade as if the shape were different.
+ * The previous `mat3(instanceMatrix) * objectNormal` was only correct for a
+ * uniform sphere or a radial-only cylinder.
+ */
 const INSTANCE_NORMAL_ROTATION = /* glsl */ `
-	objectNormal = mat3( instanceMatrix ) * objectNormal;`;
+	mat3 instanceNormalMatrix = mat3( instanceMatrix );
+	objectNormal /= vec3(
+		dot( instanceNormalMatrix[0], instanceNormalMatrix[0] ),
+		dot( instanceNormalMatrix[1], instanceNormalMatrix[1] ),
+		dot( instanceNormalMatrix[2], instanceNormalMatrix[2] )
+	);
+	objectNormal = instanceNormalMatrix * objectNormal;`;
 
 /**
  * Build the material one instanced batch draws with.
