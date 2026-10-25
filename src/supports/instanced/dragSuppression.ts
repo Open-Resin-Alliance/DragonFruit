@@ -24,19 +24,44 @@ export type SuppressedPrimitive = {
   id: string;
 };
 
-const EMPTY: ReadonlySet<string> = new Set();
+type DragSuppressionStore = {
+  suppressed: ReadonlySet<string>;
+  version: number;
+  listeners: Set<() => void>;
+};
 
-let suppressed: ReadonlySet<string> = EMPTY;
-let version = 0;
-const listeners = new Set<() => void>();
+/**
+ * The store lives on `globalThis`, not in this module's scope.
+ *
+ * The drag start runs in `useJointInteraction`/`JointGizmo`, while the
+ * primitives that must hide live under the detail renderers — in this app those
+ * landed in different lazy chunks, and a chunk can hold its own copy of a module
+ * initializer even when it imports the same source. A module-scoped set then
+ * meant `suppress…` wrote one copy and `ShaftRenderer` read another, so the
+ * detail geometry never hid. One global object makes every importer agree.
+ */
+const STORE_KEY = '__dragonfruitSupportDragSuppression';
+
+function store(): DragSuppressionStore {
+  const target = globalThis as typeof globalThis & {
+    [STORE_KEY]?: DragSuppressionStore;
+  };
+  let current = target[STORE_KEY];
+  if (!current) {
+    current = { suppressed: new Set<string>(), version: 0, listeners: new Set() };
+    target[STORE_KEY] = current;
+  }
+  return current;
+}
 
 function keyOf(kind: SuppressedPrimitiveKind, id: string): string {
   return `${kind}:${id}`;
 }
 
 function emit(): void {
-  version += 1;
-  for (const listener of listeners) listener();
+  const current = store();
+  current.version += 1;
+  for (const listener of current.listeners) listener();
 }
 
 /**
@@ -47,17 +72,19 @@ function emit(): void {
  */
 export function suppressPrimitiveDrag(kind: SuppressedPrimitiveKind, id: string): void {
   const key = keyOf(kind, id);
-  if (suppressed.has(key)) return;
-  const next = new Set(suppressed);
+  const current = store();
+  if (current.suppressed.has(key)) return;
+  const next = new Set(current.suppressed);
   next.add(key);
-  suppressed = next;
+  current.suppressed = next;
   emit();
 }
 
 /** Suppress a set of primitives in one notification, as a drag start does. */
 export function suppressPrimitivesForDrag(entries: readonly SuppressedPrimitive[]): void {
   if (entries.length === 0) return;
-  const next = new Set(suppressed);
+  const current = store();
+  const next = new Set(current.suppressed);
   let changed = false;
   for (const entry of entries) {
     const key = keyOf(entry.kind, entry.id);
@@ -66,14 +93,15 @@ export function suppressPrimitivesForDrag(entries: readonly SuppressedPrimitive[
     changed = true;
   }
   if (!changed) return;
-  suppressed = next;
+  current.suppressed = next;
   emit();
 }
 
 /** Clear the gesture's suppression: every detail primitive draws again. */
 export function clearPrimitiveDragSuppression(): void {
-  if (suppressed.size === 0) return;
-  suppressed = EMPTY;
+  const current = store();
+  if (current.suppressed.size === 0) return;
+  current.suppressed = new Set<string>();
   emit();
 }
 
@@ -99,25 +127,27 @@ export function isPrimitiveDragSuppressed(
   kind: SuppressedPrimitiveKind,
   id: string | null | undefined,
 ): boolean {
-  if (!id || suppressed.size === 0) return false;
-  return suppressed.has(keyOf(kind, id));
+  const current = store();
+  if (!id || current.suppressed.size === 0) return false;
+  return current.suppressed.has(keyOf(kind, id));
 }
 
 /** The current suppression set, for tests and dev assertions. */
 export function suppressedPrimitiveKeys(): ReadonlySet<string> {
-  return suppressed;
+  return store().suppressed;
 }
 
 export function subscribePrimitiveDragSuppression(listener: () => void): () => void {
-  listeners.add(listener);
+  const current = store();
+  current.listeners.add(listener);
   return () => {
-    listeners.delete(listener);
+    current.listeners.delete(listener);
   };
 }
 
 /** The snapshot `useSyncExternalStore` compares: it changes when the set does. */
 export function getPrimitiveDragSuppressionVersion(): number {
-  return version;
+  return store().version;
 }
 
 /** The same value on the server, where no gesture exists. */
