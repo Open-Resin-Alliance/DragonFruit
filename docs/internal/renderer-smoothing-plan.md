@@ -9,6 +9,15 @@ Remove React and per-primitive bookkeeping from the frame/interaction path.
 Targets are interaction latency, not fit-all throughput: the fitted plate already
 holds 165 fps with ~404 calls and 14.2M triangles.
 
+## Status
+
+- Phase 1 active-model slice landed and visually checked: builder + mesh +
+  active-model integration behind `PREPARE_MERGED_SUPPORTS`. Other models still
+  use the proxy; all-model merge is deferred until the Phase 2 instanced static
+  path can serve Prepare too (otherwise it is throwaway work).
+- Phase 2 wave 1 in progress: slot records, flag codec, capacity-managed batch
+  core, and a joints-only integration map.
+
 ## What is already landed
 
 - Orbit fold removed; picking readback no longer recycles an unread PBO and
