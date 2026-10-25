@@ -43,7 +43,6 @@ import { collectSupportMarqueeShapes, type SupportMarqueeShape } from './support
 import type { SupportData } from '@/supports/rendering';
 import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot } from '@/supports/state';
 import { getModelIdForSupportEntityId } from '@/supports/state';
-import FootprintBorderRenderer from '@/supports/Rafts/Crenelated/rendering/FootprintBorderRenderer';
 import type { PlateFootprintSource } from '@/supports/Rafts/Crenelated/geometry/modelPlateFootprint';
 import SliceSatBoundingMeshRenderer from '@/supports/Rafts/Crenelated/rendering/SliceSatBoundingMeshRenderer';
 import { getRaftSettings, subscribeToRaftStore } from '@/supports/Rafts/Crenelated/RaftState';
@@ -104,7 +103,6 @@ import {
   writeCornerOnlyWireframePositions,
 } from './SceneCanvasGeometry';
 import { ModelAttachedSupportLayer, ActiveMergedSupportMesh } from './ModelAttachedSupportLayer';
-import { FollowModelMove } from './FollowModelMove';
 import {
   CameraModeEntryFramingController,
   CameraProjectionController,
@@ -122,6 +120,7 @@ import {
 } from '@/components/scene/camera/orthoDolly';
 import { useMarqueeSelectionHandlers } from './useMarqueeSelectionHandlers';
 import { getOptimisticSelectedModelId, setOptimisticSelectedModelId } from './optimisticModelSelection';
+import { FootprintOutlineGroup, type FootprintOutlineTarget } from './FootprintOutlineGroup';
 import {
   marqueeModeForDrag,
   marqueeRectForDrag,
@@ -4332,6 +4331,16 @@ export function SceneCanvas({
     transform,
   ]);
 
+  const resolveFootprintOutlineTarget = React.useCallback((id: string): FootprintOutlineTarget | null => {
+    const model = modelById.get(id);
+    if (!model || !model.visible) return null;
+    return {
+      id,
+      geometry: model.geometry,
+      transform: (id === activeModelId && transform) ? transform : model.transform,
+    };
+  }, [activeModelId, modelById, transform]);
+
   const footprintOutlineTargets = React.useMemo(() => {
     const ids = selectedTransformableModelIds.length > 0
       ? selectedTransformableModelIds
@@ -4342,33 +4351,19 @@ export function SceneCanvas({
           : [];
 
     const seen = new Set<string>();
-    const targets: Array<{
-      id: string;
-      geometry: LoadedModel['geometry'];
-      transform: ModelTransform;
-    }> = [];
-
+    const targets: FootprintOutlineTarget[] = [];
     for (const id of ids) {
       if (seen.has(id)) continue;
       seen.add(id);
-
-      const model = modelById.get(id);
-      if (!model || !model.visible) continue;
-
-      targets.push({
-        id,
-        geometry: model.geometry,
-        transform: (id === activeModelId && transform) ? transform : model.transform,
-      });
+      const target = resolveFootprintOutlineTarget(id);
+      if (target) targets.push(target);
     }
-
     return targets;
   }, [
     activeModelId,
-    modelById,
+    resolveFootprintOutlineTarget,
     selectedTransformableModelIds,
     settledHoveredModelId,
-    transform,
   ]);
 
   /**
@@ -4872,7 +4867,11 @@ export function SceneCanvas({
     if (!cameraInteractionCycleEnabled) return;
     if (isMarqueeSelecting) return;
     if (isPlacementActive) return;
+    // The selection click may already have been applied on pointer-down; the
+    // one-frame flag can expire before R3F dispatches the missed click, so a
+    // model selected by its supports was deselected again in the same gesture.
     if (window.__modelClickedThisFrame) return;
+    if (performance.now() < (window.__modelClickGuardUntil ?? 0)) return;
     if (orbitInteractionActiveRef.current || spaceMouseNavigationActive) return;
 
     if (suppressNextCanvasClickRef.current || (window as any).__gizmoDragEndedThisFrame) {
@@ -7280,21 +7279,12 @@ export function SceneCanvas({
                 && !(transformMode === 'placeOnFace' && disableRaycast)
                 && (
                 <>
-                  {footprintOutlineTargets.map((entry) => (
-                    <FollowModelMove
-                      key={`footprint-border-${entry.id}`}
-                      modelId={entry.id}
-                      baseTransform={entry.transform}
-                      liveTransformsRef={crossSectionLiveTransformsRef}
-                    >
-                      <FootprintBorderRenderer
-                        modelGeometry={entry.geometry}
-                        modelTransform={entry.transform}
-                        modelId={entry.id}
-                        color={supportHoverTintColor}
-                      />
-                    </FollowModelMove>
-                  ))}
+                  <FootprintOutlineGroup
+                    targets={footprintOutlineTargets}
+                    resolveTarget={resolveFootprintOutlineTarget}
+                    liveTransformsRef={crossSectionLiveTransformsRef}
+                    color={supportHoverTintColor}
+                  />
                 </>
               )}
 
