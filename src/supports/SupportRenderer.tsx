@@ -3200,15 +3200,17 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
     /**
      * The dragged support's colour, for the drag batch's non-joint primitives.
-     * Joints ignore it — `JointRenderer` gives a selected support blue/grey.
+     *
+     * A joint drag only starts on the selected support's joints, and the detail
+     * renderer draws those primitives with its selected colour. The drag batch is
+     * the only thing drawing them during the gesture, so it must use the same
+     * selected colour — using the base/detail colour here made the moved segment
+     * orange while its own unsuppressed neighbours and joints were cyan.
+     * Joints still override this with dragged-blue/sibling-grey.
      */
     const resolveJointDragPreviewColor = React.useCallback(
-        (slotMap: JointDragSlotMap) => resolveDetailSupportColor(
-            slotMap.typeId,
-            slotMap.supportId,
-            slotMap.modelId,
-        ),
-        [resolveDetailSupportColor],
+        () => BULK_MULTI_SELECTED_COLOR,
+        [],
     );
 
     /** The props every detail renderer takes identically. */
