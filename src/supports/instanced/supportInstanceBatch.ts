@@ -12,16 +12,26 @@ const MATRIX_STRIDE = 16;
  * needs a stable name for an instance keeps its own index -> id map and follows
  * the index `removeAt` reports.
  *
- * The four instance attributes:
+ * The five instance attributes:
  * - `instanceMatrix` (mat4) - the shape's world transform;
  * - `iRatio` (float) - per-instance shape ratio (taper, body/contact width);
  * - `iData` (uint32) - packed state bits (selected, hover, visible, ...);
- * - `iPick` (uint32) - the id the GPU pick pass writes.
+ * - `iPick` (uint32) - the id the GPU pick pass writes;
+ * - `color` (vec3) - the per-instance tint, white until a caller sets one.
  *
  * `iData` and `iPick` are integer attributes: three uploads a `Uint32Array`
- * through `vertexAttribIPointer`, so the material that draws this geometry must
- * be GLSL3 (`glslVersion: THREE.GLSL3`) and declare them `in uint iData;`. A
- * `float` declaration receives no bits.
+ * through `vertexAttribIPointer`, so the vertex shader must declare them as
+ * integers (`attribute uint iData;` or `in uint iData;`). Three 0.181 compiles
+ * every non-raw program as ES 3.00 already, so no `glslVersion: GLSL3` switch
+ * is needed. A `float` declaration receives no bits.
+ *
+ * A plain `<mesh geometry={batch.geometry}>` draws every instance: three sees
+ * `isInstancedBufferGeometry` and calls `renderInstances`. But its built-in
+ * `instanceMatrix` shader chunks are emitted for `InstancedMesh` only
+ * (`USE_INSTANCING` comes from the object, not the geometry), so this geometry's
+ * material must apply `instanceMatrix` itself. Do not mount it under
+ * `<instancedMesh>`: that object's own matrix and count would then draw the
+ * batch a second way.
  *
  * The unit shape is copied, not shared: `dispose()` frees the batch's own vertex
  * buffers and leaves the base geometry usable by the next batch. Growth replaces
@@ -39,16 +49,19 @@ export class SupportInstanceBatch {
     private iRatio!: THREE.InstancedBufferAttribute;
     private iData!: THREE.InstancedBufferAttribute;
     private iPick!: THREE.InstancedBufferAttribute;
+    private colorAttribute!: THREE.InstancedBufferAttribute;
 
     private matrixArray!: Float32Array;
     private ratioArray!: Float32Array;
     private dataArray!: Uint32Array;
     private pickArray!: Uint32Array;
+    private colorArray!: Float32Array;
 
     private matrixDirty = false;
     private ratioDirty = false;
     private dataDirty = false;
     private pickDirty = false;
+    private colorDirty = false;
 
     constructor(base: THREE.BufferGeometry, initialCapacity = 1) {
         const position = base.getAttribute('position');
@@ -102,6 +115,16 @@ export class SupportInstanceBatch {
         this.pickDirty = true;
     }
 
+    /** Set the instance tint. Linear RGB, the space a vertex colour is read in. */
+    setColor(index: number, r: number, g: number, b: number): void {
+        this.assertLive(index);
+        const offset = index * 3;
+        this.colorArray[offset] = r;
+        this.colorArray[offset + 1] = g;
+        this.colorArray[offset + 2] = b;
+        this.colorDirty = true;
+    }
+
     /** Write a new instance in the slot after the last one, growing if needed. */
     append(matrix: THREE.Matrix4, ratio: number, data: number, pick: number): number {
         if (this.used === this.slotCapacity) this.grow(this.used + 1);
@@ -113,6 +136,8 @@ export class SupportInstanceBatch {
         this.setRatio(index, ratio);
         this.setData(index, data);
         this.setPick(index, pick);
+        // A slot a removal freed still holds its old tint: an instance starts white.
+        this.setColor(index, 1, 1, 1);
         return index;
     }
 
@@ -139,10 +164,12 @@ export class SupportInstanceBatch {
         this.ratioArray[index] = this.ratioArray[last];
         this.dataArray[index] = this.dataArray[last];
         this.pickArray[index] = this.pickArray[last];
+        this.colorArray.copyWithin(index * 3, last * 3, last * 3 + 3);
         this.matrixDirty = true;
         this.ratioDirty = true;
         this.dataDirty = true;
         this.pickDirty = true;
+        this.colorDirty = true;
         return last;
     }
 
@@ -172,6 +199,10 @@ export class SupportInstanceBatch {
             this.iPick.needsUpdate = true;
             this.pickDirty = false;
         }
+        if (this.colorDirty) {
+            this.colorAttribute.needsUpdate = true;
+            this.colorDirty = false;
+        }
     }
 
     /** Free the batch's vertex and instance buffers. The base geometry is untouched. */
@@ -191,34 +222,41 @@ export class SupportInstanceBatch {
         const ratio = new Float32Array(capacity);
         const data = new Uint32Array(capacity);
         const pick = new Uint32Array(capacity);
+        // White, so an instance appended without a tint draws untinted.
+        const color = new Float32Array(capacity * 3).fill(1);
 
         if (copyExisting) {
             matrix.set(this.matrixArray.subarray(0, this.used * MATRIX_STRIDE));
             ratio.set(this.ratioArray.subarray(0, this.used));
             data.set(this.dataArray.subarray(0, this.used));
             pick.set(this.pickArray.subarray(0, this.used));
+            color.set(this.colorArray.subarray(0, this.used * 3));
         }
 
         this.matrixArray = matrix;
         this.ratioArray = ratio;
         this.dataArray = data;
         this.pickArray = pick;
+        this.colorArray = color;
 
         this.instanceMatrix = instanced(matrix, MATRIX_STRIDE);
         this.iRatio = instanced(ratio, 1);
         this.iData = instanced(data, 1);
         this.iPick = instanced(pick, 1);
+        this.colorAttribute = instanced(color, 3);
 
         this.geometry.setAttribute('instanceMatrix', this.instanceMatrix);
         this.geometry.setAttribute('iRatio', this.iRatio);
         this.geometry.setAttribute('iData', this.iData);
         this.geometry.setAttribute('iPick', this.iPick);
+        this.geometry.setAttribute('color', this.colorAttribute);
         this.geometry.instanceCount = this.used;
 
         this.matrixDirty = true;
         this.ratioDirty = true;
         this.dataDirty = true;
         this.pickDirty = true;
+        this.colorDirty = true;
     }
 
     private assertLive(index: number): void {

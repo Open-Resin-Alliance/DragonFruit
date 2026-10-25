@@ -30,6 +30,11 @@ function pickArray(batch: SupportInstanceBatch): Uint32Array {
         .array as Uint32Array;
 }
 
+function colorArray(batch: SupportInstanceBatch): Float32Array {
+    return (batch.geometry.getAttribute('color') as THREE.InstancedBufferAttribute)
+        .array as Float32Array;
+}
+
 function slotMatrix(batch: SupportInstanceBatch, index: number): number[] {
     return Array.from(matrixArray(batch).subarray(index * 16, index * 16 + 16));
 }
@@ -70,6 +75,11 @@ test('a batch starts empty, on its own copy of the base shape', () => {
     assert.ok(pick.array instanceof Uint32Array, 'iPick is a uint32 id');
     assert.equal(data.count, 2);
     assert.equal(pick.count, 2);
+
+    const color = batch.geometry.getAttribute('color') as THREE.InstancedBufferAttribute;
+    assert.equal(color.itemSize, 3);
+    assert.equal(color.count, 2);
+    assert.deepEqual(Array.from(colorArray(batch)), [1, 1, 1, 1, 1, 1], 'every slot starts white');
     assert.equal(matrix.usage, THREE.DynamicDrawUsage, 'instances are rewritten in place');
 });
 
@@ -101,6 +111,7 @@ test('setters rewrite one live instance without touching the others', () => {
     batch.setRatio(1, 3.5);
     batch.setData(1, 0xff);
     batch.setPick(1, 12);
+    batch.setColor(1, 0.25, 0.5, 0.75);
 
     assert.deepEqual(slotMatrix(batch, 0), translation(0, 0, 0).toArray(), 'the other slot keeps its matrix');
     assert.deepEqual(slotMatrix(batch, 1), translation(9, 8, 7).toArray());
@@ -110,6 +121,8 @@ test('setters rewrite one live instance without touching the others', () => {
     assert.equal(dataArray(batch)[1], 0xff);
     assert.equal(pickArray(batch)[0], 10);
     assert.equal(pickArray(batch)[1], 12);
+    assert.deepEqual(Array.from(colorArray(batch).subarray(0, 3)), [1, 1, 1], 'the other slot keeps white');
+    assert.deepEqual(Array.from(colorArray(batch).subarray(3, 6)), [0.25, 0.5, 0.75]);
 });
 
 test('a packed write is coerced to uint32', () => {
@@ -125,6 +138,7 @@ test('removeAt swaps the last instance into the hole and reports where it came f
     batch.append(translation(0, 0, 0), 1, 100, 10);
     batch.append(translation(1, 0, 0), 2, 101, 11);
     batch.append(translation(2, 0, 0), 3, 102, 12);
+    batch.setColor(2, 0.25, 0.5, 0.75);
 
     assert.equal(batch.removeAt(0), 2, 'the last instance moved from slot 2');
     assert.equal(batch.count, 2);
@@ -132,8 +146,13 @@ test('removeAt swaps the last instance into the hole and reports where it came f
     assert.equal(pickArray(batch)[0], 12, 'slot 0 now holds the last instance');
     assert.equal(dataArray(batch)[0], 102);
     assert.equal(ratioArray(batch)[0], 3);
+    assert.deepEqual(Array.from(colorArray(batch).subarray(0, 3)), [0.25, 0.5, 0.75], 'the tint follows its instance');
     assert.deepEqual(slotMatrix(batch, 0), translation(2, 0, 0).toArray());
     assert.equal(pickArray(batch)[1], 11, 'the middle instance did not move');
+
+    batch.append(translation(3, 0, 0), 4, 103, 13);
+    assert.deepEqual(Array.from(colorArray(batch).subarray(6, 9)), [1, 1, 1], 'a reused slot starts white');
+    assert.deepEqual(Array.from(colorArray(batch).subarray(0, 3)), [0.25, 0.5, 0.75], 'and the moved tint stays put');
 });
 
 test('removing the last instance reports no move', () => {
@@ -155,6 +174,8 @@ test('growth doubles the capacity and keeps every earlier instance', () => {
     const batch = new SupportInstanceBatch(unitShape(), 2);
     assert.equal(batch.append(translation(0, 0, 0), 1, 1, 20), 0);
     assert.equal(batch.append(translation(1, 0, 0), 2, 2, 21), 1);
+    batch.setColor(0, 0.5, 0.25, 0.75);
+    batch.setColor(1, 0.125, 0.375, 0.625);
     assert.equal(batch.append(translation(2, 0, 0), 3, 3, 22), 2, 'the third append grows the batch');
 
     assert.equal(batch.capacity, 4, 'two slots double to four');
@@ -164,10 +185,16 @@ test('growth doubles the capacity and keeps every earlier instance', () => {
     assert.equal(ratioArray(batch).length, 4);
     assert.equal(dataArray(batch).length, 4);
     assert.equal(pickArray(batch).length, 4);
+    assert.equal(colorArray(batch).length, 4 * 3);
     assert.equal(
         (batch.geometry.getAttribute('iPick') as THREE.InstancedBufferAttribute).array,
         pickArray(batch),
         'the grown attributes are the ones on the geometry',
+    );
+    assert.deepEqual(
+        Array.from(colorArray(batch)),
+        [0.5, 0.25, 0.75, 0.125, 0.375, 0.625, 1, 1, 1, 1, 1, 1],
+        'the tints move with their instances and the new slots start white',
     );
 
     for (let slot = 0; slot < 3; slot += 1) {
@@ -179,11 +206,14 @@ test('growth doubles the capacity and keeps every earlier instance', () => {
 
     batch.append(translation(3, 0, 0), 4, 4, 23);
     assert.equal(batch.capacity, 4, 'a full batch of four still has a free slot');
+    batch.setColor(3, 0.75, 0.5, 0.25);
     batch.append(translation(4, 0, 0), 5, 5, 24);
     assert.equal(batch.capacity, 8, 'the next append doubles again');
     assert.equal(batch.count, 5);
     assert.equal(pickArray(batch)[0], 20, 'growth never reorders the live range');
     assert.equal(pickArray(batch)[4], 24);
+    assert.deepEqual(Array.from(colorArray(batch).subarray(0, 3)), [0.5, 0.25, 0.75]);
+    assert.deepEqual(Array.from(colorArray(batch).subarray(9, 12)), [0.75, 0.5, 0.25]);
 });
 
 test('flush uploads each changed attribute once and leaves untouched ones alone', () => {
@@ -193,17 +223,25 @@ test('flush uploads each changed attribute once and leaves untouched ones alone'
 
     const matrix = batch.geometry.getAttribute('instanceMatrix') as THREE.InstancedBufferAttribute;
     const ratio = batch.geometry.getAttribute('iRatio') as THREE.InstancedBufferAttribute;
+    const color = batch.geometry.getAttribute('color') as THREE.InstancedBufferAttribute;
     const matrixVersion = matrix.version;
     const ratioVersion = ratio.version;
+    const colorVersion = color.version;
 
     batch.setRatio(0, 2);
     batch.flush();
 
     assert.equal(ratio.version, ratioVersion + 1);
     assert.equal(matrix.version, matrixVersion, 'an untouched attribute is not re-sent');
+    assert.equal(color.version, colorVersion, 'an untouched tint is not re-sent');
 
     batch.flush();
     assert.equal(ratio.version, ratioVersion + 1, 'a second flush with no writes uploads nothing');
+
+    batch.setColor(0, 0.2, 0.4, 0.6);
+    batch.flush();
+    assert.equal(color.version, colorVersion + 1, 'the tint write is sent on the next flush');
+    assert.equal(ratio.version, ratioVersion + 1, 'and the ratio is not sent again');
 
     batch.setPick(0, 5);
     batch.flush();
@@ -215,6 +253,7 @@ test('an index outside the live range is rejected', () => {
     const batch = new SupportInstanceBatch(unitShape(), 2);
 
     assert.throws(() => batch.setPick(0, 1), RangeError, 'no live instance to write');
+    assert.throws(() => batch.setColor(0, 1, 1, 1), RangeError, 'no live instance to tint');
     assert.throws(() => batch.removeAt(0), RangeError);
     assert.throws(() => batch.setRatio(-1, 1), RangeError);
 
@@ -225,6 +264,7 @@ test('an index outside the live range is rejected', () => {
         'inside the capacity but past count',
     );
     assert.throws(() => batch.setData(0.5, 1), RangeError);
+    assert.throws(() => batch.setColor(1, 1, 1, 1), RangeError, 'past count even inside the capacity');
 });
 
 test('dispose frees the batch geometry and leaves the base shape alone', () => {
