@@ -127,8 +127,8 @@ export function coneShapeRatio(cone: InstancedContactCone): number {
  * they cannot be split spatially without multiplying the buckets, so this is
  * the direct lever on them.
  */
-const CONE_RATIO_BUCKET_STEP = 0.1;
-const CONE_RATIO_BUCKETS_PER_UNIT = 1 / CONE_RATIO_BUCKET_STEP;
+export const CONE_RATIO_BUCKET_STEP = 0.1;
+export const CONE_RATIO_BUCKETS_PER_UNIT = 1 / CONE_RATIO_BUCKET_STEP;
 
 /**
  * The key one cone's mesh is grouped under: its profile type and shape ratio, and
@@ -159,13 +159,23 @@ export function conePrimitiveScales(
     };
 }
 
-const getProfileType = (profile: SupportTipProfile): 'disk' | 'sphere' | 'legacy' => {
+/**
+ * The profile kind a cone is drawn as. Exported because the capacity batch keys
+ * its contact-primitive split on it: `disk` profiles also draw the nib, `sphere`
+ * and `legacy` draw the tip ball alone.
+ */
+export const getProfileType = (profile: SupportTipProfile): 'disk' | 'sphere' | 'legacy' => {
     if (profile.type === 'disk') return 'disk';
     if (profile.type === 'sphere') return 'sphere';
     return 'legacy';
 };
 
-const getDiskThicknessForCone = (cone: InstancedContactCone): number => {
+/**
+ * The nib thickness this cone is drawn with: the authored override, else the
+ * angle-dependent `calculateDiskThickness`. Exported so a batch that writes the
+ * same disk from a slot list cannot drift from the legacy group's value.
+ */
+export const getDiskThicknessForCone = (cone: InstancedContactCone): number => {
     if (cone.profile.type !== 'disk') return 0;
     const effectiveSurfaceNormal = cone.surfaceNormal ?? cone.normal;
     return cone.diskLengthOverride ?? calculateDiskThickness(effectiveSurfaceNormal, cone.normal, cone.profile);

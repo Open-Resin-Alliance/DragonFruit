@@ -36,6 +36,15 @@ holds 165 fps with ~404 calls and 14.2M triangles.
   Pending: visual/pointer parity check on the supported scene, then cones/roots,
   and the drag writer.
 
+- Phase 2 wave 4 landed behind `SUPPORT_INSTANCED_CONES` / `SUPPORT_INSTANCED_ROOTS`
+  (on for testing): cone/root slots from the producer's own groups, one capacity
+  batch per quantized shape ratio plus a tip and nib batch (cones) and a disk and
+  top-ball batch (roots), hover/marquee as colour-only writes, index raycast at
+  tolerance 0 with the legacy asymmetry (cone body covers the whole silhouette,
+  root disk is the only pickable root primitive), cone/root overlays dropped for
+  the supports the batch owns. Pending: visual/pointer parity check on the
+  supported scene, then the drag writer.
+
 **Correction from the joint map:** Support mode does not consume
 `collectProxyPrimitives`. `SupportRenderer` resolves its own batches
 (`sceneBatchedJointGroups` and siblings) with Support-specific filters, diameter

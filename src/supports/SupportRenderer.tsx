@@ -50,8 +50,17 @@ import { InstancedShaftGroup, type InstancedShaft } from './SupportPrimitives/Sh
 import { InstancedJointGroup, type InstancedJoint } from './SupportPrimitives/Joint/InstancedJointGroup';
 import { InstancedJointBatch } from './instanced/InstancedJointBatch';
 import { InstancedShaftBatch } from './instanced/InstancedShaftBatch';
-import { SUPPORT_INSTANCED_JOINTS, SUPPORT_INSTANCED_SHAFTS } from './instanced/flags';
+import { InstancedContactConeBatch } from './instanced/InstancedContactConeBatch';
+import { InstancedRootBatch } from './instanced/InstancedRootBatch';
+import {
+    SUPPORT_INSTANCED_CONES,
+    SUPPORT_INSTANCED_JOINTS,
+    SUPPORT_INSTANCED_ROOTS,
+    SUPPORT_INSTANCED_SHAFTS,
+} from './instanced/flags';
 import { buildJointSlotIndex } from './instanced/jointSlots';
+import { buildConeSlotIndex } from './instanced/coneSlots';
+import { buildRootSlotIndex, type RootSlotGroup } from './instanced/rootSlots';
 import { buildShaftSlotIndex, type ShaftSlotGroup } from './instanced/shaftSlots';
 import { InstancedRootsGroup, type InstancedRoot } from './SupportPrimitives/Roots/InstancedRootsGroup';
 import { inlineRootBatchInstance } from './SupportPrimitives/Roots/inlineRootBatch';
@@ -154,6 +163,18 @@ interface SupportJointSet {
     modelId?: string;
     joints: InstancedJoint[];
 }
+
+/**
+ * The fields the scene-batched pointer handlers read from a root.
+ *
+ * The legacy per-colour groups pass their `InstancedRoot` and the capacity batch
+ * passes its slot record; both carry these, so neither has to pretend to be the
+ * other to reach the same click and hover path.
+ */
+type SceneBatchedRootRef = { supportId?: string; modelId?: string };
+
+/** The fields the scene-batched pointer handlers read from a cone; see `SceneBatchedRootRef`. */
+type SceneBatchedConeRef = { id: string; supportId?: string; modelId?: string };
 
 const BATCHED_SHAFT_RADIAL_SEGMENTS = 10;
 const BATCHED_SHAFT_LOW_RADIAL_SEGMENTS = 6;
@@ -631,6 +652,22 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
      * that changes with the camera. So the batch is Support-mode full detail only.
      */
     const shaftBatchActive = SUPPORT_INSTANCED_SHAFTS && !simpleRender;
+    /**
+     * Whether the instanced contact-cone batch owns the unselected cones.
+     *
+     * Support-mode full detail only, like the shaft and joint batches: the
+     * simple and navigation views draw the contact primitive alone and add a
+     * line where the body was, which is a different primitive set, not a
+     * different transform.
+     */
+    const coneBatchActive = SUPPORT_INSTANCED_CONES && !simpleRender;
+    /**
+     * Whether the instanced root batch owns the unselected plate roots.
+     *
+     * Same `!simpleRender` gate: a simple or navigation root is disk-only and
+     * adds a line up its axis, so the batch does not model it.
+     */
+    const rootBatchActive = SUPPORT_INSTANCED_ROOTS && !simpleRender;
     const raftSettings = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
     // The knots kickstands host and the roots they own, derived from the
     // registry's edges rather than a kickstand-specific store.
@@ -2490,6 +2527,31 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         return byType;
     }, [renderListByType, selectedOf, state.roots, groupRootsForSceneBatch, readNumberPath, simpleRender]);
 
+    /**
+     * The one instanced root batch's slot list: the producer's root groups
+     * flattened in registry order, so slot index is draw order.
+     *
+     * `sceneBatchedRootGroupsByType` already applied the hide-plate switch, model
+     * visibility, the selected-support exclusion, the inline-root mapping, the
+     * model drop offset and the per-type shaft-diameter fallback. The writer
+     * applies the 0.01 mm render lift, because that is a rendering offset the
+     * producer's `basePos` never carries.
+     *
+     * Null while the flag is off or the view is simple: the legacy per-colour
+     * groups, their axis lines and the two root overlays keep rendering exactly
+     * as they did.
+     */
+    const rootSlotIndex = useMemo(() => {
+        if (!rootBatchActive) return null;
+        noteActivity('support-mode:root-slot-index');
+        const groups: RootSlotGroup[] = [];
+        for (const descriptor of SUPPORT_TYPES) {
+            const typeGroups = sceneBatchedRootGroupsByType[descriptor.id];
+            if (typeGroups) groups.push(...typeGroups);
+        }
+        return buildRootSlotIndex(groups);
+    }, [rootBatchActive, sceneBatchedRootGroupsByType]);
+
     const sceneBatchedContactConeGroups = useMemo(() => {
         const grouped = new Map<string, { color: string; cones: InstancedContactCone[] }>();
 
@@ -2531,6 +2593,30 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         renderListByType, selectedOf,
         contactConesBySupport, resolveSceneSupportColor, applyDropToVec3Like,
     ]);
+
+    /**
+     * The one instanced contact-cone batch's slot list: the producer's groups
+     * flattened in its draw order, so slot index is draw order.
+     *
+     * `sceneBatchedContactConeGroups` already applied model visibility, the
+     * selected-support exclusion, the knot-host model fallback, the colour and
+     * the model drop offset, and it re-derives through `contactConesBySupport`
+     * when a drag preview moves a cone — so a moving contact point moves the
+     * batch's slot without a second dependency here.
+     *
+     * The nib's penetration is deliberately not part of this list: it follows the
+     * active material profile, so the batch resolves it through
+     * `useContactPenetrationResolver` at write time.
+     *
+     * Null while the flag is off or the view is simple: the legacy per-colour
+     * groups, their axis lines and the two cone overlays keep rendering exactly
+     * as they did.
+     */
+    const coneSlotIndex = useMemo(() => {
+        if (!coneBatchActive) return null;
+        noteActivity('support-mode:cone-slot-index');
+        return buildConeSlotIndex(sceneBatchedContactConeGroups);
+    }, [coneBatchActive, sceneBatchedContactConeGroups]);
 
     const sceneBatchedShaftInstanceCount = useMemo(() => {
         // Every batched group counts, plus brace, which batches its own.
@@ -2620,12 +2706,16 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [isInteractable, hoveredSupportIdForVisual, hoveredSupportIsSelected, contactConesBySupport]);
 
     const hoveredSupportOverlayCones = useMemo(() => {
+        // The instanced batch draws the hover state per instance; a second mesh
+        // over the same cones would double-draw them. The overlay's set is the
+        // batch's exactly: unselected supports only.
+        if (coneBatchActive) return [] as InstancedContactCone[];
         if (!hoveredSupportConeSet) return [] as InstancedContactCone[];
         return hoveredSupportConeSet.cones.map((cone) => ({
             ...cone,
             pos: applyDropToVec3Like(cone.pos, cone.modelId),
         }));
-    }, [hoveredSupportConeSet, applyDropToVec3Like]);
+    }, [hoveredSupportConeSet, applyDropToVec3Like, coneBatchActive]);
 
     const hoveredSupportJointSet = useMemo(() => {
         if (!isInteractable) return null;
@@ -2746,12 +2836,21 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         if (!hoveredSupportId) return [] as InstancedRoot[];
 
         const overlay = buildHighlightedRootOverlay(hoveredSupportId);
+        // A root the batch owns already draws its own hover colour. The overlay
+        // must stay for the ones it does not: a *selected* trunk or kickstand
+        // root (the producer excludes selected supports) and an inline-root
+        // stump (which owns no root row). Membership in the slot list is the
+        // exact test for "the batch draws this support's root".
+        if (overlay && rootSlotIndex && rootSlotIndex.bySupport.has(overlay.supportId ?? '')) {
+            return [] as InstancedRoot[];
+        }
         return overlay ? [overlay] : [];
     }, [
         hidePlateContactPrimitivesEffective,
         isInteractable,
         hoveredSupportIdForVisual,
         buildHighlightedRootOverlay,
+        rootSlotIndex,
     ]);
 
     const additionalMarqueeHoveredSupportIds = useMemo(() => {
@@ -2780,6 +2879,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [additionalMarqueeHoveredSupportIds, shaftSetForSupport, applyDropToInstancedShaft, shaftBatchActive]);
 
     const marqueeHoveredOverlayCones = useMemo(() => {
+        // The batch owns the cone marquee state too; see hoveredSupportOverlayCones.
+        if (coneBatchActive) return [] as InstancedContactCone[];
         if (additionalMarqueeHoveredSupportIds.length === 0) return [] as InstancedContactCone[];
 
         const overlays: InstancedContactCone[] = [];
@@ -2792,7 +2893,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             })));
         }
         return overlays;
-    }, [additionalMarqueeHoveredSupportIds, contactConesBySupport, applyDropToVec3Like]);
+    }, [additionalMarqueeHoveredSupportIds, contactConesBySupport, applyDropToVec3Like, coneBatchActive]);
 
     const marqueeHoveredOverlayJoints = useMemo(() => {
         // The instanced batch draws the marquee state per instance; see
@@ -2820,6 +2921,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const overlays: InstancedRoot[] = [];
 
         for (const supportId of additionalMarqueeHoveredSupportIds) {
+            // Only the roots the batch does not own; see hoveredSupportOverlayRoots.
+            if (rootSlotIndex && rootSlotIndex.bySupport.has(supportId)) continue;
             const overlay = buildHighlightedRootOverlay(supportId);
             if (overlay) overlays.push(overlay);
         }
@@ -2829,6 +2932,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         hidePlateContactPrimitivesEffective,
         additionalMarqueeHoveredSupportIds,
         buildHighlightedRootOverlay,
+        rootSlotIndex,
     ]);
 
     const handleSceneBatchedShaftClick = React.useCallback((shaft: InstancedShaft, event: { nativeEvent?: Event }) => {
@@ -3130,7 +3234,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     ]);
 
 
-    const handleSceneBatchedRootClick = React.useCallback((root: InstancedRoot, event: { nativeEvent?: Event }) => {
+    const handleSceneBatchedRootClick = React.useCallback((root: SceneBatchedRootRef, event: { nativeEvent?: Event }) => {
         if (!isPointerInteractable) return;
         if (!supportAnswersPointer(root.modelId, pointerSceneryRef.current)) return;
         if (isPreparePointerInteractable) {
@@ -3142,7 +3246,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         handleSupportClick(event, root.supportId, isInteractable);
     }, [isPointerInteractable, isPreparePointerInteractable, isInteractable, supportSelectionAndHoverSuppressed]);
 
-    const handleSceneBatchedRootPointerMove = React.useCallback((root: InstancedRoot) => {
+    const handleSceneBatchedRootPointerMove = React.useCallback((root: SceneBatchedRootRef) => {
         if (!isPointerInteractable) return;
         if (!supportAnswersPointer(root.modelId, pointerSceneryRef.current)) return;
         if (orbitInteractionActiveRef.current) return;
@@ -3164,7 +3268,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         );
     }, [isPointerInteractable, primitiveHoverOnSelectedSupport, selectedCategory, selectedPrimitiveSupportId, selectedPrimitiveHoverActive, selectedSupportIdSet, supportSelectionAndHoverSuppressed]);
 
-    const handleSceneBatchedConeClick = React.useCallback((cone: InstancedContactCone, event: { nativeEvent?: Event }) => {
+    const handleSceneBatchedConeClick = React.useCallback((cone: SceneBatchedConeRef, event: { nativeEvent?: Event }) => {
         if (!isPointerInteractable) return;
         if (!supportAnswersPointer(cone.modelId, pointerSceneryRef.current)) return;
         if (isPreparePointerInteractable) {
@@ -3197,7 +3301,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         handleSupportClick(event, cone.supportId, isInteractable);
     }, [isPointerInteractable, isPreparePointerInteractable, isInteractable, supportSelectionAndHoverSuppressed, braceAltActive, state.leaves]);
 
-    const handleSceneBatchedConePointerMove = React.useCallback((cone: InstancedContactCone, event?: { point?: { x: number; y: number; z: number } | THREE.Vector3 } | null) => {
+    const handleSceneBatchedConePointerMove = React.useCallback((cone: SceneBatchedConeRef, event?: { point?: { x: number; y: number; z: number } | THREE.Vector3 } | null) => {
         if (!isPointerInteractable) return;
         if (!supportAnswersPointer(cone.modelId, pointerSceneryRef.current)) return;
         if (orbitInteractionActiveRef.current) return;
@@ -3238,7 +3342,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     // Cone pointer-out: clear the brace tool's leaf hover (so a leaf preview
     // doesn't stick once the cursor leaves the cone), then fall through to the
     // shared shaft pointer-out cleanup for the rest of the hover state.
-    const handleSceneBatchedConePointerOut = React.useCallback((cone: InstancedContactCone | null) => {
+    const handleSceneBatchedConePointerOut = React.useCallback((cone: SceneBatchedConeRef | null) => {
         if (braceAltActive && cone?.supportId && state.leaves[cone.supportId]) {
             window.dispatchEvent(new CustomEvent('brace-leaf-leave', {
                 detail: { leafId: cone.supportId },
@@ -3527,7 +3631,20 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     />
                 </group>
             )))}
-            {Object.entries(sceneBatchedRootGroupsByType).flatMap(([typeId, groups]) => groups.map((group) => (
+            {rootSlotIndex ? (
+                <InstancedRootBatch
+                    index={rootSlotIndex}
+                    hoveredSupportId={isInteractable ? hoveredSupportIdForVisual : null}
+                    marqueeSupportIds={additionalMarqueeHoveredSupportIds}
+                    clippingPlanes={clippingPlanes.length > 0 ? clippingPlanes : null}
+                    transparent={ghostTransparent}
+                    opacity={ghostOpacityClamped}
+                    renderOrder={ghostRenderOrder}
+                    onRootClick={isPointerInteractable ? handleSceneBatchedRootClick : undefined}
+                    onRootPointerMove={isPointerInteractable ? handleSceneBatchedRootPointerMove : undefined}
+                    onRootPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                />
+            ) : Object.entries(sceneBatchedRootGroupsByType).flatMap(([typeId, groups]) => groups.map((group) => (
                 <group key={`scene-${typeId}-root-batch:${group.color}`}>
                     <InstancedRootsGroup
                         roots={group.roots}
@@ -3548,7 +3665,20 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     )}
                 </group>
             )))}
-            {sceneBatchedContactConeGroups.map((group) => (
+            {coneSlotIndex ? (
+                <InstancedContactConeBatch
+                    index={coneSlotIndex}
+                    hoveredSupportId={hoveredSupportConeSet?.supportId ?? null}
+                    marqueeSupportIds={additionalMarqueeHoveredSupportIds}
+                    clippingPlanes={clippingPlanes.length > 0 ? clippingPlanes : null}
+                    transparent={ghostTransparent}
+                    opacity={ghostOpacityClamped}
+                    renderOrder={ghostRenderOrder}
+                    onConeClick={isPointerInteractable ? handleSceneBatchedConeClick : undefined}
+                    onConePointerMove={isPointerInteractable ? handleSceneBatchedConePointerMove : undefined}
+                    onConePointerOut={isPointerInteractable ? handleSceneBatchedConePointerOut : undefined}
+                />
+            ) : sceneBatchedContactConeGroups.map((group) => (
                 <group key={`scene-cone-batch:${group.color}:${discsOnly ? 'discs' : 'full'}`}>
                     <InstancedContactConeGroup
                         cones={group.cones}

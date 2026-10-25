@@ -17,7 +17,7 @@ import { writeInstanceColors } from '../instanceColorWriter';
  * disk off the plane. It is a rendering offset only - the sliced and exported
  * geometry is generated from the support state, not from this batch.
  */
-const ROOT_RENDER_LIFT_MM = 0.01;
+export const ROOT_RENDER_LIFT_MM = 0.01;
 
 export interface InstancedRoot {
     id: string;
@@ -98,8 +98,8 @@ const scratchObject = new THREE.Object3D();
  * radius, well under a print pixel, and it collapses a plate's roots to a
  * handful of meshes.
  */
-const ROOT_SHAPE_RATIO_STEP = 0.05;
-const ROOT_SHAPE_RATIO_BUCKETS_PER_UNIT = 1 / ROOT_SHAPE_RATIO_STEP;
+export const ROOT_SHAPE_RATIO_STEP = 0.05;
+export const ROOT_SHAPE_RATIO_BUCKETS_PER_UNIT = 1 / ROOT_SHAPE_RATIO_STEP;
 
 export function rootShapeRatio(root: InstancedRoot): number {
     return Math.max(0.001, root.topRadius) / Math.max(0.001, root.bottomRadius);

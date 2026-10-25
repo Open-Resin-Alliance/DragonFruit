@@ -39,3 +39,42 @@ export const SUPPORT_INSTANCED_JOINTS: boolean = true;
  * as dead code.
  */
 export const SUPPORT_INSTANCED_SHAFTS: boolean = true;
+
+/**
+ * Step 3a: the unselected supports' contact cones, drawn as one capacity batch
+ * per quantized body/contact ratio plus one tip batch and one nib batch.
+ *
+ * On is the tested state. Off, every consumer keeps its per-colour
+ * `InstancedContactConeGroup` and the cone hover/marquee overlays, so the
+ * rollback is this one line rather than a second code path.
+ *
+ * On, the profile split survives as a per-instance data bit rather than a batch:
+ * `sphere` and `legacy` cones draw the body and tip, `disk` cones draw the body,
+ * tip and nib, and the nib's material needs the legacy `polygonOffset 1/1` or it
+ * z-fights the plate exactly as the legacy nib would not. Positions arrive with
+ * the model drop offset already applied; the nib's penetration stays a writer
+ * input because it follows the active material profile, not scene state.
+ *
+ * Declared `boolean`, not `false`, for the same reason as the joint flag: a
+ * literal type would let TypeScript narrow every `SUPPORT_INSTANCED_CONES ? new
+ * : legacy` in a consumer to the legacy branch and report the instanced branch
+ * as dead code.
+ */
+export const SUPPORT_INSTANCED_CONES: boolean = true;
+
+/**
+ * Step 3b: the unselected plate roots, drawn as one capacity batch per quantized
+ * cone ratio plus one disk and one top-ball batch.
+ *
+ * On is the tested state. Off, every consumer keeps its per-colour
+ * `InstancedRootsGroup` and the root hover/marquee overlays.
+ *
+ * On, only the disk batch answers the pointer, matching the legacy group — the
+ * cone and top ball were `raycast={() => null}` there and must stay inert, or a
+ * root's silhouette starts swallowing clicks the plate owns. The 0.01 mm render
+ * lift is applied by the writer, because it is a rendering offset the producer
+ * never applies to `basePos`.
+ *
+ * Declared `boolean`, not `false`, for the same reason as the joint flag.
+ */
+export const SUPPORT_INSTANCED_ROOTS: boolean = true;
