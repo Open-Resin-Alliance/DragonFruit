@@ -30,7 +30,8 @@ object's supports into one geometry parented to the object for Prepare, and
 swaps to editable instanced supports in the Support menu.
 
 1. Build one merged `BufferGeometry` per model from `collectProxyPrimitives`
-   (world space), with group 0 = bodies and group 1 = contact disks.
+   (world space), with group 0 = bodies, group 1 = contact disks (polygon offset),
+   and group 2 = tip spheres and root plate disks (disc colour, no offset).
 2. Parent it to the model group behind the inverse committed transform (the
    matrix the attached proxy already uses). XY moves are then a parent matrix.
 3. Per-model material tint: base orange, selected cyan, hover blend, scenery
@@ -55,7 +56,8 @@ no support work in a profile; full-plate calls in the tens; visuals unchanged.
 - `src/supports/prepare/types.ts` (parent-owned, read-only): shared types.
 - Merged-support geometry module under `src/supports/prepare/` (agent A): pure builder.
   - Input `ProxyModelGeometry` (type-only import from `SupportProxyMeshLayer`).
-  - Output `MergedSupportGeometry { geometry, triangles, modelId? }`.
+  - Output `MergedSupportGeometry { geometry, triangles, modelId? }` with the
+  three groups above.
   - Same proxy fidelity: straight/tapered shafts, curved bezier tubes, roots
     (disk/cone/sphere), joints (sphere), contact cones (disk/body/tip, profile
     disk/sphere/legacy), world space, two groups.
