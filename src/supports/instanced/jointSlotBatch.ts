@@ -87,39 +87,14 @@ export function writeJointSlot(
  *
  * A joint's `iRatio` and data word are the same for every slot, so they are
  * written here (once, by `append`) and never again: a hover or a rebuild only
- * has to touch the matrix and colour attributes.
- *
- * `removeAt(count - 1)` is the last slot, so it swaps nothing and just lowers
- * the count; the freed trailing instances are simply not drawn. Growth is the
- * batch's own power-of-two reallocation, which replaces attribute objects on a
- * stable geometry — the mesh, its material and the GPU pick registration never
- * remount because the count changed.
+ * has to touch the matrix and colour attributes. Growth is the batch's own
+ * power-of-two reallocation, which replaces attribute objects on a stable
+ * geometry — the mesh, its material and the GPU pick registration never remount
+ * because the count changed — and the batch drops three's cached instanced-draw
+ * cap for it.
  */
 export function resizeJointBatch(batch: SupportInstanceBatch, count: number): void {
-  const capacityBefore = batch.capacity;
-  while (batch.count < count) {
-    batch.append(scratchMatrix.identity(), 1, JOINT_SLOT_DATA, 0);
-  }
-  while (batch.count > count) {
-    batch.removeAt(batch.count - 1);
-  }
-  clearInstanceCountCache(batch, capacityBefore);
-}
-
-/**
- * three caches the instanced draw's cap on the geometry the first time it binds
- * a per-instance attribute (`geometry._maxInstanceCount`) and only clears it
- * when the geometry is disposed. Growth replaces the attribute objects but
- * keeps the geometry, so without this the draw stays clamped to the capacity of
- * the first frame — the extra joints would exist and never appear.
- *
- * The field is deliberately internal; it is the only way to say "the instance
- * buffers changed" to a geometry that is still the same object.
- */
-function clearInstanceCountCache(batch: SupportInstanceBatch, capacityBefore: number): void {
-  if (batch.capacity === capacityBefore) return;
-  const geometry = batch.geometry as THREE.InstancedBufferGeometry & { _maxInstanceCount?: number };
-  geometry._maxInstanceCount = undefined;
+  batch.resizeTo(count, JOINT_SLOT_DATA, 1);
 }
 
 /**

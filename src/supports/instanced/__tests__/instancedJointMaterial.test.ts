@@ -3,10 +3,10 @@ import test from 'node:test';
 
 import * as THREE from 'three';
 
+import { syncInstancedStandardMaterialState } from '../instancedStandardMaterial';
 import {
   INSTANCED_JOINT_PROGRAM_KEY,
   createInstancedJointMaterial,
-  syncInstancedJointMaterialState,
 } from '../instancedJointMaterial';
 
 /**
@@ -69,7 +69,7 @@ test('material state sync applies the parent traversal values, and only when the
   const planes = [new THREE.Plane(new THREE.Vector3(0, 0, 1), -5)];
 
   const versionBefore = material.version;
-  syncInstancedJointMaterialState(material, { clippingPlanes: planes, transparent: true, opacity: 0.4 });
+  syncInstancedStandardMaterialState(material, { clippingPlanes: planes, transparent: true, opacity: 0.4 });
 
   assert.deepEqual(material.clippingPlanes, planes);
   assert.equal(material.transparent, true);
@@ -80,6 +80,6 @@ test('material state sync applies the parent traversal values, and only when the
 
   // Unchanged state is a no-op, so a re-render does not recompile.
   const stableVersion = material.version;
-  syncInstancedJointMaterialState(material, { clippingPlanes: planes, transparent: true, opacity: 0.4 });
+  syncInstancedStandardMaterialState(material, { clippingPlanes: planes, transparent: true, opacity: 0.4 });
   assert.equal(material.version, stableVersion);
 });

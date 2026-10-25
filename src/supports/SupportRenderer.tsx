@@ -49,8 +49,10 @@ import { detailRenderersFor, type DetailRendererContext } from './detailRenderer
 import { InstancedShaftGroup, type InstancedShaft } from './SupportPrimitives/Shaft/InstancedShaftGroup';
 import { InstancedJointGroup, type InstancedJoint } from './SupportPrimitives/Joint/InstancedJointGroup';
 import { InstancedJointBatch } from './instanced/InstancedJointBatch';
-import { SUPPORT_INSTANCED_JOINTS } from './instanced/flags';
+import { InstancedShaftBatch } from './instanced/InstancedShaftBatch';
+import { SUPPORT_INSTANCED_JOINTS, SUPPORT_INSTANCED_SHAFTS } from './instanced/flags';
 import { buildJointSlotIndex } from './instanced/jointSlots';
+import { buildShaftSlotIndex, type ShaftSlotGroup } from './instanced/shaftSlots';
 import { InstancedRootsGroup, type InstancedRoot } from './SupportPrimitives/Roots/InstancedRootsGroup';
 import { inlineRootBatchInstance } from './SupportPrimitives/Roots/inlineRootBatch';
 import { batchesInView, BATCHED_PASSES } from './rendering/batchCoverage';
@@ -72,6 +74,7 @@ import { BezierGizmoManager } from './Curves/BezierGizmo/BezierGizmoManager';
 import { ContactDisk, SupportMode, BezierSegment, type Stump, type Brace, type Knot, type Leaf, type Roots, type Segment, type SupportEntityAny, type Twig, type SupportOrigin, type Vec3 } from './types';
 import { resolveTwigDiameterAtSegmentT } from './SupportTypes/Twig/twigTaper';
 import { bezierSegmentToBatchedShaft, braceBezierToBatchedShaft } from './Curves/batchedBezierShaft';
+import { isCurvedBatchedShaft } from './Curves/batchedBezierTubeGeometry';
 import { EMPTY_PLACEMENT_PREVIEWS, type SupportData, type SupportPlacementPreviews } from './rendering';
 import { useJointCreationState } from './SupportPrimitives/Joint/jointCreationState';
 import { subscribeToSettings, getSettingsSnapshot } from './Settings/state';
@@ -620,6 +623,14 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     // The eye button's navigation view is the simple render plus cones reduced
     // to lines, so it takes every gate below and adds the cone handling.
     const simpleRender = debugSimple || discsOnly;
+    /**
+     * Whether the instanced shaft batch owns the straight and tapered shafts.
+     *
+     * The simple and navigation views keep the legacy line-and-pick-tube pass:
+     * their pick tubes are re-sized per viewport, which is a second slot list
+     * that changes with the camera. So the batch is Support-mode full detail only.
+     */
+    const shaftBatchActive = SUPPORT_INSTANCED_SHAFTS && !simpleRender;
     const raftSettings = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
     // The knots kickstands host and the roots they own, derived from the
     // registry's edges rather than a kickstand-specific store.
@@ -1804,15 +1815,26 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 const start = new THREE.Vector3(endpoints.start.x, endpoints.start.y, endpoints.start.z);
                 const end = new THREE.Vector3(endpoints.end.x, endpoints.end.y, endpoints.end.z);
 
-                // A declared taper on this segment: instancing needs one
-                // diameter, so a shaft whose ends differ leaves the batch.
+                // A declared taper on this segment: the legacy instanced batch
+                // has one diameter, so a shaft whose ends differ leaves it. Where
+                // the instanced shaft batch draws the type, a taper is a cone
+                // instance instead, so the segment keeps both ends and stays in
+                // the batch -- except a curved one: a merged bezier tube has one
+                // radius, so a tapered curve still goes to its detail renderer.
+                // The simple views have no batch, so there the drop still holds.
+                let diameter = segment.diameter;
+                let diameterEnd: number | undefined;
                 const tapersHere = taper
                     && (taper.segments === 'all' || index === entity.segments.length - 1);
                 if (tapersHere) {
                     const [a, b] = taper.from.map((path) => readNumberPath(entity, path));
                     if (a != null && b != null && Math.abs(a - b) >= 1e-6) {
-                        fullyBatchable = false;
-                        return;
+                        if (!shaftBatchActive || segment.type === 'bezier') {
+                            fullyBatchable = false;
+                            return;
+                        }
+                        diameter = a;
+                        diameterEnd = b;
                     }
                 }
 
@@ -1825,7 +1847,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     id: segment.id,
                     start: { x: start.x, y: start.y, z: start.z },
                     end: { x: end.x, y: end.y, z: end.z },
-                    diameter: segment.diameter,
+                    diameter,
+                    ...(diameterEnd !== undefined ? { diameterEnd } : {}),
                     supportId: entity.id,
                     modelId: entity.modelId,
                 });
@@ -1837,7 +1860,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [isModelVisible]);
+    }, [isModelVisible, shaftBatchActive]);
 
 
     const braceShaftsBySupport = useMemo(() => {
@@ -1860,13 +1883,17 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 isTapered: isTaperedBrace,
             } = braceSpanDiameters(brace, startKnot, endKnot);
 
-            // Tapered braces are rendered in the detailed path so we can preserve
-            // dynamic start/end diameters. Uniform braces remain batched for speed.
-            if (isTaperedBrace) {
+            // A tapered brace carries both ends: the instanced batch draws the
+            // taper as a cone instance, so it stays in the batch. Without that
+            // batch -- or for a curved brace, whose merged tube has one radius --
+            // the brace keeps its dynamic start/end diameters on the detailed path.
+            if (isTaperedBrace && (!shaftBatchActive || brace.curve?.type === 'bezier')) {
                 continue;
             }
 
-            const diameter = (startHostDiameter + endHostDiameter) * 0.5;
+            const diameter = isTaperedBrace
+                ? startHostDiameter
+                : (startHostDiameter + endHostDiameter) * 0.5;
             const segmentId = knotHostId(spanKnotHostType(), brace.id);
             const shafts = brace.curve?.type === 'bezier'
                 ? [braceBezierToBatchedShaft(
@@ -1885,6 +1912,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     start: startKnot.pos,
                     end: endKnot.pos,
                     diameter,
+                    ...(isTaperedBrace ? { diameterEnd: endHostDiameter } : {}),
                     supportId: brace.id,
                     modelId: brace.modelId,
                 }];
@@ -1897,7 +1925,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [renderBraceList, braceRenderKnotsById, isModelVisible]);
+    }, [renderBraceList, braceRenderKnotsById, isModelVisible, shaftBatchActive]);
 
     /**
      * Plain shaft sets per type, keyed by type id then by support. `ownsRoot`
@@ -2313,6 +2341,40 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     );
 
     /**
+     * The one instanced shaft batch's slot list: the producer's groups flattened,
+     * in the order the per-type pass draws them, so instance id is what a pointer
+     * event reports.
+     *
+     * The groups already applied model visibility, the selected/ghosted
+     * exclusion, the model drop offset, the taper diameters and the per-support
+     * colour, so nothing here re-filters (a second filter would be a second
+     * answer). Registry order, because that is the order the legacy pass draws
+     * and therefore the order the layers sit in; the brace's own set stands in
+     * for it exactly as it does there.
+     *
+     * Null when the batch is not the owner: the legacy per-colour groups and both
+     * shaft overlays keep rendering exactly as they did.
+     */
+    const shaftSlotIndex = useMemo(() => {
+        if (!shaftBatchActive) return null;
+        noteActivity('support-mode:shaft-slot-index');
+
+        const groups: ShaftSlotGroup[] = [];
+        let braceGroupsAdded = false;
+        for (const descriptor of SUPPORT_TYPES) {
+            if (getSupportTypeDescriptor(descriptor.id).segmentSelectionPrefix) {
+                if (braceGroupsAdded) continue;
+                braceGroupsAdded = true;
+                groups.push(...sceneBatchedBraceShaftGroups);
+                continue;
+            }
+            groups.push(...sceneBatchedShaftsOf(descriptor.id));
+        }
+
+        return buildShaftSlotIndex(groups);
+    }, [shaftBatchActive, sceneBatchedBraceShaftGroups, sceneBatchedShaftsOf]);
+
+    /**
      * The pick tubes the simple views mount at zero alpha, per batch, keyed by
      * the batch's own shaft array. Built here rather than in the render pass so
      * a zoom, which changes every tube's size, rebuilds them once per change.
@@ -2532,11 +2594,20 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const hoveredSupportOverlayShafts = useMemo(() => {
         if (!hoveredSupportShaftSet) return [] as InstancedShaft[];
 
-        return hoveredSupportShaftSet.shafts.map((shaft) => ({
+        // The instanced batch draws the hover state per instance for straight
+        // and tapered shafts; a second mesh over the same rods would double-draw
+        // them. Curves stay here — a merged tube has one material, so the batch
+        // cannot lift it per curve.
+        const shafts = shaftBatchActive
+            ? hoveredSupportShaftSet.shafts.filter(isCurvedBatchedShaft)
+            : hoveredSupportShaftSet.shafts;
+        if (shafts.length === 0) return [] as InstancedShaft[];
+
+        return shafts.map((shaft) => ({
             ...applyDropToInstancedShaft(shaft),
             diameter: shaft.diameter * 1.02,
         }));
-    }, [hoveredSupportShaftSet, applyDropToInstancedShaft]);
+    }, [hoveredSupportShaftSet, applyDropToInstancedShaft, shaftBatchActive]);
 
     const hoveredSupportConeSet = useMemo(() => {
         if (!isInteractable) return null;
@@ -2695,13 +2766,18 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         for (const supportId of additionalMarqueeHoveredSupportIds) {
             const shaftSet = shaftSetForSupport(supportId);
             if (!shaftSet) continue;
-            overlays.push(...shaftSet.shafts.map((shaft) => ({
+            // Straight and tapered shafts are the batch's marquee state; only the
+            // curves still need a mesh over the merged tube.
+            const shafts = shaftBatchActive
+                ? shaftSet.shafts.filter(isCurvedBatchedShaft)
+                : shaftSet.shafts;
+            overlays.push(...shafts.map((shaft) => ({
                 ...applyDropToInstancedShaft(shaft),
                 diameter: shaft.diameter * 1.02,
             })));
         }
         return overlays;
-    }, [additionalMarqueeHoveredSupportIds, shaftSetForSupport, applyDropToInstancedShaft]);
+    }, [additionalMarqueeHoveredSupportIds, shaftSetForSupport, applyDropToInstancedShaft, shaftBatchActive]);
 
     const marqueeHoveredOverlayCones = useMemo(() => {
         if (additionalMarqueeHoveredSupportIds.length === 0) return [] as InstancedContactCone[];
@@ -3001,6 +3077,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         groups: ReadonlyArray<{ color: string; shafts: InstancedShaft[] }>,
         options?: { detailedOnly?: boolean },
     ) => {
+        // The instanced batch draws every type's straight and tapered shafts
+        // (and mounts the merged curve tubes itself), so the per-type pass has
+        // nothing left to draw in Support mode. The simple views still use it.
+        if (shaftBatchActive) return null;
         // The detailed-only groups are the brace curves. The simple view drops
         // them; the navigation view keeps them as the lines everything else is.
         if (options?.detailedOnly && simpleRender && !discsOnly) return null;
@@ -3042,6 +3122,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             </group>
         ));
     }, [
+        shaftBatchActive,
         simpleRender, ghostTransparent, ghostOpacityClamped, sceneBatchedShaftRadialSegments,
         slimPickShaftsByBatch,
         isPointerInteractable, handleSceneBatchedShaftClick,
@@ -3733,6 +3814,27 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 />
             )}
 
+
+            {/*
+              Every unselected support's straight and tapered shafts, one draw
+              per shape, plus the merged curve tubes. Mounted once for the whole
+              scene; the per-type loop below then only runs detail renderers in
+              Support mode.
+            */}
+            {shaftSlotIndex && (
+                <InstancedShaftBatch
+                    index={shaftSlotIndex}
+                    hoveredSupportId={hoveredSupportShaftSet?.supportId ?? null}
+                    marqueeSupportIds={additionalMarqueeHoveredSupportIds}
+                    clippingPlanes={clippingPlanes.length > 0 ? clippingPlanes : null}
+                    transparent={ghostTransparent}
+                    opacity={ghostOpacityClamped}
+                    radialSegments={sceneBatchedShaftRadialSegments}
+                    onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
+                    onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
+                    onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                />
+            )}
 
             {/*
               The per-type detail and batched-shaft passes, in registry order.

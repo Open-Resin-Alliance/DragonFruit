@@ -13,10 +13,8 @@ import {
   writeAllJointSlots,
   writeJointSlot,
 } from './jointSlotBatch';
-import {
-  createInstancedJointMaterial,
-  syncInstancedJointMaterialState,
-} from './instancedJointMaterial';
+import { createInstancedJointMaterial } from './instancedJointMaterial';
+import { syncInstancedStandardMaterialState } from './instancedStandardMaterial';
 import type { InstancedJointVisualState } from './instancedPalette';
 import type { JointSlotIndex } from './jointSlots';
 import { SupportInstanceBatch } from './supportInstanceBatch';
@@ -114,7 +112,7 @@ export function InstancedJointBatch({
   // commit after that traversal last ran.
   useLayoutEffect(() => {
     if (!resources) return;
-    syncInstancedJointMaterialState(resources.material, {
+    syncInstancedStandardMaterialState(resources.material, {
       clippingPlanes: clippingPlanes && clippingPlanes.length > 0 ? clippingPlanes : null,
       transparent,
       opacity,

@@ -25,6 +25,17 @@ holds 165 fps with ~404 calls and 14.2M triangles.
   Pending: visual/pointer parity check on the supported scene, then shafts,
   cones/roots, and the drag writer.
 
+- Phase 2 wave 3 landed behind `SUPPORT_INSTANCED_SHAFTS` (on for testing): shaft
+  slots from the producer's own groups, one capacity batch for straight shafts
+  plus one per quantized taper ratio, curved shafts kept as one merged tube per
+  colour, hover/marquee as colour + matrix writes, index raycast at tolerance 0.
+  The Support-mode producer now carries tapered twigs/kickstands/straight braces
+  into the batch (`diameter` + `diameterEnd`): they were per-segment detail meshes
+  with their own pick shells, and now draw as cone instances with the instanced
+  hover palette. The simple views keep the legacy drop, having no batch.
+  Pending: visual/pointer parity check on the supported scene, then cones/roots,
+  and the drag writer.
+
 **Correction from the joint map:** Support mode does not consume
 `collectProxyPrimitives`. `SupportRenderer` resolves its own batches
 (`sceneBatchedJointGroups` and siblings) with Support-specific filters, diameter

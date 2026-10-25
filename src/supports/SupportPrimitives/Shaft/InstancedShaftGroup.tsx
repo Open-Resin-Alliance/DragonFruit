@@ -96,7 +96,7 @@ const NOOP_RAYCAST: THREE.Object3D['raycast'] = () => {};
 const NO_TINT_KEY = 'no-tint';
 
 /** True when this shaft's two ends differ enough to need a cone. */
-function isTaperedShaft(shaft: InstancedShaft): boolean {
+export function isTaperedShaft(shaft: InstancedShaft): boolean {
     return shaft.diameterEnd != null
         && Math.abs(shaft.diameterEnd - shaft.diameter) > 1e-6;
 }
@@ -121,9 +121,13 @@ interface TaperBucket {
  * taper profile would make one bucket per shaft; 0.05 is a 2.5% end-radius error
  * (microns at print scale) and collapses it to a handful. Same trade, and the
  * same number, as the cone batch.
+ *
+ * Exported because the scene-wide shaft slot index buckets by the same rule: two
+ * passes that quantize a ratio must quantize it identically, or one shaft renders
+ * at two widths.
  */
-const TAPER_RATIO_STEP = 0.05;
-const TAPER_RATIO_BUCKETS_PER_UNIT = 1 / TAPER_RATIO_STEP;
+export const TAPER_RATIO_STEP = 0.05;
+export const TAPER_RATIO_BUCKETS_PER_UNIT = 1 / TAPER_RATIO_STEP;
 
 function taperBuckets(shafts: readonly InstancedShaft[]): TaperBucket[] {
     const grouped = new Map<string, TaperBucket>();

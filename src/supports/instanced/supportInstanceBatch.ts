@@ -3,6 +3,9 @@ import * as THREE from 'three';
 /** Floats per instance matrix, the stride three reads for a mat4 attribute. */
 const MATRIX_STRIDE = 16;
 
+/** The transform a freshly resized instance starts at: nowhere, unscaled. */
+const IDENTITY_MATRIX = new THREE.Matrix4();
+
 /**
  * One instanced batch of Support-mode primitives: a shared unit shape plus the
  * per-instance attributes a support renderer writes while a drag is in flight.
@@ -171,6 +174,47 @@ export class SupportInstanceBatch {
         this.pickDirty = true;
         this.colorDirty = true;
         return last;
+    }
+
+    /**
+     * Move the live count to `count`, growing by append and shrinking from the
+     * end.
+     *
+     * New instances start at the identity transform with `ratio` and `data`;
+     * a caller that resizes before writing every slot then has a batch whose
+     * unused attributes are already truthful. Growth is the batch's own
+     * power-of-two reallocation, which replaces attribute objects on a stable
+     * geometry — the mesh, its material and the GPU pick registration never
+     * remount because the count changed.
+     *
+     * `removeAt(count - 1)` is always the last slot, so a shrink swaps nothing
+     * and just lowers the count; the freed trailing instances are not drawn.
+     */
+    resizeTo(count: number, data: number, ratio = 1): void {
+        const target = Math.max(0, Math.floor(count) || 0);
+        const capacityBefore = this.slotCapacity;
+        while (this.used < target) this.append(IDENTITY_MATRIX, ratio, data, 0);
+        while (this.used > target) this.removeAt(this.used - 1);
+        if (this.slotCapacity !== capacityBefore) this.clearInstanceCountCache();
+    }
+
+    /**
+     * Drop three's cached instanced-draw cap.
+     *
+     * three reads `_maxInstanceCount` off the geometry the first time it binds a
+     * per-instance attribute and only clears it when the geometry is disposed.
+     * Growth replaces the attribute objects but keeps the geometry, so without
+     * this the draw stays clamped to the capacity of the first frame — the extra
+     * instances would exist and never appear.
+     *
+     * The field is deliberately internal; this is the only way to say "the
+     * instance buffers changed" to a geometry that is still the same object.
+     * `resizeTo` calls it after growth; a caller that replaces the attributes
+     * some other way has to call it itself.
+     */
+    clearInstanceCountCache(): void {
+        const geometry = this.geometry as THREE.InstancedBufferGeometry & { _maxInstanceCount?: number };
+        geometry._maxInstanceCount = undefined;
     }
 
     /**

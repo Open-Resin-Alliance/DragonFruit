@@ -267,6 +267,58 @@ test('an index outside the live range is rejected', () => {
     assert.throws(() => batch.setColor(1, 1, 1, 1), RangeError, 'past count even inside the capacity');
 });
 
+test('resizeTo grows from the end, keeping the instances already written', () => {
+    const batch = new SupportInstanceBatch(unitShape(), 1);
+    batch.append(translation(5, 0, 0), 1, 7, 3);
+    batch.setColor(0, 0.25, 0.5, 0.75);
+
+    batch.resizeTo(3, 42, 0.5);
+
+    assert.equal(batch.count, 3);
+    assert.equal(batch.geometry.instanceCount, 3);
+    assert.deepEqual(slotMatrix(batch, 0), translation(5, 0, 0).toArray());
+    assert.deepEqual(Array.from(colorArray(batch).subarray(0, 3)), [0.25, 0.5, 0.75]);
+    for (let slot = 1; slot < 3; slot += 1) {
+        assert.deepEqual(slotMatrix(batch, slot), new THREE.Matrix4().toArray(), 'new instances start at the identity');
+        assert.equal(ratioArray(batch)[slot], 0.5);
+        assert.equal(dataArray(batch)[slot], 42);
+    }
+
+    batch.resizeTo(1, 42, 0.5);
+    assert.equal(batch.count, 1);
+    assert.equal(batch.geometry.instanceCount, 1);
+    assert.deepEqual(slotMatrix(batch, 0), translation(5, 0, 0).toArray(), 'a shrink drops the tail, never the head');
+
+    // A count is a number of instances: a fraction or a negative cannot leave the
+    // batch holding a slot three would not draw.
+    batch.resizeTo(2.9, 42, 0.5);
+    assert.equal(batch.count, 2);
+    batch.resizeTo(-4, 42, 0.5);
+    assert.equal(batch.count, 0);
+});
+
+test('growth through resizeTo drops three’s cached instance cap; a shrink keeps it', () => {
+    const batch = new SupportInstanceBatch(unitShape(), 1);
+    const geometry = batch.geometry as THREE.InstancedBufferGeometry & { _maxInstanceCount?: number };
+
+    geometry._maxInstanceCount = batch.capacity;
+    batch.resizeTo(1, 0, 1);
+    assert.equal(geometry._maxInstanceCount, batch.capacity, 'no reallocation, no rebind');
+
+    geometry._maxInstanceCount = batch.capacity;
+    batch.resizeTo(4, 0, 1);
+    assert.ok(batch.capacity >= 4);
+    assert.equal(geometry._maxInstanceCount, undefined, 'the new buffers must be visible to the draw');
+
+    geometry._maxInstanceCount = batch.capacity;
+    batch.resizeTo(2, 0, 1);
+    assert.equal(geometry._maxInstanceCount, batch.capacity, 'shrinking inside the capacity keeps the cache');
+
+    geometry._maxInstanceCount = batch.capacity;
+    batch.clearInstanceCountCache();
+    assert.equal(geometry._maxInstanceCount, undefined, 'a caller that replaces attributes itself can clear it');
+});
+
 test('dispose frees the batch geometry and leaves the base shape alone', () => {
     const base = unitShape();
     const basePosition = base.getAttribute('position');
