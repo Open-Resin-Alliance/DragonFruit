@@ -11,10 +11,24 @@ holds 165 fps with ~404 calls and 14.2M triangles.
 
 ## Status
 
+- Phase 1.8a/b landed behind `PREPARE_MERGED_SUPPORTS`: every visible model's
+  Prepare supports are one merged mesh inside its own model group.
+  `src/supports/prepare/mergedSupportCache.ts` does one `collectProxyPrimitives`
+  walk per support-collection key (element identity, hover-safe), then merges one
+  model per idle slice (`requestIdleCallback`, 200 ms timeout, `setTimeout`
+  fallback), keeping each model's previous entry drawn until its replacement
+  lands and disposing the replaced geometry. Entries carry the committed inverse
+  they were baked under, so stale geometry follows the model rigidly; the
+  profile's tip-offset-driven nib depth is part of the build key. The merged mesh
+  is non-raycast: the model mesh answers selection, hover and drag start. The
+  world support proxy hides the models whose merge is ready through a
+  supports-only exclusion (rafts stay in the world layers). Pending (1.8c/d):
+  out-of-bounds stripe on the merged mesh, ghost/duplicate/arrange previews on
+  the cache, cross-section sources for non-active models, unscoped export,
+  hide-during-gesture for Z/rotate/scale, and deleting the Prepare proxy path.
 - Phase 1 active-model slice landed and visually checked: builder + mesh +
-  active-model integration behind `PREPARE_MERGED_SUPPORTS`. Other models still
-  use the proxy; all-model merge is deferred until the Phase 2 instanced static
-  path can serve Prepare too (otherwise it is throwaway work).
+  active-model integration behind the flag. Superseded by 1.8a/b above, which
+  mounts the same builder for every model and removes the active-only mount.
 - Phase 2 wave 1 landed: slot records, flag codec, capacity-managed batch core,
   and a joints-only integration map.
 - Phase 2 wave 2 landed: joint slots from `sceneBatchedJointGroups`, per-instance

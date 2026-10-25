@@ -31,6 +31,12 @@ export interface PrepareSupportMeshProps {
   outOfBoundsMaterial?: THREE.Material | null;
   /** Defaults to 0. The proxy draws its support batches at 100000. */
   renderOrder?: number;
+  /**
+   * Replaces the mesh's raycast. The Prepare merged layer passes a no-op: the
+   * model mesh answers model-level picking, so the support mesh stays out of
+   * every pointer raycast.
+   */
+  raycast?: ((raycaster: THREE.Raycaster, intersects: THREE.Intersection[]) => void) | null;
   onClick?: (event: ThreeEvent<MouseEvent>) => void;
   onPointerOver?: (event: ThreeEvent<PointerEvent>) => void;
   onPointerOut?: (event: ThreeEvent<PointerEvent>) => void;
@@ -57,6 +63,7 @@ export function PrepareSupportMesh({
   visible = true,
   outOfBoundsMaterial = null,
   renderOrder = 0,
+  raycast,
   onClick,
   onPointerOver,
   onPointerOut,
@@ -70,6 +77,7 @@ export function PrepareSupportMesh({
         geometry={geometry}
         visible={visible}
         renderOrder={renderOrder}
+        raycast={raycast ?? undefined}
         onClick={onClick}
         onPointerOver={onPointerOver}
         onPointerOut={onPointerOut}

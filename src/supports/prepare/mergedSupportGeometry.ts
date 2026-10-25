@@ -102,9 +102,10 @@ function coneBodyGeometry(shapeRatio: number): THREE.CylinderGeometry {
  * The proxy's disk thickness rule (`getDiskThicknessForCone`): a disk profile's
  * thickness, or zero when the contact primitive is not a disk.
  *
- * The proxy's penetration comes from the active material/printer profile when
- * that profile drives the UI tip offset; the merged geometry uses the cone's
- * own `penetrationMm`, so it does not depend on global stores.
+ * The disk group's penetration comes from `resolvePenetration` when the active
+ * material profile drives the UI tip offset, and from the cone's own
+ * `penetrationMm` otherwise — the proxy's rule, so the two views cannot
+ * disagree on disk depth.
  */
 function diskThicknessForCone(cone: InstancedContactCone): number {
     if (cone.profile.type !== 'disk') return 0;
@@ -119,13 +120,32 @@ function coneShapeRatio(cone: InstancedContactCone): number {
 }
 
 /**
+ * Options that change the merge without changing the primitives.
+ */
+export type MergedSupportGeometryOptions = {
+  /**
+   * Resolves one cone's nib depth from the depth the cone was authored with.
+   *
+   * The proxy asks `calculateTipOffset` when the material's UI shows the tip
+   * offset and falls back to the cone's authored `penetrationMm`; taking the
+   * authored value as the argument keeps that fallback inside the caller's
+   * resolver instead of duplicating it here.
+   */
+  resolvePenetration?: (authoredPenetrationMm: number | undefined) => number;
+};
+
+/**
  * Build one model's merged support geometry.
  *
  * Three groups, in this order: 0 support bodies, 1 the contact disks (which the
  * proxy draws with `discColor` and a polygon offset), 2 the disc-coloured parts
  * that carry no offset (cone tip spheres and root plate disks).
  */
-export function buildMergedSupportGeometry(model: ProxyModelGeometry): MergedSupportGeometry {
+export function buildMergedSupportGeometry(
+    model: ProxyModelGeometry,
+    options?: MergedSupportGeometryOptions,
+): MergedSupportGeometry {
+    const resolvePenetration = options?.resolvePenetration;
     const { straightShafts, curvedShafts } = splitBatchedShafts(model.shafts);
     const plainShafts: InstancedShaft[] = [];
     const taperedShafts: InstancedShaft[] = [];
@@ -370,7 +390,10 @@ export function buildMergedSupportGeometry(model: ProxyModelGeometry): MergedSup
         const contactRadius = Math.max(0.001, cone.profile.contactDiameterMm / 2);
         const effectiveSurfaceNormal = cone.surfaceNormal ?? cone.normal;
         const thickness = diskThicknessForCone(cone);
-        const penetration = Math.max(0, cone.profile.penetrationMm ?? 0);
+        const penetration = Math.max(
+            0,
+            resolvePenetration ? resolvePenetration(cone.profile.penetrationMm) : (cone.profile.penetrationMm ?? 0),
+        );
         const diskCenter = getDiskCenter(cone.pos, effectiveSurfaceNormal, thickness);
         getDiskRotationInto(effectiveSurfaceNormal, quaternion);
         writePlaced(

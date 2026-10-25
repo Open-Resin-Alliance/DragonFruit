@@ -102,7 +102,9 @@ import {
   buildEmptyCornerOnlyWireframePositions,
   writeCornerOnlyWireframePositions,
 } from './SceneCanvasGeometry';
-import { ModelAttachedSupportLayer, ActiveMergedSupportMesh } from './ModelAttachedSupportLayer';
+import { ModelAttachedSupportLayer } from './ModelAttachedSupportLayer';
+import { usePrepareMergedSupportCache } from '@/supports/prepare/mergedSupportCache';
+import { PrepareMergedSupportMesh } from '@/supports/prepare/PrepareMergedSupportMesh';
 import {
   CameraModeEntryFramingController,
   CameraProjectionController,
@@ -220,15 +222,16 @@ import {
 const Canvas = dynamic(() => import('@react-three/fiber').then(m => m.Canvas), { ssr: false });
 
 /**
- * Phase 1 cutover: the active model's Prepare supports are drawn as one merged
- * mesh parented inside the model group, instead of the attached instanced proxy.
+ * Phase 1.8: every visible model's Prepare supports are drawn as one merged
+ * mesh parented inside that model's group, instead of the instanced proxy.
  *
- * One line, one revert: `false` restores the attached proxy for the supports
- * (the rafts are on the same layer either way). Only the Prepare path that
- * parents supports to the active model reads this; Support mode, the world
- * support layers and every non-attached Prepare path are untouched.
+ * One line, one revert: `false` restores the proxy for the supports everywhere
+ * (rafts and every other mode are on the same layers either way), and the
+ * attached active-model group draws supports and rafts together as it did
+ * before the merge existed.
  */
 const PREPARE_MERGED_SUPPORTS = true;
+const EMPTY_STRING_LIST: readonly string[] = Object.freeze([]);
 
 type GhostPreviewTransform = {
   position: THREE.Vector3;
@@ -3889,6 +3892,54 @@ export function SceneCanvas({
     useActiveModelAttachedSupportProxy,
   ]);
 
+  // The Prepare merged support layer: one walk and one merged geometry per
+  // model, shared by every mounted mesh. Enabled only in Prepare, so opening
+  // Support never merges anything; the builds drain in idle slices after the
+  // frame that entered Prepare.
+  const prepareMergedSupports = usePrepareMergedSupportCache({
+    enabled: PREPARE_MERGED_SUPPORTS && mode === 'prepare',
+    includeDetailedPrimitives: true,
+    interiorView,
+    cavityGeometryByModelId,
+    modelWorldInverseById,
+  });
+
+  // Models whose supports the merged meshes draw, so the world support proxy
+  // must not draw them as well. Their rafts stay in the world layers.
+  const prepareMergedSupportProxyExcludeModelIds = React.useMemo(
+    () => (PREPARE_MERGED_SUPPORTS && mode === 'prepare'
+      ? Array.from(prepareMergedSupports.readyModelIds)
+      : EMPTY_STRING_LIST),
+    [mode, prepareMergedSupports.readyModelIds],
+  );
+
+  // Models whose support *preview* another layer draws at a delta (multi-gizmo
+  // ghosts, the duplicate source, arrange ghosts). The merged mesh sits inside
+  // the model group, so during those previews it would draw the same supports
+  // as the ghost; the ghost keeps them until the gesture commits.
+  const prepareMergedSupportPreviewModelIdSet = React.useMemo(() => {
+    if (!PREPARE_MERGED_SUPPORTS || mode !== 'prepare') return null;
+    if (
+      multiGizmoSupportPreviewIds.length === 0
+      && arrangeSupportPreviewModelIds.length === 0
+      && !(renderDuplicateSourceSupportGhostPreview && duplicateSourceSupportPreviewModelId)
+    ) {
+      return null;
+    }
+    const ids = new Set<string>(multiGizmoSupportPreviewIds);
+    for (const id of arrangeSupportPreviewModelIds) ids.add(id);
+    if (renderDuplicateSourceSupportGhostPreview && duplicateSourceSupportPreviewModelId) {
+      ids.add(duplicateSourceSupportPreviewModelId);
+    }
+    return ids;
+  }, [
+    arrangeSupportPreviewModelIds,
+    duplicateSourceSupportPreviewModelId,
+    mode,
+    multiGizmoSupportPreviewIds,
+    renderDuplicateSourceSupportGhostPreview,
+  ]);
+
   const arrangeGhostPreviewGroups = React.useMemo(() => {
     if (!arrangeArrayPreviewItems || arrangeArrayPreviewItems.length === 0) {
       return [] as Array<{ model: LoadedModel; transforms: GhostPreviewTransform[] }>;
@@ -6837,7 +6888,7 @@ export function SceneCanvas({
                             mode={mode}
                             modelFilterId={model.id}
                             hideRaftPrimitives={hideRaftPrimitives}
-                            hideSupports={PREPARE_MERGED_SUPPORTS}
+                            hideSupports={PREPARE_MERGED_SUPPORTS && prepareMergedSupports.entries.has(model.id)}
                             hidePlateContactPrimitives={hidePlateContactPrimitives}
                             clipLower={clipLower}
                             clipUpper={clipUpper}
@@ -6866,33 +6917,30 @@ export function SceneCanvas({
                             cavityGeometryByModelId={cavityGeometryByModelId}
                             modelWorldInverseById={modelWorldInverseById}
                           />
-                          {PREPARE_MERGED_SUPPORTS && (
-                            <ActiveMergedSupportMesh
-                              modelId={model.id}
-                              clipLower={clipLower}
-                              clipUpper={clipUpper}
-                              selectedModelIds={selectedModelIds}
-                              marqueeCandidateModelIds={marqueeCandidateModelIds}
-                              hoverModelId={supportHoverModelId}
-                              hoverTintStrength={hoverTintStrength}
-                              pointerSceneryModelIds={plateSceneryModelIds}
-                              // The attached layer's proxy pointer gate, verbatim:
-                              // prepare, no navigation LOD, nothing suppressing the
-                              // proxy, and Select mode (transform-mode drags hand the
-                              // pointer to the gizmo).
-                              enablePointerSelection={mode === 'prepare'
-                                && !navigationLodActive
-                                && !suppressSupportProxyPointerInteraction
-                                && transformMode === 'select'}
-                              interiorView={interiorView}
-                              cavityGeometryByModelId={cavityGeometryByModelId}
-                              modelWorldInverseById={modelWorldInverseById}
-                              visible={mode === 'prepare'}
-                              onModelPointerSelect={(modelId) => selectModelFromPointerHit(modelId)}
-                              onModelPointerDragStart={handleSelectModeSupportDragStart}
-                            />
-                          )}
                         </group>
+                      )}
+
+                      {PREPARE_MERGED_SUPPORTS && mode === 'prepare' && (
+                        <PrepareMergedSupportMesh
+                          entry={prepareMergedSupports.entries.get(model.id) ?? null}
+                          clipLower={clipLower}
+                          clipUpper={clipUpper}
+                          selectedModelIds={selectedModelIds}
+                          marqueeCandidateModelIds={marqueeCandidateModelIds}
+                          hoverModelId={supportHoverModelId}
+                          hoverTintStrength={hoverTintStrength}
+                          pointerSceneryModelIds={plateSceneryModelIds}
+                          // Hollowing hides the support layer (`supportsRef`);
+                          // these meshes live in the model groups, so they take
+                          // the same gate here.
+                          // A support preview (multi-gizmo, duplicate source,
+                          // arrange) draws these supports at its own delta; the
+                          // merged mesh must not draw them twice.
+                          visible={
+                            transformMode !== 'hollowing'
+                            && !prepareMergedSupportPreviewModelIdSet?.has(model.id)
+                          }
+                        />
                       )}
 
                       {isActive && (mode === 'support' || mode === 'analysis') && showOverhangs && overhangIslands && overhangIslands.length > 0 && (
@@ -7182,6 +7230,7 @@ export function SceneCanvas({
                   mode={mode}
                   excludeModelId={duplicateSourceSupportPreviewModelId}
                   excludeModelIds={supportBaseExcludeModelIds}
+                  supportExcludeModelIds={prepareMergedSupportProxyExcludeModelIds}
                   hideRaftPrimitives={hideRaftPrimitives}
                   hideRaftPrimitivesForInactiveModels={mode === 'support' && !!activeModelId}
                   hidePlateContactPrimitives={hidePlateContactPrimitives}
@@ -7309,6 +7358,7 @@ export function SceneCanvas({
                   mode={mode}
                   excludeModelId={worldSupportExcludeModelId}
                   excludeModelIds={worldSupportExcludeModelIds}
+                  supportExcludeModelIds={prepareMergedSupportProxyExcludeModelIds}
                   hideRaftPrimitives={hideRaftPrimitives}
                   hidePlateContactPrimitives={hidePlateContactPrimitives}
                   clipLower={clipLower}
