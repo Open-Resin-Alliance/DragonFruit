@@ -103,7 +103,7 @@ import {
   buildEmptyCornerOnlyWireframePositions,
   writeCornerOnlyWireframePositions,
 } from './SceneCanvasGeometry';
-import { ModelAttachedSupportLayer } from './ModelAttachedSupportLayer';
+import { ModelAttachedSupportLayer, ActiveMergedSupportMesh } from './ModelAttachedSupportLayer';
 import { FollowModelMove } from './FollowModelMove';
 import {
   CameraModeEntryFramingController,
@@ -218,6 +218,17 @@ import {
 } from '@/components/scene/camera/trackpadGesturePose';
 
 const Canvas = dynamic(() => import('@react-three/fiber').then(m => m.Canvas), { ssr: false });
+
+/**
+ * Phase 1 cutover: the active model's Prepare supports are drawn as one merged
+ * mesh parented inside the model group, instead of the attached instanced proxy.
+ *
+ * One line, one revert: `false` restores the attached proxy for the supports
+ * (the rafts are on the same layer either way). Only the Prepare path that
+ * parents supports to the active model reads this; Support mode, the world
+ * support layers and every non-attached Prepare path are untouched.
+ */
+const PREPARE_MERGED_SUPPORTS = true;
 
 type GhostPreviewTransform = {
   position: THREE.Vector3;
@@ -6781,6 +6792,7 @@ export function SceneCanvas({
                             mode={mode}
                             modelFilterId={model.id}
                             hideRaftPrimitives={hideRaftPrimitives}
+                            hideSupports={PREPARE_MERGED_SUPPORTS}
                             hidePlateContactPrimitives={hidePlateContactPrimitives}
                             clipLower={clipLower}
                             clipUpper={clipUpper}
@@ -6809,6 +6821,32 @@ export function SceneCanvas({
                             cavityGeometryByModelId={cavityGeometryByModelId}
                             modelWorldInverseById={modelWorldInverseById}
                           />
+                          {PREPARE_MERGED_SUPPORTS && (
+                            <ActiveMergedSupportMesh
+                              modelId={model.id}
+                              clipLower={clipLower}
+                              clipUpper={clipUpper}
+                              selectedModelIds={selectedModelIds}
+                              marqueeCandidateModelIds={marqueeCandidateModelIds}
+                              hoverModelId={supportHoverModelId}
+                              hoverTintStrength={hoverTintStrength}
+                              pointerSceneryModelIds={plateSceneryModelIds}
+                              // The attached layer's proxy pointer gate, verbatim:
+                              // prepare, no navigation LOD, nothing suppressing the
+                              // proxy, and Select mode (transform-mode drags hand the
+                              // pointer to the gizmo).
+                              enablePointerSelection={mode === 'prepare'
+                                && !navigationLodActive
+                                && !suppressSupportProxyPointerInteraction
+                                && transformMode === 'select'}
+                              interiorView={interiorView}
+                              cavityGeometryByModelId={cavityGeometryByModelId}
+                              modelWorldInverseById={modelWorldInverseById}
+                              visible={mode === 'prepare'}
+                              onModelPointerSelect={(modelId) => selectModelFromPointerHit(modelId)}
+                              onModelPointerDragStart={handleSelectModeSupportDragStart}
+                            />
+                          )}
                         </group>
                       )}
 
