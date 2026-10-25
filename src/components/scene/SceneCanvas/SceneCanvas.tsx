@@ -1727,23 +1727,36 @@ export function SceneCanvas({
   // runs. Cleared as soon as the real selection lands (or after the store's
   // fallback timeout if the plate refuses it), so it never becomes a second
   // source of truth.
+  // The selection at click time, so a same-contents array (the store's own
+  // normalisation rewrites one during the transition) cannot be mistaken for
+  // the real selection and clear the hint early.
+  const selectionAtOptimisticRef = React.useRef<readonly string[] | null>(null);
+  const selectedModelIdsRef = React.useRef<readonly string[]>(selectedModelIds ?? []);
+  selectedModelIdsRef.current = selectedModelIds ?? [];
+
   React.useEffect(() => {
     const optimisticId = getOptimisticSelectedModelId();
     if (!optimisticId) return;
     if (selectedModelIds?.length === 1 && selectedModelIds[0] === optimisticId) {
+      selectionAtOptimisticRef.current = null;
       setOptimisticSelectedModelId(null);
       return;
     }
-    // A different selection arrived first: it owns the tint now.
-    if (selectedModelIds && selectedModelIds.length > 0) {
-      setOptimisticSelectedModelId(null);
-    }
+    const previous = selectionAtOptimisticRef.current;
+    const unchanged = previous !== null
+      && previous.length === (selectedModelIds?.length ?? 0)
+      && previous.every((id, index) => id === selectedModelIds?.[index]);
+    if (unchanged) return;
+    // A different selection landed: it owns the tint now.
+    selectionAtOptimisticRef.current = null;
+    setOptimisticSelectedModelId(null);
   }, [selectedModelIds]);
 
   const selectModelFromScene = React.useCallback((modelId: string | null, options?: { selectionMode?: 'single' | 'toggle' | 'add' }) => {
     if (!onActiveModelChange) return;
     const selectionMode = options?.selectionMode ?? 'single';
     if (modelId && selectionMode === 'single' && !isModelPlateLocked?.(modelId)) {
+      selectionAtOptimisticRef.current = selectedModelIdsRef.current;
       setOptimisticSelectedModelId(modelId);
       React.startTransition(() => onActiveModelChange(modelId, options));
       return;
