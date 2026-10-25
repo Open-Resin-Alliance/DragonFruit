@@ -93,6 +93,7 @@ export const KickstandRenderer = React.memo(function KickstandRenderer({
           visuals,
           isSelected: !!isSelected,
           isSegmentSelected: segmentSelected,
+      supportId: kickstand.id,
           isInteractable,
           deferStraightShaftsToSceneBatch,
           onSelect: selectPrimitiveById,

@@ -25,6 +25,7 @@ export interface RenderShaftSegmentOptions {
     visuals: ShaftSegmentVisuals;
     isSelected: boolean;
     isSegmentSelected: boolean;
+    supportId?: string;
     isInteractable: boolean;
     deferStraightShaftsToSceneBatch: boolean;
     onSelect: (segmentId: string) => void;
@@ -40,6 +41,7 @@ export function renderShaftSegment({
     visuals,
     isSelected,
     isSegmentSelected,
+    supportId,
     isInteractable,
     deferStraightShaftsToSceneBatch,
     onSelect,
@@ -65,6 +67,7 @@ export function renderShaftSegment({
         emissiveIntensity: visuals.emissiveIntensity,
         selectedColor: visuals.selectedColor,
         isParentSelected: isSelected,
+        parentSupportId: supportId,
         isInteractable,
         isSelected: isSegmentSelected,
         onClick: () => onSelect(segment.id),

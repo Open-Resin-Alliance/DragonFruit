@@ -152,6 +152,7 @@ export const BranchRenderer = React.memo(function BranchRenderer({
       visuals,
       isSelected: !!isSelected,
       isSegmentSelected: isSegSelected,
+      supportId: branch.id,
       isInteractable,
       deferStraightShaftsToSceneBatch,
       onSelect: selectPrimitiveById,

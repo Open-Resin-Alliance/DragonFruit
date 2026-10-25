@@ -211,6 +211,7 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk: baseTrun
                     emissive={visuals.emissive}
                     emissiveIntensity={visuals.emissiveIntensity}
                     selectedColor={visuals.selectedColor}
+                    parentSupportId={trunk.id}
                     isParentSelected={isSelected}
                     isInteractable={isInteractable}
                     isSelected={isSegSelected}

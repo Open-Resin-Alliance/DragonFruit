@@ -26,6 +26,7 @@ export type SuppressedPrimitive = {
 
 type DragSuppressionStore = {
   suppressed: ReadonlySet<string>;
+  suppressedSupports: ReadonlySet<string>;
   version: number;
   listeners: Set<() => void>;
 };
@@ -48,7 +49,7 @@ function store(): DragSuppressionStore {
   };
   let current = target[STORE_KEY];
   if (!current) {
-    current = { suppressed: new Set<string>(), version: 0, listeners: new Set() };
+    current = { suppressed: new Set<string>(), suppressedSupports: new Set<string>(), version: 0, listeners: new Set() };
     target[STORE_KEY] = current;
   }
   return current;
@@ -80,6 +81,16 @@ export function suppressPrimitiveDrag(kind: SuppressedPrimitiveKind, id: string)
   emit();
 }
 
+/** Suppress every primitive of one support, whatever its segment ids. */
+export function suppressSupportForDrag(supportId: string): void {
+  const current = store();
+  if (current.suppressedSupports.has(supportId)) return;
+  const next = new Set(current.suppressedSupports);
+  next.add(supportId);
+  current.suppressedSupports = next;
+  emit();
+}
+
 /** Suppress a set of primitives in one notification, as a drag start does. */
 export function suppressPrimitivesForDrag(entries: readonly SuppressedPrimitive[]): void {
   if (entries.length === 0) return;
@@ -100,8 +111,9 @@ export function suppressPrimitivesForDrag(entries: readonly SuppressedPrimitive[
 /** Clear the gesture's suppression: every detail primitive draws again. */
 export function clearPrimitiveDragSuppression(): void {
   const current = store();
-  if (current.suppressed.size === 0) return;
+  if (current.suppressed.size === 0 && current.suppressedSupports.size === 0) return;
   current.suppressed = new Set<string>();
+  current.suppressedSupports = new Set<string>();
   emit();
 }
 
@@ -111,10 +123,12 @@ export function clearPrimitiveDragSuppression(): void {
  * contact cone's id — which is the `contactDiskId` its renderer is given.
  */
 export function suppressPrimitivesForJointDrag(slotMap: {
+  supportId: string;
   joints: readonly { id: string }[];
   segments: readonly { id: string }[];
   cones: readonly { id: string }[];
 }): void {
+  suppressSupportForDrag(slotMap.supportId);
   suppressPrimitivesForDrag([
     ...slotMap.joints.map((slot) => ({ kind: 'joint' as const, id: slot.id })),
     ...slotMap.segments.map((slot) => ({ kind: 'shaft' as const, id: slot.id })),
@@ -170,4 +184,15 @@ export function usePrimitiveDragSuppressed(
     getPrimitiveDragSuppressionServerVersion,
   );
   return isPrimitiveDragSuppressed(kind, id);
+}
+
+/** Whether the gesture draws every primitive of this support in its batch. */
+export function useSupportDragSuppressed(supportId: string | null | undefined): boolean {
+  useSyncExternalStore(
+    subscribePrimitiveDragSuppression,
+    getPrimitiveDragSuppressionVersion,
+    getPrimitiveDragSuppressionServerVersion,
+  );
+  if (!supportId) return false;
+  return store().suppressedSupports.has(supportId);
 }

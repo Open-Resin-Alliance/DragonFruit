@@ -389,6 +389,7 @@ export const TwigRenderer = React.memo(function TwigRenderer({
           emissive={visuals.emissive}
           emissiveIntensity={visuals.emissiveIntensity}
           selectedColor={visuals.selectedColor}
+          parentSupportId={twig.id}
           isParentSelected={isSelected}
           isInteractable={isInteractable}
           isSelected={isSegSelected}

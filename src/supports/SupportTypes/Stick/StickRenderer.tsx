@@ -148,6 +148,7 @@ export const StickRenderer = React.memo(function StickRenderer({
       visuals,
       isSelected: !!isSelected,
       isSegmentSelected: isSegSelected,
+      supportId: stick.id,
       isInteractable,
       deferStraightShaftsToSceneBatch,
       onSelect: selectPrimitiveById,
