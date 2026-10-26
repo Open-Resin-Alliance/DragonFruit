@@ -105,6 +105,7 @@ import {
 import { ModelAttachedSupportLayer } from './ModelAttachedSupportLayer';
 import { usePrepareMergedSupportCache } from '@/supports/prepare/mergedSupportCache';
 import { PrepareMergedSupportMesh } from '@/supports/prepare/PrepareMergedSupportMesh';
+import { SupportShaderWarmup } from '@/supports/instanced/SupportShaderWarmup';
 import {
   CameraModeEntryFramingController,
   CameraProjectionController,
@@ -6676,6 +6677,7 @@ export function SceneCanvas({
           transformMode={transformMode}
           interactionEnabled={cameraInteractionCycleEnabled && modelPickerEnabled}
         >
+          <SupportShaderWarmup />
           <PickingStateSyncer enabled={cameraInteractionCycleEnabled} />
           <PickingEmptySpaceHoverResetter enabled={cameraInteractionCycleEnabled && (mode === 'prepare' || mode === 'support')} />
 
