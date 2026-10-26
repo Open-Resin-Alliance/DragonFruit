@@ -1724,11 +1724,178 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [state.leaves, previewLeavesById]);
 
     const renderBracesById = state.braces;
-    // Historically braces were ghosted during joint-drag preview because their
-    // live geometry couldn't be trusted. Now that brace endpoint knots ride
-    // the live preview overrides (see enableBraceLivePreview), the brace can
-    // render at its true live position instead of going transparent.
-    const ghostedBraceIdSet = useMemo(() => new Set<string>(), []);
+    /**
+     * Braces hosted on the dragged support's segments are frozen during a joint
+     * drag (the dependent-preview cascade is off), so they would otherwise sit
+     * at their old positions as if they were still correct. Ghost them for the
+     * gesture: the existing brace renderer fades them and drops their pointer
+     * interaction, which reads as "this will be recalculated on release".
+     *
+     * The instanced drag does not publish `activeJointDragPreview`, so the
+     * gesture's own session supplies the segment ids.
+     */
+    const ghostJointDragSession = useSyncExternalStore(
+        subscribeJointDragSession,
+        getJointDragSession,
+        getJointDragSessionServerSnapshot,
+    );
+    const ghostedBraceIdSet = useMemo(() => {
+        const ids = new Set<string>();
+        const slotMap = ghostJointDragSession && !ghostJointDragSession.ended
+            ? ghostJointDragSession.slotMap
+            : null;
+        if (!slotMap) return ids;
+
+        // A knot can name a segment *or* a joint as its parent shaft, and a
+        // pseudo-shaft (`segment:<id>`, `brace:<id>`, …) names its host entity.
+        // The old segment-only lookup missed branches hanging off a joint.
+        const draggedHostIds = new Set<string>([
+            ...slotMap.segments.map((slot) => slot.id),
+            ...slotMap.joints.map((slot) => slot.id),
+        ]);
+        const onDraggedSupport = (knot: Knot): boolean => {
+            if (draggedHostIds.has(knot.parentShaftId)) return true;
+            if (parseKnotHostId(knot.parentShaftId)?.entityId === slotMap.supportId) return true;
+            // The host lookup is the same index the renderer's selection/hover
+            // uses: if it says this knot belongs to the dragged support, the knot
+            // is on it whatever id its parentShaftId spells.
+            if (supportRenderLookup.supportIdByKnotId[knot.id] === slotMap.supportId) return true;
+            if (supportRenderLookup.supportIdBySegmentId[knot.parentShaftId] === slotMap.supportId) return true;
+            return supportRenderLookup.supportIdByJointId[knot.parentShaftId] === slotMap.supportId;
+        };
+
+        for (const knot of Object.values(state.knots)) {
+            if (!onDraggedSupport(knot)) continue;
+            for (const braceId of braceIdsByKnotId.get(knot.id) ?? []) ids.add(braceId);
+        }
+        return ids;
+    }, [braceIdsByKnotId, ghostJointDragSession, state.knots, supportRenderLookup]);
+
+    /**
+     * Every entity hosted on a knot of the dragged support: branches, leaves,
+     * twigs, braces and kickstands. Their geometry is frozen for the gesture and
+     * recalculated on release, so they are drawn translucent; the effect below
+     * dims their materials without touching any renderer.
+     */
+    const ghostedDependentSupportIdSet = useMemo(() => {
+        const ids = new Set<string>(ghostedBraceIdSet);
+        const slotMap = ghostJointDragSession && !ghostJointDragSession.ended
+            ? ghostJointDragSession.slotMap
+            : null;
+        if (!slotMap) return ids;
+
+        const draggedHostIds = new Set<string>([
+            ...slotMap.segments.map((slot) => slot.id),
+            ...slotMap.joints.map((slot) => slot.id),
+        ]);
+        const onDraggedSupport = (knot: Knot): boolean => {
+            if (draggedHostIds.has(knot.parentShaftId)) return true;
+            if (parseKnotHostId(knot.parentShaftId)?.entityId === slotMap.supportId) return true;
+            // The host lookup is the same index the renderer's selection/hover
+            // uses: if it says this knot belongs to the dragged support, the knot
+            // is on it whatever id its parentShaftId spells.
+            if (supportRenderLookup.supportIdByKnotId[knot.id] === slotMap.supportId) return true;
+            if (supportRenderLookup.supportIdBySegmentId[knot.parentShaftId] === slotMap.supportId) return true;
+            return supportRenderLookup.supportIdByJointId[knot.parentShaftId] === slotMap.supportId;
+        };
+
+        const entitiesByHostKnot = new Map<string, Array<{ id: string; segments?: Array<{ id: string }> }>>();
+        for (const collection of Object.values(state)) {
+            if (!collection || typeof collection !== 'object') continue;
+            for (const entity of Object.values(collection as Record<string, unknown>)) {
+                if (!entity || typeof entity !== 'object') continue;
+                const record = entity as {
+                    id?: unknown;
+                    parentKnotId?: unknown;
+                    hostKnotId?: unknown;
+                    segments?: Array<{ id: string }>;
+                };
+                if (typeof record.id !== 'string') continue;
+                const host = typeof record.parentKnotId === 'string'
+                    ? record.parentKnotId
+                    : typeof record.hostKnotId === 'string'
+                        ? record.hostKnotId
+                        : null;
+                if (!host) continue;
+                const list = entitiesByHostKnot.get(host) ?? [];
+                list.push({ id: record.id, segments: record.segments });
+                entitiesByHostKnot.set(host, list);
+            }
+        }
+
+        const pendingKnotIds: string[] = [];
+        const visitedKnots = new Set<string>();
+        for (const knot of Object.values(state.knots)) {
+            if (onDraggedSupport(knot)) pendingKnotIds.push(knot.id);
+        }
+
+        while (pendingKnotIds.length > 0) {
+            const knotId = pendingKnotIds.pop()!;
+            if (visitedKnots.has(knotId)) continue;
+            visitedKnots.add(knotId);
+            const hosted = entitiesByHostKnot.get(knotId);
+            if (!hosted) continue;
+            for (const entity of hosted) {
+                ids.add(entity.id);
+                for (const segment of entity.segments ?? []) {
+                    for (const childKnotId of knotIdsByParentShaftId.get(segment.id) ?? []) {
+                        if (!visitedKnots.has(childKnotId)) pendingKnotIds.push(childKnotId);
+                    }
+                }
+            }
+        }
+
+        return ids;
+    }, [ghostedBraceIdSet, ghostJointDragSession, knotIdsByParentShaftId, state, supportRenderLookup]);
+
+    /** What the ghost pass changed, so the next pass restores the originals. */
+    const ghostedDependentMaterialsRef = React.useRef(new Map<THREE.Material, {
+        transparent: boolean;
+        opacity: number;
+        depthWrite: boolean;
+    }>());
+
+    React.useLayoutEffect(() => {
+        const root = groupRef.current;
+        if (!root) return;
+
+        for (const [material, original] of ghostedDependentMaterialsRef.current) {
+            material.transparent = original.transparent;
+            material.opacity = original.opacity;
+            material.depthWrite = original.depthWrite;
+            material.needsUpdate = true;
+        }
+        ghostedDependentMaterialsRef.current.clear();
+
+        if (ghostedDependentSupportIdSet.size === 0) return;
+
+        root.traverse((object) => {
+            const mesh = object as THREE.Mesh;
+            if (!mesh.material) return;
+            let current: THREE.Object3D | null = object;
+            let ghosted = false;
+            while (current && current !== root) {
+                if (current.userData?.ghostedDependent === true) { ghosted = true; break; }
+                current = current.parent;
+            }
+            if (!ghosted) return;
+
+            const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+            for (const material of materials) {
+                if (ghostedDependentMaterialsRef.current.has(material)) continue;
+                ghostedDependentMaterialsRef.current.set(material, {
+                    transparent: material.transparent,
+                    opacity: material.opacity,
+                    depthWrite: material.depthWrite,
+                });
+                material.transparent = true;
+                material.opacity = Math.min(0.32, material.opacity);
+                material.depthWrite = false;
+                material.needsUpdate = true;
+            }
+        });
+    }, [ghostedDependentSupportIdSet, stableState]);
+
     const renderKnotsById = useMemo(() => {
         if (!hasPreviewKnotOverrides) return state.knots;
         const knots = Object.create(state.knots) as typeof state.knots;
@@ -2273,6 +2440,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             for (const entity of renderListByType[descriptor.id]) {
                 if (!isModelVisible(entity.modelId, entity.id)) continue;
                 if (selectedIds.has(entity.id)) continue;
+                if (ghostedDependentSupportIdSet.has(entity.id)) continue;
                 const jointSet = jointsBySupport.get(entity.id);
                 if (!jointSet) continue;
 
@@ -2284,6 +2452,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         for (const leaf of renderLeafList) {
             if (!isModelVisible(leaf.modelId, leaf.id)) continue;
             if (selectedLeafIds.has(leaf.id)) continue;
+            if (ghostedDependentSupportIdSet.has(leaf.id)) continue;
             const jointSet = leafJointsBySupport.get(leaf.id);
             if (!jointSet) continue;
 
@@ -2304,6 +2473,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         applyDropToVec3Like,
         dimNonSelected,
         resolveSceneSupportColor,
+        ghostedDependentSupportIdSet,
     ]);
 
     /**
@@ -2377,6 +2547,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!isModelVisible(entity.modelId, entity.id)) continue;
             if (selectedIds.has(entity.id)) continue;
             if (skip?.(entity)) continue;
+            // A dependent support is drawn by its detail renderer in ghost form
+            // during a drag; leaving its shafts in the batch would draw the same
+            // geometry opaque beside it.
+            if (ghostedDependentSupportIdSet.has(entity.id)) continue;
 
             const shaftSet = shaftsBySupport.get(entity.id);
             if (!shaftSet) continue;
@@ -2388,7 +2562,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return Array.from(grouped.values());
-    }, [isModelVisible, resolveSceneSupportColor, applyDropToInstancedShaft]);
+    }, [isModelVisible, resolveSceneSupportColor, applyDropToInstancedShaft, ghostedDependentSupportIdSet]);
 
 
     const sceneBatchedBraceShaftGroups = useMemo(() => {
@@ -2639,6 +2813,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         ) => {
             for (const entity of list) {
                 if (selectedIds.has(entity.id)) continue;
+                if (ghostedDependentSupportIdSet.has(entity.id)) continue;
                 const coneSet = contactConesBySupport.get(entity.id);
                 if (!coneSet) continue;
 
@@ -2669,6 +2844,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [
         renderListByType, selectedOf,
         contactConesBySupport, resolveSceneSupportColor, applyDropToVec3Like,
+        ghostedDependentSupportIdSet,
     ]);
 
     /**
@@ -3667,19 +3843,26 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!isModelVisible(entity.modelId, entity.id)) return null;
 
             const isSelected = selected.has(entity.id);
-            const context = { entity: entity as never, isSelected, isBatchable: batchable.has(entity.id) };
+            const context = { entity: entity as never, isSelected, isBatchable: batchable.has(entity.id), isGhosted: ghostedDependentSupportIdSet.has(entity.id) };
 
             if (entry.skip?.(context)) return null;
             const hosts = entry.hosts ? entry.hosts(entity as never) : {};
             if (!hosts) return null;
 
             return (
-                <group key={entity.id} userData={{ noClipping: entry.noClipping?.(context) ?? false }}>
+                <group
+                    key={entity.id}
+                    userData={{
+                        noClipping: entry.noClipping?.(context) ?? false,
+                        ghostedDependent: ghostedDependentSupportIdSet.has(entity.id),
+                    }}
+                >
                     <Component
                         {...{ [entityProp]: entity }}
                         {...hosts}
                         {...sharedRenderProps(typeId, entity, isSelected)}
                         {...(entry.extraProps?.(context) ?? {})}
+                        {...(ghostedDependentSupportIdSet.has(entity.id) ? { ghosted: true } : {})}
                     />
                 </group>
             );
@@ -3692,6 +3875,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         activePreviewEntity,
         isModelVisible,
         sharedRenderProps,
+        ghostedDependentSupportIdSet,
     ]);
 
     // The private drag batches' primitives: every detail shaft of a dragged

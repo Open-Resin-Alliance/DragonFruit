@@ -30,6 +30,7 @@ interface LeafRendererProps {
     hoverColor?: string;
     selectedColor?: string;
     onContactDiskHudHoverChange?: (hovered: boolean) => void;
+    ghosted?: boolean;
 }
 
 interface LeafRendererPointerEvent {
@@ -69,6 +70,7 @@ export const LeafRenderer = React.memo(function LeafRenderer({
     hoverColor,
     selectedColor = '#80fffd',
     onContactDiskHudHoverChange,
+    ghosted = false,
 }: LeafRendererProps) {
     const { camera, scene, gl } = useThree();
     const { getHotkey } = useHotkeyConfig();
@@ -164,7 +166,7 @@ export const LeafRenderer = React.memo(function LeafRenderer({
             <group ref={pickRef}>
                 {(() => {
                     const effectiveCone = tipDrag.preview ?? leaf.contactCone;
-                    if (!effectiveCone || deferContactConesToSceneBatch) return null;
+                    if (!effectiveCone || (deferContactConesToSceneBatch && !ghosted)) return null;
                     const isConeSelected = !!effectiveCone.id && selectedId === effectiveCone.id;
                     return (
                         <ContactConeRenderer
@@ -182,6 +184,8 @@ export const LeafRenderer = React.memo(function LeafRenderer({
                             isInteractable={isInteractable}
                             isParentSelected={!!isSelected}
                             isContactDiskSelected={isConeSelected}
+                            transparent={ghosted}
+                            opacity={ghosted ? 0.3 : 1}
                             onDiskHudHoverChange={onContactDiskHudHoverChange}
                             onDiskHudPointerDown={handleContactDiskHudPointerDown}
                             onDiskHudPointerUp={handleContactDiskHudPointerUp}
@@ -199,6 +203,8 @@ export const LeafRenderer = React.memo(function LeafRenderer({
                     selectedColor={visuals.selectedColor}
                     isInteractable={isInteractable}
                     isParentSelected={!!isSelected}
+                    transparent={ghosted}
+                    opacity={ghosted ? 0.3 : 1}
                 />
             )}
         </group>
@@ -213,7 +219,7 @@ registerSupportDetailRenderer('leaf', (ctx) => ({
         const parentKnot = ctx.renderKnotsById[leaf.parentKnotId];
         return parentKnot ? { parentKnot } : null;
     },
-    skip: ({ isSelected }) => !isSelected,
+    skip: ({ isSelected, isGhosted = false }) => !isSelected && !isGhosted,
     noClipping: () => true,
     extraProps: ({ entity, isSelected }) => ({
         showKnots: !simpleViewHidesDetail(ctx, isSelected),

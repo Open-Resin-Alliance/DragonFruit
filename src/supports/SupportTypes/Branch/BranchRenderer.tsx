@@ -37,6 +37,8 @@ interface BranchRendererProps {
   hoverColor?: string;
   selectedColor?: string;
   onContactDiskHudHoverChange?: (hovered: boolean) => void;
+  /** A frozen dependent of a drag: draw translucent, but still pickable. */
+  ghosted?: boolean;
 }
 
 export const BranchRenderer = React.memo(function BranchRenderer({
@@ -56,6 +58,7 @@ export const BranchRenderer = React.memo(function BranchRenderer({
   hoverColor,
   selectedColor = '#80fffd',
   onContactDiskHudHoverChange,
+  ghosted = false,
 }: BranchRendererProps) {
   const { camera, scene, gl } = useThree();
   const highDetailPrimitiveSegments = 24;
@@ -153,15 +156,16 @@ export const BranchRenderer = React.memo(function BranchRenderer({
       isSelected: !!isSelected,
       isSegmentSelected: isSegSelected,
       supportId: branch.id,
+      ghosted,
       isInteractable,
-      deferStraightShaftsToSceneBatch,
+      deferStraightShaftsToSceneBatch: deferStraightShaftsToSceneBatch && !ghosted,
       onSelect: selectPrimitiveById,
       batch: batchedStraightShafts,
     });
     if (node) shafts.push(node);
 
     // Add Joint (if present)
-    if (isSelected && seg.topJoint) {
+    if ((isSelected || ghosted) && seg.topJoint) {
       joints.push(
         <JointRenderer
           key={`joint-${seg.topJoint.id}`}
@@ -176,6 +180,8 @@ export const BranchRenderer = React.memo(function BranchRenderer({
           selectedColor={visuals.selectedColor}
           isInteractable={isInteractable}
           isParentSelected={isSelected}
+          transparent={ghosted}
+          opacity={ghosted ? 0.3 : 1}
         />
       );
     }
@@ -184,7 +190,7 @@ export const BranchRenderer = React.memo(function BranchRenderer({
   // --- Render Contact Cone (if present) ---
   const effectiveCone = effectiveBranch.contactCone;
   let coneRender = null;
-  if (effectiveCone && !deferContactConesToSceneBatch) {
+  if (effectiveCone && (!deferContactConesToSceneBatch || ghosted)) {
     const isConeSelected = !!effectiveCone.id && selectedId === effectiveCone.id;
     coneRender = (
       <ContactConeRenderer
@@ -203,6 +209,8 @@ export const BranchRenderer = React.memo(function BranchRenderer({
         isInteractable={isInteractable}
         isParentSelected={isSelected}
         isContactDiskSelected={isConeSelected}
+        transparent={ghosted}
+        opacity={ghosted ? 0.3 : 1}
         onDiskHudHoverChange={onContactDiskHudHoverChange}
         onDiskHudPointerDown={handleContactDiskHudPointerDown}
         onDiskHudPointerUp={handleContactDiskHudPointerUp}
@@ -236,6 +244,8 @@ export const BranchRenderer = React.memo(function BranchRenderer({
           selectedColor={visuals.selectedColor}
           isInteractable={isInteractable}
           isParentSelected={isSelected}
+          transparent={ghosted}
+          opacity={ghosted ? 0.3 : 1}
         />
       )}
 
@@ -253,7 +263,7 @@ registerSupportDetailRenderer('branch', (ctx) => ({
         const parentKnot = ctx.renderKnotsById[branch.parentKnotId];
         return parentKnot ? { parentKnot } : null;
     },
-    skip: ({ isSelected }) => !isSelected,
+    skip: ({ isSelected, isGhosted = false }) => !isSelected && !isGhosted,
     noClipping: () => true,
     extraProps: ({ entity, isSelected }) => ({
         showKnots: simpleViewHidesDetail(ctx, isSelected) ? false : (!ctx.hideUnselectedKnots || isSelected),
