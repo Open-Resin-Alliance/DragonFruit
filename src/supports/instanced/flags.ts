@@ -122,3 +122,32 @@ export const SUPPORT_DETAIL_DRAG_PREVIEW: boolean = true;
  * dead code.
  */
 export const SUPPORT_INSTANCED_DRAG: boolean = true;
+
+/**
+ * Step 5: a contact-disk (tip) drag's preview drawn by a private instanced cone
+ * batch instead of the dragged support's detail renderer.
+ *
+ * Off (the rollback) keeps the whole gesture on the detail path: every hit
+ * calls `setTick` and the detail renderer re-renders the support's cone (and,
+ * for a stick, its shafts and joints) around the new preview.
+ *
+ * On, `useContactDiskDragSession` begins a cone session for a type whose
+ * descriptor says the drag mutates exactly one declared cone
+ * (`tipDragRebuildsGeometry: false`) and writes one instance per frame instead
+ * of a React commit. Exactly the grabbed cone is hidden through
+ * `DraggedSupportContext`; shafts and joints of the same support stay drawn,
+ * because the drag never moves them.
+ *
+ * A branch and a twig declare `tipDragRebuildsGeometry: true` and keep the
+ * detail path byte for byte: they pass no `contact` descriptor to `start`, so
+ * no session is ever begun. The gate lives in the hook, not in the batch:
+ * `beginConeDrag` and `InstancedConeDragBatch` are inert until something calls
+ * them, and a reader that gated them again here could not test them with the
+ * flag off.
+ *
+ * Declared `boolean`, not `false`, for the same reason as the joint flag: a
+ * literal type would let TypeScript narrow every `SUPPORT_INSTANCED_CONE_DRAG ?
+ * instanced : legacy` in a consumer to the legacy branch and report the
+ * instanced branch as dead code.
+ */
+export const SUPPORT_INSTANCED_CONE_DRAG: boolean = true;

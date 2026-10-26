@@ -89,6 +89,9 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk: baseTrun
             const latest = getSnapshot().trunks[trunk.id];
             if (latest) updateSupportEntity('trunk', { ...latest, contactCone: cone });
         },
+        // A trunk's tip drag mutates only its contact cone: the socket is
+        // anchored, so the shaft, joints and root stay put.
+        coneFromPreview: (cone) => cone,
     });
 
     const socketAnchorRef = React.useRef<Vec3 | undefined>(undefined);
@@ -102,8 +105,13 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk: baseTrun
             event: e, camera, domElement: gl.domElement, scene,
             modelId: trunk.modelId,
             placementSurface: trunk.contactCone?.placementSurface,
+            contact: {
+                field: 'contactCone',
+                cone: trunk.contactCone,
+                supportId: trunk.id,
+            },
         });
-    }, [camera, gl.domElement, isSelected, scene, tipDrag, trunk.contactCone, trunk.modelId]);
+    }, [camera, gl.domElement, isSelected, scene, tipDrag, trunk.contactCone, trunk.id, trunk.modelId]);
 
     const handleContactDiskHudPointerUp = React.useCallback(() => {
         tipDrag.stop();

@@ -68,6 +68,28 @@ joint ball and one that goes through `JointGizmo` commit from
 predicate rejects (a twig's contact disks, a brace, a stump, a leaf, any bezier
 segment) never open a session and keep the 25 ms detail preview unchanged.
 
+**A contact-disk (tip) drag draws through a cone-only batch.** While a selected
+contact disk's HUD drags, `InstancedConeDragBatch` (behind
+`SUPPORT_INSTANCED_CONE_DRAG`) draws exactly that one cone — body frustum, tip
+ball and, for a `disk` profile, the polygon-offset nib — in the selected-disk
+colour `#c11f61`, from a single-cone slot map built at pointer-down
+(`buildConeDragSlotMap`). It is the only gesture served this way: a type opts in
+by declaring `tipDragRebuildsGeometry: false` in the registry AND naming the
+dragged field as a `cone` contact (`isConeOnlyTipDrag`). Trunk, leaf, stump and
+stick qualify because the drag anchors the cone's socket, so no segment or joint
+moves; a branch re-searches its socket and rebuilds its shaft, and a twig also
+re-aims both disks and moves its disk-end joint, so both keep the detail path
+byte for byte (they pass no `contact` descriptor to the session at all). The
+grabbed cone alone is hidden, through `DraggedSupportContext.coneIds` with a null
+`supportId` — the support's shafts and sibling joints stay on their detail
+renderers, because the drag never moves them. `coneDragWriter` is the same
+imperative transaction as the joint writer (`beginConeDrag` /
+`writeConeDragFrame` / `endConeDrag`, session on `globalThis` because the hook
+and the batch land in different lazy chunks), minus the model drop offset: the
+preview cone comes from a world-space hit against the committed entity and the
+detail renderer draws it with no offset. A click that never moves still commits
+and pushes one history entry, exactly as before.
+
 **The batches are one tiled set, not a live set plus a scenery set.** The split
 existed because one batch per kind had bounds covering every plate; with tiles
 each handful of primitives has its own sphere, so the split culled nothing. It

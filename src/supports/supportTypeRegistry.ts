@@ -523,6 +523,22 @@ export interface SupportTypeDescriptor {
      */
     jointDragMovesContacts: boolean;
     /**
+     * Whether dragging this type's contact tip rebuilds geometry beyond the
+     * cone itself.
+     *
+     * The instance-attribute tip-drag path writes one contact cone per frame
+     * and nothing else, so it can only serve a type whose drag mutates exactly
+     * one declared cone. Trunk, leaf, stump and stick anchor the cone's socket
+     * at pointer-down, so every segment and joint stays where it was. A branch
+     * re-searches its socket and rebuilds its shaft, and a twig also re-aims
+     * both disks and moves its disk-end joint, so both stay on the detail path.
+     *
+     * Read together with `contactEndpointsFor`: a type is cone-only only when
+     * this is false AND the dragged field is a declared cone. Never derive the
+     * answer from a list of type names.
+     */
+    tipDragRebuildsGeometry: boolean;
+    /**
      * Whether a joint drag may turn this type's segments into curves.
      *
      * Segments already bezier keep updating regardless; this is whether the
@@ -629,6 +645,7 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         upper: { kind: 'cone', field: 'contactCone' },
         isAutoPlaced: true,
         hasSegments: true,
+        tipDragRebuildsGeometry: false,
         label: 'Trunks',
         singular: 'trunk',
         location: { store: 'support', key: 'trunks' },
@@ -684,6 +701,7 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         hostsKickstand: true,
         isAutoPlaced: true,
         hasSegments: true,
+        tipDragRebuildsGeometry: true,
         label: 'Branches',
         singular: 'branch',
         location: { store: 'support', key: 'branches' },
@@ -738,6 +756,7 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         hostsKickstand: false,
         isAutoPlaced: true,
         hasSegments: false,
+        tipDragRebuildsGeometry: false,
         label: 'Leaves',
         singular: 'leaf',
         location: { store: 'support', key: 'leaves' },
@@ -783,6 +802,7 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         hostsKickstand: true,
         isAutoPlaced: true,
         hasSegments: true,
+        tipDragRebuildsGeometry: true,
         label: 'Twigs',
         singular: 'twig',
         location: { store: 'support', key: 'twigs' },
@@ -827,6 +847,7 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         hostsKickstand: true,
         isAutoPlaced: true,
         hasSegments: true,
+        tipDragRebuildsGeometry: false,
         label: 'Sticks',
         singular: 'stick',
         location: { store: 'support', key: 'sticks' },
@@ -877,6 +898,7 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         hostsKickstand: true,
         isAutoPlaced: false,
         hasSegments: false,
+        tipDragRebuildsGeometry: false,
         label: 'Braces',
         singular: 'brace',
         location: { store: 'support', key: 'braces' },
@@ -934,6 +956,7 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         hostsKickstand: true,
         isAutoPlaced: true,
         hasSegments: true,
+        tipDragRebuildsGeometry: false,
         label: 'Stumps',
         singular: 'stump',
         location: { store: 'support', key: 'stumps' },
@@ -986,6 +1009,7 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         hostsKickstand: true,
         isAutoPlaced: false,
         hasSegments: true,
+        tipDragRebuildsGeometry: false,
         label: 'Kickstands',
         singular: 'kickstand',
         location: { store: 'support', key: 'kickstands' },

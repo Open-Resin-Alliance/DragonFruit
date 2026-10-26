@@ -82,6 +82,9 @@ export const StumpRenderer = React.memo(function StumpRenderer({
             // does not name the type to write it.
             if (latest) updateSupportEntity({ ...latest, contactCone: cone });
         },
+        // A stump's tip drag mutates only its contact cone; its synthetic root
+        // is built from `rootPos` and the root diameters.
+        coneFromPreview: (cone) => cone,
     });
 
     const handleContactDiskHudPointerDown = React.useCallback((e: any) => {
@@ -93,8 +96,13 @@ export const StumpRenderer = React.memo(function StumpRenderer({
             event: e, camera, domElement: gl.domElement, scene,
             modelId: stump.modelId,
             placementSurface: stump.contactCone?.placementSurface,
+            contact: {
+                field: 'contactCone',
+                cone: stump.contactCone,
+                supportId: stump.id,
+            },
         });
-    }, [stump.contactCone, stump.modelId, camera, gl.domElement, isSelected, scene, tipDrag]);
+    }, [stump.contactCone, stump.id, stump.modelId, camera, gl.domElement, isSelected, scene, tipDrag]);
 
     const handleContactDiskHudPointerUp = React.useCallback(() => {
         tipDrag.stop();

@@ -78,6 +78,26 @@ holds 165 fps with ~404 calls and 14.2M triangles.
   profile contact drawn by the batch nib rather than `ContactDiskRenderer`, the
   gizmo following the batch imperatively) and record draw calls per drag frame.
 
+- Phase 2 wave 6 landed behind `SUPPORT_INSTANCED_CONE_DRAG` (on for testing):
+  the contact-disk (tip) drag's preview is a private instanced cone batch instead
+  of one React commit per pointer frame. `useContactDiskDragSession` begins a
+  `beginConeDrag` session when the start options carry `contact` AND the type's
+  descriptor declares `tipDragRebuildsGeometry: false` with a `cone` field — so
+  trunk, leaf, stump and stick are instanced, while branch and twig pass no
+  `contact` at all and keep the legacy `setTick` path byte for byte. The writer
+  draws body, tip and (disk profiles) nib from `fillConeBatchSlot` +
+  `writeConeBodyMatrix/Tip/DiskMatrix`, one flush per frame, no drop offset.
+  Exactly the grabbed cone hides, through the asker's context (`coneIds` union,
+  `supportId: null`); the support's shafts, joints and any sibling cone stay on
+  their detail renderers. Commit order is unchanged: `endConeDrag` → store write
+  → history push → guide cleared → `clearConeDragSessionAfterFrame`. Known
+  delta: the moving HUD ring is inside the hidden cone group, so it stops
+  following the tip for the gesture (the cone body/tip/nib still move and the
+  pointer stays captured). Pending: A/B screenshots at three zooms, React commit
+  count per gesture (expect 0 per hit), draw calls (3 vs 3), and the HUD-ring
+  follow-up (move the HUD imperatively from the session, or draw a non-pickable
+  ring in the batch).
+
 **Correction from the joint map:** Support mode does not consume
 `collectProxyPrimitives`. `SupportRenderer` resolves its own batches
 (`sceneBatchedJointGroups` and siblings) with Support-specific filters, diameter

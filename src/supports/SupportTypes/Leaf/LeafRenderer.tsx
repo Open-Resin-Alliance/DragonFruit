@@ -134,6 +134,8 @@ export const LeafRenderer = React.memo(function LeafRenderer({
             // name the type to write it.
             if (latest) updateSupportEntity({ ...latest, contactCone: nextCone });
         },
+        // A leaf's tip drag mutates only its contact cone; it owns no segments.
+        coneFromPreview: (cone) => cone,
     });
 
     const handleContactDiskHudPointerDown = React.useCallback((e: LeafRendererPointerEvent) => {
@@ -146,8 +148,13 @@ export const LeafRenderer = React.memo(function LeafRenderer({
             event: e, camera, domElement: gl.domElement, scene,
             modelId: leaf.modelId,
             placementSurface: leaf.contactCone.placementSurface,
+            contact: {
+                field: 'contactCone',
+                cone: leaf.contactCone,
+                supportId: leaf.id,
+            },
         });
-    }, [camera, gl.domElement, isSelected, leaf.contactCone, leaf.modelId, scene, tipDrag]);
+    }, [camera, gl.domElement, isSelected, leaf.contactCone, leaf.id, leaf.modelId, scene, tipDrag]);
 
     const handleContactDiskHudPointerUp = React.useCallback(() => {
         tipDrag.stop();

@@ -55,14 +55,17 @@ import { InstancedRootBatch } from './instanced/InstancedRootBatch';
 import {
     SUPPORT_DETAIL_DRAG_PREVIEW,
     SUPPORT_INSTANCED_CONES,
+    SUPPORT_INSTANCED_CONE_DRAG,
     SUPPORT_INSTANCED_DRAG,
     SUPPORT_INSTANCED_JOINTS,
     SUPPORT_INSTANCED_ROOTS,
     SUPPORT_INSTANCED_SHAFTS,
 } from './instanced/flags';
 import { InstancedJointDragBatch } from './instanced/InstancedJointDragBatch';
+import { InstancedConeDragBatch } from './instanced/InstancedConeDragBatch';
 import { DraggedSupportContext } from './instanced/dragSuppression';
 import { getJointDragSession, getJointDragSessionServerSnapshot, subscribeJointDragSession } from './instanced/instanceDragWriter';
+import { getConeDragSession, getConeDragSessionServerSnapshot, subscribeConeDragSession } from './instanced/coneDragWriter';
 import type { JointDragSceneContext } from './instanced/instanceDragWriter';
 import type { DragHostKnot, JointDragSlotMap } from './instanced/dragSlots';
 import type { SupportInstanceBatch } from './instanced/supportInstanceBatch';
@@ -244,6 +247,8 @@ const SCENE_JOINT_DIAMETER_BLEND_MM = JOINT_DIAMETER_OFFSET_MM * 0.75;
  *  pre-compensate to keep the exact KnotRenderer sphere size. */
 const KNOT_BATCH_DIAMETER_PRECOMPENSATION_MM = SCENE_JOINT_DIAMETER_BLEND_MM - JOINT_DIAMETER_OFFSET_MM;
 const EMPTY_SUPPORT_ID_LIST: readonly string[] = Object.freeze([]);
+/** A tip drag hides cones only; no joint id of the support is suppressed. */
+const EMPTY_DRAGGED_PRIMITIVE_IDS: ReadonlySet<string> = new Set<string>();
 const EMPTY_KNOT_DRAG_SHAFT_SEGMENTS_BY_ID: Record<string, never> = Object.freeze({});
 const FREEZE_DEPENDENT_PREVIEW_DURING_JOINT_DRAG = true;
 
@@ -3689,19 +3694,38 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         sharedRenderProps,
     ]);
 
-    // The private drag batch's support: every detail shaft of it hides while
-    // the gesture runs. Context, because the external suppression store proved
-    // unreliable across the lazy chunks the detail renderers live in.
+    // The private drag batches' primitives: every detail shaft of a dragged
+    // support hides while a joint gesture runs, and exactly the grabbed cone
+    // hides while a tip drag runs. Context, because the external suppression
+    // store proved unreliable across the lazy chunks the detail renderers live
+    // in.
     const jointDragSession = useSyncExternalStore(
         subscribeJointDragSession,
         getJointDragSession,
         getJointDragSessionServerSnapshot,
     );
-    const draggedSupport = jointDragSession && !jointDragSession.ended
+    // A contact-disk (tip) drag draws one cone and nothing else: it must not
+    // hide the support's shafts or joints, which the drag never moves.
+    const coneDragSession = useSyncExternalStore(
+        subscribeConeDragSession,
+        getConeDragSession,
+        getConeDragSessionServerSnapshot,
+    );
+    const jointDrag = jointDragSession && !jointDragSession.ended ? jointDragSession.slotMap : null;
+    const coneDrag = coneDragSession && !coneDragSession.ended ? coneDragSession.slotMap : null;
+    const draggedSupport = jointDrag || coneDrag
         ? {
-            supportId: jointDragSession.slotMap.supportId,
-            jointIds: new Set(jointDragSession.slotMap.joints.map((slot) => slot.id)),
-            coneIds: new Set(jointDragSession.slotMap.cones.map((slot) => slot.id)),
+            supportId: jointDrag?.supportId ?? null,
+            jointIds: jointDrag
+                ? new Set(jointDrag.joints.map((slot) => slot.id))
+                : EMPTY_DRAGGED_PRIMITIVE_IDS,
+            // The union of both gestures. They cannot overlap (different
+            // pointer-down targets, and the pointer is captured by one), so at
+            // most one of them contributes.
+            coneIds: new Set([
+                ...(jointDrag?.cones.map((slot) => slot.id) ?? []),
+                ...(coneDrag?.cones.map((slot) => slot.id) ?? []),
+            ]),
         }
         : null;
 
@@ -3766,6 +3790,26 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 <InstancedJointDragBatch
                     sharedJointBatch={sceneJointBatch}
                     resolveColor={resolveJointDragPreviewColor}
+                    transparent={ghostTransparent}
+                    opacity={ghostOpacityClamped}
+                    renderOrder={ghostRenderOrder}
+                />
+            )}
+            {/*
+              The contact-disk (tip) drag's own cone, mounted beside the joint
+              drag batch so the transparent sort order is unchanged. It draws
+              nothing without a live gesture (its own store subscription
+              decides), never enters the pick clone, and its one instance is
+              written per hit by `writeConeDragFrame` — no React commit per
+              frame. Shafts and joints of the dragged support stay on their
+              detail renderers: a tip drag never moves them.
+
+              No clipping planes on purpose, for the same reason as the joint
+              batch: a tip drag only starts from the selected cone's HUD, and a
+              selected support's detail group is clip-exempt (`noClipping`).
+            */}
+            {SUPPORT_INSTANCED_CONE_DRAG && !simpleRender && (
+                <InstancedConeDragBatch
                     transparent={ghostTransparent}
                     opacity={ghostOpacityClamped}
                     renderOrder={ghostRenderOrder}

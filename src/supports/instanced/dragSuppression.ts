@@ -198,15 +198,27 @@ export function useSupportDragSuppressed(supportId: string | null | undefined): 
 }
 
 /**
- * The support whose primitives a joint drag draws through its private batch.
+ * The support whose primitives a drag draws through its private batch.
  *
  * Context, not just the external store: the store depends on every chunk
  * importing one module instance, and the opposite happened twice. The provider
  * lives in `SupportRenderer`, which already re-renders when the drag session
  * opens/closes, so a detail renderer cannot miss it.
+ *
+ * Both gestures share it:
+ *
+ * - a joint drag sets `supportId` (which hides that support's detail shafts),
+ *   `jointIds` and the cones its batch draws;
+ * - a contact-disk (tip) drag sets `supportId: null` — nothing of the support's
+ *   shaft moves — and only its one cone id.
+ *
+ * `coneIds` is therefore the union of both gestures; the gestures cannot overlap
+ * (different pointer-down targets, and the pointer is captured by one), so at
+ * most one of them contributes.
  */
 export type DraggedSupportContextValue = {
-  supportId: string;
+  /** The support a joint drag draws in its batch, or null for a tip drag. */
+  supportId: string | null;
   /** The joint ids the private batch draws for this gesture. */
   jointIds: ReadonlySet<string>;
   /** The contact-cone ids the private batch draws for this gesture. */
