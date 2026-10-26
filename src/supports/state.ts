@@ -3540,6 +3540,25 @@ function resizeTaperStart(
     };
 }
 
+/** Gap a stump's joint keeps above its own root top. */
+const INLINE_ROOT_SOCKET_CLEARANCE_MM = 0.1;
+
+/**
+ * Lengthen a cone so its socket lands at `socketZ`, leaving the contact point
+ * where it is. A cone with no vertical reach cannot be stretched to a height,
+ * so it is returned untouched.
+ */
+function stretchConeToSocketZ<T extends { pos: Vec3; normal: Vec3; profile: { lengthMm: number } }>(
+    cone: T,
+    socketZ: number,
+): T {
+    const dz = cone.normal.z;
+    if (!(Math.abs(dz) > 1e-6)) return cone;
+    const lengthMm = (socketZ - cone.pos.z) / dz;
+    if (!Number.isFinite(lengthMm) || lengthMm <= 0) return cone;
+    return { ...cone, profile: { ...cone.profile, lengthMm } };
+}
+
 function applyTipSettingsToConeProfile(
     profile: SupportTipProfile,
     tip: SupportSettings['tip'],
@@ -3601,6 +3620,7 @@ export function applySettingsToSupportTarget(target: EditableSupportTarget, sett
         contactCone?: Trunk['contactCone'];
         rootId?: string;
         settingsCodeHex?: string;
+        joint?: Joint;
     } | undefined;
     if (!entity) return false;
 
@@ -3640,10 +3660,26 @@ export function applySettingsToSupportTarget(target: EditableSupportTarget, sett
     // An inline root is geometry on the entity, so the same settings land on the
     // fields it declares rather than on a shared `Roots` row.
     if (descriptor.lower.kind === 'inlineRoot') {
-        const { radiusField, topRadiusField, heightField } = descriptor.lower;
+        const { field, radiusField, topRadiusField, heightField } = descriptor.lower;
         if (radiusField) next[radiusField] = settings.roots.diameterMm;
         if (topRadiusField) next[topRadiusField] = settings.roots.neckDiameterMm;
         if (heightField) next[heightField] = settings.roots.coneHeightMm;
+
+        // That root is the body carrying the joint, and the cone sockets on the
+        // joint, so a taller root has to take both up with it or it swallows
+        // them and draws as a bare disc.
+        const basePos = field ? (next[field] as Vec3 | undefined) : undefined;
+        const joint = (next.joint ?? entity.joint) as Joint | undefined;
+        if (basePos && joint && heightField) {
+            const rootTopZ = basePos.z + (next[heightField] as number);
+            const socketZ = rootTopZ + INLINE_ROOT_SOCKET_CLEARANCE_MM;
+            if (socketZ > joint.pos.z) {
+                next.joint = { ...joint, pos: { ...joint.pos, z: socketZ } };
+                if (nextContactCone) {
+                    next.contactCone = stretchConeToSocketZ(nextContactCone, socketZ);
+                }
+            }
+        }
     }
 
     setCachedSupportSettingsHex(descriptor.id, entity.id, nextHex);

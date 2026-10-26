@@ -25,7 +25,7 @@ const projectRoot = process.cwd();
 const DEFAULT_DOC_FILES = ['AGENTS.md', 'CONTEXT.md', 'README.md'];
 const DEFAULT_DOC_DIRS = ['docs'];
 
-const CODE_ROOTS = ['src', 'src-tauri', 'rust', 'plugins', 'scripts', 'profiles', 'website', '.github'];
+const CODE_ROOTS = ['src', 'src-tauri', 'rust', 'plugins', 'scripts', 'profiles', 'website', '.github', 'infra'];
 // Root-level config is cited by docs as often as anything under src/.
 const CODE_FILES = [
       'package.json', 'next.config.ts', 'tsconfig.json', 'eslint.config.mjs',

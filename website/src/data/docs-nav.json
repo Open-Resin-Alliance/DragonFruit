@@ -570,6 +570,10 @@
               "slug": "dev/issue-guts-tuning"
             },
             {
+              "label": "Upload Service",
+              "slug": "dev/upload-service"
+            },
+            {
               "label": "OS Thumbnails",
               "items": [
                 {

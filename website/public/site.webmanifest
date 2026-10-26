@@ -1,0 +1,24 @@
+{
+  "name": "DragonFruit Resin Slicer",
+  "short_name": "DragonFruit",
+  "description": "DragonFruit is an open-source resin slicer and support-authoring environment: a modern workspace for hollowing, island analysis, supports and slicing, built by the Open Resin Alliance.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ec2a77",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/favicon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

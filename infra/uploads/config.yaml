@@ -1,0 +1,42 @@
+# FileBrowser Quantum config for the upload service. ${VARS} come from the
+# container environment (compose.yml → .env). Full reference of every key:
+# https://github.com/gtsteffaniak/filebrowser/blob/main/frontend/public/config.generated.yaml
+
+server:
+  # Uploaded files are untrusted; nothing should parse them server-side.
+  disablePreviews: true
+  logging:
+    - levels: "info|warning|error"
+  sources:
+    - path: /srv/uploads
+      name: uploads
+      config:
+        # Must stay false: FileBrowser refuses share links on private sources.
+        private: false
+        # Users see nothing until an admin grants them this source.
+        defaultEnabled: false
+
+auth:
+  adminPassword: ${UPLOADS_ADMIN_PASSWORD}
+  totpSecret: ${UPLOADS_TOTP_SECRET}
+  methods:
+    password:
+      enabled: true
+      minLength: 12
+      signup: false
+      enforcedOtp: true
+
+http:
+  port: 80
+  # Share links are built from this, so it must be the public HTTPS address.
+  externalUrl: ${UPLOADS_EXTERNAL_URL}
+  # The port is bound to loopback, so every request arrives through the local
+  # tunnel/proxy; without this the login lockout would see one client for all.
+  trustProxyHeaders: true
+  disableWebDAV: true
+
+frontend:
+  name: DragonFruit uploads
+  disableDefaultLinks: true
+  styling:
+    disableEventThemes: true

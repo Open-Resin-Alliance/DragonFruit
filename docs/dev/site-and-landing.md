@@ -27,7 +27,7 @@ piece lives, how the Markdown becomes pages, and what to run before pushing.
 | `website/src/styles/ora.css` | The design language — tokens, layout shell, buttons, surfaces. |
 | `website/src/assets/wordmark.svg` | The wordmark, inlined by `Wordmark.astro` so the part of it drawn in white can follow the theme. |
 | `website/public/brand/` | The emblem (`simple_icon.svg`) and the social card. |
-| `website/public/favicon.png` | The bitmap favicon Google Search reads. `favicon.svg` is the original for browsers; Google does not support SVG favicons. |
+| `website/public/favicon.png` | The bitmap favicon Google Search reads. `favicon.svg` is the original for browsers; Google does not support SVG favicons. `favicon.ico` (16/32/48 px) is what clients that never parse the head probe, and `site.webmanifest` names the site outside search. |
 | `website/public/media/` | The four screenshots in the landing page grid, re-encoded from the marketing renders. |
 | `website/src/og/` | The social cards: a build hook, the renderer, the fonts and the emblem PNG. |
 | `website/src/lib/og.ts` | Where a card lives, and the digest its URL carries. |
@@ -214,6 +214,12 @@ to the hostname, which is why search results can read `dragonfruit-slicer.com`. 
 block names the site `DragonFruit Resin Slicer` and offers `DragonFruit` as an
 alternate. The favicon PNG is the bitmap Google reads; the SVG beside it is for
 browsers, because Google does not accept SVG favicons.
+
+Two files cover the surfaces that never read any of that: `website/public/favicon.ico`
+answers the bare `/favicon.ico` probe made by browsers and OS shortcuts, and
+`website/public/site.webmanifest` gives Chrome the site's name, icons and theme colour
+outside the search index. The manifest's `name` repeats the JSON-LD's, so the two
+never disagree.
 
 ## The screenshots
 
