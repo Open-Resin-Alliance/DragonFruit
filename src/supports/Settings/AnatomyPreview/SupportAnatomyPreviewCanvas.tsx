@@ -305,7 +305,7 @@ function PreviewContent({
     manualOverride?: { data: Partial<CapturedConfig>; category: 'camera' | 'support'; timestamp: number } | null;
     autoCameraEnabled: boolean;
 }) {
-    const { camera } = useThree();
+    const { camera, invalidate } = useThree();
     const settings = React.useSyncExternalStore(subscribeToSettings, getSettingsSnapshot, getSettingsSnapshot);
     const previewState = React.useSyncExternalStore(subscribeToAnatomyPreviewState, getAnatomyPreviewState, getAnatomyPreviewState);
     const previewSettings = previewState.hoveredPresetSettings ?? settings;
@@ -448,6 +448,9 @@ function PreviewContent({
     useFrame((state, delta) => {
         if (!autoCameraEnabled) return;
         if (!isAnimating) return;
+        // Demand rendering: keep frames coming only while the auto-camera is
+        // actually interpolating.
+        invalidate();
 
         // If user starts dragging/orbiting, stop the auto-animator
         if (isUserInteractingRef.current) {
@@ -837,6 +840,9 @@ export function SupportAnatomyPreviewCanvas() {
                 />
             )}
             <Canvas
+                // The preview is static except while its auto-camera animates,
+                // so do not run a permanent WebGL frame loop in the sidebar.
+                frameloop={showPreviewTuner ? 'always' : 'demand'}
                 gl={{ alpha: true, antialias: true }}
                 orthographic={ANATOMY_CONFIG.camera.type === 'orthographic'}
                 camera={{
