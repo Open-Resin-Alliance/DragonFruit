@@ -66,10 +66,14 @@ const website = {
     <meta name="generator" content={Astro.generator} />
 
     {/* Google Search only accepts bitmap favicons (PNG, ICO, …), so the PNG is
-        listed first and the SVG follows for browsers that can use it. */}
+        listed first and the SVG follows for browsers that can use it. The ICO is
+        what browsers and OS shortcuts probe when they never parse this head. The
+        manifest is what names the site in Chrome's UI, off the search index. */}
+    <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
     <link rel="icon" href="/favicon.png" type="image/png" sizes="512x512" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" sizes="any" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
 
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content={SITE.siteName} />
