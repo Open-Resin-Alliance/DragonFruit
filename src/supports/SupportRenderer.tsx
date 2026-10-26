@@ -3643,8 +3643,20 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const selected = selectedOf(typeId);
         const batchable = entry.batchedIds ?? plainShaftsOf(typeId);
         const list = renderListByType[typeId] as readonly { id: string; modelId?: string }[];
+        // The instanced drag batch draws the moving geometry, but the detail
+        // renderer still owns everything around it (roots, disks, HUD). Give it
+        // the live preview entity directly: the part-drag event it normally
+        // subscribes to is not published on the instanced path, and leaving the
+        // committed entity here is what kept the old support visible beside the
+        // moving one.
+        const previewEntity = activePreviewEntity?.typeId === typeId
+            ? activePreviewEntity.support as { id: string; modelId?: string }
+            : null;
 
-        return list.map((entity) => {
+        return list.map((baseEntity) => {
+            const entity = previewEntity && baseEntity.id === previewEntity.id
+                ? previewEntity
+                : baseEntity;
             if (!isModelVisible(entity.modelId, entity.id)) return null;
 
             const isSelected = selected.has(entity.id);
@@ -3670,6 +3682,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         selectedOf,
         plainShaftsOf,
         renderListByType,
+        activePreviewEntity,
         isModelVisible,
         sharedRenderProps,
     ]);
