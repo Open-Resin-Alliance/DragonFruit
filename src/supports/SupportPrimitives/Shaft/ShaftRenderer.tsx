@@ -7,7 +7,7 @@ import { useBracePlacementState } from '../../SupportTypes/Brace/bracePlacementS
 import { useKickstandPlacementState } from '../../SupportTypes/Kickstand/kickstandPlacementState';
 import { useLeafPlacementState } from '../../SupportTypes/Leaf/leafPlacementState';
 import { emitImmediateModelHover, isInteriorSupportInteractionActive } from '../../interaction/pointerOcclusion';
-import { usePrimitiveDragSuppressed, useSupportDragSuppressed } from '../../instanced/dragSuppression';
+import { useDraggedSupportId, usePrimitiveDragSuppressed, useSupportDragSuppressed } from '../../instanced/dragSuppression';
 
 const NOOP_RAYCAST: THREE.Object3D['raycast'] = () => {};
 
@@ -87,8 +87,10 @@ export function ShaftRenderer({
      * to keep its pick subscription and id through the gesture.
      */
     const segmentDragSuppressed = usePrimitiveDragSuppressed('shaft', id);
-    const supportDragSuppressed = useSupportDragSuppressed(parentSupportId);
-    const dragSuppressed = segmentDragSuppressed || supportDragSuppressed;
+    const storeSupportSuppressed = useSupportDragSuppressed(parentSupportId);
+    const draggedSupportId = useDraggedSupportId();
+    const contextSupportSuppressed = !!draggedSupportId && draggedSupportId === parentSupportId;
+    const dragSuppressed = segmentDragSuppressed || storeSupportSuppressed || contextSupportSuppressed;
     const [pointerHoverActive, setPointerHoverActive] = useState(false);
 
     useEffect(() => {

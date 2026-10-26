@@ -61,6 +61,8 @@ import {
     SUPPORT_INSTANCED_SHAFTS,
 } from './instanced/flags';
 import { InstancedJointDragBatch } from './instanced/InstancedJointDragBatch';
+import { DraggedSupportContext } from './instanced/dragSuppression';
+import { getJointDragSession, getJointDragSessionServerSnapshot, subscribeJointDragSession } from './instanced/instanceDragWriter';
 import type { JointDragSceneContext } from './instanced/instanceDragWriter';
 import type { DragHostKnot, JointDragSlotMap } from './instanced/dragSlots';
 import type { SupportInstanceBatch } from './instanced/supportInstanceBatch';
@@ -3687,7 +3689,20 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         sharedRenderProps,
     ]);
 
+    // The private drag batch's support: every detail shaft of it hides while
+    // the gesture runs. Context, because the external suppression store proved
+    // unreliable across the lazy chunks the detail renderers live in.
+    const jointDragSession = useSyncExternalStore(
+        subscribeJointDragSession,
+        getJointDragSession,
+        getJointDragSessionServerSnapshot,
+    );
+    const draggedSupportId = jointDragSession && !jointDragSession.ended
+        ? jointDragSession.slotMap.supportId
+        : null;
+
     return (
+        <DraggedSupportContext.Provider value={draggedSupportId}>
         <group ref={groupRef}>
             {/* Joint Creation Manager */}
             <JointCreationManager />
@@ -4120,6 +4135,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 applyDropToVec3Like={applyDropToVec3Like}
             />
         </group>
+        </DraggedSupportContext.Provider>
     );
 });
 

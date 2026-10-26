@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react';
+import React, { useSyncExternalStore } from 'react';
 
 /**
  * Which primitives a joint-drag gesture draws through the instanced batch
@@ -195,4 +195,18 @@ export function useSupportDragSuppressed(supportId: string | null | undefined): 
   );
   if (!supportId) return false;
   return store().suppressedSupports.has(supportId);
+}
+
+/**
+ * The support whose primitives a joint drag draws through its private batch.
+ *
+ * Context, not just the external store: the store depends on every chunk
+ * importing one module instance, and the opposite happened twice. The provider
+ * lives in `SupportRenderer`, which already re-renders when the drag session
+ * opens/closes, so a detail renderer cannot miss it.
+ */
+export const DraggedSupportContext = React.createContext<string | null>(null);
+
+export function useDraggedSupportId(): string | null {
+  return React.useContext(DraggedSupportContext);
 }
