@@ -205,8 +205,18 @@ export function useSupportDragSuppressed(supportId: string | null | undefined): 
  * lives in `SupportRenderer`, which already re-renders when the drag session
  * opens/closes, so a detail renderer cannot miss it.
  */
-export const DraggedSupportContext = React.createContext<string | null>(null);
+export type DraggedSupportContextValue = {
+  supportId: string;
+  /** The joint ids the private batch draws for this gesture. */
+  jointIds: ReadonlySet<string>;
+};
+
+export const DraggedSupportContext = React.createContext<DraggedSupportContextValue | null>(null);
+
+export function useDraggedSupport(): DraggedSupportContextValue | null {
+  return React.useContext(DraggedSupportContext);
+}
 
 export function useDraggedSupportId(): string | null {
-  return React.useContext(DraggedSupportContext);
+  return React.useContext(DraggedSupportContext)?.supportId ?? null;
 }

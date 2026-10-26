@@ -9,7 +9,7 @@ import { selectPrimitiveById } from '../../interaction/shared/selection/selectio
 import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
 import { useJointDragPosition } from '../../interaction/jointDragPosition';
 import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
-import { usePrimitiveDragSuppressed } from '../../instanced/dragSuppression';
+import { useDraggedSupport, usePrimitiveDragSuppressed } from '../../instanced/dragSuppression';
 
 interface JointRendererProps {
     joint: Joint;
@@ -124,7 +124,9 @@ export function JointRenderer({
      * pass renders the group's meshes and the joint has to keep answering the
      * pointer with the pick id it already registered.
      */
-    const dragSuppressed = usePrimitiveDragSuppressed('joint', joint.id);
+    const storeDragSuppressed = usePrimitiveDragSuppressed('joint', joint.id);
+    const draggedSupport = useDraggedSupport();
+    const dragSuppressed = storeDragSuppressed || (draggedSupport?.jointIds.has(joint.id) ?? false);
 
     const isPointerOverThisJoint = (e: any): boolean => {
         if (!groupRef.current) return false;

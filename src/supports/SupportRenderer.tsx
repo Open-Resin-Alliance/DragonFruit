@@ -3697,12 +3697,15 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         getJointDragSession,
         getJointDragSessionServerSnapshot,
     );
-    const draggedSupportId = jointDragSession && !jointDragSession.ended
-        ? jointDragSession.slotMap.supportId
+    const draggedSupport = jointDragSession && !jointDragSession.ended
+        ? {
+            supportId: jointDragSession.slotMap.supportId,
+            jointIds: new Set(jointDragSession.slotMap.joints.map((slot) => slot.id)),
+        }
         : null;
 
     return (
-        <DraggedSupportContext.Provider value={draggedSupportId}>
+        <DraggedSupportContext.Provider value={draggedSupport}>
         <group ref={groupRef}>
             {/* Joint Creation Manager */}
             <JointCreationManager />
