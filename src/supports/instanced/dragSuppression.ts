@@ -209,6 +209,8 @@ export type DraggedSupportContextValue = {
   supportId: string;
   /** The joint ids the private batch draws for this gesture. */
   jointIds: ReadonlySet<string>;
+  /** The contact-cone ids the private batch draws for this gesture. */
+  coneIds: ReadonlySet<string>;
 };
 
 export const DraggedSupportContext = React.createContext<DraggedSupportContextValue | null>(null);

@@ -14,7 +14,7 @@ import { useJointDragPosition } from '../../interaction/jointDragPosition';
 // Primitives
 import { ContactDiskRenderer, calculateDiskThickness } from '../ContactDisk';
 import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
-import { usePrimitiveDragSuppressed } from '../../instanced/dragSuppression';
+import { useDraggedSupport, usePrimitiveDragSuppressed } from '../../instanced/dragSuppression';
 import { subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot, getActiveMaterialProfile, getActivePrinterProfile } from '@/features/profiles/profileStore';
 import { calculateTipOffset } from '@/supports/rendering/calculateTipOffset';
 
@@ -118,7 +118,10 @@ export function ContactConeRenderer({
      * registration and its pick id survive the gesture and are back with the
      * first pick after release.
      */
-    const dragSuppressed = usePrimitiveDragSuppressed('cone', contactDiskId);
+    const storeDragSuppressed = usePrimitiveDragSuppressed('cone', contactDiskId);
+    const draggedSupport = useDraggedSupport();
+    const dragSuppressed = storeDragSuppressed
+        || (!!contactDiskId && (draggedSupport?.coneIds.has(contactDiskId) ?? false));
 
     // Resolve accurate colors logic
     const finalDiskColor = diskColor || color;

@@ -3701,6 +3701,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         ? {
             supportId: jointDragSession.slotMap.supportId,
             jointIds: new Set(jointDragSession.slotMap.joints.map((slot) => slot.id)),
+            coneIds: new Set(jointDragSession.slotMap.cones.map((slot) => slot.id)),
         }
         : null;
 
