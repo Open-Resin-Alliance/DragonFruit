@@ -17,6 +17,11 @@ export interface HotkeyState {
      * owned by that combination until released. See `isActionActiveSync`.
      */
     comboKeys: Set<string>;
+    /**
+     * Keys pressed while Cmd/Meta was held. Firefox on macOS sends no keyup for a
+     * key released before Cmd, so these are released together with Cmd instead.
+     */
+    metaHeldKeys: Set<string>;
     config: HotkeyConfig;
     
     // Actions
@@ -29,6 +34,7 @@ export interface HotkeyState {
 export const hotkeyStore = createStore<HotkeyState>((set) => ({
     activeKeys: new Set<string>(),
     comboKeys: new Set<string>(),
+    metaHeldKeys: new Set<string>(),
     config: DEFAULT_KEYBINDINGS,
 
     pressKey: (key, modifiers) => set((state) => {
@@ -51,7 +57,15 @@ export const hotkeyStore = createStore<HotkeyState>((set) => ({
             nextCombo.delete(claimed);
         }
 
-        return { activeKeys: next, comboKeys: nextCombo };
+        // Modifier keys always get their keyup; only the others can be lost.
+        const nextMetaHeld = new Set(state.metaHeldKeys);
+        if (modifiers?.metaKey && !SELF_MODIFIER_FLAG[normalized]) {
+            nextMetaHeld.add(normalized);
+        } else {
+            nextMetaHeld.delete(normalized);
+        }
+
+        return { activeKeys: next, comboKeys: nextCombo, metaHeldKeys: nextMetaHeld };
     }),
 
     releaseKey: (key) => set((state) => {
@@ -62,10 +76,23 @@ export const hotkeyStore = createStore<HotkeyState>((set) => ({
         const nextCombo = new Set(state.comboKeys);
         nextCombo.delete(normalizeKey(normalized));
 
-        return { activeKeys: next, comboKeys: nextCombo };
+        const nextMetaHeld = new Set(state.metaHeldKeys);
+        nextMetaHeld.delete(normalized);
+        // Without this, the V of a Cmd+V stayed pressed and every later Cmd press
+        // (a Cmd+Z, say) pasted again. A key really still held comes back with
+        // its next auto-repeat keydown.
+        if (SELF_MODIFIER_FLAG[normalized] === 'metaKey') {
+            for (const held of nextMetaHeld) {
+                next.delete(held);
+                nextCombo.delete(normalizeKey(held));
+            }
+            nextMetaHeld.clear();
+        }
+
+        return { activeKeys: next, comboKeys: nextCombo, metaHeldKeys: nextMetaHeld };
     }),
 
-    clearKeys: () => set({ activeKeys: new Set(), comboKeys: new Set() }),
+    clearKeys: () => set({ activeKeys: new Set(), comboKeys: new Set(), metaHeldKeys: new Set() }),
 
     updateBinding: (category, action, key, modifier) => set((state) => ({
         config: {
