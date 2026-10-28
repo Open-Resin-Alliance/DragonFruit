@@ -698,6 +698,7 @@ type TransformStoreCommitResult = {
   updated: boolean;
   supportsChanged: boolean;
   kickstandsChanged: boolean;
+  supportLocalFramePreserved: boolean;
 };
 
 type PendingSupportDragSyncTransaction = {
@@ -8558,6 +8559,7 @@ export default function Home() {
       updated: false,
       supportsChanged: false,
       kickstandsChanged: false,
+      supportLocalFramePreserved: false,
     };
     const expectedModelTransforms: Array<{ modelId: string; transform: ModelTransform }> = [];
 
@@ -8624,7 +8626,7 @@ export default function Home() {
         );
         transformDebugTimelineRef.current.storeUpdatedAt = stampNow();
 
-        if (expectSupportTransform && (!transformCommitResult.updated || !transformCommitResult.supportsChanged)) {
+        if (expectSupportTransform && (!transformCommitResult.updated || !transformCommitResult.supportLocalFramePreserved)) {
           cancelPrepareMergedSupportRebuildSkip();
         }
 
@@ -8909,6 +8911,7 @@ export default function Home() {
         updated: false,
         supportsChanged: false,
         kickstandsChanged: false,
+        supportLocalFramePreserved: false,
       });
       return;
     }

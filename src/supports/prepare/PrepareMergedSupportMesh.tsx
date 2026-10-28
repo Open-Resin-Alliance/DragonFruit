@@ -8,12 +8,9 @@ import { PrepareSupportMesh } from './PrepareSupportMesh';
 /**
  * One model's cached merged supports, mounted inside that model's group.
  *
- * The entry's geometry is world space and its `sourceInverse` is the inverse of
- * the committed model transform that was baked with it, so the group below
- * cancels the model group at rest and any live transform delta (a drag, a drop
- * animation) moves the supports rigidly without touching a vertex. During a
- * rebuild the old entry keeps both, so stale supports follow the model instead
- * of popping to the new position before the data does.
+ * The entry's geometry is baked into the model's local frame, so it is mounted
+ * directly under the model group. A live drag moves the group and the supports
+ * with it without touching a vertex; no inverse matrix is needed.
  *
  * The mesh answers no pointer: in Prepare the *model* is the interaction unit,
  * so the model mesh owns selection, hover and drag, and this mesh must stay out
@@ -106,8 +103,6 @@ export function PrepareMergedSupportMesh({
 
   return (
     <group
-      matrix={entry.sourceInverse}
-      matrixAutoUpdate={false}
       renderOrder={renderOrder}
       userData={{ dfPerfGroup: 'supports' }}
     >

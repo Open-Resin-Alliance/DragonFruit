@@ -197,19 +197,20 @@ test('a snapshot rewrite with the same collections does not walk or rebuild', ()
   assert.equal(view().entries.get(MODEL_A), entryBefore, 'the entry is kept');
 });
 
-test('an entry keeps the committed inverse it was baked under', () => {
+test('an entry bakes its geometry into the committed model frame', () => {
   reset();
   const inverses = commitInverses({ [MODEL_A]: 5, [MODEL_B]: -3 });
   request(getSnapshot(), { modelWorldInverseById: inverses });
   drain();
 
   const entryA = view().entries.get(MODEL_A)!;
-  assert.notEqual(entryA.sourceInverse, inverses.get(MODEL_A), 'the entry owns its copy');
-  assert.ok(entryA.sourceInverse.equals(inverses.get(MODEL_A)!));
-  assert.ok(view().entries.get(MODEL_B)!.sourceInverse.equals(inverses.get(MODEL_B)!));
+  // The fixture stands at world x=0 and the inverse translates by -5, so the
+  // geometry must be local; world-space bounds would still straddle zero.
+  assert.ok(entryA.geometry.boundingBox, 'the merged geometry has bounds');
+  assert.ok(entryA.geometry.boundingBox!.min.x < -4, 'the bake moved the geometry into model space');
 
-  // Moving the models without touching their supports rebuilds nothing: the
-  // entry keeps its own inverse so stale supports follow the group rigidly.
+  // Moving the models without touching their supports rebuilds nothing: local
+  // geometry is unchanged and the group carries the new matrix.
   const builds = getPrepareMergedSupportCacheStats().builds;
   request(getSnapshot(), { modelWorldInverseById: commitInverses({ [MODEL_A]: 50, [MODEL_B]: 50 }) });
   drain();

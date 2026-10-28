@@ -49,15 +49,6 @@ export type PrepareMergedSupportEntry = {
   /** World space, three groups (bodies, contact disks, disc-coloured parts). */
   geometry: THREE.BufferGeometry;
   triangles: number;
-  /**
-   * Inverse of the committed model transform this geometry was merged under.
-   *
-   * Baked with the geometry, not read from the scene: while a replacement is
-   * being built the old entry keeps its own inverse, so stale supports follow
-   * the model rigidly (`current * committed⁻¹ * old`) instead of popping to the
-   * new position before the data catches up.
-   */
-  sourceInverse: THREE.Matrix4;
   /** `rebuilding` entries still carry their previous geometry and stay drawn. */
   status: 'ready' | 'rebuilding';
 };
@@ -263,9 +254,11 @@ function buildEntry(modelKey: string): void {
     return;
   }
 
-  const built = state.resolvePenetration
-    ? buildMergedSupportGeometry(model, { resolvePenetration: state.resolvePenetration })
-    : buildMergedSupportGeometry(model);
+  const localInverse = model.modelId ? state.inverses?.get(model.modelId) ?? null : null;
+  const built = buildMergedSupportGeometry(model, {
+    ...(state.resolvePenetration ? { resolvePenetration: state.resolvePenetration } : {}),
+    localInverse,
+  });
 
   if (built.triangles === 0) {
     built.geometry.dispose();
@@ -277,13 +270,10 @@ function buildEntry(modelKey: string): void {
   }
 
   state.builds += 1;
-  const modelId = model.modelId ?? null;
-  const bakedInverse = modelId ? state.inverses?.get(modelId) : null;
   const entry: PrepareMergedSupportEntry = {
-    modelId,
+    modelId: model.modelId ?? null,
     geometry: built.geometry,
     triangles: built.triangles,
-    sourceInverse: bakedInverse ? bakedInverse.clone() : new THREE.Matrix4(),
     status: 'ready',
   };
   state.entries.set(modelKey, entry);
@@ -423,12 +413,11 @@ export function requestPrepareMergedSupports(request: {
 
   if (keyChanged) {
     if (skipNextTransformRebuild && state.walk !== null) {
-      // The supports moved with the model, and the entries are children of the
-      // model group. Keep their geometry and inverses: current * baked⁻¹ is the
-      // transform that was just committed. The next real support edit rebuilds
-      // at the new positions. Only valid once the walk exists; otherwise a
-      // transform during the initial build would strand every model on the
-      // proxy forever.
+      // A pure XY move translates the world support data and the model frame by
+      // the same delta, so the model-local support geometry is unchanged. Keep
+      // it; the group carries the move. Only valid once the walk exists;
+      // otherwise a transform during the initial build would strand every model
+      // on the proxy forever.
       skipNextTransformRebuild = false;
       state.key = nextKey;
       publish();

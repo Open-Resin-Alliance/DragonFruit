@@ -3132,6 +3132,7 @@ export function useSceneCollectionManager(options?: {
         updated: false,
         supportsChanged: false,
         kickstandsChanged: false,
+        supportLocalFramePreserved: false,
       };
     }
     if (!currentModel) {
@@ -3139,6 +3140,7 @@ export function useSceneCollectionManager(options?: {
         updated: false,
         supportsChanged: false,
         kickstandsChanged: false,
+        supportLocalFramePreserved: false,
       };
     }
 
@@ -3152,8 +3154,26 @@ export function useSceneCollectionManager(options?: {
         updated: false,
         supportsChanged: false,
         kickstandsChanged: false,
+        supportLocalFramePreserved: false,
       };
     }
+
+    const deltaRotationEqual = Math.abs(beforeTransform.rotation.x - transform.rotation.x) <= 1e-8
+      && Math.abs(beforeTransform.rotation.y - transform.rotation.y) <= 1e-8
+      && Math.abs(beforeTransform.rotation.z - transform.rotation.z) <= 1e-8
+      && beforeTransform.rotation.order === transform.rotation.order;
+    const deltaScaleEqual = Math.abs(beforeTransform.scale.x - transform.scale.x) <= 1e-8
+      && Math.abs(beforeTransform.scale.y - transform.scale.y) <= 1e-8
+      && Math.abs(beforeTransform.scale.z - transform.scale.z) <= 1e-8;
+    /**
+     * A pure XY translation moves the world support data and the model frame by
+     * the same delta, so the supports' model-local coordinates are unchanged.
+     * Z is not rigid (roots stay on the plate) and rotation/scale move the
+     * contacts relative to the frame, so both must re-merge.
+     */
+    const supportLocalFramePreserved = deltaRotationEqual
+      && deltaScaleEqual
+      && Math.abs(beforeTransform.position.z - transform.position.z) <= 1e-8;
 
     let supportsChanged = false;
     let kickstandsChanged = false;
@@ -3241,6 +3261,7 @@ export function useSceneCollectionManager(options?: {
       updated: true,
       supportsChanged,
       kickstandsChanged,
+      supportLocalFramePreserved,
     };
   }, []);
 
@@ -3404,6 +3425,7 @@ export function useSceneCollectionManager(options?: {
         updated: false,
         supportsChanged: false,
         kickstandsChanged: false,
+        supportLocalFramePreserved: false,
       };
     }
     if (updates.length === 0) {
@@ -3411,6 +3433,7 @@ export function useSceneCollectionManager(options?: {
         updated: false,
         supportsChanged: false,
         kickstandsChanged: false,
+        supportLocalFramePreserved: false,
       };
     }
 
@@ -3470,11 +3493,23 @@ export function useSceneCollectionManager(options?: {
     let supportsChanged = false;
     let kickstandsChanged = false;
     let updated = false;
+    let supportLocalFramePreserved = true;
     updateMap.forEach((nextTransform, id) => {
       const currentModel = currentModels.find((model) => model.id === id);
       if (!currentModel) return;
       if (transformsEqual(currentModel.transform, nextTransform)) return;
-      const commit = transformSupportsForModel(id, currentModel.transform, nextTransform);
+      const before = currentModel.transform;
+      if (Math.abs(before.rotation.x - nextTransform.rotation.x) > 1e-8
+        || Math.abs(before.rotation.y - nextTransform.rotation.y) > 1e-8
+        || Math.abs(before.rotation.z - nextTransform.rotation.z) > 1e-8
+        || before.rotation.order !== nextTransform.rotation.order
+        || Math.abs(before.scale.x - nextTransform.scale.x) > 1e-8
+        || Math.abs(before.scale.y - nextTransform.scale.y) > 1e-8
+        || Math.abs(before.scale.z - nextTransform.scale.z) > 1e-8
+        || Math.abs(before.position.z - nextTransform.position.z) > 1e-8) {
+        supportLocalFramePreserved = false;
+      }
+      const commit = transformSupportsForModel(id, before, nextTransform);
       supportsChanged = supportsChanged || commit.supportsChanged;
       kickstandsChanged = kickstandsChanged || commit.kickstandsChanged;
       updated = true;
@@ -3485,6 +3520,7 @@ export function useSceneCollectionManager(options?: {
         updated: false,
         supportsChanged,
         kickstandsChanged,
+        supportLocalFramePreserved: false,
       };
     }
 
@@ -3537,6 +3573,7 @@ export function useSceneCollectionManager(options?: {
       updated,
       supportsChanged,
       kickstandsChanged,
+      supportLocalFramePreserved,
     };
   }, [pushSceneSnapshotHistory]);
 

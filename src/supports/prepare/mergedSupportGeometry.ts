@@ -21,8 +21,9 @@ import type { MergedSupportGeometry } from './types';
  * the two views read the same: read the instanced groups rather than this file
  * when the fidelity question comes up.
  *
- * Space: world. The caller parents the result behind the inverse committed
- * model transform.
+ * Space: world by default. With `localInverse`, the finished buffer is baked
+ * into that model's local frame, so the caller can parent it directly to the
+ * model group and a model move needs no vertex changes.
  */
 
 /**
@@ -132,6 +133,15 @@ export type MergedSupportGeometryOptions = {
    * resolver instead of duplicating it here.
    */
   resolvePenetration?: (authoredPenetrationMm: number | undefined) => number;
+  /**
+   * Bake the finished world-space buffer into this model's local frame.
+   *
+   * The transform is one pass over the merged buffer, not one per primitive,
+   * and it is the same work the mesh used to do with a group matrix every
+   * frame. Normals use its normal matrix so non-uniform model scales keep the
+   * lighting correct.
+   */
+  localInverse?: THREE.Matrix4 | null;
 };
 
 /**
@@ -447,8 +457,24 @@ export function buildMergedSupportGeometry(
     // or the unused zeros become degenerate triangles and pull the bounding
     // sphere towards the origin.
     const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions.subarray(0, vertexCursor * 3), 3));
-    geometry.setAttribute('normal', new THREE.BufferAttribute(normals.subarray(0, vertexCursor * 3), 3));
+    const finalPositions = positions.subarray(0, vertexCursor * 3);
+    const finalNormals = normals.subarray(0, vertexCursor * 3);
+    const localInverse = options?.localInverse;
+    if (localInverse) {
+        const inverseNormalMatrix = new THREE.Matrix3().getNormalMatrix(localInverse);
+        for (let i = 0; i < finalPositions.length; i += 3) {
+            position.set(finalPositions[i], finalPositions[i + 1], finalPositions[i + 2]).applyMatrix4(localInverse);
+            finalPositions[i] = position.x;
+            finalPositions[i + 1] = position.y;
+            finalPositions[i + 2] = position.z;
+            position.set(finalNormals[i], finalNormals[i + 1], finalNormals[i + 2]).applyMatrix3(inverseNormalMatrix).normalize();
+            finalNormals[i] = position.x;
+            finalNormals[i + 1] = position.y;
+            finalNormals[i + 2] = position.z;
+        }
+    }
+    geometry.setAttribute('position', new THREE.BufferAttribute(finalPositions, 3));
+    geometry.setAttribute('normal', new THREE.BufferAttribute(finalNormals, 3));
     geometry.setIndex(new THREE.BufferAttribute(indices.subarray(0, indexCursor), 1));
     geometry.addGroup(0, bodyCount, 0);
     geometry.addGroup(bodyCount, discCount, 1);
