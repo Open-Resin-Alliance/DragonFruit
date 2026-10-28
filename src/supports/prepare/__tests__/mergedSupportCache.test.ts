@@ -197,17 +197,19 @@ test('a snapshot rewrite with the same collections does not walk or rebuild', ()
   assert.equal(view().entries.get(MODEL_A), entryBefore, 'the entry is kept');
 });
 
-test('the model pose is baked into the entry, not carried as a group inverse', () => {
+test('an entry keeps the committed inverse it was baked under', () => {
   reset();
   const inverses = commitInverses({ [MODEL_A]: 5, [MODEL_B]: -3 });
   request(getSnapshot(), { modelWorldInverseById: inverses });
   drain();
 
   const entryA = view().entries.get(MODEL_A)!;
-  assert.ok(entryA.sourceInverse.equals(new THREE.Matrix4()), 'the entry is already model-local');
+  assert.notEqual(entryA.sourceInverse, inverses.get(MODEL_A), 'the entry owns its copy');
+  assert.ok(entryA.sourceInverse.equals(inverses.get(MODEL_A)!));
+  assert.ok(view().entries.get(MODEL_B)!.sourceInverse.equals(inverses.get(MODEL_B)!));
 
-  // Moving the models without touching their supports rebuilds nothing and
-  // leaves the local geometry alone; the model group supplies the motion.
+  // Moving the models without touching their supports rebuilds nothing: the
+  // entry keeps its own inverse so stale supports follow the group rigidly.
   const builds = getPrepareMergedSupportCacheStats().builds;
   request(getSnapshot(), { modelWorldInverseById: commitInverses({ [MODEL_A]: 50, [MODEL_B]: 50 }) });
   drain();

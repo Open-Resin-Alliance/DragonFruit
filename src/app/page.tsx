@@ -356,6 +356,7 @@ import {
 } from '@/components/settings/uvToolsPreferences';
 import { subscribe as subscribeSupportState, findShaftOwnerOfSegment, getSnapshot as getSupportSnapshot, getModelIdForSupportEntityId, getSupportEntity, resolveDeclaredHosts, toggleSegmentCurve, transformSupportsForModel, updateKnot, getSelectedId, getSelectedCategory } from '@/supports/state';
 import { skipNextPrepareMergedSupportRebuild } from '@/supports/prepare/mergedSupportCache';
+import { clonePlainData } from '@/utils/plainDataClone';
 import { bracePlacementStore } from '@/supports/SupportTypes/Brace/bracePlacementState';
 import { splitSupportShaft } from '@/supports/SupportPrimitives/Joint/jointUtils';
 import { resolveSegmentEndpoints, type ShaftEntity } from '@/supports/SupportPrimitives/Knot/segmentEndpoints';
@@ -5766,18 +5767,11 @@ export default function Home() {
   }, []);
 
   const captureTransformSupportSnapshot = React.useCallback(() => {
-    // Support state updates replace collections and records instead of mutating
-    // them, so a snapshot is the state object plus cleared interaction fields.
-    // Cloning every entity here was the dominant cost of ending a model drag;
-    // the history restore only needs the immutable version that existed at the
-    // time.
-    const supportSnapshot = {
-      ...getSupportSnapshot(),
-      selectedId: null,
-      selectedCategory: null,
-      hoveredId: null,
-      hoveredCategory: 'none' as const,
-    };
+    const supportSnapshot = clonePlainData(getSupportSnapshot());
+    supportSnapshot.selectedId = null;
+    supportSnapshot.selectedCategory = null;
+    supportSnapshot.hoveredId = null;
+    supportSnapshot.hoveredCategory = 'none';
 
     return { support: supportSnapshot };
   }, []);

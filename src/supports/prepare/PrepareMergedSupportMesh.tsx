@@ -8,10 +8,12 @@ import { PrepareSupportMesh } from './PrepareSupportMesh';
 /**
  * One model's cached merged supports, mounted inside that model's group.
  *
- * The entry's geometry is model-local: the committed model transform was baked
- * out of its vertices. The group below is therefore the identity, and any live
- * transform delta (a drag, a drop animation) moves the supports with the model
- * group without touching a vertex.
+ * The entry's geometry is world space and its `sourceInverse` is the inverse of
+ * the committed model transform that was baked with it, so the group below
+ * cancels the model group at rest and any live transform delta (a drag, a drop
+ * animation) moves the supports rigidly without touching a vertex. During a
+ * rebuild the old entry keeps both, so stale supports follow the model instead
+ * of popping to the new position before the data does.
  *
  * The mesh answers no pointer: in Prepare the *model* is the interaction unit,
  * so the model mesh owns selection, hover and drag, and this mesh must stay out

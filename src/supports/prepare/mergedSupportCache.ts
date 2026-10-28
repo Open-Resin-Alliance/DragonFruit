@@ -258,12 +258,9 @@ function buildEntry(modelKey: string): void {
     return;
   }
 
-  const modelId = model.modelId ?? null;
-  const modelWorldInverse = modelId ? state.inverses?.get(modelId) : undefined;
-  const built = buildMergedSupportGeometry(model, {
-    ...(state.resolvePenetration ? { resolvePenetration: state.resolvePenetration } : {}),
-    ...(modelWorldInverse ? { modelWorldInverse } : {}),
-  });
+  const built = state.resolvePenetration
+    ? buildMergedSupportGeometry(model, { resolvePenetration: state.resolvePenetration })
+    : buildMergedSupportGeometry(model);
 
   if (built.triangles === 0) {
     built.geometry.dispose();
@@ -275,12 +272,13 @@ function buildEntry(modelKey: string): void {
   }
 
   state.builds += 1;
+  const modelId = model.modelId ?? null;
+  const bakedInverse = modelId ? state.inverses?.get(modelId) : null;
   const entry: PrepareMergedSupportEntry = {
     modelId,
     geometry: built.geometry,
     triangles: built.triangles,
-    // The model pose is baked into the vertices; the group matrix is identity.
-    sourceInverse: new THREE.Matrix4(),
+    sourceInverse: bakedInverse ? bakedInverse.clone() : new THREE.Matrix4(),
     status: 'ready',
   };
   state.entries.set(modelKey, entry);
