@@ -13,8 +13,6 @@ import { collectProxyPrimitives, type ProxyModelGeometry } from '@/supports/Supp
 import { SUPPORT_COLLECTION_KEYS } from '@/supports/supportTypeRegistry';
 import type { SupportState } from '@/supports/types';
 import { buildMergedSupportGeometry } from './mergedSupportGeometry';
-import { requestMergedSupportBuild } from './mergedSupportWorkerClient';
-import type { MergedSupportBuildData } from './mergedSupportBuild';
 
 /**
  * The Prepare view's merged support layer, one entry per model.
@@ -82,7 +80,7 @@ export type PrepareMergedSupportCacheOptions = {
   /**
    * Pause the idle walk and merges while the camera or a model drag is live.
    * A slice is one model's merge (~50 ms), which is longer than a frame; running
-   * it under an orbit is the hitch this flag exists to remove.
+   * it under a gesture is the hitch this flag exists to remove.
    */
   suspended?: boolean;
 };
@@ -139,10 +137,6 @@ const state = {
   inverses: null as Map<string, THREE.Matrix4> | null,
   walks: 0,
   builds: 0,
-  /** Bumped whenever the walk or the penetration resolver changes. */
-  generation: 0,
-  /** The model a worker is merging; no second slice starts until it lands. */
-  inFlight: null as { modelKey: string; generation: number } | null,
 };
 
 /** Element identity only: `SUPPORT_COLLECTION_KEYS` yields a fresh array per snapshot. */
@@ -156,7 +150,6 @@ function sameRefs(a: readonly unknown[], b: readonly unknown[]): boolean {
 
 function isFinalizing(): boolean {
   if (!state.enabled) return false;
-  if (state.inFlight) return true;
   if (!state.walk) return state.key !== null;
   return state.pending !== null && state.pendingIndex < state.pending.length;
 }
@@ -207,7 +200,7 @@ export function setPrepareMergedSupportsSuspended(next: boolean): void {
 }
 
 function scheduleNextSlice(): void {
-  if (!state.enabled || suspended || resumeTimer !== null || scheduled || state.inFlight) return;
+  if (!state.enabled || suspended || resumeTimer !== null || scheduled) return;
   if (state.walk && (state.pending === null || state.pendingIndex >= state.pending.length)) return;
   const run = () => {
     scheduled = null;
@@ -241,22 +234,24 @@ function disposeEntry(entry: PrepareMergedSupportEntry): void {
   entry.geometry.dispose();
 }
 
-function disposeModelEntry(modelKey: string): void {
+function buildEntry(modelKey: string): void {
+  const model = state.walk?.get(modelKey);
   const previous = state.entries.get(modelKey);
-  if (!previous) return;
-  state.entries.delete(modelKey);
-  disposeEntry(previous);
-}
 
-function installEntry(
-  modelKey: string,
-  model: ProxyModelGeometry,
-  geometry: THREE.BufferGeometry,
-  triangles: number,
-): void {
-  const previous = state.entries.get(modelKey);
-  if (triangles === 0) {
-    geometry.dispose();
+  if (!model) {
+    if (previous) {
+      state.entries.delete(modelKey);
+      disposeEntry(previous);
+    }
+    return;
+  }
+
+  const built = state.resolvePenetration
+    ? buildMergedSupportGeometry(model, { resolvePenetration: state.resolvePenetration })
+    : buildMergedSupportGeometry(model);
+
+  if (built.triangles === 0) {
+    built.geometry.dispose();
     if (previous) {
       state.entries.delete(modelKey);
       disposeEntry(previous);
@@ -269,76 +264,13 @@ function installEntry(
   const bakedInverse = modelId ? state.inverses?.get(modelId) : null;
   const entry: PrepareMergedSupportEntry = {
     modelId,
-    geometry,
-    triangles,
+    geometry: built.geometry,
+    triangles: built.triangles,
     sourceInverse: bakedInverse ? bakedInverse.clone() : new THREE.Matrix4(),
     status: 'ready',
   };
   state.entries.set(modelKey, entry);
   if (previous) disposeEntry(previous);
-}
-
-/** Main-thread fallback, and the path unit tests exercise. */
-function buildEntrySync(modelKey: string): void {
-  const model = state.walk?.get(modelKey);
-  if (!model) {
-    disposeModelEntry(modelKey);
-    return;
-  }
-  const built = state.resolvePenetration
-    ? buildMergedSupportGeometry(model, { resolvePenetration: state.resolvePenetration })
-    : buildMergedSupportGeometry(model);
-  installEntry(modelKey, model, built.geometry, built.triangles);
-}
-
-/** Rebuild a geometry from the worker's arrays. */
-function buildEntryFromData(modelKey: string, model: ProxyModelGeometry, data: MergedSupportBuildData): void {
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(data.positions, 3));
-  geometry.setAttribute('normal', new THREE.BufferAttribute(data.normals, 3));
-  geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
-  for (const group of data.groups) {
-    geometry.addGroup(group.start, group.count, group.materialIndex);
-  }
-  if (data.boundingBox) {
-    geometry.boundingBox = new THREE.Box3(
-      new THREE.Vector3(data.boundingBox[0], data.boundingBox[1], data.boundingBox[2]),
-      new THREE.Vector3(data.boundingBox[3], data.boundingBox[4], data.boundingBox[5]),
-    );
-  }
-  if (data.boundingSphere) {
-    geometry.boundingSphere = new THREE.Sphere(
-      new THREE.Vector3(data.boundingSphere[0], data.boundingSphere[1], data.boundingSphere[2]),
-      data.boundingSphere[3],
-    );
-  }
-  installEntry(modelKey, model, geometry, data.triangles);
-}
-
-/**
- * Apply the profile's nib depth before the geometry crosses to the worker.
- *
- * The resolver is a function, so it cannot be cloned. It depends only on the
- * authored depth and the current profile, and the builder reads that depth from
- * each cone's profile.
- */
-function resolveModelPenetration(model: ProxyModelGeometry, resolve: ResolvePenetration): ProxyModelGeometry {
-  return {
-    ...model,
-    cones: model.cones.map((cone) => ({
-      ...cone,
-      profile: { ...cone.profile, penetrationMm: resolve(cone.profile.penetrationMm) },
-    })),
-  };
-}
-
-function finishPendingSlice(): void {
-  if (state.pending && state.pendingIndex >= state.pending.length) {
-    state.pending = null;
-    state.pendingIndex = 0;
-  }
-  publish();
-  scheduleNextSlice();
 }
 
 /** The proxy's interior filter for the current walk: supports touching the cavity. */
@@ -386,43 +318,21 @@ function runSlice(): void {
   }
 
   const pending = state.pending;
-  if (!pending || state.pendingIndex >= pending.length || state.inFlight) return;
+  if (!pending || state.pendingIndex >= pending.length) return;
 
   const modelKey = pending[state.pendingIndex];
   state.pendingIndex += 1;
-  const model = state.walk.get(modelKey);
-  if (!model) {
-    disposeModelEntry(modelKey);
-    finishPendingSlice();
+  buildEntry(modelKey);
+
+  if (state.pendingIndex >= pending.length) {
+    state.pending = null;
+    state.pendingIndex = 0;
+    publish();
     return;
   }
 
-  const generation = state.generation;
-  const request = requestMergedSupportBuild(
-    modelKey,
-    generation,
-    state.resolvePenetration ? resolveModelPenetration(model, state.resolvePenetration) : model,
-  );
-  if (!request) {
-    buildEntrySync(modelKey);
-    finishPendingSlice();
-    return;
-  }
-
-  state.inFlight = { modelKey, generation };
   publish();
-  request.then((data) => {
-    if (state.generation !== generation) return;
-    buildEntryFromData(modelKey, model, data);
-  }).catch(() => {
-    // A worker failure must not strand the queue; pack this model on the main
-    // thread and keep going.
-    if (state.generation === generation) buildEntrySync(modelKey);
-  }).finally(() => {
-    if (state.generation !== generation) return;
-    if (state.inFlight?.generation === generation) state.inFlight = null;
-    finishPendingSlice();
-  });
+  scheduleNextSlice();
 }
 
 /**
@@ -500,8 +410,6 @@ export function requestPrepareMergedSupports(request: {
     // entries stay drawn (and keep their own inverses) until each replacement
     // lands.
     state.key = nextKey;
-    state.generation += 1;
-    state.inFlight = null;
     state.walk = null;
     state.pending = null;
     state.pendingIndex = 0;
@@ -515,8 +423,6 @@ export function requestPrepareMergedSupports(request: {
     // Only the contact disks read the resolved nib depth, but the merge is one
     // buffer: re-merge every entry against the new resolver. A walk still
     // draining already reads the new resolver for the models it has left.
-    state.generation += 1;
-    state.inFlight = null;
     for (const entry of state.entries.values()) entry.status = 'rebuilding';
     if (state.walk) requeue(state.entries.keys());
     publish();
@@ -565,8 +471,6 @@ export function resetPrepareMergedSupportCache(): void {
   state.resolvePenetration = null;
   state.walks = 0;
   state.builds = 0;
-  state.generation += 1;
-  state.inFlight = null;
   suspended = false;
   if (resumeTimer !== null) {
     clearTimeout(resumeTimer);

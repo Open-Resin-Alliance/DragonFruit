@@ -9,7 +9,6 @@ import type { InstancedRoot } from '../../SupportPrimitives/Roots/InstancedRoots
 import type { InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
 import type { ProxyModelGeometry } from '../../SupportProxyMeshLayer';
 import { buildMergedSupportGeometry } from '../mergedSupportGeometry';
-import { buildMergedSupportData } from '../mergedSupportBuild';
 
 /**
  * The merged Prepare support geometry.
@@ -279,32 +278,3 @@ test('a skipped sub-millimetre shaft leaves no degenerate indices or vertices be
   assert.equal(merged.geometry.groups.length, 3);
 });
 
-test('the worker data carries the same buffers and groups as the geometry', () => {
-    const model = emptyModel();
-    model.shafts = [shaft('straight', [0, 0, 0], [0, 0, 10], 1)];
-    model.cones = [diskCone('cone', [0, 0, 12])];
-    model.roots = [root('root', 2, 1, 2)];
-    model.joints = [joint('joint', [0, 0, 5], 0.8)];
-
-    const direct = buildMergedSupportGeometry(model);
-    const data = buildMergedSupportData(model);
-
-    assert.equal(data.triangles, direct.triangles);
-    assert.equal(data.positions.length, direct.geometry.getAttribute('position').array.length);
-    assert.equal(data.normals.length, direct.geometry.getAttribute('normal').array.length);
-    assert.equal(data.indices.length, direct.geometry.getIndex()!.array.length);
-    assert.deepEqual(
-        data.groups,
-        direct.geometry.groups.map((group) => ({
-            start: group.start,
-            count: group.count,
-            materialIndex: group.materialIndex ?? 0,
-        })),
-    );
-    assert.deepEqual(
-        data.boundingBox,
-        direct.geometry.boundingBox
-            ? [...direct.geometry.boundingBox.min.toArray(), ...direct.geometry.boundingBox.max.toArray()]
-            : undefined,
-    );
-});

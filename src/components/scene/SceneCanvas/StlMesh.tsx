@@ -504,13 +504,13 @@ function StlMeshComponent({
    * placement, so the first Support hover never pays the router's cold-start
    * build.
    *
-   * The build runs in the column-map worker, off the main thread. It starts
-   * after the model settles so an arrange drag does not queue a build per
-   * frame, and it runs in every mode rather than only Support, so the maps are
-   * ready before the user switches workspaces.
+   * The build runs in the column-map worker, but preparing it copies the
+   * model's position array, which is large enough to matter on a plate. It is
+   * therefore limited to Support, where placement can actually ask for it; a
+   * model drag in Prepare must not pay it.
    */
   React.useEffect(() => {
-    if (!isActiveModel) return;
+    if (mode !== 'support' || !isActiveModel) return;
     const mesh = internalMeshRef.current;
     if (!mesh) return;
 
