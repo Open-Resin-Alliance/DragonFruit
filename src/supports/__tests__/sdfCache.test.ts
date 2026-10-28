@@ -187,3 +187,26 @@ test('a model move invalidates the column maps built at the old pose', () => {
         ColumnClearanceMap.build = build;
     }
 });
+
+test('an installed worker map is used without building on the main thread', () => {
+    const mesh = makeSphereMesh();
+    const sdf = new SDFCache(mesh, { cellSize: 0.5 });
+
+    const built: number[] = [];
+    const build = ColumnClearanceMap.build;
+    ColumnClearanceMap.build = ((meshArg, clearanceMm, cellMm) => {
+        built.push(clearanceMm);
+        return build(meshArg, clearanceMm, cellMm);
+    }) as typeof ColumnClearanceMap.build;
+
+    try {
+        const map = ColumnClearanceMap.build(mesh, 0.9, 0.2);
+        assert.ok(map);
+        sdf.installColumnMap(0.9, map);
+        assert.equal(sdf.hasColumnMap(0.9, 0.2), true);
+        assert.equal(sdf.enableColumnMap(0.9, 0.2), true);
+        assert.deepEqual(built, [0.9], 'the installed map must be the only build');
+    } finally {
+        ColumnClearanceMap.build = build;
+    }
+});

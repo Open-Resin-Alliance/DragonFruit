@@ -168,7 +168,7 @@ function columnClearanceMm(shaftDiameterMm: number): number {
 }
 
 /** The column map's cell size, shared with the prewarm for the same reason. */
-const COLUMN_MAP_CELL_MM = 0.2;
+export const COLUMN_MAP_CELL_MM = 0.2;
 
 /** How many preset slots the hotkeys can switch between. */
 const PINNED_PRESET_SLOT_COUNT = 6;
@@ -227,17 +227,39 @@ export function prewarmSupportPlacement(mesh: THREE.Mesh): void {
     sdf.enableColumnMap(columnClearanceMm(settings.shaft.diameterMm), COLUMN_MAP_CELL_MM);
 }
 
-function prewarmPinnedPresetColumnMaps(sdf: SDFCache): void {
-    const requestIdle = idleCallbackForPrewarm();
-    if (!requestIdle) return;
-
-    const clearances: number[] = [];
+/**
+ * The clearance of every pinned preset, plus the active one.
+ *
+ * Shared by the idle prewarm and the worker prewarm, so the two cannot ask for
+ * different maps.
+ */
+export function supportColumnMapClearances(): number[] {
+    const clearances = [columnClearanceMm(getSettings().shaft.diameterMm)];
     for (let slot = 1; slot <= PINNED_PRESET_SLOT_COUNT; slot += 1) {
         const preset = getPresetForPinnedSlot(slot);
         const diameterMm = preset?.settings?.shaft?.diameterMm;
         if (typeof diameterMm !== 'number' || !Number.isFinite(diameterMm)) continue;
-        clearances.push(columnClearanceMm(diameterMm));
+        const clearance = columnClearanceMm(diameterMm);
+        if (!clearances.some((existing) => Math.abs(existing - clearance) < 1e-9)) {
+            clearances.push(clearance);
+        }
     }
+    return clearances;
+}
+
+function prewarmPinnedPresetColumnMaps(sdf: SDFCache): void {
+    const requestIdle = idleCallbackForPrewarm();
+    if (!requestIdle) return;
+
+    // The UI warms these maps in the column-map worker. Building them here as
+    // well would race that work and put the same hundred-millisecond walks back
+    // on the main thread the moment a hover arrives before the worker answers.
+    if (typeof Worker !== 'undefined') return;
+
+    // A worker may already have installed some of these maps. Do not rebuild
+    // them on the main thread just because the idle prewarm has not run before.
+    const clearances = supportColumnMapClearances()
+        .filter((clearance) => !sdf.hasColumnMap(clearance, COLUMN_MAP_CELL_MM));
     if (clearances.length === 0) return;
 
     const signature = clearances.join('|');

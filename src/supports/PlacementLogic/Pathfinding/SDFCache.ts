@@ -823,6 +823,37 @@ export class SDFCache {
         this._rememberColumnMap(clearanceMm, map);
     }
 
+    /**
+     * Keep a map built elsewhere, e.g. in a worker.
+     *
+     * The map must describe the mesh's current world pose; callers compare the
+     * pose across the build because a response can arrive after the model moved.
+     * It becomes the active map only when there is none, so installing a
+     * background map cannot disturb the clearance a placement is using.
+     */
+    installColumnMap(clearanceMm: number, map: ColumnClearanceMap): void {
+        if (this._columnMap === null) {
+            this._columnMap = map;
+            this._columnMapClearance = clearanceMm;
+        }
+        this._rememberColumnMap(clearanceMm, map);
+    }
+
+    /** Whether a map for this clearance and cell size is already available. */
+    hasColumnMap(clearanceMm: number, cellMm?: number): boolean {
+        const matches = (map: ColumnClearanceMap) => (
+            cellMm === undefined || Math.abs(map.stats.cellMm - cellMm) < 1e-9
+        );
+        if (this._columnMap !== null
+            && Math.abs(clearanceMm - this._columnMapClearance) < 1e-9
+            && matches(this._columnMap)) {
+            return true;
+        }
+        return this._columnMapCache.some((entry) => (
+            Math.abs(entry.clearance - clearanceMm) < 1e-9 && matches(entry.map)
+        ));
+    }
+
     /** A map already built for this clearance, moved to the front of the list. */
     private _takeCachedColumnMap(clearanceMm: number): ColumnClearanceMap | null {
         for (let i = 0; i < this._columnMapCache.length; i += 1) {

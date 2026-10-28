@@ -32,7 +32,7 @@ import { MARQUEE_CANDIDATE_TINT_FACTOR } from '@/utils/marqueeCandidateTint';
 import { getSupportPlacementGuideZ } from './supportPlacementGuideStore';
 import { useOptimisticSelectedModelId } from './optimisticModelSelection';
 import { BAKED_OCCLUSION_ATTRIBUTE, bakedOcclusionStrength, bakedOcclusionVersion, getBakedOcclusionServerVersion, subscribeToBakedOcclusionVersions } from '@/features/scene/bakedOcclusion';
-import { prewarmSupportPlacement } from '@/supports/PlacementLogicV3/SmartPlacementV3';
+import { prewarmSupportPlacementAsync } from '@/supports/PlacementLogicV3/supportPlacementPrewarm';
 
 // Scratch raycaster reused for clip-zone fallback raycasts.
 const _clipFallbackRaycaster = new THREE.Raycaster();
@@ -500,37 +500,35 @@ function StlMeshComponent({
   }, [modelId, register, unregister]);
 
   /**
-   * Warm the distance field and column map while Support is open, so the first
-   * hover over the model does not pay the router's cold-start build.
+   * Warm the distance field and column maps for the model that can receive
+   * placement, so the first Support hover never pays the router's cold-start
+   * build.
    *
-   * Only the active model can receive placement, and only in Support mode. The
-   * idle callback keeps the build off the frame that switches modes; the
-   * timeout is a fallback for a browser that never reports idle.
+   * The build runs in the column-map worker, off the main thread. It starts
+   * after the model settles so an arrange drag does not queue a build per
+   * frame, and it runs in every mode rather than only Support, so the maps are
+   * ready before the user switches workspaces.
    */
   React.useEffect(() => {
-    if (mode !== 'support' || !isActiveModel) return;
+    if (!isActiveModel) return;
     const mesh = internalMeshRef.current;
     if (!mesh) return;
 
     let cancelled = false;
     const warm = () => {
       if (cancelled) return;
-      try {
-        prewarmSupportPlacement(mesh);
-      } catch {
+      void prewarmSupportPlacementAsync(mesh, () => cancelled).catch(() => {
         // The warmup is opportunistic; an unaccelerated mesh must not break
         // the scene. The hover path reports the same problem if it matters.
-      }
+      });
     };
-    const requestIdle = typeof window !== 'undefined' ? window.requestIdleCallback : undefined;
-    const handle = typeof requestIdle === 'function'
-      ? requestIdle(warm, { timeout: 250 })
-      : window.setTimeout(warm, 0);
+    // Debounced: a transform drag replaces the timer on every frame, so the
+    // worker is asked once the model settles rather than once per pointer move.
+    const handle = window.setTimeout(warm, 60);
 
     return () => {
       cancelled = true;
-      if (typeof requestIdle === 'function') window.cancelIdleCallback(handle);
-      else window.clearTimeout(handle);
+      window.clearTimeout(handle);
     };
   }, [mode, isActiveModel, geometry, transform]);
 
