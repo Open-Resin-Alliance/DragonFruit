@@ -325,6 +325,8 @@ type SceneSnapshot = {
 type SceneSnapshotCaptureOptions = {
   includeSupportState?: boolean;
   supportStateOverride?: SupportState;
+  /** The override is already an owned snapshot and must not be cloned again. */
+  supportStateOwned?: boolean;
   /** Record the plate list on this snapshot, for the entries that change it. */
   plates?: ScenePlate[];
   activePlateId?: string;
@@ -457,7 +459,9 @@ function captureSceneSnapshot(
     printerProfileId,
     ...(includeSupportState
       ? {
-          supportState: clonePlainData(supportStateOverride ?? getSnapshot()),
+          supportState: options?.supportStateOwned && supportStateOverride
+            ? supportStateOverride
+            : clonePlainData(supportStateOverride ?? getSnapshot()),
         }
       : {}),
     ...(options?.plates
@@ -3313,11 +3317,13 @@ export function useSceneCollectionManager(options?: {
     const before = captureSceneSnapshot(beforeModels, currentActiveModelId, currentSelectedModelIds, {
       includeSupportState: includeSupportHistory,
       supportStateOverride: supportSnapshotOptions?.supportBefore,
+      supportStateOwned: !!supportSnapshotOptions?.supportBefore,
       ...(spawn ? { plates: spawn.platesBefore, activePlateId: spawn.activePlateIdBefore } : {}),
     });
     const after = captureSceneSnapshot(afterModels, currentActiveModelId, currentSelectedModelIds, {
       includeSupportState: includeSupportHistory,
       supportStateOverride: supportSnapshotOptions?.supportAfter,
+      supportStateOwned: !!supportSnapshotOptions?.supportAfter,
       ...(spawn ? { plates: platesRef.current, activePlateId: activePlateIdRef.current } : {}),
     });
     const targetModelName = targetModel.name ?? id;
