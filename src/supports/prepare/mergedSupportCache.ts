@@ -194,6 +194,11 @@ export function skipNextPrepareMergedSupportRebuild(): void {
   skipNextTransformRebuild = true;
 }
 
+/** Clear a transform marker when the commit turned out not to move supports. */
+export function cancelPrepareMergedSupportRebuildSkip(): void {
+  skipNextTransformRebuild = false;
+}
+
 export function setPrepareMergedSupportsSuspended(next: boolean): void {
   if (suspended === next) return;
   suspended = next;

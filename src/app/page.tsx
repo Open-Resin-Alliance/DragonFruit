@@ -355,7 +355,7 @@ import {
   resolveUvToolsExecutablePath,
 } from '@/components/settings/uvToolsPreferences';
 import { subscribe as subscribeSupportState, findShaftOwnerOfSegment, getSnapshot as getSupportSnapshot, getModelIdForSupportEntityId, getSupportEntity, resolveDeclaredHosts, toggleSegmentCurve, transformSupportsForModel, updateKnot, getSelectedId, getSelectedCategory } from '@/supports/state';
-import { skipNextPrepareMergedSupportRebuild } from '@/supports/prepare/mergedSupportCache';
+import { cancelPrepareMergedSupportRebuildSkip, skipNextPrepareMergedSupportRebuild } from '@/supports/prepare/mergedSupportCache';
 import { clonePlainData } from '@/utils/plainDataClone';
 import { bracePlacementStore } from '@/supports/SupportTypes/Brace/bracePlacementState';
 import { splitSupportShaft } from '@/supports/SupportPrimitives/Joint/jointUtils';
@@ -8610,6 +8610,12 @@ export default function Home() {
           rotation: current.rotation.clone(),
           scale: current.scale.clone(),
         };
+        const expectSupportTransform = scene.mode === 'prepare';
+        if (expectSupportTransform) {
+          // Set before the store write: a discrete update can flush the cache
+          // hook before this handler returns.
+          skipNextPrepareMergedSupportRebuild();
+        }
         transformCommitResult = scene.updateModelTransform(
           scene.activeModelId,
           committedTransform,
@@ -8618,10 +8624,8 @@ export default function Home() {
         );
         transformDebugTimelineRef.current.storeUpdatedAt = stampNow();
 
-        if (scene.mode === 'prepare' && transformCommitResult.supportsChanged) {
-          // The merged shells follow their model groups; do not re-walk the
-          // plate for a transform that is already in the group matrix.
-          skipNextPrepareMergedSupportRebuild();
+        if (expectSupportTransform && (!transformCommitResult.updated || !transformCommitResult.supportsChanged)) {
+          cancelPrepareMergedSupportRebuildSkip();
         }
 
         if (transformCommitResult.updated) {
