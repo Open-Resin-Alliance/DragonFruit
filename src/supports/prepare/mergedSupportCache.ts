@@ -121,6 +121,13 @@ let view: PrepareMergedSupportCacheView = EMPTY_VIEW;
 let scheduled: ScheduledHandle | null = null;
 let suspended = false;
 let resumeTimer: ReturnType<typeof setTimeout> | null = null;
+/**
+ * A model transform rewrites every support point, but the merged entries are
+ * parented to their model groups and the group matrix already carries the same
+ * delta. Rebuilding them would walk and merge the whole plate for no visual
+ * change, so the next request updates its key without invalidating entries.
+ */
+let skipNextTransformRebuild = false;
 /** Let orbit damping finish before an idle merge can interrupt it. */
 const RESUME_AFTER_GESTURE_MS = 350;
 
@@ -182,6 +189,11 @@ function cancelScheduled(): void {
  * live. The queue is cancelled rather than left pending so no 50 ms merge can
  * start under the gesture; it resumes from the same model when the gesture ends.
  */
+/** Mark the next request as a model-transform commit, not a support edit. */
+export function skipNextPrepareMergedSupportRebuild(): void {
+  skipNextTransformRebuild = true;
+}
+
 export function setPrepareMergedSupportsSuspended(next: boolean): void {
   if (suspended === next) return;
   suspended = next;
@@ -405,6 +417,16 @@ export function requestPrepareMergedSupports(request: {
   state.resolvePenetration = request.resolvePenetration;
 
   if (keyChanged) {
+    if (skipNextTransformRebuild) {
+      // The supports moved with the model, and the entries are children of the
+      // model group. Keep their geometry and inverses: current * baked⁻¹ is the
+      // transform that was just committed. The next real support edit rebuilds
+      // at the new positions.
+      skipNextTransformRebuild = false;
+      state.key = nextKey;
+      publish();
+      return;
+    }
     // Every model's merge depends on the whole walk, and a support edit rewrites
     // whole collections; a per-model diff is a later optimisation. The old
     // entries stay drawn (and keep their own inverses) until each replacement
@@ -471,6 +493,7 @@ export function resetPrepareMergedSupportCache(): void {
   state.resolvePenetration = null;
   state.walks = 0;
   state.builds = 0;
+  skipNextTransformRebuild = false;
   suspended = false;
   if (resumeTimer !== null) {
     clearTimeout(resumeTimer);

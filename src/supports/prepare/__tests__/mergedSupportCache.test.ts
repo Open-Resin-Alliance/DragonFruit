@@ -13,6 +13,7 @@ import {
   requestPrepareMergedSupports,
   resetPrepareMergedSupportCache,
   setPrepareMergedSupportsSuspended,
+  skipNextPrepareMergedSupportRebuild,
   type PrepareMergedSupportCacheView,
 } from '../mergedSupportCache';
 
@@ -337,4 +338,33 @@ test('a model whose supports disappear loses its entry and its geometry', () => 
   assert.equal(view().entries.has(MODEL_B), false, 'the stale entry is evicted');
   assert.equal(disposed, 1);
   assert.ok(view().entries.has(MODEL_A));
+});
+
+test('a transform commit updates the key without rebuilding merged entries', () => {
+  reset();
+  request(getSnapshot());
+  drain();
+  const builds = getPrepareMergedSupportCacheStats().builds;
+  const entryA = view().entries.get(MODEL_A);
+  assert.ok(entryA);
+
+  const snapshot = getSnapshot();
+  // A model move rewrites the support collections, so every element identity
+  // changes even though the primitives only moved with their model.
+  const movedRefs = collectionRefs(snapshot).map((value) => (Array.isArray(value) ? [...value] : value));
+  skipNextPrepareMergedSupportRebuild();
+  requestPrepareMergedSupports({
+    enabled: true,
+    snapshot,
+    collectionRefs: movedRefs,
+    includeDetailedPrimitives: true,
+    interiorView: false,
+    cavityGeometryByModelId: null,
+    modelWorldInverseById: null,
+    resolvePenetration: null,
+  });
+
+  assert.equal(getPrepareMergedSupportCacheStats().builds, builds, 'a transform must not merge again');
+  assert.equal(view().entries.get(MODEL_A), entryA, 'the baked entry and its inverse stay');
+  assert.equal(view().finalizing, false);
 });

@@ -355,6 +355,7 @@ import {
   resolveUvToolsExecutablePath,
 } from '@/components/settings/uvToolsPreferences';
 import { subscribe as subscribeSupportState, findShaftOwnerOfSegment, getSnapshot as getSupportSnapshot, getModelIdForSupportEntityId, getSupportEntity, resolveDeclaredHosts, toggleSegmentCurve, transformSupportsForModel, updateKnot, getSelectedId, getSelectedCategory } from '@/supports/state';
+import { skipNextPrepareMergedSupportRebuild } from '@/supports/prepare/mergedSupportCache';
 import { bracePlacementStore } from '@/supports/SupportTypes/Brace/bracePlacementState';
 import { splitSupportShaft } from '@/supports/SupportPrimitives/Joint/jointUtils';
 import { resolveSegmentEndpoints, type ShaftEntity } from '@/supports/SupportPrimitives/Knot/segmentEndpoints';
@@ -8616,6 +8617,12 @@ export default function Home() {
           spawnedPlateId ? { landedPlateId: spawnedPlateId } : undefined,
         );
         transformDebugTimelineRef.current.storeUpdatedAt = stampNow();
+
+        if (scene.mode === 'prepare' && transformCommitResult.supportsChanged) {
+          // The merged shells follow their model groups; do not re-walk the
+          // plate for a transform that is already in the group matrix.
+          skipNextPrepareMergedSupportRebuild();
+        }
 
         if (transformCommitResult.updated) {
           expectedModelTransforms.push({
