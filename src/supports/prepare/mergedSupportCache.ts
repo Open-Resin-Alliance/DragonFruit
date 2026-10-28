@@ -419,16 +419,19 @@ export function requestPrepareMergedSupports(request: {
   state.resolvePenetration = request.resolvePenetration;
 
   if (keyChanged) {
-    if (skipNextTransformRebuild) {
+    if (skipNextTransformRebuild && state.walk !== null) {
       // The supports moved with the model, and the entries are children of the
       // model group. Keep their geometry and inverses: current * baked⁻¹ is the
       // transform that was just committed. The next real support edit rebuilds
-      // at the new positions.
+      // at the new positions. Only valid once the walk exists; otherwise a
+      // transform during the initial build would strand every model on the
+      // proxy forever.
       skipNextTransformRebuild = false;
       state.key = nextKey;
       publish();
       return;
     }
+    skipNextTransformRebuild = false;
     // Every model's merge depends on the whole walk, and a support edit rewrites
     // whole collections; a per-model diff is a later optimisation. The old
     // entries stay drawn (and keep their own inverses) until each replacement

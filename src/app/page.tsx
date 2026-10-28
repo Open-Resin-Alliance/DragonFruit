@@ -356,6 +356,7 @@ import {
 } from '@/components/settings/uvToolsPreferences';
 import { subscribe as subscribeSupportState, findShaftOwnerOfSegment, getSnapshot as getSupportSnapshot, getModelIdForSupportEntityId, getSupportEntity, resolveDeclaredHosts, toggleSegmentCurve, transformSupportsForModel, updateKnot, getSelectedId, getSelectedCategory } from '@/supports/state';
 import { skipNextPrepareMergedSupportRebuild } from '@/supports/prepare/mergedSupportCache';
+import { clonePlainData } from '@/utils/plainDataClone';
 import { bracePlacementStore } from '@/supports/SupportTypes/Brace/bracePlacementState';
 import { splitSupportShaft } from '@/supports/SupportPrimitives/Joint/jointUtils';
 import { resolveSegmentEndpoints, type ShaftEntity } from '@/supports/SupportPrimitives/Knot/segmentEndpoints';
@@ -5766,9 +5767,7 @@ export default function Home() {
   }, []);
 
   const captureTransformSupportSnapshot = React.useCallback(() => {
-    // Native structured clone is several times faster than walking the plain
-    // object graph by hand; the support snapshot is transform history data.
-    const supportSnapshot = structuredClone(getSupportSnapshot());
+    const supportSnapshot = clonePlainData(getSupportSnapshot());
     supportSnapshot.selectedId = null;
     supportSnapshot.selectedCategory = null;
     supportSnapshot.hoveredId = null;

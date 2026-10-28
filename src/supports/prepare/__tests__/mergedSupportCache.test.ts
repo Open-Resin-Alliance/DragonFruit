@@ -366,3 +366,12 @@ test('a transform commit updates the key without rebuilding merged entries', () 
   assert.equal(view().entries.get(MODEL_A), entryA, 'the baked entry and its inverse stay');
   assert.equal(view().finalizing, false);
 });
+
+test('a transform before the first walk still builds every entry', () => {
+  reset();
+  skipNextPrepareMergedSupportRebuild();
+  request(getSnapshot());
+  drain();
+  assert.equal(view().entries.size, 2, 'the initial build is not skipped');
+  assert.equal(view().readyModelIds.size, 2);
+});
