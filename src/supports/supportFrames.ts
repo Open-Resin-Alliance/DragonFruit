@@ -69,12 +69,12 @@ export function getSupportFrameInverseMap(): Map<string, THREE.Matrix4> {
   return map;
 }
 
-/** Drop frames for models that no longer exist; ensure every live model has one. */
+/** Track each live model's current transform and drop frames for removed models. */
 export function syncSupportFrames(models: ReadonlyArray<{ id: string; transform: ModelTransform }>): void {
   const live = new Set<string>();
   for (const model of models) {
     live.add(model.id);
-    ensureSupportFrame(model.id, model.transform);
+    setSupportFrame(model.id, model.transform);
   }
   for (const modelId of Array.from(frames.keys())) {
     if (!live.has(modelId)) frames.delete(modelId);

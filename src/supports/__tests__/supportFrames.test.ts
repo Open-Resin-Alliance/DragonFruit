@@ -35,14 +35,14 @@ test('a frame owns its transform and exposes its inverse', () => {
   assert.ok(Math.abs(point.z) < 1e-9);
 });
 
-test('ensure keeps an existing frame and sync drops dead models', () => {
+test('ensure keeps an existing frame and sync follows live models', () => {
   resetSupportFrames();
   ensureSupportFrame('m1', transform(1, 0));
   ensureSupportFrame('m1', transform(9, 0));
   assert.equal(getSupportFrameTransform('m1')!.position.x, 1);
 
   syncSupportFrames([{ id: 'm1', transform: transform(9, 0) }, { id: 'm2', transform: transform(2, 0) }]);
-  assert.equal(getSupportFrameTransform('m1')!.position.x, 1);
+  assert.equal(getSupportFrameTransform('m1')!.position.x, 9, 'sync follows the live model');
   assert.equal(getSupportFrameTransform('m2')!.position.x, 2);
 
   syncSupportFrames([{ id: 'm2', transform: transform(2, 0) }]);

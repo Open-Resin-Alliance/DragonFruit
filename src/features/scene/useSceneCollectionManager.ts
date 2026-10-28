@@ -32,6 +32,7 @@ import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { peekUndo } from '@/history/historyStore';
 import { createTypedHistory } from '@/history/typedHistory';
 import type { ModelTransform } from '@/hooks/useModelTransform';
+import { syncSupportFrames } from '@/supports/supportFrames';
 import type { DragonfruitImportFormat, SupportMode, SupportState } from '@/supports/types';
 import { getBuiltinComplexPluginDefinitions } from '@/features/plugins/builtinComplexPlugins';
 import { getBuiltinComplexPluginFileTypeHandlers } from '@/features/plugins/builtinComplexPluginFileTypeHandlers';
@@ -1474,6 +1475,11 @@ export function useSceneCollectionManager(options?: {
   );
 
   const [models, setModels] = useState<LoadedModel[]>([]);
+  // Support records will be stored in the owning model frame. Keep the frame
+  // table in step with the scene models so every write/read has one source.
+  useEffect(() => {
+    syncSupportFrames(models);
+  }, [models]);
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
   /**
