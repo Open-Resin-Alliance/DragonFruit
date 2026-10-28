@@ -32,6 +32,7 @@ import { MARQUEE_CANDIDATE_TINT_FACTOR } from '@/utils/marqueeCandidateTint';
 import { getSupportPlacementGuideZ } from './supportPlacementGuideStore';
 import { useOptimisticSelectedModelId } from './optimisticModelSelection';
 import { BAKED_OCCLUSION_ATTRIBUTE, bakedOcclusionStrength, bakedOcclusionVersion, getBakedOcclusionServerVersion, subscribeToBakedOcclusionVersions } from '@/features/scene/bakedOcclusion';
+import { prewarmSupportPlacement } from '@/supports/PlacementLogicV3/SmartPlacementV3';
 
 // Scratch raycaster reused for clip-zone fallback raycasts.
 const _clipFallbackRaycaster = new THREE.Raycaster();
@@ -497,6 +498,41 @@ function StlMeshComponent({
       }
     };
   }, [modelId, register, unregister]);
+
+  /**
+   * Warm the distance field and column map while Support is open, so the first
+   * hover over the model does not pay the router's cold-start build.
+   *
+   * Only the active model can receive placement, and only in Support mode. The
+   * idle callback keeps the build off the frame that switches modes; the
+   * timeout is a fallback for a browser that never reports idle.
+   */
+  React.useEffect(() => {
+    if (mode !== 'support' || !isActiveModel) return;
+    const mesh = internalMeshRef.current;
+    if (!mesh) return;
+
+    let cancelled = false;
+    const warm = () => {
+      if (cancelled) return;
+      try {
+        prewarmSupportPlacement(mesh);
+      } catch {
+        // The warmup is opportunistic; an unaccelerated mesh must not break
+        // the scene. The hover path reports the same problem if it matters.
+      }
+    };
+    const requestIdle = typeof window !== 'undefined' ? window.requestIdleCallback : undefined;
+    const handle = typeof requestIdle === 'function'
+      ? requestIdle(warm, { timeout: 250 })
+      : window.setTimeout(warm, 0);
+
+    return () => {
+      cancelled = true;
+      if (typeof requestIdle === 'function') window.cancelIdleCallback(handle);
+      else window.clearTimeout(handle);
+    };
+  }, [mode, isActiveModel, geometry, transform]);
 
   const defaultPosition = React.useMemo(() => new THREE.Vector3(0, 0, 0), []);
   const defaultQuaternion = React.useMemo(() => new THREE.Quaternion(), []);

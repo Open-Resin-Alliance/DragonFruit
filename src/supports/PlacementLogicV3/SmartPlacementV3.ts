@@ -204,6 +204,29 @@ function idleCallbackForPrewarm(): ((callback: () => void) => void) | null {
     }
 }
 
+/**
+ * Build the distance field and the active preset's column map before the first
+ * hover needs them.
+ *
+ * The first Support hover runs the router, which creates the pooled SDF and
+ * builds a column map over every mesh vertex, measured in tens of milliseconds
+ * on a detailed part. That cost belongs to the idle time after Support opens,
+ * not the frame where the pointer first crosses the model.
+ *
+ * Safe to call repeatedly: the cache and a map for the current clearance are
+ * reused, and a model move drops both (see `SDFCache.refreshMatrix`).
+ */
+export function prewarmSupportPlacement(mesh: THREE.Mesh): void {
+    // The idle callback can run before the renderer has refreshed the world
+    // matrix after a transform, and the router reads that matrix. Update it
+    // here so the warmup bakes the pose the first hover will query.
+    mesh.updateWorldMatrix(true, false);
+    const sdf = getOrCreateSDFCache(mesh);
+    sdf.refreshMatrix();
+    const settings = getSettings();
+    sdf.enableColumnMap(columnClearanceMm(settings.shaft.diameterMm), COLUMN_MAP_CELL_MM);
+}
+
 function prewarmPinnedPresetColumnMaps(sdf: SDFCache): void {
     const requestIdle = idleCallbackForPrewarm();
     if (!requestIdle) return;

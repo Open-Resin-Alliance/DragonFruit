@@ -164,3 +164,26 @@ test('columnBlocked gives the segment march verdict for vertical columns', () =>
     }
     assert.ok(checked > 100, 'the sweep must exercise the column path');
 });
+
+test('a model move invalidates the column maps built at the old pose', () => {
+    const mesh = makeSphereMesh();
+    const sdf = new SDFCache(mesh, { cellSize: 0.5 });
+
+    const built: number[] = [];
+    const build = ColumnClearanceMap.build;
+    ColumnClearanceMap.build = ((meshArg, clearanceMm, cellMm) => {
+        built.push(clearanceMm);
+        return build(meshArg, clearanceMm, cellMm);
+    }) as typeof ColumnClearanceMap.build;
+
+    try {
+        assert.equal(sdf.enableColumnMap(0.9, 0.2), true);
+        mesh.position.set(0, 0, 10);
+        mesh.updateMatrixWorld(true);
+        assert.equal(sdf.refreshMatrix(), true);
+        assert.equal(sdf.enableColumnMap(0.9, 0.2), true);
+        assert.deepEqual(built, [0.9, 0.9], 'the map must be rebuilt for the new pose');
+    } finally {
+        ColumnClearanceMap.build = build;
+    }
+});

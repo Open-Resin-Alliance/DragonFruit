@@ -329,6 +329,20 @@ export class SDFCache {
         this.cache.clear();
     }
 
+    /**
+     * Drop the column maps after the model moves.
+     *
+     * A map is baked in world space from every vertex, so keeping it across a
+     * transform change answers later placements at the old pose. The cell table
+     * was already cleared on drift; the maps have to follow it.
+     */
+    private _clearColumnMaps(): void {
+        this._columnMap = null;
+        this._columnMapClearance = 0;
+        this._columnMapCache.length = 0;
+        this._columnMapCacheBytes = 0;
+    }
+
     private _snapshotMatrix(): void {
         this._lastMatrix.copy(this.mesh.matrixWorld);
         this.inverseMatrix.copy(this.mesh.matrixWorld).invert();
@@ -363,6 +377,7 @@ export class SDFCache {
     refreshMatrix(): boolean {
         if (!this.mesh.matrixWorld.equals(this._lastMatrix)) {
             this._clearCells();
+            this._clearColumnMaps();
             this._snapshotMatrix();
             notifySDFMatrixDrift(this.mesh.uuid);
             return true;
