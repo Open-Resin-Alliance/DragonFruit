@@ -132,6 +132,14 @@ export type MergedSupportGeometryOptions = {
    * resolver instead of duplicating it here.
    */
   resolvePenetration?: (authoredPenetrationMm: number | undefined) => number;
+  /**
+   * Inverse of the model transform this geometry is for.
+   *
+   * Supplying it bakes the model's world pose out of the vertices, so the mesh
+   * is local to the model group. Moving or rotating the model then never
+   * changes the merged buffers; the group matrix does all of it.
+   */
+  modelWorldInverse?: THREE.Matrix4;
 };
 
 /**
@@ -440,6 +448,30 @@ export function buildMergedSupportGeometry(
             Math.max(0.001, root.effectiveDiskHeight),
             bottomRadius,
         );
+    }
+
+    // Bake the model's committed pose out of the vertices. The geometry is
+    // parented inside the model group, so a later model transform is a group
+    // matrix change rather than a re-merge.
+    const modelWorldInverse = options?.modelWorldInverse;
+    if (modelWorldInverse) {
+        const normalMatrix = new THREE.Matrix3().getNormalMatrix(modelWorldInverse);
+        const vertexTotal = vertexCursor;
+        for (let i = 0, offset = 0; i < vertexTotal; i += 1, offset += 3) {
+            position
+                .set(positions[offset], positions[offset + 1], positions[offset + 2])
+                .applyMatrix4(modelWorldInverse);
+            positions[offset] = position.x;
+            positions[offset + 1] = position.y;
+            positions[offset + 2] = position.z;
+            position
+                .set(normals[offset], normals[offset + 1], normals[offset + 2])
+                .applyMatrix3(normalMatrix)
+                .normalize();
+            normals[offset] = position.x;
+            normals[offset + 1] = position.y;
+            normals[offset + 2] = position.z;
+        }
     }
 
     // A primitive can be skipped after the count pass (the instanced batch

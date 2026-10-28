@@ -278,3 +278,19 @@ test('a skipped sub-millimetre shaft leaves no degenerate indices or vertices be
   assert.equal(merged.geometry.groups.length, 3);
 });
 
+
+test('a supplied model inverse bakes the pose into the vertices', () => {
+    const model = emptyModel();
+    model.shafts = [shaft('straight', [5, 0, 0], [5, 0, 10], 1)];
+
+    const world = buildMergedSupportGeometry(model);
+    const local = buildMergedSupportGeometry(model, {
+        modelWorldInverse: new THREE.Matrix4().makeTranslation(-5, 0, 0),
+    });
+
+    assert.ok(world.geometry.boundingBox && local.geometry.boundingBox);
+    const worldCenterX = (world.geometry.boundingBox.min.x + world.geometry.boundingBox.max.x) / 2;
+    const localCenterX = (local.geometry.boundingBox.min.x + local.geometry.boundingBox.max.x) / 2;
+    assert.ok(Math.abs(worldCenterX - 5) < 0.01);
+    assert.ok(Math.abs(localCenterX) < 0.01);
+});
