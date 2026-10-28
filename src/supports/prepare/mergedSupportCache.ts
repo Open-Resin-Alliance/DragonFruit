@@ -122,6 +122,9 @@ const listeners = new Set<() => void>();
 let view: PrepareMergedSupportCacheView = EMPTY_VIEW;
 let scheduled: ScheduledHandle | null = null;
 let suspended = false;
+let resumeTimer: ReturnType<typeof setTimeout> | null = null;
+/** Let orbit damping finish before an idle merge can interrupt it. */
+const RESUME_AFTER_GESTURE_MS = 350;
 
 const state = {
   enabled: false,
@@ -189,12 +192,22 @@ function cancelScheduled(): void {
 export function setPrepareMergedSupportsSuspended(next: boolean): void {
   if (suspended === next) return;
   suspended = next;
-  if (suspended) cancelScheduled();
-  else scheduleNextSlice();
+  if (resumeTimer !== null) {
+    clearTimeout(resumeTimer);
+    resumeTimer = null;
+  }
+  if (suspended) {
+    cancelScheduled();
+    return;
+  }
+  resumeTimer = setTimeout(() => {
+    resumeTimer = null;
+    scheduleNextSlice();
+  }, RESUME_AFTER_GESTURE_MS);
 }
 
 function scheduleNextSlice(): void {
-  if (!state.enabled || suspended || scheduled || state.inFlight) return;
+  if (!state.enabled || suspended || resumeTimer !== null || scheduled || state.inFlight) return;
   if (state.walk && (state.pending === null || state.pendingIndex >= state.pending.length)) return;
   const run = () => {
     scheduled = null;
@@ -446,6 +459,10 @@ export function requestPrepareMergedSupports(request: {
     if (state.enabled) {
       state.enabled = false;
       cancelScheduled();
+      if (resumeTimer !== null) {
+        clearTimeout(resumeTimer);
+        resumeTimer = null;
+      }
       publish();
     }
     return;
@@ -551,6 +568,10 @@ export function resetPrepareMergedSupportCache(): void {
   state.generation += 1;
   state.inFlight = null;
   suspended = false;
+  if (resumeTimer !== null) {
+    clearTimeout(resumeTimer);
+    resumeTimer = null;
+  }
   view = EMPTY_VIEW;
   listeners.clear();
 }
