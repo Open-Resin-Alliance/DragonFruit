@@ -1808,6 +1808,7 @@ export function SceneCanvas({
   );
 
   const [isCameraBelowBuildPlate, setIsCameraBelowBuildPlate] = React.useState(false);
+  const [isCameraFocusTransitionActive, setCameraFocusTransitionActive] = React.useState(false);
   const [buildPlateOpacity, setBuildPlateOpacity] = React.useState(1);
   const [outOfBoundsStripeColor, setOutOfBoundsStripeColor] = React.useState<string>('#b6ff2e');
   const [gizmoColors, setGizmoColors] = React.useState({
@@ -3903,7 +3904,7 @@ export function SceneCanvas({
     interiorView,
     cavityGeometryByModelId,
     modelWorldInverseById,
-    suspended: isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive || isGizmoDragging || selectDragPressed,
+    suspended: isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive || isGizmoDragging || selectDragPressed || isCameraFocusTransitionActive,
   });
 
   // Models whose supports the merged meshes draw, so the world support proxy
@@ -8188,6 +8189,7 @@ export function SceneCanvas({
             orbitControlsRef={orbitControlsRef as React.MutableRefObject<{ target: THREE.Vector3; update: () => void } | null>}
             perspectiveFov={perspectiveFov}
             plateFocus={plateFocus}
+            onTransitionActiveChange={setCameraFocusTransitionActive}
           />
         )}
         <CameraIntroController
