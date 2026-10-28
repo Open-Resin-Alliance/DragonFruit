@@ -23,6 +23,12 @@ type FrameEntry = {
 };
 
 const frames = new Map<string, FrameEntry>();
+let frameVersion = 0;
+
+/** Bumped whenever a frame changes, for caches that project local records to world. */
+export function getSupportFrameVersion(): number {
+  return frameVersion;
+}
 
 function cloneTransform(transform: ModelTransform): ModelTransform {
   return {
@@ -46,6 +52,7 @@ export function setSupportFrame(modelId: string, transform: ModelTransform): voi
     transform: stored,
     inverse: composeFrame(stored).invert(),
   });
+  frameVersion += 1;
 }
 
 export function ensureSupportFrame(modelId: string, transform: ModelTransform): void {
@@ -92,6 +99,7 @@ export function restoreSupportFrames(
   models?: ReadonlyArray<{ id: string; transform: ModelTransform }>,
 ): void {
   frames.clear();
+  frameVersion += 1;
   if (snapshot) {
     for (const [modelId, transform] of Object.entries(snapshot)) setSupportFrame(modelId, transform);
   }
@@ -100,6 +108,7 @@ export function restoreSupportFrames(
 
 export function resetSupportFrames(): void {
   frames.clear();
+  frameVersion += 1;
 }
 
 export function hasSupportFrame(modelId: string): boolean {

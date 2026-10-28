@@ -7,6 +7,7 @@ import {
   ensureSupportFrame,
   getSupportFrameInverse,
   getSupportFrameTransform,
+  getSupportFrameVersion,
   hasSupportFrame,
   resetSupportFrames,
   restoreSupportFrames,
@@ -47,6 +48,13 @@ test('ensure keeps an existing frame and sync follows live models', () => {
 
   syncSupportFrames([{ id: 'm2', transform: transform(2, 0) }]);
   assert.equal(hasSupportFrame('m1'), false);
+});
+
+test('a frame change bumps the projection version', () => {
+  resetSupportFrames();
+  const before = getSupportFrameVersion();
+  setSupportFrame('m1', transform(1, 0));
+  assert.ok(getSupportFrameVersion() > before);
 });
 
 test('a frame snapshot restores the baked transform', () => {
