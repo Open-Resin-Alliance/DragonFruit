@@ -3903,6 +3903,7 @@ export function SceneCanvas({
     interiorView,
     cavityGeometryByModelId,
     modelWorldInverseById,
+    suspended: isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive || isGizmoDragging,
   });
 
   // Models whose supports the merged meshes draw, so the world support proxy

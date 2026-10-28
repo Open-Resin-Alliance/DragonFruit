@@ -12,6 +12,7 @@ import {
   getPrepareMergedSupportView,
   requestPrepareMergedSupports,
   resetPrepareMergedSupportCache,
+  setPrepareMergedSupportsSuspended,
   type PrepareMergedSupportCacheView,
 } from '../mergedSupportCache';
 
@@ -109,6 +110,21 @@ function drain(): void {
     assert.ok(guard < 100, 'the build queue must finish');
   }
 }
+
+test('a suspended queue does not merge under a gesture', () => {
+  reset();
+  setPrepareMergedSupportsSuspended(true);
+  try {
+    request(getSnapshot());
+    assert.equal(view().entries.size, 0, 'the walk must not run while suspended');
+    assert.equal(flushPrepareMergedSupportSlice(), true, 'work stays queued');
+    assert.equal(view().entries.size, 0, 'a flush must not merge while suspended');
+  } finally {
+    setPrepareMergedSupportsSuspended(false);
+  }
+  drain();
+  assert.equal(view().entries.size, 2, 'the same queue resumes after the gesture');
+});
 
 function view(): PrepareMergedSupportCacheView {
   return getPrepareMergedSupportView();
