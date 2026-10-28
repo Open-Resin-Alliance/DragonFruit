@@ -1389,8 +1389,19 @@ export function setSnapshot(next: SupportState) {
 }
 
 function transformVec3(value: Vec3, matrix: THREE.Matrix4): Vec3 {
-    const v = new THREE.Vector3(value.x, value.y, value.z).applyMatrix4(matrix);
-    return { x: v.x, y: v.y, z: v.z };
+    // Inline the affine multiply: a plate move transforms tens of thousands of
+    // these, and allocating a Vector3 for each one was measurable.
+    const e = matrix.elements;
+    const x = value.x;
+    const y = value.y;
+    const z = value.z;
+    const w = e[3] * x + e[7] * y + e[11] * z + e[15];
+    const invW = w !== 0 && w !== 1 ? 1 / w : 1;
+    return {
+        x: (e[0] * x + e[4] * y + e[8] * z + e[12]) * invW,
+        y: (e[1] * x + e[5] * y + e[9] * z + e[13]) * invW,
+        z: (e[2] * x + e[6] * y + e[10] * z + e[14]) * invW,
+    };
 }
 
 function transformVec3PreserveZ(value: Vec3, matrix: THREE.Matrix4): Vec3 {
@@ -1402,10 +1413,14 @@ function transformVec3PreserveZ(value: Vec3, matrix: THREE.Matrix4): Vec3 {
 }
 
 function transformDirection(value: Vec3, normalMatrix: THREE.Matrix3): Vec3 {
-    const v = new THREE.Vector3(value.x, value.y, value.z).applyMatrix3(normalMatrix);
-    if (v.lengthSq() <= 1e-12) return value;
-    v.normalize();
-    return { x: v.x, y: v.y, z: v.z };
+    const e = normalMatrix.elements;
+    const x = e[0] * value.x + e[3] * value.y + e[6] * value.z;
+    const y = e[1] * value.x + e[4] * value.y + e[7] * value.z;
+    const z = e[2] * value.x + e[5] * value.y + e[8] * value.z;
+    const lengthSq = x * x + y * y + z * z;
+    if (lengthSq <= 1e-12) return value;
+    const invLength = 1 / Math.sqrt(lengthSq);
+    return { x: x * invLength, y: y * invLength, z: z * invLength };
 }
 
 function transformJoint(joint: import('./types').Joint | undefined, matrix: THREE.Matrix4) {

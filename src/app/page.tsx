@@ -420,7 +420,6 @@ import { IslandScanWorkflowCard } from '@/volumeAnalysis/IslandScan/workflow/Isl
 import { IslandVolumesHierarchyCard } from '@/volumeAnalysis/IslandVolumes/components/IslandVolumesHierarchyCard';
 import { uploadPrintJobWithProgress, type PluginUploadProgressEvent } from '@/features/plugins/pluginUploadBridge';
 import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
-import { clonePlainData } from '@/utils/plainDataClone';
 import { fetchRtspRelayStatus } from '@/utils/rtspRelayBridge';
 import {
   hollowApplyFromCapturedSource,
@@ -5767,7 +5766,9 @@ export default function Home() {
   }, []);
 
   const captureTransformSupportSnapshot = React.useCallback(() => {
-    const supportSnapshot = clonePlainData(getSupportSnapshot());
+    // Native structured clone is several times faster than walking the plain
+    // object graph by hand; the support snapshot is transform history data.
+    const supportSnapshot = structuredClone(getSupportSnapshot());
     supportSnapshot.selectedId = null;
     supportSnapshot.selectedCategory = null;
     supportSnapshot.hoveredId = null;
