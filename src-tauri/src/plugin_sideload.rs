@@ -408,6 +408,58 @@ pub async fn sideloaded_plugin_install<R: tauri::Runtime>(
     install_from_bytes(&root, &bytes, &inspected, passphrase.as_deref())
 }
 
+/// Opens a file through a sideloaded importer.
+///
+/// The dropped `File` arrives as a raw body (a scene can be tens of MB and JSON
+/// numbers would double it), with the plugin id and file name in headers. Returns
+/// the scene container the plugin wrote; the renderer parses it into geometry.
+#[tauri::command]
+pub async fn sideloaded_plugin_import_file<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<tauri::ipc::Response, String> {
+    let bytes = match request.body() {
+        tauri::ipc::InvokeBody::Raw(bytes) => bytes.clone(),
+        tauri::ipc::InvokeBody::Json(_) => {
+            return Err("sideloaded_plugin_import_file expects a raw binary body".to_string());
+        }
+    };
+
+    let header = |name: &str| -> Result<String, String> {
+        let value = request
+            .headers()
+            .get(name)
+            .ok_or_else(|| format!("missing {name} header"))?;
+        let text = value
+            .to_str()
+            .map_err(|error| format!("invalid {name} header: {error}"))?;
+        Ok(percent_encoding::percent_decode_str(text)
+            .decode_utf8()
+            .map_err(|error| format!("invalid {name} header: {error}"))?
+            .into_owned())
+    };
+
+    let id = header("x-plugin-id")?;
+    let file_name = header("x-file-name")?;
+    let root = root_dir(&app)?;
+    let manifest = installed_manifest(&root, &id)
+        .ok_or_else(|| format!("plugin '{id}' is not installed"))?;
+    if !manifest
+        .capabilities
+        .contains(&package::Capability::FileType)
+    {
+        return Err(format!("plugin '{id}' does not declare fileType"));
+    }
+
+    let container = tauri::async_runtime::spawn_blocking(move || {
+        crate::plugin_sideload_runtime::import_with_plugin(&root, &id, &manifest, &file_name, &bytes)
+    })
+    .await
+    .map_err(|error| format!("import task failed: {error}"))??;
+
+    Ok(tauri::ipc::Response::new(container))
+}
+
 #[tauri::command]
 pub async fn sideloaded_plugin_list<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
@@ -491,6 +543,7 @@ mod tests {
                 display_name: None,
             }],
             network: None,
+            file_types: Vec::new(),
         };
         package::build_package(
             &manifest,

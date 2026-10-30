@@ -1,68 +1,104 @@
 # File-type import
 
-Status: **designed, and blocked on a format that does not exist yet.**
+Status: **shipped, with one gap.** A package declares its extensions, the host
+matches a dropped file by extension, runs the plugin and reads the scene
+container it writes back into models. Supports do not travel yet: that needs the
+host's internal support format serialized, and it is the next addition here.
 
-The dispatch shape below is settled. What is missing is the payload: the
-compiled-in tier's `handleFileTypeImport` returns **live objects** (a
-`THREE.BufferGeometry` per model, with transforms and support data), because it
-runs in the webview. A sideloaded plugin is a separate process and can only send
-bytes, so this capability needs a serializable scene payload: geometry buffers
-(positions, normals, indices), per-model transforms, and support data in the
-host's internal format.
+## Declaring extensions
 
-That interchange format is a design decision, not plumbing, and per-material
-geometry is about to change it, so it is deliberately not pinned here. Pinning it
-before the multi-material work lands would mean pinning it twice.
+The manifest carries them, because the host has to match a file before it starts
+anything:
 
-`fileType` lets a plugin open a project file DragonFruit does not parse: a vendor
-container, a printer's job archive, a design file that carries plates and
-supports. The host asks "is this yours?" and, if so, "give me a scene".
+```json
+"capabilities": ["fileType"],
+"fileTypes": [
+  { "extension": ".apf", "displayName": "AlphaPrint project", "isSceneFile": true }
+]
+```
+
+`fileTypes` without the capability is refused at import, as is an extension that
+does not start with a dot or is not lowercase. `isSceneFile` means the payload is
+a scene; a single-mesh payload is a future addition, so declare scenes today.
 
 ## Messages
 
 ```json
-→ {"type":"import.detect","id":4,"name":"job.apf","head":"<base64 of first 4 KiB>"}
-← {"type":"import.detect.result","id":4,"match":true}
-
-→ {"type":"import","id":5,"input":"C:\\\\…\\\\job.apf","output":"C:\\\\…\\\\scene.json"}
-← {"type":"import.result","id":5,"formatId":"apf"}
+→ {"type":"import","id":5,"input":"C:\\…\\import-5\\job.apf","output":"C:\\…\\import-5\\scene.dfimport"}
+← {"type":"importDone","id":5,"path":"C:\\…\\import-5\\scene.dfimport"}
 ```
 
-- `detect` receives the file name and the first 4 KiB so a plugin can sniff a
-  magic or an extension without opening the file. Answer `match: false` and the
-  host moves on; that is not an error.
-- `import` receives an input path (read it directly — do not send the file
-  through the pipe) and an output path the host created. Write the scene there.
-- The result names the format the host records for the imported scene; it appears
-  in the scene's metadata.
+- The host writes the dropped file's bytes into a directory per import and hands
+  both paths over. Read `input`, write `output`; do not assume the file name
+  matches the one the user saw beyond what you were given.
+- Answer with an the import-done frame frame once the container is complete. The host checks the
+  file exists and has the container header before reading it, then deletes the
+  directory, so write everything you need inside it.
+- Failures are `error` frames with a code (`import-failed`, `import-unsupported`)
+  and the host reports the message. A crash is a failed import, not a failed app.
 
-## The scene payload
+There is no `detect` round trip: the extension in the manifest already chose the
+plugin, and a plugin that wants to sniff the file can read `input` itself.
 
-The constraint is the compiled-in contract: a model arrives with geometry, a
-transform, and any supports that belong to it, one entry per model so supports
-stay attached to the right one. Externally the same information has to be bytes,
-so the payload will carry:
+## The scene container (v1)
 
-- geometry: positions, normals and indices, plus the index width;
-- per-model: a stable `modelId`, an optional display name, a 4x4 transform;
-- supports, in whatever the host's internal support format serializes to;
-- optionally, hollowing or punch data the format carries.
+Little-endian throughout. Values are the host's units: millimetres, and a
+transform in the same column-major layout three.js uses.
 
-Where it is written is already decided: a working directory the host creates per
-import, with every path validated to stay inside it. The encoding is not decided,
-and the page will carry the schema once the multi-material work settles what a
-model carries per material.
+```text
+"DFIMPORT1"           9 bytes ASCII
+u32  modelCount       1..=4096
+per model:
+  u32  metaLength
+  utf8 meta           { "modelId": "part-1", "name": "Part One",
+                        "transform": [16 floats, column major],
+                        "positionCount": 3, "indexCount": 3,
+                        "hasNormals": false }
+  f32  positions      positionCount * 3     interleaved xyz
+  f32  normals        positionCount * 3     only when hasNormals
+  u32  indices        indexCount            only when indexCount > 0
+```
 
-## What it is good for
+`modelId` is required and stable: a re-import of the same document must produce
+the same ids, because the host stamps them onto models. One entry per model, not
+one per file, so a container holding several parts arrives as several models.
 
-- A vendor container that holds a plate plus its supports, so a user can reopen
-  their work instead of re-slicing from scratch.
-- A printer job archive whose settings and layers should come back as a scene.
+The host parses this into geometry, decomposes the transform into position,
+rotation and scale, and hands the result to the same import pipeline the
+compiled-in formats use (refinement, classification, placement).
 
-## What it is not
+### What v1 does not carry
 
-- **Not a mesh importer.** STL/OBJ/3MF go through the host's own loaders; a
-  plugin that only renames a mesh has nothing to add.
-- **Not a renderer.** The host builds the scene; the plugin produces data.
-- **Not a path into the slicer.** An imported scene is scene data. A plugin
-  cannot inject code, hooks or settings into the slicing pipeline through it.
+- **Supports.** A format that holds supports cannot restore them yet; the model
+  arrives without them and the host does not guess.
+- **Hollowing or punch data.**
+- **Per-material assignment.** Geometry is one mesh per model; multi-material
+  meshes land with the host's multi-material support, and this container gains a
+  per-model material list then.
+
+Each of those is an additive change to the container, so a v1 file stays
+readable.
+
+## Writing one
+
+```rust
+use dragonfruit_plugin_sdk::{serve, Capability, FormatDecl, Importer, PluginCapabilities, PluginIdentity};
+
+impl Importer for MyImport {
+    fn import(&mut self, input: &std::path::Path, output: &std::path::Path) -> Result<(), String> {
+        let source = std::fs::read(input).map_err(|error| error.to_string())?;
+        // …parse `source`, then write the container described above to `output`
+        Ok(())
+    }
+}
+```
+
+`sdk/examples/echo_import.rs` is a complete one: it reads the input, writes a
+single triangle with a translation, and the host test parses it back.
+
+## Why a process cannot return three.js objects
+
+The compiled-in tier's `handleFileTypeImport` runs in the webview and returns live
+`THREE.BufferGeometry` objects. A sideloaded plugin is a separate process, so the
+contract is bytes plus a parser on the host side. That is the whole reason this
+container exists.

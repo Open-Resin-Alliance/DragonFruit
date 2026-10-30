@@ -118,6 +118,20 @@ pub struct NetworkDecl {
     pub plugin_id: String,
 }
 
+/// An extension the package can open. Declared here, not discovered at runtime:
+/// the host matches a dropped file by extension before it starts anything.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileTypeDecl {
+    /// Lowercase, leading dot.
+    pub extension: String,
+    pub display_name: String,
+    /// True when the payload is a scene (models, supports, transforms) rather
+    /// than a single mesh.
+    #[serde(default)]
+    pub is_scene_file: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Manifest {
@@ -135,6 +149,8 @@ pub struct Manifest {
     pub formats: Vec<FormatDecl>,
     #[serde(default)]
     pub network: Option<NetworkDecl>,
+    #[serde(default)]
+    pub file_types: Vec<FileTypeDecl>,
 }
 
 /// A package whose manifest parsed and whose signature verified. The payload is
@@ -256,6 +272,34 @@ fn validate(manifest: &Manifest) -> Result<(), PackageError> {
         return Err(PackageError::Invalid(
             "a package must declare at least one capability".to_string(),
         ));
+    }
+    if !manifest.file_types.is_empty() && !manifest.capabilities.contains(&Capability::FileType) {
+        return Err(PackageError::Invalid(
+            "fileTypes are declared but the fileType capability is not".to_string(),
+        ));
+    }
+    for file_type in &manifest.file_types {
+        if !file_type.extension.starts_with('.')
+            || file_type.extension.len() < 2
+            || file_type.extension.len() > 16
+        {
+            return Err(PackageError::Invalid(format!(
+                "file type extension '{}' must start with '.' and be 2..16 characters",
+                file_type.extension
+            )));
+        }
+        if file_type.extension != file_type.extension.to_ascii_lowercase() {
+            return Err(PackageError::Invalid(format!(
+                "file type extension '{}' must be lowercase",
+                file_type.extension
+            )));
+        }
+        if file_type.display_name.trim().is_empty() {
+            return Err(PackageError::Invalid(format!(
+                "file type '{}' needs a display name",
+                file_type.extension
+            )));
+        }
     }
     for format in &manifest.formats {
         if format.extensions.is_empty() {
@@ -581,6 +625,7 @@ mod tests {
                 display_name: None,
             }],
             network: None,
+            file_types: Vec::new(),
         }
     }
 

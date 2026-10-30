@@ -4649,6 +4649,7 @@ fn main() {
             plugin_sideload::sideloaded_plugin_install,
             plugin_sideload::sideloaded_plugin_list,
             plugin_sideload::sideloaded_plugin_remove,
+            plugin_sideload::sideloaded_plugin_import_file,
             network::ensure_rtsp_relay,
             mesh_repair::mesh_analyze_from_path,
             mesh_refine::refine_mesh_soup,

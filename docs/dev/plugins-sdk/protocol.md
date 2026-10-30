@@ -74,6 +74,18 @@ The plugin finalises when the declared layer count arrives, so there is no
 "finish" message. The slot-free message is what lets the host reuse a slot; a
 plugin that never frees one starves the session at four layers.
 
+### Import
+
+```json
+→ {"type":"import","id":5,"input":"…/import-5/job.apf","output":"…/import-5/scene.dfimport"}
+← {"type":"importDone","id":5,"path":"…/import-5/scene.dfimport"}
+```
+
+No detect round trip: the manifest's extension already picked the plugin. The
+host writes the file into a per-import directory, checks the container header and
+deletes the directory afterwards, so a plugin writes only inside it. Container
+layout: `docs/dev/plugins-sdk/file-types.md`.
+
 ### Network
 
 ```json

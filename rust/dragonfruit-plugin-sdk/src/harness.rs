@@ -51,6 +51,13 @@ pub trait Encoder {
     fn finish(&mut self) -> Result<u64, String>;
 }
 
+/// A file the host cannot parse. `import` reads `input` and writes the scene
+/// container to `output`; the container format is specified in
+/// `docs/dev/plugins-sdk/file-types.md`.
+pub trait Importer {
+    fn import(&mut self, input: &Path, output: &Path) -> Result<(), String>;
+}
+
 /// What a plugin can answer after the handshake. Capabilities are opt-in per
 /// method, so a plugin that only encodes does not have to know the network
 /// vocabulary, and vice versa.
@@ -68,6 +75,12 @@ pub trait PluginCapabilities {
     /// An encoder instance for one session, or `None` when the plugin does not
     /// encode.
     fn encoder(&self) -> Option<Box<dyn Encoder>> {
+        None
+    }
+
+    /// An importer for a file this package declares, or `None` when it opens no
+    /// files.
+    fn importer(&self) -> Option<Box<dyn Importer>> {
         None
     }
 }
@@ -296,6 +309,30 @@ pub fn serve<R: Read, W: Write, C: PluginCapabilities>(
                         }
                         Err(message) => return fail(&mut output, "encode-failed", &message),
                     }
+                }
+            }
+            HostMessage::Import {
+                id,
+                input,
+                output: target,
+            } => {
+                let Some(mut importer) = capabilities.importer() else {
+                    return fail(&mut output, "import-unsupported", "the plugin offers no importer");
+                };
+                let input_path = PathBuf::from(&input);
+                let target_path = PathBuf::from(&target);
+                match importer.import(&input_path, &target_path) {
+                    Ok(()) => {
+                        write_json(
+                            &mut output,
+                            &PluginMessage::ImportDone {
+                                id,
+                                path: target,
+                            },
+                        )
+                        .map_err(to_io)?;
+                    }
+                    Err(message) => return fail(&mut output, "import-failed", &message),
                 }
             }
             HostMessage::EncodeCancel { id } => {

@@ -94,6 +94,7 @@ fn main() {
             display_name: None,
         }],
         network: None,
+        file_types: Vec::new(),
     };
 
     let mut payload_files = BTreeMap::new();

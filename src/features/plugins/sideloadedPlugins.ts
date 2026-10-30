@@ -34,6 +34,7 @@ export type SideloadedManifest = {
   };
   formats: SideloadedFormat[];
   network?: { pluginId: string } | null;
+  fileTypes?: Array<{ extension: string; displayName: string; isSceneFile?: boolean }>;
 };
 
 export type SideloadedInspect = {
@@ -83,6 +84,25 @@ export function listSideloadedPlugins(): Promise<InstalledSideloadedPlugin[]> {
 
 export function removeSideloadedPlugin(id: string): Promise<void> {
   return invoke<void>('sideloaded_plugin_remove', { id });
+}
+
+/**
+ * Opens a file through a package's importer.
+ *
+ * The bytes go as a raw body (a scene is tens of MB and JSON numbers would double
+ * it); the plugin id and file name travel in headers, percent-encoded.
+ */
+export function importSideloadedFile(
+  pluginId: string,
+  fileName: string,
+  bytes: Uint8Array,
+): Promise<ArrayBuffer> {
+  return invoke<ArrayBuffer>('sideloaded_plugin_import_file', bytes, {
+    headers: {
+      'x-plugin-id': pluginId,
+      'x-file-name': encodeURIComponent(fileName),
+    },
+  });
 }
 
 /**

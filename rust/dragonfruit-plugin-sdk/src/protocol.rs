@@ -78,6 +78,14 @@ pub enum HostMessage {
     EncodeCancel {
         id: u64,
     },
+    /// Open a file the manifest declares. `output` is a path the host created;
+    /// write the scene container there.
+    #[serde(rename_all = "camelCase")]
+    Import {
+        id: u64,
+        input: String,
+        output: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -109,6 +117,8 @@ pub enum PluginMessage {
     },
     #[serde(rename_all = "camelCase")]
     EncodeCancelled { id: u64 },
+    #[serde(rename_all = "camelCase")]
+    ImportDone { id: u64, path: String },
     #[serde(rename_all = "camelCase")]
     Error { code: String, message: String },
 }

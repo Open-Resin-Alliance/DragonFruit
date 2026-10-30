@@ -32,6 +32,10 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 /// A whole slice's encode stage, layer streaming included.
 const ENCODE_TIMEOUT: Duration = Duration::from_secs(600);
+/// Opening a file: the plugin reads a document and writes a container.
+const IMPORT_TIMEOUT: Duration = Duration::from_secs(120);
+/// First bytes of the v1 scene container a plugin writes.
+pub const SCENE_CONTAINER_MAGIC: &[u8; 9] = b"DFIMPORT1";
 
 type FrameStream = Receiver<Result<Option<sdk::Frame>, String>>;
 
@@ -392,6 +396,98 @@ fn stop(plugin: &mut RunningPlugin) {
     let _ = plugin.child.wait();
 }
 
+/// Opens a file the package declares and returns the scene container it wrote.
+///
+/// The source bytes arrive from the renderer (a dropped `File` has no path worth
+/// trusting), so the host writes them into a per-import directory, hands the
+/// plugin both paths and reads the container back before removing the directory.
+pub fn import_with_plugin(
+    root: &Path,
+    plugin_id: &str,
+    manifest: &package::Manifest,
+    file_name: &str,
+    bytes: &[u8],
+) -> Result<Vec<u8>, String> {
+    let session_id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+    let work_dir = root
+        .join(plugin_id)
+        .join(format!("import-{session_id}"));
+    std::fs::create_dir_all(&work_dir)
+        .map_err(|error| format!("failed to prepare the import directory: {error}"))?;
+
+    let safe_name = sanitize_file_name(file_name);
+    let input_path = work_dir.join(&safe_name);
+    let output_path = work_dir.join("scene.dfimport");
+
+    let outcome = (|| -> Result<Vec<u8>, String> {
+        std::fs::write(&input_path, bytes)
+            .map_err(|error| format!("failed to stage '{}': {error}", safe_name))?;
+
+        let mut plugin = start(root, plugin_id, manifest)?;
+        let result = (|| -> Result<(), String> {
+            send(
+                &mut plugin,
+                &sdk::HostMessage::Import {
+                    id: session_id,
+                    input: input_path.to_string_lossy().to_string(),
+                    output: output_path.to_string_lossy().to_string(),
+                },
+            )?;
+            let deadline = Instant::now() + IMPORT_TIMEOUT;
+            loop {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err("the importer did not answer within two minutes".to_string());
+                }
+                match plugin.frames.recv_timeout(remaining) {
+                    Ok(Ok(Some(frame))) => match serde_json::from_slice::<sdk::PluginMessage>(&frame.payload) {
+                        Ok(sdk::PluginMessage::ImportDone { .. }) => return Ok(()),
+                        Ok(sdk::PluginMessage::Error { code, message }) => {
+                            return Err(format!("import error {code}: {message}"));
+                        }
+                        Ok(other) => return Err(format!("unexpected import message: {other:?}")),
+                        Err(error) => return Err(format!("unreadable import message: {error}")),
+                    },
+                    Ok(Ok(None)) => return Err("the importer closed the control channel".to_string()),
+                    Ok(Err(error)) => return Err(error),
+                    Err(RecvTimeoutError::Timeout) => {
+                        return Err("the importer did not answer within two minutes".to_string());
+                    }
+                    Err(RecvTimeoutError::Disconnected) => {
+                        return Err("the importer reader stopped".to_string());
+                    }
+                }
+            }
+        })();
+        stop(&mut plugin);
+        result?;
+
+        let container = std::fs::read(&output_path)
+            .map_err(|error| format!("the importer reported success but wrote no scene: {error}"))?;
+        if !container.starts_with(SCENE_CONTAINER_MAGIC) {
+            return Err("the importer wrote something other than a scene container".to_string());
+        }
+        Ok(container)
+    })();
+
+    let _ = std::fs::remove_dir_all(&work_dir);
+    outcome
+}
+
+fn sanitize_file_name(name: &str) -> String {
+    let base = name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("")
+        .trim()
+        .replace([':', '*', '?', '"', '<', '>', '|'], "_");
+    if base.is_empty() {
+        "input.bin".to_string()
+    } else {
+        base
+    }
+}
+
 /// Streams every rendered layer to a sideloaded encoder and waits for the file.
 ///
 /// One process per session: the ring path is handed over in the environment, so
@@ -609,6 +705,7 @@ mod tests {
             network: Some(package::NetworkDecl {
                 plugin_id: "echo".to_string(),
             }),
+            file_types: Vec::new(),
         }
     }
 
@@ -761,6 +858,59 @@ mod tests {
         );
 
         shutdown_all();
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Opens a file through the reference importer and checks the container it
+    /// wrote, then that the per-import directory is gone.
+    #[test]
+    fn imports_a_file_through_a_real_plugin_process() {
+        let root = temp_dir("import");
+        let manifest = package::Manifest {
+            id: "example.importer".to_string(),
+            capabilities: vec![package::Capability::FileType],
+            formats: Vec::new(),
+            file_types: vec![package::FileTypeDecl {
+                extension: ".echo".to_string(),
+                display_name: "Echo project".to_string(),
+                is_scene_file: true,
+            }],
+            ..manifest(vec![package::Capability::FileType])
+        };
+        install_reference_plugin(&root, "echo_import", &manifest);
+
+        let container = import_with_plugin(
+            &root,
+            "example.importer",
+            &manifest,
+            "job.echo",
+            b"source-document",
+        )
+        .expect("import");
+
+        assert!(container.starts_with(SCENE_CONTAINER_MAGIC));
+        let model_count = u32::from_le_bytes(container[9..13].try_into().expect("count"));
+        assert_eq!(model_count, 1);
+        let meta_len = u32::from_le_bytes(container[13..17].try_into().expect("meta len")) as usize;
+        let meta: serde_json::Value =
+            serde_json::from_slice(&container[17..17 + meta_len]).expect("meta json");
+        assert_eq!(meta["modelId"], "echo-0");
+        assert_eq!(meta["positionCount"], 3);
+        assert_eq!(meta["indexCount"], 3);
+
+        let leftovers: Vec<PathBuf> = std::fs::read_dir(root.join("example.importer"))
+            .expect("plugin dir")
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| name.starts_with("import-"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        assert!(leftovers.is_empty(), "import directories left behind: {leftovers:?}");
+
         let _ = std::fs::remove_dir_all(&root);
     }
 

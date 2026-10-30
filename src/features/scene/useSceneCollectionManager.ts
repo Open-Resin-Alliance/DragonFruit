@@ -41,6 +41,12 @@ import { getBuiltinComplexPluginDefinitions } from '@/features/plugins/builtinCo
 import { getBuiltinComplexPluginFileTypeHandlers } from '@/features/plugins/builtinComplexPluginFileTypeHandlers';
 import type { PluginFileTypeDefinition } from '@/features/plugins/complexPluginContracts';
 import type { PluginFileTypeHandler } from '@/features/plugins/pluginFileTypeBridge';
+import {
+  createSideloadedFileTypeHandler,
+  getSideloadedFileTypesSnapshot,
+  refreshSideloadedFileTypes,
+  subscribeSideloadedFileTypes,
+} from '@/features/plugins/sideloadedFileTypes';
 import { accelerateGeometry, disposeGeometryBVH } from '@/utils/bvh';
 import { runWithConcurrency } from '@/utils/runWithConcurrency';
 import { logToNativeFile } from '@/utils/nativeLog';
@@ -1637,6 +1643,18 @@ export function useSceneCollectionManager(options?: {
   const { _ } = useLingui();
   const fmt = useLocaleFormat();
 
+  // Extensions contributed by installed .dfplugin packages. Empty in the web
+  // build, and refreshed after an install or removal in Settings.
+  const sideloadedFileTypes = useSyncExternalStore(
+    subscribeSideloadedFileTypes,
+    getSideloadedFileTypesSnapshot,
+    getSideloadedFileTypesSnapshot,
+  );
+
+  useEffect(() => {
+    void refreshSideloadedFileTypes();
+  }, []);
+
   type ScenePluginImportEntry = {
     pluginId: string;
     fileType: PluginFileTypeDefinition;
@@ -1661,8 +1679,13 @@ export function useSceneCollectionManager(options?: {
         }
       }
     }
+    for (const fileType of sideloadedFileTypes) {
+      if (fileType.isSceneFile && normalized.endsWith(fileType.extension)) {
+        return fileType.extension;
+      }
+    }
     return null;
-  }, []);
+  }, [sideloadedFileTypes]);
 
   const scenePluginImportHandlersByExtension = useMemo(() => {
     const handlersByPluginId = new Map(
@@ -1687,8 +1710,23 @@ export function useSceneCollectionManager(options?: {
       }
     }
 
+    // Sideloaded packages register at runtime, so they are appended after the
+    // generated entries and never shadow a compiled-in extension.
+    for (const fileType of sideloadedFileTypes) {
+      if (!fileType.isSceneFile || out.has(fileType.extension)) continue;
+      out.set(fileType.extension, {
+        pluginId: fileType.pluginId,
+        fileType: {
+          fileExtension: fileType.extension,
+          displayName: fileType.displayName,
+          isSceneFile: true,
+        },
+        handler: createSideloadedFileTypeHandler(fileType),
+      });
+    }
+
     return out;
-  }, []);
+  }, [sideloadedFileTypes]);
 
   const waitForUiYield = useCallback(
     () => new Promise<void>((resolve) => {

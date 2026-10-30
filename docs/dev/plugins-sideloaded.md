@@ -21,6 +21,7 @@ Read this page before changing anything in this tier. "Protocol v1" and
 | Process spawn, handshake, `ready` validation, idle stop | `src-tauri/src/plugin_sideload_runtime.rs` | done, tested against a real plugin process |
 | `network` capability | host runtime + SDK harness | done |
 | `slicerEncoder` capability | host runtime + engine adapter + SDK harness | done, tested against a real encoder process |
+| `fileType` capability | host runtime + renderer container parser | done, tested against a real importer process |
 | `fileType` | — | **not built**; blocked on the scene document schema |
 
 `cargo test` in the package crate and `cargo test --bin dragonfruit-desktop
