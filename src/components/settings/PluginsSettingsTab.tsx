@@ -170,6 +170,27 @@ export function PluginsSettingsTab() {
   const [pendingSideload, setPendingSideload] = React.useState<{ path: string; info: SideloadedInspect } | null>(null);
   const [sideloadPassphrase, setSideloadPassphrase] = React.useState('');
   const [pendingRemoveSideload, setPendingRemoveSideload] = React.useState<InstalledSideloadedPlugin | null>(null);
+  // A fresh install is announced by the row itself, not by a green line above the
+  // list: one glow that fades after ten seconds.
+  const [recentlyInstalledKey, setRecentlyInstalledKey] = React.useState<string | null>(null);
+  const highlightTimerRef = React.useRef<number | null>(null);
+
+  const highlightInstalledRow = React.useCallback((key: string) => {
+    if (highlightTimerRef.current !== null) {
+      window.clearTimeout(highlightTimerRef.current);
+    }
+    setRecentlyInstalledKey(key);
+    highlightTimerRef.current = window.setTimeout(() => {
+      setRecentlyInstalledKey(null);
+      highlightTimerRef.current = null;
+    }, 10_000);
+  }, []);
+
+  React.useEffect(() => () => {
+    if (highlightTimerRef.current !== null) {
+      window.clearTimeout(highlightTimerRef.current);
+    }
+  }, []);
 
   React.useEffect(() => {
     setIsDesktop(isTauriRuntime());
@@ -238,16 +259,13 @@ export function PluginsSettingsTab() {
       );
       await refreshSideloaded();
       setPendingSideload(null);
-      setStatus({
-        kind: 'success',
-        message: `Installed ${installed.manifest.name} ${installed.manifest.version}.`,
-      });
+      highlightInstalledRow(`sideloaded:${installed.manifest.id}`);
     } catch (error) {
       setStatus({ kind: 'error', message: String(error) });
     } finally {
       setSideloadBusy(false);
     }
-  }, [pendingSideload, refreshSideloaded, sideloadPassphrase]);
+  }, [highlightInstalledRow, pendingSideload, refreshSideloaded, sideloadPassphrase]);
 
   const handleConfirmRemoveSideload = React.useCallback(async () => {
     if (!pendingRemoveSideload) return;
@@ -408,12 +426,7 @@ export function PluginsSettingsTab() {
         liabilityAcceptedAt: pendingInstallPreview.liabilityAcceptedAt,
       });
 
-      setStatus({
-        kind: 'success',
-        message: pendingInstallPreview.trust === 'unverified-user-approved'
-          ? `Installed unverified plugin: ${pendingInstallPreview.manifest.name}`
-          : `Installed plugin: ${pendingInstallPreview.manifest.name}`,
-      });
+      highlightInstalledRow(`profile:${pendingInstallPreview.manifest.id}`);
       setRepoUrl('');
       setPendingInstallPreview(null);
     } catch (error) {
@@ -424,7 +437,7 @@ export function PluginsSettingsTab() {
     } finally {
       setIsInstalling(false);
     }
-  }, [pendingInstallPreview]);
+  }, [highlightInstalledRow, pendingInstallPreview]);
 
   React.useEffect(() => {
     if (isDevRuntime) return;
@@ -510,6 +523,132 @@ export function PluginsSettingsTab() {
     });
   }
   installedRows.sort((left, right) => left.name.localeCompare(right.name));
+  // What the user added comes first, untouched built-ins after a divider.
+  const userInstalledRows = installedRows.filter((row) => row.source !== 'builtin');
+  const builtinRows = installedRows.filter((row) => row.source === 'builtin');
+
+  const renderInstalledRow = (row: InstalledPluginRow) => (
+    <li
+      key={row.key}
+      className="flex items-center justify-between gap-2 rounded-md border px-2.5 py-2"
+      style={{
+        borderColor: row.key === recentlyInstalledKey
+          ? 'color-mix(in srgb, #86efac, var(--border-subtle) 28%)'
+          : 'var(--border-subtle)',
+        background: 'var(--surface-0)',
+        boxShadow: row.key === recentlyInstalledKey
+          ? '0 0 0 1px color-mix(in srgb, #86efac, transparent 55%), 0 0 18px color-mix(in srgb, #86efac, transparent 70%)'
+          : 'none',
+        transition: 'box-shadow 600ms ease, border-color 600ms ease',
+      }}
+    >
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-1.5">
+              {row.source === 'github' && (
+                <Github className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--text-muted)' }} />
+              )}
+              {row.source === 'sideloaded' && (
+                <PackagePlus className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--accent-secondary)' }} />
+              )}
+              {row.link ? (
+                <button
+                  onClick={async () => {
+                    const url = row.link as string;
+                    try {
+                      const { invoke } = await import('@tauri-apps/api/core');
+                      await invoke('open_external_url', { url });
+                    } catch {
+                      window.open(url, '_blank');
+                    }
+                  }}
+                  className="inline-flex items-center gap-1 truncate text-sm font-semibold underline underline-offset-2"
+                  style={{ color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                  title={row.link}
+                >
+                  {row.name}
+                  <ExternalLink className="h-3 w-3 shrink-0" />
+                </button>
+              ) : (
+                <span className="truncate text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{row.name}</span>
+              )}
+              {row.unverified && (
+                <span
+                  className="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[11px]"
+                  style={{
+                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 35%)',
+                    color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)',
+                    background: 'color-mix(in srgb, #d97706, var(--surface-2) 88%)',
+                  }}
+                >
+                  <Trans>Unverified source</Trans>
+                </span>
+              )}
+            </div>
+            {row.description && (
+              <div className="mt-0.5 text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
+                {row.description}
+              </div>
+            )}
+          </div>
+    
+          <div className="flex shrink-0 items-center gap-1.5 self-center">
+            <Tooltip
+              content={(
+                <div className="space-y-0.5">
+                  <div className="break-all"><span style={{ color: 'var(--text-strong)' }}><Trans>ID</Trans>:</span> {row.id}</div>
+                  <div>
+                    <span style={{ color: 'var(--text-strong)' }}><Trans>Source</Trans>:</span>{' '}
+                    {row.source === 'builtin' ? <Trans>Built-in</Trans> : row.source === 'github' ? <Trans>GitHub</Trans> : <Trans>Sideloaded</Trans>}
+                  </div>
+                  <div><span style={{ color: 'var(--text-strong)' }}><Trans>Version</Trans>:</span> <Trans>v{row.version}</Trans></div>
+                  {row.acceptedAt && (
+                    <div><span style={{ color: 'var(--text-strong)' }}><Trans>Liability accepted</Trans>:</span> {row.acceptedAt}</div>
+                  )}
+                  {row.fingerprint && (
+                    <div className="break-all">
+                      <span style={{ color: 'var(--text-strong)' }}><Trans>Publisher</Trans>:</span>{' '}
+                      <span className="font-mono">{shortFingerprint(row.fingerprint)}</span>
+                    </div>
+                  )}
+                  {row.capabilities && row.capabilities.length > 0 && (
+                    <div>
+                      <span style={{ color: 'var(--text-strong)' }}><Trans>Capabilities</Trans>:</span>{' '}
+                      {row.capabilities.map((capability) => _(SIDELOAD_CAPABILITY_MESSAGES[capability])).join(', ')}
+                    </div>
+                  )}
+                </div>
+              )}
+              maxWidth={300}
+              wrapperClassName="flex items-center"
+            >
+              <InfoIcon className="h-4 w-4 shrink-0 block" style={{ color: 'var(--text-muted)' }} />
+            </Tooltip>
+            {row.source === 'builtin' && (
+              <Tooltip content={_(msg`Built-in plugin`)} wrapperClassName="flex items-center">
+                <ShieldCheck className="h-4 w-4 shrink-0 block" style={{ color: builtinShieldIconColor }} />
+              </Tooltip>
+            )}
+            {row.source === 'builtin' && isOraHostedRepository(row.link) ? (
+              <Tooltip content={_(msg`Officially verified by ORA`)} wrapperClassName="flex items-center">
+                <CheckCircle2 className="h-4 w-4 shrink-0 block" style={{ color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)' }} />
+              </Tooltip>
+            ) : null}
+            {row.remove && (
+              <Tooltip content={_(msg`Remove plugin`)} wrapperClassName="flex items-center">
+                <IconButton
+                  variant="ghost"
+                  size="xs"
+                  aria-label={_(msg`Remove plugin`)}
+                  onClick={row.remove}
+                  className="hover:brightness-125"
+                >
+                  <Trash2 className="h-4 w-4" style={{ color: '#fca5a5' }} />
+                </IconButton>
+              </Tooltip>
+            )}
+          </div>
+        </li>
+  );
 
   return (
     <div className="space-y-3">
@@ -636,12 +775,14 @@ export function PluginsSettingsTab() {
           </>
         )}
       >
-        <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-          <Trans>
-            DragonFruit cannot confirm who published this repository. A profile pack is data only — presets and
-            material templates — so installing it cannot add code, but the values it declares are yours to check.
-          </Trans>
-        </p>
+        <div className="space-y-1.5">
+          <p className="text-sm leading-relaxed" style={{ color: 'var(--text-strong)' }}>
+            <Trans>DragonFruit cannot confirm who published this repository.</Trans>
+          </p>
+          <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+            <Trans>A profile pack is data only — presets and material templates — so installing it cannot add code. The values it declares are still yours to check.</Trans>
+          </p>
+        </div>
         {Array.isArray(pendingLiabilityInstall?.allowlistRules) && pendingLiabilityInstall.allowlistRules.length > 0 && (
           <div
             className="rounded-md border px-3 py-2"
@@ -800,7 +941,7 @@ export function PluginsSettingsTab() {
       <StructuredDialogModal
         open={allowanceDialogOpen}
         ariaLabel={_(msg`Sideloaded packages`)}
-        title={allowSideload ? <Trans>Sideloaded packages are on</Trans> : <Trans>Allow untrusted plugins?</Trans>}
+        title={allowSideload ? <Trans>Sideloading is on</Trans> : <Trans>Allow untrusted plugins?</Trans>}
         subtitle={_(msg`Sideloaded packages`)}
         icon={<ShieldAlert className="h-4 w-4" />}
         iconTone="warning"
@@ -829,13 +970,20 @@ export function PluginsSettingsTab() {
           </>
         )}
       >
-        <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-          {allowSideload ? (
+        {allowSideload ? (
+          <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
             <Trans>Packages you import run with your permissions and can read any file you can read, open network connections, and crash the app if they misbehave. Disabling this stops new imports; packages already installed stay on disk.</Trans>
-          ) : (
-            <Trans>A sideloaded package is a native program, not a profile pack. Once imported it runs with your permissions: it can read any file you can read, open network connections, and crash the app if it misbehaves.</Trans>
-          )}
-        </p>
+          </p>
+        ) : (
+          <div className="space-y-1.5">
+            <p className="text-sm leading-relaxed" style={{ color: 'var(--text-strong)' }}>
+              <Trans>A sideloaded package is a native program, not a profile pack.</Trans>
+            </p>
+            <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              <Trans>Once imported it runs with your permissions: it can read any file you can read, open network connections, and crash the app if it misbehaves.</Trans>
+            </p>
+          </div>
+        )}
         <div
           className="rounded-md border px-3 py-2"
           style={{
@@ -1013,119 +1161,21 @@ export function PluginsSettingsTab() {
           </div>
         </div>
 
-        <ul className="mt-2 space-y-1.5">
-          {installedRows.map((row) => (
-            <li
-              key={row.key}
-              className="flex items-center justify-between gap-2 rounded-md border px-2.5 py-2"
-              style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}
-            >
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {row.source === 'github' && (
-                    <Github className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--text-muted)' }} />
-                  )}
-                  {row.source === 'sideloaded' && (
-                    <PackagePlus className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--accent-secondary)' }} />
-                  )}
-                  {row.link ? (
-                    <button
-                      onClick={async () => {
-                        const url = row.link as string;
-                        try {
-                          const { invoke } = await import('@tauri-apps/api/core');
-                          await invoke('open_external_url', { url });
-                        } catch {
-                          window.open(url, '_blank');
-                        }
-                      }}
-                      className="inline-flex items-center gap-1 truncate text-sm font-semibold underline underline-offset-2"
-                      style={{ color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-                      title={row.link}
-                    >
-                      {row.name}
-                      <ExternalLink className="h-3 w-3 shrink-0" />
-                    </button>
-                  ) : (
-                    <span className="truncate text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{row.name}</span>
-                  )}
-                  {row.unverified && (
-                    <span
-                      className="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[11px]"
-                      style={{
-                        borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 35%)',
-                        color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)',
-                        background: 'color-mix(in srgb, #d97706, var(--surface-2) 88%)',
-                      }}
-                    >
-                      <Trans>Unverified source</Trans>
-                    </span>
-                  )}
-                </div>
-                {row.description && (
-                  <div className="mt-0.5 text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
-                    {row.description}
-                  </div>
-                )}
-              </div>
+        {userInstalledRows.length > 0 && (
+          <ul className="mt-2 space-y-1.5">
+            {userInstalledRows.map(renderInstalledRow)}
+          </ul>
+        )}
 
-              <div className="flex shrink-0 items-center gap-1.5 self-center">
-                <Tooltip
-                  content={(
-                    <div className="space-y-0.5">
-                      <div className="break-all"><span style={{ color: 'var(--text-strong)' }}><Trans>ID</Trans>:</span> {row.id}</div>
-                      <div>
-                        <span style={{ color: 'var(--text-strong)' }}><Trans>Source</Trans>:</span>{' '}
-                        {row.source === 'builtin' ? <Trans>Built-in</Trans> : row.source === 'github' ? <Trans>GitHub</Trans> : <Trans>Sideloaded</Trans>}
-                      </div>
-                      <div><span style={{ color: 'var(--text-strong)' }}><Trans>Version</Trans>:</span> <Trans>v{row.version}</Trans></div>
-                      {row.acceptedAt && (
-                        <div><span style={{ color: 'var(--text-strong)' }}><Trans>Liability accepted</Trans>:</span> {row.acceptedAt}</div>
-                      )}
-                      {row.fingerprint && (
-                        <div className="break-all">
-                          <span style={{ color: 'var(--text-strong)' }}><Trans>Publisher</Trans>:</span>{' '}
-                          <span className="font-mono">{shortFingerprint(row.fingerprint)}</span>
-                        </div>
-                      )}
-                      {row.capabilities && row.capabilities.length > 0 && (
-                        <div>
-                          <span style={{ color: 'var(--text-strong)' }}><Trans>Capabilities</Trans>:</span>{' '}
-                          {row.capabilities.map((capability) => _(SIDELOAD_CAPABILITY_MESSAGES[capability])).join(', ')}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  maxWidth={300}
-                  wrapperClassName="flex items-center"
-                >
-                  <InfoIcon className="h-4 w-4 shrink-0 block" style={{ color: 'var(--text-muted)' }} />
-                </Tooltip>
-                {row.source === 'builtin' && (
-                  <Tooltip content={_(msg`Built-in plugin`)} wrapperClassName="flex items-center">
-                    <ShieldCheck className="h-4 w-4 shrink-0 block" style={{ color: builtinShieldIconColor }} />
-                  </Tooltip>
-                )}
-                {row.source === 'builtin' && isOraHostedRepository(row.link) ? (
-                  <Tooltip content={_(msg`Officially verified by ORA`)} wrapperClassName="flex items-center">
-                    <CheckCircle2 className="h-4 w-4 shrink-0 block" style={{ color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)' }} />
-                  </Tooltip>
-                ) : null}
-                {row.remove && (
-                  <Button
-                    variant="secondary"
-                    size="xs"
-                    className="inline-flex items-center gap-1"
-                    onClick={row.remove}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                    <Trans>Remove</Trans>
-                  </Button>
-                )}
-              </div>
-            </li>
-          ))}
-        </ul>
+        {userInstalledRows.length > 0 && builtinRows.length > 0 && (
+          <div className="my-2 h-px" style={{ background: 'var(--border-subtle)' }} aria-hidden />
+        )}
+
+        {builtinRows.length > 0 && (
+          <ul className={userInstalledRows.length > 0 ? 'space-y-1.5' : 'mt-2 space-y-1.5'}>
+            {builtinRows.map(renderInstalledRow)}
+          </ul>
+        )}
       </section>
 
 
