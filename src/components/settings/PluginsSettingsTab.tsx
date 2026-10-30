@@ -6,7 +6,7 @@ import { msg } from '@lingui/core/macro';
 import type { MessageDescriptor } from '@lingui/core';
 import { Plural, Trans } from '@lingui/react/macro';
 import { AlertTriangle, CheckCircle2, Download, ExternalLink, Github, Info as InfoIcon, PackageCheck, PackagePlus, Plug, ShieldCheck, Trash2 } from 'lucide-react';
-import { Button, Input, SegmentedControl, Spinner, Toggle } from '@/components/atoms';
+import { Button, Input, SettingRow, Spinner, Toggle } from '@/components/atoms';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { isTauriRuntime } from '@/utils/tauriRuntime';
@@ -161,7 +161,6 @@ export function PluginsSettingsTab() {
   // Sideloaded complex plugins exist only in the desktop shell: the web build has
   // no app data dir and no place to put a native binary.
   const [isDesktop, setIsDesktop] = React.useState(false);
-  const [addSource, setAddSource] = React.useState<'github' | 'package'>('github');
   const [allowSideload, setAllowSideload] = React.useState(false);
   const [sideloadPlugins, setSideloadPlugins] = React.useState<InstalledSideloadedPlugin[]>([]);
   const [sideloadBusy, setSideloadBusy] = React.useState(false);
@@ -469,20 +468,6 @@ export function PluginsSettingsTab() {
     };
   }, []);
 
-  const accentSecondaryActionColor = isLightTheme
-    ? 'color-mix(in srgb, #4f8a08, var(--text-strong) 30%)'
-    : 'var(--accent-secondary)';
-  const accentSecondaryActionBorderColor = isLightTheme
-    ? 'color-mix(in srgb, #6aa20d, var(--border-subtle) 34%)'
-    : 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)';
-  const accentSecondaryActionBackground92 = isLightTheme
-    ? 'color-mix(in srgb, #6aa20d, var(--surface-1) 80%)'
-    : 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)';
-  const accentSecondaryActionStyle92: React.CSSProperties = {
-    color: accentSecondaryActionColor,
-    borderColor: accentSecondaryActionBorderColor,
-    background: accentSecondaryActionBackground92,
-  };
   const builtinShieldIconColor = isLightTheme
     ? 'color-mix(in srgb, #4f8a08, var(--text-strong) 28%)'
     : '#86efac';
@@ -525,114 +510,97 @@ export function PluginsSettingsTab() {
 
   return (
     <div className="space-y-3">
-      <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}>
-        <div className="flex items-start gap-2">
+      <section className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+        <div className="flex items-start gap-2.5">
           <span
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
             style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 8%)' }}
           >
             <Plug className="h-4 w-4" style={{ color: 'var(--accent)' }} />
           </span>
-          <div className="flex-1 min-w-0">
-            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-              <Trans>Add a plugin</Trans>
-            </h3>
-            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              <Trans>A profile pack from GitHub, or a signed package from a vendor.</Trans>
+          <div className="min-w-0 flex-1">
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>{_(msg`Plugins`)}</h3>
+            <p className="mt-0.5 text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
+              <Trans>Profile packs add presets and material profiles. A sideloaded package adds code and needs a publisher you trust.</Trans>
             </p>
           </div>
-          {isDesktop && (
-            <SegmentedControl
-              label={_(msg`Plugin source`)}
-              value={addSource}
-              onChange={setAddSource}
-              size="sm"
-              options={[
-                { value: 'github', label: <Trans>GitHub</Trans> },
-                { value: 'package', label: <Trans>Package</Trans> },
-              ]}
-            />
-          )}
         </div>
 
-        {addSource === 'github' && (
-          <>
-            <div className="mt-2.5 grid grid-cols-[1fr_auto] gap-2">
+        <div className="mt-2 grid gap-2">
+          <SettingRow
+            bordered
+            label={_(msg`Install profile pack`)}
+            description={_(msg`Loads a manifest from a GitHub repository. Data only — no code runs.`)}
+          >
+            <div className="flex items-center gap-2" style={{ width: 'min(420px, 46vw)' }}>
               <Input
                 type="text"
                 value={repoUrl}
                 onChange={(event) => setRepoUrl(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') void handleInstall();
+                }}
                 placeholder={_(msg`https://github.com/owner/repo`)}
-                className="h-[34px] text-sm"
+                className="h-[34px] min-w-0 flex-1 text-sm"
+                aria-label={_(msg`Plugin repository URL`)}
               />
               <Button
-                type="button"
-                onClick={() => { void handleInstall(); }}
+                variant="tinted-accent"
+                className="inline-flex shrink-0 items-center gap-1.5"
                 disabled={isInstalling}
-                variant="secondary"
-                size="auto"
-                className="!h-[34px] !px-3 !py-0 text-xs inline-flex items-center gap-1.5 disabled:opacity-60"
-                style={accentSecondaryActionStyle92}
+                onClick={() => { void handleInstall(); }}
               >
                 {isInstalling ? <Spinner size="sm" /> : <Download className="h-3.5 w-3.5" />}
                 {isInstalling ? <Trans>Installing…</Trans> : <Trans>Install</Trans>}
               </Button>
             </div>
-            {isDevRuntime && (
-              <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-                <Trans>Debug URLs</Trans>: <code>df://debug_plugin_official</code> and <code>df://debug_plugin_3rd</code>
-              </p>
-            )}
-          </>
-        )}
+          </SettingRow>
 
-        {addSource === 'package' && (
-          <div className="mt-2.5 space-y-2">
-            <div
-              className="flex items-start gap-3 rounded-md border px-2.5 py-2"
-              style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
+          {isDesktop && (
+            <SettingRow
+              bordered
+              label={_(msg`Allow signed packages`)}
+              description={_(msg`A package ships native code and runs with your user account, so only turn this on for a publisher you trust.`)}
             >
-              <div className="min-w-0 flex-1">
-                <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  <Trans>Sideloaded packages</Trans>
-                </div>
-                <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                  <Trans>A package ships native code. It runs with your user account, outside DragonFruit&apos;s control, so only import one from a publisher you trust.</Trans>
-                </p>
-              </div>
               <Toggle
                 checked={allowSideload}
                 onChange={(next) => { void handleSideloadAllowanceChange(next); }}
-                label={_(msg`Allow sideloaded complex plugins`)}
+                label={_(msg`Allow signed packages`)}
               />
-            </div>
-            <div className="flex items-center gap-2">
+            </SettingRow>
+          )}
+
+          {isDesktop && allowSideload && (
+            <SettingRow
+              bordered
+              label={_(msg`Import package`)}
+              description={_(msg`Checks the publisher signature, then unseals and installs the .dfplugin file.`)}
+            >
               <Button
-                type="button"
                 variant="secondary"
-                size="auto"
-                className="!h-[34px] !px-3 !py-0 text-xs inline-flex items-center gap-1.5"
-                disabled={!allowSideload || sideloadBusy}
+                className="inline-flex shrink-0 items-center gap-1.5"
+                disabled={sideloadBusy}
                 onClick={() => { void handlePickSideloadPackage(); }}
               >
                 {sideloadBusy ? <Spinner size="sm" /> : <PackagePlus className="h-3.5 w-3.5" />}
-                <Trans>Choose package…</Trans>
+                <Trans>Choose file…</Trans>
               </Button>
-              {!allowSideload && (
-                <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                  <Trans>Turn the switch on to import.</Trans>
-                </span>
-              )}
-            </div>
-          </div>
+            </SettingRow>
+          )}
+        </div>
+
+        {isDevRuntime && (
+          <p className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+            <Trans>Debug URLs</Trans>: <code>df://debug_plugin_official</code> and <code>df://debug_plugin_3rd</code>
+          </p>
         )}
 
         {status.kind !== 'idle' && (
-          <div className="mt-2 text-xs" style={{ color: status.kind === 'error' ? '#fca5a5' : '#86efac' }}>
+          <p className="mt-2 text-xs" style={{ color: status.kind === 'error' ? '#fca5a5' : '#86efac' }}>
             {status.message}
-          </div>
+          </p>
         )}
-      </div>
+      </section>
 
       <StructuredDialogModal
         open={pendingLiabilityInstall !== null}
@@ -972,65 +940,61 @@ export function PluginsSettingsTab() {
         </p>
       </StructuredDialogModal>
 
-      <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-        <div className="flex items-start gap-2">
+      <section className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+        <div className="flex items-start gap-2.5">
           <span
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
             style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 8%)' }}
           >
             <PackageCheck className="h-4 w-4" style={{ color: 'var(--accent)' }} />
           </span>
-          <div className="flex-1">
-            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-              <Trans>Installed plugins</Trans>
-            </h3>
-            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+          <div className="min-w-0 flex-1">
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>{_(msg`Installed plugins`)}</h3>
+            <p className="mt-0.5 text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
               <Plural value={installedRows.length} one="# plugin in this profile." other="# plugins in this profile." />
             </p>
           </div>
         </div>
 
-        <div className="mt-2 space-y-2">
+        <ul className="mt-2 space-y-1.5">
           {installedRows.map((row) => (
-            <div
+            <li
               key={row.key}
-              className="rounded-md border px-2.5 py-2"
-              style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
+              className="flex items-center justify-between gap-2 rounded-md border px-2.5 py-2"
+              style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}
             >
-              <div className="flex items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {row.source === 'github' && (
-                      <Github className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--text-muted)' }} />
-                    )}
-                    {row.source === 'sideloaded' && (
-                      <PackagePlus className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--accent-secondary)' }} />
-                    )}
-                    {row.link ? (
-                      <button
-                        onClick={async () => {
-                          const url = row.link as string;
-                          try {
-                            const { invoke } = await import('@tauri-apps/api/core');
-                            await invoke('open_external_url', { url });
-                          } catch {
-                            window.open(url, '_blank');
-                          }
-                        }}
-                        className="text-sm font-semibold truncate inline-flex items-center gap-1 underline underline-offset-2"
-                        style={{ color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-                        title={row.link}
-                      >
-                        {row.name}
-                        <ExternalLink className="h-3 w-3 shrink-0" />
-                      </button>
-                    ) : (
-                      <span className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>{row.name}</span>
-                    )}
-                  </div>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {row.source === 'github' && (
+                    <Github className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--text-muted)' }} />
+                  )}
+                  {row.source === 'sideloaded' && (
+                    <PackagePlus className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--accent-secondary)' }} />
+                  )}
+                  {row.link ? (
+                    <button
+                      onClick={async () => {
+                        const url = row.link as string;
+                        try {
+                          const { invoke } = await import('@tauri-apps/api/core');
+                          await invoke('open_external_url', { url });
+                        } catch {
+                          window.open(url, '_blank');
+                        }
+                      }}
+                      className="inline-flex items-center gap-1 truncate text-sm font-semibold underline underline-offset-2"
+                      style={{ color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                      title={row.link}
+                    >
+                      {row.name}
+                      <ExternalLink className="h-3 w-3 shrink-0" />
+                    </button>
+                  ) : (
+                    <span className="truncate text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{row.name}</span>
+                  )}
                   {row.unverified && (
-                    <div
-                      className="text-xs mt-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5"
+                    <span
+                      className="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[11px]"
                       style={{
                         borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 35%)',
                         color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)',
@@ -1038,78 +1002,75 @@ export function PluginsSettingsTab() {
                       }}
                     >
                       <Trans>Unverified source</Trans>
-                    </div>
-                  )}
-                  {row.description && (
-                    <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                      {row.description}
-                    </div>
+                    </span>
                   )}
                 </div>
-
-                <div className="flex items-center gap-1.5 shrink-0 self-center">
-                  <Tooltip
-                    content={(
-                      <div className="space-y-0.5">
-                        <div className="break-all"><span style={{ color: 'var(--text-strong)' }}><Trans>ID</Trans>:</span> {row.id}</div>
-                        <div>
-                          <span style={{ color: 'var(--text-strong)' }}><Trans>Source</Trans>:</span>{' '}
-                          {row.source === 'builtin' ? <Trans>Built-in</Trans> : row.source === 'github' ? <Trans>GitHub</Trans> : <Trans>Sideloaded</Trans>}
-                        </div>
-                        <div><span style={{ color: 'var(--text-strong)' }}><Trans>Version</Trans>:</span> <Trans>v{row.version}</Trans></div>
-                        {row.acceptedAt && (
-                          <div>
-                            <span style={{ color: 'var(--text-strong)' }}><Trans>Liability accepted</Trans>:</span> {row.acceptedAt}
-                          </div>
-                        )}
-                        {row.fingerprint && (
-                          <div className="break-all">
-                            <span style={{ color: 'var(--text-strong)' }}><Trans>Publisher</Trans>:</span>{' '}
-                            <span className="font-mono">{shortFingerprint(row.fingerprint)}</span>
-                          </div>
-                        )}
-                        {row.capabilities && row.capabilities.length > 0 && (
-                          <div>
-                            <span style={{ color: 'var(--text-strong)' }}><Trans>Capabilities</Trans>:</span>{' '}
-                            {row.capabilities.map((capability) => _(SIDELOAD_CAPABILITY_MESSAGES[capability])).join(', ')}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                    maxWidth={300}
-                    wrapperClassName="flex items-center"
-                  >
-                    <InfoIcon className="h-4 w-4 shrink-0 block" style={{ color: 'var(--text-muted)' }} />
-                  </Tooltip>
-                  {row.source === 'builtin' && (
-                    <Tooltip content={_(msg`Built-in plugin`)} wrapperClassName="flex items-center">
-                      <ShieldCheck className="h-4 w-4 shrink-0 block" style={{ color: builtinShieldIconColor }} />
-                    </Tooltip>
-                  )}
-                  {row.source === 'builtin' && isOraHostedRepository(row.link) ? (
-                    <Tooltip content={_(msg`Officially verified by ORA`)} wrapperClassName="flex items-center">
-                      <CheckCircle2 className="h-4 w-4 shrink-0 block" style={{ color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)' }} />
-                    </Tooltip>
-                  ) : null}
-                  {row.remove && (
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="auto"
-                      onClick={row.remove}
-                      className="!h-7 !px-2 !py-0 text-xs inline-flex items-center gap-1"
-                      style={{ color: '#fca5a5' }}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                      <Trans>Remove</Trans>
-                    </Button>
-                  )}
-                </div>
+                {row.description && (
+                  <div className="mt-0.5 text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
+                    {row.description}
+                  </div>
+                )}
               </div>
-            </div>
+
+              <div className="flex shrink-0 items-center gap-1.5 self-center">
+                <Tooltip
+                  content={(
+                    <div className="space-y-0.5">
+                      <div className="break-all"><span style={{ color: 'var(--text-strong)' }}><Trans>ID</Trans>:</span> {row.id}</div>
+                      <div>
+                        <span style={{ color: 'var(--text-strong)' }}><Trans>Source</Trans>:</span>{' '}
+                        {row.source === 'builtin' ? <Trans>Built-in</Trans> : row.source === 'github' ? <Trans>GitHub</Trans> : <Trans>Sideloaded</Trans>}
+                      </div>
+                      <div><span style={{ color: 'var(--text-strong)' }}><Trans>Version</Trans>:</span> <Trans>v{row.version}</Trans></div>
+                      {row.acceptedAt && (
+                        <div><span style={{ color: 'var(--text-strong)' }}><Trans>Liability accepted</Trans>:</span> {row.acceptedAt}</div>
+                      )}
+                      {row.fingerprint && (
+                        <div className="break-all">
+                          <span style={{ color: 'var(--text-strong)' }}><Trans>Publisher</Trans>:</span>{' '}
+                          <span className="font-mono">{shortFingerprint(row.fingerprint)}</span>
+                        </div>
+                      )}
+                      {row.capabilities && row.capabilities.length > 0 && (
+                        <div>
+                          <span style={{ color: 'var(--text-strong)' }}><Trans>Capabilities</Trans>:</span>{' '}
+                          {row.capabilities.map((capability) => _(SIDELOAD_CAPABILITY_MESSAGES[capability])).join(', ')}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  maxWidth={300}
+                  wrapperClassName="flex items-center"
+                >
+                  <InfoIcon className="h-4 w-4 shrink-0 block" style={{ color: 'var(--text-muted)' }} />
+                </Tooltip>
+                {row.source === 'builtin' && (
+                  <Tooltip content={_(msg`Built-in plugin`)} wrapperClassName="flex items-center">
+                    <ShieldCheck className="h-4 w-4 shrink-0 block" style={{ color: builtinShieldIconColor }} />
+                  </Tooltip>
+                )}
+                {row.source === 'builtin' && isOraHostedRepository(row.link) ? (
+                  <Tooltip content={_(msg`Officially verified by ORA`)} wrapperClassName="flex items-center">
+                    <CheckCircle2 className="h-4 w-4 shrink-0 block" style={{ color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)' }} />
+                  </Tooltip>
+                ) : null}
+                {row.remove && (
+                  <Button
+                    variant="secondary"
+                    size="xs"
+                    className="inline-flex items-center gap-1"
+                    onClick={row.remove}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <Trans>Remove</Trans>
+                  </Button>
+                )}
+              </div>
+            </li>
           ))}
-        </div>
-      </div>
+        </ul>
+      </section>
+
 
 
       {isDevRuntime && (
