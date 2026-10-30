@@ -85,7 +85,11 @@ export function removeSideloadedPlugin(id: string): Promise<void> {
   return invoke<void>('sideloaded_plugin_remove', { id });
 }
 
-/** First 16 hex characters of the publisher fingerprint, for list rows. */
+/**
+ * First 16 hex characters of the publisher fingerprint, grouped in fours
+ * (`fe81 2c12 f3ab 4ce6`). Sixteen hex is 64 bits: enough to compare against the
+ * vendor's published value by eye, short enough to read in a dialog.
+ */
 export function shortFingerprint(fingerprint: string): string {
-  return fingerprint.slice(0, 16);
+  return fingerprint.slice(0, 16).replace(/(.{4})(?=.)/g, '$1 ');
 }

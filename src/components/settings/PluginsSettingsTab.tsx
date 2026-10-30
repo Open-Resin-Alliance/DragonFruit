@@ -5,7 +5,7 @@ import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import type { MessageDescriptor } from '@lingui/core';
 import { Plural, Trans } from '@lingui/react/macro';
-import { AlertTriangle, CheckCircle2, Download, ExternalLink, Github, Info as InfoIcon, PackageCheck, PackageOpen, PackagePlus, Plug, ShieldAlert, ShieldCheck, Trash2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Download, ExternalLink, Github, Info as InfoIcon, LockKeyhole, PackageCheck, PackageOpen, PackagePlus, Plug, ShieldAlert, ShieldCheck, Trash2 } from 'lucide-react';
 import { Button, IconButton, Input, SettingRow, Spinner } from '@/components/atoms';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
@@ -169,6 +169,10 @@ export function PluginsSettingsTab() {
   const [sideloadBusy, setSideloadBusy] = React.useState(false);
   const [pendingSideload, setPendingSideload] = React.useState<{ path: string; info: SideloadedInspect } | null>(null);
   const [sideloadPassphrase, setSideloadPassphrase] = React.useState('');
+  // Sealed packages finish in a second, focused step so the passphrase is not a
+  // field a user can scroll past on a long review sheet.
+  const [passphraseOpen, setPassphraseOpen] = React.useState(false);
+  const [passphraseError, setPassphraseError] = React.useState<string | null>(null);
   const [pendingRemoveSideload, setPendingRemoveSideload] = React.useState<InstalledSideloadedPlugin | null>(null);
   // A fresh install is announced by the row itself, not by a green line above the
   // list: one glow that fades after ten seconds.
@@ -248,24 +252,38 @@ export function PluginsSettingsTab() {
     }
   }, []);
 
+  const closePassphraseDialog = React.useCallback(() => {
+    setPassphraseOpen(false);
+    setSideloadPassphrase('');
+    setPassphraseError(null);
+  }, []);
+
   const handleConfirmSideloadInstall = React.useCallback(async () => {
     if (!pendingSideload) return;
+    const sealed = pendingSideload.info.sealed;
     setSideloadBusy(true);
+    setPassphraseError(null);
     setStatus({ kind: 'idle', message: '' });
     try {
       const installed = await installSideloadPackage(
         pendingSideload.path,
-        pendingSideload.info.sealed ? sideloadPassphrase : undefined,
+        sealed ? sideloadPassphrase : undefined,
       );
       await refreshSideloaded();
       setPendingSideload(null);
+      closePassphraseDialog();
       highlightInstalledRow(`sideloaded:${installed.manifest.id}`);
     } catch (error) {
-      setStatus({ kind: 'error', message: String(error) });
+      // A wrong passphrase belongs next to the field that produced it.
+      if (sealed) {
+        setPassphraseError(String(error));
+      } else {
+        setStatus({ kind: 'error', message: String(error) });
+      }
     } finally {
       setSideloadBusy(false);
     }
-  }, [highlightInstalledRow, pendingSideload, refreshSideloaded, sideloadPassphrase]);
+  }, [closePassphraseDialog, highlightInstalledRow, pendingSideload, refreshSideloaded, sideloadPassphrase]);
 
   const handleConfirmRemoveSideload = React.useCallback(async () => {
     if (!pendingRemoveSideload) return;
@@ -929,6 +947,70 @@ export function PluginsSettingsTab() {
       </StructuredDialogModal>
 
       <StructuredDialogModal
+        open={passphraseOpen && pendingSideload !== null}
+        ariaLabel={_(msg`Package passphrase`)}
+        title={<Trans>Enter the passphrase</Trans>}
+        subtitle={pendingSideload?.info.manifest.name}
+        icon={<LockKeyhole className="h-4 w-4" />}
+        iconTone="neutral"
+        maxWidthClassName="max-w-md"
+        zIndexClassName="z-[131]"
+        closeAriaLabel={_(msg`Close modal`)}
+        closeDisabled={sideloadBusy}
+        onClose={closePassphraseDialog}
+        onBackdropClick={closePassphraseDialog}
+        actions={(
+          <>
+            <Button variant="secondary" disabled={sideloadBusy} onClick={closePassphraseDialog}>
+              <Trans>Cancel</Trans>
+            </Button>
+            <Button
+              variant="tinted-accent"
+              className="inline-flex items-center justify-center gap-1.5"
+              disabled={sideloadBusy || sideloadPassphrase.trim().length === 0}
+              onClick={() => { void handleConfirmSideloadInstall(); }}
+            >
+              {sideloadBusy ? <Spinner size="sm" /> : <LockKeyhole className="h-3.5 w-3.5" />}
+              {sideloadBusy ? <Trans>Installing…</Trans> : <Trans>Unseal and install</Trans>}
+            </Button>
+          </>
+        )}
+      >
+        <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          <Trans>The package is sealed. Enter the key your vendor gave you; it is kept locally so the plugin can load later.</Trans>
+        </p>
+        <div className="space-y-1.5">
+          <label
+            htmlFor="sideload-passphrase"
+            className="text-[11px] font-semibold uppercase tracking-wide"
+            style={{ color: 'var(--text-muted)' }}
+          >
+            <Trans>Passphrase</Trans>
+          </label>
+          <Input
+            autoFocus
+            id="sideload-passphrase"
+            type="password"
+            autoComplete="off"
+            className="h-10 w-full"
+            value={sideloadPassphrase}
+            onChange={(event) => setSideloadPassphrase(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && sideloadPassphrase.trim().length > 0 && !sideloadBusy) {
+                void handleConfirmSideloadInstall();
+              }
+            }}
+            placeholder={_(msg`The key your vendor gave you`)}
+          />
+        </div>
+        {passphraseError && (
+          <p className="text-xs leading-relaxed" style={{ color: '#fca5a5' }}>
+            {passphraseError}
+          </p>
+        )}
+      </StructuredDialogModal>
+
+      <StructuredDialogModal
         open={allowanceDialogOpen}
         ariaLabel={_(msg`Sideloaded packages`)}
         title={allowSideload ? <Trans>Sideloading is on</Trans> : <Trans>Allow untrusted plugins?</Trans>}
@@ -1009,15 +1091,30 @@ export function PluginsSettingsTab() {
             <Button variant="secondary" disabled={sideloadBusy} onClick={() => setPendingSideload(null)}>
               <Trans>Cancel</Trans>
             </Button>
-            <Button
-              variant="tinted-accent"
-              className="inline-flex items-center justify-center gap-1.5"
-              disabled={sideloadBusy || (pendingSideload?.info.sealed === true && sideloadPassphrase.trim().length === 0)}
-              onClick={() => { void handleConfirmSideloadInstall(); }}
-            >
-              {sideloadBusy ? <Spinner size="sm" /> : <PackagePlus className="h-3.5 w-3.5" />}
-              {sideloadBusy ? <Trans>Installing…</Trans> : <Trans>Install</Trans>}
-            </Button>
+            {pendingSideload?.info.sealed ? (
+              <Button
+                variant="tinted-accent"
+                className="inline-flex items-center justify-center gap-1.5"
+                onClick={() => {
+                  setSideloadPassphrase('');
+                  setPassphraseError(null);
+                  setPassphraseOpen(true);
+                }}
+              >
+                <LockKeyhole className="h-3.5 w-3.5" />
+                <Trans>Continue</Trans>
+              </Button>
+            ) : (
+              <Button
+                variant="tinted-accent"
+                className="inline-flex items-center justify-center gap-1.5"
+                disabled={sideloadBusy}
+                onClick={() => { void handleConfirmSideloadInstall(); }}
+              >
+                {sideloadBusy ? <Spinner size="sm" /> : <PackagePlus className="h-3.5 w-3.5" />}
+                {sideloadBusy ? <Trans>Installing…</Trans> : <Trans>Install</Trans>}
+              </Button>
+            )}
           </>
         )}
       >
@@ -1043,9 +1140,17 @@ export function PluginsSettingsTab() {
             </div>
             <div className="mt-1.5 space-y-1 text-xs" style={{ color: 'var(--text-muted)' }}>
               <div><span style={{ color: 'var(--text-strong)' }}><Trans>Vendor</Trans>:</span> {pendingSideload?.info.manifest.vendor.name}</div>
-              <div className="break-all">
+              <div>
                 <span style={{ color: 'var(--text-strong)' }}><Trans>Key</Trans>:</span>{' '}
-                <span className="font-mono" style={{ color: 'var(--text-strong)' }}>{pendingSideload?.info.publisherFingerprint}</span>
+                <Tooltip
+                  content={<span className="font-mono break-all">{pendingSideload?.info.publisherFingerprint}</span>}
+                  maxWidth={320}
+                  wrapperClassName="inline-flex"
+                >
+                  <span className="font-mono" style={{ color: 'var(--text-strong)' }}>
+                    {shortFingerprint(pendingSideload?.info.publisherFingerprint ?? '')}
+                  </span>
+                </Tooltip>
               </div>
             </div>
           </div>
@@ -1080,26 +1185,6 @@ export function PluginsSettingsTab() {
           <p className="text-xs" style={{ color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)' }}>
             <Trans>An older install with this ID and publisher is replaced.</Trans>
           </p>
-        )}
-
-        {pendingSideload?.info.sealed && (
-          <div>
-            <label className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }} htmlFor="sideload-passphrase">
-              <Trans>Passphrase</Trans>
-            </label>
-            <Input
-              id="sideload-passphrase"
-              type="password"
-              autoComplete="off"
-              className="mt-1"
-              value={sideloadPassphrase}
-              onChange={(event) => setSideloadPassphrase(event.target.value)}
-              placeholder={_(msg`The key your vendor gave you`)}
-            />
-            <p className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              <Trans>The key is stored locally so the plugin can load later. A leaked package stays unusable without it.</Trans>
-            </p>
-          </div>
         )}
 
         <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
