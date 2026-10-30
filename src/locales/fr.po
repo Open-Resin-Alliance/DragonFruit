@@ -22,9 +22,19 @@ msgstr ""
 msgid "{0, plural, one {# island} other {# islands}}"
 msgstr ""
 
+#. placeholder {0}: pendingInstallPreview?.manifest.materialTemplates?.length ?? 0
+#: src/components/settings/PluginsSettingsTab.tsx:523
+msgid "{0, plural, one {# material template} other {# material templates}}"
+msgstr ""
+
 #. placeholder {0}: model.polygonCount
 #: src/components/controls/ModelManagerPanel.tsx:52
 msgid "{0, plural, one {# polygon} other {# polygons}}"
+msgstr ""
+
+#. placeholder {0}: pendingInstallPreview?.manifest.printerPresets?.length ?? 0
+#: src/components/settings/PluginsSettingsTab.tsx:522
+msgid "{0, plural, one {# printer preset} other {# printer presets}}"
 msgstr ""
 
 #. placeholder {0}: selectedLibraryPresetIds.size
@@ -816,6 +826,10 @@ msgstr ""
 msgid "Allow Z-rotation"
 msgstr ""
 
+#: src/components/settings/PluginsSettingsTab.tsx:501
+msgid "Allowlisted source"
+msgstr ""
+
 #: src/features/slicing/components/LutCurveEditor.tsx:1388
 msgid "Alpha"
 msgstr ""
@@ -1020,6 +1034,10 @@ msgstr ""
 #: src/components/organisms/modals/PrintingModals.tsx:2095
 #: src/components/organisms/modals/PrintingModals.tsx:2278
 msgid "Ask the printer to disable any stale webcam stream before retrying"
+msgstr ""
+
+#: src/components/settings/PluginsSettingsTab.tsx:517
+msgid "Author"
 msgstr ""
 
 #: src/components/settings/BackupsSettingsTab.tsx:976
@@ -1594,7 +1612,9 @@ msgstr ""
 #: src/components/settings/FleetManagement.tsx:442
 #: src/components/settings/LocalBackupsSettingsTab.tsx:984
 #: src/components/settings/LocalBackupsSettingsTab.tsx:1027
-#: src/components/settings/PluginsSettingsTab.tsx:597
+#: src/components/settings/PluginsSettingsTab.tsx:416
+#: src/components/settings/PluginsSettingsTab.tsx:468
+#: src/components/settings/PluginsSettingsTab.tsx:577
 #: src/features/printing/components/PrintingPanel.tsx:99
 #: src/features/slicing/components/LutCurveEditor.tsx:1500
 #: src/features/slicing/components/LutCurveEditor.tsx:1643
@@ -1994,7 +2014,9 @@ msgstr ""
 #: src/components/modals/ObsoleteVoxlVersionModal.tsx:40
 #: src/components/modals/PrintingResliceModal.tsx:32
 #: src/components/modals/ScenePrinterMismatchModal.tsx:62
-#: src/components/settings/PluginsSettingsTab.tsx:591
+#: src/components/settings/PluginsSettingsTab.tsx:409
+#: src/components/settings/PluginsSettingsTab.tsx:460
+#: src/components/settings/PluginsSettingsTab.tsx:571
 #: src/features/slicing/components/SlicingPanel.tsx:3100
 #: src/features/slicing/components/SlicingPanel.tsx:3139
 msgid "Close modal"
@@ -2379,6 +2401,10 @@ msgstr ""
 
 #: src/supports/PlacementLogic/SupportLimitations.tsx:13
 msgid "Contact point is lower than the stump root — the shaft would extend below the root joint."
+msgstr ""
+
+#: src/components/settings/PluginsSettingsTab.tsx:521
+msgid "Contents"
 msgstr ""
 
 #. Confirms proceeding with the profile change despite the re-slice warning above (paired with "Keep current profiles", which cancels).
@@ -2908,6 +2934,10 @@ msgstr ""
 msgid "Depth Mode"
 msgstr ""
 
+#: src/components/settings/PluginsSettingsTab.tsx:554
+msgid "Description"
+msgstr ""
+
 #: src/components/settings/SceneAutosaveSettingsTab.tsx:306
 msgid "Desktop-only diagnostics for autosave files and recovery state."
 msgstr ""
@@ -3116,6 +3146,10 @@ msgstr ""
 #: src/components/layout/TopBar.tsx:844
 msgid "DragonFruit app menu"
 msgstr "Menu de l'application DragonFruit"
+
+#: src/components/settings/PluginsSettingsTab.tsx:431
+msgid "DragonFruit cannot confirm who published this repository. A profile pack is data only — presets and material templates — so installing it cannot add code, but the values it declares are yours to check."
+msgstr ""
 
 #: src/components/scene/MeshRepairReportModal.tsx:384
 msgid "DragonFruit could not fully repair this mesh — it is still not a valid manifold and may cause problems later in your workflow."
@@ -4243,6 +4277,7 @@ msgstr "Je reviendrai. (Déposez un fichier et je reviendrai vraiment.)"
 
 #. Sort order for the island list: by island id. One of three narrow buttons (ID / Volume / Layers).
 #: src/components/controls/IslandListCard.tsx:161
+#: src/components/settings/PluginsSettingsTab.tsx:513
 msgid "ID"
 msgstr ""
 
@@ -4250,6 +4285,10 @@ msgstr ""
 #: src/components/settings/BackupsSettingsTab.tsx:1285
 #: src/components/settings/LocalBackupsSettingsTab.tsx:936
 msgid "ID {0}"
+msgstr ""
+
+#: src/components/settings/PluginsSettingsTab.tsx:509
+msgid "Identity"
 msgstr ""
 
 #: src/components/settings/MeshSettingsTab.tsx:632
@@ -4486,13 +4525,35 @@ msgstr ""
 msgid "Inspecting Meshes…"
 msgstr ""
 
+#: src/components/settings/PluginsSettingsTab.tsx:477
 #: src/features/updater/UpdateCheckerSection.tsx:92
 #: src/features/updater/UpdateCheckerSection.tsx:247
 msgid "Install"
 msgstr ""
 
+#: src/components/settings/PluginsSettingsTab.tsx:401
+msgid "Install an unverified plugin?"
+msgstr ""
+
+#: src/components/settings/PluginsSettingsTab.tsx:425
+msgid "Install anyway"
+msgstr ""
+
+#: src/components/settings/PluginsSettingsTab.tsx:454
+msgid "Install this plugin?"
+msgstr ""
+
+#: src/components/settings/PluginsSettingsTab.tsx:400
+msgid "Install unverified plugin"
+msgstr ""
+
 #: src/features/updater/UpdateCheckerSection.tsx:341
 msgid "Installing Update…"
+msgstr ""
+
+#: src/components/settings/PluginsSettingsTab.tsx:425
+#: src/components/settings/PluginsSettingsTab.tsx:477
+msgid "Installing…"
 msgstr ""
 
 #: src/components/settings/GeneralSettingsTab.tsx:170
@@ -5138,6 +5199,10 @@ msgstr ""
 
 #: src/components/settings/FleetManagement.tsx:125
 msgid "Managed Printers"
+msgstr ""
+
+#: src/components/settings/PluginsSettingsTab.tsx:538
+msgid "Manifest"
 msgstr ""
 
 #. Tool rail label in Support mode. Short for the manual support settings panel (tip, shaft, roots, bracing).
@@ -6279,6 +6344,10 @@ msgstr ""
 msgid "Orienting Model"
 msgstr ""
 
+#: src/components/settings/PluginsSettingsTab.tsx:530
+msgid "Origin"
+msgstr ""
+
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:198
 msgid "Origin Colors"
 msgstr ""
@@ -7267,12 +7336,12 @@ msgctxt "Undo history entry"
 msgid "Remove leaf"
 msgstr ""
 
-#: src/components/settings/PluginsSettingsTab.tsx:585
-#: src/components/settings/PluginsSettingsTab.tsx:601
+#: src/components/settings/PluginsSettingsTab.tsx:565
+#: src/components/settings/PluginsSettingsTab.tsx:581
 msgid "Remove plugin"
 msgstr ""
 
-#: src/components/settings/PluginsSettingsTab.tsx:586
+#: src/components/settings/PluginsSettingsTab.tsx:566
 msgid "Remove Plugin?"
 msgstr ""
 
@@ -7503,6 +7572,7 @@ msgid "Replace trunk"
 msgstr ""
 
 #: src/components/settings/BackupsSettingsTab.tsx:1091
+#: src/components/settings/PluginsSettingsTab.tsx:534
 msgid "Repository"
 msgstr ""
 
@@ -7693,6 +7763,10 @@ msgstr ""
 
 #: src/supports/Settings/components/PresetSelector.tsx:606
 msgid "Revert Changes"
+msgstr ""
+
+#: src/components/settings/PluginsSettingsTab.tsx:453
+msgid "Review plugin before install"
 msgstr ""
 
 #: src/components/modals/ShrinkWrapConfirmModal.tsx:32
@@ -8393,6 +8467,10 @@ msgstr ""
 #: src/components/layout/TopBar.tsx:1081
 msgid "Settings"
 msgstr "Paramètres"
+
+#: src/components/settings/PluginsSettingsTab.tsx:543
+msgid "SHA-256"
+msgstr ""
 
 #: src/components/settings/MeshSettingsTab.tsx:202
 msgid "Shader & Preview"
@@ -9511,7 +9589,7 @@ msgstr ""
 msgid "This rebuilds the model's surface, keeping fine detail."
 msgstr ""
 
-#: src/components/settings/PluginsSettingsTab.tsx:607
+#: src/components/settings/PluginsSettingsTab.tsx:587
 msgid "This removes the plugin from your profile library."
 msgstr ""
 
@@ -9690,6 +9768,10 @@ msgstr ""
 msgid "Trunk Diameter"
 msgstr ""
 
+#: src/components/settings/PluginsSettingsTab.tsx:442
+msgid "Trusted sources"
+msgstr ""
+
 #: src/features/updater/GlobalUpdateIndicator.tsx:235
 msgid "Try again"
 msgstr ""
@@ -9852,6 +9934,10 @@ msgstr ""
 
 #: src/features/slicing/components/LutCurveEditor.tsx:728
 msgid "Untitled Curve"
+msgstr ""
+
+#: src/components/settings/PluginsSettingsTab.tsx:502
+msgid "Unverified source"
 msgstr ""
 
 #: src/features/updater/UpdateCheckerSection.tsx:141
@@ -10019,6 +10105,11 @@ msgstr ""
 
 #: src/components/settings/UvToolsSettingsTab.tsx:115
 msgid "UVTools Integration"
+msgstr ""
+
+#. placeholder {0}: pendingInstallPreview?.manifest.version
+#: src/components/settings/PluginsSettingsTab.tsx:484
+msgid "v{0}"
 msgstr ""
 
 #: src/components/settings/BackupsSettingsTab.tsx:1152

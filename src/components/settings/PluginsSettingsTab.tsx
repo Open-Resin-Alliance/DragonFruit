@@ -3,7 +3,7 @@
 import React from 'react';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
-import { Trans } from '@lingui/react/macro';
+import { Plural, Trans } from '@lingui/react/macro';
 import { AlertTriangle, CheckCircle2, Download, ExternalLink, Github, PackageCheck, Plug, ShieldCheck, Trash2 } from 'lucide-react';
 import { Button, Spinner } from '@/components/atoms';
 import { Tooltip } from '@/components/ui/Tooltip';
@@ -395,190 +395,170 @@ export function PluginsSettingsTab() {
         )}
       </div>
 
-      {pendingLiabilityInstall && (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 backdrop-blur-sm px-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
-          if (event.target === event.currentTarget && !isInstalling) setPendingLiabilityInstall(null);
-        }}>
-          <div className="w-full max-w-xl rounded-xl border p-4 ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
-            <div className="flex items-start gap-2.5">
-              <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border leading-none"
-                style={{
+      <StructuredDialogModal
+        open={pendingLiabilityInstall !== null}
+        ariaLabel={_(msg`Install unverified plugin`)}
+        title={<Trans>Install an unverified plugin?</Trans>}
+        subtitle={pendingLiabilityInstall
+          ? `${pendingLiabilityInstall.unverifiedRepo?.owner ?? ''}/${pendingLiabilityInstall.unverifiedRepo?.name ?? ''}`
+          : undefined}
+        icon={<AlertTriangle className="h-4 w-4" />}
+        iconTone="warning"
+        maxWidthClassName="max-w-xl"
+        zIndexClassName="z-[130]"
+        closeAriaLabel={_(msg`Close modal`)}
+        closeDisabled={isInstalling}
+        onClose={() => setPendingLiabilityInstall(null)}
+        onBackdropClick={() => setPendingLiabilityInstall(null)}
+        actions={(
+          <>
+            <Button variant="secondary" disabled={isInstalling} onClick={() => setPendingLiabilityInstall(null)}>
+              <Trans>Cancel</Trans>
+            </Button>
+            <Button
+              variant="tinted-warning"
+              className="inline-flex items-center justify-center gap-1.5"
+              disabled={isInstalling}
+              onClick={() => { void handleConfirmLiabilityInstall(); }}
+            >
+              {isInstalling ? <Spinner size="sm" /> : <AlertTriangle className="h-3.5 w-3.5" />}
+              {isInstalling ? <Trans>Installing…</Trans> : <Trans>Install anyway</Trans>}
+            </Button>
+          </>
+        )}
+      >
+        <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          <Trans>
+            DragonFruit cannot confirm who published this repository. A profile pack is data only — presets and
+            material templates — so installing it cannot add code, but the values it declares are yours to check.
+          </Trans>
+        </p>
+        {Array.isArray(pendingLiabilityInstall?.allowlistRules) && pendingLiabilityInstall.allowlistRules.length > 0 && (
+          <div
+            className="rounded-md border px-3 py-2"
+            style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+          >
+            <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+              <Trans>Trusted sources</Trans>
+            </div>
+            <div className="mt-0.5 text-xs break-all" style={{ color: 'var(--text-strong)' }}>
+              {pendingLiabilityInstall.allowlistRules.join(', ')}
+            </div>
+          </div>
+        )}
+      </StructuredDialogModal>
+
+      <StructuredDialogModal
+        open={pendingInstallPreview !== null}
+        ariaLabel={_(msg`Review plugin before install`)}
+        title={<Trans>Install this plugin?</Trans>}
+        subtitle={pendingInstallPreview?.manifest.name}
+        icon={<Plug className="h-4 w-4" />}
+        iconTone="accent"
+        maxWidthClassName="max-w-2xl"
+        zIndexClassName="z-[130]"
+        closeAriaLabel={_(msg`Close modal`)}
+        closeDisabled={isInstalling}
+        onClose={() => setPendingInstallPreview(null)}
+        onBackdropClick={() => setPendingInstallPreview(null)}
+        bodyClassName="space-y-3 p-5"
+        actions={(
+          <>
+            <Button variant="secondary" disabled={isInstalling} onClick={() => setPendingInstallPreview(null)}>
+              <Trans>Cancel</Trans>
+            </Button>
+            <Button
+              variant="tinted-accent"
+              className="inline-flex items-center justify-center gap-1.5"
+              disabled={isInstalling}
+              onClick={handleInstallFromPreview}
+            >
+              {isInstalling ? <Spinner size="sm" /> : <Download className="h-3.5 w-3.5" />}
+              {isInstalling ? <Trans>Installing…</Trans> : <Trans>Install</Trans>}
+            </Button>
+          </>
+        )}
+      >
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[11px] rounded-full border px-1.5 py-0.5" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
+            <Trans>v{pendingInstallPreview?.manifest.version}</Trans>
+          </span>
+          <span
+            className="text-[11px] rounded-full border px-1.5 py-0.5 font-semibold"
+            style={pendingInstallPreview?.trust === 'allowlisted'
+              ? {
+                  borderColor: 'color-mix(in srgb, #86efac, var(--border-subtle) 45%)',
+                  color: '#86efac',
+                  background: 'color-mix(in srgb, #86efac, var(--surface-2) 92%)',
+                }
+              : {
                   borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 45%)',
-                  background: 'color-mix(in srgb, #d97706, var(--surface-2) 86%)',
                   color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)',
+                  background: 'color-mix(in srgb, #d97706, var(--surface-2) 88%)',
                 }}
-              >
-                <AlertTriangle className="h-4.5 w-4.5" />
-              </span>
+          >
+            {pendingInstallPreview?.trust === 'allowlisted'
+              ? <Trans>Allowlisted source</Trans>
+              : <Trans>Unverified source</Trans>}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+              <Trans>Identity</Trans>
+            </div>
+            <div className="mt-1.5 space-y-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+              <div className="break-all">
+                <span style={{ color: 'var(--text-strong)' }}><Trans>ID</Trans>:</span> {pendingInstallPreview?.manifest.id}
+              </div>
+              {pendingInstallPreview?.manifest.author && (
+                <div className="break-all">
+                  <span style={{ color: 'var(--text-strong)' }}><Trans>Author</Trans>:</span> {pendingInstallPreview.manifest.author}
+                </div>
+              )}
               <div>
-                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Unverified Plugin Liability Warning
-                </div>
-                <div className="mt-1 text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
-                  This repository is not on the trusted allowlist. You can still install this <strong>simple/data-only</strong> plugin,
-                  but you accept responsibility for validating the source and manifest contents.
-                </div>
+                <span style={{ color: 'var(--text-strong)' }}><Trans>Contents</Trans>:</span>{' '}
+                <Plural value={pendingInstallPreview?.manifest.printerPresets?.length ?? 0} one="# printer preset" other="# printer presets" />,{' '}
+                <Plural value={pendingInstallPreview?.manifest.materialTemplates?.length ?? 0} one="# material template" other="# material templates" />
               </div>
             </div>
-            <div className="mt-3 rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                <span style={{ color: 'var(--text-strong)' }}>Repo:</span>{' '}
-                {pendingLiabilityInstall.unverifiedRepo?.owner}/{pendingLiabilityInstall.unverifiedRepo?.name}
+          </div>
+
+          <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+              <Trans>Origin</Trans>
+            </div>
+            <div className="mt-1.5 space-y-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+              <div className="break-all">
+                <span style={{ color: 'var(--text-strong)' }}><Trans>Repository</Trans>:</span> {pendingInstallPreview?.repoUrl}
               </div>
-              {Array.isArray(pendingLiabilityInstall.allowlistRules) && pendingLiabilityInstall.allowlistRules.length > 0 && (
-                <div className="mt-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  <span style={{ color: 'var(--text-strong)' }}>Allowlist:</span> {pendingLiabilityInstall.allowlistRules.join(', ')}
+              {pendingInstallPreview?.originUrl && (
+                <div className="break-all">
+                  <span style={{ color: 'var(--text-strong)' }}><Trans>Manifest</Trans>:</span> {pendingInstallPreview.originUrl}
+                </div>
+              )}
+              {pendingInstallPreview?.manifestSha256 && (
+                <div className="break-all">
+                  <span style={{ color: 'var(--text-strong)' }}><Trans>SHA-256</Trans>:</span>{' '}
+                  <span className="font-mono" style={{ color: 'var(--text-strong)' }}>{pendingInstallPreview.manifestSha256}</span>
                 </div>
               )}
             </div>
-
-            <div className="mt-4 flex items-center justify-end gap-2">
-              <Button
-                type="button"
-                variant="secondary"
-                size="auto"
-                className="!h-8 !px-3 !py-0 text-xs"
-                disabled={isInstalling}
-                onClick={() => setPendingLiabilityInstall(null)}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                size="auto"
-                className="!h-8 !px-3 !py-0 text-xs"
-                style={{ color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)' }}
-                disabled={isInstalling}
-                onClick={() => { void handleConfirmLiabilityInstall(); }}
-              >
-                {isInstalling ? 'Installing…' : 'I Understand, Install Anyway'}
-              </Button>
-            </div>
           </div>
         </div>
-      )}
 
-      {pendingInstallPreview && (
-        <div className="fixed inset-0 z-[121] flex items-center justify-center bg-black/60 backdrop-blur-sm px-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
-          if (event.target === event.currentTarget && !isInstalling) setPendingInstallPreview(null);
-        }}>
-          <div className="w-full max-w-3xl rounded-xl border p-4 ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
-            <div
-              className="rounded-lg border px-3.5 py-3"
-              style={{
-                borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                background: 'linear-gradient(145deg, color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%), color-mix(in srgb, var(--surface-1), transparent 5%))',
-              }}
-            >
-              <div className="flex items-start gap-3">
-                <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border leading-none"
-                  style={{
-                    borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 35%)',
-                    background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-2) 88%)',
-                    color: 'var(--accent-secondary)',
-                  }}
-                >
-                  <Plug className="h-5 w-5" />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                    Review Plugin Before Install
-                  </div>
-                  <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                    Confirm source and metadata before adding this plugin to your profile library.
-                  </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>
-                      {pendingInstallPreview.manifest.name}
-                    </span>
-                    <span className="text-[11px] rounded-full border px-1.5 py-0.5" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
-                      v{pendingInstallPreview.manifest.version}
-                    </span>
-                    <span
-                      className="text-[11px] rounded-full border px-1.5 py-0.5 font-semibold"
-                      style={{
-                        borderColor: pendingInstallPreview.trust === 'allowlisted'
-                          ? 'color-mix(in srgb, #86efac, var(--border-subtle) 45%)'
-                          : 'color-mix(in srgb, #d97706, var(--border-subtle) 45%)',
-                        color: pendingInstallPreview.trust === 'allowlisted' ? '#86efac' : 'color-mix(in srgb, #d97706, var(--text-strong) 18%)',
-                        background: pendingInstallPreview.trust === 'allowlisted'
-                          ? 'color-mix(in srgb, #86efac, var(--surface-2) 92%)'
-                          : 'color-mix(in srgb, #d97706, var(--surface-2) 88%)',
-                      }}
-                    >
-                      {pendingInstallPreview.trust === 'allowlisted' ? 'Allowlisted Source' : 'Unverified Source'}
-                    </span>
-                  </div>
-                </div>
-              </div>
+        {pendingInstallPreview?.manifest.description && (
+          <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+              <Trans>Description</Trans>
             </div>
-
-            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Identity</div>
-                <div className="mt-2 space-y-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  <div><span style={{ color: 'var(--text-strong)' }}>ID:</span> {pendingInstallPreview.manifest.id}</div>
-                  {pendingInstallPreview.manifest.author && (
-                    <div><span style={{ color: 'var(--text-strong)' }}>Author:</span> {pendingInstallPreview.manifest.author}</div>
-                  )}
-                  <div>
-                    <span style={{ color: 'var(--text-strong)' }}>Contents:</span>{' '}
-                    {pendingInstallPreview.manifest.printerPresets?.length ?? 0} printer preset(s),{' '}
-                    {pendingInstallPreview.manifest.materialTemplates?.length ?? 0} material template(s)
-                  </div>
-                </div>
-              </div>
-
-              <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Origin</div>
-                <div className="mt-2 space-y-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  <div className="break-all"><span style={{ color: 'var(--text-strong)' }}>Repo:</span> {pendingInstallPreview.repoUrl}</div>
-                  {pendingInstallPreview.originUrl && (
-                    <div className="break-all"><span style={{ color: 'var(--text-strong)' }}>Manifest URL:</span> {pendingInstallPreview.originUrl}</div>
-                  )}
-                  {pendingInstallPreview.manifestSha256 && (
-                    <div className="break-all"><span style={{ color: 'var(--text-strong)' }}>SHA-256:</span> {pendingInstallPreview.manifestSha256}</div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {pendingInstallPreview.manifest.description && (
-              <div className="mt-3 rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Description</div>
-                <div className="mt-1.5 text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
-                  {pendingInstallPreview.manifest.description}
-                </div>
-              </div>
-            )}
-
-            <div className="mt-4 flex items-center justify-end gap-2">
-              <Button
-                type="button"
-                variant="secondary"
-                size="auto"
-                className="!h-8 !px-3 !py-0 text-xs"
-                disabled={isInstalling}
-                onClick={() => setPendingInstallPreview(null)}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                size="auto"
-                className="!h-8 !px-3 !py-0 text-xs"
-                style={{ color: 'var(--accent-secondary)' }}
-                disabled={isInstalling}
-                onClick={handleInstallFromPreview}
-              >
-                {isInstalling ? 'Installing…' : 'Install'}
-              </Button>
-            </div>
+            <p className="mt-1 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              {pendingInstallPreview.manifest.description}
+            </p>
           </div>
-        </div>
-      )}
+        )}
+      </StructuredDialogModal>
 
       <StructuredDialogModal
         open={pendingRemovePlugin !== null}
