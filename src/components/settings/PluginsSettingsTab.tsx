@@ -4,7 +4,7 @@ import React from 'react';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import { Plural, Trans } from '@lingui/react/macro';
-import { AlertTriangle, CheckCircle2, Download, ExternalLink, Github, PackageCheck, Plug, ShieldCheck, Trash2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Download, ExternalLink, Github, Info as InfoIcon, PackageCheck, Plug, ShieldCheck, Trash2 } from 'lucide-react';
 import { Button, Spinner } from '@/components/atoms';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
@@ -646,15 +646,6 @@ export function PluginsSettingsTab() {
                       ) : (
                         <span className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>{manifest.name}</span>
                       )}
-                      <span className="text-[11px] rounded-full border px-1.5 py-0.5" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
-                        {manifest.id}
-                      </span>
-                      <span className="text-[11px] rounded-full border px-1.5 py-0.5" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
-                        {isBuiltin ? 'Built-in' : 'GitHub'}
-                      </span>
-                      <span className="text-[11px] rounded-full border px-1.5 py-0.5" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
-                        v{manifest.version}
-                      </span>
                     </div>
                     {isUnverifiedGithubPlugin && (
                       <div className="text-xs mt-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5"
@@ -678,6 +669,19 @@ export function PluginsSettingsTab() {
                   </div>
 
                   <div className="flex items-center gap-1.5 shrink-0 self-center">
+                    <Tooltip
+                      content={(
+                        <div className="space-y-0.5">
+                          <div className="break-all"><span style={{ color: 'var(--text-strong)' }}><Trans>ID</Trans>:</span> {manifest.id}</div>
+                          <div><span style={{ color: 'var(--text-strong)' }}><Trans>Source</Trans>:</span> {isBuiltin ? <Trans>Built-in</Trans> : <Trans>GitHub</Trans>}</div>
+                          <div><span style={{ color: 'var(--text-strong)' }}><Trans>Version</Trans>:</span> <Trans>v{manifest.version}</Trans></div>
+                        </div>
+                      )}
+                      maxWidth={280}
+                      wrapperClassName="flex items-center"
+                    >
+                      <InfoIcon className="h-4 w-4 shrink-0 block" style={{ color: 'var(--text-muted)' }} />
+                    </Tooltip>
                     {isBuiltin && (
                       <Tooltip content="Built-in plugin" wrapperClassName="flex items-center">
                         <ShieldCheck className="h-4 w-4 shrink-0 block" style={{ color: builtinShieldIconColor }} />

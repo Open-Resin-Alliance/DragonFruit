@@ -1557,6 +1557,7 @@ msgstr "Creada para otra impresora"
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:285
 #: src/components/controls/autoSupport/AutoSupportPresetSelect.tsx:57
 #: src/components/controls/autoSupport/AutoSupportSizingTierField.tsx:110
+#: src/components/settings/PluginsSettingsTab.tsx:676
 msgid "Built-in"
 msgstr "Integrado"
 
@@ -3932,6 +3933,10 @@ msgstr "Empezar"
 msgid "Get Started"
 msgstr "Empezar"
 
+#: src/components/settings/PluginsSettingsTab.tsx:676
+msgid "GitHub"
+msgstr ""
+
 #: src/components/settings/BackupsSettingsTab.tsx:572
 msgid "GitHub OAuth popup opened."
 msgstr "Ventana de OAuth de GitHub abierta."
@@ -4278,6 +4283,7 @@ msgstr "Volveré. (Suelta un archivo y de verdad que volveré.)"
 #. Sort order for the island list: by island id. One of three narrow buttons (ID / Volume / Layers).
 #: src/components/controls/IslandListCard.tsx:161
 #: src/components/settings/PluginsSettingsTab.tsx:513
+#: src/components/settings/PluginsSettingsTab.tsx:675
 msgid "ID"
 msgstr "ID"
 
@@ -8862,6 +8868,10 @@ msgstr "Algunos modelos tienen agujeros y vaciado sin aplicar"
 msgid "Some models have unapplied hollowing"
 msgstr "Algunos modelos tienen vaciado sin aplicar"
 
+#: src/components/settings/PluginsSettingsTab.tsx:676
+msgid "Source"
+msgstr ""
+
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:246
 msgid "Sparse supports — the detail sizing band"
 msgstr "Soportes escasos: la banda de dimensionado de detalle"
@@ -10109,14 +10119,20 @@ msgstr "Ruta del ejecutable de UVTools"
 msgid "UVTools Integration"
 msgstr "Integración con UVTools"
 
+#. placeholder {0}: manifest.version
 #. placeholder {0}: pendingInstallPreview?.manifest.version
 #: src/components/settings/PluginsSettingsTab.tsx:484
+#: src/components/settings/PluginsSettingsTab.tsx:677
 msgid "v{0}"
 msgstr ""
 
 #: src/components/settings/BackupsSettingsTab.tsx:1152
 msgid "Verify Repo"
 msgstr "Comprobar el repositorio"
+
+#: src/components/settings/PluginsSettingsTab.tsx:677
+msgid "Version"
+msgstr ""
 
 #: src/components/layout/EmptySceneState.tsx:113
 #: src/features/updater/updaterMessages.ts:29
