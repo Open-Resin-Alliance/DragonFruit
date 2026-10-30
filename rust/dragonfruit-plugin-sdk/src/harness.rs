@@ -21,12 +21,33 @@ pub trait PluginIdentity {
     fn formats(&self) -> Vec<FormatDecl>;
 }
 
+/// What a plugin can answer after the handshake. Capabilities are opt-in per
+/// method: the default answers "not served" so a plugin that only encodes does
+/// not have to know the network vocabulary.
+pub trait PluginCapabilities {
+    /// One network operation, request in and `(status, body)` out. Synchronous on
+    /// purpose: the host sends one request at a time unless a plugin declared
+    /// itself concurrent, so a handler owns the session for its duration.
+    fn network(&self, request: serde_json::Value) -> (u16, serde_json::Value) {
+        (
+            404,
+            serde_json::json!({ "error": format!("this plugin does not serve network operations: {request}") }),
+        )
+    }
+}
+
+/// For a plugin that has nothing to answer yet.
+pub struct NoCapabilities;
+
+impl PluginCapabilities for NoCapabilities {}
+
 /// Runs the control channel. Returns when the host says `shutdown` or closes the
 /// channel; an `Err` means the exchange was malformed.
-pub fn serve<R: Read, W: Write>(
+pub fn serve<R: Read, W: Write, C: PluginCapabilities>(
     mut input: R,
     mut output: W,
     identity: &dyn PluginIdentity,
+    capabilities: &C,
 ) -> io::Result<()> {
     let hello = match read_frame(&mut input) {
         Ok(Some(frame)) => frame,
@@ -47,6 +68,9 @@ pub fn serve<R: Read, W: Write>(
     let proto = match message {
         HostMessage::Hello { proto, .. } => proto,
         HostMessage::Shutdown => return Ok(()),
+        HostMessage::Network { .. } => {
+            return fail(&mut output, "unexpected-frame", "a request arrived before the handshake completed");
+        }
     };
     if proto != PROTOCOL_VERSION {
         return fail(
@@ -72,6 +96,11 @@ pub fn serve<R: Read, W: Write>(
             Ok(Some(frame)) => {
                 match serde_json::from_slice::<HostMessage>(&frame.payload) {
                     Ok(HostMessage::Shutdown) => return Ok(()),
+                    Ok(HostMessage::Network { id, request }) => {
+                        let (status, body) = capabilities.network(request);
+                        let result = PluginMessage::NetworkResult { id, status, body };
+                        write_json(&mut output, &result).map_err(to_io)?;
+                    }
                     Ok(HostMessage::Hello { .. }) => {
                         return fail(&mut output, "unexpected-frame", "the handshake was already answered");
                     }
@@ -152,7 +181,7 @@ mod tests {
     fn answers_a_handshake_with_its_identity() {
         let mut input = std::io::Cursor::new(hello(PROTOCOL_VERSION));
         let mut output = Vec::new();
-        serve(&mut input, &mut output, &TestPlugin).expect("serve");
+        serve(&mut input, &mut output, &TestPlugin, &NoCapabilities).expect("serve");
         let messages = sent_messages(&output);
         assert_eq!(messages.len(), 1);
         match &messages[0] {
@@ -175,10 +204,67 @@ mod tests {
     fn refuses_a_protocol_it_does_not_speak() {
         let mut input = std::io::Cursor::new(hello(99));
         let mut output = Vec::new();
-        assert!(serve(&mut input, &mut output, &TestPlugin).is_err());
+        assert!(serve(&mut input, &mut output, &TestPlugin, &NoCapabilities).is_err());
         match &sent_messages(&output)[0] {
             PluginMessage::Error { code, .. } => assert_eq!(code, "unsupported-protocol"),
             other => panic!("expected error, got {other:?}"),
+        }
+    }
+
+    struct EchoNetwork;
+
+    impl PluginCapabilities for EchoNetwork {
+        fn network(&self, request: serde_json::Value) -> (u16, serde_json::Value) {
+            let operation = request.get("operation").and_then(|value| value.as_str()).unwrap_or("");
+            if operation == "printer/status" {
+                (200, serde_json::json!({ "state": "printing" }))
+            } else {
+                (404, serde_json::json!({ "error": format!("unknown operation: {operation}") }))
+            }
+        }
+    }
+
+    #[test]
+    fn a_network_request_is_answered_with_its_correlation_id() {
+        let mut bytes = hello(PROTOCOL_VERSION);
+        write_json(
+            &mut bytes,
+            &HostMessage::Network {
+                id: 11,
+                request: serde_json::json!({ "operation": "printer/status" }),
+            },
+        )
+        .expect("network");
+        write_json(
+            &mut bytes,
+            &HostMessage::Network {
+                id: 12,
+                request: serde_json::json!({ "operation": "nope" }),
+            },
+        )
+        .expect("second network");
+        write_json(&mut bytes, &HostMessage::Shutdown).expect("shutdown");
+
+        let mut input = std::io::Cursor::new(bytes);
+        let mut output = Vec::new();
+        serve(&mut input, &mut output, &TestPlugin, &EchoNetwork).expect("serve");
+
+        let messages = sent_messages(&output);
+        assert_eq!(messages.len(), 3, "ready plus two results");
+        match &messages[1] {
+            PluginMessage::NetworkResult { id, status, body } => {
+                assert_eq!(*id, 11);
+                assert_eq!(*status, 200);
+                assert_eq!(body["state"], "printing");
+            }
+            other => panic!("expected a network result, got {other:?}"),
+        }
+        match &messages[2] {
+            PluginMessage::NetworkResult { id, status, .. } => {
+                assert_eq!(*id, 12);
+                assert_eq!(*status, 404);
+            }
+            other => panic!("expected a network result, got {other:?}"),
         }
     }
 
@@ -186,7 +272,7 @@ mod tests {
     fn a_closed_channel_ends_quietly() {
         let mut input = std::io::Cursor::new(Vec::new());
         let mut output = Vec::new();
-        serve(&mut input, &mut output, &TestPlugin).expect("serve");
+        serve(&mut input, &mut output, &TestPlugin, &NoCapabilities).expect("serve");
         assert!(output.is_empty());
     }
 
@@ -196,7 +282,7 @@ mod tests {
         write_json(&mut bytes, &HostMessage::Shutdown).expect("shutdown");
         let mut input = std::io::Cursor::new(bytes);
         let mut output = Vec::new();
-        serve(&mut input, &mut output, &TestPlugin).expect("serve");
+        serve(&mut input, &mut output, &TestPlugin, &NoCapabilities).expect("serve");
         let messages = sent_messages(&output);
         assert_eq!(messages.len(), 1, "only ready should be sent");
         assert!(matches!(messages[0], PluginMessage::Ready { .. }));
@@ -208,7 +294,7 @@ mod tests {
         bytes.extend_from_slice(&hello(PROTOCOL_VERSION));
         let mut input = std::io::Cursor::new(bytes);
         let mut output = Vec::new();
-        assert!(serve(&mut input, &mut output, &TestPlugin).is_err());
+        assert!(serve(&mut input, &mut output, &TestPlugin, &NoCapabilities).is_err());
         let messages = sent_messages(&output);
         assert!(matches!(messages[0], PluginMessage::Ready { .. }));
         match &messages[1] {

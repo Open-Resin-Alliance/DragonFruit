@@ -36,7 +36,7 @@ pub struct FormatDecl {
     pub ext: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum HostMessage {
     #[serde(rename_all = "camelCase")]
@@ -46,9 +46,16 @@ pub enum HostMessage {
         app_version: String,
     },
     Shutdown,
+    /// One network operation. `id` is the host's correlation id; the answer is a
+    /// `networkResult` carrying the same id.
+    #[serde(rename_all = "camelCase")]
+    Network {
+        id: u64,
+        request: serde_json::Value,
+    },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum PluginMessage {
     #[serde(rename_all = "camelCase")]
@@ -57,6 +64,12 @@ pub enum PluginMessage {
         version: String,
         capabilities: Vec<Capability>,
         formats: Vec<FormatDecl>,
+    },
+    #[serde(rename_all = "camelCase")]
+    NetworkResult {
+        id: u64,
+        status: u16,
+        body: serde_json::Value,
     },
     #[serde(rename_all = "camelCase")]
     Error { code: String, message: String },
@@ -79,6 +92,28 @@ mod tests {
             r#"{"type":"hello","proto":1,"transport":"shm","appVersion":"0.4.0"}"#
         );
         assert_eq!(serde_json::from_str::<HostMessage>(&json).unwrap(), hello);
+    }
+
+    #[test]
+    fn network_messages_use_the_wire_casing() {
+        let request = HostMessage::Network {
+            id: 11,
+            request: serde_json::json!({"operation":"printer/status"}),
+        };
+        assert_eq!(
+            serde_json::to_string(&request).expect("serialize"),
+            r#"{"type":"network","id":11,"request":{"operation":"printer/status"}}"#
+        );
+
+        let result = PluginMessage::NetworkResult {
+            id: 11,
+            status: 200,
+            body: serde_json::json!({"state":"printing"}),
+        };
+        assert_eq!(
+            serde_json::to_string(&result).expect("serialize"),
+            r#"{"type":"networkResult","id":11,"status":200,"body":{"state":"printing"}}"#
+        );
     }
 
     #[test]

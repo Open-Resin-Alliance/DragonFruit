@@ -1715,6 +1715,7 @@ dependencies = [
  "dragonfruit-mesh-repair",
  "dragonfruit-organic-cut",
  "dragonfruit-plugin-package",
+ "dragonfruit-plugin-sdk",
  "dragonfruit-rtsp-relay",
  "dragonfruit-slicing-engine",
  "flate2",

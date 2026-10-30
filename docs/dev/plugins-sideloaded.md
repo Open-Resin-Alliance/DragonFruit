@@ -18,7 +18,9 @@ Read this page before changing anything in this tier. "Protocol v1" and
 | Reference packer | `rust/dragonfruit-plugin-package/examples/pack.rs` | done |
 | Allowance gate, inspect, install, list, remove | `src-tauri/src/plugin_sideload.rs` | done, unit-tested |
 | Import UI behind the advanced switch | `src/components/settings/PluginsSettingsTab.tsx` | done |
-| Plugin process, protocol, encoder/network/file-type wiring | — | **not built**; a package installed today sits inert in app data |
+| Process spawn, handshake, `ready` validation, idle stop | `src-tauri/src/plugin_sideload_runtime.rs` | done, tested against a real plugin process |
+| `network` capability | host runtime + SDK harness | done |
+| `slicerEncoder`, `fileType` | — | **not built**; their messages are designed in the SDK subsection |
 
 `cargo test` in the package crate and `cargo test --bin dragonfruit-desktop
 plugin_sideload` cover the verification matrix below except the process cases.

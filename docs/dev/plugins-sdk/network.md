@@ -1,8 +1,9 @@
 # Network operations
 
-Status: **designed**. The message shapes below are the contract the host's
-sideloaded dispatcher will implement; today the `network` message has no host
-answer.
+Status: **shipped**. The host spawns the plugin, validates `ready` against the
+manifest, routes `plugin_network_request` to it after the built-in dispatch
+match, and stops the process after two idle minutes. Concurrent requests and
+cancellation are the parts still designed.
 
 A network capability is request/response JSON over the control channel — the same
 contract the compiled-in tier already uses between the webview and the shell, so
@@ -62,8 +63,9 @@ completes.
 
 ## Concurrency
 
-Requests for one plugin are serialized by default, in arrival order. A plugin
-that can serve two operations at once says so in `ready`:
+Requests for one plugin are serialized by default, in arrival order. That is
+what ships today. A plugin that can serve two operations at once will say so in
+`ready`:
 
 ```json
 {"type":"ready", …, "concurrent":true}

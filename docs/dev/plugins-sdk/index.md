@@ -20,10 +20,10 @@ slices, and each capability is either shipped or designed.
 
 | Capability | Wire contract | SDK support | Host support |
 | --- | --- | --- | --- |
-| handshake (`hello` / `ready` / `shutdown` / `error`) | shipped | shipped | **not wired**: the host imports and stores a package but does not spawn it yet |
-| ring accessors (slot publish / view / release) | shipped | shipped | designed |
+| handshake (`hello` / `ready` / `shutdown` / `error`) | shipped | shipped | shipped: spawn, `ready` validation against the manifest, idle stop |
+| `networkOperations` (`network` / `networkResult`) | shipped | shipped | shipped: routed after the built-in dispatch match |
+| ring accessors (slot publish / view / release) | shipped | shipped | designed: the host creates no mapping yet |
 | `slicerEncoder` (`encode.begin` / `encode.layer` / `encode.done`) | designed | designed | designed |
-| `networkOperations` (`network`) | designed | designed | designed |
 | `fileType` (`import`) | designed | designed | designed |
 
 Pages mark their own status. A "designed" page is the contract to build against;
@@ -64,7 +64,7 @@ Three rules decide almost every design question in this section:
 | --- | --- | --- |
 | import | host | signature, seal, `minAppVersion`, publisher fingerprint pin, payload extracted under the app data dir |
 | enable | user | sideloading is off by default; the package-level import is gated behind an explicit acknowledgement |
-| start | host | spawns the payload binary, sends `hello` with `proto` and `transport`, waits for `ready` |
+| start | host | spawns `payload/bin/<platform>/<binary>`, sends `hello` with `proto` and `transport`, waits for `ready` |
 | check | host | `ready.pluginId` must equal the manifest id; capabilities and formats must be a subset of the manifest's |
 | work | both | one request per operation; progress and cancellation flow back over the pipe |
 | stop | host | `shutdown`, then the process is expected to exit; an idle process is killed and respawned on demand |

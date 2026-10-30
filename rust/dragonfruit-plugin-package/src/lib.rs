@@ -28,6 +28,9 @@ pub const FORMAT_VERSION: u32 = 1;
 /// Wire protocol the host speaks to the plugin process. Owned by the SDK so the
 /// two cannot drift; re-exported here because the manifest validates against it.
 pub use dragonfruit_plugin_sdk::PROTOCOL_VERSION;
+/// The manifest and the wire must name the same capabilities and transports, so
+/// they are one definition rather than two that drift.
+pub use dragonfruit_plugin_sdk::{Capability, Transport};
 
 pub const MANIFEST_ENTRY: &str = "dfplugin.json";
 pub const SIGNATURE_ENTRY: &str = "signature.ed25519";
@@ -45,27 +48,10 @@ const NONCE_BYTES: usize = 24;
 const KEY_BYTES: usize = 32;
 const SALT_BYTES: usize = 16;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum Capability {
-    SlicerEncoder,
-    NetworkOperations,
-    FileType,
-}
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum EntryKind {
     Process,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum Transport {
-    /// Bulk layer bytes cross a file-backed ring of opaque byte slots.
-    Shm,
-    /// Bulk layer bytes cross the control pipe as length-prefixed frames.
-    Pipe,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

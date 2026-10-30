@@ -52,6 +52,22 @@ frame := u32 length (LE, includes the kind byte) | u8 kind | payload[length - 1]
 `shutdown` between operations ends the session; the process exits 0. The host
 also ends the session by closing stdin.
 
+## Capability messages
+
+`network` is implemented on both sides; encoder and file-type messages are
+designed (see their pages).
+
+```json
+→ {"type":"network","id":11,"request":{"operation":"printer/status"}}
+← {"type":"networkResult","id":11,"status":200,"body":{"state":"printing"}}
+```
+
+The host sends one request at a time per plugin and correlates the answer by
+`id`; an answer for an id that already timed out is discarded and the next one is
+read. A `networkResult` with a `5xx` status means the integration talked to the
+printer and failed. A protocol-level failure is an `error` frame, which ends the
+session and makes the host restart the process.
+
 ## Errors
 
 ```json

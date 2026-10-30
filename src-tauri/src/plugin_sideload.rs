@@ -75,6 +75,21 @@ pub struct InstalledSideloadedPlugin {
     pub sealed: bool,
 }
 
+/// Directory holding every installed package, ready for the runtime to scan.
+pub fn plugin_root<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
+    root_dir(app)
+}
+
+/// The manifest of an installed plugin, or `None` when nothing with that id is
+/// installed. Used by the runtime to decide whether a request belongs to it.
+///
+/// Reads `manifest.json` alone: routing only needs identity and capabilities, and
+/// a plugin whose state file is unreadable is still the owner of its id.
+pub fn installed_manifest(root: &Path, id: &str) -> Option<package::Manifest> {
+    let bytes = std::fs::read(installed_dir(root, id).join(MANIFEST_FILE)).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
 fn root_dir<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
     let base = app
         .path()

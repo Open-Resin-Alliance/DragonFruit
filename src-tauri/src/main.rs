@@ -60,6 +60,7 @@ fn default_dither_device_gamma() -> f64 {
 mod experiments;
 mod plugin_registry;
 mod plugin_sideload;
+mod plugin_sideload_runtime;
 mod webview_watchdog;
 mod window_state;
 
@@ -4455,6 +4456,13 @@ fn main() {
     let builder = builder.setup(|app| {
         let app_handle = app.handle().clone();
 
+        // Point the sideloaded plugin runtime at the installed packages before
+        // anything can route a request to one.
+        match plugin_sideload::plugin_root(&app_handle) {
+            Ok(root) => plugin_sideload_runtime::initialize(root),
+            Err(error) => log::warn!("[plugin-runtime] {error}"),
+        }
+
         log_startup_header();
 
         app.manage(window_state::WindowStateTracker::default());
@@ -4697,6 +4705,7 @@ fn main() {
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
             ) {
                 window_state::save(app_handle);
+                plugin_sideload_runtime::shutdown_all();
             }
         });
 }
