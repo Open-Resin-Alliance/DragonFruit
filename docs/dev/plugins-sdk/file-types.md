@@ -1,7 +1,18 @@
 # File-type import
 
-Status: **designed**. The dispatch shape is fixed; the scene payload schema the
-plugin returns is the piece that still needs pinning before this can be built.
+Status: **designed, and blocked on a format that does not exist yet.**
+
+The dispatch shape below is settled. What is missing is the payload: the
+compiled-in tier's `handleFileTypeImport` returns **live objects** (a
+`THREE.BufferGeometry` per model, with transforms and support data), because it
+runs in the webview. A sideloaded plugin is a separate process and can only send
+bytes, so this capability needs a serializable scene payload: geometry buffers
+(positions, normals, indices), per-model transforms, and support data in the
+host's internal format.
+
+That interchange format is a design decision, not plumbing, and per-material
+geometry is about to change it, so it is deliberately not pinned here. Pinning it
+before the multi-material work lands would mean pinning it twice.
 
 `fileType` lets a plugin open a project file DragonFruit does not parse: a vendor
 container, a printer's job archive, a design file that carries plates and
@@ -27,33 +38,20 @@ supports. The host asks "is this yours?" and, if so, "give me a scene".
 
 ## The scene payload
 
-The host consumes the same scene document its own importers produce
-(`docs/dev/formats.md` describes the runtime shape). Until that schema is pinned
-for external plugins, treat this capability as unreleased: the dispatch works,
-the document it hands back does not have a stable contract yet.
+The constraint is the compiled-in contract: a model arrives with geometry, a
+transform, and any supports that belong to it, one entry per model so supports
+stay attached to the right one. Externally the same information has to be bytes,
+so the payload will carry:
 
-The intended contract, when it lands:
+- geometry: positions, normals and indices, plus the index width;
+- per-model: a stable `modelId`, an optional display name, a 4x4 transform;
+- supports, in whatever the host's internal support format serializes to;
+- optionally, hollowing or punch data the format carries.
 
-```json
-{
-  "schemaVersion": 1,
-  "plates": [
-    {
-      "name": "Plate 1",
-      "printer": { "presetId": "alphabeta.alpha-4k" },
-      "models": [
-        { "path": "models/part-1.stl", "transform": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1] }
-      ],
-      "supports": null
-    }
-  ]
-}
-```
-
-Model paths are relative to the import's working directory, which the host
-creates and removes; the plugin is expected to write the geometry it extracts
-there. That is the one place a plugin writes outside the single output file, and
-the host validates every path stays inside it.
+Where it is written is already decided: a working directory the host creates per
+import, with every path validated to stay inside it. The encoding is not decided,
+and the page will carry the schema once the multi-material work settles what a
+model carries per material.
 
 ## What it is good for
 
