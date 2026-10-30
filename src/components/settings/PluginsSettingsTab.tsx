@@ -546,7 +546,7 @@ export function PluginsSettingsTab() {
           <SettingRow
             bordered
             label={_(msg`Install profile pack`)}
-            description={_(msg`Loads a manifest from a GitHub repository. Data only — no code runs.`)}
+            description={_(msg`Adds presets and materials from a repository. Contains no code.`)}
           >
             <div className="flex items-center gap-2" style={{ width: 'min(420px, 46vw)' }}>
               <Input

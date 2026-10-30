@@ -786,6 +786,10 @@ msgstr "Añadida"
 msgid "Adds a “Send to UVTools” option in the slicing panel."
 msgstr "Añade una opción «Enviar a UVTools» en el panel de laminado."
 
+#: src/components/settings/PluginsSettingsTab.tsx:549
+msgid "Adds presets and materials from a repository. Contains no code."
+msgstr ""
+
 #: src/supports/history/supportHistoryLabels.ts:166
 msgctxt "Undo history entry"
 msgid "Adjust curve bias"
@@ -5169,10 +5173,6 @@ msgstr "Cargando la miniatura…"
 #: src/components/layout/EmptySceneState.tsx:698
 msgid "loading…"
 msgstr "cargando…"
-
-#: src/components/settings/PluginsSettingsTab.tsx:549
-msgid "Loads a manifest from a GitHub repository. Data only — no code runs."
-msgstr ""
 
 #: src/components/controls/TransformControls.tsx:154
 msgctxt "Gizmo space toggle"
