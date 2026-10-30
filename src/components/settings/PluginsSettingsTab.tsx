@@ -540,9 +540,13 @@ export function PluginsSettingsTab() {
     });
   }
   installedRows.sort((left, right) => left.name.localeCompare(right.name));
-  // What the user added comes first, untouched built-ins after a divider.
-  const userInstalledRows = installedRows.filter((row) => row.source !== 'builtin');
-  const builtinRows = installedRows.filter((row) => row.source === 'builtin');
+  // Packages first, then GitHub packs, then what ships with the app — each tier
+  // separated by a hairline, and an empty tier contributes nothing.
+  const rowGroups = [
+    { key: 'sideloaded', rows: installedRows.filter((row) => row.source === 'sideloaded') },
+    { key: 'github', rows: installedRows.filter((row) => row.source === 'github') },
+    { key: 'builtin', rows: installedRows.filter((row) => row.source === 'builtin') },
+  ].filter((group) => group.rows.length > 0);
 
   const renderInstalledRow = (row: InstalledPluginRow) => (
     <li
@@ -1234,21 +1238,16 @@ export function PluginsSettingsTab() {
           </div>
         </div>
 
-        {userInstalledRows.length > 0 && (
-          <ul className="mt-2 space-y-1.5">
-            {userInstalledRows.map(renderInstalledRow)}
-          </ul>
-        )}
-
-        {userInstalledRows.length > 0 && builtinRows.length > 0 && (
-          <div className="my-2 h-px" style={{ background: 'var(--border-subtle)' }} aria-hidden />
-        )}
-
-        {builtinRows.length > 0 && (
-          <ul className={userInstalledRows.length > 0 ? 'space-y-1.5' : 'mt-2 space-y-1.5'}>
-            {builtinRows.map(renderInstalledRow)}
-          </ul>
-        )}
+        {rowGroups.map((group, index) => (
+          <React.Fragment key={group.key}>
+            {index > 0 && (
+              <div className="my-2 h-px" style={{ background: 'var(--border-subtle)' }} aria-hidden />
+            )}
+            <ul className={index === 0 ? 'mt-2 space-y-1.5' : 'space-y-1.5'}>
+              {group.rows.map(renderInstalledRow)}
+            </ul>
+          </React.Fragment>
+        ))}
       </section>
 
 
