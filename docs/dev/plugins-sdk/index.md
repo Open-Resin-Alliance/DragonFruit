@@ -9,9 +9,10 @@ The reason the boundary is a process and an SDK rather than a `dlopen`: see
 `docs/adr/0047-sideloaded-complex-plugins.md`. The package format, the trust
 model and the host side are in `docs/dev/plugins-sideloaded.md`.
 
-Throughout this section the example is **AlphaBeta**'s `AlphaPrint` plugin —
-`alphabeta.alphaprint`, format `.apf`, capabilities `slicerEncoder`,
-`networkOperations` and `fileType`.
+Throughout this section the example is **AlphaBeta**'s `AlphaPrint` plugin,
+`alphabeta.alphaprint` with format `.apf`. That is an illustrative partner: no
+real `.apf` exists. The reference plugins in the SDK use `.exf` (encoder) and
+`.echo` (import), and those are what the tests drive.
 
 ## Status
 

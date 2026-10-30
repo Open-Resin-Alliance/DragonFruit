@@ -54,8 +54,12 @@ fn main() {
     let name = arg("--name").unwrap_or_else(|| "Example Plugin".to_string());
     let version = arg("--version").unwrap_or_else(|| "0.1.0".to_string());
     let vendor = arg("--vendor").unwrap_or_else(|| "Example Vendor".to_string());
-    let format_extension = arg("--format").unwrap_or_else(|| ".apf".to_string());
-    let passphrase = arg("--passphrase");
+    let format = arg("--format");
+    let network = arg("--network").is_some();
+    let format_extension = format.clone().unwrap_or_else(|| ".apf".to_string());
+    // An empty passphrase is not a passphrase: sealing with "" only looks like
+    // protection. Treat it as an unsealed package.
+    let passphrase = arg("--passphrase").filter(|value| !value.trim().is_empty());
     let min_app_version = arg("--min-app-version").unwrap_or_else(|| "0.1.0".to_string());
     let layer_kind = match arg("--layers").as_deref() {
         None | Some("png") => None,
@@ -73,7 +77,7 @@ fn main() {
     let key = package::signing_key_from_seed(seed_bytes());
     let manifest = package::Manifest {
         format_version: package::FORMAT_VERSION,
-        id,
+        id: id.clone(),
         name,
         version,
         vendor: package::Vendor {
@@ -81,10 +85,21 @@ fn main() {
             homepage: None,
         },
         min_app_version,
+        // Declared from the flags, not assumed: a package that only imports files
+        // must not claim an encoder, or the host would try to slice with it.
         capabilities: {
-            let mut capabilities = vec![package::Capability::SlicerEncoder];
+            let mut capabilities = Vec::new();
+            if format.is_some() {
+                capabilities.push(package::Capability::SlicerEncoder);
+            }
             if file_type.is_some() {
                 capabilities.push(package::Capability::FileType);
+            }
+            if network {
+                capabilities.push(package::Capability::NetworkOperations);
+            }
+            if capabilities.is_empty() {
+                panic!("a package must declare a capability: pass --format, --file-type or --network");
             }
             capabilities
         },
@@ -101,13 +116,18 @@ fn main() {
             bytes: 0,
             seal: None,
         },
-        formats: vec![package::FormatDecl {
+        formats: format
+            .iter()
+            .map(|_| package::FormatDecl {
             id: "custom".to_string(),
-            extensions: vec![format_extension],
+            extensions: vec![format_extension.clone()],
             display_name: None,
             layers: layer_kind,
-        }],
-        network: None,
+            })
+            .collect(),
+        network: network.then(|| package::NetworkDecl {
+            plugin_id: id.clone(),
+        }),
         file_types: file_type
             .iter()
             .map(|extension| package::FileTypeDecl {

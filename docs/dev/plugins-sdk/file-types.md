@@ -101,6 +101,24 @@ impl Importer for MyImport {
 `sdk/examples/echo_import.rs` is a complete one: it reads the input, writes a
 single triangle with a translation, and the host test parses it back.
 
+## Try it with the reference importer
+
+The SDK ships `echo_import`, which reads any file and writes one triangle plus an
+empty support document. Pack it and drop a file on the app:
+
+```bash
+cargo build --manifest-path rust/dragonfruit-plugin-sdk/Cargo.toml --example echo_import
+cargo run -p dragonfruit-plugin-package --example pack -- \
+  --out echo-import-sample.dfplugin \
+  --binary rust/dragonfruit-plugin-sdk/target/debug/examples/echo_import \
+  --id example.importer --name "Echo Project Import" --version 0.1.0 --vendor DragonFruit \
+  --file-type .echo --file-type-name "Echo project"
+```
+
+Import that package (no passphrase: it is unsealed), then drop any `.echo` file
+into the scene. The model is named with the source file's byte count, which is how
+you can tell the plugin actually read it.
+
 ## Why a process cannot return three.js objects
 
 The compiled-in tier's `handleFileTypeImport` runs in the webview and returns live
