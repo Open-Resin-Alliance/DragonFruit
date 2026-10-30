@@ -572,7 +572,7 @@ export function PluginsSettingsTab() {
                 <Github className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--text-muted)' }} />
               )}
               {row.source === 'sideloaded' && (
-                <PackagePlus className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--accent-secondary)' }} />
+                <PackagePlus className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--text-muted)' }} />
               )}
               {row.link ? (
                 <button
