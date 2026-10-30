@@ -2,23 +2,26 @@
 
 This folder defines the plugin system for DragonFruit.
 
-DragonFruit supports two plugin classes with intentionally different trust and capability boundaries:
+DragonFruit supports three plugin classes with intentionally different trust and capability boundaries:
 
 - **Simple plugins** (runtime-installed, data-only, GitHub manifest based)
 - **Complex plugins** (repository-contributed, compile-time integrated, code-capable)
+- **Sideloaded complex plugins** (runtime-imported package, code-capable, opt-in — see
+  [Sideloaded Complex Plugins](plugins-sideloaded.md))
 
 Plugin submodules under this folder are licensed separately under **MIT** and each plugin root includes its own `LICENSE` file.
 
-If you remember one rule, remember this one: **runtime-installed plugins are data; executable plugin code is build-time only**.
+If you remember one rule, remember this one: **runtime-installed plugins are data unless the user turns on sideloaded complex plugins and imports a signed package** — executable plugin code is otherwise build-time only.
 
 ---
 
 ## Plugin classes at a glance
 
-| Class          | Install model                        | Contains code? | Primary use                                                | Trust model                        |
-| -------------- | ------------------------------------ | -------------- | ---------------------------------------------------------- | ---------------------------------- |
-| Simple plugin  | Runtime install from GitHub manifest | No             | Presets, templates, metadata, assets                       | Restricted + validated             |
-| Complex plugin | PR into this repository              | Yes            | Protocols, upload flows, network handlers, native encoders | Reviewed + allowlisted + generated |
+| Class                  | Install model                        | Contains code? | Primary use                                                | Trust model                        |
+| ---------------------- | ------------------------------------ | -------------- | ---------------------------------------------------------- | ---------------------------------- |
+| Simple plugin          | Runtime install from GitHub manifest | No             | Presets, templates, metadata, assets                       | Restricted + validated             |
+| Complex plugin         | PR into this repository              | Yes            | Protocols, upload flows, network handlers, native encoders | Reviewed + allowlisted + generated |
+| Sideloaded plugin      | `.dfplugin` import in Settings       | Yes (vendor)   | Closed-source encoders, protocols, importers               | Signed package + passphrase + opt-in, off by default |
 
 ---
 
@@ -38,6 +41,11 @@ Simple plugins are a safe extension mechanism for printer/material content.
 - Remote JS/TS execution
 - Runtime code download/eval
 - External binaries
+
+These rules are about the *simple* tier. Executable plugins reach the app only
+through the compiled-in tier or the opt-in sideloaded tier
+([Sideloaded Complex Plugins](plugins-sideloaded.md)); neither is reachable from
+a GitHub manifest install.
 
 ### Manifest basics
 
@@ -76,6 +84,12 @@ Transport: `src/features/plugins/pluginManifestClient.ts` → `fetch_github_plug
 ## Complex plugins (compiled plugins)
 
 Complex plugins are for integrations that require executable logic.
+
+A vendor that cannot open-source its integration cannot use this tier: their
+code would be compiled into the AGPL binary. That case uses the sideloaded
+tier instead — a runtime-imported, signed, optionally sealed package run as a
+separate process over a versioned protocol. See
+[Sideloaded Complex Plugins](plugins-sideloaded.md) and ADR-0047.
 
 ### Typical capabilities
 

@@ -93,7 +93,9 @@
             "resample_outer_surface",
             "projectService",
             "directed_hole_loops",
-            "sourceInverse"
+            "sourceInverse",
+            "minAppVersion",
+            "protoVersion"
       ],
       "paths": [
             "src/supports/generatedSupportRegistrations.ts",
@@ -109,6 +111,7 @@
             "src/supports/PlacementLogic/Pathfinding/PotentialFieldSolver.ts"
       ],
       "_reasons": {
+            "sideloaded plugin contract": "minAppVersion and protoVersion are field names of the .dfplugin manifest and the plugin protocol defined by docs/dev/plugins-sideloaded.md (ADR-0047). They are named before the implementation lands because the document IS the contract a partner builds against; when the loader exists these entries come out.",
             "CompressionStream": "a platform API, not an app symbol. docs/dev/backlog.md names it as the compressor the reverted soup-packing attempt used and the decomposer the shipped container parse uses, and docs/dev/performance-debugging.md names it in the same two places. It is deliberately absent from the tree.",
             "removed with DFST": "load_stl_file and encode_stl_response were deleted when the STL load path folded into load_mesh_file and the DFST payload was replaced by DFMX. ADR-0027 names them because the record IS their protocol and its supersession note says they are gone; rewriting the ADR's body to today's names would misstate what it decided.",
             "dragonfruit_desktop": "the Rust log target name (the crate is dragonfruit-desktop, so its module paths use an underscore), cited by performance-debugging.md for where the AO path's own log records appear. It is a log module path, not an identifier anywhere in the tree.",
