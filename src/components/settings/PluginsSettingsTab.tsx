@@ -944,7 +944,11 @@ export function PluginsSettingsTab() {
             <Button variant="secondary" onClick={() => setPendingRemovePlugin(null)}>
               <Trans>Cancel</Trans>
             </Button>
-            <Button variant="tinted-danger" onClick={handleConfirmUninstall}>
+            <Button
+              variant="tinted-danger"
+              className="inline-flex items-center justify-center gap-1.5"
+              onClick={handleConfirmUninstall}
+            >
               <Trash2 className="h-3.5 w-3.5" />
               <Trans>Remove plugin</Trans>
             </Button>
@@ -1210,7 +1214,11 @@ export function PluginsSettingsTab() {
             <Button variant="secondary" onClick={() => setPendingRemoveSideload(null)}>
               <Trans>Cancel</Trans>
             </Button>
-            <Button variant="tinted-danger" onClick={() => { void handleConfirmRemoveSideload(); }}>
+            <Button
+              variant="tinted-danger"
+              className="inline-flex items-center justify-center gap-1.5"
+              onClick={() => { void handleConfirmRemoveSideload(); }}
+            >
               <Trash2 className="h-3.5 w-3.5" />
               <Trans>Remove plugin</Trans>
             </Button>
