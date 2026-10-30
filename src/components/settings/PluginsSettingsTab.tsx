@@ -37,6 +37,9 @@ import { PluginStudioModal } from './PluginStudioModal';
 
 const BUILTIN_ATHENA_REPOSITORY_URL = 'https://github.com/Open-Resin-Alliance/DragonFruit';
 
+// Interpolating messages stay at module scope for the same reason.
+const passphrasePlaceholder = (pluginName: string) => msg`Passphrase for ${pluginName}`;
+
 // Module scope on purpose: a `msg` descriptor created inside a component can be
 // renamed out from under its catalog id by React Compiler.
 const SIDELOAD_CAPABILITY_MESSAGES: Record<SideloadedCapability, MessageDescriptor> = {
@@ -979,30 +982,22 @@ export function PluginsSettingsTab() {
         <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
           <Trans>The package is sealed. Enter the key your vendor gave you; it is kept locally so the plugin can load later.</Trans>
         </p>
-        <div className="space-y-1.5">
-          <label
-            htmlFor="sideload-passphrase"
-            className="text-[11px] font-semibold uppercase tracking-wide"
-            style={{ color: 'var(--text-muted)' }}
-          >
-            <Trans>Passphrase</Trans>
-          </label>
-          <Input
-            autoFocus
-            id="sideload-passphrase"
-            type="password"
-            autoComplete="off"
-            className="h-10 w-full"
-            value={sideloadPassphrase}
-            onChange={(event) => setSideloadPassphrase(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && sideloadPassphrase.trim().length > 0 && !sideloadBusy) {
-                void handleConfirmSideloadInstall();
-              }
-            }}
-            placeholder={_(msg`The key your vendor gave you`)}
-          />
-        </div>
+        <Input
+          autoFocus
+          id="sideload-passphrase"
+          type="password"
+          autoComplete="off"
+          className="h-10 w-full"
+          value={sideloadPassphrase}
+          onChange={(event) => setSideloadPassphrase(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && sideloadPassphrase.trim().length > 0 && !sideloadBusy) {
+              void handleConfirmSideloadInstall();
+            }
+          }}
+          placeholder={_(passphrasePlaceholder(pendingSideload?.info.manifest.name ?? ''))}
+          aria-label={_(msg`Package passphrase`)}
+        />
         {passphraseError && (
           <p className="text-xs leading-relaxed" style={{ color: '#fca5a5' }}>
             {passphraseError}
