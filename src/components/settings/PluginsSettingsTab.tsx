@@ -5,8 +5,8 @@ import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import type { MessageDescriptor } from '@lingui/core';
 import { Plural, Trans } from '@lingui/react/macro';
-import { AlertTriangle, CheckCircle2, Download, ExternalLink, Github, Info as InfoIcon, PackageCheck, PackagePlus, Plug, ShieldCheck, Trash2 } from 'lucide-react';
-import { Button, Input, SettingRow, Spinner, Toggle } from '@/components/atoms';
+import { AlertTriangle, CheckCircle2, Cog, Download, ExternalLink, Github, Info as InfoIcon, PackageCheck, PackagePlus, Plug, ShieldAlert, ShieldCheck, Trash2 } from 'lucide-react';
+import { Button, IconButton, Input, SettingRow, Spinner } from '@/components/atoms';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { isTauriRuntime } from '@/utils/tauriRuntime';
@@ -162,6 +162,9 @@ export function PluginsSettingsTab() {
   // no app data dir and no place to put a native binary.
   const [isDesktop, setIsDesktop] = React.useState(false);
   const [allowSideload, setAllowSideload] = React.useState(false);
+  // Sideloading is a semi-hidden switch behind the card's cog: enabling it asks
+  // for an explicit acknowledgement instead of being a row a user can flip by accident.
+  const [allowanceDialogOpen, setAllowanceDialogOpen] = React.useState(false);
   const [sideloadPlugins, setSideloadPlugins] = React.useState<InstalledSideloadedPlugin[]>([]);
   const [sideloadBusy, setSideloadBusy] = React.useState(false);
   const [pendingSideload, setPendingSideload] = React.useState<{ path: string; info: SideloadedInspect } | null>(null);
@@ -524,6 +527,19 @@ export function PluginsSettingsTab() {
               <Trans>Profile packs add presets and material profiles. A sideloaded package adds code and needs a publisher you trust.</Trans>
             </p>
           </div>
+          {isDesktop && (
+            <Tooltip content={_(msg`Sideloaded packages`)} wrapperClassName="flex shrink-0 items-center">
+              <IconButton
+                variant="ghost"
+                size="xs"
+                aria-label={_(msg`Sideloaded packages`)}
+                active={allowSideload}
+                onClick={() => setAllowanceDialogOpen(true)}
+              >
+                <Cog className="h-3.5 w-3.5" />
+              </IconButton>
+            </Tooltip>
+          )}
         </div>
 
         <div className="mt-2 grid gap-2">
@@ -555,20 +571,6 @@ export function PluginsSettingsTab() {
               </Button>
             </div>
           </SettingRow>
-
-          {isDesktop && (
-            <SettingRow
-              bordered
-              label={_(msg`Allow signed packages`)}
-              description={_(msg`A package ships native code and runs with your user account, so only turn this on for a publisher you trust.`)}
-            >
-              <Toggle
-                checked={allowSideload}
-                onChange={(next) => { void handleSideloadAllowanceChange(next); }}
-                label={_(msg`Allow signed packages`)}
-              />
-            </SettingRow>
-          )}
 
           {isDesktop && allowSideload && (
             <SettingRow
@@ -793,6 +795,62 @@ export function PluginsSettingsTab() {
         <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
           <Trans>This removes the plugin from your profile library.</Trans>
         </p>
+      </StructuredDialogModal>
+
+      <StructuredDialogModal
+        open={allowanceDialogOpen}
+        ariaLabel={_(msg`Sideloaded packages`)}
+        title={allowSideload ? <Trans>Sideloaded packages are on</Trans> : <Trans>Allow untrusted plugins?</Trans>}
+        subtitle={_(msg`Sideloaded packages`)}
+        icon={<ShieldAlert className="h-4 w-4" />}
+        iconTone="warning"
+        maxWidthClassName="max-w-lg"
+        zIndexClassName="z-[130]"
+        closeAriaLabel={_(msg`Close modal`)}
+        onClose={() => setAllowanceDialogOpen(false)}
+        onBackdropClick={() => setAllowanceDialogOpen(false)}
+        actions={(
+          <>
+            <Button variant="secondary" onClick={() => setAllowanceDialogOpen(false)}>
+              <Trans>Cancel</Trans>
+            </Button>
+            <Button
+              variant={allowSideload ? 'tinted-danger' : 'tinted-warning'}
+              className="inline-flex items-center justify-center gap-1.5"
+              onClick={() => {
+                void (async () => {
+                  await handleSideloadAllowanceChange(!allowSideload);
+                  setAllowanceDialogOpen(false);
+                })();
+              }}
+            >
+              {allowSideload ? <><ShieldAlert className="h-3.5 w-3.5" /><Trans>Turn off sideloading</Trans></> : <><ShieldAlert className="h-3.5 w-3.5" /><Trans>Enable Sideloading</Trans></>}
+            </Button>
+          </>
+        )}
+      >
+        <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          <Trans>A sideloaded package is a native program, not a profile pack. Once imported it runs with your permissions: it can read any file you can read, open network connections, and crash the app if it misbehaves.</Trans>
+        </p>
+        <div
+          className="rounded-md border px-3 py-2"
+          style={{
+            borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 40%)',
+            background: 'color-mix(in srgb, #d97706, var(--surface-1) 92%)',
+          }}
+        >
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: '#d97706' }} />
+            <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              <Trans>Signatures prove who built the package, not that it is safe. Only enable this for a publisher you trust.</Trans>
+            </p>
+          </div>
+        </div>
+        {allowSideload && (
+          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+            <Trans>This build can import packages. Turn sideloading off to stop new imports; packages already installed stay on disk.</Trans>
+          </p>
+        )}
       </StructuredDialogModal>
 
       <StructuredDialogModal
