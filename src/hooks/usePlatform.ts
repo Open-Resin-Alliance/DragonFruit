@@ -1,4 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useSyncExternalStore } from 'react';
+
+/** The platform never changes while the page is open, so there is nothing to subscribe to. */
+export function subscribeToPlatform(): () => void {
+  return () => {};
+}
 
 export function detectPlatform(): 'mac' | 'windows' | 'linux' | 'unknown' {
   if (typeof navigator === 'undefined') return 'unknown';
@@ -9,12 +14,13 @@ export function detectPlatform(): 'mac' | 'windows' | 'linux' | 'unknown' {
   return 'unknown';
 }
 
+// The server snapshot is false so the first render matches the prerendered HTML.
 export function useIsLinux(): boolean {
-  const [isLinux, setIsLinux] = useState(false);
-  useEffect(() => {
-    setIsLinux(detectPlatform() === 'linux');
-  }, []);
-  return isLinux;
+  return useSyncExternalStore(
+    subscribeToPlatform,
+    () => detectPlatform() === 'linux',
+    () => false,
+  );
 }
 
 // iOS WebKit greys out files whose extension it can't map to a known UTI
