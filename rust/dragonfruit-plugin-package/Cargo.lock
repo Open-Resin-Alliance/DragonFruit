@@ -304,11 +304,20 @@ dependencies = [
  "argon2",
  "base64",
  "chacha20poly1305",
+ "dragonfruit-plugin-sdk",
  "ed25519-dalek",
  "serde",
  "serde_json",
  "sha2",
  "zip",
+]
+
+[[package]]
+name = "dragonfruit-plugin-sdk"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

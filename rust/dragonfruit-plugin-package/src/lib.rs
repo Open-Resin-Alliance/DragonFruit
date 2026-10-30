@@ -21,10 +21,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub const FORMAT_VERSION: u32 = 1;
-/// Wire protocol the host speaks to the plugin process. Package manifests
-/// declare the protocol they were built against; a version this host does not
-/// know is refused rather than guessed.
-pub const PROTOCOL_VERSION: u32 = 1;
+/// Wire protocol the host speaks to the plugin process. Owned by the SDK so the
+/// two cannot drift; re-exported here because the manifest validates against it.
+pub use dragonfruit_plugin_sdk::PROTOCOL_VERSION;
 
 pub const MANIFEST_ENTRY: &str = "dfplugin.json";
 pub const SIGNATURE_ENTRY: &str = "signature.ed25519";

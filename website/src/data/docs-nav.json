@@ -267,6 +267,10 @@
             {
               "label": "Sideloaded Complex Plugins",
               "slug": "dev/plugins-sideloaded"
+            },
+            {
+              "label": "Plugin SDK",
+              "slug": "dev/plugins-sdk"
             }
           ]
         },
