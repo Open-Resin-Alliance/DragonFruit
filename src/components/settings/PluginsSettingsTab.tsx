@@ -1,9 +1,13 @@
 'use client';
 
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
 import { AlertTriangle, CheckCircle2, Download, ExternalLink, Github, PackageCheck, Plug, ShieldCheck, Trash2 } from 'lucide-react';
 import { Button, Spinner } from '@/components/atoms';
 import { Tooltip } from '@/components/ui/Tooltip';
+import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import {
   getInstalledPlugins,
   getProfileStoreSnapshot,
@@ -91,6 +95,7 @@ function normalizePluginManifest(input: GithubManifestResponse['manifest']): Plu
 }
 
 export function PluginsSettingsTab() {
+  const { _ } = useLingui();
   React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
 
   const [isLightTheme, setIsLightTheme] = React.useState(false);
@@ -575,56 +580,33 @@ export function PluginsSettingsTab() {
         </div>
       )}
 
-      {pendingRemovePlugin && (
-        <div className="fixed inset-0 z-[122] flex items-center justify-center bg-black/60 backdrop-blur-sm px-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
-          if (event.target === event.currentTarget) setPendingRemovePlugin(null);
-        }}>
-          <div className="w-full max-w-lg rounded-xl border p-4 ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
-            <div className="flex items-start gap-2.5">
-              <span className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
-                style={{
-                  borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
-                  background: 'color-mix(in srgb, #ef4444, var(--surface-2) 90%)',
-                  color: '#fca5a5',
-                }}
-              >
-                <Trash2 className="h-4 w-4" />
-              </span>
-              <div>
-                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Remove Plugin?
-                </div>
-                <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  This removes <span style={{ color: 'var(--text-strong)' }}>{pendingRemovePlugin.name}</span> from installed plugins.
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-4 flex items-center justify-end gap-2">
-              <Button
-                type="button"
-                variant="secondary"
-                size="auto"
-                className="!h-8 !px-3 !py-0 text-xs"
-                onClick={() => setPendingRemovePlugin(null)}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                size="auto"
-                className="!h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1"
-                style={{ color: '#fca5a5' }}
-                onClick={handleConfirmUninstall}
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-                Remove
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+      <StructuredDialogModal
+        open={pendingRemovePlugin !== null}
+        ariaLabel={_(msg`Remove plugin`)}
+        title={<Trans>Remove Plugin?</Trans>}
+        subtitle={pendingRemovePlugin?.name}
+        icon={<Trash2 className="h-4 w-4" />}
+        iconTone="danger"
+        zIndexClassName="z-[130]"
+        closeAriaLabel={_(msg`Close modal`)}
+        onClose={() => setPendingRemovePlugin(null)}
+        onBackdropClick={() => setPendingRemovePlugin(null)}
+        actions={(
+          <>
+            <Button variant="secondary" onClick={() => setPendingRemovePlugin(null)}>
+              <Trans>Cancel</Trans>
+            </Button>
+            <Button variant="tinted-danger" onClick={handleConfirmUninstall}>
+              <Trash2 className="h-3.5 w-3.5" />
+              <Trans>Remove plugin</Trans>
+            </Button>
+          </>
+        )}
+      >
+        <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          <Trans>This removes the plugin from your profile library.</Trans>
+        </p>
+      </StructuredDialogModal>
 
       <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
         <div className="flex items-start gap-2">
