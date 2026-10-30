@@ -892,6 +892,7 @@ export async function loadStlBinaryStreaming(fileUrl: string): Promise<THREE.Buf
   } catch (error) {
     if (error instanceof StlWebviewMemoryError) throw error;
     console.warn('[loadStlGeometry] Streaming STL failed; falling back to STLLoader.', error);
+    void logToNativeFile('warn', `[loadStlGeometry] Streaming STL failed; falling back to STLLoader: ${String(error)}`);
     return null;
   } finally {
     reader.cancel().catch(() => {});
@@ -942,6 +943,7 @@ async function loadStlViaTauri(filePath: string, classify: boolean): Promise<Nat
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error('[loadStlGeometry] Native STL loading failed.', error);
+    void logToNativeFile('error', `[loadStlGeometry] Native STL loading failed: ${message}`);
     throw new Error(message || 'Native STL loading failed.');
   }
 }
@@ -1103,24 +1105,6 @@ export async function decodeDfmx(payload: Uint8Array | ArrayBuffer): Promise<Dec
 }
 
 /**
- * Log through the platform log plugin, the one channel that reaches the log
- * file: `attachConsole` mirrors Rust records into DevTools only, so a plain
- * `console.*` from here never appears next to the Rust lines.
- *
- * The import is dynamic because `@tauri-apps/plugin-log` has no meaning in the
- * web build — the same reason `AppLogger` resolves it at call time. Best-effort:
- * outside Tauri there is nothing to log to and the console line stands alone.
- */
-async function logNativeWarning(message: string): Promise<void> {
-  try {
-    const log = await import('@tauri-apps/plugin-log');
-    await log.warn(message);
-  } catch {
-    // Not a Tauri runtime; the console line beside this already says the same.
-  }
-}
-
-/**
  * Load every body of a mesh file natively. Tauri with an on-disk path only;
  * returns null everywhere else (and on any failure) so the caller falls back to
  * the renderer's own loaders.
@@ -1131,7 +1115,7 @@ async function loadNativeMeshBodies(filePath: string | undefined): Promise<THREE
     // The native loader reads from disk, so a File with no path — a zip entry or
     // a synthesized file — can only go through the renderer's own loaders.
     console.warn('[loadMeshFile] no on-disk path for this file; using the renderer loaders.');
-    void logNativeWarning('[loadMeshFile] no on-disk path for this file; using the renderer loaders.');
+    void logToNativeFile('warn', '[loadMeshFile] no on-disk path for this file; using the renderer loaders.');
     return null;
   }
   try {
@@ -1144,7 +1128,7 @@ async function loadNativeMeshBodies(filePath: string | undefined): Promise<THREE
     return decoded.bodies;
   } catch (error) {
     console.warn('[loadMeshFile] native mesh load failed; falling back to the renderer loaders.', error);
-    void logNativeWarning(`[loadMeshFile] native mesh load failed; using the renderer loaders: ${String(error)}`);
+    void logToNativeFile('warn', `[loadMeshFile] native mesh load failed; using the renderer loaders: ${String(error)}`);
     return null;
   }
 }
@@ -1237,7 +1221,7 @@ async function loadNativeMeshBytes(
     return decoded.bodies.length > 0 ? decoded : null;
   } catch (error) {
     console.warn('[loadMeshFile] native byte load failed; falling back to the renderer loaders.', error);
-    void logNativeWarning(`[loadMeshFile] native byte load failed; using the renderer loaders: ${String(error)}`);
+    void logToNativeFile('warn', `[loadMeshFile] native byte load failed; using the renderer loaders: ${String(error)}`);
     return null;
   }
 }
@@ -1485,6 +1469,7 @@ async function tryLoadFast3mf(fileUrl: string): Promise<THREE.Group | null> {
     return null;
   } catch (fastError) {
     console.warn('[load3mfGeometry] fast-3mf-loader failed; falling back to ThreeMFLoader.', fastError);
+    void logToNativeFile('warn', `[load3mfGeometry] fast-3mf-loader failed; falling back to ThreeMFLoader: ${String(fastError)}`);
     return null;
   }
 }
@@ -1504,6 +1489,7 @@ export async function load3mfGeometry(fileUrl: string, options?: ProcessGeometry
       return await processGeometry(mergedGeometry, options);
     } catch (error) {
       console.warn('[load3mfGeometry] fast-3mf-loader geometry processing failed; falling back to ThreeMFLoader.', error);
+      void logToNativeFile('warn', `[load3mfGeometry] fast-3mf-loader geometry processing failed; falling back to ThreeMFLoader: ${String(error)}`);
     }
   }
 
@@ -1588,6 +1574,7 @@ export async function load3mfGeometryMulti(fileUrl: string, options?: ProcessGeo
       return results;
     } catch (error) {
       console.warn('[load3mfGeometryMulti] fast-3mf-loader geometry processing failed; falling back to ThreeMFLoader.', error);
+      void logToNativeFile('warn', `[load3mfGeometryMulti] fast-3mf-loader geometry processing failed; falling back to ThreeMFLoader: ${String(error)}`);
     }
   }
 
@@ -1697,6 +1684,7 @@ export async function load3mfGeometryMergedWithSplitData(
       return { merged, splitBodies };
     } catch (error) {
       console.warn('[load3mfGeometryMerged] fast-3mf-loader failed; falling back to ThreeMFLoader.', error);
+      void logToNativeFile('warn', `[load3mfGeometryMerged] fast-3mf-loader failed; falling back to ThreeMFLoader: ${String(error)}`);
     }
   }
 
