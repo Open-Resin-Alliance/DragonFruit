@@ -178,7 +178,7 @@ export function PluginsSettingsTab() {
   const [passphraseError, setPassphraseError] = React.useState<string | null>(null);
   const [pendingRemoveSideload, setPendingRemoveSideload] = React.useState<InstalledSideloadedPlugin | null>(null);
   // A fresh install is announced by the row itself, not by a green line above the
-  // list: one glow that fades after ten seconds.
+  // list: one glow that fades after three seconds.
   const [recentlyInstalledKey, setRecentlyInstalledKey] = React.useState<string | null>(null);
   const highlightTimerRef = React.useRef<number | null>(null);
 
@@ -190,7 +190,7 @@ export function PluginsSettingsTab() {
     highlightTimerRef.current = window.setTimeout(() => {
       setRecentlyInstalledKey(null);
       highlightTimerRef.current = null;
-    }, 10_000);
+    }, 3_000);
   }, []);
 
   React.useEffect(() => () => {
@@ -552,11 +552,14 @@ export function PluginsSettingsTab() {
         borderColor: row.key === recentlyInstalledKey
           ? 'color-mix(in srgb, #86efac, var(--border-subtle) 28%)'
           : 'var(--border-subtle)',
-        background: 'var(--surface-0)',
+        // The fill, not just the outline: a ring alone read as a focus state.
+        background: row.key === recentlyInstalledKey
+          ? 'color-mix(in srgb, #86efac, var(--surface-0) 88%)'
+          : 'var(--surface-0)',
         boxShadow: row.key === recentlyInstalledKey
-          ? '0 0 0 1px color-mix(in srgb, #86efac, transparent 55%), 0 0 18px color-mix(in srgb, #86efac, transparent 70%)'
+          ? 'inset 0 0 0 1px color-mix(in srgb, #86efac, transparent 45%), inset 0 0 14px color-mix(in srgb, #86efac, transparent 72%), 0 0 16px color-mix(in srgb, #86efac, transparent 62%)'
           : 'none',
-        transition: 'box-shadow 600ms ease, border-color 600ms ease',
+        transition: 'box-shadow 600ms ease, border-color 600ms ease, background 600ms ease',
       }}
     >
           <div className="min-w-0">
