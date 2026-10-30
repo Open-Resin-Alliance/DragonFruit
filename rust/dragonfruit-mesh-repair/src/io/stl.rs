@@ -67,16 +67,27 @@ fn parse_binary(bytes: &[u8]) -> Result<IndexedMesh, MeshRepairError> {
 
 /// Triangle count to read from a binary STL. Exporters get the header
 /// count wrong in the wild (e.g. 499996 in the header, 500000 records in
-/// the body), so like admesh we trust the body when it is a whole number
-/// of records, and otherwise read the header's count and ignore trailing
-/// bytes. Only a body too short for the header's count is an error.
+/// the body), so like admesh we trust the body when it holds at least the
+/// header's count in whole records, and otherwise read the header's count
+/// and ignore trailing bytes. Both are warnings: the mesh is all there. A
+/// body too short for the header's count is missing triangles, an error.
 fn binary_tri_count(bytes: &[u8]) -> Result<usize, MeshRepairError> {
     let header_count = u32::from_le_bytes([bytes[80], bytes[81], bytes[82], bytes[83]]) as usize;
     let body = bytes.len() - 84;
-    if body % 50 == 0 {
+    if body % 50 == 0 && body / 50 >= header_count {
+        if body / 50 > header_count {
+            log::warn!(
+                "binary STL header claims {header_count} triangles but the body holds {}; reading them all",
+                body / 50
+            );
+        }
         return Ok(body / 50);
     }
     if header_count.saturating_mul(50) <= body {
+        log::warn!(
+            "binary STL has {} trailing bytes after its {header_count} triangles; ignoring them",
+            body - header_count * 50
+        );
         return Ok(header_count);
     }
     Err(MeshRepairError::Parse(format!(
@@ -168,6 +179,11 @@ mod tests {
     fn trailing_garbage_uses_header_count() {
         let mesh = parse_binary(&binary_stl(3, 3, 7)).unwrap();
         assert_eq!(mesh.triangles.len(), 3);
+    }
+
+    #[test]
+    fn missing_whole_records_is_an_error() {
+        assert!(parse_binary(&binary_stl(3, 2, 0)).is_err());
     }
 
     #[test]

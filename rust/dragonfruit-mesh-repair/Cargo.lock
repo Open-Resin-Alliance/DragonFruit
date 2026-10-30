@@ -245,6 +245,7 @@ dependencies = [
  "clap",
  "dragonfruit-mesh-core",
  "dragonfruit-tetgen",
+ "log",
  "manifold-csg",
  "meshopt",
  "rayon",
