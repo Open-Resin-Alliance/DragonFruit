@@ -237,7 +237,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfruit-mesh-repair"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -245,6 +245,7 @@ dependencies = [
  "clap",
  "dragonfruit-mesh-core",
  "dragonfruit-tetgen",
+ "log",
  "manifold-csg",
  "meshopt",
  "rayon",

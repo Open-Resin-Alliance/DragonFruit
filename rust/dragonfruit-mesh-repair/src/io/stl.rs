@@ -44,14 +44,7 @@ fn parse_binary(bytes: &[u8]) -> Result<IndexedMesh, MeshRepairError> {
     if bytes.len() < 84 {
         return Err(MeshRepairError::Parse("binary STL too short".into()));
     }
-    let tri_count = u32::from_le_bytes([bytes[80], bytes[81], bytes[82], bytes[83]]) as usize;
-    let expected = 84 + tri_count.saturating_mul(50);
-    if expected != bytes.len() {
-        return Err(MeshRepairError::Parse(format!(
-            "binary STL size mismatch: expected {expected} bytes for {tri_count} triangles, got {}",
-            bytes.len()
-        )));
-    }
+    let tri_count = binary_tri_count(bytes)?;
     let mut positions: Vec<f32> = Vec::with_capacity(tri_count * 9);
     let mut cursor = 84usize;
     for _ in 0..tri_count {
@@ -70,6 +63,38 @@ fn parse_binary(bytes: &[u8]) -> Result<IndexedMesh, MeshRepairError> {
         &positions,
         crate::io::DEFAULT_MERGE_EPSILON,
     ))
+}
+
+/// Triangle count to read from a binary STL. Exporters get the header
+/// count wrong in the wild (e.g. 499996 in the header, 500000 records in
+/// the body), so like admesh we trust the body when it holds at least the
+/// header's count in whole records, and otherwise read the header's count
+/// and ignore trailing bytes. Both are warnings: the mesh is all there. A
+/// body too short for the header's count is missing triangles, an error.
+fn binary_tri_count(bytes: &[u8]) -> Result<usize, MeshRepairError> {
+    let header_count = u32::from_le_bytes([bytes[80], bytes[81], bytes[82], bytes[83]]) as usize;
+    let body = bytes.len() - 84;
+    if body % 50 == 0 && body / 50 >= header_count {
+        if body / 50 > header_count {
+            log::warn!(
+                "binary STL header claims {header_count} triangles but the body holds {}; reading them all",
+                body / 50
+            );
+        }
+        return Ok(body / 50);
+    }
+    if header_count.saturating_mul(50) <= body {
+        log::warn!(
+            "binary STL has {} trailing bytes after its {header_count} triangles; ignoring them",
+            body - header_count * 50
+        );
+        return Ok(header_count);
+    }
+    Err(MeshRepairError::Parse(format!(
+        "binary STL truncated: header claims {header_count} triangles ({} bytes), got {}",
+        84 + header_count.saturating_mul(50),
+        bytes.len()
+    )))
 }
 
 fn parse_ascii(bytes: &[u8]) -> Result<IndexedMesh, MeshRepairError> {
@@ -123,4 +148,48 @@ pub fn write_binary<P: AsRef<Path>>(mesh: &IndexedMesh, path: P) -> Result<(), M
     }
     file.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn binary_stl(header_count: u32, records: usize, trailing: usize) -> Vec<u8> {
+        let mut bytes = vec![0u8; 80];
+        bytes.extend_from_slice(&header_count.to_le_bytes());
+        for i in 0..records {
+            let o = i as f32 * 10.0;
+            bytes.extend_from_slice(&[0u8; 12]);
+            for f in [o, 0.0, 0.0, o + 1.0, 0.0, 0.0, o, 1.0, 0.0] {
+                bytes.extend_from_slice(&f32::to_le_bytes(f));
+            }
+            bytes.extend_from_slice(&[0u8; 2]);
+        }
+        bytes.extend(std::iter::repeat_n(0u8, trailing));
+        bytes
+    }
+
+    #[test]
+    fn header_undercount_reads_every_record() {
+        let mesh = parse_binary(&binary_stl(2, 3, 0)).unwrap();
+        assert_eq!(mesh.triangles.len(), 3);
+    }
+
+    #[test]
+    fn trailing_garbage_uses_header_count() {
+        let mesh = parse_binary(&binary_stl(3, 3, 7)).unwrap();
+        assert_eq!(mesh.triangles.len(), 3);
+    }
+
+    #[test]
+    fn missing_whole_records_is_an_error() {
+        assert!(parse_binary(&binary_stl(3, 2, 0)).is_err());
+    }
+
+    #[test]
+    fn truncated_body_is_an_error() {
+        let mut bytes = binary_stl(3, 3, 0);
+        bytes.truncate(bytes.len() - 7);
+        assert!(parse_binary(&bytes).is_err());
+    }
 }

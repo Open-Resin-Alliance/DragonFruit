@@ -304,7 +304,7 @@ msgstr "{rate} capas/s"
 
 #: src/components/scene/MeshRepairReportModal.tsx:365
 msgid "{repaired} of {total} parts repaired"
-msgstr ""
+msgstr "{repaired} de {total} piezas reparadas"
 
 #. Counter above the managed printer list: how many printers are saved and how many are reachable.
 #: src/components/settings/FleetManagement.tsx:16
@@ -1522,7 +1522,7 @@ msgstr "Volumen: {0} × {1} × {2} mm"
 
 #: src/components/scene/remeshProgressMessages.ts:22
 msgid "Building the new surface"
-msgstr ""
+msgstr "Construyendo la nueva superficie"
 
 #: src/components/modals/ScenePrinterMismatchModal.tsx:55
 msgid "Built for another printer"
@@ -1832,7 +1832,7 @@ msgstr "{cleanedNonManifoldEdges, plural, one {Se limpió # arista no manifold} 
 
 #: src/components/scene/solidRemeshProgressMessages.ts:21
 msgid "Cleaning up"
-msgstr ""
+msgstr "Limpiando"
 
 #: src/components/controls/AutoRotationPanel.tsx:75
 #: src/components/layout/EmptySceneState.tsx:627
@@ -2102,7 +2102,7 @@ msgstr "Si cierras ahora, los ajustes de autosoportes se quedan como están. «G
 
 #: src/components/scene/solidRemeshProgressMessages.ts:19
 msgid "Closing open edges"
-msgstr ""
+msgstr "Cerrando bordes abiertos"
 
 #: src/components/scene/repairProgressMessages.ts:25
 msgid "Closing small holes"
@@ -2110,7 +2110,7 @@ msgstr "Cerrando agujeros pequeños"
 
 #: src/components/scene/remeshProgressMessages.ts:26
 msgid "Closing the new surface"
-msgstr ""
+msgstr "Cerrando la nueva superficie"
 
 #: src/components/scene/repairProgressMessages.ts:28
 msgid "Closing the remaining gaps"
@@ -2118,11 +2118,11 @@ msgstr "Cerrando los huecos restantes"
 
 #: src/components/scene/remeshProgressMessages.ts:28
 msgid "Closing the simplified surface"
-msgstr ""
+msgstr "Cerrando la superficie simplificada"
 
 #: src/components/scene/tetSurfaceProgressMessages.ts:20
 msgid "Closing the surface"
-msgstr ""
+msgstr "Cerrando la superficie"
 
 #: src/supports/autoBracing/AutoBracingSettingsCard.tsx:185
 msgid "Cluster Spacing"
@@ -3122,7 +3122,7 @@ msgstr "Menú de DragonFruit"
 
 #: src/components/scene/MeshRepairReportModal.tsx:381
 msgid "DragonFruit rebuilt this mesh into a solid and replaced the model in your current scene."
-msgstr ""
+msgstr "DragonFruit ha reconstruido esta malla como un sólido y ha sustituido el modelo en la escena actual."
 
 #: src/components/scene/MeshRepairReportModal.tsx:383
 msgid "DragonFruit repaired this mesh and replaced the model in your current scene."
@@ -3172,7 +3172,7 @@ msgstr "Dinámica"
 
 #: src/components/scene/MeshRepairReportModal.tsx:452
 msgid "Each object was repaired on its own."
-msgstr ""
+msgstr "Cada objeto se ha reparado por separado."
 
 #: src/components/settings/SettingsModal.tsx:1272
 msgid "Early-access and experimental features"
@@ -3673,7 +3673,7 @@ msgstr "Encuentra tu impresora en la red"
 
 #: src/components/scene/remeshProgressMessages.ts:19
 msgid "Finding the surface"
-msgstr ""
+msgstr "Localizando la superficie"
 
 #: src/supports/Settings/presetMessages.ts:28
 msgid "Fine supports for delicate features"
@@ -3681,7 +3681,7 @@ msgstr "Soportes finos para detalles delicados"
 
 #: src/components/scene/tetSurfaceProgressMessages.ts:21
 msgid "Finishing up"
-msgstr ""
+msgstr "Terminando"
 
 #: src/features/slicing/components/SlicingPanel.tsx:3072
 msgid "Finishing…"
@@ -3932,7 +3932,7 @@ msgstr "Cuadrícula creciente o longitud de fila fija."
 
 #: src/components/scene/remeshProgressMessages.ts:20
 msgid "Growing the surface band"
-msgstr ""
+msgstr "Ensanchando la banda de superficie"
 
 #: src/features/organicCut/OrganicCutPanel.tsx:604
 msgid "Half-sphere tenon — locates the parts but allows rotation."
@@ -4548,7 +4548,7 @@ msgstr "Uniendo aristas sueltas"
 
 #: src/components/scene/remeshProgressMessages.ts:23
 msgid "Joining the new surface"
-msgstr ""
+msgstr "Uniendo la nueva superficie"
 
 #: src/features/organicCut/OrganicCutPanel.tsx:496
 msgid "Joint Clearance"
@@ -5225,7 +5225,7 @@ msgstr "Intervalo máximo de guardado"
 
 #: src/components/scene/remeshProgressMessages.ts:21
 msgid "Measuring distances to the surface"
-msgstr ""
+msgstr "Midiendo distancias a la superficie"
 
 #. Built-in auto-support preset for balanced supports — the Medium tier in the Auto Support panel's preset selector.
 #: src/supports/Settings/autoSupportPresetMessages.ts:29
@@ -6064,7 +6064,7 @@ msgstr "Sobre cara"
 
 #: src/components/controls/TransformControls.tsx:289
 msgid "On, models stay this far above the build plate after every move or rotation. Off, they rest on the plate. Scaling keeps the current bottom height."
-msgstr ""
+msgstr "Activado, los modelos se quedan a esta altura sobre la placa tras cada movimiento o giro. Desactivado, se apoyan en la placa. Al escalar se conserva la altura actual de la base."
 
 #: src/components/settings/BackupsSettingsTab.tsx:962
 msgid "Onboarding"
@@ -6346,11 +6346,11 @@ msgstr "Fusiones padre-hija entre las islas detectadas"
 #. placeholder {1}: part.triangles_after
 #: src/components/scene/MeshRepairReportModal.tsx:369
 msgid "Part {0}: {1} triangles"
-msgstr ""
+msgstr "Pieza {0}: {1} triángulos"
 
 #: src/components/scene/MeshRepairReportModal.tsx:451
 msgid "Parts"
-msgstr ""
+msgstr "Piezas"
 
 #: src/components/modals/ManifoldWarningModal.tsx:52
 msgid "Parts of this mesh are not closed — edges are left open, faces cross through each other, or surfaces do not quite meet. Slicing and support placement expect a sealed solid, so defects can reach the print without showing up here first."
@@ -6641,7 +6641,7 @@ msgstr "Preparando geometría…"
 
 #: src/components/scene/solidRemeshProgressMessages.ts:18
 msgid "Preparing the model"
-msgstr ""
+msgstr "Preparando el modelo"
 
 #: src/components/settings/BackupsSettingsTab.tsx:1038
 msgid "Preparing things…"
@@ -6992,27 +6992,27 @@ msgstr "Reconstruyendo la geometría del modelo con los últimos ajustes de vaci
 #: src/components/scene/solidRemeshProgressMessages.ts:20
 #: src/components/scene/tetSurfaceProgressMessages.ts:19
 msgid "Rebuilding the surface"
-msgstr ""
+msgstr "Reconstruyendo la superficie"
 
 #: src/components/scene/repairProgressMessages.ts:22
 msgid "Rebuilding the surface into a solid"
-msgstr ""
+msgstr "Reconstruyendo la superficie como un sólido"
 
 #: src/app/page.tsx:11505
 msgid "Rebuilding the surface."
-msgstr ""
+msgstr "Reconstruyendo la superficie."
 
 #: src/components/modals/TetrahedralRemeshConfirmModal.tsx:32
 msgid "Rebuilds the surface"
-msgstr ""
+msgstr "Reconstruye la superficie"
 
 #: src/components/scene/MeshRepairReportModal.tsx:159
 msgid "Rebuilt the surface into a solid: {to} triangles from {from}, with {percent}% less volume."
-msgstr ""
+msgstr "Superficie reconstruida como sólido: {to} triángulos (antes {from}), con un {percent}% menos de volumen."
 
 #: src/components/scene/MeshRepairReportModal.tsx:158
 msgid "Rebuilt the surface into a solid: {to} triangles from {from}, with {percent}% more volume."
-msgstr ""
+msgstr "Superficie reconstruida como sólido: {to} triángulos (antes {from}), con un {percent}% más de volumen."
 
 #: src/components/controls/IslandsPanel.tsx:166
 msgid "Recalculating…"
@@ -7128,35 +7128,35 @@ msgstr "Remallar"
 #: src/features/scene/sceneHistoryLabels.ts:214
 msgctxt "Undo history entry"
 msgid "Remesh {modelName}"
-msgstr ""
+msgstr "Remallar {modelName}"
 
 #: src/components/modals/TetrahedralRemeshConfirmModal.tsx:30
 msgid "Remesh confirmation"
-msgstr ""
+msgstr "Confirmación de remallado"
 
 #: src/features/scene/useSceneCollectionManager.ts:7410
 msgid "Remesh failed: {message}"
-msgstr ""
+msgstr "Falló el remallado: {message}"
 
 #: src/features/scene/useSceneCollectionManager.ts:7383
 msgid "Remesh needs the desktop app."
-msgstr ""
+msgstr "El remallado necesita la aplicación de escritorio."
 
 #: src/app/page.tsx:11507
 msgid "Remesh progress"
-msgstr ""
+msgstr "Progreso del remallado"
 
 #: src/components/modals/TetrahedralRemeshConfirmModal.tsx:31
 msgid "Remesh this model?"
-msgstr ""
+msgstr "¿Remallar este modelo?"
 
 #: src/features/scene/meshRepairMessages.ts:75
 msgid "Remesh: {inputTriangles} → {outputTriangles} triangles in {elapsed}."
-msgstr ""
+msgstr "Remallado: {inputTriangles} → {outputTriangles} triángulos en {elapsed}."
 
 #: src/features/scene/meshRepairMessages.ts:49
 msgid "Remeshed {inputTriangles} → {outputTriangles} triangles in {elapsed}."
-msgstr ""
+msgstr "Remallado {inputTriangles} → {outputTriangles} triángulos en {elapsed}."
 
 #: src/features/updater/GlobalUpdateIndicator.tsx:207
 msgid "Remind me later"
@@ -7365,7 +7365,7 @@ msgstr "Reparación completada"
 #: src/components/scene/MeshRepairReportModal.tsx:250
 #: src/components/scene/MeshRepairReportModal.tsx:405
 msgid "Repair Complete: Rebuild"
-msgstr ""
+msgstr "Reparación completada: reconstrucción"
 
 #: src/features/scene/meshRepairMessages.ts:25
 msgid "Repair failed for {modelName}: {message}"
@@ -7394,7 +7394,7 @@ msgstr "Reparar ahora"
 
 #: src/components/scene/MeshRepairConfirmModal.tsx:89
 msgid "Repair parts separately"
-msgstr ""
+msgstr "Reparar las piezas por separado"
 
 #: src/components/organisms/modals/MeshRepairModals.tsx:97
 msgid "Repair progress"
@@ -7420,7 +7420,7 @@ msgstr "{modelName} reparado."
 
 #: src/components/scene/repairProgressMessages.ts:21
 msgid "Repairing"
-msgstr ""
+msgstr "Reparando"
 
 #: src/components/organisms/modals/MeshRepairModals.tsx:275
 #: src/components/organisms/modals/MeshRepairModals.tsx:291
@@ -7555,7 +7555,7 @@ msgstr "{resolvedSelfIntersections, plural, one {Se resolvió # autointersecció
 
 #: src/app/page.tsx:11563
 msgid "Resolving the surface into a solid."
-msgstr ""
+msgstr "Convirtiendo la superficie en un sólido."
 
 #: src/components/settings/LocalBackupsSettingsTab.tsx:734
 msgid "Resolving..."
@@ -7639,7 +7639,7 @@ msgstr "Descartar los cambios"
 
 #: src/components/modals/ShrinkWrapConfirmModal.tsx:32
 msgid "Reworks the surface into one solid"
-msgstr ""
+msgstr "Rehace la superficie como un único sólido"
 
 #. View cube face, rendered uppercase inside a small 3D cube. Keep it as short as possible.
 #: src/components/scene/SceneCanvas/SceneCanvas.tsx:1797
@@ -8492,36 +8492,36 @@ msgstr "Muestra los interruptores de capa Vóxeles, Mínimos, Coincidentes y Vol
 #: src/components/modals/ShrinkWrapConfirmModal.tsx:49
 #: src/components/ui/EditorContextMenu.tsx:122
 msgid "Shrink-Wrap"
-msgstr ""
+msgstr "Envolver"
 
 #: src/features/scene/sceneHistoryLabels.ts:210
 msgctxt "Undo history entry"
 msgid "Shrink-Wrap {modelName}"
-msgstr ""
+msgstr "Envolver {modelName}"
 
 #: src/components/modals/ShrinkWrapConfirmModal.tsx:30
 msgid "Shrink-Wrap confirmation"
-msgstr ""
+msgstr "Confirmación de envoltura"
 
 #: src/features/scene/useSceneCollectionManager.ts:7464
 msgid "Shrink-Wrap failed: {message}"
-msgstr ""
+msgstr "Falló la envoltura: {message}"
 
 #: src/features/scene/useSceneCollectionManager.ts:7437
 msgid "Shrink-Wrap needs the desktop app."
-msgstr ""
+msgstr "Envolver necesita la aplicación de escritorio."
 
 #: src/app/page.tsx:11565
 msgid "Shrink-Wrap progress"
-msgstr ""
+msgstr "Progreso de la envoltura"
 
 #: src/components/modals/ShrinkWrapConfirmModal.tsx:31
 msgid "Shrink-Wrap this model?"
-msgstr ""
+msgstr "¿Envolver este modelo?"
 
 #: src/features/scene/meshRepairMessages.ts:64
 msgid "Shrink-Wrapped {inputTriangles} → {outputTriangles} triangles in {elapsed}."
-msgstr ""
+msgstr "Envuelto {inputTriangles} → {outputTriangles} triángulos en {elapsed}."
 
 #: src/components/scene/MeshRepairReportModal.tsx:764
 #: src/components/scene/MeshRepairReportModal.tsx:805
@@ -8535,7 +8535,7 @@ msgstr "Simplificado"
 
 #: src/components/scene/remeshProgressMessages.ts:27
 msgid "Simplifying the new surface"
-msgstr ""
+msgstr "Simplificando la nueva superficie"
 
 #: src/supports/autoBracing/AutoBracingSettingsCard.tsx:101
 msgid "Single Diagonal"
@@ -8666,7 +8666,7 @@ msgstr "Suave"
 
 #: src/components/scene/remeshProgressMessages.ts:24
 msgid "Smoothing the new surface"
-msgstr ""
+msgstr "Suavizando la nueva superficie"
 
 #: src/features/organicCut/history/organicCutHistoryLabels.ts:23
 msgctxt "Undo history entry"
@@ -9282,13 +9282,13 @@ msgstr "la impresora para la que se creó esta escena"
 
 #: src/components/modals/ShrinkWrapConfirmModal.tsx:67
 msgid "The rebuilt surface will replace this model in your current scene. A model that cannot be resolved is left untouched, and you can undo this afterwards."
-msgstr ""
+msgstr "La superficie reconstruida sustituirá a este modelo en la escena actual. Si un modelo no se puede resolver, se deja como está, y podrás deshacerlo después."
 
 #: src/app/page.tsx:11516
 #: src/app/page.tsx:11574
 #: src/components/modals/TetrahedralRemeshConfirmModal.tsx:67
 msgid "The rebuilt surface will replace this model in your current scene. Large models take longer, and some models cannot be rebuilt at all and are left untouched. You can undo this afterwards."
-msgstr ""
+msgstr "La superficie reconstruida sustituirá a este modelo en la escena actual. Los modelos grandes tardan más, y algunos no se pueden reconstruir y se dejan como están. Podrás deshacerlo después."
 
 #: src/components/modals/ManifoldWarningModal.tsx:59
 msgid "The red-striped areas in the viewport mark the parts that failed validation."
@@ -9296,11 +9296,11 @@ msgstr "Las zonas con rayas rojas en la vista marcan las partes que no han super
 
 #: src/components/organisms/modals/MeshRepairModals.tsx:348
 msgid "The repaired result will replace this model in your current scene. Large or badly damaged meshes can take longer, and some files may still need manual cleanup afterward."
-msgstr ""
+msgstr "El resultado reparado sustituirá a este modelo en la escena actual. Las mallas grandes o muy dañadas pueden tardar más, y puede que algunos archivos aún necesiten un retoque manual después."
 
 #: src/components/organisms/modals/MeshRepairModals.tsx:347
 msgid "The repaired results will replace these models in your current scene. Large or badly damaged meshes can take longer, and some files may still need manual cleanup afterward."
-msgstr ""
+msgstr "Los resultados reparados sustituirán a estos modelos en la escena actual. Las mallas grandes o muy dañadas pueden tardar más, y puede que algunos archivos aún necesiten un retoque manual después."
 
 #: src/components/layout/EmptySceneState.tsx:81
 msgid "The resin is ready. Are you?"
@@ -9396,7 +9396,7 @@ msgstr "Esta función aún está en desarrollo."
 
 #: src/components/scene/MeshRepairConfirmModal.tsx:28
 msgid "This file holds {shells} separate shells, which usually means several objects on one plate. Repaired whole it gets a single verdict for all of them; repaired part by part each object is reported on its own, and the ones that are fine stay fine."
-msgstr ""
+msgstr "Este archivo contiene {shells} cascarones separados, lo que suele indicar varios objetos en una misma placa. Si se repara entero, recibe un único veredicto para todos; si se repara pieza a pieza, cada objeto tiene su propio informe y los que están bien se quedan como están."
 
 #: src/components/modals/ObsoleteVoxlVersionModal.tsx:63
 msgid "This file is a VOXL V1 binary container."
@@ -9420,7 +9420,7 @@ msgstr "Esta máquina está desconectada ahora mismo"
 
 #: src/components/modals/ShrinkWrapConfirmModal.tsx:55
 msgid "This merges overlapping shells, closes gaps and drops loose pieces, leaving one solid."
-msgstr ""
+msgstr "Fusiona los cascarones que se solapan, cierra huecos y descarta las piezas sueltas, dejando un único sólido."
 
 #: src/components/organisms/modals/MeshRepairModals.tsx:225
 msgid "This mesh contains too many self-intersecting triangles and non-manifold edges for boolean operations to succeed. The import repair pass reduced but could not fully resolve all issues in the geometry."
@@ -9452,7 +9452,7 @@ msgstr "Esta impresora no tiene opciones de configuración."
 
 #: src/components/modals/TetrahedralRemeshConfirmModal.tsx:55
 msgid "This rebuilds the model's surface, keeping fine detail."
-msgstr ""
+msgstr "Reconstruye la superficie del modelo conservando el detalle fino."
 
 #: src/components/layout/EmptySceneState.tsx:79
 msgid "This scene is aggressively unoccupied."
@@ -9635,7 +9635,7 @@ msgstr "Reintentar"
 
 #: src/components/scene/remeshProgressMessages.ts:25
 msgid "Turning faces outward"
-msgstr ""
+msgstr "Orientando las caras hacia fuera"
 
 #: src/components/settings/SettingsModal.tsx:1247
 msgid "UI & Theme"
