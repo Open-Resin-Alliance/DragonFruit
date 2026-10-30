@@ -275,7 +275,6 @@ export function PluginsSettingsTab() {
     try {
       await removeSideloadedPlugin(target.manifest.id);
       await refreshSideloaded();
-      setStatus({ kind: 'success', message: `Removed ${target.manifest.name}.` });
     } catch (error) {
       setStatus({ kind: 'error', message: String(error) });
     } finally {
@@ -407,10 +406,7 @@ export function PluginsSettingsTab() {
 
   const handleConfirmUninstall = React.useCallback(() => {
     if (!pendingRemovePlugin) return;
-    const removed = uninstallPlugin(pendingRemovePlugin.id);
-    if (removed) {
-      setStatus({ kind: 'success', message: `Uninstalled plugin: ${pendingRemovePlugin.name}` });
-    }
+    uninstallPlugin(pendingRemovePlugin.id);
     setPendingRemovePlugin(null);
   }, [pendingRemovePlugin]);
 
@@ -695,7 +691,7 @@ export function PluginsSettingsTab() {
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') void handleInstall();
                 }}
-                placeholder={_(msg`https://github.com/owner/repo`)}
+                placeholder={isDevRuntime ? 'df://debug_plugin_official' : _(msg`https://github.com/owner/repo`)}
                 className="h-[34px] min-w-0 flex-1 text-sm"
                 aria-label={_(msg`Plugin repository URL`)}
               />
@@ -729,12 +725,6 @@ export function PluginsSettingsTab() {
             </SettingRow>
           )}
         </div>
-
-        {isDevRuntime && (
-          <p className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-            <Trans>Debug URLs</Trans>: <code>df://debug_plugin_official</code> and <code>df://debug_plugin_3rd</code>
-          </p>
-        )}
 
         {status.kind !== 'idle' && (
           <p className="mt-2 text-xs" style={{ color: status.kind === 'error' ? '#fca5a5' : '#86efac' }}>
