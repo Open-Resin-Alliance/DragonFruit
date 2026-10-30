@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { findDrift } from "./check-node-modules.mjs";
 
 const run = promisify(execFile);
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -167,49 +168,58 @@ const CORE = new Set(["next", "react", "react-dom", "typescript", "@types/node",
 const isCore = (n) => CORE.has(n) || n.startsWith("@tauri-apps/");
 
 async function checkNpmPackages(pkg, nodeInfo) {
-  let outdated = {};
-  try {
-    const { stdout } = await run("npm", ["outdated", "--json"], { cwd: ROOT, maxBuffer: 1 << 26 });
-    outdated = JSON.parse(stdout || "{}");
-  } catch (e) {
-    // npm outdated exits 1 when anything is outdated.
-    outdated = JSON.parse(e.stdout || "{}");
-  }
+  // Installed = what package-lock.json resolves, never node_modules (which may be stale or absent).
+  const lock = readJson("package-lock.json").packages ?? {};
+  const specs = { ...pkg.dependencies, ...pkg.devDependencies, ...pkg.optionalDependencies };
+  const names = Object.keys(specs).filter((n) => lock[`node_modules/${n}`]?.version);
+  const skipped = Object.keys(specs).filter((n) => !lock[`node_modules/${n}`]?.version || !/^[\^~<>=v\d*xX|\s.-]/.test(specs[n]));
+  const meta = await pool(names, 8, async (name) => {
+    const m = await getJson(`https://registry.npmjs.org/${name.replace("/", "%2f")}`, { accept: "application/vnd.npm.install-v1+json" });
+    return { latest: m["dist-tags"].latest, versions: Object.keys(m.versions).filter((v) => !v.includes("-")) };
+  });
+
   const core = [], rest = [];
-  for (const [name, o] of Object.entries(outdated)) {
-    if (!o.current) continue;
+  names.forEach((name, i) => {
+    const m = meta[i];
+    if (!m || m.error) return warnings.push(`registry lookup failed for ${name}: ${m?.error}`);
+    if (skipped.includes(name)) return;
+    const current = lock[`node_modules/${name}`].version;
     const hold = policy.npm?.[name];
-    let latest = o.latest, note = "";
-    if (hold?.maxMajor && parse(o.latest).major > hold.maxMajor) {
+    let latest = m.latest, note = "";
+    if (hold?.maxMajor && parse(m.latest).major > hold.maxMajor) {
       note = `held: ${hold.reason}`;
-      latest = o.wanted;
+      latest = m.versions.filter((v) => parse(v).major <= hold.maxMajor).reduce((a, b) => (cmp(a, b) >= 0 ? a : b));
     }
-    const k = bump(o.current, latest);
+    const k = cmp(latest, current) > 0 ? bump(current, latest) : null;
     const row = k
-      ? { kind: k, cells: [name, o.current, latest, note] }
-      : note ? { kind: null, cells: [name, o.current, o.latest, note] } : null;
+      ? { kind: k, cells: [name, current, latest, note] }
+      : note ? { kind: null, cells: [name, current, m.latest, note] } : null;
     if (row) (isCore(name) ? core : rest).push(row);
-  }
+  });
   const byName = (a, b) => a.cells[0].localeCompare(b.cells[0]);
   section("npm packages: core", core.sort(byName));
   section("npm packages: the rest", rest.sort(byName));
+  const unlocked = skipped.filter((n) => !lock[`node_modules/${n}`]?.version);
+  if (unlocked.length) warnings.push(`not in package-lock.json (not checked): ${unlocked.join(", ")}`);
 
   // Cross-checks between the toolchain and the type/runtime packages.
   const typesNode = (pkg.devDependencies?.["@types/node"] ?? pkg.dependencies?.["@types/node"]);
   const nodeMajor = parse(nodeInfo.current).major;
   if (typesNode && parse(clean(typesNode) + (clean(typesNode).split(".").length < 3 ? ".0" : ""))?.major !== nodeMajor)
     warnings.push(`@types/node ${typesNode} does not follow the Node major (${nodeMajor})`);
+  const { missing, drift } = findDrift(ROOT);
+  if (missing) warnings.push("node_modules is missing; run `npm ci`");
+  else if (drift.length) warnings.push(`node_modules is out of sync with package-lock.json (${drift.length} packages, e.g. ${drift[0].name}: lock ${drift[0].locked}, installed ${drift[0].installed ?? "none"}); run \`npm ci\``);
   const react = pkg.dependencies?.react, reactDom = pkg.dependencies?.["react-dom"];
   if (react && reactDom && react !== reactDom) warnings.push(`react (${react}) and react-dom (${reactDom}) differ`);
 
   // TypeScript's own Node floor against ours.
   try {
-    readFileSync(join(ROOT, "node_modules/typescript/package.json"));
     const latestTs = await getJson("https://registry.npmjs.org/typescript/latest");
     const floor = /(\d+\.\d+\.\d+)/.exec(latestTs.engines?.node ?? "")?.[1];
     if (floor && cmp(floor, nodeInfo.current) > 0)
       warnings.push(`typescript@${latestTs.version} needs Node ${latestTs.engines.node}; this repo pins ${nodeInfo.current}`);
-  } catch { /* typescript not installed */ }
+  } catch { /* registry unreachable: already reported above */ }
 
   const tsconfig = read("tsconfig.json");
   const target = /"target":\s*"([^"]+)"/.exec(tsconfig)?.[1];
