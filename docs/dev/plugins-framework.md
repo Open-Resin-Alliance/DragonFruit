@@ -48,7 +48,10 @@ Simple plugins are a safe extension mechanism for printer/material content.
 ### Install flow
 
 1. User installs from **Settings → Plugins**
-2. `POST /api/plugins/github-manifest` fetches + validates manifest
+2. `resolveGithubPluginManifest` (`src/features/plugins/githubPluginManifest.ts`) fetches and validates the manifest. The production desktop build has no Next.js server — Tauri embeds only `index.html` and `_next/static` — so the transport differs by build:
+   - Desktop: `requestPluginManifest` (`src/features/plugins/pluginManifestClient.ts`) runs the resolver in the webview and fetches every GitHub request through the `fetch_github_plugin_resource` Tauri command (`src-tauri/src/main.rs`), which allows `github.com`, `api.github.com` and `raw.githubusercontent.com` only. Preset images hosted elsewhere keep their remote URL instead of being inlined as data URLs.
+   - Web / `next dev` without Tauri: the same resolver runs inside `POST /api/plugins/github-manifest` with the server's `fetch`.
+   Both transports return the same `{ status, body }` payload, so the UI flow is identical.
 3. Metadata is persisted
 4. Presets/templates merge into runtime lists
 
@@ -65,7 +68,8 @@ Simple plugins are a safe extension mechanism for printer/material content.
 - Optional explicit liability acknowledgment for unallowlisted repos
 - Optional manifest SHA-256 verification (`expectedManifestSha256`)
 
-Route reference: `src/app/api/plugins/github-manifest/route.ts`
+Resolver: `src/features/plugins/githubPluginManifest.ts`
+Transport: `src/features/plugins/pluginManifestClient.ts` → `fetch_github_plugin_resource` (desktop) or `src/app/api/plugins/github-manifest/route.ts` (web)
 
 ---
 

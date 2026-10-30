@@ -13,6 +13,7 @@ import {
   uninstallPlugin,
 } from '@/features/profiles/profileStore';
 import type { PluginManifest } from '@/features/plugins/pluginRegistry';
+import { requestPluginManifest } from '@/features/plugins/pluginManifestClient';
 import { PluginStudioModal } from './PluginStudioModal';
 
 const BUILTIN_ATHENA_REPOSITORY_URL = 'https://github.com/Open-Resin-Alliance/DragonFruit';
@@ -124,20 +125,15 @@ export function PluginsSettingsTab() {
       acknowledgeLiabilityWarning?: boolean;
     },
   ) => {
-    const response = await fetch('/api/plugins/github-manifest', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        repoUrl: repoUrlInput,
-        allowUnverifiedInstall: options?.allowUnverifiedInstall === true,
-        acknowledgeLiabilityWarning: options?.acknowledgeLiabilityWarning === true,
-      }),
+    const { status, body } = await requestPluginManifest({
+      repoUrl: repoUrlInput,
+      allowUnverifiedInstall: options?.allowUnverifiedInstall === true,
+      acknowledgeLiabilityWarning: options?.acknowledgeLiabilityWarning === true,
     });
 
-    const payload = await response.json().catch(() => null) as GithubManifestResponse | null;
-    if (!response.ok || !payload?.ok || !payload.manifest) {
+    const payload = body as GithubManifestResponse | null;
+    // 2xx is not enough on its own: a parsed-but-rejected manifest also fails the install.
+    if (status < 200 || status > 299 || !payload?.ok || !payload.manifest) {
       const err = new Error(payload?.error || 'Unable to install plugin from GitHub repository.') as Error & {
         payload?: GithubManifestResponse | null;
       };
