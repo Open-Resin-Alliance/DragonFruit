@@ -3,11 +3,26 @@
 import React from 'react';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
+import type { MessageDescriptor } from '@lingui/core';
 import { Plural, Trans } from '@lingui/react/macro';
-import { AlertTriangle, CheckCircle2, Download, ExternalLink, Github, Info as InfoIcon, PackageCheck, Plug, ShieldCheck, Trash2 } from 'lucide-react';
-import { Button, Spinner } from '@/components/atoms';
+import { AlertTriangle, CheckCircle2, Download, ExternalLink, Github, Info as InfoIcon, PackageCheck, PackagePlus, Plug, ShieldCheck, Trash2 } from 'lucide-react';
+import { Button, Input, Spinner, Toggle } from '@/components/atoms';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import { isTauriRuntime } from '@/utils/tauriRuntime';
+import {
+  getSideloadAllowance,
+  installSideloadPackage,
+  inspectSideloadPackage,
+  listSideloadedPlugins,
+  pickSideloadPackage,
+  removeSideloadedPlugin,
+  setSideloadAllowance,
+  shortFingerprint,
+  type InstalledSideloadedPlugin,
+  type SideloadedCapability,
+  type SideloadedInspect,
+} from '@/features/plugins/sideloadedPlugins';
 import {
   getInstalledPlugins,
   getProfileStoreSnapshot,
@@ -21,6 +36,14 @@ import { requestPluginManifest } from '@/features/plugins/pluginManifestClient';
 import { PluginStudioModal } from './PluginStudioModal';
 
 const BUILTIN_ATHENA_REPOSITORY_URL = 'https://github.com/Open-Resin-Alliance/DragonFruit';
+
+// Module scope on purpose: a `msg` descriptor created inside a component can be
+// renamed out from under its catalog id by React Compiler.
+const SIDELOAD_CAPABILITY_MESSAGES: Record<SideloadedCapability, MessageDescriptor> = {
+  slicerEncoder: msg`Slicer encoder`,
+  networkOperations: msg`Network operations`,
+  fileType: msg`File-type import`,
+};
 
 function isOraHostedRepository(url: string | undefined): boolean {
   if (!url) return false;
@@ -118,6 +141,111 @@ export function PluginsSettingsTab() {
   const [pendingRemovePlugin, setPendingRemovePlugin] = React.useState<{ id: string; name: string } | null>(null);
   const [status, setStatus] = React.useState<{ kind: 'idle' | 'success' | 'error'; message: string }>({ kind: 'idle', message: '' });
   const isDevRuntime = process.env.NODE_ENV === 'development';
+
+  // Sideloaded complex plugins exist only in the desktop shell: the web build has
+  // no app data dir and no place to put a native binary.
+  const [isDesktop, setIsDesktop] = React.useState(false);
+  const [allowSideload, setAllowSideload] = React.useState(false);
+  const [sideloadPlugins, setSideloadPlugins] = React.useState<InstalledSideloadedPlugin[]>([]);
+  const [sideloadBusy, setSideloadBusy] = React.useState(false);
+  const [sideloadStatus, setSideloadStatus] = React.useState<{ kind: 'idle' | 'success' | 'error'; message: string }>({ kind: 'idle', message: '' });
+  const [pendingSideload, setPendingSideload] = React.useState<{ path: string; info: SideloadedInspect } | null>(null);
+  const [sideloadPassphrase, setSideloadPassphrase] = React.useState('');
+  const [pendingRemoveSideload, setPendingRemoveSideload] = React.useState<InstalledSideloadedPlugin | null>(null);
+
+  React.useEffect(() => {
+    setIsDesktop(isTauriRuntime());
+  }, []);
+
+  React.useEffect(() => {
+    if (!isDesktop) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [allow, installed] = await Promise.all([
+          getSideloadAllowance(),
+          listSideloadedPlugins(),
+        ]);
+        if (cancelled) return;
+        setAllowSideload(allow);
+        setSideloadPlugins(installed);
+      } catch (error) {
+        if (!cancelled) {
+          setSideloadStatus({ kind: 'error', message: String(error) });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isDesktop]);
+
+  const refreshSideloaded = React.useCallback(async () => {
+    setSideloadPlugins(await listSideloadedPlugins());
+  }, []);
+
+  const handleSideloadAllowanceChange = React.useCallback(async (next: boolean) => {
+    setAllowSideload(next);
+    setSideloadStatus({ kind: 'idle', message: '' });
+    try {
+      await setSideloadAllowance(next);
+      await refreshSideloaded();
+    } catch (error) {
+      setAllowSideload(!next);
+      setSideloadStatus({ kind: 'error', message: String(error) });
+    }
+  }, [refreshSideloaded]);
+
+  const handlePickSideloadPackage = React.useCallback(async () => {
+    setSideloadStatus({ kind: 'idle', message: '' });
+    try {
+      const path = await pickSideloadPackage();
+      if (!path) return;
+      const info = await inspectSideloadPackage(path);
+      setSideloadPassphrase('');
+      setPendingSideload({ path, info });
+    } catch (error) {
+      setSideloadStatus({ kind: 'error', message: String(error) });
+    }
+  }, []);
+
+  const handleConfirmSideloadInstall = React.useCallback(async () => {
+    if (!pendingSideload) return;
+    setSideloadBusy(true);
+    setSideloadStatus({ kind: 'idle', message: '' });
+    try {
+      const installed = await installSideloadPackage(
+        pendingSideload.path,
+        pendingSideload.info.sealed ? sideloadPassphrase : undefined,
+      );
+      await refreshSideloaded();
+      setPendingSideload(null);
+      setSideloadStatus({
+        kind: 'success',
+        message: `Installed ${installed.manifest.name} ${installed.manifest.version}.`,
+      });
+    } catch (error) {
+      setSideloadStatus({ kind: 'error', message: String(error) });
+    } finally {
+      setSideloadBusy(false);
+    }
+  }, [pendingSideload, refreshSideloaded, sideloadPassphrase]);
+
+  const handleConfirmRemoveSideload = React.useCallback(async () => {
+    if (!pendingRemoveSideload) return;
+    const target = pendingRemoveSideload;
+    setPendingRemoveSideload(null);
+    setSideloadBusy(true);
+    try {
+      await removeSideloadedPlugin(target.manifest.id);
+      await refreshSideloaded();
+      setSideloadStatus({ kind: 'success', message: `Removed ${target.manifest.name}.` });
+    } catch (error) {
+      setSideloadStatus({ kind: 'error', message: String(error) });
+    } finally {
+      setSideloadBusy(false);
+    }
+  }, [pendingRemoveSideload, refreshSideloaded]);
 
   // Read fresh list on every render; avoids stale memo behavior when external store
   // updates don't change snapshot identity but still emit notifications.
@@ -395,6 +523,118 @@ export function PluginsSettingsTab() {
         )}
       </div>
 
+      {isDesktop && (
+        <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+          <div className="flex items-start gap-2">
+            <span
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
+              style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 8%)' }}
+            >
+              <PackagePlus className="h-4 w-4" style={{ color: 'var(--accent)' }} />
+            </span>
+            <div className="flex-1 min-w-0">
+              <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                <Trans>Sideloaded Plugins</Trans>
+              </h3>
+              <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                <Trans>Import a vendor&apos;s signed .dfplugin package. These contain native code and run with your user account, outside DragonFruit&apos;s control.</Trans>
+              </p>
+            </div>
+            <Tooltip
+              content={_(
+                allowSideload
+                  ? msg`Turn off to stop installing packages. Installed plugins stay on disk.`
+                  : msg`Off by default. Only turn this on for a publisher you trust.`,
+              )}
+              wrapperClassName="flex items-center"
+            >
+              <Toggle
+                checked={allowSideload}
+                onChange={(next) => { void handleSideloadAllowanceChange(next); }}
+                label={_(msg`Allow sideloaded complex plugins`)}
+              />
+            </Tooltip>
+          </div>
+
+          {allowSideload && (
+            <div className="mt-2 flex items-center gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                className="inline-flex items-center gap-1.5"
+                disabled={sideloadBusy}
+                onClick={() => { void handlePickSideloadPackage(); }}
+              >
+                {sideloadBusy ? <Spinner size="sm" /> : <PackagePlus className="h-3.5 w-3.5" />}
+                <Trans>Import plugin file…</Trans>
+              </Button>
+            </div>
+          )}
+
+          {allowSideload && sideloadPlugins.length === 0 && (
+            <p className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+              <Trans>No sideloaded plugins installed.</Trans>
+            </p>
+          )}
+
+          {sideloadPlugins.length > 0 && (
+            <div className="mt-2 space-y-2">
+              {sideloadPlugins.map((plugin) => (
+                <div
+                  key={plugin.manifest.id}
+                  className="rounded-md border px-2.5 py-2 flex items-center justify-between gap-2"
+                  style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
+                >
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>
+                        {plugin.manifest.name}
+                      </span>
+                      <span className="text-[11px] rounded-full border px-1.5 py-0.5" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
+                        <Trans>v{plugin.manifest.version}</Trans>
+                      </span>
+                      <span
+                        className="text-[11px] rounded-full border px-1.5 py-0.5"
+                        style={{
+                          borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
+                          color: 'var(--accent-secondary)',
+                        }}
+                      >
+                        <Trans>Sideloaded</Trans>
+                      </span>
+                    </div>
+                    <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                      {plugin.manifest.vendor.name}
+                      {' · '}
+                      <span className="font-mono">{shortFingerprint(plugin.publisherFingerprint)}</span>
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="auto"
+                    className="!h-7 !px-2 !py-0 text-xs inline-flex items-center gap-1 shrink-0"
+                    style={{ color: '#fca5a5' }}
+                    disabled={sideloadBusy}
+                    onClick={() => setPendingRemoveSideload(plugin)}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <Trans>Remove</Trans>
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {sideloadStatus.kind !== 'idle' && (
+            <div className="mt-2 text-xs" style={{ color: sideloadStatus.kind === 'error' ? '#fca5a5' : '#86efac' }}>
+              {sideloadStatus.message}
+            </div>
+          )}
+        </div>
+      )}
+
       <StructuredDialogModal
         open={pendingLiabilityInstall !== null}
         ariaLabel={_(msg`Install unverified plugin`)}
@@ -585,6 +825,151 @@ export function PluginsSettingsTab() {
       >
         <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
           <Trans>This removes the plugin from your profile library.</Trans>
+        </p>
+      </StructuredDialogModal>
+
+      <StructuredDialogModal
+        open={pendingSideload !== null}
+        ariaLabel={_(msg`Install sideloaded plugin`)}
+        title={<Trans>Install this plugin?</Trans>}
+        subtitle={pendingSideload?.info.manifest.name}
+        icon={<PackagePlus className="h-4 w-4" />}
+        iconTone="accent"
+        maxWidthClassName="max-w-xl"
+        zIndexClassName="z-[130]"
+        closeAriaLabel={_(msg`Close modal`)}
+        closeDisabled={sideloadBusy}
+        onClose={() => setPendingSideload(null)}
+        onBackdropClick={() => setPendingSideload(null)}
+        bodyClassName="space-y-3 p-5"
+        actions={(
+          <>
+            <Button variant="secondary" disabled={sideloadBusy} onClick={() => setPendingSideload(null)}>
+              <Trans>Cancel</Trans>
+            </Button>
+            <Button
+              variant="tinted-accent"
+              className="inline-flex items-center justify-center gap-1.5"
+              disabled={sideloadBusy || (pendingSideload?.info.sealed === true && sideloadPassphrase.trim().length === 0)}
+              onClick={() => { void handleConfirmSideloadInstall(); }}
+            >
+              {sideloadBusy ? <Spinner size="sm" /> : <PackagePlus className="h-3.5 w-3.5" />}
+              {sideloadBusy ? <Trans>Installing…</Trans> : <Trans>Install</Trans>}
+            </Button>
+          </>
+        )}
+      >
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[11px] rounded-full border px-1.5 py-0.5" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
+            <Trans>v{pendingSideload?.info.manifest.version}</Trans>
+          </span>
+          {pendingSideload?.info.manifest.capabilities.map((capability) => (
+            <span
+              key={capability}
+              className="text-[11px] rounded-full border px-1.5 py-0.5"
+              style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-strong)' }}
+            >
+              {_(SIDELOAD_CAPABILITY_MESSAGES[capability])}
+            </span>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+              <Trans>Publisher</Trans>
+            </div>
+            <div className="mt-1.5 space-y-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+              <div><span style={{ color: 'var(--text-strong)' }}><Trans>Vendor</Trans>:</span> {pendingSideload?.info.manifest.vendor.name}</div>
+              <div className="break-all">
+                <span style={{ color: 'var(--text-strong)' }}><Trans>Key</Trans>:</span>{' '}
+                <span className="font-mono" style={{ color: 'var(--text-strong)' }}>{pendingSideload?.info.publisherFingerprint}</span>
+              </div>
+            </div>
+          </div>
+          <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+              <Trans>Package</Trans>
+            </div>
+            <div className="mt-1.5 space-y-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+              <div><span style={{ color: 'var(--text-strong)' }}><Trans>ID</Trans>:</span> {pendingSideload?.info.manifest.id}</div>
+              <div><span style={{ color: 'var(--text-strong)' }}><Trans>Needs</Trans>:</span> <Trans>DragonFruit {pendingSideload?.info.manifest.minAppVersion} or newer</Trans></div>
+              <div><span style={{ color: 'var(--text-strong)' }}><Trans>Sealed</Trans>:</span> {pendingSideload?.info.sealed ? <Trans>yes</Trans> : <Trans>no</Trans>}</div>
+            </div>
+          </div>
+        </div>
+
+        {(pendingSideload?.info.manifest.formats.length ?? 0) > 0 && (
+          <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+              <Trans>Output formats</Trans>
+            </div>
+            <div className="mt-1 space-y-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
+              {pendingSideload?.info.manifest.formats.map((format) => (
+                <div key={format.id} className="font-mono break-all">
+                  {format.extensions.join(' ')}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {pendingSideload?.info.replacesExisting && (
+          <p className="text-xs" style={{ color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)' }}>
+            <Trans>An older install with this ID and publisher is replaced.</Trans>
+          </p>
+        )}
+
+        {pendingSideload?.info.sealed && (
+          <div>
+            <label className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }} htmlFor="sideload-passphrase">
+              <Trans>Passphrase</Trans>
+            </label>
+            <Input
+              id="sideload-passphrase"
+              type="password"
+              autoComplete="off"
+              className="mt-1"
+              value={sideloadPassphrase}
+              onChange={(event) => setSideloadPassphrase(event.target.value)}
+              placeholder={_(msg`The key your vendor gave you`)}
+            />
+            <p className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              <Trans>The key is stored locally so the plugin can load later. A leaked package stays unusable without it.</Trans>
+            </p>
+          </div>
+        )}
+
+        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          <Trans>This package runs native code with your user account. It can read your files and open network connections. Only install packages from a vendor you trust.</Trans>
+        </p>
+      </StructuredDialogModal>
+
+      <StructuredDialogModal
+        open={pendingRemoveSideload !== null}
+        ariaLabel={_(msg`Remove sideloaded plugin`)}
+        title={<Trans>Remove this plugin?</Trans>}
+        subtitle={pendingRemoveSideload?.manifest.name}
+        icon={<Trash2 className="h-4 w-4" />}
+        iconTone="danger"
+        zIndexClassName="z-[130]"
+        closeAriaLabel={_(msg`Close modal`)}
+        onClose={() => setPendingRemoveSideload(null)}
+        onBackdropClick={() => setPendingRemoveSideload(null)}
+        actions={(
+          <>
+            <Button variant="secondary" onClick={() => setPendingRemoveSideload(null)}>
+              <Trans>Cancel</Trans>
+            </Button>
+            <Button variant="tinted-danger" onClick={() => { void handleConfirmRemoveSideload(); }}>
+              <Trash2 className="h-3.5 w-3.5" />
+              <Trans>Remove plugin</Trans>
+            </Button>
+          </>
+        )}
+      >
+        <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          <Trans>The package, its extracted payload and its stored key are deleted. Re-importing needs the passphrase again.</Trans>
         </p>
       </StructuredDialogModal>
 

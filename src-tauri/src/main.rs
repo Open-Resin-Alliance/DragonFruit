@@ -59,6 +59,7 @@ fn default_dither_device_gamma() -> f64 {
 
 mod experiments;
 mod plugin_registry;
+mod plugin_sideload;
 mod webview_watchdog;
 mod window_state;
 
@@ -4629,6 +4630,13 @@ fn main() {
             spacemouse::spacemouse_native_stop,
             spacemouse::spacemouse_native_sync,
             network::plugin_network_request,
+            plugin_sideload::sideloaded_plugin_allowance,
+            plugin_sideload::sideloaded_plugin_set_allowance,
+            plugin_sideload::sideloaded_plugin_pick,
+            plugin_sideload::sideloaded_plugin_inspect,
+            plugin_sideload::sideloaded_plugin_install,
+            plugin_sideload::sideloaded_plugin_list,
+            plugin_sideload::sideloaded_plugin_remove,
             network::ensure_rtsp_relay,
             mesh_repair::mesh_analyze_from_path,
             mesh_refine::refine_mesh_soup,

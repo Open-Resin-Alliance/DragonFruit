@@ -10,6 +10,21 @@ Decision record: `docs/adr/0047-sideloaded-complex-plugins.md`.
 Read this page before changing anything in this tier. "Protocol v1" and
 "Threat model" are the two sections whose mistakes are silent.
 
+## Implemented so far
+
+| Piece | Where | State |
+| --- | --- | --- |
+| Package format, signature, seal, extraction | `rust/dragonfruit-plugin-package` | done, unit-tested |
+| Reference packer | `rust/dragonfruit-plugin-package/examples/pack.rs` | done |
+| Allowance gate, inspect, install, list, remove | `src-tauri/src/plugin_sideload.rs` | done, unit-tested |
+| Import UI behind the advanced switch | `src/components/settings/PluginsSettingsTab.tsx` | done |
+| Plugin process, protocol, encoder/network/file-type wiring | — | **not built**; a package installed today sits inert in app data |
+
+`cargo test` in the package crate and `cargo test --bin dragonfruit-desktop
+plugin_sideload` cover the verification matrix below except the process cases.
+The encoder adapter named under "Host integration" is still spec: nothing here
+spawns the binary yet.
+
 ## Why this exists
 
 Compiled-in complex plugins are source submodules: the registry generator

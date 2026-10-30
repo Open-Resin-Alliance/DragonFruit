@@ -1,0 +1,91 @@
+import { invoke } from '@tauri-apps/api/core';
+
+/**
+ * Sideloaded complex plugins — signed `.dfplugin` packages imported at runtime.
+ *
+ * The format and trust model live in `docs/dev/plugins-sideloaded.md`. This
+ * module is the renderer half of the host commands in
+ * `src-tauri/src/plugin_sideload.rs`; nothing here executes the plugin, it only
+ * verifies, extracts and records what the host installed.
+ */
+
+export type SideloadedCapability = 'slicerEncoder' | 'networkOperations' | 'fileType';
+
+export type SideloadedFormat = {
+  id: string;
+  extensions: string[];
+  displayName?: string | null;
+};
+
+export type SideloadedManifest = {
+  formatVersion: number;
+  id: string;
+  name: string;
+  version: string;
+  vendor: { name: string; homepage?: string | null };
+  minAppVersion: string;
+  capabilities: SideloadedCapability[];
+  entry: { kind: 'process'; proto: number; transport: 'shm' | 'pipe' };
+  publisher: { key: string };
+  payload: {
+    sha256: string;
+    bytes: number;
+    seal?: { alg: string; kdf: string; salt: string; m: number; t: number; p: number } | null;
+  };
+  formats: SideloadedFormat[];
+  network?: { pluginId: string } | null;
+};
+
+export type SideloadedInspect = {
+  manifest: SideloadedManifest;
+  publisherFingerprint: string;
+  sealed: boolean;
+  replacesExisting: boolean;
+};
+
+export type InstalledSideloadedPlugin = {
+  manifest: SideloadedManifest;
+  publisherFingerprint: string;
+  importedAt: string;
+  sealed: boolean;
+};
+
+export function getSideloadAllowance(): Promise<boolean> {
+  return invoke<boolean>('sideloaded_plugin_allowance');
+}
+
+export function setSideloadAllowance(allow: boolean): Promise<boolean> {
+  return invoke<boolean>('sideloaded_plugin_set_allowance', { allow });
+}
+
+/** Opens the file picker; resolves `null` when the user cancels. */
+export function pickSideloadPackage(): Promise<string | null> {
+  return invoke<string | null>('sideloaded_plugin_pick');
+}
+
+export function inspectSideloadPackage(path: string): Promise<SideloadedInspect> {
+  return invoke<SideloadedInspect>('sideloaded_plugin_inspect', { path });
+}
+
+export function installSideloadPackage(
+  path: string,
+  passphrase?: string,
+): Promise<InstalledSideloadedPlugin> {
+  return invoke<InstalledSideloadedPlugin>('sideloaded_plugin_install', {
+    path,
+    passphrase: passphrase && passphrase.length > 0 ? passphrase : null,
+  });
+}
+
+export function listSideloadedPlugins(): Promise<InstalledSideloadedPlugin[]> {
+  return invoke<InstalledSideloadedPlugin[]>('sideloaded_plugin_list');
+}
+
+export function removeSideloadedPlugin(id: string): Promise<void> {
+  return invoke<void>('sideloaded_plugin_remove', { id });
+}
+
+/** First 16 hex characters of the publisher fingerprint, for list rows. */
+export function shortFingerprint(fingerprint: string): string {
+  return fingerprint.slice(0, 16);
+}

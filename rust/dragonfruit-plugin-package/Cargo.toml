@@ -1,0 +1,20 @@
+[package]
+name = "dragonfruit-plugin-package"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Parsing, verification and sealing for .dfplugin sideloaded plugin packages"
+
+[lib]
+name = "dragonfruit_plugin_package"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+base64 = "0.22"
+ed25519-dalek = "2"
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
+zip = "2"
