@@ -8,7 +8,7 @@ msgstr ""
 "Language: fr\n"
 "Project-Id-Version: dragonfruit\n"
 "Report-Msgid-Bugs-To: \n"
-"PO-Revision-Date: 2026-10-22 14:51\n"
+"PO-Revision-Date: 2026-10-30 12:23\n"
 "Last-Translator: \n"
 "Language-Team: French\n"
 "Plural-Forms: nplurals=2; plural=(n > 1);\n"
@@ -116,7 +116,7 @@ msgstr "Créer et ajuster les supports"
 #. Shown in place of file size when the file is in cache but its size is unknown. Adjective/state label.
 #: src/components/layout/EmptySceneState.tsx:660
 msgid "cached"
-msgstr ""
+msgstr "en cache"
 
 #: src/components/layout/TopBar.tsx:1269
 msgid "Changing print settings invalidates the current sliced file."
