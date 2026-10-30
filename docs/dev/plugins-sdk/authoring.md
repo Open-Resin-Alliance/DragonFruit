@@ -28,7 +28,8 @@ While you work against a checkout, a path dependency on
 ## 2. Identity
 
 `PluginIdentity` is the four facts the host checks against the manifest. They
-must match it exactly; the host refuses a plugin whose `ready` disagrees.
+must match it exactly; the host refuses a plugin whose `ready` disagrees, and
+that check lands with the spawner described in the overview's status table.
 
 ```rust
 use dragonfruit_plugin_sdk::{serve, Capability, FormatDecl, PluginIdentity};

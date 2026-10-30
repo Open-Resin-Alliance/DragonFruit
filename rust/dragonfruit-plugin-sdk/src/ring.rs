@@ -155,6 +155,7 @@ pub enum RingError {
     UnknownState(u32),
     UnknownKind(u32),
     PayloadTooLarge(usize),
+    Misaligned,
 }
 
 impl std::fmt::Display for RingError {
@@ -170,11 +171,22 @@ impl std::fmt::Display for RingError {
             Self::UnknownState(state) => write!(f, "unknown slot state {state}"),
             Self::UnknownKind(kind) => write!(f, "unknown slot kind {kind}"),
             Self::PayloadTooLarge(bytes) => write!(f, "payload of {bytes} bytes does not fit a slot"),
+            Self::Misaligned => write!(f, "ring mapping is not 8-byte aligned"),
         }
     }
 }
 
 impl std::error::Error for RingError {}
+
+/// The accessors below cast the mapping to atomics, which is only sound when
+/// the base address is 8-byte aligned. Checked rather than assumed: a caller
+/// that hands over a `Vec<u8>` would otherwise get silent undefined behaviour.
+fn ensure_aligned(bytes: &[u8]) -> Result<(), RingError> {
+    if (bytes.as_ptr() as usize) % 8 != 0 {
+        return Err(RingError::Misaligned);
+    }
+    Ok(())
+}
 
 const fn align_up(value: usize, alignment: usize) -> usize {
     let remainder = value % alignment;
@@ -223,6 +235,7 @@ fn read_u32(bytes: &[u8], offset: usize) -> u32 {
 
 /// Writes the header for `layout` into an unmapped-but-zeroed region.
 pub fn init_ring(bytes: &mut [u8], layout: RingLayout) -> Result<(), RingError> {
+    ensure_aligned(bytes)?;
     layout.validate()?;
     if bytes.len() < layout.bytes_needed() {
         return Err(RingError::BufferTooSmall);
@@ -245,6 +258,7 @@ pub fn init_ring(bytes: &mut [u8], layout: RingLayout) -> Result<(), RingError> 
 
 /// Checks the mapping looks like a ring this build understands.
 pub fn validate_ring(bytes: &[u8]) -> Result<(), RingError> {
+    ensure_aligned(bytes)?;
     if bytes.len() < HEADER_BYTES {
         return Err(RingError::BufferTooSmall);
     }
@@ -278,6 +292,7 @@ pub fn publish_slot(
     width: u32,
     height: u32,
 ) -> Result<(), RingError> {
+    ensure_aligned(bytes)?;
     layout.validate()?;
     if slot >= layout.slot_count {
         return Err(RingError::SlotOutOfRange(slot));
@@ -313,6 +328,31 @@ pub fn publish_slot(
     Ok(())
 }
 
+/// Takes ownership of a filled slot without copying it: `filled` becomes
+/// `consuming`. A consumer that wants to hold a slot across work claims it first;
+/// one that reads in place can go straight to `slot_view`.
+///
+/// The transition is a compare-and-swap, so two consumers racing for the same
+/// slot cannot both win.
+pub fn claim_slot(bytes: &mut [u8], layout: &RingLayout, slot: u32) -> Result<(), RingError> {
+    ensure_aligned(bytes)?;
+    if slot >= layout.slot_count {
+        return Err(RingError::SlotOutOfRange(slot));
+    }
+    validate_ring(bytes)?;
+    let header = layout.slot_header_offset(slot);
+    atomic_u32_mut(bytes, header)
+        .compare_exchange(
+            SlotState::Filled.to_wire(),
+            SlotState::Consuming.to_wire(),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .map_err(|_| RingError::SlotNotReadable(slot))?;
+    fence(Ordering::SeqCst);
+    Ok(())
+}
+
 #[derive(Debug)]
 pub struct SlotView<'a> {
     pub kind: SlotKind,
@@ -329,6 +369,7 @@ pub fn slot_view<'a>(
     layout: &RingLayout,
     slot: u32,
 ) -> Result<Option<SlotView<'a>>, RingError> {
+    ensure_aligned(bytes)?;
     if slot >= layout.slot_count {
         return Err(RingError::SlotOutOfRange(slot));
     }
@@ -358,6 +399,7 @@ pub fn slot_view<'a>(
 
 /// Gives a consumed slot back to the publisher.
 pub fn release_slot(bytes: &mut [u8], layout: &RingLayout, slot: u32) -> Result<(), RingError> {
+    ensure_aligned(bytes)?;
     if slot >= layout.slot_count {
         return Err(RingError::SlotOutOfRange(slot));
     }
@@ -432,6 +474,45 @@ mod tests {
             publish_slot(&mut buffer.0, &LAYOUT, 0, SlotKind::RawMask, 0, &payload, 0, 0),
             Err(RingError::PayloadTooLarge(_))
         ));
+    }
+
+    #[test]
+    fn a_slot_can_be_claimed_before_reading() {
+        let mut buffer = ring();
+        publish_slot(&mut buffer.0, &LAYOUT, 0, SlotKind::Png, 2, b"png", 4096, 2560).expect("publish");
+
+        claim_slot(&mut buffer.0, &LAYOUT, 0).expect("claim");
+        assert_eq!(slot_state(&buffer.0, &LAYOUT, 0).unwrap(), SlotState::Consuming);
+        let view = slot_view(&buffer.0, &LAYOUT, 0).unwrap().expect("still readable while consuming");
+        assert_eq!(view.layer_index, 2);
+
+        release_slot(&mut buffer.0, &LAYOUT, 0).expect("release");
+        assert_eq!(slot_state(&buffer.0, &LAYOUT, 0).unwrap(), SlotState::Free);
+
+        assert!(matches!(
+            claim_slot(&mut buffer.0, &LAYOUT, 0),
+            Err(RingError::SlotNotReadable(0))
+        ));
+    }
+
+    #[test]
+    fn claiming_twice_is_refused() {
+        let mut buffer = ring();
+        publish_slot(&mut buffer.0, &LAYOUT, 0, SlotKind::Png, 0, b"png", 0, 0).expect("publish");
+        claim_slot(&mut buffer.0, &LAYOUT, 0).expect("first claim");
+        assert!(matches!(
+            claim_slot(&mut buffer.0, &LAYOUT, 0),
+            Err(RingError::SlotNotReadable(0))
+        ));
+    }
+
+    #[test]
+    fn an_unaligned_buffer_is_refused() {
+        // One byte of padding puts the mapping on an odd address.
+        let mut backing = vec![0u8; LAYOUT_BYTES + 1];
+        let offset = if (backing.as_ptr() as usize) % 8 == 0 { 1 } else { 0 };
+        let bytes = &mut backing[offset..offset + LAYOUT_BYTES];
+        assert!(matches!(init_ring(bytes, LAYOUT), Err(RingError::Misaligned)));
     }
 
     #[test]

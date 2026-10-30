@@ -53,6 +53,10 @@ fn take_layer(mapping: &mut [u8], layout: &RingLayout, slot: u32) -> Option<Vec<
 }
 ```
 
+A consumer that wants to hold a slot while it does something else calls
+`claim_slot` first (`filled` becomes `consuming`); reading in place does not need
+it. Either way `release_slot` hands the slot back.
+
 Three habits keep this fast:
 
 1. **Do not copy `view.payload`.** It borrows the mapping; work on it in place

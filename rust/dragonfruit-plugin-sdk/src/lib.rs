@@ -42,6 +42,6 @@ pub use frame::{read_frame, write_frame, Frame, FrameError, FrameKind, MAX_FRAME
 pub use harness::{serve, PluginIdentity};
 pub use protocol::{Capability, FormatDecl, HostMessage, PluginMessage, Transport};
 pub use ring::{
-    init_ring, publish_slot, release_slot, slot_state, slot_view, RingError, RingLayout, SlotKind,
-    SlotState, SlotView, DEFAULT_SLOT_BYTES, DEFAULT_SLOT_COUNT,
+    claim_slot, init_ring, publish_slot, release_slot, slot_state, slot_view, RingError, RingLayout,
+    SlotKind, SlotState, SlotView, DEFAULT_SLOT_BYTES, DEFAULT_SLOT_COUNT,
 };

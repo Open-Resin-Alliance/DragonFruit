@@ -106,19 +106,27 @@ which is one 12K raw mask plus headroom. `RingLayout::bytes_needed()` is a
 
 ### Ownership, and nothing else
 
-- The publisher fills a slot whose state is `free`, writes the slot header and
-  payload, then stores `state = filled`. **That store is the publish**; it is a
-  release store and everything written before it is visible to the consumer.
+| Transition | Who | Call |
+| --- | --- | --- |
+| `free` → `filled` | publisher | `publish_slot`, after the header and payload are written |
+| `filled` → `consuming` | consumer, optional | `claim_slot` |
+| `filled`/`consuming` → `free` | consumer | `release_slot` |
+
+- The state store in `publish_slot` is a release store, and **that store is the
+  publish**: everything written before it is visible to the consumer.
 - The consumer loads `state` (acquire). `filled` or `consuming` means the view is
   readable; `free` means nothing is there yet.
-- The consumer returns the slot by storing `state = free`.
-- Those two stores are the only transitions either side may perform. There is no
-  lock, no queue index, no shared allocator: a slot is owned by exactly one side
-  at a time, and `slot_view` refuses a payload longer than the slot instead of
-  trusting the header.
+- `claim_slot` is a compare-and-swap, so two consumers racing for one slot cannot
+  both win. A consumer that reads in place can skip it and go straight to
+  `slot_view`, which is what the encoder example does.
+- There is no lock, no queue index, no shared allocator: a slot is owned by
+  exactly one side at a time, and `slot_view` refuses a payload longer than the
+  slot instead of trusting the header.
 
 Only `state` and `seq` are touched atomically. The mapping must start 8-byte
-aligned; a page-aligned `mmap` is what the host uses.
+aligned because the accessors cast it to atomics; a page-aligned `mmap` is what
+the host uses, and every SDK entry point rejects a mapping that is not aligned
+with `RingError::Misaligned` rather than invoking undefined behaviour.
 
 ## Versioning rules
 
