@@ -3,14 +3,47 @@
 use crate::encoders::generated_plugin_encoders::build_generated_plugin_encoders;
 use crate::encoders::FormatEncoder;
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 static ENCODERS: OnceLock<Vec<Box<dyn FormatEncoder>>> = OnceLock::new();
+static RUNTIME_ENCODERS: OnceLock<Mutex<Vec<Box<dyn FormatEncoder>>>> = OnceLock::new();
+
+fn pending_runtime_encoders() -> &'static Mutex<Vec<Box<dyn FormatEncoder>>> {
+    RUNTIME_ENCODERS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Registers an encoder that lives outside the engine, such as a sideloaded
+/// plugin's child process.
+///
+/// Call this before the first slice: lookups hand out `&'static dyn
+/// FormatEncoder`, so the registry is frozen once it is built, and a later call
+/// is refused rather than silently ignored. Compiled-in encoders keep precedence
+/// because they are appended first and lookups take the first match.
+pub fn register_runtime_encoder(encoder: Box<dyn FormatEncoder>) -> Result<(), String> {
+    if ENCODERS.get().is_some() {
+        return Err(
+            "the encoder registry is already built; register runtime encoders during startup"
+                .to_string(),
+        );
+    }
+    pending_runtime_encoders()
+        .lock()
+        .map_err(|_| "encoder registry lock poisoned".to_string())?
+        .push(encoder);
+    Ok(())
+}
 
 fn encoders() -> &'static [Box<dyn FormatEncoder>] {
     ENCODERS
-        // Plugin-provided encoders are generated at build time from allowlisted definitions.
-        .get_or_init(build_generated_plugin_encoders)
+        .get_or_init(|| {
+            // Plugin-provided encoders are generated at build time from allowlisted
+            // definitions; runtime encoders are appended after them.
+            let mut all = build_generated_plugin_encoders();
+            if let Ok(mut pending) = pending_runtime_encoders().lock() {
+                all.append(&mut pending);
+            }
+            all
+        })
         .as_slice()
 }
 

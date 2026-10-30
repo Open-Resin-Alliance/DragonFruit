@@ -22,9 +22,9 @@ slices, and each capability is either shipped or designed.
 | --- | --- | --- | --- |
 | handshake (`hello` / `ready` / `shutdown` / `error`) | shipped | shipped | shipped: spawn, `ready` validation against the manifest, idle stop |
 | `networkOperations` (`network` / `networkResult`) | shipped | shipped | shipped: routed after the built-in dispatch match |
-| ring accessors (slot publish / view / release) | shipped | shipped | designed: the host creates no mapping yet |
-| `slicerEncoder` (`encode.begin` / `encode.layer` / `encode.done`) | designed | designed | designed |
-| `fileType` (`import`) | designed | designed | designed |
+| `slicerEncoder` (`encodeBegin` / `encodeLayer` / `encodeDone`) | shipped | shipped | shipped: one process per session, ring mapping in `DF_PLUGIN_RING`, adapter registered into the engine's encoder registry |
+| ring accessors (slot publish / view / release) | shipped | shipped | shipped, for encoders |
+| `fileType` (`import.detect` / `import`) | designed | designed | designed, and blocked on the scene document schema (see the page) |
 
 Pages mark their own status. A "designed" page is the contract to build against;
 it is not a description of running code.

@@ -25,7 +25,7 @@
 //! }
 //!
 //! fn main() -> std::io::Result<()> {
-//!     serve(std::io::stdin().lock(), std::io::stdout().lock(), &MyPlugin, &NoCapabilities)
+//!     serve(std::io::stdin().lock(), std::io::stdout().lock(), &MyPlugin, &NoCapabilities, None)
 //! }
 //! ```
 
@@ -39,9 +39,11 @@ pub mod ring;
 pub const PROTOCOL_VERSION: u32 = 1;
 
 pub use frame::{read_frame, write_frame, Frame, FrameError, FrameKind, MAX_FRAME_BYTES};
-pub use harness::{serve, NoCapabilities, PluginCapabilities, PluginIdentity};
+pub use harness::{
+    serve, EncodeStart, Encoder, LayerRef, NoCapabilities, PluginCapabilities, PluginIdentity,
+};
 pub use protocol::{Capability, FormatDecl, HostMessage, PluginMessage, Transport};
 pub use ring::{
-    claim_slot, init_ring, publish_slot, release_slot, slot_state, slot_view, RingError, RingLayout,
-    SlotKind, SlotState, SlotView, DEFAULT_SLOT_BYTES, DEFAULT_SLOT_COUNT,
+    claim_slot, init_ring, publish_slot, read_layout, release_slot, slot_state, slot_view, RingError,
+    RingLayout, SlotKind, SlotState, SlotView, DEFAULT_SLOT_BYTES, DEFAULT_SLOT_COUNT,
 };

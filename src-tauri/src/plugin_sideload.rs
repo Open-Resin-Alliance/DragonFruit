@@ -80,6 +80,24 @@ pub fn plugin_root<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<PathB
     root_dir(app)
 }
 
+/// Every installed plugin's manifest, sorted by id. The encoder registry and the
+/// runtime both start from this list.
+pub fn installed_packages(root: &Path) -> Vec<package::Manifest> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut out: Vec<package::Manifest> = entries
+        .flatten()
+        .filter(|entry| entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false))
+        .filter_map(|entry| {
+            let id = entry.file_name().to_string_lossy().to_string();
+            installed_manifest(root, &id)
+        })
+        .collect();
+    out.sort_by(|left, right| left.id.cmp(&right.id));
+    out
+}
+
 /// The manifest of an installed plugin, or `None` when nothing with that id is
 /// installed. Used by the runtime to decide whether a request belongs to it.
 ///

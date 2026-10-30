@@ -64,6 +64,8 @@ pub enum SlicerV3Error {
     MissingRenderedLayerPayload(String),
     #[error("layer preview read failed: {0}")]
     LayerPreview(String),
+    #[error("external encoder failed: {0}")]
+    ExternalEncoder(String),
 }
 
 fn validate_job(job: &SliceJobV3) -> Result<(), SlicerV3Error> {

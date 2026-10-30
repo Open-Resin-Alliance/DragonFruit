@@ -62,6 +62,7 @@ fn main() {
         std::io::stdout().lock(),
         &Echo,
         &Echo,
+        None,
     )
     .expect("control channel");
 }

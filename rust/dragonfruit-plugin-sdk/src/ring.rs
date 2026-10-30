@@ -36,6 +36,8 @@
 
 use std::sync::atomic::{fence, AtomicU32, AtomicU64, Ordering};
 
+use serde::{Deserialize, Serialize};
+
 pub const RING_MAGIC: u32 = 0x4446_5247;
 pub const RING_VERSION: u32 = 1;
 pub const HEADER_BYTES: usize = 4096;
@@ -76,7 +78,8 @@ impl SlotState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum SlotKind {
     Png,
     Rle,
@@ -254,6 +257,19 @@ pub fn init_ring(bytes: &mut [u8], layout: RingLayout) -> Result<(), RingError> 
     }
     fence(Ordering::Release);
     Ok(())
+}
+
+/// Reads the layout the host wrote into the mapping. A plugin opens the ring at
+/// the path the host hands it and asks it how it is shaped, rather than being
+/// told the shape out of band.
+pub fn read_layout(bytes: &[u8]) -> Result<RingLayout, RingError> {
+    validate_ring(bytes)?;
+    let layout = RingLayout::new(
+        read_u32(bytes, OFFSET_SLOT_COUNT),
+        read_u32(bytes, OFFSET_SLOT_BYTES),
+    );
+    layout.validate()?;
+    Ok(layout)
 }
 
 /// Checks the mapping looks like a ring this build understands.
@@ -435,6 +451,14 @@ mod tests {
     fn layout_reserves_a_page_for_the_header_and_payloads_after_the_slot_headers() {
         assert_eq!(LAYOUT.payload_offset(), 8192);
         assert_eq!(LAYOUT.bytes_needed(), 8192 + 2 * 4096);
+    }
+
+    #[test]
+    fn the_layout_reads_back_out_of_the_mapping() {
+        let buffer = ring();
+        let layout = read_layout(&buffer.0).expect("layout");
+        assert_eq!(layout.slot_count, LAYOUT.slot_count);
+        assert_eq!(layout.slot_bytes, LAYOUT.slot_bytes);
     }
 
     #[test]

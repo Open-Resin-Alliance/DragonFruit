@@ -60,6 +60,7 @@ fn default_dither_device_gamma() -> f64 {
 mod experiments;
 mod plugin_registry;
 mod plugin_sideload;
+mod plugin_sideload_encoder;
 mod plugin_sideload_runtime;
 mod webview_watchdog;
 mod window_state;
@@ -4459,7 +4460,10 @@ fn main() {
         // Point the sideloaded plugin runtime at the installed packages before
         // anything can route a request to one.
         match plugin_sideload::plugin_root(&app_handle) {
-            Ok(root) => plugin_sideload_runtime::initialize(root),
+            Ok(root) => {
+                plugin_sideload_encoder::register_installed_encoders(&root);
+                plugin_sideload_runtime::initialize(root);
+            }
             Err(error) => log::warn!("[plugin-runtime] {error}"),
         }
 

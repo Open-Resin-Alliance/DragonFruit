@@ -54,8 +54,27 @@ also ends the session by closing stdin.
 
 ## Capability messages
 
-`network` is implemented on both sides; encoder and file-type messages are
-designed (see their pages).
+`network` and the encode session are implemented on both sides; file-type
+messages are designed (see that page).
+
+### Encode
+
+```json
+→ {"type":"encodeBegin","id":7,"format":".apf","output":"job.apf","layers":1200,
+   "job":{"widthPx":4096,"layerHeightMm":0.05}}
+→ {"type":"encodeLayer","id":7,"index":0,"slot":3,"kind":"png","bytes":182344}
+← {"type":"slotFree","slot":3}
+← {"type":"progress","id":7,"done":1,"total":1200}
+← {"type":"encodeDone","id":7,"path":"job.apf","bytes":48123904}
+→ {"type":"encodeCancel","id":8}
+← {"type":"encodeCancelled","id":8}
+```
+
+The plugin finalises when the declared layer count arrives, so there is no
+"finish" message. The slot-free message is what lets the host reuse a slot; a
+plugin that never frees one starves the session at four layers.
+
+### Network
 
 ```json
 → {"type":"network","id":11,"request":{"operation":"printer/status"}}

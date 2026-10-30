@@ -1,8 +1,13 @@
 # Encoders
 
-Status: **designed**. The messages, the ring usage and the capability gate are
-specified here; the host adapter that drives them is the next slice after the
-handshake. Nothing on this page runs today.
+Status: **shipped**. The host spawns one process per encode session, maps the
+ring, streams every rendered layer and registers the result in the engine's
+encoder registry, so a sideloaded format appears in the output-format list like a
+compiled-in one.
+
+Two things are not built: layer-kind negotiation (the host always sends PNG
+layers) and preview decode (`read_layer_preview_png` still answers with the
+trait's default error), so a sideloaded format has no layer thumbnails yet.
 
 An encoder turns the engine's rasterised layers into one container file. The
 host keeps the rasterising; your plugin owns the format. That split is why the
@@ -67,18 +72,12 @@ Three habits keep this fast:
    queue beats per-layer thread spawn. The host does not call you concurrently
    for the same job unless the message says `parallel: true` (designed).
 
-## Declaring what you consume
+## What you are given, today
 
-A format that wants raw masks instead of PNGs says so in `ready`, per format:
-
-```json
-{"type":"ready", …,
- "formats":[{"ext":".apf","layers":"mask"}]}
-```
-
-`layers` is `png` (default), `rle` or `mask`. The host only produces the kind you
-ask for: asking for masks costs it the rasterising memory a PNG encoder would
-save, so do not ask for more than you use.
+PNG layers, one per frame, in index order. The host rasterises, encodes each
+layer as PNG and hands the bytes over. Raw masks and RLE runs are the engine's
+faster paths and a future protocol addition; a plugin cannot ask for them yet,
+and the docs will say so here when it can.
 
 ## Cancellation and failure
 
@@ -95,9 +94,12 @@ save, so do not ask for more than you use.
 ## What the host guarantees
 
 - Layers arrive in index order, once each.
-- `encode.begin` is not re-sent for a job; a retry is a new `id`.
+- `encodeBegin` is not re-sent for a job; a retry is a new `id`.
 - The output path is inside a directory the host created and owns.
-- The process stays alive between jobs: cache per-format state, keyed by job.
+- The ring is four slots sized for the largest layer in the job, and the path is
+  in `DF_PLUGIN_RING`.
+- One process per session: the ring outlives nothing. Open the mapping at start,
+  expect `shutdown` (or EOF) at the end, and do not keep it across sessions.
 
 ## What it does not
 
