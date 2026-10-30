@@ -55,13 +55,12 @@ pub enum HostMessage {
         id: u64,
         request: serde_json::Value,
     },
-    /// Starts an encode session. The host then sends exactly `layers` layer
-    /// messages; the plugin finalises when the last one arrives.
+    /// Starts an encode session. `layers` is the total the host will send; the
+    /// session ends when the host sends `encodeEnd`, not when a count is reached.
     #[serde(rename_all = "camelCase")]
     EncodeBegin {
         id: u64,
         format: String,
-        output: String,
         layers: u32,
         job: serde_json::Value,
     },
@@ -74,9 +73,23 @@ pub enum HostMessage {
         kind: SlotKind,
         bytes: u64,
     },
+    /// Finalises a session: the plugin writes its container to `output`.
+    #[serde(rename_all = "camelCase")]
+    EncodeEnd {
+        id: u64,
+        output: String,
+    },
     #[serde(rename_all = "camelCase")]
     EncodeCancel {
         id: u64,
+    },
+    /// Asks for one layer's preview from an encoded file. The answer is a
+    /// `previewPng` header followed by a bulk frame holding the PNG.
+    #[serde(rename_all = "camelCase")]
+    Preview {
+        id: u64,
+        path: String,
+        layer: u32,
     },
     /// Open a file the manifest declares. `output` is a path the host created;
     /// write the scene container there.
@@ -119,6 +132,8 @@ pub enum PluginMessage {
     EncodeCancelled { id: u64 },
     #[serde(rename_all = "camelCase")]
     ImportDone { id: u64, path: String },
+    #[serde(rename_all = "camelCase")]
+    PreviewPng { id: u64, bytes: u64 },
     #[serde(rename_all = "camelCase")]
     Error { code: String, message: String },
 }
@@ -169,13 +184,21 @@ mod tests {
         let begin = HostMessage::EncodeBegin {
             id: 7,
             format: ".apf".to_string(),
-            output: "job.apf".to_string(),
             layers: 1200,
             job: serde_json::json!({ "widthPx": 4096 }),
         };
         assert_eq!(
             serde_json::to_string(&begin).expect("serialize"),
-            r#"{"type":"encodeBegin","id":7,"format":".apf","output":"job.apf","layers":1200,"job":{"widthPx":4096}}"#
+            r#"{"type":"encodeBegin","id":7,"format":".apf","layers":1200,"job":{"widthPx":4096}}"#
+        );
+
+        let end = HostMessage::EncodeEnd {
+            id: 7,
+            output: "job.apf".to_string(),
+        };
+        assert_eq!(
+            serde_json::to_string(&end).expect("serialize"),
+            r#"{"type":"encodeEnd","id":7,"output":"job.apf"}"#
         );
 
         let layer = HostMessage::EncodeLayer {

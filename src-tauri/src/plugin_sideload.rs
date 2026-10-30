@@ -541,6 +541,7 @@ mod tests {
                 id: "apf".to_string(),
                 extensions: vec![".apf".to_string()],
                 display_name: None,
+                layers: None,
             }],
             network: None,
             file_types: Vec::new(),

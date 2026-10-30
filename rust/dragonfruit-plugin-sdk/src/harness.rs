@@ -23,12 +23,14 @@ pub trait PluginIdentity {
     fn formats(&self) -> Vec<FormatDecl>;
 }
 
-/// What one encode session is told about itself.
+/// What one encode session is told about itself. The destination path is not
+/// here: it arrives with `finish`, because a streaming encoder only learns it
+/// once every layer has been consumed.
 pub struct EncodeStart<'a> {
     /// Extension the host is encoding for, leading dot: `.apf`.
     pub format: &'a str,
-    /// Destination path. The plugin writes the container here.
-    pub output: &'a Path,
+    /// Total layers the host will send, for progress and preallocation.
+    pub layers: u32,
     /// The slice job: resolution, layer height, exposures, printer profile.
     pub job: &'a serde_json::Value,
 }
@@ -47,8 +49,8 @@ pub struct LayerRef<'a> {
 pub trait Encoder {
     fn begin(&mut self, start: EncodeStart<'_>) -> Result<(), String>;
     fn layer(&mut self, layer: LayerRef<'_>) -> Result<(), String>;
-    /// Returns the number of bytes written.
-    fn finish(&mut self) -> Result<u64, String>;
+    /// Writes the container to `output` and returns the number of bytes written.
+    fn finish(&mut self, output: &Path) -> Result<u64, String>;
 }
 
 /// A file the host cannot parse. `import` reads `input` and writes the scene
@@ -83,6 +85,12 @@ pub trait PluginCapabilities {
     fn importer(&self) -> Option<Box<dyn Importer>> {
         None
     }
+
+    /// Decodes one layer's preview PNG from an encoded file. Not every format can:
+    /// the default says so, and the host shows the preview it can get.
+    fn preview(&self, _archive: &Path, _layer: u32) -> Result<Vec<u8>, String> {
+        Err("this plugin does not provide layer previews".to_string())
+    }
 }
 
 /// For a plugin that has nothing to answer yet.
@@ -96,7 +104,6 @@ struct EncodeState {
     layout: RingLayout,
     expected: u32,
     received: u32,
-    output: PathBuf,
 }
 
 /// Runs the control channel.
@@ -185,7 +192,6 @@ pub fn serve<R: Read, W: Write, C: PluginCapabilities>(
             HostMessage::EncodeBegin {
                 id,
                 format,
-                output: output_path,
                 layers,
                 job,
             } => {
@@ -202,31 +208,12 @@ pub fn serve<R: Read, W: Write, C: PluginCapabilities>(
                 let Some(mut encoder) = capabilities.encoder() else {
                     return fail(&mut output, "encoder-unsupported", "the plugin offers no encoder");
                 };
-                let path = PathBuf::from(&output_path);
                 if let Err(message) = encoder.begin(EncodeStart {
                     format: &format,
-                    output: &path,
+                    layers,
                     job: &job,
                 }) {
                     return fail(&mut output, "encode-failed", &message);
-                }
-
-                if layers == 0 {
-                    match encoder.finish() {
-                        Ok(bytes) => {
-                            write_json(
-                                &mut output,
-                                &PluginMessage::EncodeDone {
-                                    id,
-                                    path: output_path,
-                                    bytes,
-                                },
-                            )
-                            .map_err(to_io)?;
-                        }
-                        Err(message) => return fail(&mut output, "encode-failed", &message),
-                    }
-                    continue;
                 }
 
                 session = Some(EncodeState {
@@ -235,8 +222,46 @@ pub fn serve<R: Read, W: Write, C: PluginCapabilities>(
                     layout,
                     expected: layers,
                     received: 0,
-                    output: path,
                 });
+            }
+            HostMessage::Preview { id, path, layer } => {
+                match capabilities.preview(Path::new(&path), layer) {
+                    Ok(png) => {
+                        write_json(
+                            &mut output,
+                            &PluginMessage::PreviewPng {
+                                id,
+                                bytes: png.len() as u64,
+                            },
+                        )
+                        .map_err(to_io)?;
+                        crate::frame::write_frame(&mut output, FrameKind::Bulk, &png)
+                            .map_err(to_io)?;
+                    }
+                    Err(message) => return fail(&mut output, "preview-unsupported", &message),
+                }
+            }
+            HostMessage::EncodeEnd { id, output: target } => {
+                let Some(mut state) = session.take() else {
+                    return fail(&mut output, "unexpected-frame", "no encode session to finish");
+                };
+                if state.id != id {
+                    return fail(&mut output, "unexpected-frame", "end id does not match the session");
+                }
+                match state.encoder.finish(Path::new(&target)) {
+                    Ok(bytes) => {
+                        write_json(
+                            &mut output,
+                            &PluginMessage::EncodeDone {
+                                id,
+                                path: target,
+                                bytes,
+                            },
+                        )
+                        .map_err(to_io)?;
+                    }
+                    Err(message) => return fail(&mut output, "encode-failed", &message),
+                }
             }
             HostMessage::EncodeLayer {
                 id,
@@ -293,23 +318,6 @@ pub fn serve<R: Read, W: Write, C: PluginCapabilities>(
                 )
                 .map_err(to_io)?;
 
-                if state.received >= state.expected {
-                    let mut finished = session.take().expect("session present");
-                    match finished.encoder.finish() {
-                        Ok(bytes) => {
-                            write_json(
-                                &mut output,
-                                &PluginMessage::EncodeDone {
-                                    id: finished.id,
-                                    path: finished.output.to_string_lossy().to_string(),
-                                    bytes,
-                                },
-                            )
-                            .map_err(to_io)?;
-                        }
-                        Err(message) => return fail(&mut output, "encode-failed", &message),
-                    }
-                }
             }
             HostMessage::Import {
                 id,
@@ -401,6 +409,7 @@ mod tests {
     #[derive(Default)]
     struct RecordingEncoder {
         layers: Vec<(u32, Vec<u8>)>,
+        last_output: Option<PathBuf>,
     }
 
     impl Encoder for RecordingEncoder {
@@ -411,7 +420,8 @@ mod tests {
             self.layers.push((layer.index, layer.bytes.to_vec()));
             Ok(())
         }
-        fn finish(&mut self) -> Result<u64, String> {
+        fn finish(&mut self, output: &Path) -> Result<u64, String> {
+            self.last_output = Some(output.to_path_buf());
             Ok(self.layers.iter().map(|(_, bytes)| bytes.len() as u64).sum())
         }
     }
@@ -577,7 +587,6 @@ mod tests {
             &HostMessage::EncodeBegin {
                 id: 7,
                 format: ".pbm".to_string(),
-                output: "out.pbm".to_string(),
                 layers: layers.len() as u32,
                 job: serde_json::json!({ "widthPx": 4096 }),
             },
@@ -600,6 +609,14 @@ mod tests {
             )
             .expect("layer");
         }
+        write_json(
+            &mut bytes,
+            &HostMessage::EncodeEnd {
+                id: 7,
+                output: "out.pbm".to_string(),
+            },
+        )
+        .expect("end");
         write_json(&mut bytes, &HostMessage::Shutdown).expect("shutdown");
 
         let mut input = std::io::Cursor::new(bytes);

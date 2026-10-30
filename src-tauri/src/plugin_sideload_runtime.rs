@@ -34,6 +34,8 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 const ENCODE_TIMEOUT: Duration = Duration::from_secs(600);
 /// Opening a file: the plugin reads a document and writes a container.
 const IMPORT_TIMEOUT: Duration = Duration::from_secs(120);
+/// One layer preview.
+const PREVIEW_TIMEOUT: Duration = Duration::from_secs(30);
 /// First bytes of the v1 scene container a plugin writes.
 pub const SCENE_CONTAINER_MAGIC: &[u8; 9] = b"DFIMPORT1";
 
@@ -396,6 +398,71 @@ fn stop(plugin: &mut RunningPlugin) {
     let _ = plugin.child.wait();
 }
 
+fn recv_frame(plugin: &mut RunningPlugin, deadline: Instant) -> Result<sdk::Frame, String> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err("the plugin did not answer in time".to_string());
+    }
+    match plugin.frames.recv_timeout(remaining) {
+        Ok(Ok(Some(frame))) => Ok(frame),
+        Ok(Ok(None)) => Err("the plugin closed the control channel".to_string()),
+        Ok(Err(error)) => Err(error),
+        Err(RecvTimeoutError::Timeout) => Err("the plugin did not answer in time".to_string()),
+        Err(RecvTimeoutError::Disconnected) => Err("the plugin reader stopped".to_string()),
+    }
+}
+
+/// Decodes one layer preview PNG through the plugin's own container reader.
+///
+/// Previews are rare, so this opens a process for one answer instead of keeping a
+/// session alive: the plugin gets a `preview` request, answers with a header and
+/// then a bulk frame holding the PNG.
+pub fn preview_with_plugin(
+    root: &Path,
+    plugin_id: &str,
+    manifest: &package::Manifest,
+    archive: &Path,
+    layer: u32,
+) -> Result<Vec<u8>, String> {
+    let session_id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+    let mut plugin = start(root, plugin_id, manifest)?;
+    let result = (|| -> Result<Vec<u8>, String> {
+        send(
+            &mut plugin,
+            &sdk::HostMessage::Preview {
+                id: session_id,
+                path: archive.to_string_lossy().to_string(),
+                layer,
+            },
+        )?;
+
+        let deadline = Instant::now() + PREVIEW_TIMEOUT;
+        let header = recv_frame(&mut plugin, deadline)?;
+        let expected = match serde_json::from_slice::<sdk::PluginMessage>(&header.payload) {
+            Ok(sdk::PluginMessage::PreviewPng { id, bytes }) if id == session_id => bytes,
+            Ok(sdk::PluginMessage::Error { code, message }) => {
+                return Err(format!("preview error {code}: {message}"));
+            }
+            Ok(other) => return Err(format!("unexpected preview message: {other:?}")),
+            Err(error) => return Err(format!("unreadable preview message: {error}")),
+        };
+
+        let png = recv_frame(&mut plugin, deadline)?;
+        if png.kind != sdk::FrameKind::Bulk {
+            return Err("the preview payload was not a bulk frame".to_string());
+        }
+        if png.payload.len() as u64 != expected {
+            return Err(format!(
+                "the preview announced {expected} bytes and sent {}",
+                png.payload.len()
+            ));
+        }
+        Ok(png.payload)
+    })();
+    stop(&mut plugin);
+    result
+}
+
 /// Opens a file the package declares and returns the scene container it wrote.
 ///
 /// The source bytes arrive from the renderer (a dropped `File` has no path worth
@@ -488,11 +555,200 @@ fn sanitize_file_name(name: &str) -> String {
     }
 }
 
-/// Streams every rendered layer to a sideloaded encoder and waits for the file.
+/// One encode session against a plugin process: the ring, the process, the
+/// slots it has handed back, and the result.
 ///
-/// One process per session: the ring path is handed over in the environment, so
-/// a process that outlived its session would be reading a mapping the host has
-/// already deleted.
+/// Both encode shapes use it: the batch path (PNG layers in memory) and the
+/// streaming path, where the engine feeds RLE runs as it rasterises and only
+/// names the output file at the end.
+pub struct EncodeSession {
+    plugin: RunningPlugin,
+    mapping: memmap2::MmapMut,
+    layout: sdk::RingLayout,
+    free_slots: Vec<u32>,
+    finished: Option<(String, u64)>,
+    session_id: u64,
+    ring_path: PathBuf,
+}
+
+impl EncodeSession {
+    pub fn start(
+        root: &Path,
+        plugin_id: &str,
+        manifest: &package::Manifest,
+        format: &str,
+        job: serde_json::Value,
+        total_layers: u32,
+        slot_bytes: u32,
+    ) -> Result<Self, String> {
+        let plugin_dir = root.join(plugin_id);
+        let session_id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+        let layout = sdk::RingLayout::new(4, slot_bytes.max(4096));
+
+        let ring_path = plugin_dir.join(format!("session-{session_id}.ring"));
+        let ring_file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&ring_path)
+            .map_err(|error| format!("failed to create the ring mapping: {error}"))?;
+        ring_file
+            .set_len(layout.bytes_needed() as u64)
+            .map_err(|error| format!("failed to size the ring mapping: {error}"))?;
+        // SAFETY: this file is created here, mapped only by us, and the plugin maps
+        // it read-write for the session. The ring's accessors order the two sides.
+        let mut mapping = unsafe { memmap2::MmapMut::map_mut(&ring_file) }
+            .map_err(|error| format!("failed to map the ring: {error}"))?;
+        sdk::init_ring(&mut mapping, layout)
+            .map_err(|error| format!("failed to initialise the ring: {error}"))?;
+
+        let mut plugin = start_with_ring(root, plugin_id, manifest, Some(&ring_path))?;
+        send(
+            &mut plugin,
+            &sdk::HostMessage::EncodeBegin {
+                id: session_id,
+                format: format.to_string(),
+                layers: total_layers,
+                job,
+            },
+        )?;
+
+        let free_slots = (0..layout.slot_count).rev().collect();
+        Ok(Self {
+            plugin,
+            mapping,
+            layout,
+            free_slots,
+            finished: None,
+            session_id,
+            ring_path,
+        })
+    }
+
+    /// Publishes one layer and answers with any progress the plugin reported
+    /// while a slot was being waited for.
+    pub fn send_layer(
+        &mut self,
+        kind: sdk::SlotKind,
+        index: u32,
+        bytes: &[u8],
+    ) -> Result<Vec<(u32, u32)>, String> {
+        let mut progress = Vec::new();
+        while self.free_slots.is_empty() {
+            self.pump(Instant::now() + ENCODE_TIMEOUT, &mut progress)?;
+        }
+        let slot = self.free_slots.pop().expect("a free slot");
+        sdk::publish_slot(
+            &mut self.mapping,
+            &self.layout,
+            slot,
+            kind,
+            index,
+            bytes,
+            0,
+            0,
+        )
+        .map_err(|error| format!("failed to publish layer {index}: {error}"))?;
+        send(
+            &mut self.plugin,
+            &sdk::HostMessage::EncodeLayer {
+                id: self.session_id,
+                index,
+                slot,
+                kind,
+                bytes: bytes.len() as u64,
+            },
+        )?;
+        self.drain(&mut progress)?;
+        Ok(progress)
+    }
+
+    /// Ends the session, checks the plugin wrote the file it claimed, and
+    /// returns any progress reported while the answer was awaited.
+    pub fn finish(mut self, output: &Path) -> Result<Vec<(u32, u32)>, String> {
+        send(
+            &mut self.plugin,
+            &sdk::HostMessage::EncodeEnd {
+                id: self.session_id,
+                output: output.to_string_lossy().to_string(),
+            },
+        )?;
+        let deadline = Instant::now() + ENCODE_TIMEOUT;
+        let mut progress = Vec::new();
+        while self.finished.is_none() {
+            self.pump(deadline, &mut progress)?;
+        }
+        let (path, _bytes) = self.finished.take().expect("an encode result");
+        if !Path::new(&path).exists() {
+            return Err(format!("the plugin reported '{path}' but wrote no file"));
+        }
+        Ok(progress)
+    }
+
+    fn drain(&mut self, progress: &mut Vec<(u32, u32)>) -> Result<(), String> {
+        while let Ok(Ok(Some(frame))) = self.plugin.frames.try_recv() {
+            self.apply(frame, progress)?;
+        }
+        Ok(())
+    }
+
+    fn pump(
+        &mut self,
+        deadline: Instant,
+        progress: &mut Vec<(u32, u32)>,
+    ) -> Result<(), String> {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err("the encoder did not finish within ten minutes".to_string());
+        }
+        match self.plugin.frames.recv_timeout(remaining) {
+            Ok(Ok(Some(frame))) => self.apply(frame, progress),
+            Ok(Ok(None)) => Err("the encoder closed the control channel".to_string()),
+            Ok(Err(error)) => Err(error),
+            Err(RecvTimeoutError::Timeout) => {
+                Err("the encoder did not finish within ten minutes".to_string())
+            }
+            Err(RecvTimeoutError::Disconnected) => Err("the encoder reader stopped".to_string()),
+        }
+    }
+
+    fn apply(&mut self, frame: sdk::Frame, progress: &mut Vec<(u32, u32)>) -> Result<(), String> {
+        match serde_json::from_slice::<sdk::PluginMessage>(&frame.payload) {
+            Ok(sdk::PluginMessage::SlotFree { slot }) => {
+                if !self.free_slots.contains(&slot) {
+                    self.free_slots.push(slot);
+                }
+                Ok(())
+            }
+            Ok(sdk::PluginMessage::Progress { done, total, .. }) => {
+                progress.push((done, total));
+                Ok(())
+            }
+            Ok(sdk::PluginMessage::EncodeDone { path, bytes, .. }) => {
+                self.finished = Some((path, bytes));
+                Ok(())
+            }
+            Ok(sdk::PluginMessage::EncodeCancelled { .. }) => {
+                Err("the encoder cancelled the job".to_string())
+            }
+            Ok(sdk::PluginMessage::Error { code, message }) => {
+                Err(format!("encoder error {code}: {message}"))
+            }
+            Ok(other) => Err(format!("unexpected encoder message: {other:?}")),
+            Err(error) => Err(format!("unreadable encoder message: {error}")),
+        }
+    }
+}
+
+impl Drop for EncodeSession {
+    fn drop(&mut self) {
+        stop(&mut self.plugin);
+        let _ = std::fs::remove_file(&self.ring_path);
+    }
+}
+
+/// Streams every rendered layer to a sideloaded encoder and waits for the file.
 pub fn encode_with_plugin(
     root: &Path,
     plugin_id: &str,
@@ -503,210 +759,38 @@ pub fn encode_with_plugin(
     output_path: &Path,
     on_progress: &mut dyn FnMut(u32, u32),
 ) -> Result<(), String> {
-    let plugin_dir = root.join(plugin_id);
-    let session_id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
-
-    // Four slots, sized for the largest layer this job produces: a 12K mask is
-    // ~59 MB, a PNG layer a couple of MB, and the ring only pages in what is used.
+    // Four slots sized for the largest layer: a 12K PNG is a couple of MB, and the
+    // mapping only pages in what is touched.
     let largest = layers.iter().map(Vec::len).max().unwrap_or(0);
     let slot_bytes = ((largest.max(4096) + 4095) / 4096 * 4096) as u32;
-    let layout = sdk::RingLayout::new(4, slot_bytes);
 
-    let ring_path = plugin_dir.join(format!("session-{session_id}.ring"));
-    let ring_file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&ring_path)
-        .map_err(|error| format!("failed to create the ring mapping: {error}"))?;
-    ring_file
-        .set_len(layout.bytes_needed() as u64)
-        .map_err(|error| format!("failed to size the ring mapping: {error}"))?;
-    // SAFETY: this file is created here, mapped only by us, and the plugin maps it
-    // read-write for the session. The ring's accessors order the two sides.
-    let mut mapping = unsafe { memmap2::MmapMut::map_mut(&ring_file) }
-        .map_err(|error| format!("failed to map the ring: {error}"))?;
-    sdk::init_ring(&mut mapping, layout).map_err(|error| format!("failed to initialise the ring: {error}"))?;
-
-    let outcome = (|| -> Result<(), String> {
-        let mut plugin = start_with_ring(root, plugin_id, manifest, Some(&ring_path))?;
-        let result = stream_session(&mut plugin, &mut mapping, layout, session_id, format, job, layers, output_path, on_progress);
-        stop(&mut plugin);
-        result
-    })();
-
-    drop(mapping);
-    let _ = std::fs::remove_file(&ring_path);
-    outcome
-}
-
-#[allow(clippy::too_many_arguments)]
-fn stream_session(
-    plugin: &mut RunningPlugin,
-    mapping: &mut [u8],
-    layout: sdk::RingLayout,
-    session_id: u64,
-    format: &str,
-    job: serde_json::Value,
-    layers: &[Vec<u8>],
-    output_path: &Path,
-    on_progress: &mut dyn FnMut(u32, u32),
-) -> Result<(), String> {
-    send(
-        plugin,
-        &sdk::HostMessage::EncodeBegin {
-            id: session_id,
-            format: format.to_string(),
-            output: output_path.to_string_lossy().to_string(),
-            layers: layers.len() as u32,
-            job,
-        },
+    let mut session = EncodeSession::start(
+        root,
+        plugin_id,
+        manifest,
+        format,
+        job,
+        layers.len() as u32,
+        slot_bytes,
     )?;
-    plugin.last_used = Instant::now();
-
-    let deadline = Instant::now() + ENCODE_TIMEOUT;
-    let mut free_slots: Vec<u32> = (0..layout.slot_count).rev().collect();
-    let mut finished: Option<(String, u64)> = None;
-
     for (index, bytes) in layers.iter().enumerate() {
-        while free_slots.is_empty() {
-            pump(plugin, deadline, &mut free_slots, &mut finished, on_progress)?;
-        }
-        let slot = free_slots.pop().expect("a free slot");
-        sdk::publish_slot(
-            mapping,
-            &layout,
-            slot,
-            sdk::SlotKind::Png,
-            index as u32,
-            bytes,
-            0,
-            0,
-        )
-        .map_err(|error| format!("failed to publish layer {index}: {error}"))?;
-        send(
-            plugin,
-            &sdk::HostMessage::EncodeLayer {
-                id: session_id,
-                index: index as u32,
-                slot,
-                kind: sdk::SlotKind::Png,
-                bytes: bytes.len() as u64,
-            },
-        )?;
-        drain_available(plugin, &mut free_slots, &mut finished, on_progress)?;
-    }
-
-    while finished.is_none() {
-        pump(plugin, deadline, &mut free_slots, &mut finished, on_progress)?;
-    }
-
-    let (path, _bytes) = finished.expect("an encode result");
-    if !Path::new(&path).exists() {
-        return Err(format!("the plugin reported '{path}' but wrote no file"));
-    }
-    Ok(())
-}
-
-fn drain_available(
-    plugin: &mut RunningPlugin,
-    free_slots: &mut Vec<u32>,
-    finished: &mut Option<(String, u64)>,
-    on_progress: &mut dyn FnMut(u32, u32),
-) -> Result<(), String> {
-    while let Ok(Ok(Some(frame))) = plugin.frames.try_recv() {
-        apply(frame, free_slots, finished, on_progress)?;
-    }
-    Ok(())
-}
-
-fn pump(
-    plugin: &mut RunningPlugin,
-    deadline: Instant,
-    free_slots: &mut Vec<u32>,
-    finished: &mut Option<(String, u64)>,
-    on_progress: &mut dyn FnMut(u32, u32),
-) -> Result<(), String> {
-    let remaining = deadline.saturating_duration_since(Instant::now());
-    if remaining.is_zero() {
-        return Err("the encoder did not finish within ten minutes".to_string());
-    }
-    match plugin.frames.recv_timeout(remaining) {
-        Ok(Ok(Some(frame))) => apply(frame, free_slots, finished, on_progress),
-        Ok(Ok(None)) => Err("the encoder closed the control channel".to_string()),
-        Ok(Err(error)) => Err(error),
-        Err(RecvTimeoutError::Timeout) => Err("the encoder did not finish within ten minutes".to_string()),
-        Err(RecvTimeoutError::Disconnected) => Err("the encoder reader stopped".to_string()),
-    }
-}
-
-fn apply(
-    frame: sdk::Frame,
-    free_slots: &mut Vec<u32>,
-    finished: &mut Option<(String, u64)>,
-    on_progress: &mut dyn FnMut(u32, u32),
-) -> Result<(), String> {
-    match serde_json::from_slice::<sdk::PluginMessage>(&frame.payload) {
-        Ok(sdk::PluginMessage::SlotFree { slot }) => {
-            if !free_slots.contains(&slot) {
-                free_slots.push(slot);
-            }
-            Ok(())
-        }
-        Ok(sdk::PluginMessage::Progress { done, total, .. }) => {
+        for (done, total) in session.send_layer(sdk::SlotKind::Png, index as u32, bytes)? {
             on_progress(done, total);
-            Ok(())
         }
-        Ok(sdk::PluginMessage::EncodeDone { path, bytes, .. }) => {
-            *finished = Some((path, bytes));
-            Ok(())
-        }
-        Ok(sdk::PluginMessage::EncodeCancelled { .. }) => Err("the encoder cancelled the job".to_string()),
-        Ok(sdk::PluginMessage::Error { code, message }) => {
-            Err(format!("encoder error {code}: {message}"))
-        }
-        Ok(other) => Err(format!("unexpected encoder message: {other:?}")),
-        Err(error) => Err(format!("unreadable encoder message: {error}")),
     }
+    for (done, total) in session.finish(output_path)? {
+        on_progress(done, total);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use crate::plugin_test_support::{install_reference_plugin, platform_name, temp_dir};
 
     fn manifest(capabilities: Vec<package::Capability>) -> package::Manifest {
-        package::Manifest {
-            format_version: package::FORMAT_VERSION,
-            id: "example.echo".to_string(),
-            name: "Echo".to_string(),
-            version: "1.0.0".to_string(),
-            vendor: package::Vendor {
-                name: "Test".to_string(),
-                homepage: None,
-            },
-            min_app_version: "0.1.0".to_string(),
-            capabilities,
-            entry: package::Entry {
-                kind: package::EntryKind::Process,
-                proto: package::PROTOCOL_VERSION,
-                transport: package::Transport::Shm,
-            },
-            publisher: package::Publisher {
-                key: String::new(),
-            },
-            payload: package::PayloadRef {
-                sha256: String::new(),
-                bytes: 0,
-                seal: None,
-            },
-            formats: Vec::new(),
-            network: Some(package::NetworkDecl {
-                plugin_id: "echo".to_string(),
-            }),
-            file_types: Vec::new(),
-        }
+        crate::plugin_test_support::manifest("example.echo", capabilities)
     }
 
     fn ready(capabilities: Vec<sdk::Capability>, formats: Vec<&str>) -> sdk::PluginMessage {
@@ -768,62 +852,6 @@ mod tests {
 
         assert!(resolve_executable(&root.join("missing")).is_err());
         let _ = std::fs::remove_dir_all(&root);
-    }
-
-    fn temp_dir(label: &str) -> PathBuf {
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|value| value.as_nanos())
-            .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!("df-plugin-runtime-{label}-{stamp}"));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("temp dir");
-        dir
-    }
-
-    /// Builds one of the SDK's reference plugins and returns the binary path.
-    fn build_reference_plugin(example: &str) -> PathBuf {
-        let sdk_manifest = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("rust")
-            .join("dragonfruit-plugin-sdk")
-            .join("Cargo.toml");
-        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-        let status = Command::new(cargo)
-            .args(["build", "--quiet", "--example", example, "--manifest-path"])
-            .arg(&sdk_manifest)
-            .status()
-            .unwrap_or_else(|error| panic!("build {example}: {error}"));
-        assert!(status.success(), "{example} failed to build");
-
-        let built = sdk_manifest
-            .parent()
-            .expect("sdk dir")
-            .join("target")
-            .join("debug")
-            .join("examples")
-            .join(if cfg!(windows) {
-                format!("{example}.exe")
-            } else {
-                example.to_string()
-            });
-        assert!(built.exists(), "{example} binary missing: {}", built.display());
-        built
-    }
-
-    /// Installs a reference plugin into a temporary plugin directory.
-    fn install_reference_plugin(root: &Path, example: &str, manifest: &package::Manifest) -> PathBuf {
-        let built = build_reference_plugin(example);
-        let plugin_dir = root.join(&manifest.id);
-        let bin_dir = plugin_dir.join("payload").join("bin").join(platform_name());
-        std::fs::create_dir_all(&bin_dir).expect("bin dir");
-        std::fs::copy(&built, bin_dir.join(example)).expect("install binary");
-        std::fs::write(
-            plugin_dir.join("manifest.json"),
-            serde_json::to_vec_pretty(manifest).expect("manifest json"),
-        )
-        .expect("manifest");
-        plugin_dir
     }
 
     /// Drives the SDK's reference network plugin through the real process
@@ -914,6 +942,37 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// A preview comes back as a header plus a bulk frame.
+    #[test]
+    fn reads_a_layer_preview_from_a_real_plugin_process() {
+        let root = temp_dir("preview");
+        let manifest = package::Manifest {
+            id: "example.encoder".to_string(),
+            capabilities: vec![package::Capability::SlicerEncoder],
+            formats: vec![package::FormatDecl {
+                id: "exf".to_string(),
+                extensions: vec![".exf".to_string()],
+                display_name: None,
+                layers: None,
+            }],
+            ..manifest(vec![package::Capability::SlicerEncoder])
+        };
+        install_reference_plugin(&root, "echo_encoder", &manifest);
+
+        let archive = root.join("job.exf");
+        std::fs::write(&archive, b"container").expect("archive");
+
+        let png = preview_with_plugin(&root, "example.encoder", &manifest, &archive, 42)
+            .expect("preview");
+        assert!(png.starts_with(b"\x89PNG"), "a PNG-shaped payload came back");
+        assert!(
+            String::from_utf8_lossy(&png).contains(":42"),
+            "the layer number reached the plugin"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// Streams layers through the ring to the reference encoder and checks the
     /// container it wrote.
     #[test]
@@ -926,6 +985,7 @@ mod tests {
                 id: "exf".to_string(),
                 extensions: vec![".exf".to_string()],
                 display_name: None,
+                layers: None,
             }],
             ..manifest(vec![package::Capability::SlicerEncoder])
         };

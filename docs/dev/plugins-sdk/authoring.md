@@ -73,7 +73,9 @@ show it before anyone is asked for a key:
   "entry": { "kind": "process", "proto": 1, "transport": "shm" },
   "publisher": { "key": "<base64 Ed25519 public key>" },
   "payload": { "sha256": "<hex>", "bytes": 0, "seal": null },
-  "formats": [{ "id": "apf", "extensions": [".apf"], "displayName": "AlphaPrint" }]
+  "formats": [
+    { "id": "apf", "extensions": [".apf"], "displayName": "AlphaPrint", "layers": "rle" }
+  ]
 }
 ```
 
@@ -189,6 +191,7 @@ cargo run -p dragonfruit-plugin-package --example pack -- \
 | `--binary` | the plugin executable; it is zipped as `bin/<platform>/<file name>` |
 | `--id`, `--name`, `--version`, `--vendor` | manifest identity |
 | `--format` | output extension the encoder claims, leading dot |
+| `--layers` | `png` (default) or `rle`: which layer payload the encoder wants |
 | `--file-type` | extension the package can open, e.g. `.apf`; adds the fileType capability |
 | `--file-type-name` | display name for that extension, shown in the import UI |
 | `--min-app-version` | manifest `minAppVersion` (default `0.1.0`) |

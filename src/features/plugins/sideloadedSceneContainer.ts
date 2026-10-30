@@ -17,10 +17,13 @@ import * as THREE from 'three';
  *   f32  positions       positionCount * 3
  *   f32  normals         positionCount * 3, only when hasNormals
  *   u32  indices         indexCount, only when indexCount > 0
+ *   utf8 support         supportLength bytes, only when supportLength > 0
  * ```
  *
- * No supports yet: support data needs the host's internal format serialized, and
- * that is the one part of this payload still to pin.
+ * `support` is the host's internal support document (`roots`, `trunks`,
+ * `branches`, `leaves`, `braces`, `knots` and the optional collections). It is
+ * passed through untouched: the importer validates it, this parser only checks
+ * that it is an object.
  */
 export const SCENE_CONTAINER_MAGIC = 'DFIMPORT1';
 
@@ -33,6 +36,8 @@ export type SideloadedSceneModel = {
     rotation: THREE.Euler;
     scale: THREE.Vector3;
   };
+  /** The host's internal support document, when the container carried one. */
+  supportData?: unknown;
 };
 
 type ContainerMeta = {
@@ -42,6 +47,7 @@ type ContainerMeta = {
   positionCount?: unknown;
   indexCount?: unknown;
   hasNormals?: unknown;
+  supportLength?: unknown;
 };
 
 export function parseSideloadedSceneContainer(buffer: ArrayBuffer): SideloadedSceneModel[] {
@@ -87,6 +93,20 @@ export function parseSideloadedSceneContainer(buffer: ArrayBuffer): SideloadedSc
     const indices = indexCount > 0 ? readUint32s(buffer, offset, indexCount) : null;
     if (indexCount > 0) offset += indexCount * 4;
 
+    const supportLength = countOrNull(meta.supportLength ?? 0) ?? 0;
+    let supportData: unknown;
+    if (supportLength > 0) {
+      if (offset + supportLength > bytes.byteLength) {
+        throw new Error('Scene container support data runs past the end.');
+      }
+      const support = JSON.parse(decoder.decode(bytes.subarray(offset, offset + supportLength))) as unknown;
+      if (!support || typeof support !== 'object' || Array.isArray(support)) {
+        throw new Error('Scene container support data is not an object.');
+      }
+      supportData = support;
+      offset += supportLength;
+    }
+
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     if (normals) {
@@ -103,6 +123,7 @@ export function parseSideloadedSceneContainer(buffer: ArrayBuffer): SideloadedSc
       objName: typeof meta.name === 'string' ? meta.name : undefined,
       geometry,
       transform: readTransform(meta.transform),
+      ...(supportData ? { supportData } : {}),
     });
   }
 

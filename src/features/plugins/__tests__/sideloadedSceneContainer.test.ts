@@ -12,6 +12,7 @@ type ModelSpec = {
   positions: number[];
   normals?: number[];
   indices?: number[];
+  support?: Record<string, unknown>;
 };
 
 /** Mirrors the writer side of the format, so the reader is tested against bytes. */
@@ -41,6 +42,7 @@ function buildContainer(models: ModelSpec[]): ArrayBuffer {
         positionCount: model.positions.length / 3,
         indexCount: model.indices?.length ?? 0,
         hasNormals: Array.isArray(model.normals),
+        supportLength: model.support ? JSON.stringify(model.support).length : 0,
       }),
     );
     chunks.push(u32(meta.length), meta, f32s(model.positions));
@@ -50,6 +52,9 @@ function buildContainer(models: ModelSpec[]): ArrayBuffer {
       const view = new DataView(bytes.buffer);
       model.indices.forEach((value, index) => view.setUint32(index * 4, value, true));
       chunks.push(bytes);
+    }
+    if (model.support) {
+      chunks.push(encoder.encode(JSON.stringify(model.support)));
     }
   }
 
@@ -111,4 +116,27 @@ test('a truncated container is refused rather than half-read', () => {
   ]);
   const truncated = container.slice(0, container.byteLength - 8);
   assert.throws(() => parseSideloadedSceneContainer(truncated));
+});
+
+test('a support document travels with its model', () => {
+  const support = {
+    roots: [],
+    trunks: [],
+    branches: [],
+    leaves: [],
+    braces: [],
+    knots: [],
+  };
+  const container = buildContainer([
+    { modelId: 'with-supports', positions: [0, 0, 0, 1, 0, 0, 0, 1, 0], support },
+  ]);
+
+  const models = parseSideloadedSceneContainer(container);
+  assert.deepEqual(models[0].supportData, support);
+});
+
+test('a model without supports has none', () => {
+  const container = buildContainer([{ modelId: 'plain', positions: [0, 0, 0, 1, 0, 0, 0, 1, 0] }]);
+  const models = parseSideloadedSceneContainer(container);
+  assert.equal(models[0].supportData, undefined);
 });

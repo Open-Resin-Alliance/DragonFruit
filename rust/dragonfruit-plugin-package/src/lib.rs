@@ -103,6 +103,16 @@ pub struct PayloadRef {
     pub seal: Option<Seal>,
 }
 
+/// What the encoder wants per layer. RLE is the cheap path: the engine already
+/// rasterises to runs and a run stream is far smaller than a PNG of the same
+/// layer. PNG stays the default for formats that need pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LayerKind {
+    Png,
+    Rle,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FormatDecl {
@@ -110,6 +120,14 @@ pub struct FormatDecl {
     pub extensions: Vec<String>,
     #[serde(default)]
     pub display_name: Option<String>,
+    #[serde(default)]
+    pub layers: Option<LayerKind>,
+}
+
+impl FormatDecl {
+    pub fn layer_kind(&self) -> LayerKind {
+        self.layers.unwrap_or(LayerKind::Png)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -623,6 +641,7 @@ mod tests {
                 id: "apf".to_string(),
                 extensions: vec![".apf".to_string()],
                 display_name: None,
+                layers: None,
             }],
             network: None,
             file_types: Vec::new(),

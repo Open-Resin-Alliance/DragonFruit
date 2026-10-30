@@ -33,6 +33,7 @@ pub mod frame;
 pub mod harness;
 pub mod protocol;
 pub mod ring;
+pub mod runs;
 
 /// Wire protocol this crate speaks. The host refuses a package built against a
 /// version it does not know, so this and the host's copy must move together.
@@ -44,6 +45,7 @@ pub use harness::{
     PluginIdentity,
 };
 pub use protocol::{Capability, FormatDecl, HostMessage, PluginMessage, Transport};
+pub use runs::{decode_runs, encode_runs, Run, RUN_BYTES};
 pub use ring::{
     claim_slot, init_ring, publish_slot, read_layout, release_slot, slot_state, slot_view, RingError,
     RingLayout, SlotKind, SlotState, SlotView, DEFAULT_SLOT_BYTES, DEFAULT_SLOT_COUNT,

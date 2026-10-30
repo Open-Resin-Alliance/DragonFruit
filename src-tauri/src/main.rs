@@ -61,6 +61,8 @@ mod experiments;
 mod plugin_registry;
 mod plugin_sideload;
 mod plugin_sideload_encoder;
+#[cfg(test)]
+mod plugin_test_support;
 mod plugin_sideload_runtime;
 mod webview_watchdog;
 mod window_state;

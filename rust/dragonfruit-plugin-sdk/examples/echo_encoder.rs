@@ -11,44 +11,50 @@
 use std::io::Write;
 
 use dragonfruit_plugin_sdk::{
-    serve, Capability, EncodeStart, Encoder, FormatDecl, LayerRef, PluginCapabilities,
-    PluginIdentity,
+    decode_runs, serve, Capability, EncodeStart, Encoder, FormatDecl, LayerRef,
+    PluginCapabilities, PluginIdentity, SlotKind,
 };
 
 #[derive(Default)]
 struct EchoEncoder {
-    file: Option<std::fs::File>,
-    layers: u64,
+    format: String,
+    /// `(index, kind, run count, bytes)` per layer, kept until `finish` because a
+    /// streaming session does not learn its destination path until then.
+    layers: Vec<(u32, &'static str, u32, Vec<u8>)>,
 }
 
 impl Encoder for EchoEncoder {
     fn begin(&mut self, start: EncodeStart<'_>) -> Result<(), String> {
-        let mut file = std::fs::File::create(start.output).map_err(|error| error.to_string())?;
-        file.write_all(b"ECHOENC1").map_err(|error| error.to_string())?;
-        file.write_all(start.format.as_bytes())
-            .map_err(|error| error.to_string())?;
-        self.file = Some(file);
+        self.format = start.format.to_string();
         Ok(())
     }
 
     fn layer(&mut self, layer: LayerRef<'_>) -> Result<(), String> {
-        let file = self.file.as_mut().ok_or_else(|| "no session".to_string())?;
-        file.write_all(&layer.index.to_le_bytes())
-            .map_err(|error| error.to_string())?;
-        file.write_all(&(layer.bytes.len() as u32).to_le_bytes())
-            .map_err(|error| error.to_string())?;
-        file.write_all(layer.bytes)
-            .map_err(|error| error.to_string())?;
-        self.layers += 1;
+        let (kind, runs) = match layer.kind {
+            SlotKind::Rle => ("rle", decode_runs(layer.bytes)?.len() as u32),
+            SlotKind::Png => ("png", 0),
+            SlotKind::RawMask => ("mask", 0),
+        };
+        self.layers
+            .push((layer.index, kind, runs, layer.bytes.to_vec()));
         Ok(())
     }
 
-    fn finish(&mut self) -> Result<u64, String> {
-        let file = self.file.as_mut().ok_or_else(|| "no session".to_string())?;
-        file.flush().map_err(|error| error.to_string())?;
-        let bytes = file.metadata().map_err(|error| error.to_string())?.len();
-        file.write_all(format!("layers={}", self.layers).as_bytes())
+    fn finish(&mut self, output: &std::path::Path) -> Result<u64, String> {
+        let mut file = std::fs::File::create(output).map_err(|error| error.to_string())?;
+        file.write_all(b"ECHOENC1").map_err(|error| error.to_string())?;
+        file.write_all(self.format.as_bytes()).map_err(|error| error.to_string())?;
+        for (index, kind, runs, bytes) in &self.layers {
+            file.write_all(&index.to_le_bytes()).map_err(|error| error.to_string())?;
+            file.write_all(&(bytes.len() as u32).to_le_bytes())
+                .map_err(|error| error.to_string())?;
+            file.write_all(kind.as_bytes()).map_err(|error| error.to_string())?;
+            file.write_all(&runs.to_le_bytes()).map_err(|error| error.to_string())?;
+            file.write_all(bytes).map_err(|error| error.to_string())?;
+        }
+        file.write_all(format!("layers={}", self.layers.len()).as_bytes())
             .map_err(|error| error.to_string())?;
+        let bytes = file.metadata().map_err(|error| error.to_string())?.len();
         Ok(bytes)
     }
 }
@@ -79,27 +85,37 @@ impl PluginCapabilities for EncoderPlugin {
     fn encoder(&self) -> Option<Box<dyn Encoder>> {
         Some(Box::new(EchoEncoder::default()))
     }
+
+    /// A real format decodes its own container here. The reference one answers
+    /// with a fixed PNG-shaped payload so the host path can be exercised.
+    fn preview(&self, archive: &std::path::Path, layer: u32) -> Result<Vec<u8>, String> {
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png.extend_from_slice(format!("echo-preview:{}:{layer}", archive.display()).as_bytes());
+        Ok(png)
+    }
 }
 
 fn main() {
-    // The host maps the ring and passes its path. The SDK stays free of mapping
-    // dependencies, so opening it is the plugin's job.
-    let ring_path = std::env::var("DF_PLUGIN_RING").expect("DF_PLUGIN_RING is set by the host");
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&ring_path)
-        .unwrap_or_else(|error| panic!("open ring {ring_path}: {error}"));
-    // SAFETY: the host owns the file for the session and is the only other mapper;
-    // the ring's own accessors keep the two sides in order.
-    let mut mapping = unsafe { memmap2::MmapMut::map_mut(&file) }.expect("map the ring");
+    // The host maps the ring for encode sessions and omits it for everything else
+    // (a preview opens the process on its own), so the mapping is optional.
+    let ring_path = std::env::var("DF_PLUGIN_RING").ok();
+    let mut mapping = ring_path.map(|path| {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap_or_else(|error| panic!("open ring {path}: {error}"));
+        // SAFETY: the host owns the file for the session and is the only other
+        // mapper; the ring's own accessors keep the two sides in order.
+        unsafe { memmap2::MmapMut::map_mut(&file) }.expect("map the ring")
+    });
 
     serve(
         std::io::stdin().lock(),
         std::io::stdout().lock(),
         &EncoderPlugin,
         &EncoderPlugin,
-        Some(&mut mapping[..]),
+        mapping.as_mut().map(|mapping| &mut mapping[..]),
     )
     .expect("control channel");
 }

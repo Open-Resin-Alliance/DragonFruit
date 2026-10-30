@@ -26,13 +26,20 @@ impl Importer for EchoImport {
 
         let positions: [f32; 9] = [0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0, 0.0];
         let indices: [u32; 3] = [0, 1, 2];
+        // Empty arrays are a valid support document: the collections exist and
+        // hold nothing, which proves the transport without inventing geometry.
+        let support = serde_json::json!({
+            "roots": [], "trunks": [], "branches": [], "leaves": [], "braces": [], "knots": []
+        });
+        let support_bytes = serde_json::to_vec(&support).map_err(|error| error.to_string())?;
         let meta = serde_json::json!({
             "modelId": "echo-0",
             "name": format!("Echo ({} bytes in)", source.len()),
             "transform": [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
             "positionCount": 3,
             "indexCount": 3,
-            "hasNormals": false
+            "hasNormals": false,
+            "supportLength": support_bytes.len()
         });
         let meta_bytes = serde_json::to_vec(&meta).map_err(|error| error.to_string())?;
 
@@ -48,6 +55,7 @@ impl Importer for EchoImport {
         for value in indices {
             file.write_all(&value.to_le_bytes()).map_err(|error| error.to_string())?;
         }
+        file.write_all(&support_bytes).map_err(|error| error.to_string())?;
         Ok(())
     }
 }

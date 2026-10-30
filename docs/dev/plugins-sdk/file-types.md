@@ -1,9 +1,8 @@
 # File-type import
 
-Status: **shipped, with one gap.** A package declares its extensions, the host
-matches a dropped file by extension, runs the plugin and reads the scene
-container it writes back into models. Supports do not travel yet: that needs the
-host's internal support format serialized, and it is the next addition here.
+Status: **shipped**. A package declares its extensions, the host matches a
+dropped file by extension, runs the plugin and reads the scene container it
+writes back into models, supports included.
 
 ## Declaring extensions
 
@@ -57,7 +56,15 @@ per model:
   f32  positions      positionCount * 3     interleaved xyz
   f32  normals        positionCount * 3     only when hasNormals
   u32  indices        indexCount            only when indexCount > 0
+  utf8 support        supportLength bytes   only when supportLength > 0
 ```
+
+`support` is the host's internal support document: `roots`, `trunks`, `branches`,
+`leaves`, `braces`, `knots` and the optional collections, in DragonFruit's own
+units. The host passes it through to the importer, which validates it, so an
+empty object with empty arrays is a valid way to say "this model has none".
+
+`meta.supportLength` is what tells the host a support blob follows.
 
 `modelId` is required and stable: a re-import of the same document must produce
 the same ids, because the host stamps them onto models. One entry per model, not
@@ -69,8 +76,6 @@ compiled-in formats use (refinement, classification, placement).
 
 ### What v1 does not carry
 
-- **Supports.** A format that holds supports cannot restore them yet; the model
-  arrives without them and the host does not guess.
 - **Hollowing or punch data.**
 - **Per-material assignment.** Geometry is one mesh per model; multi-material
   meshes land with the host's multi-material support, and this container gains a

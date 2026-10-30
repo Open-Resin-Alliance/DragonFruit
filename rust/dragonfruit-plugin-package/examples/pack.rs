@@ -57,6 +57,11 @@ fn main() {
     let format_extension = arg("--format").unwrap_or_else(|| ".apf".to_string());
     let passphrase = arg("--passphrase");
     let min_app_version = arg("--min-app-version").unwrap_or_else(|| "0.1.0".to_string());
+    let layer_kind = match arg("--layers").as_deref() {
+        None | Some("png") => None,
+        Some("rle") => Some(package::LayerKind::Rle),
+        Some(other) => panic!("--layers accepts 'png' or 'rle', not '{other}'"),
+    };
     let file_type = arg("--file-type");
     let file_type_name = arg("--file-type-name").unwrap_or_else(|| "Project file".to_string());
 
@@ -100,6 +105,7 @@ fn main() {
             id: "custom".to_string(),
             extensions: vec![format_extension],
             display_name: None,
+            layers: layer_kind,
         }],
         network: None,
         file_types: file_type

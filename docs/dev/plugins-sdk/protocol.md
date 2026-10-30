@@ -60,18 +60,19 @@ messages are designed (see that page).
 ### Encode
 
 ```json
-→ {"type":"encodeBegin","id":7,"format":".apf","output":"job.apf","layers":1200,
+→ {"type":"encodeBegin","id":7,"format":".apf","layers":1200,
    "job":{"widthPx":4096,"layerHeightMm":0.05}}
 → {"type":"encodeLayer","id":7,"index":0,"slot":3,"kind":"png","bytes":182344}
 ← {"type":"slotFree","slot":3}
 ← {"type":"progress","id":7,"done":1,"total":1200}
+→ {"type":"encodeEnd","id":7,"output":"job.apf"}
 ← {"type":"encodeDone","id":7,"path":"job.apf","bytes":48123904}
 → {"type":"encodeCancel","id":8}
 ← {"type":"encodeCancelled","id":8}
 ```
 
-The plugin finalises when the declared layer count arrives, so there is no
-"finish" message. The slot-free message is what lets the host reuse a slot; a
+The session ends when the host sends `encodeEnd`, which carries the output path;
+a plugin that streams runs only learns the destination then. The slot-free message is what lets the host reuse a slot; a
 plugin that never frees one starves the session at four layers.
 
 ### Import
