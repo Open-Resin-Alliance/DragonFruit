@@ -6,7 +6,7 @@ import { msg } from '@lingui/core/macro';
 import type { MessageDescriptor } from '@lingui/core';
 import { Plural, Trans } from '@lingui/react/macro';
 import { AlertTriangle, CheckCircle2, Download, ExternalLink, Github, Info as InfoIcon, PackageCheck, PackagePlus, Plug, ShieldCheck, Trash2 } from 'lucide-react';
-import { Button, Input, Spinner, Toggle } from '@/components/atoms';
+import { Button, Input, SegmentedControl, Spinner, Toggle } from '@/components/atoms';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { isTauriRuntime } from '@/utils/tauriRuntime';
@@ -43,6 +43,22 @@ const SIDELOAD_CAPABILITY_MESSAGES: Record<SideloadedCapability, MessageDescript
   slicerEncoder: msg`Slicer encoder`,
   networkOperations: msg`Network operations`,
   fileType: msg`File-type import`,
+};
+
+/** One row in the installed list, whichever tier the plugin came from. */
+type InstalledPluginRow = {
+  key: string;
+  id: string;
+  name: string;
+  version: string;
+  description?: string;
+  source: 'builtin' | 'github' | 'sideloaded';
+  link?: string;
+  fingerprint?: string;
+  capabilities?: SideloadedCapability[];
+  unverified: boolean;
+  acceptedAt?: string;
+  remove?: () => void;
 };
 
 function isOraHostedRepository(url: string | undefined): boolean {
@@ -145,10 +161,10 @@ export function PluginsSettingsTab() {
   // Sideloaded complex plugins exist only in the desktop shell: the web build has
   // no app data dir and no place to put a native binary.
   const [isDesktop, setIsDesktop] = React.useState(false);
+  const [addSource, setAddSource] = React.useState<'github' | 'package'>('github');
   const [allowSideload, setAllowSideload] = React.useState(false);
   const [sideloadPlugins, setSideloadPlugins] = React.useState<InstalledSideloadedPlugin[]>([]);
   const [sideloadBusy, setSideloadBusy] = React.useState(false);
-  const [sideloadStatus, setSideloadStatus] = React.useState<{ kind: 'idle' | 'success' | 'error'; message: string }>({ kind: 'idle', message: '' });
   const [pendingSideload, setPendingSideload] = React.useState<{ path: string; info: SideloadedInspect } | null>(null);
   const [sideloadPassphrase, setSideloadPassphrase] = React.useState('');
   const [pendingRemoveSideload, setPendingRemoveSideload] = React.useState<InstalledSideloadedPlugin | null>(null);
@@ -171,7 +187,7 @@ export function PluginsSettingsTab() {
         setSideloadPlugins(installed);
       } catch (error) {
         if (!cancelled) {
-          setSideloadStatus({ kind: 'error', message: String(error) });
+          setStatus({ kind: 'error', message: String(error) });
         }
       }
     })();
@@ -186,18 +202,18 @@ export function PluginsSettingsTab() {
 
   const handleSideloadAllowanceChange = React.useCallback(async (next: boolean) => {
     setAllowSideload(next);
-    setSideloadStatus({ kind: 'idle', message: '' });
+    setStatus({ kind: 'idle', message: '' });
     try {
       await setSideloadAllowance(next);
       await refreshSideloaded();
     } catch (error) {
       setAllowSideload(!next);
-      setSideloadStatus({ kind: 'error', message: String(error) });
+      setStatus({ kind: 'error', message: String(error) });
     }
   }, [refreshSideloaded]);
 
   const handlePickSideloadPackage = React.useCallback(async () => {
-    setSideloadStatus({ kind: 'idle', message: '' });
+    setStatus({ kind: 'idle', message: '' });
     try {
       const path = await pickSideloadPackage();
       if (!path) return;
@@ -205,14 +221,14 @@ export function PluginsSettingsTab() {
       setSideloadPassphrase('');
       setPendingSideload({ path, info });
     } catch (error) {
-      setSideloadStatus({ kind: 'error', message: String(error) });
+      setStatus({ kind: 'error', message: String(error) });
     }
   }, []);
 
   const handleConfirmSideloadInstall = React.useCallback(async () => {
     if (!pendingSideload) return;
     setSideloadBusy(true);
-    setSideloadStatus({ kind: 'idle', message: '' });
+    setStatus({ kind: 'idle', message: '' });
     try {
       const installed = await installSideloadPackage(
         pendingSideload.path,
@@ -220,12 +236,12 @@ export function PluginsSettingsTab() {
       );
       await refreshSideloaded();
       setPendingSideload(null);
-      setSideloadStatus({
+      setStatus({
         kind: 'success',
         message: `Installed ${installed.manifest.name} ${installed.manifest.version}.`,
       });
     } catch (error) {
-      setSideloadStatus({ kind: 'error', message: String(error) });
+      setStatus({ kind: 'error', message: String(error) });
     } finally {
       setSideloadBusy(false);
     }
@@ -239,9 +255,9 @@ export function PluginsSettingsTab() {
     try {
       await removeSideloadedPlugin(target.manifest.id);
       await refreshSideloaded();
-      setSideloadStatus({ kind: 'success', message: `Removed ${target.manifest.name}.` });
+      setStatus({ kind: 'success', message: `Removed ${target.manifest.name}.` });
     } catch (error) {
-      setSideloadStatus({ kind: 'error', message: String(error) });
+      setStatus({ kind: 'error', message: String(error) });
     } finally {
       setSideloadBusy(false);
     }
@@ -471,6 +487,42 @@ export function PluginsSettingsTab() {
     ? 'color-mix(in srgb, #4f8a08, var(--text-strong) 28%)'
     : '#86efac';
 
+  // One list for all three tiers: built-in, GitHub manifest packs and sideloaded
+  // packages differ in where they came from, not in how they are managed.
+  const installedRows: InstalledPluginRow[] = [];
+  for (const plugin of installedPlugins) {
+    const manifest = plugin.manifest;
+    const isBuiltin = plugin.source === 'builtin';
+    const repositoryUrl = manifest.homepage || (isBuiltin ? BUILTIN_ATHENA_REPOSITORY_URL : plugin.sourceUrl);
+    installedRows.push({
+      key: `profile:${manifest.id}`,
+      id: manifest.id,
+      name: manifest.name,
+      version: manifest.version,
+      description: manifest.description,
+      source: isBuiltin ? 'builtin' : 'github',
+      link: typeof repositoryUrl === 'string' && repositoryUrl.trim().length > 0 ? repositoryUrl : undefined,
+      unverified: !isBuiltin && plugin.installTrust === 'unverified-user-approved',
+      acceptedAt: plugin.liabilityAcceptedAt,
+      remove: isBuiltin ? undefined : () => handleUninstall(manifest.id, manifest.name),
+    });
+  }
+  for (const plugin of sideloadPlugins) {
+    installedRows.push({
+      key: `sideloaded:${plugin.manifest.id}`,
+      id: plugin.manifest.id,
+      name: plugin.manifest.name,
+      version: plugin.manifest.version,
+      description: plugin.manifest.vendor.name,
+      source: 'sideloaded',
+      fingerprint: plugin.publisherFingerprint,
+      capabilities: plugin.manifest.capabilities,
+      unverified: false,
+      remove: () => setPendingRemoveSideload(plugin),
+    });
+  }
+  installedRows.sort((left, right) => left.name.localeCompare(right.name));
+
   return (
     <div className="space-y-3">
       <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}>
@@ -481,40 +533,99 @@ export function PluginsSettingsTab() {
           >
             <Plug className="h-4 w-4" style={{ color: 'var(--accent)' }} />
           </span>
-          <div className="flex-1">
-            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>Plugin Loader</h3>
+          <div className="flex-1 min-w-0">
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+              <Trans>Add a plugin</Trans>
+            </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Install plugin manifests from GitHub repositories (profile packs only). Remote code execution is not supported.
+              <Trans>A profile pack from GitHub, or a signed package from a vendor.</Trans>
             </p>
           </div>
+          {isDesktop && (
+            <SegmentedControl
+              label={_(msg`Plugin source`)}
+              value={addSource}
+              onChange={setAddSource}
+              size="sm"
+              options={[
+                { value: 'github', label: <Trans>GitHub</Trans> },
+                { value: 'package', label: <Trans>Package</Trans> },
+              ]}
+            />
+          )}
         </div>
-        {isDevRuntime && (
-          <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-            Debug URLs: <code>df://debug_plugin_official</code> and <code>df://debug_plugin_3rd</code>
-          </p>
+
+        {addSource === 'github' && (
+          <>
+            <div className="mt-2.5 grid grid-cols-[1fr_auto] gap-2">
+              <Input
+                type="text"
+                value={repoUrl}
+                onChange={(event) => setRepoUrl(event.target.value)}
+                placeholder={_(msg`https://github.com/owner/repo`)}
+                className="h-[34px] text-sm"
+              />
+              <Button
+                type="button"
+                onClick={() => { void handleInstall(); }}
+                disabled={isInstalling}
+                variant="secondary"
+                size="auto"
+                className="!h-[34px] !px-3 !py-0 text-xs inline-flex items-center gap-1.5 disabled:opacity-60"
+                style={accentSecondaryActionStyle92}
+              >
+                {isInstalling ? <Spinner size="sm" /> : <Download className="h-3.5 w-3.5" />}
+                {isInstalling ? <Trans>Installing…</Trans> : <Trans>Install</Trans>}
+              </Button>
+            </div>
+            {isDevRuntime && (
+              <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                <Trans>Debug URLs</Trans>: <code>df://debug_plugin_official</code> and <code>df://debug_plugin_3rd</code>
+              </p>
+            )}
+          </>
         )}
 
-        <div className="mt-2.5 grid grid-cols-[1fr_auto] gap-2">
-          <input
-            type="text"
-            value={repoUrl}
-            onChange={(event) => setRepoUrl(event.target.value)}
-            placeholder="https://github.com/<owner>/<repo> or df://debug_plugin_official"
-            className="ui-input h-[34px] px-2.5 py-1.5 text-sm"
-          />
-          <Button
-            type="button"
-            onClick={() => { void handleInstall(); }}
-            disabled={isInstalling}
-            variant="secondary"
-            size="auto"
-            className="!h-[34px] !px-3 !py-0 text-xs inline-flex items-center gap-1.5 disabled:opacity-60"
-            style={accentSecondaryActionStyle92}
-          >
-            {isInstalling ? <Spinner size="sm" /> : <Download className="h-3.5 w-3.5" />}
-            {isInstalling ? 'Installing…' : 'Install Plugin'}
-          </Button>
-        </div>
+        {addSource === 'package' && (
+          <div className="mt-2.5 space-y-2">
+            <div
+              className="flex items-start gap-3 rounded-md border px-2.5 py-2"
+              style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
+            >
+              <div className="min-w-0 flex-1">
+                <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  <Trans>Sideloaded packages</Trans>
+                </div>
+                <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                  <Trans>A package ships native code. It runs with your user account, outside DragonFruit&apos;s control, so only import one from a publisher you trust.</Trans>
+                </p>
+              </div>
+              <Toggle
+                checked={allowSideload}
+                onChange={(next) => { void handleSideloadAllowanceChange(next); }}
+                label={_(msg`Allow sideloaded complex plugins`)}
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                size="auto"
+                className="!h-[34px] !px-3 !py-0 text-xs inline-flex items-center gap-1.5"
+                disabled={!allowSideload || sideloadBusy}
+                onClick={() => { void handlePickSideloadPackage(); }}
+              >
+                {sideloadBusy ? <Spinner size="sm" /> : <PackagePlus className="h-3.5 w-3.5" />}
+                <Trans>Choose package…</Trans>
+              </Button>
+              {!allowSideload && (
+                <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                  <Trans>Turn the switch on to import.</Trans>
+                </span>
+              )}
+            </div>
+          </div>
+        )}
 
         {status.kind !== 'idle' && (
           <div className="mt-2 text-xs" style={{ color: status.kind === 'error' ? '#fca5a5' : '#86efac' }}>
@@ -522,118 +633,6 @@ export function PluginsSettingsTab() {
           </div>
         )}
       </div>
-
-      {isDesktop && (
-        <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-          <div className="flex items-start gap-2">
-            <span
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
-              style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 8%)' }}
-            >
-              <PackagePlus className="h-4 w-4" style={{ color: 'var(--accent)' }} />
-            </span>
-            <div className="flex-1 min-w-0">
-              <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                <Trans>Sideloaded Plugins</Trans>
-              </h3>
-              <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                <Trans>Import a vendor&apos;s signed .dfplugin package. These contain native code and run with your user account, outside DragonFruit&apos;s control.</Trans>
-              </p>
-            </div>
-            <Tooltip
-              content={_(
-                allowSideload
-                  ? msg`Turn off to stop installing packages. Installed plugins stay on disk.`
-                  : msg`Off by default. Only turn this on for a publisher you trust.`,
-              )}
-              wrapperClassName="flex items-center"
-            >
-              <Toggle
-                checked={allowSideload}
-                onChange={(next) => { void handleSideloadAllowanceChange(next); }}
-                label={_(msg`Allow sideloaded complex plugins`)}
-              />
-            </Tooltip>
-          </div>
-
-          {allowSideload && (
-            <div className="mt-2 flex items-center gap-2">
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                className="inline-flex items-center gap-1.5"
-                disabled={sideloadBusy}
-                onClick={() => { void handlePickSideloadPackage(); }}
-              >
-                {sideloadBusy ? <Spinner size="sm" /> : <PackagePlus className="h-3.5 w-3.5" />}
-                <Trans>Import plugin file…</Trans>
-              </Button>
-            </div>
-          )}
-
-          {allowSideload && sideloadPlugins.length === 0 && (
-            <p className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-              <Trans>No sideloaded plugins installed.</Trans>
-            </p>
-          )}
-
-          {sideloadPlugins.length > 0 && (
-            <div className="mt-2 space-y-2">
-              {sideloadPlugins.map((plugin) => (
-                <div
-                  key={plugin.manifest.id}
-                  className="rounded-md border px-2.5 py-2 flex items-center justify-between gap-2"
-                  style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
-                >
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>
-                        {plugin.manifest.name}
-                      </span>
-                      <span className="text-[11px] rounded-full border px-1.5 py-0.5" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
-                        <Trans>v{plugin.manifest.version}</Trans>
-                      </span>
-                      <span
-                        className="text-[11px] rounded-full border px-1.5 py-0.5"
-                        style={{
-                          borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
-                          color: 'var(--accent-secondary)',
-                        }}
-                      >
-                        <Trans>Sideloaded</Trans>
-                      </span>
-                    </div>
-                    <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                      {plugin.manifest.vendor.name}
-                      {' · '}
-                      <span className="font-mono">{shortFingerprint(plugin.publisherFingerprint)}</span>
-                    </div>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="auto"
-                    className="!h-7 !px-2 !py-0 text-xs inline-flex items-center gap-1 shrink-0"
-                    style={{ color: '#fca5a5' }}
-                    disabled={sideloadBusy}
-                    onClick={() => setPendingRemoveSideload(plugin)}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                    <Trans>Remove</Trans>
-                  </Button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {sideloadStatus.kind !== 'idle' && (
-            <div className="mt-2 text-xs" style={{ color: sideloadStatus.kind === 'error' ? '#fca5a5' : '#86efac' }}>
-              {sideloadStatus.message}
-            </div>
-          )}
-        </div>
-      )}
 
       <StructuredDialogModal
         open={pendingLiabilityInstall !== null}
@@ -982,121 +981,136 @@ export function PluginsSettingsTab() {
             <PackageCheck className="h-4 w-4" style={{ color: 'var(--accent)' }} />
           </span>
           <div className="flex-1">
-            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>Installed Plugins</h3>
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+              <Trans>Installed plugins</Trans>
+            </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Manage built-in and user-installed plugin packs.
+              <Plural value={installedRows.length} one="# plugin in this profile." other="# plugins in this profile." />
             </p>
           </div>
         </div>
 
         <div className="mt-2 space-y-2">
-          {installedPlugins.map((plugin) => {
-            const manifest = plugin.manifest;
-            const isBuiltin = plugin.source === 'builtin';
-            const repositoryUrl = manifest.homepage || (isBuiltin ? BUILTIN_ATHENA_REPOSITORY_URL : plugin.sourceUrl);
-            const hasRepositoryLink = typeof repositoryUrl === 'string' && repositoryUrl.trim().length > 0;
-            const isOraVerifiedBuiltin = isBuiltin && isOraHostedRepository(repositoryUrl);
-            const isUnverifiedGithubPlugin = !isBuiltin && plugin.installTrust === 'unverified-user-approved';
-
-            return (
-              <div
-                key={manifest.id}
-                className="rounded-md border px-2.5 py-2"
-                style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      {!isBuiltin && (
-                        <Github className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />
-                      )}
-                      {hasRepositoryLink ? (
-                        <button
-                          onClick={async () => {
-                            const url = repositoryUrl as string;
-                            try {
-                              const { invoke } = await import('@tauri-apps/api/core');
-                              await invoke('open_external_url', { url });
-                            } catch {
-                              window.open(url, '_blank');
-                            }
-                          }}
-                          className="text-sm font-semibold truncate inline-flex items-center gap-1 underline underline-offset-2"
-                          style={{ color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-                          title={repositoryUrl as string}
-                        >
-                          {manifest.name}
-                          <ExternalLink className="h-3 w-3 shrink-0" />
-                        </button>
-                      ) : (
-                        <span className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>{manifest.name}</span>
-                      )}
-                    </div>
-                    {isUnverifiedGithubPlugin && (
-                      <div className="text-xs mt-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5"
-                        style={{
-                          borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 35%)',
-                          color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)',
-                          background: 'color-mix(in srgb, #d97706, var(--surface-2) 88%)',
+          {installedRows.map((row) => (
+            <div
+              key={row.key}
+              className="rounded-md border px-2.5 py-2"
+              style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {row.source === 'github' && (
+                      <Github className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--text-muted)' }} />
+                    )}
+                    {row.source === 'sideloaded' && (
+                      <PackagePlus className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--accent-secondary)' }} />
+                    )}
+                    {row.link ? (
+                      <button
+                        onClick={async () => {
+                          const url = row.link as string;
+                          try {
+                            const { invoke } = await import('@tauri-apps/api/core');
+                            await invoke('open_external_url', { url });
+                          } catch {
+                            window.open(url, '_blank');
+                          }
                         }}
-                        title={plugin.liabilityAcceptedAt ? `Liability accepted at ${plugin.liabilityAcceptedAt}` : 'Installed with liability acknowledgement'}
+                        className="text-sm font-semibold truncate inline-flex items-center gap-1 underline underline-offset-2"
+                        style={{ color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                        title={row.link}
                       >
-                        Unverified Source (User Approved)
-                      </div>
+                        {row.name}
+                        <ExternalLink className="h-3 w-3 shrink-0" />
+                      </button>
+                    ) : (
+                      <span className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>{row.name}</span>
                     )}
-                    {manifest.description && (
-                      <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                        {manifest.description}
-                      </div>
-                    )}
-
-
                   </div>
-
-                  <div className="flex items-center gap-1.5 shrink-0 self-center">
-                    <Tooltip
-                      content={(
-                        <div className="space-y-0.5">
-                          <div className="break-all"><span style={{ color: 'var(--text-strong)' }}><Trans>ID</Trans>:</span> {manifest.id}</div>
-                          <div><span style={{ color: 'var(--text-strong)' }}><Trans>Source</Trans>:</span> {isBuiltin ? <Trans>Built-in</Trans> : <Trans>GitHub</Trans>}</div>
-                          <div><span style={{ color: 'var(--text-strong)' }}><Trans>Version</Trans>:</span> <Trans>v{manifest.version}</Trans></div>
-                        </div>
-                      )}
-                      maxWidth={280}
-                      wrapperClassName="flex items-center"
+                  {row.unverified && (
+                    <div
+                      className="text-xs mt-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5"
+                      style={{
+                        borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 35%)',
+                        color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)',
+                        background: 'color-mix(in srgb, #d97706, var(--surface-2) 88%)',
+                      }}
                     >
-                      <InfoIcon className="h-4 w-4 shrink-0 block" style={{ color: 'var(--text-muted)' }} />
+                      <Trans>Unverified source</Trans>
+                    </div>
+                  )}
+                  {row.description && (
+                    <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                      {row.description}
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-1.5 shrink-0 self-center">
+                  <Tooltip
+                    content={(
+                      <div className="space-y-0.5">
+                        <div className="break-all"><span style={{ color: 'var(--text-strong)' }}><Trans>ID</Trans>:</span> {row.id}</div>
+                        <div>
+                          <span style={{ color: 'var(--text-strong)' }}><Trans>Source</Trans>:</span>{' '}
+                          {row.source === 'builtin' ? <Trans>Built-in</Trans> : row.source === 'github' ? <Trans>GitHub</Trans> : <Trans>Sideloaded</Trans>}
+                        </div>
+                        <div><span style={{ color: 'var(--text-strong)' }}><Trans>Version</Trans>:</span> <Trans>v{row.version}</Trans></div>
+                        {row.acceptedAt && (
+                          <div>
+                            <span style={{ color: 'var(--text-strong)' }}><Trans>Liability accepted</Trans>:</span> {row.acceptedAt}
+                          </div>
+                        )}
+                        {row.fingerprint && (
+                          <div className="break-all">
+                            <span style={{ color: 'var(--text-strong)' }}><Trans>Publisher</Trans>:</span>{' '}
+                            <span className="font-mono">{shortFingerprint(row.fingerprint)}</span>
+                          </div>
+                        )}
+                        {row.capabilities && row.capabilities.length > 0 && (
+                          <div>
+                            <span style={{ color: 'var(--text-strong)' }}><Trans>Capabilities</Trans>:</span>{' '}
+                            {row.capabilities.map((capability) => _(SIDELOAD_CAPABILITY_MESSAGES[capability])).join(', ')}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    maxWidth={300}
+                    wrapperClassName="flex items-center"
+                  >
+                    <InfoIcon className="h-4 w-4 shrink-0 block" style={{ color: 'var(--text-muted)' }} />
+                  </Tooltip>
+                  {row.source === 'builtin' && (
+                    <Tooltip content={_(msg`Built-in plugin`)} wrapperClassName="flex items-center">
+                      <ShieldCheck className="h-4 w-4 shrink-0 block" style={{ color: builtinShieldIconColor }} />
                     </Tooltip>
-                    {isBuiltin && (
-                      <Tooltip content="Built-in plugin" wrapperClassName="flex items-center">
-                        <ShieldCheck className="h-4 w-4 shrink-0 block" style={{ color: builtinShieldIconColor }} />
-                      </Tooltip>
-                    )}
-                    {isOraVerifiedBuiltin ? (
-                      <Tooltip content="Officially verified by ORA" wrapperClassName="flex items-center">
-                        <CheckCircle2 className="h-4 w-4 shrink-0 block" style={{ color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)' }} />
-                      </Tooltip>
-                    ) : null}
-                    {!isBuiltin && (
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="auto"
-                        onClick={() => handleUninstall(manifest.id, manifest.name)}
-                        className="!h-7 !px-2 !py-0 text-xs inline-flex items-center gap-1"
-                        style={{ color: '#fca5a5' }}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                        Remove
-                      </Button>
-                    )}
-                  </div>
+                  )}
+                  {row.source === 'builtin' && isOraHostedRepository(row.link) ? (
+                    <Tooltip content={_(msg`Officially verified by ORA`)} wrapperClassName="flex items-center">
+                      <CheckCircle2 className="h-4 w-4 shrink-0 block" style={{ color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)' }} />
+                    </Tooltip>
+                  ) : null}
+                  {row.remove && (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="auto"
+                      onClick={row.remove}
+                      className="!h-7 !px-2 !py-0 text-xs inline-flex items-center gap-1"
+                      style={{ color: '#fca5a5' }}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      <Trans>Remove</Trans>
+                    </Button>
+                  )}
                 </div>
               </div>
-            );
-          })}
+            </div>
+          ))}
         </div>
       </div>
+
 
       {isDevRuntime && (
         <div className="pt-1 flex justify-center">
