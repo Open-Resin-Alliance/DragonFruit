@@ -5,7 +5,7 @@ import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import type { MessageDescriptor } from '@lingui/core';
 import { Plural, Trans } from '@lingui/react/macro';
-import { AlertTriangle, CheckCircle2, Cog, Download, ExternalLink, Github, Info as InfoIcon, PackageCheck, PackagePlus, Plug, ShieldAlert, ShieldCheck, Trash2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Download, ExternalLink, Github, Info as InfoIcon, PackageCheck, PackageOpen, PackagePlus, Plug, ShieldAlert, ShieldCheck, Trash2 } from 'lucide-react';
 import { Button, IconButton, Input, SettingRow, Spinner } from '@/components/atoms';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
@@ -513,7 +513,20 @@ export function PluginsSettingsTab() {
 
   return (
     <div className="space-y-3">
-      <section className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+      <section className="relative rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+        {isDesktop && (
+          <IconButton
+            variant="surface"
+            size="sm"
+            tone="warning"
+            className="absolute right-3 top-3 hover:brightness-110"
+            aria-label={_(msg`Sideloaded packages`)}
+            title={_(msg`Sideloaded packages`)}
+            onClick={() => setAllowanceDialogOpen(true)}
+          >
+            <PackageOpen className="h-4 w-4" />
+          </IconButton>
+        )}
         <div className="flex items-start gap-2.5">
           <span
             className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
@@ -521,25 +534,12 @@ export function PluginsSettingsTab() {
           >
             <Plug className="h-4 w-4" style={{ color: 'var(--accent)' }} />
           </span>
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 flex-1 pr-10">
             <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>{_(msg`Plugins`)}</h3>
             <p className="mt-0.5 text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
               <Trans>Profile packs add presets and material profiles. A sideloaded package adds code and needs a publisher you trust.</Trans>
             </p>
           </div>
-          {isDesktop && (
-            <Tooltip content={_(msg`Sideloaded packages`)} wrapperClassName="flex shrink-0 items-center">
-              <IconButton
-                variant="ghost"
-                size="xs"
-                aria-label={_(msg`Sideloaded packages`)}
-                active={allowSideload}
-                onClick={() => setAllowanceDialogOpen(true)}
-              >
-                <Cog className="h-3.5 w-3.5" />
-              </IconButton>
-            </Tooltip>
-          )}
         </div>
 
         <div className="mt-2 grid gap-2">
@@ -824,13 +824,17 @@ export function PluginsSettingsTab() {
                 })();
               }}
             >
-              {allowSideload ? <><ShieldAlert className="h-3.5 w-3.5" /><Trans>Turn off sideloading</Trans></> : <><ShieldAlert className="h-3.5 w-3.5" /><Trans>Enable Sideloading</Trans></>}
+              {allowSideload ? <><ShieldAlert className="h-3.5 w-3.5" /><Trans>Disable Sideloading</Trans></> : <><ShieldAlert className="h-3.5 w-3.5" /><Trans>Enable Sideloading</Trans></>}
             </Button>
           </>
         )}
       >
         <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-          <Trans>A sideloaded package is a native program, not a profile pack. Once imported it runs with your permissions: it can read any file you can read, open network connections, and crash the app if it misbehaves.</Trans>
+          {allowSideload ? (
+            <Trans>Packages you import run with your permissions and can read any file you can read, open network connections, and crash the app if they misbehave. Disabling this stops new imports; packages already installed stay on disk.</Trans>
+          ) : (
+            <Trans>A sideloaded package is a native program, not a profile pack. Once imported it runs with your permissions: it can read any file you can read, open network connections, and crash the app if it misbehaves.</Trans>
+          )}
         </p>
         <div
           className="rounded-md border px-3 py-2"
@@ -846,11 +850,6 @@ export function PluginsSettingsTab() {
             </p>
           </div>
         </div>
-        {allowSideload && (
-          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-            <Trans>This build can import packages. Turn sideloading off to stop new imports; packages already installed stay on disk.</Trans>
-          </p>
-        )}
       </StructuredDialogModal>
 
       <StructuredDialogModal
