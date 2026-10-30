@@ -189,6 +189,8 @@ cargo run -p dragonfruit-plugin-package --example pack -- \
 | `--binary` | the plugin executable; it is zipped as `bin/<platform>/<file name>` |
 | `--id`, `--name`, `--version`, `--vendor` | manifest identity |
 | `--format` | output extension the encoder claims, leading dot |
+| `--file-type` | extension the package can open, e.g. `.apf`; adds the fileType capability |
+| `--file-type-name` | display name for that extension, shown in the import UI |
 | `--min-app-version` | manifest `minAppVersion` (default `0.1.0`) |
 | `--passphrase` | seals the payload; omit for an unsealed test package |
 | `--seed` | 32 bytes of hex for a deterministic publisher key (default: the fixed dev seed) |

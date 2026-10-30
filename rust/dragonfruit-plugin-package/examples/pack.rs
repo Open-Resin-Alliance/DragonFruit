@@ -57,6 +57,8 @@ fn main() {
     let format_extension = arg("--format").unwrap_or_else(|| ".apf".to_string());
     let passphrase = arg("--passphrase");
     let min_app_version = arg("--min-app-version").unwrap_or_else(|| "0.1.0".to_string());
+    let file_type = arg("--file-type");
+    let file_type_name = arg("--file-type-name").unwrap_or_else(|| "Project file".to_string());
 
     let binary_path = PathBuf::from(&binary);
     let binary_name = binary_path
@@ -74,7 +76,13 @@ fn main() {
             homepage: None,
         },
         min_app_version,
-        capabilities: vec![package::Capability::SlicerEncoder],
+        capabilities: {
+            let mut capabilities = vec![package::Capability::SlicerEncoder];
+            if file_type.is_some() {
+                capabilities.push(package::Capability::FileType);
+            }
+            capabilities
+        },
         entry: package::Entry {
             kind: package::EntryKind::Process,
             proto: package::PROTOCOL_VERSION,
@@ -94,7 +102,14 @@ fn main() {
             display_name: None,
         }],
         network: None,
-        file_types: Vec::new(),
+        file_types: file_type
+            .iter()
+            .map(|extension| package::FileTypeDecl {
+                extension: extension.clone(),
+                display_name: file_type_name.clone(),
+                is_scene_file: true,
+            })
+            .collect(),
     };
 
     let mut payload_files = BTreeMap::new();
