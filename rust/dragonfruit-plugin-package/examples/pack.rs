@@ -103,14 +103,11 @@ fn main() {
     );
 
     let payload = package::build_payload_zip(&payload_files).expect("payload zip");
-    let package_bytes = package::build_package(
-        &manifest,
-        &payload,
-        passphrase.as_deref(),
-        [1u8; 24],
-        [2u8; 16],
-        &key,
-    )
+    let package_bytes = match passphrase {
+        Some(passphrase) => package::build_package_sealed(&manifest, &payload, &passphrase, &key),
+        // An unsealed package is a test artifact: it carries the payload ZIP as-is.
+        None => package::build_package(&manifest, &payload, None, [0u8; 24], [0u8; 16], &key),
+    }
     .expect("build package");
 
     std::fs::write(&out, &package_bytes).expect("write package");

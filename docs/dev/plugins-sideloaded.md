@@ -304,7 +304,7 @@ partner whose counsel wants it.
 ## SDK
 
 `rust/dragonfruit-plugin-sdk` (**MIT OR Apache-2.0**) is what a vendor builds
-against; its usage guide is `docs/dev/plugins-sdk.md`. It contains:
+against; the guide is the [Plugin SDK](plugins-sdk/index.md) subsection. It contains:
 
 - the frame codec and the ring-slot accessors,
 - the capability traits (`Encoder`, `Network`, `FileType`) the vendor implements,

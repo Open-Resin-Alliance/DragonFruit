@@ -270,7 +270,32 @@
             },
             {
               "label": "Plugin SDK",
-              "slug": "dev/plugins-sdk"
+              "items": [
+                {
+                  "label": "Overview",
+                  "slug": "dev/plugins-sdk/index"
+                },
+                {
+                  "label": "Authoring and Packing",
+                  "slug": "dev/plugins-sdk/authoring"
+                },
+                {
+                  "label": "Protocol",
+                  "slug": "dev/plugins-sdk/protocol"
+                },
+                {
+                  "label": "Encoders",
+                  "slug": "dev/plugins-sdk/encoders"
+                },
+                {
+                  "label": "Network Operations",
+                  "slug": "dev/plugins-sdk/network"
+                },
+                {
+                  "label": "File-Type Import",
+                  "slug": "dev/plugins-sdk/file-types"
+                }
+              ]
             }
           ]
         },

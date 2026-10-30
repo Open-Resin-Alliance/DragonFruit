@@ -7,6 +7,10 @@
 //! The manifest is plaintext so the import UI can show publisher, capabilities
 //! and app range *before* asking for a key. The payload is the only part that is
 //! sealed, and the seal is distribution control, not DRM.
+//!
+//! Licensed **MIT OR Apache-2.0**: a vendor's packaging tool links this crate to
+//! write the format, so it must not drag AGPL terms into their build. It contains
+//! no host code — only the format, its verification and its sealing.
 
 use std::collections::BTreeMap;
 use std::io::{Cursor, Read, Write};
@@ -508,6 +512,25 @@ pub fn build_package(
         .map_err(|err| PackageError::Io(err.to_string()))?;
     let cursor = writer.finish().map_err(zip_err)?;
     Ok(cursor.into_inner())
+}
+
+/// Seal with a fresh random nonce and salt.
+///
+/// This is the entry point a packaging tool should use: reusing a nonce under the
+/// same key breaks XChaCha20-Poly1305 outright, and a predictable salt weakens
+/// the Argon2id derivation. `build_package` takes both explicitly for
+/// reproducible builds and tests only.
+pub fn build_package_sealed(
+    manifest: &Manifest,
+    payload_zip: &[u8],
+    passphrase: &str,
+    signing_key: &SigningKey,
+) -> Result<Vec<u8>, PackageError> {
+    let mut nonce = [0u8; NONCE_BYTES];
+    let mut salt = [0u8; SALT_BYTES];
+    getrandom::getrandom(&mut nonce).map_err(|err| PackageError::Io(err.to_string()))?;
+    getrandom::getrandom(&mut salt).map_err(|err| PackageError::Io(err.to_string()))?;
+    build_package(manifest, payload_zip, Some(passphrase), nonce, salt, signing_key)
 }
 
 /// Public key bytes as base64, for embedding in a manifest.
