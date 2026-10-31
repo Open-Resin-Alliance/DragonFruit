@@ -30,6 +30,22 @@ slices, and each capability is either shipped or designed.
 Pages mark their own status. A "designed" page is the contract to build against;
 it is not a description of running code.
 
+### Known gaps
+
+Everything below is deliberate and has a reason, not an oversight. Each is
+documented on its page.
+
+| Gap | What happens instead |
+| --- | --- |
+| the `pipe` transport | specified, not implemented; the host refuses a package that asks for it rather than using the ring it did not ask for |
+| a cancel message | the engine aborts and the host tears the process down; a plugin never gets to flush partial state |
+| raw mask layers | not a layer kind; RLE already avoids the PNG round trip |
+| per-layer area stats | not forwarded; a format that needs them has no way to ask today |
+| cross-layer parallelism | layers arrive one at a time and the host waits for each slot; parallelise inside a layer |
+| UI contributions | impossible by design: no remote JS in this tier |
+| hollowing and punch data in an imported scene | not carried by the container; models import without them |
+| per-material geometry | lands with multi-material support |
+
 ## Mental model
 
 ```mermaid

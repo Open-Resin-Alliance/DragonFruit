@@ -8,11 +8,22 @@ kind: decision
 
 ## Status
 
-Proposed. Needs two external sign-offs, neither an engineering call:
+Proposed. One external sign-off remains: counsel on the shared byte ring, and on
+the AGPL argument in Decision 2.
 
-1. counsel on the shared byte ring (the pipe-only transport is the fallback and
-   is already specified), and on the AGPL argument in Decision 2;
-2. ORA's decision on Windows code signing for partner executables.
+Where that stands: every capability runs end to end in the branch behind this
+record. What is still a judgement call rather than a fact is whether a ring of
+opaque byte slots, which the FSF's answer calls "pretty much equivalent to
+dynamic linking" when it carries *complex data structures*, reads as a separate
+program for a byte buffer with a published layout and no shared objects. The ring
+carries no pointers, no structs and no allocator, and one side owns a slot at a
+time, which is the argument for yes. Until counsel says so, this is the one part
+of the design a reviewer should look at twice.
+
+Windows code signing is not a requirement: partner binaries ship unsigned and
+provenance comes from the package signature, the same way it does for the
+payload's hash. SmartScreen warnings on first run are accepted as a consequence,
+not treated as a blocker.
 
 ADR-0031 stays valid: in-tree format plugins remain git submodules compiled in
 with generated registration. This ADR adds an opt-in tier beside it.
@@ -147,8 +158,9 @@ comes from the process boundary, not from the seal.
   (allowlist SHA-256); their integrity is the package signature plus the stored
   publisher fingerprint.
 - Windows builds are unsigned today, so a partner executable will attract
-  SmartScreen and some AV heuristics on first run. Provenance comes from the
-  package signature, not the OS.
+  SmartScreen and some AV heuristics on first run. That is accepted: provenance
+  comes from the package signature and the pinned publisher fingerprint, not from
+  the OS.
 - Flatpak needs no new permission: the plugin lives under the app's writable
   data dir, which the sandbox already sees.
 - If ORA ever wants the in-process variant, the missing piece is an explicit

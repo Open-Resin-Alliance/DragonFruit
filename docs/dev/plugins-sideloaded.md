@@ -18,11 +18,11 @@ Read this page before changing anything in this tier. "Protocol v1" and
 | Reference packer | `rust/dragonfruit-plugin-package/examples/pack.rs` | done |
 | Allowance gate, inspect, install, list, remove | `src-tauri/src/plugin_sideload.rs` | done, unit-tested |
 | Import UI behind the advanced switch | `src/components/settings/PluginsSettingsTab.tsx` | done |
-| Process spawn, handshake, `ready` validation, idle stop | `src-tauri/src/plugin_sideload_runtime.rs` | done, tested against a real plugin process |
+| Process spawn, handshake, `ready` validation, idle stop, crash recovery | `src-tauri/src/plugin_sideload_runtime.rs` | done, tested against a real plugin process |
+| Shared ring, encode sessions, layer previews | runtime + engine adapter | done; the `pipe` transport is designed but refused rather than half-implemented |
 | `network` capability | host runtime + SDK harness | done |
 | `slicerEncoder` capability | host runtime + engine adapter + SDK harness | done, tested against a real encoder process |
 | `fileType` capability | host runtime + renderer container parser | done, tested against a real importer process |
-| `fileType` | — | **not built**; blocked on the scene document schema |
 
 `cargo test` in the package crate and `cargo test --bin dragonfruit-desktop
 plugin_sideload` cover the verification matrix below except the process cases.
@@ -101,7 +101,10 @@ README.md                    optional
     }
   },
   "formats": [
-    { "id": "apf", "extensions": [".apf"], "displayName": "AlphaPrint" }
+    { "id": "apf", "extensions": [".apf"], "displayName": "AlphaPrint", "layers": "rle" }
+  ],
+  "fileTypes": [
+    { "extension": ".apf", "displayName": "AlphaPrint project", "isSceneFile": true }
   ],
   "network": { "pluginId": "alphabeta" }
 }
@@ -157,7 +160,7 @@ to log; bulk is zero-copy and never parsed by the other side.
 ```
 frame  := u32 length (LE) | u8 kind | payload[length-1]
 kind 0 := JSON (UTF-8)
-kind 1 := bulk bytes (only used when transport = "pipe")
+kind 1 := bulk bytes (reserved for the pipe transport, not implemented yet)
 ```
 
 Handshake, in order:
@@ -169,33 +172,44 @@ plugin → {"type":"ready","pluginId":"alphabeta.alphaprint","version":"1.0.0",
 ```
 
 A capability or format the manifest did not declare ends the session with
-`undeclared-capability`.
+`undeclared-capability`. The full message reference lives in
+`docs/dev/plugins-sdk/protocol.md`; the shapes on the wire today are:
 
-Encode session:
+| Direction | Messages |
+| --- | --- |
+| host → plugin | hello, shutdown, network, encodeBegin, encodeLayer, encodeEnd, import, preview |
+| plugin → host | ready, networkResult, slotFree, progress, encodeDone, importDone, previewPng, error |
+
+An encode session:
 
 ```json
-host → {"type":"encode.begin","id":7,"job":{ …SliceJobV3 JSON… },"format":".apf","layers":1200}
-host → {"type":"encode.layer","id":7,"index":0,"slot":3,"kind":"rle","bytes":182344}
+host   → {"type":"encodeBegin","id":7,"format":".apf","layers":1200,"job":{ …SliceJobV3… }}
+host   → {"type":"encodeLayer","id":7,"index":0,"slot":3,"kind":"rle","bytes":182344}
+plugin → {"type":"slotFree","slot":3}
 plugin → {"type":"progress","id":7,"done":1,"total":1200}
-plugin → {"type":"encode.done","id":7,"path":"/…/job.apf","bytes":48123904}
-either → {"type":"error","id":7,"code":"…","message":"…"}
-host → {"type":"cancel","id":7}
+host   → {"type":"encodeEnd","id":7,"output":"/…/job.apf"}
+plugin → {"type":"encodeDone","id":7,"path":"/…/job.apf","bytes":48123904}
 ```
 
-`encode.layer` names a slot the host has already filled; the plugin reads it in
-place and answers with `{"type":"slot.free","slot":3}` when done. With
-`transport: "pipe"`, the same message arrives as a `kind 1` frame and no slot
-index is used.
+`encodeLayer` names a slot the host has already filled; the plugin reads it in
+place and answers with a slot-free message when done. The session ends at the
+host's encode-end message, which is
+where the output path arrives.
 
-Network and file-type operations reuse the channel as one request/one response:
+One request, one answer, for the other capabilities:
 
 ```json
 host   → {"type":"network","id":11,"request":{ …plugin_network_request payload… }}
-plugin → {"type":"network.result","id":11,"status":200,"body":{ … }}
+plugin → {"type":"networkResult","id":11,"status":200,"body":{ … }}
 
-host   → {"type":"import","id":12,"input":"/…/file.apf","output":"/…/scene.json"}
-plugin → {"type":"import.result","id":12,"formatId":"apf"}
+host   → {"type":"import","id":12,"input":"/…/job.apf","output":"/…/scene.dfimport"}
+plugin → {"type":"importDone","id":12,"path":"/…/scene.dfimport"}
+
+host   → {"type":"preview","id":13,"path":"/…/job.apf","layer":42}
+plugin → {"type":"previewPng","id":13,"bytes":182344}
 ```
+
+The preview answer is followed by a bulk frame holding the PNG.
 
 ### Bulk channel: a file-backed ring of byte slots
 

@@ -23,11 +23,12 @@ nothing to authenticate, and the process dies with its parent.
 frame := u32 length (LE, includes the kind byte) | u8 kind | payload[length - 1]
 ```
 
-- `kind 0` is JSON. `kind 1` is bulk, used only when the manifest says
-  `"transport": "pipe"`.
+- `kind 0` is JSON. `kind 1` is bulk, reserved for the `pipe` transport, which is
+  designed and not implemented: the host refuses a package that asks for it rather
+  than quietly using the ring.
 - The length includes the kind byte, so a frame is never empty.
-- The cap is 64 MiB per frame. Bulk layer data goes through the ring; pipe mode
-  is the fallback that carries one layer per bulk frame.
+- The cap is 64 MiB per frame. Bulk layer data goes through the ring today; pipe
+  mode is specified as the fallback that would carry one layer per bulk frame.
 - A reader that sees a length it cannot trust errors before allocating.
 - A clean end-of-stream between frames is **not** an error: the host is gone,
   exit quietly. A stream that ends mid-frame is a protocol error.

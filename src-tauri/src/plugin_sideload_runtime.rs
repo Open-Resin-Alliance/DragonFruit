@@ -581,6 +581,13 @@ impl EncodeSession {
         total_layers: u32,
         slot_bytes: u32,
     ) -> Result<Self, String> {
+        if manifest.entry.transport == package::Transport::Pipe {
+            // Refusing beats silently using the ring a package did not ask for.
+            return Err(
+                "this package asks for the pipe transport, which the host does not implement yet"
+                    .to_string(),
+            );
+        }
         let plugin_dir = root.join(plugin_id);
         let session_id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
         let layout = sdk::RingLayout::new(4, slot_bytes.max(4096));

@@ -103,8 +103,10 @@ Three habits keep this fast:
    only allocate your output.
 2. **Release as soon as you have consumed the bytes.** The host blocks when all
    four slots are full.
-3. **Own your parallelism.** The process is yours: a small pool reading from a
-   queue beats per-layer thread spawn.
+3. **Own your parallelism, within a layer.** The host hands layers over one at a
+   time and waits for each slot to come back, so the engine's per-layer parallel
+   encode hook is not used for sideloaded formats. Parallelise inside a layer
+   (rows, blocks, tiles); overlapping whole layers would need a protocol change.
 
 ## Preview decode
 
@@ -119,9 +121,11 @@ the host shows the layer without a thumbnail rather than failing the slice.
 
 ## Cancellation and failure
 
-- **A cancel request** is advisory. Stop at the next layer boundary, leave the
-  partial file or delete it, and answer with the cancelled message. The host is waiting for
-  the answer, not for the process.
+- **Cancellation is not a message yet.** The engine aborts the session and the
+  host tears the process down, which is why a cancelled slice leaves no file: the
+  plugin never gets a chance to finish one and should not assume it will. The
+  advisory cancel message is designed for when a format needs to flush or
+  keep partial state.
 - **Errors are `error` frames** with a code: `encode-failed`, `unsupported-job`,
   `io`. The host reports the message; a crashed process is reported as a failed
   job, never a failed app.
@@ -143,5 +147,8 @@ the host shows the layer without a thumbnail rather than failing the slice.
   plugins; it is not part of this ABI, and the SDK will not grow one.
 - **No raw masks.** They are the engine's third layer kind and a future addition;
   RLE already avoids the PNG round trip.
+- **No area stats.** The engine can compute per-layer connected-component stats
+  and hands them to compiled-in encoders; they are not forwarded over the
+  protocol, so a format that needs them would ask for `mask` layers instead.
 - **No access to the scene.** If a format needs the model, it needs it in the job
   document, and that is a protocol change with a host change behind it.
