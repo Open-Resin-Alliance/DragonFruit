@@ -47,7 +47,7 @@ transform in the same column-major layout three.js uses.
 ```text
 "DFIMPORT1"           9 bytes ASCII
 u32  modelCount       1..=4096
-per model:
+per model (all optional except the counts):
   u32  metaLength
   utf8 meta           { "modelId": "part-1", "name": "Part One",
                         "transform": [16 floats, column major],
@@ -118,6 +118,10 @@ cargo run -p dragonfruit-plugin-package --example pack -- \
 Import that package (no passphrase: it is unsealed), then drop any `.echo` file
 into the scene. The model is named with the source file's byte count, which is how
 you can tell the plugin actually read it.
+
+`meshModifiers` is the host's own hollowing/punch object, exactly what a compiled
+import handler returns; the scene applies it the same way. `skipClassification`
+says the plugin built a model-only mesh and supplied supports separately.
 
 ## Why a process cannot return three.js objects
 

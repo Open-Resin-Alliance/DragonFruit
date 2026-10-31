@@ -13,6 +13,8 @@ type ModelSpec = {
   normals?: number[];
   indices?: number[];
   support?: Record<string, unknown>;
+  meshModifiers?: unknown;
+  skipClassification?: boolean;
 };
 
 /** Mirrors the writer side of the format, so the reader is tested against bytes. */
@@ -43,6 +45,8 @@ function buildContainer(models: ModelSpec[]): ArrayBuffer {
         indexCount: model.indices?.length ?? 0,
         hasNormals: Array.isArray(model.normals),
         supportLength: model.support ? JSON.stringify(model.support).length : 0,
+        ...(model.meshModifiers ? { meshModifiers: model.meshModifiers } : {}),
+        ...(model.skipClassification ? { skipClassification: true } : {}),
       }),
     );
     chunks.push(u32(meta.length), meta, f32s(model.positions));
@@ -139,4 +143,37 @@ test('a model without supports has none', () => {
   const container = buildContainer([{ modelId: 'plain', positions: [0, 0, 0, 1, 0, 0, 0, 1, 0] }]);
   const models = parseSideloadedSceneContainer(container);
   assert.equal(models[0].supportData, undefined);
+});
+
+test('hollowing and punch data travel through the model metadata', () => {
+  const meshModifiers = {
+    hollowing: { wallThicknessMm: 1.5, bakedIntoGeometry: false },
+    holePunches: [{ x: 1, y: 2, z: 3, radiusMm: 2 }],
+  };
+  const [model] = parseSideloadedSceneContainer(buildContainer([
+    {
+      modelId: 'hollowed',
+      positions: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+      indices: [0, 1, 2],
+      meshModifiers,
+      skipClassification: true,
+    },
+  ]));
+
+  assert.deepEqual(model.meshModifiers, meshModifiers);
+  assert.equal(model.skipClassification, true);
+});
+
+test('a meshModifiers value that is not an object is ignored', () => {
+  const [model] = parseSideloadedSceneContainer(buildContainer([
+    {
+      modelId: 'plain',
+      positions: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+      indices: [0, 1, 2],
+      meshModifiers: 'nope',
+    },
+  ]));
+
+  assert.equal(model.meshModifiers, undefined);
+  assert.equal(model.skipClassification, undefined);
 });

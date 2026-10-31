@@ -17,6 +17,14 @@ keeps the rasterising; your plugin owns the format. That split is why the ring
 exists: a 12K layer is ~59 MB of mask, and copying that through a pipe per layer
 would cost more than the encode.
 
+## Cancelling
+
+There is no cancel frame. The engine's cancel flag stops it feeding layers, the
+sink is dropped without `finish`, and the host stops the plugin process and removes
+the ring slot file. The next encode starts a clean process, so a plugin never has
+to implement interruption — and cannot expect to flush partial state on cancel.
+
+
 ## Layer payloads
 
 `formats[].layers` picks what the engine hands you:

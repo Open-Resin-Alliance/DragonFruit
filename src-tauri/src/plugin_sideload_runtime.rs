@@ -1014,6 +1014,69 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// Cancelling an encode drops the sink without `finish`; the session's `Drop`
+    /// stops the process and removes the ring, so the plugin cannot be left holding
+    /// a half-consumed session, and the next encode starts from a clean process.
+    #[test]
+    fn dropping_an_encode_session_stops_the_plugin_and_the_next_one_works() {
+        let root = temp_dir("cancel");
+        let manifest = package::Manifest {
+            id: "example.encoder".to_string(),
+            capabilities: vec![package::Capability::SlicerEncoder],
+            formats: vec![package::FormatDecl {
+                id: "exf".to_string(),
+                extensions: vec![".exf".to_string()],
+                display_name: None,
+                layers: Some(package::LayerKind::Rle),
+                requires_area_stats: false,
+            }],
+            ..crate::plugin_test_support::manifest(
+                "example.encoder",
+                vec![package::Capability::SlicerEncoder],
+            )
+        };
+        install_reference_plugin(&root, "echo_encoder", &manifest);
+
+        let session = EncodeSession::start(
+            &root,
+            "example.encoder",
+            &manifest,
+            ".exf",
+            serde_json::json!({}),
+            2,
+            4096,
+        )
+        .expect("session starts");
+        drop(session);
+
+        let ring_files: Vec<String> = std::fs::read_dir(root.join("example.encoder"))
+            .expect("plugin dir")
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
+            .filter(|name| name.ends_with(".ring"))
+            .collect();
+        assert!(ring_files.is_empty(), "rings left behind: {ring_files:?}");
+
+        let mut second = EncodeSession::start(
+            &root,
+            "example.encoder",
+            &manifest,
+            ".exf",
+            serde_json::json!({}),
+            1,
+            4096,
+        )
+        .expect("a fresh session starts");
+        second
+            .send_layer(sdk::SlotKind::Rle, 0, &[])
+            .expect("one layer");
+        let output = root.join("after-cancel.exf");
+        second.finish(&output).expect("finish");
+        assert!(output.exists());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// Opens a file through the reference importer and checks the container it
     /// wrote, then that the per-import directory is gone.
     #[test]

@@ -13,7 +13,8 @@ import * as THREE from 'three';
  * per model:
  *   u32  metaLen
  *   utf8 meta            { modelId, name?, transform: 16 floats (column major),
- *                          positionCount, indexCount, hasNormals }
+ *                          positionCount, indexCount, hasNormals,
+ *                          meshModifiers?, skipClassification? }
  *   f32  positions       positionCount * 3
  *   f32  normals         positionCount * 3, only when hasNormals
  *   u32  indices         indexCount, only when indexCount > 0
@@ -38,6 +39,13 @@ export type SideloadedSceneModel = {
   };
   /** The host's internal support document, when the container carried one. */
   supportData?: unknown;
+  /**
+   * Hollowing configuration and hole punches the source file carried. A compiled
+   * import handler returns the same object, and the scene applies it the same way.
+   */
+  meshModifiers?: unknown;
+  /** The plugin built a model-only mesh and supplied supports separately. */
+  skipClassification?: boolean;
 };
 
 type ContainerMeta = {
@@ -48,6 +56,8 @@ type ContainerMeta = {
   indexCount?: unknown;
   hasNormals?: unknown;
   supportLength?: unknown;
+  meshModifiers?: unknown;
+  skipClassification?: unknown;
 };
 
 export function parseSideloadedSceneContainer(buffer: ArrayBuffer): SideloadedSceneModel[] {
@@ -124,6 +134,10 @@ export function parseSideloadedSceneContainer(buffer: ArrayBuffer): SideloadedSc
       geometry,
       transform: readTransform(meta.transform),
       ...(supportData ? { supportData } : {}),
+      ...(meta.meshModifiers && typeof meta.meshModifiers === 'object' && !Array.isArray(meta.meshModifiers)
+        ? { meshModifiers: meta.meshModifiers }
+        : {}),
+      ...(meta.skipClassification === true ? { skipClassification: true } : {}),
     });
   }
 

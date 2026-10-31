@@ -25,7 +25,7 @@ slices, and each capability is either shipped or designed.
 | `networkOperations` (`network` / `networkResult`) | shipped | shipped | shipped: routed after the built-in dispatch match |
 | `slicerEncoder` (encode session + preview) | shipped | shipped | shipped: one process per session, ring in `DF_PLUGIN_RING`, RLE or PNG layers, adapter in the engine's encoder registry |
 | ring accessors (slot publish / view / release) | shipped | shipped | shipped, for encoders |
-| `fileType` (import messages) | shipped | shipped | shipped: extensions from the manifest, container parsed into geometry and supports |
+| `fileType` (import messages) | shipped | shipped | shipped: extensions from the manifest, container parsed into geometry, supports and mesh modifiers |
 | printer presets and material templates | shipped | not code: manifest arrays | shipped: registered through the profile store's plugin entry point |
 | network mode | shipped | not code: the manifest's `network` block | shipped: the mode joins the Network Support list and the generic panels call the declared operations |
 | job upload | shipped | not code: the `upload` operation | shipped: the host chunks a local file through `begin`/`chunk`/`end` with progress |
@@ -47,14 +47,11 @@ documented on its page.
 | Gap | What happens instead |
 | --- | --- |
 | the `pipe` transport | specified, not implemented; the host refuses a package that asks for it rather than using the ring it did not ask for |
-| a cancel message | the engine aborts and the host tears the process down; a plugin never gets to flush partial state |
-| raw mask layers | not a layer kind; RLE already avoids the PNG round trip |
-| per-layer area stats | not forwarded; a format that needs them has no way to ask today |
+| an in-protocol cancel message | the engine's cancel flag stops feeding the sink; dropping it stops the plugin process and removes the ring (tested), so the next encode starts clean. A plugin never has to implement interruption, and cannot flush partial state |
 | cross-layer parallelism | layers arrive one at a time and the host waits for each slot; parallelise inside a layer |
-| UI contributions | impossible by design: no remote JS in this tier. Presets, templates and a network mode are data and do travel; panels and custom adapters do not |
-| remote material editing | not available to a declared mode: it needs an edit schema and per-field mapping, which the manifest cannot describe yet |
-| hollowing and punch data in an imported scene | not carried by the container; models import without them |
-| per-material geometry | lands with multi-material support |
+| concurrent network requests | serialized per plugin; a plugin that could serve two at once has no way to say so yet |
+| per-material geometry | the import payload has one material per model; multi-material files flatten |
+| custom panels | the sandboxed UI island in `docs/dev/plugins-sdk/ui.md` — designed, not built, and it needs an ADR revision because ADR-0047 says UI contributions do not travel |
 
 ## Mental model
 

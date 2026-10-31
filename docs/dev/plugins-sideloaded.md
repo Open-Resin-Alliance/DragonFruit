@@ -31,6 +31,7 @@ Read this page before changing anything in this tier. "Protocol v1" and
 | package image assets | `payload/assets/` + `sideloaded_plugin_asset` | done: preset images are inlined as data URLs |
 | job metadata payloads | manifest `jobMetadataPayloads` | done: the host bakes them into `metadata_json` and the encoder reads it |
 | raw mask layers, area stats | format `layers: "mask"`, `requiresAreaStats` | done: mask slots at source resolution, stats in the batch job |
+| imported scene modifiers | per-model `meshModifiers` / `skipClassification` in the container | done: hollowing and punches arrive with the model |
 | monitoring policy | `network.monitoring` | done: grace windows and webcam cooldowns per mode |
 
 `cargo test` in the package crate and `cargo test --bin dragonfruit-desktop
