@@ -512,12 +512,8 @@ mod tests {
         package::signing_key_from_seed([seed; 32])
     }
 
-    fn test_package(seed: u8, passphrase: Option<&str>, min_app_version: &str) -> Vec<u8> {
-        let key = test_key(seed);
-        let mut files = BTreeMap::new();
-        files.insert("bin/test/plugin".to_string(), b"#!/bin/sh\n".to_vec());
-        let payload = package::build_payload_zip(&files).expect("payload");
-        let manifest = package::Manifest {
+    fn test_manifest(key: &package::PluginSigningKey, min_app_version: &str) -> package::Manifest {
+        package::Manifest {
             format_version: package::FORMAT_VERSION,
             id: "alphabeta.test".to_string(),
             name: "Test Plugin".to_string(),
@@ -534,7 +530,7 @@ mod tests {
                 transport: package::Transport::Shm,
             },
             publisher: package::Publisher {
-                key: package::publisher_key_for(&key),
+                key: package::publisher_key_for(key),
             },
             payload: package::PayloadRef {
                 sha256: String::new(),
@@ -549,7 +545,17 @@ mod tests {
             }],
             network: None,
             file_types: Vec::new(),
-        };
+            printer_presets: Vec::new(),
+            material_templates: Vec::new(),
+        }
+    }
+
+    fn test_package(seed: u8, passphrase: Option<&str>, min_app_version: &str) -> Vec<u8> {
+        let key = test_key(seed);
+        let mut files = BTreeMap::new();
+        files.insert("bin/test/plugin".to_string(), b"#!/bin/sh\n".to_vec());
+        let payload = package::build_payload_zip(&files).expect("payload");
+        let manifest = test_manifest(&key, min_app_version);
         package::build_package(
             &manifest,
             &payload,
@@ -634,6 +640,30 @@ mod tests {
 
         install(&root, &first, None).expect("second install");
         assert!(!marker.exists(), "replacement must not keep stale files");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn presets_and_templates_survive_install() {
+        use std::collections::BTreeMap;
+
+        let key = test_key(5);
+        let payload = package::build_payload_zip(&BTreeMap::new()).expect("payload");
+        let manifest = package::Manifest {
+            printer_presets: vec![serde_json::json!({ "presetId": "example.full-printer", "manufacturer": "Example", "name": "Echo Printer" })],
+            material_templates: vec![serde_json::json!({ "name": "Echo Standard Resin" })],
+            ..test_manifest(&key, "0.1.0")
+        };
+        let bytes = package::build_package(&manifest, &payload, None, [9u8; 24], [8u8; 16], &key)
+            .expect("package");
+
+        let root = temp_root("presets");
+        install(&root, &bytes, None).expect("install");
+
+        let installed = installed_manifest(&root, "alphabeta.test").expect("manifest");
+        assert_eq!(installed.printer_presets.len(), 1);
+        assert_eq!(installed.printer_presets[0]["presetId"], "example.full-printer");
+        assert_eq!(installed.material_templates.len(), 1);
         let _ = std::fs::remove_dir_all(&root);
     }
 

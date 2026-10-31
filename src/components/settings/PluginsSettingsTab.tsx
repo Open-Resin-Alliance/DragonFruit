@@ -512,7 +512,12 @@ export function PluginsSettingsTab() {
   // One list for all three tiers: built-in, GitHub manifest packs and sideloaded
   // packages differ in where they came from, not in how they are managed.
   const installedRows: InstalledPluginRow[] = [];
+  // A sideloaded package with presets also registers a profile-store entry, so the
+  // printer library sees them. That entry must not become a second row here: the
+  // host's record is the one that can be enabled, removed or re-imported.
+  const sideloadedIds = new Set(sideloadPlugins.map((plugin) => plugin.manifest.id));
   for (const plugin of installedPlugins) {
+    if (sideloadedIds.has(plugin.manifest.id)) continue;
     const manifest = plugin.manifest;
     const isBuiltin = plugin.source === 'builtin';
     const repositoryUrl = manifest.homepage || (isBuiltin ? BUILTIN_ATHENA_REPOSITORY_URL : plugin.sourceUrl);

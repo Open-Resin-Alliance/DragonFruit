@@ -2,7 +2,9 @@ import type {
   PluginFileTypeHandler,
   PluginFileTypeImportResult,
 } from '@/features/plugins/pluginFileTypeBridge';
-import { importSideloadedFile, listSideloadedPlugins } from '@/features/plugins/sideloadedPlugins';
+import { importSideloadedFile, listSideloadedPlugins, type InstalledSideloadedPlugin } from '@/features/plugins/sideloadedPlugins';
+import { installPluginFromManifest, uninstallPlugin } from '@/features/profiles/profileStore';
+import type { PluginManifest } from '@/features/plugins/pluginRegistry';
 import { parseSideloadedSceneContainer } from '@/features/plugins/sideloadedSceneContainer';
 import {
   applySideloadedFileTypes,
@@ -22,6 +24,50 @@ export {
 } from '@/features/plugins/sideloadedFileTypeRegistry';
 
 let inFlight: Promise<void> | null = null;
+
+/**
+ * Packages whose presets we have registered with the profile store. Module state
+ * because the store owns the persistence: this is only what *we* added, so a
+ * removal takes away our entry and never someone's GitHub plugin.
+ */
+const syncedProfilePluginIds = new Set<string>();
+
+/**
+ * Packages can contribute printer presets and material templates. They go through
+ * the same store entry point the simple-plugin tier uses, which is what makes the
+ * printer library, the format dropdown and the material picker see them; the
+ * package's own row in Settings stays the sideloaded one.
+ */
+function syncProfileContributions(plugins: InstalledSideloadedPlugin[]) {
+  const present = new Set<string>();
+  for (const plugin of plugins) {
+    const source = plugin.manifest;
+    const printerPresets = Array.isArray(source.printerPresets) ? source.printerPresets : [];
+    const materialTemplates = Array.isArray(source.materialTemplates) ? source.materialTemplates : [];
+    if (printerPresets.length === 0 && materialTemplates.length === 0) continue;
+
+    present.add(source.id);
+    if (syncedProfilePluginIds.has(source.id)) continue;
+
+    const manifest: PluginManifest = {
+      schemaVersion: 1,
+      id: source.id,
+      name: source.name,
+      version: source.version,
+      description: source.description,
+      printerPresets: printerPresets as PluginManifest['printerPresets'],
+      materialTemplates: materialTemplates as PluginManifest['materialTemplates'],
+    };
+    installPluginFromManifest(manifest, source.vendor.homepage ?? undefined);
+    syncedProfilePluginIds.add(source.id);
+  }
+
+  for (const id of [...syncedProfilePluginIds]) {
+    if (present.has(id)) continue;
+    uninstallPlugin(id);
+    syncedProfilePluginIds.delete(id);
+  }
+}
 
 /** Re-reads installed packages. Safe to call after an install, remove or toggle. */
 export function refreshSideloadedContributions(): Promise<void> {
@@ -56,6 +102,7 @@ export function refreshSideloadedContributions(): Promise<void> {
       }
       applySideloadedFileTypes(fileTypes);
       applySideloadedOutputFormats(formats);
+      syncProfileContributions(plugins);
     } catch {
       // The runtime is unavailable (web build, or nothing installed yet).
       applySideloadedFileTypes([]);

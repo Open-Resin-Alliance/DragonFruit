@@ -22,6 +22,7 @@ export type SideloadedManifest = {
   id: string;
   name: string;
   version: string;
+  description?: string;
   vendor: { name: string; homepage?: string | null };
   minAppVersion: string;
   capabilities: SideloadedCapability[];
@@ -35,6 +36,10 @@ export type SideloadedManifest = {
   formats: SideloadedFormat[];
   network?: { pluginId: string } | null;
   fileTypes?: Array<{ extension: string; displayName: string; isSceneFile?: boolean }>;
+  /** Printer presets the package contributes; the renderer normalises them. */
+  printerPresets?: unknown[];
+  /** Material templates the package contributes. */
+  materialTemplates?: unknown[];
 };
 
 export type SideloadedInspect = {

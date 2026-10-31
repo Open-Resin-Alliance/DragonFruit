@@ -196,6 +196,8 @@ cargo run -p dragonfruit-plugin-package --example pack -- \
 | `--format-name` | display name for the format, shown in the profile editor |
 | `--file-type` | extension the package can open, e.g. `.apf`; adds the fileType capability |
 | `--file-type-name` | display name for that extension, shown in the import UI |
+| `--presets` | JSON array of printer presets the package contributes |
+| `--templates` | JSON array of material templates the package contributes |
 | `--min-app-version` | manifest `minAppVersion` (default `0.1.0`) |
 | `--passphrase` | seals the payload; omit (or pass an empty value) for an unsealed test package |
 | `--seed` | 32 bytes of hex for a deterministic publisher key (default: the fixed dev seed) |
@@ -206,6 +208,32 @@ sheet shows and what the host pins.
 Ship the `.dfplugin` and the passphrase through separate channels. The seal is
 what makes a leaked package inert; it is not DRM, because the host must decrypt
 the payload to run it.
+
+### The full-feature example
+
+`examples/full_plugin.rs` uses every capability at once: an encoder for `.exf`
+(records the layer stream instead of writing a real container), an importer for
+`.echo`, a network handler with two fake operations, and a preview decoder. It
+sits beside `full_plugin_presets.json` and `full_plugin_templates.json`, which
+give a printer that targets `.exf` and one material.
+
+```bash
+cargo build --manifest-path rust/dragonfruit-plugin-sdk/Cargo.toml --example full_plugin
+cargo run -p dragonfruit-plugin-package --example pack -- \
+  --out full-plugin-sample.dfplugin \
+  --binary rust/dragonfruit-plugin-sdk/target/debug/examples/full_plugin \
+  --id example.full --name "Full Feature Example" --version 0.1.0 --vendor DragonFruit \
+  --format .exf --format-name "Echo container" --layers rle \
+  --file-type .echo --file-type-name "Echo project" --network \
+  --presets rust/dragonfruit-plugin-sdk/examples/full_plugin_presets.json \
+  --templates rust/dragonfruit-plugin-sdk/examples/full_plugin_templates.json
+```
+
+Installing that one package gives you: an "Echo container" output format on the
+profile it adds, a `.echo` import extension, `printer/status`, `printer/start` and
+`echo` network operations, layer previews, and a printer preset plus material
+template in the library. It is the shape a real printer integration takes, minus
+the real protocol.
 
 ## 5. Import and verify
 

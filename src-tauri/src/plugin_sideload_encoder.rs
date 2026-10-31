@@ -312,6 +312,85 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// One binary, every capability: the SDK's `full_plugin` example. Encodes a
+    /// run stream, imports a file and serves a preview through the same install.
+    #[test]
+    fn a_package_with_every_capability_serves_all_of_them() {
+        let root = temp_dir("full");
+        let manifest = package::Manifest {
+            id: "example.full".to_string(),
+            capabilities: vec![
+                package::Capability::SlicerEncoder,
+                package::Capability::NetworkOperations,
+                package::Capability::FileType,
+            ],
+            formats: vec![package::FormatDecl {
+                id: "exf".to_string(),
+                extensions: vec![".exf".to_string()],
+                display_name: Some("Echo container".to_string()),
+                layers: Some(package::LayerKind::Rle),
+            }],
+            file_types: vec![package::FileTypeDecl {
+                extension: ".echo".to_string(),
+                display_name: "Echo project".to_string(),
+                is_scene_file: true,
+            }],
+            printer_presets: vec![serde_json::json!({ "presetId": "example.full-printer" })],
+            ..crate::plugin_test_support::manifest(
+                "example.full",
+                vec![
+                    package::Capability::SlicerEncoder,
+                    package::Capability::NetworkOperations,
+                    package::Capability::FileType,
+                ],
+            )
+        };
+        install_reference_plugin(&root, "full_plugin", &manifest);
+
+        // 1. Encode: RLE runs through the ring.
+        let encoder = SideloadedEncoder::new(
+            root.clone(),
+            manifest.clone(),
+            ".exf",
+            package::LayerKind::Rle,
+        );
+        let output = root.join("job.exf");
+        let mut sink = encoder
+            .create_rle_stream_encoder(&job(2))
+            .expect("session")
+            .expect("streaming sink");
+        sink.consume_rle_layer(0, vec![RleRun { length: 4096, value: 0 }])
+            .expect("layer 0");
+        sink.consume_rle_layer(1, vec![RleRun { length: 4096, value: 0 }])
+            .expect("layer 1");
+        sink.finalize_to_path(&output).expect("finish");
+        assert!(std::fs::read(&output).expect("read").ends_with(b"layers=2"));
+
+        // 2. Import: the scene container, supports included.
+        let container = crate::plugin_sideload_runtime::import_with_plugin(
+            &root,
+            "example.full",
+            &manifest,
+            "scene.echo",
+            b"source",
+        )
+        .expect("import");
+        assert!(container.starts_with(crate::plugin_sideload_runtime::SCENE_CONTAINER_MAGIC));
+
+        // 3. Preview: decoded from the container the plugin just wrote.
+        let png = crate::plugin_sideload_runtime::preview_with_plugin(
+            &root,
+            "example.full",
+            &manifest,
+            &output,
+            7,
+        )
+        .expect("preview");
+        assert!(png.starts_with(b"\x89PNG"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// A PNG package must not open a streaming session, and the batch path is what
     /// runs instead.
     #[test]

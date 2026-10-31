@@ -23,6 +23,7 @@ Read this page before changing anything in this tier. "Protocol v1" and
 | `network` capability | host runtime + SDK harness | done |
 | `slicerEncoder` capability | host runtime + engine adapter + SDK harness | done, tested against a real encoder process |
 | `fileType` capability | host runtime + renderer container parser | done, tested against a real importer process |
+| printer presets and material templates | manifest `printerPresets` / `materialTemplates` | done: the renderer registers them through the same store entry the simple tier uses |
 
 `cargo test` in the package crate and `cargo test --bin dragonfruit-desktop
 plugin_sideload` cover the verification matrix below except the process cases.
@@ -106,7 +107,15 @@ README.md                    optional
   "fileTypes": [
     { "extension": ".apf", "displayName": "AlphaPrint project", "isSceneFile": true }
   ],
-  "network": { "pluginId": "alphabeta" }
+  "network": { "pluginId": "alphabeta" },
+  "printerPresets": [
+    { "presetId": "alphabeta.alpha-4k", "manufacturer": "AlphaBeta", "name": "Alpha 4K",
+      "buildVolumeMm": { "width": 143, "depth": 89, "height": 175 },
+      "display": { "resolutionX": 4096, "resolutionY": 2560, "outputFormat": ".apf" } }
+  ],
+  "materialTemplates": [
+    { "name": "Alpha Standard Resin", "brand": "AlphaBeta", "layerHeightMm": 0.05 }
+  ]
 }
 ```
 
@@ -127,6 +136,24 @@ Rules the host enforces, in this order:
 `formats` is required for a package with the encoder capability: the engine
 looks encoders up by exact output extension, so the package has to declare
 extensions before anything starts.
+
+### Profile content
+
+A package can carry printer presets and material templates:
+`printerPresets` and `materialTemplates` in the manifest, bounded to 64 and 256
+entries, each a JSON object. The host keeps them with the installed record; the
+renderer hands them to the profile store through `installPluginFromManifest`, the
+same entry point the simple-plugin tier uses, so there is one normaliser and one
+place where a bad preset is rejected.
+
+That is how a sideloaded package appears in the printer library and the material
+picker. The package's own row in Settings stays the sideloaded record, which is
+the one that can be enabled or removed, and the profile-store entry it creates is
+filtered out of that list.
+
+Removing the package removes the profile entry and the presets with it. A preset
+whose `display.outputFormat` names the package's own format is the usual shape,
+so picking that printer also picks the encoder.
 
 ### Seal
 

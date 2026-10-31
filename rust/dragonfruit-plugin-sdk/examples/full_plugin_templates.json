@@ -1,0 +1,17 @@
+[
+  {
+    "name": "Echo Standard Resin",
+    "brand": "Example",
+    "currencyCode": "USD",
+    "bottlePrice": 0,
+    "bottleCapacityMl": 1000,
+    "resinFamily": "standard",
+    "layerHeightMm": 0.05,
+    "normalExposureSec": 2.5,
+    "bottomExposureSec": 28,
+    "bottomLayerCount": 5,
+    "liftDistanceMm": 6,
+    "liftSpeedMmMin": 60,
+    "retractSpeedMmMin": 150
+  }
+]

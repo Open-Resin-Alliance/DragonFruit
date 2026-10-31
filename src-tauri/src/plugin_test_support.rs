@@ -106,5 +106,7 @@ pub fn manifest(id: &str, capabilities: Vec<package::Capability>) -> package::Ma
         formats: Vec::new(),
         network: None,
         file_types: Vec::new(),
+        printer_presets: Vec::new(),
+        material_templates: Vec::new(),
     }
 }

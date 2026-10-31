@@ -67,6 +67,8 @@ fn main() {
         Some("rle") => Some(package::LayerKind::Rle),
         Some(other) => panic!("--layers accepts 'png' or 'rle', not '{other}'"),
     };
+    let presets_path = arg("--presets");
+    let templates_path = arg("--templates");
     let file_type = arg("--file-type");
     let file_type_name = arg("--file-type-name").unwrap_or_else(|| "Project file".to_string());
 
@@ -126,6 +128,12 @@ fn main() {
             layers: layer_kind,
             })
             .collect(),
+        printer_presets: presets_path
+            .map(|path| read_json_array(&path))
+            .unwrap_or_default(),
+        material_templates: templates_path
+            .map(|path| read_json_array(&path))
+            .unwrap_or_default(),
         network: network.then(|| package::NetworkDecl {
             plugin_id: id.clone(),
         }),
@@ -160,6 +168,20 @@ fn main() {
     println!("publisher key:       {}", manifest.publisher.key);
     println!("publisher fingerprint: {}", inspected.publisher_fingerprint);
     println!("sealed:              {}", inspected.sealed);
+}
+
+/// Reads a JSON array of presets or templates for the manifest. Kept as opaque
+/// objects here: the renderer normalises them with the same code the simple tier
+/// uses, so a package cannot slip a shape past two different validators.
+fn read_json_array(path: &str) -> Vec<serde_json::Value> {
+    let text = std::fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("read {path}: {error}"));
+    let value: serde_json::Value =
+        serde_json::from_str(&text).unwrap_or_else(|error| panic!("parse {path}: {error}"));
+    match value {
+        serde_json::Value::Array(items) => items,
+        _ => panic!("{path} must hold a JSON array"),
+    }
 }
 
 fn platform_dir() -> &'static str {

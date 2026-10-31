@@ -169,6 +169,13 @@ pub struct Manifest {
     pub network: Option<NetworkDecl>,
     #[serde(default)]
     pub file_types: Vec<FileTypeDecl>,
+    /// Printer presets and material templates the package contributes. Opaque
+    /// here on purpose: the host stores them and the renderer normalises them with
+    /// the same code the simple-plugin tier uses, so there is one validator.
+    #[serde(default)]
+    pub printer_presets: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub material_templates: Vec<serde_json::Value>,
 }
 
 /// A package whose manifest parsed and whose signature verified. The payload is
@@ -289,6 +296,26 @@ fn validate(manifest: &Manifest) -> Result<(), PackageError> {
     if manifest.capabilities.is_empty() {
         return Err(PackageError::Invalid(
             "a package must declare at least one capability".to_string(),
+        ));
+    }
+    if manifest.printer_presets.len() > 64 {
+        return Err(PackageError::Invalid(
+            "a package may contribute at most 64 printer presets".to_string(),
+        ));
+    }
+    if manifest.material_templates.len() > 256 {
+        return Err(PackageError::Invalid(
+            "a package may contribute at most 256 material templates".to_string(),
+        ));
+    }
+    if manifest
+        .printer_presets
+        .iter()
+        .chain(manifest.material_templates.iter())
+        .any(|entry| !entry.is_object())
+    {
+        return Err(PackageError::Invalid(
+            "presets and templates must be JSON objects".to_string(),
         ));
     }
     if !manifest.file_types.is_empty() && !manifest.capabilities.contains(&Capability::FileType) {
@@ -645,6 +672,8 @@ mod tests {
             }],
             network: None,
             file_types: Vec::new(),
+            printer_presets: Vec::new(),
+            material_templates: Vec::new(),
         }
     }
 

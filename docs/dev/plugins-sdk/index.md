@@ -26,6 +26,7 @@ slices, and each capability is either shipped or designed.
 | `slicerEncoder` (encode session + preview) | shipped | shipped | shipped: one process per session, ring in `DF_PLUGIN_RING`, RLE or PNG layers, adapter in the engine's encoder registry |
 | ring accessors (slot publish / view / release) | shipped | shipped | shipped, for encoders |
 | `fileType` (import messages) | shipped | shipped | shipped: extensions from the manifest, container parsed into geometry and supports |
+| printer presets and material templates | shipped | not code: manifest arrays | shipped: registered through the profile store's plugin entry point |
 
 Pages mark their own status. A "designed" page is the contract to build against;
 it is not a description of running code.
@@ -42,7 +43,7 @@ documented on its page.
 | raw mask layers | not a layer kind; RLE already avoids the PNG round trip |
 | per-layer area stats | not forwarded; a format that needs them has no way to ask today |
 | cross-layer parallelism | layers arrive one at a time and the host waits for each slot; parallelise inside a layer |
-| UI contributions | impossible by design: no remote JS in this tier |
+| UI contributions | impossible by design: no remote JS in this tier. Presets and templates are data and do travel; panels and adapters do not |
 | hollowing and punch data in an imported scene | not carried by the container; models import without them |
 | per-material geometry | lands with multi-material support |
 
