@@ -58,6 +58,8 @@ fn default_dither_device_gamma() -> f64 {
 }
 
 mod experiments;
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+mod mallinfo_shim;
 mod plugin_registry;
 mod webview_watchdog;
 mod window_state;
