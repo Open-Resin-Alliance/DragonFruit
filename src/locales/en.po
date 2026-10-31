@@ -23,12 +23,12 @@ msgid "{0, plural, one {# island} other {# islands}}"
 msgstr "{0, plural, one {# island} other {# islands}}"
 
 #. placeholder {0}: pendingInstallPreview?.manifest.materialTemplates?.length ?? 0
-#: src/components/settings/PluginsSettingsTab.tsx:900
+#: src/components/settings/PluginsSettingsTab.tsx:939
 msgid "{0, plural, one {# material template} other {# material templates}}"
 msgstr "{0, plural, one {# material template} other {# material templates}}"
 
 #. placeholder {0}: installedRows.length
-#: src/components/settings/PluginsSettingsTab.tsx:1253
+#: src/components/settings/PluginsSettingsTab.tsx:1292
 msgid "{0, plural, one {# plugin in this profile.} other {# plugins in this profile.}}"
 msgstr "{0, plural, one {# plugin in this profile.} other {# plugins in this profile.}}"
 
@@ -38,12 +38,12 @@ msgid "{0, plural, one {# polygon} other {# polygons}}"
 msgstr "{0, plural, one {# polygon} other {# polygons}}"
 
 #. placeholder {0}: pendingInstallPreview?.manifest.printerPresets?.length ?? 0
-#: src/components/settings/PluginsSettingsTab.tsx:899
+#: src/components/settings/PluginsSettingsTab.tsx:938
 msgid "{0, plural, one {# printer preset} other {# printer presets}}"
 msgstr "{0, plural, one {# printer preset} other {# printer presets}}"
 
 #. placeholder {0}: selectedLibraryPresetIds.size
-#: src/components/settings/ProfileSettingsModal.tsx:4779
+#: src/components/settings/ProfileSettingsModal.tsx:4783
 msgid "{0, plural, one {Add # printer} other {Add # printers}}"
 msgstr "{0, plural, one {Add # printer} other {Add # printers}}"
 
@@ -610,7 +610,7 @@ msgstr "A left column or a bar centred under the app bar."
 msgid "A model dropped on another bed makes that bed the one you work on."
 msgstr "A model dropped on another bed makes that bed the one you work on."
 
-#: src/components/settings/PluginsSettingsTab.tsx:810
+#: src/components/settings/PluginsSettingsTab.tsx:849
 msgid "A profile pack is data only — presets and material templates — so installing it cannot add code. The values it declares are still yours to check."
 msgstr "A profile pack is data only — presets and material templates — so installing it cannot add code. The values it declares are still yours to check."
 
@@ -619,7 +619,7 @@ msgstr "A profile pack is data only — presets and material templates — so in
 msgid "A recovery copy is written beside each saved project, as <name>_autosave.voxl. It uses roughly as much disk as the project itself."
 msgstr "A recovery copy is written beside each saved project, as <name>_autosave.voxl. It uses roughly as much disk as the project itself."
 
-#: src/components/settings/PluginsSettingsTab.tsx:1067
+#: src/components/settings/PluginsSettingsTab.tsx:1106
 msgid "A sideloaded package is a native program, not a profile pack."
 msgstr "A sideloaded package is a native program, not a profile pack."
 
@@ -741,8 +741,8 @@ msgstr "Add plate {plateNumber}"
 #: src/components/printers/PrinterVariantPickerModal.tsx:707
 #: src/components/settings/FleetManagement.tsx:269
 #: src/components/settings/PluginStudioModal.tsx:2100
-#: src/components/settings/ProfileSettingsModal.tsx:3584
-#: src/components/settings/ProfileSettingsModal.tsx:3647
+#: src/components/settings/ProfileSettingsModal.tsx:3588
+#: src/components/settings/ProfileSettingsModal.tsx:3651
 msgid "Add printer"
 msgstr "Add printer"
 
@@ -750,7 +750,7 @@ msgstr "Add printer"
 msgid "Add printer variant"
 msgstr "Add printer variant"
 
-#: src/components/settings/ProfileSettingsModal.tsx:4780
+#: src/components/settings/ProfileSettingsModal.tsx:4784
 msgid "Add printers"
 msgstr "Add printers"
 
@@ -790,7 +790,7 @@ msgstr "Added"
 msgid "Adds a “Send to UVTools” option in the slicing panel."
 msgstr "Adds a “Send to UVTools” option in the slicing panel."
 
-#: src/components/settings/PluginsSettingsTab.tsx:721
+#: src/components/settings/PluginsSettingsTab.tsx:760
 msgid "Adds presets and materials from a repository. Contains no code."
 msgstr "Adds presets and materials from a repository. Contains no code."
 
@@ -839,7 +839,7 @@ msgstr "All visible models are outside the build volume."
 msgid "Allow auto-arrange to rotate models by 90° on Z when beneficial"
 msgstr "Allow auto-arrange to rotate models by 90° on Z when beneficial"
 
-#: src/components/settings/PluginsSettingsTab.tsx:1031
+#: src/components/settings/PluginsSettingsTab.tsx:1070
 msgid "Allow untrusted plugins?"
 msgstr "Allow untrusted plugins?"
 
@@ -847,7 +847,7 @@ msgstr "Allow untrusted plugins?"
 msgid "Allow Z-rotation"
 msgstr "Allow Z-rotation"
 
-#: src/components/settings/PluginsSettingsTab.tsx:878
+#: src/components/settings/PluginsSettingsTab.tsx:917
 msgid "Allowlisted source"
 msgstr "Allowlisted source"
 
@@ -871,7 +871,7 @@ msgstr "Already optimal for this goal."
 msgid "Ambient Occlusion"
 msgstr "Ambient Occlusion"
 
-#: src/components/settings/PluginsSettingsTab.tsx:1201
+#: src/components/settings/PluginsSettingsTab.tsx:1240
 msgid "An older install with this ID and publisher is replaced."
 msgstr "An older install with this ID and publisher is replaced."
 
@@ -883,7 +883,7 @@ msgstr "Analysing supports"
 msgid "Analysis"
 msgstr "Analysis"
 
-#: src/app/page.tsx:11738
+#: src/app/page.tsx:11740
 msgid "Analyzing Model Islands & Minima"
 msgstr "Analyzing Model Islands & Minima"
 
@@ -933,7 +933,7 @@ msgctxt "Undo history entry"
 msgid "Apply orientation suggestion"
 msgstr "Apply orientation suggestion"
 
-#: src/app/page.tsx:8156
+#: src/app/page.tsx:8158
 msgid "Apply the holes to every visible model, or open the Hollow tool to review and apply them per model."
 msgstr "Apply the holes to every visible model, or open the Hollow tool to review and apply them per model."
 
@@ -941,7 +941,7 @@ msgstr "Apply the holes to every visible model, or open the Hollow tool to revie
 msgid "Apply this preset to the auto-support settings"
 msgstr "Apply this preset to the auto-support settings"
 
-#: src/app/page.tsx:8167
+#: src/app/page.tsx:8169
 msgid "Apply to All bakes the holes into every visible model when applicable. Or open the Hollow tool to review and apply holes individually."
 msgstr "Apply to All bakes the holes into every visible model when applicable. Or open the Hollow tool to review and apply holes individually."
 
@@ -982,7 +982,7 @@ msgstr "Applying to model {current} of {total}"
 msgid "Applying…"
 msgstr "Applying…"
 
-#: src/app/page.tsx:11831
+#: src/app/page.tsx:11833
 msgid "Are you sure you want to remove every model from the plate?"
 msgstr "Are you sure you want to remove every model from the plate?"
 
@@ -1061,7 +1061,7 @@ msgstr "ASCII STL"
 msgid "Ask the printer to disable any stale webcam stream before retrying"
 msgstr "Ask the printer to disable any stale webcam stream before retrying"
 
-#: src/components/settings/PluginsSettingsTab.tsx:894
+#: src/components/settings/PluginsSettingsTab.tsx:933
 msgid "Author"
 msgstr "Author"
 
@@ -1582,11 +1582,11 @@ msgstr "Built for another printer"
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:285
 #: src/components/controls/autoSupport/AutoSupportPresetSelect.tsx:57
 #: src/components/controls/autoSupport/AutoSupportSizingTierField.tsx:110
-#: src/components/settings/PluginsSettingsTab.tsx:634
+#: src/components/settings/PluginsSettingsTab.tsx:673
 msgid "Built-in"
 msgstr "Built-in"
 
-#: src/components/settings/PluginsSettingsTab.tsx:660
+#: src/components/settings/PluginsSettingsTab.tsx:699
 msgid "Built-in plugin"
 msgstr "Built-in plugin"
 
@@ -1624,7 +1624,7 @@ msgstr "Camera view mode: {currentLabel}"
 msgid "Can't open this scene"
 msgstr "Can't open this scene"
 
-#: src/app/page.tsx:11794
+#: src/app/page.tsx:11796
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:470
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:666
 #: src/components/controls/AutoSupportPanel.tsx:663
@@ -1642,13 +1642,13 @@ msgstr "Can't open this scene"
 #: src/components/settings/FleetManagement.tsx:442
 #: src/components/settings/LocalBackupsSettingsTab.tsx:984
 #: src/components/settings/LocalBackupsSettingsTab.tsx:1027
-#: src/components/settings/PluginsSettingsTab.tsx:791
-#: src/components/settings/PluginsSettingsTab.tsx:845
-#: src/components/settings/PluginsSettingsTab.tsx:954
-#: src/components/settings/PluginsSettingsTab.tsx:988
-#: src/components/settings/PluginsSettingsTab.tsx:1043
-#: src/components/settings/PluginsSettingsTab.tsx:1107
-#: src/components/settings/PluginsSettingsTab.tsx:1224
+#: src/components/settings/PluginsSettingsTab.tsx:830
+#: src/components/settings/PluginsSettingsTab.tsx:884
+#: src/components/settings/PluginsSettingsTab.tsx:993
+#: src/components/settings/PluginsSettingsTab.tsx:1027
+#: src/components/settings/PluginsSettingsTab.tsx:1082
+#: src/components/settings/PluginsSettingsTab.tsx:1146
+#: src/components/settings/PluginsSettingsTab.tsx:1263
 #: src/features/printing/components/PrintingPanel.tsx:99
 #: src/features/slicing/components/LutCurveEditor.tsx:1500
 #: src/features/slicing/components/LutCurveEditor.tsx:1643
@@ -1696,8 +1696,8 @@ msgstr "Cancel restore"
 msgid "Cancel Slicing"
 msgstr "Cancel Slicing"
 
-#: src/app/page.tsx:5544
-#: src/app/page.tsx:5545
+#: src/app/page.tsx:5546
+#: src/app/page.tsx:5547
 msgid "Canceling upload…"
 msgstr "Canceling upload…"
 
@@ -1730,7 +1730,7 @@ msgstr "Cannot Place Support"
 msgid "Cannot remove hollowing: original geometry is unavailable."
 msgstr "Cannot remove hollowing: original geometry is unavailable."
 
-#: src/components/settings/PluginsSettingsTab.tsx:648
+#: src/components/settings/PluginsSettingsTab.tsx:687
 msgid "Capabilities"
 msgstr "Capabilities"
 
@@ -1812,7 +1812,7 @@ msgstr "Checking coverage"
 msgid "Checking for Updates…"
 msgstr "Checking for Updates…"
 
-#: src/components/settings/PluginsSettingsTab.tsx:751
+#: src/components/settings/PluginsSettingsTab.tsx:790
 msgid "Checks the publisher signature, then unseals and installs the .dfplugin file."
 msgstr "Checks the publisher signature, then unseals and installs the .dfplugin file."
 
@@ -1832,7 +1832,7 @@ msgstr "Choose a printer to add"
 msgid "Choose an official printer preset to add."
 msgstr "Choose an official printer preset to add."
 
-#: src/components/settings/PluginsSettingsTab.tsx:760
+#: src/components/settings/PluginsSettingsTab.tsx:799
 msgid "Choose file…"
 msgstr "Choose file…"
 
@@ -1937,12 +1937,12 @@ msgstr "Clear All failed. Check console for details."
 
 #. Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.
 #. Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.
-#: src/app/page.tsx:10969
+#: src/app/page.tsx:10971
 #: src/components/scene/SceneCanvas/SceneCanvas.tsx:1931
 msgid "Clear build plate"
 msgstr "Clear build plate"
 
-#: src/app/page.tsx:11783
+#: src/app/page.tsx:11785
 msgid "Clear Build Plate?"
 msgstr "Clear Build Plate?"
 
@@ -1960,7 +1960,7 @@ msgstr "Clear hollowing"
 msgid "Clear Override"
 msgstr "Clear Override"
 
-#: src/app/page.tsx:11822
+#: src/app/page.tsx:11824
 msgid "Clear Plate"
 msgstr "Clear Plate"
 
@@ -2028,7 +2028,7 @@ msgstr "Client ID"
 msgid "Close"
 msgstr "Close"
 
-#: src/app/page.tsx:11789
+#: src/app/page.tsx:11791
 msgid "Close clear-plate confirmation"
 msgstr "Close clear-plate confirmation"
 
@@ -2060,13 +2060,13 @@ msgstr "Close material anti-aliasing settings"
 #: src/components/modals/ObsoleteVoxlVersionModal.tsx:40
 #: src/components/modals/PrintingResliceModal.tsx:32
 #: src/components/modals/ScenePrinterMismatchModal.tsx:62
-#: src/components/settings/PluginsSettingsTab.tsx:784
-#: src/components/settings/PluginsSettingsTab.tsx:837
-#: src/components/settings/PluginsSettingsTab.tsx:948
-#: src/components/settings/PluginsSettingsTab.tsx:981
-#: src/components/settings/PluginsSettingsTab.tsx:1037
-#: src/components/settings/PluginsSettingsTab.tsx:1099
-#: src/components/settings/PluginsSettingsTab.tsx:1218
+#: src/components/settings/PluginsSettingsTab.tsx:823
+#: src/components/settings/PluginsSettingsTab.tsx:876
+#: src/components/settings/PluginsSettingsTab.tsx:987
+#: src/components/settings/PluginsSettingsTab.tsx:1020
+#: src/components/settings/PluginsSettingsTab.tsx:1076
+#: src/components/settings/PluginsSettingsTab.tsx:1138
+#: src/components/settings/PluginsSettingsTab.tsx:1257
 #: src/features/slicing/components/SlicingPanel.tsx:3100
 #: src/features/slicing/components/SlicingPanel.tsx:3139
 msgid "Close modal"
@@ -2325,7 +2325,7 @@ msgstr "Confirm Cancel"
 msgid "Confirm cancel print"
 msgstr "Confirm cancel print"
 
-#: src/app/page.tsx:11782
+#: src/app/page.tsx:11784
 msgid "Confirm clearing the build plate"
 msgstr "Confirm clearing the build plate"
 
@@ -2345,7 +2345,7 @@ msgstr "Confirm delete recent file"
 msgid "Confirm delete snapshot"
 msgstr "Confirm delete snapshot"
 
-#: src/app/page.tsx:11781
+#: src/app/page.tsx:11783
 msgid "Confirm deleting the plate"
 msgstr "Confirm deleting the plate"
 
@@ -2453,7 +2453,7 @@ msgstr "Contact Disk"
 msgid "Contact point is lower than the stump root — the shaft would extend below the root joint."
 msgstr "Contact point is lower than the stump root — the shaft would extend below the root joint."
 
-#: src/components/settings/PluginsSettingsTab.tsx:898
+#: src/components/settings/PluginsSettingsTab.tsx:937
 msgid "Contents"
 msgstr "Contents"
 
@@ -2461,7 +2461,7 @@ msgstr "Contents"
 #: src/components/layout/FirstRunOnboarding.tsx:287
 #: src/components/layout/TopBar.tsx:1181
 #: src/components/organisms/modals/SceneFileModals.tsx:507
-#: src/components/settings/PluginsSettingsTab.tsx:1120
+#: src/components/settings/PluginsSettingsTab.tsx:1159
 msgid "Continue"
 msgstr "Continue"
 
@@ -2482,7 +2482,7 @@ msgstr "Contoured regions"
 msgid "Contrast"
 msgstr "Contrast"
 
-#: src/app/page.tsx:8466
+#: src/app/page.tsx:8468
 msgid "Converting support data and model metadata"
 msgstr "Converting support data and model metadata"
 
@@ -2545,7 +2545,7 @@ msgstr "Could not reopen this file from cache."
 msgid "Could not restore the model."
 msgstr "Could not restore the model."
 
-#: src/app/page.tsx:4794
+#: src/app/page.tsx:4796
 msgid "Could not save the scene"
 msgstr "Could not save the scene"
 
@@ -2895,7 +2895,7 @@ msgctxt "Undo history entry"
 msgid "Delete models and plates"
 msgstr "Delete models and plates"
 
-#: src/app/page.tsx:11822
+#: src/app/page.tsx:11824
 #: src/components/controls/ModelManagerPanel.tsx:481
 #: src/components/controls/ModelManagerPanel.tsx:768
 #: src/components/controls/ModelManagerPanel.tsx:789
@@ -2956,11 +2956,11 @@ msgid "Delete this model's existing supports and place the new ones"
 msgstr "Delete this model's existing supports and place the new ones"
 
 #. Tooltip on the bin beside the build plate when the plate can go: it removes the bed and the models standing on it. Undo brings them back.
-#: src/app/page.tsx:10968
+#: src/app/page.tsx:10970
 msgid "Delete this plate"
 msgstr "Delete this plate"
 
-#: src/app/page.tsx:11783
+#: src/app/page.tsx:11785
 #: src/components/controls/ModelManagerPanel.tsx:769
 msgid "Delete this plate?"
 msgstr "Delete this plate?"
@@ -2985,7 +2985,7 @@ msgstr "Density & Sizing"
 msgid "Depth Mode"
 msgstr "Depth Mode"
 
-#: src/components/settings/PluginsSettingsTab.tsx:931
+#: src/components/settings/PluginsSettingsTab.tsx:970
 msgid "Description"
 msgstr "Description"
 
@@ -3029,7 +3029,7 @@ msgstr "Detecting model…"
 msgid "Detection"
 msgstr "Detection"
 
-#: src/app/page.tsx:5466
+#: src/app/page.tsx:5468
 msgid "Device still processing"
 msgstr "Device still processing"
 
@@ -3047,7 +3047,7 @@ msgstr "Dial marks pull at 5° / 10° / 45°"
 msgid "Diameter"
 msgstr "Diameter"
 
-#: src/components/settings/PluginsSettingsTab.tsx:1055
+#: src/components/settings/PluginsSettingsTab.tsx:1094
 msgid "Disable Sideloading"
 msgstr "Disable Sideloading"
 
@@ -3102,7 +3102,7 @@ msgstr "Disconnected GitHub account."
 msgid "Discovered Printers"
 msgstr "Discovered Printers"
 
-#: src/app/page.tsx:11879
+#: src/app/page.tsx:11881
 #: src/components/modals/ManifoldWarningModal.tsx:38
 #: src/components/organisms/SystemNotificationStack.tsx:285
 #: src/components/scene/MeshRepairReportModal.tsx:347
@@ -3198,7 +3198,7 @@ msgid "Drag to rotate"
 msgstr "Drag to rotate"
 
 #. placeholder {0}: pendingSideload?.info.manifest.minAppVersion
-#: src/components/settings/PluginsSettingsTab.tsx:1178
+#: src/components/settings/PluginsSettingsTab.tsx:1217
 msgid "DragonFruit {0} or newer"
 msgstr "DragonFruit {0} or newer"
 
@@ -3207,7 +3207,7 @@ msgstr "DragonFruit {0} or newer"
 msgid "DragonFruit app menu"
 msgstr "DragonFruit app menu"
 
-#: src/components/settings/PluginsSettingsTab.tsx:807
+#: src/components/settings/PluginsSettingsTab.tsx:846
 msgid "DragonFruit cannot confirm who published this repository."
 msgstr "DragonFruit cannot confirm who published this repository."
 
@@ -3261,7 +3261,7 @@ msgstr "Drop"
 msgid "Drop supported files"
 msgstr "Drop supported files"
 
-#: src/app/page.tsx:10914
+#: src/app/page.tsx:10916
 msgid "Drop supported files to import"
 msgstr "Drop supported files to import"
 
@@ -3421,7 +3421,7 @@ msgstr "Enable perimeter wall for imported solid rafts."
 msgid "Enable scene autosave"
 msgstr "Enable scene autosave"
 
-#: src/components/settings/PluginsSettingsTab.tsx:1055
+#: src/components/settings/PluginsSettingsTab.tsx:1094
 msgid "Enable Sideloading"
 msgstr "Enable Sideloading"
 
@@ -3450,7 +3450,7 @@ msgstr "Encoding"
 msgid "Engine"
 msgstr "Engine"
 
-#: src/components/settings/PluginsSettingsTab.tsx:975
+#: src/components/settings/PluginsSettingsTab.tsx:1014
 msgid "Enter the passphrase"
 msgstr "Enter the passphrase"
 
@@ -3625,7 +3625,7 @@ msgstr "Export selected curve"
 msgid "Export the selected preset as a JSON file"
 msgstr "Export the selected preset as a JSON file"
 
-#: src/app/page.tsx:11771
+#: src/app/page.tsx:11773
 #: src/features/export/components/ExportPanel.tsx:761
 msgid "Exporting…"
 msgstr "Exporting…"
@@ -3775,7 +3775,7 @@ msgstr "File"
 msgid "File Location"
 msgstr "File Location"
 
-#: src/components/settings/PluginsSettingsTab.tsx:49
+#: src/components/settings/PluginsSettingsTab.tsx:68
 msgid "File-type import"
 msgstr "File-type import"
 
@@ -3988,7 +3988,7 @@ msgstr "Generate supports automatically on scan"
 msgid "Generated file"
 msgstr "Generated file"
 
-#: src/app/page.tsx:11750
+#: src/app/page.tsx:11752
 msgid "Generating Supports"
 msgstr "Generating Supports"
 
@@ -4004,7 +4004,7 @@ msgstr "Get started"
 msgid "Get Started"
 msgstr "Get Started"
 
-#: src/components/settings/PluginsSettingsTab.tsx:634
+#: src/components/settings/PluginsSettingsTab.tsx:673
 msgid "GitHub"
 msgstr "GitHub"
 
@@ -4021,7 +4021,7 @@ msgstr "Give this build plate a name"
 msgid "Go back to the settings dialog"
 msgstr "Go back to the settings dialog"
 
-#: src/app/page.tsx:11871
+#: src/app/page.tsx:11873
 msgid "Go to Settings → 3D Mouse to configure or block it."
 msgstr "Go to Settings → 3D Mouse to configure or block it."
 
@@ -4329,7 +4329,7 @@ msgstr "How the support forest is drawn"
 msgid "How to use Split"
 msgstr "How to use Split"
 
-#: src/components/settings/PluginsSettingsTab.tsx:731
+#: src/components/settings/PluginsSettingsTab.tsx:770
 msgid "https://github.com/owner/repo"
 msgstr "https://github.com/owner/repo"
 
@@ -4357,9 +4357,9 @@ msgstr "I'll be back. (Drop a file and I really will be.)"
 
 #. Sort order for the island list: by island id. One of three narrow buttons (ID / Volume / Layers).
 #: src/components/controls/IslandListCard.tsx:161
-#: src/components/settings/PluginsSettingsTab.tsx:631
-#: src/components/settings/PluginsSettingsTab.tsx:890
-#: src/components/settings/PluginsSettingsTab.tsx:1177
+#: src/components/settings/PluginsSettingsTab.tsx:670
+#: src/components/settings/PluginsSettingsTab.tsx:929
+#: src/components/settings/PluginsSettingsTab.tsx:1216
 msgid "ID"
 msgstr "ID"
 
@@ -4369,7 +4369,7 @@ msgstr "ID"
 msgid "ID {0}"
 msgstr "ID {0}"
 
-#: src/components/settings/PluginsSettingsTab.tsx:886
+#: src/components/settings/PluginsSettingsTab.tsx:925
 msgid "Identity"
 msgstr "Identity"
 
@@ -4423,7 +4423,7 @@ msgstr "Import complete. Click Print Now when ready."
 msgid "Import mesh…"
 msgstr "Import mesh…"
 
-#: src/components/settings/PluginsSettingsTab.tsx:750
+#: src/components/settings/PluginsSettingsTab.tsx:789
 msgid "Import package"
 msgstr "Import package"
 
@@ -4611,40 +4611,40 @@ msgstr "Inspecting Mesh…"
 msgid "Inspecting Meshes…"
 msgstr "Inspecting Meshes…"
 
-#: src/components/settings/PluginsSettingsTab.tsx:742
-#: src/components/settings/PluginsSettingsTab.tsx:854
-#: src/components/settings/PluginsSettingsTab.tsx:1130
+#: src/components/settings/PluginsSettingsTab.tsx:781
+#: src/components/settings/PluginsSettingsTab.tsx:893
+#: src/components/settings/PluginsSettingsTab.tsx:1169
 #: src/features/updater/UpdateCheckerSection.tsx:92
 #: src/features/updater/UpdateCheckerSection.tsx:247
 msgid "Install"
 msgstr "Install"
 
-#: src/components/settings/PluginsSettingsTab.tsx:776
+#: src/components/settings/PluginsSettingsTab.tsx:815
 msgid "Install an unverified plugin?"
 msgstr "Install an unverified plugin?"
 
-#: src/components/settings/PluginsSettingsTab.tsx:800
+#: src/components/settings/PluginsSettingsTab.tsx:839
 msgid "Install anyway"
 msgstr "Install anyway"
 
-#: src/components/settings/PluginsSettingsTab.tsx:720
+#: src/components/settings/PluginsSettingsTab.tsx:759
 msgid "Install profile pack"
 msgstr "Install profile pack"
 
-#: src/components/settings/PluginsSettingsTab.tsx:1092
+#: src/components/settings/PluginsSettingsTab.tsx:1131
 msgid "Install sideloaded plugin"
 msgstr "Install sideloaded plugin"
 
-#: src/components/settings/PluginsSettingsTab.tsx:831
-#: src/components/settings/PluginsSettingsTab.tsx:1093
+#: src/components/settings/PluginsSettingsTab.tsx:870
+#: src/components/settings/PluginsSettingsTab.tsx:1132
 msgid "Install this plugin?"
 msgstr "Install this plugin?"
 
-#: src/components/settings/PluginsSettingsTab.tsx:775
+#: src/components/settings/PluginsSettingsTab.tsx:814
 msgid "Install unverified plugin"
 msgstr "Install unverified plugin"
 
-#: src/components/settings/PluginsSettingsTab.tsx:1251
+#: src/components/settings/PluginsSettingsTab.tsx:1290
 msgid "Installed plugins"
 msgstr "Installed plugins"
 
@@ -4652,11 +4652,11 @@ msgstr "Installed plugins"
 msgid "Installing Update…"
 msgstr "Installing Update…"
 
-#: src/components/settings/PluginsSettingsTab.tsx:742
-#: src/components/settings/PluginsSettingsTab.tsx:800
-#: src/components/settings/PluginsSettingsTab.tsx:854
-#: src/components/settings/PluginsSettingsTab.tsx:997
-#: src/components/settings/PluginsSettingsTab.tsx:1130
+#: src/components/settings/PluginsSettingsTab.tsx:781
+#: src/components/settings/PluginsSettingsTab.tsx:839
+#: src/components/settings/PluginsSettingsTab.tsx:893
+#: src/components/settings/PluginsSettingsTab.tsx:1036
+#: src/components/settings/PluginsSettingsTab.tsx:1169
 msgid "Installing…"
 msgstr "Installing…"
 
@@ -4823,7 +4823,7 @@ msgstr "Keep the preset"
 msgid "Keeping the largest pieces"
 msgstr "Keeping the largest pieces"
 
-#: src/components/settings/PluginsSettingsTab.tsx:1159
+#: src/components/settings/PluginsSettingsTab.tsx:1198
 msgid "Key"
 msgstr "Key"
 
@@ -4971,11 +4971,11 @@ msgstr "Layers:"
 msgid "Layout Mode"
 msgstr "Layout Mode"
 
-#: src/app/page.tsx:11889
+#: src/app/page.tsx:11891
 msgid "Leaf Fanning Active: Click model to sprout leaf"
 msgstr "Leaf Fanning Active: Click model to sprout leaf"
 
-#: src/app/page.tsx:11890
+#: src/app/page.tsx:11892
 msgid "Leaf Fanning: Click a support shaft to lock anchor knot"
 msgstr "Leaf Fanning: Click a support shaft to lock anchor knot"
 
@@ -5005,11 +5005,11 @@ msgstr "Legend"
 msgid "Length"
 msgstr "Length"
 
-#: src/app/page.tsx:8506
+#: src/app/page.tsx:8508
 msgid "Letting DragonFruit finish its startup animation before loading your scene."
 msgstr "Letting DragonFruit finish its startup animation before loading your scene."
 
-#: src/components/settings/PluginsSettingsTab.tsx:638
+#: src/components/settings/PluginsSettingsTab.tsx:677
 msgid "Liability accepted"
 msgstr "Liability accepted"
 
@@ -5140,7 +5140,7 @@ msgstr "Loading materials from selected printer…"
 msgid "Loading Mesh Files…"
 msgstr "Loading Mesh Files…"
 
-#: src/app/page.tsx:8456
+#: src/app/page.tsx:8458
 #: src/features/scene/sceneImportMessages.ts:23
 msgid "Loading Mesh…"
 msgstr "Loading Mesh…"
@@ -5153,9 +5153,9 @@ msgstr "Loading recent print files…"
 msgid "Loading remote material…"
 msgstr "Loading remote material…"
 
-#: src/app/page.tsx:4675
-#: src/app/page.tsx:8456
-#: src/app/page.tsx:8465
+#: src/app/page.tsx:4677
+#: src/app/page.tsx:8458
+#: src/app/page.tsx:8467
 msgid "Loading Scene…"
 msgstr "Loading Scene…"
 
@@ -5314,7 +5314,7 @@ msgstr "Managed by Flatpak"
 msgid "Managed Printers"
 msgstr "Managed Printers"
 
-#: src/components/settings/PluginsSettingsTab.tsx:915
+#: src/components/settings/PluginsSettingsTab.tsx:954
 msgid "Manifest"
 msgstr "Manifest"
 
@@ -5787,11 +5787,11 @@ msgstr "Native"
 msgid "Need at least 2 visible models to arrange"
 msgstr "Need at least 2 visible models to arrange"
 
-#: src/components/settings/PluginsSettingsTab.tsx:1178
+#: src/components/settings/PluginsSettingsTab.tsx:1217
 msgid "Needs"
 msgstr "Needs"
 
-#: src/components/settings/PluginsSettingsTab.tsx:48
+#: src/components/settings/PluginsSettingsTab.tsx:67
 msgid "Network operations"
 msgstr "Network operations"
 
@@ -5834,7 +5834,7 @@ msgstr "Never"
 msgid "New Curve"
 msgstr "New Curve"
 
-#: src/app/page.tsx:11870
+#: src/app/page.tsx:11872
 msgid "New input device detected."
 msgstr "New input device detected."
 
@@ -5869,7 +5869,7 @@ msgstr "NME {edgesBefore} → {edgesAfter}"
 
 #: src/components/scene/MeshRepairReportModal.tsx:765
 #: src/components/scene/MeshRepairReportModal.tsx:806
-#: src/components/settings/PluginsSettingsTab.tsx:1179
+#: src/components/settings/PluginsSettingsTab.tsx:1218
 msgid "no"
 msgstr "no"
 
@@ -5913,8 +5913,8 @@ msgstr "No Brace"
 msgid "No braces to remove on this model."
 msgstr "No braces to remove on this model."
 
-#: src/app/page.tsx:5511
-#: src/app/page.tsx:5517
+#: src/app/page.tsx:5513
+#: src/app/page.tsx:5519
 msgid "No connected printer is available for upload."
 msgstr "No connected printer is available for upload."
 
@@ -6002,8 +6002,8 @@ msgstr "No models loaded"
 msgid "No networked printers with valid IP addresses were found in this fleet"
 msgstr "No networked printers with valid IP addresses were found in this fleet"
 
-#: src/app/page.tsx:4227
-#: src/app/page.tsx:4251
+#: src/app/page.tsx:4229
+#: src/app/page.tsx:4253
 msgid "No online printer is available for upload."
 msgstr "No online printer is available for upload."
 
@@ -6015,11 +6015,11 @@ msgstr "No preview available yet."
 msgid "No printer connected"
 msgstr "No printer connected"
 
-#: src/app/page.tsx:5569
+#: src/app/page.tsx:5571
 msgid "No printer IP address available for Print Now."
 msgstr "No printer IP address available for Print Now."
 
-#: src/app/page.tsx:5254
+#: src/app/page.tsx:5256
 msgid "No printer IP address available for send operation."
 msgstr "No printer IP address available for send operation."
 
@@ -6058,7 +6058,7 @@ msgstr "No recent files"
 msgid "No registered scene import handler for {extension}."
 msgstr "No registered scene import handler for {extension}."
 
-#: src/app/page.tsx:4125
+#: src/app/page.tsx:4127
 msgid "No resin selected"
 msgstr "No resin selected"
 
@@ -6205,7 +6205,7 @@ msgstr "OFF"
 msgid "OFF makes imported root diameter match trunk diameter."
 msgstr "OFF makes imported root diameter match trunk diameter."
 
-#: src/components/settings/PluginsSettingsTab.tsx:665
+#: src/components/settings/PluginsSettingsTab.tsx:704
 msgid "Officially verified by ORA"
 msgstr "Officially verified by ORA"
 
@@ -6298,7 +6298,7 @@ msgstr "On, models stay this far above the build plate after every move or rotat
 msgid "Onboarding"
 msgstr "Onboarding"
 
-#: src/components/settings/PluginsSettingsTab.tsx:1070
+#: src/components/settings/PluginsSettingsTab.tsx:1109
 msgid "Once imported it runs with your permissions: it can read any file you can read, open network connections, and crash the app if it misbehaves."
 msgstr "Once imported it runs with your permissions: it can read any file you can read, open network connections, and crash the app if it misbehaves."
 
@@ -6323,7 +6323,7 @@ msgstr "One file per model"
 msgid "One file per plate"
 msgstr "One file per plate"
 
-#: src/app/page.tsx:8166
+#: src/app/page.tsx:8168
 msgid "One or more models have hole punches that haven’t been applied. Hole punches must be baked into the geometry before slicing or they will not appear in the output."
 msgstr "One or more models have hole punches that haven’t been applied. Hole punches must be baked into the geometry before slicing or they will not appear in the output."
 
@@ -6432,7 +6432,7 @@ msgstr "Open saved file location"
 msgid "Open scene…"
 msgstr "Open scene…"
 
-#: src/app/page.tsx:8157
+#: src/app/page.tsx:8159
 msgid "Open the Hollow tool to apply the hollowing, or continue and supports will follow the current mesh."
 msgstr "Open the Hollow tool to apply the hollowing, or continue and supports will follow the current mesh."
 
@@ -6445,7 +6445,7 @@ msgstr "Opening"
 msgid "Opening in UVTools"
 msgstr "Opening in UVTools"
 
-#: src/app/page.tsx:8503
+#: src/app/page.tsx:8505
 msgid "Opening scene…"
 msgstr "Opening scene…"
 
@@ -6470,11 +6470,11 @@ msgstr "Orient flat against plate"
 msgid "Orient Model"
 msgstr "Orient Model"
 
-#: src/app/page.tsx:11761
+#: src/app/page.tsx:11763
 msgid "Orienting Model"
 msgstr "Orienting Model"
 
-#: src/components/settings/PluginsSettingsTab.tsx:907
+#: src/components/settings/PluginsSettingsTab.tsx:946
 msgid "Origin"
 msgstr "Origin"
 
@@ -6499,7 +6499,7 @@ msgstr "Outer"
 msgid "Output"
 msgstr "Output"
 
-#: src/components/settings/PluginsSettingsTab.tsx:1187
+#: src/components/settings/PluginsSettingsTab.tsx:1226
 msgid "Output formats"
 msgstr "Output formats"
 
@@ -6565,16 +6565,16 @@ msgstr "Overwrite preset"
 msgid "Overwrite the preset <0>{0}</0> with the current scene settings?"
 msgstr "Overwrite the preset <0>{0}</0> with the current scene settings?"
 
-#: src/components/settings/PluginsSettingsTab.tsx:1174
+#: src/components/settings/PluginsSettingsTab.tsx:1213
 msgid "Package"
 msgstr "Package"
 
-#: src/components/settings/PluginsSettingsTab.tsx:974
-#: src/components/settings/PluginsSettingsTab.tsx:1019
+#: src/components/settings/PluginsSettingsTab.tsx:1013
+#: src/components/settings/PluginsSettingsTab.tsx:1058
 msgid "Package passphrase"
 msgstr "Package passphrase"
 
-#: src/components/settings/PluginsSettingsTab.tsx:1062
+#: src/components/settings/PluginsSettingsTab.tsx:1101
 msgid "Packages you import run with your permissions and can read any file you can read, open network connections, and crash the app if they misbehave. Disabling this stops new imports; packages already installed stay on disk."
 msgstr "Packages you import run with your permissions and can read any file you can read, open network connections, and crash the app if they misbehave. Disabling this stops new imports; packages already installed stay on disk."
 
@@ -6613,7 +6613,7 @@ msgstr "Parts of this mesh are not closed — edges are left open, faces cross t
 msgid "Passes that run after placement — how much one trunk may carry, and the coverage the gap-filler must reach"
 msgstr "Passes that run after placement — how much one trunk may carry, and the coverage the gap-filler must reach"
 
-#: src/components/settings/PluginsSettingsTab.tsx:42
+#: src/components/settings/PluginsSettingsTab.tsx:61
 msgid "Passphrase for {pluginName}"
 msgstr "Passphrase for {pluginName}"
 
@@ -6735,7 +6735,7 @@ msgstr "Placement Anchor"
 msgid "Placement message."
 msgstr "Placement message."
 
-#: src/app/page.tsx:11751
+#: src/app/page.tsx:11753
 msgid "Placing and bracing supports…"
 msgstr "Placing and bracing supports…"
 
@@ -6839,11 +6839,11 @@ msgstr "Plugin import experimental warning"
 msgid "Plugin Import is Experimental"
 msgstr "Plugin Import is Experimental"
 
-#: src/components/settings/PluginsSettingsTab.tsx:733
+#: src/components/settings/PluginsSettingsTab.tsx:772
 msgid "Plugin repository URL"
 msgstr "Plugin repository URL"
 
-#: src/components/settings/PluginsSettingsTab.tsx:710
+#: src/components/settings/PluginsSettingsTab.tsx:749
 #: src/components/settings/SettingsModal.tsx:1265
 msgid "Plugins"
 msgstr "Plugins"
@@ -6986,8 +6986,8 @@ msgstr "Print readiness confirmation"
 msgid "Print start failed: {reason}"
 msgstr "Print start failed: {reason}"
 
-#: src/app/page.tsx:4295
-#: src/app/page.tsx:5589
+#: src/app/page.tsx:4297
+#: src/app/page.tsx:5591
 msgid "Print started"
 msgstr "Print started"
 
@@ -7121,7 +7121,7 @@ msgstr "Private GitHub Backups"
 msgid "Private repo ready"
 msgstr "Private repo ready"
 
-#: src/app/page.tsx:4297
+#: src/app/page.tsx:4299
 msgid "Processing"
 msgstr "Processing"
 
@@ -7130,8 +7130,8 @@ msgid "Processing {count, plural, one {# model} other {# models}}"
 msgstr "Processing {count, plural, one {# model} other {# models}}"
 
 #: src/app/page.tsx:1881
-#: src/app/page.tsx:11741
-#: src/app/page.tsx:11753
+#: src/app/page.tsx:11743
+#: src/app/page.tsx:11755
 msgid "Processing 1 model"
 msgstr "Processing 1 model"
 
@@ -7143,11 +7143,11 @@ msgstr "Processing import…"
 msgid "Processing on {backend}… elapsed {elapsed}"
 msgstr "Processing on {backend}… elapsed {elapsed}"
 
-#: src/app/page.tsx:4292
+#: src/app/page.tsx:4294
 msgid "Processing on device"
 msgstr "Processing on device"
 
-#: src/app/page.tsx:5363
+#: src/app/page.tsx:5365
 msgid "Processing on device…"
 msgstr "Processing on device…"
 
@@ -7155,7 +7155,7 @@ msgstr "Processing on device…"
 msgid "Profile"
 msgstr "Profile"
 
-#: src/components/settings/PluginsSettingsTab.tsx:712
+#: src/components/settings/PluginsSettingsTab.tsx:751
 msgid "Profile packs add presets and material profiles. A sideloaded package adds code and needs a publisher you trust."
 msgstr "Profile packs add presets and material profiles. A sideloaded package adds code and needs a publisher you trust."
 
@@ -7176,8 +7176,8 @@ msgstr "Projected area each support carries — smaller = more, tighter supports
 msgid "Projection and navigation behavior"
 msgstr "Projection and navigation behavior"
 
-#: src/components/settings/PluginsSettingsTab.tsx:642
-#: src/components/settings/PluginsSettingsTab.tsx:1154
+#: src/components/settings/PluginsSettingsTab.tsx:681
+#: src/components/settings/PluginsSettingsTab.tsx:1193
 msgid "Publisher"
 msgstr "Publisher"
 
@@ -7242,7 +7242,7 @@ msgstr "Re-Slice Now"
 msgid "Re-slice required after profile change"
 msgstr "Re-slice required after profile change"
 
-#: src/app/page.tsx:4676
+#: src/app/page.tsx:4678
 msgid "Reading autosaved scene…"
 msgstr "Reading autosaved scene…"
 
@@ -7255,8 +7255,8 @@ msgstr "Ready"
 msgid "Ready for your next adventure?"
 msgstr "Ready for your next adventure?"
 
-#: src/app/page.tsx:4293
-#: src/app/page.tsx:5458
+#: src/app/page.tsx:4295
+#: src/app/page.tsx:5460
 msgid "Ready to print"
 msgstr "Ready to print"
 
@@ -7273,7 +7273,7 @@ msgstr "Rebuilding the surface"
 msgid "Rebuilding the surface into a solid"
 msgstr "Rebuilding the surface into a solid"
 
-#: src/app/page.tsx:11619
+#: src/app/page.tsx:11621
 msgid "Rebuilding the surface."
 msgstr "Rebuilding the surface."
 
@@ -7383,6 +7383,26 @@ msgstr "Release {releaseDate}"
 msgid "Releases"
 msgstr "Releases"
 
+#: src/components/settings/PluginsSettingsTab.tsx:1333
+msgid "Reload DragonFruit now"
+msgstr "Reload DragonFruit now"
+
+#: src/components/settings/PluginsSettingsTab.tsx:50
+msgid "Reload Now ({seconds}s)"
+msgstr "Reload Now ({seconds}s)"
+
+#: src/components/settings/PluginsSettingsTab.tsx:1326
+msgid "Reload required"
+msgstr "Reload required"
+
+#: src/components/settings/PluginsSettingsTab.tsx:1327
+msgid "Reload Required"
+msgstr "Reload Required"
+
+#: src/components/settings/PluginsSettingsTab.tsx:1344
+msgid "Reloading loads an installed plugin's code, or releases a removed one's formats, network mode and file types. Unsaved changes to the current scene are lost."
+msgstr "Reloading loads an installed plugin's code, or releases a removed one's formats, network mode and file types. Unsaved changes to the current scene are lost."
+
 #: src/components/organisms/modals/PrintingModals.tsx:1022
 msgid "Remaining"
 msgstr "Remaining"
@@ -7392,8 +7412,8 @@ msgstr "Remaining"
 msgid "Remember window positions"
 msgstr "Remember window positions"
 
-#: src/app/page.tsx:11618
 #: src/app/page.tsx:11620
+#: src/app/page.tsx:11622
 #: src/components/modals/TetrahedralRemeshConfirmModal.tsx:49
 #: src/components/ui/EditorContextMenu.tsx:121
 msgid "Remesh"
@@ -7417,7 +7437,7 @@ msgstr "Remesh failed: {message}"
 msgid "Remesh needs the desktop app."
 msgstr "Remesh needs the desktop app."
 
-#: src/app/page.tsx:11621
+#: src/app/page.tsx:11623
 msgid "Remesh progress"
 msgstr "Remesh progress"
 
@@ -7501,15 +7521,15 @@ msgctxt "Undo history entry"
 msgid "Remove leaf"
 msgstr "Remove leaf"
 
-#: src/components/settings/PluginsSettingsTab.tsx:670
-#: src/components/settings/PluginsSettingsTab.tsx:674
-#: src/components/settings/PluginsSettingsTab.tsx:942
-#: src/components/settings/PluginsSettingsTab.tsx:962
-#: src/components/settings/PluginsSettingsTab.tsx:1232
+#: src/components/settings/PluginsSettingsTab.tsx:709
+#: src/components/settings/PluginsSettingsTab.tsx:713
+#: src/components/settings/PluginsSettingsTab.tsx:981
+#: src/components/settings/PluginsSettingsTab.tsx:1001
+#: src/components/settings/PluginsSettingsTab.tsx:1271
 msgid "Remove plugin"
 msgstr "Remove plugin"
 
-#: src/components/settings/PluginsSettingsTab.tsx:943
+#: src/components/settings/PluginsSettingsTab.tsx:982
 msgid "Remove Plugin?"
 msgstr "Remove Plugin?"
 
@@ -7517,7 +7537,7 @@ msgstr "Remove Plugin?"
 msgid "Remove saved printer"
 msgstr "Remove saved printer"
 
-#: src/components/settings/PluginsSettingsTab.tsx:1212
+#: src/components/settings/PluginsSettingsTab.tsx:1251
 msgid "Remove sideloaded plugin"
 msgstr "Remove sideloaded plugin"
 
@@ -7539,7 +7559,7 @@ msgstr "Remove supported clusters"
 msgid "Remove the loop you're editing."
 msgstr "Remove the loop you're editing."
 
-#: src/components/settings/PluginsSettingsTab.tsx:1213
+#: src/components/settings/PluginsSettingsTab.tsx:1252
 msgid "Remove this plugin?"
 msgstr "Remove this plugin?"
 
@@ -7748,7 +7768,7 @@ msgid "Replace trunk"
 msgstr "Replace trunk"
 
 #: src/components/settings/BackupsSettingsTab.tsx:1091
-#: src/components/settings/PluginsSettingsTab.tsx:911
+#: src/components/settings/PluginsSettingsTab.tsx:950
 msgid "Repository"
 msgstr "Repository"
 
@@ -7800,7 +7820,7 @@ msgstr "Reset hollowing"
 msgid "Reset Layout"
 msgstr "Reset Layout"
 
-#: src/app/page.tsx:9210
+#: src/app/page.tsx:9212
 #: src/components/controls/TransformControls.tsx:442
 msgid "Reset Rotation"
 msgstr "Reset Rotation"
@@ -7809,7 +7829,7 @@ msgstr "Reset Rotation"
 msgid "Reset saved window layout"
 msgstr "Reset saved window layout"
 
-#: src/app/page.tsx:9210
+#: src/app/page.tsx:9212
 #: src/components/controls/TransformControls.tsx:592
 msgid "Reset Scale"
 msgstr "Reset Scale"
@@ -7857,7 +7877,7 @@ msgstr "Resolution"
 msgid "Resolved {resolvedSelfIntersections, plural, one {# self-intersection} other {# self-intersections}}."
 msgstr "Resolved {resolvedSelfIntersections, plural, one {# self-intersection} other {# self-intersections}}."
 
-#: src/app/page.tsx:11677
+#: src/app/page.tsx:11679
 msgid "Resolving the surface into a solid."
 msgstr "Resolving the surface into a solid."
 
@@ -7893,8 +7913,8 @@ msgstr "Restore Defaults"
 msgid "Restore Factory Defaults?"
 msgstr "Restore Factory Defaults?"
 
-#: src/app/page.tsx:4707
-#: src/app/page.tsx:4718
+#: src/app/page.tsx:4709
+#: src/app/page.tsx:4720
 msgid "Restore Failed"
 msgstr "Restore Failed"
 
@@ -7941,7 +7961,7 @@ msgstr "Retry Upload"
 msgid "Revert Changes"
 msgstr "Revert Changes"
 
-#: src/components/settings/PluginsSettingsTab.tsx:830
+#: src/components/settings/PluginsSettingsTab.tsx:869
 msgid "Review plugin before install"
 msgstr "Review plugin before install"
 
@@ -8240,7 +8260,7 @@ msgstr "Scanned {modelName}."
 msgid "Scanning for Supports…"
 msgstr "Scanning for Supports…"
 
-#: src/app/page.tsx:11751
+#: src/app/page.tsx:11753
 msgid "Scanning islands & minima…"
 msgstr "Scanning islands & minima…"
 
@@ -8301,7 +8321,7 @@ msgstr "Scene import hollowing decision"
 msgid "Scene import placement decision"
 msgstr "Scene import placement decision"
 
-#: src/app/page.tsx:4786
+#: src/app/page.tsx:4788
 msgid "Scene is too large to save"
 msgstr "Scene is too large to save"
 
@@ -8326,7 +8346,7 @@ msgstr "Scene was hollowed before export"
 msgid "Sculpt and smooth surface"
 msgstr "Sculpt and smooth surface"
 
-#: src/components/settings/PluginsSettingsTab.tsx:1179
+#: src/components/settings/PluginsSettingsTab.tsx:1218
 msgid "Sealed"
 msgstr "Sealed"
 
@@ -8399,7 +8419,7 @@ msgstr "Select a LocalStorage key from the left to view its value."
 msgid "Select a matching material during import instead."
 msgstr "Select a matching material during import instead."
 
-#: src/app/page.tsx:5258
+#: src/app/page.tsx:5260
 msgid "Select a matching material profile before upload."
 msgstr "Select a matching material profile before upload."
 
@@ -8576,7 +8596,7 @@ msgstr "Send generated print file to selected printer"
 msgid "Send sliced files to UVTools for analysis"
 msgstr "Send sliced files to UVTools for analysis"
 
-#: src/app/page.tsx:4137
+#: src/app/page.tsx:4139
 #: src/features/printing/components/PrintingPanel.tsx:66
 msgid "Send to Printer"
 msgstr "Send to Printer"
@@ -8649,7 +8669,7 @@ msgstr "Set up private backups"
 msgid "Settings"
 msgstr "Settings"
 
-#: src/components/settings/PluginsSettingsTab.tsx:920
+#: src/components/settings/PluginsSettingsTab.tsx:959
 msgid "SHA-256"
 msgstr "SHA-256"
 
@@ -8803,8 +8823,8 @@ msgstr "Shows \"Cannot Place Support\" and \"Stability Warning\" tooltips."
 msgid "Shows the Voxels, Minima, Coincident, and Overhangs layer toggles."
 msgstr "Shows the Voxels, Minima, Coincident, and Overhangs layer toggles."
 
-#: src/app/page.tsx:11676
 #: src/app/page.tsx:11678
+#: src/app/page.tsx:11680
 #: src/components/modals/ShrinkWrapConfirmModal.tsx:49
 #: src/components/ui/EditorContextMenu.tsx:122
 msgid "Shrink-Wrap"
@@ -8827,7 +8847,7 @@ msgstr "Shrink-Wrap failed: {message}"
 msgid "Shrink-Wrap needs the desktop app."
 msgstr "Shrink-Wrap needs the desktop app."
 
-#: src/app/page.tsx:11679
+#: src/app/page.tsx:11681
 msgid "Shrink-Wrap progress"
 msgstr "Shrink-Wrap progress"
 
@@ -8839,22 +8859,22 @@ msgstr "Shrink-Wrap this model?"
 msgid "Shrink-Wrapped {inputTriangles} → {outputTriangles} triangles in {elapsed}."
 msgstr "Shrink-Wrapped {inputTriangles} → {outputTriangles} triangles in {elapsed}."
 
-#: src/components/settings/PluginsSettingsTab.tsx:634
+#: src/components/settings/PluginsSettingsTab.tsx:673
 msgid "Sideloaded"
 msgstr "Sideloaded"
 
-#: src/components/settings/PluginsSettingsTab.tsx:695
-#: src/components/settings/PluginsSettingsTab.tsx:696
-#: src/components/settings/PluginsSettingsTab.tsx:1030
-#: src/components/settings/PluginsSettingsTab.tsx:1032
+#: src/components/settings/PluginsSettingsTab.tsx:734
+#: src/components/settings/PluginsSettingsTab.tsx:735
+#: src/components/settings/PluginsSettingsTab.tsx:1069
+#: src/components/settings/PluginsSettingsTab.tsx:1071
 msgid "Sideloaded packages"
 msgstr "Sideloaded packages"
 
-#: src/components/settings/PluginsSettingsTab.tsx:1031
+#: src/components/settings/PluginsSettingsTab.tsx:1070
 msgid "Sideloading is on"
 msgstr "Sideloading is on"
 
-#: src/components/settings/PluginsSettingsTab.tsx:1084
+#: src/components/settings/PluginsSettingsTab.tsx:1123
 msgid "Signatures prove who built the package, not that it is safe. Only enable this for a publisher you trust."
 msgstr "Signatures prove who built the package, not that it is safe. Only enable this for a publisher you trust."
 
@@ -8932,7 +8952,7 @@ msgstr "Slice to File"
 msgid "Sliced Layers"
 msgstr "Sliced Layers"
 
-#: src/components/settings/PluginsSettingsTab.tsx:47
+#: src/components/settings/PluginsSettingsTab.tsx:66
 msgid "Slicer encoder"
 msgstr "Slicer encoder"
 
@@ -8943,7 +8963,7 @@ msgstr "Slicer encoder"
 msgid "Slicing"
 msgstr "Slicing"
 
-#: src/app/page.tsx:11739
+#: src/app/page.tsx:11741
 msgid "Slicing and analysis in progress..."
 msgstr "Slicing and analysis in progress..."
 
@@ -9051,20 +9071,20 @@ msgstr "Solid"
 msgid "Solid Areas"
 msgstr "Solid Areas"
 
-#: src/app/page.tsx:8144
-#: src/app/page.tsx:8164
+#: src/app/page.tsx:8146
+#: src/app/page.tsx:8166
 msgid "Some models have unapplied hole punches"
 msgstr "Some models have unapplied hole punches"
 
-#: src/app/page.tsx:8143
+#: src/app/page.tsx:8145
 msgid "Some models have unapplied hole punches and hollowing"
 msgstr "Some models have unapplied hole punches and hollowing"
 
-#: src/app/page.tsx:8144
+#: src/app/page.tsx:8146
 msgid "Some models have unapplied hollowing"
 msgstr "Some models have unapplied hollowing"
 
-#: src/components/settings/PluginsSettingsTab.tsx:633
+#: src/components/settings/PluginsSettingsTab.tsx:672
 msgid "Source"
 msgstr "Source"
 
@@ -9179,8 +9199,8 @@ msgstr "Start plate #{plateId}"
 msgid "Start Print"
 msgstr "Start Print"
 
-#: src/app/page.tsx:5596
-#: src/app/page.tsx:5602
+#: src/app/page.tsx:5598
+#: src/app/page.tsx:5604
 msgid "Start print failed"
 msgstr "Start print failed"
 
@@ -9209,11 +9229,11 @@ msgstr "Start using DragonFruit"
 msgid "Starting"
 msgstr "Starting"
 
-#: src/app/page.tsx:4294
+#: src/app/page.tsx:4296
 msgid "Starting print"
 msgstr "Starting print"
 
-#: src/app/page.tsx:5574
+#: src/app/page.tsx:5576
 #: src/components/organisms/modals/PrintingModals.tsx:1113
 msgid "Starting print…"
 msgstr "Starting print…"
@@ -9350,15 +9370,15 @@ msgstr "Supported: {extensions}"
 msgid "Supports"
 msgstr "Supports"
 
-#: src/app/page.tsx:8146
+#: src/app/page.tsx:8148
 msgid "Supports are generated against the mesh as it stands. Hole punches are only baked in later, so a support generated now can land inside a hole that does not exist yet."
 msgstr "Supports are generated against the mesh as it stands. Hole punches are only baked in later, so a support generated now can land inside a hole that does not exist yet."
 
-#: src/app/page.tsx:8149
+#: src/app/page.tsx:8151
 msgid "Supports are generated against the mesh as it stands. Holes and hollowing are only baked in later, so a support generated now can land inside a hole or a cavity that does not exist yet."
 msgstr "Supports are generated against the mesh as it stands. Holes and hollowing are only baked in later, so a support generated now can land inside a hole or a cavity that does not exist yet."
 
-#: src/app/page.tsx:8148
+#: src/app/page.tsx:8150
 msgid "Supports are generated against the mesh as it stands. Hollowing is only baked in later, so a support generated now can land inside a cavity that does not exist yet."
 msgstr "Supports are generated against the mesh as it stands. Hollowing is only baked in later, so a support generated now can land inside a cavity that does not exist yet."
 
@@ -9390,7 +9410,7 @@ msgstr "Suspiciously empty in here."
 msgid "Swap which cut half receives the tenon and which receives the mortise."
 msgstr "Swap which cut half receives the tenon and which receives the mortise."
 
-#: src/app/page.tsx:11762
+#: src/app/page.tsx:11764
 msgid "Sweeping orientations…"
 msgstr "Sweeping orientations…"
 
@@ -9512,12 +9532,12 @@ msgstr "Tension"
 msgid "Territory Voxels"
 msgstr "Territory Voxels"
 
-#: src/app/page.tsx:4720
+#: src/app/page.tsx:4722
 msgid "The autosave recovery file could not be found."
 msgstr "The autosave recovery file could not be found."
 
-#: src/app/page.tsx:4708
-#: src/app/page.tsx:4721
+#: src/app/page.tsx:4710
+#: src/app/page.tsx:4723
 msgid "The autosaved recovery file is corrupted or unreadable."
 msgstr "The autosaved recovery file is corrupted or unreadable."
 
@@ -9561,7 +9581,7 @@ msgstr "The hole carved in the other half."
 msgid "The inputs and factors the last run sized the supports with"
 msgstr "The inputs and factors the last run sized the supports with"
 
-#: src/app/page.tsx:11830
+#: src/app/page.tsx:11832
 msgid "The models on this plate are deleted with it."
 msgstr "The models on this plate are deleted with it."
 
@@ -9578,17 +9598,21 @@ msgstr "The mortise's silhouette lines."
 msgid "The Open Resin Alliance and its contributors accept no responsibility or liability for any loss, damage, or data loss arising from the use of experimental features."
 msgstr "The Open Resin Alliance and its contributors accept no responsibility or liability for any loss, damage, or data loss arising from the use of experimental features."
 
-#: src/components/settings/PluginsSettingsTab.tsx:1003
+#: src/components/settings/PluginsSettingsTab.tsx:1042
 msgid "The package is sealed. Enter the key your vendor gave you; it is kept locally so the plugin can load later."
 msgstr "The package is sealed. Enter the key your vendor gave you; it is kept locally so the plugin can load later."
 
-#: src/components/settings/PluginsSettingsTab.tsx:1238
+#: src/components/settings/PluginsSettingsTab.tsx:1277
 msgid "The package, its extracted payload and its stored key are deleted. Re-importing needs the passphrase again."
 msgstr "The package, its extracted payload and its stored key are deleted. Re-importing needs the passphrase again."
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:80
 msgid "The passes after placement"
 msgstr "The passes after placement"
+
+#: src/components/settings/PluginsSettingsTab.tsx:1328
+msgid "The plugin list changed. DragonFruit has to reload to apply it."
+msgstr "The plugin list changed. DragonFruit has to reload to apply it."
 
 #: src/features/organicCut/OrganicCutColorsSection.tsx:31
 msgid "The point being dragged."
@@ -9635,8 +9659,8 @@ msgstr "the printer this scene was built for"
 msgid "The rebuilt surface will replace this model in your current scene. A model that cannot be resolved is left untouched, and you can undo this afterwards."
 msgstr "The rebuilt surface will replace this model in your current scene. A model that cannot be resolved is left untouched, and you can undo this afterwards."
 
-#: src/app/page.tsx:11630
-#: src/app/page.tsx:11688
+#: src/app/page.tsx:11632
+#: src/app/page.tsx:11690
 #: src/components/modals/TetrahedralRemeshConfirmModal.tsx:67
 msgid "The rebuilt surface will replace this model in your current scene. Large models take longer, and some models cannot be rebuilt at all and are left untouched. You can undo this afterwards."
 msgstr "The rebuilt surface will replace this model in your current scene. Large models take longer, and some models cannot be rebuilt at all and are left untouched. You can undo this afterwards."
@@ -9661,7 +9685,7 @@ msgstr "The resin is ready. Are you?"
 msgid "The saved run policy the settings below are. Selecting one applies it immediately; the rest of the dialog stays staged until you save."
 msgstr "The saved run policy the settings below are. Selecting one applies it immediately; the rest of the dialog stays staged until you save."
 
-#: src/app/page.tsx:4709
+#: src/app/page.tsx:4711
 msgid "The scene importer rejected or could not parse the autosave data."
 msgstr "The scene importer rejected or could not parse the autosave data."
 
@@ -9793,7 +9817,7 @@ msgstr "This model has severe mesh issues and is likely to need heavy repair."
 msgid "This model is already added."
 msgstr "This model is already added."
 
-#: src/components/settings/PluginsSettingsTab.tsx:1206
+#: src/components/settings/PluginsSettingsTab.tsx:1245
 msgid "This package runs native code with your user account. It can read your files and open network connections. Only install packages from a vendor you trust."
 msgstr "This package runs native code with your user account. It can read your files and open network connections. Only install packages from a vendor you trust."
 
@@ -9809,7 +9833,7 @@ msgstr "This printer has no setup options."
 msgid "This rebuilds the model's surface, keeping fine detail."
 msgstr "This rebuilds the model's surface, keeping fine detail."
 
-#: src/components/settings/PluginsSettingsTab.tsx:968
+#: src/components/settings/PluginsSettingsTab.tsx:1007
 msgid "This removes the plugin from your profile library."
 msgstr "This removes the plugin from your profile library."
 
@@ -9988,7 +10012,7 @@ msgstr "Triangles:"
 msgid "Trunk Diameter"
 msgstr "Trunk Diameter"
 
-#: src/components/settings/PluginsSettingsTab.tsx:819
+#: src/components/settings/PluginsSettingsTab.tsx:858
 msgid "Trusted sources"
 msgstr "Trusted sources"
 
@@ -10004,11 +10028,11 @@ msgstr "Turning faces outward"
 msgid "UI & Theme"
 msgstr "UI & Theme"
 
-#: src/app/page.tsx:8151
+#: src/app/page.tsx:8153
 msgid "Unapplied Changes"
 msgstr "Unapplied Changes"
 
-#: src/app/page.tsx:8163
+#: src/app/page.tsx:8165
 msgid "Unapplied Holes"
 msgstr "Unapplied Holes"
 
@@ -10017,7 +10041,7 @@ msgstr "Unapplied Holes"
 msgid "Unavailable"
 msgstr "Unavailable"
 
-#: src/app/page.tsx:11786
+#: src/app/page.tsx:11788
 msgid "Undo brings the models back"
 msgstr "Undo brings the models back"
 
@@ -10057,8 +10081,8 @@ msgstr "Unknown"
 msgid "Unknown brand"
 msgstr "Unknown brand"
 
-#: src/app/page.tsx:5477
-#: src/app/page.tsx:5601
+#: src/app/page.tsx:5479
+#: src/app/page.tsx:5603
 msgid "Unknown error"
 msgstr "Unknown error"
 
@@ -10094,7 +10118,7 @@ msgstr "Unlink X and Y"
 msgid "Unlock build plate"
 msgstr "Unlock build plate"
 
-#: src/app/page.tsx:11853
+#: src/app/page.tsx:11855
 msgid "Unlock it to add or move models."
 msgstr "Unlock it to add or move models."
 
@@ -10128,11 +10152,11 @@ msgstr "Unsaved Scene Changes"
 msgid "Unsaved Scene Found"
 msgstr "Unsaved Scene Found"
 
-#: src/components/settings/PluginsSettingsTab.tsx:997
+#: src/components/settings/PluginsSettingsTab.tsx:1036
 msgid "Unseal and install"
 msgstr "Unseal and install"
 
-#: src/app/page.tsx:10914
+#: src/app/page.tsx:10916
 msgid "Unsupported file format"
 msgstr "Unsupported file format"
 
@@ -10160,8 +10184,8 @@ msgstr "Unsupported scene version"
 msgid "Untitled Curve"
 msgstr "Untitled Curve"
 
-#: src/components/settings/PluginsSettingsTab.tsx:616
-#: src/components/settings/PluginsSettingsTab.tsx:879
+#: src/components/settings/PluginsSettingsTab.tsx:655
+#: src/components/settings/PluginsSettingsTab.tsx:918
 msgid "Unverified source"
 msgstr "Unverified source"
 
@@ -10218,11 +10242,11 @@ msgstr "Updating the hollowed mesh and preserving your hole punches afterward."
 msgid "Updating the hollowing preview with your solid areas."
 msgstr "Updating the hollowing preview with your solid areas."
 
-#: src/app/page.tsx:5481
+#: src/app/page.tsx:5483
 msgid "Upload canceled"
 msgstr "Upload canceled"
 
-#: src/app/page.tsx:5480
+#: src/app/page.tsx:5482
 msgid "Upload canceled. You can retry when ready."
 msgstr "Upload canceled. You can retry when ready."
 
@@ -10239,9 +10263,9 @@ msgstr "Upload complete. {printer} is processing file metadata…"
 msgid "Upload complete. Device is still processing metadata after waiting."
 msgstr "Upload complete. Device is still processing metadata after waiting."
 
-#: src/app/page.tsx:4296
-#: src/app/page.tsx:5374
-#: src/app/page.tsx:5484
+#: src/app/page.tsx:4298
+#: src/app/page.tsx:5376
+#: src/app/page.tsx:5486
 msgid "Upload failed"
 msgstr "Upload failed"
 
@@ -10259,15 +10283,15 @@ msgstr "Upload to {printer}"
 msgid "Upload to Selected Printer"
 msgstr "Upload to Selected Printer"
 
-#: src/app/page.tsx:5297
+#: src/app/page.tsx:5299
 msgid "Uploading Print Job to Printer…"
 msgstr "Uploading Print Job to Printer…"
 
-#: src/app/page.tsx:5296
+#: src/app/page.tsx:5298
 msgid "Uploading Print Job…"
 msgstr "Uploading Print Job…"
 
-#: src/app/page.tsx:4291
+#: src/app/page.tsx:4293
 msgid "Uploading to printer"
 msgstr "Uploading to printer"
 
@@ -10335,13 +10359,13 @@ msgstr "UVTools Integration"
 #. placeholder {0}: pendingInstallPreview?.manifest.version
 #. placeholder {0}: pendingSideload?.info.manifest.version
 #. placeholder {0}: row.version
-#: src/components/settings/PluginsSettingsTab.tsx:636
-#: src/components/settings/PluginsSettingsTab.tsx:861
-#: src/components/settings/PluginsSettingsTab.tsx:1138
+#: src/components/settings/PluginsSettingsTab.tsx:675
+#: src/components/settings/PluginsSettingsTab.tsx:900
+#: src/components/settings/PluginsSettingsTab.tsx:1177
 msgid "v{0}"
 msgstr "v{0}"
 
-#: src/components/settings/PluginsSettingsTab.tsx:1157
+#: src/components/settings/PluginsSettingsTab.tsx:1196
 msgid "Vendor"
 msgstr "Vendor"
 
@@ -10349,7 +10373,7 @@ msgstr "Vendor"
 msgid "Verify Repo"
 msgstr "Verify Repo"
 
-#: src/components/settings/PluginsSettingsTab.tsx:636
+#: src/components/settings/PluginsSettingsTab.tsx:675
 msgid "Version"
 msgstr "Version"
 
@@ -10662,7 +10686,7 @@ msgstr "Write these settings to the auto-support settings"
 msgid "Write these settings, and overwrite the selected preset with them"
 msgstr "Write these settings, and overwrite the selected preset with them"
 
-#: src/app/page.tsx:11772
+#: src/app/page.tsx:11774
 msgid "Writing mesh geometry and support data to file…"
 msgstr "Writing mesh geometry and support data to file…"
 
@@ -10693,7 +10717,7 @@ msgstr "Y Min"
 
 #: src/components/scene/MeshRepairReportModal.tsx:765
 #: src/components/scene/MeshRepairReportModal.tsx:806
-#: src/components/settings/PluginsSettingsTab.tsx:1179
+#: src/components/settings/PluginsSettingsTab.tsx:1218
 msgid "yes"
 msgstr "yes"
 

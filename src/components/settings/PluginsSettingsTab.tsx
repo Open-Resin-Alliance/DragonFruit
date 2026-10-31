@@ -5,7 +5,7 @@ import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import type { MessageDescriptor } from '@lingui/core';
 import { Plural, Trans } from '@lingui/react/macro';
-import { AlertTriangle, CheckCircle2, Download, ExternalLink, Github, Info as InfoIcon, LockKeyhole, PackageCheck, PackageOpen, PackagePlus, Plug, ShieldAlert, ShieldCheck, Trash2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Download, ExternalLink, Github, Info as InfoIcon, LockKeyhole, PackageCheck, PackageOpen, PackagePlus, Plug, RotateCcw, ShieldAlert, ShieldCheck, Trash2 } from 'lucide-react';
 import { Button, IconButton, Input, SettingRow, Spinner } from '@/components/atoms';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
@@ -35,6 +35,25 @@ import {
 import type { PluginManifest } from '@/features/plugins/pluginRegistry';
 import { requestPluginManifest } from '@/features/plugins/pluginManifestClient';
 import { PluginStudioModal } from './PluginStudioModal';
+
+/**
+ * Seconds the prompt waits before it reloads on its own. The plugin's code is
+ * loaded by the webview and the engine at start, so nothing here is optional: the
+ * dialog has one outcome and no dismiss.
+ */
+const PLUGIN_RELOAD_SECONDS = 15;
+
+/**
+ * Interpolated messages live at module scope: React Compiler renames interpolated
+ * locals inside components, which desyncs the message id from the catalog.
+ */
+const reloadCountdownLabel = (seconds: number) => msg`Reload Now (${seconds}s)`;
+
+function reloadDragonFruit() {
+  if (typeof window !== 'undefined') {
+    window.location.reload();
+  }
+}
 
 const BUILTIN_ATHENA_REPOSITORY_URL = 'https://github.com/Open-Resin-Alliance/DragonFruit';
 
@@ -139,6 +158,23 @@ function normalizePluginManifest(input: GithubManifestResponse['manifest']): Plu
 
 export function PluginsSettingsTab() {
   const { _ } = useLingui();
+  const [reloadRequired, setReloadRequired] = React.useState(false);
+  const [reloadSecondsLeft, setReloadSecondsLeft] = React.useState(PLUGIN_RELOAD_SECONDS);
+
+  React.useEffect(() => {
+    if (!reloadRequired) return;
+    setReloadSecondsLeft(PLUGIN_RELOAD_SECONDS);
+    const timer = window.setInterval(() => {
+      setReloadSecondsLeft((previous) => Math.max(0, previous - 1));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [reloadRequired]);
+
+  React.useEffect(() => {
+    if (reloadRequired && reloadSecondsLeft <= 0) {
+      reloadDragonFruit();
+    }
+  }, [reloadRequired, reloadSecondsLeft]);
   React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
 
   const [isLightTheme, setIsLightTheme] = React.useState(false);
@@ -276,9 +312,11 @@ export function PluginsSettingsTab() {
         sealed ? sideloadPassphrase : undefined,
       );
       await refreshSideloaded();
+      await refreshSideloadedContributions();
       setPendingSideload(null);
       closePassphraseDialog();
       highlightInstalledRow(`sideloaded:${installed.manifest.id}`);
+      setReloadRequired(true);
     } catch (error) {
       // A wrong passphrase belongs next to the field that produced it.
       if (sealed) {
@@ -300,6 +338,7 @@ export function PluginsSettingsTab() {
       await removeSideloadedPlugin(target.manifest.id);
       await refreshSideloaded();
       await refreshSideloadedContributions();
+      setReloadRequired(true);
     } catch (error) {
       setStatus({ kind: 'error', message: String(error) });
     } finally {
@@ -1281,6 +1320,30 @@ export function PluginsSettingsTab() {
           </button>
         </div>
       )}
+
+      <StructuredDialogModal
+        open={reloadRequired}
+        ariaLabel={_(msg`Reload required`)}
+        title={<Trans>Reload Required</Trans>}
+        subtitle={<Trans>The plugin list changed. DragonFruit has to reload to apply it.</Trans>}
+        icon={<RotateCcw className="h-4 w-4" />}
+        iconTone="warning"
+        zIndexClassName="z-[200]"
+        maxWidthClassName="max-w-md"
+        closeAriaLabel={_(msg`Reload DragonFruit now`)}
+        onClose={reloadDragonFruit}
+        onBackdropClick={reloadDragonFruit}
+        actions={(
+          <Button variant="tinted-accent" size="md" className="gap-1.5" onClick={reloadDragonFruit}>
+            <RotateCcw className="h-3.5 w-3.5" />
+            {_(reloadCountdownLabel(reloadSecondsLeft))}
+          </Button>
+        )}
+      >
+        <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
+          <Trans>Reloading loads an installed plugin's code, or releases a removed one's formats, network mode and file types. Unsaved changes to the current scene are lost.</Trans>
+        </p>
+      </StructuredDialogModal>
 
       <PluginStudioModal isOpen={isDevRuntime && studioOpen} onClose={() => setStudioOpen(false)} />
     </div>

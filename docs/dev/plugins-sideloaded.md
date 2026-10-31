@@ -361,6 +361,13 @@ package that asks for it today is refused rather than quietly given a ring.
   installed list with enable/disable and remove. The review sheet uses the
   shared dialog modal like every other confirm in that tab
   (`src/components/settings/PluginsSettingsTab.tsx`).
+- **Reload.** A successful import or removal ends in a reload prompt with no
+  dismiss: the webview and the engine load encoders, network modes and file
+  types at startup, and an install that only half-lands is worse than losing an
+  unsaved scene. The prompt reloads on its own after 15 seconds, and closing it
+  by any means reloads too, so there is one outcome rather than a choice.
+  `refreshSideloadedContributions()` still runs first, so the registry is
+  consistent even if the reload is interrupted.
 
 ## Platform constraints
 
