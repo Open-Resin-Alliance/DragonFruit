@@ -14,8 +14,10 @@
 //! Pack it with `examples/pack`, see `docs/dev/plugins-sdk/authoring.md` for the
 //! command that also carries the sample printer preset and material template.
 
+use std::collections::HashMap;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use dragonfruit_plugin_sdk::{
     serve, Capability, EncodeStart, Encoder, FormatDecl, Importer, LayerRef, PluginCapabilities,
@@ -146,7 +148,67 @@ impl Importer for EchoImporter {
 
 // --- capabilities ---------------------------------------------------------
 
-struct FullCapabilities;
+#[derive(Default)]
+struct FullCapabilities {
+    /// Upload sessions stay here between requests: the host sends `begin`, one
+    /// `chunk` per request, then `end`. The process is warm, so this is enough.
+    uploads: Mutex<HashMap<String, PathBuf>>,
+}
+
+impl FullCapabilities {
+    /// The chunked upload contract: `begin` names the file, `chunk` proves the
+    /// plugin can read it at that offset, `end` reports the plate. A real backend
+    /// would send the bytes it reads to the printer instead.
+    fn upload(&self, request: &serde_json::Value) -> (u16, serde_json::Value) {
+        let phase = request.get("phase").and_then(|value| value.as_str()).unwrap_or("");
+        let mut uploads = self.uploads.lock().expect("upload state");
+
+        match phase {
+            "begin" => {
+                let source = request.get("sourcePath").and_then(|value| value.as_str()).unwrap_or("");
+                let total = request.get("totalBytes").and_then(|value| value.as_u64()).unwrap_or(0);
+                if source.is_empty() {
+                    return (400, serde_json::json!({ "error": "upload begin needs sourcePath" }));
+                }
+                let id = format!("echo-upload-{}", uploads.len() + 1);
+                uploads.insert(id.clone(), PathBuf::from(source));
+                (200, serde_json::json!({ "uploadId": id, "totalBytes": total }))
+            }
+            "chunk" => {
+                let Some(upload_id) = request.get("uploadId").and_then(|value| value.as_str()) else {
+                    return (400, serde_json::json!({ "error": "upload chunk needs uploadId" }));
+                };
+                let Some(path) = uploads.get(upload_id) else {
+                    return (404, serde_json::json!({ "error": "unknown upload id" }));
+                };
+                let offset = request.get("offset").and_then(|value| value.as_u64()).unwrap_or(0);
+                let length = request.get("length").and_then(|value| value.as_u64()).unwrap_or(0);
+                let mut file = match std::fs::File::open(path) {
+                    Ok(file) => file,
+                    Err(error) => return (500, serde_json::json!({ "error": error.to_string() })),
+                };
+                if std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(offset)).is_err() {
+                    return (500, serde_json::json!({ "error": "seek failed" }));
+                }
+                let mut buffer = vec![0u8; length as usize];
+                let read = std::io::Read::read(&mut file, &mut buffer).unwrap_or(0);
+                // `received` is what the host shows as progress; the demo consumed
+                // the bytes and threw them away.
+                (200, serde_json::json!({ "received": offset + read as u64 }))
+            }
+            "end" => {
+                let Some(upload_id) = request.get("uploadId").and_then(|value| value.as_str()) else {
+                    return (400, serde_json::json!({ "error": "upload end needs uploadId" }));
+                };
+                if uploads.remove(upload_id).is_none() {
+                    return (404, serde_json::json!({ "error": "unknown upload id" }));
+                }
+                (200, serde_json::json!({ "ok": true, "plateId": 1 }))
+            }
+            other => (400, serde_json::json!({ "error": format!("unknown upload phase: {other}") })),
+        }
+    }
+}
 
 impl PluginCapabilities for FullCapabilities {
     fn network(&self, request: serde_json::Value) -> (u16, serde_json::Value) {
@@ -164,6 +226,10 @@ impl PluginCapabilities for FullCapabilities {
             .get("host")
             .and_then(|value| value.as_str())
             .unwrap_or("127.0.0.1");
+
+        if operation == "upload" {
+            return self.upload(&request);
+        }
 
         match operation {
             "connect" => (
@@ -264,7 +330,7 @@ fn main() {
         std::io::stdin().lock(),
         std::io::stdout().lock(),
         &FullPlugin,
-        &FullCapabilities,
+        &FullCapabilities::default(),
         mapping.as_mut().map(|mapping| &mut mapping[..]),
     )
     .expect("control channel");

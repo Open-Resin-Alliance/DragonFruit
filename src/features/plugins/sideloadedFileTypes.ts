@@ -60,7 +60,8 @@ function syncProfileContributions(plugins: InstalledSideloadedPlugin[]) {
       && registered!.manifest.version === source.version
       && sameList(registered!.manifest.printerPresets, printerPresets)
       && sameList(registered!.manifest.materialTemplates, materialTemplates)
-      && (registered!.manifest.network?.mode ?? '') === declaredMode;
+      && (registered!.manifest.network?.mode ?? '') === declaredMode
+      && JSON.stringify(registered!.manifest.materialSettings ?? null) === JSON.stringify(source.materialSettings ?? null);
     if (unchanged) continue;
 
     const manifest: PluginManifest = {
@@ -76,6 +77,7 @@ function syncProfileContributions(plugins: InstalledSideloadedPlugin[]) {
         hostnames: Array.isArray(source.network.hostnames) ? source.network.hostnames : [],
         operations: source.network.operations ?? {},
       } as PluginManifest['network'] : undefined,
+      materialSettings: source.materialSettings,
       printerPresets: printerPresets as PluginManifest['printerPresets'],
       materialTemplates: materialTemplates as PluginManifest['materialTemplates'],
     };

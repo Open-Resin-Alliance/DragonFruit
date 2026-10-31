@@ -28,6 +28,8 @@ slices, and each capability is either shipped or designed.
 | `fileType` (import messages) | shipped | shipped | shipped: extensions from the manifest, container parsed into geometry and supports |
 | printer presets and material templates | shipped | not code: manifest arrays | shipped: registered through the profile store's plugin entry point |
 | network mode | shipped | not code: the manifest's `network` block | shipped: the mode joins the Network Support list and the generic panels call the declared operations |
+| job upload | shipped | not code: the `upload` operation | shipped: the host chunks a local file through `begin`/`chunk`/`end` with progress |
+| material pane schema | shipped | not code: `materialSettings` | shipped: registered into the same map the compiled adapters use |
 
 Pages mark their own status. A "designed" page is the contract to build against;
 it is not a description of running code.
@@ -109,14 +111,19 @@ between calls, exactly as it would in a long-lived daemon.
 
 ## Content beyond code
 
-Printer profiles and material templates are **data**, and today they reach
-DragonFruit only through the simple-plugin tier (a GitHub manifest with
-`printerPresets` / `materialTemplates`). A `.dfplugin` payload has `bin/`,
-`lib/`, `assets/` and a manifest, and no preset section — so a sideloaded
-package cannot yet register printer profiles of its own. If AlphaBeta needs
-them, the manifest needs a `presets` reference to a payload JSON that the host
-validates with the same rules as the simple tier; that is a spec change with a
-loader behind it, not something to work around.
+Profiles, pane schemas and network modes are **data**, and a package can carry
+them without shipping code for the webview:
+
+- `printerPresets` / `materialTemplates` — the same JSON the simple tier uses, so
+  one normaliser accepts both.
+- `materialSettings` — the material pane schema compiled plugins write in
+  TypeScript, per output format. The renderer validates it once and renders it with
+  the same form.
+- `network` — the mode, its display name, discovery hostnames and operation names.
+
+Anything that needs its own rendering is the **UI island** in
+`docs/dev/plugins-sdk/ui.md`: designed, sandboxed, not built. Until it exists, a
+pane a vendor needs is integrated in mainline as a declarative shape.
 
 ## Why this is AGPL-compatible
 
@@ -132,7 +139,10 @@ the precedent it follows and the measured transport costs are in
 
 - `docs/dev/plugins-sdk/authoring.md` — build, seal, pack, import a working plugin
 - `docs/dev/plugins-sdk/protocol.md` — frames, messages, the ring, versioning
-- `docs/dev/plugins-sdk/encoders.md` — the `slicerEncoder` contract (designed)
-- `docs/dev/plugins-sdk/network.md` — the `networkOperations` contract (designed)
-- `docs/dev/plugins-sdk/file-types.md` — the `fileType` contract (designed)
+- `docs/dev/plugins-sdk/encoders.md` — the `slicerEncoder` contract
+- `docs/dev/plugins-sdk/network.md` — the `networkOperations` contract, including
+  the declared mode and chunked upload
+- `docs/dev/plugins-sdk/file-types.md` — the `fileType` contract
+- `docs/dev/plugins-sdk/ui.md` — what a package can render today, and the planned
+  UI island
 - `docs/dev/plugins-sideloaded.md` — host side: package format and verification

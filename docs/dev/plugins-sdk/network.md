@@ -149,6 +149,26 @@ any of them:
 | `printerData` | not declared | variant detection, only when the preset sets `modelVariantDetectPath` |
 | `materials`, `materialsEdit` | same names | reserved: declared modes have no on-device material editing yet |
 
+### Uploading a job
+
+A compiled plugin uploads through a handler it registers in the webview. A package
+has no handler, so it declares `upload` and the host drives a chunk loop:
+
+| Phase | Request | Reply |
+| --- | --- | --- |
+| `begin` | `{ phase:"begin", host, path, sourcePath, totalBytes, profileId }` | `{ uploadId }` |
+| `chunk` | `{ phase:"chunk", uploadId, offset, length }` | `{ received }` |
+| `end` | `{ phase:"end", uploadId }` | `{ ok:true, plateId? }` or `{ error }` |
+
+`sourcePath` is a path on the same machine — the plugin process reads the file
+itself, which is why a chunk carries no bytes. Each `chunk` must consume exactly
+`length` bytes starting at `offset`; `received` is what the panel shows as
+progress, so report the running total. Requests are serialized, so the upload is
+sequential by construction; the panel computes speed and remaining time from the
+byte counts and the clock.
+
+The file is the sliced container the user just produced, not the scene.
+
 ### Payload contract
 
 The request is the panel's payload — the fields below are the ones it always

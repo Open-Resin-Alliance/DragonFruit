@@ -87,6 +87,12 @@ export type PluginNetworkUiAdapterContract = {
          * has no variant-detection probe.
          */
         printerData?: string;
+        /**
+         * Optional chunked-upload operation, called with `phase: begin | chunk |
+         * end`. Compiled plugins answer uploads from their own handler registry
+         * instead; a declared mode has no such handler, so it names this operation.
+         */
+        upload?: string;
     };
     defaultLocalHostnames: string[];
 } & RemoteMaterialSettingsAdapter;

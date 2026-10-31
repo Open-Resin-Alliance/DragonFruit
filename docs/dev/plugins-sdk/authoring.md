@@ -201,6 +201,7 @@ cargo run -p dragonfruit-plugin-package --example pack -- \
 | `--network-host` | repeatable `*.local` discovery candidate |
 | `--presets` | JSON array of printer presets the package contributes |
 | `--templates` | JSON array of material templates the package contributes |
+| `--material-settings` | JSON `{ byOutput, byOutputAndMode }` material pane schema |
 | `--min-app-version` | manifest `minAppVersion` (default `0.1.0`) |
 | `--passphrase` | seals the payload; omit (or pass an empty value) for an unsealed test package |
 | `--seed` | 32 bytes of hex for a deterministic publisher key (default: the fixed dev seed) |
@@ -231,14 +232,16 @@ cargo run -p dragonfruit-plugin-package --example pack -- \
   --network --network-mode demo-echo --network-name "Echo Network" \
   --network-host echo.local \
   --presets rust/dragonfruit-plugin-sdk/examples/full_plugin_presets.json \
-  --templates rust/dragonfruit-plugin-sdk/examples/full_plugin_templates.json
+  --templates rust/dragonfruit-plugin-sdk/examples/full_plugin_templates.json \
+  --material-settings rust/dragonfruit-plugin-sdk/examples/full_plugin_material_settings.json
 ```
 
 Installing that one package gives you: an "Echo container" output format on the
-profile it adds, a `.echo` import extension, layer previews, a printer preset
-plus material template in the library, and **Echo Network** in that profile's
-Network Support list — discovery, the connection test and the monitor then run
-against the example's fake printer. It is the shape a real printer integration
+profile it adds with its own **material pane** (`Exposure`, `Lift`, `Anti-aliasing`
+from `full_plugin_material_settings.json`), a `.echo` import extension, layer
+previews, a printer preset plus material template in the library, and **Echo
+Network** in that profile's Network Support list — discovery, the connection test,
+the monitor and the print upload then run against the example's fake printer. It is the shape a real printer integration
 takes, minus the real protocol.
 
 ## 5. Import and verify

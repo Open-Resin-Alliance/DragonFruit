@@ -47,6 +47,11 @@ export type SideloadedManifest = {
     operations?: Record<string, string | null | undefined>;
   } | null;
   fileTypes?: Array<{ extension: string; displayName: string; isSceneFile?: boolean }>;
+  /** Material pane schema per output format, in the compiled plugins' own shape. */
+  materialSettings?: {
+    byOutput?: Record<string, unknown>;
+    byOutputAndMode?: Record<string, Record<string, unknown>>;
+  };
   /** Printer presets the package contributes; the renderer normalises them. */
   printerPresets?: unknown[];
   /** Material templates the package contributes. */

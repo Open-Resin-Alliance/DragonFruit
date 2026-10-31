@@ -13,6 +13,7 @@ import type {
 import { getBuiltinComplexPluginDefinitions } from '@/features/plugins/builtinComplexPlugins';
 import { BUILTIN_SIMPLE_PLUGIN_MANIFESTS } from '@/features/plugins/builtinSimplePlugins';
 import { normalizeOutputFormat, normalizeFormatVersion, normalizeSettingsMode, normalizeWebcamRotationDeg, DEFAULT_WEBCAM_ROTATION_DEG } from '@/features/profiles/outputFormatUtils';
+import { sanitizeDeclaredMaterialSettings } from '@/features/plugins/declaredMaterialSettings';
 import { hasWindow } from '@/utils/dom';
 
 export type PluginSource = 'builtin' | 'github';
@@ -39,6 +40,7 @@ export type DeclaredNetworkOperations = {
   cancel?: string;
   deletePlate?: string;
   emergencyStop?: string;
+  upload?: string;
 };
 
 export type DeclaredNetworkMode = {
@@ -51,6 +53,11 @@ export type DeclaredNetworkMode = {
   operations?: DeclaredNetworkOperations;
 };
 
+export type DeclaredMaterialSettings = {
+  byOutput?: Record<string, unknown>;
+  byOutputAndMode?: Record<string, Record<string, unknown>>;
+};
+
 export type PluginManifest = {
   schemaVersion: number;
   id: string;
@@ -60,6 +67,8 @@ export type PluginManifest = {
   author?: string;
   homepage?: string;
   network?: DeclaredNetworkMode;
+  /** Material pane schema per output format, in the compiled plugins' own shape. */
+  materialSettings?: DeclaredMaterialSettings;
   printerPresets?: PrinterPreset[];
   materialTemplates?: Array<Omit<MaterialProfile, 'id' | 'printerProfileId'>>;
   materialPresets?: MaterialPreset[];
@@ -96,6 +105,8 @@ const SCENE_OVERLAY_LOADERS_BY_PLUGIN_ID = new Map<string, PluginSceneOverlayLoa
 const BUILTIN_NETWORK_MODE_KEYS = new Set<string>();
 /** Modes the installed packages added, so a rebuild can retract them. */
 const DECLARED_NETWORK_MODE_KEYS = new Set<string>();
+/** `output` and `output|mode` keys the installed packages added to the material maps. */
+const DECLARED_MATERIAL_SETTINGS_KEYS = new Set<string>();
 let builtinAdaptersHydrated = false;
 let adaptersHydratedRevision = -1;
 
@@ -163,6 +174,7 @@ function buildDeclaredNetworkAdapter(declared: DeclaredNetworkMode): ProfileNetw
       discover: operation('discover'),
       materials: operation('materials'),
       materialsEdit: operation('materialsEdit'),
+      upload: operation('upload'),
       ...(printerData ? { printerData } : {}),
     },
     defaultLocalHostnames: declared.hostnames,
@@ -230,7 +242,63 @@ function ensureBuiltinAdaptersHydrated(): void {
     DECLARED_NETWORK_MODE_KEYS.add(declared.mode);
   }
 
+  registerDeclaredMaterialSettings();
+
   adaptersHydratedRevision = revision;
+}
+
+/**
+ * Material pane schemas a package declares. Compiled plugins own their output
+ * format, so a package fills a format nobody else claims; within a format it may
+ * add modes, never replace one.
+ */
+function registerDeclaredMaterialSettings(): void {
+  for (const key of DECLARED_MATERIAL_SETTINGS_KEYS) {
+    const [output, mode] = key.split('|');
+    if (mode) {
+      const modeMap = LOCAL_MATERIAL_SETTINGS_BY_OUTPUT_AND_MODE.get(output);
+      modeMap?.delete(mode);
+      if (modeMap && modeMap.size === 0) LOCAL_MATERIAL_SETTINGS_BY_OUTPUT_AND_MODE.delete(output);
+    } else {
+      LOCAL_MATERIAL_SETTINGS_BY_OUTPUT.delete(output);
+    }
+  }
+  DECLARED_MATERIAL_SETTINGS_KEYS.clear();
+
+  for (const plugin of getInstalledProfilePlugins()) {
+    if (!plugin.enabled) continue;
+    const declared = plugin.manifest.materialSettings;
+    if (!declared) continue;
+
+    for (const [rawOutput, source] of Object.entries(declared.byOutput ?? {})) {
+      const output = normalizeOutputFormat(rawOutput);
+      if (!output || LOCAL_MATERIAL_SETTINGS_BY_OUTPUT.has(output)) continue;
+      const adapter = sanitizeDeclaredMaterialSettings(output, source);
+      if (!adapter) continue;
+      LOCAL_MATERIAL_SETTINGS_BY_OUTPUT.set(output, adapter);
+      DECLARED_MATERIAL_SETTINGS_KEYS.add(output);
+    }
+
+    for (const [rawOutput, modes] of Object.entries(declared.byOutputAndMode ?? {})) {
+      const output = normalizeOutputFormat(rawOutput);
+      if (!output || !modes) continue;
+      const modeMap = LOCAL_MATERIAL_SETTINGS_BY_OUTPUT_AND_MODE.get(output);
+      const additions: Array<[string, ProfileLocalMaterialSettingsAdapter]> = [];
+      for (const [rawMode, source] of Object.entries(modes)) {
+        const mode = normalizeSettingsMode(rawMode);
+        if (!mode || modeMap?.has(mode)) continue;
+        const adapter = sanitizeDeclaredMaterialSettings(output, source, modes);
+        if (adapter) additions.push([mode, adapter]);
+      }
+      if (additions.length === 0) continue;
+      const target = modeMap ?? new Map<string, ProfileLocalMaterialSettingsAdapter>();
+      for (const [mode, adapter] of additions) {
+        target.set(mode, adapter);
+        DECLARED_MATERIAL_SETTINGS_KEYS.add(`${output}|${mode}`);
+      }
+      LOCAL_MATERIAL_SETTINGS_BY_OUTPUT_AND_MODE.set(output, target);
+    }
+  }
 }
 
 function loadBuiltinAdapters(): void {
@@ -507,7 +575,7 @@ function sanitizeDeclaredNetwork(mode: unknown): DeclaredNetworkMode | null {
 
   const declaredOperations = (value.operations ?? {}) as Record<string, unknown>;
   const operations: DeclaredNetworkOperations = {};
-  for (const key of ['connect', 'discover', 'materials', 'materialsEdit', 'printerData', 'status', 'webcamInfo', 'platesList', 'start', 'pause', 'resume', 'cancel', 'deletePlate', 'emergencyStop'] as const) {
+  for (const key of ['connect', 'discover', 'materials', 'materialsEdit', 'printerData', 'status', 'webcamInfo', 'platesList', 'start', 'pause', 'resume', 'cancel', 'deletePlate', 'emergencyStop', 'upload'] as const) {
     const operation = boundedString(declaredOperations[key], 64);
     if (operation && NETWORK_OPERATION_PATTERN.test(operation)) operations[key] = operation;
   }
@@ -519,6 +587,30 @@ function sanitizeDeclaredNetwork(mode: unknown): DeclaredNetworkMode | null {
     hostnames,
     operations,
   };
+}
+
+function sanitizeDeclaredMaterialSettingsMap(value: unknown): DeclaredMaterialSettings | null {
+  if (!value || typeof value !== 'object') return null;
+  const source = value as Record<string, unknown>;
+  const byOutput: Record<string, unknown> = {};
+  if (source.byOutput && typeof source.byOutput === 'object' && !Array.isArray(source.byOutput)) {
+    for (const [key, entry] of Object.entries(source.byOutput as Record<string, unknown>).slice(0, 8)) {
+      if (entry && typeof entry === 'object') byOutput[key] = entry;
+    }
+  }
+  const byOutputAndMode: Record<string, Record<string, unknown>> = {};
+  if (source.byOutputAndMode && typeof source.byOutputAndMode === 'object' && !Array.isArray(source.byOutputAndMode)) {
+    for (const [key, entry] of Object.entries(source.byOutputAndMode as Record<string, unknown>).slice(0, 8)) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+      const modes: Record<string, unknown> = {};
+      for (const [mode, modeSource] of Object.entries(entry as Record<string, unknown>).slice(0, 8)) {
+        if (modeSource && typeof modeSource === 'object') modes[mode] = modeSource;
+      }
+      if (Object.keys(modes).length > 0) byOutputAndMode[key] = modes;
+    }
+  }
+  if (Object.keys(byOutput).length === 0 && Object.keys(byOutputAndMode).length === 0) return null;
+  return { byOutput, byOutputAndMode };
 }
 
 function sanitizeImageAssetPath(value: unknown): string | undefined {
@@ -844,6 +936,7 @@ function sanitizeManifest(input: unknown): PluginManifest | null {
     author: boundedString(value.author, 120) || undefined,
     homepage: boundedString(value.homepage, 500) || undefined,
     network: sanitizeDeclaredNetwork(value.network) ?? undefined,
+    materialSettings: sanitizeDeclaredMaterialSettingsMap(value.materialSettings) ?? undefined,
     printerPresets,
     materialTemplates,
     materialPresets,

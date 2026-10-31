@@ -294,6 +294,10 @@
                 {
                   "label": "File-Type Import",
                   "slug": "dev/plugins-sdk/file-types"
+                },
+                {
+                  "label": "UI Contributions",
+                  "slug": "dev/plugins-sdk/ui"
                 }
               ]
             }

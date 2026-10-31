@@ -82,6 +82,7 @@ fn main() {
     };
     let presets_path = arg("--presets");
     let templates_path = arg("--templates");
+    let material_settings_path = arg("--material-settings");
     let file_type = arg("--file-type");
     let file_type_name = arg("--file-type-name").unwrap_or_else(|| "Project file".to_string());
 
@@ -147,6 +148,9 @@ fn main() {
         material_templates: templates_path
             .map(|path| read_json_array(&path))
             .unwrap_or_default(),
+        material_settings: material_settings_path
+            .map(|path| read_material_settings(&path))
+            .unwrap_or_default(),
         network: network.then(|| package::NetworkDecl {
             plugin_id: id.clone(),
             mode: network_mode.clone().unwrap_or_else(|| {
@@ -192,6 +196,12 @@ fn main() {
 /// Reads a JSON array of presets or templates for the manifest. Kept as opaque
 /// objects here: the renderer normalises them with the same code the simple tier
 /// uses, so a package cannot slip a shape past two different validators.
+/// `{ "byOutput": {"<format>": {...}}, "byOutputAndMode": {"<format>": {"<mode>": {...}}} }`
+fn read_material_settings(path: &str) -> package::MaterialSettingsDecl {
+    let text = std::fs::read_to_string(path).expect("read material settings");
+    serde_json::from_str(&text).expect("material settings must match the manifest field")
+}
+
 fn read_json_array(path: &str) -> Vec<serde_json::Value> {
     let text = std::fs::read_to_string(path)
         .unwrap_or_else(|error| panic!("read {path}: {error}"));

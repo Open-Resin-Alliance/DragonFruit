@@ -946,6 +946,54 @@ mod tests {
             .expect("routed");
         assert_eq!(start.body["ok"], serde_json::json!(true));
 
+        // Chunked upload: the plugin is handed the local path and reads it itself.
+        let source = root.join("job.zip");
+        std::fs::write(&source, vec![7u8; 4096]).expect("upload source");
+        let begin = handle_network_request(
+            &json!({
+                "pluginId": "example.full",
+                "operation": "upload",
+                "phase": "begin",
+                "host": "http://10.0.0.7",
+                "path": "job",
+                "sourcePath": source.to_string_lossy(),
+                "totalBytes": 4096,
+            })
+            .to_string(),
+        )
+        .expect("routed");
+        assert_eq!(begin.status, 200, "body: {}", begin.body);
+        let upload_id = begin.body["uploadId"].as_str().expect("upload id").to_string();
+
+        let chunk = handle_network_request(
+            &json!({
+                "pluginId": "example.full",
+                "operation": "upload",
+                "phase": "chunk",
+                "uploadId": upload_id,
+                "offset": 0,
+                "length": 2048,
+            })
+            .to_string(),
+        )
+        .expect("routed");
+        assert_eq!(chunk.status, 200, "body: {}", chunk.body);
+        assert_eq!(chunk.body["received"], serde_json::json!(2048));
+
+        let end = handle_network_request(
+            &json!({
+                "pluginId": "example.full",
+                "operation": "upload",
+                "phase": "end",
+                "uploadId": upload_id,
+            })
+            .to_string(),
+        )
+        .expect("routed");
+        assert_eq!(end.status, 200, "body: {}", end.body);
+        assert_eq!(end.body["ok"], serde_json::json!(true));
+        assert_eq!(end.body["plateId"], serde_json::json!(1));
+
         shutdown_all();
         let _ = std::fs::remove_dir_all(&root);
     }

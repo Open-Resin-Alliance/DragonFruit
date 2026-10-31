@@ -25,6 +25,8 @@ Read this page before changing anything in this tier. "Protocol v1" and
 | `fileType` capability | host runtime + renderer container parser | done, tested against a real importer process |
 | printer presets and material templates | manifest `printerPresets` / `materialTemplates` | done: the renderer registers them through the same store entry the simple tier uses |
 | declared network mode | manifest `network` | done: the renderer registers the mode and the generic panels drive it |
+| job upload | manifest `network.operations.upload` + the host chunk loop | done: printing works for a declared mode |
+| material pane schema | manifest `materialSettings` | done: validated once, rendered by the same form as compiled adapters |
 
 `cargo test` in the package crate and `cargo test --bin dragonfruit-desktop
 plugin_sideload` cover the verification matrix below except the process cases.
@@ -121,7 +123,17 @@ README.md                    optional
   ],
   "materialTemplates": [
     { "name": "Alpha Standard Resin", "brand": "AlphaBeta", "layerHeightMm": 0.05 }
-  ]
+  ],
+  "materialSettings": {
+    "byOutput": {
+      ".apf": {
+        "displayName": "AlphaPrint",
+        "fields": [
+          { "key": "exposureSec", "label": "Exposure (s)", "kind": "number", "defaultValue": 2.5 }
+        ]
+      }
+    }
+  }
 }
 ```
 
@@ -183,6 +195,25 @@ owns. The operation names and the payload contract are in
 `docs/dev/plugins-sdk/network.md`; they are fixed so one adapter shape serves
 every package. On-device material listing and editing stay off for a declared
 mode: that needs an edit schema a manifest cannot describe yet.
+
+### Material pane schema
+
+`materialSettings` carries the material pane in the shape compiled plugins define in
+TypeScript — tabs, sections, cards and fields, or a differential object
+(`$inherit` / `$remove` / `$update`) resolved against the other modes of the same
+format. The renderer validates it in
+`src/features/plugins/declaredMaterialSettings.ts` and registers it in the same maps
+the compiled adapters fill, so one form renders both.
+
+Compiled plugins own their output format: a package fills a format nobody claims and
+may add modes inside it, never replace one. Field kinds the renderer does not know,
+fields without a `key` or a scalar `defaultValue`, and contracts that end up with no
+fields are dropped rather than guessed at. Labels are plain strings, so they are
+English; the app does not translate plugin-supplied text. Limits: 8 formats, 8
+modes per format, 512 fields, 128 KiB per contract.
+
+Whatever needs its own rendering is the planned UI island, not this field — see
+`docs/dev/plugins-sdk/ui.md`.
 
 ### Seal
 

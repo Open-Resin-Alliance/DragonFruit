@@ -164,6 +164,9 @@ pub struct NetworkOperationsDecl {
     pub delete_plate: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub emergency_stop: Option<String>,
+    /// Chunked upload: `begin`, `chunk`, `end` phases on one operation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upload: Option<String>,
 }
 
 impl NetworkOperationsDecl {
@@ -184,6 +187,7 @@ impl NetworkOperationsDecl {
             "cancel" => &self.cancel,
             "deletePlate" => &self.delete_plate,
             "emergencyStop" => &self.emergency_stop,
+            "upload" => &self.upload,
             _ => &None,
         };
         declared
@@ -194,7 +198,7 @@ impl NetworkOperationsDecl {
             .to_string()
     }
 
-    fn overrides(&self) -> [(&'static str, &Option<String>); 14] {
+    fn overrides(&self) -> [(&'static str, &Option<String>); 15] {
         [
             ("connect", &self.connect),
             ("discover", &self.discover),
@@ -210,8 +214,22 @@ impl NetworkOperationsDecl {
             ("cancel", &self.cancel),
             ("deletePlate", &self.delete_plate),
             ("emergencyStop", &self.emergency_stop),
+            ("upload", &self.upload),
         ]
     }
+}
+
+/// Per-format material settings the package declares, in the same schema compiled
+/// plugins hand the material pane: tabs, sections, cards and fields, or a
+/// differential object (`$inherit`) that starts from another mode.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MaterialSettingsDecl {
+    /// Output format (`.exf`) to a standalone settings contract.
+    pub by_output: BTreeMap<String, serde_json::Value>,
+    /// Output format to settings mode (`default`, `twostage`, …) to a contract or a
+    /// differential object.
+    pub by_output_and_mode: BTreeMap<String, BTreeMap<String, serde_json::Value>>,
 }
 
 /// A network backend the package hosts. The renderer turns this into the same
@@ -282,6 +300,9 @@ pub struct Manifest {
     pub printer_presets: Vec<serde_json::Value>,
     #[serde(default)]
     pub material_templates: Vec<serde_json::Value>,
+    /// Material pane schema per output format; see [`MaterialSettingsDecl`].
+    #[serde(default)]
+    pub material_settings: MaterialSettingsDecl,
 }
 
 /// A package whose manifest parsed and whose signature verified. The payload is
@@ -368,6 +389,36 @@ fn decode_key(manifest: &Manifest) -> Result<VerifyingKey, PackageError> {
         .map_err(|_| PackageError::Invalid("publisher key is not a valid Ed25519 key".to_string()))
 }
 
+/// One settings contract: keys stay within the format charset and the value is a
+/// JSON object small enough that a manifest still reads as a manifest.
+fn validate_material_settings_entry(
+    output: &str,
+    source: &serde_json::Value,
+) -> Result<(), PackageError> {
+    let format = output.trim();
+    if format.is_empty()
+        || format.len() > 32
+        || !format
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '.' | '-' | '_'))
+    {
+        return Err(PackageError::Invalid(format!(
+            "materialSettings output '{output}' may only contain a-z, 0-9, '.', '-' and '_'"
+        )));
+    }
+    if !source.is_object() {
+        return Err(PackageError::Invalid(format!(
+            "materialSettings['{format}'] must be a JSON object"
+        )));
+    }
+    if source.to_string().len() > 128 * 1024 {
+        return Err(PackageError::Invalid(format!(
+            "materialSettings['{format}'] is larger than 128 KiB"
+        )));
+    }
+    Ok(())
+}
+
 fn validate(manifest: &Manifest) -> Result<(), PackageError> {
     if manifest.format_version != FORMAT_VERSION {
         return Err(PackageError::Unsupported(format!(
@@ -450,6 +501,36 @@ fn validate(manifest: &Manifest) -> Result<(), PackageError> {
                 "file type '{}' needs a display name",
                 file_type.extension
             )));
+        }
+    }
+    if manifest.material_settings.by_output.len() > 8
+        || manifest.material_settings.by_output_and_mode.len() > 8
+    {
+        return Err(PackageError::Invalid(
+            "materialSettings may declare at most 8 output formats".to_string(),
+        ));
+    }
+    for (output, source) in &manifest.material_settings.by_output {
+        validate_material_settings_entry(output, source)?;
+    }
+    for (output, modes) in &manifest.material_settings.by_output_and_mode {
+        if modes.len() > 8 {
+            return Err(PackageError::Invalid(format!(
+                "materialSettings['{output}'] may declare at most 8 modes"
+            )));
+        }
+        for (mode, source) in modes {
+            if mode.is_empty()
+                || mode.len() > 32
+                || !mode
+                    .chars()
+                    .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+            {
+                return Err(PackageError::Invalid(format!(
+                    "materialSettings mode '{mode}' may only contain a-z, 0-9 and '-'"
+                )));
+            }
+            validate_material_settings_entry(output, source)?;
         }
     }
     if let Some(network) = &manifest.network {
@@ -643,7 +724,7 @@ pub fn extract_payload(payload_zip: &[u8], dest: &Path) -> Result<Vec<String>, P
     let mut written = Vec::new();
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).map_err(zip_err)?;
-        let name = entry.name().to_string();
+        let name = entry.name().expect("entry name").to_string();
         if entry.is_dir() {
             continue;
         }
@@ -853,6 +934,7 @@ mod tests {
             file_types: Vec::new(),
             printer_presets: Vec::new(),
             material_templates: Vec::new(),
+            material_settings: MaterialSettingsDecl::default(),
         }
     }
 
@@ -888,6 +970,59 @@ mod tests {
             operations: NetworkOperationsDecl::default(),
         });
         manifest
+    }
+
+    fn material_settings_manifest() -> Manifest {
+        manifest_for(&signing_key())
+    }
+
+    #[test]
+    fn accepts_a_material_settings_schema() {
+        let mut manifest = material_settings_manifest();
+        manifest.material_settings.by_output.insert(
+            ".exf".to_string(),
+            serde_json::json!({ "fields": [{ "key": "exposureSec", "kind": "number", "defaultValue": 2.5 }] }),
+        );
+        manifest.material_settings.by_output_and_mode.insert(
+            ".exf".to_string(),
+            BTreeMap::from([(
+                "twostage".to_string(),
+                serde_json::json!({ "$inherit": "default", "fields": [] }),
+            )]),
+        );
+        validate(&manifest).expect("valid material settings");
+    }
+
+    #[test]
+    fn rejects_a_settings_contract_that_is_not_an_object() {
+        let mut manifest = material_settings_manifest();
+        manifest
+            .material_settings
+            .by_output
+            .insert(".exf".to_string(), serde_json::json!([1, 2]));
+        assert!(matches!(validate(&manifest), Err(PackageError::Invalid(_))));
+    }
+
+    #[test]
+    fn rejects_more_than_eight_output_formats() {
+        let mut manifest = material_settings_manifest();
+        for index in 0..9 {
+            manifest.material_settings.by_output.insert(
+                format!(".fmt{index}"),
+                serde_json::json!({ "fields": [] }),
+            );
+        }
+        assert!(matches!(validate(&manifest), Err(PackageError::Invalid(_))));
+    }
+
+    #[test]
+    fn rejects_a_settings_mode_outside_the_charset() {
+        let mut manifest = material_settings_manifest();
+        manifest.material_settings.by_output_and_mode.insert(
+            ".exf".to_string(),
+            BTreeMap::from([("Two Stage".to_string(), serde_json::json!({ "fields": [] }))]),
+        );
+        assert!(matches!(validate(&manifest), Err(PackageError::Invalid(_))));
     }
 
     #[test]
@@ -966,7 +1101,7 @@ mod tests {
         let mut entries: BTreeMap<String, Vec<u8>> = BTreeMap::new();
         for index in 0..archive.len() {
             let mut entry = archive.by_index(index).expect("entry");
-            let name = entry.name().to_string();
+            let name = entry.name().expect("entry name").to_string();
             let mut data = Vec::new();
             entry.read_to_end(&mut data).expect("read");
             entries.insert(name, data);
