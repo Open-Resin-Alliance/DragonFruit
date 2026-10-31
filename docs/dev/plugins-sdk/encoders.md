@@ -38,8 +38,9 @@ layer shows up.
   exposures, printer profile. Treat unknown fields as absent; new ones are added
   without a protocol bump.
 - `kind` is `png` or `rle`, and `slot` names the ring slot holding it. Runs are
-  `u32 length | u8 value`, little-endian; the SDK's `decode_runs` reads them, so a
-  run-length format consumes the stream directly.
+  `u32 length | u8 value`, little-endian; `Runs` walks them in place without
+  allocating, so a run-length format consumes the stream directly. `decode_runs`
+  exists for code that wants an owned vector and is the slower choice.
 - `encodeBegin` is answered by starting work, not by an ack: the host streams
   layers as they are rasterised.
 - `encodeDone` carries the file. The host checks it exists, then hands it on.
@@ -75,14 +76,14 @@ package installed before that first slice registers immediately.
 ## Reading a layer
 
 ```rust
-use dragonfruit_plugin_sdk::{decode_runs, release_slot, slot_view, RingLayout};
-use dragonfruit_plugin_sdk::SlotKind;
+use dragonfruit_plugin_sdk::{release_slot, slot_view, RingLayout, Runs, SlotKind};
 
 fn take_layer(mapping: &mut [u8], layout: &RingLayout, slot: u32) -> Option<Vec<u8>> {
     let view = slot_view(mapping, layout, slot).expect("ring")?;
     let out = match view.kind {
         SlotKind::Rle => {
-            let runs = decode_runs(view.payload).expect("runs");
+            // Runs borrows the slot; nothing is allocated per layer.
+            let runs = Runs::new(view.payload).expect("runs");
             encode_runs_to_container(runs) // your format
         }
         SlotKind::Png => recompress(view.payload), // your format

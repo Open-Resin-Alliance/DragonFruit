@@ -45,7 +45,7 @@ pub use harness::{
     PluginIdentity,
 };
 pub use protocol::{Capability, FormatDecl, HostMessage, PluginMessage, Transport};
-pub use runs::{decode_runs, encode_runs, Run, RUN_BYTES};
+pub use runs::{decode_runs, encode_runs, write_runs, Run, Runs, RUN_BYTES};
 pub use ring::{
     claim_slot, init_ring, publish_slot, read_layout, release_slot, slot_state, slot_view, RingError,
     RingLayout, SlotKind, SlotState, SlotView, DEFAULT_SLOT_BYTES, DEFAULT_SLOT_COUNT,

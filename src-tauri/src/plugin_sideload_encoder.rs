@@ -21,9 +21,6 @@ use dragonfruit_slicing_engine::SlicerV3Error;
 use crate::plugin_sideload;
 use crate::plugin_sideload_runtime;
 
-/// One run is `u32 length | u8 value` on the wire, which is the engine's own run
-/// shape with nothing added.
-const RUN_BYTES: usize = 5;
 /// RLE slots are sized for a full-width layer of single-pixel runs, and capped:
 /// a 12K layer is 60 KB of runs, so a megabyte is generous.
 const RLE_SLOT_BYTES: u32 = 1024 * 1024;
@@ -62,6 +59,9 @@ impl SideloadedEncoder {
 /// layer over as it is produced, so nothing has to hold a whole image.
 struct SideloadedRleSink {
     session: Option<plugin_sideload_runtime::EncodeSession>,
+    /// Reused between layers: the run stream is copied into the ring or the pipe
+    /// anyway, so the intermediate buffer must not be reallocated per layer.
+    wire: Vec<u8>,
 }
 
 impl RleStreamEncoder for SideloadedRleSink {
@@ -75,13 +75,10 @@ impl RleStreamEncoder for SideloadedRleSink {
                 "the encode session already ended".to_string(),
             ));
         };
-        let mut bytes = Vec::with_capacity(runs.len() * RUN_BYTES);
-        for run in &runs {
-            bytes.extend_from_slice(&run.length.to_le_bytes());
-            bytes.push(run.value);
-        }
+        self.wire.clear();
+        sdk::write_runs(runs.iter().map(|run| (run.length, run.value)), &mut self.wire);
         session
-            .send_layer(sdk::SlotKind::Rle, layer_index, &bytes)
+            .send_layer(sdk::SlotKind::Rle, layer_index, &self.wire)
             .map_err(SlicerV3Error::ExternalEncoder)?;
         Ok(())
     }
@@ -150,6 +147,7 @@ impl FormatEncoder for SideloadedEncoder {
         .map_err(SlicerV3Error::ExternalEncoder)?;
         Ok(Some(Box::new(SideloadedRleSink {
             session: Some(session),
+            wire: Vec::with_capacity(RLE_SLOT_BYTES as usize),
         })))
     }
 

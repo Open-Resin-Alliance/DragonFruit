@@ -11,8 +11,8 @@
 use std::io::Write;
 
 use dragonfruit_plugin_sdk::{
-    decode_runs, serve, Capability, EncodeStart, Encoder, FormatDecl, LayerRef,
-    PluginCapabilities, PluginIdentity, SlotKind,
+    serve, Capability, EncodeStart, Encoder, FormatDecl, LayerRef, PluginCapabilities,
+    PluginIdentity, Runs, SlotKind,
 };
 
 #[derive(Default)]
@@ -31,7 +31,8 @@ impl Encoder for EchoEncoder {
 
     fn layer(&mut self, layer: LayerRef<'_>) -> Result<(), String> {
         let (kind, runs) = match layer.kind {
-            SlotKind::Rle => ("rle", decode_runs(layer.bytes)?.len() as u32),
+            // Count runs straight out of the wire bytes: no allocation, no Vec.
+            SlotKind::Rle => ("rle", Runs::new(layer.bytes)?.len() as u32),
             SlotKind::Png => ("png", 0),
             SlotKind::RawMask => ("mask", 0),
         };
