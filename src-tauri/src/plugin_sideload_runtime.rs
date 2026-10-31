@@ -563,12 +563,14 @@ fn sanitize_file_name(name: &str) -> String {
 /// names the output file at the end.
 pub struct EncodeSession {
     plugin: RunningPlugin,
-    mapping: memmap2::MmapMut,
-    layout: sdk::RingLayout,
+    /// Present over the ring transport; `None` in pipe mode.
+    mapping: Option<memmap2::MmapMut>,
+    layout: Option<sdk::RingLayout>,
     free_slots: Vec<u32>,
     finished: Option<(String, u64)>,
     session_id: u64,
-    ring_path: PathBuf,
+    ring_path: Option<PathBuf>,
+    transport: package::Transport,
 }
 
 impl EncodeSession {
@@ -581,36 +583,38 @@ impl EncodeSession {
         total_layers: u32,
         slot_bytes: u32,
     ) -> Result<Self, String> {
-        if manifest.entry.transport == package::Transport::Pipe {
-            // Refusing beats silently using the ring a package did not ask for.
-            return Err(
-                "this package asks for the pipe transport, which the host does not implement yet"
-                    .to_string(),
-            );
-        }
         let plugin_dir = root.join(plugin_id);
         let session_id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
-        let layout = sdk::RingLayout::new(4, slot_bytes.max(4096));
+        let transport = manifest.entry.transport;
 
-        let ring_path = plugin_dir.join(format!("session-{session_id}.ring"));
-        let ring_file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&ring_path)
-            .map_err(|error| format!("failed to create the ring mapping: {error}"))?;
-        ring_file
-            .set_len(layout.bytes_needed() as u64)
-            .map_err(|error| format!("failed to size the ring mapping: {error}"))?;
-        // SAFETY: this file is created here, mapped only by us, and the plugin maps
-        // it read-write for the session. The ring's accessors order the two sides.
-        let mut mapping = unsafe { memmap2::MmapMut::map_mut(&ring_file) }
-            .map_err(|error| format!("failed to map the ring: {error}"))?;
-        sdk::init_ring(&mut mapping, layout)
-            .map_err(|error| format!("failed to initialise the ring: {error}"))?;
-
-        let mut plugin = start_with_ring(root, plugin_id, manifest, Some(&ring_path))?;
+        // Pipe mode carries each layer as a bulk frame on the control channel; the
+        // ring is not created at all, so nothing maps memory the package did not ask
+        // for. Ring mode sizes four slots for the largest layer.
+        let (mut plugin, mapping, layout, ring_path) = if transport == package::Transport::Pipe {
+            (start_with_ring(root, plugin_id, manifest, None)?, None, None, None)
+        } else {
+            let layout = sdk::RingLayout::new(4, slot_bytes.max(4096));
+            let ring_path = plugin_dir.join(format!("session-{session_id}.ring"));
+            let ring_file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&ring_path)
+                .map_err(|error| format!("failed to create the ring mapping: {error}"))?;
+            ring_file
+                .set_len(layout.bytes_needed() as u64)
+                .map_err(|error| format!("failed to size the ring mapping: {error}"))?;
+            // SAFETY: this file is created here, mapped only by us, and the plugin
+            // maps it read-write for the session. The ring's accessors order the two
+            // sides.
+            let mut mapping = unsafe { memmap2::MmapMut::map_mut(&ring_file) }
+                .map_err(|error| format!("failed to map the ring: {error}"))?;
+            sdk::init_ring(&mut mapping, layout)
+                .map_err(|error| format!("failed to initialise the ring: {error}"))?;
+            let plugin = start_with_ring(root, plugin_id, manifest, Some(&ring_path))?;
+            (plugin, Some(mapping), Some(layout), Some(ring_path))
+        };
         send(
             &mut plugin,
             &sdk::HostMessage::EncodeBegin {
@@ -621,7 +625,9 @@ impl EncodeSession {
             },
         )?;
 
-        let free_slots = (0..layout.slot_count).rev().collect();
+        let free_slots = layout
+            .map(|layout| (0..layout.slot_count).rev().collect())
+            .unwrap_or_default();
         Ok(Self {
             plugin,
             mapping,
@@ -630,6 +636,7 @@ impl EncodeSession {
             finished: None,
             session_id,
             ring_path,
+            transport,
         })
     }
 
@@ -642,13 +649,34 @@ impl EncodeSession {
         bytes: &[u8],
     ) -> Result<Vec<(u32, u32)>, String> {
         let mut progress = Vec::new();
+
+        if self.transport == package::Transport::Pipe {
+            // One announcement, then the bytes on the same channel. The write blocks
+            // when the plugin stops reading, which is the backpressure the ring gets
+            // from its slot pool.
+            send(
+                &mut self.plugin,
+                &sdk::HostMessage::EncodeLayer {
+                    id: self.session_id,
+                    index,
+                    slot: 0,
+                    kind,
+                    bytes: bytes.len() as u64,
+                },
+            )?;
+            sdk::write_frame(&mut self.plugin.stdin, sdk::FrameKind::Bulk, bytes)
+                .map_err(|error| format!("failed to write layer {index}: {error}"))?;
+            self.drain(&mut progress)?;
+            return Ok(progress);
+        }
+
         while self.free_slots.is_empty() {
             self.pump(Instant::now() + ENCODE_TIMEOUT, &mut progress)?;
         }
         let slot = self.free_slots.pop().expect("a free slot");
         sdk::publish_slot(
-            &mut self.mapping,
-            &self.layout,
+            self.mapping.as_mut().expect("ring mapping"),
+            self.layout.as_ref().expect("ring layout"),
             slot,
             kind,
             index,
@@ -723,6 +751,9 @@ impl EncodeSession {
     fn apply(&mut self, frame: sdk::Frame, progress: &mut Vec<(u32, u32)>) -> Result<(), String> {
         match serde_json::from_slice::<sdk::PluginMessage>(&frame.payload) {
             Ok(sdk::PluginMessage::SlotFree { slot }) => {
+                if self.transport == package::Transport::Pipe {
+                    return Ok(());
+                }
                 if !self.free_slots.contains(&slot) {
                     self.free_slots.push(slot);
                 }
@@ -750,8 +781,31 @@ impl EncodeSession {
 
 impl Drop for EncodeSession {
     fn drop(&mut self) {
+        // An unfinished session was cancelled: tell the plugin so it can close what
+        // the session opened, wait briefly for the ack, then stop the process either
+        // way. A plugin that is stuck cannot hold the host up.
+        if self.finished.is_none() {
+            let _ = send(
+                &mut self.plugin,
+                &sdk::HostMessage::EncodeCancel {
+                    id: self.session_id,
+                },
+            );
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let mut progress = Vec::new();
+            while Instant::now() < deadline {
+                // The ack arrives as `EncodeCancelled`, which `apply` turns into the
+                // error that stops this loop; anything else is progress and is
+                // dropped with the session.
+                if self.pump(deadline, &mut progress).is_err() {
+                    break;
+                }
+            }
+        }
         stop(&mut self.plugin);
-        let _ = std::fs::remove_file(&self.ring_path);
+        if let Some(ring_path) = &self.ring_path {
+            let _ = std::fs::remove_file(ring_path);
+        }
     }
 }
 

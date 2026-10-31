@@ -23,12 +23,12 @@ nothing to authenticate, and the process dies with its parent.
 frame := u32 length (LE, includes the kind byte) | u8 kind | payload[length - 1]
 ```
 
-- `kind 0` is JSON. `kind 1` is bulk, reserved for the `pipe` transport, which is
-  designed and not implemented: the host refuses a package that asks for it rather
-  than quietly using the ring.
+- `kind 0` is JSON. `kind 1` is bulk: layer bytes in the `pipe` transport, and the
+  preview PNG in either transport.
 - The length includes the kind byte, so a frame is never empty.
-- The cap is 64 MiB per frame. Bulk layer data goes through the ring today; pipe
-  mode is specified as the fallback that would carry one layer per bulk frame.
+- The cap is 160 MiB per frame, which covers a 12K raw mask. In the default `shm`
+  transport layer bytes travel through the ring instead, and the pipe carries
+  control only.
 - A reader that sees a length it cannot trust errors before allocating.
 - A clean end-of-stream between frames is **not** an error: the host is gone,
   exit quietly. A stream that ends mid-frame is a protocol error.
@@ -123,6 +123,18 @@ the host cannot route.
 An unknown message is an error, never a skip: silently ignoring one is how a
 plugin and a host end up disagreeing about what a session is doing.
 
+## The pipe transport
+
+`transport: "pipe"` creates no ring and maps no memory. Each `encodeLayer`
+announcement is followed by exactly one bulk frame with the layer bytes; the plugin
+reads it before answering, and the host's write blocks when the plugin stops
+reading — the pipe is the backpressure, where `shm` uses its slot pool. There is no
+slot-free message in pipe mode because there are no slots; `progress` is sent as
+usual.
+
+Pick pipe when a package should not map shared memory at all; pick `shm` (the
+default) for throughput. Preview PNGs cross as a bulk frame in both transports.
+
 ## The ring
 
 When `transport` is `shm`, the host creates a mapping file, passes its path in
@@ -189,7 +201,7 @@ Measured on a 3000-layer job with ~100 KiB of runs per layer:
 | plugin walks the runs (`Runs`) | ~29 µs |
 
 The transport is the smallest line. Pick it for the licence boundary, not for
-throughput: `shm` is what ships, `pipe` is designed, and a raw mask layer would
+throughput: both ship, `shm` is the default, and a raw mask layer would
 be the only payload where the difference is material.
 
 ## Versioning rules

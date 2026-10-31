@@ -31,6 +31,7 @@ Read this page before changing anything in this tier. "Protocol v1" and
 | package image assets | `payload/assets/` + `sideloaded_plugin_asset` | done: preset images are inlined as data URLs |
 | job metadata payloads | manifest `jobMetadataPayloads` | done: the host bakes them into `metadata_json` and the encoder reads it |
 | raw mask layers, area stats | format `layers: "mask"`, `requiresAreaStats` | done: mask slots at source resolution, stats in the batch job |
+| pipe transport | `entry.transport: "pipe"` | done: bulk frames, no ring, no shared memory |
 | imported scene modifiers | per-model `meshModifiers` / `skipClassification` in the container | done: hollowing and punches arrive with the model |
 | monitoring policy | `network.monitoring` | done: grace windows and webcam cooldowns per mode |
 
@@ -307,7 +308,7 @@ A capability or format the manifest did not declare ends the session with
 
 | Direction | Messages |
 | --- | --- |
-| host → plugin | hello, shutdown, network, encodeBegin, encodeLayer, encodeEnd, import, preview |
+| host → plugin | hello, shutdown, network, encodeBegin, encodeLayer, encodeEnd, encodeCancel, import, preview |
 | plugin → host | ready, networkResult, slotFree, progress, encodeDone, importDone, previewPng, error |
 
 An encode session:
@@ -413,6 +414,9 @@ package that asks for it today is refused rather than quietly given a ring.
   `encode.begin`/`encode.layer`/`encode.done`; `read_layer_preview_png` maps
   onto the same request/response shape. Capabilities the plugin does not
   implement stay at the trait's defaults.
+- **Transports.** `shm` maps a ring of four slots for layer bytes; `pipe` maps
+  nothing and carries each layer as one bulk frame after its announcement. Both
+  are implemented and tested; the manifest picks one.
 - **Network.** Sideloaded ids are consulted after the generated match in
   `src-tauri/src/plugin_registry.rs`, so a package cannot shadow a built-in
   plugin id.

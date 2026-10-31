@@ -663,6 +663,59 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// Pipe mode: no ring file is created, each layer is a bulk frame, and the
+    /// container still comes out intact.
+    #[test]
+    fn streams_layers_over_the_pipe_transport() {
+        let root = temp_dir("pipe");
+        let mut manifest = package::Manifest {
+            id: "example.encoder".to_string(),
+            capabilities: vec![package::Capability::SlicerEncoder],
+            formats: vec![package::FormatDecl {
+                id: "exf".to_string(),
+                extensions: vec![".exf".to_string()],
+                display_name: None,
+                layers: Some(package::LayerKind::Rle),
+                requires_area_stats: false,
+            }],
+            ..crate::plugin_test_support::manifest(
+                "example.encoder",
+                vec![package::Capability::SlicerEncoder],
+            )
+        };
+        manifest.entry.transport = package::Transport::Pipe;
+        install_reference_plugin(&root, "echo_encoder", &manifest);
+
+        let encoder = SideloadedEncoder::new(
+            root.clone(),
+            manifest.clone(),
+            ".exf",
+            package::LayerKind::Rle,
+            false,
+        );
+        let output = root.join("pipe.exf");
+        let mut sink = encoder
+            .create_rle_stream_encoder(&job(2))
+            .expect("session")
+            .expect("streaming sink");
+        sink.consume_rle_layer(0, vec![RleRun { length: 4096, value: 0 }]).expect("layer 0");
+        sink.consume_rle_layer(1, vec![RleRun { length: 4096, value: 1 }]).expect("layer 1");
+        sink.finalize_to_path(&output).expect("finish");
+
+        let bytes = std::fs::read(&output).expect("read");
+        assert!(bytes.ends_with(b"layers=2"));
+
+        let rings: Vec<String> = std::fs::read_dir(root.join("example.encoder"))
+            .expect("plugin dir")
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
+            .filter(|name| name.ends_with(".ring"))
+            .collect();
+        assert!(rings.is_empty(), "pipe mode must not create ring files: {rings:?}");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// A PNG package must not open a streaming session, and the batch path is what
     /// runs instead.
     #[test]

@@ -9,7 +9,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::frame::{read_frame, write_json, FrameError, FrameKind};
-use crate::protocol::{Capability, FormatDecl, HostMessage, PluginMessage};
+use crate::protocol::{Capability, FormatDecl, HostMessage, PluginMessage, Transport};
 use crate::ring::{read_layout, release_slot, slot_view, RingLayout, SlotKind};
 use crate::PROTOCOL_VERSION;
 
@@ -51,6 +51,9 @@ pub trait Encoder {
     fn layer(&mut self, layer: LayerRef<'_>) -> Result<(), String>;
     /// Writes the container to `output` and returns the number of bytes written.
     fn finish(&mut self, output: &Path) -> Result<u64, String>;
+    /// The host cancelled the job. Close whatever this session opened; the process
+    /// stays alive for the next one. The default does nothing.
+    fn cancel(&mut self) {}
 }
 
 /// A file the host cannot parse. `import` reads `input` and writes the scene
@@ -101,7 +104,9 @@ impl PluginCapabilities for NoCapabilities {}
 struct EncodeState {
     id: u64,
     encoder: Box<dyn Encoder>,
-    layout: RingLayout,
+    /// Present over the ring transport; `None` in pipe mode, where each layer is a
+    /// bulk frame rather than a slot.
+    layout: Option<RingLayout>,
     expected: u32,
     received: u32,
 }
@@ -137,8 +142,8 @@ pub fn serve<R: Read, W: Write, C: PluginCapabilities>(
         }
     };
 
-    let proto = match message {
-        HostMessage::Hello { proto, .. } => proto,
+    let (proto, transport) = match message {
+        HostMessage::Hello { proto, transport, .. } => (proto, transport),
         HostMessage::Shutdown => return Ok(()),
         _ => {
             return fail(&mut output, "unexpected-frame", "a request arrived before the handshake completed");
@@ -198,12 +203,16 @@ pub fn serve<R: Read, W: Write, C: PluginCapabilities>(
                 if session.is_some() {
                     return fail(&mut output, "encode-in-progress", "one encode session at a time");
                 }
-                let Some(ring_bytes) = ring.as_deref_mut() else {
-                    return fail(&mut output, "ring-required", "this host offered no ring for layer data");
-                };
-                let layout = match read_layout(ring_bytes) {
-                    Ok(layout) => layout,
-                    Err(error) => return fail(&mut output, "ring-invalid", &error.to_string()),
+                let layout = if transport == Transport::Pipe {
+                    None
+                } else {
+                    let Some(ring_bytes) = ring.as_deref_mut() else {
+                        return fail(&mut output, "ring-required", "this host offered no ring for layer data");
+                    };
+                    match read_layout(ring_bytes) {
+                        Ok(layout) => Some(layout),
+                        Err(error) => return fail(&mut output, "ring-invalid", &error.to_string()),
+                    }
                 };
                 let Some(mut encoder) = capabilities.encoder() else {
                     return fail(&mut output, "encoder-unsupported", "the plugin offers no encoder");
@@ -276,12 +285,48 @@ pub fn serve<R: Read, W: Write, C: PluginCapabilities>(
                 if state.id != id {
                     return fail(&mut output, "unexpected-frame", "layer id does not match the session");
                 }
+
+                if transport == Transport::Pipe {
+                    // The bytes are the next frame, not a slot: the host writes the
+                    // announcement and then one bulk frame with the layer payload.
+                    let Some(bulk) = read_frame(&mut input).map_err(to_io)? else {
+                        return fail(&mut output, "layer-missing", "the layer announcement had no payload frame");
+                    };
+                    if bulk.kind != FrameKind::Bulk {
+                        return fail(&mut output, "layer-malformed", "the layer payload must be a bulk frame");
+                    }
+                    if bulk.payload.len() as u64 != bytes {
+                        return fail(&mut output, "layer-malformed", "the bulk frame does not match its announcement");
+                    }
+                    if let Err(message) = state.encoder.layer(LayerRef {
+                        index,
+                        kind,
+                        width: 0,
+                        height: 0,
+                        bytes: &bulk.payload,
+                    }) {
+                        return fail(&mut output, "encode-failed", &message);
+                    }
+                    state.received += 1;
+                    write_json(
+                        &mut output,
+                        &PluginMessage::Progress {
+                            id: state.id,
+                            done: state.received,
+                            total: state.expected,
+                        },
+                    )
+                    .map_err(to_io)?;
+                    continue;
+                }
+
                 let Some(ring_bytes) = ring.as_deref_mut() else {
                     return fail(&mut output, "ring-required", "this host offered no ring for layer data");
                 };
 
                 {
-                    let view = match slot_view(ring_bytes, &state.layout, slot) {
+                    let layout = state.layout.as_ref().expect("ring layout in shm mode");
+                    let view = match slot_view(ring_bytes, layout, slot) {
                         Ok(Some(view)) => view,
                         Ok(None) => {
                             return fail(&mut output, "slot-empty", "the published slot holds nothing");
@@ -302,7 +347,7 @@ pub fn serve<R: Read, W: Write, C: PluginCapabilities>(
                     }
                 }
 
-                if let Err(error) = release_slot(ring_bytes, &state.layout, slot) {
+                if let Err(error) = release_slot(ring_bytes, state.layout.as_ref().expect("ring layout"), slot) {
                     return fail(&mut output, "ring-invalid", &error.to_string());
                 }
                 write_json(&mut output, &PluginMessage::SlotFree { slot }).map_err(to_io)?;
@@ -344,9 +389,8 @@ pub fn serve<R: Read, W: Write, C: PluginCapabilities>(
                 }
             }
             HostMessage::EncodeCancel { id } => {
-                let matches = session.as_ref().map(|state| state.id == id).unwrap_or(false);
-                if matches {
-                    session = None;
+                if let Some(mut state) = session.take().filter(|state| state.id == id) {
+                    state.encoder.cancel();
                 }
                 write_json(&mut output, &PluginMessage::EncodeCancelled { id }).map_err(to_io)?;
             }
@@ -455,6 +499,144 @@ mod tests {
             out.push(serde_json::from_slice(&frame.payload).expect("message"));
         }
         out
+    }
+
+    #[derive(Default, Clone)]
+    struct Seen {
+        layers: std::sync::Arc<std::sync::Mutex<Vec<Vec<u8>>>>,
+        cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    struct CaptureEncoder(Seen);
+
+    impl Encoder for CaptureEncoder {
+        fn begin(&mut self, _start: EncodeStart<'_>) -> Result<(), String> {
+            Ok(())
+        }
+        fn layer(&mut self, layer: LayerRef<'_>) -> Result<(), String> {
+            self.0.layers.lock().expect("layers").push(layer.bytes.to_vec());
+            Ok(())
+        }
+        fn finish(&mut self, _output: &Path) -> Result<u64, String> {
+            Ok(1)
+        }
+        fn cancel(&mut self) {
+            self.0.cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    struct PipePlugin(Seen);
+
+    impl PluginCapabilities for PipePlugin {
+        fn encoder(&self) -> Option<Box<dyn Encoder>> {
+            Some(Box::new(CaptureEncoder(self.0.clone())))
+        }
+    }
+
+    fn frame_message(bytes: &mut Vec<u8>, message: &HostMessage) {
+        let payload = serde_json::to_vec(message).expect("json");
+        crate::frame::write_frame(bytes, FrameKind::Json, &payload).expect("write");
+    }
+
+    fn hello_pipe() -> Vec<u8> {
+        let mut input = Vec::new();
+        frame_message(
+            &mut input,
+            &HostMessage::Hello {
+                proto: PROTOCOL_VERSION,
+                transport: Transport::Pipe,
+                app_version: "0.4.0".to_string(),
+            },
+        );
+        input
+    }
+
+    #[test]
+    fn a_pipe_layer_arrives_as_a_bulk_frame() {
+        let seen = Seen::default();
+        let mut input = hello_pipe();
+        frame_message(
+            &mut input,
+            &HostMessage::EncodeBegin {
+                id: 7,
+                format: ".exf".to_string(),
+                layers: 1,
+                job: serde_json::json!({}),
+            },
+        );
+        frame_message(
+            &mut input,
+            &HostMessage::EncodeLayer {
+                id: 7,
+                index: 0,
+                slot: 0,
+                kind: SlotKind::Rle,
+                bytes: 4,
+            },
+        );
+        crate::frame::write_frame(&mut input, FrameKind::Bulk, &[1, 2, 3, 4]).expect("bulk");
+        frame_message(
+            &mut input,
+            &HostMessage::EncodeEnd {
+                id: 7,
+                output: "out.exf".to_string(),
+            },
+        );
+
+        let mut output = Vec::new();
+        serve(
+            std::io::Cursor::new(input),
+            &mut output,
+            &TestPlugin,
+            &PipePlugin(seen.clone()),
+            None,
+        )
+        .expect("serve");
+
+        assert_eq!(seen.layers.lock().expect("layers").as_slice(), &[vec![1u8, 2, 3, 4]]);
+        let messages = sent_messages(&output);
+        assert!(messages.iter().any(|message| matches!(
+            message,
+            PluginMessage::Progress { done: 1, total: 1, .. }
+        )));
+        assert!(matches!(
+            messages.last(),
+            Some(PluginMessage::EncodeDone { path, .. }) if path == "out.exf"
+        ));
+    }
+
+    #[test]
+    fn cancelling_calls_the_encoder_hook_and_answers() {
+        let seen = Seen::default();
+        let mut input = hello_pipe();
+        frame_message(
+            &mut input,
+            &HostMessage::EncodeBegin {
+                id: 9,
+                format: ".exf".to_string(),
+                layers: 3,
+                job: serde_json::json!({}),
+            },
+        );
+        frame_message(&mut input, &HostMessage::EncodeCancel { id: 9 });
+        frame_message(&mut input, &HostMessage::Shutdown);
+
+        let mut output = Vec::new();
+        serve(
+            std::io::Cursor::new(input),
+            &mut output,
+            &TestPlugin,
+            &PipePlugin(seen.clone()),
+            None,
+        )
+        .expect("serve");
+
+        assert!(seen.cancelled.load(std::sync::atomic::Ordering::SeqCst));
+        let messages = sent_messages(&output);
+        assert!(messages.iter().any(|message| matches!(
+            message,
+            PluginMessage::EncodeCancelled { id: 9 }
+        )));
     }
 
     #[test]

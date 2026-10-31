@@ -73,6 +73,11 @@ fn main() {
     let remote_materials_path = arg("--remote-materials");
     let asset_paths = arg_all("--asset");
     let requires_area_stats = arg("--area-stats").is_some();
+    let transport = match arg("--transport").as_deref() {
+        None | Some("shm") => package::Transport::Shm,
+        Some("pipe") => package::Transport::Pipe,
+        Some(other) => panic!("--transport accepts 'shm' or 'pipe', not '{other}'"),
+    };
     let job_metadata_path = arg("--job-metadata");
     let network_monitoring_path = arg("--network-monitoring");
     let format_extension = format.clone().unwrap_or_else(|| ".apf".to_string());
@@ -129,7 +134,7 @@ fn main() {
         entry: package::Entry {
             kind: package::EntryKind::Process,
             proto: package::PROTOCOL_VERSION,
-            transport: package::Transport::Shm,
+            transport,
         },
         publisher: package::Publisher {
             key: package::publisher_key_for(&key),

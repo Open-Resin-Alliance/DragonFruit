@@ -19,10 +19,13 @@ would cost more than the encode.
 
 ## Cancelling
 
-There is no cancel frame. The engine's cancel flag stops it feeding layers, the
-sink is dropped without `finish`, and the host stops the plugin process and removes
-the ring slot file. The next encode starts a clean process, so a plugin never has
-to implement interruption — and cannot expect to flush partial state on cancel.
+The engine's cancel flag stops it feeding layers, the sink is dropped without
+`finish`, and the host sends `EncodeCancel` before stopping the process and removing
+the ring slot file. The SDK answers by calling `Encoder::cancel()` on the active
+session, so a plugin can close files and drop buffers; the default does nothing.
+The process is then stopped, so a cancelled job never leaves a partial container
+behind, and the next encode starts clean. A plugin blocked inside its own handler
+cannot be interrupted — the stop is what ends it.
 
 
 ## Layer payloads

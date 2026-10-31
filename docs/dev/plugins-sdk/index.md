@@ -46,10 +46,10 @@ documented on its page.
 
 | Gap | What happens instead |
 | --- | --- |
-| the `pipe` transport | specified, not implemented; the host refuses a package that asks for it rather than using the ring it did not ask for |
-| an in-protocol cancel message | the engine's cancel flag stops feeding the sink; dropping it stops the plugin process and removes the ring (tested), so the next encode starts clean. A plugin never has to implement interruption, and cannot flush partial state |
+| flushing partial state on cancel | the host sends `EncodeCancel` and the SDK calls `Encoder::cancel()` so a session can close what it opened; the process then stops, so a cancelled job never produces a partial container |
 | cross-layer parallelism | layers arrive one at a time and the host waits for each slot; parallelise inside a layer |
 | concurrent network requests | serialized per plugin; a plugin that could serve two at once has no way to say so yet |
+| cancel is cooperative | a plugin blocked inside its own `layer`/`finish` cannot be interrupted from the host; the process is stopped instead |
 | per-material geometry | the import payload has one material per model; multi-material files flatten |
 | custom panels | the sandboxed UI island in `docs/dev/plugins-sdk/ui.md` — designed, not built, and it needs an ADR revision because ADR-0047 says UI contributions do not travel |
 

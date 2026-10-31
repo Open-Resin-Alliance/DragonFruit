@@ -194,6 +194,7 @@ cargo run -p dragonfruit-plugin-package --example pack -- \
 | `--network` | declares the network capability |
 | `--layers` | `png` (default), `rle` or `mask`: which layer payload the encoder wants |
 | `--area-stats` | ask the engine for per-layer area stats (batch encodes) |
+| `--transport` | `shm` (default, ring) or `pipe` (bulk frames, no shared memory) |
 | `--format-name` | display name for the format, shown in the profile editor |
 | `--file-type` | extension the package can open, e.g. `.apf`; adds the fileType capability |
 | `--file-type-name` | display name for that extension, shown in the import UI |
