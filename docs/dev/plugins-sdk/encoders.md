@@ -17,6 +17,15 @@ keeps the rasterising; your plugin owns the format. That split is why the ring
 exists: a 12K layer is ~59 MB of mask, and copying that through a pipe per layer
 would cost more than the encode.
 
+## Job metadata
+
+`EncodeStart.job` is the whole `SliceJobV3`, so it carries `metadata_json`: the
+merged material settings plus anything the host baked in for the format (see
+`docs/dev/plugins-sideloaded.md` under "Job metadata"). Parse it when your
+container needs values that are not in the job's own fields — a package asks for a
+scene payload by declaring `jobMetadataPayloads` in its manifest, and reads the
+result at the declared `payloadPath`.
+
 ## What the host sends
 
 ```json

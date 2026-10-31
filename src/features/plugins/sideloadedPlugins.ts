@@ -48,6 +48,8 @@ export type SideloadedManifest = {
     remoteMaterials?: unknown;
   } | null;
   fileTypes?: Array<{ extension: string; displayName: string; isSceneFile?: boolean }>;
+  /** Scene data the host bakes into a job when a settings path asks for it. */
+  jobMetadataPayloads?: Array<{ settingPath: string; payloadPath: string; payload: string }>;
   /** Material pane schema per output format, in the compiled plugins' own shape. */
   materialSettings?: {
     byOutput?: Record<string, unknown>;

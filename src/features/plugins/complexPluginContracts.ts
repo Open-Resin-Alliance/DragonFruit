@@ -511,8 +511,11 @@ export type PluginJobMetadataPayloadDefinition = {
     settingPath: string;
     /** Metadata path the base64 payload is written to. */
     payloadPath: string;
-    /** What to bake. The host implements `voxl-scene` today. */
-    payload: 'voxl-scene';
+    /**
+     * What to bake. The host implements `voxl-scene` today; a kind it does not know
+     * is skipped, which is how a package can name something newer than the build.
+     */
+    payload: string;
 };
 
 /**

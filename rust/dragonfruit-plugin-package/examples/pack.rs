@@ -72,6 +72,7 @@ fn main() {
     let network_hosts = arg_all("--network-host");
     let remote_materials_path = arg("--remote-materials");
     let asset_paths = arg_all("--asset");
+    let job_metadata_path = arg("--job-metadata");
     let format_extension = format.clone().unwrap_or_else(|| ".apf".to_string());
     // An empty passphrase is not a passphrase: sealing with "" only looks like
     // protection. Treat it as an unsealed package.
@@ -153,6 +154,9 @@ fn main() {
         material_settings: material_settings_path
             .map(|path| read_material_settings(&path))
             .unwrap_or_default(),
+        job_metadata_payloads: job_metadata_path
+            .map(|path| read_job_metadata(&path))
+            .unwrap_or_default(),
         network: network.then(|| package::NetworkDecl {
             plugin_id: id.clone(),
             mode: network_mode.clone().unwrap_or_else(|| {
@@ -213,6 +217,12 @@ fn main() {
 /// objects here: the renderer normalises them with the same code the simple tier
 /// uses, so a package cannot slip a shape past two different validators.
 /// `{ "byOutput": {"<format>": {...}}, "byOutputAndMode": {"<format>": {"<mode>": {...}}} }`
+/// JSON array of `{ settingPath, payloadPath, payload }`.
+fn read_job_metadata(path: &str) -> Vec<package::JobMetadataPayloadDecl> {
+    let text = std::fs::read_to_string(path).expect("read job metadata");
+    serde_json::from_str(&text).expect("job metadata must match the manifest field")
+}
+
 /// `{ "primaryFields": [...], "basicSections": [...], "advancedSections": [...] }`
 fn read_remote_materials(path: &str) -> package::RemoteMaterialsDecl {
     let text = std::fs::read_to_string(path).expect("read remote materials");

@@ -29,6 +29,7 @@ Read this page before changing anything in this tier. "Protocol v1" and
 | material pane schema | manifest `materialSettings` | done: validated once, rendered by the same form as compiled adapters |
 | on-device material list and edit | manifest `network.remoteMaterials` | done: the same dialog, built from declared fields |
 | package image assets | `payload/assets/` + `sideloaded_plugin_asset` | done: preset images are inlined as data URLs |
+| job metadata payloads | manifest `jobMetadataPayloads` | done: the host bakes them into `metadata_json` and the encoder reads it |
 
 `cargo test` in the package crate and `cargo test --bin dragonfruit-desktop
 plugin_sideload` cover the verification matrix below except the process cases.
@@ -231,6 +232,24 @@ Rules: paths are relative segments only (no absolute path, no `.`/`..`, no hidde
 files), images only (`png`, `jpeg`, `webp`, `gif`, `svg`, `avif`), 2.5 MB per asset,
 20 MB of inlined data per package. A read that fails leaves the preset without an
 image; it never fails the install.
+
+### Job metadata
+
+A material field can write into the slice job's metadata (`metadataPath` on a
+`materialSettings` field), and a package can ask the host to bake a scene payload
+into it when such a path is `true`:
+
+```json
+"jobMetadataPayloads": [
+  { "settingPath": "echo.embedScene", "payloadPath": "echo.sceneBase64", "payload": "voxl-scene" }
+]
+```
+
+The host knows the payload *kinds* it can produce (`voxl-scene` today) and skips a
+kind it does not implement, so a package may name something newer than the build.
+The baked value arrives at the encoder as part of `job.metadata_json` — parse it,
+look up `payloadPath`, and do what your format needs with the bytes. Limits: 8
+declarations, dotted paths of letters, digits, `.`, `_` and `-`.
 
 ### Seal
 

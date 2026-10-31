@@ -1,0 +1,7 @@
+[
+  {
+    "settingPath": "echo.embedScene",
+    "payloadPath": "echo.sceneBase64",
+    "payload": "voxl-scene"
+  }
+]

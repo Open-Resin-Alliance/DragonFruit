@@ -32,6 +32,7 @@ slices, and each capability is either shipped or designed.
 | material pane schema | shipped | not code: `materialSettings` | shipped: registered into the same map the compiled adapters use |
 | on-device material list and edit | shipped | not code: `network.remoteMaterials` | shipped: one dialog, built from declared fields |
 | package images | shipped | payload `assets/` | shipped: inlined at registration through `sideloaded_plugin_asset` |
+| job metadata payloads | shipped | not code: `jobMetadataPayloads` | shipped: baked into `metadata_json` like a compiled plugin's declaration |
 
 Pages mark their own status. A "designed" page is the contract to build against;
 it is not a description of running code.

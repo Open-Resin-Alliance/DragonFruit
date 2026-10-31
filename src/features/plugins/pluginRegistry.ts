@@ -64,6 +64,12 @@ export type DeclaredMaterialSettings = {
   byOutputAndMode?: Record<string, Record<string, unknown>>;
 };
 
+export type DeclaredJobMetadataPayload = {
+  settingPath: string;
+  payloadPath: string;
+  payload: string;
+};
+
 export type PluginManifest = {
   schemaVersion: number;
   id: string;
@@ -75,6 +81,8 @@ export type PluginManifest = {
   network?: DeclaredNetworkMode;
   /** Material pane schema per output format, in the compiled plugins' own shape. */
   materialSettings?: DeclaredMaterialSettings;
+  /** Scene data the host bakes into a job when a settings path asks for it. */
+  jobMetadataPayloads?: DeclaredJobMetadataPayload[];
   printerPresets?: PrinterPreset[];
   materialTemplates?: Array<Omit<MaterialProfile, 'id' | 'printerProfileId'>>;
   materialPresets?: MaterialPreset[];
@@ -605,6 +613,23 @@ function sanitizeDeclaredNetwork(mode: unknown): DeclaredNetworkMode | null {
   };
 }
 
+function sanitizeDeclaredJobMetadataPayloads(value: unknown): DeclaredJobMetadataPayload[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const dotted = (input: unknown, max: number) => boundedString(input, max);
+  const payloads = value
+    .slice(0, 8)
+    .map((entry) => {
+      const item = (entry ?? {}) as Record<string, unknown>;
+      const settingPath = dotted(item.settingPath, 96);
+      const payloadPath = dotted(item.payloadPath, 96);
+      const payload = boundedString(item.payload, 32).toLowerCase();
+      if (!settingPath || !payloadPath || !payload) return null;
+      return { settingPath, payloadPath, payload };
+    })
+    .filter((entry): entry is DeclaredJobMetadataPayload => entry !== null);
+  return payloads.length > 0 ? payloads : undefined;
+}
+
 function sanitizeDeclaredMaterialSettingsMap(value: unknown): DeclaredMaterialSettings | null {
   if (!value || typeof value !== 'object') return null;
   const source = value as Record<string, unknown>;
@@ -955,6 +980,7 @@ function sanitizeManifest(input: unknown): PluginManifest | null {
     homepage: boundedString(value.homepage, 500) || undefined,
     network: sanitizeDeclaredNetwork(value.network) ?? undefined,
     materialSettings: sanitizeDeclaredMaterialSettingsMap(value.materialSettings) ?? undefined,
+    jobMetadataPayloads: sanitizeDeclaredJobMetadataPayloads(value.jobMetadataPayloads),
     printerPresets,
     materialTemplates,
     materialPresets,

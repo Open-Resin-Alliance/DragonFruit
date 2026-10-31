@@ -84,6 +84,7 @@ async function syncProfileContributions(plugins: InstalledSideloadedPlugin[]) {
         remoteMaterials: source.network.remoteMaterials,
       } as PluginManifest['network'] : undefined,
       materialSettings: source.materialSettings,
+      jobMetadataPayloads: source.jobMetadataPayloads,
       printerPresets: printerPresets as PluginManifest['printerPresets'],
       materialTemplates: materialTemplates as PluginManifest['materialTemplates'],
     };

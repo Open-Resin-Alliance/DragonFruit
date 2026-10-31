@@ -228,6 +228,13 @@ mod tests {
         }
     }
 
+    fn job_with_metadata(total_layers: u32, metadata_json: &str) -> SliceJobV3 {
+        SliceJobV3 {
+            metadata_json: metadata_json.to_string(),
+            ..job(total_layers)
+        }
+    }
+
     /// Drives the streaming shape: two RLE layers in, one container out, with the
     /// plugin reporting the run counts it was given.
     #[test]
@@ -387,6 +394,59 @@ mod tests {
         )
         .expect("preview");
         assert!(png.starts_with(b"\x89PNG"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The baked scene payload rides in `job.metadata_json`; the encoder reports
+    /// that it saw it, which is the whole job-metadata contract for a package.
+    #[test]
+    fn a_package_encoder_receives_the_baked_job_metadata() {
+        let root = temp_dir("job-metadata");
+        let manifest = package::Manifest {
+            id: "example.encoder".to_string(),
+            capabilities: vec![package::Capability::SlicerEncoder],
+            formats: vec![package::FormatDecl {
+                id: "exf".to_string(),
+                extensions: vec![".exf".to_string()],
+                display_name: None,
+                layers: Some(package::LayerKind::Rle),
+            }],
+            job_metadata_payloads: vec![package::JobMetadataPayloadDecl {
+                setting_path: "echo.embedScene".to_string(),
+                payload_path: "echo.sceneBase64".to_string(),
+                payload: "voxl-scene".to_string(),
+            }],
+            ..crate::plugin_test_support::manifest(
+                "example.encoder",
+                vec![package::Capability::SlicerEncoder],
+            )
+        };
+        install_reference_plugin(&root, "echo_encoder", &manifest);
+
+        let encoder = SideloadedEncoder::new(
+            root.clone(),
+            manifest.clone(),
+            ".exf",
+            package::LayerKind::Rle,
+        );
+        let output = root.join("job.exf");
+        let mut sink = encoder
+            .create_rle_stream_encoder(&job_with_metadata(2, r#"{"echo":{"sceneBase64":"AAAA"}}"#))
+            .expect("session")
+            .expect("streaming sink");
+        sink.consume_rle_layer(0, vec![RleRun { length: 4096, value: 0 }])
+            .expect("layer 0");
+        sink.consume_rle_layer(1, vec![RleRun { length: 4096, value: 0 }])
+            .expect("layer 1");
+        sink.finalize_to_path(&output).expect("finish");
+
+        let bytes = std::fs::read(&output).expect("read");
+        assert!(
+            bytes.ends_with(b"layers=2 scene=4"),
+            "footer: {}",
+            String::from_utf8_lossy(&bytes[bytes.len().saturating_sub(64)..])
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

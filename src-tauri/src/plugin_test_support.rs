@@ -109,5 +109,6 @@ pub fn manifest(id: &str, capabilities: Vec<package::Capability>) -> package::Ma
         printer_presets: Vec::new(),
         material_templates: Vec::new(),
         material_settings: Default::default(),
+        job_metadata_payloads: Vec::new(),
     }
 }

@@ -21,11 +21,20 @@ struct EchoEncoder {
     /// `(index, kind, run count, bytes)` per layer, kept until `finish` because a
     /// streaming session does not learn its destination path until then.
     layers: Vec<(u32, &'static str, u32, Vec<u8>)>,
+    /// Bytes of the scene payload the host baked into the job metadata, when the
+    /// profile asked for one. Read from `job.metadata_json`.
+    scene_bytes: Option<usize>,
 }
 
 impl Encoder for EchoEncoder {
     fn begin(&mut self, start: EncodeStart<'_>) -> Result<(), String> {
         self.format = start.format.to_string();
+        self.scene_bytes = start
+            .job
+            .get("metadata_json")
+            .and_then(|value| value.as_str())
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+            .and_then(|metadata| metadata.get("echo")?.get("sceneBase64")?.as_str().map(str::len));
         Ok(())
     }
 
@@ -55,6 +64,10 @@ impl Encoder for EchoEncoder {
         }
         file.write_all(format!("layers={}", self.layers.len()).as_bytes())
             .map_err(|error| error.to_string())?;
+        if let Some(bytes) = self.scene_bytes {
+            file.write_all(format!(" scene={bytes}").as_bytes())
+                .map_err(|error| error.to_string())?;
+        }
         let bytes = file.metadata().map_err(|error| error.to_string())?.len();
         Ok(bytes)
     }

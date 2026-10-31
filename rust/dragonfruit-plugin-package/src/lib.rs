@@ -245,6 +245,17 @@ pub struct RemoteMaterialsDecl {
     pub advanced_sections: Vec<serde_json::Value>,
 }
 
+/// A scene payload the host bakes into the job metadata when a settings path asks
+/// for it. Mirrors `PluginJobMetadataPayloadDefinition` on the renderer side; the
+/// host implements the kinds it knows and skips the rest.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobMetadataPayloadDecl {
+    pub setting_path: String,
+    pub payload_path: String,
+    pub payload: String,
+}
+
 /// A network backend the package hosts. The renderer turns this into the same
 /// adapter shape the compiled plugins register: the mode shows up in the printer
 /// profile's Network Support list and every panel calls `plugin_network_request`
@@ -319,6 +330,9 @@ pub struct Manifest {
     /// Material pane schema per output format; see [`MaterialSettingsDecl`].
     #[serde(default)]
     pub material_settings: MaterialSettingsDecl,
+    /// Scene data the host bakes into a job when a settings path asks for it.
+    #[serde(default)]
+    pub job_metadata_payloads: Vec<JobMetadataPayloadDecl>,
 }
 
 /// A package whose manifest parsed and whose signature verified. The payload is
@@ -516,6 +530,40 @@ fn validate(manifest: &Manifest) -> Result<(), PackageError> {
             return Err(PackageError::Invalid(format!(
                 "file type '{}' needs a display name",
                 file_type.extension
+            )));
+        }
+    }
+    if manifest.job_metadata_payloads.len() > 8 {
+        return Err(PackageError::Invalid(
+            "jobMetadataPayloads may declare at most 8 entries".to_string(),
+        ));
+    }
+    for payload in &manifest.job_metadata_payloads {
+        for (label, path) in [
+            ("settingPath", &payload.setting_path),
+            ("payloadPath", &payload.payload_path),
+        ] {
+            if path.is_empty()
+                || path.len() > 96
+                || !path
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+            {
+                return Err(PackageError::Invalid(format!(
+                    "jobMetadataPayloads {label} '{path}' must be a dotted path of letters, digits, '.', '_' or '-'"
+                )));
+            }
+        }
+        if payload.payload.is_empty()
+            || payload.payload.len() > 32
+            || !payload
+                .payload
+                .chars()
+                .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+        {
+            return Err(PackageError::Invalid(format!(
+                "jobMetadataPayloads kind '{}' may only contain a-z, 0-9 and '-'",
+                payload.payload
             )));
         }
     }
@@ -974,6 +1022,7 @@ mod tests {
             printer_presets: Vec::new(),
             material_templates: Vec::new(),
             material_settings: MaterialSettingsDecl::default(),
+            job_metadata_payloads: Vec::new(),
         }
     }
 
