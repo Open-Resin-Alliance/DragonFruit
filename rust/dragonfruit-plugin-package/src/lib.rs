@@ -232,6 +232,19 @@ pub struct MaterialSettingsDecl {
     pub by_output_and_mode: BTreeMap<String, BTreeMap<String, serde_json::Value>>,
 }
 
+/// On-device material listing and editing for a declared mode. The fields are the
+/// same model compiled plugins build in TypeScript (`RemoteMaterialPrimaryField`):
+/// the host renders the edit dialog from them and sends the draft back unchanged.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteMaterialsDecl {
+    pub primary_fields: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub basic_sections: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub advanced_sections: Vec<serde_json::Value>,
+}
+
 /// A network backend the package hosts. The renderer turns this into the same
 /// adapter shape the compiled plugins register: the mode shows up in the printer
 /// profile's Network Support list and every panel calls `plugin_network_request`
@@ -252,6 +265,9 @@ pub struct NetworkDecl {
     pub hostnames: Vec<String>,
     #[serde(default)]
     pub operations: NetworkOperationsDecl,
+    /// Presence turns on on-device material listing; the fields also turn on editing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_materials: Option<RemoteMaterialsDecl>,
 }
 
 impl NetworkDecl {
@@ -586,6 +602,29 @@ fn validate(manifest: &Manifest) -> Result<(), PackageError> {
                 return Err(PackageError::Invalid(format!(
                     "network hostname '{hostname}' may only contain a-z, 0-9, '.' and '-'"
                 )));
+            }
+        }
+        if let Some(remote) = &network.remote_materials {
+            if remote.primary_fields.is_empty() || remote.primary_fields.len() > 128 {
+                return Err(PackageError::Invalid(
+                    "network.remoteMaterials.primaryFields must have 1..128 entries".to_string(),
+                ));
+            }
+            if remote.basic_sections.len() > 32 || remote.advanced_sections.len() > 32 {
+                return Err(PackageError::Invalid(
+                    "network.remoteMaterials may declare at most 32 sections per kind".to_string(),
+                ));
+            }
+            if remote
+                .primary_fields
+                .iter()
+                .chain(remote.basic_sections.iter())
+                .chain(remote.advanced_sections.iter())
+                .any(|entry| !entry.is_object())
+            {
+                return Err(PackageError::Invalid(
+                    "network.remoteMaterials entries must be JSON objects".to_string(),
+                ));
             }
         }
         for (key, operation) in network.operations.overrides() {
@@ -968,12 +1007,65 @@ mod tests {
             display_name: Some("Echo Network".to_string()),
             hostnames: vec!["echo.local".to_string()],
             operations: NetworkOperationsDecl::default(),
+            remote_materials: None,
         });
         manifest
     }
 
     fn material_settings_manifest() -> Manifest {
         manifest_for(&signing_key())
+    }
+
+    fn remote_network_manifest(fields: usize) -> Manifest {
+        let mut manifest = network_manifest("echo-net", "alphabeta.alphaprint");
+        let primary_fields = (0..fields)
+            .map(|index| serde_json::json!({ "key": format!("field{index}"), "defaultValue": 1 }))
+            .collect();
+        manifest
+            .network
+            .as_mut()
+            .expect("network")
+            .remote_materials = Some(RemoteMaterialsDecl {
+            primary_fields,
+            basic_sections: vec![serde_json::json!({ "id": "print", "title": "Print", "keys": [] })],
+            advanced_sections: Vec::new(),
+        });
+        manifest
+    }
+
+    #[test]
+    fn accepts_a_remote_material_schema() {
+        validate(&remote_network_manifest(3)).expect("valid remote materials");
+    }
+
+    #[test]
+    fn rejects_an_empty_remote_material_schema() {
+        assert!(matches!(
+            validate(&remote_network_manifest(0)),
+            Err(PackageError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_more_than_one_hundred_twenty_eight_remote_fields() {
+        assert!(matches!(
+            validate(&remote_network_manifest(129)),
+            Err(PackageError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_remote_material_entries_that_are_not_objects() {
+        let mut manifest = remote_network_manifest(1);
+        manifest
+            .network
+            .as_mut()
+            .expect("network")
+            .remote_materials
+            .as_mut()
+            .expect("remote")
+            .basic_sections = vec![serde_json::json!("print")];
+        assert!(matches!(validate(&manifest), Err(PackageError::Invalid(_))));
     }
 
     #[test]

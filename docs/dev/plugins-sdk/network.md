@@ -147,7 +147,47 @@ any of them:
 | `platesList` | `platesList` | plate list |
 | `webcamInfo` | `webcamInfo` | webcam panel (answer `available:false` when there is none) |
 | `printerData` | not declared | variant detection, only when the preset sets `modelVariantDetectPath` |
-| `materials`, `materialsEdit` | same names | reserved: declared modes have no on-device material editing yet |
+| `materials`, `materialsEdit` | same names | on-device material list and edit, when the mode describes the fields |
+
+### On-device materials
+
+A mode that lists the printer's own materials declares `network.remoteMaterials`.
+The panel then shows the list, fills the connection card from the selected
+material, and opens the edit dialog built from the declared fields.
+
+```json
+"network": {
+  "pluginId": "alphabeta.alphaprint",
+  "mode": "alphaprint-net",
+  "remoteMaterials": {
+    "primaryFields": [
+      { "key": "exposureSec", "label": "Exposure (s)", "defaultValue": 2.5, "kind": "number",
+        "description": "Per-layer exposure on the device." },
+      { "key": "liftMm", "label": "Lift (mm)", "defaultValue": 6, "kind": "number",
+        "aliases": ["liftDistanceMm"] }
+    ],
+    "basicSections": [{ "id": "print", "title": "Print", "keys": ["exposureSec", "liftMm"] }],
+    "advancedSections": [{ "id": "advanced", "title": "Advanced", "keywords": ["lift"] }]
+  }
+}
+```
+
+| Operation | Request | Reply |
+| --- | --- | --- |
+| `materials` | `{ host }` | `{ materials: [{ id, name, locked?, meta? }] }` |
+| `materialsEdit` | `{ host, profileId, fields }` | `{ ok: true }` or `{ error }` |
+
+- `meta` carries the field values by key. The dialog reads `meta[key]`, falls back
+  to each field's `aliases`, then to `defaultValue`; saving sends the same keys back
+  as `fields`, so a backend that wants another wire shape maps it behind
+  `materialsEdit`.
+- The connection card's process values come from fixed `meta` keys:
+  `layerHeightMm`, `normalExposureSec`, `bottomExposureSec`, `bottomLayerCount`.
+- `basicSections[].keys` groups fields; `advancedSections[].keywords` decides which
+  advanced section a field belongs to (case-insensitive substring).
+- Field kinds: `number`, `integer`, `text`, `boolean`, `select` (with `options`).
+  Limits: 128 fields, 32 sections per kind. A field without a `key` or with a
+  duplicate key is dropped; a schema with no usable field turns listing off.
 
 ### Uploading a job
 

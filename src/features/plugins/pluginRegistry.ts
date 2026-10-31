@@ -14,6 +14,11 @@ import { getBuiltinComplexPluginDefinitions } from '@/features/plugins/builtinCo
 import { BUILTIN_SIMPLE_PLUGIN_MANIFESTS } from '@/features/plugins/builtinSimplePlugins';
 import { normalizeOutputFormat, normalizeFormatVersion, normalizeSettingsMode, normalizeWebcamRotationDeg, DEFAULT_WEBCAM_ROTATION_DEG } from '@/features/profiles/outputFormatUtils';
 import { sanitizeDeclaredMaterialSettings } from '@/features/plugins/declaredMaterialSettings';
+import {
+  buildDeclaredRemoteMaterialsAdapter,
+  sanitizeDeclaredRemoteMaterials,
+  type DeclaredRemoteMaterials,
+} from '@/features/plugins/declaredRemoteMaterials';
 import { hasWindow } from '@/utils/dom';
 
 export type PluginSource = 'builtin' | 'github';
@@ -51,6 +56,7 @@ export type DeclaredNetworkMode = {
   displayName?: string;
   hostnames: string[];
   operations?: DeclaredNetworkOperations;
+  remoteMaterials?: DeclaredRemoteMaterials;
 };
 
 export type DeclaredMaterialSettings = {
@@ -158,6 +164,19 @@ export function parseDeclaredNetworkWebcamInfo(payload: unknown): PluginMonitori
   };
 }
 
+/** What a declared mode gets when it does not describe on-device materials. */
+const INERT_REMOTE_MATERIALS: RemoteMaterialSettingsAdapter = {
+  primaryEditFields: [],
+  basicSections: [],
+  advancedSections: [],
+  resolveEditDraftFromMeta: () => ({}),
+  resolveMaterialProcessValues: () => ({}),
+  denormalizeEditDraftForBackend: (draft) => ({ ...draft }),
+  resolveAdvancedSectionId: () => '',
+  getFieldHelpText: () => '',
+  isDynamicWaitEnabled: () => false,
+};
+
 function buildDeclaredNetworkAdapter(declared: DeclaredNetworkMode): ProfileNetworkUiAdapter {
   const operation = declaredOperationName(declared);
   const printerData = declared.operations?.printerData?.trim();
@@ -166,9 +185,12 @@ function buildDeclaredNetworkAdapter(declared: DeclaredNetworkMode): ProfileNetw
     pluginId: declared.pluginId,
     displayName: declared.displayName ?? declared.mode,
     operationNamespace: declared.mode,
-    // On-device material editing needs an edit schema and per-field mapping, which
-    // a manifest cannot describe yet, so listing and selection stay off with it.
-    supportsRemoteMaterialProfiles: false,
+    // Listing and editing exist only when the package describes the fields; a
+    // declared mode without them keeps the material UI out of the way.
+    supportsRemoteMaterialProfiles: Boolean(declared.remoteMaterials),
+    ...(declared.remoteMaterials
+      ? buildDeclaredRemoteMaterialsAdapter(declared.remoteMaterials)
+      : INERT_REMOTE_MATERIALS),
     operations: {
       connect: operation('connect'),
       discover: operation('discover'),
@@ -178,15 +200,6 @@ function buildDeclaredNetworkAdapter(declared: DeclaredNetworkMode): ProfileNetw
       ...(printerData ? { printerData } : {}),
     },
     defaultLocalHostnames: declared.hostnames,
-    primaryEditFields: [],
-    basicSections: [],
-    advancedSections: [],
-    resolveEditDraftFromMeta: () => ({}),
-    resolveMaterialProcessValues: () => ({}),
-    denormalizeEditDraftForBackend: (draft) => ({ ...draft }),
-    resolveAdvancedSectionId: () => '',
-    getFieldHelpText: () => '',
-    isDynamicWaitEnabled: () => false,
   };
 }
 
@@ -580,12 +593,15 @@ function sanitizeDeclaredNetwork(mode: unknown): DeclaredNetworkMode | null {
     if (operation && NETWORK_OPERATION_PATTERN.test(operation)) operations[key] = operation;
   }
 
+  const remoteMaterials = sanitizeDeclaredRemoteMaterials(value.remoteMaterials);
+
   return {
     pluginId,
     mode: name,
     displayName: displayName || undefined,
     hostnames,
     operations,
+    ...(remoteMaterials ? { remoteMaterials } : {}),
   };
 }
 

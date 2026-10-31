@@ -45,6 +45,7 @@ export type SideloadedManifest = {
     displayName?: string;
     hostnames?: string[];
     operations?: Record<string, string | null | undefined>;
+    remoteMaterials?: unknown;
   } | null;
   fileTypes?: Array<{ extension: string; displayName: string; isSceneFile?: boolean }>;
   /** Material pane schema per output format, in the compiled plugins' own shape. */

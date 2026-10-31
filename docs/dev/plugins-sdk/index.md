@@ -30,6 +30,7 @@ slices, and each capability is either shipped or designed.
 | network mode | shipped | not code: the manifest's `network` block | shipped: the mode joins the Network Support list and the generic panels call the declared operations |
 | job upload | shipped | not code: the `upload` operation | shipped: the host chunks a local file through `begin`/`chunk`/`end` with progress |
 | material pane schema | shipped | not code: `materialSettings` | shipped: registered into the same map the compiled adapters use |
+| on-device material list and edit | shipped | not code: `network.remoteMaterials` | shipped: one dialog, built from declared fields |
 
 Pages mark their own status. A "designed" page is the contract to build against;
 it is not a description of running code.

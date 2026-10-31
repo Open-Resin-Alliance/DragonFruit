@@ -34,6 +34,14 @@ const manifest: PluginManifest = {
 
 const modeEntry = () => getAvailableProfileNetworkModes().find((entry) => entry.mode === MODE);
 
+const remoteSchema = {
+  primaryFields: [
+    { key: 'exposureSec', label: 'Exposure (s)', defaultValue: 2.5, kind: 'number' as const, aliases: [] },
+  ],
+  basicSections: [{ id: 'print', title: 'Print', keys: ['exposureSec'] }],
+  advancedSections: [],
+};
+
 test('a declared mode appears in the network support list with its own name', () => {
   assert.equal(modeEntry(), undefined, 'absent before the install');
 
@@ -108,6 +116,33 @@ test('a compiled mode cannot be taken over by a package', () => {
   try {
     assert.equal(getProfileNetworkUiAdapter(builtinMode!), before, 'the compiled adapter stays registered');
     assert.equal(getAvailableProfileNetworkModes().filter((entry) => entry.mode === builtinMode).length, 1);
+  } finally {
+    uninstallExternalProfilePlugin(PLUGIN_ID);
+  }
+});
+
+test('a declared mode turns on on-device materials only when it describes them', () => {
+  installExternalProfilePlugin(manifest);
+  try {
+    const adapter = getProfileNetworkUiAdapter(MODE);
+    assert.ok(adapter);
+    assert.equal(adapter.supportsRemoteMaterialProfiles, false);
+    assert.deepEqual(adapter.primaryEditFields, []);
+  } finally {
+    uninstallExternalProfilePlugin(PLUGIN_ID);
+  }
+
+  installExternalProfilePlugin({
+    ...manifest,
+    network: { ...manifest.network!, remoteMaterials: remoteSchema },
+  });
+  try {
+    const adapter = getProfileNetworkUiAdapter(MODE);
+    assert.ok(adapter);
+    assert.equal(adapter.supportsRemoteMaterialProfiles, true);
+    assert.deepEqual(adapter.primaryEditFields.map((field) => field.key), ['exposureSec']);
+    assert.deepEqual(adapter.basicSections.map((section) => section.id), ['print']);
+    assert.equal(adapter.resolveEditDraftFromMeta({ exposureSec: 3 }).exposureSec, '3');
   } finally {
     uninstallExternalProfilePlugin(PLUGIN_ID);
   }

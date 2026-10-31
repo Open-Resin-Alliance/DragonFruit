@@ -76,6 +76,7 @@ function syncProfileContributions(plugins: InstalledSideloadedPlugin[]) {
         displayName: source.network.displayName,
         hostnames: Array.isArray(source.network.hostnames) ? source.network.hostnames : [],
         operations: source.network.operations ?? {},
+        remoteMaterials: source.network.remoteMaterials,
       } as PluginManifest['network'] : undefined,
       materialSettings: source.materialSettings,
       printerPresets: printerPresets as PluginManifest['printerPresets'],

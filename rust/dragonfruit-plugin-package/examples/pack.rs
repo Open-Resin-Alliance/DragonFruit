@@ -70,6 +70,7 @@ fn main() {
     let network_mode = arg("--network-mode");
     let network_name = arg("--network-name");
     let network_hosts = arg_all("--network-host");
+    let remote_materials_path = arg("--remote-materials");
     let format_extension = format.clone().unwrap_or_else(|| ".apf".to_string());
     // An empty passphrase is not a passphrase: sealing with "" only looks like
     // protection. Treat it as an unsealed package.
@@ -159,6 +160,7 @@ fn main() {
             display_name: network_name.clone(),
             hostnames: network_hosts.clone(),
             operations: Default::default(),
+            remote_materials: remote_materials_path.as_deref().map(read_remote_materials),
         }),
         file_types: file_type
             .iter()
@@ -197,6 +199,12 @@ fn main() {
 /// objects here: the renderer normalises them with the same code the simple tier
 /// uses, so a package cannot slip a shape past two different validators.
 /// `{ "byOutput": {"<format>": {...}}, "byOutputAndMode": {"<format>": {"<mode>": {...}}} }`
+/// `{ "primaryFields": [...], "basicSections": [...], "advancedSections": [...] }`
+fn read_remote_materials(path: &str) -> package::RemoteMaterialsDecl {
+    let text = std::fs::read_to_string(path).expect("read remote materials");
+    serde_json::from_str(&text).expect("remote materials must match the manifest field")
+}
+
 fn read_material_settings(path: &str) -> package::MaterialSettingsDecl {
     let text = std::fs::read_to_string(path).expect("read material settings");
     serde_json::from_str(&text).expect("material settings must match the manifest field")

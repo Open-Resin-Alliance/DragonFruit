@@ -1,0 +1,14 @@
+{
+  "primaryFields": [
+    { "key": "exposureSec", "label": "Exposure (s)", "defaultValue": 2.5, "kind": "number", "description": "Per-layer exposure on the device." },
+    { "key": "liftMm", "label": "Lift (mm)", "defaultValue": 6, "kind": "number", "aliases": ["liftDistanceMm"] },
+    { "key": "resinType", "label": "Resin", "defaultValue": "standard", "kind": "select",
+      "options": [{ "value": "standard", "label": "Standard" }, { "value": "tough", "label": "Tough" }] }
+  ],
+  "basicSections": [
+    { "id": "print", "title": "Print", "keys": ["exposureSec", "liftMm", "resinType"] }
+  ],
+  "advancedSections": [
+    { "id": "advanced", "title": "Advanced", "keywords": ["lift"] }
+  ]
+}

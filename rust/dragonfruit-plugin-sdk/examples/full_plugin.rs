@@ -279,7 +279,25 @@ impl PluginCapabilities for FullCapabilities {
             "start" | "pause" | "resume" | "cancel" | "deletePlate" | "emergencyStop" => {
                 (200, serde_json::json!({ "ok": true }))
             }
-            "materials" => (200, serde_json::json!({ "materials": [] })),
+            // On-device materials, shaped by `full_plugin_remote_materials.json`: the
+            // keys the dialog sends back on save are the keys in `meta`.
+            "materials" => (
+                200,
+                serde_json::json!({
+                    "materials": [
+                        {
+                            "id": "1",
+                            "name": "Echo Standard",
+                            "meta": { "exposureSec": 2.5, "liftMm": 6, "resinType": "standard" },
+                        },
+                        {
+                            "id": "2",
+                            "name": "Echo Tough",
+                            "meta": { "exposureSec": 3.2, "liftMm": 7, "resinType": "tough" },
+                        },
+                    ],
+                }),
+            ),
             "materialsEdit" => (200, serde_json::json!({ "ok": true })),
             // The raw protocol operations, kept so the host tests can drive the ring
             // without going through the declared-mode contract.

@@ -15,7 +15,7 @@ The tier accepts **data**, never webview code. Three shapes reach the UI:
 | Network mode in the printer profile, and the panels behind it | `network.mode` / `displayName` / `hostnames` | shipped |
 | Material pane for its own output format | `materialSettings` (below) | shipped |
 | Printer presets and material templates in the library | `printerPresets` / `materialTemplates` | shipped |
-| On-device (remote) material list and editor | needs the remote material schema | planned |
+| On-device (remote) material list and editor | `network.remoteMaterials` fields | shipped |
 | A custom panel or overlay | needs the UI island | planned |
 
 ## Material pane schema
@@ -99,8 +99,6 @@ tier. Do not add a second private channel for one partner.
 
 ## Known gaps
 
-- Remote material list/editor: needs a schema that describes the edit fields
-  (`RemoteMaterialSettingsAdapter`), not just the local pane.
 - Monitoring policy (polling grace, webcam policy) is fixed by the generic adapter;
   a declared mode cannot tune it.
 - The island: designed above, not built.

@@ -919,6 +919,20 @@ mod tests {
             display_name: Some("Echo Network".to_string()),
             hostnames: vec!["echo.local".to_string()],
             operations: Default::default(),
+            remote_materials: Some(package::RemoteMaterialsDecl {
+                primary_fields: vec![serde_json::json!({
+                    "key": "exposureSec",
+                    "label": "Exposure (s)",
+                    "defaultValue": 2.5,
+                    "kind": "number",
+                })],
+                basic_sections: vec![serde_json::json!({
+                    "id": "print",
+                    "title": "Print",
+                    "keys": ["exposureSec"],
+                })],
+                advanced_sections: Vec::new(),
+            }),
         });
         install_reference_plugin(&root, "full_plugin", &demo);
 

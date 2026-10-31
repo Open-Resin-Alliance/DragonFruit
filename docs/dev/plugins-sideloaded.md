@@ -27,6 +27,7 @@ Read this page before changing anything in this tier. "Protocol v1" and
 | declared network mode | manifest `network` | done: the renderer registers the mode and the generic panels drive it |
 | job upload | manifest `network.operations.upload` + the host chunk loop | done: printing works for a declared mode |
 | material pane schema | manifest `materialSettings` | done: validated once, rendered by the same form as compiled adapters |
+| on-device material list and edit | manifest `network.remoteMaterials` | done: the same dialog, built from declared fields |
 
 `cargo test` in the package crate and `cargo test --bin dragonfruit-desktop
 plugin_sideload` cover the verification matrix below except the process cases.
@@ -193,8 +194,8 @@ connection and monitoring panels call the package's process. A preset that sets
 another plugin's handler — and the mode may not take over one a compiled plugin
 owns. The operation names and the payload contract are in
 `docs/dev/plugins-sdk/network.md`; they are fixed so one adapter shape serves
-every package. On-device material listing and editing stay off for a declared
-mode: that needs an edit schema a manifest cannot describe yet.
+every package. `network.remoteMaterials` adds the on-device material list and edit
+dialog: the fields are the compiled plugins' own model, so one dialog renders both.
 
 ### Material pane schema
 
