@@ -5,7 +5,7 @@ import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import type { MessageDescriptor } from '@lingui/core';
 import { Plural, Trans } from '@lingui/react/macro';
-import { AlertTriangle, CheckCircle2, Download, ExternalLink, Github, Info as InfoIcon, LockKeyhole, PackageCheck, PackageOpen, PackagePlus, Plug, RotateCcw, ShieldAlert, ShieldCheck, Trash2 } from 'lucide-react';
+import { AlertTriangle, Check, CheckCircle2, Copy, Download, ExternalLink, Github, Info as InfoIcon, LockKeyhole, PackageCheck, PackageOpen, PackagePlus, Plug, RotateCcw, ShieldAlert, ShieldCheck, Trash2 } from 'lucide-react';
 import { Button, IconButton, Input, SettingRow, Spinner } from '@/components/atoms';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
@@ -36,22 +36,34 @@ import type { PluginManifest } from '@/features/plugins/pluginRegistry';
 import { requestPluginManifest } from '@/features/plugins/pluginManifestClient';
 import { PluginStudioModal } from './PluginStudioModal';
 
-/** One read-only fact in the install review: label on the left, value on the right. */
-function ReviewFact({ label, mono = false, children }: {
+/**
+ * One read-only fact: label on the left, value on the right. `stacked` puts the
+ * value on its own left-aligned line, for content that is wider than the value
+ * column (capability chips) and would otherwise wrap raggedly against the right
+ * edge.
+ */
+function ReviewFact({ label, mono = false, stacked = false, children }: {
   label: React.ReactNode;
   mono?: boolean;
+  stacked?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <div
-      className="flex items-baseline justify-between gap-3 border-b px-3 py-2 last:border-b-0"
+      className={stacked
+        ? 'border-b px-3 py-2 last:border-b-0'
+        : 'flex items-baseline justify-between gap-3 border-b px-3 py-2 last:border-b-0'}
       style={{ borderColor: 'var(--border-subtle)' }}
     >
-      <span className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+      <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
         {label}
       </span>
       <span
-        className={mono ? 'text-right text-xs font-mono break-all' : 'text-right text-xs'}
+        className={[
+          stacked ? 'mt-1.5 flex flex-wrap items-center gap-1 text-xs' : 'text-xs',
+          mono ? 'font-mono break-all' : '',
+          stacked ? '' : 'text-right',
+        ].filter(Boolean).join(' ')}
         style={{ color: 'var(--text-strong)' }}
       >
         {children}
@@ -184,6 +196,7 @@ function normalizePluginManifest(input: GithubManifestResponse['manifest']): Plu
 export function PluginsSettingsTab() {
   const { _ } = useLingui();
   const [detailsRow, setDetailsRow] = React.useState<InstalledPluginRow | null>(null);
+  const [copiedSigningKey, setCopiedSigningKey] = React.useState(false);
   const [reloadRequired, setReloadRequired] = React.useState(false);
   const [reloadSecondsLeft, setReloadSecondsLeft] = React.useState(PLUGIN_RELOAD_SECONDS);
 
@@ -1323,8 +1336,8 @@ export function PluginsSettingsTab() {
         maxWidthClassName="max-w-md"
         zIndexClassName="z-[140]"
         closeAriaLabel={_(msg`Close modal`)}
-        onClose={() => setDetailsRow(null)}
-        onBackdropClick={() => setDetailsRow(null)}
+        onClose={() => { setDetailsRow(null); setCopiedSigningKey(false); }}
+        onBackdropClick={() => { setDetailsRow(null); setCopiedSigningKey(false); }}
         actions={(
           <Button variant="secondary" onClick={() => setDetailsRow(null)}>
             <Trans>Close</Trans>
@@ -1346,7 +1359,31 @@ export function PluginsSettingsTab() {
             <ReviewFact label={<Trans>Publisher</Trans>}>{detailsRow.publisher}</ReviewFact>
           )}
           {detailsRow?.signingKeyFingerprint && (
-            <ReviewFact label={<Trans>Signing key</Trans>} mono>{detailsRow.signingKeyFingerprint}</ReviewFact>
+            <ReviewFact label={<Trans>Signing key</Trans>}>
+              <span className="inline-flex items-center gap-1">
+                <span className="font-mono">{shortFingerprint(detailsRow.signingKeyFingerprint)}</span>
+                <Tooltip content={copiedSigningKey ? _(msg`Copied`) : _(msg`Copy signing key`)} wrapperClassName="inline-flex">
+                  <IconButton
+                    variant="ghost"
+                    size="xs"
+                    aria-label={_(msg`Copy signing key`)}
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(detailsRow.signingKeyFingerprint as string);
+                        setCopiedSigningKey(true);
+                        window.setTimeout(() => setCopiedSigningKey(false), 2000);
+                      } catch {
+                        // A denied clipboard leaves the full value visible in the tooltip.
+                      }
+                    }}
+                  >
+                    {copiedSigningKey
+                      ? <Check className="h-3.5 w-3.5" style={{ color: 'var(--success)' }} />
+                      : <Copy className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />}
+                  </IconButton>
+                </Tooltip>
+              </span>
+            </ReviewFact>
           )}
           {detailsRow?.acceptedAt && (
             <ReviewFact label={<Trans>Liability accepted</Trans>}>{detailsRow.acceptedAt}</ReviewFact>
@@ -1355,18 +1392,16 @@ export function PluginsSettingsTab() {
             <ReviewFact label={<Trans>Repository</Trans>} mono>{detailsRow.link}</ReviewFact>
           )}
           {detailsRow?.capabilities && detailsRow.capabilities.length > 0 && (
-            <ReviewFact label={<Trans>Capabilities</Trans>}>
-              <span className="inline-flex flex-wrap justify-end gap-1">
-                {detailsRow.capabilities.map((capability) => (
-                  <span
-                    key={capability}
-                    className="text-[11px] rounded-full border px-1.5 py-0.5"
-                    style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
-                  >
-                    {_(SIDELOAD_CAPABILITY_MESSAGES[capability])}
-                  </span>
-                ))}
-              </span>
+            <ReviewFact label={<Trans>Capabilities</Trans>} stacked>
+              {detailsRow.capabilities.map((capability) => (
+                <span
+                  key={capability}
+                  className="text-[11px] rounded-full border px-1.5 py-0.5"
+                  style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
+                >
+                  {_(SIDELOAD_CAPABILITY_MESSAGES[capability])}
+                </span>
+              ))}
             </ReviewFact>
           )}
         </div>
