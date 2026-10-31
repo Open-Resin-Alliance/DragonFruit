@@ -213,8 +213,12 @@ wiring is explicit:
   type from `selectionCategory`, removes it with `removeSupportEntity`, and the
   payload comes from `supports/history/removalPayload.ts`, derived from your
   `SUPPORT_REMOVAL_SHAPES` entry — its `self` plus one field per declared
-  cascade entry. A field declared as an array (`['startKnot', 'endKnot']`) is a
-  set of NAMED singular slots rather than a list.
+  cascade entry. A field declared as an array (`['startKnot', 'endKnot']`), or a
+  singular one (a leaf's `knot`), is a set of NAMED slots rather than a list:
+  each holds what the seed itself pointed at, read from `<slot>Id` or the
+  declared `hostedBy` field. A cascade reaching further than those slots — a
+  knot riding a brace span — reports the rest under the collection name, so
+  nothing is deleted without being recorded.
 - Removing one of your type also re-solves a host it hung from, when that
   host's own type declares `recomputesDiameterFromAttachments` — the host is
   found through your declared `hostedBy` knot edge and re-solved, with the

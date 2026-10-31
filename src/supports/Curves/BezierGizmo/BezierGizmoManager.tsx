@@ -7,7 +7,6 @@ import { buildGizmoContextIndex, type HandleContext } from './bezierContextIndex
 import { calculateControlPoint } from './utils';
 import { useCurveInteractionState, curveInteractionStore } from '../../Curves/curveInteractionState';
 import { pushSupportHistory } from '@/supports/history/supportHistory';
-import { SUPPORT_UPDATE_TRUNK } from '../../history/actionTypes';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 import { clearSupportDragPreview, emitSupportDragPreview } from '../../SupportPrimitives/Joint/jointDragRuntime';
 import { clearTwigDragPreview, computeTwigDragAttachmentUpdates, emitTwigDragPreview } from '../../SupportTypes/Twig/twigDragPreview';
@@ -130,18 +129,21 @@ export function BezierGizmoManager() {
             // records its own entry, what it is called and which collection it
             // lives in are all declared there.
             const ownEntryDescriptor = getSupportTypeDescriptor(ctx.typeId);
+            const historyUpdate = ownEntryDescriptor.historyUpdate;
             const latestTrunk = (livePreviewRef.current?.support as Trunk | undefined)
                 ?? getSupportEntity(ctx.entity.id);
-            if (latestTrunk) {
+            if (latestTrunk && historyUpdate) {
                 // Final exact reconciliation after drag-time fast-path updates.
                 updateSupportEntity(latestTrunk);
                 pushSupportHistory({
-                    type: SUPPORT_UPDATE_TRUNK,
+                    type: historyUpdate,
                     description: editCurveLabel(ownEntryDescriptor.id),
+                    // The action comes off the descriptor, so its payload type
+                    // cannot be narrowed here.
                     payload: {
                         before: initialTrunkRef.current,
                         after: JSON.parse(JSON.stringify(latestTrunk)),
-                    },
+                    } as never,
                 });
             }
             clearSupportDragPreview(ctx.typeId, ctx.entity.id);

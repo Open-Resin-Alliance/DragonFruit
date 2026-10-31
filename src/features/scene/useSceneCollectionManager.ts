@@ -27,7 +27,7 @@ import {
 } from '@/features/scene/plates/plateLayout';
 import { detectObsoleteVoxlVersion, isVoxlBinaryV2, meshChunkStore, parseVoxlBinaryV2, readScenePlates, readSidecarFileBytes, resolveOriginalRefSidecar, VoxlObsoleteVersionError, type VoxlDocumentV1, type VoxlMeshRef, type VoxlMeshRange } from '@/features/scene/voxl';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
-import { countSupportEntities, getSnapshot, loadFromImportFormat, mergeFromImportFormat, reassignAllSupportModelIds, resetStore, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
+import { countSupportEntities, getSnapshot, loadFromImportFormat, mergeFromImportFormat, reassignAllSupportModelIds, removeSupportEntitiesForModels, resetStore, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { peekUndo } from '@/history/historyStore';
 import { createTypedHistory } from '@/history/typedHistory';
@@ -1328,7 +1328,7 @@ export interface LoadedModel {
   linkGroupId?: string;
 }
 
-import { deleteSupportsForModelIds, getSupportsForModel, type ModelSupportIds } from '@/supports/PlacementLogic/SupportModelLinker';
+import { getSupportsForModel, type ModelSupportIds } from '@/supports/PlacementLogic/SupportModelLinker';
 import { contactEndpointsFor, MODEL_ID_COLLECTION_KEYS, SUPPORT_COLLECTION_KEYS, SUPPORT_TYPES } from '@/supports/supportTypeRegistry';
 import { beginSupportStateBatch, endSupportStateBatch } from '@/supports/state';
 import {
@@ -5208,22 +5208,12 @@ export function useSceneCollectionManager(options?: {
     ids.forEach((id) => deleteStoredMeshModifiers(id));
 
     // Clean up associated supports before capturing the "after" snapshot so undo/redo remains atomic.
-    const supportState = getSnapshot();
     let totalRemovedSupports = 0;
     if (includeSupportHistory) {
-      // One pass and one store write for the whole selection: a per-model call
-      // rebuilt the support store once per model, so Ctrl+A, Delete on a
-      // supported plate normalised twenty times.
-      totalRemovedSupports += deleteSupportsForModelIds(supportState, ids);
-
-      // Defensive pass: guarantee no orphaned supports survive model deletion.
-      const orphanedModelIds = Array.from(ids).filter((modelId) => {
-        const remaining = getSupportsForModel(getSnapshot(), modelId);
-        return MODEL_ID_COLLECTION_KEYS.some((key) => remaining[key].length > 0);
-      });
-      if (orphanedModelIds.length > 0) {
-        totalRemovedSupports += deleteSupportsForModelIds(getSnapshot(), orphanedModelIds);
-      }
+      // One cascade and one store write for the whole selection: seeding every
+      // model at once reaches a dependent of another model hanging off any of
+      // them, and a per-model call rebuilt the support store once per model.
+      totalRemovedSupports += removeSupportEntitiesForModels(ids);
     }
     // Prepare's merged support geometry is per model and outlives the view that
     // built it; the delete has to hand it back or a cleared plate keeps every
@@ -5279,7 +5269,7 @@ export function useSceneCollectionManager(options?: {
 
     let totalRemovedSupports = 0;
     const supportState = getSnapshot();
-    totalRemovedSupports += deleteSupportsForModelIds(supportState, targetIds);
+    totalRemovedSupports += removeSupportEntitiesForModels(targetIds);
 
     const after = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, { includeSupportState: true });
     const defaultDescription = targetIds.length === 1

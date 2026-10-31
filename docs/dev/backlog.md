@@ -190,8 +190,8 @@ identity is unchanged.
 ## Fixed: support-edit history deep-cloned the whole state, and the debug log walked it
 
 `pushSupportEditHistory` is the edit path for joints, knots, bezier handles and
-contact disks. On flush it ran `sanitizeSupportSnapshot` over the before and
-after states — two `structuredClone`s — and `pushHistory` then cloned the action
+contact disks. On flush it deep-cloned the before and after states with two
+`structuredClone`s, and `pushHistory` then cloned the action
 payload a third time; undo/redo cloned it once more into the opposite stack, and
 `notifyHistoryOperation` cloned it once **per subscriber**. On the 83k-instance
 plate that was hundreds of milliseconds per edit, on a `requestIdleCallback`
@@ -1952,18 +1952,17 @@ fixed: the union is derived rather than rebuilt — see the placement entry.)
 
 ## Fixed: Ctrl+A, Delete rebuilt the support store once per model
 
-`deleteModels` deleted supports model by model, and each
-`deleteSupportsForModel` ends in `setSnapshot`, so a select-all delete on a
+`deleteModels` deleted supports model by model, and each per-model removal
+ended in `setSnapshot`, so a select-all delete on a
 supported plate normalised the whole support store once per model on top of a
 full scan each.
 
-`deleteSupportsForModelIds` plans the removal for every model in one pass and
-applies it with one write; both delete paths use it. Measured on a synthetic
+A batched removal planned every model in one pass and applied it with one
+write; both delete paths used it. Measured on a synthetic
 20-model, 20k-entity plate: **241 ms → 145 ms**, and the store now normalises
-once instead of twenty times.
-
-The remaining O(models × entities) is in the planning step (`getSupportsForModel`
-per model); it can read the per-model index from `supportModelIndex.ts` instead.
+once instead of twenty times. The removal now runs through the shared cascade
+(`removeSupportEntitiesForModels`), which keeps the single write: it seeds every
+selected model at once and also reaches dependents of other models.
 `deleteModels` also captures a whole support-state snapshot before and after for
 undo, which on the real scene is the larger cost.
 

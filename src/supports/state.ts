@@ -7,10 +7,10 @@ import {
     typesDeclaringOwnHistoryEntryWithoutUpdate,
     typesMissingContactOverride,
     removalShapeFor, type SupportRemovalResult } from './supportTypeRegistry';
-import { collectCascade, groupByCollection, type EntityRef } from './supportCascade';
+import { collectCascade, groupByCollection, ownedPrimitives, type EntityRef } from './supportCascade';
 import { pushSupportHistory } from './history/supportHistory';
 import { supportSettleFor } from './settle/seam';
-import { hasSupportUpdater, hostKnotFieldsFor, typeIdForCollection, updateSupportEntity, JOINT_REMOVAL_TYPES, MODEL_ID_COLLECTION_KEYS, bundledSupportTypeId, parseKnotHostId, parsePrefixedSegmentId, isKnotHostId, isConeKnotHost, isSpanKnotHost, knotHostId, CONE_KNOT_HOST_TYPES, SPAN_KNOT_HOST_TYPES, SUPPORT_COLLECTION_KEYS, contactEndpointsFor, EDITABLE_SUPPORT_TYPES, hasSettingsInference, inferSupportSettings, isEditableSupportType, registerCollectionRestore, collectionsMissingRestore, registerSettingsInference, transformExtrasFor, type SupportTypeDescriptor, createEmptySupportCollections, getSupportTypeDescriptor, registerKnotDiameterRule, registerSupportUpdater, registerSupportTypeResolver, resolveKnotDiameter, resolveSupportTypeIdOf, type SupportEntityFor, SUPPORT_STATE_COLLECTIONS, SUPPORT_TYPES, type SupportTypeId, type JointRemovalTypeId } from './supportTypeRegistry';
+import { collectOwnedRootIds, hasSupportUpdater, hostKnotFieldsFor, typeIdForCollection, updateSupportEntity, JOINT_REMOVAL_TYPES, MODEL_ID_COLLECTION_KEYS, bundledSupportTypeId, parseKnotHostId, parsePrefixedSegmentId, isKnotHostId, isConeKnotHost, isSpanKnotHost, knotHostId, CONE_KNOT_HOST_TYPES, SPAN_KNOT_HOST_TYPES, SUPPORT_COLLECTION_KEYS, contactEndpointsFor, EDITABLE_SUPPORT_TYPES, hasSettingsInference, inferSupportSettings, isEditableSupportType, registerCollectionRestore, collectionsMissingRestore, registerSettingsInference, transformExtrasFor, type SupportTypeDescriptor, createEmptySupportCollections, getSupportTypeDescriptor, registerKnotDiameterRule, registerSupportUpdater, registerSupportTypeResolver, resolveKnotDiameter, resolveSupportTypeIdOf, type SupportEntityFor, SUPPORT_STATE_COLLECTIONS, SUPPORT_TYPES, type SupportTypeId, type JointRemovalTypeId } from './supportTypeRegistry';
 import { typesMissingExportGroupBuilder } from './exportGeometry/seam';
 import { migrateLegacySupportPayload } from './importMigrations';
 import type { SupportCollectionKey } from './supportTypeRegistry';
@@ -225,6 +225,58 @@ export function removeSupportEntities(seeds: readonly EntityRef[]): void {
  */
 
 /**
+ * One entity plus everything the graph says hangs off it, under the field names
+ * its removal shape declares. One builder for both directions, so redo
+ * restores exactly what undo took.
+ */
+function cascadePayload(
+    typeId: SupportTypeId,
+    entity: { id: string },
+    byCollection: Map<SupportCollectionKey, Set<string>>,
+    // A removal's entities are about to be deleted, so its payload owns copies.
+    // An add's are the ones just written, which nothing mutates in place.
+    copy: <T>(value: T) => T,
+): Record<string, unknown> {
+    const shape = removalShapeFor(typeId);
+    const result: Record<string, unknown> = { [shape.self]: copy(entity) };
+    const plural = (field: string) => field.endsWith('s');
+
+    for (const [key, field] of Object.entries(shape.cascade as Record<string, string | readonly string[]>)) {
+        // The seed is included when its own collection is listed in `cascade`,
+        // because undo replays that list wholesale.
+        const ids = [...(byCollection.get(key as SupportCollectionKey) ?? [])];
+        const entities = ids
+            .map((entityId) => state[key as SupportCollectionKey][entityId])
+            .filter(Boolean)
+            .map((member) => copy(member));
+
+        if (typeof field === 'string' && plural(field)) {
+            result[field] = entities;
+            continue;
+        }
+
+        // A named slot holds what the seed pointed at, read from `<slot>Id` or
+        // the declared host field; the rest travel under the collection.
+        const slots = typeof field === 'string' ? [field] : field;
+        const seedFields = entity as unknown as Record<string, unknown>;
+        const entityById = new Map(ids.map((id, index) => [id, entities[index]]));
+        const hostFields = getSupportTypeDescriptor(typeId).edges
+            .filter((edge) => edge.to === key && edge.ownership === 'hostedBy')
+            .map((edge) => edge.field);
+        const claimed = new Set<unknown>();
+        slots.forEach((slot, index) => {
+            const seedId = seedFields[`${slot}Id`] ?? seedFields[hostFields[index] ?? ''];
+            const named = typeof seedId === 'string' ? entityById.get(seedId) : undefined;
+            const member = named ?? entities[index] ?? null;
+            result[slot] = member;
+            if (member) claimed.add(member);
+        });
+        result[key] = entities.filter((member) => !claimed.has(member));
+    }
+    return result;
+}
+
+/**
  * Remove an entity and everything the declared graph says depends on it.
  * `collectCascade` finds the doomed set from the registry's edges;
  * `removalShape` names each piece so history payloads keep their field names.
@@ -234,7 +286,6 @@ function removeSupportEntityCascading(
     id: string,
 ): Record<string, unknown> | null {
     const descriptor = getSupportTypeDescriptor(typeId);
-    const shape = removalShapeFor(typeId);
     const collection = descriptor.location.key;
     const existing = state[collection][id] as { id: string } | undefined;
     if (!existing) return null;
@@ -243,30 +294,8 @@ function removeSupportEntityCascading(
     const byCollection = groupByCollection(doomed);
 
     // Snapshot before deleting: the shape is what undo replays from.
-    const result: Record<string, unknown> = { [shape.self]: deepClone(existing) };
-    const plural = (field: string) => field.endsWith('s');
+    const result = cascadePayload(typeId, existing, byCollection, deepClone);
 
-    for (const [key, field] of Object.entries(shape.cascade as Record<string, string | readonly string[]>)) {
-        // The seed is included when its own collection is listed in `cascade`.
-        // removeBranch reports every doomed branch, itself among them, because
-        // undo replays the list wholesale; removeTrunk names the trunk
-        // separately via `self` and does not list `trunks` here.
-        const ids = [...(byCollection.get(key as SupportCollectionKey) ?? [])];
-        const node = SUPPORT_TYPES.find((d) => d.location.key === key);
-        const entities = ids
-            .map((entityId) => state[key as SupportCollectionKey][entityId])
-            .filter(Boolean)
-            .map((entity) => deepClone(entity));
-
-        if (typeof field === 'string') {
-            result[field] = plural(field) ? entities : (entities[0] ?? null);
-        } else {
-            // Positional slots: fill in declared order, pad with null.
-            field.forEach((slot, index) => { result[slot] = entities[index] ?? null; });
-        }
-    }
-
-    // Apply: one state write, one notify.
     commitCascadeRemoval(doomed);
     return result;
 }
@@ -299,8 +328,36 @@ function commitCascadeRemoval(doomed: ReadonlySet<string>): void {
         }
     }
 
-    setState(next as unknown as SupportState);
     notify();
+}
+
+/**
+ * Removes every support of `modelId` in one cascade, which also reaches a
+ * dependent of another model hanging off one of them.
+ */
+export function removeSupportEntitiesForModel(modelId: string): number {
+    return removeSupportEntitiesForModels([modelId]);
+}
+
+/**
+ * Removes every support of any of `modelIds` in one cascade and one store
+ * write: deleting a whole selection one model at a time rebuilt the store once
+ * per model.
+ */
+export function removeSupportEntitiesForModels(modelIds: Iterable<string>): number {
+    const targets = new Set(modelIds);
+    const seeds: EntityRef[] = [];
+    for (const descriptor of SUPPORT_TYPES) {
+        const collection = descriptor.location.key;
+        for (const entity of Object.values(state[collection])) {
+            const owned = entity as unknown as { id: string; modelId?: string };
+            if (owned.modelId !== undefined && targets.has(owned.modelId)) seeds.push({ collection, id: owned.id });
+        }
+    }
+    if (seeds.length === 0) return 0;
+
+    removeSupportEntities(seeds);
+    return seeds.length;
 }
 
 function resolveLowerSegmentIndex(segments: Segment[], jointId: string) {
@@ -503,6 +560,23 @@ function computeClosestTOnSegmentFromPoint(
 
     const ap = p.sub(a);
     return THREE.MathUtils.clamp(ap.dot(ab) / abLenSq, 0, 1);
+}
+
+/**
+ * Drops roots no imported entity claims.
+ *
+ * An import writes the file's roots as given, so a file naming a root whose
+ * owner is missing leaves one behind. Every other removal reaches a root
+ * through its owner's cascade; this is the one path that cannot.
+ */
+function pruneUnclaimedRoots(roots: Record<string, Roots>, claimedBy: Pick<SupportState, SupportCollectionKey>): Record<string, Roots> {
+    const owned = collectOwnedRootIds(claimedBy);
+    const unclaimed = Object.keys(roots).filter((id) => !owned.has(id));
+    if (unclaimed.length === 0) return roots;
+
+    const kept = { ...roots };
+    for (const id of unclaimed) delete kept[id];
+    return kept;
 }
 
 function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, SupportCollectionKey>): {
@@ -1208,6 +1282,23 @@ export function endSupportStateBatch() {
     }
 }
 
+/**
+ * Runs several store writes as one notification.
+ *
+ * An entity and the primitives it owns are separate writes. Subscribers that
+ * act on what they see -- the renderer culls roots no entity claims -- would
+ * otherwise read the gap between them and delete a root its entity was about
+ * to arrive for.
+ */
+export function asOneSupportEdit<T>(apply: () => T): T {
+    beginSupportStateBatch();
+    try {
+        return apply();
+    } finally {
+        endSupportStateBatch();
+    }
+}
+
 function rebuildSupportSettingsHexCacheFromState() {
     const next = createEmptySettingsHexCache();
 
@@ -1744,14 +1835,9 @@ export function resetKickstandsInState() {
 }
 
 /**
- * Transform kickstands owned by `modelId`, plus any connected to a touched
- * entity: a kickstand can be grafted onto another model's support, and moving
- * that support has to carry the kickstand with it.
- */
-/**
- * Transform kickstand SHAFTS only -- a kickstand grafted onto another model's
- * support moves with it. Roots and host knots are left to the main walk, which
- * already moves them; doing it here too applied the delta twice.
+ * Transform kickstand shafts: those owned by `modelId`, plus any grafted onto a
+ * support that moved. Roots and host knots are the main walk's, which already
+ * moves them.
  */
 function transformKickstandsForModelInState(
     modelId: string,
@@ -1848,7 +1934,8 @@ export function transformSupportsForModel(
     }
 
     let changed = false;
-    // Only the three collections computed here; the rest come from `nextByCollection`.
+    // Computed here; the rest come from `nextByCollection`. Each copies on its
+    // own first write, so a caller holding the earlier snapshot keeps it.
     let nextRoots = state.roots;
     let nextTrunks = state.trunks;
     let nextKnots = state.knots;
@@ -1910,10 +1997,8 @@ export function transformSupportsForModel(
 
     for (const root of Object.values(state.roots)) {
         if (root.modelId !== modelId) continue;
-        if (!changed) {
-            nextRoots = { ...state.roots };
-            changed = true;
-        }
+        if (nextRoots === state.roots) nextRoots = { ...state.roots };
+        changed = true;
         touchedRootIds.add(root.id);
         nextRoots[root.id] = transformSupportRecord(
             'roots',
@@ -1924,19 +2009,9 @@ export function transformSupportsForModel(
 
     for (const trunk of Object.values(state.trunks)) {
         if (trunk.modelId !== modelId) continue;
-        if (!changed) {
-            nextTrunks = { ...state.trunks };
-            changed = true;
-        }
+        if (nextTrunks === state.trunks) nextTrunks = { ...state.trunks };
+        changed = true;
 
-        trunk.segments.forEach((segment) => touchedSegmentIds.add(segment.id));
-        trunk.segments.forEach((segment) => {
-            if (segment.bottomJoint?.id) touchedJointIds.add(segment.bottomJoint.id);
-            if (segment.topJoint?.id) touchedJointIds.add(segment.topJoint.id);
-        });
-        if (trunk.contactCone?.socketJointId) {
-            touchedJointIds.add(trunk.contactCone.socketJointId);
-        }
         const nextTrunk = transformSupportRecord(
             'trunk',
             trunk as unknown as Record<string, unknown>,
@@ -1967,6 +2042,16 @@ export function transformSupportsForModel(
             if (contact?.socketJointId) touchedJointIds.add(contact.socketJointId);
         }
     };
+
+    // A shaft on its own root is reached by no edge, so it claims its segments
+    // here or the knots riding them stay put when the model moves.
+    for (const descriptor of SUPPORT_TYPES) {
+        if (!descriptor.ownsRoot) continue;
+        const collection = state[descriptor.location.key] as unknown as Record<string, Record<string, unknown>>;
+        for (const entity of Object.values(collection)) {
+            if (entity.modelId === modelId) claimShaft(descriptor, entity);
+        }
+    }
 
     let expandedGraph = true;
     while (expandedGraph) {
@@ -2086,10 +2171,8 @@ export function transformSupportsForModel(
 
         if (!shouldTransform) continue;
 
-        if (!changed) {
-            nextKnots = { ...state.knots };
-            changed = true;
-        }
+        if (nextKnots === state.knots) nextKnots = { ...state.knots };
+        changed = true;
 
         nextKnots[knot.id] = transformSupportRecord(
             'knots',
@@ -2381,11 +2464,12 @@ export function loadFromImportFormat(data: DragonfruitImportFormat) {
     const normalized = normalizeLoadedKnotAndLeafGeometry(newState);
     newState.knots = normalized.knots;
     newState.leaves = normalized.leaves;
+    newState.roots = pruneUnclaimedRoots(newState.roots, newState);
 
     setState(newState);
     rebuildSupportSettingsHexCacheFromState();
     emitSupportInteractionReset('loadFromImportFormat');
-    console.log('[SupportStore] Loaded from LYS:', Object.fromEntries(
+    console.log('[SupportStore] Loaded from import:', Object.fromEntries(
         SUPPORT_COLLECTION_KEYS.map((key) => [key, Object.keys(state[key] ?? {}).length]),
     ));
     notify();
@@ -2749,11 +2833,12 @@ export function mergeFromImportFormat(data: DragonfruitImportFormat, ownerModelI
     const normalized = normalizeLoadedKnotAndLeafGeometry(merged);
     merged.knots = normalized.knots;
     merged.leaves = normalized.leaves;
+    merged.roots = pruneUnclaimedRoots(merged.roots, merged);
 
     setState(merged);
     rebuildSupportSettingsHexCacheFromState();
     emitSupportInteractionReset('mergeFromImportFormat');
-    console.log('[SupportStore] Merged from LYS:', Object.fromEntries(
+    console.log('[SupportStore] Merged from import:', Object.fromEntries(
         SUPPORT_COLLECTION_KEYS.map((key) => [key, Object.keys(merged[key]).length]),
     ));
     notify();
@@ -2911,11 +2996,19 @@ export function addSupportEntityWithHistory(
     extras?: Record<string, unknown>,
 ) {
     addSupportEntity(typeId, entity);
+    // Undo removes this entity by cascade, so the entry carries what that
+    // cascade takes -- the same payload a removal records.
+    const recorded = cascadePayload(
+        typeId,
+        entity,
+        ownedPrimitives(state, typeId, entity),
+        (value) => value,
+    );
     // The declared `self` field is the key that type's add payload carries,
     // but it is computed here, so the compiler cannot match it to the union.
     pushSupportHistory({
         type: getSupportTypeDescriptor(typeId).historyAdd,
-        payload: { [removalShapeFor(typeId).self]: entity, ...extras },
+        payload: { ...recorded, ...extras },
     } as unknown as Parameters<typeof pushSupportHistory>[0]);
 }
 

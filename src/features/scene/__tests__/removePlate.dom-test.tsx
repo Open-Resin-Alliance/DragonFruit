@@ -36,7 +36,12 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   return blob ? new Response(await blob.arrayBuffer()) : domFetch(input, init);
 }) as typeof fetch;
 
-/** One support root standing under each model, where the model stands. */
+/**
+ * One support standing under each model, where the model stands.
+ *
+ * Each root carries the trunk that owns it: an import drops a root nothing
+ * claims, so a bare root would not survive to be measured.
+ */
 function rootsUnder(models: ReadonlyArray<{ id: string; x: number; y: number }>): DragonfruitImportFormat {
   const collections = Object.fromEntries(SUPPORT_COLLECTION_KEYS.map((key) => [key, []]));
   return {
@@ -50,6 +55,16 @@ function rootsUnder(models: ReadonlyArray<{ id: string; x: number; y: number }>)
       diameter: 4,
       diskHeight: 0.5,
       coneHeight: 1,
+    })),
+    trunks: models.map(({ id, x, y }) => ({
+      id: `trunk-${id}`,
+      modelId: id,
+      rootId: `root-${id}`,
+      segments: [{
+        id: `seg-${id}`,
+        diameter: 1,
+        topJoint: { id: `joint-${id}`, pos: { x, y, z: 10 }, diameter: 1.1 },
+      }],
     })),
     knots: [],
   } as unknown as DragonfruitImportFormat;
