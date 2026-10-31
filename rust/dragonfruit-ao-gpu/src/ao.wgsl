@@ -6,7 +6,8 @@
 // against the CPU values, so anything that drifts here shows up as a mismatch.
 
 struct Params {
-    vertex_count: u32,
+    vertex_end: u32,   // one past the last vertex of this batch
+    vertex_start: u32, // first vertex of this batch; gid 0 lands here
     root: u32,
     leaf_flag: u32,
     rays: u32,
@@ -14,6 +15,9 @@ struct Params {
     plateau: f32,
     bias: f32,
     rotate: f32,   // 1 = turn the fan per vertex, as the new CPU recipe does
+    ray_start: u32, // this pass traces rays [ray_start, ray_end) of `rays`;
+    ray_end: u32,   // out_ao holds the running hit sum until the last pass
+    _pad: u32,
 }
 
 @group(0) @binding(0) var<storage, read> nodes: array<u32>;      // 8 words per node
@@ -162,15 +166,17 @@ fn nearest_within(origin: vec3<f32>, dir: vec3<f32>) -> f32 {
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let index = gid.x + gid.y * 65535u;
-    if index >= params.vertex_count {
+    let index = params.vertex_start + gid.x;
+    if index >= params.vertex_end {
         return;
     }
     let position = vec3<f32>(positions[index * 3u], positions[index * 3u + 1u], positions[index * 3u + 2u]);
     let n = vec3<f32>(normals[index * 3u], normals[index * 3u + 1u], normals[index * 3u + 2u]);
     let len = length(n);
     if len < 1e-12 {
-        out_ao[index] = 1.0;
+        if params.ray_end >= params.rays {
+            out_ao[index] = 1.0;
+        }
         return;
     }
     let normal = n / len;
@@ -185,7 +191,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let origin = position + normal * params.bias;
 
     var hits = 0.0;
-    for (var i = 0u; i < params.rays; i = i + 1u) {
+    if params.ray_start > 0u {
+        hits = out_ao[index];
+    }
+    for (var i = params.ray_start; i < params.ray_end; i = i + 1u) {
         // hemisphere_samples(): golden-ratio azimuth, cosine-weighted radius.
         let u1 = (f32(i) + 0.5) / f32(params.rays);
         let u2 = fract(f32(i) * 0.618034 + params.rotate * rotation_for(position, params.reach));
@@ -199,5 +208,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             hits = hits + clamp(1.0 - span, 0.0, 1.0);
         }
     }
-    out_ao[index] = 1.0 - hits / f32(params.rays);
+    if params.ray_end >= params.rays {
+        out_ao[index] = 1.0 - hits / f32(params.rays);
+    } else {
+        out_ao[index] = hits;
+    }
 }
