@@ -252,7 +252,10 @@ fn read_model_xml(path: &Path) -> Result<String, MeshRepairError> {
         let entry = zip
             .by_index(i)
             .map_err(|e| MeshRepairError::Parse(format!("3MF zip entry: {e}")))?;
-        let name = entry.name().to_string();
+        let name = entry
+            .name()
+            .map_err(|e| MeshRepairError::Parse(format!("3MF zip entry name: {e}")))?
+            .into_owned();
         if name.to_ascii_lowercase().ends_with(".model") {
             model_name = Some(name);
             break;
@@ -287,7 +290,10 @@ fn read_models(path: &Path) -> Result<(String, HashMap<String, ObjectTable>), Me
             let entry = zip
                 .by_index(i)
                 .map_err(|e| MeshRepairError::Parse(format!("3MF zip entry: {e}")))?;
-            entry.name().to_string()
+            entry
+                .name()
+                .map_err(|e| MeshRepairError::Parse(format!("3MF zip entry name: {e}")))?
+                .into_owned()
         };
         if !name.to_ascii_lowercase().ends_with(".model") {
             continue;
@@ -550,7 +556,7 @@ mod tests {
         let file = File::create(&path).unwrap();
         let mut zip = zip::ZipWriter::new(file);
         let options =
-            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
         zip.start_file("3D/3dmodel.model", options).unwrap();
         zip.write_all(model_xml.as_bytes()).unwrap();
         zip.finish().unwrap();
@@ -571,7 +577,7 @@ mod tests {
         let file = File::create(&path).unwrap();
         let mut zip = zip::ZipWriter::new(file);
         let options =
-            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
         for (name, xml) in entries {
             zip.start_file(*name, options).unwrap();
             zip.write_all(xml.as_bytes()).unwrap();

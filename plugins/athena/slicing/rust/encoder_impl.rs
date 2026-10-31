@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use std::io::{Seek, Write};
 use std::path::Path;
 use std::sync::Arc;
-use zip::write::FileOptions;
+use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
 pub struct AthenaPluginEncoder;
@@ -325,18 +325,18 @@ fn write_nanodlp_archive<W: Write + Seek>(
     let info_json = build_info_json(layer_area_stats);
 
     let mut zip = ZipWriter::new(writer);
-    let meta_opt = FileOptions::default()
+    let meta_opt = SimpleFileOptions::default()
         .compression_method(CompressionMethod::Deflated)
-        .compression_level(Some(normalize_container_compression_level(
+        .compression_level(Some(i64::from(normalize_container_compression_level(
             job.container_compression_level,
-        )));
+        ))));
 
     // Layer PNGs use a lightweight fixed-Huffman deflate internally (fast to
     // produce, O(num_runs)).  The resulting bitstream is highly repetitive
     // (the same 13-bit distance-1 match pattern repeated thousands of times),
     // so a second ZIP deflate pass compresses it dramatically — matching the
     // approach used by mslicer's `FileOptions::DEFAULT`.
-    let layer_opt = FileOptions::default()
+    let layer_opt = SimpleFileOptions::default()
         .compression_method(CompressionMethod::Deflated)
         .compression_level(Some(1));
 
