@@ -189,6 +189,33 @@ material, and opens the edit dialog built from the declared fields.
   Limits: 128 fields, 32 sections per kind. A field without a `key` or with a
   duplicate key is dropped; a schema with no usable field turns listing off.
 
+### Monitoring policy
+
+A packed mode leaves the monitor's defaults alone. If the printer answers slowly,
+`network.monitoring` tunes the panel instead — all fields optional, clamped to
+sane bounds:
+
+```json
+"network": {
+  "pluginId": "alphabeta.alphaprint",
+  "mode": "alphaprint-net",
+  "monitoring": {
+    "busyResponseGraceMs": 45000,
+    "inconclusiveReachabilityMaxPolls": 3,
+    "supportsWebcamStreamSlotReset": true
+  }
+}
+```
+
+| Field | Meaning | Bound |
+| --- | --- | --- |
+| `busyResponseGraceMs` | how long online state survives a slow poll | ≤ 120000 |
+| `inconclusiveReachabilityMaxPolls` | inconclusive probes before offline | ≤ 100 |
+| `webcamMaxConsecutiveTimeouts` | timeouts before a cooldown | ≤ 100 |
+| `webcamTimeoutCooldownMs` | cooldown length after timeouts | ≤ 600000 |
+| `webcamFailureCooldownMs` | cooldown after an immediate failure | ≤ 600000 |
+| `supportsWebcamStreamSlotReset` | offer the manual stream reset | boolean |
+
 ### Uploading a job
 
 A compiled plugin uploads through a handler it registers in the webview. A package

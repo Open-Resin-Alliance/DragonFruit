@@ -147,3 +147,29 @@ test('a declared mode turns on on-device materials only when it describes them',
     uninstallExternalProfilePlugin(PLUGIN_ID);
   }
 });
+
+test('a declared mode carries its monitoring policy, clamped to the documented bounds', () => {
+  installExternalProfilePlugin({
+    ...manifest,
+    network: {
+      ...manifest.network!,
+      monitoring: {
+        busyResponseGraceMs: 45_000,
+        inconclusiveReachabilityMaxPolls: 900,
+        supportsWebcamStreamSlotReset: true,
+      },
+    },
+  });
+  try {
+    const monitoring = getProfileMonitoringUiAdapter(MODE);
+    assert.deepEqual(monitoring.getMonitoringUiPolicy?.(), {
+      busyResponseGraceMs: 45_000,
+      inconclusiveReachabilityMaxPolls: 100,
+      supportsWebcamStreamSlotReset: true,
+    });
+  } finally {
+    uninstallExternalProfilePlugin(PLUGIN_ID);
+  }
+
+  assert.equal(getProfileMonitoringUiAdapter(MODE).getMonitoringUiPolicy, undefined);
+});

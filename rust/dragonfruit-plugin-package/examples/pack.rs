@@ -74,6 +74,7 @@ fn main() {
     let asset_paths = arg_all("--asset");
     let requires_area_stats = arg("--area-stats").is_some();
     let job_metadata_path = arg("--job-metadata");
+    let network_monitoring_path = arg("--network-monitoring");
     let format_extension = format.clone().unwrap_or_else(|| ".apf".to_string());
     // An empty passphrase is not a passphrase: sealing with "" only looks like
     // protection. Treat it as an unsealed package.
@@ -169,6 +170,7 @@ fn main() {
             hostnames: network_hosts.clone(),
             operations: Default::default(),
             remote_materials: remote_materials_path.as_deref().map(read_remote_materials),
+            monitoring: network_monitoring_path.as_deref().map(read_network_monitoring),
         }),
         file_types: file_type
             .iter()
@@ -220,6 +222,12 @@ fn main() {
 /// objects here: the renderer normalises them with the same code the simple tier
 /// uses, so a package cannot slip a shape past two different validators.
 /// `{ "byOutput": {"<format>": {...}}, "byOutputAndMode": {"<format>": {"<mode>": {...}}} }`
+/// `{ "busyResponseGraceMs": 45000, … }`
+fn read_network_monitoring(path: &str) -> package::NetworkMonitoringDecl {
+    let text = std::fs::read_to_string(path).expect("read network monitoring");
+    serde_json::from_str(&text).expect("network monitoring must match the manifest field")
+}
+
 /// JSON array of `{ settingPath, payloadPath, payload }`.
 fn read_job_metadata(path: &str) -> Vec<package::JobMetadataPayloadDecl> {
     let text = std::fs::read_to_string(path).expect("read job metadata");

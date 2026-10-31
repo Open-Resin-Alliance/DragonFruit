@@ -48,6 +48,15 @@ export type DeclaredNetworkOperations = {
   upload?: string;
 };
 
+export type DeclaredMonitoringPolicy = {
+  busyResponseGraceMs?: number;
+  inconclusiveReachabilityMaxPolls?: number;
+  supportsWebcamStreamSlotReset?: boolean;
+  webcamMaxConsecutiveTimeouts?: number;
+  webcamTimeoutCooldownMs?: number;
+  webcamFailureCooldownMs?: number;
+};
+
 export type DeclaredNetworkMode = {
   /** The answering plugin. The host refuses a package that names another. */
   pluginId: string;
@@ -57,6 +66,8 @@ export type DeclaredNetworkMode = {
   hostnames: string[];
   operations?: DeclaredNetworkOperations;
   remoteMaterials?: DeclaredRemoteMaterials;
+  /** Monitor panel timing for a printer that answers slowly. */
+  monitoring?: DeclaredMonitoringPolicy;
 };
 
 export type DeclaredMaterialSettings = {
@@ -231,6 +242,7 @@ function buildDeclaredMonitoringAdapter(declared: DeclaredNetworkMode): ProfileM
     },
     parseStatusPayload: (payload) => parseDeclaredNetworkStatus(payload),
     parseWebcamInfoPayload: (payload) => parseDeclaredNetworkWebcamInfo(payload),
+    ...(declared.monitoring ? { getMonitoringUiPolicy: () => ({ ...declared.monitoring }) } : {}),
   };
 }
 
@@ -602,6 +614,7 @@ function sanitizeDeclaredNetwork(mode: unknown): DeclaredNetworkMode | null {
   }
 
   const remoteMaterials = sanitizeDeclaredRemoteMaterials(value.remoteMaterials);
+  const monitoring = sanitizeDeclaredMonitoring(value.monitoring);
 
   return {
     pluginId,
@@ -610,6 +623,7 @@ function sanitizeDeclaredNetwork(mode: unknown): DeclaredNetworkMode | null {
     hostnames,
     operations,
     ...(remoteMaterials ? { remoteMaterials } : {}),
+    ...(monitoring ? { monitoring } : {}),
   };
 }
 
@@ -652,6 +666,31 @@ function sanitizeDeclaredMaterialSettingsMap(value: unknown): DeclaredMaterialSe
   }
   if (Object.keys(byOutput).length === 0 && Object.keys(byOutputAndMode).length === 0) return null;
   return { byOutput, byOutputAndMode };
+}
+
+function sanitizeDeclaredMonitoring(value: unknown): DeclaredMonitoringPolicy | null {
+  if (!value || typeof value !== 'object') return null;
+  const source = value as Record<string, unknown>;
+  const bounded = (input: unknown, max: number) => {
+    const parsed = Number(input);
+    return Number.isFinite(parsed) && parsed >= 0 ? Math.min(Math.round(parsed), max) : undefined;
+  };
+
+  const policy: DeclaredMonitoringPolicy = {
+    ...(bounded(source.busyResponseGraceMs, 120_000) !== undefined
+      ? { busyResponseGraceMs: bounded(source.busyResponseGraceMs, 120_000) } : {}),
+    ...(bounded(source.inconclusiveReachabilityMaxPolls, 100) !== undefined
+      ? { inconclusiveReachabilityMaxPolls: bounded(source.inconclusiveReachabilityMaxPolls, 100) } : {}),
+    ...(typeof source.supportsWebcamStreamSlotReset === 'boolean'
+      ? { supportsWebcamStreamSlotReset: source.supportsWebcamStreamSlotReset } : {}),
+    ...(bounded(source.webcamMaxConsecutiveTimeouts, 100) !== undefined
+      ? { webcamMaxConsecutiveTimeouts: bounded(source.webcamMaxConsecutiveTimeouts, 100) } : {}),
+    ...(bounded(source.webcamTimeoutCooldownMs, 600_000) !== undefined
+      ? { webcamTimeoutCooldownMs: bounded(source.webcamTimeoutCooldownMs, 600_000) } : {}),
+    ...(bounded(source.webcamFailureCooldownMs, 600_000) !== undefined
+      ? { webcamFailureCooldownMs: bounded(source.webcamFailureCooldownMs, 600_000) } : {}),
+  };
+  return Object.keys(policy).length > 0 ? policy : null;
 }
 
 function sanitizeImageAssetPath(value: unknown): string | undefined {

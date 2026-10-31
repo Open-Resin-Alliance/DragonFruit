@@ -206,6 +206,7 @@ cargo run -p dragonfruit-plugin-package --example pack -- \
 | `--remote-materials` | JSON remote material field schema |
 | `--asset` | repeatable file copied into `assets/` (preset images) |
 | `--job-metadata` | JSON array of `{ settingPath, payloadPath, payload }` declarations |
+| `--network-monitoring` | JSON monitoring policy for the declared mode |
 | `--min-app-version` | manifest `minAppVersion` (default `0.1.0`) |
 | `--passphrase` | seals the payload; omit (or pass an empty value) for an unsealed test package |
 | `--seed` | 32 bytes of hex for a deterministic publisher key (default: the fixed dev seed) |
@@ -240,7 +241,8 @@ cargo run -p dragonfruit-plugin-package --example pack -- \
   --material-settings rust/dragonfruit-plugin-sdk/examples/full_plugin_material_settings.json \
   --remote-materials rust/dragonfruit-plugin-sdk/examples/full_plugin_remote_materials.json \
   --asset rust/dragonfruit-plugin-sdk/examples/echo_printer.png \
-  --job-metadata rust/dragonfruit-plugin-sdk/examples/full_plugin_job_metadata.json
+  --job-metadata rust/dragonfruit-plugin-sdk/examples/full_plugin_job_metadata.json \
+  --network-monitoring rust/dragonfruit-plugin-sdk/examples/full_plugin_monitoring.json
 ```
 
 Installing that one package gives you: an "Echo container" output format on the

@@ -239,6 +239,26 @@ pub struct MaterialSettingsDecl {
     pub by_output_and_mode: BTreeMap<String, BTreeMap<String, serde_json::Value>>,
 }
 
+/// How the monitor panel should treat a slow or flaky printer. Mirrors
+/// `PluginMonitoringUiPolicy`; every field is optional and the UI applies its own
+/// default for the ones left out.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct NetworkMonitoringDecl {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub busy_response_grace_ms: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inconclusive_reachability_max_polls: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supports_webcam_stream_slot_reset: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub webcam_max_consecutive_timeouts: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub webcam_timeout_cooldown_ms: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub webcam_failure_cooldown_ms: Option<u32>,
+}
+
 /// On-device material listing and editing for a declared mode. The fields are the
 /// same model compiled plugins build in TypeScript (`RemoteMaterialPrimaryField`):
 /// the host renders the edit dialog from them and sends the draft back unchanged.
@@ -286,6 +306,9 @@ pub struct NetworkDecl {
     /// Presence turns on on-device material listing; the fields also turn on editing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_materials: Option<RemoteMaterialsDecl>,
+    /// Monitor panel timing for a backend whose printer answers slowly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monitoring: Option<NetworkMonitoringDecl>,
 }
 
 impl NetworkDecl {
@@ -682,6 +705,21 @@ fn validate(manifest: &Manifest) -> Result<(), PackageError> {
                 ));
             }
         }
+        if let Some(monitoring) = &network.monitoring {
+            let bounded = |value: Option<u32>, max: u32, label: &str| -> Result<(), PackageError> {
+                match value {
+                    Some(value) if value > max => Err(PackageError::Invalid(format!(
+                        "network.monitoring.{label} must be at most {max}"
+                    ))),
+                    _ => Ok(()),
+                }
+            };
+            bounded(monitoring.busy_response_grace_ms, 120_000, "busyResponseGraceMs")?;
+            bounded(monitoring.inconclusive_reachability_max_polls, 100, "inconclusiveReachabilityMaxPolls")?;
+            bounded(monitoring.webcam_max_consecutive_timeouts, 100, "webcamMaxConsecutiveTimeouts")?;
+            bounded(monitoring.webcam_timeout_cooldown_ms, 600_000, "webcamTimeoutCooldownMs")?;
+            bounded(monitoring.webcam_failure_cooldown_ms, 600_000, "webcamFailureCooldownMs")?;
+        }
         for (key, operation) in network.operations.overrides() {
             let Some(operation) = operation else { continue };
             let operation = operation.trim();
@@ -1065,6 +1103,7 @@ mod tests {
             hostnames: vec!["echo.local".to_string()],
             operations: NetworkOperationsDecl::default(),
             remote_materials: None,
+            monitoring: None,
         });
         manifest
     }

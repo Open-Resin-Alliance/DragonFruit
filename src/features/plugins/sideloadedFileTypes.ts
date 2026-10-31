@@ -82,6 +82,7 @@ async function syncProfileContributions(plugins: InstalledSideloadedPlugin[]) {
         hostnames: Array.isArray(source.network.hostnames) ? source.network.hostnames : [],
         operations: source.network.operations ?? {},
         remoteMaterials: source.network.remoteMaterials,
+        monitoring: source.network.monitoring,
       } as PluginManifest['network'] : undefined,
       materialSettings: source.materialSettings,
       jobMetadataPayloads: source.jobMetadataPayloads,

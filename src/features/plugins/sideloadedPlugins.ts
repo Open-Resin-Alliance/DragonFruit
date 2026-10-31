@@ -46,6 +46,7 @@ export type SideloadedManifest = {
     hostnames?: string[];
     operations?: Record<string, string | null | undefined>;
     remoteMaterials?: unknown;
+    monitoring?: unknown;
   } | null;
   fileTypes?: Array<{ extension: string; displayName: string; isSceneFile?: boolean }>;
   /** Scene data the host bakes into a job when a settings path asks for it. */

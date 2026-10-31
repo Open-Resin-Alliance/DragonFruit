@@ -34,6 +34,7 @@ slices, and each capability is either shipped or designed.
 | package images | shipped | payload `assets/` | shipped: inlined at registration through `sideloaded_plugin_asset` |
 | job metadata payloads | shipped | not code: `jobMetadataPayloads` | shipped: baked into `metadata_json` like a compiled plugin's declaration |
 | raw mask layers, area stats | shipped | format `layers: "mask"`, `requiresAreaStats` | shipped: mask slots at source resolution, stats in the batch job |
+| monitoring policy | shipped | not code: `network.monitoring` | shipped: grace windows and webcam cooldowns per mode |
 
 Pages mark their own status. A "designed" page is the contract to build against;
 it is not a description of running code.

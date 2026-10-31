@@ -934,6 +934,7 @@ mod tests {
                 })],
                 advanced_sections: Vec::new(),
             }),
+            monitoring: None,
         });
         install_reference_plugin(&root, "full_plugin", &demo);
 
