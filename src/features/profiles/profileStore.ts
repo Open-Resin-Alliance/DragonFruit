@@ -297,9 +297,17 @@ const MATERIAL_PROFILE_LOCAL_OVERRIDE_KEYS = new Set<keyof MaterialProfile>([
     'bottomExposureSec',
     'bottomLayerCount',
     'liftDistanceMm',
+    'liftDistance2Mm',
     'liftSpeedMmMin',
+    'liftSpeed2MmMin',
     'retractSpeedMmMin',
+    'retractSpeed2MmMin',
     'minimumAaAlphaPercent',
+    'transitionLayerCount',
+    //Thinking for wait times, those have the strangest logic and are unlikely to match
+    // Maybe we take the word wait in the sanitiztation, add them up and make a per-layer wait time.
+    // It doesnt super matter when the wait happens functionally for print time, just that it does.
+    
 ]);
 
 export type MaterialProfile = {
@@ -330,8 +338,12 @@ export type MaterialProfile = {
     bottomExposureSec: number;
     bottomLayerCount: number;
     liftDistanceMm: number;
+    liftDistance2Mm: number;
     liftSpeedMmMin: number;
+    liftSpeed2MmMin: number;
     retractSpeedMmMin: number;
+    retractSpeed2MmMin: number;
+    transitionLayerCount: number;
     minimumAaAlphaPercent: number;
     antiAliasingSettings: MaterialAntiAliasingSettings;
     localSettingsByOutput?: Record<string, LocalMaterialSettingsMap>;
