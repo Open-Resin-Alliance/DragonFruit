@@ -193,7 +193,8 @@ import {
   isBoundsOutsideVolume,
   shouldUsePreciseBoundsForTransform,
 } from '@/utils/modelBounds';
-import { computeLowestZ, countTriangles } from '@/utils/geometry';
+import { countTriangles } from '@/utils/geometry';
+import { meshSurfaceLowestZ } from '@/utils/meshSurfaceLowestZ';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { Toast } from '@/components/atoms';
 import { getCenteredPositionSource, type CenteredPositionSource } from '@/utils/modelBounds';
@@ -1122,7 +1123,7 @@ export function SceneCanvas({
 
     const posMatrix = new THREE.Matrix4().makeTranslation(candidate.position.x, candidate.position.y, candidate.position.z);
     const finalMatrix = posMatrix.multiply(rotScaleMatrix).multiply(offsetMatrix);
-    const lowestWorldZ = computeLowestZ(geometry, finalMatrix);
+    const lowestWorldZ = meshSurfaceLowestZ(geometry, finalMatrix);
     const targetZ = autoLift ? liftDistance : 0.001;
     const offset = targetZ - lowestWorldZ;
 
