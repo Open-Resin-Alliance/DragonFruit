@@ -77,7 +77,8 @@ type InstalledPluginRow = {
   description?: string;
   source: 'builtin' | 'github' | 'sideloaded';
   link?: string;
-  fingerprint?: string;
+  publisher?: string;
+  signingKeyFingerprint?: string;
   capabilities?: SideloadedCapability[];
   unverified: boolean;
   acceptedAt?: string;
@@ -581,7 +582,8 @@ export function PluginsSettingsTab() {
       version: plugin.manifest.version,
       description: plugin.manifest.vendor.name,
       source: 'sideloaded',
-      fingerprint: plugin.publisherFingerprint,
+      publisher: plugin.manifest.vendor.name,
+      signingKeyFingerprint: plugin.publisherFingerprint,
       capabilities: plugin.manifest.capabilities,
       unverified: false,
       remove: () => setPendingRemoveSideload(plugin),
@@ -676,10 +678,13 @@ export function PluginsSettingsTab() {
                   {row.acceptedAt && (
                     <div><span style={{ color: 'var(--text-strong)' }}><Trans>Liability accepted</Trans>:</span> {row.acceptedAt}</div>
                   )}
-                  {row.fingerprint && (
+                  {row.publisher && (
+                    <div><span style={{ color: 'var(--text-strong)' }}><Trans>Publisher</Trans>:</span> {row.publisher}</div>
+                  )}
+                  {row.signingKeyFingerprint && (
                     <div className="break-all">
-                      <span style={{ color: 'var(--text-strong)' }}><Trans>Publisher</Trans>:</span>{' '}
-                      <span className="font-mono">{shortFingerprint(row.fingerprint)}</span>
+                      <span style={{ color: 'var(--text-strong)' }}><Trans>Signing key</Trans>:</span>{' '}
+                      <span className="font-mono">{shortFingerprint(row.signingKeyFingerprint)}</span>
                     </div>
                   )}
                   {row.capabilities && row.capabilities.length > 0 && (
@@ -1193,9 +1198,9 @@ export function PluginsSettingsTab() {
               <Trans>Publisher</Trans>
             </div>
             <div className="mt-1.5 space-y-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-              <div><span style={{ color: 'var(--text-strong)' }}><Trans>Vendor</Trans>:</span> {pendingSideload?.info.manifest.vendor.name}</div>
+              <div><span style={{ color: 'var(--text-strong)' }}><Trans>Name</Trans>:</span> {pendingSideload?.info.manifest.vendor.name}</div>
               <div>
-                <span style={{ color: 'var(--text-strong)' }}><Trans>Key</Trans>:</span>{' '}
+                <span style={{ color: 'var(--text-strong)' }}><Trans>Signing key</Trans>:</span>{' '}
                 <Tooltip
                   content={<span className="font-mono break-all">{pendingSideload?.info.publisherFingerprint}</span>}
                   maxWidth={320}
@@ -1334,9 +1339,27 @@ export function PluginsSettingsTab() {
         onClose={reloadDragonFruit}
         onBackdropClick={reloadDragonFruit}
         actions={(
-          <Button variant="tinted-accent" size="md" className="gap-1.5" onClick={reloadDragonFruit}>
-            <RotateCcw className="h-3.5 w-3.5" />
-            {_(reloadCountdownLabel(reloadSecondsLeft))}
+          // The button is the countdown: the fill drains over the remaining
+          // seconds, so the wait is visible without a second progress element.
+          <Button
+            variant="tinted-accent"
+            size="md"
+            className="relative isolate gap-1.5 overflow-hidden"
+            // The fill is dark enough to sit under the label: the accent text the
+            // tinted variant uses is unreadable on a bright accent bar.
+            style={{ color: 'var(--accent-contrast)' }}
+            onClick={reloadDragonFruit}
+          >
+            <span
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-y-0 left-0 -z-10 transition-[width] duration-1000 ease-linear"
+              style={{
+                width: `${(reloadSecondsLeft / PLUGIN_RELOAD_SECONDS) * 100}%`,
+                background: 'color-mix(in srgb, var(--button-tint, var(--accent)), #000 62%)',
+              }}
+            />
+            <RotateCcw className="relative h-3.5 w-3.5" />
+            <span className="relative">{_(reloadCountdownLabel(reloadSecondsLeft))}</span>
           </Button>
         )}
       >

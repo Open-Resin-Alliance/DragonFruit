@@ -205,6 +205,10 @@ executable. Treat the seal as distribution control, not DRM.
   same fingerprint.
 - Removing the plugin deletes the key with it. Re-importing needs the
   passphrase again.
+- Three names, deliberately distinct: `vendor.name` is the publisher a person
+  recognises, `publisher.key` is the signing key in the manifest, and what the UI
+  shows is that key's SHA-256 fingerprint. The fingerprint is the identity pinned
+  on first import; the publisher name is never verified by the signature.
 
 ## Protocol v1
 
