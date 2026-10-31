@@ -71,6 +71,7 @@ fn main() {
     let network_name = arg("--network-name");
     let network_hosts = arg_all("--network-host");
     let remote_materials_path = arg("--remote-materials");
+    let asset_paths = arg_all("--asset");
     let format_extension = format.clone().unwrap_or_else(|| ".apf".to_string());
     // An empty passphrase is not a passphrase: sealing with "" only looks like
     // protection. Treat it as an unsealed package.
@@ -177,6 +178,19 @@ fn main() {
         format!("bin/{}/{}", platform_dir(), binary_name),
         std::fs::read(&binary_path).expect("read binary"),
     );
+    // Assets keep their file name: a preset references `echo_printer.png`, and a
+    // nested path would need this tool to invent a layout the package never asked for.
+    for asset in &asset_paths {
+        let path = PathBuf::from(asset);
+        let name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .expect("asset file name");
+        payload_files.insert(
+            format!("assets/{name}"),
+            std::fs::read(&path).expect("read asset"),
+        );
+    }
 
     let payload = package::build_payload_zip(&payload_files).expect("payload zip");
     let package_bytes = match passphrase {

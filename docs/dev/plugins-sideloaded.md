@@ -28,6 +28,7 @@ Read this page before changing anything in this tier. "Protocol v1" and
 | job upload | manifest `network.operations.upload` + the host chunk loop | done: printing works for a declared mode |
 | material pane schema | manifest `materialSettings` | done: validated once, rendered by the same form as compiled adapters |
 | on-device material list and edit | manifest `network.remoteMaterials` | done: the same dialog, built from declared fields |
+| package image assets | `payload/assets/` + `sideloaded_plugin_asset` | done: preset images are inlined as data URLs |
 
 `cargo test` in the package crate and `cargo test --bin dragonfruit-desktop
 plugin_sideload` cover the verification matrix below except the process cases.
@@ -215,6 +216,21 @@ modes per format, 512 fields, 128 KiB per contract.
 
 Whatever needs its own rendering is the planned UI island, not this field — see
 `docs/dev/plugins-sdk/ui.md`.
+
+### Assets
+
+A payload may carry images under `payload/assets/`. A printer preset references one
+by its path inside that directory (`"imageAssetPath": "echo_printer.png"`), and the
+renderer asks the host for it at registration:
+`sideloaded_plugin_asset(pluginId, assetPath)` returns a data URL, because a webview
+cannot load a path that lives in the app data dir. The inlined URL is what the
+preset card renders, and it is stored with the preset like a remote image from the
+simple tier.
+
+Rules: paths are relative segments only (no absolute path, no `.`/`..`, no hidden
+files), images only (`png`, `jpeg`, `webp`, `gif`, `svg`, `avif`), 2.5 MB per asset,
+20 MB of inlined data per package. A read that fails leaves the preset without an
+image; it never fails the install.
 
 ### Seal
 

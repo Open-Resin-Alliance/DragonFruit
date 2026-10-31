@@ -202,6 +202,8 @@ cargo run -p dragonfruit-plugin-package --example pack -- \
 | `--presets` | JSON array of printer presets the package contributes |
 | `--templates` | JSON array of material templates the package contributes |
 | `--material-settings` | JSON `{ byOutput, byOutputAndMode }` material pane schema |
+| `--remote-materials` | JSON remote material field schema |
+| `--asset` | repeatable file copied into `assets/` (preset images) |
 | `--min-app-version` | manifest `minAppVersion` (default `0.1.0`) |
 | `--passphrase` | seals the payload; omit (or pass an empty value) for an unsealed test package |
 | `--seed` | 32 bytes of hex for a deterministic publisher key (default: the fixed dev seed) |
@@ -233,7 +235,9 @@ cargo run -p dragonfruit-plugin-package --example pack -- \
   --network-host echo.local \
   --presets rust/dragonfruit-plugin-sdk/examples/full_plugin_presets.json \
   --templates rust/dragonfruit-plugin-sdk/examples/full_plugin_templates.json \
-  --material-settings rust/dragonfruit-plugin-sdk/examples/full_plugin_material_settings.json
+  --material-settings rust/dragonfruit-plugin-sdk/examples/full_plugin_material_settings.json \
+  --remote-materials rust/dragonfruit-plugin-sdk/examples/full_plugin_remote_materials.json \
+  --asset rust/dragonfruit-plugin-sdk/examples/echo_printer.png
 ```
 
 Installing that one package gives you: an "Echo container" output format on the

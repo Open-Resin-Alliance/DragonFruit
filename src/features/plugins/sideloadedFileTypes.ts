@@ -4,6 +4,7 @@ import type {
 } from '@/features/plugins/pluginFileTypeBridge';
 import { importSideloadedFile, listSideloadedPlugins, type InstalledSideloadedPlugin } from '@/features/plugins/sideloadedPlugins';
 import { getInstalledProfilePlugins } from '@/features/plugins/pluginRegistry';
+import { inlineSideloadedPresetAssets } from '@/features/plugins/pluginAssets';
 import { installPluginFromManifest, uninstallPlugin } from '@/features/profiles/profileStore';
 import type { PluginManifest } from '@/features/plugins/pluginRegistry';
 import { parseSideloadedSceneContainer } from '@/features/plugins/sideloadedSceneContainer';
@@ -42,7 +43,7 @@ const syncedProfilePluginIds = new Set<string>();
  * A version bump refreshes an entry, plus a network mode that was not there
  * before: packages imported by an earlier build carried neither.
  */
-function syncProfileContributions(plugins: InstalledSideloadedPlugin[]) {
+async function syncProfileContributions(plugins: InstalledSideloadedPlugin[]) {
   const sameList = (left: unknown[] | undefined, right: unknown[] | undefined) => (
     JSON.stringify(left ?? []) === JSON.stringify(right ?? [])
   );
@@ -50,7 +51,11 @@ function syncProfileContributions(plugins: InstalledSideloadedPlugin[]) {
 
   for (const plugin of plugins) {
     const source = plugin.manifest;
-    const printerPresets = Array.isArray(source.printerPresets) ? source.printerPresets : [];
+    // Package images arrive as paths into the extracted payload; inline them so a
+    // preset card has something an <img> can load, exactly like the simple tier.
+    const printerPresets = Array.isArray(source.printerPresets)
+      ? await inlineSideloadedPresetAssets(source.id, source.printerPresets as Array<Record<string, unknown>>)
+      : [];
     const materialTemplates = Array.isArray(source.materialTemplates) ? source.materialTemplates : [];
     const declaredMode = (source.network?.mode ?? '').trim().toLowerCase();
     present.add(source.id);
@@ -128,7 +133,7 @@ export function refreshSideloadedContributions(): Promise<void> {
       }
       applySideloadedFileTypes(fileTypes);
       applySideloadedOutputFormats(formats);
-      syncProfileContributions(plugins);
+      await syncProfileContributions(plugins);
     } catch {
       // The runtime is unavailable (web build, or nothing installed yet).
       applySideloadedFileTypes([]);

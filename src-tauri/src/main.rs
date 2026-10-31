@@ -4652,6 +4652,7 @@ fn main() {
             plugin_sideload::sideloaded_plugin_inspect,
             plugin_sideload::sideloaded_plugin_install,
             plugin_sideload::sideloaded_plugin_list,
+            plugin_sideload::sideloaded_plugin_asset,
             plugin_sideload::sideloaded_plugin_remove,
             plugin_sideload::sideloaded_plugin_import_file,
             network::ensure_rtsp_relay,

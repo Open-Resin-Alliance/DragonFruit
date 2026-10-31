@@ -642,7 +642,9 @@ function sanitizeImageAssetPath(value: unknown): string | undefined {
     return resolveRuntimeAssetPath(trimmed);
   }
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
-  if (trimmed.startsWith('data:')) return undefined;
+  // Package preset images are inlined at registration (a webview cannot load a
+  // path inside the app data dir), so a bounded data URL is a valid source here.
+  if (trimmed.startsWith('data:image/') && trimmed.length <= 4_000_000) return trimmed;
 
   return undefined;
 }

@@ -14,6 +14,7 @@
       "resolutionY": 2560,
       "outputFormat": ".exf"
     },
-    "networkSupport": "demo-echo"
+    "networkSupport": "demo-echo",
+    "imageAssetPath": "echo_printer.png"
   }
 ]

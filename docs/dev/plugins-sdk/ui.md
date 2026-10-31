@@ -15,6 +15,7 @@ The tier accepts **data**, never webview code. Three shapes reach the UI:
 | Network mode in the printer profile, and the panels behind it | `network.mode` / `displayName` / `hostnames` | shipped |
 | Material pane for its own output format | `materialSettings` (below) | shipped |
 | Printer presets and material templates in the library | `printerPresets` / `materialTemplates` | shipped |
+| Preset images | `payload/assets/` + a relative `imageAssetPath` | shipped (inlined as data URLs) |
 | On-device (remote) material list and editor | `network.remoteMaterials` fields | shipped |
 | A custom panel or overlay | needs the UI island | planned |
 

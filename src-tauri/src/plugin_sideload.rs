@@ -22,6 +22,8 @@ const MANIFEST_FILE: &str = "manifest.json";
 const STATE_FILE: &str = "state.json";
 const KEY_FILE: &str = "key";
 const PAYLOAD_DIR: &str = "payload";
+/// One preset image; the renderer receives it as a data URL.
+const MAX_ASSET_BYTES: u64 = 2_500_000;
 
 /// Serializes installs/removals: two concurrent imports of the same id would
 /// otherwise interleave in the same directory.
@@ -464,6 +466,85 @@ pub async fn sideloaded_plugin_import_file<R: tauri::Runtime>(
     Ok(tauri::ipc::Response::new(container))
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SideloadedAsset {
+    mime: String,
+    data_url: String,
+}
+
+/// Reads one image out of an installed package's `payload/assets/` and returns it
+/// as a data URL. Paths are relative to `assets/`; nothing outside that directory
+/// is reachable, and only image types are served.
+#[tauri::command]
+pub async fn sideloaded_plugin_asset<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    id: String,
+    asset_path: String,
+) -> Result<SideloadedAsset, String> {
+    let root = root_dir(&app)?;
+    read_asset(&root, &id, &asset_path)
+}
+
+fn read_asset(root: &Path, id: &str, asset_path: &str) -> Result<SideloadedAsset, String> {
+    let relative = sanitize_asset_path(asset_path)?;
+    let base = installed_dir(root, id).join(PAYLOAD_DIR).join("assets");
+    let base = base
+        .canonicalize()
+        .map_err(|_| format!("plugin '{id}' has no assets"))?;
+    let path = base.join(&relative);
+    let path = path
+        .canonicalize()
+        .map_err(|_| format!("asset '{asset_path}' not found"))?;
+    if !path.starts_with(&base) {
+        return Err("asset path escapes the package".to_string());
+    }
+    let metadata = std::fs::metadata(&path).map_err(|err| err.to_string())?;
+    if !metadata.is_file() || metadata.len() > MAX_ASSET_BYTES {
+        return Err(format!("asset '{asset_path}' is not a readable image under {MAX_ASSET_BYTES} bytes"));
+    }
+    let mime = image_mime(&path)
+        .ok_or_else(|| format!("asset '{asset_path}' is not an image type this build serves"))?;
+    let bytes = std::fs::read(&path).map_err(|err| err.to_string())?;
+    use base64::Engine as _;
+    Ok(SideloadedAsset {
+        mime: mime.to_string(),
+        data_url: format!(
+            "data:{mime};base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        ),
+    })
+}
+
+/// Relative segments only: no absolute path, no `.`/`..`, no hidden files.
+fn sanitize_asset_path(input: &str) -> Result<PathBuf, String> {
+    let trimmed = input.trim().replace('\\', "/");
+    if trimmed.is_empty() || trimmed.len() > 240 {
+        return Err("asset path must be 1..240 characters".to_string());
+    }
+    let mut out = PathBuf::new();
+    for segment in trimmed.split('/') {
+        if segment.is_empty() || segment.starts_with('.') {
+            return Err("asset path may not contain empty, hidden or dot segments".to_string());
+        }
+        out.push(segment);
+    }
+    Ok(out)
+}
+
+fn image_mime(path: &Path) -> Option<&'static str> {
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    Some(match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
+        "avif" => "image/avif",
+        _ => return None,
+    })
+}
+
 #[tauri::command]
 pub async fn sideloaded_plugin_list<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
@@ -678,6 +759,49 @@ mod tests {
         std::fs::write(&temp_file, &bytes).expect("write");
         let error = inspect_file(&temp_file, &root).expect_err("must refuse");
         assert!(error.contains("or newer"), "unexpected: {error}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn install_asset(root: &Path, plugin_id: &str, relative: &str, bytes: &[u8]) {
+        let path = root.join(plugin_id).join(PAYLOAD_DIR).join("assets").join(relative);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("asset dir");
+        std::fs::write(path, bytes).expect("asset");
+    }
+
+    #[test]
+    fn serves_a_preset_image_as_a_data_url() {
+        let root = temp_root("asset");
+        install_asset(&root, "alphabeta.test", "printers/alpha.png", b"\x89PNG\r\n\x1a\n");
+
+        let asset = read_asset(&root, "alphabeta.test", "printers/alpha.png").expect("asset");
+        assert_eq!(asset.mime, "image/png");
+        assert!(asset.data_url.starts_with("data:image/png;base64,"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn refuses_asset_paths_outside_the_package() {
+        let root = temp_root("asset-escape");
+        install_asset(&root, "alphabeta.test", "alpha.png", b"\x89PNG\r\n\x1a\n");
+        std::fs::write(root.join("outside.png"), b"\x89PNG\r\n\x1a\n").expect("outside");
+
+        for path in ["../outside.png", "printers/../../outside.png", "/etc/passwd", ".hidden.png", ""] {
+            assert!(
+                read_asset(&root, "alphabeta.test", path).is_err(),
+                "'{path}' must be refused"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn refuses_assets_that_are_not_images() {
+        let root = temp_root("asset-type");
+        install_asset(&root, "alphabeta.test", "notes.txt", b"hello");
+        assert!(read_asset(&root, "alphabeta.test", "notes.txt").is_err());
+        assert!(read_asset(&root, "alphabeta.test", "missing.png").is_err());
         let _ = std::fs::remove_dir_all(&root);
     }
 
