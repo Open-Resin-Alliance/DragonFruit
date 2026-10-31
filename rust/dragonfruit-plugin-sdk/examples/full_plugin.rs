@@ -2,7 +2,8 @@
 //!
 //! It is deliberately small but complete: an encoder that records the layer
 //! stream instead of writing a real container, an importer that writes a
-//! one-triangle scene, a network handler with two fake operations, and a preview
+//! one-triangle scene, a declared network mode that answers the SDK's payload
+//! contract, and a preview
 //! decoder. Each part is the minimum that demonstrates the contract, so a reader
 //! can lift one block and replace the recording with their format.
 //!
@@ -155,7 +156,67 @@ impl PluginCapabilities for FullCapabilities {
             .unwrap_or("")
             .trim_matches('/');
 
+        // The names below are the ones `docs/dev/plugins-sdk/network.md` fixes for a
+        // declared mode. A package that likes other names declares them in the
+        // manifest's `network.operations` map; the panel calls whatever it finds
+        // there, so both sides only ever share these payload shapes.
+        let host = request
+            .get("host")
+            .and_then(|value| value.as_str())
+            .unwrap_or("127.0.0.1");
+
         match operation {
+            "connect" => (
+                200,
+                serde_json::json!({
+                    "connected": true,
+                    "ipAddress": host,
+                    "hostName": "echo",
+                    "printerName": "Echo Printer",
+                    "printerModel": "Echo",
+                    "statusText": "Idle",
+                }),
+            ),
+            "discover" => (
+                200,
+                serde_json::json!({
+                    "devices": [{
+                        "ipAddress": host,
+                        "hostName": "echo",
+                        "printerName": "Echo Printer",
+                        "printerModel": "Echo",
+                        "statusText": "Idle",
+                    }],
+                    "done": true,
+                    "scannedEndpoints": 1,
+                    "totalEndpoints": 1,
+                }),
+            ),
+            "status" => (
+                200,
+                serde_json::json!({
+                    "connected": true,
+                    "stateText": "Idle",
+                    "isPrinting": false,
+                    "isPaused": false,
+                    "finished": false,
+                    "progressPct": 0,
+                    "currentLayer": 0,
+                    "totalLayers": 0,
+                    "plateId": 1,
+                    "jobName": null,
+                    "etaSec": null,
+                }),
+            ),
+            // Every command answers the same envelope: the panel only needs to know
+            // whether the print accepted the instruction.
+            "start" | "pause" | "resume" | "cancel" | "deletePlate" | "emergencyStop" => {
+                (200, serde_json::json!({ "ok": true }))
+            }
+            "materials" => (200, serde_json::json!({ "materials": [] })),
+            "materialsEdit" => (200, serde_json::json!({ "ok": true })),
+            // The raw protocol operations, kept so the host tests can drive the ring
+            // without going through the declared-mode contract.
             "printer/status" => (
                 200,
                 serde_json::json!({ "state": "printing", "progress": 0.42, "layer": 312 }),

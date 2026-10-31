@@ -34,33 +34,34 @@ let inFlight: Promise<void> | null = null;
 const syncedProfilePluginIds = new Set<string>();
 
 /**
- * Packages can contribute printer presets and material templates. They go through
- * the same store entry point the simple-plugin tier uses, which is what makes the
- * printer library, the format dropdown and the material picker see them; the
- * package's own row in Settings stays the sideloaded one.
+ * Packages contribute manifest data: printer presets, material templates and the
+ * network mode they host. Registering the package in the profile plugin registry
+ * is how the renderer reads it, so every installed package goes in, and a removal
+ * takes it out again. The package's own row in Settings stays the sideloaded one.
+ *
+ * A version bump refreshes an entry, plus a network mode that was not there
+ * before: packages imported by an earlier build carried neither.
  */
 function syncProfileContributions(plugins: InstalledSideloadedPlugin[]) {
+  const sameList = (left: unknown[] | undefined, right: unknown[] | undefined) => (
+    JSON.stringify(left ?? []) === JSON.stringify(right ?? [])
+  );
   const present = new Set<string>();
+
   for (const plugin of plugins) {
     const source = plugin.manifest;
     const printerPresets = Array.isArray(source.printerPresets) ? source.printerPresets : [];
     const materialTemplates = Array.isArray(source.materialTemplates) ? source.materialTemplates : [];
-    if (printerPresets.length === 0 && materialTemplates.length === 0) continue;
-
+    const declaredMode = (source.network?.mode ?? '').trim().toLowerCase();
     present.add(source.id);
-    if (syncedProfilePluginIds.has(source.id)) continue;
 
-    // A restart must not rewrite the registry, and an unchanged package must not
-    // look like a change to everything that memoises the profile snapshot.
-    const registered = getInstalledProfilePlugins().find((plugin) => plugin.manifest.id === source.id);
-    if (
-      registered
-      && JSON.stringify(registered.manifest.printerPresets ?? []) === JSON.stringify(printerPresets)
-      && JSON.stringify(registered.manifest.materialTemplates ?? []) === JSON.stringify(materialTemplates)
-    ) {
-      syncedProfilePluginIds.add(source.id);
-      continue;
-    }
+    const registered = getInstalledProfilePlugins().find((entry) => entry.manifest.id === source.id);
+    const unchanged = Boolean(registered)
+      && registered!.manifest.version === source.version
+      && sameList(registered!.manifest.printerPresets, printerPresets)
+      && sameList(registered!.manifest.materialTemplates, materialTemplates)
+      && (registered!.manifest.network?.mode ?? '') === declaredMode;
+    if (unchanged) continue;
 
     const manifest: PluginManifest = {
       schemaVersion: 1,
@@ -68,17 +69,26 @@ function syncProfileContributions(plugins: InstalledSideloadedPlugin[]) {
       name: source.name,
       version: source.version,
       description: source.description,
+      network: source.network ? {
+        pluginId: source.network.pluginId || source.id,
+        mode: source.network.mode,
+        displayName: source.network.displayName,
+        hostnames: Array.isArray(source.network.hostnames) ? source.network.hostnames : [],
+        operations: source.network.operations ?? {},
+      } as PluginManifest['network'] : undefined,
       printerPresets: printerPresets as PluginManifest['printerPresets'],
       materialTemplates: materialTemplates as PluginManifest['materialTemplates'],
     };
     installPluginFromManifest(manifest, source.vendor.homepage ?? undefined);
-    syncedProfilePluginIds.add(source.id);
   }
 
-  for (const id of [...syncedProfilePluginIds]) {
+  for (const entry of getInstalledProfilePlugins()) {
+    const id = entry.manifest.id;
     if (present.has(id)) continue;
+    // The registry also holds compiled plugins. Only packages this sync put there
+    // are withdrawn when the package disappears.
+    if (!entry.manifest.network && !(entry.manifest.printerPresets?.length) && !(entry.manifest.materialTemplates?.length)) continue;
     uninstallPlugin(id);
-    syncedProfilePluginIds.delete(id);
   }
 }
 

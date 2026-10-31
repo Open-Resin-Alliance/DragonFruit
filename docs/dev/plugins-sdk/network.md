@@ -92,6 +92,96 @@ async fn handle(operation: &str, payload: &serde_json::Value) -> (u16, serde_jso
 That `match` is the whole host-facing surface. Everything behind it — HTTP,
 websockets, discovery, retries — is your code in your process, with your crates.
 
+## Declared network modes
+
+A network capability that only answers an operation vocabulary is invisible: the
+printer profile's **Network Support** list is built from registered adapters.
+Declaring the mode in the manifest registers yours, so the list, the discovery
+panel, the connection test and the monitor all call your process through
+`plugin_network_request`.
+
+```json
+"network": {
+  "pluginId": "alphabeta.alphaprint",
+  "mode": "alphaprint-net",
+  "displayName": "AlphaPrint Network",
+  "hostnames": ["alphaprint.local"]
+}
+```
+
+- `mode` is the slug a printer profile stores in `networkSupport`. Lowercase
+  `a-z`, `0-9` and `-`, at most 48 characters. It appears on a printer preset as
+  `"networkSupport": "alphaprint-net"`, so adding that printer selects the mode.
+- `displayName` is what the list shows; it defaults to the manifest name.
+- `hostnames` are `*.local` candidates the discovery panel tries before it scans
+  the subnet (`at most 8`).
+- `pluginId` must be the package's own id. The host refuses a package that names
+  another plugin's handler.
+- The block requires the `networkOperations` capability.
+- A compiled plugin owns its mode: a package that declares `nanodlp` or `sdcp`
+  is ignored for that mode. Two packages claiming one free mode: the first
+  installed one answers.
+
+### Operation names
+
+Unlisted operations use these names; a backend with its own vocabulary overrides
+any of them:
+
+```json
+"network": {
+  "pluginId": "alphabeta.alphaprint",
+  "mode": "alphaprint-net",
+  "operations": { "connect": "net/connect", "status": "net/printer" }
+}
+```
+
+| Key | Default | Called by |
+| --- | --- | --- |
+| `connect` | `connect` | connection test, cached-printer verification |
+| `discover` | `discover` | discovery panel (local hostnames, then subnet batches) |
+| `status` | `status` | monitor polling, reachability probes |
+| `start` | `start` | print start |
+| `pause`, `resume`, `cancel` | same names | job control |
+| `deletePlate` | `deletePlate` | plate management |
+| `emergencyStop` | `emergencyStop` | job control |
+| `platesList` | `platesList` | plate list |
+| `webcamInfo` | `webcamInfo` | webcam panel (answer `available:false` when there is none) |
+| `printerData` | not declared | variant detection, only when the preset sets `modelVariantDetectPath` |
+| `materials`, `materialsEdit` | same names | reserved: declared modes have no on-device material editing yet |
+
+### Payload contract
+
+The request is the panel's payload — the fields below are the ones it always
+sends — and the reply uses fixed keys. Unknown keys are ignored, missing ones
+read as "no value", and a reply that is not an object is treated as empty rather
+than trusted.
+
+```json
+→ {"operation":"connect","host":"192.168.1.50"}
+← {"connected":true,"ipAddress":"192.168.1.50","hostName":"printer",
+   "printerName":"AlphaPrint 4K","printerModel":"AP-4K","statusText":"Idle"}
+```
+
+| Operation | Reply |
+| --- | --- |
+| `connect` | `{ connected, ipAddress?, hostName?, printerName?, printerModel?, statusText? }` |
+| `discover` | `{ devices: [{ ipAddress, hostName?, printerName?, printerModel?, statusText? }], done?, nextBatchStart?, totalEndpoints?, scannedEndpoints? }` |
+| `status` | `{ connected, stateText?, isPrinting?, isPaused?, finished?, progressPct?, currentLayer?, totalLayers?, plateId?, jobName?, etaSec? }` |
+| `start`, `pause`, `resume`, `cancel`, `deletePlate`, `emergencyStop`, `materialsEdit` | `{ ok: true }` or `{ error: "…" }` |
+| `materials` | `{ materials: [] }` (reserved) |
+| `webcamInfo` | `{ available, streamUrl?, snapshotUrl?, message? }` |
+| `printerData` | `{ bitdepth: 8 }` |
+
+`discover` is called twice: once with `scanScope: "local-hostnames"` and a
+`localHostnames` candidate list, then with `scanScope: "subnet"` and
+`batchStart`/`batchSize`. Answer `done: true` when your scan is finished; the
+panel stops when `done` is set or `nextBatchStart` does not advance, so a backend
+that ignores the batching cannot spin it forever.
+
+Numeric fields accept numbers or numeric strings. Everything else must have the
+declared type to be used; a wrong type is dropped, not coerced silently into the
+monitor.
+
 ## What the host provides
 
 - The single dispatch point: one request in, one result out, ordered per plugin.
@@ -106,6 +196,7 @@ websockets, discovery, retries — is your code in your process, with your crate
   plugin binary pays for its own `reqwest` or `ureq`.
 - **No shared session with the host.** The host is not logged into the printer;
   you are.
-- **No UI.** A plugin cannot add a settings panel or a monitoring dashboard in
-  this tier. Keep operations self-describing and the host's generic surface (a
-  status line, a progress bar, errors) will carry them.
+- **No custom UI.** A plugin cannot add a settings panel or a monitoring
+  dashboard in this tier. What it can do is declare a network mode (below) and
+  answer the fixed payload contract, so the generic panels — Network Support
+  list, discovery, connection test, job control, status line — drive it.

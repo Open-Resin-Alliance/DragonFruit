@@ -892,6 +892,60 @@ mod tests {
             "an unknown id must fall through to the caller"
         );
 
+        // The declared-mode contract, answered by the SDK's full-feature example.
+        let mut demo = crate::plugin_test_support::manifest(
+            "example.full",
+            vec![
+                package::Capability::SlicerEncoder,
+                package::Capability::NetworkOperations,
+                package::Capability::FileType,
+            ],
+        );
+        // The example's Ready advertises all three, so the manifest must too.
+        demo.formats = vec![package::FormatDecl {
+            id: "exf".to_string(),
+            extensions: vec![".exf".to_string()],
+            display_name: Some("Echo container".to_string()),
+            layers: Some(package::LayerKind::Rle),
+        }];
+        demo.file_types = vec![package::FileTypeDecl {
+            extension: ".echo".to_string(),
+            display_name: "Echo project".to_string(),
+            is_scene_file: true,
+        }];
+        demo.network = Some(package::NetworkDecl {
+            plugin_id: "example.full".to_string(),
+            mode: "demo-echo".to_string(),
+            display_name: Some("Echo Network".to_string()),
+            hostnames: vec!["echo.local".to_string()],
+            operations: Default::default(),
+        });
+        install_reference_plugin(&root, "full_plugin", &demo);
+
+        let connect = handle_network_request(
+            r#"{"pluginId":"example.full","operation":"connect","host":"10.0.0.7"}"#,
+        )
+        .expect("routed");
+        assert_eq!(connect.status, 200, "body: {}", connect.body);
+        assert_eq!(connect.body["connected"], serde_json::json!(true));
+        assert_eq!(connect.body["ipAddress"], serde_json::json!("10.0.0.7"));
+
+        let status = handle_network_request(r#"{"pluginId":"example.full","operation":"status"}"#)
+            .expect("routed");
+        assert_eq!(status.body["stateText"], serde_json::json!("Idle"));
+        assert_eq!(status.body["connected"], serde_json::json!(true));
+
+        let discover = handle_network_request(
+            r#"{"pluginId":"example.full","operation":"discover","scanScope":"subnet"}"#,
+        )
+        .expect("routed");
+        assert_eq!(discover.body["done"], serde_json::json!(true));
+        assert_eq!(discover.body["devices"][0]["hostName"], serde_json::json!("echo"));
+
+        let start = handle_network_request(r#"{"pluginId":"example.full","operation":"start"}"#)
+            .expect("routed");
+        assert_eq!(start.body["ok"], serde_json::json!(true));
+
         shutdown_all();
         let _ = std::fs::remove_dir_all(&root);
     }

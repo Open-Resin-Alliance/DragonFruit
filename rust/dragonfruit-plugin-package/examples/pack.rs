@@ -33,6 +33,16 @@ fn arg(name: &str) -> Option<String> {
         .cloned()
 }
 
+/// Every value given for a repeatable flag, in order.
+fn arg_all(name: &str) -> Vec<String> {
+    let args: Vec<String> = std::env::args().collect();
+    args.iter()
+        .enumerate()
+        .filter(|(_, value)| value.as_str() == name)
+        .filter_map(|(index, _)| args.get(index + 1).cloned())
+        .collect()
+}
+
 fn seed_bytes() -> [u8; 32] {
     match arg("--seed") {
         Some(hex) if hex.len() == 64 => {
@@ -57,6 +67,9 @@ fn main() {
     let format = arg("--format");
     let format_name = arg("--format-name");
     let network = arg("--network").is_some();
+    let network_mode = arg("--network-mode");
+    let network_name = arg("--network-name");
+    let network_hosts = arg_all("--network-host");
     let format_extension = format.clone().unwrap_or_else(|| ".apf".to_string());
     // An empty passphrase is not a passphrase: sealing with "" only looks like
     // protection. Treat it as an unsealed package.
@@ -136,6 +149,12 @@ fn main() {
             .unwrap_or_default(),
         network: network.then(|| package::NetworkDecl {
             plugin_id: id.clone(),
+            mode: network_mode.clone().unwrap_or_else(|| {
+                panic!("--network also needs --network-mode <slug>: that slug is what a printer profile stores")
+            }),
+            display_name: network_name.clone(),
+            hostnames: network_hosts.clone(),
+            operations: Default::default(),
         }),
         file_types: file_type
             .iter()

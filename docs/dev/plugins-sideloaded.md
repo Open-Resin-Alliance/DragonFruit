@@ -24,6 +24,7 @@ Read this page before changing anything in this tier. "Protocol v1" and
 | `slicerEncoder` capability | host runtime + engine adapter + SDK harness | done, tested against a real encoder process |
 | `fileType` capability | host runtime + renderer container parser | done, tested against a real importer process |
 | printer presets and material templates | manifest `printerPresets` / `materialTemplates` | done: the renderer registers them through the same store entry the simple tier uses |
+| declared network mode | manifest `network` | done: the renderer registers the mode and the generic panels drive it |
 
 `cargo test` in the package crate and `cargo test --bin dragonfruit-desktop
 plugin_sideload` cover the verification matrix below except the process cases.
@@ -107,7 +108,12 @@ README.md                    optional
   "fileTypes": [
     { "extension": ".apf", "displayName": "AlphaPrint project", "isSceneFile": true }
   ],
-  "network": { "pluginId": "alphabeta" },
+  "network": {
+    "pluginId": "alphabeta",
+    "mode": "alphabeta-net",
+    "displayName": "AlphaBeta Network",
+    "hostnames": ["alphabeta.local"]
+  },
   "printerPresets": [
     { "presetId": "alphabeta.alpha-4k", "manufacturer": "AlphaBeta", "name": "Alpha 4K",
       "buildVolumeMm": { "width": 143, "depth": 89, "height": 175 },
@@ -159,6 +165,21 @@ reload. Adding a second derivation of the same data is the way to lose that.
 Removing the package removes the profile entry and the presets with it. A preset
 whose `display.outputFormat` names the package's own format is the usual shape,
 so picking that printer also picks the encoder.
+
+### Network mode
+
+The `network` block does more than name the answering plugin: it registers a
+mode. `mode` is the slug a printer profile stores in `networkSupport`, so the
+mode appears in the profile's **Network Support** list and the discovery,
+connection and monitoring panels call the package's process. A preset that sets
+`"networkSupport": "alphabeta-net"` selects it when the printer is added.
+
+`pluginId` must be this manifest's id — a package cannot route the UI's calls to
+another plugin's handler — and the mode may not take over one a compiled plugin
+owns. The operation names and the payload contract are in
+`docs/dev/plugins-sdk/network.md`; they are fixed so one adapter shape serves
+every package. On-device material listing and editing stay off for a declared
+mode: that needs an edit schema a manifest cannot describe yet.
 
 ### Seal
 

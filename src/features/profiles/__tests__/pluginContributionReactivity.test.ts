@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import type { PluginManifest } from '@/features/plugins/pluginRegistry';
 import {
   getAvailablePrinterPresets,
   getProfileStoreSnapshot,
@@ -18,7 +19,7 @@ import {
 const PLUGIN_ID = 'test.contribution-reactivity';
 const PRESET_ID = 'test.contribution-reactivity-printer';
 
-const manifest = {
+const manifest: PluginManifest = {
   schemaVersion: 1,
   id: PLUGIN_ID,
   name: 'Contribution Reactivity',
@@ -33,7 +34,7 @@ const manifest = {
       display: { resolutionX: 2048, resolutionY: 1152, outputFormat: '.png' },
     },
   ],
-  materialTemplates: [{ name: 'Reactive Resin' }],
+  materialTemplates: [{ name: 'Reactive Resin' } as PluginManifest['materialTemplates'] extends (infer T)[] | undefined ? T : never],
 };
 
 const hasPreset = () => getAvailablePrinterPresets().some((preset) => preset.presetId === PRESET_ID);

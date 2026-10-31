@@ -34,7 +34,18 @@ export type SideloadedManifest = {
     seal?: { alg: string; kdf: string; salt: string; m: number; t: number; p: number } | null;
   };
   formats: SideloadedFormat[];
-  network?: { pluginId: string } | null;
+  /**
+   * The network backend the package hosts. `mode` is what a printer profile
+   * stores in `networkSupport`; the renderer turns the block into the same
+   * adapter shape the compiled plugins register.
+   */
+  network?: {
+    pluginId: string;
+    mode?: string;
+    displayName?: string;
+    hostnames?: string[];
+    operations?: Record<string, string | null | undefined>;
+  } | null;
   fileTypes?: Array<{ extension: string; displayName: string; isSceneFile?: boolean }>;
   /** Printer presets the package contributes; the renderer normalises them. */
   printerPresets?: unknown[];

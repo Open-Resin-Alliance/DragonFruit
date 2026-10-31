@@ -130,10 +130,116 @@ impl FormatDecl {
     }
 }
 
+/// The operation names a declared network mode uses. Every field is optional and
+/// falls back to the canonical name, so a package that follows the protocol
+/// declares nothing but its mode.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct NetworkOperationsDecl {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connect: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discover: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub materials: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub materials_edit: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub printer_data: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub webcam_info: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plates_list: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pause: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resume: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cancel: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delete_plate: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emergency_stop: Option<String>,
+}
+
+impl NetworkOperationsDecl {
+    /// The operation name for `key`, or the protocol's canonical name.
+    pub fn resolve(&self, key: &str) -> String {
+        let declared = match key {
+            "connect" => &self.connect,
+            "discover" => &self.discover,
+            "materials" => &self.materials,
+            "materialsEdit" => &self.materials_edit,
+            "printerData" => &self.printer_data,
+            "status" => &self.status,
+            "webcamInfo" => &self.webcam_info,
+            "platesList" => &self.plates_list,
+            "start" => &self.start,
+            "pause" => &self.pause,
+            "resume" => &self.resume,
+            "cancel" => &self.cancel,
+            "deletePlate" => &self.delete_plate,
+            "emergencyStop" => &self.emergency_stop,
+            _ => &None,
+        };
+        declared
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(key)
+            .to_string()
+    }
+
+    fn overrides(&self) -> [(&'static str, &Option<String>); 14] {
+        [
+            ("connect", &self.connect),
+            ("discover", &self.discover),
+            ("materials", &self.materials),
+            ("materialsEdit", &self.materials_edit),
+            ("printerData", &self.printer_data),
+            ("status", &self.status),
+            ("webcamInfo", &self.webcam_info),
+            ("platesList", &self.plates_list),
+            ("start", &self.start),
+            ("pause", &self.pause),
+            ("resume", &self.resume),
+            ("cancel", &self.cancel),
+            ("deletePlate", &self.delete_plate),
+            ("emergencyStop", &self.emergency_stop),
+        ]
+    }
+}
+
+/// A network backend the package hosts. The renderer turns this into the same
+/// adapter shape the compiled plugins register: the mode shows up in the printer
+/// profile's Network Support list and every panel calls `plugin_network_request`
+/// with the declared operation names.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NetworkDecl {
+    /// The plugin that answers the operations. Must be this manifest's id: a
+    /// package cannot route the UI's calls to another plugin's handler.
     pub plugin_id: String,
+    /// Lowercase slug stored in a printer profile's `networkSupport`.
+    pub mode: String,
+    /// Shown in the Network Support list. Defaults to the manifest name.
+    #[serde(default)]
+    pub display_name: Option<String>,
+    /// `*.local` names the discovery panel tries before it scans the subnet.
+    #[serde(default)]
+    pub hostnames: Vec<String>,
+    #[serde(default)]
+    pub operations: NetworkOperationsDecl,
+}
+
+impl NetworkDecl {
+    pub fn resolved_display_name<'a>(&'a self, manifest: &'a Manifest) -> &'a str {
+        self.display_name.as_deref().unwrap_or(&manifest.name)
+    }
 }
 
 /// An extension the package can open. Declared here, not discovered at runtime:
@@ -344,6 +450,79 @@ fn validate(manifest: &Manifest) -> Result<(), PackageError> {
                 "file type '{}' needs a display name",
                 file_type.extension
             )));
+        }
+    }
+    if let Some(network) = &manifest.network {
+        if !manifest.capabilities.contains(&Capability::NetworkOperations) {
+            return Err(PackageError::Invalid(
+                "a network block is declared but the networkOperations capability is not".to_string(),
+            ));
+        }
+        if network.plugin_id != manifest.id {
+            return Err(PackageError::Invalid(format!(
+                "network.pluginId '{}' must be the package's own id '{}'",
+                network.plugin_id, manifest.id
+            )));
+        }
+        let mode = network.mode.trim();
+        if mode.is_empty() || mode.len() > 48 {
+            return Err(PackageError::Invalid(
+                "network.mode must be 1..48 characters".to_string(),
+            ));
+        }
+        if !mode.chars().all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+            || mode.starts_with('-')
+            || mode.ends_with('-')
+        {
+            return Err(PackageError::Invalid(
+                "network.mode may only contain a-z, 0-9 and '-', and must not start or end with '-'"
+                    .to_string(),
+            ));
+        }
+        if let Some(display_name) = &network.display_name {
+            if display_name.trim().is_empty() || display_name.len() > 64 {
+                return Err(PackageError::Invalid(
+                    "network.displayName must be 1..64 characters".to_string(),
+                ));
+            }
+        }
+        if network.hostnames.len() > 8 {
+            return Err(PackageError::Invalid(
+                "network.hostnames may list at most 8 names".to_string(),
+            ));
+        }
+        for hostname in &network.hostnames {
+            let hostname = hostname.trim();
+            if hostname.is_empty() || hostname.len() > 253 {
+                return Err(PackageError::Invalid(
+                    "network.hostnames entries must be 1..253 characters".to_string(),
+                ));
+            }
+            if !hostname
+                .chars()
+                .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '.' | '-'))
+            {
+                return Err(PackageError::Invalid(format!(
+                    "network hostname '{hostname}' may only contain a-z, 0-9, '.' and '-'"
+                )));
+            }
+        }
+        for (key, operation) in network.operations.overrides() {
+            let Some(operation) = operation else { continue };
+            let operation = operation.trim();
+            if operation.is_empty() || operation.len() > 64 {
+                return Err(PackageError::Invalid(format!(
+                    "network operation '{key}' must be 1..64 characters"
+                )));
+            }
+            if !operation
+                .chars()
+                .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '_' | '.' | '-' | '/'))
+            {
+                return Err(PackageError::Invalid(format!(
+                    "network operation '{key}' may only contain a-z, 0-9, '_', '.', '-' and '/'"
+                )));
+            }
         }
     }
     for format in &manifest.formats {
@@ -695,6 +874,77 @@ mod tests {
             &key,
         )
         .expect("package")
+    }
+
+    fn network_manifest(mode: &str, plugin_id: &str) -> Manifest {
+        let key = signing_key();
+        let mut manifest = manifest_for(&key);
+        manifest.capabilities = vec![Capability::NetworkOperations];
+        manifest.network = Some(NetworkDecl {
+            plugin_id: plugin_id.to_string(),
+            mode: mode.to_string(),
+            display_name: Some("Echo Network".to_string()),
+            hostnames: vec!["echo.local".to_string()],
+            operations: NetworkOperationsDecl::default(),
+        });
+        manifest
+    }
+
+    #[test]
+    fn accepts_a_declared_network_mode() {
+        validate(&network_manifest("echo-net", "alphabeta.alphaprint")).expect("valid network block");
+    }
+
+    #[test]
+    fn rejects_a_network_mode_that_is_not_a_slug() {
+        assert!(matches!(
+            validate(&network_manifest("Echo Network", "alphabeta.alphaprint")),
+            Err(PackageError::Invalid(_))
+        ));
+        assert!(matches!(
+            validate(&network_manifest("-echo", "alphabeta.alphaprint")),
+            Err(PackageError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_a_network_block_without_the_capability() {
+        let mut manifest = network_manifest("echo-net", "alphabeta.alphaprint");
+        manifest.capabilities = vec![Capability::SlicerEncoder];
+        assert!(matches!(validate(&manifest), Err(PackageError::Invalid(_))));
+    }
+
+    #[test]
+    fn rejects_a_network_block_naming_another_plugin() {
+        assert!(matches!(
+            validate(&network_manifest("echo-net", "someone.else")),
+            Err(PackageError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_network_operation_names_outside_the_charset() {
+        let mut manifest = network_manifest("echo-net", "alphabeta.alphaprint");
+        manifest.network.as_mut().expect("network").operations.connect = Some("Connect Me".to_string());
+        assert!(matches!(validate(&manifest), Err(PackageError::Invalid(_))));
+
+        let mut manifest = network_manifest("echo-net", "alphabeta.alphaprint");
+        manifest.network.as_mut().expect("network").operations.status = Some("printer/status".to_string());
+        validate(&manifest).expect("a namespaced operation name is allowed");
+    }
+
+    #[test]
+    fn undeclared_operations_resolve_to_their_protocol_names() {
+        let operations = NetworkOperationsDecl::default();
+        assert_eq!(operations.resolve("connect"), "connect");
+        assert_eq!(operations.resolve("materialsEdit"), "materialsEdit");
+
+        let operations = NetworkOperationsDecl {
+            connect: Some("net/connect".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(operations.resolve("connect"), "net/connect");
+        assert_eq!(operations.resolve("discover"), "discover");
     }
 
     #[test]
