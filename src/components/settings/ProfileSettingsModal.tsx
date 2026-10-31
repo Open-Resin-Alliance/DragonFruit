@@ -926,7 +926,11 @@ export function ProfileSettingsModal({
         label: mode.displayName,
       })),
     ];
-  }, []);
+    // A package installed in this session registers its mode after this modal
+    // mounted; the profile snapshot moves with the registry, so it is the dep
+    // that makes the list current. An empty dep list pinned the list at mount and
+    // showed "Unknown (<mode>)" for a mode that was registered a second later.
+  }, [profileState]);
   const selectedPrinterNetworkModeOptions = React.useMemo<Array<{ value: PrinterOutputFormat; label: string }>>(() => {
     const currentMode = (selectedPrinter?.networkSupport ?? '').trim().toLowerCase();
     if (!currentMode) return registeredNetworkModeOptions;
@@ -938,7 +942,7 @@ export function ProfileSettingsModal({
   }, [registeredNetworkModeOptions, selectedPrinter?.networkSupport]);
   const networkUiAdapter = React.useMemo(
     () => getProfileNetworkUiAdapter(selectedPrinter?.networkSupport),
-    [selectedPrinter?.networkSupport],
+    [profileState, selectedPrinter?.networkSupport],
   );
   const effectiveNetworkUiAdapter = React.useMemo(
     () => networkUiAdapter ?? getDefaultProfileNetworkUiAdapter(),

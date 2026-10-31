@@ -157,10 +157,13 @@ picker. The package's own row in Settings stays the sideloaded record, which is
 the one that can be enabled or removed, and the profile-store entry it creates is
 filtered out of that list.
 
-Presets and templates are read out of the plugin registry on every call, and the
-profile store's snapshot moves when that registry does: a plugin installed in this
-session re-renders the printer library immediately instead of waiting for a
-reload. Adding a second derivation of the same data is the way to lose that.
+Presets, templates and network modes are read out of the plugin registry on every
+call, and the profile store's snapshot moves when that registry does: a plugin
+installed in this session re-renders the printer library immediately instead of
+waiting for a reload. A component that memoises one of those lookups has to
+depend on the profile snapshot, not on an empty list — a pinned list is how the
+Network Support dropdown ended up showing "Unknown (mode)" for a mode the
+registry knew.
 
 Removing the package removes the profile entry and the presets with it. A preset
 whose `display.outputFormat` names the package's own format is the usual shape,
