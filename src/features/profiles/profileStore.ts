@@ -421,6 +421,7 @@ function sanitizeLocalMaterialSettingsMap(input: unknown): LocalMaterialSettings
 
     Object.entries(source).forEach(([key, rawValue]) => {
         const normalizedKey = key.trim();
+        console.log("Material Key: " + normalizedKey);
         if (!normalizedKey) return;
 
         if (typeof rawValue === 'string' || typeof rawValue === 'number' || typeof rawValue === 'boolean') {

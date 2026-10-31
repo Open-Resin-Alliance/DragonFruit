@@ -3618,8 +3618,9 @@ export default function Home() {
       bottomLayers * (activeMaterialProfile.bottomExposureSec + travelSecPerLayer)
       + normalLayers * (activeMaterialProfile.normalExposureSec + travelSecPerLayer)
     );
-
-    return formatApproxPrintTimeLabel(_, totalSec);
+    console.log(activeMaterialProfile);
+//totalSec - replace
+    return formatApproxPrintTimeLabel(_, 1000.0);
   }, [_, activeMaterialProfile, printingPreviewTotalLayers]);
 
   const canDownloadPrintArtifact = Boolean(printingArtifact);
@@ -7100,8 +7101,8 @@ export default function Home() {
       bottomLayers * (activeMaterialProfile.bottomExposureSec + travelSecPerLayer)
       + normalLayers * (activeMaterialProfile.normalExposureSec + travelSecPerLayer)
     );
-
-    return formatEstimatedPrintTimeLabel(_, totalSec);
+//return totalSec
+    return formatEstimatedPrintTimeLabel(_, 1000.0);
   }, [_, activeMaterialProfile, estimatedSlicerLayerCount, slicingModels.length]);
 
   const printingCurrentHeightMm = React.useMemo(() => {
