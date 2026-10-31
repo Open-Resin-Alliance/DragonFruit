@@ -2183,3 +2183,29 @@ The unwrap remains the only part of a *textured* AO map that has no GPU story:
 measured at 405 s bounded-chart on the puck, versus seconds for a decimated
 proxy — while the texel bake over the same model is 394 M rays, which this
 traversal would do in ~5 s and a ray-query path in well under one.
+
+## Sideloaded plugins: the UI island needs an ADR revision before any code
+
+`docs/dev/plugins-sdk/ui.md` records the design: a vendor's bundle in its own
+sandboxed origin, no `allow-same-origin`, no app globals, interaction only through a
+typed `postMessage` API. It is the answer to "a plugin needs a panel of its own",
+and it is deliberately not built.
+
+Building it without a revision would contradict ADR-0047, which states that UI
+contributions do not travel in this tier — the whole licence argument rests on a
+plugin staying a separate program, and importing vendor modules into our webview is
+the case the ADR rejects. Any work here starts by amending that ADR, then the
+message protocol, then the frame host. Until then, a pane a vendor needs lands in
+mainline as a declarative shape, the way the material pane and the remote material
+editor did.
+
+Two smaller directions the plugin SDK notes but does not pursue:
+
+- **Concurrent network requests.** The host serializes one request per plugin. A
+  plugin that could answer two at once has no way to say so (`ready.concurrent`
+  appears in the protocol prose but not in the message), and the host has no
+  response multiplexer. A printer is the bottleneck, so this is a direction, not a
+  cost worth paying yet.
+- **Per-material geometry on import.** The scene import payload has one material per
+  model, so a multi-material source file flattens. That follows from the scene
+  model, not from the plugin tier; it lands with multi-material support.
