@@ -7530,7 +7530,7 @@ export function SceneCanvas({
                   enableRotate
                   enableScale
                   uniformScaling={uniformScaling}
-                  enableLighting
+                  enableLighting={false}
                   onDragStateChange={setIsGizmoDragging}
                   onRetargetingChange={setIsGizmoRetargeting}
                   onMove={(delta) => {

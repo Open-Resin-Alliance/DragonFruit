@@ -11,6 +11,38 @@ page for stalls, long tasks and memory.
 
 ## In-app scaffolding
 
+### Stable gizmo lighting and single-pass Standard volume stripes
+
+The main editor disables only decorative gizmo point lights with
+`enableLighting={false}`. `TransformGizmo` forwards the flag to move, rotation
+and scale handles; their emissive materials, colors, picking and normal scene
+illumination remain. Handle culling/dimming otherwise changes the scene light
+count and can trigger model shader recompilation during navigation.
+
+`src/features/shaders/mesh/boundsTint.ts` supplies `createBoundsTintUniforms`
+and `applyBoundsTint` for model-local Standard materials. The main `StlMesh`
+owns one uniform pack; `MeshShaderMaterial` forwards it to `SoftClayMaterial`,
+which patches after baked/fake AO. The imported support-section material uses
+the same pack so its surface does not cover the warning.
+
+```ts
+const boundsTint = createBoundsTintUniforms();
+material.onBeforeCompile = shader => applyBoundsTint(shader, boundsTint);
+boundsTint.uBoundsTintMin.value.set(-100, -60, 0);
+boundsTint.uBoundsTintMax.value.set(100, 60, 200);
+boundsTint.uBoundsTintEnabled.value = 1;
+```
+
+The patch targets Standard projection/final dithering chunks, not arbitrary
+instanced or custom shaders. It blends the existing green/white warning after
+output color conversion and respects base clipping. Disabled/enabled materials
+share the same source; crossing a boundary changes uniforms, not variants.
+Standard and the solid base of Mesh view skip the second full-geometry warning
+draw. Other shaders, transparent ghosts, interior/cavity and dimmed support
+views retain the old overlay. Volume decisions, geometry and history do not
+change. Tests cover source/uniform contracts; real WebGL compilation and mode
+transitions also need a renderer smoke test, not just string assertions.
+
 ### Main-thread stall detector
 
 `src/utils/debug/mainThreadHeartbeat.ts` is the UI's equivalent of a database
