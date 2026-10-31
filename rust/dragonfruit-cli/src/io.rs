@@ -455,7 +455,7 @@ pub fn write_3mf(path: &Path, positions: &[f32]) -> Result<(), String> {
     let file = std::fs::File::create(path)
         .map_err(|e| format!("Failed to create 3MF: {e}"))?;
     let mut zip = zip::ZipWriter::new(file);
-    let options = zip::write::FileOptions::default()
+    let options = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
 
     zip.start_file("[Content_Types].xml", options)
@@ -1348,7 +1348,7 @@ mod tests {
 
         let file = std::fs::File::create(&path).unwrap();
         let mut zip = zip::ZipWriter::new(file);
-        let opts = zip::write::FileOptions::default();
+        let opts = zip::write::SimpleFileOptions::default();
 
         // 3 layer PNGs
         for i in 1..=3 {
@@ -1374,7 +1374,7 @@ mod tests {
         let mut layer_count = 0u32;
         for i in 0..archive.len() {
             if let Ok(entry) = archive.by_index(i) {
-                if entry.name().ends_with(".png") {
+                if entry.name().expect("ZIP entry name").ends_with(".png") {
                     layer_count += 1;
                 }
             }

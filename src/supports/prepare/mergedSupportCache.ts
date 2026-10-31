@@ -277,7 +277,7 @@ function disposeEntry(entry: PrepareMergedSupportEntry): void {
  */
 function dropEntriesForGoneModels(liveModelIds: ReadonlySet<string> | null | undefined): void {
   if (!liveModelIds) return;
-  dropEntriesFor(state.entries.keys().filter((key) => {
+  dropEntriesFor([...state.entries.keys()].filter((key) => {
     const entry = state.entries.get(key);
     return entry !== undefined && entry.modelId !== null && !liveModelIds.has(entry.modelId);
   }));
@@ -294,7 +294,7 @@ function dropEntriesForGoneModels(liveModelIds: ReadonlySet<string> | null | und
 export function releasePrepareMergedSupportsFor(modelIds: Iterable<string>): void {
   const ids = new Set(modelIds);
   if (ids.size === 0) return;
-  dropEntriesFor(state.entries.keys().filter((key) => {
+  dropEntriesFor([...state.entries.keys()].filter((key) => {
     const entry = state.entries.get(key);
     return entry !== undefined && entry.modelId !== null && ids.has(entry.modelId);
   }));

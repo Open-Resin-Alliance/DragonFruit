@@ -504,7 +504,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22.23.2"
+          node-version-file: .nvmrc
           cache: npm
 
       # Pinned, not `@stable`: the floating channel is what churns the Rust cache
@@ -701,7 +701,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22.23.2"
+          node-version-file: .nvmrc
           cache: npm
 
       # Pinned, not `@stable`: the floating channel is what churns the Rust cache

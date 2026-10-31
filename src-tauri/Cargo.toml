@@ -18,7 +18,7 @@ tauri = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-a
 tauri-plugin-log = { version = "2", optional = true }
 # wry-only: not yet validated against the CEF runtime.
 tauri-plugin-single-instance = { version = "2", optional = true }
-tauri-plugin-updater = "2"
+tauri-plugin-updater = { version = "2", default-features = false, features = ["rustls-tls"] }
 tauri-plugin-process = "2"
 url = "2"
 # Decodes the `x-mesh-stage-path` IPC header: HTTP header values are
@@ -32,7 +32,7 @@ log = "0.4"
 rfd = "0.15"
 flate2 = "1"
 rayon = "1.10"
-zip = "2"
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
 # tauri-plugin-updater turns on reqwest's `rustls-no-provider`, which requires the
 # application to install a process-wide CryptoProvider. Declared directly so `ring`

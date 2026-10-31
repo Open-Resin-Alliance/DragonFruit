@@ -16,5 +16,12 @@ fn main() {
         panic!("Plugin registry generator failed; cannot continue build");
     }
 
+    // libcef.so must bind to our mallinfo, not glibc's; see src/mallinfo_shim.rs.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux")
+        && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("gnu")
+    {
+        println!("cargo:rustc-link-arg-bins=-Wl,--export-dynamic-symbol=mallinfo");
+    }
+
     tauri_build::build();
 }

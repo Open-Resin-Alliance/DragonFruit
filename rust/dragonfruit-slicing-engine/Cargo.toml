@@ -1,6 +1,6 @@
 [package]
 name = "dragonfruit-slicing-engine"
-version = "3.2.7"
+version = "3.2.8"
 edition = "2021"
 
 [lib]
@@ -16,7 +16,7 @@ pulp = { version = "=0.22.3", default-features = false, features = ["std", "x86-
 libdeflater = "1"
 crc32fast = "1"
 png = { version = "0.17", default-features = false }   # needed by ctb_preview thumbnail decoder
-zip = { version = "0.6.6", default-features = false, features = ["deflate"] }
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 base64 = "0.22"
 aes = "0.8"
 cbc = "0.1"
