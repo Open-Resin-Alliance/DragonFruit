@@ -19,6 +19,12 @@
       "name": "Auto Orientation",
       "description": "Orientation suggestions that minimize support contact area. Early access.",
       "defaultEnabled": true
+    },
+    {
+      "id": "support-halo",
+      "name": "Support Halo",
+      "description": "Adds a greyscale glow around support tips as they narrow to reduce small cross section oxygen inhibition and increase strength.",
+      "defaultEnabled": false
     }
   ]
 }

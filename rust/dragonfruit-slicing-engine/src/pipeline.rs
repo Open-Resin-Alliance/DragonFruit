@@ -59,7 +59,7 @@ pub fn get_recycled_mask(size: usize) -> Vec<u8> {
     vec![0u8; size]
 }
 
-fn merge_rle_max(lhs_runs: &[RleRun], rhs_runs: &[RleRun]) -> Vec<RleRun> {
+pub(crate) fn merge_rle_max(lhs_runs: &[RleRun], rhs_runs: &[RleRun]) -> Vec<RleRun> {
     let mut out = RleAccum::new();
     let mut lhs_index = 0usize;
     let mut rhs_index = 0usize;
@@ -224,14 +224,60 @@ fn encode_zero_rle(width: usize, height: usize) -> Vec<RleRun> {
     out.finish()
 }
 
+pub(crate) struct SupportSplitJobs {
+    pub model_job: SliceJobV3,
+    pub support_job: SliceJobV3,
+}
+
+impl SupportSplitJobs {
+    pub fn from_raster_job(job: &SliceJobV3) -> Self {
+        let mut model_job = job.clone();
+        model_job.triangles_xyz = Vec::new();
+        model_job.aa_on_supports = true;
+        model_job.model_triangle_count = 0;
+        model_job.support_halo_enabled = false;
+        model_job.support_halo_radius_px = 0;
+        model_job.support_halo_radius_mm = 0.0;
+
+        // Support geometry must be binary before it is held aside from the model
+        // AA post-process. This matters for perturbation 3DAA, whose rasterizer
+        // itself emits grayscale coverage before the later XY/Z blur stages.
+        let mut support_job = model_job.clone();
+        support_job.anti_aliasing_level = "Off".to_string();
+        support_job.anti_aliasing_mode = "Coverage".to_string();
+        support_job.blur_brush_radius_px = 0;
+        support_job.minimum_aa_alpha_percent = 100.0;
+
+        Self {
+            model_job,
+            support_job,
+        }
+    }
+}
+
 fn rasterize_layer_rle_with_support_split(
-    job: &SliceJobV3,
+    split_jobs: &SupportSplitJobs,
     triangles: &[Triangle],
     layer_candidates: &[usize],
     layer: u32,
     compute_area_stats: bool,
     model_triangle_count: usize,
-) -> (Vec<RleRun>, Option<Vec<RleRun>>, LayerAreaStatsV3) {
+    halo_precalc: Option<&crate::raster::SupportHaloPrecalc>,
+) -> (Vec<RleRun>, Option<Vec<RleRun>>, LayerAreaStatsV3, u64) {
+    let job = &split_jobs.model_job;
+    // Fast-exit when no support triangles intersect this layer: avoid allocating
+    // candidate partition vectors and call rasterize_layer_rle directly.
+    if !layer_candidates.iter().any(|&c| c >= model_triangle_count) {
+        let (runs, stats) = rasterize_layer_rle(
+            job,
+            triangles,
+            layer_candidates,
+            layer,
+            compute_area_stats,
+        );
+        return (runs, None, stats, 0);
+    }
+
     let mut model_layer_indices = Vec::with_capacity(layer_candidates.len());
     let mut support_layer_indices = Vec::with_capacity(layer_candidates.len());
     for &candidate in layer_candidates {
@@ -240,12 +286,6 @@ fn rasterize_layer_rle_with_support_split(
         } else {
             support_layer_indices.push(candidate);
         }
-    }
-
-    if support_layer_indices.is_empty() {
-        let (runs, stats) =
-            rasterize_layer_rle(job, triangles, layer_candidates, layer, compute_area_stats);
-        return (runs, None, stats);
     }
 
     let width = job.effective_render_width_px() as usize;
@@ -257,40 +297,81 @@ fn rasterize_layer_rle_with_support_split(
     let model_runs = if model_layer_indices.is_empty() {
         encode_zero_rle(width, height)
     } else {
-        rasterize_layer_rle(job, triangles, &model_layer_indices, layer, false).0
+        rasterize_layer_rle(
+            &split_jobs.model_job,
+            triangles,
+            &model_layer_indices,
+            layer,
+            false,
+        )
+        .0
     };
 
-    // Support geometry must be binary before it is held aside from the model
-    // AA post-process. This matters for perturbation 3DAA, whose rasterizer
-    // itself emits grayscale coverage before the later XY/Z blur stages.
-    let mut support_job = job.clone();
-    support_job.anti_aliasing_level = "Off".to_string();
-    support_job.anti_aliasing_mode = "Coverage".to_string();
-    support_job.blur_brush_radius_px = 0;
-    support_job.minimum_aa_alpha_percent = 100.0;
-    support_job.aa_on_supports = true;
-    support_job.model_triangle_count = 0;
-
-    let (support_runs, support_stats) = rasterize_layer_rle(
-        &support_job,
+    let mut support_runs = rasterize_layer_rle(
+        &split_jobs.support_job,
         triangles,
         &support_layer_indices,
         layer,
-        compute_area_stats,
-    );
-
-    if model_layer_indices.is_empty() {
-        return (model_runs, Some(support_runs), support_stats);
-    }
+        false,
+    )
+    .0;
 
     let stats = if compute_area_stats {
-        let merged_runs = merge_rle_max(&model_runs, &support_runs);
+        let merged_runs = if model_layer_indices.is_empty() {
+            support_runs.clone()
+        } else {
+            merge_rle_max(&model_runs, &support_runs)
+        };
         recompute_layer_stats_from_rle(&merged_runs, width, height, pixel_area_mm2, true)
+    } else if model_layer_indices.is_empty() {
+        compute_rle_max_basic_stats(
+            &support_runs,
+            &support_runs,
+            width,
+            height,
+            pixel_area_mm2,
+        )
     } else {
-        compute_rle_max_basic_stats(&model_runs, &support_runs, width, height, pixel_area_mm2)
+        compute_rle_max_basic_stats(
+            &model_runs,
+            &support_runs,
+            width,
+            height,
+            pixel_area_mm2,
+        )
     };
 
-    (model_runs, Some(support_runs), stats)
+    let ssaa_factor = if job.height_px > 0 && job.source_height_px > job.height_px {
+        (job.source_height_px / job.height_px).max(1) as usize
+    } else {
+        1
+    };
+    let out_width = width / ssaa_factor;
+    let out_height = height / ssaa_factor;
+
+    if ssaa_factor > 1 {
+        support_runs = crate::raster::downsample_binary_rle_to_gray_rle(
+            &support_runs,
+            width,
+            height,
+            ssaa_factor,
+            255,
+        );
+    }
+
+    let mut halo_ns = 0u64;
+    if let Some(precalc) = halo_precalc {
+        let halo_start = std::time::Instant::now();
+        support_runs = crate::raster::apply_euclidean_radial_halo_rle_with_precalc(
+            &support_runs,
+            out_width,
+            out_height,
+            precalc,
+        );
+        halo_ns = halo_start.elapsed().as_nanos() as u64;
+    }
+
+    (model_runs, Some(support_runs), stats, halo_ns)
 }
 
 fn encode_uniform_png_cached(
@@ -463,10 +544,22 @@ pub fn render_layers_bounded(
 
     let progress = AtomicU32::new(0);
     let raster_ns = AtomicU64::new(0);
+    let support_merge_ns = AtomicU64::new(0);
     let png_ns = AtomicU64::new(0);
     let layer_pixels_len =
         (job.effective_render_width_px() as usize) * (job.source_height_px as usize);
     let binary_png_expected = job.produces_binary_output();
+    let model_aa_off = !job.anti_aliasing_mode_is_blur()
+        && job.configured_xy_aa_steps() <= 1
+        && !crate::zaa::is_vertical_aa_mode(&job.anti_aliasing_mode);
+    let rle_png_split_count = if use_rle_png_path && model_aa_off {
+        job.support_split_triangle_bounds(triangles.len(), false)
+    } else {
+        None
+    };
+    let rle_png_split_jobs = rle_png_split_count.map(|_| SupportSplitJobs::from_raster_job(job));
+    let rle_png_halo_precalc = rle_png_split_count
+        .and_then(|_| crate::raster::SupportHaloPrecalc::from_job(job, None));
 
     let empty_png_cache = emit_png_layers.then(|| Mutex::<Option<Vec<u8>>>::new(None));
     let full_png_cache = emit_png_layers.then(|| Mutex::<Option<Vec<u8>>>::new(None));
@@ -543,17 +636,48 @@ pub fn render_layers_bounded(
                             // ── Fast path: RLE rasteriser + streaming PNG ──
                             if use_rle_png_path {
                                 let raster_start = std::time::Instant::now();
-                                let (runs, stats) = rasterize_layer_rle(
-                                    job,
-                                    triangles,
-                                    layer_candidates,
-                                    layer,
-                                    compute_area_stats,
-                                );
+                                let (runs, stats, merge_ns) = if let Some((
+                                    model_triangle_count,
+                                    split_jobs,
+                                )) = rle_png_split_count
+                                    .zip(rle_png_split_jobs.as_ref())
+                                {
+                                    let (model_runs, support_runs, stats, halo_ns) =
+                                        rasterize_layer_rle_with_support_split(
+                                            split_jobs,
+                                            triangles,
+                                            layer_candidates,
+                                            layer,
+                                            compute_area_stats,
+                                            model_triangle_count,
+                                            rle_png_halo_precalc.as_ref(),
+                                        );
+                                    if let Some(sr) = support_runs {
+                                        let merge_start = std::time::Instant::now();
+                                        let merged = crate::engine::merge_rle_max(model_runs, &sr);
+                                        let m_ns = merge_start.elapsed().as_nanos() as u64;
+                                        (merged, stats, halo_ns.saturating_add(m_ns))
+                                    } else {
+                                        (model_runs, stats, halo_ns)
+                                    }
+                                } else {
+                                    let (runs, stats) = rasterize_layer_rle(
+                                        job,
+                                        triangles,
+                                        layer_candidates,
+                                        layer,
+                                        compute_area_stats,
+                                    );
+                                    (runs, stats, 0)
+                                };
+                                let elapsed_ns = raster_start.elapsed().as_nanos() as u64;
                                 raster_ns.fetch_add(
-                                    raster_start.elapsed().as_nanos() as u64,
+                                    elapsed_ns.saturating_sub(merge_ns),
                                     Ordering::Relaxed,
                                 );
+                                if merge_ns > 0 {
+                                    support_merge_ns.fetch_add(merge_ns, Ordering::Relaxed);
+                                }
                                 let png_start = std::time::Instant::now();
                                 let png = crate::encode::encode_grayscale_png_from_rle(
                                     job.effective_render_width_px(),
@@ -633,7 +757,12 @@ pub fn render_layers_bounded(
                                 None
                             };
 
-                            let raw_mask = if need_raw_masks { Some(mask) } else { None };
+                            let raw_mask = if need_raw_masks {
+                                Some(mask)
+                            } else {
+                                crate::pipeline::return_mask_to_pool(mask);
+                                None
+                            };
 
                             Ok((layer, png, raw_mask, stats))
                         })();
@@ -730,6 +859,7 @@ pub fn render_layers_bounded(
     let perf = SlicingPerfV3 {
         render_wall_ns: render_wall_start.elapsed().as_nanos() as u64,
         render_ns: raster_ns.load(Ordering::Relaxed),
+        support_merge_ns: support_merge_ns.load(Ordering::Relaxed),
         png_encode_ns: png_ns.load(Ordering::Relaxed),
         layers: total_layers,
         ..Default::default()
@@ -764,9 +894,14 @@ pub fn render_layers_rle(
     let buffer = (max_concurrent * 4).clamp(4, 64);
 
     let raster_ns = AtomicU64::new(0);
+    let support_merge_ns = AtomicU64::new(0);
     let progress = AtomicU32::new(0);
     let support_split_model_triangle_count =
         support_split_model_triangle_count.filter(|&count| count > 0 && count < triangles.len());
+    let split_jobs = support_split_model_triangle_count.map(|_| SupportSplitJobs::from_raster_job(job));
+    let split_jobs_ref = split_jobs.as_ref();
+    let halo_precalc = crate::raster::SupportHaloPrecalc::from_job(job, None);
+    let halo_precalc_ref = halo_precalc.as_ref();
 
     let (tx, rx) = std::sync::mpsc::sync_channel::<
         Result<(u32, Vec<RleRun>, Option<Vec<RleRun>>, LayerAreaStatsV3), SlicerV3Error>,
@@ -797,17 +932,18 @@ pub fn render_layers_rle(
 
                                 let layer_candidates = layer_index.candidates_for_layer(layer);
                                 let raster_start = std::time::Instant::now();
-                                let (runs, support_runs, stats) =
-                                    if let Some(model_triangle_count) =
-                                        support_split_model_triangle_count
+                                let (runs, support_runs, stats, halo_ns) =
+                                    if let Some((model_triangle_count, split_jobs)) =
+                                        support_split_model_triangle_count.zip(split_jobs_ref)
                                     {
                                         rasterize_layer_rle_with_support_split(
-                                            job,
+                                            split_jobs,
                                             triangles,
                                             layer_candidates,
                                             layer,
                                             compute_area_stats,
                                             model_triangle_count,
+                                            halo_precalc_ref,
                                         )
                                     } else {
                                         let (runs, stats) = rasterize_layer_rle(
@@ -817,12 +953,16 @@ pub fn render_layers_rle(
                                             layer,
                                             compute_area_stats,
                                         );
-                                        (runs, None, stats)
+                                        (runs, None, stats, 0)
                                     };
+                                let elapsed_ns = raster_start.elapsed().as_nanos() as u64;
                                 raster_ns.fetch_add(
-                                    raster_start.elapsed().as_nanos() as u64,
+                                    elapsed_ns.saturating_sub(halo_ns),
                                     Ordering::Relaxed,
                                 );
+                                if halo_ns > 0 {
+                                    support_merge_ns.fetch_add(halo_ns, Ordering::Relaxed);
+                                }
 
                                 Ok((layer, runs, support_runs, stats))
                             })();
@@ -889,6 +1029,7 @@ pub fn render_layers_rle(
     let perf = SlicingPerfV3 {
         render_wall_ns: render_wall_start.elapsed().as_nanos() as u64,
         render_ns: raster_ns.load(Ordering::Relaxed),
+        support_merge_ns: support_merge_ns.load(Ordering::Relaxed),
         layers: total_layers,
         ..Default::default()
     };
@@ -925,10 +1066,15 @@ pub fn render_layers_rle_encoded(
     let buffer = (max_concurrent * 4).clamp(4, 64);
 
     let raster_ns = AtomicU64::new(0);
+    let support_merge_ns = AtomicU64::new(0);
     let encode_ns = AtomicU64::new(0);
     let progress = AtomicU32::new(0);
     let support_split_model_triangle_count =
         support_split_model_triangle_count.filter(|&count| count > 0 && count < triangles.len());
+    let split_jobs = support_split_model_triangle_count.map(|_| SupportSplitJobs::from_raster_job(job));
+    let split_jobs_ref = split_jobs.as_ref();
+    let halo_precalc = crate::raster::SupportHaloPrecalc::from_job(job, None);
+    let halo_precalc_ref = halo_precalc.as_ref();
 
     let (tx, rx) = std::sync::mpsc::sync_channel::<
         Result<(u32, Vec<u8>, LayerAreaStatsV3), SlicerV3Error>,
@@ -957,17 +1103,18 @@ pub fn render_layers_rle_encoded(
 
                                 let layer_candidates = layer_index.candidates_for_layer(layer);
                                 let raster_start = std::time::Instant::now();
-                                let (runs, support_runs, stats) =
-                                    if let Some(model_triangle_count) =
-                                        support_split_model_triangle_count
+                                let (runs, support_runs, stats, halo_ns) =
+                                    if let Some((model_triangle_count, split_jobs)) =
+                                        support_split_model_triangle_count.zip(split_jobs_ref)
                                     {
                                         rasterize_layer_rle_with_support_split(
-                                            job,
+                                            split_jobs,
                                             triangles,
                                             layer_candidates,
                                             layer,
                                             compute_area_stats,
                                             model_triangle_count,
+                                            halo_precalc_ref,
                                         )
                                     } else {
                                         let (runs, stats) = rasterize_layer_rle(
@@ -977,12 +1124,16 @@ pub fn render_layers_rle_encoded(
                                             layer,
                                             compute_area_stats,
                                         );
-                                        (runs, None, stats)
+                                        (runs, None, stats, 0)
                                     };
+                                let elapsed_ns = raster_start.elapsed().as_nanos() as u64;
                                 raster_ns.fetch_add(
-                                    raster_start.elapsed().as_nanos() as u64,
+                                    elapsed_ns.saturating_sub(halo_ns),
                                     Ordering::Relaxed,
                                 );
+                                if halo_ns > 0 {
+                                    support_merge_ns.fetch_add(halo_ns, Ordering::Relaxed);
+                                }
 
                                 let encode_start = std::time::Instant::now();
                                 let bytes = encode_fn(layer, &runs, support_runs.as_deref())?;
@@ -1056,6 +1207,7 @@ pub fn render_layers_rle_encoded(
     let perf = SlicingPerfV3 {
         render_wall_ns: render_wall_start.elapsed().as_nanos() as u64,
         render_ns: raster_ns.load(Ordering::Relaxed),
+        support_merge_ns: support_merge_ns.load(Ordering::Relaxed),
         png_encode_ns: encode_ns.load(Ordering::Relaxed),
         layers: total_layers,
         ..Default::default()

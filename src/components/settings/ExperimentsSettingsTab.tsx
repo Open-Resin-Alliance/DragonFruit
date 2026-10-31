@@ -12,6 +12,7 @@ import {
   subscribeToExperiments,
 } from '@/features/experiments/experimentsRegistry';
 import { translateExperimentDescription, translateExperimentName } from '@/features/experiments/experimentMessages';
+import { applySupportHaloExperimentState } from '@/features/profiles/profileStore';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import { Trans } from '@lingui/react/macro';
@@ -119,6 +120,9 @@ export function ExperimentsSettingsTab({ onExit }: { onExit: () => void }) {
 
   const handleToggle = React.useCallback((id: string, enabled: boolean) => {
     setExperimentEnabled(id, enabled);
+    if (id === 'support-halo') {
+      applySupportHaloExperimentState(enabled);
+    }
   }, []);
 
   React.useEffect(() => {

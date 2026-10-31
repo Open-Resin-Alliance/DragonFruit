@@ -180,3 +180,138 @@ test('a stale false in storage behaves like no saved value', () => {
     removeMockWindow();
   }
 });
+
+test('support-halo experiment is declared with exact name, description, and defaultEnabled: false', async () => {
+  const definition = getExperimentDefinition('support-halo');
+  assert.ok(definition, 'expected support-halo experiment to be declared in experiments.json');
+  assert.equal(definition.name, 'Support Halo');
+  assert.equal(
+    definition.description,
+    'Adds a greyscale glow around support tips as they narrow to reduce small cross section oxygen inhibition and increase strength.',
+  );
+  assert.equal(definition.defaultEnabled, false);
+  assert.equal(isExperimentEnabled('support-halo'), false, 'support-halo should default to off');
+
+  const { translateExperimentDescription, translateExperimentName } = await import('@/features/experiments/experimentMessages');
+  const passthroughTranslate = (descriptor: { message?: string; id?: string }) => descriptor.message ?? descriptor.id ?? '';
+  assert.equal(translateExperimentName(definition, passthroughTranslate as any), 'Support Halo');
+  assert.equal(
+    translateExperimentDescription(definition, passthroughTranslate as any),
+    'Adds a greyscale glow around support tips as they narrow to reduce small cross section oxygen inhibition and increase strength.',
+  );
+});
+
+test('applySupportHaloExperimentState synchronizes official, locked, and custom material profiles plus session AA overrides', async () => {
+  const localStore = new Map<string, string>();
+  const sessionStore = new Map<string, string>();
+  restoreMockWindow = installFakeWindow({
+    localStorage: {
+      getItem: (key: string) => localStore.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        localStore.set(key, value);
+      },
+      removeItem: (key: string) => {
+        localStore.delete(key);
+      },
+    },
+    sessionStorage: {
+      getItem: (key: string) => sessionStore.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        sessionStore.set(key, value);
+      },
+      removeItem: (key: string) => {
+        sessionStore.delete(key);
+      },
+    },
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => true,
+  });
+
+  try {
+    const profileStoreMod = await import('@/features/profiles/profileStore');
+    assert.equal(
+      typeof (profileStoreMod as Record<string, unknown>).applySupportHaloExperimentState,
+      'function',
+      'expected applySupportHaloExperimentState to be exported from profileStore',
+    );
+    const applySupportHaloExperimentState = (profileStoreMod as unknown as {
+      applySupportHaloExperimentState: (enabled: boolean) => void;
+    }).applySupportHaloExperimentState;
+
+    const presets = profileStoreMod.getLibraryPrinterPresets();
+    assert.ok(presets.length > 0, 'expected printer presets');
+    const printerId = profileStoreMod.addPrinterProfileFromPreset(presets[0]!.presetId);
+    profileStoreMod.addMaterialProfile(printerId, {
+      name: 'Official Template Material',
+      officialTemplateId: 'official-template-test',
+      officialTemplateVersion: 1,
+    });
+    profileStoreMod.addMaterialProfile(printerId, {
+      name: 'Locked Custom Material',
+      locked: true,
+    });
+    profileStoreMod.addMaterialProfile(printerId, {
+      name: 'Unlocked Custom Material',
+      locked: false,
+    });
+
+    const initialSnap = profileStoreMod.getProfileStoreSnapshot();
+    assert.ok(initialSnap.materialProfiles.length >= 3, 'expected seeded official, locked, and custom material profiles');
+    const firstMaterialId = initialSnap.materialProfiles[0]!.id;
+
+    // Seed a session AA override entry in sessionStorage
+    const sessionKey = 'dragonfruit.slicing.sessionAaOverrideByMaterial.v1';
+    sessionStore.set(
+      sessionKey,
+      JSON.stringify({
+        [firstMaterialId]: {
+          minimumAaAlphaPercent: 35,
+          antiAliasingSettings: {
+            ...profileStoreMod.DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
+            supportHaloEnabled: false,
+            supportHaloAuto: false,
+            supportHaloRadiusMm: 0.35,
+            supportHaloMaxIntensityPercent: 70,
+          },
+        },
+      }),
+    );
+
+    // Toggle Support Halo experiment ON
+    setExperimentEnabled('support-halo', true);
+    applySupportHaloExperimentState(true);
+
+    const enabledSnap = profileStoreMod.getProfileStoreSnapshot();
+    for (const profile of enabledSnap.materialProfiles) {
+      assert.equal(profile.antiAliasingSettings.supportHaloEnabled, true, `profile ${profile.id} should enable supportHaloEnabled`);
+      assert.equal(profile.antiAliasingSettings.supportHaloAuto, true, `profile ${profile.id} should enable supportHaloAuto`);
+      assert.equal(profile.antiAliasingSettings.supportHaloRadiusMm, 0.15);
+      assert.equal(profile.antiAliasingSettings.supportHaloInverseScalePercent, 100);
+      assert.equal(profile.antiAliasingSettings.supportHaloMaxIntensityPercent, 25);
+      assert.equal(profile.antiAliasingSettings.supportHaloProfile, 'donut');
+      assert.equal(profile.antiAliasingSettings.supportHaloScope, 'tips_only');
+      assert.equal(profile.antiAliasingSettings.supportHaloMaxTipDiameterMm, 0.8);
+    }
+
+    const sessionAfterOn = JSON.parse(sessionStore.get(sessionKey) ?? '{}');
+    assert.equal(sessionAfterOn[firstMaterialId]?.antiAliasingSettings?.supportHaloEnabled, true);
+    assert.equal(sessionAfterOn[firstMaterialId]?.antiAliasingSettings?.supportHaloAuto, true);
+    assert.equal(sessionAfterOn[firstMaterialId]?.antiAliasingSettings?.supportHaloRadiusMm, 0.15);
+
+    // Toggle Support Halo experiment OFF
+    setExperimentEnabled('support-halo', false);
+    applySupportHaloExperimentState(false);
+
+    const disabledSnap = profileStoreMod.getProfileStoreSnapshot();
+    for (const profile of disabledSnap.materialProfiles) {
+      assert.equal(profile.antiAliasingSettings.supportHaloEnabled, false, `profile ${profile.id} should disable supportHaloEnabled`);
+    }
+
+    const sessionAfterOff = JSON.parse(sessionStore.get(sessionKey) ?? '{}');
+    assert.equal(sessionAfterOff[firstMaterialId]?.antiAliasingSettings?.supportHaloEnabled, false);
+  } finally {
+    removeMockWindow();
+  }
+});
+

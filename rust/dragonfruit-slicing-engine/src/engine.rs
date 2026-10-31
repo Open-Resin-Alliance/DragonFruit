@@ -125,7 +125,7 @@ fn ssaa_downsample_min_alpha_u8(blur_radius: usize, min_alpha_u8: u8) -> u8 {
     }
 }
 
-fn merge_rle_max(
+pub(crate) fn merge_rle_max(
     lhs: Vec<crate::rle::RleRun>,
     rhs: &[crate::rle::RleRun],
 ) -> Vec<crate::rle::RleRun> {
@@ -662,6 +662,7 @@ struct SupportMaskContext {
     triangles: Vec<crate::geometry::Triangle>,
     layer_index: crate::index::LayerIndex,
     model_triangle_count: usize,
+    halo_precalc: Option<crate::raster::SupportHaloPrecalc>,
     support_candidates: Vec<usize>,
 }
 
@@ -672,27 +673,24 @@ struct SupportMaskLayer {
 
 impl SupportMaskContext {
     fn from_job(job: &SliceJobV3, triangles_xyz: &[f32]) -> Option<Self> {
-        if job.aa_on_supports {
-            eprintln!(
-                "[SupportAA] full-mask support context disabled: aa_on_supports=true"
-            );
-            return None;
-        }
-
         let total_triangles = triangles_xyz.len() / 9;
-        let model_triangle_count = (job.model_triangle_count as usize).min(total_triangles);
-        if model_triangle_count == 0 || model_triangle_count >= total_triangles {
+        let Some(model_triangle_count) =
+            job.support_split_triangle_bounds(total_triangles, true)
+        else {
             eprintln!(
-                "[SupportAA] full-mask support context disabled: model_triangles={} total_triangles={}",
-                model_triangle_count, total_triangles
+                "[SupportAA] full-mask support context disabled: aa_on_supports={} halo={} model_triangles={} total_triangles={}",
+                job.aa_on_supports,
+                job.support_halo_active(),
+                job.model_triangle_count,
+                total_triangles
             );
             return None;
-        }
+        };
 
         eprintln!(
             "[SupportAA] full-mask support context enabled: model_triangles={} support_triangles={} total_triangles={} mode={} level={}",
             model_triangle_count,
-            total_triangles - model_triangle_count,
+            total_triangles.saturating_sub(model_triangle_count),
             total_triangles,
             job.anti_aliasing_mode,
             job.anti_aliasing_level,
@@ -705,6 +703,8 @@ impl SupportMaskContext {
         support_job.minimum_aa_alpha_percent = 100.0;
         support_job.aa_on_supports = true;
         support_job.model_triangle_count = 0;
+        support_job.support_halo_enabled = false;
+        support_job.support_halo_radius_px = 0;
 
         let mut triangles = parse_triangles(triangles_xyz);
         project_triangles_inplace(&mut triangles, &support_job);
@@ -720,6 +720,7 @@ impl SupportMaskContext {
             triangles,
             layer_index,
             model_triangle_count,
+            halo_precalc: crate::raster::SupportHaloPrecalc::from_job(job, None),
             support_candidates: Vec::new(),
         })
     }
@@ -736,29 +737,44 @@ impl SupportMaskContext {
             return None;
         }
 
-        let (mask, stats) = rasterize_layer_with_stats(
+        let (mut mask, stats) = rasterize_layer_with_stats(
             &self.support_job,
             &self.triangles,
             &self.support_candidates,
             layer,
             false,
         );
-
         if stats.total_solid_pixels == 0 {
+            crate::pipeline::return_mask_to_pool(mask);
             return None;
         }
 
-        let min_x = stats.min_x.max(0) as usize;
-        let max_x = stats.max_x.max(stats.min_x).max(0) as usize;
-        let min_y = stats.min_y.max(0) as usize;
-        let max_y = stats.max_y.max(stats.min_y).max(0) as usize;
+        let width = self.support_job.effective_render_width_px() as usize;
+        let height = self.support_job.source_height_px as usize;
+        let (rx, ry) = if let Some(ref precalc) = self.halo_precalc {
+            crate::raster::apply_euclidean_radial_halo_dense_with_precalc(
+                &mut mask,
+                width,
+                height,
+                precalc,
+            );
+            (precalc.max_rx_px, precalc.max_ry_px)
+        } else {
+            (0, 0)
+        };
 
+        let min_x = (stats.min_x.max(0) as usize).saturating_sub(rx);
+        let max_x = ((stats.max_x.max(stats.min_x).max(0) as usize) + rx)
+            .min(width.saturating_sub(1));
+        let min_y = (stats.min_y.max(0) as usize).saturating_sub(ry);
+        let max_y = ((stats.max_y.max(stats.min_y).max(0) as usize) + ry)
+            .min(height.saturating_sub(1));
         let bounds = (min_x, max_x, min_y, max_y);
         let row_width = max_x - min_x + 1;
         let row_count = max_y - min_y + 1;
         let mut compact = Vec::with_capacity(row_width.saturating_mul(row_count));
         for y in min_y..=max_y {
-            let row_start = y * self.support_job.effective_render_width_px() as usize + min_x;
+            let row_start = y * width + min_x;
             compact.extend_from_slice(&mask[row_start..row_start + row_width]);
         }
         crate::pipeline::return_mask_to_pool(mask);
@@ -806,8 +822,8 @@ fn merge_support_mask_inplace_local(
             .iter_mut()
             .zip(support_row.iter())
         {
-            if src_px > 0 {
-                *dst_px = 255;
+            if src_px > *dst_px {
+                *dst_px = src_px;
             }
         }
     }
@@ -2553,7 +2569,7 @@ fn rasterize_vertical_aa_streaming_v3(
                                 let raw_row = &mut raw_mask
                                     [row_start + start_x..row_start + start_x + support_row.len()];
                                 for (px, &s) in raw_row.iter_mut().zip(support_row.iter()) {
-                                    if s > 0 {
+                                    if s == 255 {
                                         *px = 0;
                                     }
                                 }
@@ -3744,7 +3760,7 @@ pub fn slice_and_rasterize_rle_v3(
                 j.source_width_px = job.source_width_px.saturating_mul(ssaa_factor as u32);
                 j.source_height_px = job.source_height_px.saturating_mul(ssaa_factor as u32);
                 j.width_px = job.width_px.saturating_mul(ssaa_factor as u32);
-                j.height_px = job.height_px.saturating_mul(ssaa_factor as u32);
+                j.height_px = job.source_height_px;
             }
             Some(j)
         } else {
@@ -3755,15 +3771,9 @@ pub fn slice_and_rasterize_rle_v3(
     let mut triangles = parse_triangles(&job.triangles_xyz);
     project_triangles_inplace(&mut triangles, raster_job);
     let support_split_model_triangle_count =
-        if (ssaa_factor > 1 || blur_radius > 0) && !job.aa_on_supports {
-            let model_triangle_count = (job.model_triangle_count as usize).min(triangles.len());
-            (model_triangle_count > 0 && model_triangle_count < triangles.len())
-                .then_some(model_triangle_count)
-        } else {
-            None
-        };
+        job.support_split_triangle_bounds(triangles.len(), ssaa_factor > 1 || blur_radius > 0);
     eprintln!(
-        "[SupportAA] RLE raster partition: enabled={} model_triangles={} support_triangles={} total_triangles={} aa_on_supports={} mode={} level={}",
+        "[SupportAA] RLE raster partition: enabled={} model_triangles={} support_triangles={} total_triangles={} aa_on_supports={} halo={} mode={} level={}",
         support_split_model_triangle_count.is_some(),
         support_split_model_triangle_count.unwrap_or(triangles.len()),
         support_split_model_triangle_count
@@ -3771,6 +3781,7 @@ pub fn slice_and_rasterize_rle_v3(
             .unwrap_or(0),
         triangles.len(),
         job.aa_on_supports,
+        job.support_halo_active(),
         job.anti_aliasing_mode,
         job.anti_aliasing_level,
     );
@@ -3790,6 +3801,7 @@ pub fn slice_and_rasterize_rle_v3(
 
     // Wrap on_rle_layer to downsample (if ssaa_factor > 1) and/or blur before
     // forwarding.  When neither applies the closure is a thin pass-through.
+    let mut rle_support_merge_ns = 0u64;
     let mut wrapped_on_rle =
         |layer_idx: u32,
          raster_runs: Vec<crate::rle::RleRun>,
@@ -3822,19 +3834,12 @@ pub fn slice_and_rasterize_rle_v3(
                 post_aa_runs
             };
 
-            let final_runs = if let Some(support_raster_runs) = support_raster_runs.as_ref() {
-                let support_runs = if ssaa_factor > 1 {
-                    downsample_binary_rle_to_gray_rle(
-                        support_raster_runs,
-                        super_width,
-                        super_height,
-                        ssaa_factor,
-                        255,
-                    )
-                } else {
-                    support_raster_runs.clone()
-                };
-                merge_rle_max(final_runs, &support_runs)
+            let final_runs = if let Some(support_runs) = support_raster_runs.as_ref() {
+                let merge_start = std::time::Instant::now();
+                let merged = merge_rle_max(final_runs, support_runs);
+                rle_support_merge_ns =
+                    rle_support_merge_ns.saturating_add(merge_start.elapsed().as_nanos() as u64);
+                merged
             } else {
                 final_runs
             };
@@ -3853,6 +3858,7 @@ pub fn slice_and_rasterize_rle_v3(
         cancel_flag,
     )?;
     perf.index_build_ns = index_ns;
+    perf.support_merge_ns = perf.support_merge_ns.saturating_add(rle_support_merge_ns);
 
     Ok((rendered_layers, layer_area_stats, perf))
 }
@@ -3924,36 +3930,39 @@ pub fn slice_and_rasterize_rle_blocks_v3(
         None
     };
 
-    let raster_job_owned: Option<SliceJobV3> =
-        if ssaa_factor > 1 || (blur_radius > 0 && !use_raster_perturbation) {
-            let mut j = job.clone();
-            j.triangles_xyz = Vec::new();
-            j.anti_aliasing_level = "Off".to_string();
-            j.anti_aliasing_mode = "Coverage".to_string();
-            j.blur_brush_radius_px = 0;
-            j.minimum_aa_alpha_percent = 0.0;
-            if ssaa_factor > 1 {
-                j.source_width_px = job.source_width_px.saturating_mul(ssaa_factor as u32);
-                j.source_height_px = job.source_height_px.saturating_mul(ssaa_factor as u32);
-                j.width_px = job.width_px.saturating_mul(ssaa_factor as u32);
-                j.height_px = job.height_px.saturating_mul(ssaa_factor as u32);
-            }
-            Some(j)
-        } else {
-            None
-        };
+    let total_triangles = job.triangles_xyz.len() / 9;
+    let support_split_model_triangle_count =
+        job.support_split_triangle_bounds(total_triangles, ssaa_factor > 1 || blur_radius > 0);
+
+    let raster_job_owned: Option<SliceJobV3> = if ssaa_factor > 1
+        || (blur_radius > 0 && !use_raster_perturbation)
+        || support_split_model_triangle_count.is_some()
+    {
+        let mut j = job.clone();
+        j.triangles_xyz = Vec::new();
+        j.anti_aliasing_level = "Off".to_string();
+        j.anti_aliasing_mode = "Coverage".to_string();
+        j.blur_brush_radius_px = 0;
+        j.minimum_aa_alpha_percent = 0.0;
+        j.aa_on_supports = true;
+        j.model_triangle_count = 0;
+        j.support_halo_enabled = false;
+        j.support_halo_radius_px = 0;
+        j.support_halo_radius_mm = 0.0;
+        if ssaa_factor > 1 {
+            j.source_width_px = job.source_width_px.saturating_mul(ssaa_factor as u32);
+            j.source_height_px = job.source_height_px.saturating_mul(ssaa_factor as u32);
+            j.width_px = job.width_px.saturating_mul(ssaa_factor as u32);
+            j.height_px = job.height_px.saturating_mul(ssaa_factor as u32);
+        }
+        Some(j)
+    } else {
+        None
+    };
     let raster_job = raster_job_owned.as_ref().unwrap_or(job);
 
     let mut triangles = parse_triangles(&job.triangles_xyz);
     project_triangles_inplace(&mut triangles, raster_job);
-    let support_split_model_triangle_count =
-        if (ssaa_factor > 1 || blur_radius > 0) && !job.aa_on_supports {
-            let model_triangle_count = (job.model_triangle_count as usize).min(triangles.len());
-            (model_triangle_count > 0 && model_triangle_count < triangles.len())
-                .then_some(model_triangle_count)
-        } else {
-            None
-        };
     let index_start = std::time::Instant::now();
     let layer_index = build_layer_index(
         &triangles,
@@ -3978,6 +3987,9 @@ pub fn slice_and_rasterize_rle_blocks_v3(
         sj.minimum_aa_alpha_percent = 100.0;
         sj.aa_on_supports = true;
         sj.model_triangle_count = 0;
+        sj.support_halo_enabled = false;
+        sj.support_halo_radius_px = 0;
+        sj.support_halo_radius_mm = 0.0;
         sj
     });
 
@@ -3991,6 +4003,15 @@ pub fn slice_and_rasterize_rle_blocks_v3(
     let support_job_ref = support_job.as_ref();
     let tail_cure_lut_ref = tail_cure_lut.as_ref();
     let encode_block_fn_ref = encode_block_fn.as_ref();
+    let halo_precalc = crate::raster::SupportHaloPrecalc::from_job(job, None);
+    let halo_precalc_ref = halo_precalc.as_ref();
+    let seam_halo_radius = blur_radius.max(
+        halo_precalc_ref
+            .map(|p| p.max_rx_px.saturating_add(p.max_tip_dx_px))
+            .unwrap_or(0),
+    );
+    let block_support_merge_ns = AtomicU64::new(0);
+    let block_support_merge_ns_ref = &block_support_merge_ns;
 
     let produce_layer = |layer: u32| -> Result<
         (Vec<crate::pipeline::RleBlockPayload>, LayerAreaStatsV3),
@@ -4002,11 +4023,11 @@ pub fn slice_and_rasterize_rle_blocks_v3(
         let layer_candidates = layer_index.candidates_for_layer(layer);
 
         let (model_indices, support_indices): (Vec<usize>, Vec<usize>) =
-            if let Some(model_triangle_count) = support_split_model_triangle_count {
+            if let Some(model_tri) = support_split_model_triangle_count {
                 let mut model = Vec::with_capacity(layer_candidates.len());
                 let mut support = Vec::new();
                 for &candidate in layer_candidates {
-                    if candidate < model_triangle_count {
+                    if candidate < model_tri {
                         model.push(candidate);
                     } else {
                         support.push(candidate);
@@ -4034,11 +4055,11 @@ pub fn slice_and_rasterize_rle_blocks_v3(
                 continue;
             }
 
-            // Blur reads neighbor columns: over-render interior edges by the
-            // kernel radius, post-process at the widened width, then crop the
-            // halo so the seam matches the full-width raster exactly.
-            let halo_left = blur_radius.min(out_start);
-            let halo_right = blur_radius.min(out_width - out_end);
+            // Blur and support halo read neighbor columns: over-render interior
+            // edges by the max kernel radius, post-process at the widened width,
+            // then crop the halo so the seam matches the full-width raster.
+            let halo_left = seam_halo_radius.min(out_start);
+            let halo_right = seam_halo_radius.min(out_width - out_end);
             let wid_start = out_start - halo_left;
             let wid_w = (out_end + halo_right) - wid_start;
 
@@ -4126,28 +4147,39 @@ pub fn slice_and_rasterize_rle_blocks_v3(
                 gray_runs
             };
 
-            let final_runs = if let Some(lut) = tail_cure_lut_ref {
+            let mut final_runs = if let Some(lut) = tail_cure_lut_ref {
                 remap_gray_rle_with_lut(&post_aa_runs, lut)
             } else {
                 post_aa_runs
             };
 
-            let final_runs = if let Some(support_raster_runs) = support_raster_runs.as_ref() {
-                let support_runs = if ssaa_factor > 1 {
+            if let Some(support_super) = support_raster_runs.as_ref() {
+                let mut support_runs = if ssaa_factor > 1 {
                     downsample_binary_rle_to_gray_rle(
-                        support_raster_runs,
+                        support_super,
                         wid_w * ssaa_factor,
                         super_height,
                         ssaa_factor,
                         255,
                     )
                 } else {
-                    support_raster_runs.clone()
+                    support_super.clone()
                 };
-                merge_rle_max(final_runs, &support_runs)
-            } else {
-                final_runs
-            };
+                let merge_start = std::time::Instant::now();
+                if let Some(precalc) = halo_precalc_ref {
+                    support_runs = crate::raster::apply_euclidean_radial_halo_rle_with_precalc(
+                        &support_runs,
+                        wid_w,
+                        out_height,
+                        precalc,
+                    );
+                }
+                final_runs = merge_rle_max(final_runs, &support_runs);
+                block_support_merge_ns_ref.fetch_add(
+                    merge_start.elapsed().as_nanos() as u64,
+                    Ordering::Relaxed,
+                );
+            }
 
             let final_runs = if halo_left > 0 || halo_right > 0 {
                 crop_rle_columns(&final_runs, wid_w as u32, halo_left as u32, halo_right as u32)
@@ -4172,6 +4204,11 @@ pub fn slice_and_rasterize_rle_blocks_v3(
         cancel_flag,
     )?;
     perf.index_build_ns = index_ns;
+    let total_block_support_merge_ns = block_support_merge_ns.load(Ordering::Relaxed);
+    perf.render_ns = perf.render_ns.saturating_sub(total_block_support_merge_ns);
+    perf.support_merge_ns = perf
+        .support_merge_ns
+        .saturating_add(total_block_support_merge_ns);
 
     Ok((layer_area_stats, perf))
 }
@@ -4327,12 +4364,8 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
     let mut triangles = parse_triangles(&job.triangles_xyz);
     project_triangles_inplace(&mut triangles, &raster_job);
 
-    let support_split_model_triangle_count = if !job.aa_on_supports {
-        let model_count = (job.model_triangle_count as usize).min(triangles.len());
-        (model_count > 0 && model_count < triangles.len()).then_some(model_count)
-    } else {
-        None
-    };
+    let support_split_model_triangle_count =
+        job.support_split_triangle_bounds(triangles.len(), true);
     eprintln!(
         "[SupportAA] perturb-3DAA RLE partition: enabled={} model_triangles={} support_triangles={} total_triangles={} aa_on_supports={}",
         support_split_model_triangle_count.is_some(),
@@ -4804,7 +4837,9 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
     perf.post_blur_ns = post_counters.post_blur_ns.load(Ordering::Relaxed);
     perf.encode_dither_ns = post_counters.dither_ns.load(Ordering::Relaxed);
     perf.tail_remap_ns = post_counters.tail_remap_ns.load(Ordering::Relaxed);
-    perf.support_merge_ns = post_counters.support_merge_ns.load(Ordering::Relaxed);
+    perf.support_merge_ns = perf
+        .support_merge_ns
+        .saturating_add(post_counters.support_merge_ns.load(Ordering::Relaxed));
     perf.daa_post_threads = post_worker_count as u32;
     perf.daa_post_buffer_depth = post_buffer as u32;
     Ok((rendered_layers, layer_area_stats, perf))
@@ -4860,7 +4895,7 @@ pub fn slice_and_rasterize_rle_encoded_v3(
                 j.source_width_px = job.source_width_px.saturating_mul(ssaa_factor as u32);
                 j.source_height_px = job.source_height_px.saturating_mul(ssaa_factor as u32);
                 j.width_px = job.width_px.saturating_mul(ssaa_factor as u32);
-                j.height_px = job.height_px.saturating_mul(ssaa_factor as u32);
+                j.height_px = job.source_height_px;
             }
             Some(j)
         } else {
@@ -4871,13 +4906,7 @@ pub fn slice_and_rasterize_rle_encoded_v3(
     let mut triangles = parse_triangles(&job.triangles_xyz);
     project_triangles_inplace(&mut triangles, raster_job);
     let support_split_model_triangle_count =
-        if (ssaa_factor > 1 || blur_radius > 0) && !job.aa_on_supports {
-            let model_triangle_count = (job.model_triangle_count as usize).min(triangles.len());
-            (model_triangle_count > 0 && model_triangle_count < triangles.len())
-                .then_some(model_triangle_count)
-        } else {
-            None
-        };
+        job.support_split_triangle_bounds(triangles.len(), ssaa_factor > 1 || blur_radius > 0);
     eprintln!(
         "[SupportAA] encoded-RLE raster partition: enabled={} model_triangles={} support_triangles={} total_triangles={} aa_on_supports={} mode={} level={} blur_radius={} ssaa_factor={}",
         support_split_model_triangle_count.is_some(),
@@ -4906,14 +4935,13 @@ pub fn slice_and_rasterize_rle_encoded_v3(
     // clone is cheap (reference count bump); the heavy work happens per-layer
     // inside the rayon worker pool.
     //
-    // Dithering is skipped when the output is binary (no anti-aliasing):
-    // binary values (0, 255) map directly to the dither target extremes and
-    // downstream encoders (CTB threshold, 1-bit PNG) undo any multi-level
-    // output, making the Floyd-Steinberg pass pure overhead.
-    let output_is_binary = job.produces_binary_output();
+    // Dithering is skipped when the model has no anti-aliasing (`raw` mode):
+    // binary values (0, 255) map directly to the dither target extremes, and
+    // support halo already quantizes its grayscale taper via `build_halo_dither_lut`.
+    let model_aa_active = ssaa_factor > 1 || blur_radius > 0 || use_raster_perturbation;
     let dither_palette = if let Some(bit_depth) = job
         .effective_dither_bit_depth()
-        .filter(|_| !output_is_binary)
+        .filter(|_| model_aa_active)
     {
         let active_lut = job.normalized_tail_cure_lut().unwrap_or_else(|| {
             let mut identity = [0u8; 256];
@@ -4943,7 +4971,11 @@ pub fn slice_and_rasterize_rle_encoded_v3(
             ) -> Result<Vec<u8>, SlicerV3Error>
             + Send
             + Sync,
-    > = if ssaa_factor > 1 || blur_radius > 0 || dither_palette.is_some() {
+    > = if ssaa_factor > 1
+        || blur_radius > 0
+        || dither_palette.is_some()
+        || support_split_model_triangle_count.is_some()
+    {
         let super_width = raster_job.effective_render_width_px() as usize;
         let super_height = raster_job.source_height_px as usize;
         let out_width = job.effective_render_width_px() as usize;
@@ -5003,18 +5035,7 @@ pub fn slice_and_rasterize_rle_encoded_v3(
 
                 let final_runs = if let Some(support_super_runs) = support_super_runs {
                     let start = std::time::Instant::now();
-                    let support_runs = if ssaa_factor > 1 {
-                        downsample_binary_rle_to_gray_rle(
-                            support_super_runs,
-                            super_width,
-                            super_height,
-                            ssaa_factor,
-                            255,
-                        )
-                    } else {
-                        support_super_runs.to_vec()
-                    };
-                    let merged = merge_rle_max(final_runs, &support_runs);
+                    let merged = merge_rle_max(final_runs, support_super_runs);
                     add_elapsed(&counters.support_merge_ns, start);
                     merged
                 } else {
@@ -6129,6 +6150,7 @@ mod tests {
             dither_device_gamma: 3.0,
             triangles_xyz: Vec::new(),
             metadata_json: "{}".to_string(),
+            ..Default::default()
         }
     }
 
@@ -6332,6 +6354,7 @@ mod tests {
             dither_device_gamma: 3.0,
             triangles_xyz: Vec::new(),
             metadata_json: "{}".to_string(),
+            ..Default::default()
         };
 
         let mut flat = Vec::<f32>::new();
@@ -6407,6 +6430,7 @@ mod tests {
             dither_device_gamma: 3.0,
             triangles_xyz: Vec::new(),
             metadata_json: "{}".to_string(),
+            ..Default::default()
         };
 
         let mut flat = Vec::<f32>::new();
@@ -6482,6 +6506,7 @@ mod tests {
             dither_device_gamma: 3.0,
             triangles_xyz: Vec::new(),
             metadata_json: "{}".to_string(),
+            ..Default::default()
         };
 
         let mut flat = Vec::<f32>::new();
@@ -6513,6 +6538,415 @@ mod tests {
         );
     }
 
+    #[test]
+    fn produces_grayscale_output_true_when_halo_enabled_in_no_aa_mode() {
+        let job = SliceJobV3 {
+            anti_aliasing_level: "Off".to_string(),
+            anti_aliasing_mode: "Coverage".to_string(),
+            blur_brush_radius_px: 0,
+            support_halo_enabled: true,
+            support_halo_radius_px: 2,
+            ..Default::default()
+        };
+        assert!(job.produces_grayscale_output());
+        assert!(!job.produces_binary_output());
+    }
+
+    #[test]
+    fn slice_rle_v3_and_encoded_v3_emit_halo_across_no_aa_blur_and_3daa() {
+        let mut flat = Vec::<f32>::new();
+        // Model prism at (-18, 0), Support prism at (+18, 0)
+        push_box_triangles(&mut flat, -18.0, 0.0, 0.0, 2.0, 10.0, 10.0);
+        push_box_triangles(&mut flat, 18.0, 0.0, 0.0, 2.0, 8.0, 8.0);
+
+        let base_job = SliceJobV3 {
+            output_format: ".png".to_string(),
+            source_width_px: 64,
+            source_height_px: 64,
+            width_px: 64,
+            height_px: 64,
+            x_packing_mode: "none".to_string(),
+            build_width_mm: 64.0,
+            build_depth_mm: 64.0,
+            layer_height_mm: 1.0,
+            total_layers: 2,
+            png_compression_strategy: "fastest".to_string(),
+            container_compression_level: 0,
+            anti_aliasing_level: "Off".to_string(),
+            anti_aliasing_mode: "Coverage".to_string(),
+            blur_brush_radius_px: 0,
+            aa_on_supports: false,
+            model_triangle_count: 12,
+            support_halo_enabled: true,
+            support_halo_radius_px: 3,
+            support_halo_max_intensity_percent: 50.0,
+            support_halo_profile: "linear".to_string(),
+            support_halo_scope: "full_supports".to_string(),
+            support_halo_max_tip_diameter_mm: 0.75,
+            triangles_xyz: flat,
+            metadata_json: "{}".to_string(),
+            ..Default::default()
+        };
+
+        let assert_support_right_half_has_core_and_halo = |mask: &[u8], label: &str| {
+            let mut has_core = false;
+            let mut has_halo = false;
+            for y in 0..64usize {
+                for x in 32..64usize {
+                    let px = mask[y * 64 + x];
+                    if px == 255 {
+                        has_core = true;
+                    } else if px > 0 {
+                        has_halo = true;
+                    }
+                }
+            }
+            assert!(has_core, "{label}: support right half should contain 255 core pixels");
+            assert!(
+                has_halo,
+                "{label}: support right half should contain grayscale halo pixels (0 < I < 255)"
+            );
+        };
+
+        // Mode A: No-AA ("Off") via both slice_and_rasterize_rle_v3 and slice_and_rasterize_rle_encoded_v3
+        let mut rle_runs_no_aa = None;
+        super::slice_and_rasterize_rle_v3(
+            &base_job,
+            false,
+            |idx, runs| {
+                if idx == 0 {
+                    rle_runs_no_aa = Some(runs);
+                }
+                Ok(())
+            },
+            None,
+            None,
+        )
+        .expect("No-AA RLE slice should succeed");
+        let mask_no_aa = expand_rle_to_mask(&rle_runs_no_aa.unwrap(), 64 * 64);
+        assert_support_right_half_has_core_and_halo(&mask_no_aa, "No-AA rle_v3");
+
+        let mut encoded_runs_no_aa = None;
+        super::slice_and_rasterize_rle_encoded_v3(
+            &base_job,
+            false,
+            std::sync::Arc::new(|_layer, runs| Ok(expand_rle_to_mask(runs, 64 * 64))),
+            |idx, bytes| {
+                if idx == 0 {
+                    encoded_runs_no_aa = Some(bytes);
+                }
+                Ok(())
+            },
+            None,
+            None,
+        )
+        .expect("No-AA encoded RLE slice should succeed");
+        assert_support_right_half_has_core_and_halo(&encoded_runs_no_aa.unwrap(), "No-AA encoded_v3");
+
+        // Mode B: 4x Blur AA
+        let mut blur_job = base_job.clone();
+        blur_job.anti_aliasing_level = "4x".to_string();
+        blur_job.anti_aliasing_mode = "Blur".to_string();
+        blur_job.blur_brush_radius_px = 2;
+        let mut rle_runs_blur = None;
+        super::slice_and_rasterize_rle_v3(
+            &blur_job,
+            false,
+            |idx, runs| {
+                if idx == 0 {
+                    rle_runs_blur = Some(runs);
+                }
+                Ok(())
+            },
+            None,
+            None,
+        )
+        .expect("Blur RLE slice should succeed");
+        let mask_blur = expand_rle_to_mask(&rle_runs_blur.unwrap(), 64 * 64);
+        assert_support_right_half_has_core_and_halo(&mask_blur, "Blur rle_v3");
+
+        // Mode C: 4x Vertical2 Perturb 3DAA RLE
+        let mut daa_job = base_job.clone();
+        daa_job.anti_aliasing_level = "4x".to_string();
+        daa_job.anti_aliasing_mode = "Vertical2".to_string();
+        daa_job.zaa_kernel = Some("perturb".to_string());
+        daa_job.zaa_pattern = Some("halton".to_string());
+        let mask_3daa = render_perturb_3daa_rle_test_layer(&daa_job, 0);
+        assert_support_right_half_has_core_and_halo(&mask_3daa, "3DAA perturb rle_v3");
+    }
+
+    #[test]
+    fn tips_only_scope_haloes_thin_tips_and_excludes_thick_trunks_and_rafts() {
+        let mut flat = Vec::<f32>::new();
+        // Pixel pitch = 6.4 mm / 64 px = 0.10 mm/px.
+        // Max tip diameter = 0.75 mm -> ceil(0.75 / 0.10) = 8 px.
+        // 0..12: Model at (-2.0, -1.6), size 0.8 x 0.8 mm
+        push_box_triangles(&mut flat, -2.0, -1.6, 0.0, 2.0, 0.8, 0.8);
+        // 12..24: Thick Support Trunk / Raft at (0.0, 0.0), size 1.6 x 1.6 mm (16x16 px > 8 px)
+        push_box_triangles(&mut flat, 0.0, 0.0, 0.0, 2.0, 1.6, 1.6);
+        // 24..36: Thin Support Tip at (2.0, 1.6), size 0.4 x 0.4 mm (4x4 px <= 8 px)
+        push_box_triangles(&mut flat, 2.0, 1.6, 0.0, 2.0, 0.4, 0.4);
+
+        let job = SliceJobV3 {
+            output_format: ".png".to_string(),
+            source_width_px: 64,
+            source_height_px: 64,
+            width_px: 64,
+            height_px: 64,
+            x_packing_mode: "none".to_string(),
+            build_width_mm: 6.4,
+            build_depth_mm: 6.4,
+            layer_height_mm: 1.0,
+            total_layers: 1,
+            png_compression_strategy: "fastest".to_string(),
+            container_compression_level: 0,
+            anti_aliasing_level: "Off".to_string(),
+            anti_aliasing_mode: "Coverage".to_string(),
+            blur_brush_radius_px: 0,
+            aa_on_supports: false,
+            model_triangle_count: 12,
+            support_halo_enabled: true,
+            support_halo_radius_px: 3,
+            support_halo_max_intensity_percent: 50.0,
+            support_halo_profile: "linear".to_string(),
+            support_halo_scope: "tips_only".to_string(),
+            support_halo_max_tip_diameter_mm: 0.75,
+            triangles_xyz: flat,
+            metadata_json: "{}".to_string(),
+            ..Default::default()
+        };
+
+        let mut layer0_runs = None;
+        super::slice_and_rasterize_rle_v3(
+            &job,
+            false,
+            |idx, runs| {
+                if idx == 0 {
+                    layer0_runs = Some(runs);
+                }
+                Ok(())
+            },
+            None,
+            None,
+        )
+        .expect("tips_only RLE slice should succeed");
+
+        let mask = expand_rle_to_mask(&layer0_runs.unwrap(), 64 * 64);
+
+        // Thick support trunk/raft lives around center (x in 20..44, y in 20..44):
+        // must have 255 core and ZERO grayscale halo
+        let mut shaft_core = false;
+        for y in 20..44usize {
+            for x in 20..44usize {
+                let px = mask[y * 64 + x];
+                if px == 255 {
+                    shaft_core = true;
+                }
+                assert!(
+                    px == 0 || px == 255,
+                    "support trunk/raft at ({x},{y}) must remain strictly binary (got {px})"
+                );
+            }
+        }
+        assert!(shaft_core, "support trunk/raft region should contain binary 255 pixels");
+
+        // Thin support tip lives in right X band (x in 44..64): must have 255 core AND grayscale halo
+        let mut tip_core = false;
+        let mut tip_halo = false;
+        for y in 0..64usize {
+            for x in 44..64usize {
+                let px = mask[y * 64 + x];
+                if px == 255 {
+                    tip_core = true;
+                } else if px > 0 {
+                    tip_halo = true;
+                }
+            }
+        }
+        assert!(tip_core, "support tip region should contain 255 core pixels");
+        assert!(
+            tip_halo,
+            "support tip region should contain grayscale halo pixels (0 < I < 255)"
+        );
+    }
+
+    #[test]
+    fn ssaa_2daa_support_cone_to_shaft_transition_has_no_seam_disconnect() {
+        let mut flat = Vec::<f32>::new();
+        // 0..12: Model box on the left
+        push_box_triangles(&mut flat, -2.0, 0.0, 0.0, 2.0, 0.8, 0.8);
+        // 12..24: Lower support shaft meeting at z = 1.0 with sub-pixel boundary alignment
+        push_box_triangles(&mut flat, 1.53, 0.03, 0.0, 1.05, 0.55, 0.55);
+        // 24..36: Upper support tip cone meeting/overlapping shaft at z = 1.0
+        push_box_triangles(&mut flat, 1.53, 0.03, 0.95, 2.0, 0.45, 0.45);
+
+        // Render with 4x 2DAA Coverage + tips_only halo, and compare core 255 pixels
+        // against a single unified support pass without halo to verify zero seam drop.
+        let job = SliceJobV3 {
+            output_format: ".png".to_string(),
+            source_width_px: 64,
+            source_height_px: 64,
+            width_px: 64,
+            height_px: 64,
+            x_packing_mode: "none".to_string(),
+            build_width_mm: 6.4,
+            build_depth_mm: 6.4,
+            layer_height_mm: 1.0,
+            total_layers: 2,
+            png_compression_strategy: "fastest".to_string(),
+            container_compression_level: 0,
+            anti_aliasing_level: "4x".to_string(),
+            anti_aliasing_mode: "Coverage".to_string(),
+            blur_brush_radius_px: 0,
+            aa_on_supports: false,
+            model_triangle_count: 12,
+            support_halo_enabled: true,
+            support_halo_radius_px: 3,
+            support_halo_max_intensity_percent: 50.0,
+            support_halo_profile: "linear".to_string(),
+            support_halo_scope: "tips_only".to_string(),
+            support_halo_max_tip_diameter_mm: 0.75,
+            triangles_xyz: flat,
+            metadata_json: "{}".to_string(),
+            ..Default::default()
+        };
+
+        let mut no_halo_job = job.clone();
+        no_halo_job.support_halo_enabled = false;
+        no_halo_job.support_halo_radius_px = 0;
+
+        let mut halo_layers = Vec::new();
+        super::slice_and_rasterize_rle_v3(
+            &job,
+            false,
+            |_idx, runs| {
+                halo_layers.push(expand_rle_to_mask(&runs, 64 * 64));
+                Ok(())
+            },
+            None,
+            None,
+        )
+        .expect("4x 2DAA halo slice should succeed");
+
+        let mut ref_layers = Vec::new();
+        super::slice_and_rasterize_rle_v3(
+            &no_halo_job,
+            false,
+            |_idx, runs| {
+                ref_layers.push(expand_rle_to_mask(&runs, 64 * 64));
+                Ok(())
+            },
+            None,
+            None,
+        )
+        .expect("4x 2DAA reference slice should succeed");
+
+        for layer_idx in 0..2 {
+            let halo_mask = &halo_layers[layer_idx];
+            let ref_mask = &ref_layers[layer_idx];
+            let mut support_core_count = 0usize;
+            for y in 0..64usize {
+                for x in 32..64usize {
+                    if ref_mask[y * 64 + x] == 255 {
+                        support_core_count += 1;
+                        assert_eq!(
+                            halo_mask[y * 64 + x],
+                            255,
+                            "layer {layer_idx} at ({x},{y}) lost 255 support core across shaft-to-cone seam"
+                        );
+                    }
+                }
+            }
+            assert!(support_core_count > 0);
+        }
+    }
+
+    #[test]
+    fn predithered_halo_lut_quantizes_to_3bit_and_4bit_palette_bytes() {
+        let mut flat = Vec::<f32>::new();
+        // 0..12: Model box on the left
+        push_box_triangles(&mut flat, -2.0, 0.0, 0.0, 2.0, 1.0, 1.0);
+        // 12..24: Thin support tip on the right (0.25 mm diameter)
+        push_box_triangles(&mut flat, 2.0, 0.0, 0.0, 2.0, 0.25, 0.25);
+
+        for (bit_depth, expected_len) in [(3u32, 8usize), (4u32, 16usize)] {
+            let job = SliceJobV3 {
+                output_format: ".png".to_string(),
+                source_width_px: 128,
+                source_height_px: 128,
+                width_px: 128,
+                height_px: 128,
+                x_packing_mode: "none".to_string(),
+                build_width_mm: 6.4,
+                build_depth_mm: 6.4,
+                layer_height_mm: 1.0,
+                total_layers: 2,
+                png_compression_strategy: "fastest".to_string(),
+                container_compression_level: 0,
+                anti_aliasing_level: "2x".to_string(),
+                anti_aliasing_mode: "Coverage".to_string(),
+                blur_brush_radius_px: 0,
+                aa_on_supports: false,
+                model_triangle_count: 12,
+                support_halo_enabled: true,
+                support_halo_radius_px: 6,
+                support_halo_max_intensity_percent: 25.0,
+                support_halo_profile: "donut".to_string(),
+                support_halo_scope: "tips_only".to_string(),
+                support_halo_max_tip_diameter_mm: 0.80,
+                dither_enabled: true,
+                dither_bit_depth: Some(bit_depth),
+                dither_device_gamma: 3.0,
+                triangles_xyz: flat.clone(),
+                metadata_json: "{}".to_string(),
+                ..Default::default()
+            };
+
+            let mut identity = [0u8; 256];
+            for (i, v) in identity.iter_mut().enumerate() {
+                *v = i as u8;
+            }
+            let palette = crate::dither::DitherPaletteV3::new(&identity, 3.0, bit_depth);
+            assert_eq!(palette.target_bytes.len(), expected_len);
+
+            let mut layers = Vec::new();
+            super::slice_and_rasterize_rle_encoded_v3(
+                &job,
+                false,
+                std::sync::Arc::new(|_layer, runs| {
+                    Ok(expand_rle_to_mask(runs, 128 * 128))
+                }),
+                |_idx, mask| {
+                    layers.push(mask);
+                    Ok(())
+                },
+                None,
+                None,
+            )
+            .expect("dithered halo slice should succeed");
+
+            let mask = &layers[0];
+            let mut halo_non_zero_count = 0usize;
+            for y in 0..128usize {
+                for x in 64..128usize {
+                    let v = mask[y * 128 + x];
+                    if v > 0 && v < 255 {
+                        halo_non_zero_count += 1;
+                    }
+                    assert!(
+                        palette.target_bytes.contains(&v),
+                        "bit_depth={bit_depth}: halo pixel ({x},{y}) value {v} is not in hardware palette {:?}",
+                        palette.target_bytes
+                    );
+                }
+            }
+            assert!(
+                halo_non_zero_count > 0,
+                "bit_depth={bit_depth}: support tip halo region must contain non-zero quantized halo pixels"
+            );
+        }
+    }
+
     /// The RSS diagnostic used to read /proc/self/statm, so it silently reported
     /// 0 MB on macOS and Windows. Any running process has a non-zero resident
     /// set, so this fails on any platform where the reading is broken again.
@@ -6535,4 +6969,197 @@ mod tests {
             "available RAM reported as {available:?}; the 3DAA gate would fall back to no budget"
         );
     }
+
+    #[test]
+    fn raw_mode_with_support_halo_skips_model_floyd_steinberg_dither_and_uses_halo_lut() {
+        let mut flat = Vec::<f32>::new();
+        // 0..12: Model box on the left
+        push_box_triangles(&mut flat, -1.6, 0.0, 0.0, 2.0, 1.2, 1.2);
+        // 12..24: Thin support tip on the right (0.25 mm diameter) on layer 0 only (z: 0.0..1.0)
+        push_box_triangles(&mut flat, 1.6, 0.0, 0.0, 1.0, 0.25, 0.25);
+
+        let job = SliceJobV3 {
+            output_format: ".png".to_string(),
+            source_width_px: 128,
+            source_height_px: 128,
+            width_px: 128,
+            height_px: 128,
+            x_packing_mode: "none".to_string(),
+            build_width_mm: 6.4,
+            build_depth_mm: 6.4,
+            layer_height_mm: 1.0,
+            total_layers: 2,
+            png_compression_strategy: "fastest".to_string(),
+            container_compression_level: 0,
+            anti_aliasing_level: "Off".to_string(),
+            anti_aliasing_mode: "Blur".to_string(),
+            blur_brush_radius_px: 0,
+            aa_on_supports: false,
+            model_triangle_count: 12,
+            support_halo_enabled: true,
+            support_halo_radius_px: 6,
+            support_halo_max_intensity_percent: 25.0,
+            support_halo_profile: "donut".to_string(),
+            support_halo_scope: "tips_only".to_string(),
+            support_halo_max_tip_diameter_mm: 0.80,
+            dither_enabled: true,
+            dither_bit_depth: Some(3),
+            dither_device_gamma: 3.0,
+            triangles_xyz: flat,
+            metadata_json: "{}".to_string(),
+            ..Default::default()
+        };
+
+        let mut identity = [0u8; 256];
+        for (i, v) in identity.iter_mut().enumerate() {
+            *v = i as u8;
+        }
+        let palette = crate::dither::DitherPaletteV3::new(&identity, 3.0, 3);
+
+        let mut layers = vec![Vec::new(); 2];
+        let (_rendered, _stats, perf) = super::slice_and_rasterize_rle_encoded_v3(
+            &job,
+            false,
+            std::sync::Arc::new(|_layer, runs| Ok(expand_rle_to_mask(runs, 128 * 128))),
+            |idx, mask| {
+                layers[idx as usize] = mask;
+                Ok(())
+            },
+            None,
+            None,
+        )
+        .expect("raw + support halo slice should succeed");
+
+        // 1. Model has AA Off, so full-frame Floyd-Steinberg dithering must be completely skipped!
+        assert_eq!(
+            perf.encode_dither_ns, 0,
+            "raw mode with support halo must not run Floyd-Steinberg dithering on binary model runs (got encode_dither_ns = {})",
+            perf.encode_dither_ns
+        );
+        // 2. Halo generation + merge time must be attributed to support_merge_ns
+        assert!(
+            perf.support_merge_ns > 0,
+            "support_merge_ns should include support halo generation and RLE merge time"
+        );
+
+        // 3. Layer 0 has the support tip -> quantized halo collar pixels must exist and match 3-bit palette
+        let mut halo_count_l0 = 0usize;
+        for &v in &layers[0] {
+            if v > 0 && v < 255 {
+                halo_count_l0 += 1;
+            }
+            assert!(
+                palette.target_bytes.contains(&v),
+                "layer 0 pixel value {v} is not in 3-bit palette {:?}",
+                palette.target_bytes
+            );
+        }
+        assert!(halo_count_l0 > 0, "layer 0 must contain pre-dithered support halo pixels");
+
+        // 4. Layer 1 has no supports -> only binary 0 and 255 model pixels
+        assert!(
+            layers[1].iter().all(|&v| v == 0 || v == 255),
+            "layer 1 has no supports in raw mode and must be strictly binary (0 or 255)"
+        );
+    }
+
+    #[test]
+    fn rle_blocks_v3_with_support_halo_matches_full_width_across_panel_seams() {
+        let mut flat = Vec::<f32>::new();
+        // 0..12: Model box on the left panel
+        push_box_triangles(&mut flat, -1.8, -1.0, 0.0, 2.0, 1.0, 1.0);
+        // 12..24: Thin support tip centered right on the X=0.0 panel seam (column 64 of 128)
+        push_box_triangles(&mut flat, 0.0, 0.5, 0.0, 2.0, 0.25, 0.25);
+
+        for (aa_level, blur_radius) in [("Off", 0u32), ("2x", 2u32)] {
+            let job = SliceJobV3 {
+                output_format: ".goo".to_string(),
+                format_version: Some("V5.1".to_string()),
+                source_width_px: 128,
+                source_height_px: 128,
+                width_px: 128,
+                height_px: 128,
+                x_packing_mode: "none".to_string(),
+                build_width_mm: 6.4,
+                build_depth_mm: 6.4,
+                layer_height_mm: 1.0,
+                total_layers: 1,
+                png_compression_strategy: "fastest".to_string(),
+                container_compression_level: 0,
+                anti_aliasing_level: aa_level.to_string(),
+                anti_aliasing_mode: "Blur".to_string(),
+                blur_brush_radius_px: blur_radius,
+                blur_brush_kernel: "gaussian".to_string(),
+                blur_brush_sigma_x: 1.0,
+                blur_brush_sigma_y: 1.0,
+                aa_on_supports: false,
+                model_triangle_count: 12,
+                support_halo_enabled: true,
+                support_halo_radius_px: 6,
+                support_halo_max_intensity_percent: 25.0,
+                support_halo_profile: "donut".to_string(),
+                support_halo_scope: "tips_only".to_string(),
+                support_halo_max_tip_diameter_mm: 0.80,
+                dither_device_gamma: 3.0,
+                triangles_xyz: flat.clone(),
+                metadata_json: "{}".to_string(),
+                ..Default::default()
+            };
+
+            let mut full_mask = Vec::new();
+            super::slice_and_rasterize_rle_v3(
+                &job,
+                false,
+                |_idx, runs| {
+                    full_mask = expand_rle_to_mask(&runs, 128 * 128);
+                    Ok(())
+                },
+                None,
+                None,
+            )
+            .expect("full-width RLE slice should succeed");
+
+            let blocks = [
+                crate::rle::make_rle_block(0, 64),
+                crate::rle::make_rle_block(64, 64),
+            ];
+            let mut block_masks = vec![Vec::<u8>::new(); 2];
+            super::slice_and_rasterize_rle_blocks_v3(
+                &job,
+                &blocks,
+                false,
+                None,
+                |_layer, block_idx, payload| {
+                    if let crate::pipeline::RleBlockPayload::Runs(runs) = payload {
+                        block_masks[block_idx as usize] = expand_rle_to_mask(&runs, 64 * 128);
+                    }
+                    Ok(())
+                },
+                None,
+                None,
+            )
+            .expect("block RLE slice should succeed");
+
+            let mut stitched = vec![0u8; 128 * 128];
+            for y in 0..128usize {
+                stitched[y * 128..y * 128 + 64]
+                    .copy_from_slice(&block_masks[0][y * 64..(y + 1) * 64]);
+                stitched[y * 128 + 64..(y + 1) * 128]
+                    .copy_from_slice(&block_masks[1][y * 64..(y + 1) * 64]);
+            }
+
+            for y in 0..128usize {
+                for x in 0..128usize {
+                    let s = stitched[y * 128 + x];
+                    let f = full_mask[y * 128 + x];
+                    assert_eq!(
+                        s, f,
+                        "mismatch at ({x}, {y}) for aa_level={aa_level}, blur_radius={blur_radius}: stitched={s} vs full={f}"
+                    );
+                }
+            }
+        }
+    }
 }
+
+

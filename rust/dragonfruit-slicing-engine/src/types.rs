@@ -81,6 +81,30 @@ fn default_dither_device_gamma() -> f64 {
     3.0
 }
 
+fn default_support_halo_radius_mm() -> f32 {
+    0.0
+}
+
+fn default_support_halo_inverse_scale_percent() -> f32 {
+    100.0
+}
+
+fn default_support_halo_max_intensity_percent() -> f32 {
+    25.0
+}
+
+fn default_support_halo_profile() -> String {
+    "donut".to_string()
+}
+
+fn default_support_halo_scope() -> String {
+    "tips_only".to_string()
+}
+
+fn default_support_halo_max_tip_diameter_mm() -> f32 {
+    0.80
+}
+
 fn dynamic_minimum_alpha_lut(percent: f32) -> Option<[u8; 256]> {
     let min_alpha = ((percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
     if min_alpha == 0 {
@@ -114,7 +138,7 @@ fn anti_aliasing_level_steps(level: &str) -> u8 {
     0
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SliceJobV3 {
     /// Target output extension selected from registered encoders.
     pub output_format: String,
@@ -193,6 +217,30 @@ pub struct SliceJobV3 {
     /// `0` means "unspecified" (no geometry split metadata).
     #[serde(default = "default_model_triangle_count")]
     pub model_triangle_count: u32,
+    /// Enable Euclidean radial grayscale cure halo around support cross-sections.
+    #[serde(default)]
+    pub support_halo_enabled: bool,
+    /// Outer Euclidean radius of the support halo in output pixels (legacy fallback, 0..=16).
+    #[serde(default)]
+    pub support_halo_radius_px: u32,
+    /// Reference outer Euclidean radius of the support halo in millimeters at a 0.40 mm tip (0.02..=0.50).
+    #[serde(default = "default_support_halo_radius_mm")]
+    pub support_halo_radius_mm: f32,
+    /// Inverse tip-diameter scaling strength in percent (0..=200; 100% = full dynamic scaling, 0% = fixed radius).
+    #[serde(default = "default_support_halo_inverse_scale_percent")]
+    pub support_halo_inverse_scale_percent: f32,
+    /// Peak grayscale intensity at the first halo ring as a percentage of 255 (0..=100).
+    #[serde(default = "default_support_halo_max_intensity_percent")]
+    pub support_halo_max_intensity_percent: f32,
+    /// Radial falloff curve (`donut`, `linear`, `exponential`, `gaussian`).
+    #[serde(default = "default_support_halo_profile")]
+    pub support_halo_profile: String,
+    /// Target support geometry scope (`tips_only`, `full_supports`).
+    #[serde(default = "default_support_halo_scope")]
+    pub support_halo_scope: String,
+    /// Maximum cross-section diameter (in millimeters) for `tips_only` support halo gating.
+    #[serde(default = "default_support_halo_max_tip_diameter_mm")]
+    pub support_halo_max_tip_diameter_mm: f32,
     /// Minimum grayscale alpha (0-100%) for non-zero AA pixels.
     ///
     /// When no explicit custom cure LUT is provided, the engine turns this
@@ -260,6 +308,61 @@ pub struct SliceJobV3 {
     pub metadata_json: String,
 }
 
+impl Default for SliceJobV3 {
+    fn default() -> Self {
+        Self {
+            output_format: String::new(),
+            format_version: None,
+            source_width_px: 0,
+            source_height_px: 0,
+            width_px: 0,
+            height_px: 0,
+            x_packing_mode: String::new(),
+            build_width_mm: 0.0,
+            build_depth_mm: 0.0,
+            layer_height_mm: 0.0,
+            total_layers: 0,
+            export_thumbnail_png_base64: None,
+            png_compression_strategy: String::new(),
+            container_compression_level: 0,
+            anti_aliasing_level: String::new(),
+            anti_aliasing_mode: String::new(),
+            blur_brush_radius_px: 0,
+            blur_brush_kernel: String::new(),
+            blur_brush_sigma_x: 0.0,
+            blur_brush_sigma_y: 0.0,
+            z_blur_radius_layers: 0,
+            z_blur_kernel: String::new(),
+            z_blur_sigma: 0.0,
+            aa_on_supports: false,
+            model_triangle_count: 0,
+            support_halo_enabled: false,
+            support_halo_radius_px: 0,
+            support_halo_radius_mm: default_support_halo_radius_mm(),
+            support_halo_inverse_scale_percent: default_support_halo_inverse_scale_percent(),
+            support_halo_max_intensity_percent: default_support_halo_max_intensity_percent(),
+            support_halo_profile: default_support_halo_profile(),
+            support_halo_scope: default_support_halo_scope(),
+            support_halo_max_tip_diameter_mm: default_support_halo_max_tip_diameter_mm(),
+            minimum_aa_alpha_percent: 0.0,
+            mirror_x: false,
+            mirror_y: false,
+            z_blend_look_back: 0,
+            z_blend_minimum_alpha_percent: 0.0,
+            z_blend_max_alpha_percent: 0.0,
+            z_blend_custom_lut: None,
+            zaa_kernel: None,
+            zaa_pattern: None,
+            zaa_duplicate_z: None,
+            dither_enabled: false,
+            dither_bit_depth: None,
+            dither_device_gamma: 0.0,
+            triangles_xyz: Vec::new(),
+            metadata_json: String::new(),
+        }
+    }
+}
+
 impl SliceJobV3 {
     /// Effective render width in pixels.
     ///
@@ -314,7 +417,169 @@ impl SliceJobV3 {
     }
 
     #[inline]
+    pub fn effective_support_halo_inverse_scale_percent(&self) -> f32 {
+        if self.support_halo_inverse_scale_percent.is_finite() {
+            self.support_halo_inverse_scale_percent.clamp(0.0, 200.0)
+        } else {
+            default_support_halo_inverse_scale_percent()
+        }
+    }
+
+    #[inline]
+    pub fn effective_support_halo_radius_px(&self) -> u32 {
+        if !self.support_halo_enabled {
+            return 0;
+        }
+        if self.support_halo_radius_mm.is_finite() && self.support_halo_radius_mm > 0.0 {
+            let (px, py) = self.effective_output_pixel_pitch_mm();
+            let ref_mm = self.support_halo_radius_mm.clamp(0.02, 0.50);
+            let max_scale = if self.support_halo_is_tips_only() {
+                (1.0 + (1.0 / 3.0) * (self.effective_support_halo_inverse_scale_percent() / 100.0))
+                    .clamp(1.0, 2.5)
+            } else {
+                1.0
+            };
+            return ((ref_mm * max_scale / px.min(py).max(1e-4)).ceil() as u32).clamp(1, 48);
+        }
+        self.support_halo_radius_px.clamp(0, 16)
+    }
+
+    #[inline]
+    pub fn effective_support_halo_max_intensity_percent(&self) -> f32 {
+        if self.support_halo_max_intensity_percent.is_finite() {
+            self.support_halo_max_intensity_percent.clamp(0.0, 100.0)
+        } else {
+            default_support_halo_max_intensity_percent()
+        }
+    }
+
+    #[inline]
+    pub fn effective_support_halo_max_intensity_u8(&self) -> u8 {
+        let pct = self.effective_support_halo_max_intensity_percent();
+        ((pct / 100.0) * 255.0).round().clamp(0.0, 255.0) as u8
+    }
+
+    #[inline]
+    pub fn effective_support_halo_gamma(&self) -> f32 {
+        if self.dither_device_gamma.is_finite() && self.dither_device_gamma >= 1.0 {
+            (self.dither_device_gamma as f32).clamp(1.0, 5.0)
+        } else {
+            3.0
+        }
+    }
+
+    #[inline]
+    pub fn support_halo_active(&self) -> bool {
+        self.support_halo_enabled
+            && self.effective_support_halo_ref_radius_mm() > 0.0
+            && self.effective_support_halo_max_intensity_u8() > 0
+    }
+
+    #[inline]
+    pub fn support_halo_is_tips_only(&self) -> bool {
+        !self
+            .support_halo_scope
+            .trim()
+            .eq_ignore_ascii_case("full_supports")
+    }
+
+    #[inline]
+    pub fn effective_support_halo_max_tip_diameter_mm(&self) -> f32 {
+        if self.support_halo_max_tip_diameter_mm.is_finite() {
+            self.support_halo_max_tip_diameter_mm.clamp(0.10, 5.0)
+        } else {
+            default_support_halo_max_tip_diameter_mm()
+        }
+    }
+
+    #[inline]
+    pub fn effective_output_pixel_pitch_mm(&self) -> (f32, f32) {
+        let ssaa_factor = if self.height_px > 0 && self.source_height_px >= self.height_px {
+            (self.source_height_px / self.height_px).max(1)
+        } else {
+            1
+        };
+        let out_w = (self.source_width_px / ssaa_factor) as f32;
+        let out_h = (self.source_height_px / ssaa_factor) as f32;
+        let pitch_x = if self.build_width_mm > 0.0 && out_w > 0.0 {
+            self.build_width_mm / out_w
+        } else {
+            0.05
+        };
+        let pitch_y = if self.build_depth_mm > 0.0 && out_h > 0.0 {
+            self.build_depth_mm / out_h
+        } else {
+            pitch_x
+        };
+        (pitch_x.max(0.001), pitch_y.max(0.001))
+    }
+
+    #[inline]
+    pub fn effective_output_pixel_pitch_xy_mm(&self) -> (f32, f32) {
+        self.effective_output_pixel_pitch_mm()
+    }
+
+    #[inline]
+    pub fn effective_support_halo_max_tip_diameter_px_xy(&self) -> Option<(u32, u32)> {
+        if !self.support_halo_is_tips_only() {
+            return None;
+        }
+        let d_mm = self.effective_support_halo_max_tip_diameter_mm();
+        let (pitch_x, pitch_y) = self.effective_output_pixel_pitch_mm();
+        let max_dx = (d_mm / pitch_x).ceil().max(1.0) as u32;
+        let max_dy = (d_mm / pitch_y).ceil().max(1.0) as u32;
+        Some((max_dx, max_dy))
+    }
+
+    #[inline]
+    pub fn effective_support_halo_max_tip_diameter_px(&self) -> Option<u32> {
+        self.effective_support_halo_max_tip_diameter_px_xy()
+            .map(|(dx, dy)| dx.max(dy))
+    }
+
+    #[inline]
+    pub fn effective_support_halo_ref_radius_mm(&self) -> f32 {
+        if !self.support_halo_enabled {
+            return 0.0;
+        }
+        if self.support_halo_radius_mm.is_finite() && self.support_halo_radius_mm > 0.0 {
+            return self.support_halo_radius_mm.clamp(0.0, 0.50);
+        }
+        if self.support_halo_radius_px > 0 {
+            let (px, py) = self.effective_output_pixel_pitch_mm();
+            return (self.support_halo_radius_px.min(16) as f32) * px.min(py);
+        }
+        0.0
+    }
+
+    /// Computes `model_triangle_count` when support triangles require a
+    /// separate binary and/or Euclidean radial halo pass.
+    ///
+    /// - `[0 .. model_tri)`: Model pass (uses job AA / blur / 3DAA settings)
+    /// - `[model_tri .. total_triangles)`: Unified support pass (`255` core + optional radial halo)
+    #[inline]
+    pub fn support_split_triangle_bounds(
+        &self,
+        total_triangles: usize,
+        model_aa_active: bool,
+    ) -> Option<usize> {
+        let model_tri = self.model_triangle_count as usize;
+        if model_tri == 0 || model_tri >= total_triangles {
+            return None;
+        }
+        if (model_aa_active && !self.aa_on_supports) || self.support_halo_active() {
+            Some(model_tri)
+        } else {
+            None
+        }
+    }
+
+    #[inline]
     pub fn produces_grayscale_output(&self) -> bool {
+        if self.support_halo_active() {
+            return true;
+        }
+
         if self.anti_aliasing_mode_is_vertical() {
             return true;
         }

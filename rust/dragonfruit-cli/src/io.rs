@@ -1486,7 +1486,12 @@ mod tests {
         "blur_brush_radius_px": 2, "blur_brush_kernel": "gaussian",
         "blur_brush_sigma_x": 0.5, "blur_brush_sigma_y": 0.5,
         "z_blur_radius_layers": 1, "z_blur_kernel": "box", "z_blur_sigma": 0.5,
-        "aa_on_supports": false, "minimum_aa_alpha_percent": 35,
+        "aa_on_supports": false,
+        "support_halo_enabled": true, "support_halo_radius_px": 4,
+        "support_halo_radius_mm": 0.18, "support_halo_inverse_scale_percent": 125.0,
+        "support_halo_max_intensity_percent": 65.0, "support_halo_profile": "exponential",
+        "support_halo_scope": "tips_only", "support_halo_max_tip_diameter_mm": 0.9,
+        "minimum_aa_alpha_percent": 35,
         "mirror_x": true, "mirror_y": false,
         "z_blend_look_back": 5, "z_blend_minimum_alpha_percent": 35, "z_blend_max_alpha_percent": 90,
         "z_blend_custom_lut": [0, 120, 255], "zaa_kernel": "perturb", "zaa_pattern": "halton",
@@ -1505,6 +1510,14 @@ mod tests {
         assert_eq!(job.x_packing_mode, "rgb8_div3");
         assert_eq!((job.width_px, job.height_px), (40, 80));
         assert_eq!(job.anti_aliasing_mode, "Vertical2");
+        assert!(job.support_halo_enabled);
+        assert_eq!(job.support_halo_radius_px, 4);
+        assert!((job.support_halo_radius_mm - 0.18).abs() < 1e-4);
+        assert!((job.support_halo_inverse_scale_percent - 125.0).abs() < 1e-4);
+        assert!((job.support_halo_max_intensity_percent - 65.0).abs() < 1e-4);
+        assert_eq!(job.support_halo_profile, "exponential");
+        assert_eq!(job.support_halo_scope, "tips_only");
+        assert!((job.support_halo_max_tip_diameter_mm - 0.9).abs() < 1e-4);
         assert_eq!(job.z_blend_look_back, 5);
         assert_eq!(job.z_blend_custom_lut.as_deref(), Some(&[0u8, 120, 255][..]));
         assert_eq!(job.zaa_pattern.as_deref(), Some("halton"));

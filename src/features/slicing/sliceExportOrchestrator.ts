@@ -17,6 +17,8 @@ import {
     type NativeSlicerRuntimeMetrics,
 } from './tauri/nativeSlicerBridge';
 import { invoke } from '@tauri-apps/api/core';
+import { isExperimentEnabled } from '@/features/experiments/experimentsRegistry';
+import { hasWindow } from '@/utils/dom';
 import { assembleSliceJob, buildNativeSliceJob, resolveSliceRasterSettings } from './sliceJobAssembly';
 import { resolveSliceJobAntiAliasing, type SliceJobAntiAliasingRequest } from './sliceAntiAliasing';
 
@@ -184,6 +186,13 @@ export type SliceExportResult = {
             zaaPattern?: 'uniform' | 'halton' | 'base2';
             zaaDuplicateZ?: boolean;
             modelTriangleCount: number;
+            supportHaloEnabled: boolean;
+            supportHaloRadiusMm: number;
+            supportHaloInverseScalePercent: number;
+            supportHaloMaxIntensityPercent: number;
+            supportHaloProfile: 'donut' | 'linear' | 'exponential' | 'gaussian';
+            supportHaloScope: 'tips_only' | 'full_supports';
+            supportHaloMaxTipDiameterMm: number;
             triangleFloatCount: number;
             buildWidthMm: number;
             buildDepthMm: number;
@@ -551,7 +560,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
 
     const perfSettings = getSavedSlicingPerformanceSettings();
 
-    const assembled = assembleSliceJob({
+    const rawAssembled = assembleSliceJob({
         printerProfile: options.printerProfile,
         materialProfile: options.materialProfile,
         scene: {
@@ -562,6 +571,15 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         dither: options,
         antiAliasing: options.antiAliasing,
     });
+    const assembled = hasWindow() && !isExperimentEnabled('support-halo')
+        ? {
+            ...rawAssembled,
+            antiAliasing: {
+                ...rawAssembled.antiAliasing,
+                supportHaloEnabled: false,
+            },
+        }
+        : rawAssembled;
 
     const nativeJob = {
         ...buildNativeSliceJob(assembled, {
@@ -593,6 +611,13 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         zaaKernel: nativeJob.zaaKernel,
         zaaPattern: nativeJob.zaaPattern,
         zaaDuplicateZ: nativeJob.zaaDuplicateZ,
+        supportHaloEnabled: nativeJob.supportHaloEnabled,
+        supportHaloRadiusMm: nativeJob.supportHaloRadiusMm,
+        supportHaloInverseScalePercent: nativeJob.supportHaloInverseScalePercent,
+        supportHaloMaxIntensityPercent: nativeJob.supportHaloMaxIntensityPercent,
+        supportHaloProfile: nativeJob.supportHaloProfile,
+        supportHaloScope: nativeJob.supportHaloScope,
+        supportHaloMaxTipDiameterMm: nativeJob.supportHaloMaxTipDiameterMm,
     });
 
     let progressTotal = solidMesh.totalLayers;
@@ -688,6 +713,13 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
                 zaaPattern: nativeJob.zaaPattern,
                 zaaDuplicateZ: nativeJob.zaaDuplicateZ,
                 modelTriangleCount: nativeJob.modelTriangleCount,
+                supportHaloEnabled: nativeJob.supportHaloEnabled,
+                supportHaloRadiusMm: nativeJob.supportHaloRadiusMm,
+                supportHaloInverseScalePercent: nativeJob.supportHaloInverseScalePercent,
+                supportHaloMaxIntensityPercent: nativeJob.supportHaloMaxIntensityPercent,
+                supportHaloProfile: nativeJob.supportHaloProfile,
+                supportHaloScope: nativeJob.supportHaloScope,
+                supportHaloMaxTipDiameterMm: nativeJob.supportHaloMaxTipDiameterMm,
                 triangleFloatCount: nativeJob.trianglesXYZ.length,
                 buildWidthMm: nativeJob.buildWidthMm,
                 buildDepthMm: nativeJob.buildDepthMm,

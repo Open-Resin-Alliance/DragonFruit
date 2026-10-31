@@ -18,6 +18,7 @@ import {
     normalizeWebcamRotationDeg,
     DEFAULT_WEBCAM_ROTATION_DEG,
 } from '@/features/profiles/outputFormatUtils';
+import { isExperimentEnabled } from '@/features/experiments/experimentsRegistry';
 import { hasWindow } from '@/utils/dom';
 
 export type PrinterOutputFormat = string;
@@ -256,6 +257,16 @@ export type MaterialAntiAliasingSettings = {
     tipOffsetMm: number;
     tipOffsetDisplayInUi: boolean;
     supportTipShrinkPercent: number;
+    supportHaloEnabled: boolean;
+    supportHaloAuto: boolean;
+    supportHaloRadiusMm: number;
+    supportHaloInverseScalePercent: number;
+    /** Optional legacy field migrated on read to `supportHaloRadiusMm`. */
+    supportHaloRadiusPx?: number;
+    supportHaloMaxIntensityPercent: number;
+    supportHaloProfile: 'donut' | 'linear' | 'exponential' | 'gaussian';
+    supportHaloScope: 'tips_only' | 'full_supports';
+    supportHaloMaxTipDiameterMm: number;
 };
 
 export const DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS: MaterialAntiAliasingSettings = {
@@ -289,7 +300,139 @@ export const DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS: MaterialAntiAliasingSettin
     tipOffsetMm: 0.05,
     tipOffsetDisplayInUi: false,
     supportTipShrinkPercent: 10,
+    supportHaloEnabled: false,
+    supportHaloAuto: true,
+    supportHaloRadiusMm: 0.15,
+    supportHaloInverseScalePercent: 100,
+    supportHaloMaxIntensityPercent: 25,
+    supportHaloProfile: 'donut',
+    supportHaloScope: 'tips_only',
+    supportHaloMaxTipDiameterMm: 0.8,
 };
+
+export function getAutoSupportHaloResetPatch(): Pick<
+    MaterialAntiAliasingSettings,
+    | 'supportHaloRadiusMm'
+    | 'supportHaloInverseScalePercent'
+    | 'supportHaloMaxIntensityPercent'
+    | 'supportHaloProfile'
+    | 'supportHaloScope'
+    | 'supportHaloMaxTipDiameterMm'
+> {
+    return {
+        supportHaloRadiusMm: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloRadiusMm,
+        supportHaloInverseScalePercent: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloInverseScalePercent,
+        supportHaloMaxIntensityPercent: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloMaxIntensityPercent,
+        supportHaloProfile: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloProfile,
+        supportHaloScope: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloScope,
+        supportHaloMaxTipDiameterMm: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloMaxTipDiameterMm,
+    };
+}
+
+export const buildAutoSupportHaloDefaults = getAutoSupportHaloResetPatch;
+
+export type SupportHaloReferenceRow = {
+    tipDiameterMm: number;
+    haloRadiusMm: number;
+    totalDiameterMm: number;
+    pixelsX: number;
+    pixelsY: number;
+    peakIntensityPercent: number;
+    peakPwmU8: number;
+    radiusScale: number;
+    gainScale: number;
+    gatedOff: boolean;
+};
+
+/**
+ * Computes the Option A preview row for a given 2D support blob diameter (mm)
+ * and active printer XY pixel pitch (mm).
+ */
+export function computeSupportHaloReferenceRow(
+    tipDiameterMm: number,
+    settings: Partial<MaterialAntiAliasingSettings>,
+    pitchXMm = 0.019,
+    pitchYMm = 0.024,
+): SupportHaloReferenceRow {
+    const isAuto = settings.supportHaloAuto !== false;
+    const refRadiusMm = isAuto
+        ? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloRadiusMm
+        : clampNumber(settings.supportHaloRadiusMm, DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloRadiusMm, 0.02, 0.50);
+    const inverseScalePct = isAuto
+        ? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloInverseScalePercent
+        : clampNumber(settings.supportHaloInverseScalePercent, DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloInverseScalePercent, 0, 200);
+    const maxIntensityPct = isAuto
+        ? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloMaxIntensityPercent
+        : clampNumber(settings.supportHaloMaxIntensityPercent, DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloMaxIntensityPercent, 0, 100);
+    const scope = isAuto
+        ? 'tips_only'
+        : (settings.supportHaloScope === 'full_supports' ? 'full_supports' : 'tips_only');
+    const dMaxMm = isAuto
+        ? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloMaxTipDiameterMm
+        : clampNumber(settings.supportHaloMaxTipDiameterMm, DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS.supportHaloMaxTipDiameterMm, 0.1, 5.0);
+
+    const safePitchX = Math.max(0.0001, Number.isFinite(Number(pitchXMm)) && Number(pitchXMm) > 0 ? Number(pitchXMm) : 0.019);
+    const safePitchY = Math.max(0.0001, Number.isFinite(Number(pitchYMm)) && Number(pitchYMm) > 0 ? Number(pitchYMm) : 0.024);
+
+    if (scope === 'tips_only' && tipDiameterMm >= dMaxMm) {
+        return {
+            tipDiameterMm,
+            haloRadiusMm: 0,
+            totalDiameterMm: Number(tipDiameterMm.toFixed(4)),
+            pixelsX: 0,
+            pixelsY: 0,
+            peakIntensityPercent: 0,
+            peakPwmU8: 0,
+            radiusScale: 0,
+            gainScale: 0,
+            gatedOff: true,
+        };
+    }
+
+    let sRDyn = 1.0;
+    let sEDyn = 1.0;
+    if (tipDiameterMm <= 0.20) {
+        sRDyn = 4 / 3;
+        sEDyn = 1.0;
+    } else if (tipDiameterMm <= 0.40) {
+        const t = (tipDiameterMm - 0.20) / 0.20;
+        sRDyn = (4 / 3) - (1 / 3) * t;
+        sEDyn = 1.0;
+    } else {
+        const u = Math.max(0, Math.min(1, (tipDiameterMm - 0.40) / Math.max(0.01, dMaxMm - 0.40)));
+        sRDyn = 1.0 - u;
+        sEDyn = 1.0 - u;
+    }
+
+    const k = Math.max(0, Math.min(2, inverseScalePct / 100));
+    const radiusScale = scope === 'full_supports' ? 1.0 : Math.max(0, Math.min(2.5, 1.0 + k * (sRDyn - 1.0)));
+    const gainScale = scope === 'full_supports' ? 1.0 : Math.max(0, Math.min(1.5, 1.0 + k * (sEDyn - 1.0)));
+
+    const haloRadiusMm = Number((refRadiusMm * radiusScale).toFixed(4));
+    const totalDiameterMm = Number((tipDiameterMm + 2 * haloRadiusMm).toFixed(4));
+    const pixelsX = haloRadiusMm > 0 ? Math.max(1, Math.round(haloRadiusMm / safePitchX)) : 0;
+    const pixelsY = haloRadiusMm > 0 ? Math.max(1, Math.round(haloRadiusMm / safePitchY)) : 0;
+    const peakIntensityPercent = Math.round(maxIntensityPct * gainScale);
+    const quantizedE = Math.round(Math.max(0, Math.min(1, (maxIntensityPct * gainScale) / 100)) * 255);
+    const peakPwmU8 = quantizedE <= 0
+        ? 0
+        : quantizedE >= 255
+            ? 255
+            : Math.max(1, Math.min(254, Math.round(255 * Math.pow(quantizedE / 255, 1 / 3.0))));
+
+    return {
+        tipDiameterMm,
+        haloRadiusMm,
+        totalDiameterMm,
+        pixelsX,
+        pixelsY,
+        peakIntensityPercent,
+        peakPwmU8,
+        radiusScale,
+        gainScale,
+        gatedOff: false,
+    };
+}
 
 const MATERIAL_PROFILE_LOCAL_OVERRIDE_KEYS = new Set<keyof MaterialProfile>([
     'layerHeightMm',
@@ -349,7 +492,7 @@ function clampNumber(value: unknown, fallback: number, min: number, max: number)
     return Math.max(min, Math.min(max, numeric));
 }
 
-function sanitizeMaterialAntiAliasingSettings(input: unknown): MaterialAntiAliasingSettings {
+export function sanitizeMaterialAntiAliasingSettings(input: unknown): MaterialAntiAliasingSettings {
     const source = (input && typeof input === 'object') ? input as Record<string, unknown> : {};
     const defaults = DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS;
     const mode = source.mode === 'Off' || source.mode === '3DAA' ? source.mode : defaults.mode;
@@ -371,6 +514,27 @@ function sanitizeMaterialAntiAliasingSettings(input: unknown): MaterialAntiAlias
     const tipOffsetMode = source.tipOffsetMode === 'auto' || source.tipOffsetMode === 'manual' || source.tipOffsetMode === 'disabled'
         ? source.tipOffsetMode
         : defaults.tipOffsetMode;
+    const supportHaloAuto = typeof source.supportHaloAuto === 'boolean'
+        ? source.supportHaloAuto
+        : defaults.supportHaloAuto;
+    const supportHaloProfile = supportHaloAuto
+        ? defaults.supportHaloProfile
+        : (source.supportHaloProfile === 'donut'
+            || source.supportHaloProfile === 'linear'
+            || source.supportHaloProfile === 'exponential'
+            || source.supportHaloProfile === 'gaussian'
+            ? source.supportHaloProfile
+            : defaults.supportHaloProfile);
+    const supportHaloScope = supportHaloAuto
+        ? defaults.supportHaloScope
+        : (source.supportHaloScope === 'full_supports'
+            ? 'full_supports'
+            : defaults.supportHaloScope);
+    const rawSupportHaloRadiusMm = source.supportHaloRadiusMm != null
+        ? source.supportHaloRadiusMm
+        : (source.supportHaloRadiusPx != null && Number.isFinite(Number(source.supportHaloRadiusPx))
+            ? Math.round(Number(source.supportHaloRadiusPx) * 0.025 * 100) / 100
+            : null);
 
     const enableCustomSettings = typeof source.enableCustomSettings === 'boolean'
         ? source.enableCustomSettings
@@ -411,6 +575,24 @@ function sanitizeMaterialAntiAliasingSettings(input: unknown): MaterialAntiAlias
         supportTipShrinkPercent: source.supportTipShrinkPercent == null
             ? defaults.supportTipShrinkPercent
             : Math.round(clampNumber(source.supportTipShrinkPercent, defaults.supportTipShrinkPercent, 0, 90)),
+        supportHaloEnabled: typeof source.supportHaloEnabled === 'boolean'
+            ? source.supportHaloEnabled
+            : defaults.supportHaloEnabled,
+        supportHaloAuto,
+        supportHaloRadiusMm: supportHaloAuto || rawSupportHaloRadiusMm == null
+            ? defaults.supportHaloRadiusMm
+            : clampNumber(rawSupportHaloRadiusMm, defaults.supportHaloRadiusMm, 0.02, 0.50),
+        supportHaloInverseScalePercent: supportHaloAuto || source.supportHaloInverseScalePercent == null
+            ? defaults.supportHaloInverseScalePercent
+            : Math.round(clampNumber(source.supportHaloInverseScalePercent, defaults.supportHaloInverseScalePercent, 0, 200)),
+        supportHaloMaxIntensityPercent: supportHaloAuto || source.supportHaloMaxIntensityPercent == null
+            ? defaults.supportHaloMaxIntensityPercent
+            : clampNumber(source.supportHaloMaxIntensityPercent, defaults.supportHaloMaxIntensityPercent, 5, 100),
+        supportHaloProfile,
+        supportHaloScope,
+        supportHaloMaxTipDiameterMm: supportHaloAuto || source.supportHaloMaxTipDiameterMm == null
+            ? defaults.supportHaloMaxTipDiameterMm
+            : clampNumber(source.supportHaloMaxTipDiameterMm, defaults.supportHaloMaxTipDiameterMm, 0.1, 5.0),
     };
 }
 
@@ -1372,7 +1554,24 @@ export function hydrateProfilesFromStorage(): void {
             return;
         }
 
-        state = sanitizeState(parsed);
+        const sanitized = sanitizeState(parsed);
+        const supportHaloExperimentOn = isExperimentEnabled('support-halo');
+        state = supportHaloExperimentOn
+            ? sanitized
+            : {
+                ...sanitized,
+                materialProfiles: sanitized.materialProfiles.map((profile) => (
+                    profile.antiAliasingSettings.supportHaloEnabled
+                        ? {
+                            ...profile,
+                            antiAliasingSettings: {
+                                ...profile.antiAliasingSettings,
+                                supportHaloEnabled: false,
+                            },
+                        }
+                        : profile
+                )),
+            };
         persist(state);
         notify();
     } catch (error) {
@@ -2130,6 +2329,72 @@ export function updateMaterialProfile(id: string, updates: Partial<Omit<Material
         ...state,
         materialProfiles,
     }));
+}
+
+/**
+ * Synchronizes Support Contact Halo settings across all material profiles
+ * (including official template and user-locked profiles) and any persisted
+ * slicing session AA overrides when the `support-halo` experiment master
+ * toggle is turned On or Off in Settings -> Experiments.
+ */
+export function applySupportHaloExperimentState(enabled: boolean): void {
+    ensureHydrated();
+    const haloPatch: Partial<MaterialAntiAliasingSettings> = enabled
+        ? {
+            supportHaloEnabled: true,
+            supportHaloAuto: true,
+            ...getAutoSupportHaloResetPatch(),
+        }
+        : {
+            supportHaloEnabled: false,
+        };
+
+    const materialProfiles = state.materialProfiles.map((profile) => ({
+        ...profile,
+        antiAliasingSettings: sanitizeMaterialAntiAliasingSettings({
+            ...(profile.antiAliasingSettings ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS),
+            ...haloPatch,
+        }),
+    }));
+
+    setState(ensureActiveMaterialForActivePrinter({
+        ...state,
+        materialProfiles,
+    }));
+
+    if (hasWindow()) {
+        const sessionOverrideKey = 'dragonfruit.slicing.sessionAaOverrideByMaterial.v1';
+        for (const storage of [window.sessionStorage, window.localStorage]) {
+            try {
+                const raw = storage?.getItem?.(sessionOverrideKey);
+                if (!raw) continue;
+                const parsed = JSON.parse(raw);
+                if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+                const next: Record<string, unknown> = {};
+                for (const [materialId, entry] of Object.entries(parsed as Record<string, unknown>)) {
+                    if (!entry || typeof entry !== 'object') {
+                        next[materialId] = entry;
+                        continue;
+                    }
+                    const record = entry as Record<string, unknown>;
+                    const prevAa = (record.antiAliasingSettings && typeof record.antiAliasingSettings === 'object')
+                        ? record.antiAliasingSettings as Record<string, unknown>
+                        : {};
+                    next[materialId] = {
+                        ...record,
+                        antiAliasingSettings: sanitizeMaterialAntiAliasingSettings({
+                            ...DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
+                            ...prevAa,
+                            ...haloPatch,
+                        }),
+                    };
+                }
+                storage.setItem(sessionOverrideKey, JSON.stringify(next));
+            } catch {
+                // ignore storage errors
+            }
+        }
+    }
 }
 
 /**

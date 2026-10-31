@@ -15,6 +15,14 @@ export interface EffectiveAaSettings {
     aaOnSupports: boolean;
     tipOffsetMm: number;
     tipOffsetMode: 'disabled' | 'auto' | 'manual';
+    supportHaloEnabled: boolean;
+    supportHaloAuto: boolean;
+    supportHaloRadiusMm: number;
+    supportHaloInverseScalePercent: number;
+    supportHaloMaxIntensityPercent: number;
+    supportHaloProfile: 'donut' | 'linear' | 'exponential' | 'gaussian';
+    supportHaloScope: 'tips_only' | 'full_supports';
+    supportHaloMaxTipDiameterMm: number;
 }
 
 /**
@@ -26,14 +34,58 @@ export function resolveEffectiveAaSettings(
     layerHeightMm: number,
     pixelPitchMm: number,
     pixelPitchYMm: number = pixelPitchMm,
-    activePreset: AaPreset = 'balanced',
+    activePreset: AaPreset | 'raw' = 'balanced',
 ): EffectiveAaSettings {
     const safeLayerH = Math.max(0.001, layerHeightMm);
     const safePitchX = Math.max(0.0001, pixelPitchMm);
     const safePitchY = Math.max(0.0001, pixelPitchYMm);
 
     // Baseline physical auto configuration
-    const autoCfg = computePhysicalAaConfig(activePreset, safePitchX, safeLayerH, safePitchY);
+    const autoCfg = activePreset === 'raw'
+        ? {
+            aaMode: 'Off' as const,
+            aaSteps: 0,
+            blurBrushRadiusPx: 0,
+            zBlurRadiusLayers: 0,
+            zBlendLookBack: 0,
+        }
+        : computePhysicalAaConfig(activePreset, safePitchX, safeLayerH, safePitchY);
+
+    const supportHaloEnabled = Boolean(settings.supportHaloEnabled);
+    const supportHaloAuto = settings.supportHaloAuto !== false;
+    const supportHaloRadiusMm = supportHaloAuto
+        ? 0.15
+        : (settings.supportHaloRadiusMm != null && Number.isFinite(Number(settings.supportHaloRadiusMm))
+            ? Math.max(0.02, Math.min(0.50, Number(settings.supportHaloRadiusMm)))
+            : 0.15);
+    const supportHaloInverseScalePercent = supportHaloAuto
+        ? 100
+        : (settings.supportHaloInverseScalePercent != null && Number.isFinite(Number(settings.supportHaloInverseScalePercent))
+            ? Math.max(0, Math.min(200, Math.round(Number(settings.supportHaloInverseScalePercent))))
+            : 100);
+    const supportHaloMaxIntensityPercent = supportHaloAuto
+        ? 25
+        : (settings.supportHaloMaxIntensityPercent != null && Number.isFinite(Number(settings.supportHaloMaxIntensityPercent))
+            ? Math.max(0, Math.min(100, Number(settings.supportHaloMaxIntensityPercent)))
+            : 25);
+    const supportHaloProfile: 'donut' | 'linear' | 'exponential' | 'gaussian' = supportHaloAuto
+        ? 'donut'
+        : (settings.supportHaloProfile === 'donut'
+            || settings.supportHaloProfile === 'linear'
+            || settings.supportHaloProfile === 'exponential'
+            || settings.supportHaloProfile === 'gaussian'
+            ? settings.supportHaloProfile
+            : 'donut');
+    const supportHaloScope: 'tips_only' | 'full_supports' = supportHaloAuto
+        ? 'tips_only'
+        : (settings.supportHaloScope === 'full_supports'
+            ? 'full_supports'
+            : 'tips_only');
+    const supportHaloMaxTipDiameterMm = supportHaloAuto
+        ? 0.8
+        : (settings.supportHaloMaxTipDiameterMm != null && Number.isFinite(Number(settings.supportHaloMaxTipDiameterMm))
+            ? Math.max(0.1, Math.min(5.0, Number(settings.supportHaloMaxTipDiameterMm)))
+            : 0.8);
 
     const enableCustom = Boolean(settings.enableCustomSettings);
     const enableOverride = enableCustom && Boolean(settings.enableOverride);
@@ -55,6 +107,14 @@ export function resolveEffectiveAaSettings(
             aaOnSupports: Boolean(settings.aaOnSupports),
             tipOffsetMm: autoTipOffset,
             tipOffsetMode: 'auto',
+            supportHaloEnabled,
+            supportHaloAuto,
+            supportHaloRadiusMm,
+            supportHaloInverseScalePercent,
+            supportHaloMaxIntensityPercent,
+            supportHaloProfile,
+            supportHaloScope,
+            supportHaloMaxTipDiameterMm,
         };
     }
 
@@ -110,5 +170,14 @@ export function resolveEffectiveAaSettings(
         aaOnSupports: Boolean(settings.aaOnSupports),
         tipOffsetMm: effectiveTipOffset,
         tipOffsetMode: settings.tipOffsetMode ?? 'auto',
+        supportHaloEnabled,
+        supportHaloAuto,
+        supportHaloRadiusMm,
+        supportHaloInverseScalePercent,
+        supportHaloMaxIntensityPercent,
+        supportHaloProfile,
+        supportHaloScope,
+        supportHaloMaxTipDiameterMm,
     };
 }
+
