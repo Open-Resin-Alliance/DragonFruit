@@ -9,6 +9,7 @@ import type { MessageDescriptor } from '@lingui/core';
 import type { RecentOpenedFileEntry } from '@/features/scene/useSceneCollectionManager';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { useSceneFileExtensions, useSceneFileExtensionLabels, useSceneFileInputAccept } from '@/features/plugins/pluginFileTypeExtensions';
+import { isSideloadedFileName } from '@/features/plugins/sideloadedFileTypeRegistry';
 import { useLocaleFormat } from '@/hooks/useLocaleFormat';
 import type { UnitFormat, Unit } from '@/utils/unitFormatting';
 
@@ -144,7 +145,10 @@ function isSupportedDropName(name: string, sceneExtensions: readonly string[]): 
   if (MESH_DROP_EXTENSIONS.includes(ext)) return true;
   // Scene formats come from the plugin registry, so a newly registered plugin
   // is droppable without touching this list.
-  return sceneExtensions.some((sceneExt) => ext === `.${sceneExt}`);
+  if (sceneExtensions.some((sceneExt) => ext === `.${sceneExt}`)) return true;
+  // Sideloaded packages register their extensions at runtime, after the list
+  // above was built.
+  return isSideloadedFileName(name);
 }
 
 function getDropSupportStateFromDataTransfer(
