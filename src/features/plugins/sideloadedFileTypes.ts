@@ -3,6 +3,7 @@ import type {
   PluginFileTypeImportResult,
 } from '@/features/plugins/pluginFileTypeBridge';
 import { importSideloadedFile, listSideloadedPlugins, type InstalledSideloadedPlugin } from '@/features/plugins/sideloadedPlugins';
+import { getInstalledProfilePlugins } from '@/features/plugins/pluginRegistry';
 import { installPluginFromManifest, uninstallPlugin } from '@/features/profiles/profileStore';
 import type { PluginManifest } from '@/features/plugins/pluginRegistry';
 import { parseSideloadedSceneContainer } from '@/features/plugins/sideloadedSceneContainer';
@@ -48,6 +49,18 @@ function syncProfileContributions(plugins: InstalledSideloadedPlugin[]) {
 
     present.add(source.id);
     if (syncedProfilePluginIds.has(source.id)) continue;
+
+    // A restart must not rewrite the registry, and an unchanged package must not
+    // look like a change to everything that memoises the profile snapshot.
+    const registered = getInstalledProfilePlugins().find((plugin) => plugin.manifest.id === source.id);
+    if (
+      registered
+      && JSON.stringify(registered.manifest.printerPresets ?? []) === JSON.stringify(printerPresets)
+      && JSON.stringify(registered.manifest.materialTemplates ?? []) === JSON.stringify(materialTemplates)
+    ) {
+      syncedProfilePluginIds.add(source.id);
+      continue;
+    }
 
     const manifest: PluginManifest = {
       schemaVersion: 1,

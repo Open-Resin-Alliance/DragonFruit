@@ -239,6 +239,18 @@ type PersistedPluginEnvelope = {
 };
 
 const STORAGE_KEY = 'dragonfruit-plugins-v1';
+
+/**
+ * Bumped whenever the installed set changes. Presets and templates are derived
+ * from this registry, so a consumer that memoised them needs a reason to look
+ * again; the profile store's snapshot carries this number.
+ */
+let registryRevision = 0;
+
+export function getPluginRegistryRevision(): number {
+  hydratePluginRegistry();
+  return registryRevision;
+}
 const STORAGE_VERSION = 1;
 const MAX_PRINTER_PRESETS = 128;
 const MAX_MATERIAL_TEMPLATES = 512;
@@ -700,6 +712,7 @@ export function hydratePluginRegistry() {
     externalPlugins = plugins
       .map((plugin) => sanitizeInstalledPlugin(plugin))
       .filter((plugin): plugin is InstalledProfilePlugin => plugin !== null && plugin.source !== 'builtin');
+    registryRevision += 1;
   } catch (error) {
     console.error('[PluginRegistry] Failed to hydrate plugins', error);
     externalPlugins = [];
@@ -747,6 +760,7 @@ export function installExternalProfilePlugin(
     plugin,
   ];
 
+  registryRevision += 1;
   save();
   return plugin;
 }
@@ -756,7 +770,10 @@ export function uninstallExternalProfilePlugin(pluginId: string): boolean {
   const before = externalPlugins.length;
   externalPlugins = externalPlugins.filter((plugin) => plugin.manifest.id !== pluginId);
   const changed = externalPlugins.length !== before;
-  if (changed) save();
+  if (changed) {
+    registryRevision += 1;
+    save();
+  }
   return changed;
 }
 
