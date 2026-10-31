@@ -40,6 +40,7 @@ import { gridNodeKeyFromXY, gridSnappedXYFromKey } from '../PlacementLogic/Grid/
 import { buildNearestCandidateNodeKeys } from '../PlacementLogic/Grid/nearestCandidateNodeKeys';
 import type { SDFCache } from '../PlacementLogic/Pathfinding/SDFCache';
 import { getOrCreateSDFCache } from '../PlacementLogic/Pathfinding/SDFCachePool';
+import { requestColumnClearanceMap } from '../PlacementLogic/Pathfinding/columnMapWorkerClient';
 import { isContactConeBlocked } from '../PlacementLogic/CollisionAvoidance';
 import { buildDirectionFan, findEscapeJoint, findGridJoint } from './EscapeJointSearch';
 import {
@@ -168,7 +169,7 @@ function columnClearanceMm(shaftDiameterMm: number): number {
 }
 
 /** The column map's cell size, shared with the prewarm for the same reason. */
-const COLUMN_MAP_CELL_MM = 0.2;
+export const COLUMN_MAP_CELL_MM = 0.2;
 
 /** How many preset slots the hotkeys can switch between. */
 const PINNED_PRESET_SLOT_COUNT = 6;
@@ -204,17 +205,62 @@ function idleCallbackForPrewarm(): ((callback: () => void) => void) | null {
     }
 }
 
-function prewarmPinnedPresetColumnMaps(sdf: SDFCache): void {
-    const requestIdle = idleCallbackForPrewarm();
-    if (!requestIdle) return;
+/**
+ * Build the distance field and the active preset's column map before the first
+ * hover needs them.
+ *
+ * The first Support hover runs the router, which creates the pooled SDF and
+ * builds a column map over every mesh vertex, measured in tens of milliseconds
+ * on a detailed part. That cost belongs to the idle time after Support opens,
+ * not the frame where the pointer first crosses the model.
+ *
+ * Safe to call repeatedly: the cache and a map for the current clearance are
+ * reused, and a model move drops both (see `SDFCache.refreshMatrix`).
+ */
+export function prewarmSupportPlacement(mesh: THREE.Mesh): void {
+    // The idle callback can run before the renderer has refreshed the world
+    // matrix after a transform, and the router reads that matrix. Update it
+    // here so the warmup bakes the pose the first hover will query.
+    mesh.updateWorldMatrix(true, false);
+    const sdf = getOrCreateSDFCache(mesh);
+    sdf.refreshMatrix();
+    const settings = getSettings();
+    sdf.enableColumnMap(columnClearanceMm(settings.shaft.diameterMm), COLUMN_MAP_CELL_MM);
+}
 
-    const clearances: number[] = [];
+/**
+ * The clearance of every pinned preset, plus the active one.
+ *
+ * Shared by the idle prewarm and the worker prewarm, so the two cannot ask for
+ * different maps.
+ */
+export function supportColumnMapClearances(): number[] {
+    const clearances = [columnClearanceMm(getSettings().shaft.diameterMm)];
     for (let slot = 1; slot <= PINNED_PRESET_SLOT_COUNT; slot += 1) {
         const preset = getPresetForPinnedSlot(slot);
         const diameterMm = preset?.settings?.shaft?.diameterMm;
         if (typeof diameterMm !== 'number' || !Number.isFinite(diameterMm)) continue;
-        clearances.push(columnClearanceMm(diameterMm));
+        const clearance = columnClearanceMm(diameterMm);
+        if (!clearances.some((existing) => Math.abs(existing - clearance) < 1e-9)) {
+            clearances.push(clearance);
+        }
     }
+    return clearances;
+}
+
+function prewarmPinnedPresetColumnMaps(sdf: SDFCache): void {
+    const requestIdle = idleCallbackForPrewarm();
+    if (!requestIdle) return;
+
+    // The UI warms these maps in the column-map worker. Building them here as
+    // well would race that work and put the same hundred-millisecond walks back
+    // on the main thread the moment a hover arrives before the worker answers.
+    if (typeof Worker !== 'undefined') return;
+
+    // A worker may already have installed some of these maps. Do not rebuild
+    // them on the main thread just because the idle prewarm has not run before.
+    const clearances = supportColumnMapClearances()
+        .filter((clearance) => !sdf.hasColumnMap(clearance, COLUMN_MAP_CELL_MM));
     if (clearances.length === 0) return;
 
     const signature = clearances.join('|');
@@ -582,11 +628,19 @@ export function calculateSmartPlacementV3(
      * it was pure overhead on the run's hot path.
      */
     // The router's columns are the bulk of this run's distance-field reads, and
-    // the exact column map answers them from one scalar per XY cell. It is
-    // clearance-specific, so calling it here builds one map per clearance and
-    // reuses it after that; the pinned presets' maps are built ahead of the key
-    // press by `prewarmPinnedPresetColumnMaps` above.
-    sdf.enableColumnMap(clearanceMm, COLUMN_MAP_CELL_MM);
+    // the exact column map answers them from one scalar per XY cell. The map is
+    // warmed off the interaction path (`prewarmSupportPlacementAsync`), so this
+    // only *activates* one — building it here put the whole walk on the hover
+    // that opened Support, which is the placement latency it exists to avoid.
+    // A missing map is requested from the worker and the next hover finds it.
+    perfMark('placement:columnMap');
+    const columnMapReady = sdf.tryUseColumnMap(clearanceMm, COLUMN_MAP_CELL_MM);
+    perfMeasure('placement:columnMap', 'placement:columnMap');
+    if (!columnMapReady && typeof Worker !== 'undefined') {
+        void requestColumnClearanceMap(input.mesh, clearanceMm, COLUMN_MAP_CELL_MM).catch(() => {
+            // Opportunistic: the router runs without the map in the meantime.
+        });
+    }
     prewarmPinnedPresetColumnMaps(sdf);
 
     const segmentBlockedBetween = (from: Vec3, to: Vec3): boolean => (

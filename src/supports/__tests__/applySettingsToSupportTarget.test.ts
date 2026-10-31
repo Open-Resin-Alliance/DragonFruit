@@ -59,7 +59,9 @@ function scene() {
         id: 'stump-a', modelId: MODEL,
         rootPos: { x: 10, y: 0, z: 0 }, rootBaseDiameter: 3, rootTopDiameter: 1.5, rootHeight: 2,
         joint: { id: 'stump-a-joint', pos: { x: 10, y: 0, z: 2 }, diameter: 1.2 },
-        segments: [segment('seg-sa')], contactCone: cone('cone-sa'),
+        segments: [segment('seg-sa')],
+        // A stump's cone hangs down onto the model from above its socket.
+        contactCone: { ...cone('cone-sa'), pos: { x: 10, y: 0, z: 4 }, normal: { x: 0, y: 0, z: -1 } },
     } as never);
     addSupportEntity('kickstand', {
         id: 'kickstand-a', modelId: MODEL, rootId: 'root-k',
@@ -107,6 +109,40 @@ test('an inline root takes the root settings, as a shared one does', () => {
     assert.equal(stump.rootBaseDiameter, settingsToApply.roots.diameterMm);
     assert.equal(stump.rootTopDiameter, settingsToApply.roots.neckDiameterMm);
     assert.equal(stump.rootHeight, settingsToApply.roots.coneHeightMm);
+});
+
+test('growing an inline root carries its joint and cone up with it', () => {
+    // The root IS a stump's body: it carries the joint, and the cone sockets on
+    // that joint. Writing a taller root without moving them swallows both, which
+    // draws as a bare disc lying on the plate.
+    scene();
+    const settingsToApply = settings();
+    assert.equal(
+        applySettingsToSupportTarget({ kind: 'stump', id: 'stump-a' }, settingsToApply as never),
+        true,
+    );
+
+    const stump = getSnapshot().stumps['stump-a'] as unknown as {
+        rootPos: { z: number };
+        rootHeight: number;
+        joint: { pos: { z: number } };
+        contactCone: { pos: { z: number }; normal: { z: number }; profile: { lengthMm: number } };
+    };
+
+    const rootTopZ = stump.rootPos.z + stump.rootHeight;
+    assert.ok(
+        stump.joint.pos.z > rootTopZ,
+        `joint ${stump.joint.pos.z} must clear the root top ${rootTopZ}`,
+    );
+
+    // A stump's cone points down onto the model, so its socket is BELOW the
+    // contact: without stretching it stays where the old, shorter root left it.
+    const socketZ = stump.contactCone.pos.z
+        + stump.contactCone.normal.z * stump.contactCone.profile.lengthMm;
+    assert.ok(
+        Math.abs(socketZ - stump.joint.pos.z) < 1e-6,
+        `cone socket ${socketZ.toFixed(3)} must meet the joint ${stump.joint.pos.z.toFixed(3)}`,
+    );
 });
 
 test('a missing entity or non-editable type applies nothing', () => {

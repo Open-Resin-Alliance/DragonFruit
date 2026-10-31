@@ -32,6 +32,15 @@ export type SizingPreset = 'detail' | 'structure' | 'anchor';
  * presets name these tiers, and the *fallback* `activeSizingBand()` uses when the
  * id in the settings names no preset at all (`structure` is the baseline).
  */
+/**
+ * The smallest contact tip an auto-support run may produce (mm).
+ *
+ * A Support Studio preset is an open id and its tip field can be edited below
+ * this; the run floors the resolved band, the angle-scaled contact and every
+ * per-point override here. Manual placement keeps the profile the user set.
+ */
+export const MIN_CONTACT_TIP_DIAMETER_MM = 0.22;
+
 export const SIZING_BANDS: Record<SizingPreset, SizingBand> = {
     detail: {
         shaftDiameterMm: 0.8,

@@ -75,6 +75,11 @@ export type AutoPlaceWorkerPayload = {
     mesh?: SerializedModelMesh;
     /** {@link modelMeshKey} of `mesh`, so an unchanged mesh is not rebuilt. */
     meshKey?: string;
+    /** The cavity (void boundary) in the model's pose, for interior-contact
+     *  classification. Absent when the model is not hollowed. */
+    cavityMesh?: SerializedModelMesh;
+    /** {@link modelMeshKey} of `cavityMesh`. */
+    cavityMeshKey?: string;
 };
 
 export type AutoPlaceWorkerRequest = {
@@ -175,6 +180,7 @@ export function deserializeModelMesh(serialized: SerializedModelMesh): THREE.Mes
  * only changes when the user edits it, so an unchanged key reuses the mesh.
  */
 let cachedMesh: { modelId: string; key: string; mesh: THREE.Mesh } | null = null;
+let cachedCavityMesh: { modelId: string; key: string; mesh: THREE.Mesh } | null = null;
 
 /**
  * Point this thread's module state at the run's inputs. Returns the mesh the
@@ -182,7 +188,10 @@ let cachedMesh: { modelId: string; key: string; mesh: THREE.Mesh } | null = null
  * brace clearance check (which silently allows braces through the model when
  * no mesh is registered for the model id).
  */
-export function seedAutoPlaceEnvironment(payload: AutoPlaceWorkerPayload): THREE.Mesh | undefined {
+export function seedAutoPlaceEnvironment(payload: AutoPlaceWorkerPayload): {
+    mesh?: THREE.Mesh;
+    cavityMesh?: THREE.Mesh;
+} {
     initializeBVH();
     setSettings(payload.appSettings);
     setSnapshot(payload.baseState);
@@ -191,7 +200,18 @@ export function seedAutoPlaceEnvironment(payload: AutoPlaceWorkerPayload): THREE
     // worker sizes with those numbers verbatim.
     setResolvedSizingBands(payload.sizingBands ?? null);
 
-    if (!payload.mesh) return undefined;
+    let cavityMesh: THREE.Mesh | undefined;
+    if (payload.cavityMesh) {
+        if (cachedCavityMesh && cachedCavityMesh.modelId === payload.modelId
+            && cachedCavityMesh.key === (payload.cavityMeshKey ?? '')) {
+            cavityMesh = cachedCavityMesh.mesh;
+        } else {
+            cavityMesh = deserializeModelMesh(payload.cavityMesh);
+            cachedCavityMesh = { modelId: payload.modelId, key: payload.cavityMeshKey ?? '', mesh: cavityMesh };
+        }
+    }
+
+    if (!payload.mesh) return { cavityMesh };
 
     let mesh: THREE.Mesh;
     if (cachedMesh && cachedMesh.modelId === payload.modelId && cachedMesh.key === (payload.meshKey ?? '')) {
@@ -203,7 +223,7 @@ export function seedAutoPlaceEnvironment(payload: AutoPlaceWorkerPayload): THREE
 
     setModelMesh(payload.modelId, mesh);
     registerMeshForAutoBrace(payload.modelId, mesh.geometry as THREE.BufferGeometry, mesh.matrixWorld);
-    return mesh;
+    return { mesh, cavityMesh };
 }
 
 /** The worker's whole job: seed this thread, then plan. */
@@ -211,10 +231,22 @@ export function runAutoPlaceRequest(
     payload: AutoPlaceWorkerPayload,
     onProgress?: AutoPlaceProgressCallback,
 ): AutoSupportPlan | null {
-    const mesh = seedAutoPlaceEnvironment(payload);
+    // Seeding rebuilds the mesh and its BVH (hundreds of milliseconds on a
+    // large model); the bar must already be on screen for that.
+    onProgress?.({ phase: 'Preparing model', done: 0, total: 1 });
+    const { mesh, cavityMesh } = seedAutoPlaceEnvironment(payload);
+    onProgress?.({ phase: 'Preparing model', done: 1, total: 1 });
     const islands: DetectedIsland[] = payload.islands.map((island) => ({
         ...island,
         contact: new THREE.Vector3(island.contact.x, island.contact.y, island.contact.z),
     }));
-    return computeAutoSupportPlan(islands, payload.modelId, payload.settingsOverride, payload.baseState, mesh, onProgress);
+    return computeAutoSupportPlan(
+        islands,
+        payload.modelId,
+        payload.settingsOverride,
+        payload.baseState,
+        mesh,
+        onProgress,
+        cavityMesh,
+    );
 }

@@ -5,6 +5,7 @@ import type { Vec3 } from '../../types';
 import { HIDDEN_INSTANCE_MATRIX } from '../hiddenInstanceMatrix';
 import { INSTANCED_MESH_RAYCAST } from '../instancedRaycast';
 import { writeInstanceColors } from '../instanceColorWriter';
+import { buildProxyHoverIndex, createProxyHoverRaycast } from '../../proxyHoverIndex';
 
 /** One scratch object per batch kind: layouts are synchronous, so they share it. */
 const scratchObject = new THREE.Object3D();
@@ -45,6 +46,13 @@ interface InstancedJointGroupProps {
      * per-instance walk. The hover grid answers it in O(cells crossed).
      */
     raycast?: THREE.Object3D['raycast'];
+    /**
+     * Grab radius at a depth, in millimetres. Supplying it builds a hover index
+     * for the batch: three's per-instance walk raycasts all 16k joints on this
+     * plate on every pointer move, while the index tests only the cells the ray
+     * crosses.
+     */
+    grabRadiusAt?: (distance: number) => number;
     onJointClick?: (joint: InstancedJoint, event: ThreeEvent<MouseEvent>) => void;
     onJointPointerDown?: (joint: InstancedJoint, event: ThreeEvent<PointerEvent>) => void;
     onJointPointerMove?: (joint: InstancedJoint, event: ThreeEvent<PointerEvent>) => void;
@@ -65,6 +73,7 @@ export function InstancedJointGroup({
     instanceColor,
     isHidden,
     raycast,
+    grabRadiusAt,
     onJointClick,
     onJointPointerDown,
     onJointPointerMove,
@@ -77,6 +86,25 @@ export function InstancedJointGroup({
     const validJoints = useMemo(() => {
         return joints.filter((joint) => Number.isFinite(joint.diameter) && joint.diameter > 0.001);
     }, [joints]);
+
+    const hoverRaycast = useMemo(() => {
+        if (!grabRadiusAt || validJoints.length === 0) return undefined;
+        const targets = validJoints.map((joint, index) => {
+            const radius = Math.max(0.001, joint.diameter * 0.5);
+            return {
+                modelId: joint.modelId,
+                index,
+                // A joint is a ball; a short vertical segment approximates it
+                // without a degenerate segment (three's ray-segment maths divides
+                // by its length).
+                start: { x: joint.pos.x, y: joint.pos.y, z: joint.pos.z - radius },
+                end: { x: joint.pos.x, y: joint.pos.y, z: joint.pos.z + radius },
+                radius,
+            };
+        });
+        const index = buildProxyHoverIndex(targets);
+        return index ? createProxyHoverRaycast(index, grabRadiusAt) : undefined;
+    }, [grabRadiusAt, validJoints]);
 
     const hasOverlay = !!outOfBoundsMaterial;
 
@@ -206,7 +234,7 @@ export function InstancedJointGroup({
                 args={[undefined, undefined, validJoints.length]}
                 frustumCulled={false}
                 renderOrder={100000}
-                raycast={raycast ?? INSTANCED_MESH_RAYCAST}
+                raycast={raycast ?? hoverRaycast ?? INSTANCED_MESH_RAYCAST}
                 onClick={onJointClick ? handleClick : undefined}
                 onPointerDown={onJointPointerDown ? handlePointerDown : undefined}
                 onPointerMove={onJointPointerMove ? handlePointerMove : undefined}

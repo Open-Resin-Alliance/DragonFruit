@@ -102,51 +102,68 @@ function collectRemovedSegmentIds(
 }
 
 /**
- * Removes every support belonging to `modelId`.
+ * The ids a delete would remove for one or more models, in one pass.
  *
- * @returns entities removed, excluding roots -- they cascade from shaft removals
- * rather than counting as removals themselves.
+ * The per-model entry below answers the same question for one model; the scene
+ * delete asks it for every model the user selected at once, and doing that one
+ * model at a time meant one whole-state write per model — Ctrl+A, Delete on a
+ * supported plate rebuilt the support store twenty times.
  */
-export function deleteSupportsForModel(state: SupportState, modelId: string): number {
-    const removing = getSupportsForModel(state, modelId);
-
-    const hasAnything = MODEL_ID_COLLECTION_KEYS.some((key) => removing[key].length > 0);
-    if (!hasAnything) return 0;
-
+function planSupportRemoval(state: SupportState, modelIds: Iterable<string>) {
     const removingSets = {} as Record<SupportCollectionKey, Set<string>>;
-    for (const key of MODEL_ID_COLLECTION_KEYS) removingSets[key] = new Set(removing[key]);
+    for (const key of MODEL_ID_COLLECTION_KEYS) removingSets[key] = new Set<string>();
 
-    const segmentsToRemove = collectRemovedSegmentIds(state, removing);
-
-    // A kickstand owns its root and host knot, so both go with it.
+    const removingByModel: ModelSupportIds[] = [];
     const knotsToRemove = new Set<string>();
-    for (const kickstandId of removing.kickstands) {
-        const kickstand = state.kickstands[kickstandId];
-        if (!kickstand) continue;
-        removingSets.roots.add(kickstand.rootId);
-        knotsToRemove.add(kickstand.hostKnotId);
+    const segmentsToRemove = new Set<string>();
+
+    for (const modelId of modelIds) {
+        const removing = getSupportsForModel(state, modelId);
+        if (!MODEL_ID_COLLECTION_KEYS.some((key) => removing[key].length > 0)) continue;
+        removingByModel.push(removing);
+
+        for (const key of MODEL_ID_COLLECTION_KEYS) {
+            for (const id of removing[key]) removingSets[key].add(id);
+        }
+        for (const segmentId of collectRemovedSegmentIds(state, removing)) segmentsToRemove.add(segmentId);
+
+        // A kickstand owns its root and host knot, so both go with it.
+        for (const kickstandId of removing.kickstands) {
+            const kickstand = state.kickstands[kickstandId];
+            if (!kickstand) continue;
+            removingSets.roots.add(kickstand.rootId);
+            knotsToRemove.add(kickstand.hostKnotId);
+        }
     }
 
-    for (const [knotId, knot] of Object.entries(state.knots)) {
-        const parentShaftId = knot.parentShaftId;
-        const removeByShaft = segmentsToRemove.has(parentShaftId);
+    if (removingByModel.length === 0) return null;
+
+    for (const knotId in state.knots) {
+        const knot = state.knots[knotId];
+        const removeByShaft = segmentsToRemove.has(knot.parentShaftId);
         // A knot riding a pseudo-shaft goes when its host does. Derived, so a
         // third pseudo-shaft type is covered without another `||`.
-        const host = parseKnotHostId(parentShaftId);
+        const host = parseKnotHostId(knot.parentShaftId);
         const hostCollection = host
             ? removingSets[getSupportTypeDescriptor(host.typeId).location.key]
             : undefined;
         const removeByHost = !!host && !!hostCollection?.has(host.entityId);
-        if (removeByShaft || removeByHost) {
-            knotsToRemove.add(knotId);
-        }
+        if (removeByShaft || removeByHost) knotsToRemove.add(knotId);
     }
 
+    return { removingSets, knotsToRemove, removingByModel };
+}
+
+function applySupportRemoval(
+    state: SupportState,
+    plan: NonNullable<ReturnType<typeof planSupportRemoval>>,
+): void {
+    const { removingSets, knotsToRemove } = plan;
     const filterRecord = <T>(record: Record<string, T>, shouldRemove: (id: string) => boolean): Record<string, T> => {
         const next: Record<string, T> = {};
-        for (const [id, value] of Object.entries(record)) {
+        for (const id in record) {
             if (shouldRemove(id)) continue;
-            next[id] = value;
+            next[id] = record[id];
         }
         return next;
     };
@@ -167,13 +184,41 @@ export function deleteSupportsForModel(state: SupportState, modelId: string): nu
     }
 
     setSnapshot(nextState);
+}
 
+/**
+ * Removes every support belonging to `modelId`.
+ *
+ * @returns entities removed, excluding roots -- they cascade from shaft removals
+ * rather than counting as removals themselves.
+ */
+export function deleteSupportsForModel(state: SupportState, modelId: string): number {
+    const plan = planSupportRemoval(state, [modelId]);
+    if (!plan) return 0;
+    applySupportRemoval(state, plan);
+    return countSupportRemovals(plan.removingByModel);
+}
+
+/**
+ * Removes every support belonging to any of `modelIds`, in one store write.
+ *
+ * @returns entities removed, excluding roots.
+ */
+export function deleteSupportsForModelIds(state: SupportState, modelIds: Iterable<string>): number {
+    const plan = planSupportRemoval(state, modelIds);
+    if (!plan) return 0;
+    applySupportRemoval(state, plan);
+    return countSupportRemovals(plan.removingByModel);
+}
+
+function countSupportRemovals(removingByModel: readonly ModelSupportIds[]): number {
     let removedCount = 0;
-    for (const key of MODEL_ID_COLLECTION_KEYS) {
-        if (key === 'roots') continue;
-        removedCount += removing[key].length;
+    for (const removing of removingByModel) {
+        for (const key of MODEL_ID_COLLECTION_KEYS) {
+            if (key === 'roots') continue;
+            removedCount += removing[key].length;
+        }
     }
-
     return removedCount;
 }
 

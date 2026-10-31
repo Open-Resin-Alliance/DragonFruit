@@ -400,6 +400,24 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
         const matrixElements = Array.from(matrix.elements);
         const centerCoords = [center.x, center.y, center.z];
 
+        // Overhang is classified on the exact soup the overlay draws, so its
+        // triangle ids index `geom.geometry`. Staging it also keeps the mesh
+        // off the JSON path: the command reads raw f32 bytes.
+        let world: { positions: Float32Array; bbox: THREE.Box3 } | null = null;
+        try {
+          world = prepareWorldGeom();
+        } catch (err) {
+          console.warn('[Islands] world soup prep failed; overhang will use the file mesh', err);
+        }
+        if (world) {
+          const { positions } = world;
+          await invoke(
+            'stage_mesh_binary_set',
+            new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength),
+            { headers: { 'Content-Type': 'application/octet-stream' } },
+          );
+        }
+
         // The combined Rust scan emits phase progress — wire it into the
         // progress modal so the bar moves immediately (the overhang pass runs
         // inside the same command; no TS geometry round trip up front).
@@ -415,7 +433,23 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
         setScanProgress({ done: 0, total: 100 });
 
         console.log(`[Islands] Sideloading combined island scan from path: ${sourcePath}`);
-        const combined = await invoke<{ voxelIslands: any[]; minimaIslands: any[]; overhangIslands: any[] }>(
+        const combined = await invoke<{
+          voxelIslands: Array<{
+            id: string;
+            contact: { x: number; y: number; z: number };
+            baseZ: number;
+            areaMm2?: number;
+            layerSpan: [number, number];
+            contactVoxels?: number[];
+          }>;
+          minimaIslands: Array<{
+            position: { x: number; y: number; z: number };
+            vertexIndex?: number;
+            seedTriangleId?: number;
+          }>;
+          overhangIslands: OverhangRegion[];
+          stability?: PoseStabilityWire | null;
+        }>(
           'scan_islands_from_path',
           {
             filePath: sourcePath,
@@ -431,6 +465,8 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
             overhangSelfSupportAngleDeg: getSettings().autoSupport?.overhangSelfSupportAngleDeg
               ?? OVERHANG_SELF_SUPPORT_ANGLE_DEG,
             overhangPxMm: OVERHANG_FOOTPRINT_PX_MM,
+            overhangFromStaged: world !== null,
+            hasRaft,
           },
         ).finally(() => unlisten());
 
@@ -447,6 +483,9 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
             baseZ: v.baseZ,
             areaMm2: v.areaMm2,
             layerSpan: v.layerSpan,
+            contactVoxels: v.contactVoxels && v.contactVoxels.length >= 2
+              ? { xy: new Float32Array(v.contactVoxels), z: null, count: v.contactVoxels.length / 2 }
+              : undefined,
           }));
         setVoxelIslands(voxelMapped);
 
@@ -460,38 +499,12 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
         }));
         setMinimaIslands(minimaMapped);
 
-        // Overhang triangleIds must index into `geom.geometry` as rendered.
-        // The sideload path loads the file separately in Rust and welds with
-        // a different epsilon/order than `prepareWorldGeom`/`processGeometry`,
-        // so its `triangleIds` point at the wrong geometric triangles
-        // (disconnected speckles). Always classify overhang on the frontend
-        // world soup where IDs are guaranteed to match the overlay geometry.
-        try {
-          const world = prepareWorldGeom();
-          if (world) {
-            // Tauri invoke not available in plain browser, so dynamic import is required.
-            const { invoke } = await import('@tauri-apps/api/core');
-            const scan = await invoke<OverhangScan>('scan_overhangs', {
-              positions: Array.from(world.positions),
-              selfSupportAngleDeg:
-                getSettings().autoSupport?.overhangSelfSupportAngleDeg ??
-                OVERHANG_SELF_SUPPORT_ANGLE_DEG,
-              pxMm: OVERHANG_FOOTPRINT_PX_MM,
-              label: sourcePath ?? null,
-              hasRaft,
-            });
-            if (scanEpochRef.current !== epoch) return;
-            setToppleCoverage(scanNeedsCoverage(scan.stability));
-        setDragTotalMm3(scan.stability?.dragMomentMm3 ?? 0);
-            setDragTotalMm3(scan.stability?.dragMomentMm3 ?? 0);
-            mappedOverhangs = scan.regions.map(overhangRegionToIsland);
-          } else {
-            mappedOverhangs = (combined.overhangIslands ?? []).map(overhangRegionToIsland);
-          }
-        } catch (err) {
-          console.warn('[Islands] frontend overhang scan failed, falling back to sideload overhang', err);
-          mappedOverhangs = (combined.overhangIslands ?? []).map(overhangRegionToIsland);
-        }
+        // The command classified overhang on the staged soup, so the ids
+        // index exactly what the overlay draws; the stability report came
+        // back with the same pass. Nothing else to re-run here.
+        setToppleCoverage(scanNeedsCoverage(combined.stability));
+        setDragTotalMm3(combined.stability?.dragMomentMm3 ?? 0);
+        mappedOverhangs = (combined.overhangIslands ?? []).map(overhangRegionToIsland);
         setOverhangIslands(mappedOverhangs);
 
         // Cache the scan results for this model + transform
@@ -521,13 +534,102 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
         return;
       }
 
-      // Overhang classification (Rust, positions-based) — the file sideload
-      // failed but this command may still be available. Reuses the same world
-      // geometry, so no double mesh prep.
+      // A pathless model (VOXL) has no file for the combined path, but the
+      // staged soup is exactly what that command needs. Run the whole native
+      // scan here first: voxel islands, minima and overhang in one pass, with
+      // no JSON geometry and no second mesh weld.
       try {
         const { invoke } = await import('@tauri-apps/api/core');
-        const scan = await invoke<OverhangScan>('scan_overhangs', {
-          positions: Array.from(world.positions),
+        const { listen } = await import('@tauri-apps/api/event');
+        const unlisten = await listen<{ done: number; total: number }>(
+          'island-scan-progress',
+          (e) => {
+            if (scanEpochRef.current !== epoch) return;
+            setScanProgress({ done: e.payload.done, total: e.payload.total });
+          },
+        );
+        const { positions } = world;
+        await invoke(
+          'stage_mesh_binary_set',
+          new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength),
+          { headers: { 'Content-Type': 'application/octet-stream' } },
+        );
+        const combined = await invoke<{
+          voxelIslands: Array<{
+            id: string;
+            contact: { x: number; y: number; z: number };
+            baseZ: number;
+            areaMm2?: number;
+            layerSpan: [number, number];
+            contactVoxels?: number[];
+          }>;
+          minimaIslands: Array<{
+            position: { x: number; y: number; z: number };
+            vertexIndex?: number;
+            seedTriangleId?: number;
+          }>;
+          overhangIslands: OverhangRegion[];
+          stability?: PoseStabilityWire | null;
+        }>('scan_islands_staged', {
+          layerHeightMm,
+          pxMm,
+          supportBufferMm: supportBufMm,
+          connectivity,
+          k: minimaK,
+          overhangSelfSupportAngleDeg: getSettings().autoSupport?.overhangSelfSupportAngleDeg
+            ?? OVERHANG_SELF_SUPPORT_ANGLE_DEG,
+          overhangPxMm: OVERHANG_FOOTPRINT_PX_MM,
+          hasRaft,
+        }).finally(() => unlisten());
+        if (scanEpochRef.current !== epoch) return;
+
+        const voxelMapped: DetectedIsland[] = combined.voxelIslands
+          .filter((v) => (v.areaMm2 ?? 0) >= minAreaMm2)
+          .map((v) => ({
+            id: v.id,
+            source: 'voxel',
+            contact: new THREE.Vector3(v.contact.x, v.contact.y, v.contact.z),
+            baseZ: v.baseZ,
+            areaMm2: v.areaMm2,
+            layerSpan: v.layerSpan,
+            contactVoxels: v.contactVoxels && v.contactVoxels.length >= 2
+              ? { xy: new Float32Array(v.contactVoxels), z: null, count: v.contactVoxels.length / 2 }
+              : undefined,
+          }));
+        const minimaMapped: DetectedIsland[] = combined.minimaIslands.map((m, i) => ({
+          id: `m${i}`,
+          source: 'minima',
+          contact: new THREE.Vector3(m.position.x, m.position.y, m.position.z),
+          baseZ: m.position.z,
+          vertexIndex: m.vertexIndex,
+          seedTriangleId: m.seedTriangleId,
+        }));
+        const overhangs = (combined.overhangIslands ?? []).map(overhangRegionToIsland);
+        setVoxelIslands(voxelMapped);
+        setMinimaIslands(minimaMapped);
+        setToppleCoverage(scanNeedsCoverage(combined.stability));
+        setDragTotalMm3(combined.stability?.dragMomentMm3 ?? 0);
+        setOverhangIslands(overhangs);
+        if (cacheKey) {
+          scanCacheRef.current.set(cacheKey, { voxel: voxelMapped, minima: minimaMapped, overhang: overhangs });
+        }
+        setScanning(false);
+        return;
+      } catch (err) {
+        console.warn('[Islands] staged native scan failed; using client-side detectors', err);
+      }
+
+      // Last resort: the client-side detectors. Overhang still goes through
+      // the binary staged command below; only voxel/minima are JS here.
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const { positions } = world;
+        await invoke(
+          'stage_mesh_binary_set',
+          new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength),
+          { headers: { 'Content-Type': 'application/octet-stream' } },
+        );
+        const scan = await invoke<OverhangScan>('scan_overhangs_staged', {
           selfSupportAngleDeg: getSettings().autoSupport?.overhangSelfSupportAngleDeg
             ?? OVERHANG_SELF_SUPPORT_ANGLE_DEG,
           pxMm: OVERHANG_FOOTPRINT_PX_MM,

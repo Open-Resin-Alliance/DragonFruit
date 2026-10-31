@@ -38,17 +38,22 @@ function getOrCreateCollisionSdf(mesh: THREE.Mesh): SDFCache | null {
 }
 
 function segmentBlockedWithBestAvailableMethod(
-    start: Vec3,
-    end: Vec3,
+    startX: number, startY: number, startZ: number,
+    endX: number, endY: number, endZ: number,
     collisionRadius: number,
     mesh: THREE.Mesh,
 ): boolean {
     const sdf = getOrCreateCollisionSdf(mesh);
     if (sdf) {
-        return sdf.segmentBlocked(start.x, start.y, start.z, end.x, end.y, end.z, collisionRadius);
+        return sdf.segmentBlocked(startX, startY, startZ, endX, endY, endZ, collisionRadius);
     }
 
-    return checkShaftCollision(start, end, collisionRadius, mesh).hit;
+    return checkShaftCollision(
+        { x: startX, y: startY, z: startZ },
+        { x: endX, y: endY, z: endZ },
+        collisionRadius,
+        mesh,
+    ).hit;
 }
 
 export function isCollisionSegmentBlocked(
@@ -57,7 +62,7 @@ export function isCollisionSegmentBlocked(
     collisionRadius: number,
     mesh: THREE.Mesh,
 ): boolean {
-    return segmentBlockedWithBestAvailableMethod(start, end, collisionRadius, mesh);
+    return segmentBlockedWithBestAvailableMethod(start.x, start.y, start.z, end.x, end.y, end.z, collisionRadius, mesh);
 }
 
 /**
@@ -101,25 +106,36 @@ export function isCollisionFrustumBlocked(
     const normalizedEndRadius = Math.max(0.001, endRadius);
 
     if (Math.abs(normalizedStartRadius - normalizedEndRadius) <= 0.000001) {
-        return segmentBlockedWithBestAvailableMethod(start, end, normalizedEndRadius, mesh);
+        return segmentBlockedWithBestAvailableMethod(
+            start.x, start.y, start.z,
+            end.x, end.y, end.z,
+            normalizedEndRadius,
+            mesh,
+        );
     }
 
-    const startVec = new THREE.Vector3(start.x, start.y, start.z);
-    const endVec = new THREE.Vector3(end.x, end.y, end.z);
+    // Scalar slices: this is called per candidate per router step, and the
+    // Vector3 clone/lerp pair per segment was pure allocation. The arithmetic
+    // is the same `start + (end - start) * t` the lerp performed.
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const dz = end.z - start.z;
     const segmentTotal = Math.max(1, Math.round(segmentCount));
 
     for (let i = 0; i < segmentTotal; i++) {
         const t0 = i / segmentTotal;
         const t1 = (i + 1) / segmentTotal;
-        const segStart = startVec.clone().lerp(endVec, t0);
-        const segEnd = startVec.clone().lerp(endVec, t1);
-        const radius0 = THREE.MathUtils.lerp(normalizedStartRadius, normalizedEndRadius, t0);
-        const radius1 = THREE.MathUtils.lerp(normalizedStartRadius, normalizedEndRadius, t1);
+        const radius0 = normalizedStartRadius + (normalizedEndRadius - normalizedStartRadius) * t0;
+        const radius1 = normalizedStartRadius + (normalizedEndRadius - normalizedStartRadius) * t1;
         const sliceRadius = Math.max(radius0, radius1);
 
         if (segmentBlockedWithBestAvailableMethod(
-            { x: segStart.x, y: segStart.y, z: segStart.z },
-            { x: segEnd.x, y: segEnd.y, z: segEnd.z },
+            start.x + dx * t0,
+            start.y + dy * t0,
+            start.z + dz * t0,
+            start.x + dx * t1,
+            start.y + dy * t1,
+            start.z + dz * t1,
             sliceRadius,
             mesh,
         )) {
@@ -257,7 +273,12 @@ export function calculateSafeOffset(
             );
         }
 
-        return segmentBlockedWithBestAvailableMethod(testStart, targetPos, collisionRadius, mesh);
+        return segmentBlockedWithBestAvailableMethod(
+            testStart.x, testStart.y, testStart.z,
+            targetPos.x, targetPos.y, targetPos.z,
+            collisionRadius,
+            mesh,
+        );
     };
 
     if (!testOffset(minOffset)) {

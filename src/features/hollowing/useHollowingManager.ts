@@ -1649,6 +1649,14 @@ export function useHollowingManager({
     }
 
     const persistedHollowing = activeModel.meshModifiers?.hollowing;
+    // Nothing reads this preview until the hollowing panel asks, and a model
+    // with no hollowing has nothing to show there but the defaults — which the
+    // panel computes itself on open. Warming it anyway paid a ~900 ms
+    // stage-capture-readback for every model the selection passed through,
+    // including the one the file opens on.
+    if (!persistedHollowing?.enabled && !persistedHollowing?.bakedIntoGeometry) {
+      return;
+    }
     const warmupState: HollowingPanelState = persistedHollowing?.enabled
       ? {
           mode: persistedHollowing.mode === 'shell_open_face' ? 'cavity' : persistedHollowing.mode,
@@ -1667,7 +1675,29 @@ export function useHollowingManager({
       return;
     }
 
-    void primeHollowPreviewCache(activeModel, warmupState);
+    // The warm-up exists so opening the hollowing panel is instant, and it is
+    // speculative: nothing reads this cache until the panel asks. Running it on
+    // the selection that a model drag produces put a ~300 ms task on that drag's
+    // commit frame (the trace: `stage_mesh_binary_set`, the preview capture, and
+    // every read-back). Wait for the interaction to finish — a fixed quiet
+    // period, then idle — and cancel if the selection moves again.
+    let idleHandle: number | null = null;
+    const timer = window.setTimeout(() => {
+      const scheduleIdle = typeof window.requestIdleCallback === 'function'
+        ? (cb: () => void) => window.requestIdleCallback(cb, { timeout: 1500 })
+        : (cb: () => void) => window.setTimeout(cb, 200);
+      idleHandle = scheduleIdle(() => {
+        void primeHollowPreviewCache(activeModel, warmupState);
+      });
+    }, 1200);
+
+    return () => {
+      window.clearTimeout(timer);
+      if (idleHandle != null) {
+        if (typeof window.cancelIdleCallback === 'function') window.cancelIdleCallback(idleHandle);
+        else window.clearTimeout(idleHandle);
+      }
+    };
   }, [
     buildHollowPreviewRequest,
     defaultHollowingState,

@@ -16,6 +16,13 @@ import { reportPickingRenderSample } from './pickingDiagnostics';
 import { getClipBounds } from '@/components/scene/SceneCanvas/clipBoundsStore';
 import type { PickableRegistration, PickingConfig } from './types';
 
+/**
+ * Hover picking never needs the display rate. Each pick renders the hovered
+ * model into a 3x3 target; at 165 Hz that was a measurable frame cost, while a
+ * 60 Hz hover is still responsive.
+ */
+const HOVER_PICK_MAX_HZ = 60;
+
 interface PickingRendererProps {
   /** Map of pick IDs to their registrations */
   registrations: Map<number, PickableRegistration>;
@@ -33,6 +40,12 @@ interface PickingRendererProps {
 
 function shouldExcludeFromPickClone(object: THREE.Object3D): boolean {
   return object.userData?.excludeFromPickingClone === true;
+}
+
+function createPickScene(): THREE.Scene {
+  const scene = new THREE.Scene();
+  scene.name = 'picking';
+  return scene;
 }
 
 /** No-op override for Object3D.updateMatrixWorld — keeps our manually synced matrixWorld intact. */
@@ -63,8 +76,9 @@ export function PickingRenderer({
   // Pixel buffer for reading back
   const pixelBufferRef = useRef<Uint8Array>(new Uint8Array(RENDER_TARGET.SIZE * RENDER_TARGET.SIZE * 4));
   
-  // Picking scene (separate from main scene)
-  const pickSceneRef = useRef<THREE.Scene>(new THREE.Scene());
+  // Picking scene (separate from main scene). Named so the render profiler can
+  // label this pass instead of calling it `aux`.
+  const pickSceneRef = useRef<THREE.Scene>(createPickScene());
 
   // Cached pick objects keyed by pick ID (avoids per-pick cloning)
   const pickObjectCacheRef = useRef<Map<number, { sourceObject: THREE.Object3D; pickObject: THREE.Object3D }>>(new Map());
@@ -84,6 +98,37 @@ export function PickingRenderer({
   const previousProjectionMatrixRef = useRef<THREE.Matrix4>(new THREE.Matrix4());
   const previousCameraKindRef = useRef<'orthographic' | 'perspective' | null>(null);
   const smoothedFrameMsRef = useRef<number>(1000 / 60);
+
+  /**
+   * Readbacks in flight, oldest first.
+   *
+   * `gl.readRenderTargetPixels` is a synchronous GPU→CPU read: it stalls the
+   * main thread until the pick render has finished. Measured indirectly by the
+   * hover path, that is the difference between 165 fps and 80 while the pointer
+   * moves over a model at display rate. WebGL2 can enqueue the same read into a
+   * pixel-pack buffer and hand back the bytes a frame later once a fence
+   * signals, so the cost becomes GPU work instead of a main-thread wait. The
+   * sync path stays as the fallback for a context without fences.
+   */
+  const asyncReadbacksRef = useRef<Array<{
+    pbo: WebGLBuffer;
+    sync: WebGLSync;
+    ndcX: number;
+    ndcY: number;
+  }>>([]);
+  const pboPoolRef = useRef<WebGLBuffer[]>([]);
+  const asyncReadbackDisabledRef = useRef(false);
+  const lastSlowPickLogRef = useRef(0);
+
+  const webgl2Context = useCallback((): WebGL2RenderingContext | null => {
+    try {
+      const context = gl.getContext();
+      if (!context || typeof (context as WebGL2RenderingContext).fenceSync !== 'function') return null;
+      return context as WebGL2RenderingContext;
+    } catch {
+      return null;
+    }
+  }, [gl]);
 
   const disposePickObject = useCallback((pickId: number) => {
     const cached = pickObjectCacheRef.current.get(pickId);
@@ -163,11 +208,11 @@ export function PickingRenderer({
       // this produces the wrong pick position. We manually copy source.matrixWorld in
       // syncPickObjectTransforms and must prevent Three.js from overwriting it.
       child.updateMatrixWorld = noop;
-      // Disable frustum culling on all pick clones. When setViewOffset narrows the
-      // pick camera to a 3x3 pixel patch, the bounding sphere of a gizmo handle near
-      // the screen edge can fail the frustum test even though the handle IS inside
-      // those pixels. This is especially visible for gizmos outside the build volume.
-      child.frustumCulled = false;
+      // Gizmo handles near the edge can fail the 3x3 sub-frustum test even though
+      // they are inside those pixels, so only they stay unculled. Everything else
+      // must be culled: the pick scene holds every model, and without culling each
+      // pick re-rendered the whole plate's 9.2M triangles to resolve nine pixels.
+      child.frustumCulled = !isGizmo;
       // Gizmo handles must always render after model geometry in the pick scene
       // so their depthTest=false color wins regardless of depth values.
       // This is set here (not relied on from the source) because React child
@@ -254,7 +299,120 @@ export function PickingRenderer({
       pickSceneRef.current.add(pickObject);
     }
   }, [clonePickObject, disposePickObject, registrations]);
-  
+
+  const resolveWinner = useCallback(() => {
+    const isPriorityPickId = (pickId: number) => {
+      if (pickId === PICK_ID.NONE) return false;
+      const registration = registrations.get(pickId);
+      return registration?.category === 'gizmo';
+    };
+    return config.patchSize === 1
+      ? (pixelBufferRef.current[0] << 16) | (pixelBufferRef.current[1] << 8) | pixelBufferRef.current[2]
+      : majorityVote(pixelBufferRef.current, previousWinnerRef.current, isPriorityPickId);
+  }, [config.patchSize, registrations]);
+
+  const startAsyncReadback = useCallback((context: WebGL2RenderingContext, ndcX: number, ndcY: number): 'queued' | 'skipped' | 'unavailable' => {
+    if (asyncReadbackDisabledRef.current) return 'unavailable';
+    // Never let reads pile up behind a GPU that is a frame or two behind. The
+    // old fallback was the synchronous read, which stalls the main thread until
+    // the GPU catches up; skipping this pick leaves the previous hit in place
+    // for a frame and costs nothing.
+    if (asyncReadbacksRef.current.length >= 3) return 'skipped';
+
+    try {
+      let pbo = pboPoolRef.current.pop();
+      if (!pbo) {
+        pbo = context.createBuffer() ?? undefined;
+        if (!pbo) return 'unavailable';
+        context.bindBuffer(context.PIXEL_PACK_BUFFER, pbo);
+        context.bufferData(context.PIXEL_PACK_BUFFER, pixelBufferRef.current.byteLength, context.STREAM_READ);
+      }
+      context.bindBuffer(context.PIXEL_PACK_BUFFER, pbo);
+      context.readPixels(
+        0, 0,
+        RENDER_TARGET.SIZE, RENDER_TARGET.SIZE,
+        context.RGBA, context.UNSIGNED_BYTE,
+        0,
+      );
+      context.bindBuffer(context.PIXEL_PACK_BUFFER, null);
+      const sync = context.fenceSync(context.SYNC_GPU_COMMANDS_COMPLETE, 0);
+      if (!sync) {
+        pboPoolRef.current.push(pbo);
+        return 'unavailable';
+      }
+      context.flush();
+      asyncReadbacksRef.current.push({ pbo, sync, ndcX, ndcY });
+      return 'queued';
+    } catch {
+      // The context lost the extension or the buffer; never try again this session.
+      asyncReadbackDisabledRef.current = true;
+      return 'unavailable';
+    }
+  }, []);
+
+  const pollAsyncReadbacks = useCallback((context: WebGL2RenderingContext, report: boolean) => {
+    const pending = asyncReadbacksRef.current;
+    if (pending.length === 0) return;
+
+    const remaining: typeof pending = [];
+    for (const slot of pending) {
+      let status: number;
+      try {
+        status = context.clientWaitSync(slot.sync, 0, 0);
+      } catch {
+        context.deleteSync(slot.sync);
+        pboPoolRef.current.push(slot.pbo);
+        continue;
+      }
+
+      if (status === context.ALREADY_SIGNALED || status === context.CONDITION_SATISFIED) {
+        // A pixel-pack buffer that is written (readPixels), fenced, and then
+        // written again before the bytes are read makes the driver discard the
+        // shadow copy it keeps to accelerate the readback - Chrome warns about
+        // exactly that, and the lost copy turns the next read into a stall.
+        // So a slot may only return to the pool after its bytes were read; a
+        // slot collected while paused is destroyed instead.
+        let reusable = false;
+        if (report) {
+          try {
+            context.bindBuffer(context.PIXEL_PACK_BUFFER, slot.pbo);
+            context.getBufferSubData(context.PIXEL_PACK_BUFFER, 0, pixelBufferRef.current);
+            context.bindBuffer(context.PIXEL_PACK_BUFFER, null);
+            const winnerId = resolveWinner();
+            previousWinnerRef.current = winnerId;
+            onPick(winnerId, slot.ndcX, slot.ndcY);
+            reusable = true;
+          } catch {
+            // Drop this result; the next pick will resolve the hit.
+          }
+        }
+        if (reusable) {
+          pboPoolRef.current.push(slot.pbo);
+        } else {
+          try {
+            context.deleteBuffer(slot.pbo);
+          } catch {
+            // Already invalid; nothing to release.
+          }
+        }
+        context.deleteSync(slot.sync);
+        continue;
+      }
+
+      if (status === context.WAIT_FAILED) {
+        context.deleteSync(slot.sync);
+        try {
+          context.deleteBuffer(slot.pbo);
+        } catch {
+          // Already invalid; nothing to release.
+        }
+        continue;
+      }
+      remaining.push(slot);
+    }
+    asyncReadbacksRef.current = remaining;
+  }, [onPick, resolveWinner]);
+
   // Perform the pick render
   const performPick = useCallback((ndcX: number, ndcY: number) => {
     if (!renderTargetRef.current || !camera) return;
@@ -335,54 +493,63 @@ export function PickingRenderer({
     gl.setRenderTarget(renderTargetRef.current);
     gl.clear(true, true, false); // clear color, clear depth, don't clear stencil
     gl.render(pickScene, pickCamera);
-    
-    // Read back pixels
-    gl.readRenderTargetPixels(
-      renderTargetRef.current,
-      0, 0,
-      RENDER_TARGET.SIZE, RENDER_TARGET.SIZE,
-      pixelBufferRef.current
-    );
-    
+
+    // Read back pixels. Preferred path: enqueue into a pixel-pack buffer and
+    // collect it once its fence signals; that turns a main-thread GPU wait into
+    // work the next frames absorb. The synchronous read is the fallback.
+    // Re-assert the target: the async path bypasses `readRenderTargetPixels`,
+    // which is what normally binds the framebuffer for the read.
+    gl.setRenderTarget(renderTargetRef.current);
+    const context = webgl2Context();
+    const readback = context ? startAsyncReadback(context, ndcX, ndcY) : 'unavailable';
+    if (readback === 'unavailable') {
+      gl.readRenderTargetPixels(
+        renderTargetRef.current,
+        0, 0,
+        RENDER_TARGET.SIZE, RENDER_TARGET.SIZE,
+        pixelBufferRef.current,
+      );
+    }
+
     // Restore render target
     gl.setRenderTarget(currentRenderTarget);
-    
-    const isPriorityPickId = (pickId: number) => {
-      if (pickId === PICK_ID.NONE) return false;
-      const registration = registrations.get(pickId);
-      return registration?.category === 'gizmo';
-    };
 
-    // Perform majority vote (with gizmo-priority pass).
-    // This is especially important in orthographic mode where parallel rays make
-    // model surfaces frequently dominate the 3x3 patch unless gizmos are promoted.
-    const winnerId = config.patchSize === 1
-      ? (pixelBufferRef.current[0] << 16) | (pixelBufferRef.current[1] << 8) | pixelBufferRef.current[2]
-      : majorityVote(pixelBufferRef.current, previousWinnerRef.current, isPriorityPickId);
-    
-    previousWinnerRef.current = winnerId;
+    if (readback === 'unavailable') {
+      const winnerId = resolveWinner();
+      previousWinnerRef.current = winnerId;
+      onPick(winnerId, ndcX, ndcY);
+    }
 
     const pickDurationMs = Math.max(0, performance.now() - pickStartMs);
+    const logNowMs = performance.now();
+    if (readback === 'unavailable' && pickDurationMs >= 8 && logNowMs - lastSlowPickLogRef.current >= 1000) {
+      lastSlowPickLogRef.current = logNowMs;
+      console.warn(`[picking] synchronous pick took ${pickDurationMs.toFixed(1)} ms (scene sync ${syncDurationMs.toFixed(1)} ms)`);
+    }
+
     reportPickingRenderSample({
       pickDurationMs,
       syncDurationMs,
       cachedPickObjects: pickObjectCacheRef.current.size,
       visiblePickObjects,
     });
-    
-    // Report result
-    onPick(winnerId, ndcX, ndcY);
-  }, [camera, gl, scene, registrations, config, onPick, syncPickObjectTransforms, syncPickSceneCache]);
+  }, [camera, gl, scene, registrations, config, onPick, syncPickObjectTransforms, syncPickSceneCache, resolveWinner, startAsyncReadback, webgl2Context]);
   
   // Run picking on each frame (throttled)
   useFrame((_, delta) => {
+    const now = performance.now();
+
+    // Collect finished readbacks even while paused: they belong to picks issued
+    // before the pause and were paid for already.
+    const context = webgl2Context();
+    if (context) pollAsyncReadbacks(context, !isPaused);
+
     if (!config.enabled || isPaused) return;
     if (!mouseNDC.current) return;
 
     const frameMs = Math.max(1, delta * 1000);
     smoothedFrameMsRef.current = THREE.MathUtils.lerp(smoothedFrameMsRef.current, frameMs, 0.15);
     
-    const now = performance.now();
     const prevMouse = previousMouseNdcRef.current;
     const nextMouse = mouseNDC.current;
     const moved = !prevMouse
@@ -413,21 +580,16 @@ export function PickingRenderer({
     if (isIdleHover && !moved && !sceneMoved) return;
 
     const measuredFps = 1000 / Math.max(1, smoothedFrameMsRef.current);
-    // Picking follows the frame rate, so it is as responsive as the display allows:
-    // on a 165 Hz monitor it picks at 165, not at the 30 Hz floor the config names.
-    // The ceiling is only there to bound an unthrottled render loop measuring
-    // hundreds of frames a second, which picking would then pay for on every one of
-    // them. 240 is above every display in use and still bounds it.
     const dynamicMaxHz = 240;
 
     const activeHoverHz = Math.min(
-      dynamicMaxHz,
+      HOVER_PICK_MAX_HZ,
       Math.max(1, Math.max(config.hoverUpdateRate, measuredFps)),
     );
 
     const idleHoverHz = Math.max(
       8,
-      Math.min(dynamicMaxHz, Math.max(config.hoverUpdateRate * 0.5, activeHoverHz * 0.5)),
+      Math.min(HOVER_PICK_MAX_HZ, Math.max(config.hoverUpdateRate * 0.5, activeHoverHz * 0.5)),
     );
 
     const activeDragHz = Math.min(
@@ -452,14 +614,34 @@ export function PickingRenderer({
     syncPickSceneCache();
   });
 
-  // Cleanup any cached pick objects on unmount.
+  // Cleanup any cached pick objects and readback resources on unmount.
   useEffect(() => {
     return () => {
       for (const pickId of Array.from(pickObjectCacheRef.current.keys())) {
         disposePickObject(pickId);
       }
+      const context = webgl2Context();
+      if (context) {
+        for (const slot of asyncReadbacksRef.current) {
+          try {
+            context.deleteSync(slot.sync);
+            context.deleteBuffer(slot.pbo);
+          } catch {
+            // The context is gone; its objects are already released.
+          }
+        }
+        for (const pbo of pboPoolRef.current) {
+          try {
+            context.deleteBuffer(pbo);
+          } catch {
+            // Same.
+          }
+        }
+      }
+      asyncReadbacksRef.current = [];
+      pboPoolRef.current = [];
     };
-  }, [disposePickObject]);
+  }, [disposePickObject, webgl2Context]);
   
   // This component doesn't render anything visible
   return null;

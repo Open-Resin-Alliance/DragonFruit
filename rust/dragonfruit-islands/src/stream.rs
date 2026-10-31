@@ -4,8 +4,21 @@ use crate::rasterize::rasterize_triangles_for_island_scan;
 use crate::scan::scan_layer;
 use crate::tracker::IslandTracker;
 use dragonfruit_slicing_engine::geometry::Triangle;
+use rayon::prelude::*;
 
 const EPS: f64 = 1e-6;
+
+/**
+ * Layers rasterized ahead of the tracker, in parallel.
+ *
+ * Rasterization is the largest cost of a scan and is independent per layer;
+ * island tracking is not (each layer's labels depend on the previous one).
+ * Each chunk is sliced in parallel, then fed to the tracker in order, so the
+ * output is bit-identical to the sequential loop while the cores stay busy.
+ * The chunk bounds peak memory to this many RLE masks instead of the whole
+ * volume, which is the property the streaming pipeline exists for.
+ */
+const RASTERIZE_CHUNK_LAYERS: usize = 64;
 
 /// Run the island scan using a streaming pipeline.
 ///
@@ -80,56 +93,70 @@ pub fn run_island_scan_streaming(
     let mut prev_island_labels: Option<RleLabels> = None;
     let mut island_labels_per_layer = Vec::with_capacity(if store_labels { num_layers } else { 0 });
 
-    for l in 0..num_layers {
-        // Match TS: z = zOffset + (idx + 1) * layerHeight + 1e-6
-        let z = bbox_min_z + (l as f64 + 1.0) * job.layer_height_mm + 1e-6;
+    let mut chunk_start = 0usize;
+    while chunk_start < num_layers {
+        let chunk_end = (chunk_start + RASTERIZE_CHUNK_LAYERS).min(num_layers);
 
-        // 1. Slice and rasterize the current layer — only triangles whose
-        //    Z-span can intersect this layer's slice plane.
-        let bucket_tris: Vec<&Triangle> = z_buckets[l]
-            .iter()
-            .map(|&ti| &triangles[ti as usize])
+        // Rasterize the chunk in parallel. Every layer reads the same immutable
+        // triangle list and its own Z-bucket, so the results cannot depend on
+        // scheduling, and `collect` keeps them in layer order.
+        let masks: Vec<RleMask> = (chunk_start..chunk_end)
+            .into_par_iter()
+            .map(|l| {
+                // Match TS: z = zOffset + (idx + 1) * layerHeight + 1e-6
+                let z = bbox_min_z + (l as f64 + 1.0) * job.layer_height_mm + 1e-6;
+                let bucket_tris: Vec<&Triangle> = z_buckets[l]
+                    .iter()
+                    .map(|&ti| &triangles[ti as usize])
+                    .collect();
+                rasterize_triangles_for_island_scan(
+                    &bucket_tris,
+                    z,
+                    job.grid.width,
+                    job.grid.height,
+                    job.grid.origin_x,
+                    job.grid.origin_z,
+                    job.px_mm,
+                )
+            })
             .collect();
-        let current_mask = rasterize_triangles_for_island_scan(
-            &bucket_tris,
-            z,
-            job.grid.width,
-            job.grid.height,
-            job.grid.origin_x,
-            job.grid.origin_z,
-            job.px_mm,
-        );
 
-        // 2. Scan candidates against previous layer
-        let lr = scan_layer(
-            &current_mask,
-            prev_mask.as_ref(),
-            job.px_mm,
-            job.support_buffer_mm,
-            job.connectivity,
-        );
+        for (offset, current_mask) in masks.into_iter().enumerate() {
+            let l = chunk_start + offset;
 
-        // 3. Track islands sequentially
-        let island_labels = tracker.process_layer(
-            l as u32,
-            &lr.labels,
-            &lr.components,
-            prev_island_labels.as_ref(),
-            &lr.solid_mask,
-            job.candidate_only,
-        );
+            // Scan candidates against previous layer
+            let lr = scan_layer(
+                &current_mask,
+                prev_mask.as_ref(),
+                job.px_mm,
+                job.support_buffer_mm,
+                job.connectivity,
+            );
 
-        // 4. Update window (older layers are dropped from memory here)
-        prev_mask = Some(current_mask);
-        prev_island_labels = Some(island_labels.clone());
+            // Track islands sequentially
+            let island_labels = tracker.process_layer(
+                l as u32,
+                &lr.labels,
+                &lr.components,
+                prev_island_labels.as_ref(),
+                &lr.solid_mask,
+                job.candidate_only,
+            );
 
-        if store_labels {
-            island_labels_per_layer.push(island_labels);
+            // Update window (older layers are dropped from memory here)
+            prev_mask = Some(current_mask);
+            prev_island_labels = Some(island_labels.clone());
+
+            if store_labels {
+                island_labels_per_layer.push(island_labels);
+            }
+
+            if let Some(cb) = on_progress {
+                cb(l as u32 + 1, num_layers as u32);
+            }
         }
 
-        if let Some(cb) = on_progress {
-            cb(l as u32 + 1, num_layers as u32);
-        }
+        chunk_start = chunk_end;
     }
 
     tracker.finalize_islands(num_layers.saturating_sub(1) as u32);

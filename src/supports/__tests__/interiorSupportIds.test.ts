@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { interiorSupportIds } from '../SupportProxyMeshLayer';
+import { interiorSupportIds, isInteriorContact } from '../interiorSupportGeometry';
 import { contactEndpointsFor, SUPPORT_TYPES } from '../supportTypeRegistry';
 import type { SupportState } from '../types';
 
@@ -142,4 +142,35 @@ test('the key carries the entity\'s own type, so two types cannot collide on an 
     assert.ok(ids.has(`branch:${shared}`), 'the branch key');
     assert.ok(ids.has(`leaf:${shared}`), 'the leaf key');
     assert.equal(ids.size, 2, 'two keys, not one');
+});
+
+
+test('an unstamped contact is classified by the cavity test, never shown by default', () => {
+    // Auto-generated/imported supports carry no placementSurface; the old
+    // Support-mode path returned true for those, so every support stayed
+    // visible in interior view. The predicate must consult the geometry.
+    const state = stateWithContacts('exterior');
+    for (const descriptor of SUPPORT_TYPES) {
+        const collection = state[descriptor.location.key] as unknown as Record<string, Record<string, unknown>>;
+        for (const entity of Object.values(collection ?? {})) {
+            for (const { field } of contactEndpointsFor(descriptor.id)) {
+                const c = entity[field] as { pos: unknown } | undefined;
+                entity[field] = { pos: c?.pos };
+            }
+        }
+    }
+
+    const inside = interiorSupportIds(
+        state,
+        (c, modelId) => isInteriorContact(c, modelId, () => true),
+        () => false,
+    );
+    const outside = interiorSupportIds(
+        state,
+        (c, modelId) => isInteriorContact(c, modelId, () => false),
+        () => false,
+    );
+
+    assert.ok(inside.size > 0, 'the cavity test decides an unstamped contact');
+    assert.equal(outside.size, 0, 'an unstamped contact the cavity test rejects stays hidden');
 });

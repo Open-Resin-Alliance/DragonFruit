@@ -1,7 +1,7 @@
 # Internal docs
 
-**Not published.** `mkdocs.yml` excludes this directory (`exclude_docs`), so
-nothing here reaches <https://dragonfruit-slicer.com>. It is still versioned in
+**Not published.** `website/src/data/docs-nav.json` excludes this directory (the
+`exclude` list), so nothing here reaches <https://dragonfruit-slicer.com>. It is still versioned in
 git and still reviewed in PRs — "internal" means unpublished, not unowned.
 
 ## What belongs here

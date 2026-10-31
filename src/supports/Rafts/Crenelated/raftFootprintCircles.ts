@@ -10,6 +10,9 @@ export const RAFT_UNASSIGNED_MODEL_KEY = '__raft_unassigned__';
  */
 export type RaftFootprintSource = Pick<SupportState, SupportCollectionKey>;
 
+/** The base circles of every model's roots, keyed by raft model key. */
+export type RaftBaseCirclesByModel = Map<string, SupportBaseCircle[]>;
+
 type CollectRaftBaseCirclesOptions = {
   modelFilterId?: string | null;
   excludeModelId?: string | null;
@@ -66,8 +69,8 @@ export function fromRaftModelKey(
 export function collectRaftBaseCirclesByModel(
   state: RaftFootprintSource,
   options: CollectRaftBaseCirclesOptions = {},
-): Map<string, SupportBaseCircle[]> {
-  const byModel = new Map<string, SupportBaseCircle[]>();
+): RaftBaseCirclesByModel {
+  const byModel: RaftBaseCirclesByModel = new Map();
   const excludedModelIdSet = toExcludedModelIdSet(options.excludedModelIds);
   const fallbackModelKey = options.fallbackModelKey ?? RAFT_UNASSIGNED_MODEL_KEY;
 

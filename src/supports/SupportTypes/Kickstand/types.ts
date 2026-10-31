@@ -34,6 +34,12 @@ export interface KickstandBuildInput {
     collisionMesh?: THREE.Mesh;
     /** How far a run may lean from vertical, from the shaft setting. */
     maxShaftAngleDeg?: number;
+    /**
+     * Prefix for every id this build creates. Auto-bracing passes one so a
+     * repeat run builds the same forest; manual placement leaves it unset and
+     * gets uuids.
+     */
+    idSeed?: string;
 }
 
 export interface KickstandBuildResult {

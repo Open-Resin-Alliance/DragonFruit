@@ -1434,7 +1434,7 @@ fn extract_layer_png(archive_path: &PathBuf, layer: u32, output: &PathBuf) -> Re
 
     // Collect file listing first (before borrowing archive mutably for entry read)
     let file_listing: Vec<String> = (0..archive.len())
-        .filter_map(|i| archive.by_index(i).ok().map(|e| e.name().to_string()))
+        .filter_map(|i| archive.by_index(i).ok().and_then(|e| e.name().ok().map(|n| n.into_owned())))
         .take(20)
         .collect();
 
@@ -1500,7 +1500,9 @@ fn cmd_print_inspect(input: &PathBuf, json_output: bool) -> Result<(), String> {
 
     for i in 0..total_entries {
         if let Ok(entry) = archive.by_index(i) {
-            let name = entry.name().to_string();
+            let Ok(name) = entry.name().map(|n| n.into_owned()) else {
+                continue;
+            };
             let size = entry.size();
             total_uncompressed += size;
 

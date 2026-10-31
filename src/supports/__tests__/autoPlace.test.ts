@@ -1249,3 +1249,88 @@ test('the same island sizes a thicker trunk on a big model than on a small one',
 
     setModelMesh('model-a', null);
 });
+
+test('an internal contact is bridged inside the cavity, never routed to the plate', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+    initializeBVH();
+
+    // Shell with a floor opening (a legal plate route) and an island on the
+    // inner ceiling. Without the cavity classification the router takes that
+    // opening and the support leaves through the shell.
+    const outer = 18, wall = 2, top = 16, hole = 8, strip = (outer - hole) / 2;
+    const shell = mergeGeometries([
+        new THREE.BoxGeometry(outer, outer, wall).translate(0, 0, top - wall / 2),
+        new THREE.BoxGeometry(wall, outer, top).translate(-(outer - wall) / 2, 0, top / 2),
+        new THREE.BoxGeometry(wall, outer, top).translate((outer - wall) / 2, 0, top / 2),
+        new THREE.BoxGeometry(outer, wall, top).translate(0, -(outer - wall) / 2, top / 2),
+        new THREE.BoxGeometry(outer, wall, top).translate(0, (outer - wall) / 2, top / 2),
+        new THREE.BoxGeometry(outer, strip, wall).translate(0, (hole + strip) / 2, wall / 2),
+        new THREE.BoxGeometry(outer, strip, wall).translate(0, -(hole + strip) / 2, wall / 2),
+        new THREE.BoxGeometry(strip, hole, wall).translate((hole + strip) / 2, 0, wall / 2),
+        new THREE.BoxGeometry(strip, hole, wall).translate(-(hole + strip) / 2, 0, wall / 2),
+    ])!;
+    accelerateGeometry(shell);
+    setModelMesh('model-a', new THREE.Mesh(shell));
+
+    // The void boundary, in the marching-cubes convention: face normals point
+    // into the cavity (reverse a BoxGeometry's winding).
+    const cavity = new THREE.BoxGeometry(14, 14, 12).translate(0, 0, 8);
+    const cavityIndex = cavity.getIndex()!;
+    for (let i = 0; i < cavityIndex.count; i += 3) {
+        const b = cavityIndex.getX(i + 1);
+        cavityIndex.setX(i + 1, cavityIndex.getX(i + 2));
+        cavityIndex.setX(i + 2, b);
+    }
+    cavityIndex.needsUpdate = true;
+    accelerateGeometry(cavity);
+
+    const island: DetectedIsland = {
+        ...makeIsland('inner', 4, 0, 14, 196),
+        source: 'overhang',
+        overhangAngleDeg: 0,
+        surfaceNormal: { x: 0, y: 0, z: -1 },
+    };
+    const result = runAutoPlace(
+        [island],
+        'model-a',
+        { debugSkipAutoBracing: true },
+        new THREE.Mesh(cavity),
+    );
+
+    assert.equal(result.placed.trunk, 0, 'no plate trunk for an internal contact');
+    assert.ok((result.placed.stick ?? 0) + (result.placed.twig ?? 0) > 0,
+        'the contact is bridged to a cavity surface');
+    assert.equal(result.rejectedCandidates, 0);
+
+    setModelMesh('model-a', null);
+    disposeHandlers();
+});
+
+test('a voxel island on a steep side wall gets no support', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+    initializeBVH();
+
+    const geometry = new THREE.BoxGeometry(10, 10, 10).translate(0, 0, 20);
+    accelerateGeometry(geometry);
+    setModelMesh('model-a', new THREE.Mesh(geometry));
+
+    // Side contact, normal ±X, inclination 90° > the 45° self-support angle.
+    const result = runAutoPlace(
+        [makeIsland('side', 5, 0, 20, 10)],
+        'model-a',
+        { debugSkipAutoBracing: true },
+    );
+
+    assert.equal(result.placed.trunk, 0, 'no shaft is spent on a self-supporting wall');
+    assert.equal(Object.keys(getSnapshot().trunks).length, 0);
+    assert.equal(Object.keys(getSnapshot().sticks).length, 0);
+
+    setModelMesh('model-a', null);
+    disposeHandlers();
+});

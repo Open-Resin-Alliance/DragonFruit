@@ -29,19 +29,72 @@ let resolvedHoverSnapshot: ResolvedHoverState = EMPTY_RESOLVED_HOVER_STATE;
 
 let orbitActive = false;
 let marqueeActive = false;
+/**
+ * A release that should not republish hover yet.
+ *
+ * Orbit modes with damping keep moving the camera after pointerup. Publishing
+ * `orbitActive = false` there makes every `useResolvedHoverState` subscriber
+ * render while the camera is still gliding, and the render is long enough to
+ * drop a frame (the release stutter). The hover stays suppressed until the
+ * pointer actually moves again, or another input starts.
+ */
+let resumeHoverOnPointerMove = false;
+let resumeHoverTimer: number | null = null;
+/** Damping on the slowest feel preset is settled well inside this window. */
+const RESUME_HOVER_AFTER_RELEASE_MS = 350;
 
-const handleOrbitStart = () => setOrbitActive(true);
-const handleOrbitEnd = () => setOrbitActive(false);
-const handlePointerEnd = () => setOrbitActive(false);
+const handleOrbitStart = () => {
+  resumeHoverOnPointerMove = false;
+  if (resumeHoverTimer !== null) {
+    window.clearTimeout(resumeHoverTimer);
+    resumeHoverTimer = null;
+  }
+  setOrbitActive(true);
+};
+const endOrbitAfterRelease = () => {
+  if (!orbitActive) return;
+  orbitActive = false;
+  resumeHoverOnPointerMove = true;
+  if (resumeHoverTimer === null) {
+    resumeHoverTimer = window.setTimeout(resumeHover, RESUME_HOVER_AFTER_RELEASE_MS);
+  }
+};
+const handleOrbitEnd = () => endOrbitAfterRelease();
+const handlePointerEnd = () => endOrbitAfterRelease();
+const handlePointerMoveResume = (event: PointerEvent) => {
+  if (!resumeHoverOnPointerMove || event.buttons !== 0) return;
+  resumeHover();
+};
+const handlePointerDownResume = () => {
+  if (resumeHoverOnPointerMove) resumeHover();
+};
+const handleWheelResume = () => {
+  if (resumeHoverOnPointerMove) resumeHover();
+};
 const handleMarqueeActive = (event: Event) => {
     const customEvent = event as CustomEvent<{ active?: boolean }>;
     setMarqueeActive(!!customEvent.detail?.active);
 };
 const handleMarqueeEnd = () => setMarqueeActive(false);
 const handleWindowBlur = () => {
+    resumeHoverOnPointerMove = false;
+    if (resumeHoverTimer !== null) {
+        window.clearTimeout(resumeHoverTimer);
+        resumeHoverTimer = null;
+    }
     setOrbitActive(false);
     setMarqueeActive(false);
 };
+
+/** Publish the release once the user asks for hover again by moving the pointer. */
+function resumeHover() {
+    resumeHoverOnPointerMove = false;
+    if (resumeHoverTimer !== null) {
+        window.clearTimeout(resumeHoverTimer);
+        resumeHoverTimer = null;
+    }
+    notify();
+}
 
 function notify() {
     listeners.forEach((listener) => listener());
@@ -71,6 +124,9 @@ function ensureInitialized() {
     window.addEventListener('picking-orbit-end', handleOrbitEnd);
     window.addEventListener('pointerup', handlePointerEnd, true);
     window.addEventListener('pointercancel', handlePointerEnd, true);
+    window.addEventListener('pointermove', handlePointerMoveResume, true);
+    window.addEventListener('pointerdown', handlePointerDownResume, true);
+    window.addEventListener('wheel', handleWheelResume, { capture: true, passive: true });
     window.addEventListener('support-marquee-selection-active', handleMarqueeActive as EventListener);
     window.addEventListener('support-marquee-selection-end', handleMarqueeEnd);
     window.addEventListener('blur', handleWindowBlur);
@@ -93,6 +149,11 @@ function teardownInitializedResources() {
     unsubscribeModelHover = null;
     orbitActive = false;
     marqueeActive = false;
+    resumeHoverOnPointerMove = false;
+    if (resumeHoverTimer !== null) {
+        window.clearTimeout(resumeHoverTimer);
+        resumeHoverTimer = null;
+    }
     initialized = false;
 }
 

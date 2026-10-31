@@ -10,6 +10,7 @@ import type { CameraTrackpadModifierKey, CameraTrackpadPrimaryAction } from '@/c
 import type { CameraScopeMode, WorkspaceCameraDefaults } from '@/components/settings/workspaceCameraPreferences';
 import { FOV_MIN, FOV_MAX } from '@/components/settings/cameraFovPreferences';
 import { SegmentedControl, SettingRow } from '@/components/atoms';
+import { MODEL_EDGE_OVERLAY_ENABLED } from '@/hooks/useStlGeometry';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { useLocaleFormat } from '@/hooks/useLocaleFormat';
 
@@ -223,7 +224,8 @@ export function CameraSettingsTab({
         </SettingRow>
       </section>
 
-      {/* ── Rendering — Higher Contrast Model Edges ── */}
+      {/* Rendering — Higher Contrast Model Edges (disabled while its build path is reworked) */}
+      {MODEL_EDGE_OVERLAY_ENABLED && (
       <section
         className="rounded-md border p-3"
         style={{
@@ -268,6 +270,7 @@ export function CameraSettingsTab({
           />
         </SettingRow>
       </section>
+      )}
 
       <section
         className="rounded-md border p-3"

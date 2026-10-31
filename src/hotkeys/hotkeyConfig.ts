@@ -178,6 +178,11 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
             modifier: 'ctrl+shift',
             description: 'Toggle diagnostics modal'
         },
+        RENDER_PROFILER: {
+            key: 'p',
+            modifier: 'ctrl+shift',
+            description: 'Toggle render profiler overlay'
+        },
         FORCE_UPDATE: {
             key: 'u',
             modifier: 'ctrl+shift',

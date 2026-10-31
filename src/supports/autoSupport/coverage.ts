@@ -255,6 +255,9 @@ export function buildGapFillCandidates(
     const coverageTarget = (settings.coverageTargetPercent ?? 95) / 100;
     for (const region of overhangIslands) {
         if (region.source !== 'overhang') continue;
+        // Internal ceilings use the sparser interior grid; re-densifying them
+        // through coverage convergence defeats that.
+        if (region.interior) continue;
         if (!region.contactVoxels || region.contactVoxels.count === 0) continue;
         const radius = coverageRadiusForArea(region.areaMm2 ?? 0);
         if (computeRegionCoverage(region, tips, radius) >= coverageTarget) continue;
@@ -271,6 +274,7 @@ export function buildGapFillCandidates(
                 zHeight: c.z,
                 priority: 0,
                 gridPoint: true,
+                interior: region.interior,
             });
         }
     }

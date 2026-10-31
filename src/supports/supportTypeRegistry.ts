@@ -523,6 +523,22 @@ export interface SupportTypeDescriptor {
      */
     jointDragMovesContacts: boolean;
     /**
+     * Whether dragging this type's contact tip rebuilds geometry beyond the
+     * cone itself.
+     *
+     * The instance-attribute tip-drag path writes one contact cone per frame
+     * and nothing else, so it can only serve a type whose drag mutates exactly
+     * one declared cone. Trunk, leaf, stump and stick anchor the cone's socket
+     * at pointer-down, so every segment and joint stays where it was. A branch
+     * re-searches its socket and rebuilds its shaft, and a twig also re-aims
+     * both disks and moves its disk-end joint, so both stay on the detail path.
+     *
+     * Read together with `contactEndpointsFor`: a type is cone-only only when
+     * this is false AND the dragged field is a declared cone. Never derive the
+     * answer from a list of type names.
+     */
+    tipDragRebuildsGeometry: boolean;
+    /**
      * Whether a joint drag may turn this type's segments into curves.
      *
      * Segments already bezier keep updating regardless; this is whether the
@@ -629,6 +645,7 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         upper: { kind: 'cone', field: 'contactCone' },
         isAutoPlaced: true,
         hasSegments: true,
+        tipDragRebuildsGeometry: false,
         label: 'Trunks',
         singular: 'trunk',
         location: { store: 'support', key: 'trunks' },
@@ -684,6 +701,7 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         hostsKickstand: true,
         isAutoPlaced: true,
         hasSegments: true,
+        tipDragRebuildsGeometry: true,
         label: 'Branches',
         singular: 'branch',
         location: { store: 'support', key: 'branches' },
@@ -738,6 +756,7 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         hostsKickstand: false,
         isAutoPlaced: true,
         hasSegments: false,
+        tipDragRebuildsGeometry: false,
         label: 'Leaves',
         singular: 'leaf',
         location: { store: 'support', key: 'leaves' },
@@ -783,6 +802,7 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         hostsKickstand: true,
         isAutoPlaced: true,
         hasSegments: true,
+        tipDragRebuildsGeometry: true,
         label: 'Twigs',
         singular: 'twig',
         location: { store: 'support', key: 'twigs' },
@@ -827,6 +847,7 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         hostsKickstand: true,
         isAutoPlaced: true,
         hasSegments: true,
+        tipDragRebuildsGeometry: false,
         label: 'Sticks',
         singular: 'stick',
         location: { store: 'support', key: 'sticks' },
@@ -877,6 +898,7 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         hostsKickstand: true,
         isAutoPlaced: false,
         hasSegments: false,
+        tipDragRebuildsGeometry: false,
         label: 'Braces',
         singular: 'brace',
         location: { store: 'support', key: 'braces' },
@@ -934,6 +956,7 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         hostsKickstand: true,
         isAutoPlaced: true,
         hasSegments: true,
+        tipDragRebuildsGeometry: false,
         label: 'Stumps',
         singular: 'stump',
         location: { store: 'support', key: 'stumps' },
@@ -986,6 +1009,7 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         hostsKickstand: true,
         isAutoPlaced: false,
         hasSegments: true,
+        tipDragRebuildsGeometry: false,
         label: 'Kickstands',
         singular: 'kickstand',
         location: { store: 'support', key: 'kickstands' },
@@ -1436,6 +1460,19 @@ type LateralStabiliserGenerator = (request: LateralStabiliserRequest) => unknown
 const LATERAL_STABILISERS = new Map<SupportTypeId, LateralStabiliserGenerator>();
 
 /**
+ * Derived type lists, computed on first use and invalidated by a registration.
+ *
+ * Auto-bracing asks these per sample; rebuilding the filter+map+Set each time
+ * was measurable. The arrays depend only on the static `SUPPORT_TYPES` and the
+ * stabiliser registrations, so a registration is the one thing that can change
+ * an answer, and it drops the caches.
+ */
+let lateralStabiliserIdsCache: SupportTypeId[] | null = null;
+let lateralStabiliserIdSet: Set<string> | null = null;
+let autoBraceableIdsCache: SupportTypeId[] | null = null;
+let autoBraceableIdSet: Set<string> | null = null;
+
+/**
  * Registered from the type's own folder. A type that can stand a shaft up
  * without a partner registers here; auto-bracing asks rather than importing.
  */
@@ -1444,16 +1481,23 @@ export function registerLateralStabiliser(
     generate: LateralStabiliserGenerator,
 ): void {
     LATERAL_STABILISERS.set(typeId, generate);
+    lateralStabiliserIdsCache = null;
+    lateralStabiliserIdSet = null;
+    autoBraceableIdsCache = null;
+    autoBraceableIdSet = null;
 }
 
 /** Every registered stabiliser, in registry order. */
 export function lateralStabiliserTypes(): readonly SupportTypeId[] {
-    return SUPPORT_TYPES.filter((d) => LATERAL_STABILISERS.has(d.id)).map((d) => d.id);
+    return (lateralStabiliserIdsCache ??= SUPPORT_TYPES
+        .filter((d) => LATERAL_STABILISERS.has(d.id))
+        .map((d) => d.id));
 }
 
 /** Whether this type is a lateral stabiliser, generated beside a group. */
 export function isLateralStabiliserType(typeId: SupportTypeId | string): boolean {
-    return (lateralStabiliserTypes() as readonly string[]).includes(typeId);
+    lateralStabiliserIdSet ??= new Set(lateralStabiliserTypes());
+    return lateralStabiliserIdSet.has(typeId);
 }
 
 /** The type whose brace snap target is its contact cone (leaf), if any. */
@@ -1470,15 +1514,19 @@ export function braceSnapConeType(): SupportTypeId | null {
  * after load, and a test pins it.
  */
 export function autoBraceableShaftTypes(): readonly SupportTypeId[] {
-    const stabilisers = new Set(lateralStabiliserTypes());
-    return SUPPORT_TYPES
-        .filter((d) => d.isAutoBraceable && d.hasSegments && !stabilisers.has(d.id))
-        .map((d) => d.id);
+    if (!autoBraceableIdsCache) {
+        const stabilisers = new Set(lateralStabiliserTypes());
+        autoBraceableIdsCache = SUPPORT_TYPES
+            .filter((d) => d.isAutoBraceable && d.hasSegments && !stabilisers.has(d.id))
+            .map((d) => d.id);
+    }
+    return autoBraceableIdsCache;
 }
 
 /** Whether this type's shafts may be braced to each other. */
 export function isAutoBraceableShaftType(typeId: SupportTypeId | string): boolean {
-    return (autoBraceableShaftTypes() as readonly string[]).includes(typeId);
+    autoBraceableIdSet ??= new Set(autoBraceableShaftTypes());
+    return autoBraceableIdSet.has(typeId);
 }
 
 /** Runs one type's generator, or returns nothing when it registers none. */
@@ -2010,7 +2058,10 @@ export function countSupportCollections(
     snapshot: Pick<SupportState, SupportCollectionKey>,
 ): Record<string, number> {
     const counts: Record<string, number> = {};
-    for (const key of SUPPORT_COLLECTION_KEYS) counts[key] = Object.keys(snapshot[key]).length;
+    // A state that never went through the store (a snapshot restored from disk,
+    // a debug read of a pair) may carry only the canonical `supports` map. The
+    // diagnostic must not take the renderer down over a missing view.
+    for (const key of SUPPORT_COLLECTION_KEYS) counts[key] = Object.keys(snapshot[key] ?? {}).length;
     return counts;
 }
 

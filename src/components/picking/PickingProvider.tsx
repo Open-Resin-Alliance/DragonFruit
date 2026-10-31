@@ -7,7 +7,7 @@
 
 "use client";
 
-import React, { useState, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import * as THREE from 'three';
 import { useThree } from '@react-three/fiber';
 import { PickingContext, EMPTY_PICK_RESULT } from './PickingContext';
@@ -80,6 +80,15 @@ export function PickingProvider({
   
   // Drag state
   const [isDragging, setIsDragging] = useState(false);
+
+  /**
+   * Whether the right mouse button is held, which is the app's orbit gesture.
+   * GPU picking is display-truth for hover/click and irrelevant mid-orbit; the
+   * first right-drag after a mode switch otherwise runs a pick pass whose shader
+   * programs are compiled lazily, which is the short stutter before orbiting
+   * becomes smooth. Left-button selection keeps picking normally.
+   */
+  const [rightButtonDown, setRightButtonDown] = useState(false);
   
   // Registration map (pickId -> registration)
   const registrationsRef = useRef<Map<number, PickableRegistration>>(new Map());
@@ -92,6 +101,27 @@ export function PickingProvider({
   
   // Get the GL context for coordinate conversion
   const { gl } = useThree();
+
+  useEffect(() => {
+    const canvas = gl.domElement;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.button === 2) setRightButtonDown(true);
+    };
+    const handlePointerUp = (event: PointerEvent) => {
+      if (event.button === 2) setRightButtonDown(false);
+    };
+    const handleBlur = () => setRightButtonDown(false);
+    canvas.addEventListener('pointerdown', handlePointerDown, true);
+    window.addEventListener('pointerup', handlePointerUp, true);
+    window.addEventListener('pointercancel', handlePointerUp, true);
+    window.addEventListener('blur', handleBlur);
+    return () => {
+      canvas.removeEventListener('pointerdown', handlePointerDown, true);
+      window.removeEventListener('pointerup', handlePointerUp, true);
+      window.removeEventListener('pointercancel', handlePointerUp, true);
+      window.removeEventListener('blur', handleBlur);
+    };
+  }, [gl]);
   
   /**
    * Register a pickable object.
@@ -302,7 +332,7 @@ export function PickingProvider({
         registrations={registrationsRef.current}
         config={config}
         isPaused={isPaused}
-        isDragging={isDragging}
+        isDragging={isDragging || rightButtonDown}
         onPick={handlePick}
         mouseNDC={mouseNDCRef}
       />

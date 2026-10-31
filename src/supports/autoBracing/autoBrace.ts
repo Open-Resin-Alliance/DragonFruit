@@ -110,7 +110,16 @@ function sortSupports(a: SupportSample, b: SupportSample): number {
     if (a.modelId !== b.modelId) return a.modelId.localeCompare(b.modelId);
     if (a.sortAnchor.x !== b.sortAnchor.x) return a.sortAnchor.x - b.sortAnchor.x;
     if (a.sortAnchor.y !== b.sortAnchor.y) return a.sortAnchor.y - b.sortAnchor.y;
-    return a.supportId.localeCompare(b.supportId);
+    // Generated kickstands carry random ids; comparing those first made the
+    // brace pass order-dependent on a uuid. Resolve coincident plan anchors by
+    // height and kind before falling back to the id.
+    if (a.topReferenceZ !== b.topReferenceZ) return a.topReferenceZ - b.topReferenceZ;
+    if (a.bottomReferenceZ !== b.bottomReferenceZ) return a.bottomReferenceZ - b.bottomReferenceZ;
+    if (a.supportKind !== b.supportKind) return a.supportKind.localeCompare(b.supportKind);
+    // Ids are random for generated supports. At equal geometry the stable sort
+    // keeps the insertion order, which is the placement order; comparing ids
+    // here made the brace pass differ between runs.
+    return 0;
 }
 
 function createUniqueIdFactory(prefix: string, existingIds: Set<string>) {
@@ -1223,23 +1232,33 @@ export function runAutoBracing(): AutoBraceResult {
 }
 
 /**
- * Removes every brace of one model and returns how many went.
+ * Removes every brace and kickstand of one model and returns how many went.
  *
- * The whole sweep is one cascade, one state write, and one history entry: the
- * payload is a before/after pair, which is what makes it one undo step rather
- * than one per brace. Removing brace by brace rebuilt the dependency graph per
- * brace, so Clear All was quadratic in brace count and froze the main thread.
+ * A kickstand is a lateral stabiliser — a brace that stands on its own root
+ * instead of spanning two supports — so Clear All takes both. The whole sweep
+ * is one cascade, one state write, and one history entry: the payload is a
+ * before/after pair, which is what makes it one undo step rather than one per
+ * member. Removing member by member rebuilt the dependency graph each time, so
+ * Clear All was quadratic in brace count and froze the main thread.
  */
 export function clearBracesForModel(modelId: string | null | undefined): number {
     if (!modelId) return 0;
 
-    const braceIds = Object.values(getSnapshot().braces)
-        .filter((brace) => brace.modelId === modelId)
-        .map((brace) => brace.id);
-    if (braceIds.length === 0) return 0;
+    const snapshot = getSnapshot();
+    const seeds = [
+        ...Object.values(snapshot.braces)
+            .filter((brace) => brace.modelId === modelId)
+            .map((brace) => ({ collection: 'braces' as const, id: brace.id })),
+        ...Object.values(snapshot.kickstands)
+            // A kickstand written before the entity carried `modelId` is owned
+            // by the model of its root; the exporter reads it the same way.
+            .filter((kickstand) => (kickstand.modelId ?? snapshot.roots[kickstand.rootId]?.modelId) === modelId)
+            .map((kickstand) => ({ collection: 'kickstands' as const, id: kickstand.id })),
+    ];
+    if (seeds.length === 0) return 0;
 
-    const before = cloneSupportState(getSnapshot());
-    removeSupportEntities(braceIds.map((id) => ({ collection: 'braces', id })));
+    const before = cloneSupportState(snapshot);
+    removeSupportEntities(seeds);
 
     pushSupportHistory({
         type: SUPPORT_AUTO_BRACE_REPLACE,
@@ -1248,7 +1267,7 @@ export function clearBracesForModel(modelId: string | null | undefined): number 
             after: cloneSupportState(getSnapshot()),
         },
     });
-    return braceIds.length;
+    return seeds.length;
 }
 
 type BuildSnapshotResult = AutoBraceResult & { snapshot: SupportState };

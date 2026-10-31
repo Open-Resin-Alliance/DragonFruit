@@ -30,6 +30,12 @@ interface TwigRendererProps {
   isInteractable?: boolean;
   deferStraightShaftsToSceneBatch?: boolean;
   deferInteractionToSceneBatch?: boolean;
+  /**
+   * Whether the scene's batched shaft pass draws this twig's unselected shafts.
+   * With it, a tapered segment's pick shell must not mount: the batch's own pick
+   * index answers for the rod, and a second shell would make one click fire twice.
+   */
+  isBatchable?: boolean;
   baseColor?: string;
   hoverColor?: string;
   selectedColor?: string;
@@ -45,6 +51,7 @@ export const TwigRenderer = React.memo(function TwigRenderer({
   isInteractable = true,
   deferStraightShaftsToSceneBatch = false,
   deferInteractionToSceneBatch = false,
+  isBatchable = false,
   baseColor = '#ff8800',
   hoverColor,
   selectedColor = '#80fffd',
@@ -301,9 +308,12 @@ export const TwigRenderer = React.memo(function TwigRenderer({
     const canBatchShaft = !isSelected && !deferStraightShaftsToSceneBatch && seg.type !== 'bezier' && Math.abs(diameterStart - diameterEnd) < 1e-6;
 
     // Tapered + unselected: ShaftRenderer omits its pick mesh, so add an
-    // invisible pick-only cylinder inside pickRef matching the visible rod.
+    // invisible pick-only cylinder inside pickRef matching the visible rod --
+    // unless the scene's shaft batch owns the rod, which picks it from its own
+    // index at the same diameter.
     if (
       !canBatchShaft
+      && !isBatchable
       && !isSelected
       && seg.type !== 'bezier'
       && Math.abs(diameterStart - diameterEnd) >= 1e-6
@@ -379,6 +389,7 @@ export const TwigRenderer = React.memo(function TwigRenderer({
           emissive={visuals.emissive}
           emissiveIntensity={visuals.emissiveIntensity}
           selectedColor={visuals.selectedColor}
+          parentSupportId={twig.id}
           isParentSelected={isSelected}
           isInteractable={isInteractable}
           isSelected={isSegSelected}
@@ -509,6 +520,7 @@ registerSupportDetailRenderer('twig', () => ({
     component: TwigRenderer as never,
     noClipping: ({ isSelected }) => isSelected,
     extraProps: ({ isSelected, isBatchable }) => ({
+        isBatchable,
         deferStraightShaftsToSceneBatch: !isSelected && isBatchable,
         deferInteractionToSceneBatch: !isSelected && isBatchable,
     }),

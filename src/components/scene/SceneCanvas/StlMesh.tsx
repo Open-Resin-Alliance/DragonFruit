@@ -2,6 +2,7 @@
 
 import React, { useEffect } from 'react';
 import * as THREE from 'three';
+import { MODEL_EDGE_OVERLAY_ENABLED } from '@/hooks/useStlGeometry';
 import { useFrame, useThree } from '@react-three/fiber';
 import { usePicking } from '@/components/picking';
 import { MeshShaderMaterial, type MeshShaderType } from '@/features/shaders/mesh';
@@ -30,7 +31,9 @@ import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { emitImmediateModelHover } from '@/supports/interaction/pointerOcclusion';
 import { MARQUEE_CANDIDATE_TINT_FACTOR } from '@/utils/marqueeCandidateTint';
 import { getSupportPlacementGuideZ } from './supportPlacementGuideStore';
+import { useOptimisticSelectedModelId } from './optimisticModelSelection';
 import { BAKED_OCCLUSION_ATTRIBUTE, bakedOcclusionStrength, bakedOcclusionVersion, getBakedOcclusionServerVersion, subscribeToBakedOcclusionVersions } from '@/features/scene/bakedOcclusion';
+import { prewarmSupportPlacementAsync } from '@/supports/PlacementLogicV3/supportPlacementPrewarm';
 
 // Scratch raycaster reused for clip-zone fallback raycasts.
 const _clipFallbackRaycaster = new THREE.Raycaster();
@@ -337,6 +340,15 @@ function StlMeshComponent({
   children?: React.ReactNode;
 }) {
   // Access GPU picking state to detect gizmo hover
+  // A viewport click announces its model before the page selection render
+  // lands; only the clicked mesh changes tint for that frame.
+  const optimisticSelectedModelId = useOptimisticSelectedModelId();
+  // A pending single-selection click is authoritative for the tint, so the
+  // previous model clears in the same frame instead of waiting for the commit.
+  const isEffectivelySelected = optimisticSelectedModelId !== null
+    ? optimisticSelectedModelId === modelId
+    : !!isSelected;
+
   // Note: This works because StlMesh is rendered inside PickingProvider
   const { hit } = usePicking(); // Import usePicking at top if not already used inside StlMesh
   const [isPointerHovered, setIsPointerHovered] = React.useState(false);
@@ -487,6 +499,46 @@ function StlMeshComponent({
       }
     };
   }, [modelId, register, unregister]);
+
+  /**
+   * Warm the distance field and column maps for the model that can receive
+   * placement, so the first Support hover never pays the router's cold-start
+   * build.
+   *
+   * The build runs in the column-map worker, but preparing it copies the
+   * model's position array, which is large enough to matter on a plate. So it
+   * runs in either editing mode, once the model has settled: opening Support
+   * later then finds the map already built, instead of the first hover paying
+   * for it. Prepare warms the active clearance only; Support warms the pinned
+   * presets' maps as well.
+   */
+  React.useEffect(() => {
+    if ((mode !== 'prepare' && mode !== 'support') || !isActiveModel) return;
+    const mesh = internalMeshRef.current;
+    if (!mesh) return;
+
+    let cancelled = false;
+    const warm = () => {
+      if (cancelled) return;
+      void prewarmSupportPlacementAsync(
+        mesh,
+        () => cancelled,
+        { allClearances: mode === 'support' },
+      ).catch(() => {
+        // The warmup is opportunistic; an unaccelerated mesh must not break
+        // the scene. The hover path reports the same problem if it matters.
+      });
+    };
+    // Debounced: a transform drag replaces the timer on every frame, so the
+    // worker is asked once the model settles rather than once per pointer move.
+    // Long enough that a gesture's release is settled, never on its frame.
+    const handle = window.setTimeout(warm, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(handle);
+    };
+  }, [mode, isActiveModel, geometry, transform]);
 
   const defaultPosition = React.useMemo(() => new THREE.Vector3(0, 0, 0), []);
   const defaultQuaternion = React.useMemo(() => new THREE.Quaternion(), []);
@@ -747,7 +799,7 @@ if (uDitherAmount > 0.0) {
     const selectionStrength = Math.min(1, Math.max(0.88, selectedTintStrength ?? 0.75));
     const hoverStrength = Math.min(1, Math.max(0.65, hoverTintStrength ?? 0.5));
 
-    if (isSelected) {
+    if (isEffectivelySelected) {
       return base.clone().lerp(supportTint, selectionStrength).getStyle();
     }
 
@@ -760,7 +812,7 @@ if (uDitherAmount > 0.0) {
     }
 
     return base.getStyle();
-  }, [hoverTintStrength, isHoveredModel, isMarqueeHovered, isSelected, selectedTintStrength]);
+  }, [hoverTintStrength, isHoveredModel, isMarqueeHovered, isEffectivelySelected, selectedTintStrength]);
 
   const supportSectionOpacity = React.useMemo(() => {
     if (typeof revealGhostOpacity === 'number') {
@@ -840,6 +892,10 @@ if (uDitherAmount > 0.0) {
   }, [inlineBoundsTint, outOfBoundsMax, outOfBoundsMin, outOfBoundsStripeColor, showOutOfBoundsOverlay]);
 
   const supportPlacementGuideMaterial = React.useMemo(() => {
+    // Only the active model in placement mode draws the guide; every other mounted
+    // model used to build a ShaderMaterial it never rendered and then write its
+    // uniform on every frame.
+    if (!supportPlacementGuideEnabled) return null;
     const material = new THREE.ShaderMaterial({
       transparent: true,
       depthTest: true,
@@ -909,7 +965,7 @@ if (uDitherAmount > 0.0) {
     });
 
     return material;
-  }, [planes]);
+  }, [planes, supportPlacementGuideEnabled]);
 
   React.useEffect(() => {
     if (!supportPlacementGuideMaterial) return;
@@ -929,6 +985,7 @@ if (uDitherAmount > 0.0) {
   // a render pass quantizes it, which steps the line by z / tan(surface tilt)
   // on screen.
   useFrame(() => {
+    if (!supportPlacementGuideMaterial) return;
     const planeZ = getSupportPlacementGuideZ();
     supportPlacementGuideMaterial.uniforms.uPlaneZ.value =
       typeof planeZ === 'number' && Number.isFinite(planeZ) ? planeZ : 0;
@@ -1003,6 +1060,7 @@ if (uDitherAmount > 0.0) {
 
   return (
     <group
+      userData={{ dfPerfGroup: 'models' }}
       ref={(node) => {
         groupRef.current = node;
         if (typeof meshRef === 'function') meshRef(node);
@@ -1521,7 +1579,7 @@ if (uDitherAmount > 0.0) {
         ) : (
           <MeshShaderMaterial
             shaderType={baseShaderType}
-            isSelected={!!isSelected}
+            isSelected={isEffectivelySelected}
             isHovered={isHoveredModel || isMarqueeHovered}
             useVertexColors={hasVertexColorAttribute}
             hoverTintColor={hoverTintColor}
@@ -1550,7 +1608,7 @@ if (uDitherAmount > 0.0) {
           <mesh geometry={cavityGeometry} position={meshLocalOffset} renderOrder={1} raycast={() => null}>
             <MeshShaderMaterial
               shaderType={baseShaderType}
-              isSelected={!!isSelected}
+              isSelected={isEffectivelySelected}
               isHovered={isHoveredModel || isMarqueeHovered}
               useVertexColors={false}
               hoverTintColor={hoverTintColor}
@@ -1577,7 +1635,7 @@ if (uDitherAmount > 0.0) {
         </mesh>
       )}
 
-      {!interiorView && higherContrastModelEdges && !showOpaqueWireOverlay && baseShaderType !== 'wireframe' && !blockerEditMode && edgeLinesGeometry && (
+      {!interiorView && MODEL_EDGE_OVERLAY_ENABLED && higherContrastModelEdges && !showOpaqueWireOverlay && baseShaderType !== 'wireframe' && !blockerEditMode && edgeLinesGeometry && (
         <lineSegments geometry={edgeLinesGeometry} position={meshLocalOffset} renderOrder={2} raycast={() => null}>
           <lineBasicMaterial color={edgeLinesColor} transparent opacity={0.55} depthTest polygonOffset polygonOffsetFactor={-1} polygonOffsetUnits={-1} clippingPlanes={planes} />
         </lineSegments>

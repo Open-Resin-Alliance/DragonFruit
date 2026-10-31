@@ -13,24 +13,25 @@ import { noteActivity } from '@/utils/debug/heartbeatContext';
 import {
     buildSupportPlacementPreviewBatch,
     resolvePlacementPreviewMaterial,
-    type InteriorContactFilter,
     type InteriorContactPoint,
     type PlacementPreviewBatch,
     type PlacementPreviewDisk,
     type PlacementPreviewTaperedShaft,
+    type InteriorContactFilter,
     type PlacementSurface,
     type Vec3Like,
 } from './supportPlacementPreviewMath';
 import { buildSegmentPreviewBatch } from './previewGeometry/seam';
+import { createCavityTester } from './interiorSupportGeometry';
 import './previewGeometry/registerBuiltinPreviewBuilders';
 import {
     anyContactMatches,
     collectOwnedRootIds,
     contactEndpointsFor,
     parseKnotHostId,
-    knotHostId,
     isConeKnotHost,
     isSpanKnotHost,
+    knotHostId,
     spanKnotHostType,
     coneKnotHostType,
     getSupportTypeBySelectionCategory,
@@ -47,6 +48,31 @@ import './detailRenderer/registerBuiltinDetailRenderers';
 import { detailRenderersFor, type DetailRendererContext } from './detailRenderer/seam';
 import { InstancedShaftGroup, type InstancedShaft } from './SupportPrimitives/Shaft/InstancedShaftGroup';
 import { InstancedJointGroup, type InstancedJoint } from './SupportPrimitives/Joint/InstancedJointGroup';
+import { InstancedJointBatch } from './instanced/InstancedJointBatch';
+import { InstancedShaftBatch } from './instanced/InstancedShaftBatch';
+import { InstancedContactConeBatch } from './instanced/InstancedContactConeBatch';
+import { InstancedRootBatch } from './instanced/InstancedRootBatch';
+import {
+    SUPPORT_DETAIL_DRAG_PREVIEW,
+    SUPPORT_INSTANCED_CONES,
+    SUPPORT_INSTANCED_CONE_DRAG,
+    SUPPORT_INSTANCED_DRAG,
+    SUPPORT_INSTANCED_JOINTS,
+    SUPPORT_INSTANCED_ROOTS,
+    SUPPORT_INSTANCED_SHAFTS,
+} from './instanced/flags';
+import { InstancedJointDragBatch } from './instanced/InstancedJointDragBatch';
+import { InstancedConeDragBatch } from './instanced/InstancedConeDragBatch';
+import { DraggedSupportContext } from './instanced/dragSuppression';
+import { getJointDragSession, getJointDragSessionServerSnapshot, subscribeJointDragSession } from './instanced/instanceDragWriter';
+import { getConeDragSession, getConeDragSessionServerSnapshot, subscribeConeDragSession } from './instanced/coneDragWriter';
+import type { JointDragSceneContext } from './instanced/instanceDragWriter';
+import type { DragHostKnot, JointDragSlotMap } from './instanced/dragSlots';
+import type { SupportInstanceBatch } from './instanced/supportInstanceBatch';
+import { buildJointSlotIndex } from './instanced/jointSlots';
+import { buildConeSlotIndex } from './instanced/coneSlots';
+import { buildRootSlotIndex, type RootSlotGroup } from './instanced/rootSlots';
+import { buildShaftSlotIndex, type ShaftSlotGroup } from './instanced/shaftSlots';
 import { InstancedRootsGroup, type InstancedRoot } from './SupportPrimitives/Roots/InstancedRootsGroup';
 import { inlineRootBatchInstance } from './SupportPrimitives/Roots/inlineRootBatch';
 import { batchesInView, BATCHED_PASSES } from './rendering/batchCoverage';
@@ -68,6 +94,7 @@ import { BezierGizmoManager } from './Curves/BezierGizmo/BezierGizmoManager';
 import { ContactDisk, SupportMode, BezierSegment, type Stump, type Brace, type Knot, type Leaf, type Roots, type Segment, type SupportEntityAny, type Twig, type SupportOrigin, type Vec3 } from './types';
 import { resolveTwigDiameterAtSegmentT } from './SupportTypes/Twig/twigTaper';
 import { bezierSegmentToBatchedShaft, braceBezierToBatchedShaft } from './Curves/batchedBezierShaft';
+import { isCurvedBatchedShaft } from './Curves/batchedBezierTubeGeometry';
 import { EMPTY_PLACEMENT_PREVIEWS, type SupportData, type SupportPlacementPreviews } from './rendering';
 import { useJointCreationState } from './SupportPrimitives/Joint/jointCreationState';
 import { subscribeToSettings, getSettingsSnapshot } from './Settings/state';
@@ -148,6 +175,18 @@ interface SupportJointSet {
     joints: InstancedJoint[];
 }
 
+/**
+ * The fields the scene-batched pointer handlers read from a root.
+ *
+ * The legacy per-colour groups pass their `InstancedRoot` and the capacity batch
+ * passes its slot record; both carry these, so neither has to pretend to be the
+ * other to reach the same click and hover path.
+ */
+type SceneBatchedRootRef = { supportId?: string; modelId?: string };
+
+/** The fields the scene-batched pointer handlers read from a cone; see `SceneBatchedRootRef`. */
+type SceneBatchedConeRef = { id: string; supportId?: string; modelId?: string };
+
 const BATCHED_SHAFT_RADIAL_SEGMENTS = 10;
 const BATCHED_SHAFT_LOW_RADIAL_SEGMENTS = 6;
 const BATCHED_SHAFT_HIGH_INSTANCE_THRESHOLD = 1200;
@@ -208,6 +247,8 @@ const SCENE_JOINT_DIAMETER_BLEND_MM = JOINT_DIAMETER_OFFSET_MM * 0.75;
  *  pre-compensate to keep the exact KnotRenderer sphere size. */
 const KNOT_BATCH_DIAMETER_PRECOMPENSATION_MM = SCENE_JOINT_DIAMETER_BLEND_MM - JOINT_DIAMETER_OFFSET_MM;
 const EMPTY_SUPPORT_ID_LIST: readonly string[] = Object.freeze([]);
+/** A tip drag hides cones only; no joint id of the support is suppressed. */
+const EMPTY_DRAGGED_PRIMITIVE_IDS: ReadonlySet<string> = new Set<string>();
 const EMPTY_KNOT_DRAG_SHAFT_SEGMENTS_BY_ID: Record<string, never> = Object.freeze({});
 const FREEZE_DEPENDENT_PREVIEW_DURING_JOINT_DRAG = true;
 
@@ -562,8 +603,42 @@ function supportCollectionRefs(state: SupportState, ...extra: unknown[]): readon
     return [...SUPPORT_COLLECTION_KEYS.map((key) => state[key]), ...extra];
 }
 
+/**
+ * A snapshot that only changes when something other than hover changes.
+ *
+ * SupportRenderer reads the whole support store, so a hover write used to hand
+ * it a new snapshot, invalidate every collection-derived memo, re-traverse the
+ * scene for clipping and rebuild a ~1000-element tree — measured at 84–112 ms of
+ * React commit per hovered support. Hover is visual state; the world does not
+ * change, so the heavy derivations take this snapshot instead. Live `state` is
+ * still read for the hover overlays and the selected-support primitive hover.
+ */
+function statesEqualExceptHover(a: SupportState, b: SupportState): boolean {
+    if (a === b) return true;
+    const aKeys = Object.keys(a);
+    const bKeys = Object.keys(b);
+    if (aKeys.length !== bKeys.length) return false;
+    for (const key of aKeys) {
+        if (key === 'hoveredId' || key === 'hoveredCategory') continue;
+        if ((a as unknown as Record<string, unknown>)[key]
+            !== (b as unknown as Record<string, unknown>)[key]) return false;
+    }
+    return true;
+}
+
+let cachedNonHoverSnapshot: SupportState | null = null;
+function getSnapshotWithoutHover(): SupportState {
+    const next = getSnapshot();
+    if (cachedNonHoverSnapshot && statesEqualExceptHover(cachedNonHoverSnapshot, next)) {
+        return cachedNonHoverSnapshot;
+    }
+    cachedNonHoverSnapshot = next;
+    return next;
+}
+
 export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, navigationLodActive = false, hidePlateContactPrimitives = false, clipLower, clipUpper, activeModelId = null, selectedModelIds = [], marqueeCandidateModelIds = EMPTY_SUPPORT_ID_LIST, hoverModelId = null, modelDropOffsetsById, modelFilterId = null, excludeModelId = null, excludeModelIds = [], passive = false, disableSelectionAndHover = false, ghostOpacity = 1, ghostRenderOrder = 100000, placementPreviews = EMPTY_PLACEMENT_PREVIEWS, interiorView = false, cavityGeometryByModelId, modelWorldInverseById, pointerSceneryModelIds }, ref) => {
     const state = useSyncExternalStore(subscribe, getSnapshot);
+    const stableState = useSyncExternalStore(subscribe, getSnapshotWithoutHover);
     noteActivity('support-mode:renderer');
     const resolvedSelection = useResolvedSelectionState();
     // These debug flags are all this renderer reads from the support settings, and
@@ -582,6 +657,30 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     // The eye button's navigation view is the simple render plus cones reduced
     // to lines, so it takes every gate below and adds the cone handling.
     const simpleRender = debugSimple || discsOnly;
+    /**
+     * Whether the instanced shaft batch owns the straight and tapered shafts.
+     *
+     * The simple and navigation views keep the legacy line-and-pick-tube pass:
+     * their pick tubes are re-sized per viewport, which is a second slot list
+     * that changes with the camera. So the batch is Support-mode full detail only.
+     */
+    const shaftBatchActive = SUPPORT_INSTANCED_SHAFTS && !simpleRender;
+    /**
+     * Whether the instanced contact-cone batch owns the unselected cones.
+     *
+     * Support-mode full detail only, like the shaft and joint batches: the
+     * simple and navigation views draw the contact primitive alone and add a
+     * line where the body was, which is a different primitive set, not a
+     * different transform.
+     */
+    const coneBatchActive = SUPPORT_INSTANCED_CONES && !simpleRender;
+    /**
+     * Whether the instanced root batch owns the unselected plate roots.
+     *
+     * Same `!simpleRender` gate: a simple or navigation root is disk-only and
+     * adds a line up its axis, so the batch does not model it.
+     */
+    const rootBatchActive = SUPPORT_INSTANCED_ROOTS && !simpleRender;
     const raftSettings = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
     // The knots kickstands host and the roots they own, derived from the
     // registry's edges rather than a kickstand-specific store.
@@ -710,22 +809,27 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const braceList = useMemo(() => Object.values(state.braces), [state.braces]);
     const stumpList = useMemo(() => Object.values(state.stumps), [state.stumps]);
     const kickstandList = useMemo(() => Object.values(state.kickstands), [state.kickstands]);
+    // Cavity classification for supports that carry no `placementSurface`
+    // (auto-generated and imported ones). Built lazily per cavity and reused
+    // for every contact.
+    const cavityTester = useMemo(
+        () => createCavityTester(cavityGeometryByModelId, modelWorldInverseById),
+        [cavityGeometryByModelId, modelWorldInverseById],
+    );
     const matchesInteriorContact = useMemo<InteriorContactFilter>(() => {
         if (!interiorView) return () => true;
+        // Interior view needs a cavity; without one, keep the layer's old
+        // contract of showing everything rather than hiding it all.
+        if (!cavityGeometryByModelId || cavityGeometryByModelId.size === 0) return () => true;
 
-        return (contact, _modelId) => {
+        return (contact, modelId) => {
             if (!contact) return false;
             if (contact.placementSurface === 'interior') return true;
             if (contact.placementSurface === 'exterior') return false;
-            // placementSurface is undefined for imported (LYS) supports — show them
-            // in interior view so the user can see how all supports relate to the
-            // cavity. The BVH/raycasting tests are unreliable on non-watertight
-            // cavity meshes.
-            return true;
+            // Unstamped: ask the cavity, the same test the Prepare proxy uses.
+            return cavityTester.isOnInteriorSide(contact.pos, modelId);
         };
-    }, [interiorView, cavityGeometryByModelId, modelWorldInverseById]);
-    const knotList = useMemo(() => Object.values(state.knots), [state.knots]);
-    const kickstandKnotList = useMemo(() => Object.values(kickstandKnotsById), [kickstandKnotsById]);
+    }, [interiorView, cavityGeometryByModelId, cavityTester]);
     const matchesInteriorBrace = useMemo(() => {
         if (!interiorView) return (_brace: Brace) => true;
 
@@ -782,8 +886,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         };
         // The loop above walks every shafted type from the registry, so the
         // whole snapshot is the dependency.
-    }, [interiorView, state, matchesInteriorContact]);
+    }, [interiorView, stableState, matchesInteriorContact]);
 
+    const knotList = useMemo(() => Object.values(state.knots), [state.knots]);
+    const kickstandKnotList = useMemo(() => Object.values(kickstandKnotsById), [kickstandKnotsById]);
     const entityModelIdByKnotId = useMemo(() => {
         const map = new Map<string, string | undefined>();
         for (const [id, modelId] of Object.entries(supportRenderLookup.entityModelIdByKnotId)) {
@@ -821,7 +927,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return undefined;
-    }, [state, entityModelIdByKnotId]);
+    }, [stableState, entityModelIdByKnotId]);
 
     const isModelVisible = React.useCallback((modelId?: string, supportId?: string) => {
         const resolvedModelId = resolveSupportModelId(modelId, supportId);
@@ -1241,8 +1347,26 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         // eslint-disable-next-line react-hooks/exhaustive-deps -- the collections it walks, not the snapshot: a hover ran this walk over every root for nothing.
     }, supportCollectionRefs(state, interactionHooksEnabled));
 
+    /**
+     * The scene-owned values a joint drag needs, published for the gesture
+     * layer. A ref, not a prop or a context value: `useJointInteraction` runs
+     * before the producer memos below exist, and the gesture reads it at pointer
+     * down, long after this render's layout effect has filled it.
+     */
+    const jointDragSceneRef = React.useRef<JointDragSceneContext | null>(null);
+    /**
+     * The scene's joint batch, handed up by `InstancedJointBatch`. The drag
+     * writer moves the leaf host-knot balls that ride the dragged support's own
+     * segments through it — they are scene geometry and never resized here.
+     */
+    const [sceneJointBatch, setSceneJointBatch] = React.useState<SupportInstanceBatch | null>(null);
+    const handleSceneJointBatchReady = React.useCallback(
+        (batch: SupportInstanceBatch | null) => setSceneJointBatch(batch),
+        [],
+    );
+
     // Enable joint dragging
-    useJointInteraction(isInteractable);
+    useJointInteraction(isInteractable, jointDragSceneRef);
     // Enable knot sliding
     useKnotInteraction(isInteractable);
 
@@ -1581,6 +1705,15 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         ? { typeId: activeJointDragPreview.kind as SupportTypeId, support: activeJointDragPreview.support as { id: string } }
         : null), [activeJointDragPreview]);
 
+    /**
+     * The preview substituted into the scene's render lists. With the detail
+     * renderer owning its own preview, the list keeps the committed entity: the
+     * preview would otherwise invalidate every producer and rewrite every
+     * instanced batch on each publish, which was the per-frame cost of a joint
+     * drag. Null here is stable, so the list memo does not re-run at all.
+     */
+    const previewEntityForLists = SUPPORT_DETAIL_DRAG_PREVIEW ? null : activePreviewEntity;
+
     const renderLeavesById = useMemo(() => {
         if (previewLeavesById.size === 0) return state.leaves;
         const leaves = Object.create(state.leaves) as typeof state.leaves;
@@ -1591,11 +1724,178 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [state.leaves, previewLeavesById]);
 
     const renderBracesById = state.braces;
-    // Historically braces were ghosted during joint-drag preview because their
-    // live geometry couldn't be trusted. Now that brace endpoint knots ride
-    // the live preview overrides (see enableBraceLivePreview), the brace can
-    // render at its true live position instead of going transparent.
-    const ghostedBraceIdSet = useMemo(() => new Set<string>(), []);
+    /**
+     * Braces hosted on the dragged support's segments are frozen during a joint
+     * drag (the dependent-preview cascade is off), so they would otherwise sit
+     * at their old positions as if they were still correct. Ghost them for the
+     * gesture: the existing brace renderer fades them and drops their pointer
+     * interaction, which reads as "this will be recalculated on release".
+     *
+     * The instanced drag does not publish `activeJointDragPreview`, so the
+     * gesture's own session supplies the segment ids.
+     */
+    const ghostJointDragSession = useSyncExternalStore(
+        subscribeJointDragSession,
+        getJointDragSession,
+        getJointDragSessionServerSnapshot,
+    );
+    const ghostedBraceIdSet = useMemo(() => {
+        const ids = new Set<string>();
+        const slotMap = ghostJointDragSession && !ghostJointDragSession.ended
+            ? ghostJointDragSession.slotMap
+            : null;
+        if (!slotMap) return ids;
+
+        // A knot can name a segment *or* a joint as its parent shaft, and a
+        // pseudo-shaft (`segment:<id>`, `brace:<id>`, …) names its host entity.
+        // The old segment-only lookup missed branches hanging off a joint.
+        const draggedHostIds = new Set<string>([
+            ...slotMap.segments.map((slot) => slot.id),
+            ...slotMap.joints.map((slot) => slot.id),
+        ]);
+        const onDraggedSupport = (knot: Knot): boolean => {
+            if (draggedHostIds.has(knot.parentShaftId)) return true;
+            if (parseKnotHostId(knot.parentShaftId)?.entityId === slotMap.supportId) return true;
+            // The host lookup is the same index the renderer's selection/hover
+            // uses: if it says this knot belongs to the dragged support, the knot
+            // is on it whatever id its parentShaftId spells.
+            if (supportRenderLookup.supportIdByKnotId[knot.id] === slotMap.supportId) return true;
+            if (supportRenderLookup.supportIdBySegmentId[knot.parentShaftId] === slotMap.supportId) return true;
+            return supportRenderLookup.supportIdByJointId[knot.parentShaftId] === slotMap.supportId;
+        };
+
+        for (const knot of Object.values(state.knots)) {
+            if (!onDraggedSupport(knot)) continue;
+            for (const braceId of braceIdsByKnotId.get(knot.id) ?? []) ids.add(braceId);
+        }
+        return ids;
+    }, [braceIdsByKnotId, ghostJointDragSession, state.knots, supportRenderLookup]);
+
+    /**
+     * Every entity hosted on a knot of the dragged support: branches, leaves,
+     * twigs, braces and kickstands. Their geometry is frozen for the gesture and
+     * recalculated on release, so they are drawn translucent; the effect below
+     * dims their materials without touching any renderer.
+     */
+    const ghostedDependentSupportIdSet = useMemo(() => {
+        const ids = new Set<string>(ghostedBraceIdSet);
+        const slotMap = ghostJointDragSession && !ghostJointDragSession.ended
+            ? ghostJointDragSession.slotMap
+            : null;
+        if (!slotMap) return ids;
+
+        const draggedHostIds = new Set<string>([
+            ...slotMap.segments.map((slot) => slot.id),
+            ...slotMap.joints.map((slot) => slot.id),
+        ]);
+        const onDraggedSupport = (knot: Knot): boolean => {
+            if (draggedHostIds.has(knot.parentShaftId)) return true;
+            if (parseKnotHostId(knot.parentShaftId)?.entityId === slotMap.supportId) return true;
+            // The host lookup is the same index the renderer's selection/hover
+            // uses: if it says this knot belongs to the dragged support, the knot
+            // is on it whatever id its parentShaftId spells.
+            if (supportRenderLookup.supportIdByKnotId[knot.id] === slotMap.supportId) return true;
+            if (supportRenderLookup.supportIdBySegmentId[knot.parentShaftId] === slotMap.supportId) return true;
+            return supportRenderLookup.supportIdByJointId[knot.parentShaftId] === slotMap.supportId;
+        };
+
+        const entitiesByHostKnot = new Map<string, Array<{ id: string; segments?: Array<{ id: string }> }>>();
+        for (const collection of Object.values(state)) {
+            if (!collection || typeof collection !== 'object') continue;
+            for (const entity of Object.values(collection as Record<string, unknown>)) {
+                if (!entity || typeof entity !== 'object') continue;
+                const record = entity as {
+                    id?: unknown;
+                    parentKnotId?: unknown;
+                    hostKnotId?: unknown;
+                    segments?: Array<{ id: string }>;
+                };
+                if (typeof record.id !== 'string') continue;
+                const host = typeof record.parentKnotId === 'string'
+                    ? record.parentKnotId
+                    : typeof record.hostKnotId === 'string'
+                        ? record.hostKnotId
+                        : null;
+                if (!host) continue;
+                const list = entitiesByHostKnot.get(host) ?? [];
+                list.push({ id: record.id, segments: record.segments });
+                entitiesByHostKnot.set(host, list);
+            }
+        }
+
+        const pendingKnotIds: string[] = [];
+        const visitedKnots = new Set<string>();
+        for (const knot of Object.values(state.knots)) {
+            if (onDraggedSupport(knot)) pendingKnotIds.push(knot.id);
+        }
+
+        while (pendingKnotIds.length > 0) {
+            const knotId = pendingKnotIds.pop()!;
+            if (visitedKnots.has(knotId)) continue;
+            visitedKnots.add(knotId);
+            const hosted = entitiesByHostKnot.get(knotId);
+            if (!hosted) continue;
+            for (const entity of hosted) {
+                ids.add(entity.id);
+                for (const segment of entity.segments ?? []) {
+                    for (const childKnotId of knotIdsByParentShaftId.get(segment.id) ?? []) {
+                        if (!visitedKnots.has(childKnotId)) pendingKnotIds.push(childKnotId);
+                    }
+                }
+            }
+        }
+
+        return ids;
+    }, [ghostedBraceIdSet, ghostJointDragSession, knotIdsByParentShaftId, state, supportRenderLookup]);
+
+    /** What the ghost pass changed, so the next pass restores the originals. */
+    const ghostedDependentMaterialsRef = React.useRef(new Map<THREE.Material, {
+        transparent: boolean;
+        opacity: number;
+        depthWrite: boolean;
+    }>());
+
+    React.useLayoutEffect(() => {
+        const root = groupRef.current;
+        if (!root) return;
+
+        for (const [material, original] of ghostedDependentMaterialsRef.current) {
+            material.transparent = original.transparent;
+            material.opacity = original.opacity;
+            material.depthWrite = original.depthWrite;
+            material.needsUpdate = true;
+        }
+        ghostedDependentMaterialsRef.current.clear();
+
+        if (ghostedDependentSupportIdSet.size === 0) return;
+
+        root.traverse((object) => {
+            const mesh = object as THREE.Mesh;
+            if (!mesh.material) return;
+            let current: THREE.Object3D | null = object;
+            let ghosted = false;
+            while (current && current !== root) {
+                if (current.userData?.ghostedDependent === true) { ghosted = true; break; }
+                current = current.parent;
+            }
+            if (!ghosted) return;
+
+            const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+            for (const material of materials) {
+                if (ghostedDependentMaterialsRef.current.has(material)) continue;
+                ghostedDependentMaterialsRef.current.set(material, {
+                    transparent: material.transparent,
+                    opacity: material.opacity,
+                    depthWrite: material.depthWrite,
+                });
+                material.transparent = true;
+                material.opacity = Math.min(0.32, material.opacity);
+                material.depthWrite = false;
+                material.needsUpdate = true;
+            }
+        });
+    }, [ghostedDependentSupportIdSet, stableState]);
+
     const renderKnotsById = useMemo(() => {
         if (!hasPreviewKnotOverrides) return state.knots;
         const knots = Object.create(state.knots) as typeof state.knots;
@@ -1670,8 +1970,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 list = list.map((entity) => knotDragOverridesById.get(entity.id) ?? entity);
             }
 
-            if (activePreviewEntity?.typeId === descriptor.id) {
-                const preview = activePreviewEntity.support as SupportEntityAny;
+            if (previewEntityForLists?.typeId === descriptor.id) {
+                const preview = previewEntityForLists.support as SupportEntityAny;
                 let replaced = false;
                 const next = list.map((entity) => {
                     if (entity.id !== preview.id) return entity;
@@ -1697,7 +1997,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return lists;
-    }, [state, knotDragOverridesById, activePreviewEntity, interiorView, matchesInteriorContact, matchesInteriorBrace]);
+    }, [stableState, knotDragOverridesById, previewEntityForLists, interiorView, matchesInteriorContact, matchesInteriorBrace]);
 
     /*
      * Thin typed reads of `renderListByType`, for the call sites below that
@@ -1759,15 +2059,26 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 const start = new THREE.Vector3(endpoints.start.x, endpoints.start.y, endpoints.start.z);
                 const end = new THREE.Vector3(endpoints.end.x, endpoints.end.y, endpoints.end.z);
 
-                // A declared taper on this segment: instancing needs one
-                // diameter, so a shaft whose ends differ leaves the batch.
+                // A declared taper on this segment: the legacy instanced batch
+                // has one diameter, so a shaft whose ends differ leaves it. Where
+                // the instanced shaft batch draws the type, a taper is a cone
+                // instance instead, so the segment keeps both ends and stays in
+                // the batch -- except a curved one: a merged bezier tube has one
+                // radius, so a tapered curve still goes to its detail renderer.
+                // The simple views have no batch, so there the drop still holds.
+                let diameter = segment.diameter;
+                let diameterEnd: number | undefined;
                 const tapersHere = taper
                     && (taper.segments === 'all' || index === entity.segments.length - 1);
                 if (tapersHere) {
                     const [a, b] = taper.from.map((path) => readNumberPath(entity, path));
                     if (a != null && b != null && Math.abs(a - b) >= 1e-6) {
-                        fullyBatchable = false;
-                        return;
+                        if (!shaftBatchActive || segment.type === 'bezier') {
+                            fullyBatchable = false;
+                            return;
+                        }
+                        diameter = a;
+                        diameterEnd = b;
                     }
                 }
 
@@ -1780,7 +2091,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     id: segment.id,
                     start: { x: start.x, y: start.y, z: start.z },
                     end: { x: end.x, y: end.y, z: end.z },
-                    diameter: segment.diameter,
+                    diameter,
+                    ...(diameterEnd !== undefined ? { diameterEnd } : {}),
                     supportId: entity.id,
                     modelId: entity.modelId,
                 });
@@ -1792,7 +2104,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [isModelVisible]);
+    }, [isModelVisible, shaftBatchActive]);
 
 
     const braceShaftsBySupport = useMemo(() => {
@@ -1815,13 +2127,17 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 isTapered: isTaperedBrace,
             } = braceSpanDiameters(brace, startKnot, endKnot);
 
-            // Tapered braces are rendered in the detailed path so we can preserve
-            // dynamic start/end diameters. Uniform braces remain batched for speed.
-            if (isTaperedBrace) {
+            // A tapered brace carries both ends: the instanced batch draws the
+            // taper as a cone instance, so it stays in the batch. Without that
+            // batch -- or for a curved brace, whose merged tube has one radius --
+            // the brace keeps its dynamic start/end diameters on the detailed path.
+            if (isTaperedBrace && (!shaftBatchActive || brace.curve?.type === 'bezier')) {
                 continue;
             }
 
-            const diameter = (startHostDiameter + endHostDiameter) * 0.5;
+            const diameter = isTaperedBrace
+                ? startHostDiameter
+                : (startHostDiameter + endHostDiameter) * 0.5;
             const segmentId = knotHostId(spanKnotHostType(), brace.id);
             const shafts = brace.curve?.type === 'bezier'
                 ? [braceBezierToBatchedShaft(
@@ -1840,6 +2156,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     start: startKnot.pos,
                     end: endKnot.pos,
                     diameter,
+                    ...(isTaperedBrace ? { diameterEnd: endHostDiameter } : {}),
                     supportId: brace.id,
                     modelId: brace.modelId,
                 }];
@@ -1852,7 +2169,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [renderBraceList, braceRenderKnotsById, isModelVisible]);
+    }, [renderBraceList, braceRenderKnotsById, isModelVisible, shaftBatchActive]);
 
     /**
      * Plain shaft sets per type, keyed by type id then by support. `ownsRoot`
@@ -2123,6 +2440,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             for (const entity of renderListByType[descriptor.id]) {
                 if (!isModelVisible(entity.modelId, entity.id)) continue;
                 if (selectedIds.has(entity.id)) continue;
+                if (ghostedDependentSupportIdSet.has(entity.id)) continue;
                 const jointSet = jointsBySupport.get(entity.id);
                 if (!jointSet) continue;
 
@@ -2134,6 +2452,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         for (const leaf of renderLeafList) {
             if (!isModelVisible(leaf.modelId, leaf.id)) continue;
             if (selectedLeafIds.has(leaf.id)) continue;
+            if (ghostedDependentSupportIdSet.has(leaf.id)) continue;
             const jointSet = leafJointsBySupport.get(leaf.id);
             if (!jointSet) continue;
 
@@ -2154,7 +2473,62 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         applyDropToVec3Like,
         dimNonSelected,
         resolveSceneSupportColor,
+        ghostedDependentSupportIdSet,
     ]);
+
+    /**
+     * The one instanced joint batch's slot list: the producer's joints
+     * flattened, in its draw order, so slot index is instance id.
+     *
+     * `sceneBatchedJointGroups` already applied model visibility, the
+     * selected-support exclusion, the leaf host-knot set, the model drop offset
+     * and the scene diameter blend, and it re-derives through
+     * `leafJointsBySupport` when `renderKnotsById` changes — so a knot-drag
+     * preview moves the batch's balls without a second dependency here.
+     *
+     * Null while the flag is off: the legacy per-colour batches and the two
+     * joint overlays keep rendering exactly as they did.
+     */
+    const jointSlotIndex = useMemo(() => (
+        SUPPORT_INSTANCED_JOINTS ? buildJointSlotIndex(sceneBatchedJointGroups) : null
+    ), [sceneBatchedJointGroups]);
+
+    /**
+     * The scene knots as a joint drag needs them: the writer moves the leaf
+     * host-knot balls that ride the dragged support's own segments, because
+     * those are scene-batch instances and would otherwise freeze mid-drag.
+     *
+     * Positions stay in entity space; the writer applies the model drop itself.
+     */
+    const jointDragHostKnots = React.useMemo<DragHostKnot[]>(() => {
+        if (!SUPPORT_INSTANCED_DRAG) return [];
+        const knots: DragHostKnot[] = [];
+        for (const knot of Object.values(state.knots)) {
+            knots.push({
+                id: knot.id,
+                parentShaftId: knot.parentShaftId,
+                pos: knot.pos,
+                ...(knot.t !== undefined ? { t: knot.t } : {}),
+                ...(knot.diameter !== undefined ? { diameter: knot.diameter } : {}),
+            });
+        }
+        return knots;
+    }, [state.knots]);
+
+    const jointDragScene = React.useMemo<JointDragSceneContext>(() => ({
+        hostKnots: jointDragHostKnots,
+        // The scene batch's instance per joint id, so a knot ball on a moving
+        // segment can be written at the instance the scene already draws it.
+        sharedJointSlotById: jointSlotIndex?.byPrimitive ?? null,
+        dropOffsetZFor: resolveModelDropOffsetZ,
+    }), [jointDragHostKnots, jointSlotIndex, resolveModelDropOffsetZ]);
+
+    React.useLayoutEffect(() => {
+        jointDragSceneRef.current = jointDragScene;
+        return () => {
+            jointDragSceneRef.current = null;
+        };
+    }, [jointDragScene]);
 
     /**
      * Groups a type's unselected shafts by model and colour for instanced
@@ -2173,6 +2547,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!isModelVisible(entity.modelId, entity.id)) continue;
             if (selectedIds.has(entity.id)) continue;
             if (skip?.(entity)) continue;
+            // A dependent support is drawn by its detail renderer in ghost form
+            // during a drag; leaving its shafts in the batch would draw the same
+            // geometry opaque beside it.
+            if (ghostedDependentSupportIdSet.has(entity.id)) continue;
 
             const shaftSet = shaftsBySupport.get(entity.id);
             if (!shaftSet) continue;
@@ -2184,7 +2562,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return Array.from(grouped.values());
-    }, [isModelVisible, resolveSceneSupportColor, applyDropToInstancedShaft]);
+    }, [isModelVisible, resolveSceneSupportColor, applyDropToInstancedShaft, ghostedDependentSupportIdSet]);
 
 
     const sceneBatchedBraceShaftGroups = useMemo(() => {
@@ -2249,6 +2627,40 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         (typeId: SupportTypeId) => sceneBatchedShaftGroupsByType[typeId] ?? EMPTY_SHAFT_GROUPS,
         [sceneBatchedShaftGroupsByType, EMPTY_SHAFT_GROUPS],
     );
+
+    /**
+     * The one instanced shaft batch's slot list: the producer's groups flattened,
+     * in the order the per-type pass draws them, so instance id is what a pointer
+     * event reports.
+     *
+     * The groups already applied model visibility, the selected/ghosted
+     * exclusion, the model drop offset, the taper diameters and the per-support
+     * colour, so nothing here re-filters (a second filter would be a second
+     * answer). Registry order, because that is the order the legacy pass draws
+     * and therefore the order the layers sit in; the brace's own set stands in
+     * for it exactly as it does there.
+     *
+     * Null when the batch is not the owner: the legacy per-colour groups and both
+     * shaft overlays keep rendering exactly as they did.
+     */
+    const shaftSlotIndex = useMemo(() => {
+        if (!shaftBatchActive) return null;
+        noteActivity('support-mode:shaft-slot-index');
+
+        const groups: ShaftSlotGroup[] = [];
+        let braceGroupsAdded = false;
+        for (const descriptor of SUPPORT_TYPES) {
+            if (getSupportTypeDescriptor(descriptor.id).segmentSelectionPrefix) {
+                if (braceGroupsAdded) continue;
+                braceGroupsAdded = true;
+                groups.push(...sceneBatchedBraceShaftGroups);
+                continue;
+            }
+            groups.push(...sceneBatchedShaftsOf(descriptor.id));
+        }
+
+        return buildShaftSlotIndex(groups);
+    }, [shaftBatchActive, sceneBatchedBraceShaftGroups, sceneBatchedShaftsOf]);
 
     /**
      * The pick tubes the simple views mount at zero alpha, per batch, keyed by
@@ -2366,6 +2778,31 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         return byType;
     }, [renderListByType, selectedOf, state.roots, groupRootsForSceneBatch, readNumberPath, simpleRender]);
 
+    /**
+     * The one instanced root batch's slot list: the producer's root groups
+     * flattened in registry order, so slot index is draw order.
+     *
+     * `sceneBatchedRootGroupsByType` already applied the hide-plate switch, model
+     * visibility, the selected-support exclusion, the inline-root mapping, the
+     * model drop offset and the per-type shaft-diameter fallback. The writer
+     * applies the 0.01 mm render lift, because that is a rendering offset the
+     * producer's `basePos` never carries.
+     *
+     * Null while the flag is off or the view is simple: the legacy per-colour
+     * groups, their axis lines and the two root overlays keep rendering exactly
+     * as they did.
+     */
+    const rootSlotIndex = useMemo(() => {
+        if (!rootBatchActive) return null;
+        noteActivity('support-mode:root-slot-index');
+        const groups: RootSlotGroup[] = [];
+        for (const descriptor of SUPPORT_TYPES) {
+            const typeGroups = sceneBatchedRootGroupsByType[descriptor.id];
+            if (typeGroups) groups.push(...typeGroups);
+        }
+        return buildRootSlotIndex(groups);
+    }, [rootBatchActive, sceneBatchedRootGroupsByType]);
+
     const sceneBatchedContactConeGroups = useMemo(() => {
         const grouped = new Map<string, { color: string; cones: InstancedContactCone[] }>();
 
@@ -2376,6 +2813,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         ) => {
             for (const entity of list) {
                 if (selectedIds.has(entity.id)) continue;
+                if (ghostedDependentSupportIdSet.has(entity.id)) continue;
                 const coneSet = contactConesBySupport.get(entity.id);
                 if (!coneSet) continue;
 
@@ -2406,7 +2844,32 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [
         renderListByType, selectedOf,
         contactConesBySupport, resolveSceneSupportColor, applyDropToVec3Like,
+        ghostedDependentSupportIdSet,
     ]);
+
+    /**
+     * The one instanced contact-cone batch's slot list: the producer's groups
+     * flattened in its draw order, so slot index is draw order.
+     *
+     * `sceneBatchedContactConeGroups` already applied model visibility, the
+     * selected-support exclusion, the knot-host model fallback, the colour and
+     * the model drop offset, and it re-derives through `contactConesBySupport`
+     * when a drag preview moves a cone — so a moving contact point moves the
+     * batch's slot without a second dependency here.
+     *
+     * The nib's penetration is deliberately not part of this list: it follows the
+     * active material profile, so the batch resolves it through
+     * `useContactPenetrationResolver` at write time.
+     *
+     * Null while the flag is off or the view is simple: the legacy per-colour
+     * groups, their axis lines and the two cone overlays keep rendering exactly
+     * as they did.
+     */
+    const coneSlotIndex = useMemo(() => {
+        if (!coneBatchActive) return null;
+        noteActivity('support-mode:cone-slot-index');
+        return buildConeSlotIndex(sceneBatchedContactConeGroups);
+    }, [coneBatchActive, sceneBatchedContactConeGroups]);
 
     const sceneBatchedShaftInstanceCount = useMemo(() => {
         // Every batched group counts, plus brace, which batches its own.
@@ -2470,11 +2933,20 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const hoveredSupportOverlayShafts = useMemo(() => {
         if (!hoveredSupportShaftSet) return [] as InstancedShaft[];
 
-        return hoveredSupportShaftSet.shafts.map((shaft) => ({
+        // The instanced batch draws the hover state per instance for straight
+        // and tapered shafts; a second mesh over the same rods would double-draw
+        // them. Curves stay here — a merged tube has one material, so the batch
+        // cannot lift it per curve.
+        const shafts = shaftBatchActive
+            ? hoveredSupportShaftSet.shafts.filter(isCurvedBatchedShaft)
+            : hoveredSupportShaftSet.shafts;
+        if (shafts.length === 0) return [] as InstancedShaft[];
+
+        return shafts.map((shaft) => ({
             ...applyDropToInstancedShaft(shaft),
             diameter: shaft.diameter * 1.02,
         }));
-    }, [hoveredSupportShaftSet, applyDropToInstancedShaft]);
+    }, [hoveredSupportShaftSet, applyDropToInstancedShaft, shaftBatchActive]);
 
     const hoveredSupportConeSet = useMemo(() => {
         if (!isInteractable) return null;
@@ -2487,12 +2959,16 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [isInteractable, hoveredSupportIdForVisual, hoveredSupportIsSelected, contactConesBySupport]);
 
     const hoveredSupportOverlayCones = useMemo(() => {
+        // The instanced batch draws the hover state per instance; a second mesh
+        // over the same cones would double-draw them. The overlay's set is the
+        // batch's exactly: unselected supports only.
+        if (coneBatchActive) return [] as InstancedContactCone[];
         if (!hoveredSupportConeSet) return [] as InstancedContactCone[];
         return hoveredSupportConeSet.cones.map((cone) => ({
             ...cone,
             pos: applyDropToVec3Like(cone.pos, cone.modelId),
         }));
-    }, [hoveredSupportConeSet, applyDropToVec3Like]);
+    }, [hoveredSupportConeSet, applyDropToVec3Like, coneBatchActive]);
 
     const hoveredSupportJointSet = useMemo(() => {
         if (!isInteractable) return null;
@@ -2510,6 +2986,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     ]);
 
     const hoveredSupportOverlayJoints = useMemo(() => {
+        // The instanced batch draws the hover state per instance; a second mesh
+        // over the same balls would double-draw them.
+        if (SUPPORT_INSTANCED_JOINTS) return [] as InstancedJoint[];
         if (!hoveredSupportJointSet) return [] as InstancedJoint[];
 
         return hoveredSupportJointSet.joints.map((joint) => ({
@@ -2610,12 +3089,21 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         if (!hoveredSupportId) return [] as InstancedRoot[];
 
         const overlay = buildHighlightedRootOverlay(hoveredSupportId);
+        // A root the batch owns already draws its own hover colour. The overlay
+        // must stay for the ones it does not: a *selected* trunk or kickstand
+        // root (the producer excludes selected supports) and an inline-root
+        // stump (which owns no root row). Membership in the slot list is the
+        // exact test for "the batch draws this support's root".
+        if (overlay && rootSlotIndex && rootSlotIndex.bySupport.has(overlay.supportId ?? '')) {
+            return [] as InstancedRoot[];
+        }
         return overlay ? [overlay] : [];
     }, [
         hidePlateContactPrimitivesEffective,
         isInteractable,
         hoveredSupportIdForVisual,
         buildHighlightedRootOverlay,
+        rootSlotIndex,
     ]);
 
     const additionalMarqueeHoveredSupportIds = useMemo(() => {
@@ -2630,15 +3118,22 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         for (const supportId of additionalMarqueeHoveredSupportIds) {
             const shaftSet = shaftSetForSupport(supportId);
             if (!shaftSet) continue;
-            overlays.push(...shaftSet.shafts.map((shaft) => ({
+            // Straight and tapered shafts are the batch's marquee state; only the
+            // curves still need a mesh over the merged tube.
+            const shafts = shaftBatchActive
+                ? shaftSet.shafts.filter(isCurvedBatchedShaft)
+                : shaftSet.shafts;
+            overlays.push(...shafts.map((shaft) => ({
                 ...applyDropToInstancedShaft(shaft),
                 diameter: shaft.diameter * 1.02,
             })));
         }
         return overlays;
-    }, [additionalMarqueeHoveredSupportIds, shaftSetForSupport, applyDropToInstancedShaft]);
+    }, [additionalMarqueeHoveredSupportIds, shaftSetForSupport, applyDropToInstancedShaft, shaftBatchActive]);
 
     const marqueeHoveredOverlayCones = useMemo(() => {
+        // The batch owns the cone marquee state too; see hoveredSupportOverlayCones.
+        if (coneBatchActive) return [] as InstancedContactCone[];
         if (additionalMarqueeHoveredSupportIds.length === 0) return [] as InstancedContactCone[];
 
         const overlays: InstancedContactCone[] = [];
@@ -2651,9 +3146,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             })));
         }
         return overlays;
-    }, [additionalMarqueeHoveredSupportIds, contactConesBySupport, applyDropToVec3Like]);
+    }, [additionalMarqueeHoveredSupportIds, contactConesBySupport, applyDropToVec3Like, coneBatchActive]);
 
     const marqueeHoveredOverlayJoints = useMemo(() => {
+        // The instanced batch draws the marquee state per instance; see
+        // hoveredSupportOverlayJoints.
+        if (SUPPORT_INSTANCED_JOINTS) return [] as InstancedJoint[];
         if (additionalMarqueeHoveredSupportIds.length === 0) return [] as InstancedJoint[];
 
         const overlays: InstancedJoint[] = [];
@@ -2676,6 +3174,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const overlays: InstancedRoot[] = [];
 
         for (const supportId of additionalMarqueeHoveredSupportIds) {
+            // Only the roots the batch does not own; see hoveredSupportOverlayRoots.
+            if (rootSlotIndex && rootSlotIndex.bySupport.has(supportId)) continue;
             const overlay = buildHighlightedRootOverlay(supportId);
             if (overlay) overlays.push(overlay);
         }
@@ -2685,6 +3185,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         hidePlateContactPrimitivesEffective,
         additionalMarqueeHoveredSupportIds,
         buildHighlightedRootOverlay,
+        rootSlotIndex,
     ]);
 
     const handleSceneBatchedShaftClick = React.useCallback((shaft: InstancedShaft, event: { nativeEvent?: Event }) => {
@@ -2880,6 +3381,21 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         resolveBaseColor,
     ]);
 
+    /**
+     * The dragged support's colour, for the drag batch's non-joint primitives.
+     *
+     * A joint drag only starts on the selected support's joints, and the detail
+     * renderer draws those primitives with its selected colour. The drag batch is
+     * the only thing drawing them during the gesture, so it must use the same
+     * selected colour — using the base/detail colour here made the moved segment
+     * orange while its own unsuppressed neighbours and joints were cyan.
+     * Joints still override this with dragged-blue/sibling-grey.
+     */
+    const resolveJointDragPreviewColor = React.useCallback(
+        () => BULK_MULTI_SELECTED_COLOR,
+        [],
+    );
+
     /** The props every detail renderer takes identically. */
     /**
      * The props every detail renderer takes, for one entity.
@@ -2933,6 +3449,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         groups: ReadonlyArray<{ color: string; shafts: InstancedShaft[] }>,
         options?: { detailedOnly?: boolean },
     ) => {
+        // The instanced batch draws every type's straight and tapered shafts
+        // (and mounts the merged curve tubes itself), so the per-type pass has
+        // nothing left to draw in Support mode. The simple views still use it.
+        if (shaftBatchActive) return null;
         // The detailed-only groups are the brace curves. The simple view drops
         // them; the navigation view keeps them as the lines everything else is.
         if (options?.detailedOnly && simpleRender && !discsOnly) return null;
@@ -2974,6 +3494,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             </group>
         ));
     }, [
+        shaftBatchActive,
         simpleRender, ghostTransparent, ghostOpacityClamped, sceneBatchedShaftRadialSegments,
         slimPickShaftsByBatch,
         isPointerInteractable, handleSceneBatchedShaftClick,
@@ -2981,7 +3502,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     ]);
 
 
-    const handleSceneBatchedRootClick = React.useCallback((root: InstancedRoot, event: { nativeEvent?: Event }) => {
+    const handleSceneBatchedRootClick = React.useCallback((root: SceneBatchedRootRef, event: { nativeEvent?: Event }) => {
         if (!isPointerInteractable) return;
         if (!supportAnswersPointer(root.modelId, pointerSceneryRef.current)) return;
         if (isPreparePointerInteractable) {
@@ -2993,7 +3514,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         handleSupportClick(event, root.supportId, isInteractable);
     }, [isPointerInteractable, isPreparePointerInteractable, isInteractable, supportSelectionAndHoverSuppressed]);
 
-    const handleSceneBatchedRootPointerMove = React.useCallback((root: InstancedRoot) => {
+    const handleSceneBatchedRootPointerMove = React.useCallback((root: SceneBatchedRootRef) => {
         if (!isPointerInteractable) return;
         if (!supportAnswersPointer(root.modelId, pointerSceneryRef.current)) return;
         if (orbitInteractionActiveRef.current) return;
@@ -3015,7 +3536,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         );
     }, [isPointerInteractable, primitiveHoverOnSelectedSupport, selectedCategory, selectedPrimitiveSupportId, selectedPrimitiveHoverActive, selectedSupportIdSet, supportSelectionAndHoverSuppressed]);
 
-    const handleSceneBatchedConeClick = React.useCallback((cone: InstancedContactCone, event: { nativeEvent?: Event }) => {
+    const handleSceneBatchedConeClick = React.useCallback((cone: SceneBatchedConeRef, event: { nativeEvent?: Event }) => {
         if (!isPointerInteractable) return;
         if (!supportAnswersPointer(cone.modelId, pointerSceneryRef.current)) return;
         if (isPreparePointerInteractable) {
@@ -3048,7 +3569,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         handleSupportClick(event, cone.supportId, isInteractable);
     }, [isPointerInteractable, isPreparePointerInteractable, isInteractable, supportSelectionAndHoverSuppressed, braceAltActive, state.leaves]);
 
-    const handleSceneBatchedConePointerMove = React.useCallback((cone: InstancedContactCone, event?: { point?: { x: number; y: number; z: number } | THREE.Vector3 } | null) => {
+    const handleSceneBatchedConePointerMove = React.useCallback((cone: SceneBatchedConeRef, event?: { point?: { x: number; y: number; z: number } | THREE.Vector3 } | null) => {
         if (!isPointerInteractable) return;
         if (!supportAnswersPointer(cone.modelId, pointerSceneryRef.current)) return;
         if (orbitInteractionActiveRef.current) return;
@@ -3089,7 +3610,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     // Cone pointer-out: clear the brace tool's leaf hover (so a leaf preview
     // doesn't stick once the cursor leaves the cone), then fall through to the
     // shared shaft pointer-out cleanup for the rest of the hover state.
-    const handleSceneBatchedConePointerOut = React.useCallback((cone: InstancedContactCone | null) => {
+    const handleSceneBatchedConePointerOut = React.useCallback((cone: SceneBatchedConeRef | null) => {
         if (braceAltActive && cone?.supportId && state.leaves[cone.supportId]) {
             window.dispatchEvent(new CustomEvent('brace-leaf-leave', {
                 detail: { leafId: cone.supportId },
@@ -3241,9 +3762,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         // Without this, newly added meshes can miss clipping until some other
         // dependency (like slider movement) forces a re-run.
         //
-        // `state` is the whole store snapshot, so one identity covers every
-        // collection the effect reads.
-        state,
+        // `stableState` is the whole store snapshot without hover, so one
+        // identity covers every collection the effect reads and a hover does
+        // not re-traverse the whole support scene.
+        stableState,
         kickstandRootsById,
         kickstandKnotsById,
     ]);
@@ -3304,24 +3826,43 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const selected = selectedOf(typeId);
         const batchable = entry.batchedIds ?? plainShaftsOf(typeId);
         const list = renderListByType[typeId] as readonly { id: string; modelId?: string }[];
+        // The instanced drag batch draws the moving geometry, but the detail
+        // renderer still owns everything around it (roots, disks, HUD). Give it
+        // the live preview entity directly: the part-drag event it normally
+        // subscribes to is not published on the instanced path, and leaving the
+        // committed entity here is what kept the old support visible beside the
+        // moving one.
+        const previewEntity = activePreviewEntity?.typeId === typeId
+            ? activePreviewEntity.support as { id: string; modelId?: string }
+            : null;
 
-        return list.map((entity) => {
+        return list.map((baseEntity) => {
+            const entity = previewEntity && baseEntity.id === previewEntity.id
+                ? previewEntity
+                : baseEntity;
             if (!isModelVisible(entity.modelId, entity.id)) return null;
 
             const isSelected = selected.has(entity.id);
-            const context = { entity: entity as never, isSelected, isBatchable: batchable.has(entity.id) };
+            const context = { entity: entity as never, isSelected, isBatchable: batchable.has(entity.id), isGhosted: ghostedDependentSupportIdSet.has(entity.id) };
 
             if (entry.skip?.(context)) return null;
             const hosts = entry.hosts ? entry.hosts(entity as never) : {};
             if (!hosts) return null;
 
             return (
-                <group key={entity.id} userData={{ noClipping: entry.noClipping?.(context) ?? false }}>
+                <group
+                    key={entity.id}
+                    userData={{
+                        noClipping: entry.noClipping?.(context) ?? false,
+                        ghostedDependent: ghostedDependentSupportIdSet.has(entity.id),
+                    }}
+                >
                     <Component
                         {...{ [entityProp]: entity }}
                         {...hosts}
                         {...sharedRenderProps(typeId, entity, isSelected)}
                         {...(entry.extraProps?.(context) ?? {})}
+                        {...(ghostedDependentSupportIdSet.has(entity.id) ? { ghosted: true } : {})}
                     />
                 </group>
             );
@@ -3331,17 +3872,55 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         selectedOf,
         plainShaftsOf,
         renderListByType,
+        activePreviewEntity,
         isModelVisible,
         sharedRenderProps,
+        ghostedDependentSupportIdSet,
     ]);
 
+    // The private drag batches' primitives: every detail shaft of a dragged
+    // support hides while a joint gesture runs, and exactly the grabbed cone
+    // hides while a tip drag runs. Context, because the external suppression
+    // store proved unreliable across the lazy chunks the detail renderers live
+    // in.
+    const jointDragSession = useSyncExternalStore(
+        subscribeJointDragSession,
+        getJointDragSession,
+        getJointDragSessionServerSnapshot,
+    );
+    // A contact-disk (tip) drag draws one cone and nothing else: it must not
+    // hide the support's shafts or joints, which the drag never moves.
+    const coneDragSession = useSyncExternalStore(
+        subscribeConeDragSession,
+        getConeDragSession,
+        getConeDragSessionServerSnapshot,
+    );
+    const jointDrag = jointDragSession && !jointDragSession.ended ? jointDragSession.slotMap : null;
+    const coneDrag = coneDragSession && !coneDragSession.ended ? coneDragSession.slotMap : null;
+    const draggedSupport = jointDrag || coneDrag
+        ? {
+            supportId: jointDrag?.supportId ?? null,
+            jointIds: jointDrag
+                ? new Set(jointDrag.joints.map((slot) => slot.id))
+                : EMPTY_DRAGGED_PRIMITIVE_IDS,
+            // The union of both gestures. They cannot overlap (different
+            // pointer-down targets, and the pointer is captured by one), so at
+            // most one of them contributes.
+            coneIds: new Set([
+                ...(jointDrag?.cones.map((slot) => slot.id) ?? []),
+                ...(coneDrag?.cones.map((slot) => slot.id) ?? []),
+            ]),
+        }
+        : null;
+
     return (
+        <DraggedSupportContext.Provider value={draggedSupport}>
         <group ref={groupRef}>
             {/* Joint Creation Manager */}
             <JointCreationManager />
 
             {/* Joint Gizmo */}
-            <JointGizmo />
+            <JointGizmo sceneRef={jointDragSceneRef} />
             {/* Knot Gizmo (for sliding knots along shafts) */}
             <KnotGizmo />
             <BezierGizmoManager />
@@ -3350,7 +3929,20 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 them at all. Unmounted, not faded: a zero-alpha batch left mounted
                 for picking is what kept showing joint spheres after a mode switch,
                 because the fade is a material prop on an already-built mesh. */}
-            {!simpleRender && sceneBatchedJointGroups.map((group) => (
+            {!simpleRender && (jointSlotIndex ? (
+                <InstancedJointBatch
+                    index={jointSlotIndex}
+                    hoveredSupportId={hoveredSupportJointSet?.supportId ?? null}
+                    marqueeSupportIds={additionalMarqueeHoveredSupportIds}
+                    clippingPlanes={clippingPlanes.length > 0 ? clippingPlanes : null}
+                    transparent={ghostTransparent}
+                    opacity={ghostOpacityClamped}
+                    onJointClick={isPointerInteractable ? handleSceneBatchedJointClick : undefined}
+                    onJointPointerMove={isPointerInteractable ? handleSceneBatchedJointPointerMove : undefined}
+                    onJointPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                    onBatchReady={SUPPORT_INSTANCED_DRAG ? handleSceneJointBatchReady : undefined}
+                />
+            ) : sceneBatchedJointGroups.map((group) => (
                 <group key={`scene-joint-batch:${group.color}`}>
                     <InstancedJointGroup
                         joints={group.joints}
@@ -3364,8 +3956,63 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         onJointPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
                     />
                 </group>
-            ))}
-            {Object.entries(sceneBatchedRootGroupsByType).flatMap(([typeId, groups]) => groups.map((group) => (
+            )))}
+            {/*
+              The joint drag's own geometry, mounted beside the scene joint batch
+              so the transparent sort order is unchanged. It draws nothing
+              without a live gesture (its own store subscription decides), never
+              enters the pick clone, and its instances are written per frame by
+              `writeJointDragFrame` — no React commit per frame.
+
+              No clipping planes on purpose: a joint drag only starts on a
+              selected support, and every draggable type's detail group is
+              clip-exempt (`noClipping`, always for trunk/branch and on selection
+              for the rest), so the batch has to draw unclipped to match what the
+              detail renderers show in a cross-section.
+            */}
+            {SUPPORT_INSTANCED_DRAG && !simpleRender && (
+                <InstancedJointDragBatch
+                    sharedJointBatch={sceneJointBatch}
+                    resolveColor={resolveJointDragPreviewColor}
+                    transparent={ghostTransparent}
+                    opacity={ghostOpacityClamped}
+                    renderOrder={ghostRenderOrder}
+                />
+            )}
+            {/*
+              The contact-disk (tip) drag's own cone, mounted beside the joint
+              drag batch so the transparent sort order is unchanged. It draws
+              nothing without a live gesture (its own store subscription
+              decides), never enters the pick clone, and its one instance is
+              written per hit by `writeConeDragFrame` — no React commit per
+              frame. Shafts and joints of the dragged support stay on their
+              detail renderers: a tip drag never moves them.
+
+              No clipping planes on purpose, for the same reason as the joint
+              batch: a tip drag only starts from the selected cone's HUD, and a
+              selected support's detail group is clip-exempt (`noClipping`).
+            */}
+            {SUPPORT_INSTANCED_CONE_DRAG && !simpleRender && (
+                <InstancedConeDragBatch
+                    transparent={ghostTransparent}
+                    opacity={ghostOpacityClamped}
+                    renderOrder={ghostRenderOrder}
+                />
+            )}
+            {rootSlotIndex ? (
+                <InstancedRootBatch
+                    index={rootSlotIndex}
+                    hoveredSupportId={isInteractable ? hoveredSupportIdForVisual : null}
+                    marqueeSupportIds={additionalMarqueeHoveredSupportIds}
+                    clippingPlanes={clippingPlanes.length > 0 ? clippingPlanes : null}
+                    transparent={ghostTransparent}
+                    opacity={ghostOpacityClamped}
+                    renderOrder={ghostRenderOrder}
+                    onRootClick={isPointerInteractable ? handleSceneBatchedRootClick : undefined}
+                    onRootPointerMove={isPointerInteractable ? handleSceneBatchedRootPointerMove : undefined}
+                    onRootPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                />
+            ) : Object.entries(sceneBatchedRootGroupsByType).flatMap(([typeId, groups]) => groups.map((group) => (
                 <group key={`scene-${typeId}-root-batch:${group.color}`}>
                     <InstancedRootsGroup
                         roots={group.roots}
@@ -3386,7 +4033,20 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     )}
                 </group>
             )))}
-            {sceneBatchedContactConeGroups.map((group) => (
+            {coneSlotIndex ? (
+                <InstancedContactConeBatch
+                    index={coneSlotIndex}
+                    hoveredSupportId={hoveredSupportConeSet?.supportId ?? null}
+                    marqueeSupportIds={additionalMarqueeHoveredSupportIds}
+                    clippingPlanes={clippingPlanes.length > 0 ? clippingPlanes : null}
+                    transparent={ghostTransparent}
+                    opacity={ghostOpacityClamped}
+                    renderOrder={ghostRenderOrder}
+                    onConeClick={isPointerInteractable ? handleSceneBatchedConeClick : undefined}
+                    onConePointerMove={isPointerInteractable ? handleSceneBatchedConePointerMove : undefined}
+                    onConePointerOut={isPointerInteractable ? handleSceneBatchedConePointerOut : undefined}
+                />
+            ) : sceneBatchedContactConeGroups.map((group) => (
                 <group key={`scene-cone-batch:${group.color}:${discsOnly ? 'discs' : 'full'}`}>
                     <InstancedContactConeGroup
                         cones={group.cones}
@@ -3557,7 +4217,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 />
             )}
 
-            {!debugSimple && hoveredSupportOverlayJoints.length > 0 && hoveredSupportJointSet && (
+            {!SUPPORT_INSTANCED_JOINTS && !debugSimple && hoveredSupportOverlayJoints.length > 0 && hoveredSupportJointSet && (
                 <InstancedJointGroup
                     key={`scene-joint-hover-overlay:${hoveredSupportJointSet.supportId}:${hoveredSupportOverlayJoints.length}`}
                     joints={hoveredSupportOverlayJoints}
@@ -3620,7 +4280,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 />
             )}
 
-            {!debugSimple && marqueeHoveredOverlayJoints.length > 0 && (
+            {!SUPPORT_INSTANCED_JOINTS && !debugSimple && marqueeHoveredOverlayJoints.length > 0 && (
                 <InstancedJointGroup
                     key={`scene-marquee-overlay-joints:${marqueeHoveredSupportIds.join(':')}:${marqueeHoveredOverlayJoints.length}`}
                     joints={marqueeHoveredOverlayJoints}
@@ -3652,6 +4312,27 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 />
             )}
 
+
+            {/*
+              Every unselected support's straight and tapered shafts, one draw
+              per shape, plus the merged curve tubes. Mounted once for the whole
+              scene; the per-type loop below then only runs detail renderers in
+              Support mode.
+            */}
+            {shaftSlotIndex && (
+                <InstancedShaftBatch
+                    index={shaftSlotIndex}
+                    hoveredSupportId={hoveredSupportShaftSet?.supportId ?? null}
+                    marqueeSupportIds={additionalMarqueeHoveredSupportIds}
+                    clippingPlanes={clippingPlanes.length > 0 ? clippingPlanes : null}
+                    transparent={ghostTransparent}
+                    opacity={ghostOpacityClamped}
+                    radialSegments={sceneBatchedShaftRadialSegments}
+                    onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
+                    onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
+                    onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                />
+            )}
 
             {/*
               The per-type detail and batched-shaft passes, in registry order.
@@ -3686,6 +4367,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 applyDropToVec3Like={applyDropToVec3Like}
             />
         </group>
+        </DraggedSupportContext.Provider>
     );
 });
 

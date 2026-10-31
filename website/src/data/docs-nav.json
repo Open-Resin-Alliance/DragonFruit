@@ -1,0 +1,598 @@
+{
+  "exclude": [
+    "internal"
+  ],
+  "items": [
+    {
+      "label": "Documentation",
+      "slug": "index"
+    },
+    {
+      "label": "Getting Started",
+      "items": [
+        {
+          "label": "Installation",
+          "slug": "getting-started/installation"
+        },
+        {
+          "label": "Quick Start",
+          "slug": "getting-started/quick-start"
+        },
+        {
+          "label": "Interface Tour",
+          "slug": "getting-started/interface-tour"
+        },
+        {
+          "label": "Building from Source",
+          "slug": "getting-started/building-from-source"
+        }
+      ]
+    },
+    {
+      "label": "Workflows",
+      "items": [
+        {
+          "label": "Model Preparation",
+          "slug": "workflows/model-preparation"
+        },
+        {
+          "label": "Transform and Positioning",
+          "slug": "workflows/transform-and-positioning"
+        },
+        {
+          "label": "Place On-Face and Mirror",
+          "slug": "workflows/place-on-face-and-mirror"
+        },
+        {
+          "label": "Mesh Smoothing",
+          "slug": "workflows/mesh-smoothing"
+        },
+        {
+          "label": "Hollowing and Hole Punch",
+          "slug": "workflows/hollowing"
+        },
+        {
+          "label": "Arrange Models",
+          "slug": "workflows/arrange-models"
+        },
+        {
+          "label": "Duplicate Models",
+          "slug": "workflows/duplicate-models"
+        },
+        {
+          "label": "Support Placement",
+          "slug": "workflows/support-placement"
+        },
+        {
+          "label": "Island Analysis Workflow",
+          "slug": "workflows/island-analysis-workflow"
+        },
+        {
+          "label": "Raft and Export",
+          "slug": "workflows/raft-and-export"
+        },
+        {
+          "label": "Printing Preview and Send",
+          "slug": "workflows/printing-preview-and-send"
+        }
+      ]
+    },
+    {
+      "label": "Features",
+      "items": [
+        {
+          "label": "Island Analysis and Voxels",
+          "slug": "features/island-analysis"
+        }
+      ]
+    },
+    {
+      "label": "Reference",
+      "items": [
+        {
+          "label": "Anatomy of Supports",
+          "items": [
+            {
+              "label": "Overview",
+              "slug": "reference/support-anatomy/index"
+            },
+            {
+              "label": "Roots",
+              "slug": "reference/support-anatomy/roots"
+            },
+            {
+              "label": "Stump",
+              "slug": "reference/support-anatomy/stump"
+            },
+            {
+              "label": "Trunk",
+              "slug": "reference/support-anatomy/trunk"
+            },
+            {
+              "label": "Branch",
+              "slug": "reference/support-anatomy/branch"
+            },
+            {
+              "label": "Leaf",
+              "slug": "reference/support-anatomy/leaf"
+            },
+            {
+              "label": "Twig",
+              "slug": "reference/support-anatomy/twig"
+            },
+            {
+              "label": "Stick",
+              "slug": "reference/support-anatomy/stick"
+            },
+            {
+              "label": "Brace",
+              "slug": "reference/support-anatomy/brace"
+            },
+            {
+              "label": "Knot",
+              "slug": "reference/support-anatomy/knot"
+            },
+            {
+              "label": "Joint",
+              "slug": "reference/support-anatomy/joint"
+            },
+            {
+              "label": "Shaft",
+              "slug": "reference/support-anatomy/shaft"
+            },
+            {
+              "label": "Contact Cone",
+              "slug": "reference/support-anatomy/contact-cone"
+            },
+            {
+              "label": "Contact Disk",
+              "slug": "reference/support-anatomy/contact-disk"
+            },
+            {
+              "label": "Kickstand",
+              "slug": "reference/support-anatomy/kickstand"
+            },
+            {
+              "label": "Contact Tip Research",
+              "slug": "reference/support-anatomy/contact-tip-research"
+            }
+          ]
+        },
+        {
+          "label": "Hotkeys",
+          "slug": "reference/hotkeys"
+        },
+        {
+          "label": "Support Placement Modifiers",
+          "slug": "reference/support-placement-modifiers"
+        },
+        {
+          "label": "Support Types",
+          "slug": "reference/support-types"
+        },
+        {
+          "label": "File Formats",
+          "slug": "reference/file-formats"
+        },
+        {
+          "label": "Auto-Support Settings",
+          "slug": "reference/auto-support-settings"
+        },
+        {
+          "label": "Auto-Support Preset Format",
+          "slug": "reference/auto-support-preset-format"
+        },
+        {
+          "label": "Command-Line Interface",
+          "slug": "reference/cli"
+        }
+      ]
+    },
+    {
+      "label": "Troubleshooting",
+      "items": [
+        {
+          "label": "Common Issues",
+          "slug": "troubleshooting/common-issues"
+        }
+      ]
+    },
+    {
+      "label": "Developer Guide",
+      "items": [
+        {
+          "label": "Architecture and Conventions",
+          "items": [
+            {
+              "label": "Overview",
+              "slug": "dev/index"
+            },
+            {
+              "label": "Architecture",
+              "slug": "dev/architecture-overview"
+            },
+            {
+              "label": "page.tsx Refactor Handoff",
+              "slug": "dev/page-tsx-refactor-handoff"
+            },
+            {
+              "label": "Contributing",
+              "slug": "dev/contributing"
+            },
+            {
+              "label": "DOM Tests",
+              "slug": "dev/dom-tests"
+            },
+            {
+              "label": "Preview Builds and CI Permissions",
+              "slug": "dev/preview-builds"
+            },
+            {
+              "label": "Localization (i18n)",
+              "slug": "dev/localization"
+            },
+            {
+              "label": "Backlog and Known Gotchas",
+              "slug": "dev/backlog"
+            },
+            {
+              "label": "Support Registry Findings",
+              "slug": "dev/support-registry-findings"
+            },
+            {
+              "label": "Performance Debugging",
+              "slug": "dev/performance-debugging"
+            },
+            {
+              "label": "Render Profiler",
+              "slug": "dev/render-profiler"
+            }
+          ]
+        },
+        {
+          "label": "Feature Frameworks",
+          "items": [
+            {
+              "label": "Experiments Framework",
+              "slug": "dev/experiments-framework"
+            },
+            {
+              "label": "Plugin Framework",
+              "slug": "dev/plugins-framework"
+            },
+            {
+              "label": "Complex Plugin Contributing",
+              "slug": "dev/plugins-complex-contributing"
+            }
+          ]
+        },
+        {
+          "label": "Core Systems and Contracts",
+          "items": [
+            {
+              "label": "History and Undo/Redo",
+              "slug": "dev/history-and-undo-redo"
+            },
+            {
+              "label": "Registration Seams",
+              "slug": "dev/registration-seams"
+            },
+            {
+              "label": "State and Stores",
+              "slug": "dev/state-and-stores"
+            },
+            {
+              "label": "Camera Navigation",
+              "slug": "dev/camera-navigation"
+            },
+            {
+              "label": "Config Schemas",
+              "slug": "dev/config-schemas"
+            },
+            {
+              "label": "Tauri IPC and Native Bridge",
+              "slug": "dev/tauri-ipc-bridge"
+            },
+            {
+              "label": "Hotkeys",
+              "slug": "dev/hotkeys"
+            },
+            {
+              "label": "UI Atoms",
+              "slug": "dev/ui-atoms"
+            },
+            {
+              "label": "Context Menu",
+              "slug": "dev/context-menu"
+            },
+            {
+              "label": "Notifications and Toasts",
+              "slug": "dev/notifications"
+            },
+            {
+              "label": "System Notifications",
+              "slug": "dev/system-notifications"
+            },
+            {
+              "label": "Support System",
+              "slug": "dev/support-system"
+            },
+            {
+              "label": "Support Interaction",
+              "slug": "dev/support-interaction"
+            },
+            {
+              "label": "Auto-Supports",
+              "slug": "dev/auto-supports"
+            },
+            {
+              "label": "Auto-Support Presets",
+              "slug": "dev/auto-support-presets"
+            },
+            {
+              "label": "Auto-Support Metrics",
+              "slug": "dev/auto-support-metrics"
+            },
+            {
+              "label": "Auto-Support Worker",
+              "slug": "dev/auto-support-worker"
+            },
+            {
+              "label": "Auto-Orientation (Pre-Plan)",
+              "slug": "dev/auto-orientation"
+            },
+            {
+              "label": "Adding a New Support Type",
+              "slug": "dev/support-type-extension"
+            },
+            {
+              "label": "Support Pathfinding V3",
+              "slug": "dev/support-pathfinding-v3"
+            },
+            {
+              "label": "Grid and Branching",
+              "slug": "dev/grid-and-branching"
+            },
+            {
+              "label": "Raft Geometry",
+              "slug": "dev/raft-geometry"
+            },
+            {
+              "label": "Scan Positioning",
+              "slug": "dev/scan-positioning"
+            },
+            {
+              "label": "Island Detection",
+              "slug": "dev/island-detection"
+            },
+            {
+              "label": "Ambient Occlusion",
+              "slug": "dev/ambient-occlusion"
+            }
+          ]
+        },
+        {
+          "label": "Slicing Engine",
+          "items": [
+            {
+              "label": "Overview",
+              "slug": "dev/slicing-engine/index"
+            },
+            {
+              "label": "Architecture",
+              "slug": "dev/slicing-engine/architecture"
+            },
+            {
+              "label": "Pipeline",
+              "slug": "dev/slicing-engine/pipeline"
+            },
+            {
+              "label": "API",
+              "slug": "dev/slicing-engine/api"
+            },
+            {
+              "label": "Encoders",
+              "slug": "dev/slicing-engine/encoders"
+            },
+            {
+              "label": "Tauri Integration",
+              "slug": "dev/slicing-engine/tauri-integration"
+            },
+            {
+              "label": "Slice Job Assembly",
+              "slug": "dev/slice-job-assembly"
+            },
+            {
+              "label": "Benchmarking",
+              "slug": "dev/slicing-engine/benchmarking"
+            },
+            {
+              "label": "Benchmark Suite",
+              "slug": "dev/slicing-benchmarks"
+            },
+            {
+              "label": "Development Guide",
+              "slug": "dev/slicing-engine/development-guide"
+            },
+            {
+              "label": "Troubleshooting",
+              "slug": "dev/slicing-engine/troubleshooting"
+            }
+          ]
+        },
+        {
+          "label": "Data and Formats",
+          "items": [
+            {
+              "label": "Data Storage",
+              "slug": "dev/data-storage"
+            },
+            {
+              "label": "Formats",
+              "slug": "dev/formats"
+            },
+            {
+              "label": "Mesh Wire Formats",
+              "slug": "dev/mesh-wire-formats"
+            },
+            {
+              "label": "Mesh Repair Passes",
+              "slug": "dev/mesh-repair-passes"
+            },
+            {
+              "label": "ShrinkWrap",
+              "slug": "dev/shrink-wrap"
+            },
+            {
+              "label": "VOXL Format Spec",
+              "slug": "dev/voxl-format-spec"
+            },
+            {
+              "label": "LYS Mesh Extraction Spec",
+              "slug": "dev/lys-mesh-extraction-spec"
+            }
+          ]
+        },
+        {
+          "label": "Decision Records",
+          "items": [
+            {
+              "label": "Universal macOS Distribution",
+              "slug": "adr/0005-macos-universal-distribution"
+            },
+            {
+              "label": "CLI Binary Consolidation",
+              "slug": "adr/0025-cli-binary-consolidation"
+            },
+            {
+              "label": "DFST Decimation Protocol",
+              "slug": "adr/0027-dfst-decimation-protocol"
+            },
+            {
+              "label": "Voxel Hollowing Architecture",
+              "slug": "adr/0029-voxel-hollowing-architecture"
+            },
+            {
+              "label": "Plugin Format Architecture",
+              "slug": "adr/0031-plugin-format-architecture"
+            },
+            {
+              "label": "Organic Cut Tenon Registration",
+              "slug": "adr/0026-organic-cut-tenon-registration"
+            },
+            {
+              "label": "Potential-Gradient Pathfinding",
+              "slug": "adr/0028-potential-gradient-pathfinding"
+            },
+            {
+              "label": "Camera FOV and Projection Switching",
+              "slug": "adr/0032-camera-fov-projection-switching"
+            },
+            {
+              "label": "VOXL Binary Container Format",
+              "slug": "adr/0034-voxl-binary-container-format"
+            },
+            {
+              "label": "Client-Side Persistence",
+              "slug": "adr/0035-client-side-persistence-architecture"
+            },
+            {
+              "label": "Auto-Support Roads Not Taken",
+              "slug": "adr/0038-auto-support-placement-roads-not-taken"
+            },
+            {
+              "label": "Stream CTB Layer Payloads to Disk",
+              "slug": "adr/0036-stream-ctb-layer-payloads-to-disk"
+            },
+            {
+              "label": "Cut the Surface, Not a Volume",
+              "slug": "adr/0037-cut-the-surface-not-a-volume"
+            },
+            {
+              "label": "Island Scan Data Shapes",
+              "slug": "adr/0039-island-scan-data-shapes"
+            },
+            {
+              "label": "Linux CEF Runs on X11",
+              "slug": "adr/0040-linux-cef-windowing-x11"
+            },
+            {
+              "label": "Flatpak Ships No Thumbnailer",
+              "slug": "adr/0041-flatpak-thumbnailer"
+            },
+            {
+              "label": "VOXL Version Semantics",
+              "slug": "adr/0042-voxl-version-semantics"
+            },
+            {
+              "label": "VOXL V1 Support Removed",
+              "slug": "adr/0043-voxl-v1-removal"
+            },
+            {
+              "label": "VOXL Plates and Printer",
+              "slug": "adr/0044-voxl-plates-and-printer"
+            },
+            {
+              "label": "Headless Scene Operations",
+              "slug": "adr/0045-headless-scene-operations"
+            },
+            {
+              "slug": "adr/0046-support-local-frames",
+              "title": "Support local frames"
+            },
+            {
+              "label": "Organic Cut Surface Redesign",
+              "slug": "dev/organic-cut-surface-redesign"
+            }
+          ]
+        },
+        {
+          "label": "Integration and Operations",
+          "items": [
+            {
+              "label": "The Site and the Landing Page",
+              "slug": "dev/site-and-landing"
+            },
+            {
+              "label": "RTSP Relay",
+              "slug": "dev/rtsp-relay"
+            },
+            {
+              "label": "Release Process",
+              "slug": "dev/releases"
+            },
+            {
+              "label": "Flatpak Packaging",
+              "slug": "dev/flatpak"
+            },
+            {
+              "label": "Issue Guts Labels",
+              "slug": "dev/issue-guts"
+            },
+            {
+              "label": "Retuning Issue Guts",
+              "slug": "dev/issue-guts-tuning"
+            },
+            {
+              "label": "Upload Service",
+              "slug": "dev/upload-service"
+            },
+            {
+              "label": "OS Thumbnails",
+              "items": [
+                {
+                  "label": "Overview",
+                  "slug": "dev/voxl-thumbnail/index"
+                },
+                {
+                  "label": "macOS QuickLook Extension",
+                  "slug": "dev/voxl-thumbnail/macos-quicklook"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

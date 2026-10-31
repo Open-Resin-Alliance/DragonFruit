@@ -7,6 +7,7 @@ import { useBracePlacementState } from '../../SupportTypes/Brace/bracePlacementS
 import { useKickstandPlacementState } from '../../SupportTypes/Kickstand/kickstandPlacementState';
 import { useLeafPlacementState } from '../../SupportTypes/Leaf/leafPlacementState';
 import { emitImmediateModelHover, isInteriorSupportInteractionActive } from '../../interaction/pointerOcclusion';
+import { useDraggedSupportId, usePrimitiveDragSuppressed, useSupportDragSuppressed } from '../../instanced/dragSuppression';
 
 const NOOP_RAYCAST: THREE.Object3D['raycast'] = () => {};
 
@@ -29,6 +30,8 @@ interface ShaftRendererProps {
     suppressPlacementInteraction?: boolean;
     isSelected?: boolean;
     isParentSelected?: boolean;
+    /** The owning support, so a drag can hide every segment without id matching. */
+    parentSupportId?: string;
     onClick?: (e: any) => void;
     onPointerMove?: (e: any) => void;
     radialSegments?: number;
@@ -52,6 +55,7 @@ export function ShaftRenderer({
     suppressPlacementInteraction = false,
     isSelected,
     isParentSelected,
+    parentSupportId,
     onClick,
     onPointerMove,
     radialSegments = 16,
@@ -76,6 +80,17 @@ export function ShaftRenderer({
         objectId: id,
         enabled: !!enablePicking && enableSegmentInteraction,
     });
+    /**
+     * A joint drag draws this segment through its private batch. Only the
+     * visible cylinder goes: the zero-alpha pick mesh next to it must stay
+     * drawable, because the GPU pick pass renders the group and the segment has
+     * to keep its pick subscription and id through the gesture.
+     */
+    const segmentDragSuppressed = usePrimitiveDragSuppressed('shaft', id);
+    const storeSupportSuppressed = useSupportDragSuppressed(parentSupportId);
+    const draggedSupportId = useDraggedSupportId();
+    const contextSupportSuppressed = !!draggedSupportId && draggedSupportId === parentSupportId;
+    const dragSuppressed = segmentDragSuppressed || storeSupportSuppressed || contextSupportSuppressed;
     const [pointerHoverActive, setPointerHoverActive] = useState(false);
 
     useEffect(() => {
@@ -267,6 +282,7 @@ export function ShaftRenderer({
             )}
             <mesh
                 raycast={enableSegmentInteraction ? NOOP_RAYCAST : raycast}
+                visible={!dragSuppressed}
                 userData={enableSegmentInteraction ? { excludeFromPickingClone: true, supportPrimitiveType: 'shaft' } : { supportPrimitiveType: 'shaft' }}
             >
                 <cylinderGeometry args={[visualRadiusEnd, visualRadiusStart, 1, radialSegments]} />

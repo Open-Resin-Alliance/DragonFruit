@@ -123,6 +123,8 @@ import { EditorContextMenu, MENU_ITEMS, type EditorMenuAction } from '@/componen
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { eulerFromGlobalEuler, quaternionFromGlobalEuler } from '@/utils/rotation';
 import { DiagnosticsModal } from '@/components/modals/DiagnosticsModal';
+import { RenderProfilerOverlay } from '@/components/debug/RenderProfilerOverlay';
+import { toggleRenderProfilerEnabled } from '@/utils/debug/renderProfiler';
 import { HistoryDebugModal } from '@/components/modals/HistoryDebugModal';
 import { ModelSupportsModal } from '@/components/modals/ModelSupportsModal';
 import { DestructiveTransformModal } from '@/components/modals/DestructiveTransformModal';
@@ -290,6 +292,7 @@ import {
   redo,
   subscribeHistory,
   subscribeHistoryDebug,
+  setHistoryDebugDetailsEnabled,
   setHistoryOriginProvider,
   subscribeHistoryOperations,
   undo,
@@ -352,6 +355,8 @@ import {
   resolveUvToolsExecutablePath,
 } from '@/components/settings/uvToolsPreferences';
 import { subscribe as subscribeSupportState, findShaftOwnerOfSegment, getSnapshot as getSupportSnapshot, getModelIdForSupportEntityId, getSupportEntity, resolveDeclaredHosts, toggleSegmentCurve, transformSupportsForModel, updateKnot, getSelectedId, getSelectedCategory } from '@/supports/state';
+import { cancelPrepareMergedSupportRebuildSkip, skipNextPrepareMergedSupportRebuild } from '@/supports/prepare/mergedSupportCache';
+import { clonePlainData } from '@/utils/plainDataClone';
 import { bracePlacementStore } from '@/supports/SupportTypes/Brace/bracePlacementState';
 import { splitSupportShaft } from '@/supports/SupportPrimitives/Joint/jointUtils';
 import { resolveSegmentEndpoints, type ShaftEntity } from '@/supports/SupportPrimitives/Knot/segmentEndpoints';
@@ -416,7 +421,6 @@ import { IslandScanWorkflowCard } from '@/volumeAnalysis/IslandScan/workflow/Isl
 import { IslandVolumesHierarchyCard } from '@/volumeAnalysis/IslandVolumes/components/IslandVolumesHierarchyCard';
 import { uploadPrintJobWithProgress, type PluginUploadProgressEvent } from '@/features/plugins/pluginUploadBridge';
 import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
-import { clonePlainData } from '@/utils/plainDataClone';
 import { fetchRtspRelayStatus } from '@/utils/rtspRelayBridge';
 import {
   hollowApplyFromCapturedSource,
@@ -458,6 +462,14 @@ interface ShaftHoverDebugDetail {
 type PendingModifierResetAction = 'hollowing' | 'hole_punch' | 'clear_hollowing';
 
 const EMPTY_SUPPORT_BOUNDS_BY_MODEL_ID = new Map<string, THREE.Box3>();
+
+/**
+ * Support bounds per support snapshot, so entering Arrange does not re-walk the
+ * whole forest every time. The memo below is pure over (support snapshot, raft
+ * settings); a tool switch changes neither, only the gate that asks for the map.
+ * Consumers clone what they read, so sharing the cached boxes is safe.
+ */
+const supportBoundsCache = new WeakMap<object, { raft: object; bounds: Map<string, THREE.Box3> }>();
 
 function countRecordEntries(record: Record<string, unknown>): number {
   let count = 0;
@@ -694,6 +706,7 @@ type TransformStoreCommitResult = {
   updated: boolean;
   supportsChanged: boolean;
   kickstandsChanged: boolean;
+  supportLocalFramePreserved: boolean;
 };
 
 type PendingSupportDragSyncTransaction = {
@@ -2528,6 +2541,7 @@ export default function Home() {
   const rightClickGestureRef = React.useRef<{ x: number; y: number; moved: boolean } | null>(null);
   const suppressEditorContextMenuUntilRef = React.useRef(0);
   const cameraResumeTimeoutRef = React.useRef<number | null>(null);
+  const backgroundWorkResumeTimeoutRef = React.useRef<number | null>(null);
   const { getHotkey } = useHotkeyConfig();
   const supportSpotlightHoldHotkey = getHotkey('SUPPORTS', 'TEMP_SPOTLIGHT_HOLD');
 
@@ -6412,17 +6426,17 @@ export default function Home() {
 
   React.useEffect(() => {
     const refreshHistoryDebug = () => {
+      // The panel is the only reader, and this copies up to 600 events into
+      // React state — a root re-render of this component on every push, even
+      // with the panel closed.
+      if (!isHistoryDebugOpenRef.current) return;
       setHistoryDebugEvents(getHistoryDebugEvents());
       setHistoryStackCounts({ undo: getUndoCount(), redo: getRedoCount() });
-      // Sizes only while the panel is open: both walk every entry, and the debug
-      // log updates on every push.
-      if (isHistoryDebugOpenRef.current) {
-        setHistoryStackBytes(getHistoryStackBytes());
-        setSceneSnapshotBytes(getSceneSnapshotRegistryBytes());
-      }
+      setHistoryStackBytes(getHistoryStackBytes());
+      setSceneSnapshotBytes(getSceneSnapshotRegistryBytes());
     };
 
-    refreshHistoryDebug();
+    if (isHistoryDebugOpenRef.current) refreshHistoryDebug();
 
     const unsubHistory = subscribeHistory(refreshHistoryDebug);
     const unsubHistoryDebug = subscribeHistoryDebug(refreshHistoryDebug);
@@ -6435,8 +6449,11 @@ export default function Home() {
 
   React.useEffect(() => {
     isHistoryDebugOpenRef.current = isHistoryDebugOpen;
+    setHistoryDebugDetailsEnabled(isHistoryDebugOpen);
     // Opening the panel must not wait for the next push to show a number.
     if (isHistoryDebugOpen) {
+      setHistoryDebugEvents(getHistoryDebugEvents());
+      setHistoryStackCounts({ undo: getUndoCount(), redo: getRedoCount() });
       setHistoryStackBytes(getHistoryStackBytes());
       setSceneSnapshotBytes(getSceneSnapshotRegistryBytes());
     }
@@ -6505,6 +6522,7 @@ export default function Home() {
     let wasSliceMetrics = false;
     let wasPrintMonitor = false;
     let wasPrintRtsp = false;
+    let wasRenderProfiler = false;
 
     const unsubscribe = hotkeyStore.subscribe((state) => {
       const isDiagnosticsActive = isActionActiveSync('DEBUG', 'DIAGNOSTICS');
@@ -6513,6 +6531,7 @@ export default function Home() {
       const isSliceMetricsActive = isActionActiveSync('DEBUG', 'SLICE_METRICS');
       const isPrintMonitorActive = isActionActiveSync('DEBUG', 'PRINT_MONITOR');
       const isPrintRtspActive = isActionActiveSync('DEBUG', 'PRINT_RTSP');
+      const isRenderProfilerActive = isActionActiveSync('DEBUG', 'RENDER_PROFILER');
 
       if (isDiagnosticsActive && !wasDiagnostics) {
         setIsDiagnosticsOpen((prev) => !prev);
@@ -6538,6 +6557,9 @@ export default function Home() {
           setIsPrintingMonitorRtspDebugOpen((prev) => !prev);
         }
       }
+      if (isRenderProfilerActive && !wasRenderProfiler) {
+        toggleRenderProfilerEnabled();
+      }
 
       wasDiagnostics = isDiagnosticsActive;
       wasHistory = isHistoryActive;
@@ -6545,6 +6567,7 @@ export default function Home() {
       wasSliceMetrics = isSliceMetricsActive;
       wasPrintMonitor = isPrintMonitorActive;
       wasPrintRtsp = isPrintRtspActive;
+      wasRenderProfiler = isRenderProfilerActive;
     });
 
     return unsubscribe;
@@ -6729,11 +6752,25 @@ export default function Home() {
         Math.abs(current.rotation.y - modelTransform.rotation.y) > EPSILON ||
         Math.abs(current.rotation.z - modelTransform.rotation.z) > EPSILON;
       const scaleChanged = current.scale.distanceToSquared(modelTransform.scale) > EPSILON;
+      /**
+       * Only a transform that is not a rigid translation changes the supports'
+       * relation to the model: rotation and scale re-resolve contacts against the
+       * surface. A plain drag is a translation, and its undo step is the same
+       * delta — so it needs the two transforms, not a second copy of a
+       * 20,000-entity support store. Two clones per gesture is what made the
+       * pointerup of a drag hitch.
+       *
+       * A Z change counts too, but only on the gesture's first update: that is
+       * the one moment the store still holds the pre-drag state, so a snapshot
+       * taken there is exact. Later updates take the delta path.
+       */
+      const zChanged = Math.abs(current.position.z - modelTransform.position.z) > EPSILON;
+      const needsSupportState = rotChanged || scaleChanged || zChanged;
 
       if (posChanged || rotChanged || scaleChanged) {
         const pending = pendingTransformHistoryRef.current;
         if (!pending || pending.modelId !== scene.activeModelId) {
-          const beforeSupportSnapshot = captureTransformSupportSnapshot();
+          const beforeSupportSnapshot = needsSupportState ? captureTransformSupportSnapshot() : null;
           pendingTransformHistoryRef.current = {
             modelId: scene.activeModelId,
             before: {
@@ -6747,7 +6784,7 @@ export default function Home() {
               scale: current.scale.clone(),
             },
             description: pending?.description,
-            supportBefore: beforeSupportSnapshot.support,
+            supportBefore: beforeSupportSnapshot?.support,
           };
         } else {
           pending.after = {
@@ -6760,10 +6797,9 @@ export default function Home() {
         const isDirectTransformPath = !transformMgr.pendingTransformRef.current;
         scene.updateModelTransform(scene.activeModelId, current);
 
-        const afterSupportSnapshot = captureTransformSupportSnapshot();
         const pendingAfter = pendingTransformHistoryRef.current;
-        if (pendingAfter && pendingAfter.modelId === scene.activeModelId) {
-          pendingAfter.supportAfter = afterSupportSnapshot.support;
+        if (needsSupportState && pendingAfter && pendingAfter.modelId === scene.activeModelId) {
+          pendingAfter.supportAfter = captureTransformSupportSnapshot().support;
         }
 
         if (isDirectTransformPath) {
@@ -7515,6 +7551,9 @@ export default function Home() {
       return EMPTY_SUPPORT_BOUNDS_BY_MODEL_ID;
     }
 
+    const cached = supportBoundsCache.get(supportStateSnapshot);
+    if (cached && cached.raft === raftSettingsSnapshot) return cached.bounds;
+
     const boundsByModelId = new Map<string, THREE.Box3>();
 
     const ensureBounds = (modelId: string) => {
@@ -7638,6 +7677,7 @@ export default function Home() {
       expand(modelId, knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2));
     }
 
+    supportBoundsCache.set(supportStateSnapshot, { raft: raftSettingsSnapshot, bounds: boundsByModelId });
     return boundsByModelId;
   }, [
     scene.mode,
@@ -8305,6 +8345,25 @@ export default function Home() {
     return scene.selectedModelIds;
   }, [scene.mode, scene.selectedModelIds]);
 
+  /**
+   * The cavity map the scene reads, rebuilt only when a cavity actually changes.
+   *
+   * The ref cannot be handed to the scene directly: its identity never changes,
+   * so a consumer keyed on "the inputs moved" would never see an update. But a
+   * fresh Map per render is worse — the Prepare merged-support cache keys on this
+   * map, so every unrelated render (a tool switch, a selection) invalidated the
+   * walk and re-merged every model, which is a second of work landing on the
+   * camera transition that triggered it. `cavityGeometryVersion` is bumped on
+   * every mutation of the ref, so it is the correct trigger.
+   */
+  const sceneCanvasCavityGeometryByModelId = React.useMemo(
+    () => new Map(
+      Array.from(cavityGeometryByModelIdRef.current.entries()).map(([id, entry]) => [id, entry.geometry]),
+    ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the ref is stable; the version is its change signal
+    [cavityGeometryVersion],
+  );
+
   React.useEffect(() => {
     if (scene.mode !== 'support') return;
     if (scene.activeModelId) return;
@@ -8544,6 +8603,7 @@ export default function Home() {
       updated: false,
       supportsChanged: false,
       kickstandsChanged: false,
+      supportLocalFramePreserved: false,
     };
     const expectedModelTransforms: Array<{ modelId: string; transform: ModelTransform }> = [];
 
@@ -8596,6 +8656,12 @@ export default function Home() {
           rotation: current.rotation.clone(),
           scale: current.scale.clone(),
         };
+        const expectSupportTransform = scene.mode === 'prepare';
+        if (expectSupportTransform) {
+          // Set before the store write: a discrete update can flush the cache
+          // hook before this handler returns.
+          skipNextPrepareMergedSupportRebuild();
+        }
         transformCommitResult = scene.updateModelTransform(
           scene.activeModelId,
           committedTransform,
@@ -8603,6 +8669,10 @@ export default function Home() {
           spawnedPlateId ? { landedPlateId: spawnedPlateId } : undefined,
         );
         transformDebugTimelineRef.current.storeUpdatedAt = stampNow();
+
+        if (expectSupportTransform && (!transformCommitResult.updated || !transformCommitResult.supportLocalFramePreserved)) {
+          cancelPrepareMergedSupportRebuildSkip();
+        }
 
         if (transformCommitResult.updated) {
           expectedModelTransforms.push({
@@ -8885,6 +8955,7 @@ export default function Home() {
         updated: false,
         supportsChanged: false,
         kickstandsChanged: false,
+        supportLocalFramePreserved: false,
       });
       return;
     }
@@ -9233,6 +9304,11 @@ export default function Home() {
 
   // Auto applies to the whole selection: every selected model is snapped again, and with
   // several selected they are lifted or dropped together, as a single model is on its own.
+  const getCavityGeometryForModel = React.useCallback(
+    (modelId: string) => cavityGeometryByModelIdRef.current.get(modelId)?.geometry ?? null,
+    [],
+  );
+
   const handleAutoLiftChange = React.useCallback((enabled: boolean) => {
     const targetIds = getSelectionTargetIds();
     // Placed before the overrides are cleared: the placement writes from the models as they
@@ -9429,6 +9505,44 @@ export default function Home() {
         window.clearTimeout(cameraResumeTimeoutRef.current);
       }
       scene.setBackgroundGeometryWorkPaused(false);
+    };
+  }, [scene]);
+
+  // A deferred BVH build or chunk-store encode is a single blocking call; it
+  // cannot be interrupted once started, but it must not *start* under a gesture.
+  // The camera already pauses the queue; a pointer press pauses it too, and the
+  // reason set keeps one owner's resume from restarting it under the other.
+  React.useEffect(() => {
+    const pauseForPointer = () => {
+      if (backgroundWorkResumeTimeoutRef.current !== null) {
+        window.clearTimeout(backgroundWorkResumeTimeoutRef.current);
+        backgroundWorkResumeTimeoutRef.current = null;
+      }
+      scene.setBackgroundGeometryWorkPaused(true, 'pointer');
+    };
+
+    const resumeAfterPointer = () => {
+      if (backgroundWorkResumeTimeoutRef.current !== null) {
+        window.clearTimeout(backgroundWorkResumeTimeoutRef.current);
+      }
+      backgroundWorkResumeTimeoutRef.current = window.setTimeout(() => {
+        backgroundWorkResumeTimeoutRef.current = null;
+        scene.setBackgroundGeometryWorkPaused(false, 'pointer');
+      }, 350);
+    };
+
+    window.addEventListener('pointerdown', pauseForPointer, true);
+    window.addEventListener('pointerup', resumeAfterPointer, true);
+    window.addEventListener('pointercancel', resumeAfterPointer, true);
+    return () => {
+      window.removeEventListener('pointerdown', pauseForPointer, true);
+      window.removeEventListener('pointerup', resumeAfterPointer, true);
+      window.removeEventListener('pointercancel', resumeAfterPointer, true);
+      if (backgroundWorkResumeTimeoutRef.current !== null) {
+        window.clearTimeout(backgroundWorkResumeTimeoutRef.current);
+        backgroundWorkResumeTimeoutRef.current = null;
+      }
+      scene.setBackgroundGeometryWorkPaused(false, 'pointer');
     };
   }, [scene]);
 
@@ -10623,6 +10737,7 @@ export default function Home() {
                   autoLift={transformMgr.autoLift}
                   onAutoLiftChange={handleAutoLiftChange}
                   onBeforeRun={requestModifierDecisionBeforeSupports}
+                  getCavityGeometry={getCavityGeometryForModel}
                 />
               </div>
             )}
@@ -10865,7 +10980,7 @@ export default function Home() {
               }
               setPlateTrashIntent(intent);
             }}
-            cavityGeometryByModelId={new Map(Array.from(cavityGeometryByModelIdRef.current.entries()).map(([id, entry]) => [id, entry.geometry]))}
+            cavityGeometryByModelId={sceneCanvasCavityGeometryByModelId}
             disableRaycast={transformMgr.isTransforming}
             hideCrossSectionCap={false}
             onCameraChange={handleCameraChange}
@@ -11207,6 +11322,8 @@ export default function Home() {
 
       {/* The cut's own right-click menu and its waypoint hover hint. */}
       <OrganicCutOverlay session={organicCut} toolActive={organicCutToolActive} />
+
+      <RenderProfilerOverlay />
 
       <DiagnosticsModals
         clearHistory={clearHistory}

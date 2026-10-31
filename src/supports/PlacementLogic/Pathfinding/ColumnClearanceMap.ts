@@ -49,6 +49,24 @@ const MAX_CELLS = 12_000_000;
 const SLOP_MM = 0.02;
 const NO_SOLID = Infinity;
 
+/**
+ * A column map in a form that can cross a worker boundary.
+ *
+ * `lowestZ` owns its buffer, so a worker can transfer it back without copying
+ * the grid.
+ */
+export interface ColumnClearanceMapSnapshot {
+    cellMm: number;
+    originX: number;
+    originY: number;
+    width: number;
+    height: number;
+    lowestZ: Float32Array;
+    radiusMm: number;
+    vertexCount: number;
+    buildMs: number;
+}
+
 export class ColumnClearanceMap {
     readonly stats: ColumnClearanceMapStats;
 
@@ -70,6 +88,39 @@ export class ColumnClearanceMap {
         this._h = h;
         this._lo = lo;
         this.stats = stats;
+    }
+
+    /** The map's arrays and dimensions, for transfer to another thread. */
+    snapshot(): ColumnClearanceMapSnapshot {
+        return {
+            cellMm: this._cell,
+            originX: this._ox,
+            originY: this._oy,
+            width: this._w,
+            height: this._h,
+            lowestZ: this._lo,
+            radiusMm: this.stats.radiusMm,
+            vertexCount: this.stats.vertexCount,
+            buildMs: this.stats.buildMs,
+        };
+    }
+
+    /** Rebuild a map from a snapshot, e.g. one computed in a worker. */
+    static fromSnapshot(snapshot: ColumnClearanceMapSnapshot): ColumnClearanceMap {
+        const { cellMm, originX, originY, width, height, lowestZ } = snapshot;
+        return new ColumnClearanceMap(
+            cellMm, originX, originY, width, height, lowestZ,
+            {
+                cellMm,
+                width,
+                height,
+                cells: width * height,
+                radiusMm: snapshot.radiusMm,
+                vertexCount: snapshot.vertexCount,
+                bytes: lowestZ.byteLength,
+                buildMs: snapshot.buildMs,
+            },
+        );
     }
 
     /**

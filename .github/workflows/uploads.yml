@@ -1,0 +1,113 @@
+name: Uploads
+
+# Private upload links for issue attachments (#597). A developer comments
+# /upload on an issue and gets an upload-only link for the reporter; closing
+# the issue deletes the link and the files. See docs/dev/upload-service.md.
+#
+# Both events run the copy of this file on the default branch (main), not dev.
+
+on:
+  issue_comment:
+    types: [created]
+  issues:
+    types: [closed]
+
+permissions: {}
+
+jobs:
+  open:
+    name: Open upload link
+    # Only the team can hand out links, so the service never takes files nobody
+    # asked for. Pull requests are issues too as far as comments go; skip them.
+    if: >-
+      github.event_name == 'issue_comment' &&
+      !github.event.issue.pull_request &&
+      github.event.issue.state == 'open' &&
+      startsWith(github.event.comment.body, '/upload') &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    # Per job, not per workflow: every comment in the repo starts a run, and
+    # those skipped runs must not queue against (or cancel) a real one.
+    concurrency:
+      group: uploads-${{ github.event.issue.number }}
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Get the link
+        id: link
+        env:
+          UPLOADS_URL: ${{ vars.UPLOADS_URL }}
+          UPLOADS_TOKEN: ${{ secrets.UPLOADS_TOKEN }}
+          NUMBER: ${{ github.event.issue.number }}
+        run: node .github/uploads/uploads.mjs open "$NUMBER"
+
+      - name: Post it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number }}
+          URL: ${{ steps.link.outputs.url }}
+        run: |
+          gh issue comment "$NUMBER" --body-file - <<EOF
+          You can send us the files for this issue here: **$URL**
+
+          - Only the DragonFruit developers can open or download what you upload. Anyone with the link can upload, and can see the file names, but not the files.
+          - We use the files only to investigate this issue, and never add them to our code or tests.
+          - When this issue is closed, the files are deleted and the link shows "not found".
+          EOF
+
+      - name: Say it failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number }}
+        run: gh issue comment "$NUMBER" --body "The upload service didn't answer, so there is no link yet. A developer will try again later."
+
+  close:
+    name: Delete uploads
+    if: github.event_name == 'issues'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: uploads-${{ github.event.issue.number }}
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Delete the link and the files
+        id: delete
+        env:
+          UPLOADS_URL: ${{ vars.UPLOADS_URL }}
+          UPLOADS_TOKEN: ${{ secrets.UPLOADS_TOKEN }}
+          NUMBER: ${{ github.event.issue.number }}
+        run: node .github/uploads/uploads.mjs close "$NUMBER"
+
+      - name: Say so
+        # Most issues never had a link; stay quiet on those.
+        if: steps.delete.outputs.deleted == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number }}
+        run: gh issue comment "$NUMBER" --body "The files uploaded for this issue have been deleted, and the upload link no longer works."

@@ -71,6 +71,19 @@ const YIELD_INTERVAL_LAYERS = 64;
 /** Voxels flooded between yields while building components. */
 const YIELD_INTERVAL_VOXELS = 200_000;
 
+/**
+ * Largest dense candidate mask this scan will allocate, in bytes.
+ *
+ * The candidate set is a bitset over each layer that carries unsupported
+ * voxels. That is one bit per grid cell, against a `Set<number>` entry per
+ * candidate voxel (~30-50 bytes each), so the bitset is both faster to build
+ * and far smaller for the dense candidate regions a scan actually produces.
+ * The cap keeps a pathological bbox (a tall model at a fine pixel pitch) from
+ * asking for gigabytes; past it the candidates stay a Set, which is slower but
+ * proportional to the candidates rather than to the grid.
+ */
+const MAX_DENSE_VOXEL_BYTES = 512 * 1024 * 1024;
+
 
 /**
  * Writes to the app log file, not just the devtools console.
@@ -135,7 +148,20 @@ export async function detectVoxelIslands(
   // Union of all unsupported candidate voxels.
   const reportProgress = createProgressThrottle();
   const codec = gridCodec(width, height);
-  const candidates = new Set<number>();
+  const layerCells = width * height;
+  const layerWords = Math.ceil(layerCells / 32);
+  let activeLayers = 0;
+  for (let L = 0; L < numLayers; L++) {
+    if (candidateLayers[L]?.length) activeLayers += 1;
+  }
+  // One bitset per layer that carries candidates; layers without any stay
+  // null. The same layer/row/col packing as `codec.pack`, so the flood fill
+  // reads the same keys either way.
+  const dense = activeLayers * layerWords * 4 <= MAX_DENSE_VOXEL_BYTES
+    ? new Array<Uint32Array | null>(numLayers).fill(null)
+    : null;
+  const sparse = dense ? null : new Set<number>();
+  let candidateCount = 0;
   for (let L = 0; L < numLayers; L++) {
     if (L % YIELD_INTERVAL_LAYERS === 0) {
       reportProgress(() => onProgress?.(L, numLayers, 'Collecting voxels', phaseNumber('Collecting voxels'), PHASES.length));
@@ -146,12 +172,29 @@ export async function detectVoxelIslands(
     // UI alive.
     const pairs = candidateLayers[L];
     if (!pairs) continue;
-    for (let i = 0; i < pairs.length; i += 2) {
-      candidates.add(codec.pack(pairs[i], pairs[i + 1], L));
+    // Drop the pair array as soon as it is consumed: the flood fill's own
+    // structures are built while this closure is still in scope.
+    candidateLayers[L] = undefined;
+    if (dense) {
+      const bits = (dense[L] ??= new Uint32Array(layerWords));
+      for (let i = 0; i < pairs.length; i += 2) {
+        const index = pairs[i + 1] * width + pairs[i];
+        const word = index >>> 5;
+        const mask = 1 << (index & 31);
+        if ((bits[word] & mask) === 0) {
+          bits[word] |= mask;
+          candidateCount += 1;
+        }
+      }
+    } else {
+      for (let i = 0; i < pairs.length; i += 2) {
+        sparse!.add(codec.pack(pairs[i], pairs[i + 1], L));
+      }
+      candidateCount = sparse!.size;
     }
   }
   console.timeEnd('[Islands] slice + candidate extraction');
-  console.log(`[Islands] candidate (unsupported) voxels: ${candidates.size.toLocaleString()}`);
+  console.log(`[Islands] candidate (unsupported) voxels: ${candidateCount.toLocaleString()}`);
 
   // Release the per-layer payloads before the flood fill. The union above is
   // their last reader, but the binding stays in scope for the rest of the
@@ -163,7 +206,9 @@ export async function detectVoxelIslands(
   await logToFile('[Islands] phase=flood-start');
   console.time('[Islands] 3D connected-components');
   const allIslands = await buildIslands(
-    candidates,
+    dense,
+    sparse,
+    candidateCount,
     codec,
     { originX, originZ, px, minZ, layerHeightMm },
     params.diagonal3D !== false,
@@ -202,8 +247,8 @@ async function sliceCandidateLayers(
   layerHeightMm: number,
   opts: { px_mm: number; support_buffer_mm: number; connectivity: 4 | 8 },
   onProgress?: ScanProgressCallback,
-): Promise<Int32Array[]> {
-  const candidateLayers: Int32Array[] = new Array(numLayers);
+): Promise<(Int32Array | undefined)[]> {
+  const candidateLayers: (Int32Array | undefined)[] = new Array(numLayers);
 
   const cores = typeof navigator !== 'undefined' ? (navigator.hardwareConcurrency || 4) : 4;
   const concurrency = Math.min(Math.max(2, cores), numLayers);
@@ -260,15 +305,20 @@ interface GridGeom {
   layerHeightMm: number;
 }
 
-/** 3D connected components over the candidate voxel set → contact-region islands. */
 /**
- * Groups candidate voxels into islands by 3D flood fill.
+ * 3D connected components over the candidate voxel set → contact-region islands.
  *
- * Consumes `candidates`: the Set is emptied as the walk proceeds and must not
- * be read afterwards.
+ * Candidates arrive either as one bitset per layer that has any (the normal
+ * path) or as a `Set` when the grid at this resolution would make the bitsets
+ * too large. Both walks claim a voxel by clearing it, so the store is consumed
+ * and must not be read afterwards. The bitset path never hashes or boxes a
+ * voxel: claiming a neighbour is one word read and write, and finding the next
+ * component is a scan over 32 candidates at a time.
  */
 async function buildIslands(
-  candidates: Set<number>,
+  dense: (Uint32Array | null)[] | null,
+  sparse: Set<number> | null,
+  total: number,
   codec: GridCodec,
   geom: GridGeom,
   diagonal: boolean,
@@ -277,55 +327,21 @@ async function buildIslands(
   const offsets = neighbourOffsets(diagonal);
   const islands: DetectedIsland[] = [];
   let idx = 0;
-  const total = candidates.size;
   const reportProgress = createProgressThrottle();
   let flooded = 0;
   let sinceYield = 0;
 
-  // `candidates` IS the unvisited set: each voxel is deleted as it is flooded,
-  // so no second Set of the same ten million boxed numbers has to exist beside
-  // it. That pair was most of a 17.5 GB peak, against WebKit's 16 GB ceiling.
-  //
-  // Deleting during iteration is well defined — entries removed before the
-  // iterator reaches them are skipped, which is exactly the "already visited"
-  // check this used to perform. The caller must treat the Set as consumed.
-  for (const startKey of candidates) {
+  // Yielding between components rather than inside a flood keeps the walk
+  // itself untouched; a single component can still be large, so this bounds
+  // responsiveness by the largest island, not by the whole model.
+  const yieldForProgress = async () => {
+    if (sinceYield < YIELD_INTERVAL_VOXELS) return;
+    sinceYield = 0;
+    reportProgress(() => onProgress?.(flooded, total, 'Connecting islands', phaseNumber('Connecting islands'), PHASES.length));
+    await yieldToEventLoop();
+  };
 
-    // Yielding between components rather than inside a flood keeps the walk
-    // itself untouched; a single component can still be large, so this bounds
-    // responsiveness by the largest island, not by the whole model.
-    if (sinceYield >= YIELD_INTERVAL_VOXELS) {
-      sinceYield = 0;
-      reportProgress(() => onProgress?.(flooded, total, 'Connecting islands', phaseNumber('Connecting islands'), PHASES.length));
-      await yieldToEventLoop();
-    }
-
-    // Flood this component.
-    const comp: number[] = [];
-    const stack = [startKey];
-    candidates.delete(startKey);
-    while (stack.length) {
-      const k = stack.pop()!;
-      comp.push(k);
-      flooded++;
-      sinceYield++;
-      const col = codec.colOf(k);
-      const row = codec.rowOf(k);
-      const layer = codec.layerOf(k);
-      for (let o = 0; o < offsets.length; o += 3) {
-        const nc = col + offsets[o];
-        const nr = row + offsets[o + 1];
-        const nl = layer + offsets[o + 2];
-        if (nc < 0 || nc >= codec.width || nr < 0 || nr >= codec.height || nl < 0) continue;
-        const nk = codec.pack(nc, nr, nl);
-        // `delete` reports whether it was there, so claiming a neighbour is one
-        // hash lookup rather than the previous three.
-        if (candidates.delete(nk)) {
-          stack.push(nk);
-        }
-      }
-    }
-
+  const finishComponent = (comp: number[]) => {
     // Lowest-layer footprint defines the contact point (where support attaches).
     let minLayer = Infinity;
     let maxLayer = -Infinity;
@@ -365,6 +381,116 @@ async function buildIslands(
       layerSpan: [minLayer, maxLayer],
       contactVoxels: contactVoxels.build(),
     });
+  };
+
+  if (dense) {
+    const layerCells = codec.width * codec.height;
+    const layerWords = Math.ceil(layerCells / 32);
+    let scanLayer = 0;
+    let scanWord = 0;
+    // Next unvisited voxel, in layer/row/col order. The cursor only moves
+    // forward; a flood can only clear bits, never set one, so an unvisited
+    // voxel behind it cannot appear.
+    const nextStart = (): number => {
+      while (scanLayer < dense.length) {
+        const bits = dense[scanLayer];
+        if (!bits) {
+          scanLayer += 1;
+          scanWord = 0;
+          continue;
+        }
+        while (scanWord < layerWords) {
+          const word = bits[scanWord];
+          if (word !== 0) {
+            return scanLayer * layerCells + scanWord * 32 + (31 - Math.clz32(word & -word));
+          }
+          scanWord += 1;
+        }
+        scanLayer += 1;
+        scanWord = 0;
+      }
+      return -1;
+    };
+
+    for (;;) {
+      const startKey = nextStart();
+      if (startKey < 0) break;
+      await yieldForProgress();
+
+      const comp: number[] = [];
+      const stack = [startKey];
+      {
+        const layer = Math.floor(startKey / layerCells);
+        const rest = startKey - layer * layerCells;
+        const bits = dense[layer]!;
+        bits[rest >>> 5] &= ~(1 << (rest & 31));
+      }
+      while (stack.length) {
+        const k = stack.pop()!;
+        comp.push(k);
+        flooded++;
+        sinceYield++;
+        const layer = Math.floor(k / layerCells);
+        const rest = k - layer * layerCells;
+        const row = Math.floor(rest / codec.width);
+        const col = rest - row * codec.width;
+        for (let o = 0; o < offsets.length; o += 3) {
+          const nc = col + offsets[o];
+          const nr = row + offsets[o + 1];
+          const nl = layer + offsets[o + 2];
+          if (nc < 0 || nc >= codec.width || nr < 0 || nr >= codec.height || nl < 0 || nl >= dense.length) continue;
+          const bits = dense[nl];
+          if (!bits) continue;
+          const index = nr * codec.width + nc;
+          const word = index >>> 5;
+          const mask = 1 << (index & 31);
+          if (bits[word] & mask) {
+            bits[word] &= ~mask;
+            stack.push(nl * layerCells + index);
+          }
+        }
+      }
+      finishComponent(comp);
+    }
+
+    return islands;
+  }
+
+  const candidates = sparse!;
+  // `candidates` IS the unvisited set: each voxel is deleted as it is flooded,
+  // so no second Set of the same boxed numbers has to exist beside it.
+  // Deleting during iteration is well defined — entries removed before the
+  // iterator reaches them are skipped, which is exactly the "already visited"
+  // check this used to perform.
+  for (const startKey of candidates) {
+    await yieldForProgress();
+
+    const comp: number[] = [];
+    const stack = [startKey];
+    candidates.delete(startKey);
+    while (stack.length) {
+      const k = stack.pop()!;
+      comp.push(k);
+      flooded++;
+      sinceYield++;
+      const col = codec.colOf(k);
+      const row = codec.rowOf(k);
+      const layer = codec.layerOf(k);
+      for (let o = 0; o < offsets.length; o += 3) {
+        const nc = col + offsets[o];
+        const nr = row + offsets[o + 1];
+        const nl = layer + offsets[o + 2];
+        if (nc < 0 || nc >= codec.width || nr < 0 || nr >= codec.height || nl < 0) continue;
+        const nk = codec.pack(nc, nr, nl);
+        // `delete` reports whether it was there, so claiming a neighbour is one
+        // hash lookup rather than the previous three.
+        if (candidates.delete(nk)) {
+          stack.push(nk);
+        }
+      }
+    }
+
+    finishComponent(comp);
   }
 
   return islands;

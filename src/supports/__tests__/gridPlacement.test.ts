@@ -425,3 +425,17 @@ test('the anchoring spacing follows the part thickness, not a switch', () => {
     assert.equal(steepFlatSpacingMultiplier({ steepFlat: false }, base, 7), 1);
     assert.equal(steepFlatSpacingMultiplier(face, base, 0), STEEP_FLAT_SPACING_MULTIPLIER);
 });
+
+test('an interior cavity ceiling gets a far sparser grid', () => {
+    const settings = createDefaultAutoSupportSettings();
+    const exteriorRegion = rectRegion('cavity', -10, 10, -10, 10, 400);
+    const interiorRegion: DetectedIsland = { ...exteriorRegion, interior: true };
+
+    const exterior = generateGridCandidates([exteriorRegion], settings);
+    const interior = generateGridCandidates([interiorRegion], settings);
+
+    assert.ok(exterior.length > 0, 'the exterior region has candidates');
+    assert.ok(interior.length > 0, 'the interior region still has candidates');
+    assert.ok(interior.length <= Math.ceil(exterior.length / 4),
+        `interior forest is much sparser (${interior.length} vs ${exterior.length})`);
+});

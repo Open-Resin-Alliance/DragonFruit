@@ -48,6 +48,15 @@ function makeBoxSdf(boxes: Box[]): SDFCache {
             }
             return false;
         },
+        columnBlocked: (x: number, y: number, zTop: number, zBot: number, clearance: number) => {
+            const len = Math.abs(zTop - zBot);
+            const steps = Math.max(1, Math.ceil(len / 0.25));
+            for (let i = 0; i <= steps; i++) {
+                const t = i / steps;
+                if (distanceAt(x, y, zTop + (zBot - zTop) * t) < clearance) return true;
+            }
+            return false;
+        },
     } as unknown as SDFCache;
 }
 

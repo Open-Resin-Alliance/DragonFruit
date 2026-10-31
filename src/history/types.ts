@@ -29,6 +29,13 @@ export interface HistoryAction<Type extends string = string, Payload = unknown> 
   /** Serialized payload required to undo/redo the action. */
   payload: Payload;
   /**
+   * The payload is a fresh copy owned by the store, so pushing and moving it
+   * between the undo and redo stacks need not clone it again. Set by a domain
+   * that has just built a private snapshot (support-edit history does); never set
+   * it on a payload that is still referenced by live state.
+   */
+  payloadOwned?: boolean;
+  /**
    * Tool the entry was made in. Stamped by `pushHistory` from the app-installed
    * provider, so every domain gets it without opting in — the same reason the
    * cut tool snapshots its whole state instead of wiring each edit by hand.

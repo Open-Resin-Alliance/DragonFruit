@@ -290,6 +290,19 @@ function applyIslandFallbackSeeds(
     }
 }
 
+/** Stable order for support ids: position first, id only for exact coincidence.
+ *  Auto-generated ids are random, so sorting by id alone made the partition —
+ *  and every brace choice downstream — differ between runs. */
+function compareSupportIds(a: string, b: string, nodeById: Map<string, VoronoiSupportNode>): number {
+    const na = nodeById.get(a);
+    const nb = nodeById.get(b);
+    if (na && nb) {
+        if (na.point.x !== nb.point.x) return na.point.x - nb.point.x;
+        if (na.point.y !== nb.point.y) return na.point.y - nb.point.y;
+    }
+    return a.localeCompare(b);
+}
+
 function multiSourceClaim(
     nodes: VoronoiSupportNode[],
     adjacency: Map<string, string[]>,
@@ -297,8 +310,9 @@ function multiSourceClaim(
 ): Map<string, string> {
     const claimedBySupportId = new Map<string, string>();
     const queue: Array<{ supportId: string; centerId: string }> = [];
+    const nodeById = new Map(nodes.map((node) => [node.supportId, node]));
 
-    const sortedSeeds = [...seeds].sort();
+    const sortedSeeds = [...seeds].sort((a, b) => compareSupportIds(a, b, nodeById));
     for (const centerId of sortedSeeds) {
         claimedBySupportId.set(centerId, centerId);
         queue.push({ supportId: centerId, centerId });
@@ -406,8 +420,9 @@ export function partitionSupportsWithVoronoi(
             groupsByCenter.set(centerId, list);
         }
 
+        const nodeBySupportId = new Map(modelSupports.map((node) => [node.supportId, node]));
         for (const group of groupsByCenter.values()) {
-            groupsAcrossModels.push(group.sort());
+            groupsAcrossModels.push(group.sort((a, b) => compareSupportIds(a, b, nodeBySupportId)));
         }
     }
 

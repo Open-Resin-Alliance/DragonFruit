@@ -28,7 +28,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22.23.2"
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Install dependencies
@@ -62,7 +62,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22.23.2"
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Install dependencies
@@ -81,7 +81,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22.23.2"
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: website/package-lock.json
 
@@ -94,6 +94,15 @@ jobs:
       - name: Check types and templates
         working-directory: website
         run: npm run check
+
+      # The build renders main and dev snapshots. The script materializes the
+      # placeholder screenshots each snapshot links, so a clean checkout builds.
+      - name: Prepare documentation versions
+        run: node scripts/prepare-docs-versions.mjs
+        env:
+          DOCS_VERSIONS: main,dev
+          DOCS_DEFAULT: main
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build the site
         working-directory: website
@@ -111,7 +120,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22.23.2"
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Install dependencies
@@ -138,7 +147,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22.23.2"
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Install dependencies
@@ -168,7 +177,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22.23.2"
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Install the pinned Rust toolchain

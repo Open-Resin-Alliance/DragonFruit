@@ -54,8 +54,12 @@ export default function socialCards() {
           if (!source) continue;
           /* A forwarding stub is not a landing page - it bounces straight to the
              section it belongs to, carries no social tags, and is noindex - so it
-             gets no card. Rendering one per part would be fifty PNGs nobody asks for. */
-          if (source.includes('http-equiv="refresh"')) continue;
+             gets no card. Astro's stub starts with this exact title; a documentation
+             page can mention `http-equiv="refresh"` while explaining the redirects. */
+          if (source.startsWith('<!doctype html><title>Redirecting to:')) continue;
+          /* Alternate docs versions are noindex branch snapshots; a card for one is
+             both unnecessary and a second card for the same words. */
+          if (source.includes('<meta name="robots" content="noindex">')) continue;
 
           const title = fromHtml(source, /<meta name="card:title" content="([^"]*)"/) ?? 'DragonFruit';
 

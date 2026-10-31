@@ -140,14 +140,12 @@ test('buildForestReport groups fan-out trees and lists bare trunks with sizing',
     assert.ok(bare.sizingNote.includes('area 0.10mm²'));
 });
 
-test('forestSizingNote reports the height factor and area reasoning', () => {
+test('forestSizingNote reports the sized multiplier and area reasoning', () => {
     const note = forestSizingNote(ledgerEntry('v19', 'e', 40, 0.5), 1.3);
-    // Z=40 → h = 1 + (40-20)/200 = 1.10.
-    assert.ok(note.includes('h1.10'));
+    assert.ok(note.includes('sized ×1.30'), note);
     assert.ok(note.includes('Ø1.30mm'));
     const short = forestSizingNote(ledgerEntry('v0', 'e', 5, 0.1), 0.89);
-    // Z=5 → h = 1.00 (below the 20mm band start).
-    assert.ok(short.includes('h1.00'));
+    assert.ok(short.includes('sized ×0.89'), short);
 });
 
 test('forestReportToText renders the copyable plain-text report', () => {

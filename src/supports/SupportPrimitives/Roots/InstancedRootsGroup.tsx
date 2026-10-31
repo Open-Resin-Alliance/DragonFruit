@@ -17,7 +17,7 @@ import { writeInstanceColors } from '../instanceColorWriter';
  * disk off the plane. It is a rendering offset only - the sliced and exported
  * geometry is generated from the support state, not from this batch.
  */
-const ROOT_RENDER_LIFT_MM = 0.01;
+export const ROOT_RENDER_LIFT_MM = 0.01;
 
 export interface InstancedRoot {
     id: string;
@@ -72,12 +72,10 @@ interface InstancedRootsGroupProps {
 interface RootBucket {
     key: string;
     roots: InstancedRoot[];
-    diskRadius: number;
-    diskHeight: number;
-    coneTopRadius: number;
-    coneBottomRadius: number;
-    coneHeight: number;
-    sphereRadius: number;
+    /** Top-to-bottom radius of the base cone: the one dimension a matrix cannot carry. */
+    shapeRatio: number;
+    /** Whether the bucket has any base cone at all; a root without one hides its instance. */
+    hasCone: boolean;
 }
 
 const ROOT_ROTATION = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
@@ -86,14 +84,53 @@ const IDENTITY_ROTATION = new THREE.Quaternion();
 /** Layout scratch: layouts are synchronous, so the batch kinds can share it. */
 const scratchObject = new THREE.Object3D();
 
-const toBucketKey = (root: InstancedRoot) => {
-    return [
-        quantizeToScale(root.bottomRadius, 1000),
-        quantizeToScale(root.effectiveDiskHeight, 1000),
-        quantizeToScale(root.topRadius, 1000),
-        quantizeToScale(root.coneHeight, 1000),
-    ].join(':');
-};
+/**
+ * Quantization of the base cone's top-to-bottom radius, in ratio units.
+ *
+ * The ratio is the only root dimension a unit geometry plus an instance matrix
+ * cannot express: a cylinder scaled by (r, h, r) covers the disk, a uniform
+ * sphere covers the top ball, but a frustum's two radii differ. It used to be
+ * part of a four-parameter key at 0.001 precision — and the root *diameter*
+ * varies continuously with the support profile, so the 20-model scene produced
+ * **254 buckets** and 762 mount calls for roots alone.
+ *
+ * 0.05 parts of the ratio is a top-radius error of at most 2.5% of the bottom
+ * radius, well under a print pixel, and it collapses a plate's roots to a
+ * handful of meshes.
+ */
+export const ROOT_SHAPE_RATIO_STEP = 0.05;
+export const ROOT_SHAPE_RATIO_BUCKETS_PER_UNIT = 1 / ROOT_SHAPE_RATIO_STEP;
+
+export function rootShapeRatio(root: InstancedRoot): number {
+    return Math.max(0.001, root.topRadius) / Math.max(0.001, root.bottomRadius);
+}
+
+/** The key one root's meshes are grouped under: its base cone's shape alone. */
+export function rootBucketKey(root: InstancedRoot): string {
+    return String(quantizeToScale(rootShapeRatio(root), ROOT_SHAPE_RATIO_BUCKETS_PER_UNIT));
+}
+
+/**
+ * The instance scale for each root primitive.
+ *
+ * The geometries are unit-sized (a 1×1×1 cylinder, a 1-radius sphere), so the
+ * instance matrix carries every millimetre dimension and two roots that differ
+ * only in size share a mesh. The disk and cone are rotated onto Z by the caller;
+ * their scale is in the geometry's own Y-up frame, where `y` is the height.
+ */
+export function rootInstanceScales(root: InstancedRoot): {
+    disk: [number, number, number];
+    cone: [number, number, number];
+    sphere: [number, number, number];
+} {
+    const bottomRadius = Math.max(0.001, root.bottomRadius);
+    const topRadius = Math.max(0.001, root.topRadius);
+    return {
+        disk: [bottomRadius, Math.max(0.001, root.effectiveDiskHeight), bottomRadius],
+        cone: [bottomRadius, Math.max(0.001, root.coneHeight), bottomRadius],
+        sphere: [topRadius, topRadius, topRadius],
+    };
+}
 
 function RootBucketMesh({
     bucket,
@@ -149,11 +186,12 @@ function RootBucketMesh({
         root: InstancedRoot,
         hidden: boolean,
     ) => {
+        const meshes = [
+            diskRef.current, coneRef.current, sphereRef.current,
+            overlayDiskRef.current, overlayConeRef.current, overlaySphereRef.current,
+        ];
         if (hidden) {
-            for (const mesh of [
-                diskRef.current, coneRef.current, sphereRef.current,
-                overlayDiskRef.current, overlayConeRef.current, overlaySphereRef.current,
-            ]) {
+            for (const mesh of meshes) {
                 if (mesh) mesh.setMatrixAt(index, HIDDEN_INSTANCE_MATRIX);
             }
             return;
@@ -162,22 +200,36 @@ function RootBucketMesh({
         // The whole stack rides the lift together, so its own faces keep their
         // spacing; only the disk's bottom leaves the plate.
         const lift = ROOT_RENDER_LIFT_MM;
-        const centers: Array<[THREE.InstancedMesh | null, THREE.Quaternion, number]> = [
-            [diskRef.current, ROOT_ROTATION, lift + root.effectiveDiskHeight / 2],
-            [coneRef.current, ROOT_ROTATION, lift + root.effectiveDiskHeight + (root.coneHeight / 2)],
-            [sphereRef.current, IDENTITY_ROTATION, lift + root.effectiveDiskHeight + root.coneHeight],
-            [overlayDiskRef.current, ROOT_ROTATION, lift + root.effectiveDiskHeight / 2],
-            [overlayConeRef.current, ROOT_ROTATION, lift + root.effectiveDiskHeight + (root.coneHeight / 2)],
-            [overlaySphereRef.current, IDENTITY_ROTATION, lift + root.effectiveDiskHeight + root.coneHeight],
+        const scales = rootInstanceScales(root);
+        // A root with no cone has no top ball either; its instances stay
+        // collapsed rather than drawing at the origin.
+        const hasCone = root.coneHeight > 0;
+        const entries: Array<{
+            mesh: THREE.InstancedMesh | null;
+            quaternion: THREE.Quaternion;
+            scale: [number, number, number];
+            zOffset: number;
+        }> = [
+            { mesh: diskRef.current, quaternion: ROOT_ROTATION, scale: scales.disk, zOffset: lift + root.effectiveDiskHeight / 2 },
+            { mesh: coneRef.current, quaternion: ROOT_ROTATION, scale: scales.cone, zOffset: lift + root.effectiveDiskHeight + (root.coneHeight / 2) },
+            { mesh: sphereRef.current, quaternion: IDENTITY_ROTATION, scale: scales.sphere, zOffset: lift + root.effectiveDiskHeight + root.coneHeight },
+            { mesh: overlayDiskRef.current, quaternion: ROOT_ROTATION, scale: scales.disk, zOffset: lift + root.effectiveDiskHeight / 2 },
+            { mesh: overlayConeRef.current, quaternion: ROOT_ROTATION, scale: scales.cone, zOffset: lift + root.effectiveDiskHeight + (root.coneHeight / 2) },
+            { mesh: overlaySphereRef.current, quaternion: IDENTITY_ROTATION, scale: scales.sphere, zOffset: lift + root.effectiveDiskHeight + root.coneHeight },
         ];
 
-        for (const [mesh, quaternion, zOffset] of centers) {
-            if (!mesh) continue;
-            scratchObject.position.set(root.basePos.x, root.basePos.y, root.basePos.z + zOffset);
-            scratchObject.quaternion.copy(quaternion);
-            scratchObject.scale.set(1, 1, 1);
+        for (let i = 0; i < entries.length; i += 1) {
+            const entry = entries[i];
+            if (!entry.mesh) continue;
+            if (!hasCone && i !== 0 && i !== 3) {
+                entry.mesh.setMatrixAt(index, HIDDEN_INSTANCE_MATRIX);
+                continue;
+            }
+            scratchObject.position.set(root.basePos.x, root.basePos.y, root.basePos.z + entry.zOffset);
+            scratchObject.quaternion.copy(entry.quaternion);
+            scratchObject.scale.set(entry.scale[0], entry.scale[1], entry.scale[2]);
             scratchObject.updateMatrix();
-            mesh.setMatrixAt(index, scratchObject.matrix);
+            entry.mesh.setMatrixAt(index, scratchObject.matrix);
         }
     }, []);
 
@@ -290,7 +342,7 @@ function RootBucketMesh({
                 onPointerMove={onRootPointerMove ? handlePointerMove : undefined}
                 onPointerOut={onRootPointerOut ? handlePointerOut : undefined}
             >
-                <cylinderGeometry args={[bucket.diskRadius, bucket.diskRadius, bucket.diskHeight, 10]} />
+                <cylinderGeometry args={[1, 1, 1, 10]} />
                 <meshStandardMaterial
                     color={instanceColor ? '#ffffff' : (discColor ?? color)}
                     emissive={emissive}
@@ -302,7 +354,7 @@ function RootBucketMesh({
                 />
             </instancedMesh>
 
-            {!diskOnly && bucket.coneHeight > 0 && (
+            {!diskOnly && bucket.hasCone && (
                 <instancedMesh
                     key={`root-cone:${bucket.roots.length}`}
                     ref={coneRef}
@@ -311,7 +363,7 @@ function RootBucketMesh({
                     renderOrder={100000}
                     raycast={() => null}
                 >
-                    <cylinderGeometry args={[bucket.coneTopRadius, bucket.coneBottomRadius, bucket.coneHeight, 10]} />
+                    <cylinderGeometry args={[bucket.shapeRatio, 1, 1, 10]} />
                     <meshStandardMaterial
                         color={instanceColor ? '#ffffff' : color}
                         emissive={emissive}
@@ -324,7 +376,7 @@ function RootBucketMesh({
                 </instancedMesh>
             )}
 
-            {!diskOnly && bucket.coneHeight > 0 && (
+            {!diskOnly && bucket.hasCone && (
                 <instancedMesh
                     key={`root-sphere:${bucket.roots.length}`}
                     ref={sphereRef}
@@ -333,7 +385,7 @@ function RootBucketMesh({
                     renderOrder={100000}
                     raycast={() => null}
                 >
-                    <sphereGeometry args={[bucket.sphereRadius, 10, 8]} />
+                    <sphereGeometry args={[1, 8, 6]} />
                     <meshStandardMaterial
                         color={instanceColor ? '#ffffff' : color}
                         emissive={emissive}
@@ -356,9 +408,9 @@ function RootBucketMesh({
                         renderOrder={100000}
                         material={outOfBoundsMaterial}
                     >
-                        <cylinderGeometry args={[bucket.diskRadius, bucket.diskRadius, bucket.diskHeight, 10]} />
+                        <cylinderGeometry args={[1, 1, 1, 10]} />
                     </instancedMesh>
-                    {!diskOnly && bucket.coneHeight > 0 && (
+                    {!diskOnly && bucket.hasCone && (
                         <instancedMesh
                             ref={overlayConeRef}
                             args={[undefined, undefined, bucket.roots.length]}
@@ -367,10 +419,10 @@ function RootBucketMesh({
                             renderOrder={100000}
                             material={outOfBoundsMaterial}
                         >
-                            <cylinderGeometry args={[bucket.coneTopRadius, bucket.coneBottomRadius, bucket.coneHeight, 10]} />
+                            <cylinderGeometry args={[bucket.shapeRatio, 1, 1, 10]} />
                         </instancedMesh>
                     )}
-                    {!diskOnly && bucket.coneHeight > 0 && (
+                    {!diskOnly && bucket.hasCone && (
                         <instancedMesh
                             ref={overlaySphereRef}
                             args={[undefined, undefined, bucket.roots.length]}
@@ -379,7 +431,7 @@ function RootBucketMesh({
                             renderOrder={100000}
                             material={outOfBoundsMaterial}
                         >
-                            <sphereGeometry args={[bucket.sphereRadius, 10, 8]} />
+                            <sphereGeometry args={[1, 8, 6]} />
                         </instancedMesh>
                     )}
                 </>
@@ -414,22 +466,19 @@ export function InstancedRootsGroup({
         const grouped = new Map<string, RootBucket>();
 
         for (const root of validRoots) {
-            const key = toBucketKey(root);
+            const key = rootBucketKey(root);
             const existing = grouped.get(key);
             if (existing) {
                 existing.roots.push(root);
+                if (root.coneHeight > 0) existing.hasCone = true;
                 continue;
             }
 
             grouped.set(key, {
                 key,
                 roots: [root],
-                diskRadius: root.bottomRadius,
-                diskHeight: root.effectiveDiskHeight,
-                coneTopRadius: root.topRadius,
-                coneBottomRadius: root.bottomRadius,
-                coneHeight: root.coneHeight,
-                sphereRadius: root.topRadius,
+                shapeRatio: quantizeToScale(rootShapeRatio(root), ROOT_SHAPE_RATIO_BUCKETS_PER_UNIT),
+                hasCone: root.coneHeight > 0,
             });
         }
 

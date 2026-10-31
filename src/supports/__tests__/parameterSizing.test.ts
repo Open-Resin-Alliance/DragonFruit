@@ -152,10 +152,10 @@ test('a custom band sizes the run (the band is the block, not a tier lookup)', (
 
     assert.equal(thin.shaftDiameterMm, 0.45, "the shaft is the block's own number");
     assert.equal(thin.rootsDiameterMm, 1.2, 'the pad too');
-    // The tip floor is 30% of the shaft, so a 0.45 mm shaft floors at 0.135 —
-    // past the band's own 0.12 contact.
-    assert.ok(Math.abs(thin.tipContactDiameterMm! - 0.135) < 1e-9,
-        `tip floors on a thin custom shaft (${thin.tipContactDiameterMm})`);
+    // A 0.45 mm shaft's 30% floor would be 0.135, and the band's own contact
+    // 0.12 — both below the 0.22 mm minimum a run may print, which binds here.
+    assert.ok(Math.abs(thin.tipContactDiameterMm! - 0.22) < 1e-9,
+        `tip floors at the 0.22 mm minimum on a thin custom shaft (${thin.tipContactDiameterMm})`);
 
     assert.ok(thin.shaftDiameterMm! < defaulted.shaftDiameterMm!, 'a smaller band sizes thinner');
     assert.ok(thin.tipContactDiameterMm! < defaulted.tipContactDiameterMm!, 'and with a smaller tip');
@@ -381,8 +381,8 @@ test('a run naming a custom Support Studio preset sizes with its numbers, not th
         const sized = sizeParameters(makeCandidate({ islandAreaMm2: 8, zHeight: 10 }))!;
         assert.equal(sized.shaftDiameterMm, 0.45, "the run sizes with the user's own preset");
         assert.equal(sized.rootsDiameterMm, 1.2, 'and its roots');
-        assert.ok(Math.abs(sized.tipContactDiameterMm! - 0.135) < 1e-9,
-            `and its tip, floored at 30% of the shaft (${sized.tipContactDiameterMm})`);
+        assert.ok(Math.abs(sized.tipContactDiameterMm! - 0.22) < 1e-9,
+            `and its tip, floored at the 0.22 mm minimum (${sized.tipContactDiameterMm})`);
     } finally {
         setResolvedSizingBands(null);
         updateAutoSupportSettings({ sizingPreset: 'structure' });
@@ -392,4 +392,16 @@ test('a run naming a custom Support Studio preset sizes with its numbers, not th
     updateAutoSupportSettings({ sizingPreset: created.id });
     assert.equal(activeSizingBand().shaftDiameterMm, 1.0, 'an unresolvable id falls back to structure');
     updateAutoSupportSettings({ sizingPreset: 'structure' });
+});
+
+test('the three model factors together are capped at the documented 1.85', () => {
+    const band = activeSizingBand().shaftDiameterMm;
+    const candidate = makeCandidate({ islandAreaMm2: 8, zHeight: 100 });
+    // Large part (size cap 1.45), heavy share (load cap 1.3) and a tall
+    // support (height cap 1.35): 2.54 if multiplied freely.
+    const ctx: ModelSizingContext = { modelVolumeMm3: 400000, totalCandidates: 20, modelSizeMm: 400 };
+    const sized = sizeParameters(candidate, 1, ctx)!;
+    assert.ok(sized.shaftDiameterMm! <= band * 1.85 + 1e-9,
+        `combined factor caps at 1.85 (got ${sized.shaftDiameterMm})`);
+    assert.ok(sized.shaftDiameterMm! > band * 1.5, 'and the scaled end still grows');
 });

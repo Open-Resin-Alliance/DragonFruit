@@ -60,6 +60,11 @@ Three-phase pipeline matching the TypeScript `ScanOrchestrator`:
 
 ```text
 Phase 1: Per-layer scan (parallel via rayon)
+  Rasterization is independent per layer and tracking is not, so the streaming
+  pipeline rasterizes RASTERIZE_CHUNK_LAYERS layers at a time in parallel, then
+  feeds that chunk to the tracker in order. Peak memory stays bounded by the
+  chunk rather than the volume, and the labels are bit-identical to the
+  sequential loop (`z_bucket_streaming_matches_unbucketed_reference`).
   For each layer:
     supported  = current_mask AND Dilate(prev_mask, buffer)
     candidates = current_mask MINUS supported
@@ -197,31 +202,74 @@ Run from `rust/dragonfruit-islands/`:
 
 ## Tauri IPC Integration
 
-The island scan is exposed to the frontend via a Tauri IPC command. The Tauri app (`src-tauri`) depends on `dragonfruit-islands` directly.
+The island scan is exposed to the frontend through Tauri commands. All of them
+take geometry as raw `f32` bytes on the shared staging buffer
+(`stage_mesh_binary_set`); no mesh crosses the boundary as a JSON number array.
+
+| Command | Used for | Mesh source |
+|---|---|---|
+| `run_island_scan_native` | Volume Analysis (RLE volume + per-layer labels) | staged transformed geometry |
+| `scan_islands_from_path` | Islands panel, model with a source file | file, loaded once in Rust |
+| `scan_islands_staged` | Islands panel, **pathless model (VOXL)** | staged rendered world soup |
+| `scan_overhangs_staged` | last-resort client detector's overhang pass | staged rendered world soup |
+
+`scan_islands_from_path` and `scan_islands_staged` share one body: voxel
+islands, mesh minima and overhang classification run **concurrently on one
+welded mesh**, and the topple report comes from the same overhang pass. The path
+variant classifies overhang on the file mesh unless the frontend stages its
+soup and passes `overhangFromStaged: true`. The staged variant always uses the
+staged soup, so its `triangleIds` index the rendered geometry.
 
 ### IPC Flow
 
 ```text
 Frontend                         Tauri IPC                  Rust Backend
 ────────                         ─────────                  ────────────
-stage_mesh_binary()  ──────►  raw binary body  ──────►  staged_mesh (Mutex)
+stage_mesh_binary_set()  ────►  raw binary body  ──────►  staged_mesh (Mutex)
 
-run_island_scan_native() ──►  { paramsJson }   ──────►  spawn_blocking {
+run_island_scan_native() ────►  { paramsJson }   ──────►  spawn_blocking {
                                                            parse triangles
-  ◄─ islandscan://progress ──  window.emit()   ◄──────    rasterize (rayon)
-  ◄─ islandscan://progress ──  window.emit()   ◄──────    run_island_scan()
-                                                           build ScanResults
+  ◄─ islandscan://progress ──  window.emit()   ◄──────    rasterize (rayon, chunked)
+  ◄─ islandscan://progress ──  window.emit()   ◄──────    run_island_scan_streaming()
   ◄─ NativeIslandScanResult ─  return JSON     ◄──────    serialize
 }
+
+scan_islands_staged(...)  ───►  params            ──────►  spawn_blocking {
+                                                           IndexedMesh::from_triangle_soup
+                                                           thread A: rasterize + scan (voxel)
+                                                           thread B: minima
+                                                           thread C: overhang classification
+                                                           thread D: topple report
+                                                           thread A: surface-snap (after voxel)
+                                                         }
+  ◄─ island-scan-progress  ──  window.emit()    ◄──────
+  ◄─ { voxelIslands, minimaIslands,
+       overhangIslands, stability }             ◄──────
 ```
+
+### The staged-soup contract
+
+- **Stage the rendered triangles.** `prepareWorldGeom()` produces non-indexed
+  world-space positions in the rendered triangle order. `from_triangle_soup`
+  preserves that order, so an overhang `triangleId` is the rendered triangle
+  id and the overlay can copy the exact triangles it is shading.
+- **No matrix or center arguments.** The pose is baked into the staged
+  positions.
+- **The buffer is consumed.** A command `take()`s it; stage immediately before
+  invoking. Two staged commands in one scan stage twice.
+- **A missing buffer is not fatal for `scan_islands_from_path`.** It logs and
+  classifies overhang on the file mesh instead of failing the scan.
 
 ### Files
 
 | File | Purpose |
 |---|---|
 | `src-tauri/src/main.rs` | `run_island_scan_native` IPC command (uses `dragonfruit_islands::*` directly) |
+| `src-tauri/src/mesh_minima.rs` | `scan_islands_from_path` and `scan_islands_staged` (voxel + minima + overhang) |
+| `src-tauri/src/overhang.rs` | `scan_overhangs_staged` for the client-detector fallback |
 | `src/volumeAnalysis/IslandScan/nativeIslandScan.ts` | TS bridge (`runIslandScanNative()`) |
 | `src/volumeAnalysis/IslandScan/useIslandManager.ts` | React hook with `useNativeScan` toggle |
+| `src/volumeAnalysis/Islands/useIslands.ts` | Islands panel scan; stages the world soup and maps the combined result |
 
 ## Design Notes
 

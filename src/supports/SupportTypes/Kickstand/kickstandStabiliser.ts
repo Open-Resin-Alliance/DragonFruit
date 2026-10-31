@@ -300,7 +300,7 @@ export function generateRequiredKickstands(
     for (let passIndex = 0; passIndex < 2; passIndex += 1) {
         const isCleanupPass = passIndex === 1;
 
-    for (const trunk of Object.values(snapshot.trunks)) {
+    for (const [trunkIndex, trunk] of Object.values(snapshot.trunks).entries()) {
         const root = snapshot.roots[trunk.rootId];
         if (!root) continue;
 
@@ -388,7 +388,7 @@ export function generateRequiredKickstands(
             let selectedRootDistSq = Infinity;
 
             // Iterate through possible anchor points (highest first)
-            for (const anchor of candidateAnchors) {
+            for (const [anchorIndex, anchor] of candidateAnchors.entries()) {
                 // Calculate the lateral drift of the trunk up to THIS anchor so we can mirror it
                 const trunkDx = anchor.pos.x - rootPos.x;
                 const trunkDy = anchor.pos.y - rootPos.y;
@@ -523,10 +523,16 @@ export function generateRequiredKickstands(
                         modelId: trunk.modelId,
                         rootPos: candidateRootPos,
                         host: hostTarget,
+                        idSeed: `auto-ks-${passIndex}-${trunkIndex}-${i}-${anchorIndex}-${attempt}`,
                     };
 
                     try {
                         const trialBuild = buildKickstandData(buildInput);
+                        // The same gate a manual placement applies. A build
+                        // error means the terminal cannot reach the host at a
+                        // legal angle (or runs through the model), leaving a
+                        // column beside the trunk rather than a kickstand.
+                        if (trialBuild.error) continue;
                         if (!builtKickstandPassesMeshClearance(trialBuild, trunk.modelId)) {
                             continue;
                         }

@@ -216,6 +216,69 @@ Three payload patterns exist:
   `sceneSnapshotRegistry` (in `useSceneCollectionManager.ts`), which stores the
   heavy `{ before, after }` pairs with a 200-entry + ~300 MB-eviction budget.
 
+**A move is a delta, not a copy.** A transform step stores the model's before and
+after transform as `supportMoves` on the pair, and the history handler replays
+`transformSupportsForModel` (inverse on undo) instead of restoring a support
+state. The old path deep-cloned the whole support store twice per commit — tens
+of thousands of entities on a supported plate — which was the bulk of the
+pointerup stall on a drag. Only a caller that also changes support *content*
+(an explicit `supportBefore`/`supportAfter`) still takes the snapshot path. The
+same rule makes a transform pair cost no history budget: the geometry it shares
+with the live scene is not history memory, so the estimator skips live geometry
+and the pair never triggers a spill.
+
+### Disk-backed geometry spill
+
+A scene snapshot keeps its model objects, transforms and support state in RAM,
+but the geometry arrays can be moved to the **OPFS scratch store**
+(`dragonfruit-undo/`, written by `src/features/scene/sceneSnapshotSpill.ts`).
+Only `BufferGeometry` attributes and indices, plus the pair's **support state**
+(JSON), move; model IDs, transforms, plates and printer stay in the pair, so the
+existing `applySceneSnapshot` restore path does not change.
+
+The support state matters as much as the meshes on a supported plate: a delete
+of a 20-model scene carries ~20,000 entities, and the pair holds its own deep
+copy. It is written verbatim (the per-type views *and* the canonical `supports`
+map). Do not reduce it to `supports`: the primitive collections (`roots`,
+`knots`) only exist as properties, and readers expect the views before the state
+reaches the store.
+
+- Snapshots spill when the registry's in-RAM geometry estimate exceeds the
+  ~300 MB budget. A model delete spills its entry immediately: the undo pair is
+  the only thing still holding the deleted meshes, so waiting for the budget
+  would keep a deleted model's geometry resident. Undo stays available;
+  rehydration reads the arrays back asynchronously.
+- A geometry still referenced by a live model, the clipboard or another
+  snapshot is not released, so sharing is preserved. The delete path passes the
+  surviving model list explicitly, because the scene ref has not committed yet
+  and the deleted models would still count as live.
+- Rehydration is lazy: the history handler applies the snapshot inside the
+  `before`/`after` pair after the scratch file is read. Missing scratch data
+  declines the restore rather than applying a half-empty mesh.
+- `releaseGeometryStorage` drops attributes, index, morph data, BVH and the
+  centered-position cache. GPU disposal alone left the arrays alive behind
+  stale fibers and render lists. It is only used for geometry nothing can draw
+  any more: the deferred-disposal queue keeps its arrays (a swapped mesh can
+  still be in a render list for a frame), and eviction schedules the release on
+  an idle callback that re-checks the retained set before touching anything.
+- Prepare's merged support geometry is per model and is released when the model
+  is deleted (the delete path calls `releasePrepareMergedSupportsFor`). The
+  entry is re-pointed at an empty geometry before its buffers go: a stale view,
+  mounted prop or fiber can still hold the entry object, and dropping only the
+  map slot left hundreds of MB alive. A *replaced* entry is different — the
+  previous mesh stays drawn until the replacement publishes, so that path keeps
+  its arrays and only frees the GPU buffers.
+- The mesh chunk store is swept when the scene empties too, not only when models
+  arrive; skipping the empty case retained every deleted model's compressed
+  mesh (~150-200 MB on a loaded scene).
+- Scratch files are removed when an entry is evicted or rehydrated, a 4 GB
+  ceiling evicts the oldest spilled entries, and `pruneSpilledSceneSnapshots`
+  removes orphans on startup.
+
+Spill is best-effort: when OPFS is unavailable, quota is exhausted, or a geometry
+uses an unsupported layout (interleaved/morph attributes), the snapshot stays in
+memory and the old bounded-history behaviour applies.
+
 ### Plates on the scene snapshot
 
 Beds ride on the same snapshot as the models, so an entry that changes the plate

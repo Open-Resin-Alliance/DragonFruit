@@ -1,6 +1,7 @@
 "use client";
 
 import React from 'react';
+import type * as THREE from 'three';
 import { createPortal } from 'react-dom';
 import { Settings, Settings2, X } from 'lucide-react';
 import { useLingui } from '@lingui/react';
@@ -80,9 +81,13 @@ interface AutoSupportPanelProps {
   /** Resolve unapplied hollowing / hole punches before generating. Resolves
    *  false when the user went off to apply them first — the run is abandoned. */
   onBeforeRun?: () => Promise<boolean>;
+  /** Resolve the model's cavity (void boundary) at run time. Read after
+   *  `onBeforeRun` has applied any pending hollowing, so it must be a getter
+   *  rather than a prop value captured when the panel rendered. */
+  getCavityGeometry?: (modelId: string) => THREE.BufferGeometry | null;
 }
 
-export function AutoSupportPanel({ islands, hasGeometry, activeModelId, autoLift, onAutoLiftChange, onBeforeRun }: AutoSupportPanelProps) {
+export function AutoSupportPanel({ islands, hasGeometry, activeModelId, autoLift, onAutoLiftChange, onBeforeRun, getCavityGeometry }: AutoSupportPanelProps) {
   const { _ } = useLingui();
   const [expanded, setExpanded] = useFloatingPanelCollapse(true);
   const [busy, setBusy] = React.useState(false);
@@ -155,13 +160,19 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, autoLift
   const runAutoSupports = React.useCallback(async (list: UseIslandsReturn['filteredIslands']) => {
     if (!activeModelId) return;
     try {
-      const result = await runAutoPlaceInWorker(list, activeModelId, getSettings().autoSupport, setAutoSupportProgress);
+      const result = await runAutoPlaceInWorker(
+        list,
+        activeModelId,
+        getSettings().autoSupport,
+        setAutoSupportProgress,
+        getCavityGeometry?.(activeModelId) ?? null,
+      );
       if (result.analytics?.sizingDebug) setSizingDebugState(result.analytics.sizingDebug);
       if (result.analytics?.forestReport) setForestReportState(result.analytics.forestReport);
     } catch (e) {
       console.error('[AutoSupport] runAutoPlace failed:', e);
     }
-  }, [activeModelId]);
+  }, [activeModelId, getCavityGeometry]);
 
   // Deferred run: fires after React flushes state changes (scan complete
   // or snapshot clear).  Incrementing deferredRunRef triggers a re-render,

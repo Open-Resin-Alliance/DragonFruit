@@ -101,6 +101,7 @@ export function candidateFromIsland(island: DetectedIsland): CandidatePoint {
         // and larger islands take the active band default (undefined) — until
         // `generateCandidates` runs the free-width cap over the batch.
         tipDiameterMm: area < SMALL_ISLAND_TIP_AREA_MM2 ? smallIslandTipDiameterMm() : undefined,
+        interior: island.interior,
     };
 }
 /**
@@ -204,40 +205,32 @@ export function deduplicateCandidates(
     const cellSize = baseRadius;
     const cellRange = Math.max(1, Math.ceil(maxGate / cellSize));
 
-    // Bucket by XY cell. The grown suppression gate reaches `cellRange`
-    // cells out; the per-pair Z check happens inside the loop.
-    const grid = new Map<string, CandidatePoint[]>();
-    const cellOf = (c: CandidatePoint): string => {
-        const cx = Math.round(c.tipPos.x / cellSize);
-        const cy = Math.round(c.tipPos.y / cellSize);
-        return `${cx},${cy}`;
-    };
-    for (const c of candidates) {
-        const key = cellOf(c);
-        const bucket = grid.get(key);
-        if (bucket) {
-            bucket.push(c);
-        } else {
-            grid.set(key, [c]);
-        }
-    }
+    // Bucket the *retained* candidates by XY cell as they are kept. Only a
+    // retained candidate can suppress a later one, so the index only ever
+    // holds survivors: a candidate probes its neighbourhood against that
+    // local set rather than filtering the whole retained list through each
+    // bucket (the old code was O(candidates × retained × bucket) and was the
+    // single largest cost of a dense lattice run).
+    //
+    // Numeric cell keys, not strings: this runs once per candidate and the
+    // interpolation allocated two strings a call. The offset keeps the key
+    // positive and exact in a double for every grid a plate can hold
+    // (±32768 cells at the tip radius).
+    const grid = new Map<number, CandidatePoint[]>();
 
     const sorted = [...candidates].sort((a, b) => b.priority - a.priority);
     const retained: CandidatePoint[] = [];
 
     for (const c of sorted) {
-        const [cxStr, cyStr] = cellOf(c).split(',');
-        const cx = parseInt(cxStr);
-        const cy = parseInt(cyStr);
+        const cx = Math.round(c.tipPos.x / cellSize);
+        const cy = Math.round(c.tipPos.y / cellSize);
 
         let duplicate = false;
         for (let dx = -cellRange; dx <= cellRange && !duplicate; dx++) {
             for (let dy = -cellRange; dy <= cellRange && !duplicate; dy++) {
-                const bucket = grid.get(`${cx + dx},${cy + dy}`);
+                const bucket = grid.get((cx + dx + 0x8000) * 0x10000 + (cy + dy + 0x8000));
                 if (!bucket) continue;
-                for (const r of retained) {
-                    // Only candidates bucketed here can be this close.
-                    if (!bucket.some((rr) => rr.id === r.id)) continue;
+                for (const r of bucket) {
                     const ddx = c.tipPos.x - r.tipPos.x;
                     const ddy = c.tipPos.y - r.tipPos.y;
                     const dz = Math.abs(c.tipPos.z - r.tipPos.z);
@@ -266,7 +259,12 @@ export function deduplicateCandidates(
             }
         }
 
-        if (!duplicate) retained.push(c);
+        if (duplicate) continue;
+        retained.push(c);
+        const key = (cx + 0x8000) * 0x10000 + (cy + 0x8000);
+        const bucket = grid.get(key);
+        if (bucket) bucket.push(c);
+        else grid.set(key, [c]);
     }
 
     return retained.sort((a, b) => b.priority - a.priority);

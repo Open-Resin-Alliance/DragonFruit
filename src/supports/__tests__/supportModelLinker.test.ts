@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { addSupportEntity, getSnapshot, resetStore } from '../state';
-import { deleteSupportsForModel, getSupportsForModel } from '../PlacementLogic/SupportModelLinker';
+import { deleteSupportsForModel, deleteSupportsForModelIds, getSupportsForModel } from '../PlacementLogic/SupportModelLinker';
 
 function makeTwig(id: string, modelId: string) {
   return {
@@ -72,5 +72,23 @@ describe('SupportModelLinker', () => {
     const afterState = getSnapshot();
     assert.ok(!afterState.twigs['twig-a'], 'Twig for deleted model should be removed');
     assert.ok(!!afterState.twigs['twig-b'], 'Twig for other models should remain');
+  });
+
+  it('removes several models in one pass, leaving other models alone', () => {
+    resetStore();
+
+    addSupportEntity('twig', makeTwig('twig-a', 'model-a'));
+    addSupportEntity('twig', makeTwig('twig-b', 'model-b'));
+    addSupportEntity('twig', makeTwig('twig-c', 'model-c'));
+
+    const removedCount = deleteSupportsForModelIds(getSnapshot(), ['model-a', 'model-b']);
+
+    assert.ok(removedCount >= 2, 'both models\' supports counted as removed');
+    const afterState = getSnapshot();
+    assert.ok(!afterState.twigs['twig-a'], 'model-a support removed');
+    assert.ok(!afterState.twigs['twig-b'], 'model-b support removed');
+    assert.ok(!!afterState.twigs['twig-c'], 'model-c support kept');
+    assert.strictEqual(getSupportsForModel(afterState, 'model-a').twigs.length, 0);
+    assert.strictEqual(getSupportsForModel(afterState, 'model-b').twigs.length, 0);
   });
 });

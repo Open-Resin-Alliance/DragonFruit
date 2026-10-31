@@ -1,7 +1,7 @@
 import { useContactDiskDragSession } from '../useContactDiskDragSession';
 import { updateSupportEntity } from '../../supportTypeRegistry';
 import { registerSupportDetailRenderer } from '../../detailRenderer/seam';
-import React, { useSyncExternalStore } from 'react';
+import React from 'react';
 import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { Trunk, Roots, type Vec3 } from '../../types';
@@ -19,7 +19,6 @@ import { selectPrimitiveById } from '../../interaction/shared/selection/selectio
 import { useHighlight } from '../../interaction/useHighlight';
 import { usePartDragUpdate } from '../../interaction/partDragPreview';
 import { getSnapshot } from '../../state';
-import { subscribeToSettings, getSettingsSnapshot } from '../../Settings/state';
 
 interface TrunkRendererProps {
     trunk: Trunk;
@@ -65,12 +64,6 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk: baseTrun
         hoverColor,
     });
 
-    // Subscribe to settings for Base Flare reactivity
-    const settings = useSyncExternalStore(subscribeToSettings, getSettingsSnapshot, getSettingsSnapshot);
-    const baseFlare = settings.baseFlare;
-    const rootsSettings = settings.roots;
-    const baseFlareEnabled = baseFlare.enabled;
-
     // Handle Click
     const handleClick = (e: any) => {
         if (!isPickingHovered && !isSelected) return;
@@ -89,6 +82,9 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk: baseTrun
             const latest = getSnapshot().trunks[trunk.id];
             if (latest) updateSupportEntity('trunk', { ...latest, contactCone: cone });
         },
+        // A trunk's tip drag mutates only its contact cone: the socket is
+        // anchored, so the shaft, joints and root stay put.
+        coneFromPreview: (cone) => cone,
     });
 
     const socketAnchorRef = React.useRef<Vec3 | undefined>(undefined);
@@ -102,8 +98,13 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk: baseTrun
             event: e, camera, domElement: gl.domElement, scene,
             modelId: trunk.modelId,
             placementSurface: trunk.contactCone?.placementSurface,
+            contact: {
+                field: 'contactCone',
+                cone: trunk.contactCone,
+                supportId: trunk.id,
+            },
         });
-    }, [camera, gl.domElement, isSelected, scene, tipDrag, trunk.contactCone, trunk.modelId]);
+    }, [camera, gl.domElement, isSelected, scene, tipDrag, trunk.contactCone, trunk.id, trunk.modelId]);
 
     const handleContactDiskHudPointerUp = React.useCallback(() => {
         tipDrag.stop();
@@ -124,18 +125,20 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk: baseTrun
     // For now, let's assume standard Z=0 behavior unless we see gaps.
     // Actually, we should probably align the logic.
     
-    const diskHeight = rootsSettings.diskHeightMm; // Use global setting
-    const coneHeight = baseFlareEnabled ? baseFlare.heightMm : (root.coneHeight || 1.5);
-    
-    // Effective Cone Height depends on Base Flare setting
-    const effectiveConeHeight = baseFlareEnabled ? coneHeight : 0;
+    // The shaft starts at the root top the RootsRenderer actually draws: the
+    // root's own disk + cone heights. This used to read the global roots/flare
+    // settings instead, so a selected trunk whose root was baked with different
+    // dimensions (an auto-support band, or a later slider change) started above
+    // the root and showed a gap that the unselected batch — which resolves
+    // `rootTop()` from the same root fields — never had.
+    const diskHeight = root.diskHeight;
+    const coneHeight = root.coneHeight;
 
     const shaftDiameter = trunk.segments[0]?.diameter ?? 1.5;
 
     // --- Render Segments ---
     // Segments start at the CENTER of the Roots sphere (same as joints)
-    // Sphere center is at diskHeight + effectiveConeHeight
-    let currentStart = basePos.clone().add(new THREE.Vector3(0, 0, diskHeight + effectiveConeHeight));
+    let currentStart = basePos.clone().add(new THREE.Vector3(0, 0, diskHeight + coneHeight));
 
     const shafts: React.ReactNode[] = [];
     const batchedStraightShafts: InstancedShaft[] = [];
@@ -211,6 +214,7 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk: baseTrun
                     emissive={visuals.emissive}
                     emissiveIntensity={visuals.emissiveIntensity}
                     selectedColor={visuals.selectedColor}
+                    parentSupportId={trunk.id}
                     isParentSelected={isSelected}
                     isInteractable={isInteractable}
                     isSelected={isSegSelected}

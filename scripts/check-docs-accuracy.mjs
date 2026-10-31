@@ -11,7 +11,7 @@
  *   2. no pinned line numbers (`main.rs:4215`) — they drift within a week
  *   3. backticked code symbols appear somewhere in the codebase
  *   4. relative links to other .md files resolve
- * Plus, once: the MkDocs nav lists every published page and nothing missing.
+ * Plus, once: the site nav lists every published page and nothing missing.
  *
  * Usage:
  *   node scripts/check-docs-accuracy.mjs            # the repo's own docs
@@ -25,11 +25,11 @@ const projectRoot = process.cwd();
 const DEFAULT_DOC_FILES = ['AGENTS.md', 'CONTEXT.md', 'README.md'];
 const DEFAULT_DOC_DIRS = ['docs'];
 
-const CODE_ROOTS = ['src', 'src-tauri', 'rust', 'plugins', 'scripts', 'profiles', 'website', '.github'];
+const CODE_ROOTS = ['src', 'src-tauri', 'rust', 'plugins', 'scripts', 'profiles', 'website', '.github', 'infra'];
 // Root-level config is cited by docs as often as anything under src/.
 const CODE_FILES = [
       'package.json', 'next.config.ts', 'tsconfig.json', 'eslint.config.mjs',
-      'lingui.config.ts', 'mkdocs.yml', 'crowdin.yml', 'rust-toolchain.toml',
+      'lingui.config.ts', 'crowdin.yml', 'rust-toolchain.toml', 'website/astro.config.mjs',
 ];
 const CODE_EXTENSIONS = new Set(['.ts', '.tsx', '.astro', '.rs', '.mjs', '.js', '.json', '.toml', '.yml', '.yaml', '.css', '.sh']);
 
@@ -52,6 +52,7 @@ async function* walk(dir) {
       for (const entry of entries) {
             const fullPath = path.join(dir, entry.name);
             if (entry.name === 'node_modules' || entry.name === 'target' || entry.name === '.git') continue;
+            if (entry.name === '.docs-versions' || entry.name === 'dist' || entry.name === '.astro') continue;
             if (entry.isDirectory()) {
                   yield* walk(fullPath);
                   continue;
@@ -152,24 +153,30 @@ function classify(token) {
 }
 
 async function checkNav(problems) {
-      let config;
+      const navFile = 'website/src/data/docs-nav.json';
+      let nav;
       try {
-            config = await fs.readFile(path.join(projectRoot, 'mkdocs.yml'), 'utf8');
+            nav = JSON.parse(await fs.readFile(path.join(projectRoot, navFile), 'utf8'));
       } catch {
             return;
       }
-      const navSection = config.split('\nnav:')[1];
-      if (!navSection) return;
 
-      const listed = new Set([...navSection.matchAll(/:\s*([A-Za-z0-9_\-./]+\.md)\s*$/gm)].map((m) => m[1]));
-      const excluded = [...(config.match(/exclude_docs:\s*\|([\s\S]*?)\n\S/) ?? [null, ''])[1].matchAll(/\s*(\S+)/g)]
-            .map((m) => m[1]);
+      const listed = new Set();
+      const walkNav = (items) => {
+            for (const item of items ?? []) {
+                  if (item.slug) listed.add(item.slug);
+                  if (item.items) walkNav(item.items);
+            }
+      };
+      walkNav(nav.items);
 
-      for (const entry of listed) {
+      const excluded = (nav.exclude ?? []).map((rule) => rule.replace(/\/$/, ''));
+
+      for (const slug of listed) {
             try {
-                  await fs.access(path.join(projectRoot, 'docs', entry));
+                  await fs.access(path.join(projectRoot, 'docs', `${slug}.md`));
             } catch {
-                  problems.push({ file: 'mkdocs.yml', kind: 'nav-missing', value: entry });
+                  problems.push({ file: navFile, kind: 'nav-missing', value: slug });
             }
       }
 
@@ -177,9 +184,10 @@ async function checkNav(problems) {
             if (path.extname(filePath) !== '.md') continue;
             const relativePath = path.relative(path.join(projectRoot, 'docs'), filePath);
             const posixPath = relativePath.split(path.sep).join('/');
-            if (excluded.some((rule) => posixPath === rule || posixPath.startsWith(rule.replace(/\/$/, '') + '/'))) continue;
-            if (!listed.has(posixPath)) {
-                  problems.push({ file: `docs/${relativePath}`, kind: 'nav-orphan', value: relativePath });
+            if (excluded.some((rule) => posixPath === rule || posixPath.startsWith(rule + '/'))) continue;
+            const slug = posixPath.replace(/\.md$/, '');
+            if (!listed.has(slug)) {
+                  problems.push({ file: `docs/${relativePath}`, kind: 'nav-orphan', value: slug });
             }
       }
 }

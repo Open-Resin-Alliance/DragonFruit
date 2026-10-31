@@ -50,6 +50,27 @@ export function isEmptyFootprint(footprint: VoxelFootprint | undefined): boolean
     return !footprint || footprint.count === 0;
 }
 
+/** World-space XY bounds of a footprint, without materialising its points. */
+export function footprintBounds(
+    footprint: VoxelFootprint,
+): { minX: number; minY: number; maxX: number; maxY: number } | null {
+    if (footprint.count === 0) return null;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    const xy = footprint.xy;
+    for (let i = 0; i < footprint.count; i++) {
+        const x = xy[i * 2];
+        const y = xy[i * 2 + 1];
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+    }
+    return { minX, minY, maxX, maxY };
+}
+
 /**
  * Accumulates voxels when the count is not known up front.
  *

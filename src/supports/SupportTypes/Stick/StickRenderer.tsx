@@ -95,6 +95,9 @@ export const StickRenderer = React.memo(function StickRenderer({
       const latestStick = getSnapshot().sticks[stick.id];
       if (latestStick) updateSupportEntity('stick', { ...latestStick, [key]: cone });
     },
+    // A stick's tip drag mutates one cone: both ends are joints, and the
+    // grabbed cone's socket is anchored, so the rod stays where it is.
+    coneFromPreview: (preview) => preview.cone,
   });
 
   const startConeDrag = React.useCallback((coneKey: 'contactConeA' | 'contactConeB', initialEvent?: any) => {
@@ -106,6 +109,7 @@ export const StickRenderer = React.memo(function StickRenderer({
       event: initialEvent, camera, domElement: gl.domElement, scene,
       modelId: stick.modelId,
       placementSurface: cone.placementSurface,
+      contact: { field: coneKey, cone, supportId: stick.id },
     });
   }, [camera, gl.domElement, scene, stick.id, stick.contactConeA, stick.contactConeB, stick.modelId]);
 
@@ -148,6 +152,7 @@ export const StickRenderer = React.memo(function StickRenderer({
       visuals,
       isSelected: !!isSelected,
       isSegmentSelected: isSegSelected,
+      supportId: stick.id,
       isInteractable,
       deferStraightShaftsToSceneBatch,
       onSelect: selectPrimitiveById,

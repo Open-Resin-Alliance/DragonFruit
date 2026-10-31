@@ -12,15 +12,15 @@ import { SUPPORT_TYPES, type SupportTypeId } from '../supportTypeRegistry';
 export interface DetailRendererEntry {
     component: ComponentType<Record<string, unknown>>;
     hosts?: (entity: never) => Record<string, unknown> | null;
-    skip?: (context: { entity: never; isSelected: boolean; isBatchable: boolean }) => boolean;
+    skip?: (context: { entity: never; isSelected: boolean; isBatchable: boolean; isGhosted?: boolean }) => boolean;
     /**
      * Draws its own simplified form, so the seam does not skip it when
      * `simpleRender` is set. A type that leaves this off is skipped, and the
      * batched pass draws whatever lines it contributes.
      */
     drawsSimplified?: boolean;
-    extraProps?: (context: { entity: never; isSelected: boolean; isBatchable: boolean }) => Record<string, unknown>;
-    noClipping?: (context: { entity: never; isSelected: boolean; isBatchable: boolean }) => boolean;
+    extraProps?: (context: { entity: never; isSelected: boolean; isBatchable: boolean; isGhosted?: boolean }) => Record<string, unknown>;
+    noClipping?: (context: { entity: never; isSelected: boolean; isBatchable: boolean; isGhosted?: boolean }) => boolean;
     /** Where "is this shaft batched" comes from, when not `plainShaftsOf`. */
     batchedIds?: ReadonlySet<string> | { has(id: string): boolean };
 }

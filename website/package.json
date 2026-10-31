@@ -14,16 +14,24 @@
     "check": "astro check"
   },
   "dependencies": {
+    "@astrojs/markdown-satteri": "0.4.3",
     "@fontsource-variable/atkinson-hyperlegible-next": "^5.3.0",
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
     "@resvg/resvg-js": "^2.6.2",
     "astro": "^7.3.2",
+    "github-slugger": "^2.0.0",
     "satori": "^0.33.5",
-    "satori-html": "^0.3.2"
+    "satori-html": "^0.3.2",
+    "satteri": "^0.10.5",
+    "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.10",
+    "@types/node": "^24.19.2",
     "sharp": "^0.35.5",
     "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "fflate": "^0.7.5"
   }
 }

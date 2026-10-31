@@ -13,6 +13,8 @@ interface Props {
   cardSummary?: string;
   /** A short label for the card's right corner, for pages that have two of a kind. */
   cardMeta?: string;
+  /** Alternate documentation versions are branch snapshots, not the indexed pages. */
+  noindex?: boolean;
 }
 
 const {
@@ -20,10 +22,11 @@ const {
   description = SITE.description,
   cardSummary = title === SITE.name ? SITE.motto : description,
   cardMeta,
+  noindex = false,
 } = Astro.props;
 
 const canonical = new URL(Astro.url.pathname, Astro.site).href;
-const pageTitle = title === SITE.name ? `${SITE.name} — ${SITE.tagline}` : `${title} · ${SITE.name}`;
+const pageTitle = title === SITE.name ? `${SITE.name} – ${SITE.org}` : `${title} · ${SITE.name}`;
 
 /* The card is rendered at build time by src/og/, from these three values, and its URL
    carries a digest of them so a crawler sees a new image when the words change and the
@@ -38,6 +41,17 @@ const socialImage = new URL(
   `${ogImagePath(card.pathname)}?v=${cardFingerprint(card)}`,
   Astro.site,
 ).href;
+
+/* Google Search only reads WebSite structured data from the site's home page. The
+   name there is the one it will use for the whole domain; without it the system
+   falls back to the hostname. `alternateName` gives it the short brand too. */
+const website = {
+  '@context': 'https://schema.org',
+  '@type': 'WebSite',
+  name: SITE.siteName,
+  alternateName: ['DragonFruit', 'DragonFruit Slicer'],
+  url: new URL('/', Astro.site).href,
+};
 ---
 
 <!doctype html>
@@ -48,12 +62,21 @@ const socialImage = new URL(
     <title>{pageTitle}</title>
     <meta name="description" content={description} />
     <link rel="canonical" href={canonical} />
+    {noindex && <meta name="robots" content="noindex" />}
     <meta name="generator" content={Astro.generator} />
 
-    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    {/* Google Search only accepts bitmap favicons (PNG, ICO, …), so the PNG is
+        listed first and the SVG follows for browsers that can use it. The ICO is
+        what browsers and OS shortcuts probe when they never parse this head. The
+        manifest is what names the site in Chrome's UI, off the search index. */}
+    <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
+    <link rel="icon" href="/favicon.png" type="image/png" sizes="512x512" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" sizes="any" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
 
     <meta property="og:type" content="website" />
-    <meta property="og:site_name" content={SITE.name} />
+    <meta property="og:site_name" content={SITE.siteName} />
     <meta property="og:title" content={pageTitle} />
     <meta property="og:description" content={description} />
     <meta property="og:url" content={canonical} />
@@ -74,6 +97,12 @@ const socialImage = new URL(
     {cardMeta && <meta name="card:meta" content={cardMeta} />}
 
     <meta name="theme-color" content="#ec2a77" />
+
+    {
+      Astro.url.pathname === '/' && (
+        <script type="application/ld+json" set:html={JSON.stringify(website)} />
+      )
+    }
 
     <script is:inline>
       // Theme bootstrap: applied before the first paint, so a reader who chose the

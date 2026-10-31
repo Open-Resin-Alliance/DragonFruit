@@ -4,6 +4,11 @@ How to find out where DragonFruit's time goes. Two halves: scaffolding that
 ships inside the app and reports from users' machines, and external profilers
 you point at your own machine when you need a call stack.
 
+The [render profiler](render-profiler.md) (Ctrl+Shift+P) is the first stop for a
+frame-budget complaint: it splits a frame into its render passes and reports CPU
+time, GPU time where measurable, draw calls and triangles for each. Use this
+page for stalls, long tasks and memory.
+
 ## In-app scaffolding
 
 ### Stable gizmo lighting and single-pass Standard volume stripes

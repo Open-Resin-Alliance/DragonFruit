@@ -13,9 +13,9 @@ import {
 import type { KickstandBuildInput, KickstandBuildResult } from './types';
 import { v4 as uuidv4 } from 'uuid';
 
-function createJoint(pos: { x: number; y: number; z: number }, diameter: number): Joint {
+function createJoint(id: string, pos: { x: number; y: number; z: number }, diameter: number): Joint {
     return {
-        id: uuidv4(),
+        id,
         pos,
         diameter,
     };
@@ -127,9 +127,12 @@ export function buildKickstandData(input: KickstandBuildInput): KickstandBuildRe
     const bodyDiameterMm = Math.max(0.001, input.host.diameterMm);
     const jointDiameterMm = getJointDiameter(bodyDiameterMm);
 
-    const rootId = uuidv4();
-    const hostKnotId = uuidv4();
-    const kickstandId = uuidv4();
+    // A seeded build is reproducible: auto-bracing compares supports by id in
+    // some tie-breaks, so a fresh uuid per run made the brace pass drift.
+    const nextId = (suffix: string): string => (input.idSeed ? `${input.idSeed}-${suffix}` : uuidv4());
+    const rootId = nextId('root');
+    const hostKnotId = nextId('host-knot');
+    const kickstandId = nextId('kickstand');
 
     const root = {
         id: rootId,
@@ -147,6 +150,7 @@ export function buildKickstandData(input: KickstandBuildInput): KickstandBuildRe
     const { firstJointZ, secondJointZ, thirdJointZ } = createRootAndJointHeights(input, rootTopZ);
 
     const joint1 = createJoint(
+        nextId('j1'),
         {
             x: input.rootPos.x,
             y: input.rootPos.y,
@@ -156,6 +160,7 @@ export function buildKickstandData(input: KickstandBuildInput): KickstandBuildRe
     );
 
     const joint2 = createJoint(
+        nextId('j2'),
         {
             x: input.rootPos.x,
             y: input.rootPos.y,
@@ -166,6 +171,7 @@ export function buildKickstandData(input: KickstandBuildInput): KickstandBuildRe
 
     const topBlend = 0.65;
     const joint3 = createJoint(
+        nextId('j3'),
         {
             x: input.rootPos.x + (input.host.pos.x - input.rootPos.x) * topBlend,
             y: input.rootPos.y + (input.host.pos.y - input.rootPos.y) * topBlend,
@@ -175,26 +181,26 @@ export function buildKickstandData(input: KickstandBuildInput): KickstandBuildRe
     );
 
     const segment1: Segment = {
-        id: uuidv4(),
+        id: nextId('s1'),
         diameter: bodyDiameterMm,
         topJoint: joint1,
     };
 
     const segment2: Segment = {
-        id: uuidv4(),
+        id: nextId('s2'),
         diameter: bodyDiameterMm,
         bottomJoint: joint1,
         topJoint: joint2,
     };
 
     const terminalSegment: Segment = {
-        id: uuidv4(),
+        id: nextId('s4'),
         diameter: bodyDiameterMm,
         bottomJoint: joint3,
     };
 
     const upperSegment: Segment = {
-        id: uuidv4(),
+        id: nextId('s3'),
         diameter: bodyDiameterMm,
         bottomJoint: joint2,
         topJoint: joint3,
@@ -214,17 +220,23 @@ export function buildKickstandData(input: KickstandBuildInput): KickstandBuildRe
     // segment and one terminal. The derived joints exist to give a placed
     // kickstand something to drag, and would bend it.
     const columnTop = input.authoredColumn
-        ? createJoint(input.authoredColumn.topPos, jointDiameterMm)
+        ? createJoint(nextId('column-top'), input.authoredColumn.topPos, jointDiameterMm)
         : null;
     const segments = columnTop
         ? [
-            { id: uuidv4(), diameter: bodyDiameterMm, topJoint: columnTop },
-            { id: uuidv4(), diameter: bodyDiameterMm, bottomJoint: columnTop },
+            { id: nextId('s1'), diameter: bodyDiameterMm, topJoint: columnTop },
+            { id: nextId('s2'), diameter: bodyDiameterMm, bottomJoint: columnTop },
         ]
         : [segment1, segment2, upperSegment, terminalSegment];
 
     const kickstand = {
         id: kickstandId,
+        // Stamped here, not only by the store: auto-bracing builds a kickstand
+        // into a local snapshot before committing it, and the type resolver
+        // falls back to store membership for an unstamped entity. Without this
+        // the fresh kickstand has no resolvable segments, so the brace pass
+        // gives it no samples and never braces it to its host.
+        typeId: 'kickstand' as const,
         modelId: input.modelId,
         rootId,
         hostKnotId,

@@ -110,11 +110,32 @@ export function coneShapeRatio(cone: InstancedContactCone): number {
 }
 
 /**
+ * Quantization of the frustum's end-to-end ratio, in ratio units.
+ *
+ * The ratio is the only cone shape parameter an instance matrix cannot carry,
+ * so it is part of the bucket key — and the key is a draw-call count: each
+ * bucket mounts up to three instanced meshes, in every layer that draws it.
+ * A real plate's body-to-contact ratio varies continuously with the support
+ * profile (the 20-model scene has 342 distinct values at 0.001 precision), so
+ * 0.001 precision produced **2111 draw calls** and a 10 ms CPU render on an
+ * RTX 3080.
+ *
+ * 0.1 parts of the ratio is a body-radius error of at most 5% *of the contact
+ * radius* — microns at print resolution — and collapses those 342 values to
+ * 34 buckets (17 for the active model), where 0.05 left about twice as many.
+ * Cone draw calls are the support layer's bulk and, unlike shafts and joints,
+ * they cannot be split spatially without multiplying the buckets, so this is
+ * the direct lever on them.
+ */
+export const CONE_RATIO_BUCKET_STEP = 0.1;
+export const CONE_RATIO_BUCKETS_PER_UNIT = 1 / CONE_RATIO_BUCKET_STEP;
+
+/**
  * The key one cone's mesh is grouped under: its profile type and shape ratio, and
  * nothing else. Two cones that differ only in size share a mesh.
  */
 export function coneBucketKey(cone: InstancedContactCone): string {
-    return `${getProfileType(cone.profile)}:${quantizeToScale(coneShapeRatio(cone), 1000)}`;
+    return `${getProfileType(cone.profile)}:${quantizeToScale(coneShapeRatio(cone), CONE_RATIO_BUCKETS_PER_UNIT)}`;
 }
 
 /**
@@ -138,13 +159,23 @@ export function conePrimitiveScales(
     };
 }
 
-const getProfileType = (profile: SupportTipProfile): 'disk' | 'sphere' | 'legacy' => {
+/**
+ * The profile kind a cone is drawn as. Exported because the capacity batch keys
+ * its contact-primitive split on it: `disk` profiles also draw the nib, `sphere`
+ * and `legacy` draw the tip ball alone.
+ */
+export const getProfileType = (profile: SupportTipProfile): 'disk' | 'sphere' | 'legacy' => {
     if (profile.type === 'disk') return 'disk';
     if (profile.type === 'sphere') return 'sphere';
     return 'legacy';
 };
 
-const getDiskThicknessForCone = (cone: InstancedContactCone): number => {
+/**
+ * The nib thickness this cone is drawn with: the authored override, else the
+ * angle-dependent `calculateDiskThickness`. Exported so a batch that writes the
+ * same disk from a slot list cannot drift from the legacy group's value.
+ */
+export const getDiskThicknessForCone = (cone: InstancedContactCone): number => {
     if (cone.profile.type !== 'disk') return 0;
     const effectiveSurfaceNormal = cone.surfaceNormal ?? cone.normal;
     return cone.diskLengthOverride ?? calculateDiskThickness(effectiveSurfaceNormal, cone.normal, cone.profile);
@@ -489,7 +520,7 @@ function ConeBucketMesh({
                     {...sharedHandlers}
                     raycast={raycast ?? INSTANCED_MESH_RAYCAST}
                 >
-                    <sphereGeometry args={[1, 10, 8]} />
+                    <sphereGeometry args={[1, 8, 6]} />
                     <meshStandardMaterial
                         color={instanceColor ? '#ffffff' : (discColor ?? color)}
                         emissive={emissive}
@@ -525,7 +556,7 @@ function ConeBucketMesh({
                             renderOrder={100000}
                             material={outOfBoundsMaterial}
                         >
-                            <sphereGeometry args={[1, 10, 8]} />
+                            <sphereGeometry args={[1, 8, 6]} />
                         </instancedMesh>
                     )}
                     {bucket.profileType === 'disk' && (

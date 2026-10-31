@@ -3,6 +3,7 @@ import { resolveObjectURL } from 'node:buffer';
 import test from 'node:test';
 import { useEffect } from 'react';
 import { clearHistory, getUndoCount, redo, undo } from '@/history/historyStore';
+import { addRoot, getSnapshot } from '@/supports/state';
 import { renderWithProviders, settle } from '@/utils/__tests__/helpers/renderDom';
 import { useSceneCollectionManager } from '../useSceneCollectionManager';
 
@@ -154,6 +155,57 @@ test('scene edits from the model list land in undo history', async (t) => {
       assert.equal(getUndoCount(), 1);
       await assertUndoRedo(geometries, originals, repaired);
     });
+  } finally {
+    await tree.unmount();
+  }
+});
+
+/**
+ * A move is a delta, not a copy of the support store: the pair records the two
+ * transforms and the supports are replayed by the same call that moved them.
+ * The clone it replaces was ~20k entities twice on a supported plate.
+ */
+test('moving a model carries its supports through undo and redo', async () => {
+  const { tree, scene } = await mountScene();
+  try {
+    const cube = await loadCube(scene);
+    clearHistory();
+    addRoot({
+      id: 'move-root',
+      modelId: cube.id,
+      transform: { pos: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0, w: 1 }, scale: { x: 1, y: 1, z: 1 } },
+      diameter: 3,
+      diskHeight: 1,
+      coneHeight: 2,
+    } as never);
+
+    const rootX = () => getSnapshot().roots['move-root'].transform.pos.x;
+    const startX = rootX();
+    const model = () => scene().models.find((candidate) => candidate.id === cube.id)!;
+    const before = model().transform;
+    const after = {
+      position: before.position.clone().setX(before.position.x + 5),
+      rotation: before.rotation.clone(),
+      scale: before.scale.clone(),
+    };
+
+    const moved = scene().updateModelTransform(cube.id, after);
+    assert.equal(moved.updated, true);
+    scene().commitModelTransformHistory(cube.id, before, after);
+    await settle(20);
+
+    assert.equal(getUndoCount(), 1, 'the move is one undo step');
+    assert.ok(Math.abs(rootX() - (startX + 5)) < 1e-6, 'the support moved with the model');
+
+    undo();
+    await settle(20);
+    assert.ok(Math.abs(rootX() - startX) < 1e-6, 'undo moves the support back');
+    assert.ok(Math.abs(model().transform.position.x - before.position.x) < 1e-6, 'and the model');
+
+    redo();
+    await settle(20);
+    assert.ok(Math.abs(rootX() - (startX + 5)) < 1e-6, 'redo moves the support again');
+    assert.ok(Math.abs(model().transform.position.x - after.position.x) < 1e-6, 'and the model');
   } finally {
     await tree.unmount();
   }

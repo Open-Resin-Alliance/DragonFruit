@@ -118,7 +118,7 @@ export function findEscapeJoint(
     /** Is the column from this point down to the root clear? */
     const columnClear = (x: number, y: number, z: number): boolean => {
         probes++;
-        return !sdf.segmentBlocked(x, y, z, x, y, rootTopZ, opts.clearanceMm);
+        return !sdf.columnBlocked(x, y, z, rootTopZ, opts.clearanceMm);
     };
     /** Is this straight segment clear? Used on the leg, so a diagonal cannot tunnel through a thin wall. */
     const segmentClear = (from: Vec3, to: Vec3): boolean => {
@@ -234,7 +234,7 @@ export function findGridJoint(
 
     const columnClear = (x: number, y: number, z: number): boolean => {
         probes++;
-        return !sdf.segmentBlocked(x, y, z, x, y, rootTopZ, opts.clearanceMm);
+        return !sdf.columnBlocked(x, y, z, rootTopZ, opts.clearanceMm);
     };
     const segmentClear = (from: Vec3, to: Vec3): boolean => {
         probes++;

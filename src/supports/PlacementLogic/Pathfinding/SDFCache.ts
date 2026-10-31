@@ -130,6 +130,13 @@ export class SDFCache {
      * table (measured: 26 us a lookup against 62 ns for a `Map`).
      */
     private readonly cellKeys = new Float64Array(CELL_TABLE_SLOTS).fill(-1);
+    /**
+     * Slot the last miss found empty, so the write that follows the BVH query
+     * reuses it instead of probing the table a second time. Set by `_readCell`
+     * and consumed by `_writeCellAfterMiss`; a cache lookup is the only thing
+     * between them (`_computeSignedDistanceAtQuantizedCell` never reads cells).
+     */
+    private _lastEmptySlot = -1;
     private readonly cellValues = new Float32Array(CELL_TABLE_SLOTS);
     private cellCount = 0;
     /** Opt-in exact fast path for vertical segments; see `enableColumnMap`. */
@@ -155,7 +162,14 @@ export class SDFCache {
         distance: 0,
         faceIndex: -1,
     };
-    private readonly _faceNormalCache = new Map<number, { x: number; y: number; z: number }>();
+    /**
+     * Geometric face normals, one triple per triangle, built on first use.
+     *
+     * The sign test runs for every fresh cell, and the lazy `Map<faceIndex,
+     * {x,y,z}>` it replaced allocated an object per face plus a hash lookup on
+     * every query. A flat array is one read per component.
+     */
+    private _faceNormals: Float32Array | null = null;
 
     /** Last seen matrixWorld — used to detect stale cache. */
     private readonly _lastMatrix = new THREE.Matrix4();
@@ -211,14 +225,21 @@ export class SDFCache {
      */
     boundedDistanceAt(wx: number, wy: number, wz: number, boundMm: number): number {
         const cs = this.cellSize;
-        const qx = quantizeToCell(wx, cs);
-        const qy = quantizeToCell(wy, cs);
-        const qz = quantizeToCell(wz, cs);
+        return this._boundedDistanceAtQuantized(
+            quantizeToCell(wx, cs),
+            quantizeToCell(wy, cs),
+            quantizeToCell(wz, cs),
+            boundMm,
+        );
+    }
+
+    /** `boundedDistanceAt` for a cell already quantized by the caller. */
+    private _boundedDistanceAtQuantized(qx: number, qy: number, qz: number, boundMm: number): number {
         const cached = this._readCell(qx, qy, qz);
         if (cached !== undefined) return cached;
         const dist = this._computeSignedDistanceAtQuantizedCell(qx, qy, qz, boundMm);
         const capped = dist === Infinity ? boundMm : Math.min(dist, boundMm);
-        this._writeCell(qx, qy, qz, capped);
+        this._writeCellAfterMiss(qx, qy, qz, capped);
         return capped;
     }
 
@@ -249,12 +270,35 @@ export class SDFCache {
     /** Cached distance for a cell, or undefined when it has not been computed. */
     private _readCell(qx: number, qy: number, qz: number): number | undefined {
         this.stats.cellReads++;
+        // Only a miss may hand its slot to the following write; a hit leaves
+        // no valid insertion point.
+        this._lastEmptySlot = -1;
         const key = cellKey(qx, qy, qz);
         for (let index = this._tableIndex(key); ; index = (index + 1) & (CELL_TABLE_SLOTS - 1)) {
             const stored = this.cellKeys[index];
             if (stored === key) return this.cellValues[index];
-            if (stored === -1) return this.cache.get(key);
+            if (stored === -1) {
+                this._lastEmptySlot = index;
+                return this.cache.get(key);
+            }
         }
+    }
+
+    /**
+     * Store the value for the miss `_readCell` just reported, at the slot it
+     * already found. Falls back to a normal write when that slot is no longer
+     * usable (the table filled in between, or a Map fallback answer was live).
+     */
+    private _writeCellAfterMiss(qx: number, qy: number, qz: number, value: number): void {
+        const index = this._lastEmptySlot;
+        this._lastEmptySlot = -1;
+        if (index < 0 || this.cellCount >= CELL_TABLE_SLOTS - 1 || this.cellKeys[index] !== -1) {
+            this._writeCell(qx, qy, qz, value);
+            return;
+        }
+        this.cellKeys[index] = cellKey(qx, qy, qz);
+        this.cellValues[index] = value;
+        this.cellCount++;
     }
 
     private _writeCell(qx: number, qy: number, qz: number, value: number): void {
@@ -283,6 +327,20 @@ export class SDFCache {
         this.cellKeys.fill(-1);
         this.cellCount = 0;
         this.cache.clear();
+    }
+
+    /**
+     * Drop the column maps after the model moves.
+     *
+     * A map is baked in world space from every vertex, so keeping it across a
+     * transform change answers later placements at the old pose. The cell table
+     * was already cleared on drift; the maps have to follow it.
+     */
+    private _clearColumnMaps(): void {
+        this._columnMap = null;
+        this._columnMapClearance = 0;
+        this._columnMapCache.length = 0;
+        this._columnMapCacheBytes = 0;
     }
 
     private _snapshotMatrix(): void {
@@ -319,6 +377,7 @@ export class SDFCache {
     refreshMatrix(): boolean {
         if (!this.mesh.matrixWorld.equals(this._lastMatrix)) {
             this._clearCells();
+            this._clearColumnMaps();
             this._snapshotMatrix();
             notifySDFMatrixDrift(this.mesh.uuid);
             return true;
@@ -353,7 +412,7 @@ export class SDFCache {
         if (cached !== undefined && cached < MARCH_DISTANCE_BOUND_MM) return cached;
 
         const dist = this._computeSignedDistanceAtQuantizedCell(qx, qy, qz);
-        this._writeCell(qx, qy, qz, dist);
+        this._writeCellAfterMiss(qx, qy, qz, dist);
         return dist;
     }
 
@@ -645,41 +704,39 @@ export class SDFCache {
      * rather than vertex normals, which may be smoothed and unreliable
      * for inside/outside determination.
      */
-    private _isQueryInsideSurface(faceIndex: number): boolean {
-        let fn = this._faceNormalCache.get(faceIndex);
+    /** Build the per-triangle normal table once for this mesh. */
+    private _faceNormalsFor(): Float32Array {
+        if (this._faceNormals) return this._faceNormals;
 
-        if (!fn) {
-            const geom = this.mesh.geometry;
-            const posAttr = geom.getAttribute('position');
-            const idx = geom.index;
+        const geom = this.mesh.geometry;
+        const posAttr = geom.getAttribute('position');
+        const idx = geom.index;
+        const triCount = idx ? Math.floor(idx.count / 3) : Math.floor(posAttr.count / 3);
+        const normals = new Float32Array(triCount * 3);
 
-            // Look up vertex indices for this triangle
-            let i0: number, i1: number, i2: number;
-            if (idx) {
-                i0 = idx.getX(faceIndex * 3);
-                i1 = idx.getX(faceIndex * 3 + 1);
-                i2 = idx.getX(faceIndex * 3 + 2);
-            } else {
-                i0 = faceIndex * 3;
-                i1 = faceIndex * 3 + 1;
-                i2 = faceIndex * 3 + 2;
-            }
+        for (let fi = 0; fi < triCount; fi++) {
+            const i0 = idx ? idx.getX(fi * 3) : fi * 3;
+            const i1 = idx ? idx.getX(fi * 3 + 1) : fi * 3 + 1;
+            const i2 = idx ? idx.getX(fi * 3 + 2) : fi * 3 + 2;
 
-            // Compute geometric face normal once and cache it.
             const v0x = posAttr.getX(i0), v0y = posAttr.getY(i0), v0z = posAttr.getZ(i0);
             const v1x = posAttr.getX(i1), v1y = posAttr.getY(i1), v1z = posAttr.getZ(i1);
             const v2x = posAttr.getX(i2), v2y = posAttr.getY(i2), v2z = posAttr.getZ(i2);
 
             const e1x = v1x - v0x, e1y = v1y - v0y, e1z = v1z - v0z;
             const e2x = v2x - v0x, e2y = v2y - v0y, e2z = v2z - v0z;
-
-            fn = {
-                x: e1y * e2z - e1z * e2y,
-                y: e1z * e2x - e1x * e2z,
-                z: e1x * e2y - e1y * e2x,
-            };
-            this._faceNormalCache.set(faceIndex, fn);
+            const o = fi * 3;
+            normals[o] = e1y * e2z - e1z * e2y;
+            normals[o + 1] = e1z * e2x - e1x * e2z;
+            normals[o + 2] = e1x * e2y - e1y * e2x;
         }
+
+        this._faceNormals = normals;
+        return normals;
+    }
+
+    private _isQueryInsideSurface(faceIndex: number): boolean {
+        const normals = this._faceNormalsFor();
 
         // Direction from closest surface point → query point (local space)
         const rp = this._resultTarget.point;
@@ -688,7 +745,8 @@ export class SDFCache {
         const dz = this._localPoint.z - rp.z;
 
         // Negative dot → query point faces into the mesh interior
-        return (dx * fn.x + dy * fn.y + dz * fn.z) < 0;
+        const o = faceIndex * 3;
+        return (dx * normals[o] + dy * normals[o + 1] + dz * normals[o + 2]) < 0;
     }
 
     /**
@@ -734,20 +792,30 @@ export class SDFCache {
      * when the grid would be too large, in which case nothing changes.
      */
     enableColumnMap(clearanceMm: number, cellMm: number): boolean {
-        if (this._columnMap !== null && Math.abs(clearanceMm - this._columnMapClearance) < 1e-9) return true;
-
-        const reused = this._takeCachedColumnMap(clearanceMm);
-        if (reused) {
-            this._columnMap = reused;
-            this._columnMapClearance = clearanceMm;
-            return true;
-        }
+        if (this.tryUseColumnMap(clearanceMm, cellMm)) return true;
 
         const map = ColumnClearanceMap.build(this.mesh, clearanceMm, cellMm);
         if (!map) return false;
         this._columnMap = map;
         this._columnMapClearance = clearanceMm;
         this._rememberColumnMap(clearanceMm, map);
+        return true;
+    }
+
+    /**
+     * Activate a map that is already built for this clearance, and never build.
+     *
+     * The placement path uses this so a hover cannot pay the walk that builds
+     * the map: the map is warmed off the interaction path, and a missing one is
+     * requested from the worker instead of built here.
+     */
+    tryUseColumnMap(clearanceMm: number, cellMm: number): boolean {
+        if (this._columnMap !== null && Math.abs(clearanceMm - this._columnMapClearance) < 1e-9) return true;
+
+        const reused = this._takeCachedColumnMap(clearanceMm);
+        if (!reused) return false;
+        this._columnMap = reused;
+        this._columnMapClearance = clearanceMm;
         return true;
     }
 
@@ -763,6 +831,37 @@ export class SDFCache {
         const map = ColumnClearanceMap.build(this.mesh, clearanceMm, cellMm);
         if (!map) return;
         this._rememberColumnMap(clearanceMm, map);
+    }
+
+    /**
+     * Keep a map built elsewhere, e.g. in a worker.
+     *
+     * The map must describe the mesh's current world pose; callers compare the
+     * pose across the build because a response can arrive after the model moved.
+     * It becomes the active map only when there is none, so installing a
+     * background map cannot disturb the clearance a placement is using.
+     */
+    installColumnMap(clearanceMm: number, map: ColumnClearanceMap): void {
+        if (this._columnMap === null) {
+            this._columnMap = map;
+            this._columnMapClearance = clearanceMm;
+        }
+        this._rememberColumnMap(clearanceMm, map);
+    }
+
+    /** Whether a map for this clearance and cell size is already available. */
+    hasColumnMap(clearanceMm: number, cellMm?: number): boolean {
+        const matches = (map: ColumnClearanceMap) => (
+            cellMm === undefined || Math.abs(map.stats.cellMm - cellMm) < 1e-9
+        );
+        if (this._columnMap !== null
+            && Math.abs(clearanceMm - this._columnMapClearance) < 1e-9
+            && matches(this._columnMap)) {
+            return true;
+        }
+        return this._columnMapCache.some((entry) => (
+            Math.abs(entry.clearance - clearanceMm) < 1e-9 && matches(entry.map)
+        ));
     }
 
     /** A map already built for this clearance, moved to the front of the list. */
@@ -792,19 +891,6 @@ export class SDFCache {
     }
 
     /**
-     * How far a sample's true distance can be below the cached value: the cache
-     * answers for the nearest lattice point (`quantizeToCell` rounds), so this
-     * is the sample's distance to it.
-     */
-    private _latticeGap(px: number, py: number, pz: number): number {
-        const cs = this.cellSize;
-        const lx = Math.round(px / cs) * cs - px;
-        const ly = Math.round(py / cs) * cs - py;
-        const lz = Math.round(pz / cs) * cs - pz;
-        return Math.sqrt(lx * lx + ly * ly + lz * lz);
-    }
-
-    /**
      * One march sample, as the distance it can safely advance.
      *
      * Returns -1 when the sample is inside `clearance`. The cached value bounds
@@ -815,9 +901,19 @@ export class SDFCache {
      * function per call is measurable.
      */
     private _marchSample(px: number, py: number, pz: number, clearance: number): number {
-        const d = this.boundedDistanceAt(px, py, pz, MARCH_DISTANCE_BOUND_MM);
-        const base = d === Infinity ? MARCH_DISTANCE_BOUND_MM : d;
-        const gap = this._latticeGap(px, py, pz);
+        // Quantize once and reuse the lattice cell for both the cache lookup and
+        // the sample's offset from its centre. This runs once per sample of
+        // millions, and the shared path used to divide and round six more times
+        // (`boundedDistanceAt` + `_latticeGap`) for values already in hand.
+        const cs = this.cellSize;
+        const qx = Math.round(px / cs);
+        const qy = Math.round(py / cs);
+        const qz = Math.round(pz / cs);
+        const base = this._boundedDistanceAtQuantized(qx, qy, qz, MARCH_DISTANCE_BOUND_MM);
+        const lx = qx * cs - px;
+        const ly = qy * cs - py;
+        const lz = qz * cs - pz;
+        const gap = Math.sqrt(lx * lx + ly * ly + lz * lz);
         if (base + gap < clearance) return -1;
         if (base - gap >= clearance) return base - gap - clearance;
         const exact = this._exactBoundedDistanceAt(px, py, pz, clearance + 0.001);
@@ -889,6 +985,65 @@ export class SDFCache {
         // Always check the exact endpoint — the adaptive loop may exit with
         // t > len before sampling the terminal cell.
         return this._marchSample(bx, by, bz, clearance) < 0;
+    }
+
+    /**
+     * Vertical column test — the router's most common query.
+     *
+     * Same verdict as `segmentBlocked` for a segment whose X/Y do not change,
+     * with the parts that cannot vary hoisted out of the loop: no direction
+     * normalisation, no per-sample X/Y quantization, and the lattice offset in
+     * X/Y computed once. The march itself, its step floor and the endpoint
+     * sample are the generic ones, so a column can never disagree with the
+     * segment test it replaces.
+     */
+    columnBlocked(
+        x: number,
+        y: number,
+        zTop: number,
+        zBot: number,
+        clearance: number,
+    ): boolean {
+        if (this._columnMap !== null
+            && Math.abs(clearance - this._columnMapClearance) < 1e-9
+            && this._columnMap.columnVerdict(x, y, zTop, zBot) === 'blocked') {
+            return true;
+        }
+
+        const len = Math.abs(zTop - zBot);
+        if (len < 0.01) return this._marchSample(x, y, zTop, clearance) < 0;
+        if (!this._segmentIntersectsExpandedWorldBounds(x, y, zTop, x, y, zBot, clearance)) {
+            return false;
+        }
+
+        const cs = this.cellSize;
+        const qx = Math.round(x / cs);
+        const qy = Math.round(y / cs);
+        const lx = qx * cs - x;
+        const ly = qy * cs - y;
+        const stepZ = (zBot - zTop) / len;
+        const minStep = cs * 0.9;
+        const maxIter = Math.max(8, Math.ceil(len / minStep) + 2);
+        let travelled = 0;
+        for (let iter = 0; iter < maxIter; iter++) {
+            const z = zTop + stepZ * travelled;
+            const qz = Math.round(z / cs);
+            const base = this._boundedDistanceAtQuantized(qx, qy, qz, MARCH_DISTANCE_BOUND_MM);
+            const lz = qz * cs - z;
+            const gap = Math.sqrt(lx * lx + ly * ly + lz * lz);
+            let advance: number;
+            if (base + gap < clearance) return true;
+            if (base - gap >= clearance) {
+                advance = base - gap - clearance;
+            } else {
+                const exact = this._exactBoundedDistanceAt(x, y, z, clearance + 0.001);
+                if (exact < clearance) return true;
+                advance = exact - clearance;
+            }
+            travelled += advance > minStep ? advance : minStep;
+            if (travelled >= len) break;
+        }
+        return this._marchSample(x, y, zBot, clearance) < 0;
     }
 
     /** Number of cached cells (for diagnostics). */

@@ -11,14 +11,14 @@
  * context (the web build, `npm test`) the caller's own `console.*` stands alone.
  */
 export async function logToNativeFile(
-  level: 'info' | 'warn',
+  level: 'info' | 'warn' | 'error',
   message: string,
 ): Promise<void> {
   try {
     // Dynamic because this module does not exist outside a Tauri context, where
     // importing it statically would break every web/test consumer of the callers.
     const log = await import('@tauri-apps/plugin-log');
-    await (level === 'warn' ? log.warn : log.info)(message);
+    await log[level](message);
   } catch {
     // Nothing to write to.
   }

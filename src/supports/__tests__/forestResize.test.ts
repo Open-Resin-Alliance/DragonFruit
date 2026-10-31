@@ -177,7 +177,8 @@ test('syncContactConeDiameters scales lagging cone bodies up to resized shafts',
 
     const synced = syncContactConeDiameters(s);
     assert.equal(synced.trunks['t1'].contactCone?.profile?.bodyDiameterMm, 1.15, 'cone body matches the resized shaft');
-    assert.equal(synced.trunks['t1'].contactCone?.profile?.contactDiameterMm, 0.28, 'tip contact untouched (peel choice)');
+    assert.ok(Math.abs(synced.trunks['t1'].contactCone!.profile!.contactDiameterMm! - 1.15 * 0.3) < 1e-9,
+        'contact rises with the resized shaft to the 30% floor');
 });
 
 test('syncContactConeDiameters still clamps oversized cone bodies down', () => {
@@ -204,6 +205,8 @@ test('syncContactConeDiameters still clamps oversized cone bodies down', () => {
 
     const synced = syncContactConeDiameters(s);
     assert.equal(synced.trunks['t1'].contactCone?.profile?.bodyDiameterMm, 1.0, 'oversized cone clamped to the shaft');
+    assert.ok(Math.abs(synced.trunks['t1'].contactCone!.profile!.contactDiameterMm! - 0.3) < 1e-9,
+        'contact also meets the 30% floor of the clamped shaft');
 });
 
 test('syncContactConeDiameters lifts leaf cones to thickened hosts', () => {
@@ -234,7 +237,8 @@ test('syncContactConeDiameters lifts leaf cones to thickened hosts', () => {
 
     const synced = syncContactConeDiameters(s);
     assert.equal(synced.leaves['l1'].contactCone?.profile?.bodyDiameterMm, 1.12, 'leaf cone body follows the host shaft');
-    assert.equal(synced.leaves['l1'].contactCone?.profile?.contactDiameterMm, 0.28, 'tip contact untouched');
+    assert.ok(Math.abs(synced.leaves['l1'].contactCone!.profile!.contactDiameterMm! - 1.12 * 0.3) < 1e-9,
+        'leaf contact rises to the 30% floor of the host it splays from');
 });
 
 test('syncContactConeDiameters is a no-op when bodies already match', () => {
@@ -248,7 +252,7 @@ test('syncContactConeDiameters is a no-op when bodies already match', () => {
             normal: { x: 0, y: 0, z: 1 },
             profile: {
                 type: 'disk',
-                contactDiameterMm: 0.28,
+                contactDiameterMm: 0.35,
                 bodyDiameterMm: 1.0,
                 lengthMm: 2.5,
                 penetrationMm: 0,

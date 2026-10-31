@@ -96,3 +96,25 @@ test('the chunk store refuses the bytes it baked before a reorder', async () => 
   const after = ExportManager.computeModelGeometrySignature(model);
   assert.equal(store.lookup('m1', after), null, 'the reorder must force a fresh bake');
 });
+
+test('a duplicate adopts the source chunk instead of encoding the same geometry again', async () => {
+  const store = new MeshChunkStore();
+  const signature = 'geometry:1:2:3:4';
+  let encodes = 0;
+  await store.bake({
+    modelId: 'source',
+    signature,
+    encode: () => {
+      encodes += 1;
+      return new Uint8Array([1, 2, 3, 4]);
+    },
+  });
+
+  const adopted = store.adoptForModel('copy', signature);
+
+  assert.notEqual(adopted, null, 'the shared signature has a chunk to adopt');
+  assert.equal(adopted?.sha256, store.lookup('source', signature)?.sha256);
+  assert.notEqual(store.lookup('copy', signature), null, 'the copy is now served without an encode');
+  assert.equal(encodes, 1, 'only the source encoded');
+  assert.equal(store.adoptForModel('other', 'geometry:9:9:9:9'), null, 'a different signature is not adopted');
+});

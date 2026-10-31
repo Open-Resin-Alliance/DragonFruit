@@ -1,4 +1,4 @@
-import { cellKey, footprintToPoints } from '@/volumeAnalysis/Islands/voxelFootprint';
+import { VoxelFootprintBuilder, cellKey, footprintBounds, footprintToPoints, footprintX, footprintY, footprintZ, type VoxelFootprint } from '@/volumeAnalysis/Islands/voxelFootprint';
 import * as THREE from 'three';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
 import type { CandidatePoint } from './types';
@@ -8,6 +8,7 @@ import {
     SLOPE_RELAX_RAMP_START,
     GRID_SPACING_MAX_FACTOR,
     ISLAND_TWO_POINT_MAX_MM,
+    INTERIOR_CAVITY_SPACING_SCALE,
 } from './constants';
 import type { AutoSupportSettings } from './settings';
 import { applyContactTipCaps } from './contactTipCap';
@@ -24,26 +25,26 @@ const FOOTPRINT_TOLERANCE_MM = 0.25;
  * (corners, holes, rotated edges) and no grid point is within `spacing`.
  */
 export function buildBoundaryPoints(
-    voxels: Array<{ x: number; y: number; z?: number }>,
+    voxels: VoxelFootprint,
     spacing: number,
     fallbackZ: number,
 ): Array<{ x: number; y: number; z: number }> {
-    if (voxels.length === 0) return [];
+    if (voxels.count === 0) return [];
     const set = new Set<number>();
     let sumX = 0;
     let sumY = 0;
-    for (const v of voxels) {
-        set.add(cellKey(Math.round(v.x * 4), Math.round(v.y * 4)));
-        sumX += v.x;
-        sumY += v.y;
+    for (let i = 0; i < voxels.count; i++) {
+        set.add(cellKey(Math.round(footprintX(voxels, i) * 4), Math.round(footprintY(voxels, i) * 4)));
+        sumX += footprintX(voxels, i);
+        sumY += footprintY(voxels, i);
     }
-    const cx = sumX / voxels.length;
-    const cy = sumY / voxels.length;
+    const cx = sumX / voxels.count;
+    const cy = sumY / voxels.count;
 
     const boundary: Array<{ x: number; y: number; z?: number }> = [];
-    for (const v of voxels) {
-        const kx = Math.round(v.x * 4);
-        const ky = Math.round(v.y * 4);
+    for (let i = 0; i < voxels.count; i++) {
+        const kx = Math.round(footprintX(voxels, i) * 4);
+        const ky = Math.round(footprintY(voxels, i) * 4);
         let onEdge = false;
         for (let dx = -1; dx <= 1 && !onEdge; dx++) {
             for (let dy = -1; dy <= 1 && !onEdge; dy++) {
@@ -51,7 +52,7 @@ export function buildBoundaryPoints(
                 if (!set.has(cellKey(kx + dx, ky + dy))) onEdge = true;
             }
         }
-        if (onEdge) boundary.push(v);
+        if (onEdge) boundary.push({ x: footprintX(voxels, i), y: footprintY(voxels, i), z: footprintZ(voxels, i) ?? undefined });
     }
     if (boundary.length === 0) return [];
 
@@ -240,13 +241,15 @@ const PERIMETER_ERODE_PIXELS = 1;
  * correct local direction. Empty for regions thinner than the inset — callers
  * fall back to the raw boundary.
  */
-export function erodeFootprint(voxels: Array<{ x: number; y: number; z?: number }>): Array<{ x: number; y: number; z?: number }> {
+export function erodeFootprint(voxels: VoxelFootprint): VoxelFootprint {
     const set = new Set<number>();
-    for (const p of voxels) set.add(cellKey(Math.round(p.x * 4), Math.round(p.y * 4)));
-    const interior: Array<{ x: number; y: number; z?: number }> = [];
-    for (const p of voxels) {
-        const kx = Math.round(p.x * 4);
-        const ky = Math.round(p.y * 4);
+    for (let i = 0; i < voxels.count; i++) {
+        set.add(cellKey(Math.round(footprintX(voxels, i) * 4), Math.round(footprintY(voxels, i) * 4)));
+    }
+    const interior = new VoxelFootprintBuilder(voxels.count, voxels.z !== null);
+    for (let i = 0; i < voxels.count; i++) {
+        const kx = Math.round(footprintX(voxels, i) * 4);
+        const ky = Math.round(footprintY(voxels, i) * 4);
         let all = true;
         for (let dx = -PERIMETER_ERODE_PIXELS; dx <= PERIMETER_ERODE_PIXELS && all; dx++) {
             for (let dy = -PERIMETER_ERODE_PIXELS; dy <= PERIMETER_ERODE_PIXELS && all; dy++) {
@@ -254,9 +257,9 @@ export function erodeFootprint(voxels: Array<{ x: number; y: number; z?: number 
                 if (!set.has(cellKey(kx + dx, ky + dy))) all = false;
             }
         }
-        if (all) interior.push(p);
+        if (all) interior.push(footprintX(voxels, i), footprintY(voxels, i), footprintZ(voxels, i) ?? undefined);
     }
-    return interior;
+    return interior.build();
 }
 
 /** Boundary-ring spacing relative to the infill spacing. The perimeter is
@@ -485,15 +488,9 @@ export function shouldUseDensityGrid(
     if ((island.areaMm2 ?? 0) >= settings.gridAreaThresholdMm2) return true;
 
     const voxels = island.contactVoxels;
-    if (!voxels || voxels.count === 0) return false;
-    const points = footprintToPoints(voxels);
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    for (const p of points) {
-        if (p.x < minX) minX = p.x;
-        if (p.x > maxX) maxX = p.x;
-        if (p.y < minY) minY = p.y;
-        if (p.y > maxY) maxY = p.y;
-    }
+    const bounds = voxels ? footprintBounds(voxels) : null;
+    if (!bounds) return false;
+    const { minX, minY, maxX, maxY } = bounds;
     // Longer than the two-point band: a thin rib (a plank's underside) needs
     // its edge sampled, whether or not it erodes away completely. The lattice
     // is skipped for it below — a footprint thinner than one lattice cell has
@@ -552,33 +549,31 @@ export function generateGridCandidates(
     for (const island of overhangIslands) {
         if (!shouldUseDensityGrid(island, settings)) continue;
         const baseSpacing = computeRegionSpacing(island, settings);
-        const spacing = baseSpacing * steepFlatSpacingMultiplier(island, baseSpacing, partThicknessMm);
+        // An internal ceiling is bridged to the cavity floor, not carried to
+        // the plate; the short strut needs far fewer contacts.
+        const spacing = baseSpacing
+            * steepFlatSpacingMultiplier(island, baseSpacing, partThicknessMm)
+            * (island.interior ? INTERIOR_CAVITY_SPACING_SCALE : 1);
 
         const voxels = island.contactVoxels;
         if (!voxels || voxels.count === 0) continue;
 
         // Footprint bbox (lattice span); the containment/Z hash is built
         // lazily inside the voxel fallback sampler.
-        let minX = Infinity;
-        let minY = Infinity;
-        let maxX = -Infinity;
-        let maxY = -Infinity;
+        const bounds = footprintBounds(voxels)!;
+        const { minX, minY, maxX, maxY } = bounds;
         const cellSize = Math.max(spacing, 1.0);
-        const voxelPoints = footprintToPoints(voxels);
-        for (const p of voxelPoints) {
-            if (p.x < minX) minX = p.x;
-            if (p.y < minY) minY = p.y;
-            if (p.x > maxX) maxX = p.x;
-            if (p.y > maxY) maxY = p.y;
-        }
 
         const surfaceNormal = island.surfaceNormal ?? { x: 0, y: 0, z: -1 };
 
 
         // Triangle-accurate surface resolution when the mesh + region
         // triangles are available; voxel nearest-neighbor is the fallback.
+        // The fallback's point objects are built only when it is actually
+        // used: materialising a 112k-voxel footprint per region cost more
+        // than the placement that reads it.
         const surfaceAt = createTriangleSurfaceAt(island, mesh)
-            ?? createVoxelSurfaceAt(voxelPoints, cellSize, island.baseZ);
+            ?? createVoxelSurfaceAt(footprintToPoints(voxels), cellSize, island.baseZ);
         const minZ = island.baseZ;
         // A steep flat is self-supporting, so its contacts are there to ANCHOR
         // the part, not to hold up material that is still forming. Anchoring
@@ -608,14 +603,15 @@ export function generateGridCandidates(
                 zHeight: z,
                 priority: 0,
                 gridPoint: true,
+                interior: island.interior,
             });
         };
 
         // Sliver test: nothing survives footprint erosion → ring only. A rib
         // thinner than one lattice cell is treated the same way — infilling it
         // would stack a second line of supports a millimeter from the edge.
-        const eroded = erodeFootprint(voxelPoints);
-        const isSliver = eroded.length === 0;
+        const eroded = erodeFootprint(voxels);
+        const isSliver = eroded.count === 0;
 
         // Candidate-cap guard: on overflow, fall back to the angle-only
         // spacing, then subsample evenly — never silently denser than the cap.
@@ -669,7 +665,7 @@ export function generateGridCandidates(
         const ringCoverageSq = (ringSpacing * 0.5) * (ringSpacing * 0.5);
         const boundary: Array<{ x: number; y: number; z: number; faceIndex?: number }> = sampleBoundary2D(island.perimeterLoops, ringSpacing, surfaceAt)
             ?? buildBoundaryPoints(
-                eroded.length > 0 ? eroded : voxelPoints,
+                eroded.count > 0 ? eroded : voxels,
                 ringSpacing,
                 minZ,
             );

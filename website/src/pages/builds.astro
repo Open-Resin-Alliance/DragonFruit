@@ -3,16 +3,14 @@ import Base from '../layouts/Base.astro';
 import { LINKS } from '../data/site';
 import {
   DEV_FEED_URL,
-  PLATFORM_KEYS,
-  PLATFORMS,
   RELEASES_API_URL,
-  RELEASES_URL,
   devFeedTargets,
   fetchJson,
   formatDate,
-  pickAsset,
   recentPreviews,
   releaseUrlFor,
+  toPreviewBuild,
+  type PreviewBuild,
   type Release,
   type UpdaterFeed,
 } from '../lib/releases';
@@ -25,29 +23,14 @@ import {
  *   because that is what an install on the dev channel updates to - asking GitHub
  *   for the newest prerelease answers a different question and gets it wrong;
  * - the **branch previews** from the releases API, because nothing else lists
- *   them.
+ *   them. That list is a build-time snapshot, then refreshed in the browser:
+ *   preview releases are deleted and recreated on every push, so a snapshot can
+ *   name a release that no longer exists by the time the page is read. The built
+ *   list is the no-JavaScript and failed-fetch fallback.
  *
  * Each section degrades on its own: an unreachable source says so and points at
  * GitHub rather than rendering an empty list as if there were no builds.
  */
-interface Build {
-  tag: string;
-  url: string;
-  date: string;
-  assets: { label: string; url: string }[];
-}
-
-function toBuild(release: Release): Build {
-  return {
-    tag: release.tag_name ?? 'build',
-    url: release.html_url ?? RELEASES_URL,
-    date: formatDate(release.published_at),
-    assets: PLATFORM_KEYS.map((key) => {
-      const asset = pickAsset(release.assets ?? [], key);
-      return asset ? { label: PLATFORMS[key].label, url: asset.browser_download_url } : null;
-    }).filter((asset): asset is { label: string; url: string } => asset !== null),
-  };
-}
 
 interface DeveloperBuild {
   version: string;
@@ -58,7 +41,7 @@ interface DeveloperBuild {
 
 let developer: DeveloperBuild | null = null;
 let reachedDevFeed = true;
-let previews: Build[] = [];
+let previews: PreviewBuild[] = [];
 let reachedReleases = true;
 
 try {
@@ -76,7 +59,7 @@ try {
 }
 
 try {
-  previews = recentPreviews(await fetchJson<Release[]>(RELEASES_API_URL, process.env.GITHUB_TOKEN)).map(toBuild);
+  previews = recentPreviews(await fetchJson<Release[]>(RELEASES_API_URL, process.env.GITHUB_TOKEN)).map(toPreviewBuild);
 } catch {
   reachedReleases = false;
 }
@@ -167,33 +150,35 @@ try {
             </p>
           </div>
 
-          {previews.length > 0 ? (
-            <ul class="builds">
-              {previews.map((build) => (
-                <li class="build">
-                  <a class="build__tag mono" href={build.url} rel="noopener noreferrer" target="_blank">
-                    {build.tag}
-                  </a>
-                  <div class="build__right">
-                    <span class="build__date">{build.date}</span>
-                    <div class="build__assets">
-                      {build.assets.length > 0 ? (
-                        build.assets.map((asset) => (
-                          <a class="build__asset" href={asset.url}>
-                            {asset.label}
-                          </a>
-                        ))
-                      ) : (
-                        <span class="muted">No installer attached</span>
-                      )}
+          <div data-preview-body aria-live="polite">
+            {previews.length > 0 ? (
+              <ul class="builds">
+                {previews.map((build) => (
+                  <li class="build">
+                    <a class="build__tag mono" href={build.url} rel="noopener noreferrer" target="_blank">
+                      {build.tag}
+                    </a>
+                    <div class="build__right">
+                      <span class="build__date">{build.date}</span>
+                      <div class="build__assets">
+                        {build.assets.length > 0 ? (
+                          build.assets.map((asset) => (
+                            <a class="build__asset" href={asset.url}>
+                              {asset.label}
+                            </a>
+                          ))
+                        ) : (
+                          <span class="muted">No installer attached</span>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p class="muted">No branch has built a preview in the last two weeks.</p>
-          )}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p class="muted">No branch has built a preview in the last two weeks.</p>
+            )}
+          </div>
         </section>
       )
     }
@@ -208,6 +193,12 @@ try {
     </p>
   </section>
 </Base>
+
+<script>
+  import { initPreviewFeed } from '../lib/preview-feed';
+
+  initPreviewFeed();
+</script>
 
 <style>
   .page {

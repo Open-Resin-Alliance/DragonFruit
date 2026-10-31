@@ -281,3 +281,37 @@ function buildLadder() {
     return { snapshot, modelId };
 }
 
+
+test('a generated kickstand is braced to the trunk it stabilises', () => {
+    const snapshot = createEmptySnapshot();
+    const modelId = 'model-a';
+    // A tall collinear run: one axis of trunk-to-trunk bracing cannot satisfy
+    // the two-axis rule, so the generative pass adds a kickstand. That
+    // kickstand must then get a real brace from its own shaft to the trunk —
+    // a column beside the trunk with only its terminal section is a post.
+    for (let i = 0; i < 3; i++) {
+        const x = i * 2;
+        const root = createRoot(`root-${i}`, modelId, x);
+        const trunk = createTrunk(`trunk-${i}`, modelId, root.id, `seg-${i}`, x, 0, 30);
+        snapshot.roots[root.id] = root;
+        snapshot.trunks[trunk.id] = trunk;
+    }
+
+    const result = buildAutoBracedSnapshot(snapshot, createDefaultAutoBracingSettings());
+    const built = result.snapshot;
+    assert.ok(Object.keys(built.kickstands).length > 0, 'a tall one-axis run needs a kickstand');
+
+    const kickstandSegmentIds = new Set(
+        Object.values(built.kickstands).flatMap((kickstand) => kickstand.segments.map((segment) => segment.id)),
+    );
+    const bracedToKickstand = Object.values(built.braces).filter((brace) => {
+        const start = built.knots[brace.startKnotId];
+        const end = built.knots[brace.endKnotId];
+        return (start && kickstandSegmentIds.has(start.parentShaftId))
+            || (end && kickstandSegmentIds.has(end.parentShaftId));
+    });
+    assert.ok(
+        bracedToKickstand.length > 0,
+        'a generated kickstand must be braced to its host trunk, not just touch it at the terminal knot',
+    );
+});

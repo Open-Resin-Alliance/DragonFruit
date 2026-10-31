@@ -54,8 +54,15 @@ export function SelectionManager({
     const handleCanvasClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
       if (target.tagName === 'CANVAS') {
-        // If model-clicked event fired this frame, it was a direct mesh click - already handled
-        if (window.__modelClickedThisFrame) {
+        // A direct model click already handled this gesture. The one-frame flag
+        // can expire before the browser dispatches the follow-up click (the
+        // selection is applied on pointer-down), so the short guard window is
+        // the reliable answer; without it a click on the model's supports
+        // deselected the model again and the tint flickered.
+        if (
+          window.__modelClickedThisFrame
+          || performance.now() < (window.__modelClickGuardUntil ?? 0)
+        ) {
           return;
         }
 

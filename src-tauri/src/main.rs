@@ -58,6 +58,8 @@ fn default_dither_device_gamma() -> f64 {
 }
 
 mod experiments;
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+mod mallinfo_shim;
 mod plugin_registry;
 mod webview_watchdog;
 mod window_state;
@@ -4511,8 +4513,10 @@ fn main() {
             mesh_minima::scan_mesh_minima_from_path,
             mesh_minima::scan_voxel_islands_from_path,
             mesh_minima::scan_islands_from_path,
+            mesh_minima::scan_islands_staged,
             ao_vertex::bake_vertex_occlusion,
             overhang::scan_overhangs,
+            overhang::scan_overhangs_staged,
             export_mesh_file,
             save_print_file,
             save_print_file_from_path,

@@ -171,6 +171,11 @@ export const OVERHANG_SELF_SUPPORT_ANGLE_DEG = 45;
  *  supports). A slope at the self-support threshold (45°) is the sparsest:
  *  spacing × 1.3 (≈0.6×). */
 export const GRID_SPACING_MIN_FACTOR = 0.7;
+
+/** Interior (cavity) ceilings are bridged, not pillared: the short strut carries
+ *  less peel than a full-height shaft, and the cavity forest is hard to see and
+ *  remove. Grid spacing is multiplied by this; 3 costs one ninth the supports. */
+export const INTERIOR_CAVITY_SPACING_SCALE = 3;
 export const GRID_SPACING_MAX_FACTOR = 1.3;
 
 /**

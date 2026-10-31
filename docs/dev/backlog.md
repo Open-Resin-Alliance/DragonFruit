@@ -53,6 +53,399 @@ scale (`defaultnormal_vertex`, "in lieu of a per-instance normal-matrix"), so th
 frustum body shades correctly at any ratio. Measured on the same scene: **3282 ->
 291 draw calls per frame, 53 -> 163 fps**, median frame 18.2 -> 6.1 ms.
 
+## Known cost: the cone ratio key was still quantized to 0.001
+
+The fix above moved five parameters out of the cone batch key but left the sixth
+— the body-to-contact ratio — at 0.001 precision. On a plate whose supports come
+from mixed profiles that ratio varies continuously: the Ed_EF_Minis scene (20
+models, 9.2M model triangles, 10,904 contact cones) has **342 distinct ratios**,
+so the world layer plus the active model's layer mount **2023 instanced
+meshes**. Each mounts up to three primitives (disk, body, tip), and every one is
+a draw call on every frame.
+
+Measured with the [render profiler](render-profiler.md) on an RTX 3080 at
+165 Hz, during a normal orbit:
+
+| | value |
+| --- | --- |
+| draw calls per frame | **2111**, all in the main pass |
+| instanced meshes / instances | 2023 / 83,007 |
+| triangles per frame | **18.4M** |
+| CPU render (submit) p50 | **10.0 ms** |
+| frame p50 / p95 | 11.5 / 19.3 ms |
+| fps | 73 |
+
+The triangle total is roughly twice the models' 9.2M because the active model's
+supports are also drawn (zero-scaled) by the world batch, and the support
+primitives themselves add several million.
+
+**Fixed** by quantizing the ratio to **0.05**: a 2.5% error of the contact
+radius, microns on the plate, and 342 values collapse to 64 buckets (24 for the
+active model). Re-recorded on the same scene: **2111 -> 1254 draw calls, 2023 ->
+1150 instanced meshes, CPU render 10.0 -> 5.8 ms, 73 -> 128 fps**, frame p50
+11.5 -> 6.5 ms.
+
+## Known cost: the root batch keyed on size, not shape
+
+The same recording attributed the remaining calls. A root's key was
+`bottomRadius : diskHeight : topRadius : coneHeight`, each at 0.001 mm. The
+bottom radius is the support's root diameter, and that varies continuously with
+the sizing profile — the 20-model scene has 254 distinct root keys. Each key
+mounts up to three instanced meshes (disk, base cone, top ball) plus overlay
+copies, so the keys alone were ~762 draw calls.
+
+**Fixed** the way the cone batch was fixed: the geometries are unit-sized and
+the instance matrix carries every dimension. What a matrix cannot express is the
+base cone's taper, so the key is the top-to-bottom radius ratio quantized to
+0.05 (a 2.5% top-radius error). The scene's roots collapse to three buckets.
+`rootInstanceScales` builds the disk `(r, h, r)`, cone `(r, h, r)` and uniform
+sphere matrices.
+
+**Also reduced the proxy primitives' tessellation.** A joint was a 12x10 sphere
+(216 triangles) and the plate has 16,004 of them — 3.5M triangles per layer for
+balls a few pixels wide. The proxy view now uses 8x6 (80 triangles), and the
+contact-cone tips and root balls drop from 10x8 to 8x6. Projected saving is about
+3M of the 18.4M triangles per frame; the detail view keeps the denser spheres.
+
+With those three changes the same scene, nothing selected, records **165 fps
+stable** (p95 6.20 ms, max 9.61). Selecting all twenty models drops it to 159-161
+fps with 15-24 ms spikes.
+
+## Known cost: selecting a model queued a full-mesh footprint scan
+
+The all-selected slowdown was not rendering: draw calls rose by 124 (the active
+model's attached support layer) and CPU by 0.5 ms, but the spikes were ~10x
+that. `SceneCanvas` mounts one `FootprintBorderRenderer` per selected model, and
+each schedules an idle callback that computes a projected silhouette hull
+(`computeProjectedFootprintHull`). That scan read up to **160,000 corners** per
+model with `getX/getY/getZ` and an `atan2` each.
+
+Measured on a 460k-triangle model: **9 ms per hull**, so selecting a 20-model
+plate queued ~180 ms of main-thread work, landing in 16-24 ms frames exactly
+while the user was orbiting. The scan is cached per orientation, so it is a
+selection-time cost, not a per-frame one — but it is the reason "select all then
+orbit" chugged while "nothing selected then orbit" did not.
+
+**Fixed** by giving `computeProjectedFootprintHull` a `{ scan: 'sampled' }` mode
+and using it for the border: it reads the **1024-point sample the cache already
+builds** instead of scanning the position attribute, measured at **0.26 ms per
+model**. Placement sizing (`computeProjectedFootprintSize`) keeps the full scan,
+where an underestimated footprint would put a model over the plate edge. The
+hull cache key carries the mode, so the two cannot poison each other, and the
+previously dead `sampledCenteredPoints` array is now the thing it was built for.
+
+Selecting all twenty models therefore queues ~5 ms of work instead of ~180 ms,
+and the border still takes the farthest point per angular bin.
+
+## Known cost: a selected model kept every support answering the pointer during an orbit
+
+With nothing selected, prepare renders one support layer whose `navigationLodActive`
+is the live orbit state, so its pointer handlers unmount the moment the camera
+moves. With a model active, Select mode renders the world layer from a second
+branch that passed `navigationLodActive={transformMode !== 'select'}` — a
+constant `false` in Select mode. The handlers therefore stayed mounted through
+every orbit.
+
+R3F raycasts every object that carries a pointer handler on every pointer move,
+so moving the mouse while orbiting paid the support batches' walk: 16,004 joint
+instances (three's per-instance raycast, ~0.11 µs each), 10,904 contact cones,
+15,359 shafts and the rafts, in both the world and attached layers. The frame
+rate did not care what the pointer was over; it cared that a model was selected
+and the mouse moved.
+
+**Fixed** by giving that layer the live `navigationLodActive` too. The handlers
+still exist when the camera is still, which is what press-to-drag a model by its
+supports needs.
+
+## Known cost: GPU picking followed the display rate and read back synchronously
+
+Hover picking renders the hovered model into a 3x3 target and then calls
+`readRenderTargetPixels`, which stalls the main thread until the GPU has
+finished. The loop took `max(config.hoverUpdateRate, measuredFps)`, so on a
+165 Hz display it did that **up to 165 times a second** while the pointer moved —
+the reported difference between 165 fps and 80 fps over the plate.
+
+**Fixed** two ways:
+
+- hover picks are capped at **60 Hz** (drags keep the display rate); the pick
+  does not need to be resampled faster than a pointer hover can change;
+- the readback is **asynchronous**: WebGL2 fences a pixel-pack buffer and the
+  bytes are collected a frame or two later in `pollAsyncReadbacks`, so the GPU
+  wait stops being a main-thread stall. The synchronous read stays as the
+  fallback for a context without fences, and results that land while picking is
+  paused are discarded rather than reported.
+
+## Known cost: every pick rendered the whole plate
+
+The picking pass clones every registered object and rendered them to a 3×3
+target. `clonePickObject` disabled frustum culling on **all** clones to keep
+gizmo handles near the screen edge pickable — so each pick also drew all 20
+models: 9.2M triangles for nine pixels, at up to 60 Hz while the pointer moved.
+That is a second full vertex pass hidden inside the hover path.
+
+**Fixed:** only gizmo clones stay unculled; model clones use the normal frustum
+test. The 3×3 sub-frustum still contains the model under the cursor, so hover
+identity is unchanged.
+
+## Fixed: support-edit history deep-cloned the whole state, and the debug log walked it
+
+`pushSupportEditHistory` is the edit path for joints, knots, bezier handles and
+contact disks. On flush it ran `sanitizeSupportSnapshot` over the before and
+after states — two `structuredClone`s — and `pushHistory` then cloned the action
+payload a third time; undo/redo cloned it once more into the opposite stack, and
+`notifyHistoryOperation` cloned it once **per subscriber**. On the 83k-instance
+plate that was hundreds of milliseconds per edit, on a `requestIdleCallback`
+with a 250 ms deadline, which is exactly a frame gap.
+
+`appendHistoryDebugEvent` added to it: on every push it walked every payload in
+both stacks with `estimatePayloadBytes`, and `page.tsx` copied the 600-entry
+debug log into React state even when the History Debug panel was closed.
+
+**Fixed:**
+
+- support snapshots use `clonePlainData` (≈2.8× faster than `structuredClone`,
+  and the state is plain records by construction);
+- a payload a domain has just cloned is marked `payloadOwned`, so pushing,
+  undoing and redoing move the same object instead of cloning it again;
+- operation subscribers receive the stack's entry read-only instead of a clone
+  each;
+- byte accounting runs only while the History Debug panel is open
+  (`setHistoryDebugDetailsEnabled`), and the page's debug refresh is gated on the
+  same flag, so a push with the panel closed touches no React state.
+
+## Fixed: a fast hover sweep re-rendered the whole canvas per model
+
+Sweeping the pointer across the plate dropped the frame rate to ~30. Two costs
+fired per model crossing, both avoidable:
+
+- **Every R3F pointer move raycast all twenty models**, and three-mesh-bvh
+  collected *all* hits per mesh. `SceneCanvasInteractionBits` now sets
+  `raycaster.firstHitOnly = true`: each object still contributes its nearest hit
+  (so ordering and behind-the-model checks hold), but the BVH stops at the first
+  triangle instead of walking the rest of a 460k-triangle model.
+- **`hoveredModelId` was applied on every animation frame while sweeping.** One
+  set re-renders the 8.3k-line canvas and remounts the hovered footprint border
+  (which builds a raft footprint and schedules a silhouette). Hover updates are
+  now throttled to one per 50 ms with the latest trailing, clearing to `null`
+  immediately, and the footprint border follows a hover that has settled for
+  140 ms instead of the raw one.
+- **The joint batch answered hover with three's per-instance walk.** Shafts and
+  contact cones already had a grid raycast; joints (16,004 on this plate) did
+  not, so a pointer move tested every instance (~1.8 ms). `InstancedJointGroup`
+  now builds a point index when it is given a grab radius, using the same
+  `proxyHoverIndex` as the other batches; a joint is indexed as a short vertical
+  segment so the ray-segment maths never sees a degenerate one.
+
+## Fixed: support batches cull spatially
+
+Models cull per mesh; support batches did not. One mesh per kind carried the whole
+plate with `frustumCulled={false}`, so zooming into one model still vertex-shaded
+all 15.4k shafts and 16k joints — the asymmetry that makes "models are smooth,
+models with supports are not" feel so large. Shafts, roots and joints are now
+split into a 3x3 grid of tiles, each with a bounding sphere built from the
+primitives it actually holds, and `ProxyTileCuller` gives every instanced batch
+under a tile that sphere and enables culling. Cones stay unsplit: their batch is
+keyed on the cone shape ratio, and a tile would multiply the buckets.
+
+The cone key itself is coarser: 0.1 of the ratio instead of 0.05, which is a
+body-radius error of at most 5% of the contact radius (microns) and takes the 342
+live ratios to 34 buckets — about 90 fewer draw calls, which is the support
+layer's bulk.
+
+**Tiles must survive an exclusion change.** `batches` is a new object whenever
+the visible set changes (activating a model, a model drop offset); its
+straight/root/joint arrays are stable and only the curved list changes.
+`buildProxyTiles` is therefore memoized on the base sets (`worldBatches` /
+`filteredBatches`), not on `batches`. Cutting tiles from `batches` handed every
+shaft, root and joint group new arrays, which rebuilt their hover indexes over
+~33k primitives. Measured on the 20-model plate's primitive mix: the partition
+alone is **6.6 ms** per exclusion change (15,359 shafts, 16,004 joints, 2,169
+roots), inside a 12–14 ms commit.
+
+**The orbit fold is gone.** The active model's supports/raft used to fold into
+the world layer for the duration of an orbit, saving 124 draw calls while the
+camera moved. The exclusion change at each end re-rendered the support layer and
+ran its per-instance hide pass over ~78k instances inside the pointerdown/
+pointerup task. The profiler's long-frame capture named it: a **62 ms long
+animation frame at orbit start, 48 ms blocking, `three-stdlib onPointerDown` on
+the stack** (the nested listeners and the React flush live under it). A
+full-plate orbit holds 165 fps at 404 calls without the fold, so the 124 calls
+bought nothing; the attached layer now simply stays visible and the world layer
+always excludes its model.
+
+**The support batches are one tiled set.** Shafts, roots, joints and cones used
+to be split into a live set and a scenery set (models on other beds) so the
+scenery set could cull as a group. Tiles made that split redundant, and it made
+every change to the active plate or the selection rebuild all arrays and lay out
+~78k instances again — inside the click that switched plates. Scenery is now a
+per-instance pointer/tint decision; a single set is cut into tiles once.
+
+**Rafts are not the cost.** Measured by running `buildSolidRaftPreviewMeshes` over
+the scene's 20 root sets with the default raft settings: **10,340 triangles
+total** (about 500 per model). The raft proxy is 40 draw calls and almost no
+geometry, so merging it across models would buy ~0.2 ms at the cost of per-model
+pointer identity — not worth it.
+
+**Measured on the 20-model plate** (14.18M triangles, 4.87M of them supports):
+a full-plate spin holds a flat **165 fps, p95 6.125 ms, max 6.32 ms** over 240
+frames with 404 draw calls; a 600-frame run in which part of the plate left the
+view had a **median of 350 calls** (max 412), so the tiles are culling. The cone
+key change and the tiles roughly cancel at full plate (404 against 412 before),
+and the tiles are the win whenever the camera stops seeing the whole plate.
+
+## Fixed: duplicating models rebuilt their edge overlays
+
+A duplicate shares the source model's geometry, so it must share the edge overlay
+derived from it too. `cloneGeometryWithBounds(..., { shared: true })` returned
+every other derived field but dropped `edgeGeometry`, so the idle edge pass saw
+each copy as an un-edged model and rebuilt the overlay with
+`buildModelEdgeGeometry` — O(triangles), once per copy, inside an
+`IdleRequestCallback`. Duplicating eight models produced a **653 ms** idle task,
+605 ms of it blocking, measured by the render profiler's LoAF capture
+(`IdleRequestCallback`, from the scene feature chunk), about 450 ms after the
+confirm click. The shared clone now carries the source's `edgeGeometry`; edges are
+read-only and the vertex data is literally the same object.
+
+**Disabled anyway.** Sharing the overlay did not remove the reported spike, so
+the feature is off behind `MODEL_EDGE_OVERLAY_ENABLED` in
+`src/hooks/useStlGeometry.ts`: the builder returns undefined, the settings control
+is not rendered, and the idle ensure pass is skipped. The render path checks the
+same flag. Re-enabling it needs the work to leave the main thread, not another
+share or deferral.
+
+## Fixed: duplicates re-encoded the same mesh chunk
+
+The post-duplicate chunk sweep baked a preview chunk per model. A duplicate
+shares the source's `BufferGeometry` and the chunk is encoded in local space
+around the mesh centre, so its bytes are identical — but the store is keyed per
+owner model, so every copy missed and ran the whole encode (STL build, SHA,
+zlib-6) again. The 666 ms `IdleRequestCallback` in the duplicate capture is that
+work: the idle callback itself returns a promise, so the profiler's idle-task
+wrapper timed only the callback body and the encode landed in the continuations.
+
+`MeshChunkStore.adoptForModel` now reuses an owner's chunk for the same geometry
+signature, and `bakeModelGeometryChunk` / `resolveModelChunkForTick` try it
+before encoding. An eight-model duplicate encodes nothing when the source is
+already baked.
+
+## Fixed: a joint drag committed a different position than it showed
+
+The live drag published a **clamped** joint position (against the host or the
+model contacts) through the preview stores, but the release committed from the
+**raw camera-plane hit**. The commit then re-solved the contacts from that other
+point, which could land away from what the user saw — the release snap. The
+release also ran before the final pointermove's rAF, so the last few pixels of a
+drag were never part of the commit.
+
+`useJointInteraction` now resolves the pending pointer hit at release and
+commits from `lastPreviewedJointPosRef` (the position the preview actually
+showed), falling back to the raw hit only when no preview was emitted.
+
+## Joint drags no longer pay for hover or 165 Hz support previews
+
+A joint drag re-renders the dragged support synchronously (`usePartDragUpdate`
+flushes the preview to keep the cone attached to the socket), which is 20–26 ms
+of React commit per preview in Support mode. Two things were adding to it:
+
+- the hover coalescing timer fired during the drag (`TimerHandler:setTimeout`, from the
+  support state chunk), applying a hover render 23–38 ms after a drag had
+  already started. Hover writes are ignored while a joint/knot/bezier drag owns
+  the pointer (and through its 180 ms guard).
+- the support preview was published every frame. It is now throttled to 40 Hz;
+  the joint/gizmo *position* preview still updates every frame, which is the part
+  the eye tracks, while the shaft geometry catches up at 40 Hz. The release
+  still commits from the last position preview, so throttling cannot lose the
+  final pose.
+
+The remaining cost is the synchronous preview render itself; making it
+imperative (mutating the dragged segment meshes from a frame callback) is the
+next step if 40 Hz still feels uneven.
+
+## Fixed: hovering a support re-rendered the whole support scene
+
+`SupportRenderer` subscribes to the whole support store, so a hover write handed
+it a new snapshot: every collection-derived memo recomputed, the clipping pass
+re-traversed the scene, and a ~1000-element tree was reconciled — 84–112 ms of
+React commit per hovered support, 33 fps while sweeping across supports.
+
+Two changes:
+
+- heavy derivations (`renderListByType`, model resolution, the clipping pass)
+  take `getSnapshotWithoutHover`, a snapshot that keeps its identity when only
+  `hoveredId`/`hoveredCategory` moved. Measured commit p95 fell from 84.6 ms to
+  **32 ms**.
+- hover writes are trailing-coalesced at 80 ms (`setHoveredState`): a pointer
+  crossing several supports renders the last one instead of each one. Clearing
+  stays immediate.
+
+The remaining 32 ms is the element tree itself; the structural fix is to move
+hover into its own store and render the hover overlays from a small layer, so
+the world tree does not re-render at all.
+
+## Fixed: entering Support mounted detail for the whole plate
+
+`useUltraLazySupports` was `mode !== 'support'`, so the Support tab swapped the
+instanced proxy for `SupportRenderer` across **every** model on the plate. Only
+the active model is editable; the others are scenery, and each detailed support
+primitive creates its own geometry and material. That cold mount is the lag on
+the first Support-tab click.
+
+The world layer now draws the **edited model only**; non-selected models'
+supports are not shown at all in Support mode, which is what the mode is for.
+Per-model layers (ghost/preview) still render their own filter. Nothing else is
+mounted for the other models' supports, so entering Support no longer remounts
+the proxy either. The active model's detail is the remaining cold cost; the next
+step there is a deferred swap or instanced detail, not this split.
+
+## Tried: rendering on demand while idle (reverted)
+
+R3F's `frameloop="demand"` plus a wake gate stopped the 165 fps redraw of a
+static plate entirely, which is real power and fan noise saved. It also made the
+first and last frames of a camera gesture worse: the loop stops between gestures,
+so the GPU drops its clocks and the resumed frame pays for the wake, while the
+first frame after a long idle carries the whole idle interval in R3F's clock
+delta (animations that read `delta` jump). Users felt it as more lag at orbit
+start and end than the constant redraw had. Reverted to `frameloop="always"`;
+do not re-add demand without solving both the wake frame and the first delta.
+
+## Fixed: per-frame work that did not need to be per frame
+
+A scan for frame-path work found four items that ran every frame regardless of
+whether anyone could see the result:
+
+- `GizmoCenter` read `canvas.getBoundingClientRect()` inside `useFrame` while the
+  gizmo was visible (forced layout) and cloned the position vector. The rect is
+  now cached and refreshed by a `ResizeObserver`/scroll/resize, and the projection
+  uses a scratch vector.
+- `SpaceMouseController` polled the Gamepad API every frame even with no device
+  attached. Detection is throttled to 2 Hz while no candidate exists; a present
+  device (and the frame after it disappears) still polls every frame because the
+  axes live in the snapshot.
+- Every mounted model built a `ShaderMaterial` for the support-placement guide
+  and wrote its `uPlaneZ` uniform each frame, even though only the active model in
+  placement mode draws it. The material is now created only when enabled and the
+  frame write is guarded.
+- The render profiler's own card had `backdrop-blur` over the canvas; a
+  compositor blur runs every frame the panel is open. It is opaque now.
+
+## Fixed: snapshot-keyed memos re-walked the support forest on a hover
+
+`SceneCanvas` subscribes to the whole support snapshot, and a hover replaces it.
+Three derivations were keyed on that identity even though they read collections:
+the raft base circles, the raft marquee rings and the marquee polylines for all
+supports. Each hover therefore re-walked the forest and allocated a new set of
+shapes. They now key on the collections they read (`SUPPORT_COLLECTION_KEYS` /
+`raftFootprintSourceRefs`) and return the cached result when those are unchanged.
+
+Deferred geometry work is also paused for pointer gestures now, not only for
+camera movement: the queue keeps a set of pause reasons (`camera`, `pointer`), so
+one owner's resume cannot restart a BVH build under the other. The build itself
+is one blocking call and still cannot be pre-empted once started.
+
+Tapered shafts bucket their end-to-end ratio at 0.05 instead of 0.001 — the same
+latent draw-call cliff the cone and root batches had, now closed before a taper
+profile can trigger it.
+
 ## Known cost: a model selection rebuilt the raft
 
 Selecting a model took 19 seconds on that scene, and the whole of it was the
@@ -877,19 +1270,58 @@ before and after):
   skips only points the fixed-step loop would also have found clear, so the
   verdict is unchanged and a cone in the open costs an order of magnitude fewer
   queries.
+- `deduplicateCandidates` filtered the *whole* retained list through every
+  neighbouring bucket (`bucket.some(rr => rr.id === r.id)` inside a loop over
+  retained), which is O(candidates × retained × bucket) on a dense lattice.
+  Only retained candidates can suppress a later one, so the buckets are built
+  from survivors as they are kept; a candidate probes its neighbours directly.
+  Numeric cell keys replace the per-candidate template string. On the
+  overhang-slab fixture this took dedup from 104 ms to 20 ms with an identical
+  candidate set.
+- `computeAndApplySupportDiameterProfile` deep-cloned **every knot of the
+  snapshot once per trunk** (`structuredClone` in a `trunks × knots` loop) and
+  then filtered them with `trunk.segments.some(...)`. Knots are immutable in
+  that function — every change is `{ ...knot, ... }` — so the map holds the
+  snapshot's own objects and only changed knots are copied; the segment filter
+  is a `Set`. The forest resize on the same fixture dropped from 222 ms to
+  98 ms.
+- `isCollisionFrustumBlocked` cloned two `Vector3`s and lerped/cloned one pair
+  per slice; it now slices with scalar arithmetic (same `start + (end-start)*t`
+  the lerp performed). `recomputeContactConeForMovedDisk` likewise computes the
+  axes as scalars and materialises only the vectors its thickness resolver
+  takes. Together that removed the frustum check from the top of the profile
+  (179 ms → 59 ms across the three-model profile).
+- **The plan's draft is owned** (`createOwnedDraft`, `supportDraft.ts`): its
+  collections are copied on first write and mutated in place. Every placement
+  and every consolidation link used to spread `{ ...draft, [key]: { ... } }`,
+  which copied a several-hundred-entry collection (and the roots map) per
+  support — about 0.9 ms per copy on the slab fixture. Chunk consolidation also
+  stopped copying a pruned draft per host: the pillar being replaced is passed
+  as `excludeHostIds` and deleted after the link builds.
+- **The fan pool is walked per host, not per sample.**
+  `fanLeafToHost` / `buildConsolidationBranch` resolved the host entity (and the
+  grid-host flag) once per sample — tens of thousands of dictionary reads per
+  attempt. Both now resolve per host, unchanged for the pool's host-ordered
+  samples. `leafPathCrossesSupports` walks the host collections directly instead
+  of allocating a ref object per host per call.
+- `generateGridCandidates` materialises the footprint as `{x,y,z}` objects only
+  when the voxel fallback sampler is actually used; the triangle surface, when
+  available, no longer pays for a 112k-object array per region.
+
+Measured on the 7-model corpus (`npm run bench:auto-supports`, output identical
+to the golden baseline): 4.45 s → 3.37 s total; the 623-support overhang slab
+2.67 s → 1.54 s, its consolidation phase 1.56 s → 0.7 s.
 
 Still open, in the order a profile says they pay:
 
-1. `generateGridCandidates` materialises the whole footprint as `{x,y,z}`
-   objects (`footprintToPoints`) before eroding and walking it — 112k objects
-   for a large region. The mask-native path is a typed-array API.
-2. `fanLeafToHost` / `buildConsolidationBranch` call `getSupportTypeDescriptor`
-   per candidate host sample, and their reach is a linear walk of the whole
-   shaft pool. Registry lookups want hoisting; the pool wants a spatial index.
-3. `computeForestDiameterProfile` deep-clones the forest with
-   `structuredClone` — most of that phase's cost.
-4. `isAutoBraceableShaftType` / `lateralStabiliserTypes` rebuild their
-   filter+map+Set on every call, and they are called per sample.
+1. The fan pool is still a linear walk of every sample for every attempt. It
+   wants a per-pass spatial index (XY buckets, radius queries) with tombstones
+   for converted hosts.
+2. `countAttachmentsOnHost` walks every knot in the draft for every host
+   considered, so consolidation pays `hosts × knots`; a parent-shaft index per
+   pass would make it O(1).
+3. `computeForestDiameterProfile` (the forest-resize phase) is now the largest
+   single phase after placement on the slab (~140-200 ms of 1.5 s).
 
 **The responsiveness fix was architectural, not micro-optimisation.** The plan is
 pure with respect to the stores it *writes* (one commit at the end), which is
@@ -1181,11 +1613,463 @@ That scene and copy count now measures ~146 ms. Still open:
    2 × O(total support entities). A patch-shaped entry — the ids added, and the
    ids removed with their entities — would make it O(N) and delete the copies
    from the confirm path entirely.
-2. `estimateSceneSnapshotRegistryBytes` counts geometry only, so support copies
-   sit outside the ~300 MB eviction budget: 200 entries of a 9,000-entity state
-   are retained with nothing accounting for them.
+2. ~~`estimateSceneSnapshotRegistryBytes` counts geometry only~~ — fixed: the
+   budget now counts each pair's support states (~700 B per entity, measured at
+   ~14 MB per half on the 20-model scene), and a pair spills its states even
+   when its geometry is shared, so the budget offloads them to disk instead of
+   throwing undo entries away.
 3. Undo copies the stored snapshot again (`applySceneSnapshot`), so a restore
    pays a third full copy.
+
+## Measured: a cleared scene flushes, and what is still retained
+
+Clearing a supported scene used to keep its meshes. Measured with
+`Runtime.getHeapUsage` after `HeapProfiler.collectGarbage`, against the
+production build (`next build && next start`, since the dev build's fibers are
+retained by their own tooling), loading the 20-model, 198 MB VOXL scene and
+clearing with Ctrl+A, Delete:
+
+| step | before | after |
+| --- | ---: | ---: |
+| load 1 → clear 1 | 1971 → 321 MB | 1882 → 275 MB |
+| load 2 → clear 2 | 2021 → 491 MB | 1798 → 277 MB |
+| load 3 → clear 3 | 2023 → 508 MB | 1838 → 280 MB |
+
+The four retainers fixed are in
+[History and Undo/Redo](history-and-undo-redo.md#disk-backed-geometry-spill).
+What is left, in the order it pays:
+
+1. **~19 MB of plain objects per load**, retained across clears. usedSize
+   grows by roughly that per load/clear cycle while backingStorageSize stays
+   flat, so it is JS data, not geometry. A snapshot diff of two floors shows
+   plain objects, numbers, strings and object-element arrays; the only retainer
+   paths found end in a `SceneCanvas` render-scope context held through a native
+   handle. Window/document listener counts were checked across a load and return
+   to baseline on clear (CDP DOMDebugger.getEventListeners), so it is not a leaked
+   listener. Next step: bottom-up diff of the retained closure set (the render
+   scope holds `entryDropOffsets`, `prepareMergedSupports`, ...) and a check of
+   whether a pending `requestAnimationFrame`/timer holds one scope per load.
+2. **Undo of a cleared scene re-reads the whole file** (~800 MB on the scene
+   above, geometry + support JSON). It lands in ~15 s on the test machine,
+   which is acceptable for an explicit undo but is the reason a clear writes
+   800 MB of scratch in the first place.
+3. The scratch store keeps one file per spilled entry under a 4 GB ceiling
+   (`SCENE_HISTORY_MAX_SPILLED_BYTES`); a session that clears many large scenes
+   evicts the oldest entries (and their undo) rather than filling the disk.
+
+## Fixed: support batches built their swept tubes inside render
+
+The support proxy's curved shafts are merged into one tube mesh per colour. That
+merge ran in a `useMemo` on the render thread, and a supported plate's batch is
+thousands of swept curves: the stall detector reported
+
+```
+[stall] Main thread blocked for 949 ms — activity: support-mode:curved-shaft-tubes
+```
+
+right after a 20-model scene loaded — i.e. during the camera intro, and again at
+the commit of a model move. Two changes:
+
+- the merge writes preallocated `Float32Array`/`Uint32Array` buffers instead of
+  pushing three floats and one index at a time into plain arrays (output byte-
+  identical; the builder's tests pass unchanged);
+- the per-shaft `TubeGeometry` builds happen in idle slices of 160, and the
+  previous batch stays drawn until the new one is assembled. `tubeGeometryCache`
+  is keyed by shaft, so a move only regenerates the shafts that actually changed.
+
+The merged-support cache is also suspended during the intro
+(`cameraIntroRunId > cameraIntroCompletedRunId`), not just during orbit and
+camera-focus transitions.
+
+Measured on the same load: the intro window went from p95 18.2 ms / max 1200 ms
+to p95 12.2 ms, and the curved-shaft stall is gone from the log.
+
+## Fixed: a support walk asked every model its own question
+
+The out-of-bounds walk (`computeSupportAndRaftWorldBounds`) answered "which of
+this model's supports exist?" once per model by scanning every collection: O(models
+× entities), ~20 × 20,683 visits per commit, each with an `Object.values`
+allocation per collection per model. It now reads a per-model index
+(`buildSupportModelIndex`) built once per collection change, so a commit is O(n).
+
+Then the same index answers the better question: **which models did this write
+touch?** The store replaces only the entities it touched and carries every other
+collection and entity through by reference (`transformSupportsForModel`:
+`nextByCollection[key] ?? state[key]`), so a slice comparison is pointer
+comparison, and a commit that moves one model is O(its models). Both render-path
+consumers use it:
+
+- `SceneCanvas` keeps one support-and-raft box per model, valid until that
+  model's entities or the raft settings change, instead of one cache wiped by any
+  collection write. The comparison is against the index the cache was *filled
+  from*, not the latest transition — a drag returns early from the bounds path,
+  so two writes can pass while the cache is skipped.
+- `SupportProxyMeshLayer` re-walks only the models whose entities changed and
+  reuses the previous `ProxyModelGeometry` for the rest. `collectProxyPrimitives`
+  takes a model-key filter and skips other models before allocating. A first
+  build, or a change that moved half the plate, still takes one unfiltered walk:
+  the filter reads every entity, so twenty passes would read the plate twenty
+  times.
+
+Measured with `supportModelIndex.test.ts` on the change detection; the scene
+numbers below are what the *commit* frame did not improve.
+
+## Fixed: a model drag's commit frame paid a hollowing preview warm-up
+
+The pointerup of a model drag blocked one frame for ~285–400 ms while p50/p95
+stayed at 6.1 ms. A CDP network trace during the release showed the frame's IPC:
+`stage_mesh_binary_set`, `mesh_hollow_preview_capture_staged_source`, then the
+whole read-back family (`…read_positions`, `…read_cavity_positions`,
+`…read_removed_voxel_centers/indices`, `…read_blocked_voxel_centers/indices`).
+
+That is `useHollowingManager`'s warm-up effect. It fires on `scene.activeModel`
+change, a drag selects the model it moves, and `primeHollowPreviewCache` builds a
+preview for a model that has not had one this session. The warm-up is purely
+speculative: the only readers of `hollowPreviewResultCacheRef` are the hollowing
+panel and its materializer, so a model nobody is about to hollow was being
+voxelized during the gesture.
+
+It now waits for a 1.2 s quiet period and then runs in `requestIdleCallback`,
+cancelled when the selection changes again. Verified by the same trace on the
+rebuilt app: a fresh selection's commit window (first 600 ms) contains no preview
+IPC at all, and `stage_mesh_binary_set` lands afterwards.
+
+`hollowPreviewFromCapturedSource` was already async in the IPC sense — each
+read-back is a separate `await` — so what remains is one long task after the
+gesture: the profile of that window is `(program)` (IPC deserialization) and
+render work, not JS copies. Making that non-blocking means receiving the buffers
+in pieces, which is a change to the command's shape, not to this effect.
+
+## Known: entering Support mounts the detail renderer, and that is the tab's cost
+
+Measured on the 20-model scene, per `Prepare → Support` click:
+
+| entry | worst frame | long tasks |
+| --- | ---: | ---: |
+| first | 624 ms | 100, 535, 81 ms |
+| second (warm) | 321 ms | 212, 105 ms |
+| with the raft renderers switched off | 327 ms | 219, 104 ms |
+
+So it is not the rafts and not a one-time chunk: it repeats, and the bulk is one
+~180–530 ms task. `ModelAttachedSupportLayer` sets
+`useUltraLazySupports = mode !== 'support'`, and Support mounts the full
+per-primitive renderer for the active model — thousands of `SupportRenderer`
+children built in a single commit, plus program setup.
+
+**The obvious fix does not reach it.** Mounting that subtree ahead of time, in
+Prepare, and revealing it on the switch was tried and does nothing: in Prepare
+the world layer is not mounted at all — `useActiveModelAttachedSupportProxy`
+routes the active model's supports through per-model layers — so the pre-built
+subtree is discarded and the world layer builds its own on entry.
+
+The shape that can work: keep the proxy drawing in Support until the detail
+subtree exists, and build that subtree **progressively** — one support type, or
+one slice of a type, per idle callback — with the proxy excluding what the detail
+has already taken over. That needs the detail renderer to accept a growing
+subset, and the proxy to stay mounted in Support for the duration.
+
+## Measured: the hollowing tool is smooth except its mode toggle
+
+Same scene and build.
+
+| phase | fps | p95 | worst frame | long tasks |
+| --- | ---: | ---: | ---: | ---: |
+| leave hollowing (→ Drag tool) | 130.3 | 8.0 | 29.6 | 0 |
+| enter hollowing | 132.4 | 8.1 | 15.1 | 0 |
+| voxel-size ± clicks | 132.6 | 8.0 | 8.1 | 0 |
+| Cavity ↔ Infill mode toggle | 115.2 | 8.1 | 151.3 | 153, 110, 127, 71 ms |
+| hover across the model | 133.6 | 8.1 | 8.2 | 0 |
+| idle in hollowing | 132.3 | 8.1 | 8.2 | 0 |
+
+Entering the tool costs nothing now (the preview guard keeps a non-hollowed model
+from staging), and hovering/stepping values is clean. **Toggling Cavity ↔ Infill
+blocks ~110–150 ms per switch** — that re-runs the native preview and decodes its
+buffers on the main thread. It is the same shape as the preview warm-up: the
+round trip is fine, the buffer read-back is what blocks. A chunked read (yield
+between buffers, as `sceneSnapshotSpill` does) is the smallest change that would
+keep the frame moving.
+
+## Fixed: placing a support no longer rebuilds the whole support map
+
+The router never reads the support store, so hovering is unaffected by how full
+the plate is. Placing was: `addSupportEntity` ended in `setSnapshot` →
+`normaliseSupportState`, which rebuilt the canonical `supports` map (every
+entity) and re-stamped the touched collection.
+
+`supports` is now **derived**: the eight collections are the truth, the union is
+built on first read and cached per state object, and it is non-enumerable so the
+`{ ...state }` every writer does cannot materialise it. Views the store produced
+are marked in a `WeakSet`, so a write that hands one back (a collection plus one
+entity — the placement path) skips the stamping pass entirely. The id lookups
+(`getSupportTypeOf`, shaft owner, model id) walk the collections instead of the
+union, and the history sizer counts entities per collection.
+
+Measured on a synthetic plate, median of 12 placements:
+
+| existing supports | before | after |
+| ---: | ---: | ---: |
+| 0 | 0.02 ms | 0.02 ms |
+| 2,000 | 0.99 ms | 0.50 ms |
+| 20,000 | 17.6 ms | **7.2 ms** |
+
+What is left at 20k is the one unavoidable copy: `{ ...state[key], [id]: entity }`
+copies the touched collection so its identity changes and React re-renders. Going
+below that means collections as `Map`s with a versioned object view — a change to
+every writer and reader, and the next step if a 50k plate ever feels heavy.
+
+## Fixed: the first placement hover paid the column-map walk
+
+`calculateSmartPlacementV3` began with `sdf.enableColumnMap(...)`, which *builds*
+the clearance map when one is missing — a walk over every mesh vertex, tens to
+hundreds of milliseconds on a detailed part. The first hover after opening
+Support paid it, which is the "placing isn't instant" the tab shows.
+
+Three changes:
+
+- `SDFCache.tryUseColumnMap(clearance, cell)` activates a map that exists and
+  **never builds one**. The placement path calls it; a missing map is requested
+  from the column-map worker and the next hover finds it. The router already
+  works without the map (it is opt-in), so a hover never blocks on the walk.
+- `prewarmSupportPlacementAsync` now runs in **both editing modes**, 250 ms after
+  the model settles (it was Support-only, 60 ms). Prepare warms the active
+  clearance; Support warms the pinned presets' maps too. By the time the user
+  opens Support the map is normally built.
+- The probe flag moved to `__dfPerfMarks`. The support pathfinding module installs
+  `window.__dfPerf` as its own console API, so testing that name made every
+  `perfProbe` mark — and a `performance.measure` entry per call — run in
+  production builds.
+
+The rule that matters: build the acceleration data once, off the interaction
+path, and never inside the hover.
+
+## Measured: mode switches and the Support tab
+
+Second half of the tour, same scene and build, same recording.
+
+| phase | fps | p95 | worst frame | long tasks |
+| --- | ---: | ---: | ---: | ---: |
+| Prepare → Support (first) | 91.3 | 8.1 | 484.6 | 98, 389, 85 ms |
+| Support → Prepare | 130.2 | 8.1 | 37.5 | 0 |
+| Prepare → Support (again) | 113.5 | 8.1 | 280.8 | 178, 92 ms |
+| Prepare → Export (first) | 123.9 | 8.1 | 182.1 | 99, 69 ms |
+| Export → Prepare | 130.7 | 8.1 | 23.2 | 0 |
+| Prepare → Printing | 129.2 | 8.1 | 53.2 | 0 |
+| Support Studio tabs (General/Raft/Grid/Bracing) | 130.5 | 8.0 | 37.7 | 0 |
+| hover across supports | 133.6 | 8.0 | 8.1 | 0 |
+| click a support | 133.3 | 8.1 | 8.1 | 0 |
+| delete a support (Backspace) | 133.1 | 8.1 | 8.2 | 0 |
+| undo the delete | 133.1 | 8.0 | 8.3 | 0 |
+
+So **entering Support is the one recurring chug**: ~180–280 ms every time, not just
+the first, and the profile of a warm entry is three.js program setup
+(program info logs, vertex-array binds, uploads, parameter lookups) plus `fetch`.
+
+The structural reason is one line: `ModelAttachedSupportLayer` sets
+`useUltraLazySupports = mode !== 'support'`, so Support mode swaps the ultra-lazy
+proxy renderer for the full `SupportRenderer` — a different set of meshes and
+materials that is built synchronously when the mode mounts. Prepare uses the
+proxy; Support uses the full renderer; every switch pays the difference.
+
+Fixing it means one of: building the full renderer's geometry in idle slices
+(the merged layer's pattern), keeping the proxy mounted underneath until the full
+renderer is ready, or teaching one renderer both jobs. All three are larger than
+the fixes above and want a dedicated pass; the numbers here are the target.
+
+## Measured: the 20-model scene is smooth in steady state, and where the one hitch is
+
+A scripted tour of the 198 MB, 18-visible-model supported scene, in a production
+build, recording `requestAnimationFrame` intervals and long tasks per phase
+(`PerformanceObserver('longtask')`):
+
+| phase | fps | p95 | worst frame | long tasks |
+| --- | ---: | ---: | ---: | ---: |
+| idle | 165.5 | 6.2 | 6.2 | 0 |
+| orbit drag | 164.3 | 6.2 | 12.1 | 0 |
+| wheel zoom | 163.9 | 6.1 | 18.2 | 0 |
+| hover sweep across the plate | 165.6 | 6.1 | 6.2 | 0 |
+| click select | 158.4 | 6.2 | 24.2 | 0 |
+| drag a model | 165.7 | 6.2 | 6.2 | 0 |
+| undo (`Ctrl+Z`) | 165.8 | 6.1 | 6.2 | 0 |
+| Prepare → Support → Prepare | 165.3 | 6.1 | 6.3 | 0 |
+| Prepare → Export → Prepare | 165.3 | 6.1 | 6.2 | 0 |
+| camera focus | 130.9 | 8.0 | 22.5 | 0 |
+| settings modal open/close | 131.3 | 8.0 | 22.4 | 0 |
+| six drags on six different models | 165–165.8 | 6.1–6.2 | 12.1 | 0 |
+
+The per-model first-commit stall recorded earlier in this file is gone in this
+build: six fresh models dragged in a row, every one at 165 fps with a 6.1 ms p95.
+
+**The one remaining hitch is the load**, once per file: ~800 ms of main thread
+right after the scene appears. Bisected with `window.__dfLayers`: it survives with
+`merged`, `proxy` and `rafts` all off (878 ms), so it is not the support layers,
+and a network trace shows **no** `mesh_hollow_preview_*` calls on load. A profile
+of the window shows no single JS hot spot — `getBufferSubData` (GPU readback),
+`fetch` (native chunk hand-off) and `(program)` carry it. That is the import and
+AO-bake path, which the section below already breaks down (ranged reads, sync
+inflate of SUPP/MODL/EXTD).
+
+**Also fixed here:** the hollowing preview warm-up no longer runs for a model with
+no hollowing (`!enabled && !bakedIntoGeometry`). Nothing reads that cache until
+the panel asks, and the panel computes its own preview on open; the warm-up had
+been paying a stage/capture/read-back for every model selection that passed
+through, on a scene where no model is hollowed.
+
+## Known: remaining serial work on the open, generate and commit paths
+
+A scan of the three heaviest paths found the following still blocking the main
+thread. None of it is speculative; each entry names the loop and its scale.
+
+**Scene open** (`parseVoxlBinaryV2` in `useSceneCollectionManager.ts`): the whole
+file is wrapped in `new Uint8Array(await file.arrayBuffer())` — 677 MB on the
+13-model test scene — and every `subarray` in the parser aliases it, so it stays
+resident until the last chunk settles. The desktop path has a ranged read
+(`readSidecarFileBytes`); header + directory + the non-mesh chunks could come
+from it the same way the mesh chunks already do.
+
+**Scene open** (`parseVoxlBinaryV2` in `codec-v2.ts`): `SUPP`, `MODL`
+and `EXTD` are inflate + `JSON.parse` synchronously, one task. Only
+MESH/HSRC/CAVT/PSRC are in the async bulk path. Moving their `unzlibSync` to the
+existing async inflate removes the blocking decompress; the parse order stays.
+
+**Auto-support generate** (`autoPlaceWorkerClient.ts`):
+every run posts `baseState: getSnapshot()` — the whole plate's support state,
+structured-cloned in the calling task — plus `mesh`/`cavityMesh` slices that the
+worker already caches by key (`autoPlace.worker.shared.ts`). Omitting
+what the worker already holds, and transferring the first copies, removes the
+per-run clone.
+
+**Auto-support generate** (`AutoSupportPanel.tsx`):
+the replace pre-pass walks every model's supports, rebuilds the knot map and then
+`setSnapshot`s — and the commit rebuilds it again.
+
+**Every support write** (`src/supports/state.ts`, `normaliseSupportState`): the
+canonical `supports` map is rebuilt one entity at a time and each supplied
+collection is folded in, so a one-entity edit is O(plate). Measured on a 20k
+entity plate: **21.6 ms** for a write that reads all eight views back (down from
+31.9 ms after pinning the supplied views instead of re-filtering `supports`, and
+iterating records with `in` instead of allocating `Object.entries` pairs). (Since
+fixed: the union is derived rather than rebuilt — see the placement entry.)
+
+## Fixed: Ctrl+A, Delete rebuilt the support store once per model
+
+`deleteModels` deleted supports model by model, and each
+`deleteSupportsForModel` ends in `setSnapshot`, so a select-all delete on a
+supported plate normalised the whole support store once per model on top of a
+full scan each.
+
+`deleteSupportsForModelIds` plans the removal for every model in one pass and
+applies it with one write; both delete paths use it. Measured on a synthetic
+20-model, 20k-entity plate: **241 ms → 145 ms**, and the store now normalises
+once instead of twenty times.
+
+The remaining O(models × entities) is in the planning step (`getSupportsForModel`
+per model); it can read the per-model index from `supportModelIndex.ts` instead.
+`deleteModels` also captures a whole support-state snapshot before and after for
+undo, which on the real scene is the larger cost.
+
+## Known: a model's *first* commit stalls ~250 ms outside JavaScript
+
+Measured with opt-in marks (`src/utils/perfProbe.ts`: set `window.__dfPerfMarks = true` —
+not `__dfPerf`, which the support pathfinding module already uses for its own console API,
+then read `performance.getEntriesByType('measure')`) on the 20-model,
+20,683-support scene in a production build.
+
+Per commit, the JavaScript is small:
+
+| piece | per commit |
+| --- | ---: |
+| `proxy:collect` (the support proxy walk) | 2.4–5.7 ms, one model |
+| `proxy:tiles` | 3.6–15.6 ms |
+| `bounds:models` | 0–7.9 ms |
+| `bounds:support` | 0.7–7.7 ms, one model |
+| `merged:build` (the merged support re-merge) | does not run |
+
+The hitch is **per model, once**, not per commit:
+
+| input | worst frame |
+| --- | ---: |
+| click (no move) | 12 ms |
+| drag on empty canvas | 6 ms |
+| first drag of a model this session | 250–375 ms |
+| the same drag again | 6–12 ms |
+
+Toggling the merged layer off and on again, which forces a full rebuild, then
+dragging immediately: 12 ms. A model that has been dragged once never stalls
+again.
+
+It is not JavaScript: ~4 ms of V8 samples in the window, the trace's largest task
+is 64 ms with none over 80 ms, viewport size does not change it (700×560,
+1100×880, 1718×1420 all ~250 ms), and no probe accounts for it. The frame the
+compositor fails to produce is the stall, and the work that causes it happens
+once per model.
+
+**The bisect that narrowed it** (`window.__dfLayers = { merged | mergedMesh | proxy | shapes | rafts | overlay: false }`,
+via `perfLayerEnabled`): `merged: false` (cache disabled) is 6 ms; `mergedMesh: false`
+(cache on, meshes hidden) is 230–255 ms. So the *cache*, not the mesh, is what
+makes the first commit expensive — but it charges nothing on later commits, and
+`merged:build` never fires during the stall.
+
+**What changed along the way, all measured:**
+
+- `mergedSupportCache` re-collects and re-merges only the models a write touched
+  (`changedSupportModels`), instead of a whole-plate walk and a full re-merge.
+- Its transform-skip branch no longer calls `publish()`. Nothing changed for
+  consumers, but a fresh `readyModelIds` made the world proxy re-cut its batches
+  and tiles and re-upload every support instance.
+- The walks behind the proxy and the bounds are per-model (earlier commits).
+
+The in-app render profiler (`Ctrl+Shift+P`, and `window.__dfProfiler` from
+`perfProbe`) settles the renderer side: with GPU sync probes requested,
+`gpuTiming` comes back `unavailable` (no `EXT_disjoint_timer_query` in this
+WebView2), and the recorded passes top out at **8 ms of CPU**. Nothing in the
+frame's JavaScript is the stall.
+
+So the cost is one-time GPU work for the model being committed: its support
+instance buffers and merged geometry are allocated and uploaded on that model's
+first commit, and reused afterwards. Verifying that needs one of:
+
+- pre-warming the upload in idle (draw the model's layer once off-screen, or
+  allocate its tiles with a zero-count draw) and confirming the first commit
+  drops to the steady-state cost;
+- or reading GPU memory counters (`gl.info.memory`) across the first and second
+  commit, which only move if the stall is an allocation.
+
+## Known: selecting a model costs one frame on its own
+
+Separate from the move: a fresh selection still produced a 654 ms frame in the
+same session, with no preview IPC in the window. That is the selection path —
+the Prepare merged-support build for the newly active model and the camera focus
+glide — not the drag commit. Not measured piece by piece yet.
+
+## Fixed: every tool switch re-merged the whole plate's supports
+
+Switching Prepare's Drag ↔ Arrange tools (and switching plates) stuttered the
+camera transition on a supported plate. Measured on the 20-model, 20,683-support
+scene in a **production** build over a 2 s window after the click:
+
+| phase | fps | p95 | worst frame |
+| --- | ---: | ---: | ---: |
+| before → Arrange | 133.7 | 18.2 ms | 127.3 ms |
+| before → Drag | 141.1 | 18.1 ms | 30.4 ms |
+| after → Arrange (warm) | 164.5 | 6.1 ms | 18.1 ms |
+| after → Drag | 165.0 | 6.2 ms | 12.1 ms |
+
+The cause was an identity, not work: `SceneCanvas` was handed
+`cavityGeometryByModelId={new Map(...)}` **inline in JSX**, so every page render
+produced a new Map. The Prepare merged-support cache keys its walk on that map,
+so any re-render — a tool switch, a plate switch, a selection — invalidated the
+walk and re-merged all 20 models. Instrumented with the cache's own counters,
+each toggle cost `walks +1…2, builds +20`.
+
+The map is now memoized on `cavityGeometryVersion`, which the hollowing manager
+bumps on every mutation of the ref, so its identity changes only when a cavity
+does.
+
+`supportBoundsByModelId` (page.tsx) also re-walked the forest on every entry to
+Arrange. It is pure over (support snapshot, raft settings), so its result is
+cached in a WeakMap keyed by the snapshot; consumers already clone the boxes.
+The first Arrange after a support change still pays that walk (~109 ms worst
+frame on the scene above) and later entries are ~18 ms.
 
 ## Known: Select-mode hover and selection pay per support
 
@@ -1229,14 +2113,16 @@ Fixed so far:
   shafts come from the visible set and are merged again, which is cheap now that
   each shaft's sweep is cached.
 
+**Fixed:** `SupportProxyMeshLayer`'s cache is keyed on the collections the walk
+reads (`SUPPORT_COLLECTION_KEYS`), not on the snapshot, so a hover write no
+longer rebuilds ~83k proxy primitives and re-lays out every instance.
+`RaftProxyMeshLayer` already keyed on `raftFootprintSourceRefs`.
+
 Still open:
 
-1. `RaftProxyMeshLayer` and `SupportProxyMeshLayer` each hold a single-entry
-   module cache keyed on the whole support-store snapshot, so any store write
-   (including hover and selection writes) rebuilds every proxy primitive.
-2. `sharedProxyCache`'s geometries are never disposed when the cache is
+1. `sharedProxyCache`'s geometries are never disposed when the cache is
    replaced; the raft cache leaks its per-model geometries the same way.
-3. A model drop offset (`modelDropOffsetsById`, live during a drag or a drop
+2. A model drop offset (`modelDropOffsetsById`, live during a drag or a drop
    animation) re-appends every primitive in the scene with the offset, so the
    base batch rebuilds and re-uploads all of its matrices per frame. The offset
    belongs on the group transform, as the overlays already do it.

@@ -147,6 +147,26 @@ pub fn overhang_and_stability_from_soup(
     (regions, report)
 }
 
+/// One undirected mesh edge, tagged with the triangle that owns it.
+///
+/// The classifier used a `HashMap<(u32, u32), Vec<u32>>`: three entries per
+/// triangle, each a separately allocated `Vec`, merged across rayon threads.
+/// A flat array sorted by the edge key answers the same questions — union all
+/// triangles on an edge, and look up the neighbours of one — with one
+/// contiguous allocation and a parallel sort.
+#[derive(Clone, Copy)]
+struct EdgeRef {
+    /// `(min_vertex << 32) | max_vertex`.
+    key: u64,
+    tri: u32,
+}
+
+#[inline]
+fn edge_key(a: u32, b: u32) -> u64 {
+    let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+    ((lo as u64) << 32) | hi as u64
+}
+
 /// Classify overhang regions on an already-welded mesh.
 pub fn classify_overhangs(
     mesh: &IndexedMesh,
@@ -176,36 +196,19 @@ pub fn classify_overhangs(
         is_overhang.push(o);
     }
 
-    // Triangle adjacency through undirected edges (min, max vertex id).
-    // Fold into thread-local maps, then merge: union-find is order-independent
-    // over the edge pairs, so the result stays deterministic.
-    let edge_tris: HashMap<(u32, u32), Vec<u32>> = mesh
-        .triangles
-        .par_iter()
-        .enumerate()
-        .fold(
-            || HashMap::<(u32, u32), Vec<u32>>::new(),
-            |mut acc, (fi, tri)| {
-                for pair in [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
-                    let key = if pair.0 < pair.1 {
-                        pair
-                    } else {
-                        (pair.1, pair.0)
-                    };
-                    acc.entry(key).or_default().push(fi as u32);
-                }
-                acc
-            },
-        )
-        .reduce(
-            || HashMap::<(u32, u32), Vec<u32>>::new(),
-            |mut a, b| {
-                for (k, v) in b {
-                    a.entry(k).or_default().extend(v);
-                }
-                a
-            },
-        );
+    // Triangle adjacency through undirected edges (min, max vertex id), as one
+    // flat array sorted by edge key. Union-find is order-independent over the
+    // edge pairs, so grouping stays deterministic.
+    let mut edges: Vec<EdgeRef> = Vec::with_capacity(tri_count * 3);
+    edges.par_extend(mesh.triangles.par_iter().enumerate().flat_map_iter(|(fi, tri)| {
+        let owner = fi as u32;
+        [
+            EdgeRef { key: edge_key(tri[0], tri[1]), tri: owner },
+            EdgeRef { key: edge_key(tri[1], tri[2]), tri: owner },
+            EdgeRef { key: edge_key(tri[2], tri[0]), tri: owner },
+        ]
+    }));
+    edges.par_sort_unstable_by_key(|edge| edge.key);
 
     // Union-find over overhang triangles sharing an edge.
     let mut parent: Vec<u32> = (0..tri_count as u32).collect();
@@ -232,12 +235,9 @@ pub fn classify_overhangs(
         }
     }
 
-    for tris in edge_tris.values() {
-        if tris.len() < 2 {
-            continue;
-        }
-        for w in tris.windows(2) {
-            union(&mut parent, w[0], w[1]);
+    for pair in edges.windows(2) {
+        if pair[0].key == pair[1].key {
+            union(&mut parent, pair[0].tri, pair[1].tri);
         }
     }
 
@@ -273,7 +273,7 @@ pub fn classify_overhangs(
     // Steep flats ride the same region shape, so the density grid, the surface
     // sampler and the perimeter ring all treat them as ordinary overhangs.
     regions.extend(classify_steep_flats(
-        mesh, &normal, &edge_tris, threshold, px_mm, base_z,
+        mesh, &normal, &edges, threshold, px_mm, base_z,
     ));
     regions
 }
@@ -291,7 +291,7 @@ pub fn classify_overhangs(
 fn classify_steep_flats(
     mesh: &IndexedMesh,
     normal: &[Vec3],
-    edge_tris: &HashMap<(u32, u32), Vec<u32>>,
+    edges: &[EdgeRef],
     self_support_threshold: f32,
     px_mm: f32,
     base_z: f32,
@@ -339,15 +339,14 @@ fn classify_steep_flats(
 
             neighbors.clear();
             let tri = mesh.triangles[fi as usize];
-            for pair in [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
-                let key = if pair.0 < pair.1 {
-                    pair
-                } else {
-                    (pair.1, pair.0)
-                };
-                if let Some(ts) = edge_tris.get(&key) {
-                    neighbors.extend_from_slice(ts);
-                }
+            for key in [
+                edge_key(tri[0], tri[1]),
+                edge_key(tri[1], tri[2]),
+                edge_key(tri[2], tri[0]),
+            ] {
+                let start = edges.partition_point(|edge| edge.key < key);
+                let end = edges.partition_point(|edge| edge.key <= key);
+                neighbors.extend(edges[start..end].iter().map(|edge| edge.tri));
             }
             neighbors.sort_unstable();
             neighbors.dedup();
@@ -1518,6 +1517,69 @@ pub async fn scan_overhangs(
     .await
     .map_err(|e| format!("Overhang scan task panicked: {e}"))?
 }
+
+/// Tauri IPC command: weld the staged world-space triangle soup and classify
+/// overhang regions plus the topple report.
+///
+/// The frontend stages exactly the positions it renders, so the returned
+/// `triangleIds` index the rendered geometry. This is the binary counterpart
+/// of `scan_overhangs`: no JSON number array crosses the boundary. The command
+/// consumes the staged buffer.
+#[tauri::command]
+pub async fn scan_overhangs_staged(
+    self_support_angle_deg: f32,
+    px_mm: f32,
+    label: Option<String>,
+    has_raft: Option<bool>,
+) -> Result<OverhangScan, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = crate::staged_mesh()
+            .lock()
+            .map_err(|e| format!("staged mesh lock poisoned: {e}"))?
+            .take()
+            .ok_or("No staged mesh binary — call stage_mesh_binary_set first")?;
+        let soup = crate::bytes_to_f32_vec(&bytes)?;
+        if soup.is_empty() || soup.len() % 9 != 0 {
+            return Err(format!(
+                "Staged overhang scan needs a triangle soup (9 floats per triangle); got {} floats",
+                soup.len()
+            ));
+        }
+
+        let (regions, report) = overhang_and_stability_from_soup(
+            &soup,
+            self_support_angle_deg,
+            px_mm,
+            has_raft.unwrap_or(false),
+        );
+        if let Some(report) = &report {
+            log::info!(
+                "[stability] {}: {}",
+                label.as_deref().unwrap_or("world soup"),
+                report.to_log_line(),
+            );
+            if !regions.is_empty() {
+                log::info!(
+                    "[stability] regions by drag moment (pose total {:.0}mm³): {}",
+                    report.drag_moment_mm3,
+                    region_moment_ranking(&regions, report.drag_moment_mm3, 4),
+                );
+            }
+        }
+        log::info!(
+            "[overhang] staged scan complete: {} regions from {} triangles",
+            regions.len(),
+            soup.len() / 9,
+        );
+        Ok(OverhangScan {
+            regions,
+            stability: report,
+        })
+    })
+    .await
+    .map_err(|e| format!("Staged overhang scan task panicked: {e}"))?
+}
+
 
 #[cfg(test)]
 mod tests {

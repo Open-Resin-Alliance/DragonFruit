@@ -10,7 +10,10 @@ export interface TypedHistory<M> {
    * Push an entry whose payload must match its action type. The toast names it by
    * `description` when given, else by the domain's label for its type.
    */
-  push<K extends keyof M & string>(action: { type: K; payload: M[K]; description?: MessageDescriptor }): void;
+  push<K extends keyof M & string>(
+    action: { type: K; payload: M[K]; description?: MessageDescriptor },
+    options?: { payloadOwned?: boolean },
+  ): void;
   /** Register a handler that receives its action's payload already narrowed. */
   register<K extends keyof M & string>(
     type: K,
@@ -30,8 +33,12 @@ export interface TypedHistory<M> {
  */
 export function createTypedHistory<M>(labels: HistoryLabels<M>): TypedHistory<M> {
   return {
-    push(action) {
-      pushHistory({ ...action, description: action.description ?? labels[action.type] });
+    push(action, options) {
+      pushHistory({
+        ...action,
+        description: action.description ?? labels[action.type],
+        ...(options?.payloadOwned ? { payloadOwned: true } : {}),
+      });
     },
     register(type, handler) {
       return registerHistoryHandler(type, (action, direction) =>

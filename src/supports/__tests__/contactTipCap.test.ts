@@ -232,3 +232,20 @@ test('tipContactMarginScale sets the fraction of free width the contact keeps', 
         updateAutoSupportSettings({ ...prev });
     }
 });
+
+test('auto-support never produces a contact tip below 0.22 mm', () => {
+    const tinyBand: SizingBand = { ...SIZING_BANDS.detail, tipContactDiameterMm: 0.1 };
+    withBand(tinyBand, () => {
+        assert.equal(activeSizingBand().tipContactDiameterMm, 0.22,
+            'a preset tip below the floor is raised to it');
+        assert.equal(smallIslandTipDiameterMm(), 0.22, 'and so is the small-island tip');
+
+        const bandSized = sizeParameters(makeCandidate());
+        assert.ok(bandSized.tipContactDiameterMm! >= 0.22,
+            `band-sized contact floors at 0.22 (got ${bandSized.tipContactDiameterMm})`);
+
+        const explicit = sizeParameters(makeCandidate({ tipDiameterMm: 0.1 }));
+        assert.ok(explicit.tipContactDiameterMm! >= 0.22,
+            `an explicit per-point tip cannot go below 0.22 (got ${explicit.tipContactDiameterMm})`);
+    });
+});

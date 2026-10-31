@@ -281,6 +281,37 @@ export class MeshChunkStore {
   }
 
   /**
+   * Gives `targetModelId` the chunk another owner already baked for the same
+   * geometry signature, without encoding it again.
+   *
+   * Duplication shares the source model's `BufferGeometry` (same uuid, same
+   * attribute versions, same signature) and the chunk is encoded in local space
+   * around the geometry's centre, so the bytes are identical. Without this, the
+   * post-duplicate chunk sweep encoded the same multi-hundred-megabyte STL once
+   * per copy — on the main thread, inside an idle callback that ran for 650 ms on
+   * an eight-model duplicate.
+   */
+  adoptForModel(targetModelId: string, signature: string, slot: ChunkSlot = 'preview'): BakedChunk | null {
+    const targetKey = ownerKey(targetModelId, slot);
+    const current = this.contentByOwner.get(targetKey);
+    if (current?.signature === signature) return this.lastCommitted(targetModelId, slot);
+
+    for (const [key, owner] of this.contentByOwner) {
+      if (key === targetKey || owner.signature !== signature) continue;
+      const blob = this.chunkStore.get(owner.sha256);
+      if (!blob) continue;
+      this.adopt(targetKey, signature, owner.sha256);
+      return {
+        sha256: owner.sha256,
+        data: blob.data,
+        compression: blob.compression,
+        uncompressedSize: blob.uncompressedSize,
+      };
+    }
+    return null;
+  }
+
+  /**
    * Drops this model's chunks. With no `slot`, every slot the model owns is
    * released — which is what `deleteModels` wants, and what keeps Ph5's embed
    * from leaking when a model is deleted.

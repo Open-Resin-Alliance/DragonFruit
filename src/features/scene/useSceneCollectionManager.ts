@@ -27,11 +27,15 @@ import {
 } from '@/features/scene/plates/plateLayout';
 import { detectObsoleteVoxlVersion, isVoxlBinaryV2, meshChunkStore, parseVoxlBinaryV2, readScenePlates, readSidecarFileBytes, resolveOriginalRefSidecar, VoxlObsoleteVersionError, type VoxlDocumentV1, type VoxlMeshRef, type VoxlMeshRange } from '@/features/scene/voxl';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
-import { getSnapshot, loadFromImportFormat, mergeFromImportFormat, reassignAllSupportModelIds, resetStore, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
+import { countSupportEntities, getSnapshot, loadFromImportFormat, mergeFromImportFormat, reassignAllSupportModelIds, resetStore, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { peekUndo } from '@/history/historyStore';
 import { createTypedHistory } from '@/history/typedHistory';
 import type { ModelTransform } from '@/hooks/useModelTransform';
+import { forgetCenteredPositions } from '@/utils/modelBounds';
+import { releasePrepareMergedSupportsFor } from '@/supports/prepare/mergedSupportCache';
+import { releaseGeometryStorage as releaseGeometryStorageBase } from '@/utils/releaseGeometry';
+import { disposeSpilledSceneSnapshot, hasSpilledSceneSnapshot, pruneSpilledSceneSnapshots, rehydrateSceneSnapshotPair, spillSceneSnapshotPair, spilledSceneSnapshotBytes } from './sceneSnapshotSpill';
 import type { DragonfruitImportFormat, SupportMode, SupportState } from '@/supports/types';
 import { getBuiltinComplexPluginDefinitions } from '@/features/plugins/builtinComplexPlugins';
 import { getBuiltinComplexPluginFileTypeHandlers } from '@/features/plugins/builtinComplexPluginFileTypeHandlers';
@@ -139,7 +143,7 @@ import {
   unlinkModelsLabel,
 } from '@/features/scene/sceneHistoryLabels';
 import { registerMeshForAutoBrace, unregisterMeshForAutoBrace } from '@/supports/autoBracing/meshGeometryStore';
-import { buildModelEdgeGeometry } from '@/hooks/useStlGeometry';
+import { MODEL_EDGE_OVERLAY_ENABLED, buildModelEdgeGeometry } from '@/hooks/useStlGeometry';
 import { MESH_SHADER_TYPES, type MatcapVariant, type MeshShaderType } from '@/features/shaders/mesh';
 import {
   getSavedWorkspaceCameraSettings,
@@ -285,6 +289,10 @@ const SCENE_HISTORY_MAX_SNAPSHOTS = 200;
 // can retain far more memory per snapshot than typical small edits, so the
 // flat count cap alone can leave a lot of stale geometry pinned alive.
 const SCENE_HISTORY_MAX_ESTIMATED_GEOMETRY_BYTES = 300 * 1024 * 1024;
+// A clear spills the scene's whole geometry — hundreds of MB to a few GB — so
+// the scratch store needs its own ceiling: the RAM budget above never sees a
+// spilled snapshot's bytes, and a long session would otherwise fill the disk.
+const SCENE_HISTORY_MAX_SPILLED_BYTES = 4 * 1024 * 1024 * 1024;
 // Modifier edits of the same kind on the same model this close together are one
 // step: the panels' number fields report every keystroke and every wheel notch.
 const MODIFIER_HISTORY_MERGE_WINDOW_MS = 1000;
@@ -299,7 +307,7 @@ const sceneHistory = createTypedHistory<SceneHistoryPayloadMap>({
   [SCENE_MODELS_SNAPSHOT_APPLY]: SCENE_CHANGE_LABEL,
 });
 
-type SceneSnapshot = {
+export type SceneSnapshot = {
   models: LoadedModel[];
   activeModelId: string | null;
   selectedModelIds: string[];
@@ -325,6 +333,8 @@ type SceneSnapshot = {
 type SceneSnapshotCaptureOptions = {
   includeSupportState?: boolean;
   supportStateOverride?: SupportState;
+  /** The override is already an owned snapshot and must not be cloned again. */
+  supportStateOwned?: boolean;
   /** Record the plate list on this snapshot, for the entries that change it. */
   plates?: ScenePlate[];
   activePlateId?: string;
@@ -342,9 +352,26 @@ type TransformHistorySupportSnapshotOptions = {
   includeSupportState?: boolean;
 };
 
-type SceneSnapshotPair = {
+/**
+ * One model whose supports were moved with it, recorded instead of a copy of the
+ * whole support store. A transform rewrites positions by a delta, so undo is the
+ * same call with the ends swapped; cloning ~20k entities twice per drag bell was
+ * the single biggest cost of committing a move.
+ */
+export type SupportTransformMove = {
+  modelId: string;
+  from: ModelTransform;
+  to: ModelTransform;
+};
+
+export type SceneSnapshotPair = {
   before: SceneSnapshot;
   after: SceneSnapshot;
+  /**
+   * Present on a pure transform step: the pair carries no support state, and the
+   * history handler replays these transforms instead (inverse on undo).
+   */
+  supportMoves?: SupportTransformMove[];
 };
 
 const sceneSnapshotRegistry = new Map<string, SceneSnapshotPair>();
@@ -457,7 +484,9 @@ function captureSceneSnapshot(
     printerProfileId,
     ...(includeSupportState
       ? {
-          supportState: clonePlainData(supportStateOverride ?? getSnapshot()),
+          supportState: options?.supportStateOwned && supportStateOverride
+            ? supportStateOverride
+            : clonePlainData(supportStateOverride ?? getSnapshot()),
         }
       : {}),
     ...(options?.plates
@@ -519,6 +548,180 @@ function estimateGeometryBytes(geometry: THREE.BufferGeometry): number {
   return total;
 }
 
+let liveModelsProvider: (() => LoadedModel[]) | null = null;
+let extraRetainedGeometriesProvider: (() => Iterable<THREE.BufferGeometry>) | null = null;
+
+function installLiveModelsProvider(provider: (() => LoadedModel[]) | null): void {
+  liveModelsProvider = provider;
+}
+
+function installExtraRetainedGeometries(provider: (() => Iterable<THREE.BufferGeometry>) | null): void {
+  extraRetainedGeometriesProvider = provider;
+}
+
+function modelGeometries(model: Pick<LoadedModel, 'geometry'>): THREE.BufferGeometry[] {
+  const geometries: THREE.BufferGeometry[] = [model.geometry.geometry];
+  if (model.geometry.edgeGeometry) geometries.push(model.geometry.edgeGeometry);
+  const defects = model.geometry.meshDefects;
+  if (defects?.supportSectionGeometry) geometries.push(defects.supportSectionGeometry);
+  if (defects?.modelSectionGeometry) geometries.push(defects.modelSectionGeometry);
+  return geometries;
+}
+
+/**
+ * Releases everything a geometry owns, not just its GPU buffers. `dispose()`
+ * alone leaves the typed arrays reachable while any stale fiber, render list or
+ * module cache still points at the geometry — which is what kept a cleared scene
+ * resident. Attributes are dropped too, so those references become cheap.
+ */
+function releaseGeometryStorage(geometry: THREE.BufferGeometry): void {
+  forgetCenteredPositions(geometry);
+  releaseGeometryStorageBase(geometry);
+}
+
+/**
+ * Disposes the geometry a history pair owned once no snapshot, live model or
+ * clipboard still references it. Deleting a registry entry alone leaves the
+ * renderer's attribute buffers and the mesh arrays resident for the rest of the
+ * session, which is why an emptied scene used to keep its whole RAM footprint.
+ *
+ * The release runs on an idle callback and re-checks the retained set there:
+ * the frame that stopped drawing these geometries must finish first, and an
+ * undo that lands in between puts one of them back in the scene.
+ */
+function disposeEvictedSnapshot(pair: SceneSnapshotPair): void {
+  const candidates = new Set<THREE.BufferGeometry>();
+  for (const model of pair.before.models) modelGeometries(model).forEach((geometry) => candidates.add(geometry));
+  for (const model of pair.after.models) modelGeometries(model).forEach((geometry) => candidates.add(geometry));
+  if (candidates.size === 0) return;
+
+  const release = () => {
+    const retained = retainedSnapshotGeometries('');
+    for (const geometry of candidates) {
+      if (retained.has(geometry)) continue;
+      releaseGeometryStorage(geometry);
+    }
+  };
+  if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+    window.requestIdleCallback(release, { timeout: 500 });
+  } else {
+    setTimeout(release, 50);
+  }
+}
+
+/** Geometry another snapshot, a live model or the clipboard still needs. */
+function retainedSnapshotGeometries(
+  excludeKey: string,
+  liveModels?: readonly LoadedModel[],
+  includeSceneProvider = true,
+): Set<THREE.BufferGeometry> {
+  const retained = new Set<THREE.BufferGeometry>();
+  for (const [key, pair] of sceneSnapshotRegistry) {
+    if (key === excludeKey) continue;
+    pair.before.models.forEach((model) => modelGeometries(model).forEach((geometry) => retained.add(geometry)));
+    pair.after.models.forEach((model) => modelGeometries(model).forEach((geometry) => retained.add(geometry)));
+  }
+  // The caller's list is the scene the action is about to commit; the provider
+  // is whatever is drawn RIGHT NOW. A spill awaits disk writes, so an undo can
+  // land in between — both sets have to be treated as live.
+  for (const model of liveModels ?? []) {
+    modelGeometries(model).forEach((geometry) => retained.add(geometry));
+  }
+  if (includeSceneProvider) {
+    for (const model of liveModelsProvider?.() ?? []) {
+      modelGeometries(model).forEach((geometry) => retained.add(geometry));
+    }
+  }
+  for (const geometry of extraRetainedGeometriesProvider?.() ?? []) retained.add(geometry);
+  return retained;
+}
+
+/**
+ * Moves a snapshot's geometry to the scratch store. `liveModels` is the set that
+ * will be standing after the action that pushed the pair; pass it explicitly when
+ * the ref has not committed yet (a delete), or the deleted meshes still look live
+ * and nothing is released.
+ *
+ * Selection uses that list ALONE: React has not committed the delete when the
+ * pair is pushed, so the scene provider still reports the deleted models as
+ * live. The release predicate is a different question — by the time the arrays
+ * are dropped the commit has landed, and an undo may have restored them — so it
+ * asks the live scene again.
+ */
+async function spillSceneSnapshotKey(key: string, liveModels?: readonly LoadedModel[]): Promise<boolean> {
+  const pair = sceneSnapshotRegistry.get(key);
+  if (!pair || hasSpilledSceneSnapshot(key)) return false;
+  const retainedAtSpill = retainedSnapshotGeometries(key, liveModels, liveModels === undefined);
+  const spilled = await spillSceneSnapshotPair(
+    key,
+    pair,
+    (geometry) => !retainedAtSpill.has(geometry),
+    (geometry) => !retainedSnapshotGeometries(key).has(geometry),
+  );
+  if (spilled && !sceneSnapshotRegistry.has(key)) disposeSpilledSceneSnapshot(key);
+  if (spilled) trimSpilledSnapshots();
+  return spilled;
+}
+
+let spillingSnapshots = false;
+
+/**
+ * Evicts the oldest spilled snapshot while the scratch store is over its
+ * ceiling. Its file goes with it; the history entry that pointed at it becomes
+ * unrecoverable, exactly like a RAM eviction.
+ */
+function trimSpilledSnapshots(): void {
+  while (sceneSnapshotOrder.length > 1 && spilledSceneSnapshotBytes() > SCENE_HISTORY_MAX_SPILLED_BYTES) {
+    const key = sceneSnapshotOrder.find((candidate) => hasSpilledSceneSnapshot(candidate));
+    if (!key) return;
+    const index = sceneSnapshotOrder.indexOf(key);
+    if (index >= 0) sceneSnapshotOrder.splice(index, 1);
+    sceneSnapshotRegistry.delete(key);
+    disposeSpilledSceneSnapshot(key);
+  }
+}
+
+/**
+ * Keeps the in-RAM history inside its budget by moving the oldest snapshots to
+ * the scratch store. Undo remains available; the geometry is re-read on demand.
+ */
+async function spillSnapshotsOverBudget(): Promise<void> {
+  if (spillingSnapshots) return;
+  spillingSnapshots = true;
+  try {
+    while (
+      sceneSnapshotOrder.length > 1
+      && estimateSceneSnapshotRegistryBytes() > SCENE_HISTORY_MAX_ESTIMATED_GEOMETRY_BYTES
+    ) {
+      const key = sceneSnapshotOrder.find((candidate) => (
+        sceneSnapshotRegistry.has(candidate) && !hasSpilledSceneSnapshot(candidate)
+      ));
+      if (!key) break;
+      const spilled = await spillSceneSnapshotKey(key);
+      if (!spilled) break;
+    }
+  } finally {
+    spillingSnapshots = false;
+  }
+  trimSpilledSnapshots();
+}
+
+/**
+ * Rough bytes of a snapshot's support state.
+ *
+ * The pair owns a deep copy (`clonePlainData`), and a supported plate is tens of
+ * thousands of entities — measured at ~14 MB for the 20-model VFX scene. Without
+ * this the ~300 MB budget never sees them: 200 entries of a supported plate are
+ * retained with nothing accounting for their cost. Spilling a pair clears its
+ * support states too, so the budget drives them out rather than destroying undo.
+ */
+const SUPPORT_ENTITY_BYTES = 700;
+function estimateSnapshotSupportBytes(snapshot: SceneSnapshot): number {
+  const state = snapshot.supportState;
+  if (!state) return 0;
+  return countSupportEntities(state) * SUPPORT_ENTITY_BYTES;
+}
+
 // Counts each distinct BufferGeometry ONCE, because that is what the process
 // actually holds: cloneLoadedModel is a shallow clone, so every snapshot that
 // didn't change the mesh shares the same geometry object. A move stores two
@@ -529,18 +732,31 @@ function estimateGeometryBytes(geometry: THREE.BufferGeometry): number {
 // threw away undo entries that cost nothing -- their scene snapshots went with
 // them, and undoing those actions was silently declined and discarded. Only
 // geometry a step genuinely creates (a cut, a hollow) adds to the total now.
+//
+// Support states are the exception: each pair owns its own copy, so they count
+// once per half.
 function estimateSceneSnapshotRegistryBytes(): number {
   const counted = new Set<THREE.BufferGeometry>();
+  const live = new Set<THREE.BufferGeometry>();
+  for (const model of liveModelsProvider?.() ?? []) {
+    for (const geometry of modelGeometries(model)) live.add(geometry);
+  }
   let total = 0;
   const add = (model: LoadedModel) => {
-    const geometry = model.geometry.geometry;
-    if (counted.has(geometry)) return;
-    counted.add(geometry);
-    total += estimateGeometryBytes(geometry);
+    for (const geometry of modelGeometries(model)) {
+      // A mesh the scene is drawing right now is not history cost: the budget is
+      // there to bound what only the undo stack holds. Counting the live plate
+      // kept the estimate permanently over budget, so every commit tried to spill
+      // and none of it could ever be released.
+      if (counted.has(geometry) || live.has(geometry)) continue;
+      counted.add(geometry);
+      total += estimateGeometryBytes(geometry);
+    }
   };
   for (const pair of sceneSnapshotRegistry.values()) {
     pair.before.models.forEach(add);
     pair.after.models.forEach(add);
+    total += estimateSnapshotSupportBytes(pair.before) + estimateSnapshotSupportBytes(pair.after);
   }
   return total;
 }
@@ -561,7 +777,12 @@ function storeSceneSnapshotPair(pair: SceneSnapshotPair): string {
 
   while (sceneSnapshotOrder.length > SCENE_HISTORY_MAX_SNAPSHOTS) {
     const removed = sceneSnapshotOrder.shift();
-    if (removed) sceneSnapshotRegistry.delete(removed);
+    if (removed) {
+      const evicted = sceneSnapshotRegistry.get(removed);
+      sceneSnapshotRegistry.delete(removed);
+      disposeSpilledSceneSnapshot(removed);
+      if (evicted) disposeEvictedSnapshot(evicted);
+    }
   }
 
   // Always keep at least one snapshot so undo of the most recent action
@@ -571,9 +792,15 @@ function storeSceneSnapshotPair(pair: SceneSnapshotPair): string {
     && estimateSceneSnapshotRegistryBytes() > SCENE_HISTORY_MAX_ESTIMATED_GEOMETRY_BYTES
   ) {
     const removed = sceneSnapshotOrder.shift();
-    if (removed) sceneSnapshotRegistry.delete(removed);
+    if (removed) {
+      const evicted = sceneSnapshotRegistry.get(removed);
+      sceneSnapshotRegistry.delete(removed);
+      disposeSpilledSceneSnapshot(removed);
+      if (evicted) disposeEvictedSnapshot(evicted);
+    }
   }
 
+  void spillSnapshotsOverBudget();
   return key;
 }
 
@@ -1101,7 +1328,7 @@ export interface LoadedModel {
   linkGroupId?: string;
 }
 
-import { deleteSupportsForModel, getSupportsForModel, type ModelSupportIds } from '@/supports/PlacementLogic/SupportModelLinker';
+import { deleteSupportsForModelIds, getSupportsForModel, type ModelSupportIds } from '@/supports/PlacementLogic/SupportModelLinker';
 import { contactEndpointsFor, MODEL_ID_COLLECTION_KEYS, SUPPORT_COLLECTION_KEYS, SUPPORT_TYPES } from '@/supports/supportTypeRegistry';
 import { beginSupportStateBatch, endSupportStateBatch } from '@/supports/state';
 import {
@@ -1119,6 +1346,7 @@ import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/c
 import type { SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
 import { getImportDefaultsRaftPatch, getSavedImportDefaultsSettings } from '@/features/scene/importDefaultsPreferences';
 import { readNativeFileSize } from '@/utils/pluginNetworkBridge';
+import { perfMark, perfMeasure } from '@/utils/perfProbe';
 import { clonePlainData } from '@/utils/plainDataClone';
 import { DEFAULT_LIFT_DISTANCE_MM } from '@/features/transform/liftDefaults';
 
@@ -1470,6 +1698,13 @@ export function useSceneCollectionManager(options?: {
   );
 
   const [models, setModels] = useState<LoadedModel[]>([]);
+  useEffect(() => {
+    installLiveModelsProvider(() => modelsRef.current);
+    return () => installLiveModelsProvider(null);
+  }, []);
+  useEffect(() => {
+    void pruneSpilledSceneSnapshots(new Set(sceneSnapshotRegistry.keys()));
+  }, []);
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
   /**
@@ -1595,11 +1830,27 @@ export function useSceneCollectionManager(options?: {
   // Coalesced and idle-scheduled, so a burst of imports or an Auto-Arrange
   // sweeps once. See `scheduleChunkStoreSweep` for why this is a sweep rather
   // than a hook on every model-producing path.
+  //
+  // The sweep must also run when the scene EMPTIES: the store is keyed by model
+  // id, and skipping the empty case retained every deleted model's compressed
+  // mesh (~150-200 MB on a loaded scene) for the rest of the session. The first
+  // mount is skipped so an empty app does not pay the export module's load.
+  const hasHadModelsRef = useRef(false);
   useEffect(() => {
-    if (models.length === 0) return;
+    if (models.length > 0) hasHadModelsRef.current = true;
+    else if (!hasHadModelsRef.current) return;
     scheduleChunkStoreSweep(() => modelsRef.current);
   }, [models]);
   const [modelClipboard, setModelClipboard] = useState<ModelClipboardEntry[]>([]);
+
+  useEffect(() => {
+    installExtraRetainedGeometries(() => {
+      const geometries: THREE.BufferGeometry[] = [];
+      for (const entry of modelClipboard) modelGeometries(entry).forEach((geometry) => geometries.push(geometry));
+      return geometries;
+    });
+    return () => installExtraRetainedGeometries(null);
+  }, [modelClipboard]);
   const [recentOpenedFiles, setRecentOpenedFiles] = useState<RecentOpenedFileEntry[]>([]);
   const [importProgress, setImportProgress] = useState<ImportProgressState>({
     active: false,
@@ -1628,7 +1879,9 @@ export function useSceneCollectionManager(options?: {
 
   const deferredAccelerationQueueRef = useRef<THREE.BufferGeometry[]>([]);
   const deferredAccelerationProcessingRef = useRef(false);
-  const deferredAccelerationPausedRef = useRef(false);
+  // Reasons, not a boolean: the camera and a pointer gesture can each pause this
+  // queue, and the first one to resume must not restart it under the other.
+  const deferredAccelerationPauseReasonsRef = useRef<Set<string>>(new Set());
   const deferredDisposalQueueRef = useRef<THREE.BufferGeometry[]>([]);
   const deferredDisposalProcessingRef = useRef(false);
   // Count of scheduled-but-unfinished flattening-plane computations (idle
@@ -2349,6 +2602,30 @@ export function useSceneCollectionManager(options?: {
         const pair = sceneSnapshotRegistry.get(payload.key);
         if (!pair) return false;
 
+        const moveSupports = () => {
+          if (!pair.supportMoves || pair.supportMoves.length === 0) return;
+          for (const move of pair.supportMoves) {
+            // Undo puts the supports back where they were; redo moves them again.
+            if (direction === 'undo') transformSupportsForModel(move.modelId, move.to, move.from);
+            else transformSupportsForModel(move.modelId, move.from, move.to);
+          }
+        };
+
+        if (hasSpilledSceneSnapshot(payload.key)) {
+          void rehydrateSceneSnapshotPair(payload.key, pair)
+            .then((restored) => {
+              if (!restored) {
+                console.warn('[UndoSpill] Scene snapshot scratch data is missing; undo was not applied.');
+                return;
+              }
+              moveSupports();
+              applySceneSnapshot(direction === 'undo' ? pair.before : pair.after);
+            })
+            .catch((error) => console.warn('[UndoSpill] Failed restoring scene snapshot.', error));
+          return true;
+        }
+
+        moveSupports();
         applySceneSnapshot(direction === 'undo' ? pair.before : pair.after);
         return true;
       },
@@ -2359,13 +2636,18 @@ export function useSceneCollectionManager(options?: {
     };
   }, [applySceneSnapshot]);
 
-  const pushSceneSnapshotHistory = useCallback((before: SceneSnapshot, after: SceneSnapshot, description?: MessageDescriptor, modelId?: string) => {
-    const key = storeSceneSnapshotPair({ before, after });
+  const pushSceneSnapshotHistory = useCallback((before: SceneSnapshot, after: SceneSnapshot, description?: MessageDescriptor, modelId?: string, supportMoves?: SupportTransformMove[]): string => {
+    const key = storeSceneSnapshotPair({
+      before,
+      after,
+      ...(supportMoves && supportMoves.length > 0 ? { supportMoves } : {}),
+    });
     sceneHistory.push({
       type: SCENE_MODELS_SNAPSHOT_APPLY,
       description,
       payload: { key, ...(modelId ? { modelId } : {}) },
     });
+    return key;
   }, []);
 
   const cloneGeometryWithBounds = useCallback((source: GeometryWithBounds, options?: { accelerate?: boolean; shared?: boolean }): GeometryWithBounds => {
@@ -2388,6 +2670,12 @@ export function useSceneCollectionManager(options?: {
           center: plane.center.clone(),
         })),
         meshDefects: source.meshDefects,
+        // A duplicate shares the source's vertex data, so it shares the edge
+        // overlay derived from it. Leaving this out made every duplicated model
+        // look like it had never been edged: the idle edge pass rebuilt the
+        // overlay for each copy, which is O(triangles) and blocked the main
+        // thread for most of a second on an 8-model duplicate.
+        ...(source.edgeGeometry ? { edgeGeometry: source.edgeGeometry } : {}),
       };
     }
 
@@ -2424,7 +2712,7 @@ export function useSceneCollectionManager(options?: {
 
   const processDeferredAccelerationQueue = useCallback(() => {
     if (deferredAccelerationProcessingRef.current) return;
-    if (deferredAccelerationPausedRef.current) return;
+    if (deferredAccelerationPauseReasonsRef.current.size > 0) return;
     if (deferredAccelerationQueueRef.current.length === 0) return;
 
     deferredAccelerationProcessingRef.current = true;
@@ -2438,7 +2726,7 @@ export function useSceneCollectionManager(options?: {
     };
 
     const step = () => {
-      if (deferredAccelerationPausedRef.current) {
+      if (deferredAccelerationPauseReasonsRef.current.size > 0) {
         deferredAccelerationProcessingRef.current = false;
         return;
       }
@@ -2469,9 +2757,11 @@ export function useSceneCollectionManager(options?: {
     processDeferredAccelerationQueue();
   }, [processDeferredAccelerationQueue]);
 
-  const setBackgroundGeometryWorkPaused = useCallback((paused: boolean) => {
-    deferredAccelerationPausedRef.current = paused;
-    if (!paused) {
+  const setBackgroundGeometryWorkPaused = useCallback((paused: boolean, reason = 'camera') => {
+    const reasons = deferredAccelerationPauseReasonsRef.current;
+    if (paused) reasons.add(reason);
+    else reasons.delete(reason);
+    if (reasons.size === 0) {
       processDeferredAccelerationQueue();
     }
   }, [processDeferredAccelerationQueue]);
@@ -3118,6 +3408,7 @@ export function useSceneCollectionManager(options?: {
         updated: false,
         supportsChanged: false,
         kickstandsChanged: false,
+        supportLocalFramePreserved: false,
       };
     }
     if (!currentModel) {
@@ -3125,6 +3416,7 @@ export function useSceneCollectionManager(options?: {
         updated: false,
         supportsChanged: false,
         kickstandsChanged: false,
+        supportLocalFramePreserved: false,
       };
     }
 
@@ -3138,8 +3430,26 @@ export function useSceneCollectionManager(options?: {
         updated: false,
         supportsChanged: false,
         kickstandsChanged: false,
+        supportLocalFramePreserved: false,
       };
     }
+
+    const deltaRotationEqual = Math.abs(beforeTransform.rotation.x - transform.rotation.x) <= 1e-8
+      && Math.abs(beforeTransform.rotation.y - transform.rotation.y) <= 1e-8
+      && Math.abs(beforeTransform.rotation.z - transform.rotation.z) <= 1e-8
+      && beforeTransform.rotation.order === transform.rotation.order;
+    const deltaScaleEqual = Math.abs(beforeTransform.scale.x - transform.scale.x) <= 1e-8
+      && Math.abs(beforeTransform.scale.y - transform.scale.y) <= 1e-8
+      && Math.abs(beforeTransform.scale.z - transform.scale.z) <= 1e-8;
+    /**
+     * A pure XY translation moves the world support data and the model frame by
+     * the same delta, so the supports' model-local coordinates are unchanged.
+     * Z is not rigid (roots stay on the plate) and rotation/scale move the
+     * contacts relative to the frame, so both must re-merge.
+     */
+    const supportLocalFramePreserved = deltaRotationEqual
+      && deltaScaleEqual
+      && Math.abs(beforeTransform.position.z - transform.position.z) <= 1e-8;
 
     let supportsChanged = false;
     let kickstandsChanged = false;
@@ -3227,6 +3537,7 @@ export function useSceneCollectionManager(options?: {
       updated: true,
       supportsChanged,
       kickstandsChanged,
+      supportLocalFramePreserved,
     };
   }, []);
 
@@ -3287,31 +3598,43 @@ export function useSceneCollectionManager(options?: {
       return m;
     });
 
+    // A transform moves supports by the same delta as the model; the store already
+    // holds them at the "after" position, so the undo step only needs the two
+    // transforms. An explicit support state (a caller that also changed support
+    // content) still takes the snapshot path.
     const includeSupportByOption = supportSnapshotOptions?.includeSupportState === true
       || !!supportSnapshotOptions?.supportBefore
-      || !!supportSnapshotOptions?.supportAfter
-;
-
-    const includeSupportByState = (() => {
+      || !!supportSnapshotOptions?.supportAfter;
+    const supportMoves: SupportTransformMove[] = [];
+    if (!includeSupportByOption) {
       const supportStateNow = getSnapshot();
-      return hasSupportsForModel(id, supportStateNow);
-    })();
-
-    const includeSupportHistory = includeSupportByOption || includeSupportByState;
+      if (hasSupportsForModel(id, supportStateNow)) {
+        supportMoves.push({ modelId: id, from: beforeTransform, to: afterTransform });
+      }
+      for (const model of beforeModels) {
+        if (model.id === id) continue;
+        const current = currentModels.find((candidate) => candidate.id === model.id);
+        if (!current || transformsEqual(model.transform, current.transform)) continue;
+        if (!hasSupportsForModel(model.id, supportStateNow)) continue;
+        supportMoves.push({ modelId: model.id, from: model.transform, to: current.transform });
+      }
+    }
 
     const spawn = supportSnapshotOptions?.plateSpawn;
     const before = captureSceneSnapshot(beforeModels, currentActiveModelId, currentSelectedModelIds, {
-      includeSupportState: includeSupportHistory,
+      includeSupportState: includeSupportByOption,
       supportStateOverride: supportSnapshotOptions?.supportBefore,
+      supportStateOwned: !!supportSnapshotOptions?.supportBefore,
       ...(spawn ? { plates: spawn.platesBefore, activePlateId: spawn.activePlateIdBefore } : {}),
     });
     const after = captureSceneSnapshot(afterModels, currentActiveModelId, currentSelectedModelIds, {
-      includeSupportState: includeSupportHistory,
+      includeSupportState: includeSupportByOption,
       supportStateOverride: supportSnapshotOptions?.supportAfter,
+      supportStateOwned: !!supportSnapshotOptions?.supportAfter,
       ...(spawn ? { plates: platesRef.current, activePlateId: activePlateIdRef.current } : {}),
     });
     const targetModelName = targetModel.name ?? id;
-    pushSceneSnapshotHistory(before, after, description ?? transformModelLabel(targetModelName));
+    pushSceneSnapshotHistory(before, after, description ?? transformModelLabel(targetModelName), undefined, supportMoves);
     return true;
   }, [pushSceneSnapshotHistory]);
 
@@ -3341,19 +3664,26 @@ export function useSceneCollectionManager(options?: {
     const includeSupportByOption = supportSnapshotOptions?.includeSupportState === true
       || !!supportSnapshotOptions?.supportBefore
       || !!supportSnapshotOptions?.supportAfter;
-    const supportStateNow = getSnapshot();
-    const includeSupportByState = changedIds.some((id) => hasSupportsForModel(id, supportStateNow));
-    const includeSupportHistory = includeSupportByOption || includeSupportByState;
+    const supportMoves: SupportTransformMove[] = [];
+    if (!includeSupportByOption) {
+      const supportStateNow = getSnapshot();
+      for (const model of currentModels) {
+        const beforeTransform = beforeTransformMap.get(model.id);
+        if (!beforeTransform || transformsEqual(beforeTransform, model.transform)) continue;
+        if (!hasSupportsForModel(model.id, supportStateNow)) continue;
+        supportMoves.push({ modelId: model.id, from: beforeTransform, to: model.transform });
+      }
+    }
 
     const before = captureSceneSnapshot(beforeModels, currentActiveModelId, currentSelectedModelIds, {
-      includeSupportState: includeSupportHistory,
+      includeSupportState: includeSupportByOption,
       supportStateOverride: supportSnapshotOptions?.supportBefore,
     });
     const after = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, {
-      includeSupportState: includeSupportHistory,
+      includeSupportState: includeSupportByOption,
       supportStateOverride: supportSnapshotOptions?.supportAfter,
     });
-    pushSceneSnapshotHistory(before, after, description ?? transformModelsLabel(beforeTransforms.length));
+    pushSceneSnapshotHistory(before, after, description ?? transformModelsLabel(beforeTransforms.length), undefined, supportMoves);
     return true;
   }, [pushSceneSnapshotHistory]);
 
@@ -3388,6 +3718,7 @@ export function useSceneCollectionManager(options?: {
         updated: false,
         supportsChanged: false,
         kickstandsChanged: false,
+        supportLocalFramePreserved: false,
       };
     }
     if (updates.length === 0) {
@@ -3395,6 +3726,7 @@ export function useSceneCollectionManager(options?: {
         updated: false,
         supportsChanged: false,
         kickstandsChanged: false,
+        supportLocalFramePreserved: false,
       };
     }
 
@@ -3454,21 +3786,37 @@ export function useSceneCollectionManager(options?: {
     let supportsChanged = false;
     let kickstandsChanged = false;
     let updated = false;
+    let supportLocalFramePreserved = true;
+    const perfStoreStart = perfMark();
     updateMap.forEach((nextTransform, id) => {
       const currentModel = currentModels.find((model) => model.id === id);
       if (!currentModel) return;
       if (transformsEqual(currentModel.transform, nextTransform)) return;
-      const commit = transformSupportsForModel(id, currentModel.transform, nextTransform);
+      const before = currentModel.transform;
+      if (Math.abs(before.rotation.x - nextTransform.rotation.x) > 1e-8
+        || Math.abs(before.rotation.y - nextTransform.rotation.y) > 1e-8
+        || Math.abs(before.rotation.z - nextTransform.rotation.z) > 1e-8
+        || before.rotation.order !== nextTransform.rotation.order
+        || Math.abs(before.scale.x - nextTransform.scale.x) > 1e-8
+        || Math.abs(before.scale.y - nextTransform.scale.y) > 1e-8
+        || Math.abs(before.scale.z - nextTransform.scale.z) > 1e-8
+        || Math.abs(before.position.z - nextTransform.position.z) > 1e-8) {
+        supportLocalFramePreserved = false;
+      }
+      const commit = transformSupportsForModel(id, before, nextTransform);
       supportsChanged = supportsChanged || commit.supportsChanged;
       kickstandsChanged = kickstandsChanged || commit.kickstandsChanged;
       updated = true;
     });
+
+    perfMeasure('store:transform', perfStoreStart);
 
     if (!updated) {
       return {
         updated: false,
         supportsChanged,
         kickstandsChanged,
+        supportLocalFramePreserved: false,
       };
     }
 
@@ -3521,6 +3869,7 @@ export function useSceneCollectionManager(options?: {
       updated,
       supportsChanged,
       kickstandsChanged,
+      supportLocalFramePreserved,
     };
   }, [pushSceneSnapshotHistory]);
 
@@ -3897,7 +4246,7 @@ export function useSceneCollectionManager(options?: {
   ).higherContrastModelEdges;
 
   useEffect(() => {
-    if (!higherContrastModelEdges) return;
+    if (!MODEL_EDGE_OVERLAY_ENABLED || !higherContrastModelEdges) return;
 
     const queue = modelsRef.current
       .filter((model) => !model.geometry.edgeGeometry && model.geometry.geometry.getAttribute('position'))
@@ -4862,21 +5211,24 @@ export function useSceneCollectionManager(options?: {
     const supportState = getSnapshot();
     let totalRemovedSupports = 0;
     if (includeSupportHistory) {
-      ids.forEach((id) => {
-        totalRemovedSupports += deleteSupportsForModel(supportState, id);
-      });
+      // One pass and one store write for the whole selection: a per-model call
+      // rebuilt the support store once per model, so Ctrl+A, Delete on a
+      // supported plate normalised twenty times.
+      totalRemovedSupports += deleteSupportsForModelIds(supportState, ids);
 
       // Defensive pass: guarantee no orphaned supports survive model deletion.
-      for (const modelId of ids) {
+      const orphanedModelIds = Array.from(ids).filter((modelId) => {
         const remaining = getSupportsForModel(getSnapshot(), modelId);
-        const hasRemainingSupports = MODEL_ID_COLLECTION_KEYS
-          .some((key) => remaining[key].length > 0);
-
-        if (hasRemainingSupports) {
-          totalRemovedSupports += deleteSupportsForModel(getSnapshot(), modelId);
-        }
+        return MODEL_ID_COLLECTION_KEYS.some((key) => remaining[key].length > 0);
+      });
+      if (orphanedModelIds.length > 0) {
+        totalRemovedSupports += deleteSupportsForModelIds(getSnapshot(), orphanedModelIds);
       }
     }
+    // Prepare's merged support geometry is per model and outlives the view that
+    // built it; the delete has to hand it back or a cleared plate keeps every
+    // deleted model's merged supports in RAM.
+    releasePrepareMergedSupportsFor(ids);
 
     if (shouldPushHistory && before) {
       const after = captureSceneSnapshot(nextModels, nextActiveModelId, nextSelectedModelIds, {
@@ -4887,7 +5239,12 @@ export function useSceneCollectionManager(options?: {
       const deletedLabel = existing.length === 1
         ? deleteModelLabel(existing[0].name)
         : deleteModelsLabel(existing.length);
-      pushSceneSnapshotHistory(before, after, deletedLabel);
+      const deleteHistoryKey = pushSceneSnapshotHistory(before, after, deletedLabel);
+      // A delete must actually give the mesh memory back. The undo pair is the
+      // only thing still holding the deleted geometry, so move that geometry to
+      // the scratch store now instead of letting it sit in RAM until the history
+      // budget evicts the pair. Undo re-reads it; shared meshes are skipped.
+      void spillSceneSnapshotKey(deleteHistoryKey, nextModels);
     }
 
     console.log(`[SceneCollection] Deleted ${ids.size} model(s) and ${totalRemovedSupports} associated supports.`);
@@ -4922,9 +5279,7 @@ export function useSceneCollectionManager(options?: {
 
     let totalRemovedSupports = 0;
     const supportState = getSnapshot();
-    targetIds.forEach((modelId) => {
-      totalRemovedSupports += deleteSupportsForModel(supportState, modelId);
-    });
+    totalRemovedSupports += deleteSupportsForModelIds(supportState, targetIds);
 
     const after = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, { includeSupportState: true });
     const defaultDescription = targetIds.length === 1
@@ -7462,19 +7817,16 @@ export function useSceneCollectionManager(options?: {
   // Cleanup on unmount
   useEffect(() => {
     const previous = trackedGeometriesRef.current;
-    const next = new Set<THREE.BufferGeometry>(models.map((model) => model.geometry.geometry));
+    const next = new Set<THREE.BufferGeometry>();
+    for (const model of models) modelGeometries(model).forEach((geometry) => next.add(geometry));
 
     for (const clipboardEntry of modelClipboard) {
-      next.add(clipboardEntry.geometry.geometry);
+      modelGeometries(clipboardEntry).forEach((geometry) => next.add(geometry));
     }
 
     for (const snapshot of sceneSnapshotRegistry.values()) {
-      for (const model of snapshot.before.models) {
-        next.add(model.geometry.geometry);
-      }
-      for (const model of snapshot.after.models) {
-        next.add(model.geometry.geometry);
-      }
+      for (const model of snapshot.before.models) modelGeometries(model).forEach((geometry) => next.add(geometry));
+      for (const model of snapshot.after.models) modelGeometries(model).forEach((geometry) => next.add(geometry));
     }
 
     const removed: THREE.BufferGeometry[] = [];
@@ -8071,7 +8423,8 @@ export function useSceneCollectionManager(options?: {
       activePlateId: firstPlateId,
       includeSupportState: true,
     });
-    pushSceneSnapshotHistory(before, after, DELETE_MODELS_AND_PLATES_LABEL);
+    const historyKey = pushSceneSnapshotHistory(before, after, DELETE_MODELS_AND_PLATES_LABEL);
+    void spillSceneSnapshotKey(historyKey, modelsRef.current);
   }, [deleteModels, modelPlateId, pushSceneSnapshotHistory, waitForUiYield]);
 
   /**

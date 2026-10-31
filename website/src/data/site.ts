@@ -1,6 +1,7 @@
 export const SITE = {
   name: 'DragonFruit',
-  tagline: 'Open-source, high-performance slicer for resin 3D printers',
+  /** The name Google Search should use for the site, not the app's short name. */
+  siteName: 'DragonFruit Resin Slicer',
   /** What the project says about itself, in the hero and again in the footer. */
   motto:
     'From the community, for the community. Free to use, open to contribute, and shaped by the people who print with it.',
@@ -23,8 +24,8 @@ export const LINKS = {
 } as const;
 
 /**
- * The documentation is MkDocs, built into `docs/` of this same site, so every
- * link to it is written through `docs()` and moves with that one constant.
+ * The documentation is rendered by this Astro site under `/docs/`, so every link
+ * to it is written through `docs()` and moves with that one constant.
  */
 export const DOCS_BASE = '/docs';
 
@@ -38,6 +39,7 @@ export interface NavItem {
 }
 
 export const NAV: readonly NavItem[] = [
+  { label: 'Home', href: '/' },
   { label: 'Documentation', href: docs() },
   { label: 'Translations', href: LINKS.translate, external: true },
 ];

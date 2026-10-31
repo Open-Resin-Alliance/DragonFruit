@@ -92,7 +92,7 @@ function compile(filename, source) {
         loader: filename.endsWith('.tsx') ? 'tsx' : 'ts',
         format: 'cjs',
         jsx: 'automatic',
-        target: 'node22',
+        target: 'node24',
         sourcefile: filename,
         sourcemap: 'inline',
     }).code;

@@ -23,8 +23,20 @@ const PHASE_LABELS: Record<string, MessageDescriptor> = {
   'Tracking islands': msg`Tracking islands`,
   'Tracking territories': msg`Tracking territories`,
   'Compiling results': msg`Compiling results`,
-  // The auto-support run reports its placement pass through the same channel.
+  // The auto-support run reports each pass through the same channel.
+  'Preparing model': msg`Preparing model`,
+  'Finding candidates': msg`Finding candidates`,
+  'Removing duplicates': msg`Removing duplicates`,
+  'Filtering supports': msg`Filtering supports`,
   'Placing supports': msg`Placing supports`,
+  'Consolidating supports': msg`Consolidating supports`,
+  'Filling gaps': msg`Filling gaps`,
+  'Analysing supports': msg`Analysing supports`,
+  'Fanning leaves': msg`Fanning leaves`,
+  'Checking coverage': msg`Checking coverage`,
+  'Resizing supports': msg`Resizing supports`,
+  'Compiling report': msg`Compiling report`,
+  'Bracing supports': msg`Bracing supports`,
 };
 
 export function translateScanPhase(phase: string | undefined, translate: Translate): string {

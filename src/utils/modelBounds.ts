@@ -12,10 +12,17 @@ export type TransformLike = {
 type GeometryLike = Pick<GeometryWithBounds, 'geometry' | 'bbox' | 'center'>;
 
 type GeometryCacheEntry = {
-  centeredPositions: Float32Array;
   attributeVersion: number;
   vertexCount: number;
   boundsCache: Map<string, THREE.Box3>;
+};
+
+/** The geometry's own vertex array plus the centre to subtract; no copy is made. */
+export type CenteredPositionSource = {
+  array: Float32Array;
+  itemSize: number;
+  count: number;
+  center: THREE.Vector3;
 };
 
 const geometryCache = new WeakMap<THREE.BufferGeometry, GeometryCacheEntry>();
@@ -45,7 +52,7 @@ function makeOrientationKey(t: TransformLike): string {
   ].join('|');
 }
 
-function ensureCenteredPositionBuffer(geometryData: GeometryLike): GeometryCacheEntry | null {
+function boundsCacheFor(geometryData: GeometryLike): GeometryCacheEntry | null {
   const geometry = geometryData.geometry;
   const positionAttribute = geometry.getAttribute('position');
   if (!positionAttribute || positionAttribute.count === 0) return null;
@@ -58,47 +65,34 @@ function ensureCenteredPositionBuffer(geometryData: GeometryLike): GeometryCache
     return cached;
   }
 
-  const centered = new Float32Array(positionAttribute.count * 3);
-  const cx = geometryData.center.x;
-  const cy = geometryData.center.y;
-  const cz = geometryData.center.z;
-
-  if (positionAttribute instanceof THREE.BufferAttribute) {
-    const source = positionAttribute.array;
-    const itemSize = positionAttribute.itemSize;
-    for (let i = 0; i < positionAttribute.count; i++) {
-      const src = i * itemSize;
-      const dst = i * 3;
-      centered[dst] = source[src] - cx;
-      centered[dst + 1] = source[src + 1] - cy;
-      centered[dst + 2] = source[src + 2] - cz;
-    }
-  } else {
-    for (let i = 0; i < positionAttribute.count; i++) {
-      const dst = i * 3;
-      centered[dst] = positionAttribute.getX(i) - cx;
-      centered[dst + 1] = positionAttribute.getY(i) - cy;
-      centered[dst + 2] = positionAttribute.getZ(i) - cz;
-    }
-  }
-
   const next: GeometryCacheEntry = {
-    centeredPositions: centered,
     attributeVersion: attrVersion,
     vertexCount: positionAttribute.count,
     boundsCache: new Map<string, THREE.Box3>(),
   };
-
   geometryCache.set(geometry, next);
   return next;
 }
 
+/** Drop the derived bounds cache for a geometry that is being released. */
+export function forgetCenteredPositions(geometry: THREE.BufferGeometry): void {
+  geometryCache.delete(geometry);
+}
+
 /**
- * Mesh vertices with the geometry's own centre offset already removed, so the
- * model transform alone places them in world space. Cached per geometry.
+ * The original position array and centre. Keeping no centred copy matters: the
+ * model was held by React's development fiber tree, so a WeakMap value keyed by
+ * its geometry stayed alive and duplicated every vertex buffer (~20 MB a model).
  */
-export function getCenteredPositions(geometryData: GeometryLike): Float32Array | null {
-  return ensureCenteredPositionBuffer(geometryData)?.centeredPositions ?? null;
+export function getCenteredPositionSource(geometryData: GeometryLike): CenteredPositionSource | null {
+  const positionAttribute = geometryData.geometry.getAttribute('position');
+  if (!(positionAttribute instanceof THREE.BufferAttribute) || positionAttribute.count === 0) return null;
+  return {
+    array: positionAttribute.array as Float32Array,
+    itemSize: positionAttribute.itemSize,
+    count: positionAttribute.count,
+    center: geometryData.center,
+  };
 }
 
 export function shouldUsePreciseBoundsForTransform(transform: TransformLike, angleEpsilon = 1e-4): boolean {
@@ -140,8 +134,9 @@ export function computePreciseModelWorldBounds(
   out?: THREE.Box3,
 ): THREE.Box3 {
   const target = out ?? new THREE.Box3();
-  const cacheEntry = ensureCenteredPositionBuffer(geometryData);
-  if (!cacheEntry || cacheEntry.centeredPositions.length === 0) {
+  const source = getCenteredPositionSource(geometryData);
+  const cacheEntry = source ? boundsCacheFor(geometryData) : null;
+  if (!source || !cacheEntry) {
     return computeApproxModelWorldBounds(geometryData, transform, target);
   }
 
@@ -157,7 +152,11 @@ export function computePreciseModelWorldBounds(
   // a box is exact, so this is the same answer for a fraction of the work.
   matrixScratch.compose(originScratch, quaternionScratch.copy(quaternionFromGlobalEuler(transform.rotation)), transform.scale);
   const e = matrixScratch.elements;
-  const points = cacheEntry.centeredPositions;
+  const points = source.array;
+  const itemSize = source.itemSize;
+  const centerX = source.center.x;
+  const centerY = source.center.y;
+  const centerZ = source.center.z;
 
   let minX = Number.POSITIVE_INFINITY;
   let minY = Number.POSITIVE_INFINITY;
@@ -166,10 +165,11 @@ export function computePreciseModelWorldBounds(
   let maxY = Number.NEGATIVE_INFINITY;
   let maxZ = Number.NEGATIVE_INFINITY;
 
-  for (let i = 0; i < points.length; i += 3) {
-    const x = points[i];
-    const y = points[i + 1];
-    const z = points[i + 2];
+  for (let i = 0; i < source.count; i += 1) {
+    const offset = i * itemSize;
+    const x = points[offset] - centerX;
+    const y = points[offset + 1] - centerY;
+    const z = points[offset + 2] - centerZ;
 
     const tx = (x * e[0]) + (y * e[4]) + (z * e[8]) + e[12];
     const ty = (x * e[1]) + (y * e[5]) + (z * e[9]) + e[13];

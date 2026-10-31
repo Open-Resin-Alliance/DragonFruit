@@ -15,6 +15,13 @@ type FootprintCacheEntry = {
 };
 
 const MAX_SAMPLED_POINTS = 1024;
+/**
+ * Vertices the full silhouette scan may read per model. That path is for
+ * placement sizing, where an underestimated footprint would place a model over
+ * the plate edge; the visual border uses `{ scan: 'sampled' }` and the cached
+ * 1024-point sample instead, so selecting every model no longer queues one
+ * full scan each (measured at 9 ms per 460k-triangle model).
+ */
 const MAX_HULL_SCANNED_VERTICES = 160_000;
 const HULL_SILHOUETTE_BINS = 96;
 const MAX_SIZE_CACHE_PER_GEOMETRY = 80;
@@ -86,21 +93,22 @@ function ensureSampledCenteredPoints(geometryData: GeometryLike): FootprintCache
   return next;
 }
 
+/** `full` samples the position attribute; `sampled` reads the cached 1024-point sample. */
+export type FootprintHullScan = 'full' | 'sampled';
+
 export function computeProjectedFootprintHull(
   geometryData: GeometryLike,
   rotation: THREE.Euler,
   scale: THREE.Vector3,
+  options: { scan?: FootprintHullScan } = {},
 ): THREE.Vector2[] {
+  const scan = options.scan ?? 'full';
   const cacheEntry = ensureSampledCenteredPoints(geometryData);
   if (!cacheEntry) return [];
 
-  const key = makeFootprintKey(rotation, scale);
+  const key = `${makeFootprintKey(rotation, scale)}|${scan}`;
   const cached = cacheEntry.hullCache.get(key);
   if (cached) return cloneHull(cached);
-
-  const geometry = geometryData.geometry;
-  const positionAttribute = geometry.getAttribute('position');
-  if (!positionAttribute || positionAttribute.count < 3) return [];
 
   matrixScratch.compose(
     new THREE.Vector3(0, 0, 0),
@@ -108,10 +116,6 @@ export function computeProjectedFootprintHull(
     scale,
   );
   const e = matrixScratch.elements;
-  const cx = geometryData.center.x;
-  const cy = geometryData.center.y;
-  const cz = geometryData.center.z;
-  const stride = Math.max(1, Math.ceil(positionAttribute.count / MAX_HULL_SCANNED_VERTICES));
 
   const binPoints = new Array<THREE.Vector2 | null>(HULL_SILHOUETTE_BINS).fill(null);
   const binDistances = new Array<number>(HULL_SILHOUETTE_BINS).fill(-Infinity);
@@ -136,10 +140,7 @@ export function computeProjectedFootprintHull(
     maxDiagB: -Infinity,
   };
 
-  for (let i = 0; i < positionAttribute.count; i += stride) {
-    const x = positionAttribute.getX(i) - cx;
-    const y = positionAttribute.getY(i) - cy;
-    const z = positionAttribute.getZ(i) - cz;
+  const addPoint = (x: number, y: number, z: number) => {
     const tx = (x * e[0]) + (y * e[4]) + (z * e[8]);
     const ty = (x * e[1]) + (y * e[5]) + (z * e[9]);
     const point = new THREE.Vector2(tx, ty);
@@ -165,6 +166,30 @@ export function computeProjectedFootprintHull(
     if (diagA > values.maxDiagA) { values.maxDiagA = diagA; extremes.maxDiagA = point; }
     if (diagB < values.minDiagB) { values.minDiagB = diagB; extremes.minDiagB = point; }
     if (diagB > values.maxDiagB) { values.maxDiagB = diagB; extremes.maxDiagB = point; }
+  };
+
+  if (scan === 'sampled') {
+    // The cache already holds `MAX_SAMPLED_POINTS` centred corners, one stride
+    // apart over the soup. That is the cheap path for a visual border.
+    const sampled = cacheEntry.sampledCenteredPoints;
+    if (sampled.length < 9) return [];
+    for (let i = 0; i < sampled.length; i += 3) {
+      addPoint(sampled[i], sampled[i + 1], sampled[i + 2]);
+    }
+  } else {
+    const positionAttribute = geometryData.geometry.getAttribute('position');
+    if (!positionAttribute || positionAttribute.count < 3) return [];
+    const cx = geometryData.center.x;
+    const cy = geometryData.center.y;
+    const cz = geometryData.center.z;
+    const stride = Math.max(1, Math.ceil(positionAttribute.count / MAX_HULL_SCANNED_VERTICES));
+    for (let i = 0; i < positionAttribute.count; i += stride) {
+      addPoint(
+        positionAttribute.getX(i) - cx,
+        positionAttribute.getY(i) - cy,
+        positionAttribute.getZ(i) - cz,
+      );
+    }
   }
 
   const hull = convexHull2d([

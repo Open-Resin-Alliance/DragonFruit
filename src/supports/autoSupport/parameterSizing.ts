@@ -2,7 +2,7 @@ import { clamp, round } from '@/utils/math';
 import type { CandidatePoint } from './types';
 import { getSettings } from '../Settings/state';
 import { getPresetById } from '../Settings/presets';
-import { AUTO_SUPPORT_CONSTRAINTS, SIZING_BANDS } from './settings';
+import { AUTO_SUPPORT_CONSTRAINTS, MIN_CONTACT_TIP_DIAMETER_MM, SIZING_BANDS } from './settings';
 import type { SizingBand, SizingPreset } from './settings';
 import type { SupportSettings } from '../Settings/types';
 
@@ -111,7 +111,13 @@ export function resolvedSizingBandsForRun(id: string | null | undefined): Record
  * the run has to size with something.
  */
 export function resolveSizingBand(id: string | null | undefined): SizingBand {
-    return (id ? resolvedSizingBands?.[id] : undefined) ?? sizingBandOfPreset(id) ?? SIZING_BANDS.structure;
+    const band = (id ? resolvedSizingBands?.[id] : undefined) ?? sizingBandOfPreset(id) ?? SIZING_BANDS.structure;
+    // A preset's tip is an editable profile field. A run never prints a contact
+    // below the published floor, whatever the preset (or a worker's resolved
+    // copy of it) carries.
+    return band.tipContactDiameterMm >= MIN_CONTACT_TIP_DIAMETER_MM
+        ? band
+        : { ...band, tipContactDiameterMm: MIN_CONTACT_TIP_DIAMETER_MM };
 }
 
 /** The band the run sizes with: the Support Studio preset the live settings name. */
@@ -133,6 +139,16 @@ const CELL_REFERENCE_AREA_MM2 = 8;
 
 /** Maximum shaft diameter (mm) for very large single supports. */
 const MAX_SHAFT_DIAMETER_MM = 2.0;
+
+/**
+ * Combined ceiling on the three run-level model factors (mm-equivalent).
+ *
+ * Each factor has its own cap, but they multiply: 1.45 × 1.3 × 1.35 = 2.54,
+ * and a tall support on a large heavy part reached thicknesses the documented
+ * "up to ×1.85" never promised. The user's `sizeScale` stays outside this
+ * ceiling — that is an explicit instruction, not a curve.
+ */
+const MAX_MODEL_SCALE_FACTOR = 1.85;
 
 // ---------------------------------------------------------------------------
 // Model-scale sizing: the three factors that ride ON TOP of the settings band
@@ -166,6 +182,9 @@ export const SHARE_EXPONENT = 0.25;
 /** Support height (mm) at or below which supports are at band. */
 export const HEIGHT_REFERENCE_MM = 20;
 export const HEIGHT_EXPONENT = 0.35;
+
+/** Contact tip never narrower than this fraction of the shaft it sits on. */
+export const TIP_CONTACT_MIN_SHAFT_RATIO = 0.3;
 
 // The three caps are no longer constants: they are the `autoSupport`
 // `modelSizeFactorCap` / `modelLoadFactorCap` / `heightFactorCap` settings, so a
@@ -335,9 +354,10 @@ export function sizeParameters(
         ? powerFactor(zHeight / HEIGHT_REFERENCE_MM, HEIGHT_EXPONENT, heightCap)
         : 1;
     const trunkScale = modelSizingFactors(ctx).trunkScale;
+    const modelScale = Math.min(MAX_MODEL_SCALE_FACTOR, heightFactor * trunkScale);
     const shaftDiameterMm = round(
         clamp(
-            shaftDiameterForArea(band.shaftDiameterMm, areaInput) * heightFactor * trunkScale,
+            shaftDiameterForArea(band.shaftDiameterMm, areaInput) * modelScale,
             0.001,
             MAX_SHAFT_DIAMETER_MM,
         ) * sizeScale,
@@ -350,7 +370,10 @@ export function sizeParameters(
     // Per-point override (small-island shrunk tip) bypasses the band and
     // its 30%-of-shaft floor — explicit means explicit.
     const tipContactDiameterMm = round(
-        candidate.tipDiameterMm ?? Math.max(band.tipContactDiameterMm * angleFactor, shaftDiameterMm * 0.3),
+        Math.max(
+            MIN_CONTACT_TIP_DIAMETER_MM,
+            candidate.tipDiameterMm ?? Math.max(band.tipContactDiameterMm * angleFactor, shaftDiameterMm * TIP_CONTACT_MIN_SHAFT_RATIO),
+        ),
     3);
 
     return {

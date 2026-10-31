@@ -277,9 +277,15 @@ export class ExportManager {
    * it, because the writer consumes the store rather than the geometry.
    */
   static async bakeModelGeometryChunk(model: LoadedModel): Promise<BakedChunk> {
+    const signature = this.computeModelGeometrySignature(model);
+    // Duplicates share the source geometry, so their local-space chunk is the
+    // same bytes. Reuse an owner that already baked this signature instead of
+    // encoding the mesh again for every copy.
+    const adopted = meshChunkStore.adoptForModel(model.id, signature);
+    if (adopted) return adopted;
     return meshChunkStore.bake({
       modelId: model.id,
-      signature: this.computeModelGeometrySignature(model),
+      signature,
       encode: () => this.exportModelAsEmbeddedBinaryStlBytes(model),
     });
   }
@@ -301,6 +307,9 @@ export class ExportManager {
 
     const cached = meshChunkStore.lookup(model.id, signature);
     if (cached) return { chunk: cached, stale: false };
+
+    const adopted = meshChunkStore.adoptForModel(model.id, signature);
+    if (adopted) return { chunk: adopted, stale: false };
 
     const inFlight = meshChunkStore.pending(model.id, signature);
     if (inFlight) {

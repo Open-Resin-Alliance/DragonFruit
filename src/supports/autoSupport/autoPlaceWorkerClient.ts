@@ -14,6 +14,7 @@ import type { DetectedIsland } from '@/volumeAnalysis/Islands/types';
 import { getSettings } from '../Settings/state';
 import { getSnapshot } from '../state';
 import { commitAutoPlacePlan, logAutoPlaceTimings, runAutoPlace } from './autoPlace';
+import * as THREE from 'three';
 import { getModelMesh } from './meshStore';
 import { resolvedSizingBandsForRun } from './parameterSizing';
 import type { AutoSupportSettings } from './settings';
@@ -129,6 +130,31 @@ export function resetAutoPlaceWorker(): void {
     if (worker) dropWorker(worker);
 }
 
+let cavityCache: { key: string; mesh: SerializedModelMesh } | null = null;
+
+/** Pose the cavity geometry exactly like the model mesh the run uses: the
+ *  cavity surface is in model-local space, contacts are world-space. */
+const serializeCavityForModel = (
+    modelId: string,
+    cavityGeometry: THREE.BufferGeometry | null | undefined,
+): { cavityMesh?: SerializedModelMesh; cavityMeshKey?: string } => {
+    if (!cavityGeometry) return {};
+    const pose = getModelMesh(modelId);
+    if (!pose) return {};
+
+    const mesh = new THREE.Mesh(cavityGeometry);
+    mesh.matrixAutoUpdate = false;
+    mesh.matrix.copy(pose.matrixWorld);
+    mesh.matrix.decompose(mesh.position, mesh.quaternion, mesh.scale);
+    mesh.updateMatrixWorld(true);
+
+    const key = modelMeshKey(mesh);
+    if (cavityCache?.key === key) return { cavityMesh: cavityCache.mesh, cavityMeshKey: key };
+    const serialized = serializeModelMesh(mesh);
+    cavityCache = { key, mesh: serialized };
+    return { cavityMesh: serialized, cavityMeshKey: key };
+};
+
 const serializeMeshForModel = (modelId: string): { mesh?: SerializedModelMesh; meshKey?: string } => {
     const mesh = getModelMesh(modelId);
     if (!mesh) return {};
@@ -160,6 +186,9 @@ const requestPlan = (
         }, AUTO_PLACE_WORKER_STARTUP_TIMEOUT_MS);
 
         pending.set(requestId, { resolve, reject, startupTimer, onProgress });
+        // Serialising the mesh and structured-cloning the payload happen
+        // before the worker can report anything. Put the bar up now.
+        onProgress?.({ phase: 'Preparing model', done: 0, total: 1 });
         target.postMessage({ type: 'run', requestId, payload });
     });
 };
@@ -179,12 +208,24 @@ export async function runAutoPlaceInWorker(
     modelId: string,
     settingsOverride?: Partial<AutoSupportSettings>,
     onProgress?: (progress: { phase: string; done: number; total: number }) => void,
+    cavityGeometry?: THREE.BufferGeometry | null,
 ): Promise<AutoPlaceResult> {
     const target = ensureWorker();
+    const cavityPose = cavityGeometry ? getModelMesh(modelId) : null;
+    const cavityMesh = cavityGeometry && cavityPose
+        ? (() => {
+            const mesh = new THREE.Mesh(cavityGeometry);
+            mesh.matrixAutoUpdate = false;
+            mesh.matrix.copy(cavityPose.matrixWorld);
+            mesh.matrix.decompose(mesh.position, mesh.quaternion, mesh.scale);
+            mesh.updateMatrixWorld(true);
+            return mesh;
+        })()
+        : undefined;
     if (!target) {
         // No worker in this environment (tests, plain browser), or one that has
         // already failed: the plan is still correct, it just runs on this thread.
-        return runAutoPlace(islands, modelId, settingsOverride);
+        return runAutoPlace(islands, modelId, settingsOverride, cavityMesh);
     }
 
     let plan: AutoSupportPlan | null;
@@ -202,6 +243,7 @@ export async function runAutoPlaceInWorker(
             appSettings: getSettings(),
             baseState: getSnapshot(),
             ...serializeMeshForModel(modelId),
+            ...serializeCavityForModel(modelId, cavityGeometry),
         }, onProgress);
     } catch (error) {
         console.error(
@@ -209,7 +251,7 @@ export async function runAutoPlaceInWorker(
             'Later runs this session go straight to in-process.',
             error,
         );
-        return runAutoPlace(islands, modelId, settingsOverride);
+        return runAutoPlace(islands, modelId, settingsOverride, cavityMesh);
     }
 
     // The worker's own logs do not reach `dragonfruit.log`, and the run's

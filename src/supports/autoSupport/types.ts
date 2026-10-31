@@ -40,6 +40,9 @@ export interface CandidatePoint {
     /** Density-grid point: must become its own standalone trunk (never merged
      *  into a nearby host) so flat regions get independent supports. */
     gridPoint?: boolean;
+    /** The contact is on a cavity (internal) surface. A plate route would have
+     *  to leave the cavity, so only a bridge that stays inside is allowed. */
+    interior?: boolean;
 }
 
 /** Why a candidate was rejected. */

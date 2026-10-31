@@ -52,6 +52,18 @@ describe('cone batch shape', () => {
     assert.notStrictEqual(coneBucketKey(narrow), coneBucketKey(wide));
   });
 
+  it('shares a bucket between ratios inside the 0.05 step and splits across it', () => {
+    // Ratios 3.0 and 3.005: a 0.005 difference is a quarter of a micron of body
+    // radius on a 0.2 mm contact radius, and must not buy a new draw call.
+    const base = cone({ contactDiameterMm: 0.4, bodyDiameterMm: 1.2 });
+    const nearlyIdentical = cone({ contactDiameterMm: 0.4, bodyDiameterMm: 1.202 });
+    // Ratio 3.05 is the next bucket and genuinely differs by a step.
+    const nextStep = cone({ contactDiameterMm: 0.4, bodyDiameterMm: 1.22 });
+
+    assert.strictEqual(coneBucketKey(base), coneBucketKey(nearlyIdentical));
+    assert.notStrictEqual(coneBucketKey(base), coneBucketKey(nextStep));
+  });
+
   it('separates a disk profile from a sphere profile', () => {
     assert.notStrictEqual(coneBucketKey(cone({ type: 'disk' })), coneBucketKey(cone({ type: 'sphere' })));
   });

@@ -141,6 +141,12 @@ export function SpaceMouseController({
   const rayDirectionRef = React.useRef(new THREE.Vector3());
   const raycastTargetsRef = React.useRef<THREE.Object3D[]>([]);
   const isNavigatingRef = React.useRef(false);
+  // Detection polls the Gamepad API; while no device is present there is nothing
+  // to read every frame, so a miss is cached briefly. A present device (and the
+  // frame after it disappears) is polled every frame, because its axes live in
+  // the snapshot.
+  const candidatesRef = React.useRef<Gamepad[]>([]);
+  const lastCandidatePollAtRef = React.useRef(0);
 
   React.useEffect(() => {
     if (pivotPoint) return;
@@ -319,7 +325,14 @@ export function SpaceMouseController({
     }
 
     // Capture once per frame — shared by detection loop and active-pad selection.
-    const allCandidates = getCandidateGamepads();
+    // Without a device, re-poll at 2 Hz rather than 60+; with one, every frame.
+    const now = performance.now();
+    const hadCandidates = candidatesRef.current.length > 0;
+    if (hadCandidates || now - lastCandidatePollAtRef.current >= 500) {
+      lastCandidatePollAtRef.current = now;
+      candidatesRef.current = getCandidateGamepads();
+    }
+    const allCandidates = candidatesRef.current;
 
     // Detect newly connected candidate devices and notify once per app session.
     // Only notify for unrecognized fallback devices that aren't already blocked —

@@ -25,6 +25,9 @@ export interface RenderShaftSegmentOptions {
     visuals: ShaftSegmentVisuals;
     isSelected: boolean;
     isSegmentSelected: boolean;
+    supportId?: string;
+    /** Drawn translucent because the support is a frozen dependent of a drag. */
+    ghosted?: boolean;
     isInteractable: boolean;
     deferStraightShaftsToSceneBatch: boolean;
     onSelect: (segmentId: string) => void;
@@ -40,6 +43,8 @@ export function renderShaftSegment({
     visuals,
     isSelected,
     isSegmentSelected,
+    supportId,
+    ghosted = false,
     isInteractable,
     deferStraightShaftsToSceneBatch,
     onSelect,
@@ -48,7 +53,7 @@ export function renderShaftSegment({
     const { segment, start, end, diameterStart, diameterEnd, isUniformDiameter } = shaft;
     const isBezier = segment.type === 'bezier';
 
-    if (!isSelected && !deferStraightShaftsToSceneBatch && !isBezier && isUniformDiameter) {
+    if (!ghosted && !isSelected && !deferStraightShaftsToSceneBatch && !isBezier && isUniformDiameter) {
         batch.push({ id: segment.id, start, end, diameter: segment.diameter });
         return null;
     }
@@ -57,6 +62,8 @@ export function renderShaftSegment({
     // through a spread.
     const key = `shaft-${segment.id}`;
     const shared = {
+        transparent: ghosted,
+        opacity: ghosted ? 0.3 : 1,
         id: segment.id,
         start,
         end,
@@ -65,6 +72,7 @@ export function renderShaftSegment({
         emissiveIntensity: visuals.emissiveIntensity,
         selectedColor: visuals.selectedColor,
         isParentSelected: isSelected,
+        parentSupportId: supportId,
         isInteractable,
         isSelected: isSegmentSelected,
         onClick: () => onSelect(segment.id),
@@ -83,7 +91,7 @@ export function renderShaftSegment({
         );
     }
 
-    if (deferStraightShaftsToSceneBatch && !isSelected) return null;
+    if (deferStraightShaftsToSceneBatch && !isSelected && !ghosted) return null;
 
     return (
         <ShaftRenderer

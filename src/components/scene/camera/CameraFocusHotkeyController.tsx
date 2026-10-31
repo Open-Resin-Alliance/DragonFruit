@@ -48,6 +48,12 @@ type CameraFocusHotkeyControllerProps = {
    * No radius, so this is a pan — the view keeps its angle and its distance.
    */
   plateFocus?: { runId: number; center: THREE.Vector3 };
+  /**
+   * Notifies the scene while a camera transition owns the view. The Prepare
+   * merged-support queue pauses during it: one merge slice is longer than a
+   * frame, and starting one mid-pan makes the pan stutter.
+   */
+  onTransitionActiveChange?: (active: boolean) => void;
 };
 
 type FocusTransition = {
@@ -96,6 +102,7 @@ function computeModelWorldBoundingSphere(model: LoadedModel): THREE.Sphere {
 
 export function CameraFocusHotkeyController({
   plateFocus,
+  onTransitionActiveChange,
   hoverPointRef,
   setOrbitTargetFromPoint,
   models,
@@ -112,6 +119,7 @@ export function CameraFocusHotkeyController({
   const sizeRef = React.useRef(size);
   React.useEffect(() => { sizeRef.current = size; }, [size]);
   const transitionRef = React.useRef<FocusTransition | null>(null);
+  React.useEffect(() => () => onTransitionActiveChange?.(false), [onTransitionActiveChange]);
 
   useFrame(() => {
     const transition = transitionRef.current;
@@ -134,6 +142,7 @@ export function CameraFocusHotkeyController({
       camera.position.copy(transition.endPos);
       controls.target.copy(transition.endTarget);
       controls.update();
+      onTransitionActiveChange?.(false);
 
       // Tell the pivot state where the view ended up: it feeds the controls' `target`
       // prop and the focus hotkey, and a pan that left it pointing at the old plate would
@@ -220,7 +229,8 @@ export function CameraFocusHotkeyController({
       prevDamping,
       prevEnabled,
     };
-  }, [cameraRef, orbitControlsRef, perspectiveFov, setOrbitTargetFromPoint]);
+    onTransitionActiveChange?.(true);
+  }, [cameraRef, onTransitionActiveChange, orbitControlsRef, perspectiveFov, setOrbitTargetFromPoint]);
 
   // A clicked plate brings the view with it. The run id and the new active plate's centre
   // arrive in the same commit, so the pan reads the plate that was picked.

@@ -96,6 +96,9 @@ export interface DetectedIsland {
   contact: THREE.Vector3;
   /** Z-ordering sort key, equal to `contact.z` (world mm). */
   baseZ: number;
+  /** Contact lies on a cavity (internal) surface. Filled by the auto-support
+   *  run from the cavity mesh; absent on scan output. */
+  interior?: boolean;
 
   // --- voxel-detector extras (undefined for minima) ---
   /** Contact footprint area at the island's base layer (mm^2). */

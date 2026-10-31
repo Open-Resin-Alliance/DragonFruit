@@ -29,6 +29,51 @@ export function isCurvedBatchedShaft(shaft: InstancedShaft): boolean {
 }
 
 /**
+ * The swept tube for one shaft, from the cache or built now.
+ *
+ * Building a `TubeGeometry` is the expensive half of laying a batch out (the
+ * merge is a buffer copy). It is per shaft, so a caller can warm a batch in idle
+ * slices instead of paying all of it inside a render — see `warmBezierTube`.
+ */
+function sweptTubeFor(shaft: InstancedShaft, radialSegments: number): {
+    curve: THREE.CubicBezierCurve3;
+    tubularSegments: number;
+    tube: THREE.TubeGeometry;
+} {
+    const cached = tubeGeometryCache.get(shaft);
+    if (cached) return cached;
+
+    const curve = new THREE.CubicBezierCurve3(
+        new THREE.Vector3(shaft.start.x, shaft.start.y, shaft.start.z),
+        new THREE.Vector3(shaft.controlPoint1!.x, shaft.controlPoint1!.y, shaft.controlPoint1!.z),
+        new THREE.Vector3(shaft.controlPoint2!.x, shaft.controlPoint2!.y, shaft.controlPoint2!.z),
+        new THREE.Vector3(shaft.end.x, shaft.end.y, shaft.end.z),
+    );
+    const tubularSegments = Math.max(2, Math.floor(
+        shaft.resolution
+        ?? calculateAdaptiveBezierResolution(shaft.start, shaft.controlPoint1!, shaft.controlPoint2!, shaft.end),
+    ));
+    const radius = Math.max(0.0005, shaft.diameter / 2);
+    const entry = {
+        curve,
+        tubularSegments,
+        tube: new THREE.TubeGeometry(curve, tubularSegments, radius, radialSegments, false),
+    };
+    tubeGeometryCache.set(shaft, entry);
+    return entry;
+}
+
+/** Whether this shaft's tube is already built, so a warmer can skip it cheaply. */
+export function hasCachedBezierTube(shaft: InstancedShaft): boolean {
+    return tubeGeometryCache.has(shaft);
+}
+
+/** Build one shaft's tube now; call from an idle slice, never from render. */
+export function warmBezierTube(shaft: InstancedShaft, radialSegments: number): void {
+    sweptTubeFor(shaft, radialSegments);
+}
+
+/**
  * Split a batch's shafts into the ones the merged tube mesh draws and the ones
  * the instanced mesh draws.
  *
@@ -100,83 +145,99 @@ export function buildBatchedBezierTubes(
 ): BatchedBezierTubes | null {
     if (curvedShafts.length === 0) return null;
 
-    const positions: number[] = [];
-    const normals: number[] = [];
-    const indices: number[] = [];
-    const triangleRangeEnds: number[] = [];
+    // Resolve every swept tube first and total the merge, so each buffer is
+    // allocated once and written in place. Pushing three floats and one index at a
+    // time into plain arrays was most of this function's cost on a supported
+    // plate — ~950 ms for 20k curved shafts — and it ran on the render thread
+    // whenever the batch was re-laid-out (a load, a move, a selection tint).
+    const swept: Array<{
+        curve: THREE.CubicBezierCurve3;
+        tubularSegments: number;
+        tube: THREE.TubeGeometry;
+    }> = [];
+    let vertexTotal = 0;
+    let indexTotal = 0;
+    for (const shaft of curvedShafts) {
+        const entry = sweptTubeFor(shaft, radialSegments);
+        swept.push(entry);
+        vertexTotal += entry.tube.getAttribute('position').count + 2 * (1 + radialSegments);
+        indexTotal += entry.tube.getIndex()!.count + 2 * radialSegments * 3;
+    }
+
+    const positions = new Float32Array(vertexTotal * 3);
+    const normals = new Float32Array(vertexTotal * 3);
+    const indices = new Uint32Array(indexTotal);
+    const triangleRangeEnds = new Array<number>(swept.length);
+    let vertexCursor = 0;
+    let indexCursor = 0;
 
     const addCap = (ringStartVertex: number, center: THREE.Vector3, outward: THREE.Vector3) => {
-        const capBase = positions.length / 3;
-        positions.push(center.x, center.y, center.z);
-        normals.push(outward.x, outward.y, outward.z);
+        const capBase = vertexCursor;
+        positions[vertexCursor * 3] = center.x;
+        positions[vertexCursor * 3 + 1] = center.y;
+        positions[vertexCursor * 3 + 2] = center.z;
+        normals[vertexCursor * 3] = outward.x;
+        normals[vertexCursor * 3 + 1] = outward.y;
+        normals[vertexCursor * 3 + 2] = outward.z;
+        vertexCursor += 1;
 
         // Duplicate the rim ring with the cap normal (skip the tube's seam
         // duplicate at j === radialSegments) so the cap edge shades crisply.
         for (let j = 0; j < radialSegments; j += 1) {
             const src = (ringStartVertex + j) * 3;
-            positions.push(positions[src], positions[src + 1], positions[src + 2]);
-            normals.push(outward.x, outward.y, outward.z);
+            positions[vertexCursor * 3] = positions[src];
+            positions[vertexCursor * 3 + 1] = positions[src + 1];
+            positions[vertexCursor * 3 + 2] = positions[src + 2];
+            normals[vertexCursor * 3] = outward.x;
+            normals[vertexCursor * 3 + 1] = outward.y;
+            normals[vertexCursor * 3 + 2] = outward.z;
+            vertexCursor += 1;
         }
 
         // Orient the fan so its winding faces `outward` regardless of the
         // direction TubeGeometry wound the ring.
-        const a = new THREE.Vector3(
-            positions[(capBase + 1) * 3] - center.x,
-            positions[(capBase + 1) * 3 + 1] - center.y,
-            positions[(capBase + 1) * 3 + 2] - center.z,
-        );
-        const b = new THREE.Vector3(
-            positions[(capBase + 2) * 3] - center.x,
-            positions[(capBase + 2) * 3 + 1] - center.y,
-            positions[(capBase + 2) * 3 + 2] - center.z,
-        );
-        const flip = new THREE.Vector3().crossVectors(a, b).dot(outward) < 0;
+        const ax = positions[(capBase + 1) * 3] - center.x;
+        const ay = positions[(capBase + 1) * 3 + 1] - center.y;
+        const az = positions[(capBase + 1) * 3 + 2] - center.z;
+        const bx = positions[(capBase + 2) * 3] - center.x;
+        const by = positions[(capBase + 2) * 3 + 1] - center.y;
+        const bz = positions[(capBase + 2) * 3 + 2] - center.z;
+        const crossX = ay * bz - az * by;
+        const crossY = az * bx - ax * bz;
+        const crossZ = ax * by - ay * bx;
+        const flip = crossX * outward.x + crossY * outward.y + crossZ * outward.z < 0;
 
         for (let j = 0; j < radialSegments; j += 1) {
             const r0 = capBase + 1 + j;
             const r1 = capBase + 1 + ((j + 1) % radialSegments);
+            indices[indexCursor] = capBase;
             if (flip) {
-                indices.push(capBase, r1, r0);
+                indices[indexCursor + 1] = r1;
+                indices[indexCursor + 2] = r0;
             } else {
-                indices.push(capBase, r0, r1);
+                indices[indexCursor + 1] = r0;
+                indices[indexCursor + 2] = r1;
             }
+            indexCursor += 3;
         }
     };
 
-    for (const shaft of curvedShafts) {
-        let swept = tubeGeometryCache.get(shaft);
-        if (!swept) {
-            const curve = new THREE.CubicBezierCurve3(
-                new THREE.Vector3(shaft.start.x, shaft.start.y, shaft.start.z),
-                new THREE.Vector3(shaft.controlPoint1!.x, shaft.controlPoint1!.y, shaft.controlPoint1!.z),
-                new THREE.Vector3(shaft.controlPoint2!.x, shaft.controlPoint2!.y, shaft.controlPoint2!.z),
-                new THREE.Vector3(shaft.end.x, shaft.end.y, shaft.end.z),
-            );
-            const tubularSegments = Math.max(2, Math.floor(
-                shaft.resolution
-                ?? calculateAdaptiveBezierResolution(shaft.start, shaft.controlPoint1!, shaft.controlPoint2!, shaft.end),
-            ));
-            const radius = Math.max(0.0005, shaft.diameter / 2);
-            swept = {
-                curve,
-                tubularSegments,
-                tube: new THREE.TubeGeometry(curve, tubularSegments, radius, radialSegments, false),
-            };
-            tubeGeometryCache.set(shaft, swept);
-        }
-        const { curve, tubularSegments, tube } = swept;
+    for (let s = 0; s < swept.length; s += 1) {
+        const { curve, tubularSegments, tube } = swept[s];
 
-        const vertexBase = positions.length / 3;
+        const vertexBase = vertexCursor;
         const pos = tube.getAttribute('position') as THREE.BufferAttribute;
         const nor = tube.getAttribute('normal') as THREE.BufferAttribute;
-        for (let i = 0; i < pos.count; i += 1) {
-            positions.push(pos.getX(i), pos.getY(i), pos.getZ(i));
-            normals.push(nor.getX(i), nor.getY(i), nor.getZ(i));
-        }
+        positions.set(pos.array as Float32Array, vertexCursor * 3);
+        normals.set(nor.array as Float32Array, vertexCursor * 3);
+        vertexCursor += pos.count;
+
         const idx = tube.getIndex()!;
+        const src = idx.array as Uint16Array | Uint32Array;
         for (let i = 0; i < idx.count; i += 1) {
-            indices.push(vertexBase + idx.getX(i));
+            indices[indexCursor + i] = vertexBase + src[i];
         }
+        indexCursor += idx.count;
 
         const startOutward = curve.getTangent(0).normalize().negate();
         const endOutward = curve.getTangent(1).normalize();
@@ -192,13 +253,13 @@ export function buildBatchedBezierTubes(
         addCap(vertexBase, curve.getPoint(0), startOutward);
         addCap(vertexBase + tubularSegments * (radialSegments + 1), curve.getPoint(1), endOutward);
 
-        triangleRangeEnds.push(indices.length / 3);
+        triangleRangeEnds[s] = indexCursor / 3;
     }
 
     const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
-    geometry.setIndex(indices);
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+    geometry.setIndex(new THREE.BufferAttribute(indices, 1));
     geometry.computeBoundingBox();
     geometry.computeBoundingSphere();
 

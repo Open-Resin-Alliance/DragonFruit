@@ -559,7 +559,7 @@ export function RaftProxyMeshLayer({
   }
 
   return (
-    <group>
+    <group userData={{ dfPerfGroup: 'rafts' }}>
       {visibleEntries.map((entry) => {
         const entryPointerEnabled = pointerEnabled
           && supportAnswersPointer(entry.modelId, pointerSceneryModelIds);

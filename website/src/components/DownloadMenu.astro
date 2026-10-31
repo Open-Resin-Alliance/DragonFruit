@@ -9,7 +9,7 @@ import { LINKS, docs } from '../data/site';
   </div>
 
   <p class="download__meta mono muted">
-    <span data-download-version>Latest stable release, from GitHub</span>
+    <a data-download-version href={`${LINKS.releases}/latest`}>Latest stable release, from GitHub</a>
     <span aria-hidden="true">·</span>
     <a href="/builds/">Preview Builds</a>
   </p>
@@ -57,10 +57,17 @@ import { LINKS, docs } from '../data/site';
     font-size: 0.75rem;
   }
 
+  .download__meta [data-download-version] {
+    text-decoration: underline;
+    text-decoration-color: var(--border-strong);
+    text-underline-offset: 0.2em;
+  }
+
   .download__meta a:hover,
   .download__meta a:focus-visible {
     color: var(--ink);
     text-decoration: underline;
+    text-decoration-color: currentColor;
     text-underline-offset: 0.2em;
   }
 </style>

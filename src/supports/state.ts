@@ -1263,7 +1263,10 @@ export function getSnapshot() {
  * was most of the cost of a history push.
  */
 export function cloneSupportState(source: SupportState): SupportState {
-    return installCollectionViews(clonePlainData({
+    // Through normalise so the clone gets the derived-union accessor: a plain
+    // `installCollectionViews` would treat its frozen collections as a caller's
+    // partial write and leave them unstamped.
+    return normaliseSupportState(clonePlainData({
         ...source,
         supports: source.supports ?? {},
     } as SupportState));
@@ -1272,6 +1275,22 @@ export function cloneSupportState(source: SupportState): SupportState {
 /** Every support entity by id, whatever its type. */
 export function getSupports(): Record<string, SupportEntityAny> {
     return state.supports ?? {};
+}
+
+/**
+ * How many entities a support state holds, counted by collection.
+ *
+ * For the history budget, which only needs a number: reading `supports` would
+ * materialise the derived union of a whole plate.
+ */
+export function countSupportEntities(source: SupportState): number {
+    let count = 0;
+    for (const descriptor of SUPPORT_TYPES) {
+        const view = source[descriptor.location.key] as Record<string, unknown> | undefined;
+        if (!view) continue;
+        for (const _id in view) count += 1;
+    }
+    return count;
 }
 
 export function reassignAllSupportModelIds(modelId: string): boolean {
@@ -1293,36 +1312,86 @@ export function reassignAllSupportModelIds(modelId: string): boolean {
 
 
 /**
- * Install each collection name as a view over `state.supports`. Enumerable, so
- * `{ ...state }` yields a snapshot rather than a live view.
+ * Views the store has already stamped.
+ *
+ * A view it produced carries `typeId` on every entity, so a later write that
+ * hands it back needs no second pass. Writers that build a view from one of
+ * these (a spread plus one entity) add it here too; anything unmarked is
+ * stamped as it comes in, which is the import path.
  */
-function installCollectionViews(next: SupportState): SupportState {
-    for (const descriptor of SUPPORT_TYPES) {
-        let cache: { from: Record<string, SupportEntityAny>; view: Record<string, SupportEntityAny> } | null = null;
+const stampedViews = new WeakSet<object>();
 
+/**
+ * Install each collection name as a collection, and `supports` as the union.
+ *
+ * The collections are the source of truth. `supports` is derived: eagerly when
+ * the caller handed one in, lazily (on first read) when it can be merged from
+ * the collections. It is non-enumerable so `{ ...state }` does not materialise a
+ * whole-plate map on every write, and the union is cached per state object.
+ */
+function installCollectionViews(
+    next: SupportState,
+    pinned?: ReadonlyMap<SupportCollectionKey, Record<string, SupportEntityAny>>,
+    providedUnion?: Record<string, SupportEntityAny>,
+): SupportState {
+    for (const descriptor of SUPPORT_TYPES) {
+        const pinnedView = pinned?.get(descriptor.location.key);
+        if (pinnedView) {
+            stampedViews.add(pinnedView);
+            Object.defineProperty(next, descriptor.location.key, {
+                configurable: true,
+                enumerable: true,
+                value: pinnedView,
+                writable: true,
+            });
+            continue;
+        }
+
+        // No collection supplied for this type: derive it from the union the
+        // caller handed in, filtered once per state object.
+        let cache: Record<string, SupportEntityAny> | null = null;
         Object.defineProperty(next, descriptor.location.key, {
             configurable: true,
             enumerable: true,
-            get(this: SupportState) {
-                const all = this.supports ?? {};
-                if (cache && cache.from === all) return cache.view;
-
+            get() {
+                if (cache) return cache;
                 const view: Record<string, SupportEntityAny> = {};
+                const all = providedUnion ?? {};
                 for (const id in all) {
                     if ((all[id] as { typeId?: SupportTypeId }).typeId === descriptor.id) view[id] = all[id];
                 }
-
-                cache = { from: all, view };
+                cache = view;
+                stampedViews.add(view);
                 return view;
             },
         });
     }
+
+    let union: Record<string, SupportEntityAny> | null = providedUnion ?? null;
+    Object.defineProperty(next, 'supports', {
+        configurable: true,
+        enumerable: false,
+        get(this: SupportState) {
+            if (union) return union;
+            const merged: Record<string, SupportEntityAny> = {};
+            for (const descriptor of SUPPORT_TYPES) {
+                const view = this[descriptor.location.key] as Record<string, SupportEntityAny> | undefined;
+                if (!view) continue;
+                for (const id in view) merged[id] = view[id];
+            }
+            union = merged;
+            return merged;
+        },
+        set(value: Record<string, SupportEntityAny> | null) {
+            union = value ?? null;
+        },
+    });
     return next;
 }
 
 /**
- * Normalise a state object into the stored shape: one `supports` map with the
- * eight names derived from it. Accepts either shape.
+ * Normalise a state object into the stored shape: the eight collections are the
+ * truth and `supports` is derived from them.
  */
 function normaliseSupportState(next: SupportState): SupportState {
     const raw = next as unknown as Record<string, unknown>;
@@ -1330,18 +1399,16 @@ function normaliseSupportState(next: SupportState): SupportState {
     // An own collection key means a writer set one explicitly, so it wins for
     // that type. Types without one keep whatever `supports` already held.
     const overrides = SUPPORT_TYPES.filter((d) => Object.prototype.hasOwnProperty.call(raw, d.location.key));
+    const providedUnion = (next as { supports?: Record<string, SupportEntityAny> }).supports ?? undefined;
 
     // A write that only touched interaction state carries the previous views
-    // unchanged, so `supports` is already correct. Rebuilding it would hand
-    // every reader new collection objects and invalidate their memos.
-    if (next.supports && overrides.length === SUPPORT_TYPES.length
+    // unchanged. Reuse them, and let the union come from the previous state the
+    // first time anything reads it.
+    if (overrides.length === SUPPORT_TYPES.length
         && overrides.every((d) => (raw[d.location.key] as object) === state?.[d.location.key])) {
         const carried: Record<string, unknown> = { ...raw };
         for (const descriptor of SUPPORT_TYPES) delete carried[descriptor.location.key];
-        const kept = { ...carried, supports: next.supports } as unknown as SupportState;
-
-        // Reuse the resolved views, so a reader memoised on `state.trunks`
-        // does not rebuild for a hover.
+        const kept = Object.assign(Object.create(null), carried) as unknown as SupportState;
         for (const descriptor of SUPPORT_TYPES) {
             Object.defineProperty(kept, descriptor.location.key, {
                 configurable: true,
@@ -1350,30 +1417,47 @@ function normaliseSupportState(next: SupportState): SupportState {
                 writable: true,
             });
         }
+        const previous = state as SupportState | null;
+        let union: Record<string, SupportEntityAny> | null = providedUnion ?? null;
+        Object.defineProperty(kept, 'supports', {
+            configurable: true,
+            enumerable: false,
+            get() {
+                if (union) return union;
+                union = previous?.supports ?? {};
+                return union;
+            },
+            set(value: Record<string, SupportEntityAny> | null) { union = value ?? null; },
+        });
         return kept;
     }
 
-    const supports: Record<string, SupportEntityAny> = {};
-    for (const [id, entity] of Object.entries(next.supports ?? {})) {
-        const typeId = (entity as { typeId?: SupportTypeId }).typeId;
-        if (overrides.some((d) => d.id === typeId)) continue;
-        supports[id] = entity;
-    }
-
+    const pinned = new Map<SupportCollectionKey, Record<string, SupportEntityAny>>();
     for (const descriptor of overrides) {
-        for (const [id, entity] of Object.entries(raw[descriptor.location.key] as Record<string, SupportEntityAny>)) {
-            // Already stamped entities pass through by reference; copying every
-            // one on every write is what made a geometry write cost a frame.
-            supports[id] = (entity as { typeId?: SupportTypeId }).typeId === descriptor.id
+        const supplied = raw[descriptor.location.key] as Record<string, SupportEntityAny>;
+        // A view the store produced is already stamped; handing it back is the
+        // common write (one entity added to a collection), and copying it again
+        // was half of a placement's cost on a full plate.
+        if (stampedViews.has(supplied)) {
+            pinned.set(descriptor.location.key, supplied);
+            continue;
+        }
+        const view: Record<string, SupportEntityAny> = {};
+        for (const id in supplied) {
+            const entity = supplied[id];
+            view[id] = (entity as { typeId?: SupportTypeId }).typeId === descriptor.id
                 ? entity
                 : { ...entity, typeId: descriptor.id } as SupportEntityAny;
         }
+        stampedViews.add(view);
+        pinned.set(descriptor.location.key, view);
     }
 
     const rest: Record<string, unknown> = { ...raw };
     for (const descriptor of SUPPORT_TYPES) delete rest[descriptor.location.key];
+    delete rest.supports;
 
-    return installCollectionViews({ ...rest, supports } as unknown as SupportState);
+    return installCollectionViews(rest as unknown as SupportState, pinned, providedUnion);
 }
 
 /** The only place `state` is assigned, so the derived views cannot be lost. */
@@ -1389,8 +1473,19 @@ export function setSnapshot(next: SupportState) {
 }
 
 function transformVec3(value: Vec3, matrix: THREE.Matrix4): Vec3 {
-    const v = new THREE.Vector3(value.x, value.y, value.z).applyMatrix4(matrix);
-    return { x: v.x, y: v.y, z: v.z };
+    // Inline the affine multiply: a plate move transforms tens of thousands of
+    // these, and allocating a Vector3 for each one was measurable.
+    const e = matrix.elements;
+    const x = value.x;
+    const y = value.y;
+    const z = value.z;
+    const w = e[3] * x + e[7] * y + e[11] * z + e[15];
+    const invW = w !== 0 && w !== 1 ? 1 / w : 1;
+    return {
+        x: (e[0] * x + e[4] * y + e[8] * z + e[12]) * invW,
+        y: (e[1] * x + e[5] * y + e[9] * z + e[13]) * invW,
+        z: (e[2] * x + e[6] * y + e[10] * z + e[14]) * invW,
+    };
 }
 
 function transformVec3PreserveZ(value: Vec3, matrix: THREE.Matrix4): Vec3 {
@@ -1402,10 +1497,14 @@ function transformVec3PreserveZ(value: Vec3, matrix: THREE.Matrix4): Vec3 {
 }
 
 function transformDirection(value: Vec3, normalMatrix: THREE.Matrix3): Vec3 {
-    const v = new THREE.Vector3(value.x, value.y, value.z).applyMatrix3(normalMatrix);
-    if (v.lengthSq() <= 1e-12) return value;
-    v.normalize();
-    return { x: v.x, y: v.y, z: v.z };
+    const e = normalMatrix.elements;
+    const x = e[0] * value.x + e[3] * value.y + e[6] * value.z;
+    const y = e[1] * value.x + e[4] * value.y + e[7] * value.z;
+    const z = e[2] * value.x + e[5] * value.y + e[8] * value.z;
+    const lengthSq = x * x + y * y + z * z;
+    if (lengthSq <= 1e-12) return value;
+    const invLength = 1 / Math.sqrt(lengthSq);
+    return { x: x * invLength, y: y * invLength, z: z * invLength };
 }
 
 function transformJoint(joint: import('./types').Joint | undefined, matrix: THREE.Matrix4) {
@@ -2669,13 +2768,72 @@ export function setSelectedId(id: string | null) {
 }
 
 
-export function setHoveredState(
+/**
+ * Hover writes are trailing-coalesced.
+ *
+ * A hover changes the support snapshot, and in Support mode that snapshot feeds
+ * a large detailed renderer: one hovered support cost 84–112 ms of React commit
+ * before the non-hover derivations were stabilised, and still ~32 ms after. A
+ * pointer sweep crosses several supports in 30 ms, each one paying that. Applying
+ * only the last hover after the pointer has been still for a moment keeps the
+ * highlight responsive enough (80 ms is below the threshold where a hover feels
+ * delayed) while a sweep costs one render instead of one per support.
+ *
+ * Clearing is immediate: leaving a support must not leave its highlight behind.
+ */
+const HOVER_COALESCE_MS = 80;
+let hoverTimer: number | null = null;
+let pendingHover: { category: 'model' | 'support' | 'contactDisk' | 'segment' | 'joint' | 'knot' | 'raft' | 'gizmo'; id: string } | null = null;
+
+function applyHoveredState(
     category: 'model' | 'support' | 'contactDisk' | 'segment' | 'joint' | 'knot' | 'raft' | 'gizmo' | 'none',
     id: string | null,
 ) {
     if (state.hoveredCategory === category && state.hoveredId === id) return;
     setState({ ...state, hoveredCategory: category, hoveredId: id });
     notify();
+}
+
+/** Whether a support-edit drag owns the pointer right now. */
+function supportEditDragActive(): boolean {
+    if (typeof window === 'undefined') return false;
+    const w = window as unknown as Record<string, unknown>;
+    if (w.__jointGizmoDragging || w.__knotGizmoDragging || w.__bezierGizmoDragging) return true;
+    const guardUntil = Math.max(
+        Number(w.__jointGizmoGuardUntil ?? 0),
+        Number(w.__knotGizmoGuardUntil ?? 0),
+        Number(w.__bezierGizmoGuardUntil ?? 0),
+    );
+    return guardUntil > Date.now();
+}
+
+export function setHoveredState(
+    category: 'model' | 'support' | 'contactDisk' | 'segment' | 'joint' | 'knot' | 'raft' | 'gizmo' | 'none',
+    id: string | null,
+) {
+    // A hover render (25 ms in Support mode) has no place under a drag: the
+    // pointer is captured, the hovered primitive is the one being moved, and the
+    // coalescing timer would otherwise fire a React render mid-drag.
+    if (supportEditDragActive() && category !== 'none' && id !== null) return;
+
+    if (category === 'none' || id === null || typeof window === 'undefined') {
+        if (hoverTimer !== null) {
+            window.clearTimeout(hoverTimer);
+            hoverTimer = null;
+        }
+        pendingHover = null;
+        applyHoveredState(category, id);
+        return;
+    }
+
+    pendingHover = { category, id };
+    if (hoverTimer !== null) window.clearTimeout(hoverTimer);
+    hoverTimer = window.setTimeout(() => {
+        hoverTimer = null;
+        const next = pendingHover;
+        pendingHover = null;
+        if (next) applyHoveredState(next.category, next.id);
+    }, HOVER_COALESCE_MS);
 }
 
 export function setInteractionWarning(warning: import('./types').WarningCode | null) {
@@ -2726,9 +2884,14 @@ export function addSupportEntity(
     }
 
     const key = descriptor.location.key;
+    // The collection is a stamped view plus one stamped entity, so the store
+    // does not need to walk it again: that pass was half of a placement's cost
+    // on a full plate.
+    const view = { ...state[key], [entity.id]: { ...entity, typeId } };
+    stampedViews.add(view);
     setState({
         ...state,
-        [key]: { ...state[key], [entity.id]: { ...entity, typeId } },
+        [key]: view,
     });
     notify();
 }
@@ -3134,25 +3297,25 @@ export function getModelIdForSupportEntityId(id: string | null | undefined): str
     // One pass over every support, asking each what it is. Segments and edges
     // are matched in the same pass because they take disjoint id kinds -- a
     // segment or joint id, versus
-    // the knot id an edge points at -- so no id can satisfy both.
-    for (const entity of Object.values(getSupports())) {
-        const typeId = (entity as { typeId?: SupportTypeId }).typeId;
-        if (!typeId) continue;
-        const descriptor = getSupportTypeDescriptor(typeId);
+    // the knot id an edge points at -- so no id can satisfy both. Walked by
+    // collection, not through the derived union.
+    for (const descriptor of SUPPORT_TYPES) {
+        const view = state[descriptor.location.key] as unknown as Record<string, Record<string, unknown>>;
+        for (const entityId in view) {
+            const entity = view[entityId];
+            // A primitive on a shaft: segment, or either of its joints.
+            if (descriptor.hasSegments) {
+                const segments = (entity.segments as Segment[] | undefined) ?? [];
+                if (segments.some((segment) =>
+                    segment.id === id || segment.topJoint?.id === id || segment.bottomJoint?.id === id)) {
+                    return modelIdOf(entity);
+                }
+            }
 
-        // A primitive on a shaft: segment, or either of its joints.
-        if (descriptor.hasSegments) {
-            const segments = (entity as { segments?: Segment[] }).segments ?? [];
-            if (segments.some((segment) =>
-                segment.id === id || segment.topJoint?.id === id || segment.bottomJoint?.id === id)) {
+            // Or the entity points at the id through one of its declared edges.
+            if (descriptor.edges.some((edge) => edge.to === 'knots' && entity[edge.field] === id)) {
                 return modelIdOf(entity);
             }
-        }
-
-        // Or the entity points at the id through one of its declared edges.
-        const fields = entity as unknown as Record<string, unknown>;
-        if (descriptor.edges.some((edge) => edge.to === 'knots' && fields[edge.field] === id)) {
-            return modelIdOf(entity);
         }
     }
 
@@ -3194,19 +3357,33 @@ export function getSupportEntity(
 export function getSupportTypeOf(id: string): SupportTypeId | null {
     if (!id) return null;
 
-    const entity = getSupports()[id] as { typeId?: SupportTypeId } | undefined;
-    if (entity?.typeId) return entity.typeId;
-    if (!entity) return null;
-
-    // In the store but unstamped: a whole-store payload restored through
-    // `setSnapshot` bypasses the writers that stamp. Fall back to the
-    // collection holding it.
+    // Eight lookups, not the whole union: `supports` is derived, and building it
+    // to answer one id would materialise a plate-wide map.
     for (const descriptor of SUPPORT_TYPES) {
-        if ((state[descriptor.location.key] as Record<string, unknown>)[id]) return descriptor.id;
+        const entity = (state[descriptor.location.key] as Record<string, { typeId?: SupportTypeId }>)[id];
+        if (!entity) continue;
+        return entity.typeId ?? descriptor.id;
     }
     return null;
 }
 
+
+/**
+ * The first entity matching `predicate`, walking the collections rather than the
+ * derived union.
+ */
+function findSupportEntityWhere(
+    predicate: (entity: Record<string, unknown>) => boolean,
+): Record<string, unknown> | null {
+    for (const descriptor of SUPPORT_TYPES) {
+        const view = state[descriptor.location.key] as unknown as Record<string, Record<string, unknown>>;
+        for (const id in view) {
+            const entity = view[id];
+            if (predicate(entity)) return entity;
+        }
+    }
+    return null;
+}
 
 /** Which support owns a shaft segment, searching every shafted type. */
 export function findShaftOwnerOfSegment(
@@ -3221,11 +3398,12 @@ export function findShaftOwnerOfSegment(
             : null;
     }
 
-    for (const entity of Object.values(getSupports()) as { id: string; segments?: Segment[] }[]) {
-        if (entity.segments?.some((segment) => segment.id === segmentId)) {
-            const typeId = getSupportTypeOf(entity.id);
-            if (typeId) return { typeId, id: entity.id };
-        }
+    const owner = findSupportEntityWhere((entity) => (
+        ((entity.segments as Segment[] | undefined) ?? []).some((segment) => segment.id === segmentId)
+    ));
+    if (owner) {
+        const typeId = getSupportTypeOf(owner.id as string);
+        if (typeId) return { typeId, id: owner.id as string };
     }
     return null;
 }
@@ -3243,11 +3421,13 @@ export function jointPosIn(segments: readonly Segment[], jointId: string): Vec3 
 export function findShaftOwnerOfJoint(
     jointId: string,
 ): { typeId: SupportTypeId; id: string; pos: Vec3 } | null {
-    for (const entity of Object.values(getSupports()) as { id: string; segments?: Segment[] }[]) {
-        const pos = jointPosIn(entity.segments ?? [], jointId);
-        if (!pos) continue;
-        const typeId = getSupportTypeOf(entity.id);
-        if (typeId) return { typeId, id: entity.id, pos };
+    const owner = findSupportEntityWhere((entity) => (
+        jointPosIn((entity.segments as Segment[] | undefined) ?? [], jointId) !== null
+    ));
+    if (owner) {
+        const pos = jointPosIn((owner.segments as Segment[] | undefined) ?? [], jointId);
+        const typeId = getSupportTypeOf(owner.id as string);
+        if (pos && typeId) return { typeId, id: owner.id as string, pos };
     }
     return null;
 }
@@ -3481,6 +3661,25 @@ function resizeTaperStart(
     };
 }
 
+/** Gap a stump's joint keeps above its own root top. */
+const INLINE_ROOT_SOCKET_CLEARANCE_MM = 0.1;
+
+/**
+ * Lengthen a cone so its socket lands at `socketZ`, leaving the contact point
+ * where it is. A cone with no vertical reach cannot be stretched to a height,
+ * so it is returned untouched.
+ */
+function stretchConeToSocketZ<T extends { pos: Vec3; normal: Vec3; profile: { lengthMm: number } }>(
+    cone: T,
+    socketZ: number,
+): T {
+    const dz = cone.normal.z;
+    if (!(Math.abs(dz) > 1e-6)) return cone;
+    const lengthMm = (socketZ - cone.pos.z) / dz;
+    if (!Number.isFinite(lengthMm) || lengthMm <= 0) return cone;
+    return { ...cone, profile: { ...cone.profile, lengthMm } };
+}
+
 function applyTipSettingsToConeProfile(
     profile: SupportTipProfile,
     tip: SupportSettings['tip'],
@@ -3542,6 +3741,7 @@ export function applySettingsToSupportTarget(target: EditableSupportTarget, sett
         contactCone?: Trunk['contactCone'];
         rootId?: string;
         settingsCodeHex?: string;
+        joint?: Joint;
     } | undefined;
     if (!entity) return false;
 
@@ -3581,10 +3781,26 @@ export function applySettingsToSupportTarget(target: EditableSupportTarget, sett
     // An inline root is geometry on the entity, so the same settings land on the
     // fields it declares rather than on a shared `Roots` row.
     if (descriptor.lower.kind === 'inlineRoot') {
-        const { radiusField, topRadiusField, heightField } = descriptor.lower;
+        const { field, radiusField, topRadiusField, heightField } = descriptor.lower;
         if (radiusField) next[radiusField] = settings.roots.diameterMm;
         if (topRadiusField) next[topRadiusField] = settings.roots.neckDiameterMm;
         if (heightField) next[heightField] = settings.roots.coneHeightMm;
+
+        // That root is the body carrying the joint, and the cone sockets on the
+        // joint, so a taller root has to take both up with it or it swallows
+        // them and draws as a bare disc.
+        const basePos = field ? (next[field] as Vec3 | undefined) : undefined;
+        const joint = (next.joint ?? entity.joint) as Joint | undefined;
+        if (basePos && joint && heightField) {
+            const rootTopZ = basePos.z + (next[heightField] as number);
+            const socketZ = rootTopZ + INLINE_ROOT_SOCKET_CLEARANCE_MM;
+            if (socketZ > joint.pos.z) {
+                next.joint = { ...joint, pos: { ...joint.pos, z: socketZ } };
+                if (nextContactCone) {
+                    next.contactCone = stretchConeToSocketZ(nextContactCone, socketZ);
+                }
+            }
+        }
     }
 
     setCachedSupportSettingsHex(descriptor.id, entity.id, nextHex);

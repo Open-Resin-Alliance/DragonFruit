@@ -37,13 +37,14 @@ import type { ScanResults } from '@/volumeAnalysis/IslandScan/ScanOrchestrator';
 import type { TransformMode, ModelTransform } from '@/hooks/useModelTransform';
 import type { LimitationCode, SupportMode, WarningCode } from '@/supports/types';
 import { contactEndpointsFor, getSupportTypeDescriptor, hostKnotFieldsFor, INLINE_ROOT_TYPES, previewTypesByPriority, SUPPORT_COLLECTION_KEYS, SUPPORT_TYPES, type SupportTypeId } from '@/supports/supportTypeRegistry';
+import { changedSupportModels, EMPTY_SUPPORT_ENTITIES, EMPTY_SUPPORT_MODELS, getSupportModelIndex, type SupportModelIndex } from '@/supports/supportModelIndex';
+import { installPerfProfilerHandle, perfLayerEnabled, perfMark, perfMeasure } from '@/utils/perfProbe';
 import { EMPTY_PLACEMENT_ACTIVE, EMPTY_PLACEMENT_PREVIEWS, type SupportPlacementActive, type SupportPlacementPreviews } from '@/supports/rendering';
-import { collectRaftBaseCirclesByModel, raftFootprintSourceRefs, RAFT_UNASSIGNED_MODEL_KEY } from '@/supports/Rafts/Crenelated/raftFootprintCircles';
-import { collectSupportMarqueeShapes } from './supportMarqueeShapes';
+import { collectRaftBaseCirclesByModel, raftFootprintSourceRefs, RAFT_UNASSIGNED_MODEL_KEY, type RaftBaseCirclesByModel } from '@/supports/Rafts/Crenelated/raftFootprintCircles';
+import { collectSupportMarqueeShapes, type SupportMarqueeShape } from './supportMarqueeShapes';
 import type { SupportData } from '@/supports/rendering';
 import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot } from '@/supports/state';
 import { getModelIdForSupportEntityId } from '@/supports/state';
-import FootprintBorderRenderer from '@/supports/Rafts/Crenelated/rendering/FootprintBorderRenderer';
 import type { PlateFootprintSource } from '@/supports/Rafts/Crenelated/geometry/modelPlateFootprint';
 import SliceSatBoundingMeshRenderer from '@/supports/Rafts/Crenelated/rendering/SliceSatBoundingMeshRenderer';
 import { getRaftSettings, subscribeToRaftStore } from '@/supports/Rafts/Crenelated/RaftState';
@@ -104,7 +105,9 @@ import {
   writeCornerOnlyWireframePositions,
 } from './SceneCanvasGeometry';
 import { ModelAttachedSupportLayer } from './ModelAttachedSupportLayer';
-import { FollowModelMove } from './FollowModelMove';
+import { usePrepareMergedSupportCache } from '@/supports/prepare/mergedSupportCache';
+import { PrepareMergedSupportMesh } from '@/supports/prepare/PrepareMergedSupportMesh';
+import { SupportShaderWarmup } from '@/supports/instanced/SupportShaderWarmup';
 import {
   CameraModeEntryFramingController,
   CameraProjectionController,
@@ -121,6 +124,8 @@ import {
   orthoWheelRadiusScale,
 } from '@/components/scene/camera/orthoDolly';
 import { useMarqueeSelectionHandlers } from './useMarqueeSelectionHandlers';
+import { getOptimisticSelectedModelId, setOptimisticSelectedModelId } from './optimisticModelSelection';
+import { FootprintOutlineGroup, type FootprintOutlineTarget } from './FootprintOutlineGroup';
 import {
   marqueeModeForDrag,
   marqueeRectForDrag,
@@ -131,6 +136,8 @@ import {
   type ProjectedMesh,
 } from './marqueeHitTest';
 import { PickingEmptySpaceHoverResetter, SceneRenderBindings } from './SceneCanvasInteractionBits';
+import { SceneRenderProfiler } from './SceneRenderProfiler';
+import { recordReactCommit } from '@/utils/debug/renderProfiler';
 
 import { PickingProviderWrapper, SelectionSync, useInteractionWarning } from './SceneSelectionAndPicking';
 import { CameraClipPlaneStabilizer, CameraProvider, EnableLocalClipping, Helpers, Lights, SceneMoodOverlay } from './SceneEnvironment';
@@ -189,7 +196,7 @@ import {
 import { computeLowestZ, countTriangles } from '@/utils/geometry';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { Toast } from '@/components/atoms';
-import { getCenteredPositions } from '@/utils/modelBounds';
+import { getCenteredPositionSource, type CenteredPositionSource } from '@/utils/modelBounds';
 import { emitImmediateModelHover } from '@/supports/interaction/pointerOcclusion';
 import { SupportPathfindingDebugHud, SupportPathfindingDebugOverlay } from '@/components/scene/SupportPathfindingDebugOverlay';
 import {
@@ -217,6 +224,20 @@ import {
 
 const Canvas = dynamic(() => import('@react-three/fiber').then(m => m.Canvas), { ssr: false });
 
+/**
+ * Phase 1.8: every visible model's Prepare supports are drawn as one merged
+ * mesh parented inside that model's group, instead of the instanced proxy.
+ *
+ * One line, one revert: `false` restores the proxy for the supports everywhere
+ * (rafts and every other mode are on the same layers either way), and the
+ * attached active-model group draws supports and rafts together as it did
+ * before the merge existed.
+ */
+const PREPARE_MERGED_SUPPORTS = true;
+
+installPerfProfilerHandle();
+const EMPTY_STRING_LIST: readonly string[] = Object.freeze([]);
+
 type GhostPreviewTransform = {
   position: THREE.Vector3;
   rotation: THREE.Euler;
@@ -243,7 +264,7 @@ function formatOutOfBoundsLabel(
  * result is reused for every pointer move.
  */
 function projectModelMesh(
-  positions: Float32Array,
+  source: CenteredPositionSource,
   modelMatrix: THREE.Matrix4,
   camera: THREE.Camera,
   rect: DOMRect,
@@ -253,7 +274,12 @@ function projectModelMesh(
     .multiply(modelMatrix);
   const m = clip.elements;
 
-  const count = positions.length / 3;
+  const count = source.count;
+  const positions = source.array;
+  const itemSize = source.itemSize;
+  const centerX = source.center.x;
+  const centerY = source.center.y;
+  const centerZ = source.center.z;
   const xs = new Float32Array(count);
   const ys = new Float32Array(count);
 
@@ -264,9 +290,10 @@ function projectModelMesh(
   let dropped = false;
 
   for (let i = 0; i < count; i += 1) {
-    const px = positions[i * 3];
-    const py = positions[(i * 3) + 1];
-    const pz = positions[(i * 3) + 2];
+    const offset = i * itemSize;
+    const px = positions[offset] - centerX;
+    const py = positions[offset + 1] - centerY;
+    const pz = positions[offset + 2] - centerZ;
 
     const w = (m[3] * px) + (m[7] * py) + (m[11] * pz) + m[15];
     if (w <= 0) {
@@ -427,6 +454,15 @@ const CROSS_SECTION_CAP_DEBUG_STORAGE_KEY = 'df:cross-section-cap-debug:v4';
 const CROSS_SECTION_CAP_DEBUG_HOTKEY_ENABLED = false;
 const SUPPORT_PATHFINDING_DEBUG_DOUBLE_TAP_WINDOW_MS = 420;
 
+/**
+ * Minimum time between hovered-model state changes.
+ *
+ * One change re-renders this whole canvas and remounts the hovered footprint
+ * border. At display rate a sweep across twenty models paid that ~165 times a
+ * second; 50 ms keeps the hover responsive while bounding the cost.
+ */
+const HOVER_MODEL_MIN_INTERVAL_MS = 50;
+
 const DEFAULT_CROSS_SECTION_CAP_DEBUG_STATE: CrossSectionCapDebugPanelState = {
   enabled: false,
   top: {
@@ -446,6 +482,21 @@ const DEFAULT_CROSS_SECTION_CAP_DEBUG_STATE: CrossSectionCapDebugPanelState = {
     depthTest: false,
   },
 };
+
+/**
+ * Whether two ordered lists of collection references are the same collections.
+ *
+ * A support-store write (a hover included) replaces the snapshot but not the
+ * collections, so a memo that reads collections can compare these and keep its
+ * result instead of re-walking every entity.
+ */
+function sameCollectionRefs(a: readonly unknown[] | null | undefined, b: readonly unknown[]): boolean {
+  if (!a || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
 
 export function SceneCanvas({
   models: modelsProp = [],
@@ -1484,6 +1535,7 @@ export function SceneCanvas({
   const hoveredMeshModelIdRef = React.useRef<string | null>(null);
   const hoverModelRafRef = React.useRef<number | null>(null);
   const pendingHoverModelIdRef = React.useRef<string | null>(null);
+  const lastHoverModelAppliedAtRef = React.useRef(0);
   const [hoveredRaftModelId, setHoveredRaftModelId] = React.useState<string | null>(null);
   const [hoveredSupportPointerModelId, setHoveredSupportPointerModelId] = React.useState<string | null>(null);
   const modelPickerEnabled = mode !== 'printing';
@@ -1500,6 +1552,22 @@ export function SceneCanvas({
     () => (modelPickerEnabled ? (hoveredMeshModelId ?? hoveredRaftModelId ?? hoveredSupportModelId) : null),
     [hoveredMeshModelId, hoveredRaftModelId, hoveredSupportModelId, modelPickerEnabled],
   );
+  /**
+   * The hover used by the footprint border. Mounting a border builds its raft
+   * footprint and schedules a silhouette; doing that for every model a fast
+   * sweep crosses is the churn, so the border follows a pointer that has settled
+   * for a moment instead of the raw hover.
+   */
+  const [settledHoveredModelId, setSettledHoveredModelId] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    if (hoveredModelId === null) {
+      setSettledHoveredModelId(null);
+      return;
+    }
+    const timer = window.setTimeout(() => setSettledHoveredModelId(hoveredModelId), 140);
+    return () => window.clearTimeout(timer);
+  }, [hoveredModelId]);
+
   const onModelHoverPointChange = React.useCallback((point: THREE.Vector3 | null) => {
     lastHoveredModelPointRef.current = point;
   }, []);
@@ -1510,7 +1578,7 @@ export function SceneCanvas({
   React.useEffect(() => {
     return () => {
       if (hoverModelRafRef.current !== null) {
-        cancelAnimationFrame(hoverModelRafRef.current);
+        window.clearTimeout(hoverModelRafRef.current);
         hoverModelRafRef.current = null;
       }
     };
@@ -1521,7 +1589,7 @@ export function SceneCanvas({
 
     pendingHoverModelIdRef.current = null;
     if (hoverModelRafRef.current !== null) {
-      cancelAnimationFrame(hoverModelRafRef.current);
+      window.clearTimeout(hoverModelRafRef.current);
       hoverModelRafRef.current = null;
     }
 
@@ -1536,7 +1604,7 @@ export function SceneCanvas({
 
     pendingHoverModelIdRef.current = null;
     if (hoverModelRafRef.current !== null) {
-      cancelAnimationFrame(hoverModelRafRef.current);
+      window.clearTimeout(hoverModelRafRef.current);
       hoverModelRafRef.current = null;
     }
 
@@ -1546,35 +1614,65 @@ export function SceneCanvas({
     emitImmediateModelHover(null);
   }, [modelPickerEnabled]);
 
+  // Hover changes at most once per `HOVER_MODEL_MIN_INTERVAL_MS`, with the first
+  // change applied immediately and the last one trailing. A sweep across twenty
+  // models used to set this state on every frame; each set re-renders the whole
+  // canvas (and its support/raft layers) and remounts the hovered footprint
+  // border, which is what a fast sweep paid for.
+  const applyHoveredModel = React.useCallback((nextId: string | null) => {
+    lastHoverModelAppliedAtRef.current = performance.now();
+    hoveredMeshModelIdRef.current = nextId;
+    setHoveredMeshModelId((prev) => (prev === nextId ? prev : nextId));
+    if (nextId) {
+      setHoveredRaftModelId((prev) => (prev === null ? prev : null));
+      setHoveredSupportPointerModelId((prev) => (prev === null ? prev : null));
+    }
+  }, []);
+
   const onModelHoverModelChange = React.useCallback((id: string | null) => {
     if (!modelPickerEnabled) {
       pendingHoverModelIdRef.current = null;
       if (hoverModelRafRef.current !== null) {
-        cancelAnimationFrame(hoverModelRafRef.current);
+        window.clearTimeout(hoverModelRafRef.current);
         hoverModelRafRef.current = null;
       }
-      setHoveredMeshModelId((prev) => (prev === null ? prev : null));
+      applyHoveredModel(null);
       setHoveredRaftModelId((prev) => (prev === null ? prev : null));
       setHoveredSupportPointerModelId((prev) => (prev === null ? prev : null));
       return;
     }
 
     const nextId = id ?? null;
+    if (nextId === null) {
+      pendingHoverModelIdRef.current = null;
+      if (hoverModelRafRef.current !== null) {
+        window.clearTimeout(hoverModelRafRef.current);
+        hoverModelRafRef.current = null;
+      }
+      applyHoveredModel(null);
+      return;
+    }
+
+    const elapsed = performance.now() - lastHoverModelAppliedAtRef.current;
+    if (elapsed >= HOVER_MODEL_MIN_INTERVAL_MS) {
+      pendingHoverModelIdRef.current = null;
+      if (hoverModelRafRef.current !== null) {
+        window.clearTimeout(hoverModelRafRef.current);
+        hoverModelRafRef.current = null;
+      }
+      applyHoveredModel(nextId);
+      return;
+    }
+
     pendingHoverModelIdRef.current = nextId;
     if (hoverModelRafRef.current !== null) return;
-
-    hoverModelRafRef.current = requestAnimationFrame(() => {
+    hoverModelRafRef.current = window.setTimeout(() => {
       hoverModelRafRef.current = null;
       const pending = pendingHoverModelIdRef.current;
       pendingHoverModelIdRef.current = null;
-      if (pending === hoveredMeshModelIdRef.current) return;
-      setHoveredMeshModelId((prev) => (prev === pending ? prev : pending));
-      if (pending) {
-        setHoveredRaftModelId((prev) => (prev === null ? prev : null));
-        setHoveredSupportPointerModelId((prev) => (prev === null ? prev : null));
-      }
-    });
-  }, [modelPickerEnabled]);
+      applyHoveredModel(pending);
+    }, HOVER_MODEL_MIN_INTERVAL_MS - elapsed);
+  }, [applyHoveredModel, modelPickerEnabled]);
 
   React.useEffect(() => {
     const handleModelPointerHoverImmediate = (event: Event) => {
@@ -1593,7 +1691,7 @@ export function SceneCanvas({
         if (modelId) {
           pendingHoverModelIdRef.current = null;
           if (hoverModelRafRef.current !== null) {
-            cancelAnimationFrame(hoverModelRafRef.current);
+            window.clearTimeout(hoverModelRafRef.current);
             hoverModelRafRef.current = null;
           }
           setHoveredMeshModelId((prev) => (prev === null ? prev : null));
@@ -1612,7 +1710,7 @@ export function SceneCanvas({
         if (modelId) {
           pendingHoverModelIdRef.current = null;
           if (hoverModelRafRef.current !== null) {
-            cancelAnimationFrame(hoverModelRafRef.current);
+            window.clearTimeout(hoverModelRafRef.current);
             hoverModelRafRef.current = null;
           }
           setHoveredMeshModelId((prev) => (prev === null ? prev : null));
@@ -1635,18 +1733,63 @@ export function SceneCanvas({
     };
   }, [modelPickerEnabled, onModelHoverModelChange]);
 
+  // Clicking a model in the viewport must tint it on the next frame, not after
+  // the page has re-rendered around the new selection. The meshes subscribe to
+  // the optimistic id themselves, while the selection update that every panel
+  // reads is a transition, so the browser can paint the tint before that render
+  // runs. Cleared as soon as the real selection lands (or after the store's
+  // fallback timeout if the plate refuses it), so it never becomes a second
+  // source of truth.
+  // The selection at click time, so a same-contents array (the store's own
+  // normalisation rewrites one during the transition) cannot be mistaken for
+  // the real selection and clear the hint early.
+  const selectionAtOptimisticRef = React.useRef<readonly string[] | null>(null);
+  const selectedModelIdsRef = React.useRef<readonly string[]>(selectedModelIds ?? []);
+  selectedModelIdsRef.current = selectedModelIds ?? [];
+
+  React.useEffect(() => {
+    const optimisticId = getOptimisticSelectedModelId();
+    if (!optimisticId) return;
+    if (selectedModelIds?.length === 1 && selectedModelIds[0] === optimisticId) {
+      selectionAtOptimisticRef.current = null;
+      setOptimisticSelectedModelId(null);
+      return;
+    }
+    const previous = selectionAtOptimisticRef.current;
+    const unchanged = previous !== null
+      && previous.length === (selectedModelIds?.length ?? 0)
+      && previous.every((id, index) => id === selectedModelIds?.[index]);
+    if (unchanged) return;
+    // A different selection landed: it owns the tint now.
+    selectionAtOptimisticRef.current = null;
+    setOptimisticSelectedModelId(null);
+  }, [selectedModelIds]);
+
+  const selectModelFromScene = React.useCallback((modelId: string | null, options?: { selectionMode?: 'single' | 'toggle' | 'add' }) => {
+    if (!onActiveModelChange) return;
+    const selectionMode = options?.selectionMode ?? 'single';
+    if (modelId && selectionMode === 'single' && !isModelPlateLocked?.(modelId)) {
+      selectionAtOptimisticRef.current = selectedModelIdsRef.current;
+      setOptimisticSelectedModelId(modelId);
+      React.startTransition(() => onActiveModelChange(modelId, options));
+      return;
+    }
+    if (!modelId) setOptimisticSelectedModelId(null);
+    onActiveModelChange(modelId, options);
+  }, [isModelPlateLocked, onActiveModelChange]);
+
   const selectModelFromPointerHit = React.useCallback((modelId: string | null | undefined) => {
     if (mode !== 'prepare') return;
     if (!modelId || !onActiveModelChange) return;
 
-    onActiveModelChange(modelId);
+    selectModelFromScene(modelId);
     window.__modelClickGuardUntil = performance.now() + 48;
     window.dispatchEvent(new CustomEvent('model-clicked', { detail: { modelId } }));
     window.__modelClickedThisFrame = true;
     window.setTimeout(() => {
       window.__modelClickedThisFrame = false;
     }, 0);
-  }, [mode, onActiveModelChange]);
+  }, [mode, onActiveModelChange, selectModelFromScene]);
 
   React.useEffect(() => {
     const handleSupportModelPointerSelect = (event: Event) => {
@@ -1675,6 +1818,7 @@ export function SceneCanvas({
   );
 
   const [isCameraBelowBuildPlate, setIsCameraBelowBuildPlate] = React.useState(false);
+  const [isCameraFocusTransitionActive, setCameraFocusTransitionActive] = React.useState(false);
   const [buildPlateOpacity, setBuildPlateOpacity] = React.useState(1);
   const [outOfBoundsStripeColor, setOutOfBoundsStripeColor] = React.useState<string>('#b6ff2e');
   const [gizmoColors, setGizmoColors] = React.useState({
@@ -1811,13 +1955,21 @@ export function SceneCanvas({
   // makes, and a new identity here poisoned the per-model bounds cache below -
   // which re-ran the raft's polygon booleans for every model, ~120 ms of blocking
   // work on a click in a production build.
-  const raftBaseCirclesByModelKey = React.useMemo(
-    () => collectRaftBaseCirclesByModel(supportStateForBounds, {
+  const raftBaseCirclesCacheRef = React.useRef<{
+    refs: readonly unknown[];
+    byModel: RaftBaseCirclesByModel;
+  } | null>(null);
+
+  const raftBaseCirclesByModelKey = React.useMemo(() => {
+    const refs = raftFootprintSourceRefs(supportStateForBounds);
+    const cached = raftBaseCirclesCacheRef.current;
+    if (cached && sameCollectionRefs(cached.refs, refs)) return cached.byModel;
+    const byModel = collectRaftBaseCirclesByModel(supportStateForBounds, {
       fallbackModelKey: RAFT_UNASSIGNED_MODEL_KEY,
-    }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- the collections the walk reads; the helper returns exactly those, in a fixed order.
-    raftFootprintSourceRefs(supportStateForBounds),
-  );
+    });
+    raftBaseCirclesCacheRef.current = { refs, byModel };
+    return byModel;
+  }, [supportStateForBounds]);
 
   /**
    * A model's support-and-raft extent, kept per model until the supports or the
@@ -1830,36 +1982,72 @@ export function SceneCanvas({
    * tasks on a click in a production build. Keyed on the collections, a selection
    * finds every entry already there.
    */
-  const supportRaftBoundsCacheRef = React.useRef<{
-    key: readonly unknown[];
+  /** The index the bounds cache was filled from: the comparison base. */
+  const supportBoundsCacheRef = React.useRef<{
+    settings: unknown;
+    index: SupportModelIndex;
     byModel: Map<string, THREE.Box3 | null>;
   } | null>(null);
+  /**
+   * Model keys the plate's bounds cache is allowed to reuse.
+   *
+   * Compared against the index the cache was filled from, not the latest
+   * transition: two state changes can pass while the cache is skipped (a drag
+   * returns early), and a transition-local set would then miss the model that
+   * moved in the change nobody recomputed.
+   */
+  const supportBoundsChangeRef = React.useRef<{
+    from: SupportModelIndex;
+    to: SupportModelIndex;
+    changed: Set<string>;
+  } | null>(null);
+
+  const changedModelsSince = React.useCallback((from: SupportModelIndex, to: SupportModelIndex): Set<string> => {
+    if (from === to) return EMPTY_SUPPORT_MODELS;
+    const cached = supportBoundsChangeRef.current;
+    if (cached && cached.from === from && cached.to === to) return cached.changed;
+    const changed = changedSupportModels(from, to);
+    supportBoundsChangeRef.current = { from, to, changed };
+    return changed;
+  }, []);
+
+  const supportBoundsIndex = React.useMemo(
+    () => getSupportModelIndex(supportStateForBounds as unknown as Record<string, unknown>),
+    [supportStateForBounds],
+  );
 
   const computeSupportAndRaftWorldBounds = React.useCallback((modelId: string): THREE.Box3 | null => {
     // During active gizmo drags, keep bounds work minimal to preserve interaction FPS.
     if (isGizmoDragging || isGizmoRetargeting) return null;
 
-    const key = [
-      raftSettingsForBounds,
-      raftBaseCirclesByModelKey,
-      supportStateForBounds.knots,
-      ...SUPPORT_COLLECTION_KEYS.map((collectionKey) => supportStateForBounds[collectionKey]),
-    ];
-    let cache = supportRaftBoundsCacheRef.current;
-    if (!cache || cache.key.length !== key.length || !cache.key.every((ref, i) => ref === key[i])) {
-      cache = { key, byModel: new Map() };
-      supportRaftBoundsCacheRef.current = cache;
-    } else if (cache.byModel.has(modelId)) {
-      return cache.byModel.get(modelId) ?? null;
+    const cached = supportBoundsCacheRef.current;
+    // A raft-settings change re-shapes every model's raft. A support write
+    // replaces only the entities of the models it touched, so a move re-walks
+    // the moved model and returns the cached box for every other one — this is
+    // the per-model half of the cost a plate-wide invalidation used to pay.
+    if (cached && cached.settings === raftSettingsForBounds) {
+      const changed = changedModelsSince(cached.index, supportBoundsIndex);
+      if (!changed.has(modelId)) {
+        const previous = cached.byModel.get(modelId);
+        if (previous !== undefined) return previous;
+      }
     }
 
     const computed = computeSupportAndRaftWorldBoundsUncached(modelId);
-    cache.byModel.set(modelId, computed);
+    const reusable = cached && cached.settings === raftSettingsForBounds ? cached : null;
+    const byModel = reusable ? reusable.byModel : new Map<string, THREE.Box3 | null>();
+    byModel.set(modelId, computed);
+    supportBoundsCacheRef.current = {
+      settings: raftSettingsForBounds,
+      index: supportBoundsIndex,
+      byModel,
+    };
     return computed;
-  }, [isGizmoDragging, isGizmoRetargeting, raftBaseCirclesByModelKey, raftSettingsForBounds, supportStateForBounds]);
+  }, [changedModelsSince, isGizmoDragging, isGizmoRetargeting, raftSettingsForBounds, supportBoundsIndex]);
 
   const computeSupportAndRaftWorldBoundsUncached = React.useCallback((modelId: string): THREE.Box3 | null => {
-
+    const perfStart = perfMark();
+    try {
     const bounds = new THREE.Box3();
     let hasAny = false;
     const BUILD_PLATE_Z = 0;
@@ -1872,51 +2060,34 @@ export function SceneCanvas({
       hasAny = true;
     };
 
-    const rootsForModel = Object.values(supportStateForBounds.roots).filter((root) => root.modelId === modelId);
+    const rootsForModel = supportBoundsIndex.rootsByModel.get(modelId) ?? EMPTY_SUPPORT_ENTITIES;
     for (const root of rootsForModel) {
-      const rootRadius = Math.max(0.001, root.diameter / 2);
-      const rootBase = root.transform.pos;
+      const rootRadius = Math.max(0.001, (root.diameter as number) / 2);
+      const rootBase = (root.transform as { pos: { x: number; y: number; z: number } }).pos;
       const rootTop = {
-        x: root.transform.pos.x,
-        y: root.transform.pos.y,
-        z: root.transform.pos.z + Math.max(0, root.diskHeight) + Math.max(0, root.coneHeight),
+        x: rootBase.x,
+        y: rootBase.y,
+        z: rootBase.z + Math.max(0, root.diskHeight as number) + Math.max(0, root.coneHeight as number),
       };
       expandByRadius(rootBase, rootRadius);
       expandByRadius(rootTop, rootRadius);
     }
 
     // The knots this model's supports hang from, read through each type's
-    // declared `hostedBy` knot edges.
-    const modelKnotIds = new Set<string>();
-    for (const descriptor of SUPPORT_TYPES) {
-      const knotFields = hostKnotFieldsFor(descriptor.id);
-      if (knotFields.length === 0) continue;
-      const collection = supportStateForBounds[descriptor.location.key] as unknown as
-        Record<string, Record<string, unknown>> | undefined;
-      for (const entity of Object.values(collection ?? {})) {
-        if (entity.modelId !== modelId) continue;
-        for (const field of knotFields) {
-          const knotId = entity[field];
-          if (typeof knotId === 'string') modelKnotIds.add(knotId);
-        }
-      }
-    }
-
-    for (const knotId of modelKnotIds) {
-      const knot = supportStateForBounds.knots[knotId];
-      if (!knot?.pos) continue;
-      expandByRadius(knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2));
+    // declared `hostedBy` knot edges. The index resolves them once per model.
+    for (const knot of supportBoundsIndex.knotsByModel.get(modelId) ?? EMPTY_SUPPORT_ENTITIES) {
+      const knotPos = knot.pos as { x: number; y: number; z: number } | undefined;
+      if (!knotPos) continue;
+      expandByRadius(knotPos, Math.max(0.001, ((knot.diameter as number | undefined) ?? 1.2) / 2));
     }
 
     // Each type's base, for the types that carry one instead of a Roots entry:
     // the frustum IS the root. Nothing else here is type-specific, so the rest
     // of such a type is covered by the segment and contact passes below.
     for (const placement of INLINE_ROOT_TYPES) {
-      const entities = supportStateForBounds[placement.collectionKey] as unknown as
-        | Record<string, Record<string, unknown>>
-        | undefined;
-      for (const entity of Object.values(entities ?? {})) {
-        if (entity.modelId !== modelId) continue;
+      const entities = supportBoundsIndex.entitiesByTypeByModel.get(placement.collectionKey)?.get(modelId)
+        ?? EMPTY_SUPPORT_ENTITIES;
+      for (const entity of entities) {
         const base = entity[placement.posField] as { x: number; y: number; z: number } | undefined;
         const radius = entity[placement.radiusField];
         if (!base) continue;
@@ -1931,15 +2102,12 @@ export function SceneCanvas({
     // two radii; a disk's socket is the joint the segment pass already
     // expanded, so it contributes one.
     for (const descriptor of SUPPORT_TYPES) {
-      const entities = supportStateForBounds[descriptor.location.key] as unknown as
-        | Record<string, Record<string, unknown>>
-        | undefined;
+      const entities = supportBoundsIndex.entitiesByTypeByModel.get(descriptor.location.key)?.get(modelId)
+        ?? EMPTY_SUPPORT_ENTITIES;
       // Read once per type, not once per entity: this allocates.
       const contactEndpoints = contactEndpointsFor(descriptor.id);
 
-      for (const entity of Object.values(entities ?? {})) {
-        if (entity.modelId !== modelId) continue;
-
+      for (const entity of entities) {
         // The two passes are not the same set of types: a leaf declares a
         // contact and no segments, so skipping a type for having no shaft would
         // drop its tip from the bounds entirely.
@@ -2017,7 +2185,10 @@ export function SceneCanvas({
     }
 
     return hasAny ? bounds : null;
-  }, [raftBaseCirclesByModelKey, raftSettingsForBounds, supportStateForBounds]);
+    } finally {
+      perfMeasure('bounds:support', perfStart);
+    }
+  }, [raftBaseCirclesByModelKey, raftSettingsForBounds, supportBoundsIndex]);
 
   const computeModelWorldBounds = React.useCallback((
     model: LoadedModel,
@@ -2115,6 +2286,7 @@ export function SceneCanvas({
   );
 
   const modelWorldBounds = React.useMemo(() => {
+    const perfStart = perfMark();
     const liveGroupFor = (modelId: string) => (
       (isGizmoDragging || isGizmoRetargeting) ? meshRefs.current[modelId] ?? null : null
     );
@@ -2139,6 +2311,7 @@ export function SceneCanvas({
       map.set(model.id, computeModelWorldBounds(model, effectiveTransform, buildVolumeBounds));
     }
     cachedModelWorldBoundsRef.current = map;
+    perfMeasure('bounds:models', perfStart);
     return map;
   }, [activeTransformOverrideModelId, buildVolumeBounds, computeModelWorldBounds, isGizmoDragging, isGizmoRetargeting, liveDragTransformVersion, models, transform]);
 
@@ -3112,10 +3285,10 @@ export function SceneCanvas({
       if (!model.visible) continue;
 
       const matrix = modelMarqueeMatrices.get(model.id);
-      const positions = getCenteredPositions(model.geometry);
-      if (!matrix || !positions) continue;
+      const source = getCenteredPositionSource(model.geometry);
+      if (!matrix || !source) continue;
 
-      meshes.set(model.id, projectModelMesh(positions, matrix, camera, rect));
+      meshes.set(model.id, projectModelMesh(source, matrix, camera, rect));
     }
 
     projectedModelMeshesRef.current = { matrices: modelMarqueeMatrices, cameraKey, viewportKey, meshes };
@@ -3132,9 +3305,7 @@ export function SceneCanvas({
     // catches cannot disagree with the raft a user sees. This read only `roots`
     // before, which missed the types that carry their own inline root -- their
     // bases pushed the drawn raft out but not the grabbable outline.
-    const circlesByModelId = collectRaftBaseCirclesByModel(supportStateForBounds, {
-      fallbackModelKey: RAFT_UNASSIGNED_MODEL_KEY,
-    });
+    const circlesByModelId = new Map(raftBaseCirclesByModelKey);
     circlesByModelId.delete(RAFT_UNASSIGNED_MODEL_KEY);
 
     const thickness = raftSettingsForBounds.bottomMode === 'line'
@@ -3161,19 +3332,28 @@ export function SceneCanvas({
     }
 
     return map;
-    // The whole state, because the footprint walks the collections the registry
-    // names rather than `roots` alone. This memo only profiles circles, so it is
-    // cheap; the raft MESHES are the expensive part and they cache separately.
-  }, [raftSettingsForBounds, supportStateForBounds]);
+  }, [raftBaseCirclesByModelKey, raftSettingsForBounds]);
 
   // Every support drawn as the polyline that runs along it: root or host knot,
   // each joint in order, and the contact cone at the tip. Built once per state
   // change — the marquee walks this on every pointer move. A curved segment is
   // approximated by its chord.
-  const supportMarqueeShapes = React.useMemo(
-    () => collectSupportMarqueeShapes(supportStateForBounds),
-    [supportStateForBounds],
-  );
+  //
+  // Keyed on the collections, not the snapshot: a hover writes the store, and
+  // rebuilding this polyline for all ~7.5k supports on a hover it does not read
+  // was pure allocation pressure.
+  const supportMarqueeShapesCacheRef = React.useRef<{
+    refs: readonly unknown[];
+    shapes: SupportMarqueeShape[];
+  } | null>(null);
+  const supportMarqueeShapes = React.useMemo(() => {
+    const refs = SUPPORT_COLLECTION_KEYS.map((key) => supportStateForBounds[key]);
+    const cached = supportMarqueeShapesCacheRef.current;
+    if (cached && sameCollectionRefs(cached.refs, refs)) return cached.shapes;
+    const shapes = collectSupportMarqueeShapes(supportStateForBounds);
+    supportMarqueeShapesCacheRef.current = { refs, shapes };
+    return shapes;
+  }, [supportStateForBounds]);
 
   const supportMarqueeShapesByModelId = React.useMemo(() => {
     const map = new Map<string, typeof supportMarqueeShapes>();
@@ -3745,6 +3925,64 @@ export function SceneCanvas({
     useActiveModelAttachedSupportProxy,
   ]);
 
+  // The models the scene still holds, for the merged-support cache: an entry
+  // whose model is gone is released instead of waiting for a walk the cache may
+  // never run (it is disabled outside Prepare).
+  const prepareMergedSupportLiveModelIds = React.useMemo(
+    () => new Set(modelsProp.map((model) => model.id)),
+    [modelsProp],
+  );
+
+  // The Prepare merged support layer: one walk and one merged geometry per
+  // model, shared by every mounted mesh. Enabled only in Prepare, so opening
+  // Support never merges anything; the builds drain in idle slices after the
+  // frame that entered Prepare.
+  const prepareMergedSupports = usePrepareMergedSupportCache({
+    enabled: PREPARE_MERGED_SUPPORTS && mode === 'prepare' && perfLayerEnabled('merged'),
+    includeDetailedPrimitives: true,
+    interiorView,
+    cavityGeometryByModelId,
+    modelWorldInverseById,
+    liveModelIds: prepareMergedSupportLiveModelIds,
+    suspended: isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive || isGizmoDragging || selectDragPressed || isCameraFocusTransitionActive || cameraIntroRunId > cameraIntroCompletedRunId,
+  });
+
+  // Models whose supports the merged meshes draw, so the world support proxy
+  // must not draw them as well. Their rafts stay in the world layers.
+  const prepareMergedSupportProxyExcludeModelIds = React.useMemo(
+    () => (PREPARE_MERGED_SUPPORTS && mode === 'prepare'
+      ? Array.from(prepareMergedSupports.readyModelIds)
+      : EMPTY_STRING_LIST),
+    [mode, prepareMergedSupports.readyModelIds],
+  );
+
+  // Models whose support *preview* another layer draws at a delta (multi-gizmo
+  // ghosts, the duplicate source, arrange ghosts). The merged mesh sits inside
+  // the model group, so during those previews it would draw the same supports
+  // as the ghost; the ghost keeps them until the gesture commits.
+  const prepareMergedSupportPreviewModelIdSet = React.useMemo(() => {
+    if (!PREPARE_MERGED_SUPPORTS || mode !== 'prepare') return null;
+    if (
+      multiGizmoSupportPreviewIds.length === 0
+      && arrangeSupportPreviewModelIds.length === 0
+      && !(renderDuplicateSourceSupportGhostPreview && duplicateSourceSupportPreviewModelId)
+    ) {
+      return null;
+    }
+    const ids = new Set<string>(multiGizmoSupportPreviewIds);
+    for (const id of arrangeSupportPreviewModelIds) ids.add(id);
+    if (renderDuplicateSourceSupportGhostPreview && duplicateSourceSupportPreviewModelId) {
+      ids.add(duplicateSourceSupportPreviewModelId);
+    }
+    return ids;
+  }, [
+    arrangeSupportPreviewModelIds,
+    duplicateSourceSupportPreviewModelId,
+    mode,
+    multiGizmoSupportPreviewIds,
+    renderDuplicateSourceSupportGhostPreview,
+  ]);
+
   const arrangeGhostPreviewGroups = React.useMemo(() => {
     if (!arrangeArrayPreviewItems || arrangeArrayPreviewItems.length === 0) {
       return [] as Array<{ model: LoadedModel; transforms: GhostPreviewTransform[] }>;
@@ -3858,7 +4096,22 @@ export function SceneCanvas({
     setMultiGizmoAnchorPosition(multiGizmoCenter);
   }, [isMultiGizmoSelection, multiGizmoCenter, setMultiGizmoAnchorPosition]);
 
+  const selectDragCandidateRef = React.useRef<{
+    modelId: string;
+    clientX: number;
+    clientY: number;
+  } | null>(null);
   const dragCornerCageRefs = React.useRef<Record<string, THREE.LineSegments | null>>({});
+  /**
+   * The corner buffer per model, created once.
+   *
+   * `<bufferAttribute args={[...]} />` recreates the attribute whenever `args`
+   * changes, and a freshly built `Float32Array` changes identity on every
+   * render — which wiped the positions the cage had just written. That is why
+   * the corners flickered on a press and only settled once a move kept
+   * rewriting them. Each model needs its own buffer: the cage writes into it.
+   */
+  const dragCornerCagePositionsRef = React.useRef(new Map<string, [Float32Array, number]>());
   const dragCornerCagePrimeRafRef = React.useRef<number | null>(null);
   const dragCornerCageUpdateRafRef = React.useRef<number | null>(null);
   const dragCornerCageBaseBoundsRef = React.useRef<Record<string, THREE.Box3>>({});
@@ -3976,9 +4229,15 @@ export function SceneCanvas({
     // the drag — not just while the model is actively moving — and it follows the
     // model as it moves.
     if (transformMode === 'select') {
-      if (!activeModelId) return [] as string[];
+      // The cage follows the model the pointer is on, not the active model: a
+      // press on another model sets the candidate in the same event, while
+      // `activeModelId` only arrives with the next commit. Reading the active
+      // model here drew the *previous* model's corners for the frames in
+      // between.
+      const targetModelId = selectDragCandidateRef.current?.modelId ?? activeModelId;
+      if (!targetModelId) return [] as string[];
       if (!selectDragPressed && !isGizmoDragging) return [] as string[];
-      return modelById.get(activeModelId)?.visible ? [activeModelId] : ([] as string[]);
+      return modelById.get(targetModelId)?.visible ? [targetModelId] : ([] as string[]);
     }
     if (transformMode !== 'transform') return [] as string[];
     if (!isGizmoDragging || !activeModelId) return [] as string[];
@@ -3994,10 +4253,14 @@ export function SceneCanvas({
   }, [activeModelId, isGizmoDragging, isMultiGizmoSelection, mode, modelById, selectDragPressed, selectedTransformableModelIds, transformMode]);
 
   const updateDragCornerCagesNow = React.useCallback(() => {
+    const activeCageIds = new Set(dragCornerCageModelIds);
+    // A cage whose model is no longer in the set must not keep drawing, however
+    // briefly: a mount that React has not retired yet would still render.
+    for (const [modelId, line] of Object.entries(dragCornerCageRefs.current)) {
+      if (line && !activeCageIds.has(modelId)) line.visible = false;
+    }
+
     if (dragCornerCageModelIds.length === 0) {
-      Object.values(dragCornerCageRefs.current).forEach((line) => {
-        if (line) line.visible = false;
-      });
       return;
     }
 
@@ -4187,43 +4450,39 @@ export function SceneCanvas({
     transform,
   ]);
 
+  const resolveFootprintOutlineTarget = React.useCallback((id: string): FootprintOutlineTarget | null => {
+    const model = modelById.get(id);
+    if (!model || !model.visible) return null;
+    return {
+      id,
+      geometry: model.geometry,
+      transform: (id === activeModelId && transform) ? transform : model.transform,
+    };
+  }, [activeModelId, modelById, transform]);
+
   const footprintOutlineTargets = React.useMemo(() => {
     const ids = selectedTransformableModelIds.length > 0
       ? selectedTransformableModelIds
       : activeModelId
         ? [activeModelId]
-        : hoveredModelId
-          ? [hoveredModelId]
+        : settledHoveredModelId
+          ? [settledHoveredModelId]
           : [];
 
     const seen = new Set<string>();
-    const targets: Array<{
-      id: string;
-      geometry: LoadedModel['geometry'];
-      transform: ModelTransform;
-    }> = [];
-
+    const targets: FootprintOutlineTarget[] = [];
     for (const id of ids) {
       if (seen.has(id)) continue;
       seen.add(id);
-
-      const model = modelById.get(id);
-      if (!model || !model.visible) continue;
-
-      targets.push({
-        id,
-        geometry: model.geometry,
-        transform: (id === activeModelId && transform) ? transform : model.transform,
-      });
+      const target = resolveFootprintOutlineTarget(id);
+      if (target) targets.push(target);
     }
-
     return targets;
   }, [
     activeModelId,
-    hoveredModelId,
-    modelById,
+    resolveFootprintOutlineTarget,
     selectedTransformableModelIds,
-    transform,
+    settledHoveredModelId,
   ]);
 
   /**
@@ -4632,7 +4891,7 @@ export function SceneCanvas({
           return;
         }
 
-        onActiveModelChange(null);
+        selectModelFromScene(null);
         window.dispatchEvent(new CustomEvent('model-deselected'));
       }
 
@@ -4640,7 +4899,7 @@ export function SceneCanvas({
     });
 
     return unsubscribe;
-  }, [activeModelId, mode, onActiveModelChange, selectedModelIds]);
+  }, [activeModelId, mode, selectModelFromScene, selectedModelIds]);
 
   React.useEffect(() => {
     if (mode !== 'support') {
@@ -4727,7 +4986,11 @@ export function SceneCanvas({
     if (!cameraInteractionCycleEnabled) return;
     if (isMarqueeSelecting) return;
     if (isPlacementActive) return;
+    // The selection click may already have been applied on pointer-down; the
+    // one-frame flag can expire before R3F dispatches the missed click, so a
+    // model selected by its supports was deselected again in the same gesture.
     if (window.__modelClickedThisFrame) return;
+    if (performance.now() < (window.__modelClickGuardUntil ?? 0)) return;
     if (orbitInteractionActiveRef.current || spaceMouseNavigationActive) return;
 
     if (suppressNextCanvasClickRef.current || (window as any).__gizmoDragEndedThisFrame) {
@@ -4738,7 +5001,7 @@ export function SceneCanvas({
 
     if (mode === 'prepare') {
       if (onActiveModelChange) {
-        onActiveModelChange(null);
+        selectModelFromScene(null);
       }
       window.dispatchEvent(new CustomEvent('model-deselected'));
       return;
@@ -4748,7 +5011,7 @@ export function SceneCanvas({
       if (supportStateForBounds.hoveredCategory === 'contactDisk') return;
       clearSupportSelection();
     }
-  }, [cameraInteractionCycleEnabled, isMarqueeSelecting, mode, onActiveModelChange, spaceMouseNavigationActive, supportStateForBounds.hoveredCategory, isPlacementActive]);
+  }, [cameraInteractionCycleEnabled, isMarqueeSelecting, mode, onActiveModelChange, selectModelFromScene, spaceMouseNavigationActive, supportStateForBounds.hoveredCategory, isPlacementActive]);
 
   React.useEffect(() => {
     updateCameraBelowBuildPlate();
@@ -4781,6 +5044,21 @@ export function SceneCanvas({
   const hideGridHelpers = false;
   const modifyToolActive = mode === 'prepare' && transformMode === 'transform';
   const navigationLodActive = isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive || isGizmoDragging || isGizmoRetargeting || isLayerScrubbing;
+  /**
+   * The active model's supports/raft always live in their own attached layer;
+   * the world layer always excludes that model.
+   *
+   * They used to fold into the world layer for the duration of an orbit, which
+   * saved 124 draw calls while the camera moved. That saving was not free: the
+   * exclusion change at the start and end of every gesture re-rendered the whole
+   * support layer and ran its per-instance hide pass over ~78k instances, and
+   * the React flush happens inside the pointerdown/pointerup task. The profiler
+   * measured a 62 ms long animation frame at orbit start, 48 ms of it blocking,
+   * with `onPointerDown` on the stack. Full-plate orbit holds 165 fps at 404
+   * calls without the fold, so the 124 calls were not buying anything.
+   */
+  const worldSupportExcludeModelId = activeModelId;
+  const worldSupportExcludeModelIds = supportProxyExcludeModelIds;
   const suppressSupportProxyPointerInteraction = supportCreationModeActive || suppressSupportSelectionAndHover || modifyToolActive;
 
   const updateOrbitControlSpeeds = React.useCallback(() => {
@@ -5978,11 +6256,6 @@ export function SceneCanvas({
   // actually begins once the pointer crosses a small threshold, by which time
   // the click-to-select state has flushed and the newly selected model is active.
   const SELECT_DRAG_START_DIST_SQ = 25; // ~5px of travel before a press becomes a move
-  const selectDragCandidateRef = React.useRef<{
-    modelId: string;
-    clientX: number;
-    clientY: number;
-  } | null>(null);
   const selectDragActiveRef = React.useRef(false);
   const selectDragPlaneRef = React.useRef<THREE.Plane | null>(null);
   const selectDragLastPointRef = React.useRef<THREE.Vector3 | null>(null);
@@ -6232,7 +6505,13 @@ export function SceneCanvas({
     }
     selectDragCandidateRef.current = { modelId, clientX, clientY };
     setSelectDragPressed(true);
-  }, [isModelPlateLocked, onBlockedByPlateLock]);
+
+    // Prime the cage on the press, not on the first move: the corners are the
+    // feedback that the model is grabbed, so they belong to the hold. The drag
+    // start primes again with the committed transform, which is idempotent.
+    const model = modelById.get(modelId);
+    if (model) scheduleDragCornerCagePrime([modelId], model.transform);
+  }, [isModelPlateLocked, modelById, onBlockedByPlateLock, scheduleDragCornerCagePrime]);
 
   // Support/raft presses in Select mode also grab the model: select its model
   // (so the drag targets it) then start the same XY drag as a model-mesh press.
@@ -6240,10 +6519,10 @@ export function SceneCanvas({
     if (mode !== 'prepare' || transformMode !== 'select') return;
     if (!modelId) return;
     if (onActiveModelChange) {
-      onActiveModelChange(modelId, { selectionMode: 'single' });
+      selectModelFromScene(modelId, { selectionMode: 'single' });
     }
     handleSelectModeDragStart(modelId, clientX, clientY);
-  }, [handleSelectModeDragStart, mode, onActiveModelChange, transformMode]);
+  }, [handleSelectModeDragStart, mode, onActiveModelChange, selectModelFromScene, transformMode]);
 
   // Window-level pointer tracking for the select-mode drag: candidate presses
   // only start moving once the pointer crosses the drag threshold, and moves /
@@ -6305,6 +6584,14 @@ export function SceneCanvas({
     if (mode !== 'prepare' || transformMode !== 'select') return;
     clearSelectDragCandidate();
   }, [clearSelectDragCandidate, interactionResetNonce, mode, transformMode]);
+
+  const handleProfilerRender = React.useCallback((
+    _id: string,
+    _phase: 'mount' | 'update' | 'nested-update',
+    actualDuration: number,
+  ) => {
+    recordReactCommit(actualDuration);
+  }, []);
 
   const [showCrossSectionCapDebugPanel, setShowCrossSectionCapDebugPanel] = React.useState(false);
   const [crossSectionCapDebugState, setCrossSectionCapDebugState] = React.useState<CrossSectionCapDebugPanelState>(
@@ -6388,6 +6675,8 @@ export function SceneCanvas({
         gl={{ stencil: true, logarithmicDepthBuffer: false, powerPreference: 'high-performance' }}
         onPointerMissed={handleScenePointerMissed}
       >
+        <React.Profiler id="df-scene" onRender={handleProfilerRender}>
+        <SceneRenderProfiler />
         <SceneRenderBindings
           rendererRef={rendererRef}
           sceneRef={sceneRef}
@@ -6456,6 +6745,7 @@ export function SceneCanvas({
           transformMode={transformMode}
           interactionEnabled={cameraInteractionCycleEnabled && modelPickerEnabled}
         >
+          <SupportShaderWarmup />
           <PickingStateSyncer enabled={cameraInteractionCycleEnabled} />
           <PickingEmptySpaceHoverResetter enabled={cameraInteractionCycleEnabled && (mode === 'prepare' || mode === 'support')} />
 
@@ -6608,9 +6898,20 @@ export function SceneCanvas({
                       onSmoothingGeometryActivate={onSmoothingGeometryActivate}
                       onSupportClick={onSupportClick}
                       onSupportHover={handleSupportHover}
-                      onActiveModelChange={onActiveModelChange}
+                      onActiveModelChange={selectModelFromScene}
                       onSelectModeDragStart={handleSelectModeDragStart}
-                      disableRaycast={disableRaycast || !answersPointer || !modelPickerEnabled || !cameraInteractionCycleEnabled}
+                      disableRaycast={
+                        disableRaycast
+                        || !answersPointer
+                        || !modelPickerEnabled
+                        || !cameraInteractionCycleEnabled
+                        // R3F raycasts every model with a handler on every pointer
+                        // move; while the camera moves no model can answer one, so
+                        // they leave the interaction list for the gesture.
+                        || isOrbitInteracting
+                        || isWheelZoomInteracting
+                        || spaceMouseNavigationActive
+                      }
                       blockSupportPlacement={!cameraInteractionCycleEnabled || isGizmoDragging || blockSupportPlacement}
                       suppressNextClickRef={suppressNextCanvasClickRef}
                       isSelected={isModelSelected}
@@ -6657,6 +6958,7 @@ export function SceneCanvas({
                             mode={mode}
                             modelFilterId={model.id}
                             hideRaftPrimitives={hideRaftPrimitives}
+                            hideSupports={PREPARE_MERGED_SUPPORTS && prepareMergedSupports.entries.has(model.id)}
                             hidePlateContactPrimitives={hidePlateContactPrimitives}
                             clipLower={clipLower}
                             clipUpper={clipUpper}
@@ -6686,6 +6988,29 @@ export function SceneCanvas({
                             modelWorldInverseById={modelWorldInverseById}
                           />
                         </group>
+                      )}
+
+                      {PREPARE_MERGED_SUPPORTS && mode === 'prepare' && perfLayerEnabled('mergedMesh') && (
+                        <PrepareMergedSupportMesh
+                          entry={prepareMergedSupports.entries.get(model.id) ?? null}
+                          clipLower={clipLower}
+                          clipUpper={clipUpper}
+                          selectedModelIds={selectedModelIds}
+                          marqueeCandidateModelIds={marqueeCandidateModelIds}
+                          hoverModelId={supportHoverModelId}
+                          hoverTintStrength={hoverTintStrength}
+                          pointerSceneryModelIds={plateSceneryModelIds}
+                          // Hollowing hides the support layer (`supportsRef`);
+                          // these meshes live in the model groups, so they take
+                          // the same gate here.
+                          // A support preview (multi-gizmo, duplicate source,
+                          // arrange) draws these supports at its own delta; the
+                          // merged mesh must not draw them twice.
+                          visible={
+                            transformMode !== 'hollowing'
+                            && !prepareMergedSupportPreviewModelIdSet?.has(model.id)
+                          }
+                        />
                       )}
 
                       {isActive && (mode === 'support' || mode === 'analysis') && showOverhangs && overhangIslands && overhangIslands.length > 0 && (
@@ -6902,7 +7227,13 @@ export function SceneCanvas({
                 : null}
 
               {!thumbnailCaptureActive && dragCornerCageModelIds.length > 0
-                ? dragCornerCageModelIds.map((modelId) => (
+                ? dragCornerCageModelIds.map((modelId) => {
+                  let cageArgs = dragCornerCagePositionsRef.current.get(modelId);
+                  if (!cageArgs) {
+                    cageArgs = [buildEmptyCornerOnlyWireframePositions(), 3];
+                    dragCornerCagePositionsRef.current.set(modelId, cageArgs);
+                  }
+                  return (
                     <lineSegments
                       key={`drag-corner-cage-${modelId}`}
                       ref={(node) => {
@@ -6914,7 +7245,7 @@ export function SceneCanvas({
                       <bufferGeometry>
                         <bufferAttribute
                           attach="attributes-position"
-                          args={[buildEmptyCornerOnlyWireframePositions(), 3]}
+                          args={cageArgs}
                         />
                       </bufferGeometry>
                       <lineBasicMaterial
@@ -6927,7 +7258,8 @@ export function SceneCanvas({
                         depthTest={false}
                       />
                     </lineSegments>
-                  ))
+                  );
+                })
                 : null}
 
               {!thumbnailCaptureActive && activeBuildVolumeSettings?.enabled && buildVolumeBoxGeometry && buildVolumeEdgeGeometry && (
@@ -6975,6 +7307,7 @@ export function SceneCanvas({
                   mode={mode}
                   excludeModelId={duplicateSourceSupportPreviewModelId}
                   excludeModelIds={supportBaseExcludeModelIds}
+                  supportExcludeModelIds={prepareMergedSupportProxyExcludeModelIds}
                   hideRaftPrimitives={hideRaftPrimitives}
                   hideRaftPrimitivesForInactiveModels={mode === 'support' && !!activeModelId}
                   hidePlateContactPrimitives={hidePlateContactPrimitives}
@@ -6998,7 +7331,7 @@ export function SceneCanvas({
                   onModelPointerDragStart={handleSelectModeSupportDragStart}
                   supportRendererRef={supportsRef as React.Ref<THREE.Group>}
                   supportRenderRefreshNonce={supportRenderRefreshNonce}
-                  showOutOfBoundsOverlay={!!activeBuildVolumeSettings?.enabled && outOfBoundsModelIds.size > 0}
+                  showOutOfBoundsOverlay={!!activeBuildVolumeSettings?.enabled && outOfBoundsModelIds.size > 0 && perfLayerEnabled('overlay')}
                   outOfBoundsMin={shaderOutOfBoundsBounds?.min ?? null}
                   outOfBoundsMax={shaderOutOfBoundsBounds?.max ?? null}
                   outOfBoundsStripeColor={outOfBoundsStripeColor}
@@ -7072,21 +7405,12 @@ export function SceneCanvas({
                 && !(transformMode === 'placeOnFace' && disableRaycast)
                 && (
                 <>
-                  {footprintOutlineTargets.map((entry) => (
-                    <FollowModelMove
-                      key={`footprint-border-${entry.id}`}
-                      modelId={entry.id}
-                      baseTransform={entry.transform}
-                      liveTransformsRef={crossSectionLiveTransformsRef}
-                    >
-                      <FootprintBorderRenderer
-                        modelGeometry={entry.geometry}
-                        modelTransform={entry.transform}
-                        modelId={entry.id}
-                        color={supportHoverTintColor}
-                      />
-                    </FollowModelMove>
-                  ))}
+                  <FootprintOutlineGroup
+                    targets={footprintOutlineTargets}
+                    resolveTarget={resolveFootprintOutlineTarget}
+                    liveTransformsRef={crossSectionLiveTransformsRef}
+                    color={supportHoverTintColor}
+                  />
                 </>
               )}
 
@@ -7109,8 +7433,9 @@ export function SceneCanvas({
                 <ModelAttachedSupportLayer
                   plateClearanceTargets={plateClearanceTargets}
                   mode={mode}
-                  excludeModelId={activeModelId}
-                  excludeModelIds={supportProxyExcludeModelIds}
+                  excludeModelId={worldSupportExcludeModelId}
+                  excludeModelIds={worldSupportExcludeModelIds}
+                  supportExcludeModelIds={prepareMergedSupportProxyExcludeModelIds}
                   hideRaftPrimitives={hideRaftPrimitives}
                   hidePlateContactPrimitives={hidePlateContactPrimitives}
                   clipLower={clipLower}
@@ -7124,7 +7449,7 @@ export function SceneCanvas({
                   marqueeCandidateModelIds={marqueeCandidateModelIds}
                   hoverModelId={supportHoverModelId}
                   modelDropOffsetsById={entryDropOffsets}
-                  navigationLodActive={transformMode !== 'select'}
+                  navigationLodActive={navigationLodActive}
                   disableSelectionAndHover={suppressSupportProxyPointerInteraction}
                   pointerSceneryModelIds={plateSceneryModelIds}
                   raftColorized={raftColorized}
@@ -7937,6 +8262,7 @@ export function SceneCanvas({
             orbitControlsRef={orbitControlsRef as React.MutableRefObject<{ target: THREE.Vector3; update: () => void } | null>}
             perspectiveFov={perspectiveFov}
             plateFocus={plateFocus}
+            onTransitionActiveChange={setCameraFocusTransitionActive}
           />
         )}
         <CameraIntroController
@@ -7974,6 +8300,7 @@ export function SceneCanvas({
           <SupportPathfindingDebugOverlay snapshot={supportPathfindingDebugState.snapshot} />
         )}
         {children}
+        </React.Profiler>
       </Canvas>
 
       {mode === 'support' && supportPathfindingDebugState.enabled && (

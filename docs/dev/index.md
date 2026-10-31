@@ -29,6 +29,7 @@ Internals of DragonFruit, for people changing them. Start with [Architecture Ove
 | Persist something | [Data Storage](data-storage.md), [VOXL Format Spec](voxl-format-spec.md) |
 | Cut a release | [Release Process](releases.md), [Flatpak Packaging](flatpak.md) |
 | Change how new issues get their area labels | [Issue Guts Labels](issue-guts.md), [Retuning Issue Guts](issue-guts-tuning.md) |
+| Get a user's private file for an issue | [Upload Service](upload-service.md) |
 | Change OS file thumbnails | [OS Thumbnails](voxl-thumbnail/index.md) |
 | Add or translate a string | [Localization](localization.md) |
 | Write or change docs | [Contributing](contributing.md) |
@@ -43,7 +44,7 @@ Three that are easy to get wrong and fail silently:
 
 ## Keeping these pages true
 
-`npm run check:docs` verifies that every path and symbol these pages cite still exists, bans pinned line numbers, and keeps the MkDocs nav in sync. It runs in CI. What it cannot check is whether a page's *description of behaviour* is still right — that needs a human reading the code beside the page, and it is where every real error found so far has been.
+`npm run check:docs` verifies that every path and symbol these pages cite still exists, bans pinned line numbers, and keeps the site nav in sync. It runs in CI. What it cannot check is whether a page's *description of behaviour* is still right — that needs a human reading the code beside the page, and it is where every real error found so far has been.
 
 New developer-facing interfaces ship with documentation here; that rule and its checklist are in `AGENTS.md`.
 
