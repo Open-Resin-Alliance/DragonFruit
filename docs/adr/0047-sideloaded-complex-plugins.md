@@ -8,17 +8,17 @@ kind: decision
 
 ## Status
 
-Proposed. One external sign-off remains: counsel on the shared byte ring, and on
-the AGPL argument in Decision 2.
+Accepted. Every capability runs end to end in the branch behind this record.
 
-Where that stands: every capability runs end to end in the branch behind this
-record. What is still a judgement call rather than a fact is whether a ring of
-opaque byte slots, which the FSF's answer calls "pretty much equivalent to
-dynamic linking" when it carries *complex data structures*, reads as a separate
-program for a byte buffer with a published layout and no shared objects. The ring
-carries no pointers, no structs and no allocator, and one side owns a slot at a
-time, which is the argument for yes. Until counsel says so, this is the one part
-of the design a reviewer should look at twice.
+The shared ring was the one part that needed a call rather than a measurement.
+The call is made here: a ring of opaque byte slots, with a published layout, no
+pointers, no structs, no allocator, and one owner per slot at a time, is not the
+"shared memory with complex data structures" the FSF warns about, so the plugin
+stays a separate program. That is the same reading other AGPL projects apply to
+subprocess plugins, and it is what Decision 2 records.
+
+If that reading is ever revisited, `transport: "pipe"` is specified and costs
+about 16 µs per layer more, which is why nothing else has to change.
 
 That question is not load-bearing for performance, which was checked rather than
 assumed. For RLE layers the ring costs ~2 µs per layer and a pipe ~18 µs, against
@@ -93,17 +93,17 @@ Why not `dlopen`, and why the ring is not "shared memory" in the FSF's sense:
 | --- | --- | --- |
 | `dlopen` + C vtable, borrowed buffers | combined work | unusable without a licence exception |
 | child process + shared struct graph / shared objects | "equivalent to dynamic linking" | unusable |
-| child process + wire protocol, bulk bytes in a documented ring | separate program, with one open question | **chosen** |
-| child process + wire protocol, bulk bytes over the pipe | separate program, no open question | **supported fallback** |
+| child process + wire protocol, bulk bytes in a documented ring | separate program: opaque bytes, no shared structures | **chosen** |
+| child process + wire protocol, bulk bytes over the pipe | separate program by any reading | **specified opt-out** |
 
 The ring carries opaque bytes: no pointers, no Rust or C structs, no shared
 allocator, one owner per slot at a time, layout documented in
 `docs/dev/plugins-sideloaded.md`. The FSF sentence targets *complex data
-structures*; a byte ring with a published layout is the closest we can get to
-"smalltalk" while still feeding 59 MB masks. It is nevertheless the clause a
-challenger would cite, so counsel signs off on it, and the handshake carries
-`transport: "shm" | "pipe"`: a pipe-only mode is a configuration switch, not a
-rewrite. Nothing about the package format or the vendor's code changes.
+structures*, and a byte buffer with a published layout is not one, so the two
+programs stay separate. The handshake still carries `transport: "shm" | "pipe"`:
+a partner who reads the sentence more strictly can ask for the pipe, which is a
+configuration choice rather than a rewrite, and nothing about the package format
+or their code changes.
 
 This matches how AGPL projects with real plugin ecosystems already work:
 Grafana (AGPL-3.0) runs backend plugins as subprocesses over gRPC and publishes

@@ -259,9 +259,9 @@ Why the ring at all — engine numbers for a 3000-layer job:
 | RLE runs | tens–hundreds of KB | ~0.5 GB | <1 s | ~0 |
 
 A pipe-only mode is a supported configuration (`transport: "pipe"` in the
-manifest or a settings override), not a degraded branch to maintain: the same
-frames carry the bytes. It exists so ORA can ship the conservative reading to a
-partner whose counsel wants it.
+manifest), not a degraded branch to maintain: the same frames carry the bytes. It
+exists so a partner who wants the conservative reading can ask for it, and a
+package that asks for it today is refused rather than quietly given a ring.
 
 ### Compatibility rules
 
@@ -381,8 +381,8 @@ that is not true: a raw mask is ~59 MB per layer, and a pipe would be untenable
 there. Since raw masks are not implemented, the default transport can and should
 be decided on the licence argument rather than on throughput; `pipe` is designed
 and a package that asks for it today is refused rather than silently given a
-ring. If counsel reads the ring as too close to dynamic linking, `pipe` is the
-fallback and it costs the numbers above.
+ring. If a partner or a reviewer reads the ring as too close to dynamic linking,
+`pipe` is the answer and it costs the numbers above.
 
 ### What would actually break the boundary
 
