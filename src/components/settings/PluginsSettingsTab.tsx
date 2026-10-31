@@ -5,7 +5,7 @@ import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import type { MessageDescriptor } from '@lingui/core';
 import { Plural, Trans } from '@lingui/react/macro';
-import { AlertTriangle, Check, CheckCircle2, Copy, Download, ExternalLink, Github, Info as InfoIcon, LockKeyhole, PackageCheck, PackageOpen, PackagePlus, Plug, RotateCcw, ShieldAlert, ShieldCheck, Trash2 } from 'lucide-react';
+import { AlertTriangle, Check, CheckCircle2, ChevronDown, ChevronUp, Copy, Download, ExternalLink, Github, Info as InfoIcon, LockKeyhole, PackageCheck, PackageOpen, PackagePlus, Plug, RotateCcw, ShieldAlert, ShieldCheck, Trash2 } from 'lucide-react';
 import { Button, IconButton, Input, SettingRow, Spinner } from '@/components/atoms';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
@@ -104,6 +104,17 @@ const SIDELOAD_CAPABILITY_MESSAGES: Record<SideloadedCapability, MessageDescript
   fileType: msg`File-type import`,
 };
 
+/**
+ * One word each, for the narrow value column in the details modal; the full name
+ * stays in the tooltip and in the expanded list. Contexts keep these apart from
+ * verbs like "import" elsewhere in the app.
+ */
+const SIDELOAD_CAPABILITY_SHORT_MESSAGES: Record<SideloadedCapability, MessageDescriptor> = {
+  slicerEncoder: msg({ message: 'Encoder', context: 'plugin capability' }),
+  networkOperations: msg({ message: 'Network', context: 'plugin capability' }),
+  fileType: msg({ message: 'Import', context: 'plugin capability' }),
+};
+
 /** One row in the installed list, whichever tier the plugin came from. */
 type InstalledPluginRow = {
   key: string;
@@ -197,6 +208,7 @@ export function PluginsSettingsTab() {
   const { _ } = useLingui();
   const [detailsRow, setDetailsRow] = React.useState<InstalledPluginRow | null>(null);
   const [copiedSigningKey, setCopiedSigningKey] = React.useState(false);
+  const [capabilitiesExpanded, setCapabilitiesExpanded] = React.useState(false);
   const [reloadRequired, setReloadRequired] = React.useState(false);
   const [reloadSecondsLeft, setReloadSecondsLeft] = React.useState(PLUGIN_RELOAD_SECONDS);
 
@@ -1336,8 +1348,8 @@ export function PluginsSettingsTab() {
         maxWidthClassName="max-w-md"
         zIndexClassName="z-[140]"
         closeAriaLabel={_(msg`Close modal`)}
-        onClose={() => { setDetailsRow(null); setCopiedSigningKey(false); }}
-        onBackdropClick={() => { setDetailsRow(null); setCopiedSigningKey(false); }}
+        onClose={() => { setDetailsRow(null); setCopiedSigningKey(false); setCapabilitiesExpanded(false); }}
+        onBackdropClick={() => { setDetailsRow(null); setCopiedSigningKey(false); setCapabilitiesExpanded(false); }}
         actions={(
           <Button variant="secondary" onClick={() => setDetailsRow(null)}>
             <Trans>Close</Trans>
@@ -1392,16 +1404,45 @@ export function PluginsSettingsTab() {
             <ReviewFact label={<Trans>Repository</Trans>} mono>{detailsRow.link}</ReviewFact>
           )}
           {detailsRow?.capabilities && detailsRow.capabilities.length > 0 && (
-            <ReviewFact label={<Trans>Capabilities</Trans>} stacked>
-              {detailsRow.capabilities.map((capability) => (
-                <span
-                  key={capability}
-                  className="text-[11px] rounded-full border px-1.5 py-0.5"
-                  style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
-                >
-                  {_(SIDELOAD_CAPABILITY_MESSAGES[capability])}
+            <ReviewFact label={<Trans>Capabilities</Trans>} stacked={capabilitiesExpanded}>
+              {capabilitiesExpanded ? (
+                <span className="flex flex-col items-start gap-1">
+                  {detailsRow.capabilities.map((capability) => (
+                    <span key={capability} className="text-xs">{_(SIDELOAD_CAPABILITY_MESSAGES[capability])}</span>
+                  ))}
+                  <button
+                    type="button"
+                    aria-label={_(msg`Show fewer capabilities`)}
+                    onClick={() => setCapabilitiesExpanded(false)}
+                    className="mt-0.5 inline-flex items-center gap-1 text-[11px]"
+                    style={{ color: 'var(--text-muted)', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
+                  >
+                    <ChevronUp className="h-3.5 w-3.5" />
+                    <Trans>Less</Trans>
+                  </button>
                 </span>
-              ))}
+              ) : (
+                <span className="inline-flex items-center gap-1">
+                  {detailsRow.capabilities.map((capability) => (
+                    <Tooltip key={capability} content={_(SIDELOAD_CAPABILITY_MESSAGES[capability])} wrapperClassName="inline-flex">
+                      <span
+                        className="rounded-full border px-1.5 py-0.5 text-[11px]"
+                        style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
+                      >
+                        {_(SIDELOAD_CAPABILITY_SHORT_MESSAGES[capability])}
+                      </span>
+                    </Tooltip>
+                  ))}
+                  <IconButton
+                    variant="ghost"
+                    size="xs"
+                    aria-label={_(msg`Show all capabilities`)}
+                    onClick={() => setCapabilitiesExpanded(true)}
+                  >
+                    <ChevronDown className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />
+                  </IconButton>
+                </span>
+              )}
             </ReviewFact>
           )}
         </div>
