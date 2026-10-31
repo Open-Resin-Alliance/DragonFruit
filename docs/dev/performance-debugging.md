@@ -11,6 +11,32 @@ page for stalls, long tasks and memory.
 
 ## In-app scaffolding
 
+### Yielding while encoding VOXL embedded STL chunks
+
+`encodeEmbeddedStl(geometry, center)` in
+`src/features/export/logic/encodeEmbeddedStl.ts` returns a `Promise<Uint8Array>`
+containing the same model-local binary STL as the previous `STLExporter` path.
+The header, little-endian face records, center translation, face order and
+normal calculation remain byte-compatible for indexed and non-indexed input.
+
+The encoder writes one output buffer and checks a four-millisecond work budget
+every 256 triangles. It yields with the existing MessageChannel-based
+`yieldToEventLoop`, without per-batch React progress or copying the whole result
+again. A batch can overrun that budget under contention; it is not a hard
+real-time guarantee or evidence of native frame latency.
+
+```ts
+const bytes = await encodeEmbeddedStl(geometry, localCenter);
+```
+
+Position/index attribute identity, versions and backing arrays are checked across
+yields. Editing must follow the existing attribute-version convention; silent
+in-place edits without a version change cannot be detected. A changed geometry
+rejects rather than serializing mixed revisions. `ExportManager` already awaits
+the operation and its existing bake error/retry handling remains in charge.
+Tests compare bytes with the old exporter, verify host-task interleaving and
+reject mutations between batches. Geometry, normals and indices are not modified.
+
 ### Main-thread stall detector
 
 `src/utils/debug/mainThreadHeartbeat.ts` is the UI's equivalent of a database
