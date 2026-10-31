@@ -183,6 +183,7 @@ function normalizePluginManifest(input: GithubManifestResponse['manifest']): Plu
 
 export function PluginsSettingsTab() {
   const { _ } = useLingui();
+  const [detailsRow, setDetailsRow] = React.useState<InstalledPluginRow | null>(null);
   const [reloadRequired, setReloadRequired] = React.useState(false);
   const [reloadSecondsLeft, setReloadSecondsLeft] = React.useState(PLUGIN_RELOAD_SECONDS);
 
@@ -690,39 +691,15 @@ export function PluginsSettingsTab() {
           </div>
     
           <div className="flex shrink-0 items-center gap-1.5 self-center">
-            <Tooltip
-              content={(
-                <div className="space-y-0.5">
-                  <div className="break-all"><span style={{ color: 'var(--text-strong)' }}><Trans>ID</Trans>:</span> {row.id}</div>
-                  <div>
-                    <span style={{ color: 'var(--text-strong)' }}><Trans>Source</Trans>:</span>{' '}
-                    {row.source === 'builtin' ? <Trans>Built-in</Trans> : row.source === 'github' ? <Trans>GitHub</Trans> : <Trans>Sideloaded</Trans>}
-                  </div>
-                  <div><span style={{ color: 'var(--text-strong)' }}><Trans>Version</Trans>:</span> <Trans>v{row.version}</Trans></div>
-                  {row.acceptedAt && (
-                    <div><span style={{ color: 'var(--text-strong)' }}><Trans>Liability accepted</Trans>:</span> {row.acceptedAt}</div>
-                  )}
-                  {row.publisher && (
-                    <div><span style={{ color: 'var(--text-strong)' }}><Trans>Publisher</Trans>:</span> {row.publisher}</div>
-                  )}
-                  {row.signingKeyFingerprint && (
-                    <div className="break-all">
-                      <span style={{ color: 'var(--text-strong)' }}><Trans>Signing key</Trans>:</span>{' '}
-                      <span className="font-mono">{shortFingerprint(row.signingKeyFingerprint)}</span>
-                    </div>
-                  )}
-                  {row.capabilities && row.capabilities.length > 0 && (
-                    <div>
-                      <span style={{ color: 'var(--text-strong)' }}><Trans>Capabilities</Trans>:</span>{' '}
-                      {row.capabilities.map((capability) => _(SIDELOAD_CAPABILITY_MESSAGES[capability])).join(', ')}
-                    </div>
-                  )}
-                </div>
-              )}
-              maxWidth={300}
-              wrapperClassName="flex items-center"
-            >
-              <InfoIcon className="h-4 w-4 shrink-0 block" style={{ color: 'var(--text-muted)' }} />
+            <Tooltip content={_(msg`Plugin details`)} wrapperClassName="flex items-center">
+              <IconButton
+                variant="ghost"
+                size="xs"
+                aria-label={_(msg`Plugin details`)}
+                onClick={() => setDetailsRow(row)}
+              >
+                <InfoIcon className="h-4 w-4 shrink-0 block" style={{ color: 'var(--text-muted)' }} />
+              </IconButton>
             </Tooltip>
             {row.source === 'builtin' && (
               <Tooltip content={_(msg`Built-in plugin`)} wrapperClassName="flex items-center">
@@ -1335,6 +1312,65 @@ export function PluginsSettingsTab() {
           </button>
         </div>
       )}
+
+      <StructuredDialogModal
+        open={detailsRow !== null}
+        ariaLabel={_(msg`Plugin details`)}
+        title={detailsRow?.name}
+        subtitle={detailsRow?.description}
+        icon={<InfoIcon className="h-4 w-4" />}
+        iconTone="accent"
+        maxWidthClassName="max-w-md"
+        zIndexClassName="z-[140]"
+        closeAriaLabel={_(msg`Close modal`)}
+        onClose={() => setDetailsRow(null)}
+        onBackdropClick={() => setDetailsRow(null)}
+        actions={(
+          <Button variant="secondary" onClick={() => setDetailsRow(null)}>
+            <Trans>Close</Trans>
+          </Button>
+        )}
+      >
+        <div
+          className="overflow-hidden rounded-md border"
+          style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+        >
+          <ReviewFact label={<Trans>Package ID</Trans>} mono>{detailsRow?.id}</ReviewFact>
+          <ReviewFact label={<Trans>Source</Trans>}>
+            {detailsRow?.source === 'builtin'
+              ? <Trans>Built-in</Trans>
+              : detailsRow?.source === 'github' ? <Trans>GitHub</Trans> : <Trans>Sideloaded</Trans>}
+          </ReviewFact>
+          <ReviewFact label={<Trans>Version</Trans>}><Trans>v{detailsRow?.version}</Trans></ReviewFact>
+          {detailsRow?.publisher && (
+            <ReviewFact label={<Trans>Publisher</Trans>}>{detailsRow.publisher}</ReviewFact>
+          )}
+          {detailsRow?.signingKeyFingerprint && (
+            <ReviewFact label={<Trans>Signing key</Trans>} mono>{detailsRow.signingKeyFingerprint}</ReviewFact>
+          )}
+          {detailsRow?.acceptedAt && (
+            <ReviewFact label={<Trans>Liability accepted</Trans>}>{detailsRow.acceptedAt}</ReviewFact>
+          )}
+          {detailsRow?.link && (
+            <ReviewFact label={<Trans>Repository</Trans>} mono>{detailsRow.link}</ReviewFact>
+          )}
+          {detailsRow?.capabilities && detailsRow.capabilities.length > 0 && (
+            <ReviewFact label={<Trans>Capabilities</Trans>}>
+              <span className="inline-flex flex-wrap justify-end gap-1">
+                {detailsRow.capabilities.map((capability) => (
+                  <span
+                    key={capability}
+                    className="text-[11px] rounded-full border px-1.5 py-0.5"
+                    style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
+                  >
+                    {_(SIDELOAD_CAPABILITY_MESSAGES[capability])}
+                  </span>
+                ))}
+              </span>
+            </ReviewFact>
+          )}
+        </div>
+      </StructuredDialogModal>
 
       <StructuredDialogModal
         open={reloadRequired}
