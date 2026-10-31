@@ -43,7 +43,7 @@ msgid "{0, plural, one {# printer preset} other {# printer presets}}"
 msgstr ""
 
 #. placeholder {0}: selectedLibraryPresetIds.size
-#: src/components/settings/ProfileSettingsModal.tsx:4780
+#: src/components/settings/ProfileSettingsModal.tsx:4779
 msgid "{0, plural, one {Add # printer} other {Add # printers}}"
 msgstr ""
 
@@ -193,15 +193,15 @@ msgctxt "Undo history entry"
 msgid "{count, plural, one {Unlink # model} other {Unlink # models}}"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:63
+#: src/components/layout/EmptySceneState.tsx:64
 msgid "{deltaDays} d"
 msgstr "{deltaDays} j"
 
-#: src/components/layout/EmptySceneState.tsx:59
+#: src/components/layout/EmptySceneState.tsx:60
 msgid "{deltaHours} h"
 msgstr "{deltaHours} h"
 
-#: src/components/layout/EmptySceneState.tsx:55
+#: src/components/layout/EmptySceneState.tsx:56
 msgid "{deltaMin} min"
 msgstr "{deltaMin} min"
 
@@ -722,7 +722,7 @@ msgstr ""
 msgid "Add models to the plate"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:565
+#: src/components/layout/EmptySceneState.tsx:569
 msgid "Add or switch printer anytime from the top bar."
 msgstr "Ajoutez ou changez d'imprimante à tout moment depuis la barre supérieure."
 
@@ -736,21 +736,21 @@ msgctxt "Undo history entry"
 msgid "Add plate {plateNumber}"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:537
+#: src/components/layout/EmptySceneState.tsx:541
 #: src/components/layout/OnboardingPrinterLibrary.tsx:414
 #: src/components/printers/PrinterVariantPickerModal.tsx:707
 #: src/components/settings/FleetManagement.tsx:269
-#: src/components/settings/PluginStudioModal.tsx:2101
-#: src/components/settings/ProfileSettingsModal.tsx:3585
-#: src/components/settings/ProfileSettingsModal.tsx:3648
+#: src/components/settings/PluginStudioModal.tsx:2100
+#: src/components/settings/ProfileSettingsModal.tsx:3584
+#: src/components/settings/ProfileSettingsModal.tsx:3647
 msgid "Add printer"
 msgstr "Ajouter une imprimante"
 
-#: src/components/settings/PluginStudioModal.tsx:2986
+#: src/components/settings/PluginStudioModal.tsx:2985
 msgid "Add printer variant"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:4781
+#: src/components/settings/ProfileSettingsModal.tsx:4780
 msgid "Add printers"
 msgstr ""
 
@@ -904,7 +904,7 @@ msgstr ""
 msgid "Anti-Aliasing"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:104
+#: src/components/layout/EmptySceneState.tsx:105
 msgid "Anti-aliasing: nothing to anti-alias."
 msgstr "Anticrénelage : rien à lisser."
 
@@ -1516,7 +1516,7 @@ msgstr ""
 msgid "Bright surfaces for well-lit workspaces."
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:493
+#: src/components/layout/EmptySceneState.tsx:497
 msgid "Bring in a mesh or scene to start preparing, analyzing, supporting, and exporting your print."
 msgstr "Importez un maillage ou une scène pour commencer à préparer, analyser, ajouter des soutiens et exporter votre impression."
 
@@ -1608,7 +1608,7 @@ msgid "Bypassed"
 msgstr ""
 
 #. Shown in place of file size when the file is in cache but its size is unknown. Adjective/state label.
-#: src/components/layout/EmptySceneState.tsx:699
+#: src/components/layout/EmptySceneState.tsx:703
 msgid "cached"
 msgstr "en cache"
 
@@ -1914,7 +1914,7 @@ msgid "Cleaning up"
 msgstr ""
 
 #: src/components/controls/AutoRotationPanel.tsx:75
-#: src/components/layout/EmptySceneState.tsx:627
+#: src/components/layout/EmptySceneState.tsx:631
 #: src/features/hollowing/HollowingPanel.tsx:301
 #: src/volumeAnalysis/IslandVolumes/components/IslandVolumesHierarchyCard.tsx:876
 msgid "Clear"
@@ -2004,7 +2004,7 @@ msgstr ""
 msgid "Click the face you want to open in the scene."
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:459
+#: src/components/layout/EmptySceneState.tsx:463
 msgid "Click to copy build info"
 msgstr ""
 
@@ -2491,7 +2491,7 @@ msgstr ""
 msgid "Cool"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:488
+#: src/components/layout/EmptySceneState.tsx:492
 msgid "Copied!"
 msgstr ""
 
@@ -2536,8 +2536,8 @@ msgstr ""
 msgid "Could not read printer data."
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:420
-#: src/components/layout/EmptySceneState.tsx:423
+#: src/components/layout/EmptySceneState.tsx:424
+#: src/components/layout/EmptySceneState.tsx:427
 msgid "Could not reopen this file from cache."
 msgstr "Impossible de rouvrir ce fichier depuis le cache."
 
@@ -2653,7 +2653,7 @@ msgstr ""
 msgid "Current Plate"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:82
+#: src/components/layout/EmptySceneState.tsx:83
 msgid "Currently displaying nothing at maximum fidelity."
 msgstr "Affichage de rien, en fidélité maximale."
 
@@ -3131,7 +3131,7 @@ msgid "Do not remind again"
 msgstr ""
 
 #. Paraphrase of Yoda's line from Star Wars: The Empire Strikes Back (1980): "Do or do not. There is no try."
-#: src/components/layout/EmptySceneState.tsx:87
+#: src/components/layout/EmptySceneState.tsx:88
 msgid "Do or do not. There is no try... oh wait, just click Load mesh."
 msgstr "Faire, ou ne pas faire. Il n'y a pas d'essai... ah non, attends, clique juste sur Charger un maillage."
 
@@ -3184,7 +3184,7 @@ msgstr ""
 msgid "Drag"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:85
+#: src/components/layout/EmptySceneState.tsx:86
 msgid "Drag a file in. The platform is judging you."
 msgstr "Glissez-déposez un fichier. La plateforme vous juge."
 
@@ -3257,7 +3257,7 @@ msgctxt "Drop button"
 msgid "Drop"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:734
+#: src/components/layout/EmptySceneState.tsx:738
 msgid "Drop supported files"
 msgstr "Déposez des fichiers pris en charge"
 
@@ -3380,7 +3380,7 @@ msgid "Elapsed: {elapsed}"
 msgstr ""
 
 #. Paraphrase of "Elementary, my dear Watson", the line associated with Sherlock Holmes (Arthur Conan Doyle stories; multiple film and TV adaptations).
-#: src/components/layout/EmptySceneState.tsx:98
+#: src/components/layout/EmptySceneState.tsx:99
 msgid "Elementary, my dear user — load a model."
 msgstr "Élémentaire, cher utilisateur — chargez un modèle."
 
@@ -3506,7 +3506,7 @@ msgstr ""
 msgid "Estimated volume"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:74
+#: src/components/layout/EmptySceneState.tsx:75
 msgid "Every great print starts with an empty scene."
 msgstr "Toute grande impression commence par une scène vide."
 
@@ -3996,7 +3996,7 @@ msgstr ""
 msgid "Geometry"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:522
+#: src/components/layout/EmptySceneState.tsx:526
 msgid "Get started"
 msgstr "Commencer"
 
@@ -4338,7 +4338,7 @@ msgid "Hull-based SAT packing for tighter fit"
 msgstr ""
 
 #. Paraphrase of Walter White's line from Breaking Bad, S04E06 "Cornered": "I am the one who knocks."
-#: src/components/layout/EmptySceneState.tsx:90
+#: src/components/layout/EmptySceneState.tsx:91
 msgid "I am the one who slices."
 msgstr "C'est moi qui lamine."
 
@@ -4351,7 +4351,7 @@ msgid "I understand"
 msgstr ""
 
 #. Paraphrase of the Terminator's line from The Terminator (1984): "I'll be back."
-#: src/components/layout/EmptySceneState.tsx:95
+#: src/components/layout/EmptySceneState.tsx:96
 msgid "I'll be back. (Drop a file and I really will be.)"
 msgstr "Je reviendrai. (Déposez un fichier et je reviendrai vraiment.)"
 
@@ -4385,7 +4385,7 @@ msgid "Idle"
 msgstr ""
 
 #. Adaptation of the English proverb "Idle hands are the devil's workshop".
-#: src/components/layout/EmptySceneState.tsx:83
+#: src/components/layout/EmptySceneState.tsx:84
 msgid "Idle hands do no slicing."
 msgstr "Les mains oisives ne laminent pas."
 
@@ -4427,7 +4427,7 @@ msgstr "Importer un maillage…"
 msgid "Import package"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:601
+#: src/components/layout/EmptySceneState.tsx:605
 msgid "Import Scene"
 msgstr ""
 
@@ -4480,12 +4480,12 @@ msgstr ""
 msgid "Importing VOXL Scene…"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:505
+#: src/components/layout/EmptySceneState.tsx:509
 msgid "Importing your file…"
 msgstr "Importation de votre fichier…"
 
 #. Parody of the tagline for Alien (1979): "In space, no one can hear you scream."
-#: src/components/layout/EmptySceneState.tsx:88
+#: src/components/layout/EmptySceneState.tsx:89
 msgid "In space, no one can hear you slice."
 msgstr "Dans l'espace, personne ne vous entend laminer."
 
@@ -4725,7 +4725,7 @@ msgid "It looks like DragonFruit quit before you saved your last session. You ca
 msgstr ""
 
 #. Paraphrase of Admiral Ackbar's line from Star Wars: Return of the Jedi (1983): "It's a trap!"
-#: src/components/layout/EmptySceneState.tsx:96
+#: src/components/layout/EmptySceneState.tsx:97
 msgid "It's a trap! ...just kidding, drop your STL."
 msgstr "C'est un piège ! ...je plaisante, déposez votre STL."
 
@@ -4741,7 +4741,7 @@ msgstr ""
 msgid "Job:"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:106
+#: src/components/layout/EmptySceneState.tsx:107
 msgid "Join the Open Resin Alliance!"
 msgstr "Rejoignez l'Open Resin Alliance !"
 
@@ -4791,7 +4791,7 @@ msgstr ""
 msgid "Keep File"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:559
+#: src/components/layout/EmptySceneState.tsx:563
 msgid "Keep going without a printer. You can add one later."
 msgstr "Continuez sans imprimante. Vous pourrez en ajouter une plus tard."
 
@@ -4868,11 +4868,11 @@ msgstr ""
 msgid "Last local sync: {0}"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:692
+#: src/components/layout/EmptySceneState.tsx:696
 msgid "last opened {period} ago"
 msgstr "ouvert il y a {period}"
 
-#: src/components/layout/EmptySceneState.tsx:691
+#: src/components/layout/EmptySceneState.tsx:695
 msgid "last opened just now"
 msgstr "ouvert à l'instant"
 
@@ -4936,7 +4936,7 @@ msgstr ""
 msgid "Layer #"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:103
+#: src/components/layout/EmptySceneState.tsx:104
 msgid "Layer 0 of 0. Living dangerously."
 msgstr "Couche 0 sur 0. On vit dangereusement."
 
@@ -5090,7 +5090,7 @@ msgstr ""
 msgid "Load As-Is"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:583
+#: src/components/layout/EmptySceneState.tsx:587
 msgid "Load Mesh"
 msgstr ""
 
@@ -5177,7 +5177,7 @@ msgid "Loading thumbnail…"
 msgstr ""
 
 #. Shown in place of file size while a recent file is being reopened. Keep it short.
-#: src/components/layout/EmptySceneState.tsx:698
+#: src/components/layout/EmptySceneState.tsx:702
 msgid "loading…"
 msgstr "chargement…"
 
@@ -5475,7 +5475,7 @@ msgstr ""
 
 #. File type badge on the recent files list. Noun — labels a mesh file (.stl, .obj, .3mf).
 #. View mode: mesh edges drawn over a solid surface, so back edges stay hidden.
-#: src/components/layout/EmptySceneState.tsx:683
+#: src/components/layout/EmptySceneState.tsx:687
 #: src/components/settings/SettingsModal.tsx:1223
 #: src/features/shaders/mesh/types.ts:45
 msgid "Mesh"
@@ -6049,7 +6049,7 @@ msgstr ""
 msgid "No printers saved yet. Add one below to start."
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:645
+#: src/components/layout/EmptySceneState.tsx:649
 msgid "No recent files"
 msgstr ""
 
@@ -6073,7 +6073,7 @@ msgstr ""
 msgid "No sponsors yet — be the first!"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:102
+#: src/components/layout/EmptySceneState.tsx:103
 msgid "No supports needed for an empty scene."
 msgstr "Aucun soutien nécessaire pour une scène vide."
 
@@ -6114,7 +6114,7 @@ msgid "Normals"
 msgstr ""
 
 #. Play on "all men are created equal" from the United States Declaration of Independence (1776).
-#: src/components/layout/EmptySceneState.tsx:108
+#: src/components/layout/EmptySceneState.tsx:109
 msgid "Not all slicers are created equal. This one's free!"
 msgstr "Tous les logiciels de laminage ne se valent pas. Celui-ci est gratuit !"
 
@@ -6135,7 +6135,7 @@ msgctxt "Mesh repair summary"
 msgid "not watertight"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:76
+#: src/components/layout/EmptySceneState.tsx:77
 msgid "Nothing to see here. Yet."
 msgstr "Rien à voir ici. Pour l'instant."
 
@@ -6302,7 +6302,7 @@ msgid "Once imported it runs with your permissions: it can read any file you can
 msgstr ""
 
 #. Paraphrase of Boromir's line from The Lord of the Rings: The Fellowship of the Ring (2001): "One does not simply walk into Mordor."
-#: src/components/layout/EmptySceneState.tsx:94
+#: src/components/layout/EmptySceneState.tsx:95
 msgid "One does not simply import a mesh... or actually, you just click a button."
 msgstr "On n'importe pas un maillage aussi simplement... enfin si, il suffit de cliquer sur un bouton."
 
@@ -6409,7 +6409,7 @@ msgstr ""
 msgid "Open Network Settings"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:540
+#: src/components/layout/EmptySceneState.tsx:544
 msgid "Open printer library and add one now."
 msgstr "Ouvrez la bibliothèque d'imprimantes et ajoutez-en une maintenant."
 
@@ -6798,7 +6798,7 @@ msgstr ""
 msgid "Please ensure you have saved any important work."
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:508
+#: src/components/layout/EmptySceneState.tsx:512
 msgid "Please hang tight while we prepare your scene."
 msgstr "Merci de patienter pendant que nous préparons votre scène."
 
@@ -7250,7 +7250,7 @@ msgstr ""
 msgid "Ready"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:70
+#: src/components/layout/EmptySceneState.tsx:71
 msgid "Ready for your next adventure?"
 msgstr "Prêt pour votre prochaine aventure ?"
 
@@ -7292,7 +7292,7 @@ msgstr ""
 msgid "Recalculating…"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:618
+#: src/components/layout/EmptySceneState.tsx:622
 msgid "Recent files"
 msgstr "Fichiers récents"
 
@@ -7636,7 +7636,7 @@ msgid "Rendering Options"
 msgstr ""
 
 #. placeholder {0}: entry.name
-#: src/components/layout/EmptySceneState.tsx:670
+#: src/components/layout/EmptySceneState.tsx:674
 msgid "Reopen {0}"
 msgstr "Rouvrir {0}"
 
@@ -7962,7 +7962,7 @@ msgid "Ring each mesh minima with contacts on its own flank, so a section starts
 msgstr ""
 
 #. Paraphrase of Doc Brown's line from Back to the Future (1985): "Roads? Where we're going, we don't need roads."
-#: src/components/layout/EmptySceneState.tsx:99
+#: src/components/layout/EmptySceneState.tsx:100
 msgid "Roads? Where we're printing, we don't need roads."
 msgstr "Des routes ? Là où nous imprimons, nous n'avons pas besoin de routes."
 
@@ -8264,7 +8264,7 @@ msgid "Scanning…"
 msgstr ""
 
 #. File type badge on the recent files list. Noun — labels a saved scene file (.voxl, .lys).
-#: src/components/layout/EmptySceneState.tsx:682
+#: src/components/layout/EmptySceneState.tsx:686
 msgid "Scene"
 msgstr "Scène"
 
@@ -9380,7 +9380,7 @@ msgstr ""
 msgid "Surfaces flatter than this angle get supports (resin standard: 45°). Higher = fewer, mostly on the steepest parts."
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:78
+#: src/components/layout/EmptySceneState.tsx:79
 msgid "Suspiciously empty in here."
 msgstr "Suspicieusement vide ici."
 
@@ -9523,11 +9523,11 @@ msgstr ""
 msgid "The background recovery save failed repeatedly."
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:71
+#: src/components/layout/EmptySceneState.tsx:72
 msgid "The build plate awaits."
 msgstr "Le plateau d'impression vous attend."
 
-#: src/components/layout/EmptySceneState.tsx:84
+#: src/components/layout/EmptySceneState.tsx:85
 msgid "The build volume misses you."
 msgstr "Le volume d'impression s'ennuie de vous."
 
@@ -9651,7 +9651,7 @@ msgstr ""
 msgid "The repaired results will replace these models in your current scene. Large or badly damaged meshes can take longer, and some files may still need manual cleanup afterward."
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:81
+#: src/components/layout/EmptySceneState.tsx:82
 msgid "The resin is ready. Are you?"
 msgstr "La résine est prête. Et vous ?"
 
@@ -9688,7 +9688,7 @@ msgid "The sizing constants the engine ships with. They are stored per preset."
 msgstr ""
 
 #. Paraphrase of "The spice must flow" from Dune (novel by Frank Herbert, 1965; films 1984 and 2021).
-#: src/components/layout/EmptySceneState.tsx:97
+#: src/components/layout/EmptySceneState.tsx:98
 msgid "The spice must flow. The resin must cure."
 msgstr "L'épice doit couler. La résine doit durcir."
 
@@ -9811,7 +9811,7 @@ msgstr ""
 msgid "This removes the plugin from your profile library."
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:79
+#: src/components/layout/EmptySceneState.tsx:80
 msgid "This scene is aggressively unoccupied."
 msgstr "Cette scène est agressivement inoccupée."
 
@@ -9861,7 +9861,7 @@ msgstr ""
 msgid "Tidying up"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:73
+#: src/components/layout/EmptySceneState.tsx:74
 msgid "Time to make something real."
 msgstr "Il est temps de créer quelque chose de réel."
 
@@ -10134,11 +10134,11 @@ msgstr ""
 msgid "Unsupported file format"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:734
+#: src/components/layout/EmptySceneState.tsx:738
 msgid "Unsupported file type"
 msgstr "Type de fichier non pris en charge"
 
-#: src/components/layout/EmptySceneState.tsx:754
+#: src/components/layout/EmptySceneState.tsx:758
 msgid "Unsupported format detected."
 msgstr ""
 
@@ -10290,7 +10290,7 @@ msgstr ""
 msgid "Use the plates the scene already has before adding more"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:556
+#: src/components/layout/EmptySceneState.tsx:560
 msgid "Use without printer"
 msgstr "Utiliser sans imprimante"
 
@@ -10351,12 +10351,12 @@ msgstr ""
 msgid "Version"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:113
+#: src/components/layout/EmptySceneState.tsx:114
 #: src/features/updater/updaterMessages.ts:29
 msgid "Version {version}"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:113
+#: src/components/layout/EmptySceneState.tsx:114
 msgid "Version {version} — Beta"
 msgstr ""
 
@@ -10504,7 +10504,7 @@ msgstr ""
 msgid "Wait this long after edits before autosaving."
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:101
+#: src/components/layout/EmptySceneState.tsx:102
 msgid "Waiting for first layer adhesion... to reality."
 msgstr "En attente de l'adhérence de la première couche... à la réalité."
 
@@ -10574,7 +10574,7 @@ msgid "We’ll open a secure GitHub popup to connect your account."
 msgstr ""
 
 #. Paraphrase of Chief Brody's line from Jaws (1975): "You're gonna need a bigger boat."
-#: src/components/layout/EmptySceneState.tsx:93
+#: src/components/layout/EmptySceneState.tsx:94
 msgid "We're gonna need a bigger build plate."
 msgstr "Il va nous falloir un plus grand plateau d'impression."
 
@@ -10590,7 +10590,7 @@ msgstr ""
 msgid "Welcome!"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:72
+#: src/components/layout/EmptySceneState.tsx:73
 msgid "What are we printing today?"
 msgstr "Qu'imprimons-nous aujourd'hui ?"
 
@@ -10611,7 +10611,7 @@ msgid "Where contacts land, and how far members fan"
 msgstr ""
 
 #. Paraphrase of the Joker's line from The Dark Knight (2008): "Why so serious?"
-#: src/components/layout/EmptySceneState.tsx:92
+#: src/components/layout/EmptySceneState.tsx:93
 msgid "Why so empty?"
 msgstr "Pourquoi si vide ?"
 
@@ -10640,7 +10640,7 @@ msgid "Wireframe"
 msgstr ""
 
 #. Paraphrase of the Spider-Man motto, originating in Amazing Fantasy #15 (1962): "With great power comes great responsibility."
-#: src/components/layout/EmptySceneState.tsx:91
+#: src/components/layout/EmptySceneState.tsx:92
 msgid "With great resin comes great responsibility."
 msgstr "Avec une grande résine vient une grande responsabilité."
 
@@ -10725,7 +10725,7 @@ msgid "You have unsaved LUT curve edits."
 msgstr ""
 
 #. Paraphrase of Gandalf's line from The Lord of the Rings: The Fellowship of the Ring (2001): "You shall not pass!"
-#: src/components/layout/EmptySceneState.tsx:89
+#: src/components/layout/EmptySceneState.tsx:90
 msgid "You shall not pass... until you load a model."
 msgstr "Vous ne passerez pas... tant que vous n'aurez pas chargé un modèle."
 
@@ -10753,7 +10753,7 @@ msgstr ""
 msgid "Your model has been modified (geometry, position, rotation, scale, or supports changed). The current slice is no longer valid."
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:77
+#: src/components/layout/EmptySceneState.tsx:78
 msgid "Your models called. They want to be sliced."
 msgstr "Vos modèles ont appelé. Ils veulent être laminés."
 
@@ -10773,7 +10773,7 @@ msgstr ""
 msgid "Z Min"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:80
+#: src/components/layout/EmptySceneState.tsx:81
 msgid "Zero polygons. Infinite potential."
 msgstr "Zéro polygone. Potentiel infini."
 
