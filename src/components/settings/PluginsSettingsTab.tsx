@@ -36,6 +36,30 @@ import type { PluginManifest } from '@/features/plugins/pluginRegistry';
 import { requestPluginManifest } from '@/features/plugins/pluginManifestClient';
 import { PluginStudioModal } from './PluginStudioModal';
 
+/** One read-only fact in the install review: label on the left, value on the right. */
+function ReviewFact({ label, mono = false, children }: {
+  label: React.ReactNode;
+  mono?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className="flex items-baseline justify-between gap-3 border-b px-3 py-2 last:border-b-0"
+      style={{ borderColor: 'var(--border-subtle)' }}
+    >
+      <span className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+        {label}
+      </span>
+      <span
+        className={mono ? 'text-right text-xs font-mono break-all' : 'text-right text-xs'}
+        style={{ color: 'var(--text-strong)' }}
+      >
+        {children}
+      </span>
+    </div>
+  );
+}
+
 /**
  * Seconds the prompt waits before it reloads on its own. The plugin's code is
  * loaded by the webview and the engine at start, so nothing here is optional: the
@@ -1192,53 +1216,39 @@ export function PluginsSettingsTab() {
           ))}
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-            <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-              <Trans>Publisher</Trans>
-            </div>
-            <div className="mt-1.5 space-y-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-              <div><span style={{ color: 'var(--text-strong)' }}><Trans>Name</Trans>:</span> {pendingSideload?.info.manifest.vendor.name}</div>
-              <div>
-                <span style={{ color: 'var(--text-strong)' }}><Trans>Signing key</Trans>:</span>{' '}
-                <Tooltip
-                  content={<span className="font-mono break-all">{pendingSideload?.info.publisherFingerprint}</span>}
-                  maxWidth={320}
-                  wrapperClassName="inline-flex"
-                >
-                  <span className="font-mono" style={{ color: 'var(--text-strong)' }}>
-                    {shortFingerprint(pendingSideload?.info.publisherFingerprint ?? '')}
-                  </span>
-                </Tooltip>
-              </div>
-            </div>
-          </div>
-          <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-            <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-              <Trans>Package</Trans>
-            </div>
-            <div className="mt-1.5 space-y-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-              <div><span style={{ color: 'var(--text-strong)' }}><Trans>ID</Trans>:</span> {pendingSideload?.info.manifest.id}</div>
-              <div><span style={{ color: 'var(--text-strong)' }}><Trans>Needs</Trans>:</span> <Trans>DragonFruit {pendingSideload?.info.manifest.minAppVersion} or newer</Trans></div>
-              <div><span style={{ color: 'var(--text-strong)' }}><Trans>Sealed</Trans>:</span> {pendingSideload?.info.sealed ? <Trans>yes</Trans> : <Trans>no</Trans>}</div>
-            </div>
-          </div>
+        <div
+          className="overflow-hidden rounded-md border"
+          style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+        >
+          <ReviewFact label={<Trans>Publisher</Trans>}>
+            {pendingSideload?.info.manifest.vendor.name}
+          </ReviewFact>
+          <ReviewFact label={<Trans>Signing key</Trans>} mono>
+            <Tooltip
+              content={<span className="break-all">{pendingSideload?.info.publisherFingerprint}</span>}
+              maxWidth={320}
+              wrapperClassName="inline-flex"
+            >
+              <span>{shortFingerprint(pendingSideload?.info.publisherFingerprint ?? '')}</span>
+            </Tooltip>
+          </ReviewFact>
+          <ReviewFact label={<Trans>Package ID</Trans>} mono>
+            {pendingSideload?.info.manifest.id}
+          </ReviewFact>
+          <ReviewFact label={<Trans>Requires</Trans>}>
+            <Trans>DragonFruit {pendingSideload?.info.manifest.minAppVersion} or newer</Trans>
+          </ReviewFact>
+          <ReviewFact label={<Trans>Sealed</Trans>}>
+            {pendingSideload?.info.sealed ? <Trans>Yes</Trans> : <Trans>No</Trans>}
+          </ReviewFact>
+          {(pendingSideload?.info.manifest.formats.length ?? 0) > 0 && (
+            <ReviewFact label={<Trans>Output formats</Trans>} mono>
+              {(pendingSideload?.info.manifest.formats ?? [])
+                .map((format) => format.extensions.join(' '))
+                .join(', ')}
+            </ReviewFact>
+          )}
         </div>
-
-        {(pendingSideload?.info.manifest.formats.length ?? 0) > 0 && (
-          <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-            <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-              <Trans>Output formats</Trans>
-            </div>
-            <div className="mt-1 space-y-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-              {pendingSideload?.info.manifest.formats.map((format) => (
-                <div key={format.id} className="font-mono break-all">
-                  {format.extensions.join(' ')}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
 
         {pendingSideload?.info.replacesExisting && (
           <p className="text-xs" style={{ color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)' }}>
@@ -1330,7 +1340,7 @@ export function PluginsSettingsTab() {
         open={reloadRequired}
         ariaLabel={_(msg`Reload required`)}
         title={<Trans>Reload Required</Trans>}
-        subtitle={<Trans>The plugin list changed. DragonFruit has to reload to apply it.</Trans>}
+        subtitle={<Trans>The plugin list has changed, DragonFruit has to reload.</Trans>}
         icon={<RotateCcw className="h-4 w-4" />}
         iconTone="warning"
         zIndexClassName="z-[200]"
