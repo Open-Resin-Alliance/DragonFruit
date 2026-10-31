@@ -30,6 +30,7 @@ Read this page before changing anything in this tier. "Protocol v1" and
 | on-device material list and edit | manifest `network.remoteMaterials` | done: the same dialog, built from declared fields |
 | package image assets | `payload/assets/` + `sideloaded_plugin_asset` | done: preset images are inlined as data URLs |
 | job metadata payloads | manifest `jobMetadataPayloads` | done: the host bakes them into `metadata_json` and the encoder reads it |
+| raw mask layers, area stats | format `layers: "mask"`, `requiresAreaStats` | done: mask slots at source resolution, stats in the batch job |
 
 `cargo test` in the package crate and `cargo test --bin dragonfruit-desktop
 plugin_sideload` cover the verification matrix below except the process cases.

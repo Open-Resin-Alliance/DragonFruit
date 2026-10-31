@@ -24,11 +24,19 @@ struct EchoEncoder {
     /// Bytes of the scene payload the host baked into the job metadata, when the
     /// profile asked for one. Read from `job.metadata_json`.
     scene_bytes: Option<usize>,
+    /// Per-layer area stats, present only when the format declares
+    /// `requiresAreaStats` and the job is a batch encode.
+    area_stats: usize,
 }
 
 impl Encoder for EchoEncoder {
     fn begin(&mut self, start: EncodeStart<'_>) -> Result<(), String> {
         self.format = start.format.to_string();
+        self.area_stats = start
+            .job
+            .get("layerAreaStats")
+            .and_then(|value| value.as_array().map(Vec::len))
+            .unwrap_or(0);
         self.scene_bytes = start
             .job
             .get("metadata_json")
@@ -66,6 +74,10 @@ impl Encoder for EchoEncoder {
             .map_err(|error| error.to_string())?;
         if let Some(bytes) = self.scene_bytes {
             file.write_all(format!(" scene={bytes}").as_bytes())
+                .map_err(|error| error.to_string())?;
+        }
+        if self.area_stats > 0 {
+            file.write_all(format!(" areas={}", self.area_stats).as_bytes())
                 .map_err(|error| error.to_string())?;
         }
         let bytes = file.metadata().map_err(|error| error.to_string())?.len();

@@ -72,6 +72,7 @@ fn main() {
     let network_hosts = arg_all("--network-host");
     let remote_materials_path = arg("--remote-materials");
     let asset_paths = arg_all("--asset");
+    let requires_area_stats = arg("--area-stats").is_some();
     let job_metadata_path = arg("--job-metadata");
     let format_extension = format.clone().unwrap_or_else(|| ".apf".to_string());
     // An empty passphrase is not a passphrase: sealing with "" only looks like
@@ -81,7 +82,8 @@ fn main() {
     let layer_kind = match arg("--layers").as_deref() {
         None | Some("png") => None,
         Some("rle") => Some(package::LayerKind::Rle),
-        Some(other) => panic!("--layers accepts 'png' or 'rle', not '{other}'"),
+        Some("mask") => Some(package::LayerKind::RawMask),
+        Some(other) => panic!("--layers accepts 'png', 'rle' or 'mask', not '{other}'"),
     };
     let presets_path = arg("--presets");
     let templates_path = arg("--templates");
@@ -143,6 +145,7 @@ fn main() {
             extensions: vec![format_extension.clone()],
             display_name: format_name.clone(),
             layers: layer_kind,
+            requires_area_stats,
             })
             .collect(),
         printer_presets: presets_path

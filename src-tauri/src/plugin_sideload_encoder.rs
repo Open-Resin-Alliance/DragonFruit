@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use dragonfruit_plugin_package as package;
 use dragonfruit_plugin_sdk as sdk;
 use dragonfruit_slicing_engine::encoders::registry;
-use dragonfruit_slicing_engine::encoders::{FormatEncoder, RleStreamEncoder};
+use dragonfruit_slicing_engine::encoders::{FormatEncoder, RawMaskStreamEncoder, RleStreamEncoder};
 use dragonfruit_slicing_engine::rle::RleRun;
 use dragonfruit_slicing_engine::types::{LayerAreaStatsV3, RenderedLayersV3, SliceJobV3};
 use dragonfruit_slicing_engine::SlicerV3Error;
@@ -24,12 +24,17 @@ use crate::plugin_sideload_runtime;
 /// RLE slots are sized for a full-width layer of single-pixel runs, and capped:
 /// a 12K layer is 60 KB of runs, so a megabyte is generous.
 const RLE_SLOT_BYTES: u32 = 1024 * 1024;
+/// One raw mask byte per source pixel; a 12K layer is ~86 MB, so the cap is the
+/// largest layer the ring will map rather than a policy.
+const RAW_MASK_SLOT_CAP_BYTES: u64 = 256 * 1024 * 1024;
 
 pub struct SideloadedEncoder {
     root: PathBuf,
     manifest: package::Manifest,
-    /// What the package asked for per layer: runs or a PNG.
+    /// What the package asked for per layer: runs, a PNG or a raw mask.
     layer_kind: package::LayerKind,
+    /// The format asked the engine for per-layer area stats.
+    requires_area_stats: bool,
     /// `FormatEncoder::output_format` returns `&'static str`, and a package's
     /// extension is not a compile-time constant, so the name is interned once at
     /// startup. The count is bounded by the installed formats (a handful), the
@@ -45,11 +50,13 @@ impl SideloadedEncoder {
         manifest: package::Manifest,
         extension: &str,
         layer_kind: package::LayerKind,
+        requires_area_stats: bool,
     ) -> Self {
         Self {
             root,
             manifest,
             layer_kind,
+            requires_area_stats,
             output_format: Box::leak(extension.to_string().into_boxed_str()),
         }
     }
@@ -102,6 +109,48 @@ impl RleStreamEncoder for SideloadedRleSink {
     }
 }
 
+/// Raw masks cross the ring one byte per source pixel, exactly as the SDK's
+/// `SlotKind::RawMask` slot describes.
+struct SideloadedMaskSink {
+    session: Option<plugin_sideload_runtime::EncodeSession>,
+}
+
+impl RawMaskStreamEncoder for SideloadedMaskSink {
+    fn consume_raw_mask_layer(
+        &mut self,
+        layer_index: u32,
+        raw_mask: Vec<u8>,
+    ) -> Result<(), SlicerV3Error> {
+        let Some(session) = self.session.as_mut() else {
+            return Err(SlicerV3Error::ExternalEncoder(
+                "the encode session already ended".to_string(),
+            ));
+        };
+        session
+            .send_layer(sdk::SlotKind::RawMask, layer_index, &raw_mask)
+            .map_err(SlicerV3Error::ExternalEncoder)?;
+        Ok(())
+    }
+
+    fn finalize_to_bytes(self: Box<Self>) -> Result<Vec<u8>, SlicerV3Error> {
+        Err(SlicerV3Error::ExternalEncoder(
+            "a streaming encoder writes to a path".to_string(),
+        ))
+    }
+
+    fn finalize_to_path(mut self: Box<Self>, output_path: &Path) -> Result<(), SlicerV3Error> {
+        let Some(session) = self.session.take() else {
+            return Err(SlicerV3Error::ExternalEncoder(
+                "the encode session already ended".to_string(),
+            ));
+        };
+        session
+            .finish(output_path)
+            .map(|_progress| ())
+            .map_err(SlicerV3Error::ExternalEncoder)
+    }
+}
+
 impl FormatEncoder for SideloadedEncoder {
     fn output_format(&self) -> &'static str {
         self.output_format
@@ -109,6 +158,14 @@ impl FormatEncoder for SideloadedEncoder {
 
     fn requires_png_layers(&self) -> bool {
         self.layer_kind == package::LayerKind::Png
+    }
+
+    fn requires_area_stats(&self) -> bool {
+        self.requires_area_stats
+    }
+
+    fn requires_raw_mask_layers(&self) -> bool {
+        self.layer_kind == package::LayerKind::RawMask
     }
 
     fn read_layer_preview_png(
@@ -151,6 +208,34 @@ impl FormatEncoder for SideloadedEncoder {
         })))
     }
 
+    fn create_raw_mask_stream_encoder(
+        &self,
+        job: &SliceJobV3,
+    ) -> Result<Option<Box<dyn RawMaskStreamEncoder>>, SlicerV3Error> {
+        if self.layer_kind != package::LayerKind::RawMask {
+            return Ok(None);
+        }
+        let mask_bytes = (job.source_width_px as u64)
+            .saturating_mul(job.source_height_px as u64);
+        if mask_bytes == 0 || mask_bytes > RAW_MASK_SLOT_CAP_BYTES {
+            return Err(SlicerV3Error::ExternalEncoder(format!(
+                "a {mask_bytes}-byte raw mask layer does not fit the ring (cap {RAW_MASK_SLOT_CAP_BYTES})"
+            )));
+        }
+        let job_json = serde_json::to_value(job).map_err(|error| SlicerV3Error::Json(error.to_string()))?;
+        let session = plugin_sideload_runtime::EncodeSession::start(
+            &self.root,
+            &self.manifest.id,
+            &self.manifest,
+            self.output_format,
+            job_json,
+            job.total_layers,
+            mask_bytes as u32,
+        )
+        .map_err(SlicerV3Error::ExternalEncoder)?;
+        Ok(Some(Box::new(SideloadedMaskSink { session: Some(session) })))
+    }
+
     fn encode_container_to_path_with_progress(
         &self,
         job: &SliceJobV3,
@@ -164,7 +249,18 @@ impl FormatEncoder for SideloadedEncoder {
                 "a sideloaded encoder is fed PNG layers".to_string(),
             ));
         };
-        let job_json = serde_json::to_value(job).map_err(|error| SlicerV3Error::Json(error.to_string()))?;
+        let mut job_json = serde_json::to_value(job).map_err(|error| SlicerV3Error::Json(error.to_string()))?;
+        // The engine computes these only when `requires_area_stats` says so; hand
+        // them over in the job, which is the only channel the batch path has.
+        if self.requires_area_stats && !_layer_area_stats.is_empty() {
+            if let Some(object) = job_json.as_object_mut() {
+                object.insert(
+                    "layerAreaStats".to_string(),
+                    serde_json::to_value(_layer_area_stats)
+                        .map_err(|error| SlicerV3Error::Json(error.to_string()))?,
+                );
+            }
+        }
 
         let mut progress = |done: u32, total: u32| {
             if let Some(callback) = on_progress {
@@ -203,6 +299,7 @@ pub fn register_installed_encoders(root: &std::path::Path) {
                     manifest.clone(),
                     extension,
                     format.layer_kind(),
+                    format.requires_area_stats,
                 ));
                 if let Err(error) = registry::register_runtime_encoder(encoder) {
                     log::warn!("[plugin-encoder] {}: {error}", manifest.id);
@@ -248,6 +345,7 @@ mod tests {
                 extensions: vec![".exf".to_string()],
                 display_name: None,
                 layers: Some(package::LayerKind::Rle),
+                requires_area_stats: false,
             }],
             ..crate::plugin_test_support::manifest(
                 "example.encoder",
@@ -261,6 +359,7 @@ mod tests {
             manifest,
             ".exf",
             package::LayerKind::Rle,
+            false,
         );
         assert!(!encoder.requires_png_layers(), "an RLE format must not ask for PNGs");
 
@@ -299,6 +398,7 @@ mod tests {
                 extensions: vec![".exf".to_string()],
                 display_name: Some("Echo container".to_string()),
                 layers: Some(package::LayerKind::Rle),
+                requires_area_stats: false,
             }],
             ..crate::plugin_test_support::manifest(
                 "example.encoder",
@@ -336,6 +436,7 @@ mod tests {
                 extensions: vec![".exf".to_string()],
                 display_name: Some("Echo container".to_string()),
                 layers: Some(package::LayerKind::Rle),
+                requires_area_stats: false,
             }],
             file_types: vec![package::FileTypeDecl {
                 extension: ".echo".to_string(),
@@ -360,6 +461,7 @@ mod tests {
             manifest.clone(),
             ".exf",
             package::LayerKind::Rle,
+            false,
         );
         let output = root.join("job.exf");
         let mut sink = encoder
@@ -411,6 +513,7 @@ mod tests {
                 extensions: vec![".exf".to_string()],
                 display_name: None,
                 layers: Some(package::LayerKind::Rle),
+                requires_area_stats: false,
             }],
             job_metadata_payloads: vec![package::JobMetadataPayloadDecl {
                 setting_path: "echo.embedScene".to_string(),
@@ -429,6 +532,7 @@ mod tests {
             manifest.clone(),
             ".exf",
             package::LayerKind::Rle,
+            false,
         );
         let output = root.join("job.exf");
         let mut sink = encoder
@@ -451,6 +555,114 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    fn job_sized(width: u32, height: u32, total_layers: u32) -> SliceJobV3 {
+        SliceJobV3 {
+            source_width_px: width,
+            source_height_px: height,
+            ..job(total_layers)
+        }
+    }
+
+    /// Raw masks take the ring one byte per source pixel, the same slot kind the
+    /// SDK documents; the reference plugin records the kind it received.
+    #[test]
+    fn streams_raw_mask_layers_through_a_real_plugin_process() {
+        let root = temp_dir("mask");
+        let manifest = package::Manifest {
+            id: "example.encoder".to_string(),
+            capabilities: vec![package::Capability::SlicerEncoder],
+            formats: vec![package::FormatDecl {
+                id: "exf".to_string(),
+                extensions: vec![".exf".to_string()],
+                display_name: None,
+                layers: Some(package::LayerKind::RawMask),
+                requires_area_stats: false,
+            }],
+            ..crate::plugin_test_support::manifest(
+                "example.encoder",
+                vec![package::Capability::SlicerEncoder],
+            )
+        };
+        install_reference_plugin(&root, "echo_encoder", &manifest);
+
+        let encoder = SideloadedEncoder::new(
+            root.clone(),
+            manifest.clone(),
+            ".exf",
+            package::LayerKind::RawMask,
+            false,
+        );
+        assert!(!encoder.requires_png_layers());
+        assert!(encoder.requires_raw_mask_layers());
+
+        let output = root.join("mask.exf");
+        let mut sink = encoder
+            .create_raw_mask_stream_encoder(&job_sized(4, 4, 2))
+            .expect("session")
+            .expect("mask sink");
+        sink.consume_raw_mask_layer(0, vec![0u8; 16]).expect("layer 0");
+        sink.consume_raw_mask_layer(1, vec![7u8; 16]).expect("layer 1");
+        sink.finalize_to_path(&output).expect("finish");
+
+        let bytes = std::fs::read(&output).expect("read");
+        assert!(bytes.windows(4).any(|window| window == b"mask"), "the plugin recorded the slot kind");
+        assert!(bytes.ends_with(b"layers=2"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A format that asks for area stats receives them in the batch job, which is
+    /// the only channel the PNG path has.
+    #[test]
+    fn a_package_encoder_receives_area_stats_when_it_asks() {
+        let root = temp_dir("area-stats");
+        let manifest = package::Manifest {
+            id: "example.encoder".to_string(),
+            capabilities: vec![package::Capability::SlicerEncoder],
+            formats: vec![package::FormatDecl {
+                id: "exf".to_string(),
+                extensions: vec![".exf".to_string()],
+                display_name: None,
+                layers: Some(package::LayerKind::Png),
+                requires_area_stats: true,
+            }],
+            ..crate::plugin_test_support::manifest(
+                "example.encoder",
+                vec![package::Capability::SlicerEncoder],
+            )
+        };
+        install_reference_plugin(&root, "echo_encoder", &manifest);
+
+        let encoder = SideloadedEncoder::new(
+            root.clone(),
+            manifest.clone(),
+            ".exf",
+            package::LayerKind::Png,
+            true,
+        );
+        assert!(encoder.requires_area_stats());
+
+        let rendered = RenderedLayersV3 {
+            png_layers: Some(vec![vec![1u8, 2, 3, 4]]),
+            raw_mask_layers: None,
+        };
+        let output = root.join("stats.exf");
+        encoder
+            .encode_container_to_path_with_progress(
+                &job(1),
+                &rendered,
+                &[LayerAreaStatsV3::default()],
+                &output,
+                None,
+            )
+            .expect("encode");
+
+        let bytes = std::fs::read(&output).expect("read");
+        assert!(bytes.ends_with(b"layers=1 areas=1"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// A PNG package must not open a streaming session, and the batch path is what
     /// runs instead.
     #[test]
@@ -464,6 +676,7 @@ mod tests {
             manifest,
             ".exf",
             package::LayerKind::Png,
+            false,
         );
         assert!(encoder.requires_png_layers());
         assert!(encoder

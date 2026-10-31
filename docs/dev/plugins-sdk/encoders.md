@@ -17,6 +17,22 @@ keeps the rasterising; your plugin owns the format. That split is why the ring
 exists: a 12K layer is ~59 MB of mask, and copying that through a pipe per layer
 would cost more than the encode.
 
+## Layer payloads
+
+`formats[].layers` picks what the engine hands you:
+
+| Value | Payload | Slot size | Notes |
+| --- | --- | --- | --- |
+| `"png"` | one PNG per layer, batch | largest layer, rounded to 4 KiB | the default; no streaming |
+| `"rle"` | runs of `(length, value)`, streamed | 1 MiB, sized for single-pixel runs | no per-layer allocation on either side |
+| `"mask"` | one byte per source pixel, streamed | `source_width_px × source_height_px`, cap 256 MiB | what an AA-quality container usually wants |
+
+`formats[].requiresAreaStats: true` makes the engine compute per-layer
+connected-component stats. Batch (`png`) encodes receive them in the job as
+`layerAreaStats`; a streaming session has no point at which they exist, so mask and
+RLE formats do not get them.
+
+
 ## Job metadata
 
 `EncodeStart.job` is the whole `SliceJobV3`, so it carries `metadata_json`: the

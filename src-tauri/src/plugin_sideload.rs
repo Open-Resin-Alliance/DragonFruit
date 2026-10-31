@@ -623,6 +623,7 @@ mod tests {
                 extensions: vec![".apf".to_string()],
                 display_name: None,
                 layers: None,
+                requires_area_stats: false,
             }],
             network: None,
             file_types: Vec::new(),

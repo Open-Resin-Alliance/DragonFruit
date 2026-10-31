@@ -907,6 +907,7 @@ mod tests {
             extensions: vec![".exf".to_string()],
             display_name: Some("Echo container".to_string()),
             layers: Some(package::LayerKind::Rle),
+            requires_area_stats: false,
         }];
         demo.file_types = vec![package::FileTypeDecl {
             extension: ".echo".to_string(),
@@ -1077,6 +1078,7 @@ mod tests {
                 extensions: vec![".exf".to_string()],
                 display_name: None,
                 layers: None,
+                requires_area_stats: false,
             }],
             ..manifest(vec![package::Capability::SlicerEncoder])
         };
@@ -1109,6 +1111,7 @@ mod tests {
                 extensions: vec![".exf".to_string()],
                 display_name: None,
                 layers: None,
+                requires_area_stats: false,
             }],
             ..manifest(vec![package::Capability::SlicerEncoder])
         };

@@ -497,7 +497,8 @@ impl RenderedLayersV3 {
 ///
 /// Values are kept lightweight to enable near-zero-overhead aggregation in the
 /// hot scanline fill path.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LayerAreaStatsV3 {
     pub total_solid_pixels: u32,
     pub total_solid_area_mm2: f64,

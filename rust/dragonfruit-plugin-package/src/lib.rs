@@ -111,6 +111,9 @@ pub struct PayloadRef {
 pub enum LayerKind {
     Png,
     Rle,
+    /// One byte per pixel, at the job's source resolution.
+    #[serde(rename = "mask")]
+    RawMask,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,6 +125,10 @@ pub struct FormatDecl {
     pub display_name: Option<String>,
     #[serde(default)]
     pub layers: Option<LayerKind>,
+    /// Ask the engine for per-layer connected-component area stats. Batch encodes
+    /// receive them in the job; a streaming mask or RLE session does not have them.
+    #[serde(default)]
+    pub requires_area_stats: bool,
 }
 
 impl FormatDecl {
@@ -1016,6 +1023,7 @@ mod tests {
                 extensions: vec![".apf".to_string()],
                 display_name: None,
                 layers: None,
+                requires_area_stats: false,
             }],
             network: None,
             file_types: Vec::new(),
