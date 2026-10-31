@@ -35,6 +35,16 @@ import {
 import type { PluginManifest } from '@/features/plugins/pluginRegistry';
 import { requestPluginManifest } from '@/features/plugins/pluginManifestClient';
 import { PluginStudioModal } from './PluginStudioModal';
+import { repositoryLabel } from '@/features/plugins/repositoryLabel';
+
+async function openExternalUrl(url: string) {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('open_external_url', { url });
+  } catch {
+    window.open(url, '_blank');
+  }
+}
 
 /**
  * One read-only fact: label on the left, value on the right. `stacked` puts the
@@ -676,15 +686,7 @@ export function PluginsSettingsTab() {
               )}
               {row.link ? (
                 <button
-                  onClick={async () => {
-                    const url = row.link as string;
-                    try {
-                      const { invoke } = await import('@tauri-apps/api/core');
-                      await invoke('open_external_url', { url });
-                    } catch {
-                      window.open(url, '_blank');
-                    }
-                  }}
+                  onClick={() => { void openExternalUrl(row.link as string); }}
                   className="inline-flex items-center gap-1 truncate text-sm font-semibold underline underline-offset-2"
                   style={{ color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
                   title={row.link}
@@ -1401,7 +1403,18 @@ export function PluginsSettingsTab() {
             <ReviewFact label={<Trans>Liability accepted</Trans>}>{detailsRow.acceptedAt}</ReviewFact>
           )}
           {detailsRow?.link && (
-            <ReviewFact label={<Trans>Repository</Trans>} mono>{detailsRow.link}</ReviewFact>
+            <ReviewFact label={<Trans>Repository</Trans>}>
+              <button
+                type="button"
+                title={detailsRow.link}
+                onClick={() => { void openExternalUrl(detailsRow.link as string); }}
+                className="inline-flex items-center gap-1 underline underline-offset-2"
+                style={{ color: 'var(--accent)', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
+              >
+                {repositoryLabel(detailsRow.link)}
+                <ExternalLink className="h-3 w-3 shrink-0" />
+              </button>
+            </ReviewFact>
           )}
           {detailsRow?.capabilities && detailsRow.capabilities.length > 0 && (
             <ReviewFact label={<Trans>Capabilities</Trans>} stacked={capabilitiesExpanded}>
