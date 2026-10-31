@@ -3,6 +3,7 @@ import type { ResolveSlicingFormatContext, SlicingFormatDefinition } from './typ
 import { getBuiltinComplexPluginDefinitions } from '@/features/plugins/builtinComplexPlugins';
 import { getProfileNetworkUiAdapter } from '@/features/plugins/pluginRegistry';
 import { normalizeFormatVersion, normalizeSettingsMode } from '@/features/profiles/outputFormatUtils';
+import { sideloadedOutputFormats } from '@/features/plugins/sideloadedFileTypeRegistry';
 
 function resolveBuiltinPluginSlicingFormat(
   outputFormat: PrinterOutputFormat,
@@ -43,11 +44,23 @@ export function getAvailableOutputFormatOptions(): Array<{ value: PrinterOutputF
     }
   }
 
+  // Installed packages add their encoder formats at runtime. Read here rather
+  // than at module load: a package installed in this session has to appear in the
+  // profile editor without a reload.
+  const sideloadedLabels = new Map<string, string>();
+  for (const format of sideloadedOutputFormats()) {
+    formats.add(format.extension);
+    sideloadedLabels.set(format.extension, format.displayName);
+  }
+
   return Array.from(formats)
     .sort((a, b) => a.localeCompare(b))
     .map((format) => {
       const def = resolveBuiltinPluginSlicingFormat(format);
-      return { value: format, label: def?.displayName ?? format };
+      return {
+        value: format,
+        label: def?.displayName ?? sideloadedLabels.get(format) ?? format,
+      };
     });
 }
 

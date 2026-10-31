@@ -44,7 +44,7 @@ import type { PluginFileTypeHandler } from '@/features/plugins/pluginFileTypeBri
 import {
   createSideloadedFileTypeHandler,
   getSideloadedFileTypesSnapshot,
-  refreshSideloadedFileTypes,
+  refreshSideloadedContributions,
   subscribeSideloadedFileTypes,
 } from '@/features/plugins/sideloadedFileTypes';
 import { accelerateGeometry, disposeGeometryBVH } from '@/utils/bvh';
@@ -1652,7 +1652,7 @@ export function useSceneCollectionManager(options?: {
   );
 
   useEffect(() => {
-    void refreshSideloadedFileTypes();
+    void refreshSideloadedContributions();
   }, []);
 
   type ScenePluginImportEntry = {

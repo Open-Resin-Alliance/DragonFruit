@@ -55,6 +55,7 @@ fn main() {
     let version = arg("--version").unwrap_or_else(|| "0.1.0".to_string());
     let vendor = arg("--vendor").unwrap_or_else(|| "Example Vendor".to_string());
     let format = arg("--format");
+    let format_name = arg("--format-name");
     let network = arg("--network").is_some();
     let format_extension = format.clone().unwrap_or_else(|| ".apf".to_string());
     // An empty passphrase is not a passphrase: sealing with "" only looks like
@@ -121,7 +122,7 @@ fn main() {
             .map(|_| package::FormatDecl {
             id: "custom".to_string(),
             extensions: vec![format_extension.clone()],
-            display_name: None,
+            display_name: format_name.clone(),
             layers: layer_kind,
             })
             .collect(),

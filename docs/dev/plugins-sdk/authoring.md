@@ -193,6 +193,7 @@ cargo run -p dragonfruit-plugin-package --example pack -- \
 | `--format` | output extension the encoder claims, leading dot. Omit for a package that only imports files |
 | `--network` | declares the network capability |
 | `--layers` | `png` (default) or `rle`: which layer payload the encoder wants |
+| `--format-name` | display name for the format, shown in the profile editor |
 | `--file-type` | extension the package can open, e.g. `.apf`; adds the fileType capability |
 | `--file-type-name` | display name for that extension, shown in the import UI |
 | `--min-app-version` | manifest `minAppVersion` (default `0.1.0`) |

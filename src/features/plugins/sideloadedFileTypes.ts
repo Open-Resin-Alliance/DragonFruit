@@ -6,7 +6,9 @@ import { importSideloadedFile, listSideloadedPlugins } from '@/features/plugins/
 import { parseSideloadedSceneContainer } from '@/features/plugins/sideloadedSceneContainer';
 import {
   applySideloadedFileTypes,
+  applySideloadedOutputFormats,
   type SideloadedFileType,
+  type SideloadedOutputFormat,
 } from '@/features/plugins/sideloadedFileTypeRegistry';
 
 export type { SideloadedFileType };
@@ -22,17 +24,28 @@ export {
 let inFlight: Promise<void> | null = null;
 
 /** Re-reads installed packages. Safe to call after an install, remove or toggle. */
-export function refreshSideloadedFileTypes(): Promise<void> {
+export function refreshSideloadedContributions(): Promise<void> {
   if (inFlight) return inFlight;
   inFlight = (async () => {
     try {
       const plugins = await listSideloadedPlugins();
-      const next: SideloadedFileType[] = [];
+      const fileTypes: SideloadedFileType[] = [];
+      const formats: SideloadedOutputFormat[] = [];
       for (const plugin of plugins) {
         const manifest = plugin.manifest;
+        for (const format of manifest.formats ?? []) {
+          for (const extension of format.extensions) {
+            formats.push({
+              pluginId: manifest.id,
+              pluginName: manifest.name,
+              extension: extension.toLowerCase(),
+              displayName: format.displayName ?? format.id,
+            });
+          }
+        }
         if (!manifest.capabilities.includes('fileType')) continue;
         for (const fileType of manifest.fileTypes ?? []) {
-          next.push({
+          fileTypes.push({
             pluginId: manifest.id,
             pluginName: manifest.name,
             extension: fileType.extension.toLowerCase(),
@@ -41,10 +54,12 @@ export function refreshSideloadedFileTypes(): Promise<void> {
           });
         }
       }
-      applySideloadedFileTypes(next);
+      applySideloadedFileTypes(fileTypes);
+      applySideloadedOutputFormats(formats);
     } catch {
       // The runtime is unavailable (web build, or nothing installed yet).
       applySideloadedFileTypes([]);
+      applySideloadedOutputFormats([]);
     } finally {
       inFlight = null;
     }

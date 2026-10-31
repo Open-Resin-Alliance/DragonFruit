@@ -14,9 +14,19 @@ export type SideloadedFileType = {
   isSceneFile: boolean;
 };
 
+/** An output format an installed package can encode, as the pickers need it. */
+export type SideloadedOutputFormat = {
+  pluginId: string;
+  pluginName: string;
+  extension: string;
+  displayName: string;
+};
+
 const EMPTY: SideloadedFileType[] = [];
+const EMPTY_FORMATS: SideloadedOutputFormat[] = [];
 
 let snapshot: SideloadedFileType[] = EMPTY;
+let formatSnapshot: SideloadedOutputFormat[] = EMPTY_FORMATS;
 const listeners = new Set<() => void>();
 
 export function subscribeSideloadedFileTypes(listener: () => void): () => void {
@@ -52,6 +62,27 @@ function normalizedExtension(name: string): string {
   const trimmed = name.trim().toLowerCase();
   const dot = trimmed.lastIndexOf('.');
   return dot < 0 ? '' : trimmed.slice(dot);
+}
+
+export function applySideloadedOutputFormats(next: SideloadedOutputFormat[]): void {
+  const same =
+    next.length === formatSnapshot.length &&
+    next.every((entry, index) => {
+      const current = formatSnapshot[index];
+      return (
+        current?.pluginId === entry.pluginId &&
+        current.extension === entry.extension &&
+        current.displayName === entry.displayName
+      );
+    });
+  if (same) return;
+  formatSnapshot = next.length === 0 ? EMPTY_FORMATS : next;
+  for (const listener of listeners) listener();
+}
+
+/** Encoder formats contributed by installed packages, in id order. */
+export function sideloadedOutputFormats(): readonly SideloadedOutputFormat[] {
+  return formatSnapshot;
 }
 
 /** Any extension an installed package claims, scene or not. */

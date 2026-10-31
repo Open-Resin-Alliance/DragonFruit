@@ -405,7 +405,11 @@ pub async fn sideloaded_plugin_install<R: tauri::Runtime>(
         .map_err(|_| "Plugin install lock poisoned.".to_string())?;
 
     let (bytes, inspected, _replaces) = inspect_file(Path::new(&path), &root)?;
-    install_from_bytes(&root, &bytes, &inspected, passphrase.as_deref())
+    let installed = install_from_bytes(&root, &bytes, &inspected, passphrase.as_deref())?;
+    // Make a fresh package's encoder formats available without a restart, as long
+    // as nothing has sliced yet: the engine registry is frozen by the first slice.
+    crate::plugin_sideload_encoder::register_installed_encoders(&root);
+    Ok(installed)
 }
 
 /// Opens a file through a sideloaded importer.

@@ -282,6 +282,38 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// Registering an installed package makes its format findable by the engine.
+    #[test]
+    fn a_registered_package_appears_in_the_engine_registry() {
+        let root = temp_dir("registry");
+        let manifest = package::Manifest {
+            id: "example.encoder".to_string(),
+            capabilities: vec![package::Capability::SlicerEncoder],
+            formats: vec![package::FormatDecl {
+                id: "exf".to_string(),
+                extensions: vec![".exf".to_string()],
+                display_name: Some("Echo container".to_string()),
+                layers: Some(package::LayerKind::Rle),
+            }],
+            ..crate::plugin_test_support::manifest(
+                "example.encoder",
+                vec![package::Capability::SlicerEncoder],
+            )
+        };
+        install_reference_plugin(&root, "echo_encoder", &manifest);
+
+        register_installed_encoders(&root);
+
+        let encoder = registry::find_encoder(".exf").expect("the format is registered");
+        assert_eq!(encoder.output_format(), ".exf");
+        assert!(
+            !encoder.requires_png_layers(),
+            "an RLE package must not be asked for PNG layers"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// A PNG package must not open a streaming session, and the batch path is what
     /// runs instead.
     #[test]

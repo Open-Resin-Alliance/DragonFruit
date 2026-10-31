@@ -161,7 +161,6 @@ function writeRemoteMaterialByPrinter(printerId: string, materialId: string): vo
   }
 }
 
-const OUTPUT_FORMAT_OPTIONS = getAvailableOutputFormatOptions();
 const WEBCAM_ROTATION_OPTIONS = [
   { value: '0', label: '0°' },
   { value: '90', label: '90°' },
@@ -5175,7 +5174,7 @@ export function ProfileSettingsModal({
                     <LabeledSelectInput
                       label="Output Format"
                       value={selectedPrinter.display.outputFormat}
-                      options={OUTPUT_FORMAT_OPTIONS}
+                      options={getAvailableOutputFormatOptions()}
                       onChange={(value) => handlePrinterDisplayChange({ outputFormat: value })}
                     />
 

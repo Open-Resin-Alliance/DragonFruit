@@ -44,6 +44,34 @@ layer shows up.
   layers as they are rasterised.
 - `encodeDone` carries the file. The host checks it exists, then hands it on.
 
+## Slice with the sample format
+
+`echo_encoder` is a complete format for trying the path: it records what it was
+given instead of rasterising a real container.
+
+```bash
+cargo build --manifest-path rust/dragonfruit-plugin-sdk/Cargo.toml --example echo_encoder
+cargo run -p dragonfruit-plugin-package --example pack -- \
+  --out echo-encoder-sample.dfplugin \
+  --binary rust/dragonfruit-plugin-sdk/target/debug/examples/echo_encoder \
+  --id example.encoder --name "Echo Container Encoder" --version 0.1.0 --vendor DragonFruit \
+  --format .exf --format-name "Echo container" --layers rle
+```
+
+Then:
+
+1. Import the package (no passphrase: it is unsealed). Its format appears in
+   **Settings → Printers → Output format** as "Echo container".
+2. Select it on the active printer profile, load a model and slice.
+3. The output is a text-ish container: `ECHOENC1.exf`, then per layer the index,
+   the payload length, the kind (`rle`), the run count, the run bytes, and a final
+   `layers=N`. Open it in a hex viewer: if `layers=` matches the slice and every
+   record says `rle`, the run stream reached the plugin intact.
+
+Registering a format after a slice has already run needs an app restart: the
+engine's encoder registry is frozen by the first slice, which is deliberate. A
+package installed before that first slice registers immediately.
+
 ## Reading a layer
 
 ```rust

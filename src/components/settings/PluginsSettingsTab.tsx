@@ -9,7 +9,7 @@ import { AlertTriangle, CheckCircle2, Download, ExternalLink, Github, Info as In
 import { Button, IconButton, Input, SettingRow, Spinner } from '@/components/atoms';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
-import { refreshSideloadedFileTypes } from '@/features/plugins/sideloadedFileTypes';
+import { refreshSideloadedContributions } from '@/features/plugins/sideloadedFileTypes';
 import { isTauriRuntime } from '@/utils/tauriRuntime';
 import {
   getSideloadAllowance,
@@ -216,7 +216,7 @@ export function PluginsSettingsTab() {
         if (cancelled) return;
         setAllowSideload(allow);
         setSideloadPlugins(installed);
-        void refreshSideloadedFileTypes();
+        void refreshSideloadedContributions();
       } catch (error) {
         if (!cancelled) {
           setStatus({ kind: 'error', message: String(error) });
@@ -238,7 +238,7 @@ export function PluginsSettingsTab() {
     try {
       await setSideloadAllowance(next);
       await refreshSideloaded();
-      await refreshSideloadedFileTypes();
+      await refreshSideloadedContributions();
     } catch (error) {
       setAllowSideload(!next);
       setStatus({ kind: 'error', message: String(error) });
@@ -299,7 +299,7 @@ export function PluginsSettingsTab() {
     try {
       await removeSideloadedPlugin(target.manifest.id);
       await refreshSideloaded();
-      await refreshSideloadedFileTypes();
+      await refreshSideloadedContributions();
     } catch (error) {
       setStatus({ kind: 'error', message: String(error) });
     } finally {
