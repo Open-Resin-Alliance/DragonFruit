@@ -177,6 +177,21 @@ aligned because the accessors cast it to atomics; a page-aligned `mmap` is what
 the host uses, and every SDK entry point rejects a mapping that is not aligned
 with `RingError::Misaligned` rather than invoking undefined behaviour.
 
+## What the transport costs
+
+Measured on a 3000-layer job with ~100 KiB of runs per layer:
+
+| Path | Per layer |
+| --- | --- |
+| host marshals the engine's runs to wire bytes (`write_runs`) | ~6 µs |
+| ring slot publish (one copy into the mapping) | ~2 µs |
+| pipe (one bulk frame per layer, written and read) | ~18 µs |
+| plugin walks the runs (`Runs`) | ~29 µs |
+
+The transport is the smallest line. Pick it for the licence boundary, not for
+throughput: `shm` is what ships, `pipe` is designed, and a raw mask layer would
+be the only payload where the difference is material.
+
 ## Versioning rules
 
 - Adding a message type is a **minor** change: an older peer answers

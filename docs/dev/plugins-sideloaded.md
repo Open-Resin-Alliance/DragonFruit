@@ -332,6 +332,69 @@ against; the guide is the [Plugin SDK](plugins-sdk/index.md) subsection. It cont
 It contains no engine code, no `FormatEncoder`, no scene types. That is the
 point: linking the SDK must not drag AGPL code into the vendor's binary.
 
+## Licence boundary
+
+DragonFruit is AGPL-3.0 and stays that way. A closed-source plugin is usable
+because it is a **separate program**, and every mechanism in this tier exists to
+keep it that way. The FSF's answer on plug-ins is the test:
+
+> If the main program uses fork and exec to invoke plug-ins, and they establish
+> intimate communication by sharing complex data structures, or shipping complex
+> data structures back and forth, that can make them one single combined program.
+> A main program that uses simple fork and exec to invoke plug-ins and does not
+> establish intimate communication between them results in the plug-ins being a
+> separate program. […] Using shared memory to communicate with complex data
+> structures is pretty much equivalent to dynamic linking.
+
+Read against what this tier does:
+
+| Mechanism | Why it is there |
+| --- | --- |
+| spawn, never `dlopen` | a dynamically linked vendor library that calls into the host and shares its buffers is the combined-work case |
+| messages are JSON over stdio | a documented protocol between two programs, not shared objects |
+| the ring carries opaque bytes, with a published layout and no pointers, structs or allocator | the FSF sentence names *complex data structures*, and a byte buffer with one owner per slot is not one |
+| the SDK and the package writer are MIT OR Apache-2.0 and hold no host or engine code | a vendor links the SDK, never DragonFruit, so their binary and their packaging tool carry no AGPL code; the dependency runs host to crate, never the reverse |
+| the package is signed and pinned per publisher | provenance, not licensing: it says who built the file, and the AGPL argument does not depend on it |
+| the payload is encrypted | distribution control, also not licensing: the app has to decrypt and run the code either way |
+
+The same shape as an AGPL project that already hosts third-party plugins: Grafana
+(AGPL-3.0) runs backend plugins as subprocesses over gRPC and publishes an
+Apache-2.0 SDK. The projects that allow in-process plugins are either weak
+copyleft (Odoo) or require the plugin to carry the same licence (Blender,
+Nextcloud).
+
+### Transport cost, so the choice is not made on vibes
+
+Measured on this machine, one 3000-layer job, RLE payloads around 100 KiB per
+layer:
+
+| Path | Cost per layer |
+| --- | --- |
+| host: engine runs to wire bytes | ~6 µs (was ~72 µs before the run codec was rewritten) |
+| ring: copy into the shared mapping | ~2 µs |
+| pipe: write and read, a bulk frame per layer | ~18 µs |
+| plugin: walk the runs | ~29 µs |
+
+So the ring buys about 16 µs per layer over a pipe, roughly 50 ms on a
+3000-layer job whose encode takes tens of seconds. It exists for payloads where
+that is not true: a raw mask is ~59 MB per layer, and a pipe would be untenable
+there. Since raw masks are not implemented, the default transport can and should
+be decided on the licence argument rather than on throughput; `pipe` is designed
+and a package that asks for it today is refused rather than silently given a
+ring. If counsel reads the ring as too close to dynamic linking, `pipe` is the
+fallback and it costs the numbers above.
+
+### What would actually break the boundary
+
+- Handing the plugin a host struct, a callback into host code, or a buffer the
+  host keeps mutating while the plugin reads it.
+- Linking DragonFruit crates into the SDK, however convenient.
+- Letting a plugin load host symbols or call into the engine instead of the
+  protocol.
+
+None of those are needed for any capability the tier ships, and each one would
+turn a defensible arrangement into an argument.
+
 ## Threat model and non-goals
 
 - The plugin is **native code with the user's privileges**. It is a separate

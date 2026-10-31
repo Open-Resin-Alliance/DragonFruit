@@ -20,6 +20,14 @@ carries no pointers, no structs and no allocator, and one side owns a slot at a
 time, which is the argument for yes. Until counsel says so, this is the one part
 of the design a reviewer should look at twice.
 
+That question is not load-bearing for performance, which was checked rather than
+assumed. For RLE layers the ring costs ~2 µs per layer and a pipe ~18 µs, against
+~6 µs to marshal the runs on the host and ~29 µs to walk them in the plugin: the
+ring buys about 16 µs per layer, roughly 50 ms on a 3000-layer job. It matters
+only for raw masks (~59 MB per layer), which are not implemented. So the
+transport can be decided on the licence argument alone, and `pipe` stays the
+fallback with a cost that small.
+
 Windows code signing is not a requirement: partner binaries ship unsigned and
 provenance comes from the package signature, the same way it does for the
 payload's hash. SmartScreen warnings on first run are accepted as a consequence,

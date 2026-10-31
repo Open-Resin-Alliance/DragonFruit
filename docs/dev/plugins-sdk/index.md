@@ -115,6 +115,16 @@ them, the manifest needs a `presets` reference to a payload JSON that the host
 validates with the same rules as the simple tier; that is a spec change with a
 loader behind it, not something to work around.
 
+## Why this is AGPL-compatible
+
+DragonFruit is AGPL-3.0 and a closed-source plugin is a separate program, not a
+derivative: it is spawned, it talks to the host through a documented protocol,
+and the only memory the two share is a ring of opaque bytes with no pointers or
+structs in it. The SDK and the package writer are MIT OR Apache-2.0 and contain
+no host or engine code, so a vendor links the SDK and nothing else. The argument,
+the precedent it follows and the measured transport costs are in
+`docs/dev/plugins-sideloaded.md` under "Licence boundary".
+
 ## Pages
 
 - `docs/dev/plugins-sdk/authoring.md` — build, seal, pack, import a working plugin
