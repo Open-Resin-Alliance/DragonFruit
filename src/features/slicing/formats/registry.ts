@@ -4,6 +4,36 @@ import { getBuiltinComplexPluginDefinitions } from '@/features/plugins/builtinCo
 import { getProfileNetworkUiAdapter } from '@/features/plugins/pluginRegistry';
 import { normalizeFormatVersion, normalizeSettingsMode } from '@/features/profiles/outputFormatUtils';
 import { sideloadedOutputFormats } from '@/features/plugins/sideloadedFileTypeRegistry';
+import { normalizeOutputFormat } from '@/features/profiles/outputFormatUtils';
+
+/**
+ * A sideloaded package's format, shaped like a definition so the slice path and
+ * the settings that read definitions treat it like any other.
+ *
+ * The engine owns the real behaviour: the adapter registered for this extension
+ * decides whether it wants runs or PNGs and what it writes. The fields below are
+ * the ones a definition exists to carry in the renderer (identity, layer kind,
+ * ownership), not a second source of truth.
+ */
+function resolveSideloadedSlicingFormat(
+  outputFormat: PrinterOutputFormat,
+): SlicingFormatDefinition | null {
+  const token = normalizeOutputFormat(outputFormat);
+  if (!token) return null;
+  const match = sideloadedOutputFormats().find((format) => format.extension === token);
+  if (!match) return null;
+  return {
+    id: token.replace(/^\./, ''),
+    outputFormat: token,
+    displayName: match.displayName,
+    ownership: 'plugin',
+    layerDataKind: 'png',
+    pluginId: match.pluginId,
+    rustModulePath: '',
+    wasmExportName: '',
+    notes: 'Sideloaded plugin format: encoded by the package process.',
+  };
+}
 
 function resolveBuiltinPluginSlicingFormat(
   outputFormat: PrinterOutputFormat,
@@ -77,14 +107,21 @@ export function resolveSlicingFormatDefinition(context: ResolveSlicingFormatCont
   const format = context.printerProfile.display.outputFormat;
   const preferredPluginId = getProfileNetworkUiAdapter(context.printerProfile.networkSupport)?.pluginId;
 
-  return resolveBuiltinPluginSlicingFormat(format, preferredPluginId);
+  return (
+    resolveBuiltinPluginSlicingFormat(format, preferredPluginId)
+    ?? resolveSideloadedSlicingFormat(format)
+  );
 }
 
-function resolveSlicingFormatDefinitionByOutput(
+/** Resolves a format without a profile, for callers that only have the token. */
+export function resolveSlicingFormatDefinitionByOutput(
   outputFormat: PrinterOutputFormat,
   preferredPluginId?: string,
 ): SlicingFormatDefinition | null {
-  return resolveBuiltinPluginSlicingFormat(outputFormat, preferredPluginId);
+  return (
+    resolveBuiltinPluginSlicingFormat(outputFormat, preferredPluginId)
+    ?? resolveSideloadedSlicingFormat(outputFormat)
+  );
 }
 
 export function getAvailableFormatVersionOptions(
