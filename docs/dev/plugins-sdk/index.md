@@ -1,8 +1,8 @@
 # Plugin SDK
 
 A sideloaded plugin is a **process**. DragonFruit starts it, speaks a small
-versioned protocol over stdio, and hands bulk layer data through a shared byte
-ring. `rust/dragonfruit-plugin-sdk` gives you that protocol so your binary is a
+versioned protocol over stdio, and hands bulk layer data either through a shared
+byte ring or as bulk frames on the same channel. `rust/dragonfruit-plugin-sdk` gives you that protocol so your binary is a
 `main` and one trait impl.
 
 The reason the boundary is a process and an SDK rather than a `dlopen`: see
@@ -23,7 +23,8 @@ slices, and each capability is either shipped or designed.
 | --- | --- | --- | --- |
 | handshake (`hello` / `ready` / `shutdown` / `error`) | shipped | shipped | shipped: spawn, `ready` validation against the manifest, idle stop |
 | `networkOperations` (`network` / `networkResult`) | shipped | shipped | shipped: routed after the built-in dispatch match |
-| `slicerEncoder` (encode session + preview) | shipped | shipped | shipped: one process per session, ring in `DF_PLUGIN_RING`, RLE or PNG layers, adapter in the engine's encoder registry |
+| `slicerEncoder` (encode session + preview) | shipped | shipped | shipped: one process per session, RLE, PNG or raw mask layers, adapter in the engine's encoder registry |
+| transports (`shm` ring / `pipe`) | shipped | shipped | shipped: ring slots by default, or one bulk frame per layer with no shared memory |
 | ring accessors (slot publish / view / release) | shipped | shipped | shipped, for encoders |
 | `fileType` (import messages) | shipped | shipped | shipped: extensions from the manifest, container parsed into geometry, supports and mesh modifiers |
 | printer presets and material templates | shipped | not code: manifest arrays | shipped: registered through the profile store's plugin entry point |
