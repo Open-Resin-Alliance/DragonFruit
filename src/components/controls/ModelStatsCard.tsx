@@ -94,7 +94,7 @@ export function ModelStatsCard({
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
   const networkUiAdapter = React.useMemo(
     () => getProfileNetworkUiAdapter(activePrinterProfile?.networkSupport),
-    [activePrinterProfile?.networkSupport],
+    [profileState, activePrinterProfile?.networkSupport],
   );
   const activeMaterialProfile = React.useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
   const selectedNetworkDeviceId = React.useMemo(() => {

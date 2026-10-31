@@ -1,6 +1,7 @@
 import printerPresetsData from '../../../profiles/printers';
 import materialTemplatesData from '../../../profiles/materials';
 import {
+    getPluginRegistryRevision,
     getProfileLocalMaterialSettingsAdapter,
     getInstalledProfilePlugins,
     getRuntimeMaterialTemplates,
@@ -1389,9 +1390,26 @@ export function subscribeToProfileStore(listener: Listener): () => void {
     return () => listeners.delete(listener);
 }
 
+let snapshot: ProfileStoreState | null = null;
+let snapshotState: ProfileStoreState | null = null;
+let snapshotRevision = -1;
+
+/**
+ * The snapshot changes identity when the state does *or* when the plugin
+ * registry does. Presets and material templates are read out of the registry on
+ * every call, so a snapshot that never moved would leave a freshly installed
+ * plugin invisible until a reload: `useSyncExternalStore` compares by identity and
+ * would skip the re-render that recomputes them.
+ */
 export function getProfileStoreSnapshot(): ProfileStoreState {
     ensureHydrated();
-    return state;
+    const revision = getPluginRegistryRevision();
+    if (!snapshot || snapshotState !== state || snapshotRevision !== revision) {
+        snapshotState = state;
+        snapshotRevision = revision;
+        snapshot = { ...state };
+    }
+    return snapshot;
 }
 
 export function getProfileStoreServerSnapshot(): ProfileStoreState {

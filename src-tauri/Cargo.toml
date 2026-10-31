@@ -54,6 +54,10 @@ dragonfruit-mesh-core = { path = "../rust/dragonfruit-mesh-core" }
 dragonfruit-ao-gpu = { path = "../rust/dragonfruit-ao-gpu" }
 dragonfruit-mesh-repair = { path = "../rust/dragonfruit-mesh-repair", features = ["manifold"] }
 dragonfruit-organic-cut = { path = "../rust/dragonfruit-organic-cut", features = ["manifold"] }
+dragonfruit-plugin-package = { path = "../rust/dragonfruit-plugin-package" }
+dragonfruit-plugin-sdk = { path = "../rust/dragonfruit-plugin-sdk" }
+# The host maps the shared ring the plugin reads layer bytes from.
+memmap2 = "0.9"
 bytemuck = "1"
 meshopt = "0.6.2"
 

@@ -3625,7 +3625,9 @@ export default function Home() {
   const canDownloadPrintArtifact = Boolean(printingArtifact);
   const activeNetworkUiAdapter = React.useMemo(
     () => getProfileNetworkUiAdapter(activePrinterProfile?.networkSupport),
-    [activePrinterProfile?.networkSupport],
+    // The registry, not just the mode string: a package installed this session
+    // registers its adapter after the profile was written.
+    [profileState, activePrinterProfile?.networkSupport],
   );
   const selectedSliceDeviceId = React.useMemo(() => {
     const directId = activePrinterProfile?.activeNetworkDeviceId?.trim();

@@ -891,10 +891,7 @@ export function useImportExportManager({
       const ext = getFileExtension(file.name);
       return ext === '.stl' || ext === '.obj' || ext === '.3mf';
     });
-    const sceneFiles = supportedFiles.filter((file) => {
-      const ext = getFileExtension(file.name);
-      return SCENE_FILE_EXTENSIONS.some((sceneExt) => ext === `.${sceneExt}`);
-    });
+    const sceneFiles = supportedFiles.filter((file) => isSceneFileName(file.name));
 
     const buildSyntheticFileChangeEvent = (nextFiles: File[]): React.ChangeEvent<HTMLInputElement> => {
       const dt = new DataTransfer();

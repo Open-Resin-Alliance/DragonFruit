@@ -263,6 +263,43 @@
             {
               "label": "Complex Plugin Contributing",
               "slug": "dev/plugins-complex-contributing"
+            },
+            {
+              "label": "Sideloaded Complex Plugins",
+              "slug": "dev/plugins-sideloaded"
+            },
+            {
+              "label": "Plugin SDK",
+              "items": [
+                {
+                  "label": "Overview",
+                  "slug": "dev/plugins-sdk/index"
+                },
+                {
+                  "label": "Authoring and Packing",
+                  "slug": "dev/plugins-sdk/authoring"
+                },
+                {
+                  "label": "Protocol",
+                  "slug": "dev/plugins-sdk/protocol"
+                },
+                {
+                  "label": "Encoders",
+                  "slug": "dev/plugins-sdk/encoders"
+                },
+                {
+                  "label": "Network Operations",
+                  "slug": "dev/plugins-sdk/network"
+                },
+                {
+                  "label": "File-Type Import",
+                  "slug": "dev/plugins-sdk/file-types"
+                },
+                {
+                  "label": "UI Contributions",
+                  "slug": "dev/plugins-sdk/ui"
+                }
+              ]
             }
           ]
         },
@@ -539,6 +576,10 @@
             {
               "slug": "adr/0046-support-local-frames",
               "title": "Support local frames"
+            },
+            {
+              "label": "Sideloaded Complex Plugins",
+              "slug": "adr/0047-sideloaded-complex-plugins"
             },
             {
               "label": "Organic Cut Surface Redesign",

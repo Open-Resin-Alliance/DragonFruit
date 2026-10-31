@@ -61,6 +61,11 @@ mod experiments;
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 mod mallinfo_shim;
 mod plugin_registry;
+mod plugin_sideload;
+mod plugin_sideload_encoder;
+#[cfg(test)]
+mod plugin_test_support;
+mod plugin_sideload_runtime;
 mod webview_watchdog;
 mod window_state;
 
@@ -4073,6 +4078,69 @@ async fn fetch_sponsor_avatar(url: String) -> Result<String, String> {
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
     Ok(format!("data:{content_type};base64,{b64}"))
 }
+/// Payload returned by `fetch_github_plugin_resource`.
+#[derive(serde::Serialize)]
+struct GithubPluginResource {
+    status: u16,
+    content_type: String,
+    body_base64: String,
+}
+
+/// Fetch a plugin manifest resource (manifest JSON, preset packs, preset images)
+/// via Rust, bypassing WebView CORS.
+///
+/// The desktop build serves only static assets from Tauri, so the Next.js
+/// `/api/plugins/github-manifest` route does not exist in production. The
+/// resolver in `src/features/plugins/githubPluginManifest.ts` runs in the
+/// WebView and calls this command for every GitHub request instead.
+///
+/// Only `https` GitHub hosts are allowed; anything else is refused here rather
+/// than fetched. Non-2xx responses are returned with their status so the
+/// resolver can report the HTTP error.
+#[tauri::command]
+async fn fetch_github_plugin_resource(url: String) -> Result<GithubPluginResource, String> {
+    let trimmed = url.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("URL is empty".to_string());
+    }
+    let parsed = url::Url::parse(&trimmed).map_err(|e| format!("Invalid url: {e}"))?;
+    if parsed.scheme() != "https" {
+        return Err("Only https URLs are allowed".to_string());
+    }
+    let host = parsed.host_str().ok_or("Missing host")?.to_ascii_lowercase();
+    const ALLOWED_HOSTS: &[&str] = &["github.com", "api.github.com", "raw.githubusercontent.com"];
+    if !ALLOWED_HOSTS.contains(&host.as_str()) {
+        return Err(format!("Host not allowed: {host}"));
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Client build failed: {e}"))?;
+    let resp = client
+        .get(trimmed)
+        .header("Accept", "application/json, */*")
+        .header("User-Agent", "DragonFruit")
+        .send()
+        .await
+        .map_err(|e| format!("Fetch failed: {e}"))?;
+
+    let status = resp.status().as_u16();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let bytes = resp.bytes().await.map_err(|e| format!("Read failed: {e}"))?;
+
+    Ok(GithubPluginResource {
+        status,
+        content_type,
+        body_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
+    })
+}
+
 /// Fetch external JSON/text via Rust (bypasses WebView CORS) for sponsors list.
 /// Only `https` URLs from `opencollective.com` are allowed.
 #[tauri::command]
@@ -4393,6 +4461,16 @@ fn main() {
     let builder = builder.setup(|app| {
         let app_handle = app.handle().clone();
 
+        // Point the sideloaded plugin runtime at the installed packages before
+        // anything can route a request to one.
+        match plugin_sideload::plugin_root(&app_handle) {
+            Ok(root) => {
+                plugin_sideload_encoder::register_installed_encoders(&root);
+                plugin_sideload_runtime::initialize(root);
+            }
+            Err(error) => log::warn!("[plugin-runtime] {error}"),
+        }
+
         log_startup_header();
 
         app.manage(window_state::WindowStateTracker::default());
@@ -4526,6 +4604,7 @@ fn main() {
             experiments::set_experiment_overrides,
             fetch_sponsor_avatar,
             fetch_external_text,
+            fetch_github_plugin_resource,
             get_slicer_engine_version,
             notify_launch_scene_handoff,
             focus_main_window_command,
@@ -4567,6 +4646,15 @@ fn main() {
             spacemouse::spacemouse_native_stop,
             spacemouse::spacemouse_native_sync,
             network::plugin_network_request,
+            plugin_sideload::sideloaded_plugin_allowance,
+            plugin_sideload::sideloaded_plugin_set_allowance,
+            plugin_sideload::sideloaded_plugin_pick,
+            plugin_sideload::sideloaded_plugin_inspect,
+            plugin_sideload::sideloaded_plugin_install,
+            plugin_sideload::sideloaded_plugin_list,
+            plugin_sideload::sideloaded_plugin_asset,
+            plugin_sideload::sideloaded_plugin_remove,
+            plugin_sideload::sideloaded_plugin_import_file,
             network::ensure_rtsp_relay,
             mesh_repair::mesh_analyze_from_path,
             mesh_refine::refine_mesh_soup,
@@ -4627,6 +4715,7 @@ fn main() {
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
             ) {
                 window_state::save(app_handle);
+                plugin_sideload_runtime::shutdown_all();
             }
         });
 }

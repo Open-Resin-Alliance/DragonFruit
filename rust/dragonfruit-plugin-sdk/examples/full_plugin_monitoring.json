@@ -1,0 +1,5 @@
+{
+  "busyResponseGraceMs": 45000,
+  "inconclusiveReachabilityMaxPolls": 3,
+  "supportsWebcamStreamSlotReset": true
+}

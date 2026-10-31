@@ -183,7 +183,6 @@ const STEP_META: Record<StepId, {
   },
 };
 
-const OUTPUT_FORMAT_OPTIONS = getAvailableOutputFormatOptions();
 const WEBCAM_ROTATION_OPTIONS: Array<{ value: `${0 | 90 | 180 | 270}`; label: string }> = [
   { value: '0', label: '0°' },
   { value: '90', label: '90°' },
@@ -1768,7 +1767,7 @@ function PrinterPresetEditor({ preset, onChange }: PrinterPresetEditorProps) {
             label="Output Format"
             value={preset.outputFormat}
             onChange={(v) => onChange({ ...preset, outputFormat: v, formatVersion: '', settingsMode: '' })}
-            options={[{ value: '', label: '— select format —' }, ...OUTPUT_FORMAT_OPTIONS]}
+            options={[{ value: '', label: '— select format —' }, ...getAvailableOutputFormatOptions()]}
             className="space-y-1 block"
             labelClassName="font-medium"
             selectClassName="w-full h-[36px] px-2.5 pr-10 leading-tight text-sm"

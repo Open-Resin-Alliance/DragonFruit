@@ -13,10 +13,73 @@ import type {
 import { getBuiltinComplexPluginDefinitions } from '@/features/plugins/builtinComplexPlugins';
 import { BUILTIN_SIMPLE_PLUGIN_MANIFESTS } from '@/features/plugins/builtinSimplePlugins';
 import { normalizeOutputFormat, normalizeFormatVersion, normalizeSettingsMode, normalizeWebcamRotationDeg, DEFAULT_WEBCAM_ROTATION_DEG } from '@/features/profiles/outputFormatUtils';
+import { sanitizeDeclaredMaterialSettings } from '@/features/plugins/declaredMaterialSettings';
+import {
+  buildDeclaredRemoteMaterialsAdapter,
+  sanitizeDeclaredRemoteMaterials,
+  type DeclaredRemoteMaterials,
+} from '@/features/plugins/declaredRemoteMaterials';
 import { hasWindow } from '@/utils/dom';
 
 export type PluginSource = 'builtin' | 'github';
 export type PluginInstallTrust = 'allowlisted' | 'unverified-user-approved';
+
+/**
+ * A network backend declared by a package instead of compiled in. The renderer
+ * turns it into the same adapter shape `builtinComplexPlugins` registers, so the
+ * mode appears in a printer profile's Network Support list and every panel talks
+ * to the package through `plugin_network_request`.
+ */
+export type DeclaredNetworkOperations = {
+  connect?: string;
+  discover?: string;
+  materials?: string;
+  materialsEdit?: string;
+  printerData?: string;
+  status?: string;
+  webcamInfo?: string;
+  platesList?: string;
+  start?: string;
+  pause?: string;
+  resume?: string;
+  cancel?: string;
+  deletePlate?: string;
+  emergencyStop?: string;
+  upload?: string;
+};
+
+export type DeclaredMonitoringPolicy = {
+  busyResponseGraceMs?: number;
+  inconclusiveReachabilityMaxPolls?: number;
+  supportsWebcamStreamSlotReset?: boolean;
+  webcamMaxConsecutiveTimeouts?: number;
+  webcamTimeoutCooldownMs?: number;
+  webcamFailureCooldownMs?: number;
+};
+
+export type DeclaredNetworkMode = {
+  /** The answering plugin. The host refuses a package that names another. */
+  pluginId: string;
+  /** Lowercase slug a printer profile stores in `networkSupport`. */
+  mode: string;
+  displayName?: string;
+  hostnames: string[];
+  operations?: DeclaredNetworkOperations;
+  remoteMaterials?: DeclaredRemoteMaterials;
+  /** Monitor panel timing for a printer that answers slowly. */
+  monitoring?: DeclaredMonitoringPolicy;
+};
+
+export type DeclaredMaterialSettings = {
+  byOutput?: Record<string, unknown>;
+  byOutputAndMode?: Record<string, Record<string, unknown>>;
+};
+
+export type DeclaredJobMetadataPayload = {
+  settingPath: string;
+  payloadPath: string;
+  payload: string;
+};
 
 export type PluginManifest = {
   schemaVersion: number;
@@ -26,6 +89,11 @@ export type PluginManifest = {
   description?: string;
   author?: string;
   homepage?: string;
+  network?: DeclaredNetworkMode;
+  /** Material pane schema per output format, in the compiled plugins' own shape. */
+  materialSettings?: DeclaredMaterialSettings;
+  /** Scene data the host bakes into a job when a settings path asks for it. */
+  jobMetadataPayloads?: DeclaredJobMetadataPayload[];
   printerPresets?: PrinterPreset[];
   materialTemplates?: Array<Omit<MaterialProfile, 'id' | 'printerProfileId'>>;
   materialPresets?: MaterialPreset[];
@@ -58,16 +126,220 @@ const MONITORING_ADAPTERS_BY_MODE = new Map<string, ProfileMonitoringUiAdapter>(
 const LOCAL_MATERIAL_SETTINGS_BY_OUTPUT = new Map<string, ProfileLocalMaterialSettingsAdapter>();
 const LOCAL_MATERIAL_SETTINGS_BY_OUTPUT_AND_MODE = new Map<string, Map<string, ProfileLocalMaterialSettingsAdapter>>();
 const SCENE_OVERLAY_LOADERS_BY_PLUGIN_ID = new Map<string, PluginSceneOverlayLoaderContract>();
+/** Modes a compiled plugin owns. A package cannot take one over. */
+const BUILTIN_NETWORK_MODE_KEYS = new Set<string>();
+/** Modes the installed packages added, so a rebuild can retract them. */
+const DECLARED_NETWORK_MODE_KEYS = new Set<string>();
+/** `output` and `output|mode` keys the installed packages added to the material maps. */
+const DECLARED_MATERIAL_SETTINGS_KEYS = new Set<string>();
 let builtinAdaptersHydrated = false;
+let adaptersHydratedRevision = -1;
+
+function declaredOperationName(declared: DeclaredNetworkMode): (key: keyof DeclaredNetworkOperations) => string {
+  return (key) => declared.operations?.[key]?.trim() || key;
+}
+
+/**
+ * The common payload contract a declared mode answers with. Fixed keys are what
+ * let one adapter shape serve every package: a malformed field reads as "no
+ * value" instead of leaking a bad type into the monitor panel.
+ */
+export function parseDeclaredNetworkStatus(payload: unknown): PluginMonitoringSnapshotContract {
+  const value = (payload ?? {}) as Record<string, unknown>;
+  const numeric = (input: unknown) => {
+    const parsed = typeof input === 'number' ? input : Number(input);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  const text = (input: unknown) => (typeof input === 'string' ? input : null);
+
+  return {
+    connected: value.connected === true,
+    stateText: text(value.stateText) ?? '',
+    isPrinting: value.isPrinting === true,
+    isPaused: value.isPaused === true,
+    cancelLatched: value.cancelLatched === true,
+    pauseLatched: value.pauseLatched === true,
+    finished: value.finished === true,
+    progressPct: numeric(value.progressPct),
+    currentLayer: numeric(value.currentLayer),
+    totalLayers: numeric(value.totalLayers),
+    plateId: numeric(value.plateId),
+    jobName: text(value.jobName),
+    etaSec: numeric(value.etaSec),
+    thumbnailPath: text(value.thumbnailPath),
+    taskId: text(value.taskId),
+    taskStatus: numeric(value.taskStatus),
+  };
+}
+
+export function parseDeclaredNetworkWebcamInfo(payload: unknown): PluginMonitoringWebcamInfoContract {
+  const value = (payload ?? {}) as Record<string, unknown>;
+  const text = (input: unknown) => (typeof input === 'string' ? input : null);
+  return {
+    available: value.available === true,
+    streamUrl: text(value.streamUrl),
+    snapshotUrl: text(value.snapshotUrl),
+    message: text(value.message) ?? '',
+  };
+}
+
+/** What a declared mode gets when it does not describe on-device materials. */
+const INERT_REMOTE_MATERIALS: RemoteMaterialSettingsAdapter = {
+  primaryEditFields: [],
+  basicSections: [],
+  advancedSections: [],
+  resolveEditDraftFromMeta: () => ({}),
+  resolveMaterialProcessValues: () => ({}),
+  denormalizeEditDraftForBackend: (draft) => ({ ...draft }),
+  resolveAdvancedSectionId: () => '',
+  getFieldHelpText: () => '',
+  isDynamicWaitEnabled: () => false,
+};
+
+function buildDeclaredNetworkAdapter(declared: DeclaredNetworkMode): ProfileNetworkUiAdapter {
+  const operation = declaredOperationName(declared);
+  const printerData = declared.operations?.printerData?.trim();
+  return {
+    mode: declared.mode,
+    pluginId: declared.pluginId,
+    displayName: declared.displayName ?? declared.mode,
+    operationNamespace: declared.mode,
+    // Listing and editing exist only when the package describes the fields; a
+    // declared mode without them keeps the material UI out of the way.
+    supportsRemoteMaterialProfiles: Boolean(declared.remoteMaterials),
+    ...(declared.remoteMaterials
+      ? buildDeclaredRemoteMaterialsAdapter(declared.remoteMaterials)
+      : INERT_REMOTE_MATERIALS),
+    operations: {
+      connect: operation('connect'),
+      discover: operation('discover'),
+      materials: operation('materials'),
+      materialsEdit: operation('materialsEdit'),
+      upload: operation('upload'),
+      ...(printerData ? { printerData } : {}),
+    },
+    defaultLocalHostnames: declared.hostnames,
+  };
+}
+
+function buildDeclaredMonitoringAdapter(declared: DeclaredNetworkMode): ProfileMonitoringUiAdapter {
+  const operation = declaredOperationName(declared);
+  return {
+    mode: declared.mode,
+    pluginId: declared.pluginId,
+    displayName: declared.displayName ?? declared.mode,
+    available: true,
+    operations: {
+      status: operation('status'),
+      webcamInfo: operation('webcamInfo'),
+      platesList: operation('platesList'),
+      start: operation('start'),
+      pause: operation('pause'),
+      resume: operation('resume'),
+      cancel: operation('cancel'),
+      deletePlate: operation('deletePlate'),
+      emergencyStop: operation('emergencyStop'),
+    },
+    parseStatusPayload: (payload) => parseDeclaredNetworkStatus(payload),
+    parseWebcamInfoPayload: (payload) => parseDeclaredNetworkWebcamInfo(payload),
+    ...(declared.monitoring ? { getMonitoringUiPolicy: () => ({ ...declared.monitoring }) } : {}),
+  };
+}
 
 function ensureBuiltinAdaptersHydrated(): void {
-  if (builtinAdaptersHydrated) return;
-  builtinAdaptersHydrated = true;
+  // Presets, templates and declared modes all come from the installed set, so the
+  // registry's revision decides whether these maps are still current.
+  const revision = getPluginRegistryRevision();
+  if (builtinAdaptersHydrated && revision === adaptersHydratedRevision) return;
 
+  if (!builtinAdaptersHydrated) {
+    loadBuiltinAdapters();
+    builtinAdaptersHydrated = true;
+  }
+
+  for (const mode of DECLARED_NETWORK_MODE_KEYS) {
+    NETWORK_ADAPTERS_BY_MODE.delete(mode);
+    MONITORING_ADAPTERS_BY_MODE.delete(mode);
+  }
+  DECLARED_NETWORK_MODE_KEYS.clear();
+
+  for (const plugin of getInstalledProfilePlugins()) {
+    if (!plugin.enabled) continue;
+    const declared = plugin.manifest.network;
+    if (!declared || BUILTIN_NETWORK_MODE_KEYS.has(declared.mode)) continue;
+    // Two packages claiming one mode: the first installed one answers, so the
+    // second cannot silently take the network panel away from it.
+    if (NETWORK_ADAPTERS_BY_MODE.has(declared.mode)) continue;
+    NETWORK_ADAPTERS_BY_MODE.set(declared.mode, buildDeclaredNetworkAdapter(declared));
+    MONITORING_ADAPTERS_BY_MODE.set(declared.mode, buildDeclaredMonitoringAdapter(declared));
+    DECLARED_NETWORK_MODE_KEYS.add(declared.mode);
+  }
+
+  registerDeclaredMaterialSettings();
+
+  adaptersHydratedRevision = revision;
+}
+
+/**
+ * Material pane schemas a package declares. Compiled plugins own their output
+ * format, so a package fills a format nobody else claims; within a format it may
+ * add modes, never replace one.
+ */
+function registerDeclaredMaterialSettings(): void {
+  for (const key of DECLARED_MATERIAL_SETTINGS_KEYS) {
+    const [output, mode] = key.split('|');
+    if (mode) {
+      const modeMap = LOCAL_MATERIAL_SETTINGS_BY_OUTPUT_AND_MODE.get(output);
+      modeMap?.delete(mode);
+      if (modeMap && modeMap.size === 0) LOCAL_MATERIAL_SETTINGS_BY_OUTPUT_AND_MODE.delete(output);
+    } else {
+      LOCAL_MATERIAL_SETTINGS_BY_OUTPUT.delete(output);
+    }
+  }
+  DECLARED_MATERIAL_SETTINGS_KEYS.clear();
+
+  for (const plugin of getInstalledProfilePlugins()) {
+    if (!plugin.enabled) continue;
+    const declared = plugin.manifest.materialSettings;
+    if (!declared) continue;
+
+    for (const [rawOutput, source] of Object.entries(declared.byOutput ?? {})) {
+      const output = normalizeOutputFormat(rawOutput);
+      if (!output || LOCAL_MATERIAL_SETTINGS_BY_OUTPUT.has(output)) continue;
+      const adapter = sanitizeDeclaredMaterialSettings(output, source);
+      if (!adapter) continue;
+      LOCAL_MATERIAL_SETTINGS_BY_OUTPUT.set(output, adapter);
+      DECLARED_MATERIAL_SETTINGS_KEYS.add(output);
+    }
+
+    for (const [rawOutput, modes] of Object.entries(declared.byOutputAndMode ?? {})) {
+      const output = normalizeOutputFormat(rawOutput);
+      if (!output || !modes) continue;
+      const modeMap = LOCAL_MATERIAL_SETTINGS_BY_OUTPUT_AND_MODE.get(output);
+      const additions: Array<[string, ProfileLocalMaterialSettingsAdapter]> = [];
+      for (const [rawMode, source] of Object.entries(modes)) {
+        const mode = normalizeSettingsMode(rawMode);
+        if (!mode || modeMap?.has(mode)) continue;
+        const adapter = sanitizeDeclaredMaterialSettings(output, source, modes);
+        if (adapter) additions.push([mode, adapter]);
+      }
+      if (additions.length === 0) continue;
+      const target = modeMap ?? new Map<string, ProfileLocalMaterialSettingsAdapter>();
+      for (const [mode, adapter] of additions) {
+        target.set(mode, adapter);
+        DECLARED_MATERIAL_SETTINGS_KEYS.add(`${output}|${mode}`);
+      }
+      LOCAL_MATERIAL_SETTINGS_BY_OUTPUT_AND_MODE.set(output, target);
+    }
+  }
+}
+
+function loadBuiltinAdapters(): void {
   getBuiltinComplexPluginDefinitions().forEach((definition) => {
     const networkAdapters = definition.networkAdaptersByMode ?? {};
     Object.values(networkAdapters).forEach((adapter) => {
       NETWORK_ADAPTERS_BY_MODE.set(adapter.mode, adapter);
+      BUILTIN_NETWORK_MODE_KEYS.add(adapter.mode);
     });
 
     const monitoringAdapters = definition.monitoringAdaptersByMode ?? {};
@@ -239,6 +511,18 @@ type PersistedPluginEnvelope = {
 };
 
 const STORAGE_KEY = 'dragonfruit-plugins-v1';
+
+/**
+ * Bumped whenever the installed set changes. Presets and templates are derived
+ * from this registry, so a consumer that memoised them needs a reason to look
+ * again; the profile store's snapshot carries this number.
+ */
+let registryRevision = 0;
+
+export function getPluginRegistryRevision(): number {
+  hydratePluginRegistry();
+  return registryRevision;
+}
 const STORAGE_VERSION = 1;
 const MAX_PRINTER_PRESETS = 128;
 const MAX_MATERIAL_TEMPLATES = 512;
@@ -304,6 +588,111 @@ function sanitizeNetworkSupport(value: unknown): PrinterPreset['networkSupport']
   return normalized;
 }
 
+const NETWORK_MODE_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$/;
+const NETWORK_OPERATION_PATTERN = /^[a-z0-9_./-]{1,64}$/;
+const NETWORK_HOSTNAME_PATTERN = /^[a-z0-9.-]{1,253}$/;
+
+function sanitizeDeclaredNetwork(mode: unknown): DeclaredNetworkMode | null {
+  const value = (mode ?? {}) as Record<string, unknown>;
+  const pluginId = boundedString(value.pluginId, 120);
+  const name = boundedString(value.mode, 48).toLowerCase();
+  if (!pluginId || !NETWORK_MODE_PATTERN.test(name)) return null;
+
+  const displayName = boundedString(value.displayName, 64);
+  const hostnames = Array.isArray(value.hostnames)
+    ? value.hostnames
+      .slice(0, 8)
+      .map((entry) => boundedString(entry, 253).toLowerCase())
+      .filter((entry) => NETWORK_HOSTNAME_PATTERN.test(entry))
+    : [];
+
+  const declaredOperations = (value.operations ?? {}) as Record<string, unknown>;
+  const operations: DeclaredNetworkOperations = {};
+  for (const key of ['connect', 'discover', 'materials', 'materialsEdit', 'printerData', 'status', 'webcamInfo', 'platesList', 'start', 'pause', 'resume', 'cancel', 'deletePlate', 'emergencyStop', 'upload'] as const) {
+    const operation = boundedString(declaredOperations[key], 64);
+    if (operation && NETWORK_OPERATION_PATTERN.test(operation)) operations[key] = operation;
+  }
+
+  const remoteMaterials = sanitizeDeclaredRemoteMaterials(value.remoteMaterials);
+  const monitoring = sanitizeDeclaredMonitoring(value.monitoring);
+
+  return {
+    pluginId,
+    mode: name,
+    displayName: displayName || undefined,
+    hostnames,
+    operations,
+    ...(remoteMaterials ? { remoteMaterials } : {}),
+    ...(monitoring ? { monitoring } : {}),
+  };
+}
+
+function sanitizeDeclaredJobMetadataPayloads(value: unknown): DeclaredJobMetadataPayload[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const dotted = (input: unknown, max: number) => boundedString(input, max);
+  const payloads = value
+    .slice(0, 8)
+    .map((entry) => {
+      const item = (entry ?? {}) as Record<string, unknown>;
+      const settingPath = dotted(item.settingPath, 96);
+      const payloadPath = dotted(item.payloadPath, 96);
+      const payload = boundedString(item.payload, 32).toLowerCase();
+      if (!settingPath || !payloadPath || !payload) return null;
+      return { settingPath, payloadPath, payload };
+    })
+    .filter((entry): entry is DeclaredJobMetadataPayload => entry !== null);
+  return payloads.length > 0 ? payloads : undefined;
+}
+
+function sanitizeDeclaredMaterialSettingsMap(value: unknown): DeclaredMaterialSettings | null {
+  if (!value || typeof value !== 'object') return null;
+  const source = value as Record<string, unknown>;
+  const byOutput: Record<string, unknown> = {};
+  if (source.byOutput && typeof source.byOutput === 'object' && !Array.isArray(source.byOutput)) {
+    for (const [key, entry] of Object.entries(source.byOutput as Record<string, unknown>).slice(0, 8)) {
+      if (entry && typeof entry === 'object') byOutput[key] = entry;
+    }
+  }
+  const byOutputAndMode: Record<string, Record<string, unknown>> = {};
+  if (source.byOutputAndMode && typeof source.byOutputAndMode === 'object' && !Array.isArray(source.byOutputAndMode)) {
+    for (const [key, entry] of Object.entries(source.byOutputAndMode as Record<string, unknown>).slice(0, 8)) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+      const modes: Record<string, unknown> = {};
+      for (const [mode, modeSource] of Object.entries(entry as Record<string, unknown>).slice(0, 8)) {
+        if (modeSource && typeof modeSource === 'object') modes[mode] = modeSource;
+      }
+      if (Object.keys(modes).length > 0) byOutputAndMode[key] = modes;
+    }
+  }
+  if (Object.keys(byOutput).length === 0 && Object.keys(byOutputAndMode).length === 0) return null;
+  return { byOutput, byOutputAndMode };
+}
+
+function sanitizeDeclaredMonitoring(value: unknown): DeclaredMonitoringPolicy | null {
+  if (!value || typeof value !== 'object') return null;
+  const source = value as Record<string, unknown>;
+  const bounded = (input: unknown, max: number) => {
+    const parsed = Number(input);
+    return Number.isFinite(parsed) && parsed >= 0 ? Math.min(Math.round(parsed), max) : undefined;
+  };
+
+  const policy: DeclaredMonitoringPolicy = {
+    ...(bounded(source.busyResponseGraceMs, 120_000) !== undefined
+      ? { busyResponseGraceMs: bounded(source.busyResponseGraceMs, 120_000) } : {}),
+    ...(bounded(source.inconclusiveReachabilityMaxPolls, 100) !== undefined
+      ? { inconclusiveReachabilityMaxPolls: bounded(source.inconclusiveReachabilityMaxPolls, 100) } : {}),
+    ...(typeof source.supportsWebcamStreamSlotReset === 'boolean'
+      ? { supportsWebcamStreamSlotReset: source.supportsWebcamStreamSlotReset } : {}),
+    ...(bounded(source.webcamMaxConsecutiveTimeouts, 100) !== undefined
+      ? { webcamMaxConsecutiveTimeouts: bounded(source.webcamMaxConsecutiveTimeouts, 100) } : {}),
+    ...(bounded(source.webcamTimeoutCooldownMs, 600_000) !== undefined
+      ? { webcamTimeoutCooldownMs: bounded(source.webcamTimeoutCooldownMs, 600_000) } : {}),
+    ...(bounded(source.webcamFailureCooldownMs, 600_000) !== undefined
+      ? { webcamFailureCooldownMs: bounded(source.webcamFailureCooldownMs, 600_000) } : {}),
+  };
+  return Object.keys(policy).length > 0 ? policy : null;
+}
+
 function sanitizeImageAssetPath(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
@@ -317,7 +706,9 @@ function sanitizeImageAssetPath(value: unknown): string | undefined {
     return resolveRuntimeAssetPath(trimmed);
   }
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
-  if (trimmed.startsWith('data:')) return undefined;
+  // Package preset images are inlined at registration (a webview cannot load a
+  // path inside the app data dir), so a bounded data URL is a valid source here.
+  if (trimmed.startsWith('data:image/') && trimmed.length <= 4_000_000) return trimmed;
 
   return undefined;
 }
@@ -626,6 +1017,9 @@ function sanitizeManifest(input: unknown): PluginManifest | null {
     description: boundedString(value.description, 500) || undefined,
     author: boundedString(value.author, 120) || undefined,
     homepage: boundedString(value.homepage, 500) || undefined,
+    network: sanitizeDeclaredNetwork(value.network) ?? undefined,
+    materialSettings: sanitizeDeclaredMaterialSettingsMap(value.materialSettings) ?? undefined,
+    jobMetadataPayloads: sanitizeDeclaredJobMetadataPayloads(value.jobMetadataPayloads),
     printerPresets,
     materialTemplates,
     materialPresets,
@@ -700,6 +1094,7 @@ export function hydratePluginRegistry() {
     externalPlugins = plugins
       .map((plugin) => sanitizeInstalledPlugin(plugin))
       .filter((plugin): plugin is InstalledProfilePlugin => plugin !== null && plugin.source !== 'builtin');
+    registryRevision += 1;
   } catch (error) {
     console.error('[PluginRegistry] Failed to hydrate plugins', error);
     externalPlugins = [];
@@ -747,6 +1142,7 @@ export function installExternalProfilePlugin(
     plugin,
   ];
 
+  registryRevision += 1;
   save();
   return plugin;
 }
@@ -756,7 +1152,10 @@ export function uninstallExternalProfilePlugin(pluginId: string): boolean {
   const before = externalPlugins.length;
   externalPlugins = externalPlugins.filter((plugin) => plugin.manifest.id !== pluginId);
   const changed = externalPlugins.length !== before;
-  if (changed) save();
+  if (changed) {
+    registryRevision += 1;
+    save();
+  }
   return changed;
 }
 

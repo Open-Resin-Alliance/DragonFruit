@@ -1,9 +1,29 @@
 'use client';
 
 import React from 'react';
-import { AlertTriangle, CheckCircle2, Download, ExternalLink, Github, PackageCheck, Plug, ShieldCheck, Trash2 } from 'lucide-react';
-import { Button, Spinner } from '@/components/atoms';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import type { MessageDescriptor } from '@lingui/core';
+import { Plural, Trans } from '@lingui/react/macro';
+import { AlertTriangle, Check, CheckCircle2, ChevronDown, ChevronUp, Copy, Download, ExternalLink, Github, Info as InfoIcon, LockKeyhole, PackageCheck, PackageOpen, PackagePlus, Plug, RotateCcw, ShieldAlert, ShieldCheck, Trash2 } from 'lucide-react';
+import { Button, IconButton, Input, SettingRow, Spinner } from '@/components/atoms';
 import { Tooltip } from '@/components/ui/Tooltip';
+import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import { refreshSideloadedContributions } from '@/features/plugins/sideloadedFileTypes';
+import { isTauriRuntime } from '@/utils/tauriRuntime';
+import {
+  getSideloadAllowance,
+  installSideloadPackage,
+  inspectSideloadPackage,
+  listSideloadedPlugins,
+  pickSideloadPackage,
+  removeSideloadedPlugin,
+  setSideloadAllowance,
+  shortFingerprint,
+  type InstalledSideloadedPlugin,
+  type SideloadedCapability,
+  type SideloadedInspect,
+} from '@/features/plugins/sideloadedPlugins';
 import {
   getInstalledPlugins,
   getProfileStoreSnapshot,
@@ -13,9 +33,114 @@ import {
   uninstallPlugin,
 } from '@/features/profiles/profileStore';
 import type { PluginManifest } from '@/features/plugins/pluginRegistry';
+import { requestPluginManifest } from '@/features/plugins/pluginManifestClient';
 import { PluginStudioModal } from './PluginStudioModal';
+import { repositoryLabel } from '@/features/plugins/repositoryLabel';
+
+async function openExternalUrl(url: string) {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('open_external_url', { url });
+  } catch {
+    window.open(url, '_blank');
+  }
+}
+
+/**
+ * One read-only fact: label on the left, value on the right. `stacked` puts the
+ * value on its own left-aligned line, for content that is wider than the value
+ * column (capability chips) and would otherwise wrap raggedly against the right
+ * edge.
+ */
+function ReviewFact({ label, mono = false, stacked = false, children }: {
+  label: React.ReactNode;
+  mono?: boolean;
+  stacked?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className={stacked
+        ? 'border-b px-3 py-2 last:border-b-0'
+        : 'flex items-baseline justify-between gap-3 border-b px-3 py-2 last:border-b-0'}
+      style={{ borderColor: 'var(--border-subtle)' }}
+    >
+      <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+        {label}
+      </span>
+      <span
+        className={[
+          stacked ? 'mt-1.5 flex flex-wrap items-center gap-1 text-xs' : 'text-xs',
+          mono ? 'font-mono break-all' : '',
+          stacked ? '' : 'text-right',
+        ].filter(Boolean).join(' ')}
+        style={{ color: 'var(--text-strong)' }}
+      >
+        {children}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * Seconds the prompt waits before it reloads on its own. The plugin's code is
+ * loaded by the webview and the engine at start, so nothing here is optional: the
+ * dialog has one outcome and no dismiss.
+ */
+const PLUGIN_RELOAD_SECONDS = 15;
+
+/**
+ * Interpolated messages live at module scope: React Compiler renames interpolated
+ * locals inside components, which desyncs the message id from the catalog.
+ */
+const reloadCountdownLabel = (seconds: number) => msg`Reload Now (${seconds}s)`;
+
+function reloadDragonFruit() {
+  if (typeof window !== 'undefined') {
+    window.location.reload();
+  }
+}
 
 const BUILTIN_ATHENA_REPOSITORY_URL = 'https://github.com/Open-Resin-Alliance/DragonFruit';
+
+// Interpolating messages stay at module scope for the same reason.
+const passphrasePlaceholder = (pluginName: string) => msg`Passphrase for ${pluginName}`;
+
+// Module scope on purpose: a `msg` descriptor created inside a component can be
+// renamed out from under its catalog id by React Compiler.
+const SIDELOAD_CAPABILITY_MESSAGES: Record<SideloadedCapability, MessageDescriptor> = {
+  slicerEncoder: msg`Slicer encoder`,
+  networkOperations: msg`Network operations`,
+  fileType: msg`File-type import`,
+};
+
+/**
+ * One word each, for the narrow value column in the details modal; the full name
+ * stays in the tooltip and in the expanded list. Contexts keep these apart from
+ * verbs like "import" elsewhere in the app.
+ */
+const SIDELOAD_CAPABILITY_SHORT_MESSAGES: Record<SideloadedCapability, MessageDescriptor> = {
+  slicerEncoder: msg({ message: 'Encoder', context: 'plugin capability' }),
+  networkOperations: msg({ message: 'Network', context: 'plugin capability' }),
+  fileType: msg({ message: 'Import', context: 'plugin capability' }),
+};
+
+/** One row in the installed list, whichever tier the plugin came from. */
+type InstalledPluginRow = {
+  key: string;
+  id: string;
+  name: string;
+  version: string;
+  description?: string;
+  source: 'builtin' | 'github' | 'sideloaded';
+  link?: string;
+  publisher?: string;
+  signingKeyFingerprint?: string;
+  capabilities?: SideloadedCapability[];
+  unverified: boolean;
+  acceptedAt?: string;
+  remove?: () => void;
+};
 
 function isOraHostedRepository(url: string | undefined): boolean {
   if (!url) return false;
@@ -90,6 +215,27 @@ function normalizePluginManifest(input: GithubManifestResponse['manifest']): Plu
 }
 
 export function PluginsSettingsTab() {
+  const { _ } = useLingui();
+  const [detailsRow, setDetailsRow] = React.useState<InstalledPluginRow | null>(null);
+  const [copiedSigningKey, setCopiedSigningKey] = React.useState(false);
+  const [capabilitiesExpanded, setCapabilitiesExpanded] = React.useState(false);
+  const [reloadRequired, setReloadRequired] = React.useState(false);
+  const [reloadSecondsLeft, setReloadSecondsLeft] = React.useState(PLUGIN_RELOAD_SECONDS);
+
+  React.useEffect(() => {
+    if (!reloadRequired) return;
+    setReloadSecondsLeft(PLUGIN_RELOAD_SECONDS);
+    const timer = window.setInterval(() => {
+      setReloadSecondsLeft((previous) => Math.max(0, previous - 1));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [reloadRequired]);
+
+  React.useEffect(() => {
+    if (reloadRequired && reloadSecondsLeft <= 0) {
+      reloadDragonFruit();
+    }
+  }, [reloadRequired, reloadSecondsLeft]);
   React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
 
   const [isLightTheme, setIsLightTheme] = React.useState(false);
@@ -113,6 +259,154 @@ export function PluginsSettingsTab() {
   const [status, setStatus] = React.useState<{ kind: 'idle' | 'success' | 'error'; message: string }>({ kind: 'idle', message: '' });
   const isDevRuntime = process.env.NODE_ENV === 'development';
 
+  // Sideloaded complex plugins exist only in the desktop shell: the web build has
+  // no app data dir and no place to put a native binary.
+  const [isDesktop, setIsDesktop] = React.useState(false);
+  const [allowSideload, setAllowSideload] = React.useState(false);
+  // Sideloading is a semi-hidden switch behind the card's cog: enabling it asks
+  // for an explicit acknowledgement instead of being a row a user can flip by accident.
+  const [allowanceDialogOpen, setAllowanceDialogOpen] = React.useState(false);
+  const [sideloadPlugins, setSideloadPlugins] = React.useState<InstalledSideloadedPlugin[]>([]);
+  const [sideloadBusy, setSideloadBusy] = React.useState(false);
+  const [pendingSideload, setPendingSideload] = React.useState<{ path: string; info: SideloadedInspect } | null>(null);
+  const [sideloadPassphrase, setSideloadPassphrase] = React.useState('');
+  // Sealed packages finish in a second, focused step so the passphrase is not a
+  // field a user can scroll past on a long review sheet.
+  const [passphraseOpen, setPassphraseOpen] = React.useState(false);
+  const [passphraseError, setPassphraseError] = React.useState<string | null>(null);
+  const [pendingRemoveSideload, setPendingRemoveSideload] = React.useState<InstalledSideloadedPlugin | null>(null);
+  // A fresh install is announced by the row itself, not by a green line above the
+  // list: one glow that fades after three seconds.
+  const [recentlyInstalledKey, setRecentlyInstalledKey] = React.useState<string | null>(null);
+  const highlightTimerRef = React.useRef<number | null>(null);
+
+  const highlightInstalledRow = React.useCallback((key: string) => {
+    if (highlightTimerRef.current !== null) {
+      window.clearTimeout(highlightTimerRef.current);
+    }
+    setRecentlyInstalledKey(key);
+    highlightTimerRef.current = window.setTimeout(() => {
+      setRecentlyInstalledKey(null);
+      highlightTimerRef.current = null;
+    }, 3_000);
+  }, []);
+
+  React.useEffect(() => () => {
+    if (highlightTimerRef.current !== null) {
+      window.clearTimeout(highlightTimerRef.current);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    setIsDesktop(isTauriRuntime());
+  }, []);
+
+  React.useEffect(() => {
+    if (!isDesktop) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [allow, installed] = await Promise.all([
+          getSideloadAllowance(),
+          listSideloadedPlugins(),
+        ]);
+        if (cancelled) return;
+        setAllowSideload(allow);
+        setSideloadPlugins(installed);
+        void refreshSideloadedContributions();
+      } catch (error) {
+        if (!cancelled) {
+          setStatus({ kind: 'error', message: String(error) });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isDesktop]);
+
+  const refreshSideloaded = React.useCallback(async () => {
+    setSideloadPlugins(await listSideloadedPlugins());
+  }, []);
+
+  const handleSideloadAllowanceChange = React.useCallback(async (next: boolean) => {
+    setAllowSideload(next);
+    setStatus({ kind: 'idle', message: '' });
+    try {
+      await setSideloadAllowance(next);
+      await refreshSideloaded();
+      await refreshSideloadedContributions();
+    } catch (error) {
+      setAllowSideload(!next);
+      setStatus({ kind: 'error', message: String(error) });
+    }
+  }, [refreshSideloaded]);
+
+  const handlePickSideloadPackage = React.useCallback(async () => {
+    setStatus({ kind: 'idle', message: '' });
+    try {
+      const path = await pickSideloadPackage();
+      if (!path) return;
+      const info = await inspectSideloadPackage(path);
+      setSideloadPassphrase('');
+      setPendingSideload({ path, info });
+    } catch (error) {
+      setStatus({ kind: 'error', message: String(error) });
+    }
+  }, []);
+
+  const closePassphraseDialog = React.useCallback(() => {
+    setPassphraseOpen(false);
+    setSideloadPassphrase('');
+    setPassphraseError(null);
+  }, []);
+
+  const handleConfirmSideloadInstall = React.useCallback(async () => {
+    if (!pendingSideload) return;
+    const sealed = pendingSideload.info.sealed;
+    setSideloadBusy(true);
+    setPassphraseError(null);
+    setStatus({ kind: 'idle', message: '' });
+    try {
+      const installed = await installSideloadPackage(
+        pendingSideload.path,
+        sealed ? sideloadPassphrase : undefined,
+      );
+      await refreshSideloaded();
+      await refreshSideloadedContributions();
+      setPendingSideload(null);
+      closePassphraseDialog();
+      highlightInstalledRow(`sideloaded:${installed.manifest.id}`);
+      setReloadRequired(true);
+    } catch (error) {
+      // A wrong passphrase belongs next to the field that produced it.
+      if (sealed) {
+        setPassphraseError(String(error));
+      } else {
+        setStatus({ kind: 'error', message: String(error) });
+      }
+    } finally {
+      setSideloadBusy(false);
+    }
+  }, [closePassphraseDialog, highlightInstalledRow, pendingSideload, refreshSideloaded, sideloadPassphrase]);
+
+  const handleConfirmRemoveSideload = React.useCallback(async () => {
+    if (!pendingRemoveSideload) return;
+    const target = pendingRemoveSideload;
+    setPendingRemoveSideload(null);
+    setSideloadBusy(true);
+    try {
+      await removeSideloadedPlugin(target.manifest.id);
+      await refreshSideloaded();
+      await refreshSideloadedContributions();
+      setReloadRequired(true);
+    } catch (error) {
+      setStatus({ kind: 'error', message: String(error) });
+    } finally {
+      setSideloadBusy(false);
+    }
+  }, [pendingRemoveSideload, refreshSideloaded]);
+
   // Read fresh list on every render; avoids stale memo behavior when external store
   // updates don't change snapshot identity but still emit notifications.
   const installedPlugins = getInstalledPlugins();
@@ -124,20 +418,15 @@ export function PluginsSettingsTab() {
       acknowledgeLiabilityWarning?: boolean;
     },
   ) => {
-    const response = await fetch('/api/plugins/github-manifest', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        repoUrl: repoUrlInput,
-        allowUnverifiedInstall: options?.allowUnverifiedInstall === true,
-        acknowledgeLiabilityWarning: options?.acknowledgeLiabilityWarning === true,
-      }),
+    const { status, body } = await requestPluginManifest({
+      repoUrl: repoUrlInput,
+      allowUnverifiedInstall: options?.allowUnverifiedInstall === true,
+      acknowledgeLiabilityWarning: options?.acknowledgeLiabilityWarning === true,
     });
 
-    const payload = await response.json().catch(() => null) as GithubManifestResponse | null;
-    if (!response.ok || !payload?.ok || !payload.manifest) {
+    const payload = body as GithubManifestResponse | null;
+    // 2xx is not enough on its own: a parsed-but-rejected manifest also fails the install.
+    if (status < 200 || status > 299 || !payload?.ok || !payload.manifest) {
       const err = new Error(payload?.error || 'Unable to install plugin from GitHub repository.') as Error & {
         payload?: GithubManifestResponse | null;
       };
@@ -242,10 +531,7 @@ export function PluginsSettingsTab() {
 
   const handleConfirmUninstall = React.useCallback(() => {
     if (!pendingRemovePlugin) return;
-    const removed = uninstallPlugin(pendingRemovePlugin.id);
-    if (removed) {
-      setStatus({ kind: 'success', message: `Uninstalled plugin: ${pendingRemovePlugin.name}` });
-    }
+    uninstallPlugin(pendingRemovePlugin.id);
     setPendingRemovePlugin(null);
   }, [pendingRemovePlugin]);
 
@@ -261,12 +547,7 @@ export function PluginsSettingsTab() {
         liabilityAcceptedAt: pendingInstallPreview.liabilityAcceptedAt,
       });
 
-      setStatus({
-        kind: 'success',
-        message: pendingInstallPreview.trust === 'unverified-user-approved'
-          ? `Installed unverified plugin: ${pendingInstallPreview.manifest.name}`
-          : `Installed plugin: ${pendingInstallPreview.manifest.name}`,
-      });
+      highlightInstalledRow(`profile:${pendingInstallPreview.manifest.id}`);
       setRepoUrl('');
       setPendingInstallPreview(null);
     } catch (error) {
@@ -277,7 +558,7 @@ export function PluginsSettingsTab() {
     } finally {
       setIsInstalling(false);
     }
-  }, [pendingInstallPreview]);
+  }, [highlightInstalledRow, pendingInstallPreview]);
 
   React.useEffect(() => {
     if (isDevRuntime) return;
@@ -324,432 +605,727 @@ export function PluginsSettingsTab() {
     };
   }, []);
 
-  const accentSecondaryActionColor = isLightTheme
-    ? 'color-mix(in srgb, #4f8a08, var(--text-strong) 30%)'
-    : 'var(--accent-secondary)';
-  const accentSecondaryActionBorderColor = isLightTheme
-    ? 'color-mix(in srgb, #6aa20d, var(--border-subtle) 34%)'
-    : 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)';
-  const accentSecondaryActionBackground92 = isLightTheme
-    ? 'color-mix(in srgb, #6aa20d, var(--surface-1) 80%)'
-    : 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)';
-  const accentSecondaryActionStyle92: React.CSSProperties = {
-    color: accentSecondaryActionColor,
-    borderColor: accentSecondaryActionBorderColor,
-    background: accentSecondaryActionBackground92,
-  };
   const builtinShieldIconColor = isLightTheme
     ? 'color-mix(in srgb, #4f8a08, var(--text-strong) 28%)'
     : '#86efac';
 
+  // One list for all three tiers: built-in, GitHub manifest packs and sideloaded
+  // packages differ in where they came from, not in how they are managed.
+  const installedRows: InstalledPluginRow[] = [];
+  // A sideloaded package with presets also registers a profile-store entry, so the
+  // printer library sees them. That entry must not become a second row here: the
+  // host's record is the one that can be enabled, removed or re-imported.
+  const sideloadedIds = new Set(sideloadPlugins.map((plugin) => plugin.manifest.id));
+  for (const plugin of installedPlugins) {
+    if (sideloadedIds.has(plugin.manifest.id)) continue;
+    const manifest = plugin.manifest;
+    const isBuiltin = plugin.source === 'builtin';
+    const repositoryUrl = manifest.homepage || (isBuiltin ? BUILTIN_ATHENA_REPOSITORY_URL : plugin.sourceUrl);
+    installedRows.push({
+      key: `profile:${manifest.id}`,
+      id: manifest.id,
+      name: manifest.name,
+      version: manifest.version,
+      description: manifest.description,
+      source: isBuiltin ? 'builtin' : 'github',
+      link: typeof repositoryUrl === 'string' && repositoryUrl.trim().length > 0 ? repositoryUrl : undefined,
+      unverified: !isBuiltin && plugin.installTrust === 'unverified-user-approved',
+      acceptedAt: plugin.liabilityAcceptedAt,
+      remove: isBuiltin ? undefined : () => handleUninstall(manifest.id, manifest.name),
+    });
+  }
+  for (const plugin of sideloadPlugins) {
+    installedRows.push({
+      key: `sideloaded:${plugin.manifest.id}`,
+      id: plugin.manifest.id,
+      name: plugin.manifest.name,
+      version: plugin.manifest.version,
+      description: plugin.manifest.vendor.name,
+      source: 'sideloaded',
+      publisher: plugin.manifest.vendor.name,
+      signingKeyFingerprint: plugin.publisherFingerprint,
+      capabilities: plugin.manifest.capabilities,
+      unverified: false,
+      remove: () => setPendingRemoveSideload(plugin),
+    });
+  }
+  installedRows.sort((left, right) => left.name.localeCompare(right.name));
+  // Packages first, then GitHub packs, then what ships with the app — each tier
+  // separated by a hairline, and an empty tier contributes nothing.
+  const rowGroups = [
+    { key: 'sideloaded', rows: installedRows.filter((row) => row.source === 'sideloaded') },
+    { key: 'github', rows: installedRows.filter((row) => row.source === 'github') },
+    { key: 'builtin', rows: installedRows.filter((row) => row.source === 'builtin') },
+  ].filter((group) => group.rows.length > 0);
+
+  const renderInstalledRow = (row: InstalledPluginRow) => (
+    <li
+      key={row.key}
+      className="flex items-center justify-between gap-2 rounded-md border px-2.5 py-2"
+      style={{
+        borderColor: row.key === recentlyInstalledKey
+          ? 'color-mix(in srgb, #86efac, var(--border-subtle) 28%)'
+          : 'var(--border-subtle)',
+        // The fill, not just the outline: a ring alone read as a focus state.
+        background: row.key === recentlyInstalledKey
+          ? 'color-mix(in srgb, #86efac, var(--surface-0) 88%)'
+          : 'var(--surface-0)',
+        boxShadow: row.key === recentlyInstalledKey
+          ? 'inset 0 0 0 1px color-mix(in srgb, #86efac, transparent 45%), inset 0 0 14px color-mix(in srgb, #86efac, transparent 72%), 0 0 16px color-mix(in srgb, #86efac, transparent 62%)'
+          : 'none',
+        transition: 'box-shadow 600ms ease, border-color 600ms ease, background 600ms ease',
+      }}
+    >
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-1.5">
+              {row.source === 'github' && (
+                <Github className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--text-muted)' }} />
+              )}
+              {row.source === 'sideloaded' && (
+                <PackagePlus className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--text-muted)' }} />
+              )}
+              {row.link ? (
+                <button
+                  onClick={() => { void openExternalUrl(row.link as string); }}
+                  className="inline-flex items-center gap-1 truncate text-sm font-semibold underline underline-offset-2"
+                  style={{ color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                  title={row.link}
+                >
+                  {row.name}
+                  <ExternalLink className="h-3 w-3 shrink-0" />
+                </button>
+              ) : (
+                <span className="truncate text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{row.name}</span>
+              )}
+              {row.unverified && (
+                <span
+                  className="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[11px]"
+                  style={{
+                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 35%)',
+                    color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)',
+                    background: 'color-mix(in srgb, #d97706, var(--surface-2) 88%)',
+                  }}
+                >
+                  <Trans>Unverified source</Trans>
+                </span>
+              )}
+            </div>
+            {row.description && (
+              <div className="mt-0.5 text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
+                {row.description}
+              </div>
+            )}
+          </div>
+    
+          <div className="flex shrink-0 items-center gap-1.5 self-center">
+            <Tooltip content={_(msg`Plugin details`)} wrapperClassName="flex items-center">
+              <IconButton
+                variant="ghost"
+                size="xs"
+                aria-label={_(msg`Plugin details`)}
+                onClick={() => setDetailsRow(row)}
+              >
+                <InfoIcon className="h-4 w-4 shrink-0 block" style={{ color: 'var(--text-muted)' }} />
+              </IconButton>
+            </Tooltip>
+            {row.source === 'builtin' && (
+              <Tooltip content={_(msg`Built-in plugin`)} wrapperClassName="flex items-center">
+                <ShieldCheck className="h-4 w-4 shrink-0 block" style={{ color: builtinShieldIconColor }} />
+              </Tooltip>
+            )}
+            {row.source === 'builtin' && isOraHostedRepository(row.link) ? (
+              <Tooltip content={_(msg`Officially verified by ORA`)} wrapperClassName="flex items-center">
+                <CheckCircle2 className="h-4 w-4 shrink-0 block" style={{ color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)' }} />
+              </Tooltip>
+            ) : null}
+            {row.remove && (
+              <Tooltip content={_(msg`Remove plugin`)} wrapperClassName="flex items-center">
+                <IconButton
+                  variant="ghost"
+                  size="xs"
+                  aria-label={_(msg`Remove plugin`)}
+                  onClick={row.remove}
+                  className="hover:brightness-125"
+                >
+                  <Trash2 className="h-4 w-4" style={{ color: '#fca5a5' }} />
+                </IconButton>
+              </Tooltip>
+            )}
+          </div>
+        </li>
+  );
+
   return (
     <div className="space-y-3">
-      <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}>
-        <div className="flex items-start gap-2">
+      <section className="relative rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+        {isDesktop && (
+          <IconButton
+            variant="surface"
+            size="sm"
+            tone="warning"
+            className="absolute right-3 top-3 hover:brightness-110"
+            aria-label={_(msg`Sideloaded packages`)}
+            title={_(msg`Sideloaded packages`)}
+            onClick={() => setAllowanceDialogOpen(true)}
+          >
+            <PackageOpen className="h-4 w-4" />
+          </IconButton>
+        )}
+        <div className="flex items-start gap-2.5">
           <span
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
             style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 8%)' }}
           >
             <Plug className="h-4 w-4" style={{ color: 'var(--accent)' }} />
           </span>
-          <div className="flex-1">
-            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>Plugin Loader</h3>
-            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Install plugin manifests from GitHub repositories (profile packs only). Remote code execution is not supported.
+          <div className="min-w-0 flex-1 pr-10">
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>{_(msg`Plugins`)}</h3>
+            <p className="mt-0.5 text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
+              <Trans>Profile packs add presets and material profiles. A sideloaded package adds code and needs a publisher you trust.</Trans>
             </p>
           </div>
         </div>
-        {isDevRuntime && (
-          <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-            Debug URLs: <code>df://debug_plugin_official</code> and <code>df://debug_plugin_3rd</code>
-          </p>
-        )}
 
-        <div className="mt-2.5 grid grid-cols-[1fr_auto] gap-2">
-          <input
-            type="text"
-            value={repoUrl}
-            onChange={(event) => setRepoUrl(event.target.value)}
-            placeholder="https://github.com/<owner>/<repo> or df://debug_plugin_official"
-            className="ui-input h-[34px] px-2.5 py-1.5 text-sm"
-          />
-          <Button
-            type="button"
-            onClick={() => { void handleInstall(); }}
-            disabled={isInstalling}
-            variant="secondary"
-            size="auto"
-            className="!h-[34px] !px-3 !py-0 text-xs inline-flex items-center gap-1.5 disabled:opacity-60"
-            style={accentSecondaryActionStyle92}
+        <div className="mt-2 grid gap-2">
+          <SettingRow
+            bordered
+            label={_(msg`Install profile pack`)}
+            description={_(msg`Adds presets and materials from a repository. Contains no code.`)}
           >
-            {isInstalling ? <Spinner size="sm" /> : <Download className="h-3.5 w-3.5" />}
-            {isInstalling ? 'Installing…' : 'Install Plugin'}
-          </Button>
+            <div className="flex items-center gap-2" style={{ width: 'min(420px, 46vw)' }}>
+              <Input
+                type="text"
+                value={repoUrl}
+                onChange={(event) => setRepoUrl(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') void handleInstall();
+                }}
+                placeholder={isDevRuntime ? 'df://debug_plugin_official' : _(msg`https://github.com/owner/repo`)}
+                className="h-[34px] min-w-0 flex-1 text-sm"
+                aria-label={_(msg`Plugin repository URL`)}
+              />
+              <Button
+                variant="tinted-accent"
+                className="inline-flex shrink-0 items-center gap-1.5"
+                disabled={isInstalling}
+                onClick={() => { void handleInstall(); }}
+              >
+                {isInstalling ? <Spinner size="sm" /> : <Download className="h-3.5 w-3.5" />}
+                {isInstalling ? <Trans>Installing…</Trans> : <Trans>Install</Trans>}
+              </Button>
+            </div>
+          </SettingRow>
+
+          {isDesktop && allowSideload && (
+            <SettingRow
+              bordered
+              label={_(msg`Import package`)}
+              description={_(msg`Checks the publisher signature, then unseals and installs the .dfplugin file.`)}
+            >
+              <Button
+                variant="secondary"
+                className="inline-flex shrink-0 items-center gap-1.5"
+                disabled={sideloadBusy}
+                onClick={() => { void handlePickSideloadPackage(); }}
+              >
+                {sideloadBusy ? <Spinner size="sm" /> : <PackagePlus className="h-3.5 w-3.5" />}
+                <Trans>Choose file…</Trans>
+              </Button>
+            </SettingRow>
+          )}
         </div>
 
         {status.kind !== 'idle' && (
-          <div className="mt-2 text-xs" style={{ color: status.kind === 'error' ? '#fca5a5' : '#86efac' }}>
+          <p className="mt-2 text-xs" style={{ color: status.kind === 'error' ? '#fca5a5' : '#86efac' }}>
             {status.message}
+          </p>
+        )}
+      </section>
+
+      <StructuredDialogModal
+        open={pendingLiabilityInstall !== null}
+        ariaLabel={_(msg`Install unverified plugin`)}
+        title={<Trans>Install an unverified plugin?</Trans>}
+        subtitle={pendingLiabilityInstall
+          ? `${pendingLiabilityInstall.unverifiedRepo?.owner ?? ''}/${pendingLiabilityInstall.unverifiedRepo?.name ?? ''}`
+          : undefined}
+        icon={<AlertTriangle className="h-4 w-4" />}
+        iconTone="warning"
+        maxWidthClassName="max-w-xl"
+        zIndexClassName="z-[130]"
+        closeAriaLabel={_(msg`Close modal`)}
+        closeDisabled={isInstalling}
+        onClose={() => setPendingLiabilityInstall(null)}
+        onBackdropClick={() => setPendingLiabilityInstall(null)}
+        actions={(
+          <>
+            <Button variant="secondary" disabled={isInstalling} onClick={() => setPendingLiabilityInstall(null)}>
+              <Trans>Cancel</Trans>
+            </Button>
+            <Button
+              variant="tinted-warning"
+              className="inline-flex items-center justify-center gap-1.5"
+              disabled={isInstalling}
+              onClick={() => { void handleConfirmLiabilityInstall(); }}
+            >
+              {isInstalling ? <Spinner size="sm" /> : <AlertTriangle className="h-3.5 w-3.5" />}
+              {isInstalling ? <Trans>Installing…</Trans> : <Trans>Install anyway</Trans>}
+            </Button>
+          </>
+        )}
+      >
+        <div className="space-y-1.5">
+          <p className="text-sm leading-relaxed" style={{ color: 'var(--text-strong)' }}>
+            <Trans>DragonFruit cannot confirm who published this repository.</Trans>
+          </p>
+          <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+            <Trans>A profile pack is data only — presets and material templates — so installing it cannot add code. The values it declares are still yours to check.</Trans>
+          </p>
+        </div>
+        {Array.isArray(pendingLiabilityInstall?.allowlistRules) && pendingLiabilityInstall.allowlistRules.length > 0 && (
+          <div
+            className="rounded-md border px-3 py-2"
+            style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+          >
+            <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+              <Trans>Trusted sources</Trans>
+            </div>
+            <div className="mt-0.5 text-xs break-all" style={{ color: 'var(--text-strong)' }}>
+              {pendingLiabilityInstall.allowlistRules.join(', ')}
+            </div>
           </div>
         )}
-      </div>
+      </StructuredDialogModal>
 
-      {pendingLiabilityInstall && (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 backdrop-blur-sm px-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
-          if (event.target === event.currentTarget && !isInstalling) setPendingLiabilityInstall(null);
-        }}>
-          <div className="w-full max-w-xl rounded-xl border p-4 ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
-            <div className="flex items-start gap-2.5">
-              <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border leading-none"
-                style={{
+      <StructuredDialogModal
+        open={pendingInstallPreview !== null}
+        ariaLabel={_(msg`Review plugin before install`)}
+        title={<Trans>Install this plugin?</Trans>}
+        subtitle={pendingInstallPreview?.manifest.name}
+        icon={<Plug className="h-4 w-4" />}
+        iconTone="accent"
+        maxWidthClassName="max-w-2xl"
+        zIndexClassName="z-[130]"
+        closeAriaLabel={_(msg`Close modal`)}
+        closeDisabled={isInstalling}
+        onClose={() => setPendingInstallPreview(null)}
+        onBackdropClick={() => setPendingInstallPreview(null)}
+        bodyClassName="space-y-3 p-5"
+        actions={(
+          <>
+            <Button variant="secondary" disabled={isInstalling} onClick={() => setPendingInstallPreview(null)}>
+              <Trans>Cancel</Trans>
+            </Button>
+            <Button
+              variant="tinted-accent"
+              className="inline-flex items-center justify-center gap-1.5"
+              disabled={isInstalling}
+              onClick={handleInstallFromPreview}
+            >
+              {isInstalling ? <Spinner size="sm" /> : <Download className="h-3.5 w-3.5" />}
+              {isInstalling ? <Trans>Installing…</Trans> : <Trans>Install</Trans>}
+            </Button>
+          </>
+        )}
+      >
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[11px] rounded-full border px-1.5 py-0.5" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
+            <Trans>v{pendingInstallPreview?.manifest.version}</Trans>
+          </span>
+          <span
+            className="text-[11px] rounded-full border px-1.5 py-0.5 font-semibold"
+            style={pendingInstallPreview?.trust === 'allowlisted'
+              ? {
+                  borderColor: 'color-mix(in srgb, #86efac, var(--border-subtle) 45%)',
+                  color: '#86efac',
+                  background: 'color-mix(in srgb, #86efac, var(--surface-2) 92%)',
+                }
+              : {
                   borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 45%)',
-                  background: 'color-mix(in srgb, #d97706, var(--surface-2) 86%)',
                   color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)',
+                  background: 'color-mix(in srgb, #d97706, var(--surface-2) 88%)',
                 }}
-              >
-                <AlertTriangle className="h-4.5 w-4.5" />
-              </span>
+          >
+            {pendingInstallPreview?.trust === 'allowlisted'
+              ? <Trans>Allowlisted source</Trans>
+              : <Trans>Unverified source</Trans>}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+              <Trans>Identity</Trans>
+            </div>
+            <div className="mt-1.5 space-y-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+              <div className="break-all">
+                <span style={{ color: 'var(--text-strong)' }}><Trans>ID</Trans>:</span> {pendingInstallPreview?.manifest.id}
+              </div>
+              {pendingInstallPreview?.manifest.author && (
+                <div className="break-all">
+                  <span style={{ color: 'var(--text-strong)' }}><Trans>Author</Trans>:</span> {pendingInstallPreview.manifest.author}
+                </div>
+              )}
               <div>
-                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Unverified Plugin Liability Warning
-                </div>
-                <div className="mt-1 text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
-                  This repository is not on the trusted allowlist. You can still install this <strong>simple/data-only</strong> plugin,
-                  but you accept responsibility for validating the source and manifest contents.
-                </div>
+                <span style={{ color: 'var(--text-strong)' }}><Trans>Contents</Trans>:</span>{' '}
+                <Plural value={pendingInstallPreview?.manifest.printerPresets?.length ?? 0} one="# printer preset" other="# printer presets" />,{' '}
+                <Plural value={pendingInstallPreview?.manifest.materialTemplates?.length ?? 0} one="# material template" other="# material templates" />
               </div>
             </div>
-            <div className="mt-3 rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                <span style={{ color: 'var(--text-strong)' }}>Repo:</span>{' '}
-                {pendingLiabilityInstall.unverifiedRepo?.owner}/{pendingLiabilityInstall.unverifiedRepo?.name}
+          </div>
+
+          <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+              <Trans>Origin</Trans>
+            </div>
+            <div className="mt-1.5 space-y-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+              <div className="break-all">
+                <span style={{ color: 'var(--text-strong)' }}><Trans>Repository</Trans>:</span> {pendingInstallPreview?.repoUrl}
               </div>
-              {Array.isArray(pendingLiabilityInstall.allowlistRules) && pendingLiabilityInstall.allowlistRules.length > 0 && (
-                <div className="mt-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  <span style={{ color: 'var(--text-strong)' }}>Allowlist:</span> {pendingLiabilityInstall.allowlistRules.join(', ')}
+              {pendingInstallPreview?.originUrl && (
+                <div className="break-all">
+                  <span style={{ color: 'var(--text-strong)' }}><Trans>Manifest</Trans>:</span> {pendingInstallPreview.originUrl}
+                </div>
+              )}
+              {pendingInstallPreview?.manifestSha256 && (
+                <div className="break-all">
+                  <span style={{ color: 'var(--text-strong)' }}><Trans>SHA-256</Trans>:</span>{' '}
+                  <span className="font-mono" style={{ color: 'var(--text-strong)' }}>{pendingInstallPreview.manifestSha256}</span>
                 </div>
               )}
             </div>
-
-            <div className="mt-4 flex items-center justify-end gap-2">
-              <Button
-                type="button"
-                variant="secondary"
-                size="auto"
-                className="!h-8 !px-3 !py-0 text-xs"
-                disabled={isInstalling}
-                onClick={() => setPendingLiabilityInstall(null)}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                size="auto"
-                className="!h-8 !px-3 !py-0 text-xs"
-                style={{ color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)' }}
-                disabled={isInstalling}
-                onClick={() => { void handleConfirmLiabilityInstall(); }}
-              >
-                {isInstalling ? 'Installing…' : 'I Understand, Install Anyway'}
-              </Button>
-            </div>
           </div>
         </div>
-      )}
 
-      {pendingInstallPreview && (
-        <div className="fixed inset-0 z-[121] flex items-center justify-center bg-black/60 backdrop-blur-sm px-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
-          if (event.target === event.currentTarget && !isInstalling) setPendingInstallPreview(null);
-        }}>
-          <div className="w-full max-w-3xl rounded-xl border p-4 ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
-            <div
-              className="rounded-lg border px-3.5 py-3"
-              style={{
-                borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                background: 'linear-gradient(145deg, color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%), color-mix(in srgb, var(--surface-1), transparent 5%))',
+        {pendingInstallPreview?.manifest.description && (
+          <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+              <Trans>Description</Trans>
+            </div>
+            <p className="mt-1 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              {pendingInstallPreview.manifest.description}
+            </p>
+          </div>
+        )}
+      </StructuredDialogModal>
+
+      <StructuredDialogModal
+        open={pendingRemovePlugin !== null}
+        ariaLabel={_(msg`Remove plugin`)}
+        title={<Trans>Remove Plugin?</Trans>}
+        subtitle={pendingRemovePlugin?.name}
+        icon={<Trash2 className="h-4 w-4" />}
+        iconTone="danger"
+        zIndexClassName="z-[130]"
+        closeAriaLabel={_(msg`Close modal`)}
+        onClose={() => setPendingRemovePlugin(null)}
+        onBackdropClick={() => setPendingRemovePlugin(null)}
+        actions={(
+          <>
+            <Button variant="secondary" onClick={() => setPendingRemovePlugin(null)}>
+              <Trans>Cancel</Trans>
+            </Button>
+            <Button
+              variant="tinted-danger"
+              className="inline-flex items-center justify-center gap-1.5"
+              onClick={handleConfirmUninstall}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              <Trans>Remove plugin</Trans>
+            </Button>
+          </>
+        )}
+      >
+        <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          <Trans>This removes the plugin from your profile library.</Trans>
+        </p>
+      </StructuredDialogModal>
+
+      <StructuredDialogModal
+        open={passphraseOpen && pendingSideload !== null}
+        ariaLabel={_(msg`Package passphrase`)}
+        title={<Trans>Enter the passphrase</Trans>}
+        subtitle={pendingSideload?.info.manifest.name}
+        icon={<LockKeyhole className="h-4 w-4" />}
+        iconTone="neutral"
+        maxWidthClassName="max-w-md"
+        zIndexClassName="z-[131]"
+        closeAriaLabel={_(msg`Close modal`)}
+        closeDisabled={sideloadBusy}
+        onClose={closePassphraseDialog}
+        onBackdropClick={closePassphraseDialog}
+        actions={(
+          <>
+            <Button variant="secondary" disabled={sideloadBusy} onClick={closePassphraseDialog}>
+              <Trans>Cancel</Trans>
+            </Button>
+            <Button
+              variant="tinted-accent"
+              className="inline-flex items-center justify-center gap-1.5"
+              disabled={sideloadBusy || sideloadPassphrase.trim().length === 0}
+              onClick={() => { void handleConfirmSideloadInstall(); }}
+            >
+              {sideloadBusy ? <Spinner size="sm" /> : <LockKeyhole className="h-3.5 w-3.5" />}
+              {sideloadBusy ? <Trans>Installing…</Trans> : <Trans>Unseal and install</Trans>}
+            </Button>
+          </>
+        )}
+      >
+        <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          <Trans>The package is sealed. Enter the key your vendor gave you; it is kept locally so the plugin can load later.</Trans>
+        </p>
+        <Input
+          autoFocus
+          id="sideload-passphrase"
+          type="password"
+          autoComplete="off"
+          className="h-10 w-full"
+          value={sideloadPassphrase}
+          onChange={(event) => setSideloadPassphrase(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && sideloadPassphrase.trim().length > 0 && !sideloadBusy) {
+              void handleConfirmSideloadInstall();
+            }
+          }}
+          placeholder={_(passphrasePlaceholder(pendingSideload?.info.manifest.name ?? ''))}
+          aria-label={_(msg`Package passphrase`)}
+        />
+        {passphraseError && (
+          <p className="text-xs leading-relaxed" style={{ color: '#fca5a5' }}>
+            {passphraseError}
+          </p>
+        )}
+      </StructuredDialogModal>
+
+      <StructuredDialogModal
+        open={allowanceDialogOpen}
+        ariaLabel={_(msg`Sideloaded packages`)}
+        title={allowSideload ? <Trans>Sideloading is on</Trans> : <Trans>Allow untrusted plugins?</Trans>}
+        subtitle={_(msg`Sideloaded packages`)}
+        icon={<ShieldAlert className="h-4 w-4" />}
+        iconTone="warning"
+        maxWidthClassName="max-w-lg"
+        zIndexClassName="z-[130]"
+        closeAriaLabel={_(msg`Close modal`)}
+        onClose={() => setAllowanceDialogOpen(false)}
+        onBackdropClick={() => setAllowanceDialogOpen(false)}
+        actions={(
+          <>
+            <Button variant="secondary" onClick={() => setAllowanceDialogOpen(false)}>
+              <Trans>Cancel</Trans>
+            </Button>
+            <Button
+              variant={allowSideload ? 'tinted-danger' : 'tinted-warning'}
+              className="inline-flex items-center justify-center gap-1.5"
+              onClick={() => {
+                void (async () => {
+                  await handleSideloadAllowanceChange(!allowSideload);
+                  setAllowanceDialogOpen(false);
+                })();
               }}
             >
-              <div className="flex items-start gap-3">
-                <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border leading-none"
-                  style={{
-                    borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 35%)',
-                    background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-2) 88%)',
-                    color: 'var(--accent-secondary)',
-                  }}
-                >
-                  <Plug className="h-5 w-5" />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                    Review Plugin Before Install
-                  </div>
-                  <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                    Confirm source and metadata before adding this plugin to your profile library.
-                  </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>
-                      {pendingInstallPreview.manifest.name}
-                    </span>
-                    <span className="text-[11px] rounded-full border px-1.5 py-0.5" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
-                      v{pendingInstallPreview.manifest.version}
-                    </span>
-                    <span
-                      className="text-[11px] rounded-full border px-1.5 py-0.5 font-semibold"
-                      style={{
-                        borderColor: pendingInstallPreview.trust === 'allowlisted'
-                          ? 'color-mix(in srgb, #86efac, var(--border-subtle) 45%)'
-                          : 'color-mix(in srgb, #d97706, var(--border-subtle) 45%)',
-                        color: pendingInstallPreview.trust === 'allowlisted' ? '#86efac' : 'color-mix(in srgb, #d97706, var(--text-strong) 18%)',
-                        background: pendingInstallPreview.trust === 'allowlisted'
-                          ? 'color-mix(in srgb, #86efac, var(--surface-2) 92%)'
-                          : 'color-mix(in srgb, #d97706, var(--surface-2) 88%)',
-                      }}
-                    >
-                      {pendingInstallPreview.trust === 'allowlisted' ? 'Allowlisted Source' : 'Unverified Source'}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Identity</div>
-                <div className="mt-2 space-y-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  <div><span style={{ color: 'var(--text-strong)' }}>ID:</span> {pendingInstallPreview.manifest.id}</div>
-                  {pendingInstallPreview.manifest.author && (
-                    <div><span style={{ color: 'var(--text-strong)' }}>Author:</span> {pendingInstallPreview.manifest.author}</div>
-                  )}
-                  <div>
-                    <span style={{ color: 'var(--text-strong)' }}>Contents:</span>{' '}
-                    {pendingInstallPreview.manifest.printerPresets?.length ?? 0} printer preset(s),{' '}
-                    {pendingInstallPreview.manifest.materialTemplates?.length ?? 0} material template(s)
-                  </div>
-                </div>
-              </div>
-
-              <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Origin</div>
-                <div className="mt-2 space-y-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  <div className="break-all"><span style={{ color: 'var(--text-strong)' }}>Repo:</span> {pendingInstallPreview.repoUrl}</div>
-                  {pendingInstallPreview.originUrl && (
-                    <div className="break-all"><span style={{ color: 'var(--text-strong)' }}>Manifest URL:</span> {pendingInstallPreview.originUrl}</div>
-                  )}
-                  {pendingInstallPreview.manifestSha256 && (
-                    <div className="break-all"><span style={{ color: 'var(--text-strong)' }}>SHA-256:</span> {pendingInstallPreview.manifestSha256}</div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {pendingInstallPreview.manifest.description && (
-              <div className="mt-3 rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Description</div>
-                <div className="mt-1.5 text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
-                  {pendingInstallPreview.manifest.description}
-                </div>
-              </div>
-            )}
-
-            <div className="mt-4 flex items-center justify-end gap-2">
-              <Button
-                type="button"
-                variant="secondary"
-                size="auto"
-                className="!h-8 !px-3 !py-0 text-xs"
-                disabled={isInstalling}
-                onClick={() => setPendingInstallPreview(null)}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                size="auto"
-                className="!h-8 !px-3 !py-0 text-xs"
-                style={{ color: 'var(--accent-secondary)' }}
-                disabled={isInstalling}
-                onClick={handleInstallFromPreview}
-              >
-                {isInstalling ? 'Installing…' : 'Install'}
-              </Button>
-            </div>
+              {allowSideload ? <><ShieldAlert className="h-3.5 w-3.5" /><Trans>Disable Sideloading</Trans></> : <><ShieldAlert className="h-3.5 w-3.5" /><Trans>Enable Sideloading</Trans></>}
+            </Button>
+          </>
+        )}
+      >
+        {allowSideload ? (
+          <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+            <Trans>Packages you import run with your permissions and can read any file you can read, open network connections, and crash the app if they misbehave. Disabling this stops new imports; packages already installed stay on disk.</Trans>
+          </p>
+        ) : (
+          <div className="space-y-1.5">
+            <p className="text-sm leading-relaxed" style={{ color: 'var(--text-strong)' }}>
+              <Trans>A sideloaded package is a native program, not a profile pack.</Trans>
+            </p>
+            <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              <Trans>Once imported it runs with your permissions: it can read any file you can read, open network connections, and crash the app if it misbehaves.</Trans>
+            </p>
+          </div>
+        )}
+        <div
+          className="rounded-md border px-3 py-2"
+          style={{
+            borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 40%)',
+            background: 'color-mix(in srgb, #d97706, var(--surface-1) 92%)',
+          }}
+        >
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: '#d97706' }} />
+            <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              <Trans>Signatures prove who built the package, not that it is safe. Only enable this for a publisher you trust.</Trans>
+            </p>
           </div>
         </div>
-      )}
+      </StructuredDialogModal>
 
-      {pendingRemovePlugin && (
-        <div className="fixed inset-0 z-[122] flex items-center justify-center bg-black/60 backdrop-blur-sm px-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
-          if (event.target === event.currentTarget) setPendingRemovePlugin(null);
-        }}>
-          <div className="w-full max-w-lg rounded-xl border p-4 ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
-            <div className="flex items-start gap-2.5">
-              <span className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
-                style={{
-                  borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
-                  background: 'color-mix(in srgb, #ef4444, var(--surface-2) 90%)',
-                  color: '#fca5a5',
+      <StructuredDialogModal
+        open={pendingSideload !== null}
+        ariaLabel={_(msg`Install sideloaded plugin`)}
+        title={<Trans>Install this plugin?</Trans>}
+        subtitle={pendingSideload?.info.manifest.name}
+        icon={<PackagePlus className="h-4 w-4" />}
+        iconTone="accent"
+        maxWidthClassName="max-w-xl"
+        zIndexClassName="z-[130]"
+        closeAriaLabel={_(msg`Close modal`)}
+        closeDisabled={sideloadBusy}
+        onClose={() => setPendingSideload(null)}
+        onBackdropClick={() => setPendingSideload(null)}
+        bodyClassName="space-y-3 p-5"
+        actions={(
+          <>
+            <Button variant="secondary" disabled={sideloadBusy} onClick={() => setPendingSideload(null)}>
+              <Trans>Cancel</Trans>
+            </Button>
+            {pendingSideload?.info.sealed ? (
+              <Button
+                variant="tinted-accent"
+                className="inline-flex items-center justify-center gap-1.5"
+                onClick={() => {
+                  setSideloadPassphrase('');
+                  setPassphraseError(null);
+                  setPassphraseOpen(true);
                 }}
               >
-                <Trash2 className="h-4 w-4" />
-              </span>
-              <div>
-                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Remove Plugin?
-                </div>
-                <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  This removes <span style={{ color: 'var(--text-strong)' }}>{pendingRemovePlugin.name}</span> from installed plugins.
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-4 flex items-center justify-end gap-2">
-              <Button
-                type="button"
-                variant="secondary"
-                size="auto"
-                className="!h-8 !px-3 !py-0 text-xs"
-                onClick={() => setPendingRemovePlugin(null)}
-              >
-                Cancel
+                <LockKeyhole className="h-3.5 w-3.5" />
+                <Trans>Continue</Trans>
               </Button>
+            ) : (
               <Button
-                type="button"
-                variant="secondary"
-                size="auto"
-                className="!h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1"
-                style={{ color: '#fca5a5' }}
-                onClick={handleConfirmUninstall}
+                variant="tinted-accent"
+                className="inline-flex items-center justify-center gap-1.5"
+                disabled={sideloadBusy}
+                onClick={() => { void handleConfirmSideloadInstall(); }}
               >
-                <Trash2 className="h-3.5 w-3.5" />
-                Remove
+                {sideloadBusy ? <Spinner size="sm" /> : <PackagePlus className="h-3.5 w-3.5" />}
+                {sideloadBusy ? <Trans>Installing…</Trans> : <Trans>Install</Trans>}
               </Button>
-            </div>
-          </div>
+            )}
+          </>
+        )}
+      >
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[11px] rounded-full border px-1.5 py-0.5" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
+            <Trans>v{pendingSideload?.info.manifest.version}</Trans>
+          </span>
+          {pendingSideload?.info.manifest.capabilities.map((capability) => (
+            <span
+              key={capability}
+              className="text-[11px] rounded-full border px-1.5 py-0.5"
+              style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-strong)' }}
+            >
+              {_(SIDELOAD_CAPABILITY_MESSAGES[capability])}
+            </span>
+          ))}
         </div>
-      )}
 
-      <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-        <div className="flex items-start gap-2">
+        <div
+          className="overflow-hidden rounded-md border"
+          style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+        >
+          <ReviewFact label={<Trans>Publisher</Trans>}>
+            {pendingSideload?.info.manifest.vendor.name}
+          </ReviewFact>
+          <ReviewFact label={<Trans>Signing key</Trans>} mono>
+            <Tooltip
+              content={<span className="break-all">{pendingSideload?.info.publisherFingerprint}</span>}
+              maxWidth={320}
+              wrapperClassName="inline-flex"
+            >
+              <span>{shortFingerprint(pendingSideload?.info.publisherFingerprint ?? '')}</span>
+            </Tooltip>
+          </ReviewFact>
+          <ReviewFact label={<Trans>Package ID</Trans>} mono>
+            {pendingSideload?.info.manifest.id}
+          </ReviewFact>
+          <ReviewFact label={<Trans>Requires</Trans>}>
+            <Trans>DragonFruit {pendingSideload?.info.manifest.minAppVersion} or newer</Trans>
+          </ReviewFact>
+          <ReviewFact label={<Trans>Sealed</Trans>}>
+            {pendingSideload?.info.sealed ? <Trans>Yes</Trans> : <Trans>No</Trans>}
+          </ReviewFact>
+          {(pendingSideload?.info.manifest.formats.length ?? 0) > 0 && (
+            <ReviewFact label={<Trans>Output formats</Trans>} mono>
+              {(pendingSideload?.info.manifest.formats ?? [])
+                .map((format) => format.extensions.join(' '))
+                .join(', ')}
+            </ReviewFact>
+          )}
+        </div>
+
+        {pendingSideload?.info.replacesExisting && (
+          <p className="text-xs" style={{ color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)' }}>
+            <Trans>An older install with this ID and publisher is replaced.</Trans>
+          </p>
+        )}
+
+        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          <Trans>This package runs native code with your user account. It can read your files and open network connections. Only install packages from a vendor you trust.</Trans>
+        </p>
+      </StructuredDialogModal>
+
+      <StructuredDialogModal
+        open={pendingRemoveSideload !== null}
+        ariaLabel={_(msg`Remove sideloaded plugin`)}
+        title={<Trans>Remove this plugin?</Trans>}
+        subtitle={pendingRemoveSideload?.manifest.name}
+        icon={<Trash2 className="h-4 w-4" />}
+        iconTone="danger"
+        zIndexClassName="z-[130]"
+        closeAriaLabel={_(msg`Close modal`)}
+        onClose={() => setPendingRemoveSideload(null)}
+        onBackdropClick={() => setPendingRemoveSideload(null)}
+        actions={(
+          <>
+            <Button variant="secondary" onClick={() => setPendingRemoveSideload(null)}>
+              <Trans>Cancel</Trans>
+            </Button>
+            <Button
+              variant="tinted-danger"
+              className="inline-flex items-center justify-center gap-1.5"
+              onClick={() => { void handleConfirmRemoveSideload(); }}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              <Trans>Remove plugin</Trans>
+            </Button>
+          </>
+        )}
+      >
+        <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          <Trans>The package, its extracted payload and its stored key are deleted. Re-importing needs the passphrase again.</Trans>
+        </p>
+      </StructuredDialogModal>
+
+      <section className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+        <div className="flex items-start gap-2.5">
           <span
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
             style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 8%)' }}
           >
             <PackageCheck className="h-4 w-4" style={{ color: 'var(--accent)' }} />
           </span>
-          <div className="flex-1">
-            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>Installed Plugins</h3>
-            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Manage built-in and user-installed plugin packs.
+          <div className="min-w-0 flex-1">
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>{_(msg`Installed plugins`)}</h3>
+            <p className="mt-0.5 text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
+              <Plural value={installedRows.length} one="# plugin in this profile." other="# plugins in this profile." />
             </p>
           </div>
         </div>
 
-        <div className="mt-2 space-y-2">
-          {installedPlugins.map((plugin) => {
-            const manifest = plugin.manifest;
-            const isBuiltin = plugin.source === 'builtin';
-            const repositoryUrl = manifest.homepage || (isBuiltin ? BUILTIN_ATHENA_REPOSITORY_URL : plugin.sourceUrl);
-            const hasRepositoryLink = typeof repositoryUrl === 'string' && repositoryUrl.trim().length > 0;
-            const isOraVerifiedBuiltin = isBuiltin && isOraHostedRepository(repositoryUrl);
-            const isUnverifiedGithubPlugin = !isBuiltin && plugin.installTrust === 'unverified-user-approved';
-
-            return (
-              <div
-                key={manifest.id}
-                className="rounded-md border px-2.5 py-2"
-                style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      {!isBuiltin && (
-                        <Github className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />
-                      )}
-                      {hasRepositoryLink ? (
-                        <button
-                          onClick={async () => {
-                            const url = repositoryUrl as string;
-                            try {
-                              const { invoke } = await import('@tauri-apps/api/core');
-                              await invoke('open_external_url', { url });
-                            } catch {
-                              window.open(url, '_blank');
-                            }
-                          }}
-                          className="text-sm font-semibold truncate inline-flex items-center gap-1 underline underline-offset-2"
-                          style={{ color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-                          title={repositoryUrl as string}
-                        >
-                          {manifest.name}
-                          <ExternalLink className="h-3 w-3 shrink-0" />
-                        </button>
-                      ) : (
-                        <span className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>{manifest.name}</span>
-                      )}
-                      <span className="text-[11px] rounded-full border px-1.5 py-0.5" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
-                        {manifest.id}
-                      </span>
-                      <span className="text-[11px] rounded-full border px-1.5 py-0.5" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
-                        {isBuiltin ? 'Built-in' : 'GitHub'}
-                      </span>
-                      <span className="text-[11px] rounded-full border px-1.5 py-0.5" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
-                        v{manifest.version}
-                      </span>
-                    </div>
-                    {isUnverifiedGithubPlugin && (
-                      <div className="text-xs mt-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5"
-                        style={{
-                          borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 35%)',
-                          color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)',
-                          background: 'color-mix(in srgb, #d97706, var(--surface-2) 88%)',
-                        }}
-                        title={plugin.liabilityAcceptedAt ? `Liability accepted at ${plugin.liabilityAcceptedAt}` : 'Installed with liability acknowledgement'}
-                      >
-                        Unverified Source (User Approved)
-                      </div>
-                    )}
-                    {manifest.description && (
-                      <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                        {manifest.description}
-                      </div>
-                    )}
+        {rowGroups.map((group, index) => (
+          <React.Fragment key={group.key}>
+            {index > 0 && (
+              <div className="my-2 h-px" style={{ background: 'var(--border-subtle)' }} aria-hidden />
+            )}
+            <ul className={index === 0 ? 'mt-2 space-y-1.5' : 'space-y-1.5'}>
+              {group.rows.map(renderInstalledRow)}
+            </ul>
+          </React.Fragment>
+        ))}
+      </section>
 
 
-                  </div>
-
-                  <div className="flex items-center gap-1.5 shrink-0 self-center">
-                    {isBuiltin && (
-                      <Tooltip content="Built-in plugin" wrapperClassName="flex items-center">
-                        <ShieldCheck className="h-4 w-4 shrink-0 block" style={{ color: builtinShieldIconColor }} />
-                      </Tooltip>
-                    )}
-                    {isOraVerifiedBuiltin ? (
-                      <Tooltip content="Officially verified by ORA" wrapperClassName="flex items-center">
-                        <CheckCircle2 className="h-4 w-4 shrink-0 block" style={{ color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)' }} />
-                      </Tooltip>
-                    ) : null}
-                    {!isBuiltin && (
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="auto"
-                        onClick={() => handleUninstall(manifest.id, manifest.name)}
-                        className="!h-7 !px-2 !py-0 text-xs inline-flex items-center gap-1"
-                        style={{ color: '#fca5a5' }}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                        Remove
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
 
       {isDevRuntime && (
         <div className="pt-1 flex justify-center">
@@ -763,6 +1339,169 @@ export function PluginsSettingsTab() {
           </button>
         </div>
       )}
+
+      <StructuredDialogModal
+        open={detailsRow !== null}
+        ariaLabel={_(msg`Plugin details`)}
+        title={detailsRow?.name}
+        subtitle={detailsRow?.description}
+        icon={<InfoIcon className="h-4 w-4" />}
+        iconTone="accent"
+        maxWidthClassName="max-w-md"
+        zIndexClassName="z-[140]"
+        closeAriaLabel={_(msg`Close modal`)}
+        onClose={() => { setDetailsRow(null); setCopiedSigningKey(false); setCapabilitiesExpanded(false); }}
+        onBackdropClick={() => { setDetailsRow(null); setCopiedSigningKey(false); setCapabilitiesExpanded(false); }}
+        actions={(
+          <Button variant="secondary" onClick={() => setDetailsRow(null)}>
+            <Trans>Close</Trans>
+          </Button>
+        )}
+      >
+        <div
+          className="overflow-hidden rounded-md border"
+          style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+        >
+          <ReviewFact label={<Trans>Package ID</Trans>} mono>{detailsRow?.id}</ReviewFact>
+          <ReviewFact label={<Trans>Source</Trans>}>
+            {detailsRow?.source === 'builtin'
+              ? <Trans>Built-in</Trans>
+              : detailsRow?.source === 'github' ? <Trans>GitHub</Trans> : <Trans>Sideloaded</Trans>}
+          </ReviewFact>
+          <ReviewFact label={<Trans>Version</Trans>}><Trans>v{detailsRow?.version}</Trans></ReviewFact>
+          {detailsRow?.publisher && (
+            <ReviewFact label={<Trans>Publisher</Trans>}>{detailsRow.publisher}</ReviewFact>
+          )}
+          {detailsRow?.signingKeyFingerprint && (
+            <ReviewFact label={<Trans>Signing key</Trans>}>
+              <span className="inline-flex items-center gap-1">
+                <span className="font-mono">{shortFingerprint(detailsRow.signingKeyFingerprint)}</span>
+                <Tooltip content={copiedSigningKey ? _(msg`Copied`) : _(msg`Copy signing key`)} wrapperClassName="inline-flex">
+                  <IconButton
+                    variant="ghost"
+                    size="xs"
+                    aria-label={_(msg`Copy signing key`)}
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(detailsRow.signingKeyFingerprint as string);
+                        setCopiedSigningKey(true);
+                        window.setTimeout(() => setCopiedSigningKey(false), 2000);
+                      } catch {
+                        // A denied clipboard leaves the full value visible in the tooltip.
+                      }
+                    }}
+                  >
+                    {copiedSigningKey
+                      ? <Check className="h-3.5 w-3.5" style={{ color: 'var(--success)' }} />
+                      : <Copy className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />}
+                  </IconButton>
+                </Tooltip>
+              </span>
+            </ReviewFact>
+          )}
+          {detailsRow?.acceptedAt && (
+            <ReviewFact label={<Trans>Liability accepted</Trans>}>{detailsRow.acceptedAt}</ReviewFact>
+          )}
+          {detailsRow?.link && (
+            <ReviewFact label={<Trans>Repository</Trans>}>
+              <button
+                type="button"
+                title={detailsRow.link}
+                onClick={() => { void openExternalUrl(detailsRow.link as string); }}
+                className="inline-flex items-center gap-1 underline underline-offset-2"
+                style={{ color: 'var(--accent)', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
+              >
+                {repositoryLabel(detailsRow.link)}
+                <ExternalLink className="h-3 w-3 shrink-0" />
+              </button>
+            </ReviewFact>
+          )}
+          {detailsRow?.capabilities && detailsRow.capabilities.length > 0 && (
+            <ReviewFact label={<Trans>Capabilities</Trans>} stacked={capabilitiesExpanded}>
+              {capabilitiesExpanded ? (
+                <span className="flex flex-col items-start gap-1">
+                  {detailsRow.capabilities.map((capability) => (
+                    <span key={capability} className="text-xs">{_(SIDELOAD_CAPABILITY_MESSAGES[capability])}</span>
+                  ))}
+                  <button
+                    type="button"
+                    aria-label={_(msg`Show fewer capabilities`)}
+                    onClick={() => setCapabilitiesExpanded(false)}
+                    className="mt-0.5 inline-flex items-center gap-1 text-[11px]"
+                    style={{ color: 'var(--text-muted)', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
+                  >
+                    <ChevronUp className="h-3.5 w-3.5" />
+                    <Trans>Less</Trans>
+                  </button>
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1">
+                  {detailsRow.capabilities.map((capability) => (
+                    <Tooltip key={capability} content={_(SIDELOAD_CAPABILITY_MESSAGES[capability])} wrapperClassName="inline-flex">
+                      <span
+                        className="rounded-full border px-1.5 py-0.5 text-[11px]"
+                        style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
+                      >
+                        {_(SIDELOAD_CAPABILITY_SHORT_MESSAGES[capability])}
+                      </span>
+                    </Tooltip>
+                  ))}
+                  <IconButton
+                    variant="ghost"
+                    size="xs"
+                    aria-label={_(msg`Show all capabilities`)}
+                    onClick={() => setCapabilitiesExpanded(true)}
+                  >
+                    <ChevronDown className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />
+                  </IconButton>
+                </span>
+              )}
+            </ReviewFact>
+          )}
+        </div>
+      </StructuredDialogModal>
+
+      <StructuredDialogModal
+        open={reloadRequired}
+        ariaLabel={_(msg`Reload required`)}
+        title={<Trans>Reload Required</Trans>}
+        subtitle={<Trans>The plugin list has changed, DragonFruit has to reload.</Trans>}
+        icon={<RotateCcw className="h-4 w-4" />}
+        iconTone="warning"
+        zIndexClassName="z-[200]"
+        maxWidthClassName="max-w-md"
+        closeAriaLabel={_(msg`Reload DragonFruit now`)}
+        onClose={reloadDragonFruit}
+        onBackdropClick={reloadDragonFruit}
+        actions={(
+          // The button is the countdown: the fill drains over the remaining
+          // seconds, so the wait is visible without a second progress element.
+          <Button
+            variant="tinted-accent"
+            size="md"
+            className="relative isolate gap-1.5 overflow-hidden"
+            // The fill is dark enough to sit under the label: the accent text the
+            // tinted variant uses is unreadable on a bright accent bar.
+            style={{ color: 'var(--accent-contrast)' }}
+            onClick={reloadDragonFruit}
+          >
+            <span
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-y-0 left-0 -z-10 transition-[width] duration-1000 ease-linear"
+              style={{
+                width: `${(reloadSecondsLeft / PLUGIN_RELOAD_SECONDS) * 100}%`,
+                background: 'color-mix(in srgb, var(--button-tint, var(--accent)), #000 62%)',
+              }}
+            />
+            <RotateCcw className="relative h-3.5 w-3.5" />
+            <span className="relative">{_(reloadCountdownLabel(reloadSecondsLeft))}</span>
+          </Button>
+        )}
+      >
+        <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
+          <Trans>Reloading loads an installed plugin's code, or releases a removed one's formats, network mode and file types. Unsaved changes to the current scene are lost.</Trans>
+        </p>
+      </StructuredDialogModal>
 
       <PluginStudioModal isOpen={isDevRuntime && studioOpen} onClose={() => setStudioOpen(false)} />
     </div>

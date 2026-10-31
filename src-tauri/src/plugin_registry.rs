@@ -179,9 +179,15 @@ pub async fn dispatch_network_request(
     }
 
     if let Some(response) =
-        generated_builtin_plugins::dispatch_generated_network_request(&plugin_id, request_json)
+        generated_builtin_plugins::dispatch_generated_network_request(&plugin_id, request_json.clone())
             .await?
     {
+        return Ok(response);
+    }
+
+    // Sideloaded plugins are consulted after the built-in match, so a package can
+    // never shadow a compiled-in plugin id.
+    if let Some(response) = crate::plugin_sideload_runtime::handle_network_request(&request_json) {
         return Ok(response);
     }
 

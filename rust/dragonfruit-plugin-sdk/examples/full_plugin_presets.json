@@ -1,0 +1,20 @@
+[
+  {
+    "presetId": "example.full-printer",
+    "profileVersion": 1,
+    "manufacturer": "Example",
+    "name": "Echo Printer",
+    "buildVolumeMm": {
+      "width": 143,
+      "depth": 89,
+      "height": 175
+    },
+    "display": {
+      "resolutionX": 4096,
+      "resolutionY": 2560,
+      "outputFormat": ".exf"
+    },
+    "networkSupport": "demo-echo",
+    "imageAssetPath": "echo_printer.png"
+  }
+]
