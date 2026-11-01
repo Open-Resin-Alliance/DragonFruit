@@ -98,8 +98,59 @@ Until that exists, anything a vendor needs is integrated **in mainline** as a
 declarative shape (the material pane is the first) or is out of scope for the
 tier. Do not add a second private channel for one partner.
 
+### Why an island is defensible where a module is not
+
+The combined-work question is about how the two programs communicate, not about
+whether they run on one machine. The FSF's plugin guidance treats a program that
+forks and execs and talks over a pipe as separate, and treats sharing memory or
+intimate data structures as the case that merges them. A vendor module imported
+into our webview is the second case: our tree calls its functions and our objects
+cross by reference. A sandboxed frame with only serialized messages is the first
+case in the web's idiom — the host hands over values through a documented,
+versioned interface, and nothing is shared. It is the same argument the process
+tier already makes, applied to a window.
+
+### The invariants that keep it separate
+
+1. **Own origin.** Served from a dedicated origin, never the app's; no
+   `allow-same-origin`, no cookies or storage shared with the host.
+2. **No host objects.** Every message is JSON. No functions, DOM nodes, class
+   instances or handles cross the boundary, in either direction. The host
+   validates what arrives against the schema and ignores unknown fields.
+3. **A narrow, versioned API.** Reads the data a pane legitimately needs (active
+   printer, job progress, the material values already in the profile, the output
+   format) and asks the *host* to act (run a declared network operation, raise a
+   notification). Never "call this host function", never a dynamic import of host
+   modules, never `eval` across the boundary.
+4. **No ambient capability.** CSP `default-src 'self'`, `connect-src 'none'`; no
+   Tauri IPC, no filesystem, no shell. Printer traffic stays the plugin process's
+   job, through the operations it already declares.
+5. **Independent failure.** A crashed or blank island leaves the app working, and
+   the app never depends on a pane existing. That is what "separate program" means
+   in the software, not just on the licence page.
+6. **Vendor code stays out of our build.** The bundle is payload data, unpacked at
+   install; our build never compiles, lints or type-checks it, and the island SDK we
+   publish is Apache-2.0/MIT like the plugin SDK.
+
+### What would break the argument
+
+- Importing the bundle into the webview's module graph "just for the panel".
+- Passing live objects or callbacks instead of JSON.
+- Letting the island reach `window.__TAURI_INTERNALS__` or the app's origin.
+- An API so broad that it is the app's internals under another name (for example
+  "give me the scene" plus "run arbitrary commands").
+- Making the app refuse to work without the island.
+
+If a feature needs any of those, it belongs in mainline as a declarative shape
+(the material pane and the remote material editor are the two precedents).
+
+### Before code
+
+ADR-0047 says UI contributions do not travel. Shipping the island starts with an
+ADR revision that makes the six invariants normative and records the
+interpretation above, so a later contributor cannot widen the bridge without
+reopening the decision.
+
 ## Known gaps
 
-- Monitoring policy (polling grace, webcam policy) is fixed by the generic adapter;
-  a declared mode cannot tune it.
-- The island: designed above, not built.
+- The island: designed above, not built; it needs the ADR revision first.
