@@ -15,6 +15,7 @@ export { Toggle } from './Toggle';
 export { SegmentedControl, type SegmentedOption } from './SegmentedControl';
 export { SettingRow } from './SettingRow';
 export { BlockingOverlay } from './BlockingOverlay';
+export { FadeText, type FadeTextProps } from './FadeText';
 // `PanelCollapseToggle` is deliberately NOT re-exported here. It resolves its
 // accessible name through the Lingui catalog, so it imports `@lingui/core/macro`,
 // and that module throws by design when it runs untransformed. The barrel is the

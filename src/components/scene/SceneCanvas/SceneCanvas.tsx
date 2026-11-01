@@ -615,6 +615,8 @@ export function SceneCanvas({
   leafTipPosition,
   leafHoverPosition,
   selectionColor,
+  multiMaterialMode = false,
+  selectedBodies,
   hoverColor,
   hoverTintStrength,
   selectedTintStrength,
@@ -855,6 +857,14 @@ export function SceneCanvas({
   leafTipPosition?: { x: number; y: number; z: number } | null;
   leafHoverPosition?: { x: number; y: number; z: number } | null;
   selectionColor?: string;
+  /**
+   * The active printer splits its resin across tanks, so a model's colour is its
+   * material and a tint alone no longer reads as "selected". The selected model
+   * gains an outline as well.
+   */
+  multiMaterialMode?: boolean;
+  /** Selected 3MF bodies, by model, so the renderer can draw each one apart. */
+  selectedBodies?: ReadonlyArray<{ modelId: string; bodyIndex: number }>;
   hoverColor?: string;
   hoverTintStrength?: number;
   selectedTintStrength?: number;
@@ -1946,6 +1956,15 @@ export function SceneCanvas({
   const hoverTintColor = hoverColor ?? '#ec2a77';
   const selectedTintColor = selectionColor ?? '#ec2a77';
   const likelySupportGeometryTintColor = '#c8752a';
+  const selectedBodyIndicesByModel = React.useMemo(() => {
+    const byModel = new Map<string, number[]>();
+    for (const entry of selectedBodies ?? []) {
+      const list = byModel.get(entry.modelId);
+      if (list) list.push(entry.bodyIndex);
+      else byModel.set(entry.modelId, [entry.bodyIndex]);
+    }
+    return byModel;
+  }, [selectedBodies]);
 
   // One walk per state change, keyed by model, so the per-model bounds callback
   // below does not re-walk every collection for every model.
@@ -6811,9 +6830,20 @@ export function SceneCanvas({
                 // dimmed base only muddies the colour the user picked it for; in the export
                 // workspace, where everything on every bed reads as selected, dimming it is the
                 // whole difference between the two beds.
+                // A single-material printer cannot print a tank assignment, so the
+                // mesh shows the colour it had before the material was assigned
+                // even if the assignment is still on the model (a scene kept as-is
+                // at import, or one restored from autosave mid-load).
+                const modelHasMaterialState = !multiMaterialMode && (
+                  !!model.materialProfileId
+                  || (model.bodyColors?.some((entry) => !!entry) ?? false)
+                );
+                const modelBaseColor = modelHasMaterialState
+                  ? (model.materialBaseColor || meshColor)
+                  : (model.color || meshColor);
                 const modelMeshColor = modelPlateState?.dimmedColor && !isModelSelected
                   ? modelPlateState.dimmedColor
-                  : (model.color || meshColor);
+                  : modelBaseColor;
                 // Use live drag transform only during active/guarded gizmo interaction.
                 // Otherwise stale refs can mask immediate panel-driven updates (e.g. reset scale).
                 const liveDragTransformForRender = (
@@ -6920,6 +6950,12 @@ export function SceneCanvas({
                       onModelHoverModelChange={onModelHoverModelChange}
                       hoverTintColor={modelHoverTintColor}
                       selectedTintColor={modelSelectedTintColor}
+                      materialOutlineEnabled={multiMaterialMode}
+                      bodyGeometries={model.splitBodies && model.splitBodies.length > 1
+                        ? model.splitBodies.map((body) => body.geometry)
+                        : undefined}
+                      bodyColors={multiMaterialMode ? model.bodyColors : undefined}
+                      selectedBodyIndices={selectedBodyIndicesByModel.get(model.id)}
                       hoverTintStrength={hoverTintStrength}
                       selectedTintStrength={selectedTintStrength}
                       supportNonSelectedOpacity={supportNonSelectedOpacity}

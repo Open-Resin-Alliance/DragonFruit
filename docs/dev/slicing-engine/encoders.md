@@ -25,6 +25,16 @@ V3.1 performance-oriented contract for streaming encoded layers:
 
 If `parallel_encode_fn()` is `Some`, pipeline uses the preferred V3.1 rasterize+encode worker path.
 
+### Multi-tank
+
+A job with `tank_count > 1` renders every layer once per tank and delivers the
+run streams to `consume_rle_tank_layer(layer_index, tank_index, runs)`,
+tank-major: all layers of tank 0, then tank 1, and so on. Formats that can store
+independent per-tank streams override `supports_multi_tank() -> true`; the engine
+refuses a multi-tank job on a format that does not, and never falls back to
+painting every tank as Tank 1. Support geometry is part of Tank 1's stream by
+construction.
+
 ## Registry behavior
 
 Registry initialization is lazy (`OnceLock`) and sourced from generated plugin encoder wiring.

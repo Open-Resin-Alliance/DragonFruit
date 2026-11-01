@@ -19,9 +19,15 @@ export type SelectDropdownProps<T extends string | number = string> = {
     value: T;
     label: string;
     disabled?: boolean;
+    /** Render as a non-interactive group header rather than a choice. */
+    heading?: boolean;
+    /** Render as a thin rule, for separating a destructive choice from the list. */
+    divider?: boolean;
+    /** A command rather than a value: it never shows as the field's current choice. */
+    action?: boolean;
     icon?: React.ReactNode;
     rightContent?: React.ReactNode;
-    tone?: 'default' | 'accent';
+    tone?: 'default' | 'accent' | 'danger';
   }>;
   onChange: (value: T) => void;
   disabled?: boolean;
@@ -32,6 +38,8 @@ export type SelectDropdownProps<T extends string | number = string> = {
   labelStyle?: React.CSSProperties;
   endAdornment?: React.ReactNode;
   leadingDisplay?: React.ReactNode;
+  /** Where the selected value sits horizontally; a leading icon stays at the edge. */
+  selectedTextAlign?: 'left' | 'center';
   selectedDisplay?: React.ReactNode;
   hideSelectedText?: boolean;
   selectedDisplayAlignment?: 'left' | 'center';
@@ -99,6 +107,7 @@ export function SelectDropdown<T extends string | number = string>({
   labelStyle,
   endAdornment,
   leadingDisplay,
+  selectedTextAlign = 'left',
   selectedDisplay,
   hideSelectedText = false,
   selectedDisplayAlignment = 'left',
@@ -123,7 +132,7 @@ export function SelectDropdown<T extends string | number = string>({
   const [menuPosition, setMenuPosition] = React.useState<{ top: number; left: number; minWidth: number; maxHeight: number; visibility: 'hidden' | 'visible' } | null>(null);
 
   const selectedOption = React.useMemo(
-    () => options.find((option) => String(option.value) === String(value)) ?? null,
+    () => options.find((option) => !option.heading && !option.divider && String(option.value) === String(value)) ?? null,
     [options, value],
   );
 
@@ -237,6 +246,9 @@ export function SelectDropdown<T extends string | number = string>({
   }, [isOpen, updateMenuPosition]);
 
   const selectedLabel = selectedOption?.label ?? String(value);
+  // The trigger carries the selected option's icon too, so a colour swatch reads in the
+  // closed control and not only in the menu.
+  const triggerLeading = leadingDisplay ?? selectedOption?.icon ?? null;
 
   return (
     <label className={`space-y-1 block ${className}`}>
@@ -286,7 +298,7 @@ export function SelectDropdown<T extends string | number = string>({
               setIsOpen(false);
             }
           }}
-          className={`ui-input rounded-[4px] relative w-full h-[36px] px-2.5 pr-10 leading-tight text-sm disabled:pointer-events-none disabled:opacity-55 disabled:cursor-not-allowed inline-flex items-center text-left ${selectClassName}`}
+          className={`ui-input rounded-[4px] relative w-full h-[36px] px-2.5 py-0 pr-10 leading-none text-sm disabled:pointer-events-none disabled:opacity-55 disabled:cursor-not-allowed inline-flex items-center text-left ${selectClassName}`}
           style={{
             ...selectStyle,
             ...(isOpen
@@ -297,20 +309,25 @@ export function SelectDropdown<T extends string | number = string>({
               : undefined),
           }}
         >
-          {leadingDisplay && !(hideSelectedText && selectedDisplay) && (
-            <span className="mr-1.5 inline-flex shrink-0 items-center justify-center">
-              {leadingDisplay}
+          {/* A leading affordance survives the overlay display: an icon-only trigger
+              with a centred value is a legitimate pair (a warning icon before a dash). */}
+          {triggerLeading && (
+            <span className="mr-1.5 inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center">
+              {triggerLeading}
             </span>
           )}
 
           <span
-            className={`min-w-0 flex-1 truncate ${(hideSelectedText && selectedDisplay) ? 'text-transparent' : ''}`}
-            style={hideSelectedText && selectedDisplay
-              ? {
-                  color: 'transparent',
-                  WebkitTextFillColor: 'transparent',
-                }
-              : undefined}
+            className={`min-w-0 flex-1 truncate ${selectedTextAlign === 'center' ? 'text-center' : ''} ${(hideSelectedText && selectedDisplay) ? 'text-transparent' : ''}`}
+            style={{
+              // A leading icon is a fixed 18px plus 6px gap; centring inside the space
+              // left over from it would centre this text to the right of the control.
+              // Reclaim that width so the label centres on the control, dot aside.
+              ...(triggerLeading && selectedTextAlign === 'center' ? { marginLeft: '-1.5rem' } : null),
+              ...(hideSelectedText && selectedDisplay
+                ? { color: 'transparent', WebkitTextFillColor: 'transparent' }
+                : null),
+            }}
           >
             {selectedLabel}
           </span>
@@ -362,10 +379,37 @@ export function SelectDropdown<T extends string | number = string>({
               <div className="overflow-y-auto custom-scrollbar" style={{ maxHeight: menuPosition?.maxHeight }}>
                 {options.map((option, index) => {
                   const optionKey = String(option.value);
-                  const isSelected = optionKey === String(value);
+
+                  if (option.heading) {
+                    return (
+                      <div
+                        key={optionKey}
+                        className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide"
+                        style={{
+                          color: 'var(--accent)',
+                          borderBottom: '1px solid color-mix(in srgb, var(--border-subtle), transparent 35%)',
+                        }}
+                      >
+                        {option.label}
+                      </div>
+                    );
+                  }
+
+                  const isSelected = !option.action && optionKey === String(value);
                   const isHovered = hoveredOptionKey === optionKey;
                   const optionTone = option.tone ?? 'default';
                   const isAccentTone = optionTone === 'accent';
+                  const isDangerTone = optionTone === 'danger';
+
+                  if (option.divider) {
+                    return (
+                      <div
+                        key={optionKey}
+                        className="border-t"
+                        style={{ borderColor: 'var(--border-subtle)' }}
+                      />
+                    );
+                  }
 
                   return (
                     <button
@@ -395,17 +439,27 @@ export function SelectDropdown<T extends string | number = string>({
                               borderBottomColor: 'var(--border-subtle)',
                             }
                           : {
-                              borderBottomColor: index === options.length - 1 ? 'transparent' : 'color-mix(in srgb, var(--border-subtle), transparent 16%)',
+                              // A group ends without a rule: the heading below is the
+                              // separation, and two lines there read as a table.
+                              borderBottomColor: (index === options.length - 1
+                                || options[index + 1]?.heading
+                                || options[index + 1]?.divider)
+                                ? 'transparent'
+                                : 'color-mix(in srgb, var(--border-subtle), transparent 16%)',
                               background: isSelected
                                 ? 'color-mix(in srgb, var(--accent), var(--surface-0) 86%)'
                                 : (isHovered
-                                  ? (isAccentTone
-                                    ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 92%)'
-                                    : 'color-mix(in srgb, var(--surface-2), transparent 18%)')
+                                  ? (isDangerTone
+                                    ? 'color-mix(in srgb, var(--danger), transparent 88%)'
+                                    : isAccentTone
+                                      ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 92%)'
+                                      : 'color-mix(in srgb, var(--surface-2), transparent 18%)')
                                   : 'transparent'),
-                              color: isAccentTone
-                                ? 'var(--accent-secondary)'
-                                : ((isSelected || isHovered) ? 'var(--text-strong)' : 'var(--text-muted)'),
+                              color: isDangerTone
+                                ? 'var(--danger)'
+                                : isAccentTone
+                                  ? 'var(--accent-secondary)'
+                                  : ((isSelected || isHovered) ? 'var(--text-strong)' : 'var(--text-muted)'),
                             }
                       }
                     >
@@ -413,11 +467,13 @@ export function SelectDropdown<T extends string | number = string>({
                         <span
                           className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center"
                           style={{
-                            color: isAccentTone
-                              ? 'var(--accent-secondary)'
-                              : (isSelected
-                                ? 'var(--accent)'
-                                : (isHovered ? 'var(--text-strong)' : 'var(--text-muted)')),
+                            color: isDangerTone
+                              ? 'var(--danger)'
+                              : isAccentTone
+                                ? 'var(--accent-secondary)'
+                                : (isSelected
+                                  ? 'var(--accent)'
+                                  : (isHovered ? 'var(--text-strong)' : 'var(--text-muted)')),
                           }}
                         >
                           {option.icon}

@@ -1680,6 +1680,11 @@ export function SlicingPanel({
   }, [remoteOfflineLayerHeightMm]);
 
   const resolvedMaterialLabel = useMemo(() => {
+    // A multi-tank printer has no single active material: the tanks carry their own.
+    if (activePrinterProfile?.materialMode === 'multiTank') {
+      return _(msg({ message: 'Multi-Tank', comment: 'Material value for a printer whose resin is split across tanks.' }));
+    }
+
     if (showRemoteOfflineLayerHeightOverride) {
       return 'N/A';
     }
@@ -1696,6 +1701,7 @@ export function SlicingPanel({
     return resolveCompositeMaterialLabel(effectiveMaterialProfile) ?? effectiveMaterialProfile?.name ?? _(msg`No material selected`);
   }, [
     _,
+    activePrinterProfile?.materialMode,
     activePrinterProfile?.networkConnection?.selectedMaterialName,
     effectiveMaterialProfile,
     isLoadingRemoteMaterial,

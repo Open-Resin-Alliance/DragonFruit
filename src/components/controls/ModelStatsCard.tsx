@@ -94,7 +94,7 @@ export function ModelStatsCard({
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
   const networkUiAdapter = React.useMemo(
     () => getProfileNetworkUiAdapter(activePrinterProfile?.networkSupport),
-    [activePrinterProfile?.networkSupport],
+    [profileState, activePrinterProfile?.networkSupport],
   );
   const activeMaterialProfile = React.useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
   const selectedNetworkDeviceId = React.useMemo(() => {
@@ -131,6 +131,11 @@ export function ModelStatsCard({
   }, [activePrinterProfile]);
 
   const effectiveMaterialName = React.useMemo(() => {
+    // A multi-tank printer has no single active material: the tanks carry their own.
+    if (activePrinterProfile?.materialMode === 'multiTank') {
+      return _(msg({ message: 'Multi-Tank', comment: 'Material value for a printer whose resin is split across tanks.' }));
+    }
+
     if (showRemoteOfflineMaterialPlaceholder) {
       return _(msg({ message: 'N/A', comment: 'Value placeholder shown when the material is unknown because the printer is offline. Keep it as short as "N/A".' }));
     }

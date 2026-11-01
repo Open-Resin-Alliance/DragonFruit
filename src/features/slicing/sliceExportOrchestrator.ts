@@ -573,6 +573,8 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
             ? encodeBytesToBase64(options.exportThumbnailPng)
             : null,
         trianglesXYZ: solidMesh.trianglesXYZ,
+        tankCount: solidMesh.tankCount,
+        triangleTankIndex: solidMesh.triangleTankIndex,
         meshEncoding: meshTransportEncoding,
         meshQuantization: meshTransportQuantization,
         outputPath: options.outputPath?.trim() || null,

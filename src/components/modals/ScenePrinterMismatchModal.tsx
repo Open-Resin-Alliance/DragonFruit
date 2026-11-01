@@ -22,6 +22,10 @@ type ScenePrinterMismatchModalProps = {
   willAddPrinter: boolean;
   /** True when the selected printer is smaller on some axis, so nothing fits as packed. */
   currentIsSmaller: boolean;
+  /** The scene names tank materials for models or bodies. */
+  sceneUsesMultiTankMaterials?: boolean;
+  /** The material mode of the selected profile. */
+  currentMaterialMode?: string;
   onSwitch: () => void;
   onKeep: () => void;
 };
@@ -42,20 +46,27 @@ export function ScenePrinterMismatchModal({
   currentBuildVolumeMm,
   willAddPrinter,
   currentIsSmaller,
+  sceneUsesMultiTankMaterials = false,
+  currentMaterialMode,
   onSwitch,
   onKeep,
 }: ScenePrinterMismatchModalProps) {
   const { _ } = useLingui();
   const recordedLabel = recordedPrinterName?.trim() || _(msg`the printer this scene was built for`);
+  // The scene was authored with per-tank material assignments and the profile
+  // selected now has one material: keeping it throws those assignments away.
+  const losesMaterialAssignments = sceneUsesMultiTankMaterials && currentMaterialMode !== 'multiTank';
 
   return (
     <StructuredDialogModal
       open={isOpen}
-      ariaLabel={_(msg`Scene built for another printer`)}
-      title={_(msg`Built for another printer`)}
-      subtitle={currentIsSmaller
-        ? _(msg`This scene may not fit the one selected`)
-        : _(msg`Its plates are spaced for that printer`)}
+      ariaLabel={losesMaterialAssignments ? _(msg`Scene built for a multi-material printer`) : _(msg`Scene built for another printer`)}
+      title={losesMaterialAssignments ? _(msg`Built for Multi-Material`) : _(msg`Built for another printer`)}
+      subtitle={losesMaterialAssignments
+        ? _(msg`This scene is made for a multi-material printer`)
+        : currentIsSmaller
+          ? _(msg`This scene may not fit the one selected`)
+          : _(msg`Its plates are spaced for that printer`)}
       icon={<AlertTriangle className="h-4 w-4" />}
       iconTone="warning"
       zIndexClassName="z-[130]"
@@ -77,6 +88,15 @@ export function ScenePrinterMismatchModal({
         </>
       }
     >
+      {losesMaterialAssignments && (
+        <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          <Trans>
+            Its materials are split across several tanks, which the printer selected now cannot
+            print. The assignments stay with the scene, hidden while this printer is selected —
+            switch to a multi-material printer to print them.
+          </Trans>
+        </p>
+      )}
       <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
         <Trans comment="A printer name, shown in bold.">
           <strong className="text-sm font-medium" style={{ color: 'var(--text-strong)' }}>{recordedLabel}</strong>{' '}

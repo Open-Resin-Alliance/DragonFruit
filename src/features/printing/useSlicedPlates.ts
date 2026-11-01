@@ -121,16 +121,31 @@ export function useSlicedPlates<Model extends object>({
  */
 export function useSlicedPlatePreviewLoading(
   { slicedPlates, plates, activeSlice }: Pick<SlicedPlatesView, 'slicedPlates' | 'plates' | 'activeSlice'>,
-  { activePlateId, displayedLayer, isPrinting }: { activePlateId: string; displayedLayer: number; isPrinting: boolean },
+  {
+    activePlateId,
+    displayedLayer,
+    isPrinting,
+    /** False when another preview path owns the layer image (multi-tank composites). */
+    nativePreviewEnabled = true,
+  }: {
+    activePlateId: string;
+    displayedLayer: number;
+    isPrinting: boolean;
+    nativePreviewEnabled?: boolean;
+  },
 ): void {
   const totalLayers = activeSlice?.totalLayers ?? 0;
   const artifact = activeSlice?.artifact ?? null;
   React.useEffect(() => {
-    if (!isPrinting || !artifact || totalLayers <= 0) return;
+    if (!nativePreviewEnabled || !isPrinting || !artifact || totalLayers <= 0) return;
     slicedPlates.loadLayerPreview(activePlateId, Math.max(1, Math.min(totalLayers, displayedLayer)));
-  }, [activePlateId, artifact, displayedLayer, isPrinting, slicedPlates, totalLayers]);
+  }, [activePlateId, artifact, displayedLayer, isPrinting, nativePreviewEnabled, slicedPlates, totalLayers]);
 
   React.useEffect(() => {
+    // Read-ahead asks the format's decoder for neighbour layers; a multi-tank
+    // slice answers from its own archive instead, so those reads would only cost
+    // a native round trip per layer while scrubbing.
+    if (!nativePreviewEnabled) return;
     slicedPlates.prefetch(displayedLayer);
-  }, [displayedLayer, plates, slicedPlates]);
+  }, [displayedLayer, nativePreviewEnabled, plates, slicedPlates]);
 }

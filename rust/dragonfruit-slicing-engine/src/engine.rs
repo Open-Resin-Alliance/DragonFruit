@@ -54,6 +54,8 @@ pub enum SlicerV3Error {
     },
     #[error("invalid triangle buffer length: expected multiple of 9, got {0}")]
     InvalidTriangleBuffer(usize),
+    #[error("invalid tank assignment: {indices} entries for {triangles} triangles")]
+    InvalidTankAssignment { indices: usize, triangles: usize },
     #[error("png encode failed: {0}")]
     Png(String),
     #[error("zip encode failed: {0}")]
@@ -64,6 +66,8 @@ pub enum SlicerV3Error {
     MissingRenderedLayerPayload(String),
     #[error("layer preview read failed: {0}")]
     LayerPreview(String),
+    #[error("external encoder failed: {0}")]
+    ExternalEncoder(String),
 }
 
 fn validate_job(job: &SliceJobV3) -> Result<(), SlicerV3Error> {
@@ -95,6 +99,13 @@ fn validate_job(job: &SliceJobV3) -> Result<(), SlicerV3Error> {
         return Err(SlicerV3Error::InvalidTriangleBuffer(
             job.triangles_xyz.len(),
         ));
+    }
+    let triangle_count = job.triangles_xyz.len() / 9;
+    if !job.triangle_tank_index.is_empty() && job.triangle_tank_index.len() != triangle_count {
+        return Err(SlicerV3Error::InvalidTankAssignment {
+            indices: job.triangle_tank_index.len(),
+            triangles: triangle_count,
+        });
     }
     Ok(())
 }
@@ -3415,22 +3426,34 @@ pub fn slice_with_progress_v3(
         if let Some(mut rle_enc) = encoder.create_rle_stream_encoder(job)? {
             let total_start = std::time::Instant::now();
             let job_total_layers = job.total_layers;
-            let progress_total = job_total_layers.saturating_add(1);
+            // A multi-tank job renders every layer once per tank, so progress is
+            // measured in (layer, tank) units, plus one for the finalizing step.
+            let progress_slice_units =
+                job_total_layers.saturating_mul(job.tank_count.max(1));
+            let progress_total = progress_slice_units.saturating_add(1);
 
             let slicing_progress = on_progress.as_ref().map(|cb| {
                 let cb = cb.clone();
                 Arc::new(move |update: SliceProgressUpdateV3| {
                     cb(SliceProgressUpdateV3 {
-                        done: update.done.min(job_total_layers),
+                        done: update.done.min(progress_slice_units),
                         total: progress_total,
                         phase: SliceProgressPhaseV3::Slicing,
                     });
                 }) as ProgressCallbackV3
             });
 
+            if job.is_multi_tank() && !rle_enc.supports_multi_tank() {
+                return Err(SlicerV3Error::UnsupportedOutput(format!(
+                    "{} cannot store per-tank films for a multi-tank job",
+                    encoder.output_format()
+                )));
+            }
+
             // Block-partitioned RLE path: the encoder wants per-column-window
             // payloads (e.g. GOO V5 half-screen panels) rasterized directly.
-            if !is_3daa {
+            // Multi-tank jobs take the tank path instead: a block carries one film.
+            if !is_3daa && !job.is_multi_tank() {
                 if let Some(blocks) = rle_enc.rle_blocks(job) {
                     let encode_block_fn = rle_enc.parallel_encode_block_fn();
                     let on_block = |layer: u32,
@@ -3486,7 +3509,22 @@ pub fn slice_with_progress_v3(
             }
 
             // Parallel-encode path: rasterize + encode PNG in rayon workers.
-            let (_rendered_layers, layer_area_stats, mut perf) = if is_3daa {
+            let (_rendered_layers, layer_area_stats, mut perf) = if job.is_multi_tank() {
+                let mut tank_sink = |layer: u32,
+                                     tank: u32,
+                                     runs: Vec<crate::rle::RleRun>|
+                 -> Result<(), SlicerV3Error> {
+                    rle_enc.consume_rle_tank_layer(layer, tank, runs)
+                };
+                let (stats, tank_perf) = slice_and_rasterize_rle_multi_tank_v3(
+                    job,
+                    requires_area_stats,
+                    &mut tank_sink,
+                    slicing_progress,
+                    cancel_flag,
+                )?;
+                (RenderedLayersV3::default(), stats, tank_perf)
+            } else if is_3daa {
                 // RLE-native perturbation 3DAA: raster emits grayscale RLE,
                 // then we apply XY blur, Z blur, LUT, and support merge in
                 // streaming order without materializing full-frame masks.
@@ -3539,7 +3577,7 @@ pub fn slice_with_progress_v3(
 
             if let Some(cb) = on_progress.as_ref() {
                 cb(SliceProgressUpdateV3 {
-                    done: job_total_layers,
+                    done: progress_slice_units,
                     total: progress_total,
                     phase: SliceProgressPhaseV3::Finalizing,
                 });
@@ -3623,6 +3661,15 @@ pub fn slice_with_progress_v3(
     }
 
     let total_start = std::time::Instant::now();
+
+    // Multi-tank output only exists on the per-tank RLE path above. Falling back
+    // here would print every tank as Tank 1, so refuse instead of guessing.
+    if job.is_multi_tank() {
+        return Err(SlicerV3Error::UnsupportedOutput(format!(
+            "{} needs a multi-tank RLE stream encoder",
+            encoder.output_format()
+        )));
+    }
 
     // raster_job_owned / raster_job were computed before the RLE guard above.
     let (rendered_layers, layer_area_stats, mut perf) = if is_3daa {
@@ -3855,6 +3902,106 @@ pub fn slice_and_rasterize_rle_v3(
     perf.index_build_ns = index_ns;
 
     Ok((rendered_layers, layer_area_stats, perf))
+}
+
+/// Multi-tank RLE stage: every tank is sliced as its own job and its runs are
+/// delivered per (layer, tank), tank-major.
+///
+/// Each tank's geometry is a self-contained triangle list, so the single-tank
+/// pipeline — with all of its AA, SSAA and support handling — runs unchanged for
+/// it. Supports are part of Tank 1 by construction (`tanks::partition_triangles_by_tank`).
+pub fn slice_and_rasterize_rle_multi_tank_v3(
+    job: &SliceJobV3,
+    compute_area_stats: bool,
+    mut on_rle_tank_layer: impl FnMut(
+        u32,
+        u32,
+        Vec<crate::rle::RleRun>,
+    ) -> Result<(), SlicerV3Error>,
+    on_progress: Option<ProgressCallbackV3>,
+    cancel_flag: Option<&AtomicBool>,
+) -> Result<(Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
+    validate_job(job)?;
+    if !job.is_multi_tank() {
+        return Err(SlicerV3Error::UnsupportedOutput(
+            "multi-tank slicing needs tank_count > 1".to_string(),
+        ));
+    }
+
+    let triangles = parse_triangles(&job.triangles_xyz);
+    let tanks = crate::tanks::partition_triangles_by_tank(job, &triangles);
+    let total_layers = job.total_layers;
+    let mut layer_area_stats = vec![LayerAreaStatsV3::default(); total_layers as usize];
+    let mut perf = SlicingPerfV3::default();
+    let progress_units = total_layers.saturating_mul(tanks.len() as u32);
+
+    for (tank_position, tank) in tanks.iter().enumerate() {
+        if cancel_flag
+            .map(|flag| flag.load(Ordering::Relaxed))
+            .unwrap_or(false)
+        {
+            return Err(SlicerV3Error::Cancelled);
+        }
+
+        let mut triangles_xyz = Vec::with_capacity(tank.triangles.len() * 9);
+        for triangle in &tank.triangles {
+            for vertex in [triangle.a, triangle.b, triangle.c] {
+                triangles_xyz.extend_from_slice(&[vertex.x, vertex.y, vertex.z]);
+            }
+        }
+
+        let mut tank_job = job.clone();
+        tank_job.tank_count = 1;
+        tank_job.triangle_tank_index = Vec::new();
+        tank_job.triangles_xyz = triangles_xyz;
+        // The partition keeps the job's order and supports only ever trail the
+        // model triangles, so the per-tank split is a plain count.
+        tank_job.model_triangle_count = u32::try_from(tank.model_triangle_count).unwrap_or(u32::MAX);
+
+        let tank_index = tank.tank;
+        let base_done = (tank_position as u32).saturating_mul(total_layers);
+        let tank_progress = on_progress.as_ref().map(|callback| {
+            let callback = callback.clone();
+            Arc::new(move |update: SliceProgressUpdateV3| {
+                callback(SliceProgressUpdateV3 {
+                    done: base_done.saturating_add(update.done),
+                    total: progress_units,
+                    phase: SliceProgressPhaseV3::Slicing,
+                });
+            }) as ProgressCallbackV3
+        });
+
+        let (_, tank_stats, tank_perf) = slice_and_rasterize_rle_v3(
+            &tank_job,
+            compute_area_stats,
+            |layer, runs| on_rle_tank_layer(layer, tank_index, runs),
+            tank_progress,
+            cancel_flag,
+        )?;
+
+        for (index, stats) in tank_stats.iter().enumerate() {
+            if let Some(total) = layer_area_stats.get_mut(index) {
+                accumulate_block_stats(total, stats);
+            }
+        }
+
+        perf.index_build_ns = perf.index_build_ns.saturating_add(tank_perf.index_build_ns);
+        perf.render_wall_ns = perf.render_wall_ns.saturating_add(tank_perf.render_wall_ns);
+        perf.render_ns = perf.render_ns.saturating_add(tank_perf.render_ns);
+        perf.z_blend_backward_ns = perf
+            .z_blend_backward_ns
+            .saturating_add(tank_perf.z_blend_backward_ns);
+        perf.z_blend_forward_ns = perf
+            .z_blend_forward_ns
+            .saturating_add(tank_perf.z_blend_forward_ns);
+        perf.cross_blend_ns = perf.cross_blend_ns.saturating_add(tank_perf.cross_blend_ns);
+        perf.post_blur_ns = perf.post_blur_ns.saturating_add(tank_perf.post_blur_ns);
+        perf.support_merge_ns = perf.support_merge_ns.saturating_add(tank_perf.support_merge_ns);
+        perf.total_ns = perf.total_ns.saturating_add(tank_perf.total_ns);
+    }
+
+    perf.layers = total_layers;
+    Ok((layer_area_stats, perf))
 }
 
 /// Accumulate one block's stats into the layer total. Pixel totals/areas and
@@ -5266,22 +5413,34 @@ pub fn slice_with_progress_v3_to_path(
         if let Some(mut rle_enc) = encoder.create_rle_stream_encoder(job)? {
             let total_start = std::time::Instant::now();
             let job_total_layers = job.total_layers;
-            let progress_total = job_total_layers.saturating_add(1);
+            // A multi-tank job renders every layer once per tank, so progress is
+            // measured in (layer, tank) units, plus one for the finalizing step.
+            let progress_slice_units =
+                job_total_layers.saturating_mul(job.tank_count.max(1));
+            let progress_total = progress_slice_units.saturating_add(1);
 
             let slicing_progress = on_progress.as_ref().map(|cb| {
                 let cb = cb.clone();
                 Arc::new(move |update: SliceProgressUpdateV3| {
                     cb(SliceProgressUpdateV3 {
-                        done: update.done.min(job_total_layers),
+                        done: update.done.min(progress_slice_units),
                         total: progress_total,
                         phase: SliceProgressPhaseV3::Slicing,
                     });
                 }) as ProgressCallbackV3
             });
 
+            if job.is_multi_tank() && !rle_enc.supports_multi_tank() {
+                return Err(SlicerV3Error::UnsupportedOutput(format!(
+                    "{} cannot store per-tank films for a multi-tank job",
+                    encoder.output_format()
+                )));
+            }
+
             // Block-partitioned RLE path (disk-streaming twin of the branch
-            // in the in-memory encode driver above).
-            if !is_3daa {
+            // in the in-memory encode driver above). Multi-tank takes the tank
+            // path instead: a block carries one film.
+            if !is_3daa && !job.is_multi_tank() {
                 if let Some(blocks) = rle_enc.rle_blocks(job) {
                     let encode_block_fn = rle_enc.parallel_encode_block_fn();
                     let on_block = |layer: u32,
@@ -5336,7 +5495,22 @@ pub fn slice_with_progress_v3_to_path(
                 }
             }
 
-            let (_rendered_layers, layer_area_stats, mut perf) = if is_3daa {
+            let (_rendered_layers, layer_area_stats, mut perf) = if job.is_multi_tank() {
+                let mut tank_sink = |layer: u32,
+                                     tank: u32,
+                                     runs: Vec<crate::rle::RleRun>|
+                 -> Result<(), SlicerV3Error> {
+                    rle_enc.consume_rle_tank_layer(layer, tank, runs)
+                };
+                let (stats, tank_perf) = slice_and_rasterize_rle_multi_tank_v3(
+                    job,
+                    requires_area_stats,
+                    &mut tank_sink,
+                    slicing_progress,
+                    cancel_flag,
+                )?;
+                (RenderedLayersV3::default(), stats, tank_perf)
+            } else if is_3daa {
                 // RLE-native perturbation 3DAA: raster emits grayscale RLE,
                 // then we apply XY blur, Z blur, LUT, and support merge in
                 // streaming order without materializing full-frame masks.
@@ -5474,6 +5648,15 @@ pub fn slice_with_progress_v3_to_path(
 
     let total_start = std::time::Instant::now();
 
+    // Multi-tank output only exists on the per-tank RLE path above. Falling back
+    // here would print every tank as Tank 1, so refuse instead of guessing.
+    if job.is_multi_tank() {
+        return Err(SlicerV3Error::UnsupportedOutput(format!(
+            "{} needs a multi-tank RLE stream encoder",
+            encoder.output_format()
+        )));
+    }
+
     // raster_job_owned / raster_job were computed before the RLE guard above.
     let (rendered_layers, layer_area_stats, mut perf) = if is_3daa {
         rasterize_vertical_aa_streaming_v3(
@@ -5577,6 +5760,27 @@ mod tests {
     };
     use std::collections::VecDeque;
     use std::sync::Arc;
+
+    /// Appends the 12 triangles of an axis-aligned box to a flat triangle buffer.
+    fn push_box_xyz(xyz: &mut Vec<f32>, min_x: f32, min_y: f32, min_z: f32, max_x: f32, max_y: f32, max_z: f32) {
+        let corners = [
+            [min_x, min_y, min_z], [max_x, min_y, min_z], [max_x, max_y, min_z], [min_x, max_y, min_z],
+            [min_x, min_y, max_z], [max_x, min_y, max_z], [max_x, max_y, max_z], [min_x, max_y, max_z],
+        ];
+        let faces = [
+            [0, 2, 1], [0, 3, 2],
+            [4, 5, 6], [4, 6, 7],
+            [0, 1, 5], [0, 5, 4],
+            [1, 2, 6], [1, 6, 5],
+            [2, 3, 7], [2, 7, 6],
+            [3, 0, 4], [3, 4, 7],
+        ];
+        for face in faces {
+            for index in face {
+                xyz.extend_from_slice(&corners[index]);
+            }
+        }
+    }
 
     fn z_blur_test_layer(mask: BoundedGrayMask) -> PostProcessedLayer {
         let bounds = mask.bounds();
@@ -6129,6 +6333,7 @@ mod tests {
             dither_device_gamma: 3.0,
             triangles_xyz: Vec::new(),
             metadata_json: "{}".to_string(),
+            ..Default::default()
         }
     }
 
@@ -6332,6 +6537,7 @@ mod tests {
             dither_device_gamma: 3.0,
             triangles_xyz: Vec::new(),
             metadata_json: "{}".to_string(),
+            ..Default::default()
         };
 
         let mut flat = Vec::<f32>::new();
@@ -6407,6 +6613,7 @@ mod tests {
             dither_device_gamma: 3.0,
             triangles_xyz: Vec::new(),
             metadata_json: "{}".to_string(),
+            ..Default::default()
         };
 
         let mut flat = Vec::<f32>::new();
@@ -6482,6 +6689,7 @@ mod tests {
             dither_device_gamma: 3.0,
             triangles_xyz: Vec::new(),
             metadata_json: "{}".to_string(),
+            ..Default::default()
         };
 
         let mut flat = Vec::<f32>::new();
@@ -6535,4 +6743,96 @@ mod tests {
             "available RAM reported as {available:?}; the 3DAA gate would fall back to no budget"
         );
     }
+    #[test]
+    fn multi_tank_rle_delivers_one_stream_per_tank() {
+        let mut xyz = Vec::new();
+        // Box A prints from Tank 1, box B from Tank 2, at opposite sides of the bed.
+        push_box_xyz(&mut xyz, -30.0, 10.0, 0.0, -10.0, 30.0, 1.0);
+        push_box_xyz(&mut xyz, 10.0, 10.0, 0.0, 30.0, 30.0, 1.0);
+        let mut tank_index = vec![1u32; 12];
+        tank_index.extend(vec![0u32; 12]);
+
+        let job = SliceJobV3 {
+            output_format: ".test".to_string(),
+            source_width_px: 100,
+            source_height_px: 100,
+            width_px: 100,
+            height_px: 100,
+            build_width_mm: 100.0,
+            build_depth_mm: 100.0,
+            layer_height_mm: 1.0,
+            total_layers: 1,
+            anti_aliasing_level: "Off".to_string(),
+            anti_aliasing_mode: "Coverage".to_string(),
+            tank_count: 2,
+            triangle_tank_index: tank_index,
+            model_triangle_count: 24,
+            triangles_xyz: xyz,
+            metadata_json: "{}".to_string(),
+            ..Default::default()
+        };
+
+        let mut streams: std::collections::HashMap<u32, Vec<crate::rle::RleRun>> = Default::default();
+        let (stats, _perf) = super::slice_and_rasterize_rle_multi_tank_v3(
+            &job,
+            false,
+            |layer, tank, runs| {
+                assert_eq!(layer, 0);
+                streams.insert(tank, runs);
+                Ok(())
+            },
+            None,
+            None,
+        )
+        .expect("multi-tank slice");
+
+        assert_eq!(stats.len(), 1);
+        let width = 100usize;
+        let height = 100usize;
+        let tank_one = expand_rle_to_mask(&streams[&0], width * height);
+        let tank_two = expand_rle_to_mask(&streams[&1], width * height);
+        let first_solid = |mask: &[u8]| -> Option<usize> {
+            mask.iter().position(|value| *value > 0)
+        };
+
+        let tank_one_pixel = first_solid(&tank_one).expect("tank 1 has film");
+        let tank_two_pixel = first_solid(&tank_two).expect("tank 2 has film");
+        assert_eq!(tank_one[tank_one_pixel], 255);
+        assert_eq!(tank_two[tank_two_pixel], 255);
+        assert_eq!(
+            tank_two[tank_one_pixel], 0,
+            "tank 2 has no film where tank 1's model is",
+        );
+        assert_eq!(
+            tank_one[tank_two_pixel], 0,
+            "tank 1 has no film where tank 2's model is",
+        );
+    }
+
+    #[test]
+    fn multi_tank_stage_rejects_a_single_tank_job() {
+        let job = SliceJobV3 {
+            output_format: ".test".to_string(),
+            source_width_px: 8,
+            source_height_px: 8,
+            width_px: 8,
+            height_px: 8,
+            build_width_mm: 10.0,
+            build_depth_mm: 10.0,
+            layer_height_mm: 1.0,
+            total_layers: 1,
+            tank_count: 1,
+            ..Default::default()
+        };
+        let result = super::slice_and_rasterize_rle_multi_tank_v3(
+            &job,
+            false,
+            |_, _, _| Ok(()),
+            None,
+            None,
+        );
+        assert!(matches!(result, Err(super::SlicerV3Error::UnsupportedOutput(_))));
+    }
+
+
 }

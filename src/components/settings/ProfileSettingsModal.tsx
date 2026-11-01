@@ -2,14 +2,17 @@
 
 import React from 'react';
 import { Plural, Trans } from '@lingui/react/macro';
+import { msg } from '@lingui/core/macro';
+import { useLingui } from '@lingui/react';
 import { createPortal } from 'react-dom';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { AlertTriangle, Box, Check, Square, ChevronDown, ChevronLeft, ChevronRight, Copy, Download, Edit3, FlaskConical, Frown, ImagePlus, Info, LayoutGrid, Lock, Plus, Printer, RefreshCw, Search, Trash2, Unlock, Upload, Wifi, WifiOff, X } from 'lucide-react';
-import { Button, IconButton, IconChip, Spinner } from '@/components/atoms';
+import { Button, IconButton, IconChip, Spinner, FadeText } from '@/components/atoms';
 import FleetManagement from '@/components/settings/FleetManagement';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import { Tooltip } from '@/components/ui/Tooltip';
 import {
   PrinterVariantPickerModal,
   type PrinterVariantPickerNetworkContext,
@@ -64,10 +67,15 @@ import {
 import {
   getAvailableOutputFormatOptions,
   getAvailableFormatVersionOptions,
+  outputFormatSupportsMultiTank,
   getAvailableSettingsModeOptions,
   resolveOutputFormatVersion,
   resolveOutputSettingsMode,
 } from '@/features/slicing/formats/registry';
+import {
+  getSideloadedOutputFormatsSnapshot,
+  subscribeSideloadedFileTypes,
+} from '@/features/plugins/sideloadedFileTypeRegistry';
 import {
   getPrinterReachabilityServerSnapshot,
   getPrinterReachabilitySnapshot,
@@ -101,6 +109,8 @@ import {
   LabeledTwoStageNumberInput,
   LabeledSelectInput,
   LabeledToggleInput,
+  DefaultOptionChip,
+  MODIFIED_FIELD_STYLE,
   LabeledResinFamilySelect,
   LabeledCurrencySelect,
   MaterialProfileFormSections,
@@ -161,7 +171,6 @@ function writeRemoteMaterialByPrinter(printerId: string, materialId: string): vo
   }
 }
 
-const OUTPUT_FORMAT_OPTIONS = getAvailableOutputFormatOptions();
 const WEBCAM_ROTATION_OPTIONS = [
   { value: '0', label: '0°' },
   { value: '90', label: '90°' },
@@ -267,6 +276,13 @@ function computeBuildDimensionMm(resolutionPx: number, pixelSizeUm: number): num
   return Number(((safeResolution * safePixelSize) / 1000).toFixed(3));
 }
 
+/**
+ * Tooltip for a profile whose contributing plugin was removed. Module scope on
+ * purpose: an interpolated message inside a component desyncs from the catalog when
+ * React Compiler renames the local.
+ */
+const missingPluginMessage = (pluginName: string) => msg`The "${pluginName}" plugin is missing.`;
+
 function resolveDefaultLocalSettingsForOutput(
   outputFormat: string,
   settingsMode?: string,
@@ -327,6 +343,7 @@ export function ProfileSettingsModal({
   }, []);
 
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
+  const { _ } = useLingui();
   const [selectedPrinterId, setSelectedPrinterId] = React.useState<string | null>(null);
   const [selectedMaterialId, setSelectedMaterialId] = React.useState<string | null>(null);
   const [selectedManufacturer, setSelectedManufacturer] = React.useState<string | null>(null);
@@ -576,10 +593,26 @@ export function ProfileSettingsModal({
     return Math.round(printerBitDepth);
   }, [selectedPrinter?.bitDepth?.bits]);
 
+  const supportsMultiTankFormat = React.useMemo(
+    () => outputFormatSupportsMultiTank(selectedPrinter?.display.outputFormat),
+    [selectedPrinter?.display.outputFormat],
+  );
+  // Multi-Tank assigns materials per tank; the Material Settings list is then a
+  // library, not a chooser, so rows carry no selection of their own.
+  const multiTankMaterialPicker = supportsMultiTankFormat && selectedPrinter?.materialMode === 'multiTank';
+
+  // Reinstalling a package can add output versions to a format; the profile
+  // editor has to re-read the snapshot when that happens.
+  const sideloadedFormats = React.useSyncExternalStore(
+    subscribeSideloadedFileTypes,
+    getSideloadedOutputFormatsSnapshot,
+    getSideloadedOutputFormatsSnapshot,
+  );
   const selectedFormatVersionOptions = React.useMemo(() => {
     if (!selectedPrinter) return [] as Array<{ value: string; label: string; isDefault?: boolean }>;
+    void sideloadedFormats;
     return getAvailableFormatVersionOptions(selectedPrinter.display.outputFormat);
-  }, [selectedPrinter]);
+  }, [selectedPrinter, sideloadedFormats]);
 
   const selectedResolvedFormatVersion = React.useMemo(() => {
     if (!selectedPrinter) return undefined;
@@ -588,6 +621,43 @@ export function ProfileSettingsModal({
       selectedPrinter.display.formatVersion,
     );
   }, [selectedPrinter]);
+
+  // Which official profile this is, so the editable fields can say what the preset
+  // shipped and flag the ones the user changed away from it.
+  const selectedOfficialPreset = React.useMemo(() => {
+    if (!selectedPrinter?.isOfficial) return null;
+    const presetId = typeof selectedPrinter.officialPresetId === 'string'
+      ? selectedPrinter.officialPresetId.trim()
+      : '';
+    if (!presetId) return null;
+    return availablePrinterPresets.find((preset) => preset.presetId === presetId) ?? null;
+  }, [availablePrinterPresets, selectedPrinter]);
+
+  const officialFieldDefaults = React.useMemo(() => {
+    if (!selectedOfficialPreset) return null;
+    const display = selectedOfficialPreset.display as {
+      formatVersion?: unknown;
+      settingsMode?: unknown;
+      webcamRotationDeg?: unknown;
+      webcamOrientation?: unknown;
+    } & typeof selectedOfficialPreset.display;
+    const rotation = Number(display.webcamRotationDeg ?? display.webcamOrientation);
+    const formatVersion = typeof display.formatVersion === 'string' && display.formatVersion.trim().length > 0
+      ? display.formatVersion.trim()
+      : undefined;
+    const settingsMode = typeof display.settingsMode === 'string' && display.settingsMode.trim().length > 0
+      ? display.settingsMode.trim()
+      : undefined;
+    return {
+      materialMode: selectedOfficialPreset.materialMode ?? 'single',
+      outputFormat: (selectedOfficialPreset.display.outputFormat ?? '').trim().toLowerCase(),
+      networkSupport: (selectedOfficialPreset.networkSupport ?? '').trim().toLowerCase(),
+      hasCamera: selectedOfficialPreset.hasCamera !== false,
+      webcamRotationDeg: Number.isFinite(rotation) ? rotation : 0,
+      formatVersion,
+      settingsMode,
+    };
+  }, [selectedOfficialPreset]);
 
   const selectedSettingsModeOptions = React.useMemo(() => {
     if (!selectedPrinter) return [] as Array<{ value: string; label: string; isDefault?: boolean }>;
@@ -601,6 +671,30 @@ export function ProfileSettingsModal({
       selectedPrinter.display.settingsMode,
     );
   }, [selectedPrinter]);
+
+  const officialFieldsModified = React.useMemo(() => {
+    if (!officialFieldDefaults || !selectedPrinter) return null;
+    const defaultFormatVersion = officialFieldDefaults.formatVersion ?? selectedFormatVersionOptions[0]?.value ?? '';
+    const currentFormatVersion = selectedResolvedFormatVersion ?? selectedFormatVersionOptions[0]?.value ?? '';
+    const defaultSettingsMode = officialFieldDefaults.settingsMode ?? selectedSettingsModeOptions[0]?.value ?? '';
+    const currentSettingsMode = selectedResolvedSettingsMode ?? selectedSettingsModeOptions[0]?.value ?? '';
+    return {
+      materialMode: (selectedPrinter.materialMode ?? 'single') !== officialFieldDefaults.materialMode,
+      outputFormat: (selectedPrinter.display.outputFormat ?? '').trim().toLowerCase() !== officialFieldDefaults.outputFormat,
+      networkSupport: (selectedPrinter.networkSupport ?? '').trim().toLowerCase() !== officialFieldDefaults.networkSupport,
+      hasCamera: (selectedPrinter.hasCamera !== false) !== officialFieldDefaults.hasCamera,
+      webcamRotationDeg: Number(selectedPrinter.display.webcamRotationDeg ?? 0) !== officialFieldDefaults.webcamRotationDeg,
+      formatVersion: currentFormatVersion !== defaultFormatVersion,
+      settingsMode: currentSettingsMode !== defaultSettingsMode,
+    };
+  }, [
+    officialFieldDefaults,
+    selectedPrinter,
+    selectedFormatVersionOptions,
+    selectedResolvedFormatVersion,
+    selectedSettingsModeOptions,
+    selectedResolvedSettingsMode,
+  ]);
 
   const selectedLocalMaterialSettingsAdapter = React.useMemo(() => {
     if (!selectedPrinter) return null;
@@ -806,6 +900,56 @@ export function ProfileSettingsModal({
     return getMaterialProfilesForPrinter(selectedPrinter.id, profileState);
   }, [profileState, selectedPrinter]);
 
+  // The tank menus group by manufacturer, because a printer can carry resins from
+  // several brands and a flat list stops being scannable past a handful.
+  const tankMaterialOptions = React.useMemo(() => {
+    const groups = new Map<string, typeof printerMaterials>();
+    for (const material of printerMaterials) {
+      const brand = (material.brand || 'Default').trim() || 'Default';
+      groups.set(brand, [...(groups.get(brand) ?? []), material]);
+    }
+    const options: Array<{ value: string; label: string; heading?: boolean }> = [];
+    for (const brand of [...groups.keys()].sort((left, right) => left.localeCompare(right))) {
+      options.push({ value: `__brand__:${brand}`, label: brand, heading: true });
+      for (const material of [...(groups.get(brand) ?? [])].sort((left, right) => left.name.localeCompare(right.name))) {
+        // Brand is the group, so the row only has to carry the type, in front of the
+        // name ("Standard Blue"). A name that already opens with its family ("Standard
+        // 405nm") is left alone rather than stuttering.
+        const familyLabel = RESIN_FAMILY_OPTIONS.find((option) => option.value === material.resinFamily)?.label;
+        const nameStartsWithFamily = Boolean(familyLabel)
+          && material.name.toLowerCase().startsWith(familyLabel!.toLowerCase());
+        options.push({
+          value: material.id,
+          label: familyLabel && !nameStartsWithFamily ? `${familyLabel} ${material.name}` : material.name,
+          ...(material.color
+            ? {
+              icon: (
+                <span
+                  className="h-3.5 w-3.5 rounded-[4px]"
+                  style={{
+                    background: material.color,
+                    boxShadow: 'inset 0 0 0 1px rgba(0, 0, 0, 0.35), 0 0 0 1px var(--border-subtle)',
+                  }}
+                />
+              ),
+            }
+            : {}),
+        });
+      }
+    }
+    // Clearing a tank is the destructive choice, so it sits last behind a rule rather
+    // than at the top where a stray click would hit it.
+    options.push({ value: '__unassign-rule__', label: '', divider: true } as never);
+    options.push({
+      value: '',
+      label: 'Unassign Tank',
+      icon: <Trash2 className="h-3.5 w-3.5" />,
+      tone: 'danger',
+      action: true,
+    } as never);
+    return options;
+  }, [printerMaterials]);
+
   const availableMaterialPresets = React.useMemo(() => {
     const printerPresetId = selectedPrinter?.officialPresetId?.trim() ?? '';
     return getRuntimeMaterialPresets(printerPresetId.length > 0 ? printerPresetId : undefined);
@@ -927,7 +1071,11 @@ export function ProfileSettingsModal({
         label: mode.displayName,
       })),
     ];
-  }, []);
+    // A package installed in this session registers its mode after this modal
+    // mounted; the profile snapshot moves with the registry, so it is the dep
+    // that makes the list current. An empty dep list pinned the list at mount and
+    // showed "Unknown (<mode>)" for a mode that was registered a second later.
+  }, [profileState]);
   const selectedPrinterNetworkModeOptions = React.useMemo<Array<{ value: PrinterOutputFormat; label: string }>>(() => {
     const currentMode = (selectedPrinter?.networkSupport ?? '').trim().toLowerCase();
     if (!currentMode) return registeredNetworkModeOptions;
@@ -939,7 +1087,7 @@ export function ProfileSettingsModal({
   }, [registeredNetworkModeOptions, selectedPrinter?.networkSupport]);
   const networkUiAdapter = React.useMemo(
     () => getProfileNetworkUiAdapter(selectedPrinter?.networkSupport),
-    [selectedPrinter?.networkSupport],
+    [profileState, selectedPrinter?.networkSupport],
   );
   const effectiveNetworkUiAdapter = React.useMemo(
     () => networkUiAdapter ?? getDefaultProfileNetworkUiAdapter(),
@@ -1347,6 +1495,8 @@ export function ProfileSettingsModal({
   const renderPrinterRailCard = React.useCallback((options: {
     key: string;
     active: boolean;
+    /** Greyed out and inert: the profile's plugin is gone. */
+    muted?: boolean;
     draggable?: boolean;
     dragging?: boolean;
     onClick: () => void;
@@ -1373,6 +1523,7 @@ export function ProfileSettingsModal({
     const {
       key,
       active,
+      muted,
       draggable,
       dragging,
       onClick,
@@ -1406,16 +1557,18 @@ export function ProfileSettingsModal({
         onDragOver={onDragOver}
         onDrop={onDrop}
         className={`min-w-0 w-full rounded-md border p-2 transition-all duration-150 ${draggable ? (dragging ? 'opacity-60' : 'cursor-grab active:cursor-grabbing') : ''}`}
+        aria-disabled={muted || undefined}
         onDoubleClick={onDoubleClick}
         style={active ? activeStyles : inactiveStyles}
       >
         <button
           type="button"
-          onClick={onClick}
-          className="w-full text-left leading-none"
+          onClick={muted ? undefined : onClick}
+          aria-disabled={muted || undefined}
+          className={muted ? 'w-full text-left leading-none cursor-not-allowed' : 'w-full text-left leading-none'}
         >
           <div
-            className="h-[128px] min-h-[128px] max-h-[128px] shrink-0 rounded-md border overflow-hidden relative"
+            className={`h-[128px] min-h-[128px] max-h-[128px] shrink-0 rounded-md border overflow-hidden relative ${muted ? 'opacity-60 grayscale' : ''}`}
             style={{
               borderColor: 'var(--border-subtle)',
               background: printerImageWellBackground,
@@ -1452,8 +1605,9 @@ export function ProfileSettingsModal({
         <div className="mt-0.5 flex items-center justify-between gap-1.5">
           <button
             type="button"
-            onClick={onClick}
-            className="min-w-0 flex-1 text-left"
+            onClick={muted ? undefined : onClick}
+            aria-disabled={muted || undefined}
+            className={`min-w-0 flex-1 text-left ${muted ? 'opacity-60 grayscale cursor-not-allowed' : ''}`}
           >
             <div className="flex items-center gap-1.5">
               <div className="text-xs leading-snug font-semibold truncate min-w-0" style={{ color: 'var(--text-strong)' }}>
@@ -1774,10 +1928,38 @@ export function ProfileSettingsModal({
     selectedMaterialId,
   ]);
 
+  const assignedTankCount = React.useMemo(() => {
+    if (!multiTankMaterialPicker || !selectedPrinter) return 0;
+    const count = selectedPrinter.tankCount ?? 2;
+    const assignments = selectedPrinter.tankMaterials ?? [];
+    let assigned = 0;
+    for (let index = 0; index < count; index += 1) {
+      if (assignments[index]) assigned += 1;
+    }
+    return assigned;
+  }, [multiTankMaterialPicker, selectedPrinter]);
+
+  const [showUnassignedTanksWarning, setShowUnassignedTanksWarning] = React.useState(false);
+
+  // One assigned tank is enough to be useful — a profile is allowed to carry tanks
+  // nobody uses yet. Only leaving with nothing assigned at all is worth interrupting.
+  const requestClose = React.useCallback(() => {
+    if (multiTankMaterialPicker && assignedTankCount === 0) {
+      setShowUnassignedTanksWarning(true);
+      return;
+    }
+    onClose();
+  }, [assignedTankCount, multiTankMaterialPicker, onClose]);
+
   // Escape unwinds this modal's own nested dialogs one at a time before it
   // closes the modal itself; nested dialogs of their own take precedence.
   useEscapeToClose(isOpen, () => {
     const closedNestedDialog = ((): boolean => {
+      if (showUnassignedTanksWarning) {
+        setShowUnassignedTanksWarning(false);
+        return true;
+      }
+
       if (deleteConfirmTarget) {
         setDeleteConfirmTarget(null);
         return true;
@@ -1850,7 +2032,7 @@ export function ProfileSettingsModal({
     })();
 
     if (closedNestedDialog) return;
-    onClose();
+    requestClose();
   });
 
   React.useEffect(() => {
@@ -2794,6 +2976,9 @@ export function ProfileSettingsModal({
     setEditMaterialDraft({
       name: selectedMaterial.name,
       brand: selectedMaterial.brand,
+      // The colour is part of the material meta: without it here, an edit that changed
+      // it saved nothing and the profile reopened on the old value.
+      color: selectedMaterial.color,
       currencyCode: selectedMaterial.currencyCode || 'USD',
       bottlePrice: selectedMaterial.bottlePrice,
       bottleCapacityMl: selectedMaterial.bottleCapacityMl,
@@ -3495,7 +3680,7 @@ export function ProfileSettingsModal({
     <div
       className="fixed inset-0 z-50 flex items-stretch justify-center bg-black/58 backdrop-blur-sm p-5 ui-modal-backdrop-enter"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        if (event.target === event.currentTarget) requestClose();
       }}
     >
       <div
@@ -3524,7 +3709,7 @@ export function ProfileSettingsModal({
           <IconButton
             variant="surface"
             size="sm"
-            onClick={onClose}
+            onClick={requestClose}
             aria-label="Close"
             type="button"
           >
@@ -3741,6 +3926,7 @@ export function ProfileSettingsModal({
                   })
                   : profileState.printerProfiles.map((printer) => {
                   const active = printer.id === selectedPrinter?.id;
+                  const missingPlugin = printer.missingPlugin;
                   const isGenericPrinter = (printer.manufacturer ?? '').toLowerCase() === 'generic'
                     || printer.name.toLowerCase().includes('generic');
                   const activeDeviceReachability = printer.activeNetworkDeviceId
@@ -3769,13 +3955,14 @@ export function ProfileSettingsModal({
                     ? `${bitDepthBits} Bit`
                     : null;
 
-                  return renderPrinterRailCard({
+                  const card = renderPrinterRailCard({
                     key: printer.id,
                     active,
-                    draggable: true,
+                    muted: Boolean(missingPlugin),
+                    draggable: !missingPlugin,
                     dragging: printerDragId === printer.id,
-                    onClick: () => handlePickPrinter(printer.id),
-                    onDoubleClick: () => {
+                    onClick: () => { if (!missingPlugin) handlePickPrinter(printer.id); },
+                    onDoubleClick: missingPlugin ? undefined : () => {
                       handlePickPrinter(printer.id);
                       setIsEditingPrinter(true);
                     },
@@ -3863,7 +4050,19 @@ export function ProfileSettingsModal({
                     ) : null,
                     title: printer.name,
                     subtitle: printer.manufacturer || 'Generic',
-                    footer: supportsNetworkFleet ? (
+                    footer: missingPlugin ? (
+                      <Button
+                        type="button"
+                        aria-label={_(msg`Delete printer`)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setDeleteConfirmTarget({ kind: 'printer', id: printer.id, name: printer.name });
+                        }}
+                        variant="tinted-danger" size="auto" className="!h-7 !w-7 !px-0 !py-0 inline-flex items-center justify-center rounded-md shrink-0"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    ) : supportsNetworkFleet ? (
                       <Button
                         type="button"
                         onClick={(event) => {
@@ -3904,6 +4103,17 @@ export function ProfileSettingsModal({
                       background: 'var(--surface-2)',
                     },
                   });
+
+                  if (!missingPlugin) return card;
+                  return (
+                    <Tooltip
+                      key={`missing-${printer.id}`}
+                      content={_(missingPluginMessage(missingPlugin.name))}
+                      wrapperClassName="block"
+                    >
+                      {card}
+                    </Tooltip>
+                  );
                   })}
               </div>
 
@@ -4047,6 +4257,73 @@ export function ProfileSettingsModal({
                   )}
                 </div>
               </div>
+              )}
+            </div>
+          </section>
+          )}
+
+          {hasPrinters && selectedPrinter && multiTankMaterialPicker && (
+          <section
+            className="rounded-md border overflow-hidden flex flex-col shrink-0"
+            style={{
+              borderColor: 'var(--border-subtle)',
+              background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface-1), transparent 8%), var(--surface-1))',
+            }}
+          >
+            <div className="p-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div>
+                <h3 className="text-sm font-semibold flex items-center gap-2" style={{ color: 'var(--text-strong)' }}>
+                  <FlaskConical className="w-4 h-4" />
+                  Multi-Tank
+                </h3>
+              </div>
+            </div>
+
+            <div className="p-3">
+              <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2.5">
+                {Array.from({ length: Math.max(4, selectedPrinter.tankCount ?? 2) }, (_, index) => {
+                  const assignments = selectedPrinter.tankMaterials ?? [];
+                  const tankCount = selectedPrinter.tankCount ?? 2;
+                  const isTank = index < tankCount;
+                  const assignedId = isTank ? assignments[index] ?? '' : '';
+                  return (
+                    <div key={`tank-${index}`} className="space-y-1 block">
+                      <span className="ui-label font-medium inline-flex w-full justify-center text-center">
+                        {`Tank ${index + 1}`}
+                      </span>
+                      <SelectDropdown
+                        value={assignedId}
+                        disabled={!isTank}
+                        options={tankMaterialOptions}
+                        // An unassigned tank is the thing to fix: a leading warning
+                        // icon, and the dash centred rather than sitting on the left.
+                        // A disabled spare centres its own dash the same way.
+                        leadingDisplay={isTank && assignedId.length === 0
+                          ? <AlertTriangle className="h-3.5 w-3.5" style={{ color: 'var(--danger)' }} />
+                          : undefined}
+                        hideSelectedText={!isTank || assignedId.length === 0}
+                        selectedDisplay={(!isTank || assignedId.length === 0)
+                          ? <span style={{ color: isTank ? 'var(--danger)' : 'var(--text-muted)' }}>—</span>
+                          : undefined}
+                        selectedDisplayAlignment="center"
+                        selectedTextAlign="center"
+                        selectStyle={isTank && assignedId.length === 0 ? { color: 'var(--danger)' } : undefined}
+                        selectClassName="w-full h-[36px] px-2.5 pr-10 leading-tight text-sm"
+                        onChange={(value) => {
+                          if (!isTank) return;
+                          const next = Array.from({ length: tankCount }, (_, slot) => assignments[slot] ?? '');
+                          next[index] = value;
+                          updatePrinterProfile(selectedPrinter.id, { tankMaterials: next });
+                        }}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+              {printerMaterials.length === 0 && (
+                <p className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                  Add a material profile to assign it to a tank.
+                </p>
               )}
             </div>
           </section>
@@ -4290,7 +4567,7 @@ export function ProfileSettingsModal({
               ) : (
                 <>
               <div className="rounded-md border overflow-hidden flex flex-col flex-1 min-h-0" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
-                <div className="grid grid-cols-[1fr_1fr_1.25fr] flex-1 min-h-0 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.25fr)] flex-1 min-h-0 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
                   <div className="border-r min-h-0 flex flex-col" style={{ borderColor: 'var(--border-subtle)' }}>
                     <div className="px-2.5 py-2 text-sm font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Manufacturer</div>
                     <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-1.5 space-y-1">
@@ -4359,9 +4636,9 @@ export function ProfileSettingsModal({
                     </div>
                   </div>
 
-                  <div className="min-h-0 flex flex-col">
+                  <div className="min-w-0 min-h-0 flex flex-col">
                     <div className="px-2.5 py-2 text-sm font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Profile</div>
-                    <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-1.5 space-y-1">
+                    <div className="flex-1 min-h-0 min-w-0 overflow-y-auto custom-scrollbar p-1.5 space-y-1">
                       {filteredMaterialProfiles.map((material) => {
                         const active = selectedMaterial?.id === material.id;
                         const isOfficial = typeof material.officialTemplateId === 'string' && material.officialTemplateId.trim().length > 0;
@@ -4371,12 +4648,14 @@ export function ProfileSettingsModal({
                             key={material.id}
                             type="button"
                             onClick={() => {
+                              // In Multi-Tank the row is picked for the Edit/Duplicate
+                              // buttons, not as the job's material: the tanks own that.
                               setSelectedMaterialId(material.id);
-                              setActiveMaterialProfile(material.id);
+                              if (!multiTankMaterialPicker) setActiveMaterialProfile(material.id);
                             }}
                             onDoubleClick={() => {
                               setSelectedMaterialId(material.id);
-                              setActiveMaterialProfile(material.id);
+                              if (!multiTankMaterialPicker) setActiveMaterialProfile(material.id);
                               if (isLocked) {
                                 setMaterialLockDialogIsOfficial(isOfficial);
                                 setShowOfficialMaterialLockDialog(true);
@@ -4397,12 +4676,22 @@ export function ProfileSettingsModal({
                                   color: 'var(--text-muted)',
                                 }}
                           >
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="inline-flex min-w-0 items-center gap-1.5 truncate font-semibold">
+                            <div className="flex min-w-0 items-center justify-between gap-2">
+                              <span className="flex min-w-0 flex-1 items-center gap-1.5 font-semibold">
                                 {isLocked && <Lock className="w-3.5 h-3.5 shrink-0" />}
-                                <span className="truncate">{material.name}</span>
+                                {material.color && (
+                                  <span
+                                    className="h-3.5 w-3.5 shrink-0 rounded-[4px]"
+                                    style={{
+                                      background: material.color,
+                                      boxShadow: 'inset 0 0 0 1px rgba(0, 0, 0, 0.35), 0 0 0 1px var(--border-subtle)',
+                                    }}
+                                    aria-hidden="true"
+                                  />
+                                )}
+                                <FadeText className="min-w-0 flex-1">{material.name}</FadeText>
                               </span>
-                              <span className="tabular-nums">{Math.round(material.layerHeightMm * 1000)} μm</span>
+                              <span className="shrink-0 whitespace-nowrap tabular-nums">{Math.round(material.layerHeightMm * 1000)} μm</span>
                             </div>
                           </button>
                         );
@@ -4603,7 +4892,7 @@ export function ProfileSettingsModal({
                 </div>
               </div>
 
-              <div className="px-2 py-2 border-t flex items-center justify-between gap-2 shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="px-3 py-3 border-t flex items-center justify-between gap-2 shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
                 <Button
                   type="button"
                   onClick={handleResetFleetUnitDraft}
@@ -4858,7 +5147,7 @@ export function ProfileSettingsModal({
                 )}
               </div>
 
-              <div className="px-2 py-2 border-t flex items-center justify-between gap-2 shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="px-3 py-3 border-t flex items-center justify-between gap-2 shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
                 <Button
                   type="button"
                   onClick={() => {
@@ -4946,7 +5235,7 @@ export function ProfileSettingsModal({
 
                 <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
                   <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Identity</div>
-                  <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_240px] gap-3 md:items-stretch">
+                  <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_220px] gap-3 md:items-stretch">
                     <div className="space-y-3">
                       <LabeledInput
                         label="Printer Name"
@@ -4962,44 +5251,57 @@ export function ProfileSettingsModal({
                         onChange={(value) => updatePrinterProfile(selectedPrinter.id, { manufacturer: value })}
                       />
 
-                      <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}>
-                        <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Profile Image</div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <Button
-                            type="button"
-                            onClick={() => triggerImageUpload(selectedPrinter.id)}
-                            disabled={isSelectedPrinterOfficial}
-                            variant="secondary" size="auto" className="!h-8 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1 rounded-md"
-                            style={{ color: isSelectedPrinterOfficial ? 'var(--text-muted)' : 'var(--text-strong)' }}
-                          >
-                            <Upload className="w-3.5 h-3.5" />
-                            Upload Image
-                          </Button>
-                          <Button
-                            type="button"
-                            onClick={() => {
-                              if (!selectedPrinter.imageDataUrl) return;
-                              updatePrinterProfile(selectedPrinter.id, { imageDataUrl: undefined });
-                            }}
-                            disabled={isSelectedPrinterOfficial || !selectedPrinter.imageDataUrl}
-                            variant="secondary" size="auto" className="!h-8 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
-                            style={{ color: selectedPrinter.imageDataUrl ? 'var(--danger)' : 'var(--text-muted)' }}
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                            Clear Image
-                          </Button>
-                        </div>
-                      </div>
+                      <LabeledInput
+                        label="User Notes"
+                        value={selectedPrinter.notes ?? ''}
+                        onChange={(value) => updatePrinterProfile(selectedPrinter.id, { notes: value })}
+                      />
                     </div>
 
-                    <div className="w-full h-full min-h-0 rounded-md border overflow-hidden flex items-center justify-center" style={{ borderColor: 'var(--border-subtle)', background: printerImageWellBackground }}>
+                    {/* The well is the control: empty means "click to upload", a
+                        picture carries its own clear affordance. */}
+                    <div
+                      role={selectedPrinter.imageDataUrl ? undefined : 'button'}
+                      tabIndex={selectedPrinter.imageDataUrl || isSelectedPrinterOfficial ? undefined : 0}
+                      aria-label={selectedPrinter.imageDataUrl ? undefined : 'Upload profile image'}
+                      onClick={() => {
+                        if (selectedPrinter.imageDataUrl || isSelectedPrinterOfficial) return;
+                        triggerImageUpload(selectedPrinter.id);
+                      }}
+                      onKeyDown={(event) => {
+                        if (selectedPrinter.imageDataUrl || isSelectedPrinterOfficial) return;
+                        if (event.key !== 'Enter' && event.key !== ' ') return;
+                        event.preventDefault();
+                        triggerImageUpload(selectedPrinter.id);
+                      }}
+                      className={`relative w-full min-h-[190px] rounded-md border overflow-hidden flex items-center justify-center ${selectedPrinter.imageDataUrl || isSelectedPrinterOfficial ? '' : 'cursor-pointer'}`}
+                      style={{ borderColor: 'var(--border-subtle)', background: printerImageWellBackground }}
+                    >
                       {selectedPrinter.imageDataUrl ? (
                         <AutoTrimmedImage src={selectedPrinter.imageDataUrl} alt={selectedPrinter.name} className="h-full w-full object-contain" />
                       ) : (
                         <div className="text-xs text-center px-3" style={{ color: 'var(--text-muted)' }}>
-                          <Printer className="w-5 h-5 mx-auto mb-1" />
-                          No preview image
+                          <ImagePlus className="w-6 h-6 mx-auto mb-1" />
+                          {isSelectedPrinterOfficial ? 'No preview image' : 'Click to add a profile image'}
                         </div>
+                      )}
+
+                      {/* An official profile's picture comes from its preset: there is
+                          nothing here to clear, so no control is offered. */}
+                      {selectedPrinter.imageDataUrl && !isSelectedPrinterOfficial && (
+                        <IconButton
+                          variant="surface"
+                          size="sm"
+                          type="button"
+                          aria-label="Clear profile image"
+                          className="absolute top-1.5 right-1.5 z-10"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            updatePrinterProfile(selectedPrinter.id, { imageDataUrl: undefined });
+                          }}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" style={{ color: '#fca5a5' }} />
+                        </IconButton>
                       )}
                     </div>
                   </div>
@@ -5175,7 +5477,9 @@ export function ProfileSettingsModal({
                     <LabeledSelectInput
                       label="Output Format"
                       value={selectedPrinter.display.outputFormat}
-                      options={OUTPUT_FORMAT_OPTIONS}
+                      options={getAvailableOutputFormatOptions()}
+                      defaultValue={officialFieldDefaults?.outputFormat}
+                      highlight={officialFieldsModified?.outputFormat === true}
                       onChange={(value) => handlePrinterDisplayChange({ outputFormat: value })}
                     />
 
@@ -5183,6 +5487,8 @@ export function ProfileSettingsModal({
                       label="Network Support"
                       value={selectedPrinter.networkSupport ?? ''}
                       options={selectedPrinterNetworkModeOptions}
+                      defaultValue={officialFieldDefaults?.networkSupport}
+                      highlight={officialFieldsModified?.networkSupport === true}
                       onChange={(value) => {
                         const nextMode = value.trim().toLowerCase();
                         const normalizedMode = nextMode.length > 0 ? nextMode : undefined;
@@ -5197,6 +5503,7 @@ export function ProfileSettingsModal({
                     <LabeledToggleInput
                       label="Webcam Support"
                       checked={selectedPrinter.hasCamera !== false}
+                      highlight={officialFieldsModified?.hasCamera === true}
                       onChange={(checked) => updatePrinterProfile(selectedPrinter.id, { hasCamera: checked })}
                     />
 
@@ -5205,6 +5512,8 @@ export function ProfileSettingsModal({
                         label="Webcam Rotation"
                         value={String(selectedPrinter.display.webcamRotationDeg ?? 0)}
                         options={WEBCAM_ROTATION_OPTIONS}
+                        defaultValue={officialFieldDefaults ? String(officialFieldDefaults.webcamRotationDeg) : undefined}
+                        highlight={officialFieldsModified?.webcamRotationDeg === true}
                         onChange={(value) => {
                           const parsed = Number(value);
                           const nextRotation = (parsed === 0 || parsed === 90 || parsed === 180 || parsed === 270)
@@ -5219,7 +5528,14 @@ export function ProfileSettingsModal({
                       <SelectDropdown
                         label="Format Version"
                         value={selectedResolvedFormatVersion ?? selectedFormatVersionOptions[0].value}
-                        options={selectedFormatVersionOptions}
+                        options={officialFieldDefaults
+                          ? selectedFormatVersionOptions.map((option) => (
+                            option.value === (officialFieldDefaults.formatVersion ?? selectedFormatVersionOptions[0]?.value)
+                              ? { ...option, rightContent: <DefaultOptionChip /> }
+                              : option
+                          ))
+                          : selectedFormatVersionOptions}
+                        selectStyle={officialFieldsModified?.formatVersion ? MODIFIED_FIELD_STYLE : undefined}
                         onChange={(value) => handlePrinterDisplayChange({ formatVersion: value })}
                       />
                     )}
@@ -5228,8 +5544,14 @@ export function ProfileSettingsModal({
                       <SelectDropdown
                         label="Settings Mode"
                         value={selectedResolvedSettingsMode ?? selectedSettingsModeOptions[0].value}
-                        options={selectedSettingsModeOptions}
-                        disabled={isSelectedPrinterOfficial}
+                        options={officialFieldDefaults
+                          ? selectedSettingsModeOptions.map((option) => (
+                            option.value === (officialFieldDefaults.settingsMode ?? selectedSettingsModeOptions[0]?.value)
+                              ? { ...option, rightContent: <DefaultOptionChip /> }
+                              : option
+                          ))
+                          : selectedSettingsModeOptions}
+                        selectStyle={officialFieldsModified?.settingsMode ? MODIFIED_FIELD_STYLE : undefined}
                         onChange={(value) => handlePrinterDisplayChange({ settingsMode: value })}
                       />
                     )}
@@ -5247,11 +5569,49 @@ export function ProfileSettingsModal({
                       checked={selectedPrinter.display.mirrorY === true}
                       onChange={(checked) => handlePrinterDisplayChange({ mirrorY: checked })}
                     />
+
+                    {/* Multi-material controls sit last in Output: they describe the
+                        machine's tanks, not the format settings above them. */}
+                    {supportsMultiTankFormat && (
+                      <>
+                        <LabeledSelectInput
+                          label="Material Mode"
+                          value={selectedPrinter.materialMode ?? 'single'}
+                          options={[
+                            { value: 'single', label: 'Single Material' },
+                            { value: 'multiTank', label: 'Multi-Tank' },
+                          ]}
+                          defaultValue={officialFieldDefaults?.materialMode}
+                          highlight={officialFieldsModified?.materialMode === true}
+                          onChange={(value) => {
+                            const nextMode = value === 'multiTank' ? 'multiTank' : 'single';
+                            updatePrinterProfile(selectedPrinter.id, {
+                              materialMode: nextMode,
+                              ...(nextMode === 'multiTank' ? { tankCount: selectedPrinter.tankCount ?? 2 } : {}),
+                            });
+                          }}
+                        />
+
+                        {selectedPrinter.materialMode === 'multiTank' && (
+                          <LabeledNumberInput
+                            label="Amount of Tanks"
+                            value={selectedPrinter.tankCount ?? 2}
+                            step={1}
+                            precision={0}
+                            min={2}
+                            max={16}
+                            onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
+                              tankCount: Math.round(value),
+                            })}
+                          />
+                        )}
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
 
-              <div className="px-2 py-2 border-t flex items-center justify-between gap-2 shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="px-3 py-3 border-t flex items-center justify-between gap-2 shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
                 <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
                   Changes are applied immediately.
                 </span>
@@ -5392,7 +5752,7 @@ export function ProfileSettingsModal({
                                         }
                                   }
                                 >
-                                  <span>{Math.round(h * 1000) + 'μm'}</span>
+                                  <span className="whitespace-nowrap">{Math.round(h * 1000) + 'μm'}</span>
                                   <span className="text-[11px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
                                     {count}
                                   </span>
@@ -5693,7 +6053,7 @@ export function ProfileSettingsModal({
                 )}
               </div>
 
-              <div className="px-2 py-2 border-t flex items-center justify-end gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="px-3 py-3 border-t flex items-center justify-end gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
                 <Button
                   type="button"
                   onClick={() => setIsCreateMaterialOpen(false)}
@@ -5839,7 +6199,7 @@ export function ProfileSettingsModal({
                 )}
               </div>
 
-              <div className="px-4 pb-4 pt-2 border-t flex items-center justify-end gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="px-4 py-4 border-t flex items-center justify-end gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
                 <Button
                   type="button"
                   onClick={() => setShowPrinterUpdateDiffModal(false)}
@@ -5975,6 +6335,40 @@ export function ProfileSettingsModal({
               Choose <strong>Unlock</strong> to edit it directly, or <strong>Make Custom Copy</strong> to duplicate it as a new editable profile.
             </p>
           )}
+        </StructuredDialogModal>
+
+        <StructuredDialogModal
+          open={showUnassignedTanksWarning}
+          ariaLabel="Unassigned tanks"
+          title="Tanks are unassigned"
+          subtitle={selectedPrinter?.name}
+          icon={<AlertTriangle className="h-4 w-4" />}
+          iconTone="warning"
+          zIndexClassName="z-[100]"
+          maxWidthClassName="max-w-md"
+          closeAriaLabel="Close warning"
+          onClose={() => setShowUnassignedTanksWarning(false)}
+          actions={(
+            <>
+              <Button variant="secondary" onClick={() => setShowUnassignedTanksWarning(false)}>
+                Keep editing
+              </Button>
+              <Button
+                variant="tinted-danger"
+                onClick={() => {
+                  setShowUnassignedTanksWarning(false);
+                  onClose();
+                }}
+              >
+                Close anyway
+              </Button>
+            </>
+          )}
+        >
+          <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
+            No tank has a material assigned yet, so a Multi-Tank print would not know which
+            resin it is holding. Assign at least one tank, or close anyway.
+          </p>
         </StructuredDialogModal>
 
         <StructuredDialogModal
@@ -6230,7 +6624,7 @@ function RemoteMaterialEditDialog({
         </div>
 
         <div
-          className="px-2 py-2 border-t flex items-center justify-between gap-2 shrink-0 sticky bottom-0"
+          className="px-3 py-3 border-t flex items-center justify-between gap-2 shrink-0 sticky bottom-0"
           style={{
             borderColor: 'var(--border-subtle)',
             background: 'color-mix(in srgb, var(--surface-0), transparent 4%)',

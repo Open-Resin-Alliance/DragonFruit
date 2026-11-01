@@ -24,7 +24,7 @@ import { useLingui } from '@lingui/react';
 import { msg, plural } from '@lingui/core/macro';
 import { Trans } from '@lingui/react/macro';
 import type { MessageDescriptor } from '@lingui/core';
-import { formatFileSize } from '@/utils/meshStatsFormatting';
+import { formatFileSize, formatPolygonCountCompact } from '@/utils/meshStatsFormatting';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { Button, Card, CardHeader, IconButton } from '@/components/atoms';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
@@ -54,6 +54,19 @@ function formatModelInfoTooltip(translate: Translate, fmt: UnitFormat, model: Lo
   return size ? translate(msg`${size} · ${polygons}`) : polygons;
 }
 
+/**
+ * "Body 3" for the drawer under a multi-body 3MF. Module scope because React
+ * Compiler renames interpolated locals before the Lingui macro reads them.
+ */
+function bodyNameLabel(translate: Translate, index: number): string {
+  return translate(msg`Body ${index + 1}`);
+}
+
+/** "4 bodies" for the drawer chevron's tooltip. */
+function bodyCountLabel(translate: Translate, count: number): string {
+  return translate(msg`${plural(count, { one: '# body', other: '# bodies' })}`);
+}
+
 type GroupSelectMode = 'single' | 'add';
 
 interface ModelManagerPanelProps {
@@ -70,6 +83,12 @@ interface ModelManagerPanelProps {
   resolveModelPlateId?: (model: LoadedModel) => string;
   activeModelId: string | null;
   selectedModelIds: string[];
+  /** Body rows already selected, as `${modelId}#${bodyIndex}`. */
+  selectedBodyKeys?: string[];
+  /** A 3MF body was clicked in a model's drawer. */
+  onSelectBody?: (modelId: string, bodyIndex: number, mode: 'single' | 'toggle') => void;
+  /** The drawer closed: no body of that model can stay selected while hidden. */
+  onCloseBodyDrawer?: (modelId: string) => void;
   onSelect: (id: string, mode?: SelectMode) => void;
   onSelectRange?: (ids: string[], activeId: string, mode?: 'replace' | 'add') => void;
   onSelectGroup?: (groupId: string, mode?: GroupSelectMode) => void;
@@ -191,6 +210,9 @@ export function ModelManagerPanel({
   resolveModelPlateId,
   activeModelId,
   selectedModelIds,
+  selectedBodyKeys = [],
+  onSelectBody,
+  onCloseBodyDrawer,
   onSelect,
   onSelectRange,
   onSelectGroup,
@@ -219,6 +241,8 @@ export function ModelManagerPanel({
   // the column layout and hides the whole body, which is an empty model list.
   const expanded = collapsible ? collapseExpanded : true;
   const [collapsedGroupIds, setCollapsedGroupIds] = useState<Record<string, boolean>>({});
+  /** Models whose 3MF bodies are shown inline, opened from the row's chevron. */
+  const [expandedBodyModelIds, setExpandedBodyModelIds] = useState<Record<string, boolean>>({});
   /** The plate being renamed inline, and the text being typed. */
   const [renamingPlateId, setRenamingPlateId] = useState<string | null>(null);
   const [plateNameDraft, setPlateNameDraft] = useState('');
@@ -264,6 +288,7 @@ export function ModelManagerPanel({
   }, []);
 
   const selectedSet = useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
+  const selectedBodySet = useMemo(() => new Set(selectedBodyKeys), [selectedBodyKeys]);
 
   const grouped = useMemo<GroupedEntry[]>(() => {
     const outsidePlateSet = new Set(outsidePlateModelIds);
@@ -586,9 +611,13 @@ export function ModelManagerPanel({
   /** One model's row. A folder's models and a plate's ungrouped ones share it. */
   const renderModelRow = (model: LoadedModel) => {
     const isSelected = selectedSet.has(model.id);
+    // A 3MF imported with several bodies keeps them in one model until "Split to
+    // Bodies"; the drawer lists them without doing that.
+    const splitBodies = model.splitBodies && model.splitBodies.length > 1 ? model.splitBodies : null;
+    const bodiesExpanded = !!expandedBodyModelIds[model.id];
     return (
+      <div key={model.id} className="space-y-1">
                   <div
-                    key={model.id}
                       className="px-2 py-1 rounded border transition-colors flex items-center gap-2 cursor-pointer"
                       style={isSelected
                         ? {
@@ -640,7 +669,27 @@ export function ModelManagerPanel({
                       });
                     }}
                   >
-                    
+                    {splitBodies && (
+                      <IconButton
+                        variant="ghost"
+                        size="sm"
+                        className="!-ml-1 shrink-0"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const nextExpanded = !bodiesExpanded;
+                          setExpandedBodyModelIds((prev) => ({ ...prev, [model.id]: nextExpanded }));
+                          // Closing the drawer hides the rows, so a body selected in
+                          // them would stay selected with nothing to show it.
+                          if (!nextExpanded) onCloseBodyDrawer?.(model.id);
+                        }}
+                        title={bodyCountLabel(_, splitBodies.length)}
+                        aria-label={bodyCountLabel(_, splitBodies.length)}
+                        aria-expanded={bodiesExpanded}
+                      >
+                        {bodiesExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                      </IconButton>
+                    )}
+
                     <div className="flex-1 min-w-0">
                       {renamingModelId === model.id ? (
                         <div className="flex w-full min-w-0 items-center gap-1">
@@ -725,6 +774,67 @@ export function ModelManagerPanel({
 
                     </div>
                   </div>
+
+                  {splitBodies && bodiesExpanded && (
+                    // Indented like a folder's models rather than ruled: the bodies
+                    // are what this model is made of, not a separate column.
+                    <div className="ml-1.5 space-y-1 pl-1">
+                      {splitBodies.map((body, index) => {
+                        const bodyKey = `${model.id}#${index}`;
+                        const bodySelected = selectedBodySet.has(bodyKey);
+                        const bodyColor = model.bodyColors?.[index];
+                        return (
+                          <div
+                            key={bodyKey}
+                            className="flex items-center justify-between gap-2 rounded border px-2 py-1 text-sm cursor-pointer transition-colors"
+                            style={bodySelected
+                              ? {
+                                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 40%)',
+                                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 92%)',
+                              }
+                              : { borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onSelectBody?.(model.id, index, (e.ctrlKey || e.metaKey) ? 'toggle' : 'single');
+                            }}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              // The same menu a model row opens, targeting this body:
+                              // selecting it first is what makes Material a body assignment.
+                              onSelectBody?.(model.id, index, 'single');
+                              onModelContextMenu?.(model.id, { x: e.clientX, y: e.clientY });
+                            }}
+                          >
+                            <span className="flex min-w-0 items-center gap-1.5">
+                              {bodyColor && (
+                                <span
+                                  className="h-3.5 w-3.5 shrink-0 rounded-[4px]"
+                                  style={{
+                                    background: bodyColor,
+                                    boxShadow: 'inset 0 0 0 1px rgba(0, 0, 0, 0.28)',
+                                  }}
+                                  aria-hidden="true"
+                                />
+                              )}
+                              <span className="truncate font-medium" style={{ color: bodySelected ? 'var(--text-strong)' : 'var(--text-muted)' }}>
+                                {bodyNameLabel(_, index)}
+                              </span>
+                            </span>
+                            <span className="shrink-0 text-[11px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
+                              {formatPolygonCountCompact(
+                                body.geometry.index
+                                  ? body.geometry.index.count / 3
+                                  : (body.geometry.getAttribute('position')?.count ?? 0) / 3,
+                                fmt,
+                              )}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+      </div>
     );
   };
 

@@ -20,6 +20,11 @@ export type ContextMenuEntry = {
   icon?: LucideIcon;
   /** Custom icon-slot content (e.g. a slot number badge). Wins over `icon`. */
   iconNode?: React.ReactNode;
+  /**
+   * Draw `iconNode` without the framed slot. A colour chip already carries its own
+   * edge; framing it again reads as a box inside a box.
+   */
+  iconBare?: boolean;
   /** Right-aligned secondary text, e.g. a "occupied" marker. */
   trailing?: React.ReactNode;
   /** Renders a tick in the icon slot — for toggles. Wins over `icon`/`iconNode`. */
@@ -68,6 +73,7 @@ type MenuRowProps = {
   label: React.ReactNode;
   icon?: LucideIcon;
   iconNode?: React.ReactNode;
+  iconBare?: boolean;
   checked?: boolean;
   disabled?: boolean;
   danger?: boolean;
@@ -82,6 +88,7 @@ function MenuRow({
   label,
   icon: Icon,
   iconNode,
+  iconBare = false,
   checked = false,
   disabled = false,
   danger = false,
@@ -123,10 +130,10 @@ function MenuRow({
       role="menuitem"
     >
       <span
-        className="inline-flex h-5 w-5 items-center justify-center rounded border"
+        className={`inline-flex h-5 w-5 items-center justify-center ${iconBare && !checked ? '' : 'rounded border'}`}
         style={{
           borderColor: 'var(--border-subtle)',
-          background: 'var(--surface-1)',
+          background: iconBare && !checked ? 'transparent' : 'var(--surface-1)',
           opacity: disabled ? 0.8 : 1,
           color: checked && !disabled ? 'var(--accent)' : undefined,
         }}
@@ -191,6 +198,7 @@ function SubmenuFlyout({ entries, onSelect, onMouseEnter, onMouseLeave, onPlaced
               label={entry.label}
               icon={entry.icon}
               iconNode={entry.iconNode}
+              iconBare={entry.iconBare}
               checked={entry.checked}
               disabled={entry.disabled}
               danger={entry.danger}
@@ -358,6 +366,7 @@ export function ContextMenu({
                 label={entry.label}
                 icon={entry.icon}
                 iconNode={entry.iconNode}
+                iconBare={entry.iconBare}
                 checked={entry.checked}
                 disabled={entry.disabled}
                 danger={entry.danger}
