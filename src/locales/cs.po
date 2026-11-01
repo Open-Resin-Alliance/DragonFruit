@@ -6858,10 +6858,6 @@ msgstr ""
 msgid "Please wait…"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:277
-msgid "Plugin {pluginName} is missing."
-msgstr ""
-
 #: src/components/settings/PluginsSettingsTab.tsx:730
 #: src/components/settings/PluginsSettingsTab.tsx:734
 #: src/components/settings/PluginsSettingsTab.tsx:1354
@@ -9584,6 +9580,10 @@ msgstr ""
 
 #: src/components/controls/TerritoryVoxelControls.tsx:44
 msgid "Territory Voxels"
+msgstr ""
+
+#: src/components/settings/ProfileSettingsModal.tsx:277
+msgid "The \"{pluginName}\" plugin is missing."
 msgstr ""
 
 #: src/app/page.tsx:4722

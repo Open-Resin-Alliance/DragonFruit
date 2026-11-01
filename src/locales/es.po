@@ -6859,10 +6859,6 @@ msgstr "Espera, por favor."
 msgid "Please wait…"
 msgstr "Espera, por favor…"
 
-#: src/components/settings/ProfileSettingsModal.tsx:277
-msgid "Plugin {pluginName} is missing."
-msgstr ""
-
 #: src/components/settings/PluginsSettingsTab.tsx:730
 #: src/components/settings/PluginsSettingsTab.tsx:734
 #: src/components/settings/PluginsSettingsTab.tsx:1354
@@ -9587,6 +9583,10 @@ msgstr "Tensión"
 #: src/components/controls/TerritoryVoxelControls.tsx:44
 msgid "Territory Voxels"
 msgstr "Vóxeles de territorio"
+
+#: src/components/settings/ProfileSettingsModal.tsx:277
+msgid "The \"{pluginName}\" plugin is missing."
+msgstr ""
 
 #: src/app/page.tsx:4722
 msgid "The autosave recovery file could not be found."

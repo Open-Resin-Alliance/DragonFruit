@@ -274,7 +274,7 @@ function computeBuildDimensionMm(resolutionPx: number, pixelSizeUm: number): num
  * purpose: an interpolated message inside a component desyncs from the catalog when
  * React Compiler renames the local.
  */
-const missingPluginMessage = (pluginName: string) => msg`Plugin ${pluginName} is missing.`;
+const missingPluginMessage = (pluginName: string) => msg`The "${pluginName}" plugin is missing.`;
 
 function resolveDefaultLocalSettingsForOutput(
   outputFormat: string,
