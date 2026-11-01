@@ -809,6 +809,9 @@ function sanitizePrinterPreset(input: unknown): PrinterPreset | null {
     imageAssetPath: sanitizeImageAssetPath(value.imageAssetPath),
     antiAliasing: typeof value.antiAliasing === 'boolean' ? value.antiAliasing : undefined,
     hasCamera: typeof value.hasCamera === 'boolean' ? value.hasCamera : undefined,
+    materialMode: value.materialMode === 'single' || value.materialMode === 'multiTank'
+      ? value.materialMode
+      : undefined,
     networkSupport: sanitizeNetworkSupport(value.networkSupport),
     networkFilter: boundedString((value as any).networkFilter, 120) || undefined,
     platformBadge: sanitizePlatformBadge((value as any).platformBadge),

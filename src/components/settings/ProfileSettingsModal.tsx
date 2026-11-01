@@ -5218,6 +5218,18 @@ export function ProfileSettingsModal({
                   <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Output</div>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
                     <LabeledSelectInput
+                      label="Material Mode"
+                      value={selectedPrinter.materialMode ?? 'single'}
+                      options={[
+                        { value: 'single', label: 'Single Material' },
+                        { value: 'multiTank', label: 'Multi-tank' },
+                      ]}
+                      onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
+                        materialMode: value === 'multiTank' ? 'multiTank' : 'single',
+                      })}
+                    />
+
+                    <LabeledSelectInput
                       label="Output Format"
                       value={selectedPrinter.display.outputFormat}
                       options={getAvailableOutputFormatOptions()}

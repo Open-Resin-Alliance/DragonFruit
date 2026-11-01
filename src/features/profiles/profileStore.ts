@@ -67,6 +67,14 @@ export type PrinterBitDepth = {
 };
 
 export type PrinterBuildDimensionMode = 'manual' | 'auto';
+
+/**
+ * How a machine handles materials. `single` is the default every printer had
+ * before the field existed; `multiTank` marks a machine that carries more than one
+ * tank and switches between them. The switching semantics are not defined yet, so
+ * nothing but the profile field and its UI depend on this value.
+ */
+export type PrinterMaterialMode = 'single' | 'multiTank';
 export type PrinterWebcamRotationDeg = 0 | 90 | 180 | 270;
 
 export type PrinterPreset = {
@@ -84,6 +92,8 @@ export type PrinterPreset = {
     pixelSize?: PrinterPixelSize;
     bitDepth?: PrinterBitDepth;
     buildDimensionMode?: PrinterBuildDimensionMode;
+    /** A machine that ships with more than one tank declares it here. */
+    materialMode?: PrinterMaterialMode;
     /**
      * Concrete variant presetIds for a "family" preset (e.g. an Athena II 16K
      * entry that resolves to separate 3-bit / 8-bit variants). When set, the
@@ -143,6 +153,7 @@ export type PrinterProfile = {
     pixelSize?: PrinterPixelSize;
     bitDepth?: PrinterBitDepth;
     buildDimensionMode?: PrinterBuildDimensionMode;
+    materialMode?: PrinterMaterialMode;
     officialPresetId?: string;
     officialPresetVersion?: number;
     /** Set when the plugin that contributed this profile's preset was removed. */
@@ -673,6 +684,13 @@ function normalizeAntiAliasingSupport(value: unknown): boolean | undefined {
     return undefined;
 }
 
+function normalizeMaterialMode(value: unknown): PrinterMaterialMode | undefined {
+    if (typeof value !== 'string') return undefined;
+    const normalized = value.trim();
+    if (normalized === 'single' || normalized === 'multiTank') return normalized;
+    return undefined;
+}
+
 function normalizeBuildDimensionMode(value: unknown): PrinterBuildDimensionMode | undefined {
     if (value === 'auto' || value === 'manual') return value;
     return undefined;
@@ -925,6 +943,7 @@ const DEFAULT_PRINTER_PROFILES: PrinterProfile[] = BUILTIN_PRINTER_PRESETS.map((
     pixelSize: sanitizePixelSize((preset as any).pixelSize),
     bitDepth: sanitizeBitDepth((preset as any).bitDepth),
     buildDimensionMode: normalizeBuildDimensionMode((preset as any).buildDimensionMode),
+    materialMode: normalizeMaterialMode((preset as any).materialMode),
     officialPresetId: preset.presetId,
     officialPresetVersion: normalizeProfileVersion((preset as any).profileVersion, 1),
     isOfficial: true,
@@ -1128,6 +1147,8 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
                     pixelSize: resolvedPixelSize,
                     bitDepth: sanitizeBitDepth((profile as any).bitDepth) ?? sanitizeBitDepth((matchedPreset as any)?.bitDepth),
                     buildDimensionMode: resolvedBuildDimensionMode,
+                    materialMode: normalizeMaterialMode((profile as any).materialMode)
+                        ?? normalizeMaterialMode((matchedPreset as any)?.materialMode),
                     officialPresetId,
                     officialPresetVersion: normalizeProfileVersion((profile as any).officialPresetVersion, fallbackOfficialPresetVersion),
                     missingPlugin: sanitizeMissingPlugin((profile as any).missingPlugin),
@@ -1923,6 +1944,10 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
             nextUpdates.hasCamera = sourceUpdates.hasCamera;
         }
 
+        if (Object.prototype.hasOwnProperty.call(sourceUpdates, 'materialMode')) {
+            nextUpdates.materialMode = sourceUpdates.materialMode;
+        }
+
         if (sourceUpdates.display) {
             const nextDisplay: Partial<PrinterProfile['display']> = {};
             if (Object.prototype.hasOwnProperty.call(sourceUpdates.display, 'outputFormat')) {
@@ -2011,6 +2036,9 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
                 ? normalizeAntiAliasingSupport(appliedUpdates.antiAliasing)
                 : profile.antiAliasing,
             networkSupport: nextNetworkSupport,
+            materialMode: appliedUpdates.materialMode !== undefined
+                ? normalizeMaterialMode(appliedUpdates.materialMode)
+                : profile.materialMode,
             hasCamera: appliedUpdates.hasCamera !== undefined
                 ? normalizeCameraSupport(appliedUpdates.hasCamera)
                 : profile.hasCamera,

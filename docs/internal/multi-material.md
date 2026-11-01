@@ -38,9 +38,19 @@ is how a slicer grows a second material system that matches neither.
 - `docs/dev/backlog.md` records "per-material geometry" as the import gap that
   "lands with multi-material support".
 
+## What is on the branch
+
+- `PrinterProfile.materialMode: 'single' | 'multiTank'`, absent meaning **Single
+  Material**; a preset may carry it so a machine that ships with several tanks
+  declares that from the library. The printer settings' Output section has the
+  matching **Material Mode** control, and the value is sanitised on load and on
+  update (an unknown value is dropped rather than guessed).
+- Switching semantics are **not defined**: nothing reads the value yet. It is the
+  field the next slice will hang off.
+
 ## Next step
 
-Pick one of the three above; then the first slice is the scene model change
+Pick one of the three meanings above; then the first slice is the scene model change
 (`materialProfileId` on a model, material groups from import), because all three
 versions need it and it is the only part that can ship without a product decision on
 printing.
