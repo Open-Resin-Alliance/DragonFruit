@@ -41,8 +41,8 @@ is how a slicer grows a second material system that matches neither.
 ## What is on the branch
 
 - `PrinterProfile.materialMode: 'single' | 'multiTank'`, absent meaning **Single
-  Material**; a preset may carry it so a machine that ships with several tanks
-  declares that from the library. The printer settings' Output section has the
+  Material** and `multiTank` shown as **Multi-Tank**; a preset may carry it so a
+  machine that ships with several tanks declares that from the library. The printer settings' Output section has the
   matching **Material Mode** control, and the value is sanitised on load and on
   update (an unknown value is dropped rather than guessed).
 - Switching semantics are **not defined**: nothing reads the value yet. It is the

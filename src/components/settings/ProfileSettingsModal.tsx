@@ -5235,7 +5235,7 @@ export function ProfileSettingsModal({
                       value={selectedPrinter.materialMode ?? 'single'}
                       options={[
                         { value: 'single', label: 'Single Material' },
-                        { value: 'multiTank', label: 'Multi-tank' },
+                        { value: 'multiTank', label: 'Multi-Tank' },
                       ]}
                       onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
                         materialMode: value === 'multiTank' ? 'multiTank' : 'single',
