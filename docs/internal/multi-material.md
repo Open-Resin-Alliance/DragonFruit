@@ -81,8 +81,12 @@ increments are:
    `layer_00001_tank_1.png` plus an `echo.json` container version when the job
    has several. The plugin offers the layout as a Format Version (`Echo` /
    `Echo Multi`), which is also the output extension (`.exf` / `.exm`);
-3. the app payload: map each model/body material to its tank index on the active
-   printer and send the assignment with the job;
+3. ~~the app payload: map each model/body material to its tank index on the active
+   printer and send the assignment with the job~~ — done. Model triangles carry
+   `triangleTankIndex` (a body's own material when it has one, else the model's);
+   a multi-body model contributes its bodies as model geometry in the merged
+   model's space, and `tankCount` is the printer's tank list. Single-material
+   payloads stay byte-identical (the keys are omitted);
 4. printing: send each tank's stream to its panel/port.
 
 ## Next step

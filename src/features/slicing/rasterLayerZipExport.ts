@@ -2,6 +2,7 @@ import JSZip from 'jszip';
 import { asciiFileBaseName } from '@/features/slicing/plateSliceNaming';
 import * as THREE from 'three';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
+import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { type MaterialProfile, type PrinterProfile, getActiveMaterialProfile, getActivePrinterProfile } from '@/features/profiles/profileStore';
 import { calculateTipOffset } from '@/supports/rendering/calculateTipOffset';
 import {
@@ -141,6 +142,10 @@ export type SolidSliceMeshForWasm = {
   mirrorX: boolean;
   mirrorY: boolean;
   modelTriangleCount: number;
+  /** Resin tanks this job prints; `1` unless the printer splits its resin. */
+  tankCount: number;
+  /** Tank per triangle, aligned with `trianglesXYZ`. Absent on single-tank jobs. */
+  triangleTankIndex?: Uint32Array;
   buildWidthMm: number;
   buildDepthMm: number;
   layerHeightMm: number;
@@ -284,6 +289,9 @@ class TriangleFloatCollector {
 
   private triangleCountValue = 0;
 
+  /** Tank per triangle, aligned with the published triangle order. */
+  private tankValues: number[] = [];
+
   private maxZValue = -Infinity;
 
   private minXValue = Infinity;
@@ -363,6 +371,7 @@ class TriangleFloatCollector {
     cx: number,
     cy: number,
     cz: number,
+    tank = 0,
   ): void {
     this.ensureCapacity(9);
     ax += this.offsetX;
@@ -383,6 +392,7 @@ class TriangleFloatCollector {
     this.data[base + 8] = cz;
     this.cursor = base + 9;
     this.triangleCountValue += 1;
+    this.tankValues.push(tank);
 
     const triMaxZ = Math.max(az, bz, cz);
     if (triMaxZ > this.maxZValue) {
@@ -402,7 +412,7 @@ class TriangleFloatCollector {
     if (triMaxY > this.maxYValue) this.maxYValue = triMaxY;
   }
 
-  appendWorldTriangles(triangles: WorldTriangle[]): void {
+  appendWorldTriangles(triangles: WorldTriangle[], tank = 0): void {
     for (let i = 0; i < triangles.length; i += 1) {
       const tri = triangles[i];
       this.pushTriangle(
@@ -415,8 +425,14 @@ class TriangleFloatCollector {
         tri.cx,
         tri.cy,
         tri.cz,
+        tank,
       );
     }
+  }
+
+  /** The tank each triangle prints from, in publish order. */
+  get tankIndices(): Uint32Array {
+    return Uint32Array.from(this.tankValues);
   }
 
   async finalize(): Promise<Float32Array> {
@@ -1418,11 +1434,67 @@ function buildWorldTriangles(models: LoadedModel[]): WorldTriangle[] {
   return triangles;
 }
 
+/**
+ * Appends one 3MF body as model geometry, in the merged model's own space: the
+ * bodies were processed in that space, so the same centre subtraction and model
+ * matrix place them exactly where the merged mesh would.
+ */
+function appendBodyTrianglesInModelSpace(
+  model: LoadedModel,
+  body: GeometryWithBounds,
+  collector: TriangleFloatCollector,
+  tank: number,
+): void {
+  const matrix = composeModelMatrix(model.transform);
+  const flipWinding = matrix.determinant() < 0;
+  const center = model.geometry.center;
+  const geometry = body.geometry;
+  const position = geometry.getAttribute('position');
+  const index = geometry.getIndex();
+  if (!position) return;
+
+  const v0 = new THREE.Vector3();
+  const v1 = new THREE.Vector3();
+  const v2 = new THREE.Vector3();
+  const readVertex = (vertexIndex: number, target: THREE.Vector3) => {
+    target.set(
+      position.getX(vertexIndex) - center.x,
+      position.getY(vertexIndex) - center.y,
+      position.getZ(vertexIndex) - center.z,
+    );
+    target.applyMatrix4(matrix);
+    return target;
+  };
+  const push = () => (
+    flipWinding
+      ? collector.pushTriangle(v0.x, v0.y, v0.z, v2.x, v2.y, v2.z, v1.x, v1.y, v1.z, tank)
+      : collector.pushTriangle(v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z, tank)
+  );
+
+  if (index) {
+    const idx = index.array;
+    for (let i = 0; i + 2 < idx.length; i += 3) {
+      readVertex(Number(idx[i]), v0);
+      readVertex(Number(idx[i + 1]), v1);
+      readVertex(Number(idx[i + 2]), v2);
+      push();
+    }
+  } else {
+    for (let i = 0; i + 2 < position.count; i += 3) {
+      readVertex(i, v0);
+      readVertex(i + 1, v1);
+      readVertex(i + 2, v2);
+      push();
+    }
+  }
+}
+
 function appendModelTrianglesInRange(
   model: LoadedModel,
   collector: TriangleFloatCollector,
   startTri: number,
   endTri: number,
+  tank = 0,
 ): void {
   const matrix = composeModelMatrix(model.transform);
   // A negative-determinant model transform (a mirror / negative scale, e.g.
@@ -1455,8 +1527,8 @@ function appendModelTrianglesInRange(
 
   const push = () =>
     flipWinding
-      ? collector.pushTriangle(v0.x, v0.y, v0.z, v2.x, v2.y, v2.z, v1.x, v1.y, v1.z)
-      : collector.pushTriangle(v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
+      ? collector.pushTriangle(v0.x, v0.y, v0.z, v2.x, v2.y, v2.z, v1.x, v1.y, v1.z, tank)
+      : collector.pushTriangle(v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z, tank);
 
   if (index) {
     const idx = index.array;
@@ -2112,12 +2184,35 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
     options.plateOffsetMm,
   );
 
+  // A multi-tank printer prints a body from the tank its material sits in. The
+  // mapping is the material's position in the printer's tank list; anything
+  // unassigned (or a single-tank printer) falls back to Tank 1.
+  const tankMaterials = options.printerProfile.tankMaterials ?? [];
+  const multiTank = options.printerProfile.materialMode === 'multiTank' && tankMaterials.length > 1;
+  const tankForMaterial = (materialId: string | undefined): number => {
+    if (!multiTank || !materialId) return 0;
+    const index = tankMaterials.indexOf(materialId);
+    return index >= 0 ? index : 0;
+  };
+  const usesBodyTanks = (model: LoadedModel): boolean => (
+    multiTank
+    && (model.splitBodies?.length ?? 0) > 1
+    && (model.bodyMaterialProfileIds?.some((id) => !!id) ?? false)
+  );
+
   // Push model-only triangles first (across all models), then support-only.
   // This produces the same collector layout as manually splitting before slicing.
   for (const model of visibleModels) {
+    if (usesBodyTanks(model)) {
+      model.splitBodies?.forEach((body, index) => {
+        const materialId = model.bodyMaterialProfileIds?.[index] ?? model.materialProfileId;
+        appendBodyTrianglesInModelSpace(model, body, collector, tankForMaterial(materialId));
+      });
+      continue;
+    }
     const modelTriCount = effectiveModelTriangleCount(model);
     if (modelTriCount > 0) {
-      appendModelTrianglesInRange(model, collector, 0, modelTriCount);
+      appendModelTrianglesInRange(model, collector, 0, modelTriCount, tankForMaterial(model.materialProfileId));
     }
   }
   // The native side splits the buffer here, before support-classified meshes
@@ -2202,6 +2297,8 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
     mirrorX: settings.mirrorX,
     mirrorY: settings.mirrorY,
     modelTriangleCount,
+    tankCount: multiTank ? tankMaterials.length : 1,
+    ...(multiTank ? { triangleTankIndex: collector.tankIndices } : {}),
     buildWidthMm: Math.max(1, options.printerProfile.buildVolumeMm.width),
     buildDepthMm: Math.max(1, options.printerProfile.buildVolumeMm.depth),
     layerHeightMm: settings.layerHeightMm,

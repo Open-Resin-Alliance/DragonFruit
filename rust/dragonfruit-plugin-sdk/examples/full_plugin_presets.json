@@ -15,8 +15,6 @@
       "outputFormat": ".exf"
     },
     "networkSupport": "demo-echo",
-    "imageAssetPath": "dragonfruit_simple_icon.svg",
-    "materialMode": "multiTank",
-    "tankCount": 2
+    "imageAssetPath": "dragonfruit_simple_icon.svg"
   }
 ]
