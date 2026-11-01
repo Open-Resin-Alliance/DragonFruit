@@ -2834,6 +2834,12 @@ export default function Home() {
     activePlateId: scene.activePlateId,
     displayedLayer: printingDisplayedLayer,
     isPrinting: scene.mode === 'printing',
+    // A multi-tank slice's preview is composed from its own per-tank images; the
+    // format decoder's single layer image would be read and thrown away.
+    nativePreviewEnabled: !(
+      activePrinterProfile?.materialMode === 'multiTank'
+      && Boolean(printingArtifact?.nativeTempPath)
+    ),
   });
 
   const hasPrintingWorkspaceData = printingPreviewTotalLayers > 0 && printingArtifact !== null;
@@ -4243,6 +4249,12 @@ export default function Home() {
     && shouldUseRemoteOfflineLayerHeight,
   );
   const printingResinName = React.useMemo(() => {
+    // A Multi-Tank print has no single resin: the sliced file carries one film per
+    // tank, so the plate is not "in" any one material.
+    if (activePrinterProfile?.materialMode === 'multiTank') {
+      return _(msg({ message: 'Multi-Tank', comment: 'Material value for a printer whose resin is split across tanks.' }));
+    }
+
     if (shouldShowOfflineRemoteMaterialName) {
       return 'N/A';
     }
@@ -4267,6 +4279,7 @@ export default function Home() {
     _,
     activeMaterialProfile,
     activeNetworkUiAdapter,
+    activePrinterProfile?.materialMode,
     activePrinterProfile?.networkConnection?.connected,
     activePrinterProfile?.networkConnection?.selectedMaterialName,
     printingTargetDevice?.selectedMaterialName,
