@@ -29,12 +29,10 @@ function createTrunk(id: string, modelId: string, rootId: string, x: number, top
     };
 }
 
-function supportsWith(...entities: Array<Roots | Trunk>): SupportCollections {
+function supportsWith(roots: Roots[], trunks: Trunk[] = []): SupportCollections {
     const state = createEmptySupportCollections();
-    for (const entity of entities) {
-        if ('typeId' in entity) state.trunks[entity.id] = entity;
-        else state.roots[entity.id] = entity;
-    }
+    for (const root of roots) state.roots[root.id] = root;
+    for (const trunk of trunks) state.trunks[trunk.id] = trunk;
     return state;
 }
 
@@ -50,7 +48,7 @@ function rootMl(diameter: number, diskHeight: number, coneHeight: number, topDia
 
 test('no visible models means no support resin', () => {
     const ml = computeSupportAndRaftResinMl({
-        supportState: supportsWith(createRoot('r', 'm', 0)),
+        supportState: supportsWith([createRoot('r', 'm', 0)]),
         raftSettings: RAFT_OFF,
         visibleModelIds: new Set(),
         plateModels: [],
@@ -60,7 +58,7 @@ test('no visible models means no support resin', () => {
 
 test('a lone root counts its disk, cone and cap', () => {
     const ml = computeSupportAndRaftResinMl({
-        supportState: supportsWith(createRoot('r', 'm', 0)),
+        supportState: supportsWith([createRoot('r', 'm', 0)]),
         raftSettings: RAFT_OFF,
         visibleModelIds: new Set(['m']),
         plateModels: [],
@@ -71,7 +69,7 @@ test('a lone root counts its disk, cone and cap', () => {
 
 test('a trunk adds its shaft and narrows the root cone to the shaft', () => {
     const ml = computeSupportAndRaftResinMl({
-        supportState: supportsWith(createRoot('r', 'm', 0), createTrunk('t', 'm', 'r', 0, 10)),
+        supportState: supportsWith([createRoot('r', 'm', 0)], [createTrunk('t', 'm', 'r', 0, 10)]),
         raftSettings: RAFT_OFF,
         visibleModelIds: new Set(['m']),
         plateModels: [],
@@ -83,7 +81,7 @@ test('a trunk adds its shaft and narrows the root cone to the shaft', () => {
 });
 
 test('supports of hidden models do not count', () => {
-    const state = supportsWith(createRoot('a', 'shown', 0), createRoot('b', 'hidden', 10));
+    const state = supportsWith([createRoot('a', 'shown', 0), createRoot('b', 'hidden', 10)]);
     const ml = computeSupportAndRaftResinMl({
         supportState: state,
         raftSettings: RAFT_OFF,
@@ -94,7 +92,7 @@ test('supports of hidden models do not count', () => {
 });
 
 test('a solid raft adds resin under the roots', () => {
-    const state = supportsWith(createRoot('r', 'm', 0));
+    const state = supportsWith([createRoot('r', 'm', 0)]);
     const args = { supportState: state, visibleModelIds: new Set(['m']), plateModels: [] };
     const without = computeSupportAndRaftResinMl({ ...args, raftSettings: RAFT_OFF });
     const withRaft = computeSupportAndRaftResinMl({ ...args, raftSettings: DEFAULT_RAFT_SETTINGS });
