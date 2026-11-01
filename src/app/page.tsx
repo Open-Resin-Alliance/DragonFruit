@@ -3599,28 +3599,43 @@ export default function Home() {
     return fmt.quantity(printingEstimatedResinTotalMl, 2, 'ml');
   }, [printingEstimatedResinTotalMl, sceneResinModels.length, fmt]);
 
-  const estimatedPrintTimeLabel = React.useMemo(() => {
+  
+  
+  /** Making a single function that will produce this for both the material list card (bottom left) and the post-slice card.  **/
+  function estimatePrintTime(activeMaterialProfile): number {
+    
     if (!activeMaterialProfile || printingPreviewTotalLayers <= 0) return '—';
 
+    const matProf = activeMaterialProfile;
     const totalLayers = printingPreviewTotalLayers;
-    const bottomLayers = Math.max(0, Math.min(totalLayers, Math.round(activeMaterialProfile.bottomLayerCount)));
-    const normalLayers = Math.max(0, totalLayers - bottomLayers);
 
-    const liftSec = activeMaterialProfile.liftSpeedMmMin > 0
-      ? (activeMaterialProfile.liftDistanceMm / activeMaterialProfile.liftSpeedMmMin) * 60
-      : 0;
-    const retractSec = activeMaterialProfile.retractSpeedMmMin > 0
-      ? (activeMaterialProfile.liftDistanceMm / activeMaterialProfile.retractSpeedMmMin) * 60
-      : 0;
-    const travelSecPerLayer = Math.max(0, liftSec + retractSec);
+    const bottomLayerTime = ((matProf.bottomLiftDistanceMm / matProf.bottomLiftSpeedMmMin + matProf.bottomLiftDistance2Mm / matProf.bottomLiftSpeed2MmMin + matProf.bottomLiftDistanceMm / matProf.bottomRetractSpeedMmMin + matProf.bottomLiftDistance2Mm / matProf.bottomRetractSpeed2MmMin) * 60) + matProf.bottomExposureSec;
+    const totalBottomLayerEstimate = bottomLayerTime * matProf.bottomLayerCount;
 
-    const totalSec = (
-      bottomLayers * (activeMaterialProfile.bottomExposureSec + travelSecPerLayer)
-      + normalLayers * (activeMaterialProfile.normalExposureSec + travelSecPerLayer)
-    );
+    const regularLayerTime = ((matProf.liftDistanceMm / matProf.liftSpeedMmMin +  matProf.liftDistance2Mm / matProf.liftSpeed2MmMin + matProf.liftDistanceMm / matProf.retractSpeedMmMin + matProf.liftDistance2Mm / matProf.retractSpeed2MmMin) * 60) + matProf.normalExposureSec;
+    const totalRegularLayerEstimate = regularLayerTime * (totalLayers - matProf.bottomLayerCount - matProf.transitionLayerCount);
+
+    //No wait times yet. We need to make a solution for them to pass through properly.
+
+    //cant think of a way to do transitions without a for loop.
+    let totalTransitionLayerEstimate = 0;
+    for (let i=0; i < matProf.transitionLayerCount; i++){
+      const pct = i / matProf.transitionLayerCount;
+      //Simple Linear Interpolation. No reason to believe the printer doesnt do the same.
+      const layerExposure = matProf.normalExposureSec + pct * (matProf.bottomExposureSec - matProf.normalExposureSec);
+      console.log("Layer Exposure Transition: ", layerExposure);
+      const layerTime = ((matProf.bottomLiftDistanceMm / matProf.bottomLiftSpeedMmMin + matProf.bottomLiftDistance2Mm / matProf.bottomLiftSpeed2MmMin + matProf.bottomLiftDistanceMm / matProf.bottomRetractSpeedMmMin + matProf.bottomLiftDistance2Mm / matProf.bottomRetractSpeed2MmMin) * 60) + layerExposure;
+      totalTransitionLayerEstimate += layerTime;
+    }
+
     console.log(activeMaterialProfile);
-//totalSec - replace
-    return formatApproxPrintTimeLabel(_, 1000.0);
+    console.log("Print Stats - Bottom Layers: ", totalBottomLayerEstimate, " Transition Layers: ", totalTransitionLayerEstimate, " Normal Layers: ", totalRegularLayerEstimate);
+    return totalBottomLayerEstimate + totalRegularLayerEstimate + totalTransitionLayerEstimate;
+  }
+
+  
+  const estimatedPrintTimeLabel = React.useMemo(() => {
+    return formatApproxPrintTimeLabel(_, estimatePrintTime(activeMaterialProfile));
   }, [_, activeMaterialProfile, printingPreviewTotalLayers]);
 
   const canDownloadPrintArtifact = Boolean(printingArtifact);
