@@ -325,7 +325,9 @@ import {
   getProfileStoreSnapshot,
   getProfileStoreServerSnapshot,
   selectPrinterNetworkDevice,
+  setActivePrinterProfile,
   subscribeToProfileStore,
+  updatePrinterProfile,
   type PrinterNetworkDevice,
   upsertPrinterNetworkDevice,
 } from '@/features/profiles/profileStore';
@@ -923,6 +925,62 @@ export default function Home() {
   );
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
   const activeMaterialProfile = React.useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
+  /**
+   * A scene authored for a Multi-Tank printer cannot print on a single-material
+   * one: its bodies carry tank assignments that a single film has nowhere to put.
+   * Switching printers raises this instead of letting the mismatch reach slicing.
+   */
+  const sceneUsesMultiTankMaterials = React.useMemo(
+    () => scene.models.some((model) => (
+      !!model.materialProfileId || (model.bodyMaterialProfileIds?.some((id) => !!id) ?? false)
+    )),
+    [scene.models],
+  );
+  const previousPrinterRef = React.useRef<{ id: string; materialMode?: string } | null>(null);
+  const [printerSceneConflictPreviousId, setPrinterSceneConflictPreviousId] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    const printer = activePrinterProfile;
+    const previous = previousPrinterRef.current;
+    previousPrinterRef.current = printer
+      ? { id: printer.id, materialMode: printer.materialMode }
+      : null;
+    if (!printer) return;
+
+    if (printer.materialMode === 'multiTank') {
+      // The compatible state again — nothing to warn about.
+      setPrinterSceneConflictPreviousId(null);
+      return;
+    }
+    if (!sceneUsesMultiTankMaterials) {
+      setPrinterSceneConflictPreviousId(null);
+      return;
+    }
+
+    // Only *leaving* Multi-Tank raises the warning — by switching printers or by
+    // editing this profile's material mode. Loading a saved scene under a
+    // single-material profile must not flash the dialog before the scene puts its
+    // own printer back.
+    const leftMultiTank = previous !== null && previous.materialMode === 'multiTank';
+    if (leftMultiTank) {
+      setPrinterSceneConflictPreviousId(previous.id);
+    }
+  }, [activePrinterProfile, sceneUsesMultiTankMaterials]);
+
+  /**
+   * Undo the incompatible choice: go back to the printer that was active, or —
+   * when the same profile's material mode was the change — switch that profile
+   * back to Multi-Tank.
+   */
+  const keepMultiTankPrinter = React.useCallback(() => {
+    const previousId = printerSceneConflictPreviousId;
+    setPrinterSceneConflictPreviousId(null);
+    if (!previousId) return;
+    if (previousId !== activePrinterProfile?.id) {
+      setActivePrinterProfile(previousId);
+      return;
+    }
+    updatePrinterProfile(previousId, { materialMode: 'multiTank' });
+  }, [activePrinterProfile?.id, printerSceneConflictPreviousId]);
   const hasActivePrinterProfile = Boolean(activePrinterProfile);
   const hasPrinterProfiles = React.useMemo(
     () => profileState.printerProfiles.length > 0,
@@ -11912,6 +11970,52 @@ export default function Home() {
           zIndexClassName="z-[120]"
         />
       )}
+
+      <StructuredDialogModal
+        open={printerSceneConflictPreviousId !== null}
+        ariaLabel={_(msg`Multi-Tank scene on a single-material printer`)}
+        title={_(msg`This scene needs a Multi-Tank printer`)}
+        subtitle={_(msg`Start a new scene to use this printer`)}
+        icon={<AlertTriangle className="h-4 w-4" />}
+        iconTone="warning"
+        closeAriaLabel={_(msg`Keep the Multi-Tank printer`)}
+        onClose={keepMultiTankPrinter}
+        actions={(
+          <>
+            <Button
+              variant="secondary"
+              onClick={keepMultiTankPrinter}
+            >
+              <Trans>Keep Multi-Tank Printer</Trans>
+            </Button>
+            <Button
+              variant="tinted-danger"
+              className="inline-flex items-center justify-center gap-1.5"
+              onClick={() => {
+                setPrinterSceneConflictPreviousId(null);
+                // Starting a new scene is the only way the switch can stand; the
+                // dialog says the work in this one is not carried over.
+                startNewScene();
+              }}
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <Trans>Start New Scene</Trans>
+            </Button>
+          </>
+        )}
+      >
+        <div className="space-y-2">
+          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+            <Trans>
+              This scene was made for a Multi-Tank printer: models and bodies are
+              assigned to its tanks, which a single-material printer cannot print.
+            </Trans>
+          </p>
+          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+            <strong><Trans>Starting a new scene discards the scene above; unsaved progress will be lost.</Trans></strong>
+          </p>
+        </div>
+      </StructuredDialogModal>
 
       <StructuredDialogModal
         open={plateTrashIntent !== null}

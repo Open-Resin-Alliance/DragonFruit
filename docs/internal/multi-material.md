@@ -89,6 +89,15 @@ increments are:
    payloads stay byte-identical (the keys are omitted);
 4. printing: send each tank's stream to its panel/port.
 
+## Scene/printer compatibility
+
+A scene authored on a Multi-Tank printer (models or bodies carry
+`materialProfileId` / `bodyMaterialProfileIds`) cannot print on a single-material
+one. Leaving Multi-Tank — by switching printers or by editing the active profile's
+material mode — raises a blocking dialog offering *Keep Multi-Tank Printer* (switch
+back, or restore multiTank on the same profile) or *Start New Scene* (discard the
+scene; the dialog says unsaved progress is lost).
+
 ## Next step
 
 Pick one of the three meanings above; then the first slice is the scene model change
