@@ -94,6 +94,8 @@ export type PrinterPreset = {
     buildDimensionMode?: PrinterBuildDimensionMode;
     /** A machine that ships with more than one tank declares it here. */
     materialMode?: PrinterMaterialMode;
+    /** How many tanks a Multi-Tank machine carries. */
+    tankCount?: number;
     /**
      * Concrete variant presetIds for a "family" preset (e.g. an Athena II 16K
      * entry that resolves to separate 3-bit / 8-bit variants). When set, the
@@ -154,6 +156,13 @@ export type PrinterProfile = {
     bitDepth?: PrinterBitDepth;
     buildDimensionMode?: PrinterBuildDimensionMode;
     materialMode?: PrinterMaterialMode;
+    /** How many tanks a Multi-Tank machine carries (2..16). */
+    tankCount?: number;
+    /**
+     * Which material sits in each tank, by index. `''` is an unassigned tank; the
+     * array is trimmed to `tankCount` and entries are dropped if their material is.
+     */
+    tankMaterials?: string[];
     /** Free-text notes the user keeps with this machine; never part of a preset. */
     notes?: string;
     officialPresetId?: string;
@@ -946,6 +955,7 @@ const DEFAULT_PRINTER_PROFILES: PrinterProfile[] = BUILTIN_PRINTER_PRESETS.map((
     bitDepth: sanitizeBitDepth((preset as any).bitDepth),
     buildDimensionMode: normalizeBuildDimensionMode((preset as any).buildDimensionMode),
     materialMode: normalizeMaterialMode((preset as any).materialMode),
+    tankCount: sanitizeTankCount((preset as any).tankCount),
     officialPresetId: preset.presetId,
     officialPresetVersion: normalizeProfileVersion((preset as any).profileVersion, 1),
     isOfficial: true,
@@ -955,6 +965,21 @@ const DEFAULT_PRINTER_PROFILES: PrinterProfile[] = BUILTIN_PRINTER_PRESETS.map((
     display: preset.display,
     network: sanitizePrinterNetworkSettings((preset as any).network),
 }));
+
+function sanitizeTankMaterials(value: unknown, tankCount: number | undefined, knownMaterialIds: ReadonlySet<string>): string[] | undefined {
+    if (!Array.isArray(value) || !tankCount) return undefined;
+    const entries = value.slice(0, tankCount).map((entry) => (
+        typeof entry === 'string' && knownMaterialIds.has(entry) ? entry : ''
+    ));
+    while (entries.length < tankCount) entries.push('');
+    return entries.some((entry) => entry.length > 0) ? entries : undefined;
+}
+
+function sanitizeTankCount(value: unknown): number | undefined {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return undefined;
+    return Math.min(16, Math.max(2, Math.round(parsed)));
+}
 
 function sanitizePrinterNotes(value: unknown): string | undefined {
     if (typeof value !== 'string') return undefined;
@@ -1098,6 +1123,13 @@ function notify(): void {
 
 function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): ProfileStoreState {
     const fallback = createDefaultState();
+    // Tank assignments reference material profiles by id; an id whose material is
+    // gone is cleared rather than left dangling.
+    const knownMaterialIds = new Set(
+        (Array.isArray(input?.materialProfiles) ? input!.materialProfiles : [])
+            .map((profile) => (typeof profile?.id === 'string' ? profile.id : ''))
+            .filter((id) => id.length > 0),
+    );
 
     const printerProfiles = Array.isArray(input?.printerProfiles)
         ? input!.printerProfiles
@@ -1129,6 +1161,11 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
                     && resolvedPixelSize != null;
                 const resolvedBuildDimensionMode: PrinterBuildDimensionMode = explicitBuildDimensionMode
                     ?? (inferAutoBuildDimensionMode ? 'auto' : 'manual');
+                const resolvedMaterialMode = normalizeMaterialMode((profile as any).materialMode)
+                    ?? normalizeMaterialMode((matchedPreset as any)?.materialMode);
+                const resolvedTankCount = sanitizeTankCount((profile as any).tankCount)
+                    ?? sanitizeTankCount((matchedPreset as any)?.tankCount)
+                    ?? (resolvedMaterialMode === 'multiTank' ? 2 : undefined);
                 const networkSupport = resolveNetworkSupport(profile);
                 const networkProfileState = networkSupport
                     ? deriveNetworkProfileState(profile, networkSupport)
@@ -1155,8 +1192,13 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
                     pixelSize: resolvedPixelSize,
                     bitDepth: sanitizeBitDepth((profile as any).bitDepth) ?? sanitizeBitDepth((matchedPreset as any)?.bitDepth),
                     buildDimensionMode: resolvedBuildDimensionMode,
-                    materialMode: normalizeMaterialMode((profile as any).materialMode)
-                        ?? normalizeMaterialMode((matchedPreset as any)?.materialMode),
+                    materialMode: resolvedMaterialMode,
+                    // A Multi-Tank machine has at least two by definition; the count is
+                    // never left undefined in that mode, so nothing has to re-derive it.
+                    tankCount: resolvedTankCount,
+                    tankMaterials: resolvedMaterialMode === 'multiTank'
+                        ? sanitizeTankMaterials((profile as any).tankMaterials, resolvedTankCount, knownMaterialIds)
+                        : undefined,
                     notes: sanitizePrinterNotes((profile as any).notes),
                     officialPresetId,
                     officialPresetVersion: normalizeProfileVersion((profile as any).officialPresetVersion, fallbackOfficialPresetVersion),
@@ -1961,6 +2003,14 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
             nextUpdates.notes = sourceUpdates.notes;
         }
 
+        if (Object.prototype.hasOwnProperty.call(sourceUpdates, 'tankCount')) {
+            nextUpdates.tankCount = sourceUpdates.tankCount;
+        }
+
+        if (Object.prototype.hasOwnProperty.call(sourceUpdates, 'tankMaterials')) {
+            nextUpdates.tankMaterials = sourceUpdates.tankMaterials;
+        }
+
         if (sourceUpdates.display) {
             const nextDisplay: Partial<PrinterProfile['display']> = {};
             if (Object.prototype.hasOwnProperty.call(sourceUpdates.display, 'outputFormat')) {
@@ -2006,6 +2056,9 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
         const nextNetworkSupportDisabled = hasNetworkSupportUpdate
             ? !nextNetworkSupport
             : profile.networkSupportDisabled;
+        const nextTankCount = appliedUpdates.tankCount !== undefined
+            ? sanitizeTankCount(appliedUpdates.tankCount)
+            : profile.tankCount;
         const nextNetwork = appliedUpdates.network !== undefined
             ? sanitizePrinterNetworkSettings(appliedUpdates.network)
             : sanitizePrinterNetworkSettings(profile.network);
@@ -2052,6 +2105,16 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
             materialMode: appliedUpdates.materialMode !== undefined
                 ? normalizeMaterialMode(appliedUpdates.materialMode)
                 : profile.materialMode,
+            tankCount: nextTankCount,
+            // Resized to the tank count here; `sanitizeState` is what drops ids whose
+            // material is gone, so it can see the material list this update produces.
+            tankMaterials: nextTankCount
+                ? Array.from({ length: nextTankCount }, (_, index) => (
+                    (appliedUpdates.tankMaterials !== undefined
+                        ? appliedUpdates.tankMaterials
+                        : profile.tankMaterials)?.[index] ?? ''
+                ))
+                : undefined,
             notes: appliedUpdates.notes !== undefined
                 ? sanitizePrinterNotes(appliedUpdates.notes)
                 : profile.notes,

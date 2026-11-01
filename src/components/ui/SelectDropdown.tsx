@@ -19,9 +19,15 @@ export type SelectDropdownProps<T extends string | number = string> = {
     value: T;
     label: string;
     disabled?: boolean;
+    /** Render as a non-interactive group header rather than a choice. */
+    heading?: boolean;
+    /** Render as a thin rule, for separating a destructive choice from the list. */
+    divider?: boolean;
+    /** A command rather than a value: it never shows as the field's current choice. */
+    action?: boolean;
     icon?: React.ReactNode;
     rightContent?: React.ReactNode;
-    tone?: 'default' | 'accent';
+    tone?: 'default' | 'accent' | 'danger';
   }>;
   onChange: (value: T) => void;
   disabled?: boolean;
@@ -297,7 +303,9 @@ export function SelectDropdown<T extends string | number = string>({
               : undefined),
           }}
         >
-          {leadingDisplay && !(hideSelectedText && selectedDisplay) && (
+          {/* A leading affordance survives the overlay display: an icon-only trigger
+              with a centred value is a legitimate pair (a warning icon before a dash). */}
+          {leadingDisplay && (
             <span className="mr-1.5 inline-flex shrink-0 items-center justify-center">
               {leadingDisplay}
             </span>
@@ -362,10 +370,37 @@ export function SelectDropdown<T extends string | number = string>({
               <div className="overflow-y-auto custom-scrollbar" style={{ maxHeight: menuPosition?.maxHeight }}>
                 {options.map((option, index) => {
                   const optionKey = String(option.value);
-                  const isSelected = optionKey === String(value);
+
+                  if (option.heading) {
+                    return (
+                      <div
+                        key={optionKey}
+                        className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide"
+                        style={{
+                          color: 'var(--accent)',
+                          borderBottom: '1px solid color-mix(in srgb, var(--border-subtle), transparent 35%)',
+                        }}
+                      >
+                        {option.label}
+                      </div>
+                    );
+                  }
+
+                  const isSelected = !option.action && optionKey === String(value);
                   const isHovered = hoveredOptionKey === optionKey;
                   const optionTone = option.tone ?? 'default';
                   const isAccentTone = optionTone === 'accent';
+                  const isDangerTone = optionTone === 'danger';
+
+                  if (option.divider) {
+                    return (
+                      <div
+                        key={optionKey}
+                        className="border-t"
+                        style={{ borderColor: 'var(--border-subtle)' }}
+                      />
+                    );
+                  }
 
                   return (
                     <button
@@ -395,17 +430,27 @@ export function SelectDropdown<T extends string | number = string>({
                               borderBottomColor: 'var(--border-subtle)',
                             }
                           : {
-                              borderBottomColor: index === options.length - 1 ? 'transparent' : 'color-mix(in srgb, var(--border-subtle), transparent 16%)',
+                              // A group ends without a rule: the heading below is the
+                              // separation, and two lines there read as a table.
+                              borderBottomColor: (index === options.length - 1
+                                || options[index + 1]?.heading
+                                || options[index + 1]?.divider)
+                                ? 'transparent'
+                                : 'color-mix(in srgb, var(--border-subtle), transparent 16%)',
                               background: isSelected
                                 ? 'color-mix(in srgb, var(--accent), var(--surface-0) 86%)'
                                 : (isHovered
-                                  ? (isAccentTone
-                                    ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 92%)'
-                                    : 'color-mix(in srgb, var(--surface-2), transparent 18%)')
+                                  ? (isDangerTone
+                                    ? 'color-mix(in srgb, var(--danger), transparent 88%)'
+                                    : isAccentTone
+                                      ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 92%)'
+                                      : 'color-mix(in srgb, var(--surface-2), transparent 18%)')
                                   : 'transparent'),
-                              color: isAccentTone
-                                ? 'var(--accent-secondary)'
-                                : ((isSelected || isHovered) ? 'var(--text-strong)' : 'var(--text-muted)'),
+                              color: isDangerTone
+                                ? 'var(--danger)'
+                                : isAccentTone
+                                  ? 'var(--accent-secondary)'
+                                  : ((isSelected || isHovered) ? 'var(--text-strong)' : 'var(--text-muted)'),
                             }
                       }
                     >
@@ -413,11 +458,13 @@ export function SelectDropdown<T extends string | number = string>({
                         <span
                           className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center"
                           style={{
-                            color: isAccentTone
-                              ? 'var(--accent-secondary)'
-                              : (isSelected
-                                ? 'var(--accent)'
-                                : (isHovered ? 'var(--text-strong)' : 'var(--text-muted)')),
+                            color: isDangerTone
+                              ? 'var(--danger)'
+                              : isAccentTone
+                                ? 'var(--accent-secondary)'
+                                : (isSelected
+                                  ? 'var(--accent)'
+                                  : (isHovered ? 'var(--text-strong)' : 'var(--text-muted)')),
                           }}
                         >
                           {option.icon}

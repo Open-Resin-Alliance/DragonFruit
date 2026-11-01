@@ -812,6 +812,9 @@ function sanitizePrinterPreset(input: unknown): PrinterPreset | null {
     materialMode: value.materialMode === 'single' || value.materialMode === 'multiTank'
       ? value.materialMode
       : undefined,
+    tankCount: Number.isFinite(Number(value.tankCount))
+      ? Math.min(16, Math.max(2, Math.round(Number(value.tankCount))))
+      : undefined,
     networkSupport: sanitizeNetworkSupport(value.networkSupport),
     networkFilter: boundedString((value as any).networkFilter, 120) || undefined,
     platformBadge: sanitizePlatformBadge((value as any).platformBadge),

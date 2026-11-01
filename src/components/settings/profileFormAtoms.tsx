@@ -223,6 +223,10 @@ type LabeledNumberInputProps = {
     value: number;
     step?: number;
     precision?: number;
+    /** Lower bound, applied to typing, blur and the stepper carets. Defaults to 0. */
+    min?: number;
+    /** Upper bound, same treatment. Defaults to no cap. */
+    max?: number;
     /** Native tooltip on the input itself, for callers that show the same help
      *  text as a `title` as well as through the ⓘ affordance. */
     title?: string;
@@ -235,8 +239,11 @@ type LabeledNumberInputProps = {
     onChange: (value: number) => void;
 };
 
-export function LabeledNumberInput({ label, helpText, tag, color, disabled = false, value, step: propStep, precision, title, unit, onChange }: LabeledNumberInputProps) {
-    const safeValue = clampNonNegativeNumber(value);
+export function LabeledNumberInput({ label, helpText, tag, color, disabled = false, value, step: propStep, precision, min: propMin, max: propMax, title, unit, onChange }: LabeledNumberInputProps) {
+    const min = propMin ?? 0;
+    const max = propMax ?? Number.POSITIVE_INFINITY;
+    const clampToRange = (input: number) => Math.min(max, Math.max(min, input));
+    const safeValue = clampToRange(Number.isFinite(value) ? value : 0);
     const formatVal = React.useCallback((val: number) => {
         if (precision !== undefined) return val.toFixed(precision);
         return String(val);
@@ -272,7 +279,7 @@ export function LabeledNumberInput({ label, helpText, tag, color, disabled = fal
             return;
         }
 
-        const sanitized = clampNonNegativeNumber(next);
+        const sanitized = clampToRange(next);
         onChange(sanitized);
         setLocalValue(formatVal(sanitized));
     }, [formatVal, localValue, onChange, value]);
@@ -283,7 +290,7 @@ export function LabeledNumberInput({ label, helpText, tag, color, disabled = fal
         const current = Number.isFinite(parsed) ? parsed : fallback;
         const activeStep = propStep ?? (Math.abs(current) < 1 ? 0.01 : 1);
         const decimals = precision ?? (activeStep < 1 ? 3 : 0);
-        const next = clampNonNegativeNumber(Number((current + direction * activeStep).toFixed(decimals)));
+        const next = clampToRange(Number((current + direction * activeStep).toFixed(decimals)));
         onChange(next);
         setLocalValue(formatVal(next));
     }, [formatVal, localValue, onChange, precision, propStep, safeValue]);

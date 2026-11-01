@@ -593,6 +593,9 @@ export function ProfileSettingsModal({
     () => outputFormatSupportsMultiTank(selectedPrinter?.display.outputFormat),
     [selectedPrinter?.display.outputFormat],
   );
+  // Multi-Tank assigns materials per tank; the Material Settings list is then a
+  // library, not a chooser, so rows carry no selection of their own.
+  const multiTankMaterialPicker = supportsMultiTankFormat && selectedPrinter?.materialMode === 'multiTank';
 
   const selectedFormatVersionOptions = React.useMemo(() => {
     if (!selectedPrinter) return [] as Array<{ value: string; label: string; isDefault?: boolean }>;
@@ -869,6 +872,43 @@ export function ProfileSettingsModal({
     if (!selectedPrinter) return [];
     return getMaterialProfilesForPrinter(selectedPrinter.id, profileState);
   }, [profileState, selectedPrinter]);
+
+  // The tank menus group by manufacturer, because a printer can carry resins from
+  // several brands and a flat list stops being scannable past a handful.
+  const tankMaterialOptions = React.useMemo(() => {
+    const groups = new Map<string, typeof printerMaterials>();
+    for (const material of printerMaterials) {
+      const brand = (material.brand || 'Default').trim() || 'Default';
+      groups.set(brand, [...(groups.get(brand) ?? []), material]);
+    }
+    const options: Array<{ value: string; label: string; heading?: boolean }> = [];
+    for (const brand of [...groups.keys()].sort((left, right) => left.localeCompare(right))) {
+      options.push({ value: `__brand__:${brand}`, label: brand, heading: true });
+      for (const material of [...(groups.get(brand) ?? [])].sort((left, right) => left.name.localeCompare(right.name))) {
+        // Brand is the group, so the row only has to carry the type, in front of the
+        // name ("Standard Blue"). A name that already opens with its family ("Standard
+        // 405nm") is left alone rather than stuttering.
+        const familyLabel = RESIN_FAMILY_OPTIONS.find((option) => option.value === material.resinFamily)?.label;
+        const nameStartsWithFamily = Boolean(familyLabel)
+          && material.name.toLowerCase().startsWith(familyLabel!.toLowerCase());
+        options.push({
+          value: material.id,
+          label: familyLabel && !nameStartsWithFamily ? `${familyLabel} ${material.name}` : material.name,
+        });
+      }
+    }
+    // Clearing a tank is the destructive choice, so it sits last behind a rule rather
+    // than at the top where a stray click would hit it.
+    options.push({ value: '__unassign-rule__', label: '', divider: true } as never);
+    options.push({
+      value: '',
+      label: 'Unassign Tank',
+      icon: <Trash2 className="h-3.5 w-3.5" />,
+      tone: 'danger',
+      action: true,
+    } as never);
+    return options;
+  }, [printerMaterials]);
 
   const availableMaterialPresets = React.useMemo(() => {
     const printerPresetId = selectedPrinter?.officialPresetId?.trim() ?? '';
@@ -1848,10 +1888,38 @@ export function ProfileSettingsModal({
     selectedMaterialId,
   ]);
 
+  const assignedTankCount = React.useMemo(() => {
+    if (!multiTankMaterialPicker || !selectedPrinter) return 0;
+    const count = selectedPrinter.tankCount ?? 2;
+    const assignments = selectedPrinter.tankMaterials ?? [];
+    let assigned = 0;
+    for (let index = 0; index < count; index += 1) {
+      if (assignments[index]) assigned += 1;
+    }
+    return assigned;
+  }, [multiTankMaterialPicker, selectedPrinter]);
+
+  const [showUnassignedTanksWarning, setShowUnassignedTanksWarning] = React.useState(false);
+
+  // One assigned tank is enough to be useful — a profile is allowed to carry tanks
+  // nobody uses yet. Only leaving with nothing assigned at all is worth interrupting.
+  const requestClose = React.useCallback(() => {
+    if (multiTankMaterialPicker && assignedTankCount === 0) {
+      setShowUnassignedTanksWarning(true);
+      return;
+    }
+    onClose();
+  }, [assignedTankCount, multiTankMaterialPicker, onClose]);
+
   // Escape unwinds this modal's own nested dialogs one at a time before it
   // closes the modal itself; nested dialogs of their own take precedence.
   useEscapeToClose(isOpen, () => {
     const closedNestedDialog = ((): boolean => {
+      if (showUnassignedTanksWarning) {
+        setShowUnassignedTanksWarning(false);
+        return true;
+      }
+
       if (deleteConfirmTarget) {
         setDeleteConfirmTarget(null);
         return true;
@@ -1924,7 +1992,7 @@ export function ProfileSettingsModal({
     })();
 
     if (closedNestedDialog) return;
-    onClose();
+    requestClose();
   });
 
   React.useEffect(() => {
@@ -3569,7 +3637,7 @@ export function ProfileSettingsModal({
     <div
       className="fixed inset-0 z-50 flex items-stretch justify-center bg-black/58 backdrop-blur-sm p-5 ui-modal-backdrop-enter"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        if (event.target === event.currentTarget) requestClose();
       }}
     >
       <div
@@ -3598,7 +3666,7 @@ export function ProfileSettingsModal({
           <IconButton
             variant="surface"
             size="sm"
-            onClick={onClose}
+            onClick={requestClose}
             aria-label="Close"
             type="button"
           >
@@ -4151,6 +4219,72 @@ export function ProfileSettingsModal({
           </section>
           )}
 
+          {hasPrinters && selectedPrinter && multiTankMaterialPicker && (
+          <section
+            className="rounded-md border overflow-hidden flex flex-col shrink-0"
+            style={{
+              borderColor: 'var(--border-subtle)',
+              background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface-1), transparent 8%), var(--surface-1))',
+            }}
+          >
+            <div className="p-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div>
+                <h3 className="text-sm font-semibold flex items-center gap-2" style={{ color: 'var(--text-strong)' }}>
+                  <FlaskConical className="w-4 h-4" />
+                  Multi-Tank
+                </h3>
+              </div>
+            </div>
+
+            <div className="p-3">
+              <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2.5">
+                {Array.from({ length: Math.max(4, selectedPrinter.tankCount ?? 2) }, (_, index) => {
+                  const assignments = selectedPrinter.tankMaterials ?? [];
+                  const tankCount = selectedPrinter.tankCount ?? 2;
+                  const isTank = index < tankCount;
+                  const assignedId = isTank ? assignments[index] ?? '' : '';
+                  return (
+                    <label key={`tank-${index}`} className="space-y-1 block">
+                      <span className="ui-label font-medium inline-flex w-full justify-center text-center">
+                        {`Tank ${index + 1}`}
+                      </span>
+                      <SelectDropdown
+                        value={assignedId}
+                        disabled={!isTank}
+                        options={tankMaterialOptions}
+                        // An unassigned tank is the thing to fix: a leading warning
+                        // icon, and the dash centred rather than sitting on the left.
+                        // A disabled spare centres its own dash the same way.
+                        leadingDisplay={isTank && assignedId.length === 0
+                          ? <AlertTriangle className="h-3.5 w-3.5" style={{ color: 'var(--danger)' }} />
+                          : undefined}
+                        hideSelectedText={!isTank || assignedId.length === 0}
+                        selectedDisplay={(!isTank || assignedId.length === 0)
+                          ? <span style={{ color: isTank ? 'var(--danger)' : 'var(--text-muted)' }}>—</span>
+                          : undefined}
+                        selectedDisplayAlignment="center"
+                        selectStyle={isTank && assignedId.length === 0 ? { color: 'var(--danger)' } : undefined}
+                        selectClassName="w-full h-[36px] px-2.5 pr-10 leading-tight text-sm"
+                        onChange={(value) => {
+                          if (!isTank) return;
+                          const next = Array.from({ length: tankCount }, (_, slot) => assignments[slot] ?? '');
+                          next[index] = value;
+                          updatePrinterProfile(selectedPrinter.id, { tankMaterials: next });
+                        }}
+                      />
+                    </label>
+                  );
+                })}
+              </div>
+              {printerMaterials.length === 0 && (
+                <p className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                  Add a material profile to assign it to a tank.
+                </p>
+              )}
+            </div>
+          </section>
+          )}
+
           {hasPrinters && selectedPrinter && (
           <section
             className="rounded-md border overflow-hidden flex flex-col min-h-[320px] flex-1 shrink-0"
@@ -4470,12 +4604,14 @@ export function ProfileSettingsModal({
                             key={material.id}
                             type="button"
                             onClick={() => {
+                              // In Multi-Tank the row is picked for the Edit/Duplicate
+                              // buttons, not as the job's material: the tanks own that.
                               setSelectedMaterialId(material.id);
-                              setActiveMaterialProfile(material.id);
+                              if (!multiTankMaterialPicker) setActiveMaterialProfile(material.id);
                             }}
                             onDoubleClick={() => {
                               setSelectedMaterialId(material.id);
-                              setActiveMaterialProfile(material.id);
+                              if (!multiTankMaterialPicker) setActiveMaterialProfile(material.id);
                               if (isLocked) {
                                 setMaterialLockDialogIsOfficial(isOfficial);
                                 setShowOfficialMaterialLockDialog(true);
@@ -5284,22 +5420,6 @@ export function ProfileSettingsModal({
                 <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
                   <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Output</div>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
-                    {supportsMultiTankFormat && (
-                    <LabeledSelectInput
-                      label="Material Mode"
-                      value={selectedPrinter.materialMode ?? 'single'}
-                      options={[
-                        { value: 'single', label: 'Single Material' },
-                        { value: 'multiTank', label: 'Multi-Tank' },
-                      ]}
-                      defaultValue={officialFieldDefaults?.materialMode}
-                      highlight={officialFieldsModified?.materialMode === true}
-                      onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
-                        materialMode: value === 'multiTank' ? 'multiTank' : 'single',
-                      })}
-                    />
-                    )}
-
                     <LabeledSelectInput
                       label="Output Format"
                       value={selectedPrinter.display.outputFormat}
@@ -5389,6 +5509,44 @@ export function ProfileSettingsModal({
                       checked={selectedPrinter.display.mirrorY === true}
                       onChange={(checked) => handlePrinterDisplayChange({ mirrorY: checked })}
                     />
+
+                    {/* Multi-material controls sit last in Output: they describe the
+                        machine's tanks, not the format settings above them. */}
+                    {supportsMultiTankFormat && (
+                      <>
+                        <LabeledSelectInput
+                          label="Material Mode"
+                          value={selectedPrinter.materialMode ?? 'single'}
+                          options={[
+                            { value: 'single', label: 'Single Material' },
+                            { value: 'multiTank', label: 'Multi-Tank' },
+                          ]}
+                          defaultValue={officialFieldDefaults?.materialMode}
+                          highlight={officialFieldsModified?.materialMode === true}
+                          onChange={(value) => {
+                            const nextMode = value === 'multiTank' ? 'multiTank' : 'single';
+                            updatePrinterProfile(selectedPrinter.id, {
+                              materialMode: nextMode,
+                              ...(nextMode === 'multiTank' ? { tankCount: selectedPrinter.tankCount ?? 2 } : {}),
+                            });
+                          }}
+                        />
+
+                        {selectedPrinter.materialMode === 'multiTank' && (
+                          <LabeledNumberInput
+                            label="Amount of Tanks"
+                            value={selectedPrinter.tankCount ?? 2}
+                            step={1}
+                            precision={0}
+                            min={2}
+                            max={16}
+                            onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
+                              tankCount: Math.round(value),
+                            })}
+                          />
+                        )}
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
@@ -6117,6 +6275,40 @@ export function ProfileSettingsModal({
               Choose <strong>Unlock</strong> to edit it directly, or <strong>Make Custom Copy</strong> to duplicate it as a new editable profile.
             </p>
           )}
+        </StructuredDialogModal>
+
+        <StructuredDialogModal
+          open={showUnassignedTanksWarning}
+          ariaLabel="Unassigned tanks"
+          title="Tanks are unassigned"
+          subtitle={selectedPrinter?.name}
+          icon={<AlertTriangle className="h-4 w-4" />}
+          iconTone="warning"
+          zIndexClassName="z-[100]"
+          maxWidthClassName="max-w-md"
+          closeAriaLabel="Close warning"
+          onClose={() => setShowUnassignedTanksWarning(false)}
+          actions={(
+            <>
+              <Button variant="secondary" onClick={() => setShowUnassignedTanksWarning(false)}>
+                Keep editing
+              </Button>
+              <Button
+                variant="tinted-danger"
+                onClick={() => {
+                  setShowUnassignedTanksWarning(false);
+                  onClose();
+                }}
+              >
+                Close anyway
+              </Button>
+            </>
+          )}
+        >
+          <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
+            No tank has a material assigned yet, so a Multi-Tank print would not know which
+            resin it is holding. Assign at least one tank, or close anyway.
+          </p>
         </StructuredDialogModal>
 
         <StructuredDialogModal
