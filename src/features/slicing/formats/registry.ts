@@ -31,6 +31,7 @@ function resolveSideloadedSlicingFormat(
     pluginId: match.pluginId,
     rustModulePath: '',
     wasmExportName: '',
+    supportsMultiTank: match.multiTank === true,
     notes: 'Sideloaded plugin format: encoded by the package process.',
   };
 }
@@ -52,6 +53,19 @@ function resolveBuiltinPluginSlicingFormat(
     if (match) return match;
   }
   return null;
+}
+
+/**
+ * Whether a format can carry more than one material. The printer profile's Material
+ * Mode control only makes sense for those, so it is hidden everywhere else.
+ */
+export function outputFormatSupportsMultiTank(
+  outputFormat: PrinterOutputFormat | string | null | undefined,
+): boolean {
+  if (!outputFormat) return false;
+  const format = outputFormat as PrinterOutputFormat;
+  const definition = resolveBuiltinPluginSlicingFormat(format) ?? resolveSideloadedSlicingFormat(format);
+  return definition?.supportsMultiTank === true;
 }
 
 export function outputFormatUsesPngLayers(outputFormat: PrinterOutputFormat | string | null | undefined): boolean {

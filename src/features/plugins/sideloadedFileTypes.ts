@@ -130,6 +130,7 @@ export function refreshSideloadedContributions(): Promise<void> {
               pluginName: manifest.name,
               extension: extension.toLowerCase(),
               displayName: format.displayName ?? format.id,
+              multiTank: format.multiTank === true,
             });
           }
         }

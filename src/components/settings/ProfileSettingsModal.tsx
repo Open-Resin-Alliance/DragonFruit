@@ -67,6 +67,7 @@ import {
 import {
   getAvailableOutputFormatOptions,
   getAvailableFormatVersionOptions,
+  outputFormatSupportsMultiTank,
   getAvailableSettingsModeOptions,
   resolveOutputFormatVersion,
   resolveOutputSettingsMode,
@@ -587,6 +588,11 @@ export function ProfileSettingsModal({
     if (!Number.isFinite(printerBitDepth) || printerBitDepth <= 0) return null;
     return Math.round(printerBitDepth);
   }, [selectedPrinter?.bitDepth?.bits]);
+
+  const supportsMultiTankFormat = React.useMemo(
+    () => outputFormatSupportsMultiTank(selectedPrinter?.display.outputFormat),
+    [selectedPrinter?.display.outputFormat],
+  );
 
   const selectedFormatVersionOptions = React.useMemo(() => {
     if (!selectedPrinter) return [] as Array<{ value: string; label: string; isDefault?: boolean }>;
@@ -5278,6 +5284,7 @@ export function ProfileSettingsModal({
                 <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
                   <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Output</div>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+                    {supportsMultiTankFormat && (
                     <LabeledSelectInput
                       label="Material Mode"
                       value={selectedPrinter.materialMode ?? 'single'}
@@ -5291,6 +5298,7 @@ export function ProfileSettingsModal({
                         materialMode: value === 'multiTank' ? 'multiTank' : 'single',
                       })}
                     />
+                    )}
 
                     <LabeledSelectInput
                       label="Output Format"

@@ -20,6 +20,8 @@ export type SideloadedOutputFormat = {
   pluginName: string;
   extension: string;
   displayName: string;
+  /** The package's format declares it can carry more than one material. */
+  multiTank?: boolean;
 };
 
 const EMPTY: SideloadedFileType[] = [];

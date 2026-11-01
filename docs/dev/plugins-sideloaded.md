@@ -160,7 +160,9 @@ Rules the host enforces, in this order:
 
 `formats` is required for a package with the encoder capability: the engine
 looks encoders up by exact output extension, so the package has to declare
-extensions before anything starts.
+extensions before anything starts. `formats[].multiTank: true` says the format can
+carry more than one material; the printer profile shows its Material Mode control
+only for such a format.
 
 ### Profile content
 

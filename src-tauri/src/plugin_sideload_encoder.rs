@@ -346,6 +346,7 @@ mod tests {
                 display_name: None,
                 layers: Some(package::LayerKind::Rle),
                 requires_area_stats: false,
+                multi_tank: false,
             }],
             ..crate::plugin_test_support::manifest(
                 "example.encoder",
@@ -399,6 +400,7 @@ mod tests {
                 display_name: Some("Echo container".to_string()),
                 layers: Some(package::LayerKind::Rle),
                 requires_area_stats: false,
+                multi_tank: false,
             }],
             ..crate::plugin_test_support::manifest(
                 "example.encoder",
@@ -437,6 +439,7 @@ mod tests {
                 display_name: Some("Echo container".to_string()),
                 layers: Some(package::LayerKind::Rle),
                 requires_area_stats: false,
+                multi_tank: false,
             }],
             file_types: vec![package::FileTypeDecl {
                 extension: ".echo".to_string(),
@@ -514,6 +517,7 @@ mod tests {
                 display_name: None,
                 layers: Some(package::LayerKind::Rle),
                 requires_area_stats: false,
+                multi_tank: false,
             }],
             job_metadata_payloads: vec![package::JobMetadataPayloadDecl {
                 setting_path: "echo.embedScene".to_string(),
@@ -577,6 +581,7 @@ mod tests {
                 display_name: None,
                 layers: Some(package::LayerKind::RawMask),
                 requires_area_stats: false,
+                multi_tank: false,
             }],
             ..crate::plugin_test_support::manifest(
                 "example.encoder",
@@ -625,6 +630,7 @@ mod tests {
                 display_name: None,
                 layers: Some(package::LayerKind::Png),
                 requires_area_stats: true,
+                multi_tank: false,
             }],
             ..crate::plugin_test_support::manifest(
                 "example.encoder",
@@ -677,6 +683,7 @@ mod tests {
                 display_name: None,
                 layers: Some(package::LayerKind::Rle),
                 requires_area_stats: false,
+                multi_tank: false,
             }],
             ..crate::plugin_test_support::manifest(
                 "example.encoder",

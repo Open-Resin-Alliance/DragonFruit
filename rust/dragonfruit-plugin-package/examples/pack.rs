@@ -73,6 +73,7 @@ fn main() {
     let remote_materials_path = arg("--remote-materials");
     let asset_paths = arg_all("--asset");
     let requires_area_stats = arg("--area-stats").is_some();
+    let multi_tank = arg("--multi-tank").is_some();
     let transport = match arg("--transport").as_deref() {
         None | Some("shm") => package::Transport::Shm,
         Some("pipe") => package::Transport::Pipe,
@@ -152,6 +153,7 @@ fn main() {
             display_name: format_name.clone(),
             layers: layer_kind,
             requires_area_stats,
+            multi_tank,
             })
             .collect(),
         printer_presets: presets_path

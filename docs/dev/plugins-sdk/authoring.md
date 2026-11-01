@@ -195,6 +195,7 @@ cargo run -p dragonfruit-plugin-package --example pack -- \
 | `--layers` | `png` (default), `rle` or `mask`: which layer payload the encoder wants |
 | `--area-stats` | ask the engine for per-layer area stats (batch encodes) |
 | `--transport` | `shm` (default, ring) or `pipe` (bulk frames, no shared memory) |
+| `--multi-tank` | the format can carry more than one material, which enables Material Mode for it |
 | `--format-name` | display name for the format, shown in the profile editor |
 | `--file-type` | extension the package can open, e.g. `.apf`; adds the fileType capability |
 | `--file-type-name` | display name for that extension, shown in the import UI |
@@ -232,8 +233,8 @@ cargo build --manifest-path rust/dragonfruit-plugin-sdk/Cargo.toml --example ful
 cargo run -p dragonfruit-plugin-package --example pack -- \
   --out full-plugin-sample.dfplugin \
   --binary rust/dragonfruit-plugin-sdk/target/debug/examples/full_plugin \
-  --id example.full --name "Full Feature Example" --version 0.1.0 --vendor DragonFruit \
-  --format .exf --format-name "Echo container" --layers rle \
+  --id example.full --name "Full Feature Example" --version 0.2.0 --vendor DragonFruit \
+  --format .exf --format-name "Echo container" --layers rle --multi-tank \
   --file-type .echo --file-type-name "Echo project" \
   --network --network-mode demo-echo --network-name "Echo Network" \
   --network-host echo.local \

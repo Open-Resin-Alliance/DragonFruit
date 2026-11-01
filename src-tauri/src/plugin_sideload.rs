@@ -624,6 +624,7 @@ mod tests {
                 display_name: None,
                 layers: None,
                 requires_area_stats: false,
+                multi_tank: false,
             }],
             network: None,
             file_types: Vec::new(),

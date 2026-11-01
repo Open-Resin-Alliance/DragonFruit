@@ -15,6 +15,8 @@ export type SideloadedFormat = {
   id: string;
   extensions: string[];
   displayName?: string | null;
+  /** The format can carry more than one material (a Multi-Tank machine). */
+  multiTank?: boolean;
 };
 
 export type SideloadedManifest = {

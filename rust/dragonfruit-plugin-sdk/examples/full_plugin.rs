@@ -36,7 +36,7 @@ impl PluginIdentity for FullPlugin {
     }
 
     fn version(&self) -> &str {
-        "0.1.0"
+        "0.2.0"
     }
 
     fn capabilities(&self) -> Vec<Capability> {

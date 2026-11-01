@@ -129,6 +129,10 @@ pub struct FormatDecl {
     /// receive them in the job; a streaming mask or RLE session does not have them.
     #[serde(default)]
     pub requires_area_stats: bool,
+    /// The format can carry more than one material, which is what makes the printer
+    /// profile's Material Mode control meaningful for it.
+    #[serde(default)]
+    pub multi_tank: bool,
 }
 
 impl FormatDecl {
@@ -1062,6 +1066,7 @@ mod tests {
                 display_name: None,
                 layers: None,
                 requires_area_stats: false,
+                multi_tank: false,
             }],
             network: None,
             file_types: Vec::new(),
