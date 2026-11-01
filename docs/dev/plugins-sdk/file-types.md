@@ -107,10 +107,12 @@ The SDK ships `echo_import`, which reads any file and writes one triangle plus a
 empty support document. Pack it and drop a file on the app:
 
 ```bash
-cargo build --manifest-path rust/dragonfruit-plugin-sdk/Cargo.toml --example echo_import
+cargo build --manifest-path rust/dragonfruit-plugin-sdk/Cargo.toml --release --example echo_import
 cargo run -p dragonfruit-plugin-package --example pack -- \
   --out echo-import-sample.dfplugin \
-  --binary rust/dragonfruit-plugin-sdk/target/debug/examples/echo_import \
+  --binary rust/dragonfruit-plugin-sdk/target/release/examples/echo_import.exe --binary-platform windows \
+  --binary rust/dragonfruit-plugin-sdk/target/universal2-apple-darwin/release/examples/echo_import --binary-platform macos \
+  --binary rust/dragonfruit-plugin-sdk/target/x86_64-unknown-linux-musl/release/examples/echo_import --binary-platform linux \
   --id example.importer --name "Echo Project Import" --version 0.1.0 --vendor DragonFruit \
   --file-type .echo --file-type-name "Echo project"
 ```

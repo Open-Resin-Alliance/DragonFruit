@@ -134,10 +134,12 @@ layer shows up.
 given instead of rasterising a real container.
 
 ```bash
-cargo build --manifest-path rust/dragonfruit-plugin-sdk/Cargo.toml --example echo_encoder
+cargo build --manifest-path rust/dragonfruit-plugin-sdk/Cargo.toml --release --example echo_encoder
 cargo run -p dragonfruit-plugin-package --example pack -- \
   --out echo-encoder-sample.dfplugin \
-  --binary rust/dragonfruit-plugin-sdk/target/debug/examples/echo_encoder \
+  --binary rust/dragonfruit-plugin-sdk/target/release/examples/echo_encoder.exe --binary-platform windows \
+  --binary rust/dragonfruit-plugin-sdk/target/universal2-apple-darwin/release/examples/echo_encoder --binary-platform macos \
+  --binary rust/dragonfruit-plugin-sdk/target/x86_64-unknown-linux-musl/release/examples/echo_encoder --binary-platform linux \
   --id example.encoder --name "Echo Container Encoder" --version 0.1.0 --vendor DragonFruit \
   --format .exf --format-name "Echo container" --layers rle
 ```

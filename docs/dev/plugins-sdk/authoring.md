@@ -171,12 +171,18 @@ do first, so a package that fails it here fails there.
 
 ### With the reference CLI
 
-The crate ships a packer that does the same thing from a binary path:
+The crate ships a packer that does the same thing from binary paths. Every package
+is universal: one binary for each of Windows, macOS and Linux, with a
+`--binary-platform` once per `--binary`. macOS must be a universal Mach-O
+(`cargo zigbuild --target universal2-apple-darwin`), Linux a musl or older-glibc
+build.
 
 ```bash
 cargo run -p dragonfruit-plugin-package --example pack -- \
   --out alphaprint.dfplugin \
-  --binary target/release/alphaprint-plugin \
+  --binary target/x86_64-pc-windows-msvc/release/alphaprint-plugin.exe --binary-platform windows \
+  --binary target/universal2-apple-darwin/release/alphaprint-plugin --binary-platform macos \
+  --binary target/x86_64-unknown-linux-musl/release/alphaprint-plugin --binary-platform linux \
   --id alphabeta.alphaprint \
   --name "AlphaPrint Format" \
   --version 1.0.0 \
@@ -229,10 +235,12 @@ sits beside `full_plugin_presets.json` and `full_plugin_templates.json`, which
 give a printer that targets `.exf` and one material.
 
 ```bash
-cargo build --manifest-path rust/dragonfruit-plugin-sdk/Cargo.toml --example full_plugin
+cargo build --manifest-path rust/dragonfruit-plugin-sdk/Cargo.toml --release --example full_plugin
 cargo run -p dragonfruit-plugin-package --example pack -- \
   --out full-plugin-sample.dfplugin \
-  --binary rust/dragonfruit-plugin-sdk/target/debug/examples/full_plugin \
+  --binary rust/dragonfruit-plugin-sdk/target/release/examples/full_plugin.exe --binary-platform windows \
+  --binary rust/dragonfruit-plugin-sdk/target/universal2-apple-darwin/release/examples/full_plugin --binary-platform macos \
+  --binary rust/dragonfruit-plugin-sdk/target/x86_64-unknown-linux-musl/release/examples/full_plugin --binary-platform linux \
   --id example.full --name "Full Feature Example" --version 0.2.0 --vendor DragonFruit \
   --format .exf --format-name "Echo container" --layers rle --multi-tank \
   --file-type .echo --file-type-name "Echo project" \

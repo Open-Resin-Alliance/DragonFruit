@@ -16,6 +16,10 @@
 //!   --passphrase "correct horse battery staple"
 //! ```
 //!
+//! A universal package repeats `--binary` once per platform, each followed by
+//! `--binary-platform windows|macos|linux`; the host runs the one for its own OS.
+//! A single `--binary` with no platform defaults to the build host.
+//!
 //! The publisher key comes from `--seed` (hex, 32 bytes) when given, otherwise a
 //! fixed development seed is used and reported so the same key can be reused
 //! across test imports.
@@ -59,7 +63,11 @@ fn seed_bytes() -> [u8; 32] {
 
 fn main() {
     let out = arg("--out").unwrap_or_else(|| "plugin.dfplugin".to_string());
-    let binary = arg("--binary").expect("--binary <path> is required");
+    let binaries = arg_all("--binary");
+    if binaries.is_empty() {
+        panic!("--binary <path> is required (repeat it for a universal package)");
+    }
+    let binary_platforms = arg_all("--binary-platform");
     let id = arg("--id").unwrap_or_else(|| "example.plugin".to_string());
     let name = arg("--name").unwrap_or_else(|| "Example Plugin".to_string());
     let version = arg("--version").unwrap_or_else(|| "0.1.0".to_string());
@@ -112,11 +120,38 @@ fn main() {
     let file_type = arg("--file-type");
     let file_type_name = arg("--file-type-name").unwrap_or_else(|| "Project file".to_string());
 
-    let binary_path = PathBuf::from(&binary);
-    let binary_name = binary_path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .expect("binary file name");
+    // One binary per platform, or a single binary defaulting to the build host.
+    // A universal package is `--binary win.exe --binary-platform windows
+    // --binary main-macos --binary-platform macos ...`.
+    // A package is universal by construction: exactly one binary for each of the
+    // three platforms. Shipping a package that cannot run on two of them is what the
+    // old host-default behaviour allowed, and it is how a "plugin" ends up installable
+    // but unspawnable elsewhere.
+    if binary_platforms.len() != binaries.len() {
+        panic!(
+            "--binary-platform must be given once per --binary ({} platforms for {} binaries)",
+            binary_platforms.len(),
+            binaries.len(),
+        );
+    }
+    let platforms: Vec<&'static str> = binary_platforms
+        .iter()
+        .map(|value| match value.trim().to_ascii_lowercase().as_str() {
+            "windows" => "windows",
+            "macos" => "macos",
+            "linux" => "linux",
+            other => panic!("--binary-platform accepts windows, macos or linux, not '{other}'"),
+        })
+        .collect();
+    for required in ["windows", "macos", "linux"] {
+        if !platforms.contains(&required) {
+            panic!("a package must carry a binary for all three platforms; missing {required}");
+        }
+    }
+    if platforms.len() != 3 {
+        panic!("a package carries exactly one binary per platform; got {platforms:?}");
+    }
+    let platform_for = |index: usize| -> &'static str { platforms[index] };
     let key = package::signing_key_from_seed(seed_bytes());
     let manifest = package::Manifest {
         format_version: package::FORMAT_VERSION,
@@ -206,10 +241,19 @@ fn main() {
     };
 
     let mut payload_files = BTreeMap::new();
-    payload_files.insert(
-        format!("bin/{}/{}", platform_dir(), binary_name),
-        std::fs::read(&binary_path).expect("read binary"),
-    );
+    for (index, binary) in binaries.iter().enumerate() {
+        let binary_path = PathBuf::from(binary);
+        let binary_name = binary_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .expect("binary file name");
+        let platform = platform_for(index);
+        let target = format!("bin/{platform}/{binary_name}");
+        if payload_files.contains_key(&target) {
+            panic!("two binaries target '{target}'");
+        }
+        payload_files.insert(target, std::fs::read(&binary_path).expect("read binary"));
+    }
     // Assets keep their file name: a preset references `echo_printer.png`, and a
     // nested path would need this tool to invent a layout the package never asked for.
     for asset in &asset_paths {
@@ -279,12 +323,3 @@ fn read_json_array(path: &str) -> Vec<serde_json::Value> {
     }
 }
 
-fn platform_dir() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "windows"
-    } else if cfg!(target_os = "macos") {
-        "macos"
-    } else {
-        "linux"
-    }
-}

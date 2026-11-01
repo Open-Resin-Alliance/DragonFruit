@@ -335,7 +335,15 @@ fn resolve_executable(payload_dir: &Path) -> Result<PathBuf, String> {
     })?;
     for entry in entries.flatten() {
         if entry.file_type().map(|kind| kind.is_file()).unwrap_or(false) {
-            return Ok(entry.path());
+            let path = entry.path();
+            // A zip does not carry the unix execute bit. Without it a universal
+            // package would install on macOS/Linux and then fail to spawn.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
+            }
+            return Ok(path);
         }
     }
     Err(format!("'{}' holds no plugin binary", platform_dir.display()))

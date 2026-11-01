@@ -565,12 +565,28 @@ turn a defensible arrangement into an argument.
   before reading, and never trust `state` transitions it did not observe.
 - Explicitly out of scope for v1: OS sandboxing, per-capability enforcement,
   plugin auto-update feeds, and running a package on a platform it did not
-  ship a binary for.
+  ship a binary for. One package may ship binaries for all three platforms
+  (`bin/windows`, `bin/macos`, `bin/linux`); the host picks its own. There is
+  no per-architecture split, so an x64 and an arm64 build would collide and a
+  universal Mach-O or per-arch packages are the answers.
 
 ## Building a package (vendor path)
 
 1. Implement the capability traits with `dragonfruit-plugin-sdk`; build one
-   executable per target platform.
+   executable per target platform and pack them into one package:
+
+   ```text
+   cargo run --example pack -- \
+     --out myformat.dfplugin --id vendor.format --name "My Format" \
+     --binary target/windows/myformat.exe --binary-platform windows \
+     --binary target/macos/myformat     --binary-platform macos \
+     --binary target/linux/myformat     --binary-platform linux \
+     --format .mpf
+   ```
+
+   A package must carry all three; the packer refuses anything less, and there is
+   no host-default shortcut. macOS is a universal Mach-O, Linux a musl (or
+   older-glibc) build.
 2. Write `dfplugin.json`; list every capability you implement, every output
    extension you encode, and the transports you accept.
 3. Zip the payload, hash it, seal it with the passphrase the customer will type,
