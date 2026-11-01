@@ -1257,7 +1257,25 @@ export function PluginsSettingsTab() {
           {(pendingSideload?.info.manifest.formats.length ?? 0) > 0 && (
             <ReviewFact label={<Trans>Output formats</Trans>} mono>
               {(pendingSideload?.info.manifest.formats ?? [])
-                .map((format) => format.extensions.join(' '))
+                .map((format) => {
+                  // With `fileExtensionFromVersion` each version is an output
+                  // extension of its own, so the review lists every file the
+                  // package can write (`.exf` and `.exm`), not just the canonical one.
+                  const versions = format.formatVersions ?? [];
+                  if (format.fileExtensionFromVersion && versions.length > 0) {
+                    return versions
+                      .map((version) => {
+                        const id = version.id.trim();
+                        if (!id) return '';
+                        const extension = id.startsWith('.') ? id : `.${id}`;
+                        const label = version.label.trim();
+                        return label ? `${extension} (${label})` : extension;
+                      })
+                      .filter((entry) => entry.length > 0)
+                      .join(', ');
+                  }
+                  return format.extensions.join(' ');
+                })
                 .join(', ')}
             </ReviewFact>
           )}

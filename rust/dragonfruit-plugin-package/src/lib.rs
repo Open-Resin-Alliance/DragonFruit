@@ -116,6 +116,17 @@ pub enum LayerKind {
     RawMask,
 }
 
+/// One selectable output version of a format. `id` is the value stored in a
+/// printer profile's `display.formatVersion`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FormatVersionDecl {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub is_default: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FormatDecl {
@@ -133,6 +144,13 @@ pub struct FormatDecl {
     /// profile's Material Mode control meaningful for it.
     #[serde(default)]
     pub multi_tank: bool,
+    /// Output versions the printer profile's Format Version dropdown offers.
+    #[serde(default)]
+    pub format_versions: Vec<FormatVersionDecl>,
+    /// When true the selected version is used as the output file extension (e.g.
+    /// `exf` / `exm` for one container with two layouts).
+    #[serde(default)]
+    pub file_extension_from_version: bool,
 }
 
 impl FormatDecl {
@@ -1067,6 +1085,8 @@ mod tests {
                 layers: None,
                 requires_area_stats: false,
                 multi_tank: false,
+                format_versions: Vec::new(),
+                file_extension_from_version: false,
             }],
             network: None,
             file_types: Vec::new(),

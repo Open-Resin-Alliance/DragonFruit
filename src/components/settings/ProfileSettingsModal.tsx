@@ -73,6 +73,10 @@ import {
   resolveOutputSettingsMode,
 } from '@/features/slicing/formats/registry';
 import {
+  getSideloadedOutputFormatsSnapshot,
+  subscribeSideloadedFileTypes,
+} from '@/features/plugins/sideloadedFileTypeRegistry';
+import {
   getPrinterReachabilityServerSnapshot,
   getPrinterReachabilitySnapshot,
   subscribeToPrinterReachability,
@@ -597,10 +601,18 @@ export function ProfileSettingsModal({
   // library, not a chooser, so rows carry no selection of their own.
   const multiTankMaterialPicker = supportsMultiTankFormat && selectedPrinter?.materialMode === 'multiTank';
 
+  // Reinstalling a package can add output versions to a format; the profile
+  // editor has to re-read the snapshot when that happens.
+  const sideloadedFormats = React.useSyncExternalStore(
+    subscribeSideloadedFileTypes,
+    getSideloadedOutputFormatsSnapshot,
+    getSideloadedOutputFormatsSnapshot,
+  );
   const selectedFormatVersionOptions = React.useMemo(() => {
     if (!selectedPrinter) return [] as Array<{ value: string; label: string; isDefault?: boolean }>;
+    void sideloadedFormats;
     return getAvailableFormatVersionOptions(selectedPrinter.display.outputFormat);
-  }, [selectedPrinter]);
+  }, [selectedPrinter, sideloadedFormats]);
 
   const selectedResolvedFormatVersion = React.useMemo(() => {
     if (!selectedPrinter) return undefined;

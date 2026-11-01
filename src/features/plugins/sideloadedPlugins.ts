@@ -17,6 +17,10 @@ export type SideloadedFormat = {
   displayName?: string | null;
   /** The format can carry more than one material (a Multi-Tank machine). */
   multiTank?: boolean;
+  /** Output versions the printer profile's Format Version dropdown offers. */
+  formatVersions?: Array<{ id: string; label: string; isDefault?: boolean }>;
+  /** The selected version doubles as the output file extension (`exf` / `exm`). */
+  fileExtensionFromVersion?: boolean;
 };
 
 export type SideloadedManifest = {

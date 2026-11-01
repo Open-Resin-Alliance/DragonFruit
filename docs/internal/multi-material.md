@@ -73,8 +73,14 @@ increments are:
    — done (`slice_and_rasterize_rle_multi_tank_v3`, tank-major delivery);
 2. ~~`RleStreamEncoder`: a per-tank delivery method and refusal for formats that
    cannot store tanks~~ — done (`supports_multi_tank`, `consume_rle_tank_layer`). No
-   format opts in yet: a tank's own image stream inside the container is the next
-   decision (Athena/NanoDLP stores one image per layer today);
+   format opts in yet. The protocol now carries a tank index per layer
+   (`encodeLayer.tank`, ring version 2, protocol version 2) and the host bridge
+   forwards it from `consume_rle_tank_layer`; the reference `full_plugin` example
+   (`.exf`, all capabilities) is the first format that stores it — its Echo
+   container stays `ECHOENC1` for one material and becomes a zip of
+   `layer_00001_tank_1.png` plus an `echo.json` container version when the job
+   has several. The plugin offers the layout as a Format Version (`Echo` /
+   `Echo Multi`), which is also the output extension (`.exf` / `.exm`);
 3. the app payload: map each model/body material to its tank index on the active
    printer and send the assignment with the job;
 4. printing: send each tank's stream to its panel/port.

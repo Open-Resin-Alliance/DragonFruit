@@ -19,6 +19,7 @@
 //!   16 u32 width
 //!   20 u32 height
 //!   24 u64 seq
+//!   32 u32 tankIndex     ring version 2: which tank the layer prints from
 //! payloads (slotBytes each, page aligned)
 //! ```
 //!
@@ -39,7 +40,7 @@ use std::sync::atomic::{fence, AtomicU32, AtomicU64, Ordering};
 use serde::{Deserialize, Serialize};
 
 pub const RING_MAGIC: u32 = 0x4446_5247;
-pub const RING_VERSION: u32 = 1;
+pub const RING_VERSION: u32 = 2;
 pub const HEADER_BYTES: usize = 4096;
 pub const SLOT_HEADER_BYTES: usize = 64;
 pub const DEFAULT_SLOT_COUNT: u32 = 4;
@@ -304,6 +305,7 @@ pub fn publish_slot(
     slot: u32,
     kind: SlotKind,
     layer_index: u32,
+    tank: u32,
     payload: &[u8],
     width: u32,
     height: u32,
@@ -333,6 +335,7 @@ pub fn publish_slot(
     write_u32(bytes, header + 12, payload.len() as u32);
     write_u32(bytes, header + 16, width);
     write_u32(bytes, header + 20, height);
+    write_u32(bytes, header + 32, tank);
     atomic_u64_mut(bytes, header + 24).store(seq, Ordering::Relaxed);
 
     let payload_offset = layout.payload_slot_offset(slot);
@@ -373,6 +376,8 @@ pub fn claim_slot(bytes: &mut [u8], layout: &RingLayout, slot: u32) -> Result<()
 pub struct SlotView<'a> {
     pub kind: SlotKind,
     pub layer_index: u32,
+    /// Which tank this layer prints from; `0` is Tank 1.
+    pub tank: u32,
     pub width: u32,
     pub height: u32,
     pub payload: &'a [u8],
@@ -407,6 +412,7 @@ pub fn slot_view<'a>(
     Ok(Some(SlotView {
         kind: SlotKind::from_wire(read_u32(bytes, header + 4))?,
         layer_index: read_u32(bytes, header + 8),
+        tank: read_u32(bytes, header + 32),
         width: read_u32(bytes, header + 16),
         height: read_u32(bytes, header + 20),
         payload: &bytes[payload_offset..payload_offset + bytes_len],
@@ -467,7 +473,7 @@ mod tests {
         assert_eq!(slot_state(&buffer.0, &LAYOUT, 0).unwrap(), SlotState::Free);
         assert!(slot_view(&buffer.0, &LAYOUT, 0).unwrap().is_none());
 
-        publish_slot(&mut buffer.0, &LAYOUT, 0, SlotKind::Rle, 7, b"runs", 0, 0).expect("publish");
+        publish_slot(&mut buffer.0, &LAYOUT, 0, SlotKind::Rle, 7, 0, b"runs", 0, 0).expect("publish");
         assert_eq!(slot_state(&buffer.0, &LAYOUT, 0).unwrap(), SlotState::Filled);
 
         let view = slot_view(&buffer.0, &LAYOUT, 0).unwrap().expect("filled");
@@ -483,9 +489,9 @@ mod tests {
     #[test]
     fn publishing_over_a_filled_slot_is_refused() {
         let mut buffer = ring();
-        publish_slot(&mut buffer.0, &LAYOUT, 1, SlotKind::Png, 0, b"png", 4096, 2560).expect("first");
+        publish_slot(&mut buffer.0, &LAYOUT, 1, SlotKind::Png, 0, 0, b"png", 4096, 2560).expect("first");
         assert!(matches!(
-            publish_slot(&mut buffer.0, &LAYOUT, 1, SlotKind::Png, 1, b"png", 0, 0),
+            publish_slot(&mut buffer.0, &LAYOUT, 1, SlotKind::Png, 1, 0, b"png", 0, 0),
             Err(RingError::SlotNotFree(1))
         ));
     }
@@ -495,7 +501,7 @@ mod tests {
         let mut buffer = ring();
         let payload = vec![0u8; LAYOUT.slot_bytes as usize + 1];
         assert!(matches!(
-            publish_slot(&mut buffer.0, &LAYOUT, 0, SlotKind::RawMask, 0, &payload, 0, 0),
+            publish_slot(&mut buffer.0, &LAYOUT, 0, SlotKind::RawMask, 0, 0, &payload, 0, 0),
             Err(RingError::PayloadTooLarge(_))
         ));
     }
@@ -503,7 +509,7 @@ mod tests {
     #[test]
     fn a_slot_can_be_claimed_before_reading() {
         let mut buffer = ring();
-        publish_slot(&mut buffer.0, &LAYOUT, 0, SlotKind::Png, 2, b"png", 4096, 2560).expect("publish");
+        publish_slot(&mut buffer.0, &LAYOUT, 0, SlotKind::Png, 2, 0, b"png", 4096, 2560).expect("publish");
 
         claim_slot(&mut buffer.0, &LAYOUT, 0).expect("claim");
         assert_eq!(slot_state(&buffer.0, &LAYOUT, 0).unwrap(), SlotState::Consuming);
@@ -522,7 +528,7 @@ mod tests {
     #[test]
     fn claiming_twice_is_refused() {
         let mut buffer = ring();
-        publish_slot(&mut buffer.0, &LAYOUT, 0, SlotKind::Png, 0, b"png", 0, 0).expect("publish");
+        publish_slot(&mut buffer.0, &LAYOUT, 0, SlotKind::Png, 0, 0, b"png", 0, 0).expect("publish");
         claim_slot(&mut buffer.0, &LAYOUT, 0).expect("first claim");
         assert!(matches!(
             claim_slot(&mut buffer.0, &LAYOUT, 0),
@@ -556,7 +562,7 @@ mod tests {
             Err(RingError::NotInitialised)
         ));
         assert!(matches!(
-            publish_slot(&mut buffer.0, &LAYOUT, 0, SlotKind::Png, 0, b"x", 0, 0),
+            publish_slot(&mut buffer.0, &LAYOUT, 0, SlotKind::Png, 0, 0, b"x", 0, 0),
             Err(RingError::NotInitialised)
         ));
     }
@@ -564,10 +570,10 @@ mod tests {
     #[test]
     fn publishing_bumps_the_sequence() {
         let mut buffer = ring();
-        publish_slot(&mut buffer.0, &LAYOUT, 0, SlotKind::Png, 0, b"a", 0, 0).expect("publish");
+        publish_slot(&mut buffer.0, &LAYOUT, 0, SlotKind::Png, 0, 0, b"a", 0, 0).expect("publish");
         let first = atomic_u64(&buffer.0, OFFSET_SEQ).load(Ordering::Relaxed);
         release_slot(&mut buffer.0, &LAYOUT, 0).expect("release");
-        publish_slot(&mut buffer.0, &LAYOUT, 0, SlotKind::Png, 1, b"b", 0, 0).expect("publish");
+        publish_slot(&mut buffer.0, &LAYOUT, 0, SlotKind::Png, 1, 0, b"b", 0, 0).expect("publish");
         let second = atomic_u64(&buffer.0, OFFSET_SEQ).load(Ordering::Relaxed);
         assert_eq!(second, first + 1);
     }

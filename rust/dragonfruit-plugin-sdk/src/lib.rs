@@ -37,7 +37,7 @@ pub mod runs;
 
 /// Wire protocol this crate speaks. The host refuses a package built against a
 /// version it does not know, so this and the host's copy must move together.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 pub use frame::{read_frame, write_frame, Frame, FrameError, FrameKind, MAX_FRAME_BYTES};
 pub use harness::{

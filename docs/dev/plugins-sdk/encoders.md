@@ -28,6 +28,53 @@ behind, and the next encode starts clean. A plugin blocked inside its own handle
 cannot be interrupted — the stop is what ends it.
 
 
+## Multi-tank formats
+
+A format that can store more than one material sets `"multiTank": true` in its
+manifest declaration (the same flag the printer profile's Material Mode control
+reads). The job's `tank_count` then says how many streams arrive, and every
+`Encoder::layer` call carries `LayerRef.tank` — `0` is Tank 1, and support geometry
+is always in Tank 1's stream.
+
+A thin printer needs `"layers": "rle"` for this: the engine's per-tank path is the
+streaming one, and a format that declares multi-tank with `"png"` or `"mask"` is
+refused rather than printed as a single tank. `../examples/full_plugin.rs`
+is the reference: its Echo container keeps `ECHOENC1` for a single-material job and
+switches to a store-only zip for a multi-tank one, with
+`layer_00001_tank_1.png`, `layer_00001_tank_2.png`, … plus an `echo.json` naming
+the container version (`2`) and the job's `formatVersion`.
+
+### Format versions
+
+A format may offer versions, which the printer profile's **Format Version**
+dropdown lists and stores in `display.formatVersion`:
+
+```json
+"formats": [{
+  "id": "echo",
+  "extensions": [".exf"],
+  "layers": "rle",
+  "multiTank": true,
+  "fileExtensionFromVersion": true,
+  "formatVersions": [
+    { "id": "exf", "label": "Echo", "isDefault": true },
+    { "id": "exm", "label": "Echo Multi" }
+  ]
+}]
+```
+
+`fileExtensionFromVersion` makes the chosen id the output file extension, so one
+encoder writes `.exf` or `.exm` without a second format. The plugin reads the
+choice from the job's `format_version`; the full example maps `exm` to the zip
+container and `exf` to the single stream.
+
+The zip's PNGs are written from the run stream, not from a pixel buffer: one
+fixed-Huffman deflate block per layer, each run a literal plus distance-1
+back-references (the engine's own approach). Encoding a 4K layer is O(runs + rows),
+so 400 layers finish in seconds. Expanding runs to pixels and calling zlib — or, worse,
+doing either in a debug build — is what makes a container appear to hang in
+`Finalizing`; pack `--release` binaries.
+
 ## Layer payloads
 
 `formats[].layers` picks what the engine hands you:

@@ -7,6 +7,15 @@ Version: `PROTOCOL_VERSION` in `rust/dragonfruit-plugin-sdk/src/lib.rs`. The
 package manifest declares it as `entry.proto`; a mismatch is refused on both
 sides rather than guessed.
 
+## Protocol version
+
+`PROTOCOL_VERSION` is `2`. Version 2 adds the tank index to encode layers:
+`encodeLayer.tank` on the wire, and `tankIndex` in the ring slot header (offset 32,
+ring version 2). A host and plugin that disagree are refused at the handshake, so a
+version-1 plugin keeps working against a version-1 host and never silently prints a
+multi-tank job as one tank.
+
+
 ## Two channels
 
 | Channel | Carries | Shape |

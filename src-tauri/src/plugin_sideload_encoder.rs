@@ -35,6 +35,8 @@ pub struct SideloadedEncoder {
     layer_kind: package::LayerKind,
     /// The format asked the engine for per-layer area stats.
     requires_area_stats: bool,
+    /// The format can carry one image stream per resin tank.
+    multi_tank: bool,
     /// `FormatEncoder::output_format` returns `&'static str`, and a package's
     /// extension is not a compile-time constant, so the name is interned once at
     /// startup. The count is bounded by the installed formats (a handful), the
@@ -51,12 +53,14 @@ impl SideloadedEncoder {
         extension: &str,
         layer_kind: package::LayerKind,
         requires_area_stats: bool,
+        multi_tank: bool,
     ) -> Self {
         Self {
             root,
             manifest,
             layer_kind,
             requires_area_stats,
+            multi_tank,
             output_format: Box::leak(extension.to_string().into_boxed_str()),
         }
     }
@@ -69,11 +73,14 @@ struct SideloadedRleSink {
     /// Reused between layers: the run stream is copied into the ring or the pipe
     /// anyway, so the intermediate buffer must not be reallocated per layer.
     wire: Vec<u8>,
+    /// The package declared that it can store one stream per tank.
+    multi_tank: bool,
 }
 
-impl RleStreamEncoder for SideloadedRleSink {
-    fn consume_rle_layer(
+impl SideloadedRleSink {
+    fn send_runs(
         &mut self,
+        tank: u32,
         layer_index: u32,
         runs: Vec<RleRun>,
     ) -> Result<(), SlicerV3Error> {
@@ -85,9 +92,33 @@ impl RleStreamEncoder for SideloadedRleSink {
         self.wire.clear();
         sdk::write_runs(runs.iter().map(|run| (run.length, run.value)), &mut self.wire);
         session
-            .send_layer(sdk::SlotKind::Rle, layer_index, &self.wire)
+            .send_layer(sdk::SlotKind::Rle, tank, layer_index, &self.wire)
             .map_err(SlicerV3Error::ExternalEncoder)?;
         Ok(())
+    }
+
+}
+
+impl RleStreamEncoder for SideloadedRleSink {
+    fn consume_rle_layer(
+        &mut self,
+        layer_index: u32,
+        runs: Vec<RleRun>,
+    ) -> Result<(), SlicerV3Error> {
+        self.send_runs(0, layer_index, runs)
+    }
+
+    fn supports_multi_tank(&self) -> bool {
+        self.multi_tank
+    }
+
+    fn consume_rle_tank_layer(
+        &mut self,
+        layer_index: u32,
+        tank_index: u32,
+        runs: Vec<RleRun>,
+    ) -> Result<(), SlicerV3Error> {
+        self.send_runs(tank_index, layer_index, runs)
     }
 
     fn finalize_to_bytes(self: Box<Self>) -> Result<Vec<u8>, SlicerV3Error> {
@@ -127,7 +158,7 @@ impl RawMaskStreamEncoder for SideloadedMaskSink {
             ));
         };
         session
-            .send_layer(sdk::SlotKind::RawMask, layer_index, &raw_mask)
+            .send_layer(sdk::SlotKind::RawMask, 0, layer_index, &raw_mask)
             .map_err(SlicerV3Error::ExternalEncoder)?;
         Ok(())
     }
@@ -205,6 +236,7 @@ impl FormatEncoder for SideloadedEncoder {
         Ok(Some(Box::new(SideloadedRleSink {
             session: Some(session),
             wire: Vec::with_capacity(RLE_SLOT_BYTES as usize),
+            multi_tank: self.multi_tank,
         })))
     }
 
@@ -300,6 +332,7 @@ pub fn register_installed_encoders(root: &std::path::Path) {
                     extension,
                     format.layer_kind(),
                     format.requires_area_stats,
+                    format.multi_tank,
                 ));
                 if let Err(error) = registry::register_runtime_encoder(encoder) {
                     log::warn!("[plugin-encoder] {}: {error}", manifest.id);
@@ -360,6 +393,7 @@ mod tests {
             manifest,
             ".exf",
             package::LayerKind::Rle,
+            false,
             false,
         );
         assert!(!encoder.requires_png_layers(), "an RLE format must not ask for PNGs");

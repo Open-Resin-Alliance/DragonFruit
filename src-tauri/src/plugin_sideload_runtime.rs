@@ -645,6 +645,7 @@ impl EncodeSession {
     pub fn send_layer(
         &mut self,
         kind: sdk::SlotKind,
+        tank: u32,
         index: u32,
         bytes: &[u8],
     ) -> Result<Vec<(u32, u32)>, String> {
@@ -659,6 +660,7 @@ impl EncodeSession {
                 &sdk::HostMessage::EncodeLayer {
                     id: self.session_id,
                     index,
+                    tank,
                     slot: 0,
                     kind,
                     bytes: bytes.len() as u64,
@@ -680,6 +682,7 @@ impl EncodeSession {
             slot,
             kind,
             index,
+            tank,
             bytes,
             0,
             0,
@@ -690,6 +693,7 @@ impl EncodeSession {
             &sdk::HostMessage::EncodeLayer {
                 id: self.session_id,
                 index,
+                tank,
                 slot,
                 kind,
                 bytes: bytes.len() as u64,
@@ -835,7 +839,7 @@ pub fn encode_with_plugin(
         slot_bytes,
     )?;
     for (index, bytes) in layers.iter().enumerate() {
-        for (done, total) in session.send_layer(sdk::SlotKind::Png, index as u32, bytes)? {
+        for (done, total) in session.send_layer(sdk::SlotKind::Png, 0, index as u32, bytes)? {
             on_progress(done, total);
         }
     }
@@ -1124,7 +1128,7 @@ mod tests {
         )
         .expect("a fresh session starts");
         second
-            .send_layer(sdk::SlotKind::Rle, 0, &[])
+            .send_layer(sdk::SlotKind::Rle, 0, 0, &[])
             .expect("one layer");
         let output = root.join("after-cancel.exf");
         second.finish(&output).expect("finish");

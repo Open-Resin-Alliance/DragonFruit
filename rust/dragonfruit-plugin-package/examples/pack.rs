@@ -74,6 +74,20 @@ fn main() {
     let asset_paths = arg_all("--asset");
     let requires_area_stats = arg("--area-stats").is_some();
     let multi_tank = arg("--multi-tank").is_some();
+    // `--format-version id:label[:default]`, repeatable. The id is the value a
+    // printer profile stores and, with `--file-extension-from-version`, the output
+    // file extension.
+    let format_versions: Vec<package::FormatVersionDecl> = arg_all("--format-version")
+        .iter()
+        .map(|entry| {
+            let mut parts = entry.splitn(3, ':');
+            let id = parts.next().unwrap_or("").trim().to_string();
+            let label = parts.next().unwrap_or(&id).trim().to_string();
+            let is_default = matches!(parts.next(), Some(flag) if flag.trim().eq_ignore_ascii_case("default"));
+            package::FormatVersionDecl { id, label, is_default }
+        })
+        .collect();
+    let file_extension_from_version = arg("--file-extension-from-version").is_some();
     let transport = match arg("--transport").as_deref() {
         None | Some("shm") => package::Transport::Shm,
         Some("pipe") => package::Transport::Pipe,
@@ -154,6 +168,8 @@ fn main() {
             layers: layer_kind,
             requires_area_stats,
             multi_tank,
+            format_versions: format_versions.clone(),
+            file_extension_from_version,
             })
             .collect(),
         printer_presets: presets_path

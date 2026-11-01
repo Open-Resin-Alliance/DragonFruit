@@ -38,6 +38,8 @@ pub struct EncodeStart<'a> {
 /// One rasterised layer, borrowed from the ring.
 pub struct LayerRef<'a> {
     pub index: u32,
+    /// Which tank the layer prints from; `0` is Tank 1.
+    pub tank: u32,
     pub kind: SlotKind,
     pub width: u32,
     pub height: u32,
@@ -275,6 +277,7 @@ pub fn serve<R: Read, W: Write, C: PluginCapabilities>(
             HostMessage::EncodeLayer {
                 id,
                 index,
+                tank,
                 slot,
                 kind,
                 bytes,
@@ -300,6 +303,7 @@ pub fn serve<R: Read, W: Write, C: PluginCapabilities>(
                     }
                     if let Err(message) = state.encoder.layer(LayerRef {
                         index,
+                        tank,
                         kind,
                         width: 0,
                         height: 0,
@@ -338,6 +342,7 @@ pub fn serve<R: Read, W: Write, C: PluginCapabilities>(
                     }
                     if let Err(message) = state.encoder.layer(LayerRef {
                         index: view.layer_index,
+                        tank: view.tank,
                         kind: view.kind,
                         width: view.width,
                         height: view.height,
@@ -504,6 +509,7 @@ mod tests {
     #[derive(Default, Clone)]
     struct Seen {
         layers: std::sync::Arc<std::sync::Mutex<Vec<Vec<u8>>>>,
+        tanks: std::sync::Arc<std::sync::Mutex<Vec<u32>>>,
         cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     }
 
@@ -515,6 +521,7 @@ mod tests {
         }
         fn layer(&mut self, layer: LayerRef<'_>) -> Result<(), String> {
             self.0.layers.lock().expect("layers").push(layer.bytes.to_vec());
+            self.0.tanks.lock().expect("tanks").push(layer.tank);
             Ok(())
         }
         fn finish(&mut self, _output: &Path) -> Result<u64, String> {
@@ -569,6 +576,7 @@ mod tests {
             &HostMessage::EncodeLayer {
                 id: 7,
                 index: 0,
+                tank: 2,
                 slot: 0,
                 kind: SlotKind::Rle,
                 bytes: 4,
@@ -594,6 +602,11 @@ mod tests {
         .expect("serve");
 
         assert_eq!(seen.layers.lock().expect("layers").as_slice(), &[vec![1u8, 2, 3, 4]]);
+        assert_eq!(
+            seen.tanks.lock().expect("tanks").as_slice(),
+            &[2],
+            "the layer's tank reaches the encoder",
+        );
         let messages = sent_messages(&output);
         assert!(messages.iter().any(|message| matches!(
             message,
@@ -777,13 +790,14 @@ mod tests {
 
         for (index, payload) in layers.iter().enumerate() {
             let slot = index as u32;
-            publish_slot(&mut buffer.0, &LAYOUT, slot, SlotKind::Png, index as u32, payload, 4096, 2560)
+            publish_slot(&mut buffer.0, &LAYOUT, slot, SlotKind::Png, index as u32, 0, payload, 4096, 2560)
                 .expect("publish");
             write_json(
                 &mut bytes,
                 &HostMessage::EncodeLayer {
                     id: 7,
                     index: index as u32,
+                    tank: 0,
                     slot,
                     kind: SlotKind::Png,
                     bytes: payload.len() as u64,

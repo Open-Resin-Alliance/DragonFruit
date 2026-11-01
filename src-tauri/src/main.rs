@@ -41,6 +41,10 @@ fn default_z_blur_sigma() -> f64 {
     0.5
 }
 
+fn default_tank_count() -> u32 {
+    1
+}
+
 fn default_anti_aliasing_mode() -> String {
     "Blur".to_string()
 }
@@ -685,6 +689,12 @@ struct SliceJobMetadata {
     zaa_duplicate_z: Option<bool>,
     #[serde(default)]
     model_triangle_count: u32,
+    /// Resin tanks the job prints; `1` for every single-material machine.
+    #[serde(default = "default_tank_count")]
+    tank_count: u32,
+    /// Tank per triangle, aligned with the mesh. Empty means all Tank 1.
+    #[serde(default)]
+    triangle_tank_index: Vec<u32>,
     container_compression_level: u8,
     build_width_mm: f32,
     build_depth_mm: f32,
@@ -1657,6 +1667,8 @@ async fn slice_solid_native_to_temp_path(
             z_blur_sigma: meta.z_blur_sigma,
             aa_on_supports: meta.aa_on_supports,
             model_triangle_count: meta.model_triangle_count,
+            tank_count: meta.tank_count,
+            triangle_tank_index: meta.triangle_tank_index,
             minimum_aa_alpha_percent: meta.minimum_aa_alpha_percent,
             mirror_x: meta.mirror_x,
             mirror_y: meta.mirror_y,

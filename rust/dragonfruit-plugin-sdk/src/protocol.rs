@@ -69,6 +69,10 @@ pub enum HostMessage {
     EncodeLayer {
         id: u64,
         index: u32,
+        /// Which tank the layer prints from; absent on protocol-1 hosts, which
+        /// only ever sent Tank 1.
+        #[serde(default)]
+        tank: u32,
         slot: u32,
         kind: SlotKind,
         bytes: u64,
@@ -204,13 +208,14 @@ mod tests {
         let layer = HostMessage::EncodeLayer {
             id: 7,
             index: 0,
+            tank: 0,
             slot: 3,
             kind: SlotKind::Png,
             bytes: 1024,
         };
         assert_eq!(
             serde_json::to_string(&layer).expect("serialize"),
-            r#"{"type":"encodeLayer","id":7,"index":0,"slot":3,"kind":"png","bytes":1024}"#
+            r#"{"type":"encodeLayer","id":7,"index":0,"tank":0,"slot":3,"kind":"png","bytes":1024}"#
         );
 
         let done = PluginMessage::EncodeDone {

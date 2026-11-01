@@ -24,6 +24,11 @@ use dragonfruit_plugin_sdk::{
     PluginIdentity, Runs, SlotKind,
 };
 
+#[path = "support/echo_multi_container.rs"]
+mod echo_multi_container;
+
+use echo_multi_container::{encode_grayscale_png, ZipWriter};
+
 const CONTAINER_MAGIC: &[u8; 9] = b"DFIMPORT1";
 
 // --- identity -------------------------------------------------------------
@@ -59,14 +64,58 @@ impl PluginIdentity for FullPlugin {
 #[derive(Default)]
 struct EchoEncoder {
     format: String,
-    /// `(layer index, kind, run count, bytes)`, kept until `finish` because the
-    /// destination path only arrives with the host's encode-end message.
-    layers: Vec<(u32, &'static str, u32, Vec<u8>)>,
+    /// Any `formatVersion` the job asked for, echoed into the multi-tank manifest.
+    format_version: Option<String>,
+    /// How many resin tanks this job prints; `1` for a single-material job.
+    tank_count: u32,
+    /// The selected Echo version decides the container: `exm` is the multi-tank
+    /// zip, `exf` the single-stream file. With no version, tanks decide.
+    multi_tank_container: bool,
+    width: u32,
+    height: u32,
+    /// `(layer index, tank, kind, run count, bytes)`, kept until `finish` because
+    /// the destination path only arrives with the host's encode-end message.
+    layers: Vec<(u32, u32, &'static str, u32, Vec<u8>)>,
 }
 
 impl Encoder for EchoEncoder {
     fn begin(&mut self, start: EncodeStart<'_>) -> Result<(), String> {
         self.format = start.format.to_string();
+        // A jammed single-material job must not carry a junk tank count.
+        self.tank_count = start
+            .job
+            .get("tank_count")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(1)
+            .max(1) as u32;
+        self.width = start
+            .job
+            .get("source_width_px")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0) as u32;
+        self.height = start
+            .job
+            .get("source_height_px")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0) as u32;
+        self.format_version = start
+            .job
+            .get("format_version")
+            .and_then(|value| value.as_str())
+            .map(str::to_string);
+        self.multi_tank_container = match self
+            .format_version
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "exm" | "echo-multi" | "multi" => true,
+            "exf" | "echo" | "single" => false,
+            // No version: the job's own shape is the only signal.
+            _ => self.tank_count > 1,
+        };
         Ok(())
     }
 
@@ -78,15 +127,18 @@ impl Encoder for EchoEncoder {
             SlotKind::RawMask => ("mask", 0),
         };
         self.layers
-            .push((layer.index, kind, runs, layer.bytes.to_vec()));
+            .push((layer.index, layer.tank, kind, runs, layer.bytes.to_vec()));
         Ok(())
     }
 
     fn finish(&mut self, output: &Path) -> Result<u64, String> {
+        if self.multi_tank_container {
+            return self.finish_multi_tank(output);
+        }
         let mut file = std::fs::File::create(output).map_err(|error| error.to_string())?;
         file.write_all(b"ECHOENC1").map_err(|error| error.to_string())?;
         file.write_all(self.format.as_bytes()).map_err(|error| error.to_string())?;
-        for (index, kind, runs, bytes) in &self.layers {
+        for (index, _tank, kind, runs, bytes) in &self.layers {
             file.write_all(&index.to_le_bytes()).map_err(|error| error.to_string())?;
             file.write_all(&(bytes.len() as u32).to_le_bytes())
                 .map_err(|error| error.to_string())?;
@@ -96,8 +148,61 @@ impl Encoder for EchoEncoder {
         }
         file.write_all(format!("layers={}", self.layers.len()).as_bytes())
             .map_err(|error| error.to_string())?;
+        if let Some(version) = &self.format_version {
+            file.write_all(format!(" version={version}").as_bytes())
+                .map_err(|error| error.to_string())?;
+        }
         let bytes = file.metadata().map_err(|error| error.to_string())?.len();
         Ok(bytes)
+    }
+}
+
+impl EchoEncoder {
+    /// The multi-tank container: one PNG per tank per layer inside a zip, plus an
+    /// `echo.json` that names the container version so a reader can tell this
+    /// layout from the single-stream `ECHOENC1` file.
+    fn finish_multi_tank(&mut self, output: &Path) -> Result<u64, String> {
+        if self.width == 0 || self.height == 0 {
+            return Err("a multi-tank job carries no layer resolution".to_string());
+        }
+
+        let mut zip = ZipWriter::default();
+        let mut written = 0usize;
+        self.layers.sort_by_key(|(index, tank, _, _, _)| (*index, *tank));
+        for (index, tank, kind, _, bytes) in &self.layers {
+            if *kind != "rle" {
+                return Err(format!(
+                    "the multi-tank container takes runs, not {kind} (layer {index}, tank {})",
+                    tank + 1
+                ));
+            }
+            let runs = Runs::new(bytes)?;
+            let png = encode_grayscale_png(self.width, self.height, &runs)?;
+            zip.add(&format!("layer_{:05}_tank_{}.png", index + 1, tank + 1), &png);
+            written += 1;
+        }
+
+        let manifest = serde_json::json!({
+            "container": "echo-multi",
+            "version": 2,
+            "format": self.format,
+            "formatVersion": self.format_version,
+            "width": self.width,
+            "height": self.height,
+            "tanks": self.tank_count,
+            "layers": written,
+        });
+        zip.add(
+            "echo.json",
+            serde_json::to_vec_pretty(&manifest)
+                .map_err(|error| error.to_string())?
+                .as_slice(),
+        );
+
+        let bytes = zip.finish();
+        let mut file = std::fs::File::create(output).map_err(|error| error.to_string())?;
+        file.write_all(&bytes).map_err(|error| error.to_string())?;
+        Ok(bytes.len() as u64)
     }
 }
 
@@ -352,4 +457,93 @@ fn main() {
         mapping.as_mut().map(|mapping| &mut mapping[..]),
     )
     .expect("control channel");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dragonfruit_plugin_sdk::{write_runs, EncodeStart, LayerRef, SlotKind};
+
+    fn layer_bytes() -> Vec<u8> {
+        let mut wire = Vec::new();
+        write_runs([(8, 255)], &mut wire);
+        wire
+    }
+
+    fn temp_path(name: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!("df-{name}-{}.out", std::process::id()));
+        path
+    }
+
+    #[test]
+    fn the_exm_version_writes_one_png_per_tank() {
+        let mut encoder = EchoEncoder::default();
+        let job = serde_json::json!({
+            "tank_count": 2,
+            "source_width_px": 4,
+            "source_height_px": 2,
+            "format_version": "exm",
+        });
+        encoder
+            .begin(EncodeStart { format: ".exf", layers: 2, job: &job })
+            .expect("begin");
+
+        let bytes = layer_bytes();
+        for tank in 0..2u32 {
+            encoder
+                .layer(LayerRef {
+                    index: 0,
+                    tank,
+                    kind: SlotKind::Rle,
+                    width: 4,
+                    height: 2,
+                    bytes: &bytes,
+                })
+                .expect("layer");
+        }
+
+        let path = temp_path("exm");
+        encoder.finish(&path).expect("finish");
+        let written = std::fs::read(&path).expect("read");
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(&written[..4], &0x0403_4b50u32.to_le_bytes(), "a store-only zip");
+        let text = String::from_utf8_lossy(&written);
+        assert!(text.contains("layer_00001_tank_1.png"));
+        assert!(text.contains("layer_00001_tank_2.png"));
+        assert!(text.contains("echo.json"));
+        assert!(text.contains("\"version\": 2"));
+    }
+
+    #[test]
+    fn the_exf_version_writes_the_single_stream_container() {
+        let mut encoder = EchoEncoder::default();
+        let job = serde_json::json!({
+            "tank_count": 2,
+            "source_width_px": 4,
+            "source_height_px": 2,
+            "format_version": "exf",
+        });
+        encoder
+            .begin(EncodeStart { format: ".exf", layers: 2, job: &job })
+            .expect("begin");
+        let bytes = layer_bytes();
+        encoder
+            .layer(LayerRef {
+                index: 0,
+                tank: 0,
+                kind: SlotKind::Rle,
+                width: 4,
+                height: 2,
+                bytes: &bytes,
+            })
+            .expect("layer");
+        let path = temp_path("exf");
+        encoder.finish(&path).expect("finish");
+        let written = std::fs::read(&path).expect("read");
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(&written[..8], b"ECHOENC1");
+    }
 }

@@ -32,6 +32,14 @@ function resolveSideloadedSlicingFormat(
     rustModulePath: '',
     wasmExportName: '',
     supportsMultiTank: match.multiTank === true,
+    formatVersions: match.formatVersions
+      ?.filter((version) => version.id.trim().length > 0)
+      .map((version) => ({
+        value: version.id.trim(),
+        label: version.label.trim() || version.id.trim(),
+        isDefault: version.isDefault === true,
+      })),
+    fileExtensionFromVersion: match.fileExtensionFromVersion === true,
     notes: 'Sideloaded plugin format: encoded by the package process.',
   };
 }
@@ -94,6 +102,8 @@ export function getAvailableOutputFormatOptions(): Array<{ value: PrinterOutputF
   const sideloadedLabels = new Map<string, string>();
   for (const format of sideloadedOutputFormats()) {
     formats.add(format.extension);
+    // The picker names the format, not its versions: which file extension a
+    // version writes is what the Format Version dropdown beside it says.
     sideloadedLabels.set(format.extension, format.displayName);
   }
 

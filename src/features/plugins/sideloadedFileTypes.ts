@@ -131,6 +131,12 @@ export function refreshSideloadedContributions(): Promise<void> {
               extension: extension.toLowerCase(),
               displayName: format.displayName ?? format.id,
               multiTank: format.multiTank === true,
+              formatVersions: format.formatVersions?.map((version) => ({
+                id: version.id,
+                label: version.label,
+                isDefault: version.isDefault === true,
+              })),
+              fileExtensionFromVersion: format.fileExtensionFromVersion === true,
             });
           }
         }
