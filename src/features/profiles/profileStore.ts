@@ -2330,7 +2330,12 @@ export function updateMaterialProfile(id: string, updates: Partial<Omit<Material
             printerProfileId: profile.printerProfileId,
             locked: profile.locked,
             brand: updates.brand !== undefined ? updates.brand : profile.brand,
-            color: updates.color !== undefined ? sanitizeMaterialColor(updates.color) : profile.color,
+            // An explicit `color: undefined` is "remove the colour", not "leave it".
+            // The editor sends exactly that when the user picks None, and testing the
+            // value instead of the key kept the old colour on save.
+            color: Object.prototype.hasOwnProperty.call(updates, 'color')
+                ? sanitizeMaterialColor(updates.color)
+                : profile.color,
             currencyCode: updates.currencyCode !== undefined ? updates.currencyCode.toUpperCase() : profile.currencyCode,
             name: updates.name !== undefined ? updates.name : profile.name,
             localSettingsByOutput: updates.localSettingsByOutput !== undefined

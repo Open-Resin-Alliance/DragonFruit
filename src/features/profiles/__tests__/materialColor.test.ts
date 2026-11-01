@@ -45,6 +45,10 @@ test('a material keeps a hex colour and drops anything else', () => {
 
     updateMaterialProfile(materialId, { color: '#22C55E' });
     assert.equal(materialById(materialId)?.color, '#22c55e');
+
+    // None sends `color: undefined`, which has to clear rather than be ignored.
+    updateMaterialProfile(materialId, { color: undefined });
+    assert.equal(materialById(materialId)?.color, undefined, 'None removes the colour');
   } finally {
     removeMaterialProfile(materialId);
     removePrinterProfile(profileId);
