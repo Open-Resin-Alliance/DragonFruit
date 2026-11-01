@@ -52,6 +52,11 @@ a compiled adapter — the same form renders both.
 
 Rules:
 
+- `replacesDefaultMaterialSettings: true` makes the pane *replace* the stock material
+  form: its tabs become the editor's tabs, with `Meta` and `Anti-Aliasing` appended.
+  Without it the pane is appended under the stock fields — which is why an example
+  that forgot the flag looked like a box at the bottom of the dialog rather than a
+  material editor of its own.
 - A compiled plugin owns its output format. A package fills a format nobody claims
   and may add settings modes inside it, never replace one.
 - Field kinds are the renderer's own: `number`, `integer`, `text`, `boolean`,

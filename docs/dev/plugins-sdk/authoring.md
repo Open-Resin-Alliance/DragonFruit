@@ -204,7 +204,7 @@ cargo run -p dragonfruit-plugin-package --example pack -- \
 | `--presets` | JSON array of printer presets the package contributes |
 | `--templates` | JSON array of material templates the package contributes |
 | `--material-settings` | JSON `{ byOutput, byOutputAndMode }` material pane schema |
-| `--remote-materials` | JSON remote material field schema |
+| `--remote-materials` | JSON remote material field schema (not used by the example: Echo Network keeps local material profiles) |
 | `--asset` | repeatable file copied into `assets/` (preset images) |
 | `--job-metadata` | JSON array of `{ settingPath, payloadPath, payload }` declarations |
 | `--network-monitoring` | JSON monitoring policy for the declared mode |
@@ -240,15 +240,15 @@ cargo run -p dragonfruit-plugin-package --example pack -- \
   --presets rust/dragonfruit-plugin-sdk/examples/full_plugin_presets.json \
   --templates rust/dragonfruit-plugin-sdk/examples/full_plugin_templates.json \
   --material-settings rust/dragonfruit-plugin-sdk/examples/full_plugin_material_settings.json \
-  --remote-materials rust/dragonfruit-plugin-sdk/examples/full_plugin_remote_materials.json \
   --asset rust/dragonfruit-plugin-sdk/examples/dragonfruit_simple_icon.svg \
   --job-metadata rust/dragonfruit-plugin-sdk/examples/full_plugin_job_metadata.json \
   --network-monitoring rust/dragonfruit-plugin-sdk/examples/full_plugin_monitoring.json
 ```
 
 Installing that one package gives you: an "Echo container" output format on the
-profile it adds with its own **material pane** (`Exposure`, `Lift`, `Anti-aliasing`
-from `full_plugin_material_settings.json`), a `.echo` import extension, layer
+profile it adds with its own **material editor**: `replacesDefaultMaterialSettings`
+and LUMEN's tabbed layout (General, Motion, Advanced) with 34 fields, carried as
+data in `full_plugin_material_settings.json`. A `.echo` import extension, layer
 previews, a printer preset plus material template in the library, and **Echo
 Network** in that profile's Network Support list — discovery, the connection test,
 the monitor and the print upload then run against the example's fake printer. It is the shape a real printer integration

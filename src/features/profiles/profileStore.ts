@@ -147,6 +147,12 @@ export type PrinterProfile = {
     officialPresetVersion?: number;
     /** Set when the plugin that contributed this profile's preset was removed. */
     missingPlugin?: { id: string; name: string };
+    /**
+     * The user chose "None" for network support on a profile whose preset has one.
+     * `networkSupport` alone cannot express that: an absent value means "inherit the
+     * preset", so without this flag clearing the mode snapped back to the preset's.
+     */
+    networkSupportDisabled?: boolean;
     isOfficial?: boolean;
     isCustom?: boolean;
     safetyMarginMm?: {
@@ -967,6 +973,7 @@ function resolveSafetyMarginForProfile(profile: Partial<PrinterProfile>): Printe
 }
 
 function resolveNetworkSupport(profile: Partial<PrinterProfile>): PrinterNetworkSupport | undefined {
+    if ((profile as any).networkSupportDisabled === true) return undefined;
     const explicit = normalizeNetworkSupport((profile as any).networkSupport);
     if (explicit) return explicit;
 
@@ -1113,6 +1120,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
                     antiAliasing: normalizeAntiAliasingSupport((profile as any).antiAliasing)
                         ?? normalizeAntiAliasingSupport((matchedPreset as any)?.antiAliasing),
                     networkSupport,
+                    networkSupportDisabled: networkSupport ? undefined : ((profile as any).networkSupportDisabled === true ? true : undefined),
                     hasCamera: normalizeCameraSupport((profile as any).hasCamera)
                         ?? normalizeCameraSupport((matchedPreset as any)?.hasCamera),
                     networkFilter: sanitizeNetworkFilter((profile as any).networkFilter) ?? sanitizeNetworkFilter((matchedPreset as any)?.networkFilter),
@@ -1947,6 +1955,11 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
         const nextNetworkSupport = hasNetworkSupportUpdate
             ? normalizeNetworkSupport(appliedUpdates.networkSupport)
             : profile.networkSupport;
+        // An explicit "None" has to outlive the empty value, or hydration reads the
+        // profile as "no choice made" and restores the preset's mode.
+        const nextNetworkSupportDisabled = hasNetworkSupportUpdate
+            ? !nextNetworkSupport
+            : profile.networkSupportDisabled;
         const nextNetwork = appliedUpdates.network !== undefined
             ? sanitizePrinterNetworkSettings(appliedUpdates.network)
             : sanitizePrinterNetworkSettings(profile.network);
@@ -1983,6 +1996,7 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
         return {
             ...profile,
             ...appliedUpdates,
+            networkSupportDisabled: nextNetworkSupportDisabled,
             name: appliedUpdates.name !== undefined ? appliedUpdates.name : profile.name,
             manufacturer: appliedUpdates.manufacturer !== undefined ? appliedUpdates.manufacturer : profile.manufacturer,
             antiAliasing: appliedUpdates.antiAliasing !== undefined

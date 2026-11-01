@@ -1,11 +1,12 @@
 {
   "byOutput": {
     ".exf": {
-      "displayName": "Echo printer settings",
+      "displayName": "Echo Resin Settings",
+      "replacesDefaultMaterialSettings": true,
       "tabs": [
         {
-          "id": "basic",
-          "title": "Basic",
+          "id": "general",
+          "title": "General",
           "order": 10
         },
         {
@@ -14,291 +15,782 @@
           "order": 20
         },
         {
-          "id": "vendor",
-          "title": "Echo",
+          "id": "advanced",
+          "title": "Advanced",
           "order": 30
         }
       ],
       "sections": [
         {
-          "id": "exposure-section",
-          "title": "Exposure",
-          "tabId": "basic",
+          "id": "global",
+          "title": "General Settings",
+          "tabId": "general",
           "order": 10
         },
         {
-          "id": "motion-section",
-          "title": "Lift and retract",
+          "id": "burn-in",
+          "title": "Burn-in Layers",
+          "tabId": "general",
+          "order": 20
+        },
+        {
+          "id": "normal",
+          "title": "Normal Layers",
+          "tabId": "general",
+          "order": 30
+        },
+        {
+          "id": "timing",
+          "title": "Timing",
+          "tabId": "general",
+          "order": 40
+        },
+        {
+          "id": "light",
+          "title": "Light Settings",
+          "tabId": "general",
+          "order": 50
+        },
+        {
+          "id": "burn-in-motion",
+          "title": "Burn-in Motion",
           "tabId": "motion",
           "order": 10
         },
         {
-          "id": "echo-section",
-          "title": "Echo options",
-          "tabId": "vendor",
+          "id": "motion",
+          "title": "Motion",
+          "tabId": "motion",
+          "order": 20
+        },
+        {
+          "id": "burn-in-waits",
+          "title": "Burn-in Waits",
+          "tabId": "advanced",
           "order": 10
+        },
+        {
+          "id": "scale",
+          "title": "Scale Compensation",
+          "tabId": "advanced",
+          "order": 20
+        },
+        {
+          "id": "temperature",
+          "title": "Temperature",
+          "tabId": "meta",
+          "order": 10
+        },
+        {
+          "id": "file",
+          "title": "File",
+          "tabId": "meta",
+          "order": 20
         }
       ],
       "cards": [
         {
-          "id": "exposure-card",
-          "title": "Print",
-          "sectionId": "exposure-section",
-          "tabId": "basic",
+          "id": "global-settings",
+          "title": "General Settings",
+          "tabId": "general",
+          "sectionId": "global",
           "order": 10
         },
         {
-          "id": "bottom-card",
-          "title": "Bottom layers",
-          "sectionId": "exposure-section",
-          "tabId": "basic",
-          "order": 20
+          "id": "burn-in-settings",
+          "title": "Burn-in Layers",
+          "tabId": "general",
+          "sectionId": "burn-in",
+          "order": 10
         },
         {
-          "id": "motion-card",
-          "title": "Speed",
-          "sectionId": "motion-section",
+          "id": "normal-settings",
+          "title": "Normal Layers",
+          "tabId": "general",
+          "sectionId": "normal",
+          "order": 10
+        },
+        {
+          "id": "timing-settings",
+          "title": "Timing",
+          "tabId": "general",
+          "sectionId": "timing",
+          "order": 10
+        },
+        {
+          "id": "light-settings",
+          "title": "Light Settings",
+          "tabId": "general",
+          "sectionId": "light",
+          "order": 10
+        },
+        {
+          "id": "burn-in-motion-settings",
+          "title": "Burn-in Motion",
           "tabId": "motion",
+          "sectionId": "burn-in-motion",
           "order": 10
         },
         {
-          "id": "echo-card",
-          "title": "Echo options",
-          "sectionId": "echo-section",
-          "tabId": "vendor",
+          "id": "motion-settings",
+          "title": "Motion",
+          "tabId": "motion",
+          "sectionId": "motion",
+          "order": 10
+        },
+        {
+          "id": "burn-in-wait-times",
+          "title": "Burn-in Waits",
+          "tabId": "advanced",
+          "sectionId": "burn-in-waits",
+          "order": 10
+        },
+        {
+          "id": "scale-settings",
+          "title": "Scale Compensation",
+          "tabId": "advanced",
+          "sectionId": "scale",
+          "order": 10
+        },
+        {
+          "id": "temperature-settings",
+          "title": "Temperature",
+          "tabId": "meta",
+          "sectionId": "temperature",
+          "order": 10
+        },
+        {
+          "id": "scene-settings",
+          "title": "Scene",
+          "tabId": "meta",
+          "sectionId": "file",
           "order": 10
         }
       ],
       "fields": [
         {
           "key": "layerHeightMm",
-          "label": "Layer height (mm)",
+          "label": "Layer Thickness (mm)",
           "kind": "number",
           "defaultValue": 0.05,
-          "min": 0.01,
-          "max": 0.2,
-          "step": 0.01,
+          "min": 0.001,
+          "max": 1,
+          "step": 0.001,
+          "rowKey": "global-settings-row",
+          "rowWeight": 1,
           "placement": {
-            "tabId": "basic",
-            "sectionId": "exposure-section",
-            "cardId": "exposure-card",
+            "tabId": "general",
+            "sectionId": "global",
+            "cardId": "global-settings",
             "order": 10
-          }
+          },
+          "metadataPath": "material.layerHeightMm",
+          "description": "How tall one layer is. A thinner layer holds more detail and prints more of them, so the print takes longer."
         },
         {
-          "key": "exposureSec",
-          "label": "Exposure (s)",
-          "kind": "number",
-          "defaultValue": 2.5,
-          "min": 0.1,
-          "max": 30,
-          "step": 0.1,
+          "key": "elephantFootCompensation",
+          "label": "Elephant's Foot Compensation",
+          "kind": "boolean",
+          "defaultValue": false,
+          "disabled": true,
+          "rowKey": "global-settings-row",
+          "rowWeight": 1,
           "placement": {
-            "tabId": "basic",
-            "sectionId": "exposure-section",
-            "cardId": "exposure-card",
+            "tabId": "general",
+            "sectionId": "global",
+            "cardId": "global-settings",
             "order": 20
-          }
+          },
+          "metadataPath": "material.elephantFootCompensation",
+          "description": "Does nothing yet: no slicer applies an elephant's-foot compensation. The correction is made by insetting the bottom layers' masks in the geometry rather than in anything Echo records, so the input stays disabled until that lands."
         },
         {
-          "key": "bottomExposureSec",
-          "label": "Bottom exposure (s)",
-          "kind": "number",
-          "defaultValue": 28,
-          "min": 1,
-          "max": 120,
-          "step": 0.5,
-          "placement": {
-            "tabId": "basic",
-            "sectionId": "exposure-section",
-            "cardId": "bottom-card",
-            "order": 10
-          }
-        },
-        {
-          "key": "bottomLayerCount",
-          "label": "Bottom layers",
-          "kind": "integer",
-          "defaultValue": 5,
-          "min": 0,
-          "max": 30,
-          "step": 1,
-          "placement": {
-            "tabId": "basic",
-            "sectionId": "exposure-section",
-            "cardId": "bottom-card",
-            "order": 20
-          }
-        },
-        {
-          "key": "liftMm",
-          "label": "Lift (mm)",
-          "kind": "number",
-          "defaultValue": 6,
-          "min": 0,
-          "max": 20,
-          "step": 0.5,
-          "placement": {
-            "tabId": "motion",
-            "sectionId": "motion-section",
-            "cardId": "motion-card",
-            "order": 10
-          }
-        },
-        {
-          "key": "liftSpeedMmMin",
-          "label": "Lift speed (mm/min)",
-          "kind": "number",
-          "defaultValue": 60,
-          "min": 10,
-          "max": 300,
-          "step": 5,
-          "placement": {
-            "tabId": "motion",
-            "sectionId": "motion-section",
-            "cardId": "motion-card",
-            "order": 20
-          }
-        },
-        {
-          "key": "retractSpeedMmMin",
-          "label": "Retract speed (mm/min)",
-          "kind": "number",
-          "defaultValue": 150,
-          "min": 10,
-          "max": 500,
-          "step": 10,
-          "placement": {
-            "tabId": "motion",
-            "sectionId": "motion-section",
-            "cardId": "motion-card",
-            "order": 30
-          }
-        },
-        {
-          "key": "resinType",
-          "label": "Resin family",
+          "key": "zstdLevel",
+          "label": "File Compression Level",
           "kind": "select",
-          "defaultValue": "standard",
+          "defaultValue": "6",
           "options": [
             {
-              "value": "standard",
+              "value": "3",
+              "label": "Low"
+            },
+            {
+              "value": "6",
               "label": "Standard"
             },
             {
-              "value": "tough",
-              "label": "Tough"
+              "value": "9",
+              "label": "High"
             },
             {
-              "value": "castable",
-              "label": "Castable"
+              "value": "19",
+              "label": "Very High"
             }
           ],
           "placement": {
-            "tabId": "vendor",
-            "sectionId": "echo-section",
-            "cardId": "echo-card",
-            "order": 10
-          }
-        },
-        {
-          "key": "antialias",
-          "label": "Anti-aliasing",
-          "kind": "select",
-          "defaultValue": "2",
-          "options": [
-            {
-              "value": "1",
-              "label": "Off"
-            },
-            {
-              "value": "2",
-              "label": "2x"
-            },
-            {
-              "value": "4",
-              "label": "4x"
-            },
-            {
-              "value": "8",
-              "label": "8x"
-            }
-          ],
-          "placement": {
-            "tabId": "vendor",
-            "sectionId": "echo-section",
-            "cardId": "echo-card",
+            "tabId": "meta",
+            "sectionId": "file",
+            "cardId": "scene-settings",
             "order": 20
-          }
+          },
+          "metadataPath": "echo.zstdLevel",
+          "description": "How hard the layer frames are compressed, traded against slicing time. Measured on an anti-aliased 800-layer 12K print, against Standard: High is 3% smaller, Very High 17% smaller and about nine seconds slower to encode on that print. Low gives the largest file and slices fastest."
         },
         {
-          "key": "serialPrefix",
-          "label": "Job name prefix",
-          "kind": "text",
-          "defaultValue": "echo",
+          "key": "tagProbe",
+          "label": "Cross-Layer Encoding Probe",
+          "kind": "boolean",
+          "defaultValue": true,
+          "rowKey": null,
+          "rowWeight": null,
           "placement": {
-            "tabId": "vendor",
-            "sectionId": "echo-section",
-            "cardId": "echo-card",
-            "order": 30
-          }
+            "tabId": "meta",
+            "sectionId": "file",
+            "cardId": "scene-settings",
+            "order": 21
+          },
+          "metadataPath": "echo.tagProbe",
+          "description": "Whether the writer also encodes every layer group with tag 0x03, whose anti-aliasing overlay hangs off the run boundaries of the thresholded mask, and keeps it when its compressed frame is smaller. On by default and free of risk to file size: the frames are compared, so a group where the new encoding loses keeps the one it had, and measured whole files written by the reference encoder are 5-12% smaller where it wins and byte-identical where it does not. Turn it off when the print is going to a printer whose firmware predates the tag, which section 5.7 obliges it to refuse."
         },
         {
-          "key": "embedScene",
-          "label": "Embed editor scene",
+          "key": "bottomLayerCount",
+          "label": "Burn-in Layers",
+          "kind": "integer",
+          "defaultValue": 5,
+          "min": 0,
+          "max": 200,
+          "step": 1,
+          "placement": {
+            "tabId": "general",
+            "sectionId": "burn-in",
+            "cardId": "burn-in-settings",
+            "order": 10
+          },
+          "metadataPath": "material.bottomLayerCount",
+          "description": "How many layers at the build plate cure with the burn-in exposure before the normal layers begin."
+        },
+        {
+          "key": "transitionLayerCount",
+          "label": "Transition Layers",
+          "kind": "integer",
+          "defaultValue": 0,
+          "min": 0,
+          "max": 100000,
+          "step": 1,
+          "placement": {
+            "tabId": "general",
+            "sectionId": "burn-in",
+            "cardId": "burn-in-settings",
+            "order": 20
+          },
+          "metadataPath": "echo.transitionLayerCount",
+          "description": "Layers between the burn-in and normal exposures whose cure time steps from the burn-in value down to the normal one. 0 switches straight from one to the other."
+        },
+        {
+          "key": "bottomExposureSec",
+          "label": "Burn-in Exposure (s)",
+          "kind": "number",
+          "defaultValue": 25,
+          "min": 0,
+          "max": 300,
+          "step": 0.1,
+          "placement": {
+            "tabId": "general",
+            "sectionId": "burn-in",
+            "cardId": "burn-in-settings",
+            "order": 30
+          },
+          "metadataPath": "material.bottomExposureSec",
+          "description": "How long a burn-in layer is exposed. The first layers have to bond to the build plate, so they cure far longer than the layers above them."
+        },
+        {
+          "key": "normalExposureSec",
+          "label": "Normal Exposure (s)",
+          "kind": "number",
+          "defaultValue": 2,
+          "min": 0,
+          "max": 120,
+          "step": 0.01,
+          "placement": {
+            "tabId": "general",
+            "sectionId": "normal",
+            "cardId": "normal-settings",
+            "order": 10
+          },
+          "metadataPath": "material.normalExposureSec",
+          "description": "How long every layer above the burn-in ones is exposed. The resin's own cure time is the value to start from, and the first one to tune when a print comes out soft or over-cured."
+        },
+        {
+          "key": "waitTimeBeforeCureSec",
+          "label": "Wait Before Cure (s)",
+          "kind": "number",
+          "defaultValue": 0,
+          "min": 0,
+          "max": 120,
+          "step": 0.01,
+          "placement": {
+            "tabId": "general",
+            "sectionId": "timing",
+            "cardId": "timing-settings",
+            "order": 10
+          },
+          "metadataPath": "echo.waitTimeBeforeCureSec",
+          "description": "Pause between the plate reaching position and the light turning on, which lets the resin come to rest before it cures."
+        },
+        {
+          "key": "waitTimeAfterCureSec",
+          "label": "Wait After Cure (s)",
+          "kind": "number",
+          "defaultValue": 0,
+          "min": 0,
+          "max": 120,
+          "step": 0.01,
+          "placement": {
+            "tabId": "general",
+            "sectionId": "timing",
+            "cardId": "timing-settings",
+            "order": 20
+          },
+          "metadataPath": "echo.waitTimeAfterCureSec",
+          "description": "Pause between the exposure and the lift, which lets the cured layer set before it is peeled off the film."
+        },
+        {
+          "key": "waitTimeAfterLiftSec",
+          "label": "Wait After Lift (s)",
+          "kind": "number",
+          "defaultValue": 0,
+          "min": 0,
+          "max": 120,
+          "step": 0.01,
+          "placement": {
+            "tabId": "general",
+            "sectionId": "timing",
+            "cardId": "timing-settings",
+            "order": 30
+          },
+          "metadataPath": "echo.waitTimeAfterLiftSec",
+          "description": "Pause at the top of the lift, before the plate starts back down for the next layer."
+        },
+        {
+          "key": "projectorPwmPercent",
+          "label": "Projector PWM (%)",
+          "kind": "number",
+          "defaultValue": 100,
+          "min": 1,
+          "max": 100,
+          "step": 1,
+          "placement": {
+            "tabId": "general",
+            "sectionId": "light",
+            "cardId": "light-settings",
+            "order": 10
+          },
+          "metadataPath": "echo.projectorPwmPercent",
+          "description": "Ultraviolet power as a percentage of the projector's full output. Lower values dim every exposure and need longer cure times."
+        },
+        {
+          "key": "bottomProjectorPwmPercent",
+          "label": "Burn-in Projector PWM (%)",
+          "kind": "number",
+          "defaultValue": 100,
+          "min": 1,
+          "max": 100,
+          "step": 1,
+          "placement": {
+            "tabId": "general",
+            "sectionId": "light",
+            "cardId": "light-settings",
+            "order": 20
+          },
+          "metadataPath": "echo.bottomProjectorPwmPercent",
+          "description": "The same power setting for the burn-in layers, which usually run at full output so the first layers bond to the plate."
+        },
+        {
+          "key": "scaleCompensationXPct",
+          "label": "Scale X (%)",
+          "kind": "number",
+          "defaultValue": 0,
+          "min": -100,
+          "max": 100,
+          "step": 0.1,
+          "disabled": true,
+          "rowKey": "scale-compensation",
+          "rowWeight": 1,
+          "placement": {
+            "tabId": "advanced",
+            "sectionId": "scale",
+            "cardId": "scale-settings",
+            "order": 10
+          },
+          "metadataPath": "echo.scaleCompensationXPct",
+          "description": "Shrinkage compensation for the X axis, in percent. 0 leaves the material profile's own value alone, and the input stays disabled until the slicer applies a compensation."
+        },
+        {
+          "key": "scaleCompensationYPct",
+          "label": "Scale Y (%)",
+          "kind": "number",
+          "defaultValue": 0,
+          "min": -100,
+          "max": 100,
+          "step": 0.1,
+          "disabled": true,
+          "rowKey": "scale-compensation",
+          "rowWeight": 1,
+          "placement": {
+            "tabId": "advanced",
+            "sectionId": "scale",
+            "cardId": "scale-settings",
+            "order": 20
+          },
+          "metadataPath": "echo.scaleCompensationYPct",
+          "description": "Shrinkage compensation for the Y axis, in percent. 0 leaves the material profile's own value alone, and the input stays disabled until the slicer applies a compensation."
+        },
+        {
+          "key": "scaleCompensationZPct",
+          "label": "Scale Z (%)",
+          "kind": "number",
+          "defaultValue": 0,
+          "min": -100,
+          "max": 100,
+          "step": 0.1,
+          "disabled": true,
+          "rowKey": "scale-compensation",
+          "rowWeight": 1,
+          "placement": {
+            "tabId": "advanced",
+            "sectionId": "scale",
+            "cardId": "scale-settings",
+            "order": 30
+          },
+          "metadataPath": "echo.scaleCompensationZPct",
+          "description": "Shrinkage compensation for the Z axis, in percent. 0 leaves the material profile's own value alone, and the input stays disabled until the slicer applies a compensation."
+        },
+        {
+          "key": "bottomLiftDistanceMm",
+          "label": "Burn-in Lift Distance (mm)",
+          "kind": "number",
+          "defaultValue": 3,
+          "min": 0,
+          "max": 50,
+          "step": 0.01,
+          "placement": {
+            "tabId": "motion",
+            "sectionId": "burn-in-motion",
+            "cardId": "burn-in-motion-settings",
+            "order": 10
+          },
+          "metadataPath": "echo.bottomLiftDistanceMm",
+          "description": "How far a burn-in layer is lifted. The first, slow segment peels the layer off the film, which the sticky first layers need most, and the fast segment then travels its own distance. A 0 in the second distance makes the lift single-stage, so this distance carries the whole move.",
+          "tag": "Slow",
+          "color": "#f59e0b",
+          "splitWithKey": "bottomLiftDistance2Mm"
+        },
+        {
+          "key": "bottomLiftDistance2Mm",
+          "label": "Burn-in Lift Distance 2 (mm)",
+          "kind": "number",
+          "defaultValue": 4,
+          "tag": "Fast",
+          "color": "#22c55e",
+          "min": 0,
+          "max": 50,
+          "step": 0.01,
+          "placement": {
+            "tabId": "motion",
+            "sectionId": "burn-in-motion",
+            "cardId": "burn-in-motion-settings",
+            "order": 10
+          },
+          "metadataPath": "echo.bottomLiftDistance2Mm"
+        },
+        {
+          "key": "bottomLiftSpeedMmMin",
+          "label": "Burn-in Lift Speed (mm/min)",
+          "kind": "number",
+          "defaultValue": 60,
+          "min": 0,
+          "max": 100000,
+          "step": 1,
+          "placement": {
+            "tabId": "motion",
+            "sectionId": "burn-in-motion",
+            "cardId": "burn-in-motion-settings",
+            "order": 20
+          },
+          "metadataPath": "echo.bottomLiftSpeedMmMin",
+          "tag": "Slow",
+          "color": "#f59e0b",
+          "splitWithKey": "bottomLiftSpeed2MmMin",
+          "description": "How fast the peel segment of a burn-in lift moves. Peeling slowly keeps the suction on the film low, which is what the first layers against the plate need. The second speed is used only when the second distance is non-zero; a 0 there makes the lift single-stage and the fast segment never happens."
+        },
+        {
+          "key": "bottomLiftSpeed2MmMin",
+          "label": "Burn-in Lift Speed 2 (mm/min)",
+          "kind": "number",
+          "defaultValue": 180,
+          "tag": "Fast",
+          "color": "#22c55e",
+          "min": 0,
+          "max": 100000,
+          "step": 1,
+          "placement": {
+            "tabId": "motion",
+            "sectionId": "burn-in-motion",
+            "cardId": "burn-in-motion-settings",
+            "order": 20
+          },
+          "metadataPath": "echo.bottomLiftSpeed2MmMin"
+        },
+        {
+          "key": "bottomRetractSpeedMmMin",
+          "label": "Burn-in Retract Speed (mm/min)",
+          "kind": "number",
+          "defaultValue": 180,
+          "min": 0,
+          "max": 100000,
+          "step": 1,
+          "placement": {
+            "tabId": "motion",
+            "sectionId": "burn-in-motion",
+            "cardId": "burn-in-motion-settings",
+            "order": 30
+          },
+          "metadataPath": "echo.bottomRetractSpeedMmMin",
+          "tag": "Fast",
+          "color": "#22c55e",
+          "splitWithKey": "bottomRetractSpeed2MmMin",
+          "description": "How fast a burn-in layer travels back down. The retract's two halves are the lift's the other way round: this first segment is the fast one and the second is the slow approach into the resin, so this is the fast half. A 0 in the second distance makes the retract single-stage."
+        },
+        {
+          "key": "bottomRetractSpeed2MmMin",
+          "label": "Burn-in Retract Speed 2 (mm/min)",
+          "kind": "number",
+          "defaultValue": 60,
+          "tag": "Slow",
+          "color": "#f59e0b",
+          "min": 0,
+          "max": 100000,
+          "step": 1,
+          "placement": {
+            "tabId": "motion",
+            "sectionId": "burn-in-motion",
+            "cardId": "burn-in-motion-settings",
+            "order": 30
+          },
+          "metadataPath": "echo.bottomRetractSpeed2MmMin"
+        },
+        {
+          "key": "liftDistanceMm",
+          "label": "Lift Distance (mm)",
+          "kind": "number",
+          "defaultValue": 1,
+          "min": 0,
+          "max": 50,
+          "step": 0.01,
+          "placement": {
+            "tabId": "motion",
+            "sectionId": "motion",
+            "cardId": "motion-settings",
+            "order": 10
+          },
+          "metadataPath": "material.liftDistanceMm",
+          "tag": "Slow",
+          "color": "#f59e0b",
+          "splitWithKey": "liftDistance2Mm",
+          "description": "How far the plate lifts after each layer. The first, slow segment peels the cured layer off the film, and the fast segment then travels its own distance. A 0 in the second distance makes the lift single-stage, so this distance carries the whole move."
+        },
+        {
+          "key": "liftDistance2Mm",
+          "label": "Lift Distance 2 (mm)",
+          "kind": "number",
+          "defaultValue": 4,
+          "tag": "Fast",
+          "color": "#22c55e",
+          "min": 0,
+          "max": 50,
+          "step": 0.01,
+          "placement": {
+            "tabId": "motion",
+            "sectionId": "motion",
+            "cardId": "motion-settings",
+            "order": 10
+          },
+          "metadataPath": "echo.liftDistance2Mm"
+        },
+        {
+          "key": "liftSpeedMmMin",
+          "label": "Lift Speed (mm/min)",
+          "kind": "number",
+          "defaultValue": 60,
+          "min": 0,
+          "max": 100000,
+          "step": 1,
+          "placement": {
+            "tabId": "motion",
+            "sectionId": "motion",
+            "cardId": "motion-settings",
+            "order": 20
+          },
+          "metadataPath": "material.liftSpeedMmMin",
+          "tag": "Slow",
+          "color": "#f59e0b",
+          "splitWithKey": "liftSpeed2MmMin",
+          "description": "How fast the peel segment of the lift moves. Peeling slowly keeps the suction on the film low, which is what stops a fresh layer tearing away from its supports. The second speed is used only when the second distance is non-zero; a 0 there makes the lift single-stage."
+        },
+        {
+          "key": "liftSpeed2MmMin",
+          "label": "Lift Speed 2 (mm/min)",
+          "kind": "number",
+          "defaultValue": 240,
+          "tag": "Fast",
+          "color": "#22c55e",
+          "min": 0,
+          "max": 100000,
+          "step": 1,
+          "placement": {
+            "tabId": "motion",
+            "sectionId": "motion",
+            "cardId": "motion-settings",
+            "order": 20
+          },
+          "metadataPath": "echo.liftSpeed2MmMin"
+        },
+        {
+          "key": "retractSpeedMmMin",
+          "label": "Retract Speed (mm/min)",
+          "kind": "number",
+          "defaultValue": 240,
+          "min": 0,
+          "max": 100000,
+          "step": 1,
+          "placement": {
+            "tabId": "motion",
+            "sectionId": "motion",
+            "cardId": "motion-settings",
+            "order": 30
+          },
+          "metadataPath": "material.retractSpeedMmMin",
+          "tag": "Fast",
+          "color": "#22c55e",
+          "splitWithKey": "retractSpeed2MmMin",
+          "description": "How fast the plate travels back down. The retract's two halves are the lift's the other way round: this first segment is the fast one and the second is the slow approach that settles the plate into the resin. A 0 in the second distance makes the retract single-stage."
+        },
+        {
+          "key": "retractSpeed2MmMin",
+          "label": "Retract Speed 2 (mm/min)",
+          "kind": "number",
+          "defaultValue": 60,
+          "tag": "Slow",
+          "color": "#f59e0b",
+          "min": 0,
+          "max": 100000,
+          "step": 1,
+          "placement": {
+            "tabId": "motion",
+            "sectionId": "motion",
+            "cardId": "motion-settings",
+            "order": 30
+          },
+          "metadataPath": "echo.retractSpeed2MmMin"
+        },
+        {
+          "key": "bottomWaitTimeBeforeCureSec",
+          "label": "Burn-in Wait Before Cure (s)",
+          "kind": "number",
+          "defaultValue": 0,
+          "min": 0,
+          "max": 120,
+          "step": 0.01,
+          "placement": {
+            "tabId": "advanced",
+            "sectionId": "burn-in-waits",
+            "cardId": "burn-in-wait-times",
+            "order": 10
+          },
+          "metadataPath": "echo.bottomWaitTimeBeforeCureSec",
+          "description": "Pause before curing a burn-in layer. 0 means no pause at all rather than the normal layer's wait, so match Wait Before Cure when the whole print should run on one rhythm."
+        },
+        {
+          "key": "bottomWaitTimeAfterCureSec",
+          "label": "Burn-in Wait After Cure (s)",
+          "kind": "number",
+          "defaultValue": 0,
+          "min": 0,
+          "max": 120,
+          "step": 0.01,
+          "placement": {
+            "tabId": "advanced",
+            "sectionId": "burn-in-waits",
+            "cardId": "burn-in-wait-times",
+            "order": 20
+          },
+          "metadataPath": "echo.bottomWaitTimeAfterCureSec",
+          "description": "Pause after curing a burn-in layer. 0 means no pause rather than the normal layer's wait; match Wait After Cure to keep one rhythm across the print."
+        },
+        {
+          "key": "bottomWaitTimeAfterLiftSec",
+          "label": "Burn-in Wait After Lift (s)",
+          "kind": "number",
+          "defaultValue": 0,
+          "min": 0,
+          "max": 120,
+          "step": 0.01,
+          "placement": {
+            "tabId": "advanced",
+            "sectionId": "burn-in-waits",
+            "cardId": "burn-in-wait-times",
+            "order": 30
+          },
+          "metadataPath": "echo.bottomWaitTimeAfterLiftSec",
+          "description": "Pause at the top of the lift on a burn-in layer. 0 means no pause rather than the normal layer's wait; match Wait After Lift to keep one rhythm across the print."
+        },
+        {
+          "key": "chamberTemperatureC",
+          "label": "Chamber Temperature (\u00b0C)",
+          "kind": "number",
+          "min": 0,
+          "max": 120,
+          "step": 0.1,
+          "placement": {
+            "tabId": "meta",
+            "sectionId": "temperature",
+            "cardId": "temperature-settings",
+            "order": 10
+          },
+          "metadataPath": "echo.chamberTemperatureC",
+          "description": "The temperature the printer's chamber was at, in Celsius. Informational: it is written down for whoever reads the file later and changes nothing about the print, so it can be left alone."
+        },
+        {
+          "key": "vatTemperatureC",
+          "label": "Vat Temperature (\u00b0C)",
+          "kind": "number",
+          "min": 0,
+          "max": 120,
+          "step": 0.1,
+          "placement": {
+            "tabId": "meta",
+            "sectionId": "temperature",
+            "cardId": "temperature-settings",
+            "order": 20
+          },
+          "metadataPath": "echo.vatTemperatureC",
+          "description": "The temperature the resin was at when the print was made, in Celsius. Informational, like the chamber temperature: it is recorded rather than used, so it can be left alone."
+        },
+        {
+          "key": "embedVoxlScene",
+          "label": "Embed VOXL Scene",
           "kind": "boolean",
           "defaultValue": false,
-          "metadataPath": "echo.embedScene",
+          "description": "Write the scene this print came from into the .lumen file, so the file carries its own scene. The scene's bytes are added to the file, which grows it by the scene's size.",
           "placement": {
-            "tabId": "vendor",
-            "sectionId": "echo-section",
-            "cardId": "echo-card",
-            "order": 40
-          }
+            "tabId": "meta",
+            "sectionId": "file",
+            "cardId": "scene-settings",
+            "order": 10
+          },
+          "metadataPath": "echo.embedVoxlScene"
         }
       ]
-    }
-  },
-  "byOutputAndMode": {
-    ".exf": {
-      "twostage": {
-        "$inherit": "default",
-        "tabs": [
-          {
-            "id": "twostage",
-            "title": "Two-stage",
-            "order": 40
-          }
-        ],
-        "fields": [
-          {
-            "key": "liftDistance2Mm",
-            "label": "Second lift (mm)",
-            "kind": "number",
-            "defaultValue": 4,
-            "min": 0,
-            "max": 20,
-            "step": 0.5,
-            "placement": {
-              "tabId": "twostage",
-              "order": 10
-            }
-          },
-          {
-            "key": "liftSpeed2MmMin",
-            "label": "Second lift speed (mm/min)",
-            "kind": "number",
-            "defaultValue": 40,
-            "min": 10,
-            "max": 300,
-            "step": 5,
-            "placement": {
-              "tabId": "twostage",
-              "order": 20
-            }
-          }
-        ]
-      }
     }
   }
 }
