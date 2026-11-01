@@ -17,3 +17,5 @@ serde_json = "1"
 [dev-dependencies]
 # Only the encoder example maps the ring; the library itself has no mapping code.
 memmap2 = "0.9"
+# The multi-tank example encodes its layer PNGs across cores, like the engine does.
+rayon = "1"

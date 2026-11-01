@@ -15,6 +15,8 @@
 //! command that also carries the sample printer preset and material template.
 
 use std::collections::HashMap;
+
+use rayon::prelude::*;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -166,19 +168,36 @@ impl EchoEncoder {
             return Err("a multi-tank job carries no layer resolution".to_string());
         }
 
-        let mut zip = ZipWriter::default();
-        let mut written = 0usize;
         self.layers.sort_by_key(|(index, tank, _, _, _)| (*index, *tank));
-        for (index, tank, kind, _, bytes) in &self.layers {
+        for (index, tank, kind, _, _) in &self.layers {
             if *kind != "rle" {
                 return Err(format!(
                     "the multi-tank container takes runs, not {kind} (layer {index}, tank {})",
                     tank + 1
                 ));
             }
-            let runs = Runs::new(bytes)?;
-            let png = encode_grayscale_png(self.width, self.height, &runs)?;
-            zip.add(&format!("layer_{:05}_tank_{}.png", index + 1, tank + 1), &png);
+        }
+
+        // Encoding a 4K layer is the whole cost of finalizing; a native format spreads
+        // it over every core while it rasterizes, so this does too instead of walking
+        // the layers one at a time.
+        let width = self.width;
+        let height = self.height;
+        let encoded: Vec<Result<(String, Vec<u8>), String>> = self
+            .layers
+            .par_iter()
+            .map(|(index, tank, _, _, bytes)| {
+                let runs = Runs::new(bytes)?;
+                let png = encode_grayscale_png(width, height, &runs)?;
+                Ok((format!("layer_{:05}_tank_{}.png", index + 1, tank + 1), png))
+            })
+            .collect();
+
+        let mut zip = ZipWriter::default();
+        let mut written = 0usize;
+        for entry in encoded {
+            let (name, png) = entry?;
+            zip.add(&name, &png);
             written += 1;
         }
 
