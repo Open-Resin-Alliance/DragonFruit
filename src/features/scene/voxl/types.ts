@@ -91,6 +91,14 @@ export type VoxlModelEntry = {
   isSupportGeometry?: boolean;
   linkGroupId?: string;
   /**
+   * The material this model prints in on a multi-tank printer (see
+   * `LoadedModel.materialProfileId`). Additive: a reader that ignores it prints the
+   * model in the plate's material.
+   */
+  materialProfileId?: string;
+  /** The mesh colour the material assignment replaced, restored when it is cleared. */
+  materialBaseColor?: string;
+  /**
    * Baked mesh classification (V3.3): the native classify-only report for the
    * exact triangle order stored in this model's `mesh` payload, so a reader can
    * restore the model/support split without re-running the classifier. Purely
@@ -208,6 +216,10 @@ export type VoxlModelRuntimeLike = {
   plateId?: string;
   isSupportGeometry?: boolean;
   linkGroupId?: string;
+  /** See `VoxlModelEntry.materialProfileId`. */
+  materialProfileId?: string;
+  /** See `VoxlModelEntry.materialBaseColor`. */
+  materialBaseColor?: string;
   /** See `VoxlModelEntry.classification` (V3.3). */
   classification?: MeshHealthReport;
 };

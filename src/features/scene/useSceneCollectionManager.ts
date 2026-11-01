@@ -128,6 +128,7 @@ import {
   hideModelLabel,
   linkModelsLabel,
   MARK_AS_MODEL_LABEL,
+  ASSIGN_MATERIAL_LABEL,
   MARK_AS_SUPPORT_LABEL,
   mergeSupportsLabel,
   pasteModelLabel,
@@ -502,6 +503,23 @@ function captureSceneSnapshot(
         }
       : {}),
   };
+}
+
+/**
+ * The material an imported model starts with on a multi-tank printer: the resin in
+ * Tank 1. A model must always name a material there — an unassigned one would print
+ * in no tank at all.
+ */
+function resolveMultiTankImportDefault(): { materialProfileId: string; materialColor?: string } | null {
+  const printer = getActivePrinterProfile();
+  if (printer?.materialMode !== 'multiTank') return null;
+
+  const tankMaterialId = (printer.tankMaterials ?? []).find((id) => typeof id === 'string' && id.length > 0);
+  if (!tankMaterialId) return null;
+
+  const material = getMaterialProfilesForPrinter(printer.id).find((entry) => entry.id === tankMaterialId);
+  if (!material) return null;
+  return { materialProfileId: material.id, materialColor: material.color };
 }
 
 /** Repaints a model's vertex colours, when it has any, to a flat `color`. */
@@ -1332,6 +1350,16 @@ export interface LoadedModel {
   manualZMoveOverride?: boolean;
   isSupportGeometry?: boolean;
   linkGroupId?: string;
+  /**
+   * The material this model prints in, when the printer has more than one tank.
+   * Absent means the plate's own material (the single active profile).
+   */
+  materialProfileId?: string;
+  /**
+   * The mesh colour the model had before a material assignment recoloured it, so
+   * clearing the assignment can give that colour back.
+   */
+  materialBaseColor?: string;
 }
 
 import { deleteSupportsForModelIds, getSupportsForModel, type ModelSupportIds } from '@/supports/PlacementLogic/SupportModelLinker';
@@ -1550,6 +1578,8 @@ type ModelClipboardEntry = {
   supportClipboard: SupportClipboardPayload | null;
   isSupportGeometry?: boolean;
   linkGroupId?: string;
+  materialProfileId?: string;
+  materialBaseColor?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -3126,6 +3156,7 @@ export function useSceneCollectionManager(options?: {
     try {
       // Process sequentially to avoid freezing UI too much
       for (let i = 0; i < files.length; i++) {
+        const multiTankImportDefault = resolveMultiTankImportDefault();
         const file = files[i];
         const url = URL.createObjectURL(file);
 
@@ -3256,7 +3287,13 @@ export function useSceneCollectionManager(options?: {
                 scale: new THREE.Vector3(1, 1, 1),
               },
               visible: true,
-              color,
+              color: multiTankImportDefault?.materialColor ?? color,
+              ...(multiTankImportDefault
+                ? {
+                  materialProfileId: multiTankImportDefault.materialProfileId,
+                  materialBaseColor: color,
+                }
+                : {}),
               polygonCount: merged.nativePreview?.originalTriangleCount
                 ?? countTriangles(merged.geometry),
             };
@@ -3299,7 +3336,13 @@ export function useSceneCollectionManager(options?: {
                 scale: new THREE.Vector3(1, 1, 1),
               },
               visible: true,
-              color,
+              color: multiTankImportDefault?.materialColor ?? color,
+              ...(multiTankImportDefault
+                ? {
+                  materialProfileId: multiTankImportDefault.materialProfileId,
+                  materialBaseColor: color,
+                }
+                : {}),
               polygonCount: geom.nativePreview?.originalTriangleCount
                 ?? countTriangles(geom.geometry),
             };
@@ -5351,6 +5394,8 @@ export function useSceneCollectionManager(options?: {
         supportClipboard,
         isSupportGeometry: source.isSupportGeometry,
         linkGroupId: source.linkGroupId,
+        materialProfileId: source.materialProfileId,
+        materialBaseColor: source.materialBaseColor,
       },
     ]);
 
@@ -5382,6 +5427,8 @@ export function useSceneCollectionManager(options?: {
         supportClipboard,
         isSupportGeometry: source.isSupportGeometry,
         linkGroupId: source.linkGroupId,
+        materialProfileId: source.materialProfileId,
+        materialBaseColor: source.materialBaseColor,
       };
     }));
 
@@ -5425,6 +5472,8 @@ export function useSceneCollectionManager(options?: {
       meshModifiers: undefined,
       isSupportGeometry: first.isSupportGeometry,
       linkGroupId: first.linkGroupId,
+      materialProfileId: first.materialProfileId,
+      materialBaseColor: first.materialBaseColor,
     };
 
     const nextModels = [...models, pastedModel];
@@ -5918,6 +5967,8 @@ export function useSceneCollectionManager(options?: {
         meshModifiers: undefined,
         isSupportGeometry: entry.isSupportGeometry,
         linkGroupId: entry.linkGroupId,
+        materialProfileId: entry.materialProfileId,
+        materialBaseColor: entry.materialBaseColor,
         ...(assignedPlateIds[index] ? { plateId: assignedPlateIds[index] } : {}),
       };
     });
@@ -6035,6 +6086,8 @@ export function useSceneCollectionManager(options?: {
         meshModifiers: undefined,
         isSupportGeometry: source.isSupportGeometry,
         linkGroupId: source.linkGroupId,
+        materialProfileId: source.materialProfileId,
+        materialBaseColor: source.materialBaseColor,
       };
     });
 
@@ -7010,6 +7063,10 @@ export function useSceneCollectionManager(options?: {
             manualZMoveOverride: true,
             isSupportGeometry: model.isSupportGeometry,
             linkGroupId: model.linkGroupId,
+            // A project saved before models carried a material still has to name one
+            // on a multi-tank printer.
+            materialProfileId: model.materialProfileId ?? resolveMultiTankImportDefault()?.materialProfileId,
+            materialBaseColor: model.materialBaseColor,
           });
 
           // Store meshModifiers externally so model objects stay lightweight
@@ -7525,6 +7582,55 @@ export function useSceneCollectionManager(options?: {
       after,
       isSupport ? MARK_AS_SUPPORT_LABEL : MARK_AS_MODEL_LABEL,
     );
+  }, [activeModelId, models, pushSceneSnapshotHistory, selectedModelIds]);
+
+  const setModelMaterialProfile = useCallback((
+    modelIds: string[],
+    materialProfileId: string | null,
+    materialColor?: string,
+  ) => {
+    if (modelIds.length === 0) return;
+    const targetIds = new Set(modelIds);
+    if (!models.some((m) => targetIds.has(m.id))) return;
+
+    const nextMaterialProfileId = materialProfileId || undefined;
+    // An assigned material paints its resin colour on the mesh, remembering the
+    // colour it replaced; clearing the assignment hands that colour back.
+    const nextModels = models.map((model) => {
+      if (!targetIds.has(model.id)) return model;
+      if (!nextMaterialProfileId) {
+        if (!model.materialProfileId && !model.materialBaseColor) return model;
+        return {
+          ...model,
+          materialProfileId: undefined,
+          materialBaseColor: undefined,
+          color: model.materialBaseColor ?? model.color,
+        };
+      }
+      if (!materialColor) {
+        return model.materialProfileId === nextMaterialProfileId
+          ? model
+          : { ...model, materialProfileId: nextMaterialProfileId };
+      }
+      return {
+        ...model,
+        materialProfileId: nextMaterialProfileId,
+        materialBaseColor: model.materialBaseColor ?? model.color,
+        color: materialColor,
+      };
+    });
+
+    if (nextModels.every((model, index) => model === models[index])) return;
+
+    nextModels.forEach((next, index) => {
+      const previous = models[index];
+      if (previous.color !== next.color) paintModelBaseColor(next, next.color);
+    });
+
+    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
+    setModels(nextModels);
+    const after = captureSceneSnapshot(nextModels, activeModelId, selectedModelIds);
+    pushSceneSnapshotHistory(before, after, ASSIGN_MATERIAL_LABEL);
   }, [activeModelId, models, pushSceneSnapshotHistory, selectedModelIds]);
 
   const linkModels = useCallback((idsInput: string[]) => {
@@ -8590,6 +8696,7 @@ export function useSceneCollectionManager(options?: {
     setModelManualZMoveOverride,
     setModelVisibility,
     toggleSupportDesignation,
+    setModelMaterialProfile,
     linkModels,
     unlinkModels,
     setModelMeshModifiers,

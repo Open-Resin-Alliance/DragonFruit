@@ -1213,6 +1213,8 @@ export class ExportManager {
             meshModifiers?: ModelMeshModifiers;
             isSupportGeometry?: boolean;
             linkGroupId?: string;
+            materialProfileId?: string;
+            materialBaseColor?: string;
             classification?: MeshHealthReport;
             mesh: {
               mode: 'embedded-file';
@@ -1322,6 +1324,8 @@ export class ExportManager {
               ...(model.plateId ? { plateId: model.plateId } : {}),
               isSupportGeometry: model.isSupportGeometry,
               linkGroupId: model.linkGroupId,
+              ...(model.materialProfileId ? { materialProfileId: model.materialProfileId } : {}),
+              ...(model.materialBaseColor ? { materialBaseColor: model.materialBaseColor } : {}),
               classification,
               mesh: {
                 mode: 'embedded-file',

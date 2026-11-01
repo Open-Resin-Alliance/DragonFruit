@@ -48,6 +48,14 @@ is how a slicer grows a second material system that matches neither.
 - Switching semantics are **not defined**, but the value is read: the slicing panel's
   Material button and the stats panel's Material row show **Multi-Tank** rather than a
   single profile name while the printer is in that mode.
+- Models carry `materialProfileId` and `materialBaseColor`. In multi-material mode the
+  model context menu grows a **Material** section listing the resins the printer's tanks
+  hold; assigning one also paints the mesh in that resin's colour (remembering the
+  colour it replaced, so clearing the assignment gives it back), pushes a single undo
+  entry, and the selected model draws a silhouette because a resin colour no longer
+  distinguishes selection on its own. Imported models are assigned Tank 1's resin by
+  default (a model must always name a material there), and hover draws a fainter grey
+  rim instead of a tint.
 
 ## Next step
 

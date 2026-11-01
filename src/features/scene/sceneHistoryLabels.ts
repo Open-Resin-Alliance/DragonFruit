@@ -12,6 +12,7 @@ import { msg, plural } from '@lingui/core/macro';
 export const SCENE_CHANGE_LABEL = msg({ message: 'Scene change', context: 'Undo history entry' });
 export const MARK_AS_SUPPORT_LABEL = msg({ message: 'Mark as support', context: 'Undo history entry' });
 export const MARK_AS_MODEL_LABEL = msg({ message: 'Mark as model', context: 'Undo history entry' });
+export const ASSIGN_MATERIAL_LABEL = msg({ message: 'Assign material', context: 'Undo history entry' });
 export const SWITCH_PRINTER_LABEL = msg({ message: 'Switch printer', context: 'Undo history entry' });
 export const DELETE_MODELS_AND_PLATES_LABEL = msg({
   message: 'Delete models and plates',

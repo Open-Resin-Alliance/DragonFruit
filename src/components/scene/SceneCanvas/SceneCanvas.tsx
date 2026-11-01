@@ -615,6 +615,7 @@ export function SceneCanvas({
   leafTipPosition,
   leafHoverPosition,
   selectionColor,
+  multiMaterialMode = false,
   hoverColor,
   hoverTintStrength,
   selectedTintStrength,
@@ -855,6 +856,12 @@ export function SceneCanvas({
   leafTipPosition?: { x: number; y: number; z: number } | null;
   leafHoverPosition?: { x: number; y: number; z: number } | null;
   selectionColor?: string;
+  /**
+   * The active printer splits its resin across tanks, so a model's colour is its
+   * material and a tint alone no longer reads as "selected". The selected model
+   * gains an outline as well.
+   */
+  multiMaterialMode?: boolean;
   hoverColor?: string;
   hoverTintStrength?: number;
   selectedTintStrength?: number;
@@ -6920,6 +6927,7 @@ export function SceneCanvas({
                       onModelHoverModelChange={onModelHoverModelChange}
                       hoverTintColor={modelHoverTintColor}
                       selectedTintColor={modelSelectedTintColor}
+                      materialOutlineEnabled={multiMaterialMode}
                       hoverTintStrength={hoverTintStrength}
                       selectedTintStrength={selectedTintStrength}
                       supportNonSelectedOpacity={supportNonSelectedOpacity}

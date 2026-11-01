@@ -10,7 +10,7 @@ import { detectIsIOS } from '@/hooks/usePlatform';
 import { useUiScale } from '@/hooks/useUiScale';
 import * as THREE from 'three';
 import type { ThreeEvent } from '@react-three/fiber';
-import { AlertTriangle, CheckCircle2, ChevronDown, ClipboardList, Download, Gamepad2, LayoutGrid, Loader2, Lock, Maximize2, Minimize2, Play, Plus, Printer, Pyramid, Redo2, RefreshCw, Trash2, Undo2, Wrench, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, ClipboardList, Download, Gamepad2, LayoutGrid, Loader2, Lock, Maximize2, Minimize2, Palette, Play, Plus, Printer, Pyramid, Redo2, RefreshCw, Trash2, Undo2, Wrench, X } from 'lucide-react';
 import { SceneCanvas } from '@/components/scene/SceneCanvas';
 import { SceneOverlays } from '@/components/organisms/scene/SceneOverlays';
 import { FloatingPanelStack } from '@/components/layout/FloatingPanelStack';
@@ -119,7 +119,7 @@ import type { MirrorAxis } from '@/features/mirror/types';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { RtspRelayCanvasPlayer } from '@/components/monitoring/RtspRelayCanvasPlayer';
 import { BlockingOverlay, Button, IconButton, Toast, ToastViewport } from '@/components/atoms';
-import { EditorContextMenu, MENU_ITEMS, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
+import { EditorContextMenu, MENU_ITEMS, type EditorMenuAction, type EditorMenuItemDef } from '@/components/ui/EditorContextMenu';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { eulerFromGlobalEuler, quaternionFromGlobalEuler } from '@/utils/rotation';
 import { DiagnosticsModal } from '@/components/modals/DiagnosticsModal';
@@ -335,6 +335,7 @@ import {
   setPrinterReachabilityMap,
   subscribeToPrinterReachability,
 } from '@/features/network/printerReachabilityStore';
+import { resolveTankMaterialProfiles } from '@/features/profiles/tankMaterials';
 import type { SliceExportArtifact, SliceExportResult } from '@/features/slicing/sliceExportOrchestrator';
 import { sliceProfileFingerprint } from '@/features/printing/slicedPlates';
 import { useSlicedPlatePreviewLoading, useSlicedPlates } from '@/features/printing/useSlicedPlates';
@@ -2605,6 +2606,18 @@ export default function Home() {
   }, []);
 
   const editorContextMenuTitle = scene.mode === 'support' ? _(msg`Supports`) : _(msg`Editor`);
+  // A multi-tank machine can print a model in any resin one of its tanks holds; the
+  // menu offers exactly those, in tank order.
+  const multiTankMaterialChoices = React.useMemo(
+    () => resolveTankMaterialProfiles(activePrinterProfile, profileState.materialProfiles),
+    [activePrinterProfile, profileState.materialProfiles],
+  );
+  const editorContextMenuTargetIds = React.useMemo(() => resolveModelActionTargetIds({
+    modelIds: scene.models.map((model) => model.id),
+    selectedModelIds: scene.selectedModelIds,
+    activeModelId: scene.activeModelId,
+  }), [scene.activeModelId, scene.models, scene.selectedModelIds]);
+
   // Only a repair run from this menu offers "Auto-Repair Again" and the report: the import pass
   // repairs every model at load, so the report it leaves behind cannot be the signal.
   const editorContextMenuItems = React.useMemo(() => {
@@ -2613,7 +2626,7 @@ export default function Home() {
     }
     const repaired = !!scene.activeModelId
       && scene.manuallyRepairedModelIds.includes(scene.activeModelId);
-    return MENU_ITEMS.map((item) =>
+    const items: EditorMenuItemDef[] = MENU_ITEMS.map((item) =>
       item.id === 'repair-menu' && 'children' in item
         ? {
             ...item,
@@ -2630,7 +2643,48 @@ export default function Home() {
           }
         : item,
     );
-  }, [scene.mode, scene.activeModelId, scene.manuallyRepairedModelIds, supportContextMenuItems]);
+
+    if (multiTankMaterialChoices.length === 0) return items;
+
+    const targetModels = scene.models.filter((model) => editorContextMenuTargetIds.includes(model.id));
+    const assignedIds = new Set(targetModels.map((model) => model.materialProfileId ?? null));
+    const currentMaterialId = assignedIds.size === 1 ? [...assignedIds][0] : null;
+    const materialMenu: EditorMenuItemDef = {
+      id: 'material-menu',
+      label: msg`Material`,
+      icon: Palette,
+      startsGroup: true,
+      children: multiTankMaterialChoices.map((material) => ({
+        id: `assign-material:${material.id}` as const,
+        label: material.name,
+        icon: Palette,
+        checked: targetModels.length > 0 && currentMaterialId === material.id,
+        disabled: editorContextMenuTargetIds.length === 0,
+        iconBare: true,
+        iconNode: material.color ? (
+          <span
+            className="h-3.5 w-3.5 rounded-[4px]"
+            style={{
+              background: material.color,
+              boxShadow: 'inset 0 0 0 1px rgba(0, 0, 0, 0.35), 0 0 0 1px var(--border-subtle)',
+            }}
+          />
+        ) : undefined,
+      })),
+    };
+
+    const geometryIndex = items.findIndex((item) => item.id === 'geometry-menu');
+    if (geometryIndex < 0) return [...items, materialMenu];
+    return [...items.slice(0, geometryIndex + 1), materialMenu, ...items.slice(geometryIndex + 1)];
+  }, [
+    scene.mode,
+    scene.activeModelId,
+    scene.models,
+    scene.manuallyRepairedModelIds,
+    supportContextMenuItems,
+    multiTankMaterialChoices,
+    editorContextMenuTargetIds,
+  ]);
   const editorContextMenuDisabledActions = React.useMemo(() => {
     if (scene.mode === 'support') {
       return [
@@ -6236,6 +6290,16 @@ export default function Home() {
       };
     };
 
+    if (action.startsWith('assign-material:')) {
+      const materialProfileId = action.slice('assign-material:'.length) || null;
+      if (editorContextMenuTargetIds.length > 0) {
+        const material = multiTankMaterialChoices.find((entry) => entry.id === materialProfileId);
+        scene.setModelMaterialProfile(editorContextMenuTargetIds, materialProfileId, material?.color);
+      }
+      closeEditorContextMenu();
+      return;
+    }
+
     switch (action) {
       case 'supports-toggle-curve': {
         const state = getSupportSnapshot();
@@ -6424,7 +6488,7 @@ export default function Home() {
         break;
     }
     closeEditorContextMenu();
-  }, [arrangeSpacingMm, closeEditorContextMenu, scene]);
+  }, [arrangeSpacingMm, closeEditorContextMenu, editorContextMenuTargetIds, multiTankMaterialChoices, scene]);
 
   React.useEffect(() => {
     const refreshHistoryDebug = () => {
@@ -11074,6 +11138,7 @@ export default function Home() {
             higherContrastModelEdges={workspaceCameraSettings.higherContrastModelEdges}
             blockerEditMode={hollowingEditMode}
             selectionColor={themeMeshHighlightColors.selection}
+            multiMaterialMode={activePrinterProfile?.materialMode === 'multiTank'}
             hoverColor={themeMeshHighlightColors.hover}
             hoverTintStrength={effectiveHoverTintStrengthForScene}
             selectedTintStrength={effectiveSelectedTintStrengthForScene}

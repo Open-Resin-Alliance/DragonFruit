@@ -45,6 +45,76 @@ const _interiorCavityRaycastMesh = new THREE.Mesh();
 // result by quantised ray origin + direction eliminates redundant raycasts
 // when the pointer hasn't moved meaningfully.
 const _clipCacheQuant = 0.15; // mm position quantisation
+/** Stencil passes for the selection silhouette: the mask, then the rim above the scene. */
+const MATERIAL_OUTLINE_MASK_ORDER = 100000;
+const MATERIAL_OUTLINE_ORDER = 100001;
+const MATERIAL_HOVER_OUTLINE_MASK_ORDER = 99998;
+const MATERIAL_HOVER_OUTLINE_ORDER = 99999;
+
+type MaterialOutlineRimProps = {
+  geometry: THREE.BufferGeometry;
+  position: THREE.Vector3;
+  scale: number;
+  color: string;
+  opacity: number;
+  maskOrder: number;
+  rimOrder: number;
+  planes?: THREE.Plane[];
+};
+
+/**
+ * A stencil-masked silhouette: backfaces of the model, expanded, drawn only where
+ * the model's own stencil is clear, with no depth test.
+ *
+ * Without the mask a depth-test-free rim paints the whole model; without clearing
+ * the depth test it is hidden under the plate and grid, which draw after it.
+ */
+function MaterialOutlineRim({
+  geometry,
+  position,
+  scale,
+  color,
+  opacity,
+  maskOrder,
+  rimOrder,
+  planes,
+}: MaterialOutlineRimProps) {
+  return (
+    <>
+      <mesh geometry={geometry} position={position} renderOrder={maskOrder} raycast={() => {}}>
+        <meshBasicMaterial
+          colorWrite={false}
+          depthWrite={false}
+          depthTest={false}
+          stencilWrite
+          stencilRef={1}
+          stencilFunc={THREE.AlwaysStencilFunc}
+          stencilZPass={THREE.ReplaceStencilOp}
+          clippingPlanes={planes}
+        />
+      </mesh>
+      <mesh geometry={geometry} position={position} scale={scale} renderOrder={rimOrder} raycast={() => {}}>
+        <meshBasicMaterial
+          color={color}
+          side={THREE.BackSide}
+          transparent
+          opacity={opacity}
+          depthWrite={false}
+          depthTest={false}
+          // Mask wrote 1 across the model; draw the rim only where it is not 1.
+          stencilWrite
+          stencilRef={1}
+          stencilFunc={THREE.NotEqualStencilFunc}
+          stencilFail={THREE.KeepStencilOp}
+          stencilZFail={THREE.KeepStencilOp}
+          stencilZPass={THREE.KeepStencilOp}
+          toneMapped={false}
+          clippingPlanes={planes}
+        />
+      </mesh>
+    </>
+  );
+}
 let _clipCacheKey = '';
 let _clipCacheResult: THREE.Intersection | null = null;
 
@@ -224,6 +294,7 @@ function StlMeshComponent({
   suppressNextClickRef,
   modelId,
   isSelected,
+  materialOutlineEnabled = false,
   isMarqueeCandidate,
   onModelHoverPointChange,
   onModelHoverModelChange,
@@ -300,6 +371,12 @@ function StlMeshComponent({
   suppressNextClickRef?: React.RefObject<boolean>;
   /** Model ID for picking registration */
   modelId: string;
+  /**
+   * Draw a silhouette around the selected model. Multi-material printing colours
+   * each mesh by its resin, so the selection tint alone can disappear into a
+   * similar hue; the outline is the second, colour-independent cue.
+   */
+  materialOutlineEnabled?: boolean;
   /** Whether model is selected (tints material) */
   isSelected?: boolean;
   /** Whether model is currently inside marquee drag window */
@@ -347,6 +424,32 @@ function StlMeshComponent({
   const isEffectivelySelected = optimisticSelectedModelId !== null
     ? optimisticSelectedModelId === modelId
     : !!isSelected;
+  // In multi-material mode the mesh colour *is* the assigned resin, so selection is
+  // carried by the rim alone; tinting would hide the colour the user just chose.
+  // Hover keeps its tint, which is transient and not the selection cue.
+  const selectionTintActive = isEffectivelySelected && !materialOutlineEnabled;
+
+  // Inverted-hull silhouette: backfaces of the model, pushed out along a uniform
+  // scale. Sharing the geometry costs no extra vertex memory, and the shell is
+  // mounted only while this model is selected in multi-material mode. Thin and
+  // white on purpose - a rim, not a halo, and independent of the resin colour.
+  const materialHoverOutlineScale = React.useMemo(() => {
+    if (!materialOutlineEnabled) return 1;
+    if (!geometry.boundingSphere) geometry.computeBoundingSphere();
+    const radius = geometry.boundingSphere?.radius ?? 0;
+    if (!(radius > 0)) return 1;
+    return 1 + Math.min(0.008, 0.18 / radius);
+  }, [geometry, materialOutlineEnabled]);
+
+  const materialOutlineScale = React.useMemo(() => {
+    if (!materialOutlineEnabled || !isEffectivelySelected) return 1;
+    if (!geometry.boundingSphere) geometry.computeBoundingSphere();
+    const radius = geometry.boundingSphere?.radius ?? 0;
+    if (!(radius > 0)) return 1;
+    // A hairline: about 0.3 mm on a typical part, capped so small parts do not
+    // get a fat rim.
+    return 1 + Math.min(0.012, 0.3 / radius);
+  }, [geometry, isEffectivelySelected, materialOutlineEnabled]);
 
   // Note: This works because StlMesh is rendered inside PickingProvider
   const { hit } = usePicking(); // Import usePicking at top if not already used inside StlMesh
@@ -670,6 +773,8 @@ function StlMeshComponent({
     ? isExternallyHoveredModel
     : (isExternallyHoveredModel || isHoveredModelFromPicking);
   const isMarqueeHovered = !shouldSuppressModelInteraction && !!isMarqueeCandidate;
+  // Multi-material meshes show their resin; hover is a faint rim, not a tint.
+  const hoverTintActive = (isHoveredModel || isMarqueeHovered) && !materialOutlineEnabled;
   const isSupportDimmed = typeof supportNonSelectedOpacity === 'number';
   isSupportDimmedRef.current = isSupportDimmed; // keep ref current every render
   const dimmedBaseOpacity = isSupportDimmed
@@ -1566,8 +1671,8 @@ if (uDitherAmount > 0.0) {
         ) : (
           <MeshShaderMaterial
             shaderType={baseShaderType}
-            isSelected={isEffectivelySelected}
-            isHovered={isHoveredModel || isMarqueeHovered}
+            isSelected={selectionTintActive}
+            isHovered={hoverTintActive}
             useVertexColors={hasVertexColorAttribute}
             hoverTintColor={hoverTintColor}
             selectedTintColor={selectedTintColor}
@@ -1587,6 +1692,33 @@ if (uDitherAmount > 0.0) {
         )}
       </mesh>
 
+      {/* Selection is the rim in multi-material mode, because the mesh colour is the
+          assigned resin. Hover gets a fainter grey rim instead of a tint. */}
+      {materialOutlineEnabled && isEffectivelySelected && (
+        <MaterialOutlineRim
+          geometry={geometry}
+          position={meshLocalOffset}
+          scale={materialOutlineScale}
+          color="#ffffff"
+          opacity={1}
+          maskOrder={MATERIAL_OUTLINE_MASK_ORDER}
+          rimOrder={MATERIAL_OUTLINE_ORDER}
+          planes={planes}
+        />
+      )}
+      {materialOutlineEnabled && !isEffectivelySelected && (isHoveredModel || isMarqueeHovered) && (
+        <MaterialOutlineRim
+          geometry={geometry}
+          position={meshLocalOffset}
+          scale={materialHoverOutlineScale}
+          color="#9aa0aa"
+          opacity={0.55}
+          maskOrder={MATERIAL_HOVER_OUTLINE_MASK_ORDER}
+          rimOrder={MATERIAL_HOVER_OUTLINE_ORDER}
+          planes={planes}
+        />
+      )}
+
       {/* ── Interior View Mode: cavity shell visual-only ── */}
       {interiorView && cavityGeometry && (
         <>
@@ -1594,8 +1726,8 @@ if (uDitherAmount > 0.0) {
           <mesh geometry={cavityGeometry} position={meshLocalOffset} renderOrder={1} raycast={() => null}>
             <MeshShaderMaterial
               shaderType={baseShaderType}
-              isSelected={isEffectivelySelected}
-              isHovered={isHoveredModel || isMarqueeHovered}
+              isSelected={selectionTintActive}
+              isHovered={hoverTintActive}
               useVertexColors={false}
               hoverTintColor={hoverTintColor}
               selectedTintColor={selectedTintColor}

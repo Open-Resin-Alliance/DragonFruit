@@ -625,6 +625,9 @@ async function prepareVoxlDocumentV2(
       mesh: meshRef,
       isSupportGeometry: m.isSupportGeometry,
       linkGroupId: m.linkGroupId,
+      // Written only when set, so a single-material scene's bytes do not move.
+      ...(m.materialProfileId ? { materialProfileId: m.materialProfileId } : {}),
+      ...(m.materialBaseColor ? { materialBaseColor: m.materialBaseColor } : {}),
       classification: m.classification,
     };
   });
