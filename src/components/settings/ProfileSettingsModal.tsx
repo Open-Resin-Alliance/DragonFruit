@@ -2,6 +2,8 @@
 
 import React from 'react';
 import { Plural, Trans } from '@lingui/react/macro';
+import { msg } from '@lingui/core/macro';
+import { useLingui } from '@lingui/react';
 import { createPortal } from 'react-dom';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { AlertTriangle, Box, Check, Square, ChevronDown, ChevronLeft, ChevronRight, Copy, Download, Edit3, FlaskConical, Frown, ImagePlus, Info, LayoutGrid, Lock, Plus, Printer, RefreshCw, Search, Trash2, Unlock, Upload, Wifi, WifiOff, X } from 'lucide-react';
@@ -10,6 +12,7 @@ import FleetManagement from '@/components/settings/FleetManagement';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import { Tooltip } from '@/components/ui/Tooltip';
 import {
   PrinterVariantPickerModal,
   type PrinterVariantPickerNetworkContext,
@@ -266,6 +269,13 @@ function computeBuildDimensionMm(resolutionPx: number, pixelSizeUm: number): num
   return Number(((safeResolution * safePixelSize) / 1000).toFixed(3));
 }
 
+/**
+ * Tooltip for a profile whose contributing plugin was removed. Module scope on
+ * purpose: an interpolated message inside a component desyncs from the catalog when
+ * React Compiler renames the local.
+ */
+const missingPluginMessage = (pluginName: string) => msg`Plugin ${pluginName} is missing.`;
+
 function resolveDefaultLocalSettingsForOutput(
   outputFormat: string,
   settingsMode?: string,
@@ -326,6 +336,7 @@ export function ProfileSettingsModal({
   }, []);
 
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
+  const { _ } = useLingui();
   const [selectedPrinterId, setSelectedPrinterId] = React.useState<string | null>(null);
   const [selectedMaterialId, setSelectedMaterialId] = React.useState<string | null>(null);
   const [selectedManufacturer, setSelectedManufacturer] = React.useState<string | null>(null);
@@ -1350,6 +1361,8 @@ export function ProfileSettingsModal({
   const renderPrinterRailCard = React.useCallback((options: {
     key: string;
     active: boolean;
+    /** Greyed out and inert: the profile's plugin is gone. */
+    muted?: boolean;
     draggable?: boolean;
     dragging?: boolean;
     onClick: () => void;
@@ -1376,6 +1389,7 @@ export function ProfileSettingsModal({
     const {
       key,
       active,
+      muted,
       draggable,
       dragging,
       onClick,
@@ -1408,7 +1422,8 @@ export function ProfileSettingsModal({
         onDragEnd={onDragEnd}
         onDragOver={onDragOver}
         onDrop={onDrop}
-        className={`min-w-0 w-full rounded-md border p-2 transition-all duration-150 ${draggable ? (dragging ? 'opacity-60' : 'cursor-grab active:cursor-grabbing') : ''}`}
+        className={`min-w-0 w-full rounded-md border p-2 transition-all duration-150 ${muted ? 'opacity-45 grayscale pointer-events-none' : draggable ? (dragging ? 'opacity-60' : 'cursor-grab active:cursor-grabbing') : ''}`}
+        aria-disabled={muted || undefined}
         onDoubleClick={onDoubleClick}
         style={active ? activeStyles : inactiveStyles}
       >
@@ -3744,6 +3759,7 @@ export function ProfileSettingsModal({
                   })
                   : profileState.printerProfiles.map((printer) => {
                   const active = printer.id === selectedPrinter?.id;
+                  const missingPlugin = printer.missingPlugin;
                   const isGenericPrinter = (printer.manufacturer ?? '').toLowerCase() === 'generic'
                     || printer.name.toLowerCase().includes('generic');
                   const activeDeviceReachability = printer.activeNetworkDeviceId
@@ -3772,12 +3788,13 @@ export function ProfileSettingsModal({
                     ? `${bitDepthBits} Bit`
                     : null;
 
-                  return renderPrinterRailCard({
+                  const card = renderPrinterRailCard({
                     key: printer.id,
                     active,
-                    draggable: true,
+                    muted: Boolean(missingPlugin),
+                    draggable: !missingPlugin,
                     dragging: printerDragId === printer.id,
-                    onClick: () => handlePickPrinter(printer.id),
+                    onClick: () => { if (!missingPlugin) handlePickPrinter(printer.id); },
                     onDoubleClick: () => {
                       handlePickPrinter(printer.id);
                       setIsEditingPrinter(true);
@@ -3907,6 +3924,17 @@ export function ProfileSettingsModal({
                       background: 'var(--surface-2)',
                     },
                   });
+
+                  if (!missingPlugin) return card;
+                  return (
+                    <Tooltip
+                      key={`missing-${printer.id}`}
+                      content={_(missingPluginMessage(missingPlugin.name))}
+                      wrapperClassName="block"
+                    >
+                      {card}
+                    </Tooltip>
+                  );
                   })}
               </div>
 

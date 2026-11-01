@@ -145,6 +145,8 @@ export type PrinterProfile = {
     buildDimensionMode?: PrinterBuildDimensionMode;
     officialPresetId?: string;
     officialPresetVersion?: number;
+    /** Set when the plugin that contributed this profile's preset was removed. */
+    missingPlugin?: { id: string; name: string };
     isOfficial?: boolean;
     isCustom?: boolean;
     safetyMarginMm?: {
@@ -927,6 +929,15 @@ const DEFAULT_PRINTER_PROFILES: PrinterProfile[] = BUILTIN_PRINTER_PRESETS.map((
     network: sanitizePrinterNetworkSettings((preset as any).network),
 }));
 
+function sanitizeMissingPlugin(value: unknown): PrinterProfile['missingPlugin'] {
+    if (!value || typeof value !== 'object') return undefined;
+    const source = value as { id?: unknown; name?: unknown };
+    const id = typeof source.id === 'string' ? source.id.trim() : '';
+    if (!id) return undefined;
+    const name = typeof source.name === 'string' ? source.name.trim() : '';
+    return { id, name: name || id };
+}
+
 function resolveOfficialPresetId(profile: Partial<PrinterProfile>): string | undefined {
     if (typeof (profile as any).officialPresetId === 'string') {
         return ((profile as any).officialPresetId as string).trim() || undefined;
@@ -1111,6 +1122,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
                     buildDimensionMode: resolvedBuildDimensionMode,
                     officialPresetId,
                     officialPresetVersion: normalizeProfileVersion((profile as any).officialPresetVersion, fallbackOfficialPresetVersion),
+                    missingPlugin: sanitizeMissingPlugin((profile as any).missingPlugin),
                     isOfficial: isOfficialProfileByHeuristic(profile),
                     isCustom: typeof profile.isCustom === 'boolean' ? profile.isCustom : !isOfficialProfileByHeuristic(profile),
                     buildVolumeMm: (() => {
@@ -1673,6 +1685,48 @@ export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>)
     setState(ensureActiveMaterialForActivePrinter(nextState));
 
     return profile.id;
+}
+
+/**
+ * Marks every profile whose preset came from `pluginId` as missing, which is what
+ * the printer rail greys out. Profiles are matched by preset id, so profiles created
+ * before the package ever recorded provenance are covered too.
+ */
+export function markPrinterProfilesMissingPlugin(
+    pluginId: string,
+    pluginName: string,
+    presetIds: readonly string[],
+): void {
+    ensureHydrated();
+    const ids = new Set(presetIds);
+    if (ids.size === 0) return;
+    let changed = false;
+    const printerProfiles = state.printerProfiles.map((profile) => {
+        const presetId = resolveOfficialPresetId(profile);
+        if (!presetId || !ids.has(presetId)) return profile;
+        if (profile.missingPlugin?.id === pluginId) return profile;
+        changed = true;
+        return { ...profile, missingPlugin: { id: pluginId, name: pluginName } };
+    });
+    if (!changed) return;
+    setState({ ...state, printerProfiles });
+}
+
+/** Clears the mark once the plugin (and the presets behind those profiles) is back. */
+export function clearPrinterProfilesMissingPlugin(pluginId: string, presetIds: readonly string[]): void {
+    ensureHydrated();
+    const ids = new Set(presetIds);
+    let changed = false;
+    const printerProfiles = state.printerProfiles.map((profile) => {
+        if (profile.missingPlugin?.id !== pluginId) return profile;
+        const presetId = resolveOfficialPresetId(profile);
+        if (ids.size > 0 && (!presetId || !ids.has(presetId))) return profile;
+        changed = true;
+        const { missingPlugin: _missing, ...rest } = profile;
+        return rest;
+    });
+    if (!changed) return;
+    setState({ ...state, printerProfiles });
 }
 
 export function getAvailablePrinterPresets(): PrinterPreset[] {

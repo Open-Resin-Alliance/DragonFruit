@@ -5,7 +5,11 @@ import type {
 import { importSideloadedFile, listSideloadedPlugins, type InstalledSideloadedPlugin } from '@/features/plugins/sideloadedPlugins';
 import { getInstalledProfilePlugins } from '@/features/plugins/pluginRegistry';
 import { inlineSideloadedPresetAssets } from '@/features/plugins/pluginAssets';
-import { installPluginFromManifest, uninstallPlugin } from '@/features/profiles/profileStore';
+import {
+  clearPrinterProfilesMissingPlugin,
+  installPluginFromManifest,
+  uninstallPlugin,
+} from '@/features/profiles/profileStore';
 import type { PluginManifest } from '@/features/plugins/pluginRegistry';
 import { parseSideloadedSceneContainer } from '@/features/plugins/sideloadedSceneContainer';
 import {
@@ -59,6 +63,13 @@ async function syncProfileContributions(plugins: InstalledSideloadedPlugin[]) {
     const materialTemplates = Array.isArray(source.materialTemplates) ? source.materialTemplates : [];
     const declaredMode = (source.network?.mode ?? '').trim().toLowerCase();
     present.add(source.id);
+
+    // The package is installed: any profile that was greyed out because this
+    // plugin went missing is usable again, as long as its preset came back.
+    const presetIds = printerPresets
+      .map((preset) => (typeof preset?.presetId === 'string' ? preset.presetId : ''))
+      .filter((presetId) => presetId.length > 0);
+    clearPrinterProfilesMissingPlugin(source.id, presetIds);
 
     const registered = getInstalledProfilePlugins().find((entry) => entry.manifest.id === source.id);
     const unchanged = Boolean(registered)

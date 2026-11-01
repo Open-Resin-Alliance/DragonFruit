@@ -1162,8 +1162,15 @@ export function uninstallExternalProfilePlugin(pluginId: string): boolean {
 export function getRuntimePrinterPresets(basePresets: PrinterPreset[]): PrinterPreset[] {
   hydratePluginRegistry();
   const byId = new Map<string, PrinterPreset>();
+  // Provenance travels with the preset so a profile can say who contributed it.
   const pluginPresets = getInstalledProfilePlugins()
-    .flatMap((plugin) => plugin.enabled ? (plugin.manifest.printerPresets ?? []) : []);
+    .flatMap((plugin) => (plugin.enabled
+      ? (plugin.manifest.printerPresets ?? []).map((preset) => ({
+        ...preset,
+        pluginId: plugin.manifest.id,
+        pluginName: plugin.manifest.name,
+      }))
+      : []));
 
   [...basePresets, ...pluginPresets]
     .forEach((preset) => {

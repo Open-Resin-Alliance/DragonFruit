@@ -14,8 +14,9 @@ const contract = {
 test('a declared contract keeps its fields and metadata', () => {
   const adapter = sanitizeDeclaredMaterialSettings('.exf', {
     ...contract,
-    tabs: [{ id: 'basic', title: 'Basic' }],
-    cards: [{ id: 'print', title: 'Print', tabId: 'basic' }],
+    tabs: [{ id: 'basic', title: 'Basic' }, { id: 'vendor', title: 'Vendor', order: 20 }],
+    sections: [{ id: 'exposure', title: 'Exposure', tabId: 'basic' }],
+    cards: [{ id: 'print', title: 'Print', tabId: 'basic', sectionId: 'exposure' }],
   });
 
   assert.ok(adapter);
@@ -25,8 +26,10 @@ test('a declared contract keeps its fields and metadata', () => {
   assert.equal(adapter.fields[0].kind, 'number');
   assert.equal(adapter.fields[0].max, 30);
   assert.deepEqual(adapter.fields[1].options, [{ value: '2', label: '2x' }]);
-  assert.deepEqual(adapter.tabs?.map((tab) => tab.id), ['basic']);
+  assert.deepEqual(adapter.tabs?.map((tab) => tab.id), ['basic', 'vendor']);
+  assert.deepEqual(adapter.sections?.map((section) => section.id), ['exposure']);
   assert.deepEqual(adapter.cards?.map((card) => card.id), ['print']);
+  assert.equal(adapter.cards?.[0].sectionId, 'exposure');
 });
 
 test('a field the renderer cannot interpret is dropped, not guessed at', () => {

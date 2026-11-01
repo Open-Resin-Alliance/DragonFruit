@@ -1,19 +1,41 @@
 {
   "byOutput": {
     ".exf": {
-      "displayName": "Echo settings",
+      "displayName": "Echo printer settings",
       "tabs": [
         {
           "id": "basic",
           "title": "Basic",
           "order": 10
+        },
+        {
+          "id": "motion",
+          "title": "Motion",
+          "order": 20
+        },
+        {
+          "id": "vendor",
+          "title": "Echo",
+          "order": 30
         }
       ],
       "sections": [
         {
-          "id": "exposure",
+          "id": "exposure-section",
           "title": "Exposure",
           "tabId": "basic",
+          "order": 10
+        },
+        {
+          "id": "motion-section",
+          "title": "Lift and retract",
+          "tabId": "motion",
+          "order": 10
+        },
+        {
+          "id": "echo-section",
+          "title": "Echo options",
+          "tabId": "vendor",
           "order": 10
         }
       ],
@@ -21,12 +43,48 @@
         {
           "id": "exposure-card",
           "title": "Print",
-          "sectionId": "exposure",
+          "sectionId": "exposure-section",
           "tabId": "basic",
+          "order": 10
+        },
+        {
+          "id": "bottom-card",
+          "title": "Bottom layers",
+          "sectionId": "exposure-section",
+          "tabId": "basic",
+          "order": 20
+        },
+        {
+          "id": "motion-card",
+          "title": "Speed",
+          "sectionId": "motion-section",
+          "tabId": "motion",
+          "order": 10
+        },
+        {
+          "id": "echo-card",
+          "title": "Echo options",
+          "sectionId": "echo-section",
+          "tabId": "vendor",
           "order": 10
         }
       ],
       "fields": [
+        {
+          "key": "layerHeightMm",
+          "label": "Layer height (mm)",
+          "kind": "number",
+          "defaultValue": 0.05,
+          "min": 0.01,
+          "max": 0.2,
+          "step": 0.01,
+          "placement": {
+            "tabId": "basic",
+            "sectionId": "exposure-section",
+            "cardId": "exposure-card",
+            "order": 10
+          }
+        },
         {
           "key": "exposureSec",
           "label": "Exposure (s)",
@@ -37,9 +95,39 @@
           "step": 0.1,
           "placement": {
             "tabId": "basic",
-            "sectionId": "exposure",
+            "sectionId": "exposure-section",
             "cardId": "exposure-card",
+            "order": 20
+          }
+        },
+        {
+          "key": "bottomExposureSec",
+          "label": "Bottom exposure (s)",
+          "kind": "number",
+          "defaultValue": 28,
+          "min": 1,
+          "max": 120,
+          "step": 0.5,
+          "placement": {
+            "tabId": "basic",
+            "sectionId": "exposure-section",
+            "cardId": "bottom-card",
             "order": 10
+          }
+        },
+        {
+          "key": "bottomLayerCount",
+          "label": "Bottom layers",
+          "kind": "integer",
+          "defaultValue": 5,
+          "min": 0,
+          "max": 30,
+          "step": 1,
+          "placement": {
+            "tabId": "basic",
+            "sectionId": "exposure-section",
+            "cardId": "bottom-card",
+            "order": 20
           }
         },
         {
@@ -51,10 +139,66 @@
           "max": 20,
           "step": 0.5,
           "placement": {
-            "tabId": "basic",
-            "sectionId": "exposure",
-            "cardId": "exposure-card",
+            "tabId": "motion",
+            "sectionId": "motion-section",
+            "cardId": "motion-card",
+            "order": 10
+          }
+        },
+        {
+          "key": "liftSpeedMmMin",
+          "label": "Lift speed (mm/min)",
+          "kind": "number",
+          "defaultValue": 60,
+          "min": 10,
+          "max": 300,
+          "step": 5,
+          "placement": {
+            "tabId": "motion",
+            "sectionId": "motion-section",
+            "cardId": "motion-card",
             "order": 20
+          }
+        },
+        {
+          "key": "retractSpeedMmMin",
+          "label": "Retract speed (mm/min)",
+          "kind": "number",
+          "defaultValue": 150,
+          "min": 10,
+          "max": 500,
+          "step": 10,
+          "placement": {
+            "tabId": "motion",
+            "sectionId": "motion-section",
+            "cardId": "motion-card",
+            "order": 30
+          }
+        },
+        {
+          "key": "resinType",
+          "label": "Resin family",
+          "kind": "select",
+          "defaultValue": "standard",
+          "options": [
+            {
+              "value": "standard",
+              "label": "Standard"
+            },
+            {
+              "value": "tough",
+              "label": "Tough"
+            },
+            {
+              "value": "castable",
+              "label": "Castable"
+            }
+          ],
+          "placement": {
+            "tabId": "vendor",
+            "sectionId": "echo-section",
+            "cardId": "echo-card",
+            "order": 10
           }
         },
         {
@@ -74,12 +218,28 @@
             {
               "value": "4",
               "label": "4x"
+            },
+            {
+              "value": "8",
+              "label": "8x"
             }
           ],
           "placement": {
-            "tabId": "basic",
-            "sectionId": "exposure",
-            "cardId": "exposure-card",
+            "tabId": "vendor",
+            "sectionId": "echo-section",
+            "cardId": "echo-card",
+            "order": 20
+          }
+        },
+        {
+          "key": "serialPrefix",
+          "label": "Job name prefix",
+          "kind": "text",
+          "defaultValue": "echo",
+          "placement": {
+            "tabId": "vendor",
+            "sectionId": "echo-section",
+            "cardId": "echo-card",
             "order": 30
           }
         },
@@ -90,13 +250,55 @@
           "defaultValue": false,
           "metadataPath": "echo.embedScene",
           "placement": {
-            "tabId": "basic",
-            "sectionId": "exposure",
-            "cardId": "exposure-card",
+            "tabId": "vendor",
+            "sectionId": "echo-section",
+            "cardId": "echo-card",
             "order": 40
           }
         }
       ]
+    }
+  },
+  "byOutputAndMode": {
+    ".exf": {
+      "twostage": {
+        "$inherit": "default",
+        "tabs": [
+          {
+            "id": "twostage",
+            "title": "Two-stage",
+            "order": 40
+          }
+        ],
+        "fields": [
+          {
+            "key": "liftDistance2Mm",
+            "label": "Second lift (mm)",
+            "kind": "number",
+            "defaultValue": 4,
+            "min": 0,
+            "max": 20,
+            "step": 0.5,
+            "placement": {
+              "tabId": "twostage",
+              "order": 10
+            }
+          },
+          {
+            "key": "liftSpeed2MmMin",
+            "label": "Second lift speed (mm/min)",
+            "kind": "number",
+            "defaultValue": 40,
+            "min": 10,
+            "max": 300,
+            "step": 5,
+            "placement": {
+              "tabId": "twostage",
+              "order": 20
+            }
+          }
+        ]
+      }
     }
   }
 }

@@ -26,6 +26,7 @@ import {
 } from '@/features/plugins/sideloadedPlugins';
 import {
   getInstalledPlugins,
+  markPrinterProfilesMissingPlugin,
   getProfileStoreSnapshot,
   getProfileStoreServerSnapshot,
   installPluginFromManifest,
@@ -396,9 +397,17 @@ export function PluginsSettingsTab() {
     setPendingRemoveSideload(null);
     setSideloadBusy(true);
     try {
+      // Collect the presets before the package (and its manifest) is gone: the
+      // profiles built from them are what stays behind, greyed out until it returns.
+      const presetIds = (Array.isArray(target.manifest.printerPresets) ? target.manifest.printerPresets : [])
+        .map((preset) => (preset && typeof preset === 'object' && typeof (preset as { presetId?: unknown }).presetId === 'string'
+          ? String((preset as { presetId: string }).presetId)
+          : ''))
+        .filter((presetId) => presetId.length > 0);
       await removeSideloadedPlugin(target.manifest.id);
       await refreshSideloaded();
       await refreshSideloadedContributions();
+      markPrinterProfilesMissingPlugin(target.manifest.id, target.manifest.name, presetIds);
       setReloadRequired(true);
     } catch (error) {
       setStatus({ kind: 'error', message: String(error) });

@@ -241,7 +241,7 @@ cargo run -p dragonfruit-plugin-package --example pack -- \
   --templates rust/dragonfruit-plugin-sdk/examples/full_plugin_templates.json \
   --material-settings rust/dragonfruit-plugin-sdk/examples/full_plugin_material_settings.json \
   --remote-materials rust/dragonfruit-plugin-sdk/examples/full_plugin_remote_materials.json \
-  --asset rust/dragonfruit-plugin-sdk/examples/echo_printer.png \
+  --asset rust/dragonfruit-plugin-sdk/examples/dragonfruit_simple_icon.svg \
   --job-metadata rust/dragonfruit-plugin-sdk/examples/full_plugin_job_metadata.json \
   --network-monitoring rust/dragonfruit-plugin-sdk/examples/full_plugin_monitoring.json
 ```

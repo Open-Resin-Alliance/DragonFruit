@@ -23,7 +23,7 @@ Read this page before changing anything in this tier. "Protocol v1" and
 | `network` capability | host runtime + SDK harness | done |
 | `slicerEncoder` capability | host runtime + engine adapter + SDK harness | done, tested against a real encoder process |
 | `fileType` capability | host runtime + renderer container parser | done, tested against a real importer process |
-| printer presets and material templates | manifest `printerPresets` / `materialTemplates` | done: the renderer registers them through the same store entry the simple tier uses |
+| printer presets and material templates | manifest `printerPresets` / `materialTemplates` | done: the renderer registers them through the same store entry the simple tier uses; profiles outlive removal and are marked missing |
 | declared network mode | manifest `network` | done: the renderer registers the mode and the generic panels drive it |
 | job upload | manifest `network.operations.upload` + the host chunk loop | done: printing works for a declared mode |
 | material pane schema | manifest `materialSettings` | done: validated once, rendered by the same form as compiled adapters |
@@ -188,6 +188,12 @@ Removing the package removes the profile entry and the presets with it. A preset
 whose `display.outputFormat` names the package's own format is the usual shape,
 so picking that printer also picks the encoder.
 
+A printer profile built from such a preset **outlives the package**: its scene and
+its settings are the user's, so removing the plugin only marks the profile
+(`missingPlugin: { id, name }`, matched by preset id). The rail greys it out,
+disables it and a tooltip names the missing plugin; reinstalling the package clears
+the mark when its presets return.
+
 ### Network mode
 
 The `network` block does more than name the answering plugin: it registers a
@@ -225,7 +231,7 @@ Whatever needs its own rendering is the planned UI island, not this field — se
 ### Assets
 
 A payload may carry images under `payload/assets/`. A printer preset references one
-by its path inside that directory (`"imageAssetPath": "echo_printer.png"`), and the
+by its path inside that directory (`"imageAssetPath": "dragonfruit_simple_icon.svg"`), and the
 renderer asks the host for it at registration:
 `sideloaded_plugin_asset(pluginId, assetPath)` returns a data URL, because a webview
 cannot load a path that lives in the app data dir. The inlined URL is what the
