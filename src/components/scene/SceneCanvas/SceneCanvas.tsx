@@ -6830,9 +6830,20 @@ export function SceneCanvas({
                 // dimmed base only muddies the colour the user picked it for; in the export
                 // workspace, where everything on every bed reads as selected, dimming it is the
                 // whole difference between the two beds.
+                // A single-material printer cannot print a tank assignment, so the
+                // mesh shows the colour it had before the material was assigned
+                // even if the assignment is still on the model (a scene kept as-is
+                // at import, or one restored from autosave mid-load).
+                const modelHasMaterialState = !multiMaterialMode && (
+                  !!model.materialProfileId
+                  || (model.bodyColors?.some((entry) => !!entry) ?? false)
+                );
+                const modelBaseColor = modelHasMaterialState
+                  ? (model.materialBaseColor || meshColor)
+                  : (model.color || meshColor);
                 const modelMeshColor = modelPlateState?.dimmedColor && !isModelSelected
                   ? modelPlateState.dimmedColor
-                  : (model.color || meshColor);
+                  : modelBaseColor;
                 // Use live drag transform only during active/guarded gizmo interaction.
                 // Otherwise stale refs can mask immediate panel-driven updates (e.g. reset scale).
                 const liveDragTransformForRender = (
@@ -6943,7 +6954,7 @@ export function SceneCanvas({
                       bodyGeometries={model.splitBodies && model.splitBodies.length > 1
                         ? model.splitBodies.map((body) => body.geometry)
                         : undefined}
-                      bodyColors={model.bodyColors}
+                      bodyColors={multiMaterialMode ? model.bodyColors : undefined}
                       selectedBodyIndices={selectedBodyIndicesByModel.get(model.id)}
                       hoverTintStrength={hoverTintStrength}
                       selectedTintStrength={selectedTintStrength}

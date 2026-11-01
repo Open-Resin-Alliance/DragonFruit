@@ -104,9 +104,16 @@ increments are:
 A scene authored on a Multi-Tank printer (models or bodies carry
 `materialProfileId` / `bodyMaterialProfileIds`) cannot print on a single-material
 one. Leaving Multi-Tank — by switching printers or by editing the active profile's
-material mode — raises a blocking dialog offering *Keep Multi-Tank Printer* (switch
-back, or restore multiTank on the same profile) or *Start New Scene* (discard the
-scene; the dialog says unsaved progress is lost).
+material mode — raises a blocking dialog offering *Cancel* (return to the printer, or
+restore multiTank on the same profile) or *Continue*. Continue is non-destructive: the
+assignments stay on the models and are only hidden — the renderer draws the
+pre-assignment colour and ignores body colours while the active printer is
+single-material. Selecting a Multi-Tank printer again brings them back, including the
+body split.
+
+Importing such a scene while a single-material profile is selected gets the
+*Built for Multi-Material* variant of the printer-mismatch dialog with the same
+semantics: *Keep* hides the assignments, it does not delete them.
 
 ## Next step
 

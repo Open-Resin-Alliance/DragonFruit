@@ -1608,6 +1608,10 @@ export type PrinterMismatchPrompt = {
   bundle: VoxlPrinterBundle;
   /** Material profiles the scene references, adopted once its printer is chosen. */
   materials?: unknown[];
+  /** The scene names a tank material for models or bodies. */
+  sceneUsesMultiTankMaterials?: boolean;
+  /** Material mode of the profile selected now, so the dialog can warn about losing it. */
+  currentMaterialMode?: string;
   /** The printer's name as the bundle carries it; absent when it has none. */
   recordedName?: string;
   recordedBuildVolumeMm: { width: number; depth: number; height: number };
@@ -1721,6 +1725,7 @@ function scheduleChunkStoreSweep(getModels: () => LoadedModel[]): void {
       });
   }, 1_500);
 }
+
 
 export function useSceneCollectionManager(options?: {
   /**
@@ -2090,6 +2095,8 @@ export function useSceneCollectionManager(options?: {
    * when this machine already has it, and otherwise adds it from the bundle the
    * scene carries, which is the point of shipping it whole.
    */
+
+
   const resolvePrinterMismatch = useCallback((choice: 'switch' | 'keep') => {
     if (choice === 'switch' && printerMismatch) {
       const installedId = printerMismatch.installedProfileId;
@@ -7320,9 +7327,14 @@ export function useSceneCollectionManager(options?: {
             const recordedName = typeof recordedPrinter.printer.name === 'string' && recordedPrinter.printer.name.trim().length > 0
               ? recordedPrinter.printer.name
               : undefined;
+            const sceneUsesMultiTankMaterials = document.models.some((entry) => (
+              !!entry.materialProfileId || (entry.bodyMaterialProfileIds?.some((id) => !!id) ?? false)
+            ));
             setPrinterMismatch({
               bundle: recordedPrinter,
               ...(sceneMaterials.length > 0 ? { materials: sceneMaterials } : {}),
+              sceneUsesMultiTankMaterials,
+              currentMaterialMode: currentPrinter.materialMode,
               ...(recordedName ? { recordedName } : {}),
               recordedBuildVolumeMm: { ...recordedVolume },
               currentName: currentPrinter.name,

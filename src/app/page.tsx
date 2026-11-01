@@ -938,6 +938,9 @@ export default function Home() {
   );
   const previousPrinterRef = React.useRef<{ id: string; materialMode?: string } | null>(null);
   const [printerSceneConflictPreviousId, setPrinterSceneConflictPreviousId] = React.useState<string | null>(null);
+  // A printer the user chose to keep despite the mismatch; the warning must not
+  // re-raise for the same choice on every render.
+  const [conflictAcknowledgedPrinterId, setConflictAcknowledgedPrinterId] = React.useState<string | null>(null);
   React.useEffect(() => {
     const printer = activePrinterProfile;
     const previous = previousPrinterRef.current;
@@ -949,12 +952,15 @@ export default function Home() {
     if (printer.materialMode === 'multiTank') {
       // The compatible state again — nothing to warn about.
       setPrinterSceneConflictPreviousId(null);
+      setConflictAcknowledgedPrinterId(null);
       return;
     }
     if (!sceneUsesMultiTankMaterials) {
       setPrinterSceneConflictPreviousId(null);
+      setConflictAcknowledgedPrinterId(null);
       return;
     }
+    if (conflictAcknowledgedPrinterId === printer.id) return;
 
     // Only *leaving* Multi-Tank raises the warning — by switching printers or by
     // editing this profile's material mode. Loading a saved scene under a
@@ -964,7 +970,7 @@ export default function Home() {
     if (leftMultiTank) {
       setPrinterSceneConflictPreviousId(previous.id);
     }
-  }, [activePrinterProfile, sceneUsesMultiTankMaterials]);
+  }, [activePrinterProfile, conflictAcknowledgedPrinterId, sceneUsesMultiTankMaterials]);
 
   /**
    * Undo the incompatible choice: go back to the printer that was active, or —
@@ -11973,9 +11979,9 @@ export default function Home() {
 
       <StructuredDialogModal
         open={printerSceneConflictPreviousId !== null}
-        ariaLabel={_(msg`Multi-Tank scene on a single-material printer`)}
-        title={_(msg`This scene needs a Multi-Tank printer`)}
-        subtitle={_(msg`Start a new scene to use this printer`)}
+        ariaLabel={_(msg`Multi-Material scene on a single-material printer`)}
+        title={_(msg`This scene is made for a multi-material printer`)}
+        subtitle={_(msg`Its materials stay hidden until you switch back`)}
         icon={<AlertTriangle className="h-4 w-4" />}
         iconTone="warning"
         closeAriaLabel={_(msg`Keep the Multi-Tank printer`)}
@@ -11986,20 +11992,19 @@ export default function Home() {
               variant="secondary"
               onClick={keepMultiTankPrinter}
             >
-              <Trans>Keep Multi-Tank Printer</Trans>
+              <Trans>Cancel</Trans>
             </Button>
             <Button
-              variant="tinted-danger"
-              className="inline-flex items-center justify-center gap-1.5"
+              variant="tinted-accent"
               onClick={() => {
                 setPrinterSceneConflictPreviousId(null);
-                // Starting a new scene is the only way the switch can stand; the
-                // dialog says the work in this one is not carried over.
-                startNewScene();
+                // Non-destructive: the assignments stay on the models and come back
+                // when a Multi-Tank printer is selected again. Only this choice is
+                // acknowledged, so picking the printer again does not re-ask.
+                setConflictAcknowledgedPrinterId(activePrinterProfile?.id ?? null);
               }}
             >
-              <Trash2 className="w-3.5 h-3.5" />
-              <Trans>Start New Scene</Trans>
+              <Trans>Continue</Trans>
             </Button>
           </>
         )}
@@ -12007,12 +12012,15 @@ export default function Home() {
         <div className="space-y-2">
           <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
             <Trans>
-              This scene was made for a Multi-Tank printer: models and bodies are
-              assigned to its tanks, which a single-material printer cannot print.
+              Its materials are split across several tanks, which the printer selected
+              now cannot print. The assignments stay with the scene and its models are
+              shown in their normal colour while this printer is selected.
             </Trans>
           </p>
           <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-            <strong><Trans>Starting a new scene discards the scene above; unsaved progress will be lost.</Trans></strong>
+            <Trans>
+              Switch to a multi-material printer later and the assignments come back.
+            </Trans>
           </p>
         </div>
       </StructuredDialogModal>
