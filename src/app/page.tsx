@@ -5812,6 +5812,14 @@ export default function Home() {
 
   // A body row selects its model too, so the canvas and menu agree on what is
   // being worked on.
+  // A body selection belongs to the Models panel's Prepare workflow; leaving that
+  // mode returns to selecting the whole model, which is what Export and Printing act on.
+  React.useEffect(() => {
+    if (scene.mode !== 'prepare') {
+      setSelectedBodies([]);
+    }
+  }, [scene.mode]);
+
   const handleSelectBody = React.useCallback((modelId: string, bodyIndex: number, mode: 'single' | 'toggle') => {
     setSelectedBodies((prev) => {
       if (mode === 'single') return [{ modelId, bodyIndex }];
