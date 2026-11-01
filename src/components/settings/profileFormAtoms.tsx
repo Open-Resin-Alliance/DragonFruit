@@ -478,9 +478,13 @@ export function LabeledTwoStageNumberInput({
 
 // ─── LabeledSelectInput ───────────────────────────────────────────────────────
 
-/** Amber outline for a field that no longer matches the official profile's default. */
+/**
+ * Amber wash for a field that no longer matches the official profile's default: the
+ * border alone was easy to miss beside a row of identical outlines.
+ */
 export const MODIFIED_FIELD_STYLE: React.CSSProperties = {
     borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 25%)',
+    background: 'color-mix(in srgb, #f59e0b, var(--surface-0) 92%)',
 };
 
 /** The chip that marks which option is the preset's default. */

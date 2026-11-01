@@ -2030,6 +2030,11 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
             if (Object.prototype.hasOwnProperty.call(sourceUpdates.display, 'formatVersion')) {
                 nextDisplay.formatVersion = sourceUpdates.display.formatVersion;
             }
+            // Which material-settings source a job uses is a user preference, not a
+            // fact about the machine, so an official profile may change it.
+            if (Object.prototype.hasOwnProperty.call(sourceUpdates.display, 'settingsMode')) {
+                nextDisplay.settingsMode = sourceUpdates.display.settingsMode;
+            }
             if (Object.prototype.hasOwnProperty.call(sourceUpdates.display, 'webcamRotationDeg')) {
                 nextDisplay.webcamRotationDeg = sourceUpdates.display.webcamRotationDeg;
             }

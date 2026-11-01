@@ -637,12 +637,16 @@ export function ProfileSettingsModal({
     if (!selectedOfficialPreset) return null;
     const display = selectedOfficialPreset.display as {
       formatVersion?: unknown;
+      settingsMode?: unknown;
       webcamRotationDeg?: unknown;
       webcamOrientation?: unknown;
     } & typeof selectedOfficialPreset.display;
     const rotation = Number(display.webcamRotationDeg ?? display.webcamOrientation);
     const formatVersion = typeof display.formatVersion === 'string' && display.formatVersion.trim().length > 0
       ? display.formatVersion.trim()
+      : undefined;
+    const settingsMode = typeof display.settingsMode === 'string' && display.settingsMode.trim().length > 0
+      ? display.settingsMode.trim()
       : undefined;
     return {
       materialMode: selectedOfficialPreset.materialMode ?? 'single',
@@ -651,6 +655,7 @@ export function ProfileSettingsModal({
       hasCamera: selectedOfficialPreset.hasCamera !== false,
       webcamRotationDeg: Number.isFinite(rotation) ? rotation : 0,
       formatVersion,
+      settingsMode,
     };
   }, [selectedOfficialPreset]);
 
@@ -671,6 +676,8 @@ export function ProfileSettingsModal({
     if (!officialFieldDefaults || !selectedPrinter) return null;
     const defaultFormatVersion = officialFieldDefaults.formatVersion ?? selectedFormatVersionOptions[0]?.value ?? '';
     const currentFormatVersion = selectedResolvedFormatVersion ?? selectedFormatVersionOptions[0]?.value ?? '';
+    const defaultSettingsMode = officialFieldDefaults.settingsMode ?? selectedSettingsModeOptions[0]?.value ?? '';
+    const currentSettingsMode = selectedResolvedSettingsMode ?? selectedSettingsModeOptions[0]?.value ?? '';
     return {
       materialMode: (selectedPrinter.materialMode ?? 'single') !== officialFieldDefaults.materialMode,
       outputFormat: (selectedPrinter.display.outputFormat ?? '').trim().toLowerCase() !== officialFieldDefaults.outputFormat,
@@ -678,8 +685,16 @@ export function ProfileSettingsModal({
       hasCamera: (selectedPrinter.hasCamera !== false) !== officialFieldDefaults.hasCamera,
       webcamRotationDeg: Number(selectedPrinter.display.webcamRotationDeg ?? 0) !== officialFieldDefaults.webcamRotationDeg,
       formatVersion: currentFormatVersion !== defaultFormatVersion,
+      settingsMode: currentSettingsMode !== defaultSettingsMode,
     };
-  }, [officialFieldDefaults, selectedPrinter, selectedFormatVersionOptions, selectedResolvedFormatVersion]);
+  }, [
+    officialFieldDefaults,
+    selectedPrinter,
+    selectedFormatVersionOptions,
+    selectedResolvedFormatVersion,
+    selectedSettingsModeOptions,
+    selectedResolvedSettingsMode,
+  ]);
 
   const selectedLocalMaterialSettingsAdapter = React.useMemo(() => {
     if (!selectedPrinter) return null;
@@ -5529,8 +5544,14 @@ export function ProfileSettingsModal({
                       <SelectDropdown
                         label="Settings Mode"
                         value={selectedResolvedSettingsMode ?? selectedSettingsModeOptions[0].value}
-                        options={selectedSettingsModeOptions}
-                        disabled={isSelectedPrinterOfficial}
+                        options={officialFieldDefaults
+                          ? selectedSettingsModeOptions.map((option) => (
+                            option.value === (officialFieldDefaults.settingsMode ?? selectedSettingsModeOptions[0]?.value)
+                              ? { ...option, rightContent: <DefaultOptionChip /> }
+                              : option
+                          ))
+                          : selectedSettingsModeOptions}
+                        selectStyle={officialFieldsModified?.settingsMode ? MODIFIED_FIELD_STYLE : undefined}
                         onChange={(value) => handlePrinterDisplayChange({ settingsMode: value })}
                       />
                     )}
