@@ -7,7 +7,7 @@ import { useLingui } from '@lingui/react';
 import { createPortal } from 'react-dom';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { AlertTriangle, Box, Check, Square, ChevronDown, ChevronLeft, ChevronRight, Copy, Download, Edit3, FlaskConical, Frown, ImagePlus, Info, LayoutGrid, Lock, Plus, Printer, RefreshCw, Search, Trash2, Unlock, Upload, Wifi, WifiOff, X } from 'lucide-react';
-import { Button, IconButton, IconChip, Spinner } from '@/components/atoms';
+import { Button, IconButton, IconChip, Spinner, FadeText } from '@/components/atoms';
 import FleetManagement from '@/components/settings/FleetManagement';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
@@ -4383,7 +4383,7 @@ export function ProfileSettingsModal({
               ) : (
                 <>
               <div className="rounded-md border overflow-hidden flex flex-col flex-1 min-h-0" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
-                <div className="grid grid-cols-[1fr_1fr_1.25fr] flex-1 min-h-0 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.25fr)] flex-1 min-h-0 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
                   <div className="border-r min-h-0 flex flex-col" style={{ borderColor: 'var(--border-subtle)' }}>
                     <div className="px-2.5 py-2 text-sm font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Manufacturer</div>
                     <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-1.5 space-y-1">
@@ -4452,9 +4452,9 @@ export function ProfileSettingsModal({
                     </div>
                   </div>
 
-                  <div className="min-h-0 flex flex-col">
+                  <div className="min-w-0 min-h-0 flex flex-col">
                     <div className="px-2.5 py-2 text-sm font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Profile</div>
-                    <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-1.5 space-y-1">
+                    <div className="flex-1 min-h-0 min-w-0 overflow-y-auto custom-scrollbar p-1.5 space-y-1">
                       {filteredMaterialProfiles.map((material) => {
                         const active = selectedMaterial?.id === material.id;
                         const isOfficial = typeof material.officialTemplateId === 'string' && material.officialTemplateId.trim().length > 0;
@@ -4490,10 +4490,10 @@ export function ProfileSettingsModal({
                                   color: 'var(--text-muted)',
                                 }}
                           >
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="inline-flex min-w-0 items-center gap-1.5 truncate font-semibold">
+                            <div className="flex min-w-0 items-center justify-between gap-2">
+                              <span className="flex min-w-0 flex-1 items-center gap-1.5 font-semibold">
                                 {isLocked && <Lock className="w-3.5 h-3.5 shrink-0" />}
-                                <span className="truncate">{material.name}</span>
+                                <FadeText className="min-w-0 flex-1">{material.name}</FadeText>
                               </span>
                               <span className="shrink-0 whitespace-nowrap tabular-nums">{Math.round(material.layerHeightMm * 1000)} μm</span>
                             </div>
