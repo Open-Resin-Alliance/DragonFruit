@@ -104,6 +104,8 @@ import {
   LabeledTwoStageNumberInput,
   LabeledSelectInput,
   LabeledToggleInput,
+  DefaultOptionChip,
+  MODIFIED_FIELD_STYLE,
   LabeledResinFamilySelect,
   LabeledCurrencySelect,
   MaterialProfileFormSections,
@@ -599,6 +601,38 @@ export function ProfileSettingsModal({
     );
   }, [selectedPrinter]);
 
+  // Which official profile this is, so the editable fields can say what the preset
+  // shipped and flag the ones the user changed away from it.
+  const selectedOfficialPreset = React.useMemo(() => {
+    if (!selectedPrinter?.isOfficial) return null;
+    const presetId = typeof selectedPrinter.officialPresetId === 'string'
+      ? selectedPrinter.officialPresetId.trim()
+      : '';
+    if (!presetId) return null;
+    return availablePrinterPresets.find((preset) => preset.presetId === presetId) ?? null;
+  }, [availablePrinterPresets, selectedPrinter]);
+
+  const officialFieldDefaults = React.useMemo(() => {
+    if (!selectedOfficialPreset) return null;
+    const display = selectedOfficialPreset.display as {
+      formatVersion?: unknown;
+      webcamRotationDeg?: unknown;
+      webcamOrientation?: unknown;
+    } & typeof selectedOfficialPreset.display;
+    const rotation = Number(display.webcamRotationDeg ?? display.webcamOrientation);
+    const formatVersion = typeof display.formatVersion === 'string' && display.formatVersion.trim().length > 0
+      ? display.formatVersion.trim()
+      : undefined;
+    return {
+      materialMode: selectedOfficialPreset.materialMode ?? 'single',
+      outputFormat: (selectedOfficialPreset.display.outputFormat ?? '').trim().toLowerCase(),
+      networkSupport: (selectedOfficialPreset.networkSupport ?? '').trim().toLowerCase(),
+      hasCamera: selectedOfficialPreset.hasCamera !== false,
+      webcamRotationDeg: Number.isFinite(rotation) ? rotation : 0,
+      formatVersion,
+    };
+  }, [selectedOfficialPreset]);
+
   const selectedSettingsModeOptions = React.useMemo(() => {
     if (!selectedPrinter) return [] as Array<{ value: string; label: string; isDefault?: boolean }>;
     return getAvailableSettingsModeOptions(selectedPrinter.display.outputFormat);
@@ -611,6 +645,20 @@ export function ProfileSettingsModal({
       selectedPrinter.display.settingsMode,
     );
   }, [selectedPrinter]);
+
+  const officialFieldsModified = React.useMemo(() => {
+    if (!officialFieldDefaults || !selectedPrinter) return null;
+    const defaultFormatVersion = officialFieldDefaults.formatVersion ?? selectedFormatVersionOptions[0]?.value ?? '';
+    const currentFormatVersion = selectedResolvedFormatVersion ?? selectedFormatVersionOptions[0]?.value ?? '';
+    return {
+      materialMode: (selectedPrinter.materialMode ?? 'single') !== officialFieldDefaults.materialMode,
+      outputFormat: (selectedPrinter.display.outputFormat ?? '').trim().toLowerCase() !== officialFieldDefaults.outputFormat,
+      networkSupport: (selectedPrinter.networkSupport ?? '').trim().toLowerCase() !== officialFieldDefaults.networkSupport,
+      hasCamera: (selectedPrinter.hasCamera !== false) !== officialFieldDefaults.hasCamera,
+      webcamRotationDeg: Number(selectedPrinter.display.webcamRotationDeg ?? 0) !== officialFieldDefaults.webcamRotationDeg,
+      formatVersion: currentFormatVersion !== defaultFormatVersion,
+    };
+  }, [officialFieldDefaults, selectedPrinter, selectedFormatVersionOptions, selectedResolvedFormatVersion]);
 
   const selectedLocalMaterialSettingsAdapter = React.useMemo(() => {
     if (!selectedPrinter) return null;
@@ -4447,7 +4495,7 @@ export function ProfileSettingsModal({
                                 {isLocked && <Lock className="w-3.5 h-3.5 shrink-0" />}
                                 <span className="truncate">{material.name}</span>
                               </span>
-                              <span className="tabular-nums">{Math.round(material.layerHeightMm * 1000)} μm</span>
+                              <span className="shrink-0 whitespace-nowrap tabular-nums">{Math.round(material.layerHeightMm * 1000)} μm</span>
                             </div>
                           </button>
                         );
@@ -4648,7 +4696,7 @@ export function ProfileSettingsModal({
                 </div>
               </div>
 
-              <div className="px-2 py-2 border-t flex items-center justify-between gap-2 shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="px-3 py-3 border-t flex items-center justify-between gap-2 shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
                 <Button
                   type="button"
                   onClick={handleResetFleetUnitDraft}
@@ -4903,7 +4951,7 @@ export function ProfileSettingsModal({
                 )}
               </div>
 
-              <div className="px-2 py-2 border-t flex items-center justify-between gap-2 shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="px-3 py-3 border-t flex items-center justify-between gap-2 shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
                 <Button
                   type="button"
                   onClick={() => {
@@ -5237,6 +5285,8 @@ export function ProfileSettingsModal({
                         { value: 'single', label: 'Single Material' },
                         { value: 'multiTank', label: 'Multi-Tank' },
                       ]}
+                      defaultValue={officialFieldDefaults?.materialMode}
+                      highlight={officialFieldsModified?.materialMode === true}
                       onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
                         materialMode: value === 'multiTank' ? 'multiTank' : 'single',
                       })}
@@ -5246,6 +5296,8 @@ export function ProfileSettingsModal({
                       label="Output Format"
                       value={selectedPrinter.display.outputFormat}
                       options={getAvailableOutputFormatOptions()}
+                      defaultValue={officialFieldDefaults?.outputFormat}
+                      highlight={officialFieldsModified?.outputFormat === true}
                       onChange={(value) => handlePrinterDisplayChange({ outputFormat: value })}
                     />
 
@@ -5253,6 +5305,8 @@ export function ProfileSettingsModal({
                       label="Network Support"
                       value={selectedPrinter.networkSupport ?? ''}
                       options={selectedPrinterNetworkModeOptions}
+                      defaultValue={officialFieldDefaults?.networkSupport}
+                      highlight={officialFieldsModified?.networkSupport === true}
                       onChange={(value) => {
                         const nextMode = value.trim().toLowerCase();
                         const normalizedMode = nextMode.length > 0 ? nextMode : undefined;
@@ -5267,6 +5321,7 @@ export function ProfileSettingsModal({
                     <LabeledToggleInput
                       label="Webcam Support"
                       checked={selectedPrinter.hasCamera !== false}
+                      highlight={officialFieldsModified?.hasCamera === true}
                       onChange={(checked) => updatePrinterProfile(selectedPrinter.id, { hasCamera: checked })}
                     />
 
@@ -5275,6 +5330,8 @@ export function ProfileSettingsModal({
                         label="Webcam Rotation"
                         value={String(selectedPrinter.display.webcamRotationDeg ?? 0)}
                         options={WEBCAM_ROTATION_OPTIONS}
+                        defaultValue={officialFieldDefaults ? String(officialFieldDefaults.webcamRotationDeg) : undefined}
+                        highlight={officialFieldsModified?.webcamRotationDeg === true}
                         onChange={(value) => {
                           const parsed = Number(value);
                           const nextRotation = (parsed === 0 || parsed === 90 || parsed === 180 || parsed === 270)
@@ -5289,7 +5346,14 @@ export function ProfileSettingsModal({
                       <SelectDropdown
                         label="Format Version"
                         value={selectedResolvedFormatVersion ?? selectedFormatVersionOptions[0].value}
-                        options={selectedFormatVersionOptions}
+                        options={officialFieldDefaults
+                          ? selectedFormatVersionOptions.map((option) => (
+                            option.value === (officialFieldDefaults.formatVersion ?? selectedFormatVersionOptions[0]?.value)
+                              ? { ...option, rightContent: <DefaultOptionChip /> }
+                              : option
+                          ))
+                          : selectedFormatVersionOptions}
+                        selectStyle={officialFieldsModified?.formatVersion ? MODIFIED_FIELD_STYLE : undefined}
                         onChange={(value) => handlePrinterDisplayChange({ formatVersion: value })}
                       />
                     )}
@@ -5321,7 +5385,7 @@ export function ProfileSettingsModal({
                 </div>
               </div>
 
-              <div className="px-2 py-2 border-t flex items-center justify-between gap-2 shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="px-3 py-3 border-t flex items-center justify-between gap-2 shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
                 <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
                   Changes are applied immediately.
                 </span>
@@ -5462,7 +5526,7 @@ export function ProfileSettingsModal({
                                         }
                                   }
                                 >
-                                  <span>{Math.round(h * 1000) + 'μm'}</span>
+                                  <span className="whitespace-nowrap">{Math.round(h * 1000) + 'μm'}</span>
                                   <span className="text-[11px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
                                     {count}
                                   </span>
@@ -5763,7 +5827,7 @@ export function ProfileSettingsModal({
                 )}
               </div>
 
-              <div className="px-2 py-2 border-t flex items-center justify-end gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="px-3 py-3 border-t flex items-center justify-end gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
                 <Button
                   type="button"
                   onClick={() => setIsCreateMaterialOpen(false)}
@@ -5909,7 +5973,7 @@ export function ProfileSettingsModal({
                 )}
               </div>
 
-              <div className="px-4 pb-4 pt-2 border-t flex items-center justify-end gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="px-4 py-4 border-t flex items-center justify-end gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
                 <Button
                   type="button"
                   onClick={() => setShowPrinterUpdateDiffModal(false)}
@@ -6300,7 +6364,7 @@ function RemoteMaterialEditDialog({
         </div>
 
         <div
-          className="px-2 py-2 border-t flex items-center justify-between gap-2 shrink-0 sticky bottom-0"
+          className="px-3 py-3 border-t flex items-center justify-between gap-2 shrink-0 sticky bottom-0"
           style={{
             borderColor: 'var(--border-subtle)',
             background: 'color-mix(in srgb, var(--surface-0), transparent 4%)',

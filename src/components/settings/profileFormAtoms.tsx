@@ -471,22 +471,62 @@ export function LabeledTwoStageNumberInput({
 
 // ─── LabeledSelectInput ───────────────────────────────────────────────────────
 
+/** Amber outline for a field that no longer matches the official profile's default. */
+export const MODIFIED_FIELD_STYLE: React.CSSProperties = {
+    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 25%)',
+};
+
+/** The chip that marks which option is the preset's default. */
+export function DefaultOptionChip() {
+    return (
+        <span
+            className="rounded-full border px-1.5 py-[1px] text-[10px] leading-none"
+            style={{
+                borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
+                color: 'color-mix(in srgb, #f59e0b, var(--text-strong) 22%)',
+            }}
+        >
+            Default
+        </span>
+    );
+}
+
 type LabeledSelectInputProps = {
     label: string;
     value: PrinterOutputFormat;
     options: Array<{ value: PrinterOutputFormat; label: string }>;
     onChange: (value: PrinterOutputFormat) => void;
     disabled?: boolean;
+    /** The option an official profile's preset declares; gets the Default chip. */
+    defaultValue?: string;
+    /** The value differs from that preset default. */
+    highlight?: boolean;
 };
 
-export function LabeledSelectInput({ label, value, options, onChange, disabled = false }: LabeledSelectInputProps) {
+export function LabeledSelectInput({
+    label,
+    value,
+    options,
+    onChange,
+    disabled = false,
+    defaultValue,
+    highlight = false,
+}: LabeledSelectInputProps) {
+    const decorated = defaultValue === undefined
+        ? options
+        : options.map((option) => (
+            option.value === defaultValue
+                ? { ...option, rightContent: <DefaultOptionChip /> }
+                : option
+        ));
+
     return (
         <SelectDropdown
             label={label}
             value={value}
             onChange={(nextValue) => onChange(nextValue as PrinterOutputFormat)}
             disabled={disabled}
-            options={options}
+            options={decorated}
             className="space-y-1 block"
             labelClassName="font-medium"
             selectClassName={`w-full h-[36px] px-2.5 pr-10 leading-tight text-sm ${disabled ? 'opacity-55 cursor-not-allowed' : ''}`}
@@ -496,7 +536,7 @@ export function LabeledSelectInput({ label, value, options, onChange, disabled =
                     background: 'color-mix(in srgb, var(--surface-2), black 8%)',
                     color: 'var(--text-muted)',
                 }
-                : undefined}
+                : highlight ? MODIFIED_FIELD_STYLE : undefined}
         />
     );
 }
@@ -509,11 +549,13 @@ type LabeledToggleInputProps = {
     checked: boolean;
     onChange: (value: boolean) => void;
     disabled?: boolean;
+    /** The value differs from the official profile's preset default. */
+    highlight?: boolean;
     /** Native tooltip on the switch itself, beside the ⓘ affordance. */
     title?: string;
 };
 
-export function LabeledToggleInput({ label, helpText, checked, onChange, disabled = false, title }: LabeledToggleInputProps) {
+export function LabeledToggleInput({ label, helpText, checked, onChange, disabled = false, title, highlight = false }: LabeledToggleInputProps) {
     return (
         <label className="space-y-1 block">
             <span className="ui-label font-medium inline-flex items-center gap-1.5">
@@ -538,9 +580,11 @@ export function LabeledToggleInput({ label, helpText, checked, onChange, disable
                         color: 'var(--text-muted)',
                     }
                     : {
-                        borderColor: checked
-                            ? 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 36%)'
-                            : 'var(--border-subtle)',
+                        borderColor: highlight
+                            ? 'color-mix(in srgb, #f59e0b, var(--border-subtle) 25%)'
+                            : checked
+                                ? 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 36%)'
+                                : 'var(--border-subtle)',
                         background: checked
                             ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 90%)'
                             : 'var(--surface-1)',
