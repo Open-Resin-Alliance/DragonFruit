@@ -1259,11 +1259,19 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
             ? materialProfiles
             : createDefaultMaterials(printerProfiles);
 
-    const activePrinterProfileId =
+    const requestedActivePrinterId =
         typeof input?.activePrinterProfileId === 'string'
             && printerProfiles.some((profile) => profile.id === input.activePrinterProfileId)
             ? input.activePrinterProfileId
             : printerProfiles[0]?.id ?? '';
+    // A printer whose plugin is gone cannot print, so it must not stay the active
+    // one: fall through to the next usable profile in the user's order. If every
+    // profile is marked, the selection stays where it was rather than going blank.
+    const requestedActiveIsUsable = requestedActivePrinterId.length > 0
+        && !printerProfiles.find((profile) => profile.id === requestedActivePrinterId)?.missingPlugin;
+    const activePrinterProfileId = requestedActiveIsUsable
+        ? requestedActivePrinterId
+        : (printerProfiles.find((profile) => !profile.missingPlugin)?.id ?? requestedActivePrinterId);
 
     const materialsForActivePrinter = ensuredMaterials.filter((profile) => profile.printerProfileId === activePrinterProfileId);
     const fallbackActiveMaterialId = materialsForActivePrinter[0]?.id ?? ensuredMaterials[0]?.id ?? '';
