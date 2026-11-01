@@ -45,8 +45,9 @@ is how a slicer grows a second material system that matches neither.
   machine that ships with several tanks declares that from the library. The printer settings' Output section has the
   matching **Material Mode** control, and the value is sanitised on load and on
   update (an unknown value is dropped rather than guessed).
-- Switching semantics are **not defined**: nothing reads the value yet. It is the
-  field the next slice will hang off.
+- Switching semantics are **not defined**, but the value is read: the slicing panel's
+  Material button and the stats panel's Material row show **Multi-Tank** rather than a
+  single profile name while the printer is in that mode.
 
 ## Next step
 
