@@ -2884,6 +2884,73 @@ export function getActiveMaterialProfile(stateOverride?: ProfileStoreState): Mat
     return resolveMaterialProfileWithLocalSettings(materialProfile, activePrinterProfile);
 }
 
+/**
+ * Adopts the material profiles a scene carries (VOXL `MATP`), keeping their ids so
+ * the models' `materialProfileId` / `bodyMaterialProfileIds` references still point
+ * at them. They are attached to `printerProfileId`, which is the profile the scene
+ * resolved to on this machine.
+ *
+ * A profile already present under that id is left alone: it is either the same
+ * material on its original machine, or the local edit the user made to it.
+ */
+export function importSceneMaterials(printerProfileId: string, materials: unknown[]): void {
+    ensureHydrated();
+    if (!Array.isArray(materials) || materials.length === 0) return;
+
+    const byId = new Map(state.materialProfiles.map((profile) => [profile.id, profile]));
+    let changed = false;
+
+    for (const raw of materials) {
+        if (!raw || typeof raw !== 'object') continue;
+        const source = raw as Partial<MaterialProfile>;
+        const id = typeof source.id === 'string' && source.id.trim().length > 0
+            ? source.id.trim()
+            : createId('material');
+        const existing = byId.get(id);
+        if (existing && existing.printerProfileId === printerProfileId) continue;
+        changed = true;
+        byId.set(id, {
+            id,
+            printerProfileId,
+            officialTemplateId: typeof source.officialTemplateId === 'string' ? source.officialTemplateId : undefined,
+            officialTemplateVersion: Number.isFinite(Number(source.officialTemplateVersion))
+                ? normalizeProfileVersion(source.officialTemplateVersion, 1)
+                : undefined,
+            name: typeof source.name === 'string' && source.name.trim().length > 0 ? source.name.trim() : 'Imported material',
+            brand: typeof source.brand === 'string' && source.brand.trim().length > 0 ? source.brand.trim() : 'Default',
+            color: sanitizeMaterialColor(source.color),
+            currencyCode: typeof source.currencyCode === 'string' && source.currencyCode.trim().length > 0
+                ? source.currencyCode.trim().toUpperCase()
+                : 'USD',
+            bottlePrice: Number.isFinite(Number(source.bottlePrice)) ? Number(source.bottlePrice) : 0,
+            bottleCapacityMl: Number.isFinite(Number(source.bottleCapacityMl)) ? Number(source.bottleCapacityMl) : 1000,
+            resinFamily: source.resinFamily ?? 'standard',
+            scaleCompensationPct: {
+                x: Number(source.scaleCompensationPct?.x ?? 0),
+                y: Number(source.scaleCompensationPct?.y ?? 0),
+                z: Number(source.scaleCompensationPct?.z ?? 0),
+            },
+            layerHeightMm: Number.isFinite(Number(source.layerHeightMm)) ? Number(source.layerHeightMm) : 0.05,
+            normalExposureSec: Number.isFinite(Number(source.normalExposureSec)) ? Number(source.normalExposureSec) : 2.5,
+            bottomExposureSec: Number.isFinite(Number(source.bottomExposureSec)) ? Number(source.bottomExposureSec) : 28,
+            bottomLayerCount: Math.max(1, Math.round(Number(source.bottomLayerCount ?? 5))),
+            liftDistanceMm: Number.isFinite(Number(source.liftDistanceMm)) ? Number(source.liftDistanceMm) : 6,
+            liftSpeedMmMin: Number.isFinite(Number(source.liftSpeedMmMin)) ? Number(source.liftSpeedMmMin) : 60,
+            retractSpeedMmMin: Number.isFinite(Number(source.retractSpeedMmMin)) ? Number(source.retractSpeedMmMin) : 150,
+            minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent(source.minimumAaAlphaPercent, 35),
+            antiAliasingSettings: sanitizeMaterialAntiAliasingSettings(source.antiAliasingSettings),
+            localSettingsByOutput: sanitizeLocalSettingsByOutput(source.localSettingsByOutput),
+            locked: source.locked === true,
+        });
+    }
+
+    if (!changed) return;
+    setState(ensureActiveMaterialForActivePrinter({
+        ...state,
+        materialProfiles: [...byId.values()],
+    }));
+}
+
 export function getMaterialProfilesForPrinter(printerProfileId: string, stateOverride?: ProfileStoreState): MaterialProfile[] {
     const snapshot = stateOverride ?? state;
     const printerProfile = snapshot.printerProfiles.find((entry) => entry.id === printerProfileId) ?? null;

@@ -25,7 +25,7 @@ import {
   withPlateMembership,
   type PlateFrame,
 } from '@/features/scene/plates/plateLayout';
-import { detectObsoleteVoxlVersion, isVoxlBinaryV2, meshChunkStore, parseVoxlBinaryV2, readScenePlates, readSidecarFileBytes, resolveOriginalRefSidecar, VoxlObsoleteVersionError, type VoxlDocumentV1, type VoxlMeshRef, type VoxlMeshRange } from '@/features/scene/voxl';
+import { decodeVoxlBodyChunk, detectObsoleteVoxlVersion, isVoxlBinaryV2, meshChunkStore, parseVoxlBinaryV2, readScenePlates, readSidecarFileBytes, resolveOriginalRefSidecar, VoxlObsoleteVersionError, type VoxlDocumentV1, type VoxlMeshRef, type VoxlMeshRange } from '@/features/scene/voxl';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
 import { countSupportEntities, getSnapshot, loadFromImportFormat, mergeFromImportFormat, reassignAllSupportModelIds, resetStore, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
@@ -50,7 +50,7 @@ import {
 import { accelerateGeometry, disposeGeometryBVH } from '@/utils/bvh';
 import { runWithConcurrency } from '@/utils/runWithConcurrency';
 import { logToNativeFile } from '@/utils/nativeLog';
-import { BAKED_OCCLUSION_ATTRIBUTE, DEFAULT_BAKED_OCCLUSION_INTENSITY, bakeOcclusionForGeometry, bumpBakedOcclusionVersion, canBakeOcclusion, setBakedOcclusionIntensity } from '@/features/scene/bakedOcclusion';
+import { BAKED_OCCLUSION_ATTRIBUTE, DEFAULT_BAKED_OCCLUSION_INTENSITY, bakeAndAttachOcclusionForGeometry, bakeOcclusionForGeometry, bumpBakedOcclusionVersion, canBakeOcclusion, setBakedOcclusionIntensity } from '@/features/scene/bakedOcclusion';
 import { computeProjectedFootprintSize } from '@/utils/modelFootprint';
 import { shelfPack, type ShelfItem } from '@/features/scene/arrange/shelfPack';
 import { eulerFromGlobalEuler, quaternionFromGlobalEuler } from '@/utils/rotation';
@@ -178,6 +178,7 @@ import {
   getProfileStoreSnapshot,
   getProfileStoreServerSnapshot,
   importPrinterBundle,
+  importSceneMaterials,
   setActivePrinterProfile,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
@@ -503,6 +504,54 @@ function captureSceneSnapshot(
         }
       : {}),
   };
+}
+
+/**
+ * `BODY` chunk (VOXL V3.4) → one geometry per split 3MF body, in the merged
+ * model's own space. The binary layout lives in `decodeVoxlBodyChunk`; this adds
+ * what the scene needs from a geometry.
+ */
+async function decodeBodyChunk(bytes: Uint8Array, targetCenter: { x: number; y: number; z: number }): Promise<GeometryWithBounds[]> {
+  const decoded = decodeVoxlBodyChunk(bytes);
+  // The bodies were captured in the merged mesh's space at save time. Loading
+  // re-processes that mesh (centring, normalising Y), which translates it; the
+  // bodies carry no such pass, so they move by the same delta.
+  const dx = targetCenter.x - decoded.center.x;
+  const dy = targetCenter.y - decoded.center.y;
+  const dz = targetCenter.z - decoded.center.z;
+  const bodies: GeometryWithBounds[] = [];
+  for (const body of decoded.bodies) {
+    if (dx !== 0 || dy !== 0 || dz !== 0) {
+      for (let i = 0; i + 2 < body.positions.length; i += 3) {
+        body.positions[i] += dx;
+        body.positions[i + 1] += dy;
+        body.positions[i + 2] += dz;
+      }
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(body.positions, 3));
+    if (body.index) geometry.setIndex(new THREE.BufferAttribute(body.index, 1));
+    geometry.computeVertexNormals();
+    geometry.computeBoundingBox();
+    // The occlusion bake is geometry state, not container state. Without it the
+    // shader reads an empty attribute as 0 and every body renders darker than it
+    // did when it was imported; a plain web build cannot bake, so it gets a flat
+    // 1 (no occlusion) rather than black.
+    const baked = await bakeAndAttachOcclusionForGeometry(geometry);
+    if (!baked && !geometry.getAttribute(BAKED_OCCLUSION_ATTRIBUTE)) {
+      const flat = new Float32Array(geometry.getAttribute('position')?.count ?? 0).fill(1);
+      geometry.setAttribute(BAKED_OCCLUSION_ATTRIBUTE, new THREE.BufferAttribute(flat, 1));
+    }
+    const bbox = geometry.boundingBox ? geometry.boundingBox.clone() : new THREE.Box3();
+    bodies.push({
+      geometry,
+      bbox,
+      center: bbox.getCenter(new THREE.Vector3()),
+      size: bbox.getSize(new THREE.Vector3()),
+      flatteningPlanes: [],
+    });
+  }
+  return bodies;
 }
 
 /**
@@ -1557,6 +1606,8 @@ export type ObsoleteVoxlScenePrompt = {
 export type PrinterMismatchPrompt = {
   /** The printer the scene carries, whole, so switching can add it when it is missing here. */
   bundle: VoxlPrinterBundle;
+  /** Material profiles the scene references, adopted once its printer is chosen. */
+  materials?: unknown[];
   /** The printer's name as the bundle carries it; absent when it has none. */
   recordedName?: string;
   recordedBuildVolumeMm: { width: number; depth: number; height: number };
@@ -2042,8 +2093,11 @@ export function useSceneCollectionManager(options?: {
   const resolvePrinterMismatch = useCallback((choice: 'switch' | 'keep') => {
     if (choice === 'switch' && printerMismatch) {
       const installedId = printerMismatch.installedProfileId;
-      if (installedId) setActivePrinterProfile(installedId);
-      else setActivePrinterProfile(importPrinterBundle(printerMismatch.bundle));
+      const resolvedId = installedId ?? importPrinterBundle(printerMismatch.bundle);
+      setActivePrinterProfile(resolvedId);
+      if (printerMismatch.materials && printerMismatch.materials.length > 0) {
+        importSceneMaterials(resolvedId, printerMismatch.materials);
+      }
     }
     setPrinterMismatch(null);
   }, [printerMismatch]);
@@ -6812,6 +6866,8 @@ export function useSceneCollectionManager(options?: {
       });
       const parsedAt = performance.now();
       const document: VoxlDocumentV1 = parsed.document;
+      const sceneMaterials: unknown[] = Array.isArray(document.materials) ? document.materials : [];
+      const bodyChunks = parsed.bodyChunks;
       const resolvedMeshBytes: Map<string, Uint8Array> = parsed.meshBytes;
       const resolvedOriginalMeshBytes = parsed.originalMeshBytes;
       const originalMeshChunks = parsed.originalMeshChunks;
@@ -7068,6 +7124,9 @@ export function useSceneCollectionManager(options?: {
             }
           }
 
+          const decodedSplitBodies = bodyChunks?.has(model.id)
+            ? await decodeBodyChunk(bodyChunks.get(model.id) as Uint8Array, geometry.center)
+            : undefined;
           const polygonCount = countTriangles(geometry.geometry);
           const color = clampHexColor(model.color, DEFAULT_MESH_COLOR);
           const importedPlateId = plateIdForImport(model.plateId);
@@ -7098,6 +7157,13 @@ export function useSceneCollectionManager(options?: {
             // on a multi-tank printer.
             materialProfileId: model.materialProfileId ?? resolveMultiTankImportDefault()?.materialProfileId,
             materialBaseColor: model.materialBaseColor,
+            ...(decodedSplitBodies ? { splitBodies: decodedSplitBodies } : {}),
+            ...(model.bodyMaterialProfileIds
+              ? { bodyMaterialProfileIds: model.bodyMaterialProfileIds.map((id) => id ?? undefined) }
+              : {}),
+            ...(model.bodyColors
+              ? { bodyColors: model.bodyColors.map((color) => color ?? undefined) }
+              : {}),
           });
 
           // Store meshModifiers externally so model objects stay lightweight
@@ -7256,6 +7322,7 @@ export function useSceneCollectionManager(options?: {
               : undefined;
             setPrinterMismatch({
               bundle: recordedPrinter,
+              ...(sceneMaterials.length > 0 ? { materials: sceneMaterials } : {}),
               ...(recordedName ? { recordedName } : {}),
               recordedBuildVolumeMm: { ...recordedVolume },
               currentName: currentPrinter.name,
@@ -7263,7 +7330,13 @@ export function useSceneCollectionManager(options?: {
               installedProfileId: installed?.id ?? null,
               currentIsSmaller: buildVolumeIsSmaller(currentPrinter, recordedPrinter),
             });
+          } else if (sceneMaterials.length > 0) {
+            // The scene is already on its printer: adopt the materials it carries
+            // so its material references resolve here.
+            importSceneMaterials(installed?.id ?? currentPrinter.id, sceneMaterials);
           }
+        } else if (sceneMaterials.length > 0 && currentPrinter) {
+          importSceneMaterials(currentPrinter.id, sceneMaterials);
         }
       }
 

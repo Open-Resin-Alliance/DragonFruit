@@ -121,6 +121,8 @@ const CHUNK_EXTD = 'EXTD';
 const CHUNK_HSRC = 'HSRC'; // hollowing.sourcePositions (raw Float32 bytes)
 const CHUNK_CAVT = 'CAVT'; // hollowing.cavityPositions (raw Float32 bytes)
 const CHUNK_PSRC = 'PSRC'; // holePunchSourcePositions  (raw Float32 bytes)
+const CHUNK_BODY = 'BODY'; // split 3MF bodies, raw positions + indices (V3.4)
+const CHUNK_MATP = 'MATP'; // material profiles the scene references (V3.4)
 
 // ─── Internal Types ───────────────────────────────────────────────────────────
 
@@ -408,6 +410,88 @@ interface PreparedDocument {
  * streaming writers so they cannot drift — the byte-identity gate between them
  * is the whole point of sub-phase E.
  */
+/**
+ * `BODY` payload (V3.4): `u32 count`, then per body `u32 positionFloats`,
+ * `f32[positionFloats]`, `u32 indexCount`, `u32[indexCount]`. Positions are in
+ * the merged model's own space, which is what the renderer and slicer expect.
+ */
+function encodeBodyChunk(
+  bodies: Array<{ positions: Float32Array; index?: Uint32Array | null }>,
+  center?: { x: number; y: number; z: number },
+): Uint8Array {
+  let byteLength = 4 + 12;
+  for (const body of bodies) {
+    byteLength += 4 + body.positions.byteLength + 4 + (body.index?.byteLength ?? 0);
+  }
+  const out = new Uint8Array(byteLength);
+  const view = new DataView(out.buffer);
+  let offset = 0;
+  view.setUint32(offset, bodies.length, true);
+  offset += 4;
+  view.setFloat32(offset, center?.x ?? 0, true);
+  view.setFloat32(offset + 4, center?.y ?? 0, true);
+  view.setFloat32(offset + 8, center?.z ?? 0, true);
+  offset += 12;
+  for (const body of bodies) {
+    view.setUint32(offset, body.positions.length, true);
+    offset += 4;
+    out.set(
+      new Uint8Array(body.positions.buffer, body.positions.byteOffset, body.positions.byteLength),
+      offset,
+    );
+    offset += body.positions.byteLength;
+    const index = body.index ?? new Uint32Array(0);
+    view.setUint32(offset, index.length, true);
+    offset += 4;
+    out.set(
+      new Uint8Array(index.buffer, index.byteOffset, index.byteLength),
+      offset,
+    );
+    offset += index.byteLength;
+  }
+  return out;
+}
+
+/** Inverse of `encodeBodyChunk`: raw positions/indices per body, in file order. */
+export type DecodedVoxlBodyChunk = {
+  /** Centre of the merged mesh when the bodies were captured, in its own space. */
+  center: { x: number; y: number; z: number };
+  bodies: Array<{ positions: Float32Array; index: Uint32Array | null }>;
+};
+
+export function decodeVoxlBodyChunk(bytes: Uint8Array): DecodedVoxlBodyChunk {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let offset = 0;
+  const readU32 = () => {
+    const value = view.getUint32(offset, true);
+    offset += 4;
+    return value;
+  };
+  const out: Array<{ positions: Float32Array; index: Uint32Array | null }> = [];
+  const center = { x: 0, y: 0, z: 0 };
+  if (bytes.byteLength < 16) return { center, bodies: out };
+  const count = readU32();
+  center.x = view.getFloat32(offset, true);
+  center.y = view.getFloat32(offset + 4, true);
+  center.z = view.getFloat32(offset + 8, true);
+  offset += 12;
+  for (let i = 0; i < count; i += 1) {
+    const positionFloats = readU32();
+    const positions = new Float32Array(positionFloats);
+    new Uint8Array(positions.buffer).set(bytes.subarray(offset, offset + positionFloats * 4));
+    offset += positionFloats * 4;
+    const indexCount = readU32();
+    let index: Uint32Array | null = null;
+    if (indexCount > 0) {
+      index = new Uint32Array(indexCount);
+      new Uint8Array(index.buffer).set(bytes.subarray(offset, offset + indexCount * 4));
+    }
+    offset += indexCount * 4;
+    out.push({ positions, index });
+  }
+  return { center, bodies: out };
+}
+
 async function prepareVoxlDocumentV2(
   input: BuildVoxlDocumentInput,
   meshBytes: Map<number, Uint8Array>,
@@ -628,6 +712,17 @@ async function prepareVoxlDocumentV2(
       // Written only when set, so a single-material scene's bytes do not move.
       ...(m.materialProfileId ? { materialProfileId: m.materialProfileId } : {}),
       ...(m.materialBaseColor ? { materialBaseColor: m.materialBaseColor } : {}),
+      // V3.4 multi-body material state; written only for a model with bodies so a
+      // single-material scene's bytes do not move.
+      ...(m.bodies && m.bodies.length > 0
+        ? {
+          bodyCount: m.bodies.length,
+          ...(m.bodyMaterialProfileIds
+            ? { bodyMaterialProfileIds: m.bodyMaterialProfileIds.map((id) => id ?? null) }
+            : {}),
+          ...(m.bodyColors ? { bodyColors: m.bodyColors.map((color) => color ?? null) } : {}),
+        }
+        : {}),
       classification: m.classification,
     };
   });
@@ -654,6 +749,21 @@ async function prepareVoxlDocumentV2(
   pending.push({ type: CHUNK_META, index: 0, raw: textEncoder.encode(JSON.stringify(meta)), compress: false });
   pending.push({ type: CHUNK_SCNE, index: 0, raw: textEncoder.encode(JSON.stringify(scene)), compress: false });
   pending.push({ type: CHUNK_MODL, index: 0, raw: textEncoder.encode(JSON.stringify(models)), compress: true });
+  // V3.4: one BODY chunk per model that carries split bodies, and the material
+  // profiles the scene references so their ids survive a round trip.
+  input.models.forEach((m, index) => {
+    if (m.bodies && m.bodies.length > 0) {
+      pending.push({
+        type: CHUNK_BODY,
+        index,
+        raw: encodeBodyChunk(m.bodies, m.bodyCenter),
+        compress: true,
+      });
+    }
+  });
+  if (input.materials && input.materials.length > 0) {
+    pending.push({ type: CHUNK_MATP, index: 0, raw: textEncoder.encode(JSON.stringify(input.materials)), compress: true });
+  }
 
   // One MESH chunk per UNIQUE mesh (owner index), sorted by index. Duplicates
   // reference an owner via meshRef.chunkIndex and get no chunk of their own.
@@ -1183,6 +1293,15 @@ export async function parseVoxlBinaryV2(
   if (!supports) throw new Error('VOXL V2: missing SUPP chunk.');
 
   const extensions = readJsonChunk<Record<string, unknown>>(CHUNK_EXTD) ?? {};
+  // V3.4: material profiles with their ids, and one BODY payload per model that
+  // carries split bodies.
+  const materials = readJsonChunk<unknown[]>(CHUNK_MATP) ?? undefined;
+  const bodyChunks = new Map<string, Uint8Array>();
+  for (const entry of entries) {
+    if (entry.type !== CHUNK_BODY) continue;
+    const model = models[entry.index];
+    if (model) bodyChunks.set(model.id, readChunk(entry));
+  }
 
   // ── Inflate the bulk chunks, in parallel ──────────────────────────────
   // The JSON above is small and stays synchronous. Everything below it is mesh
@@ -1344,11 +1463,13 @@ export async function parseVoxlBinaryV2(
       models,
       supports,
       extensions,
+      ...(materials ? { materials } : {}),
     },
     meshBytes: meshBytesMap,
     ...(deferMeshChunks ? { meshRanges: meshRangesMap } : {}),
     ...(lazyOriginalMeshBytesMap ? { originalMeshBytes: lazyOriginalMeshBytesMap } : {}),
     ...(originalMeshChunksMap.size > 0 ? { originalMeshChunks: originalMeshChunksMap } : {}),
+    ...(bodyChunks.size > 0 ? { bodyChunks } : {}),
     sourceVersion: hasModifierChunks ? VOXL_V3_SEMANTIC_REVISION : VOXL_V2_INLINE_REVISION,
   };
 }

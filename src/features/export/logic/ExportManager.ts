@@ -6,6 +6,7 @@ import type { MeshHealthReport } from '@/utils/meshRepair';
 import { reportAddressesTriangleSoup } from '@/features/scene/voxl/classification';
 import { resolveModelMeshModifiers } from '@/features/mesh-modifiers/meshModifierStore';
 import { KNOWN_SOURCE_EXTENSION_STRIP_RE } from '@/features/plugins/pluginFileTypeExtensions';
+import { getProfileStoreSnapshot } from '@/features/profiles/profileStore';
 import { buildSupportExportFromStores, serializeVoxlDocumentV2, serializeVoxlDocumentV2Streaming, VoxlSizeLimitError, VoxlUnchangedError, type PrecompressedChunk, type VoxlChunkCache, type VoxlChunkReportEntry, type VoxlPrinterBundle } from '@/features/scene/voxl';
 import { type BakedChunk, meshChunkStore } from '@/features/scene/voxl/meshChunkStore';
 import { buildScopedSupportExportDocument, buildScopedSupportGeometryGroup } from '@/features/export/logic/supportExportReconstruction';
@@ -1215,6 +1216,10 @@ export class ExportManager {
             linkGroupId?: string;
             materialProfileId?: string;
             materialBaseColor?: string;
+            bodies?: Array<{ positions: Float32Array; index: Uint32Array | null }>;
+            bodyCenter?: { x: number; y: number; z: number };
+            bodyMaterialProfileIds?: Array<string | null>;
+            bodyColors?: Array<string | null>;
             classification?: MeshHealthReport;
             mesh: {
               mode: 'embedded-file';
@@ -1326,6 +1331,33 @@ export class ExportManager {
               linkGroupId: model.linkGroupId,
               ...(model.materialProfileId ? { materialProfileId: model.materialProfileId } : {}),
               ...(model.materialBaseColor ? { materialBaseColor: model.materialBaseColor } : {}),
+              // V3.4: bodies travel whole so per-body material assignments survive
+              // a reload without the source 3MF.
+              ...(model.splitBodies && model.splitBodies.length > 0
+                ? {
+                  bodies: model.splitBodies.map((body) => {
+                    const position = body.geometry.getAttribute('position');
+                    const index = body.geometry.getIndex();
+                    return {
+                      positions: position
+                        ? Float32Array.from(position.array as ArrayLike<number>)
+                        : new Float32Array(0),
+                      index: index ? Uint32Array.from(index.array as ArrayLike<number>) : null,
+                    };
+                  }),
+                  bodyCenter: {
+                    x: model.geometry.center.x,
+                    y: model.geometry.center.y,
+                    z: model.geometry.center.z,
+                  },
+                  ...(model.bodyMaterialProfileIds
+                    ? { bodyMaterialProfileIds: model.bodyMaterialProfileIds.map((id) => id ?? null) }
+                    : {}),
+                  ...(model.bodyColors
+                    ? { bodyColors: model.bodyColors.map((color) => color ?? null) }
+                    : {}),
+                }
+                : {}),
               classification,
               mesh: {
                 mode: 'embedded-file',
@@ -1355,6 +1387,20 @@ export class ExportManager {
         }
       : undefined;
 
+    // The material profiles the scene references, ids preserved. Without them a
+    // scene opened on another machine has model/body material ids that resolve to
+    // nothing (the printer bundle's own materials are re-id'd on import).
+    const referencedMaterialIds = new Set<string>();
+    for (const model of models) {
+      if (model.materialProfileId) referencedMaterialIds.add(model.materialProfileId);
+      for (const id of model.bodyMaterialProfileIds ?? []) {
+        if (id) referencedMaterialIds.add(id);
+      }
+    }
+    const sceneMaterials = referencedMaterialIds.size > 0
+      ? getProfileStoreSnapshot().materialProfiles.filter((material) => referencedMaterialIds.has(material.id))
+      : [];
+
     const documentInput = {
       models,
       activeModelId: sceneContext?.activeModelId ?? null,
@@ -1373,6 +1419,7 @@ export class ExportManager {
         generator: 'DragonFruit',
         ...(sceneContext?.printer ? { printer: sceneContext.printer } : {}),
       },
+      ...(sceneMaterials.length > 0 ? { materials: sceneMaterials } : {}),
       extensions: {
         ...voxlExtensions,
         ...(sceneContext?.plateOrdering

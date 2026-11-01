@@ -62,6 +62,16 @@ is how a slicer grows a second material system that matches neither.
   stays for picking and overlays). Splitting to bodies still works and carries each
   body's material onto the new model.
 
+## Saving and loading multi-material scenes
+
+VOXL revision 3.5 carries the assignments and what they point at: `MODL` gains
+`bodyCount` / `bodyMaterialProfileIds` / `bodyColors`; a `BODY` chunk per model
+holds the split 3MF bodies (raw positions + indices in the model's own space);
+`MATP` holds the referenced material profiles with their ids, which the loader
+adopts onto the printer the scene resolves to (`importSceneMaterials`). Without
+`MATP` the ids would dangle, because the printer bundle's materials are re-id'd
+on import.
+
 ## Slicing engine
 
 The engine now has the geometry contract for tanks: `SliceJobV3.tank_count` and
