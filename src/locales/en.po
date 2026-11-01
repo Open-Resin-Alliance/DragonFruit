@@ -43,7 +43,7 @@ msgid "{0, plural, one {# printer preset} other {# printer presets}}"
 msgstr "{0, plural, one {# printer preset} other {# printer presets}}"
 
 #. placeholder {0}: selectedLibraryPresetIds.size
-#: src/components/settings/ProfileSettingsModal.tsx:4811
+#: src/components/settings/ProfileSettingsModal.tsx:4827
 msgid "{0, plural, one {Add # printer} other {Add # printers}}"
 msgstr "{0, plural, one {Add # printer} other {Add # printers}}"
 
@@ -741,8 +741,8 @@ msgstr "Add plate {plateNumber}"
 #: src/components/printers/PrinterVariantPickerModal.tsx:707
 #: src/components/settings/FleetManagement.tsx:269
 #: src/components/settings/PluginStudioModal.tsx:2100
-#: src/components/settings/ProfileSettingsModal.tsx:3603
-#: src/components/settings/ProfileSettingsModal.tsx:3666
+#: src/components/settings/ProfileSettingsModal.tsx:3605
+#: src/components/settings/ProfileSettingsModal.tsx:3668
 msgid "Add printer"
 msgstr "Add printer"
 
@@ -750,7 +750,7 @@ msgstr "Add printer"
 msgid "Add printer variant"
 msgstr "Add printer variant"
 
-#: src/components/settings/ProfileSettingsModal.tsx:4812
+#: src/components/settings/ProfileSettingsModal.tsx:4828
 msgid "Add printers"
 msgstr "Add printers"
 
@@ -2931,6 +2931,11 @@ msgstr "Delete preset"
 #: src/supports/Settings/components/PresetSelector.tsx:950
 msgid "Delete presets"
 msgstr "Delete presets"
+
+#: src/components/settings/ProfileSettingsModal.tsx:3891
+#: src/components/settings/ProfileSettingsModal.tsx:3892
+msgid "Delete printer"
+msgstr "Delete printer"
 
 #: src/components/organisms/modals/PrintingModals.tsx:490
 msgid "Delete Recent Print File"

@@ -1422,18 +1422,19 @@ export function ProfileSettingsModal({
         onDragEnd={onDragEnd}
         onDragOver={onDragOver}
         onDrop={onDrop}
-        className={`min-w-0 w-full rounded-md border p-2 transition-all duration-150 ${muted ? 'opacity-45 grayscale pointer-events-none' : draggable ? (dragging ? 'opacity-60' : 'cursor-grab active:cursor-grabbing') : ''}`}
+        className={`min-w-0 w-full rounded-md border p-2 transition-all duration-150 ${draggable ? (dragging ? 'opacity-60' : 'cursor-grab active:cursor-grabbing') : ''}`}
         aria-disabled={muted || undefined}
         onDoubleClick={onDoubleClick}
         style={active ? activeStyles : inactiveStyles}
       >
         <button
           type="button"
-          onClick={onClick}
-          className="w-full text-left leading-none"
+          onClick={muted ? undefined : onClick}
+          aria-disabled={muted || undefined}
+          className={muted ? 'w-full text-left leading-none cursor-not-allowed' : 'w-full text-left leading-none'}
         >
           <div
-            className="h-[128px] min-h-[128px] max-h-[128px] shrink-0 rounded-md border overflow-hidden relative"
+            className={`h-[128px] min-h-[128px] max-h-[128px] shrink-0 rounded-md border overflow-hidden relative ${muted ? 'opacity-60 grayscale' : ''}`}
             style={{
               borderColor: 'var(--border-subtle)',
               background: printerImageWellBackground,
@@ -1470,8 +1471,9 @@ export function ProfileSettingsModal({
         <div className="mt-0.5 flex items-center justify-between gap-1.5">
           <button
             type="button"
-            onClick={onClick}
-            className="min-w-0 flex-1 text-left"
+            onClick={muted ? undefined : onClick}
+            aria-disabled={muted || undefined}
+            className={`min-w-0 flex-1 text-left ${muted ? 'opacity-60 grayscale cursor-not-allowed' : ''}`}
           >
             <div className="flex items-center gap-1.5">
               <div className="text-xs leading-snug font-semibold truncate min-w-0" style={{ color: 'var(--text-strong)' }}>
@@ -3795,7 +3797,7 @@ export function ProfileSettingsModal({
                     draggable: !missingPlugin,
                     dragging: printerDragId === printer.id,
                     onClick: () => { if (!missingPlugin) handlePickPrinter(printer.id); },
-                    onDoubleClick: () => {
+                    onDoubleClick: missingPlugin ? undefined : () => {
                       handlePickPrinter(printer.id);
                       setIsEditingPrinter(true);
                     },
@@ -3883,7 +3885,19 @@ export function ProfileSettingsModal({
                     ) : null,
                     title: printer.name,
                     subtitle: printer.manufacturer || 'Generic',
-                    footer: supportsNetworkFleet ? (
+                    footer: missingPlugin ? (
+                      <Button
+                        type="button"
+                        aria-label={_(msg`Delete printer`)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setDeleteConfirmTarget({ kind: 'printer', id: printer.id, name: printer.name });
+                        }}
+                        variant="tinted-danger" size="auto" className="!h-7 !w-7 !px-0 !py-0 inline-flex items-center justify-center rounded-md shrink-0"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    ) : supportsNetworkFleet ? (
                       <Button
                         type="button"
                         onClick={(event) => {

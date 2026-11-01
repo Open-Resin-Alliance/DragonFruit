@@ -190,8 +190,9 @@ so picking that printer also picks the encoder.
 
 A printer profile built from such a preset **outlives the package**: its scene and
 its settings are the user's, so removing the plugin only marks the profile
-(`missingPlugin: { id, name }`, matched by preset id). The rail greys it out,
-disables it and a tooltip names the missing plugin; reinstalling the package clears
+(`missingPlugin: { id, name }`, matched by preset id). The rail greys out its picture and name, disables
+selecting it, offers a red delete button where the network setup button sits, and a
+tooltip names the missing plugin; reinstalling the package clears
 the mark when its presets return. If the missing profile was the active printer, the
 app falls through to the next usable profile on the next state resolve (so a reload
 opens on a machine that can actually slice), and keeps the selection only when every
