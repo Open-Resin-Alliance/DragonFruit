@@ -154,6 +154,8 @@ export type PrinterProfile = {
     bitDepth?: PrinterBitDepth;
     buildDimensionMode?: PrinterBuildDimensionMode;
     materialMode?: PrinterMaterialMode;
+    /** Free-text notes the user keeps with this machine; never part of a preset. */
+    notes?: string;
     officialPresetId?: string;
     officialPresetVersion?: number;
     /** Set when the plugin that contributed this profile's preset was removed. */
@@ -954,6 +956,12 @@ const DEFAULT_PRINTER_PROFILES: PrinterProfile[] = BUILTIN_PRINTER_PRESETS.map((
     network: sanitizePrinterNetworkSettings((preset as any).network),
 }));
 
+function sanitizePrinterNotes(value: unknown): string | undefined {
+    if (typeof value !== 'string') return undefined;
+    const trimmed = value.trim().slice(0, 2000);
+    return trimmed.length > 0 ? trimmed : undefined;
+}
+
 function sanitizeMissingPlugin(value: unknown): PrinterProfile['missingPlugin'] {
     if (!value || typeof value !== 'object') return undefined;
     const source = value as { id?: unknown; name?: unknown };
@@ -1149,6 +1157,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
                     buildDimensionMode: resolvedBuildDimensionMode,
                     materialMode: normalizeMaterialMode((profile as any).materialMode)
                         ?? normalizeMaterialMode((matchedPreset as any)?.materialMode),
+                    notes: sanitizePrinterNotes((profile as any).notes),
                     officialPresetId,
                     officialPresetVersion: normalizeProfileVersion((profile as any).officialPresetVersion, fallbackOfficialPresetVersion),
                     missingPlugin: sanitizeMissingPlugin((profile as any).missingPlugin),
@@ -1948,6 +1957,10 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
             nextUpdates.materialMode = sourceUpdates.materialMode;
         }
 
+        if (Object.prototype.hasOwnProperty.call(sourceUpdates, 'notes')) {
+            nextUpdates.notes = sourceUpdates.notes;
+        }
+
         if (sourceUpdates.display) {
             const nextDisplay: Partial<PrinterProfile['display']> = {};
             if (Object.prototype.hasOwnProperty.call(sourceUpdates.display, 'outputFormat')) {
@@ -2039,6 +2052,9 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
             materialMode: appliedUpdates.materialMode !== undefined
                 ? normalizeMaterialMode(appliedUpdates.materialMode)
                 : profile.materialMode,
+            notes: appliedUpdates.notes !== undefined
+                ? sanitizePrinterNotes(appliedUpdates.notes)
+                : profile.notes,
             hasCamera: appliedUpdates.hasCamera !== undefined
                 ? normalizeCameraSupport(appliedUpdates.hasCamera)
                 : profile.hasCamera,

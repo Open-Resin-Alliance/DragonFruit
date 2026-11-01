@@ -4991,7 +4991,7 @@ export function ProfileSettingsModal({
 
                 <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
                   <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Identity</div>
-                  <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_240px] gap-3 md:items-stretch">
+                  <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_220px] gap-3 md:items-stretch">
                     <div className="space-y-3">
                       <LabeledInput
                         label="Printer Name"
@@ -5007,44 +5007,57 @@ export function ProfileSettingsModal({
                         onChange={(value) => updatePrinterProfile(selectedPrinter.id, { manufacturer: value })}
                       />
 
-                      <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}>
-                        <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Profile Image</div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <Button
-                            type="button"
-                            onClick={() => triggerImageUpload(selectedPrinter.id)}
-                            disabled={isSelectedPrinterOfficial}
-                            variant="secondary" size="auto" className="!h-8 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1 rounded-md"
-                            style={{ color: isSelectedPrinterOfficial ? 'var(--text-muted)' : 'var(--text-strong)' }}
-                          >
-                            <Upload className="w-3.5 h-3.5" />
-                            Upload Image
-                          </Button>
-                          <Button
-                            type="button"
-                            onClick={() => {
-                              if (!selectedPrinter.imageDataUrl) return;
-                              updatePrinterProfile(selectedPrinter.id, { imageDataUrl: undefined });
-                            }}
-                            disabled={isSelectedPrinterOfficial || !selectedPrinter.imageDataUrl}
-                            variant="secondary" size="auto" className="!h-8 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
-                            style={{ color: selectedPrinter.imageDataUrl ? 'var(--danger)' : 'var(--text-muted)' }}
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                            Clear Image
-                          </Button>
-                        </div>
-                      </div>
+                      <LabeledInput
+                        label="User Notes"
+                        value={selectedPrinter.notes ?? ''}
+                        onChange={(value) => updatePrinterProfile(selectedPrinter.id, { notes: value })}
+                      />
                     </div>
 
-                    <div className="w-full h-full min-h-0 rounded-md border overflow-hidden flex items-center justify-center" style={{ borderColor: 'var(--border-subtle)', background: printerImageWellBackground }}>
+                    {/* The well is the control: empty means "click to upload", a
+                        picture carries its own clear affordance. */}
+                    <div
+                      role={selectedPrinter.imageDataUrl ? undefined : 'button'}
+                      tabIndex={selectedPrinter.imageDataUrl || isSelectedPrinterOfficial ? undefined : 0}
+                      aria-label={selectedPrinter.imageDataUrl ? undefined : 'Upload profile image'}
+                      onClick={() => {
+                        if (selectedPrinter.imageDataUrl || isSelectedPrinterOfficial) return;
+                        triggerImageUpload(selectedPrinter.id);
+                      }}
+                      onKeyDown={(event) => {
+                        if (selectedPrinter.imageDataUrl || isSelectedPrinterOfficial) return;
+                        if (event.key !== 'Enter' && event.key !== ' ') return;
+                        event.preventDefault();
+                        triggerImageUpload(selectedPrinter.id);
+                      }}
+                      className={`relative w-full min-h-[190px] rounded-md border overflow-hidden flex items-center justify-center ${selectedPrinter.imageDataUrl || isSelectedPrinterOfficial ? '' : 'cursor-pointer'}`}
+                      style={{ borderColor: 'var(--border-subtle)', background: printerImageWellBackground }}
+                    >
                       {selectedPrinter.imageDataUrl ? (
                         <AutoTrimmedImage src={selectedPrinter.imageDataUrl} alt={selectedPrinter.name} className="h-full w-full object-contain" />
                       ) : (
                         <div className="text-xs text-center px-3" style={{ color: 'var(--text-muted)' }}>
-                          <Printer className="w-5 h-5 mx-auto mb-1" />
-                          No preview image
+                          <ImagePlus className="w-6 h-6 mx-auto mb-1" />
+                          {isSelectedPrinterOfficial ? 'No preview image' : 'Click to add a profile image'}
                         </div>
+                      )}
+
+                      {/* An official profile's picture comes from its preset: there is
+                          nothing here to clear, so no control is offered. */}
+                      {selectedPrinter.imageDataUrl && !isSelectedPrinterOfficial && (
+                        <IconButton
+                          variant="surface"
+                          size="sm"
+                          type="button"
+                          aria-label="Clear profile image"
+                          className="absolute top-1.5 right-1.5 z-10"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            updatePrinterProfile(selectedPrinter.id, { imageDataUrl: undefined });
+                          }}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" style={{ color: '#fca5a5' }} />
+                        </IconButton>
                       )}
                     </div>
                   </div>

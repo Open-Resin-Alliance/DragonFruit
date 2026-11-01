@@ -69,3 +69,37 @@ test('a printer without the field reads as single material', () => {
     uninstallExternalProfilePlugin(PLUGIN_ID);
   }
 });
+
+test('User Notes are trimmed, capped and survive on an official profile', () => {
+  installExternalProfilePlugin({
+    schemaVersion: 1,
+    id: PLUGIN_ID,
+    name: 'Material Mode',
+    version: '1.0.0',
+    printerPresets: [{
+      presetId: SINGLE_PRESET_ID,
+      profileVersion: 1,
+      manufacturer: 'Test',
+      name: 'Single Printer',
+      buildVolumeMm: { width: 100, depth: 60, height: 120 },
+      display: { resolutionX: 2048, resolutionY: 1152, outputFormat: '.png' },
+    }],
+  });
+
+  const profileId = addPrinterProfileFromPreset(SINGLE_PRESET_ID);
+  try {
+    assert.equal(profileByPreset(SINGLE_PRESET_ID)?.isOfficial, true, 'preset profiles are official');
+
+    updatePrinterProfile(profileId, { notes: '  Service: 2026-03, vat gasket  ' });
+    assert.equal(profileByPreset(SINGLE_PRESET_ID)?.notes, 'Service: 2026-03, vat gasket');
+
+    updatePrinterProfile(profileId, { notes: '   ' });
+    assert.equal(profileByPreset(SINGLE_PRESET_ID)?.notes, undefined, 'blank notes are no notes');
+
+    updatePrinterProfile(profileId, { notes: 'x'.repeat(2500) });
+    assert.equal(profileByPreset(SINGLE_PRESET_ID)?.notes?.length, 2000, 'notes are capped');
+  } finally {
+    removePrinterProfile(profileId);
+    uninstallExternalProfilePlugin(PLUGIN_ID);
+  }
+});
