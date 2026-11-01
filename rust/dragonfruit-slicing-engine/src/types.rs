@@ -77,6 +77,10 @@ fn default_model_triangle_count() -> u32 {
     0
 }
 
+fn default_tank_count() -> u32 {
+    1
+}
+
 fn default_dither_device_gamma() -> f64 {
     3.0
 }
@@ -187,6 +191,20 @@ pub struct SliceJobV3 {
     /// metadata is available.
     #[serde(default)]
     pub aa_on_supports: bool,
+    /// How many resin tanks the machine feeds this job from.
+    ///
+    /// `1` is a single-material machine and the historical behaviour. A job with
+    /// more tanks must carry `triangle_tank_index` so every model triangle names
+    /// the tank it prints from; support geometry is always Tank 1.
+    #[serde(default = "default_tank_count")]
+    pub tank_count: u32,
+    /// Tank index per triangle, aligned with `triangles_xyz`.
+    ///
+    /// Empty means "every triangle in tank 0", which is what a single-material
+    /// job sends. Entries for support triangles are ignored: support geometry
+    /// always prints from Tank 1 (index 0).
+    #[serde(default)]
+    pub triangle_tank_index: Vec<u32>,
     /// Number of model triangles at the front of `triangles_xyz`.
     ///
     /// Triangles after this index are treated as support/raft geometry.
@@ -382,6 +400,40 @@ impl SliceJobV3 {
             Some(bits) => Some(bits.max(2)),
             None => None,
         }
+    }
+
+    /// Triangles in the job.
+    #[inline]
+    pub fn triangle_count(&self) -> usize {
+        self.triangles_xyz.len() / 9
+    }
+
+    /// True when the job draws more than one tank's film.
+    #[inline]
+    pub fn is_multi_tank(&self) -> bool {
+        self.tank_count > 1
+    }
+
+    /// Whether `index` is support geometry, given the model/support split.
+    #[inline]
+    pub fn is_support_triangle(&self, index: usize) -> bool {
+        self.model_triangle_count > 0 && index >= self.model_triangle_count as usize
+    }
+
+    /// The tank a triangle prints from.
+    ///
+    /// Support geometry always prints from Tank 1, whatever the model assignment
+    /// says; a missing assignment also falls back to Tank 1.
+    #[inline]
+    pub fn tank_for_triangle(&self, index: usize) -> u32 {
+        if self.is_support_triangle(index) || self.triangle_tank_index.is_empty() {
+            return 0;
+        }
+        self.triangle_tank_index
+            .get(index)
+            .copied()
+            .unwrap_or(0)
+            .min(self.tank_count.saturating_sub(1))
     }
 
     #[inline]

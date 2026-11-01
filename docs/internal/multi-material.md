@@ -62,6 +62,23 @@ is how a slicer grows a second material system that matches neither.
   stays for picking and overlays). Splitting to bodies still works and carries each
   body's material onto the new model.
 
+## Slicing engine
+
+The engine now has the geometry contract for tanks: `SliceJobV3.tank_count` and
+`triangle_tank_index`, with support triangles always in Tank 1
+(`tanks::partition_triangles_by_tank`). Nothing renders per tank yet — the next
+increments are:
+
+1. ~~pipeline: rasterize each layer once per tank, delivering a run stream per tank~~
+   — done (`slice_and_rasterize_rle_multi_tank_v3`, tank-major delivery);
+2. ~~`RleStreamEncoder`: a per-tank delivery method and refusal for formats that
+   cannot store tanks~~ — done (`supports_multi_tank`, `consume_rle_tank_layer`). No
+   format opts in yet: a tank's own image stream inside the container is the next
+   decision (Athena/NanoDLP stores one image per layer today);
+3. the app payload: map each model/body material to its tank index on the active
+   printer and send the assignment with the job;
+4. printing: send each tank's stream to its panel/port.
+
 ## Next step
 
 Pick one of the three meanings above; then the first slice is the scene model change

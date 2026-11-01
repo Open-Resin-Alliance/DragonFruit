@@ -119,6 +119,30 @@ pub trait RleStreamEncoder: Send {
 
     /// Store a pre-encoded block produced by `parallel_encode_block_fn`.
     fn store_encoded_block(&mut self, _layer_index: u32, _block_index: u32, _bytes: Vec<u8>) {}
+
+    /// Whether this format can store one run stream per tank for a multi-tank job.
+    ///
+    /// A format that cannot must say so: the engine refuses a multi-tank job rather
+    /// than silently printing every tank as Tank 1.
+    fn supports_multi_tank(&self) -> bool {
+        false
+    }
+
+    /// Consume one tank's RLE stream for a layer.
+    ///
+    /// Called tank-major — every layer of tank 0 before any layer of tank 1 — so a
+    /// format can append one independent stream per tank. The engine never calls this
+    /// on an encoder whose [`Self::supports_multi_tank`] is false.
+    fn consume_rle_tank_layer(
+        &mut self,
+        _layer_index: u32,
+        _tank_index: u32,
+        _runs: Vec<crate::rle::RleRun>,
+    ) -> Result<(), SlicerV3Error> {
+        Err(SlicerV3Error::UnsupportedOutput(
+            "encoder does not store per-tank films".to_string(),
+        ))
+    }
 }
 
 /// Trait implemented by concrete output format encoders.

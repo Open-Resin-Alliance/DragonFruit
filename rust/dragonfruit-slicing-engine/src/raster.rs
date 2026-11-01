@@ -4702,6 +4702,7 @@ mod tests {
             triangles_xyz: Vec::new(),
             metadata_json: "{}".to_string(),
             x_packing_mode: "none".to_string(),
+            ..Default::default()
         }
     }
 
