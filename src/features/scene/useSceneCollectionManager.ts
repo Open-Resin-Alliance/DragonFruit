@@ -1360,6 +1360,14 @@ export interface LoadedModel {
    * clearing the assignment can give that colour back.
    */
   materialBaseColor?: string;
+  /**
+   * Material assigned to each body of a multi-body 3MF, aligned with
+   * `splitBodies`. `undefined` at an index means the body prints in the model's
+   * own material. Bodies stay in the model — assigning does not split it.
+   */
+  bodyMaterialProfileIds?: Array<string | undefined>;
+  /** Resolved colour per body, aligned with `splitBodies`. */
+  bodyColors?: Array<string | undefined>;
 }
 
 import { deleteSupportsForModelIds, getSupportsForModel, type ModelSupportIds } from '@/supports/PlacementLogic/SupportModelLinker';
@@ -1580,6 +1588,8 @@ type ModelClipboardEntry = {
   linkGroupId?: string;
   materialProfileId?: string;
   materialBaseColor?: string;
+  bodyMaterialProfileIds?: Array<string | undefined>;
+  bodyColors?: Array<string | undefined>;
 };
 
 // ---------------------------------------------------------------------------
@@ -3292,6 +3302,13 @@ export function useSceneCollectionManager(options?: {
                 ? {
                   materialProfileId: multiTankImportDefault.materialProfileId,
                   materialBaseColor: color,
+                  // Each body starts in Tank 1 too, so every body names a material.
+                  ...(splitBodies.length > 1
+                    ? {
+                      bodyMaterialProfileIds: splitBodies.map(() => multiTankImportDefault.materialProfileId),
+                      bodyColors: splitBodies.map(() => multiTankImportDefault.materialColor),
+                    }
+                    : {}),
                 }
                 : {}),
               polygonCount: merged.nativePreview?.originalTriangleCount
@@ -4689,7 +4706,11 @@ export function useSceneCollectionManager(options?: {
         scale: source.transform.scale.clone(),
       },
       visible: source.visible,
-      color: source.color,
+      // A body that already carries its own material keeps it when it becomes a model.
+      color: source.bodyColors?.[i] ?? source.color,
+      ...(source.bodyMaterialProfileIds?.[i]
+        ? { materialProfileId: source.bodyMaterialProfileIds[i] }
+        : {}),
       polygonCount: bodyGeom.nativePreview?.originalTriangleCount
         ?? countTriangles(bodyGeom.geometry),
     }));
@@ -5396,6 +5417,8 @@ export function useSceneCollectionManager(options?: {
         linkGroupId: source.linkGroupId,
         materialProfileId: source.materialProfileId,
         materialBaseColor: source.materialBaseColor,
+        bodyMaterialProfileIds: source.bodyMaterialProfileIds,
+        bodyColors: source.bodyColors,
       },
     ]);
 
@@ -5429,6 +5452,8 @@ export function useSceneCollectionManager(options?: {
         linkGroupId: source.linkGroupId,
         materialProfileId: source.materialProfileId,
         materialBaseColor: source.materialBaseColor,
+        bodyMaterialProfileIds: source.bodyMaterialProfileIds,
+        bodyColors: source.bodyColors,
       };
     }));
 
@@ -5474,6 +5499,8 @@ export function useSceneCollectionManager(options?: {
       linkGroupId: first.linkGroupId,
       materialProfileId: first.materialProfileId,
       materialBaseColor: first.materialBaseColor,
+      bodyMaterialProfileIds: first.bodyMaterialProfileIds,
+      bodyColors: first.bodyColors,
     };
 
     const nextModels = [...models, pastedModel];
@@ -5969,6 +5996,8 @@ export function useSceneCollectionManager(options?: {
         linkGroupId: entry.linkGroupId,
         materialProfileId: entry.materialProfileId,
         materialBaseColor: entry.materialBaseColor,
+        bodyMaterialProfileIds: entry.bodyMaterialProfileIds,
+        bodyColors: entry.bodyColors,
         ...(assignedPlateIds[index] ? { plateId: assignedPlateIds[index] } : {}),
       };
     });
@@ -6088,6 +6117,8 @@ export function useSceneCollectionManager(options?: {
         linkGroupId: source.linkGroupId,
         materialProfileId: source.materialProfileId,
         materialBaseColor: source.materialBaseColor,
+        bodyMaterialProfileIds: source.bodyMaterialProfileIds,
+        bodyColors: source.bodyColors,
       };
     });
 
@@ -7584,6 +7615,43 @@ export function useSceneCollectionManager(options?: {
     );
   }, [activeModelId, models, pushSceneSnapshotHistory, selectedModelIds]);
 
+  const setModelBodyMaterial = useCallback((
+    modelId: string,
+    bodyIndices: number[],
+    materialProfileId: string | null,
+    materialColor?: string,
+  ) => {
+    const target = models.find((model) => model.id === modelId);
+    const bodyCount = target?.splitBodies?.length ?? 0;
+    if (!target || bodyCount <= 1 || bodyIndices.length === 0) return;
+
+    const nextIds = Array.from({ length: bodyCount }, (_, index) => target.bodyMaterialProfileIds?.[index]);
+    const nextColors = Array.from({ length: bodyCount }, (_, index) => target.bodyColors?.[index]);
+    let changed = false;
+    for (const index of bodyIndices) {
+      if (index < 0 || index >= bodyCount) continue;
+      const nextId = materialProfileId || undefined;
+      const nextColor = nextId ? materialColor : undefined;
+      if (nextIds[index] !== nextId || nextColors[index] !== nextColor) {
+        nextIds[index] = nextId;
+        nextColors[index] = nextColor;
+        changed = true;
+      }
+    }
+    if (!changed) return;
+
+    const nextModels = models.map((model) => (
+      model.id === modelId
+        ? { ...model, bodyMaterialProfileIds: nextIds, bodyColors: nextColors }
+        : model
+    ));
+
+    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
+    setModels(nextModels);
+    const after = captureSceneSnapshot(nextModels, activeModelId, selectedModelIds);
+    pushSceneSnapshotHistory(before, after, ASSIGN_MATERIAL_LABEL);
+  }, [activeModelId, models, pushSceneSnapshotHistory, selectedModelIds]);
+
   const setModelMaterialProfile = useCallback((
     modelIds: string[],
     materialProfileId: string | null,
@@ -8697,6 +8765,7 @@ export function useSceneCollectionManager(options?: {
     setModelVisibility,
     toggleSupportDesignation,
     setModelMaterialProfile,
+    setModelBodyMaterial,
     linkModels,
     unlinkModels,
     setModelMeshModifiers,

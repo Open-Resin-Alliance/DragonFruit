@@ -2606,6 +2606,20 @@ export default function Home() {
   }, []);
 
   const editorContextMenuTitle = scene.mode === 'support' ? _(msg`Supports`) : _(msg`Editor`);
+  /**
+   * Selected 3MF bodies. UI selection rather than scene state: a body is not a
+   * model, and nothing outside the panel, the menu and the renderer reads it.
+   */
+  const [selectedBodies, setSelectedBodies] = React.useState<Array<{ modelId: string; bodyIndex: number }>>([]);
+  const selectedBodyKeys = React.useMemo(
+    () => selectedBodies.map((entry) => `${entry.modelId}#${entry.bodyIndex}`),
+    [selectedBodies],
+  );
+  const liveSelectedBodies = React.useMemo(
+    () => selectedBodies.filter((entry) => scene.models.some((model) => model.id === entry.modelId)),
+    [scene.models, selectedBodies],
+  );
+
   // A multi-tank machine can print a model in any resin one of its tanks holds; the
   // menu offers exactly those, in tank order.
   const multiTankMaterialChoices = React.useMemo(
@@ -2647,7 +2661,12 @@ export default function Home() {
     if (multiTankMaterialChoices.length === 0) return items;
 
     const targetModels = scene.models.filter((model) => editorContextMenuTargetIds.includes(model.id));
-    const assignedIds = new Set(targetModels.map((model) => model.materialProfileId ?? null));
+    const bodyTargets = liveSelectedBodies.filter((entry) => editorContextMenuTargetIds.includes(entry.modelId));
+    const assignedIds = new Set(bodyTargets.length > 0
+      ? bodyTargets.map((entry) => (
+        targetModels.find((model) => model.id === entry.modelId)?.bodyMaterialProfileIds?.[entry.bodyIndex] ?? null
+      ))
+      : targetModels.map((model) => model.materialProfileId ?? null));
     const currentMaterialId = assignedIds.size === 1 ? [...assignedIds][0] : null;
     const materialMenu: EditorMenuItemDef = {
       id: 'material-menu',
@@ -2684,6 +2703,7 @@ export default function Home() {
     supportContextMenuItems,
     multiTankMaterialChoices,
     editorContextMenuTargetIds,
+    liveSelectedBodies,
   ]);
   const editorContextMenuDisabledActions = React.useMemo(() => {
     if (scene.mode === 'support') {
@@ -5686,6 +5706,7 @@ export default function Home() {
   const handleModelListContextMenu = React.useCallback((modelId: string, position: { x: number; y: number }) => {
     // Right-clicking a model row should target that model first.
     if (!scene.selectedModelIds.includes(modelId)) {
+      setSelectedBodies([]);
       scene.selectModel(modelId, 'single');
     }
     setEditorContextMenuPos(position);
@@ -5706,11 +5727,32 @@ export default function Home() {
   }, []);
 
   const handleModelSelection = React.useCallback((modelId: string, mode: 'single' | 'toggle' | 'add' = 'single') => {
+    // Selecting the model itself means the whole 3MF; a body is only ever chosen
+    // explicitly, from its own row.
+    setSelectedBodies([]);
     scene.selectModel(modelId, mode);
   }, [scene]);
 
+  // A body row selects its model too, so the canvas and menu agree on what is
+  // being worked on.
+  const handleSelectBody = React.useCallback((modelId: string, bodyIndex: number, mode: 'single' | 'toggle') => {
+    setSelectedBodies((prev) => {
+      if (mode === 'single') return [{ modelId, bodyIndex }];
+      const exists = prev.some((entry) => entry.modelId === modelId && entry.bodyIndex === bodyIndex);
+      return exists
+        ? prev.filter((entry) => !(entry.modelId === modelId && entry.bodyIndex === bodyIndex))
+        : [...prev, { modelId, bodyIndex }];
+    });
+    scene.selectModel(modelId, 'single');
+  }, [scene]);
+
+  const handleCloseBodyDrawer = React.useCallback((modelId: string) => {
+    setSelectedBodies((prev) => prev.filter((entry) => entry.modelId !== modelId));
+  }, []);
+
   const handleModelRangeSelection = React.useCallback((ids: string[], activeId: string, mode: 'replace' | 'add' = 'replace') => {
     if (ids.length === 0) return;
+    setSelectedBodies([]);
 
     if (mode === 'add') {
       scene.setSelectedModelIds((prev) => Array.from(new Set([...prev, ...ids])));
@@ -5760,9 +5802,11 @@ export default function Home() {
         setHolePunchHoverPlacement(null);
         return;
       }
+      setSelectedBodies([]);
       scene.clearModelSelection();
       return;
     }
+    setSelectedBodies([]);
     scene.selectModel(modelId, options?.selectionMode ?? 'single');
   }, [scene, selectedHolePunchPlacementIds.length, transformMgr.transformMode]);
 
@@ -6294,7 +6338,20 @@ export default function Home() {
       const materialProfileId = action.slice('assign-material:'.length) || null;
       if (editorContextMenuTargetIds.length > 0) {
         const material = multiTankMaterialChoices.find((entry) => entry.id === materialProfileId);
-        scene.setModelMaterialProfile(editorContextMenuTargetIds, materialProfileId, material?.color);
+        const bodyTargets = liveSelectedBodies.filter((entry) => editorContextMenuTargetIds.includes(entry.modelId));
+        if (bodyTargets.length > 0) {
+          const byModel = new Map<string, number[]>();
+          for (const entry of bodyTargets) {
+            const list = byModel.get(entry.modelId);
+            if (list) list.push(entry.bodyIndex);
+            else byModel.set(entry.modelId, [entry.bodyIndex]);
+          }
+          for (const [modelId, bodyIndices] of byModel) {
+            scene.setModelBodyMaterial(modelId, bodyIndices, materialProfileId, material?.color);
+          }
+        } else {
+          scene.setModelMaterialProfile(editorContextMenuTargetIds, materialProfileId, material?.color);
+        }
       }
       closeEditorContextMenu();
       return;
@@ -6488,7 +6545,14 @@ export default function Home() {
         break;
     }
     closeEditorContextMenu();
-  }, [arrangeSpacingMm, closeEditorContextMenu, editorContextMenuTargetIds, multiTankMaterialChoices, scene]);
+  }, [
+    arrangeSpacingMm,
+    closeEditorContextMenu,
+    editorContextMenuTargetIds,
+    liveSelectedBodies,
+    multiTankMaterialChoices,
+    scene,
+  ]);
 
   React.useEffect(() => {
     const refreshHistoryDebug = () => {
@@ -10667,6 +10731,9 @@ export default function Home() {
               modelsPanelVisible: modelsPanelShown,
               modelsPanelCollapsible: toolLayout === 'horizontal',
               handleModelSelection: handleModelSelection,
+              selectedBodyKeys,
+              handleSelectBody,
+              handleCloseBodyDrawer,
               handleModelRangeSelection: handleModelRangeSelection,
               handleGroupSelection: handleGroupSelection,
               handleGroupSelectedModels: handleGroupSelectedModels,
@@ -10768,6 +10835,9 @@ export default function Home() {
               scene={scene}
               outsidePlateModelIds={outsidePlateModelIds}
               handleModelSelection={handleModelSelection}
+              selectedBodyKeys={selectedBodyKeys}
+              handleSelectBody={handleSelectBody}
+              handleCloseBodyDrawer={handleCloseBodyDrawer}
               handleModelRangeSelection={handleModelRangeSelection}
               handleGroupSelection={handleGroupSelection}
               handleGroupSelectedModels={handleGroupSelectedModels}
@@ -11139,6 +11209,7 @@ export default function Home() {
             blockerEditMode={hollowingEditMode}
             selectionColor={themeMeshHighlightColors.selection}
             multiMaterialMode={activePrinterProfile?.materialMode === 'multiTank'}
+            selectedBodies={liveSelectedBodies}
             hoverColor={themeMeshHighlightColors.hover}
             hoverTintStrength={effectiveHoverTintStrengthForScene}
             selectedTintStrength={effectiveSelectedTintStrengthForScene}

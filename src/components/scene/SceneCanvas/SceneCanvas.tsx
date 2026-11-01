@@ -616,6 +616,7 @@ export function SceneCanvas({
   leafHoverPosition,
   selectionColor,
   multiMaterialMode = false,
+  selectedBodies,
   hoverColor,
   hoverTintStrength,
   selectedTintStrength,
@@ -862,6 +863,8 @@ export function SceneCanvas({
    * gains an outline as well.
    */
   multiMaterialMode?: boolean;
+  /** Selected 3MF bodies, by model, so the renderer can draw each one apart. */
+  selectedBodies?: ReadonlyArray<{ modelId: string; bodyIndex: number }>;
   hoverColor?: string;
   hoverTintStrength?: number;
   selectedTintStrength?: number;
@@ -1953,6 +1956,15 @@ export function SceneCanvas({
   const hoverTintColor = hoverColor ?? '#ec2a77';
   const selectedTintColor = selectionColor ?? '#ec2a77';
   const likelySupportGeometryTintColor = '#c8752a';
+  const selectedBodyIndicesByModel = React.useMemo(() => {
+    const byModel = new Map<string, number[]>();
+    for (const entry of selectedBodies ?? []) {
+      const list = byModel.get(entry.modelId);
+      if (list) list.push(entry.bodyIndex);
+      else byModel.set(entry.modelId, [entry.bodyIndex]);
+    }
+    return byModel;
+  }, [selectedBodies]);
 
   // One walk per state change, keyed by model, so the per-model bounds callback
   // below does not re-walk every collection for every model.
@@ -6928,6 +6940,11 @@ export function SceneCanvas({
                       hoverTintColor={modelHoverTintColor}
                       selectedTintColor={modelSelectedTintColor}
                       materialOutlineEnabled={multiMaterialMode}
+                      bodyGeometries={model.splitBodies && model.splitBodies.length > 1
+                        ? model.splitBodies.map((body) => body.geometry)
+                        : undefined}
+                      bodyColors={model.bodyColors}
+                      selectedBodyIndices={selectedBodyIndicesByModel.get(model.id)}
                       hoverTintStrength={hoverTintStrength}
                       selectedTintStrength={selectedTintStrength}
                       supportNonSelectedOpacity={supportNonSelectedOpacity}

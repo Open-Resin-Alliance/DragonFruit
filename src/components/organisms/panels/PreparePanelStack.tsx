@@ -20,6 +20,9 @@ export type PreparePanelStackProps = {
 
   outsidePlateModelIds: React.ComponentProps<typeof ModelManagerPanel>['outsidePlateModelIds'];
   handleModelSelection: React.ComponentProps<typeof ModelManagerPanel>['onSelect'];
+  selectedBodyKeys?: React.ComponentProps<typeof ModelManagerPanel>['selectedBodyKeys'];
+  handleSelectBody?: React.ComponentProps<typeof ModelManagerPanel>['onSelectBody'];
+  handleCloseBodyDrawer?: React.ComponentProps<typeof ModelManagerPanel>['onCloseBodyDrawer'];
   handleModelRangeSelection: React.ComponentProps<typeof ModelManagerPanel>['onSelectRange'];
   handleGroupSelection: React.ComponentProps<typeof ModelManagerPanel>['onSelectGroup'];
   handleGroupSelectedModels: React.ComponentProps<typeof ModelManagerPanel>['onGroupModels'];
@@ -81,6 +84,9 @@ export function PreparePanelStack({
   organicCut,
   outsidePlateModelIds,
   handleModelSelection,
+  selectedBodyKeys,
+  handleSelectBody,
+  handleCloseBodyDrawer,
   handleModelRangeSelection,
   handleGroupSelection,
   handleGroupSelectedModels,
@@ -187,6 +193,9 @@ export function PreparePanelStack({
         scene={scene}
         outsidePlateModelIds={outsidePlateModelIds}
         handleModelSelection={handleModelSelection}
+        selectedBodyKeys={selectedBodyKeys}
+        handleSelectBody={handleSelectBody}
+        handleCloseBodyDrawer={handleCloseBodyDrawer}
         handleModelRangeSelection={handleModelRangeSelection}
         handleGroupSelection={handleGroupSelection}
         handleGroupSelectedModels={handleGroupSelectedModels}

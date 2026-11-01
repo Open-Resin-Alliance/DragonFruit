@@ -56,6 +56,11 @@ is how a slicer grows a second material system that matches neither.
   distinguishes selection on its own. Imported models are assigned Tank 1's resin by
   default (a model must always name a material there), and hover draws a fainter grey
   rim instead of a tint.
+- Multi-body 3MFs expose their bodies as a drawer under the model row. The bodies are
+  processed in the merged model's own space, so a body can be selected on its own and
+  given its own material; the renderer then draws one mesh per body (the merged mesh
+  stays for picking and overlays). Splitting to bodies still works and carries each
+  body's material onto the new model.
 
 ## Next step
 
