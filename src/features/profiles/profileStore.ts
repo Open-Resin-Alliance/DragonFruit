@@ -347,6 +347,8 @@ export type MaterialProfile = {
     locked?: boolean;
     name: string;
     brand: string;
+    /** Swatch colour, `#rrggbb`. Optional: older profiles have none. */
+    color?: string;
     currencyCode: string;
     bottlePrice: number;
     bottleCapacityMl: number;
@@ -367,6 +369,12 @@ export type MaterialProfile = {
     antiAliasingSettings: MaterialAntiAliasingSettings;
     localSettingsByOutput?: Record<string, LocalMaterialSettingsMap>;
 };
+
+function sanitizeMaterialColor(value: unknown): string | undefined {
+    if (typeof value !== 'string') return undefined;
+    const trimmed = value.trim();
+    return /^#[0-9a-fA-F]{6}$/.test(trimmed) ? trimmed.toLowerCase() : undefined;
+}
 
 function normalizeMinimumAaAlphaPercent(value: unknown, fallback = 35): number {
     const numeric = Number(value);
@@ -1078,6 +1086,7 @@ function createDefaultMaterials(printerProfiles: PrinterProfile[]): MaterialProf
 
     return getAllMaterialTemplates().map((template) => ({
         ...template,
+        color: sanitizeMaterialColor((template as any).color),
         currencyCode: typeof (template as any).currencyCode === 'string' ? (template as any).currencyCode : 'USD',
         minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent((template as any).minimumAaAlphaPercent, 35),
         antiAliasingSettings: sanitizeMaterialAntiAliasingSettings((template as any).antiAliasingSettings),
@@ -1301,6 +1310,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
                         locked: materialProfile.locked === true,
                         name: profile.name,
                         brand: typeof (profile as any).brand === 'string' ? (profile as any).brand : 'Default',
+                        color: sanitizeMaterialColor((profile as any).color),
                         currencyCode: typeof (profile as any).currencyCode === 'string' ? (profile as any).currencyCode.toUpperCase() : 'USD',
                         bottlePrice: Number((profile as any).bottlePrice) || 0,
                         bottleCapacityMl: Number((profile as any).bottleCapacityMl) || 1000,
@@ -1947,6 +1957,7 @@ export function addMaterialProfile(
         locked: (partial as any)?.locked === true,
         name: partial?.name?.trim() || `Material ${state.materialProfiles.length + 1}`,
         brand: partial?.brand?.trim() || 'Default',
+        color: sanitizeMaterialColor(partial?.color),
         currencyCode: partial?.currencyCode?.trim().toUpperCase() || 'USD',
         bottlePrice: partial?.bottlePrice ?? 0,
         bottleCapacityMl: partial?.bottleCapacityMl ?? 1000,
@@ -2314,6 +2325,7 @@ export function updateMaterialProfile(id: string, updates: Partial<Omit<Material
             printerProfileId: profile.printerProfileId,
             locked: profile.locked,
             brand: updates.brand !== undefined ? updates.brand : profile.brand,
+            color: updates.color !== undefined ? sanitizeMaterialColor(updates.color) : profile.color,
             currencyCode: updates.currencyCode !== undefined ? updates.currencyCode.toUpperCase() : profile.currencyCode,
             name: updates.name !== undefined ? updates.name : profile.name,
             localSettingsByOutput: updates.localSettingsByOutput !== undefined

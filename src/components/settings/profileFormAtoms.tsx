@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { CarFront, ChevronDown, ChevronUp, CircleHelp, Snail } from 'lucide-react';
-import { Button } from '@/components/atoms';
+import { Button, ColorSwatchInput } from '@/components/atoms';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { MouseTooltip } from '@/components/ui/MouseTooltip';
@@ -660,6 +660,99 @@ export function LabeledCurrencySelect({ label, value, options, onChange }: Label
     );
 }
 
+// ─── Material colour ─────────────────────────────────────────────────────────
+
+/** Named swatches for the common resins; anything else is a Custom colour. */
+export const MATERIAL_COLOR_PRESETS: Array<{ value: string; label: string }> = [
+    { value: '#9ca3af', label: 'Grey' },
+    { value: '#f8fafc', label: 'White' },
+    { value: '#111827', label: 'Black' },
+    { value: '#3b82f6', label: 'Blue' },
+    { value: '#22c55e', label: 'Green' },
+    { value: '#ef4444', label: 'Red' },
+    { value: '#f59e0b', label: 'Amber' },
+    { value: '#ec4899', label: 'Pink' },
+    { value: '#a855f7', label: 'Purple' },
+    { value: '#14b8a6', label: 'Teal' },
+];
+
+const CUSTOM_MATERIAL_COLOR = 'custom';
+
+export function LabeledMaterialColorSelect({ value, onChange }: { value?: string; onChange: (color: string) => void }) {
+    const preset = MATERIAL_COLOR_PRESETS.find((entry) => entry.value === value);
+    // "Custom" is a mode, not a colour: picking it while a named swatch is current must
+    // open the picker on that colour, which the hex alone cannot express.
+    const [customMode, setCustomMode] = React.useState(false);
+    React.useEffect(() => {
+        if (!value) setCustomMode(false);
+    }, [value]);
+    const isCustom = customMode || (Boolean(value) && !preset);
+    const selected = isCustom ? CUSTOM_MATERIAL_COLOR : preset?.value ?? '';
+    // The native picker fires on every pixel while it is dragged. Writing that through
+    // re-rendered this whole modal per event, which is the lag; the swatch previews
+    // locally and commits once, when the picker closes (blur).
+    const [previewColor, setPreviewColor] = React.useState(value ?? '#8a8f98');
+    React.useEffect(() => {
+        setPreviewColor(value ?? '#8a8f98');
+    }, [value]);
+
+    // Not a <label>: SelectDropdown renders its own, and nesting them is both invalid
+    // and what left this control a different height from its neighbours.
+    return (
+        <div className="space-y-1 block">
+            <span className="ui-label font-medium inline-flex items-center gap-1.5">Color</span>
+            <div className="flex items-center gap-2">
+                <SelectDropdown
+                    className="min-w-0 flex-1"
+                    selectedTextAlign="center"
+                    value={selected}
+                    options={[
+                        { value: '', label: 'None' },
+                        ...MATERIAL_COLOR_PRESETS.map((entry) => ({
+                            value: entry.value,
+                            label: entry.label,
+                            icon: (
+                                <span
+                                    className="h-3.5 w-3.5 rounded-[4px]"
+                                    style={{
+                                        background: entry.value,
+                                        boxShadow: 'inset 0 0 0 1px rgba(0, 0, 0, 0.35), 0 0 0 1px var(--border-subtle)',
+                                    }}
+                                />
+                            ),
+                        })),
+                        {
+                            value: CUSTOM_MATERIAL_COLOR,
+                            label: 'Custom Color',
+                            tone: 'accent',
+                        },
+                    ]}
+                    onChange={(next) => {
+                        if (next === CUSTOM_MATERIAL_COLOR) {
+                            setCustomMode(true);
+                            onChange(value ?? '#8a8f98');
+                            return;
+                        }
+                        setCustomMode(false);
+                        onChange(next);
+                    }}
+                />
+                {selected === CUSTOM_MATERIAL_COLOR && (
+                    <ColorSwatchInput
+                        value={previewColor}
+                        onChange={setPreviewColor}
+                        onBlur={() => onChange(previewColor)}
+                        // A touch shorter than the 36px field: a filled swatch reads as
+                        // larger than an outline at the same height.
+                        className="h-[30px] w-9 self-center"
+                        ariaLabel="Custom material color"
+                    />
+                )}
+            </div>
+        </div>
+    );
+}
+
 // ─── MaterialProfileIdentitySection ──────────────────────────────────────────
 
 type MaterialProfileIdentitySectionProps = {
@@ -671,7 +764,7 @@ export function MaterialProfileIdentitySection({ draft, onChange }: MaterialProf
     return (
         <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
             <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Material Profile</div>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
                 <LabeledInput
                     label="Manufacturer"
                     value={draft.brand}
@@ -682,6 +775,13 @@ export function MaterialProfileIdentitySection({ draft, onChange }: MaterialProf
                     value={draft.name}
                     onChange={(value) => onChange((prev) => ({ ...prev, name: value }))}
                 />
+                <LabeledMaterialColorSelect
+                    value={draft.color}
+                    onChange={(color) => onChange((prev) => ({ ...prev, color: color || undefined }))}
+                />
+            </div>
+
+            <div className="mt-2 grid grid-cols-2 gap-2">
                 <LabeledResinFamilySelect
                     label="Resin Family"
                     value={draft.resinFamily}

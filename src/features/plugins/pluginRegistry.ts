@@ -908,9 +908,14 @@ function sanitizeMaterialTemplate(input: unknown): Omit<MaterialProfile, 'id' | 
     ? resinFamilyRaw
     : 'standard';
 
+  const color = boundedString(value.color, 7).toLowerCase();
+
   return {
     name,
     brand: boundedString(value.brand, 80) || 'Default',
+    // The colour is part of the material meta, so a plugin's template can carry the
+    // vendor's swatch and it survives into the profile.
+    ...(/^#[0-9a-f]{6}$/.test(color) ? { color } : {}),
     currencyCode: (boundedString(value.currencyCode, 3) || 'USD').toUpperCase(),
     bottlePrice: sanitizeNumber(value.bottlePrice, 0, 0, 1000000),
     bottleCapacityMl: sanitizeNumber(value.bottleCapacityMl, 1000, 1, 1000000),

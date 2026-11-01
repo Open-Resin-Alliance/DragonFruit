@@ -34,7 +34,13 @@ export function ColorSwatchInput({ value, onChange, onBlur, className, title, ar
         '[&::-webkit-color-swatch]:border-0 [&::-webkit-color-swatch-wrapper]:p-0 [&::-moz-color-swatch]:border-0',
         className,
       )}
-      style={{ borderColor: 'var(--border-subtle)' }}
+      // The swatch is the colour itself, so a pale resin on a pale surface would read
+      // as a larger box with no edge. An inset hairline keeps every colour the same
+      // apparent size.
+      style={{
+        borderColor: 'var(--border-subtle)',
+        boxShadow: 'inset 0 0 0 1px rgba(0, 0, 0, 0.28)',
+      }}
     />
   );
 }

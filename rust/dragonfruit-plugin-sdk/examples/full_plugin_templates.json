@@ -12,6 +12,7 @@
     "bottomLayerCount": 5,
     "liftDistanceMm": 6,
     "liftSpeedMmMin": 60,
-    "retractSpeedMmMin": 150
+    "retractSpeedMmMin": 150,
+    "color": "#3b82f6"
   }
 ]

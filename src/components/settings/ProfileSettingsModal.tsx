@@ -894,6 +894,19 @@ export function ProfileSettingsModal({
         options.push({
           value: material.id,
           label: familyLabel && !nameStartsWithFamily ? `${familyLabel} ${material.name}` : material.name,
+          ...(material.color
+            ? {
+              icon: (
+                <span
+                  className="h-3.5 w-3.5 rounded-[4px]"
+                  style={{
+                    background: material.color,
+                    boxShadow: 'inset 0 0 0 1px rgba(0, 0, 0, 0.35), 0 0 0 1px var(--border-subtle)',
+                  }}
+                />
+              ),
+            }
+            : {}),
         });
       }
     }
@@ -2936,6 +2949,9 @@ export function ProfileSettingsModal({
     setEditMaterialDraft({
       name: selectedMaterial.name,
       brand: selectedMaterial.brand,
+      // The colour is part of the material meta: without it here, an edit that changed
+      // it saved nothing and the profile reopened on the old value.
+      color: selectedMaterial.color,
       currencyCode: selectedMaterial.currencyCode || 'USD',
       bottlePrice: selectedMaterial.bottlePrice,
       bottleCapacityMl: selectedMaterial.bottleCapacityMl,
@@ -4244,7 +4260,7 @@ export function ProfileSettingsModal({
                   const isTank = index < tankCount;
                   const assignedId = isTank ? assignments[index] ?? '' : '';
                   return (
-                    <label key={`tank-${index}`} className="space-y-1 block">
+                    <div key={`tank-${index}`} className="space-y-1 block">
                       <span className="ui-label font-medium inline-flex w-full justify-center text-center">
                         {`Tank ${index + 1}`}
                       </span>
@@ -4263,6 +4279,7 @@ export function ProfileSettingsModal({
                           ? <span style={{ color: isTank ? 'var(--danger)' : 'var(--text-muted)' }}>—</span>
                           : undefined}
                         selectedDisplayAlignment="center"
+                        selectedTextAlign="center"
                         selectStyle={isTank && assignedId.length === 0 ? { color: 'var(--danger)' } : undefined}
                         selectClassName="w-full h-[36px] px-2.5 pr-10 leading-tight text-sm"
                         onChange={(value) => {
@@ -4272,7 +4289,7 @@ export function ProfileSettingsModal({
                           updatePrinterProfile(selectedPrinter.id, { tankMaterials: next });
                         }}
                       />
-                    </label>
+                    </div>
                   );
                 })}
               </div>
@@ -4635,6 +4652,16 @@ export function ProfileSettingsModal({
                             <div className="flex min-w-0 items-center justify-between gap-2">
                               <span className="flex min-w-0 flex-1 items-center gap-1.5 font-semibold">
                                 {isLocked && <Lock className="w-3.5 h-3.5 shrink-0" />}
+                                {material.color && (
+                                  <span
+                                    className="h-3.5 w-3.5 shrink-0 rounded-[4px]"
+                                    style={{
+                                      background: material.color,
+                                      boxShadow: 'inset 0 0 0 1px rgba(0, 0, 0, 0.35), 0 0 0 1px var(--border-subtle)',
+                                    }}
+                                    aria-hidden="true"
+                                  />
+                                )}
                                 <FadeText className="min-w-0 flex-1">{material.name}</FadeText>
                               </span>
                               <span className="shrink-0 whitespace-nowrap tabular-nums">{Math.round(material.layerHeightMm * 1000)} μm</span>
