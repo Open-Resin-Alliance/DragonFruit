@@ -904,11 +904,14 @@ export function Helpers({
   // Keep decal geometry in lockstep with the logo SVG's intrinsic viewBox ratio
   // to avoid non-uniform stretching on the build plate.
   const plateLogoAspect = 1772 / 304;
-  const plateLogoBaseWidth = Math.max(16, Math.min(42, width * 0.2));
+  // The 16mm floor was a 100mm-machine value; on a 10mm bed it made the wordmark
+  // wider than the part. Keep the width proportional, with only enough of a floor
+  // that a tiny plate still has a legible mark.
+  const plateLogoBaseWidth = Math.max(3, Math.min(42, width * 0.2));
   const plateLogoScale = 1.0;
   const plateLogoWidth = plateLogoBaseWidth * plateLogoScale;
   const plateLogoHeight = (plateLogoBaseWidth / plateLogoAspect) * plateLogoScale;
-  const plateLogoInset = 1.6;
+  const plateLogoInset = Math.min(1.6, width * 0.08);
   const plateLogoX = resolvedOriginMinX + width - plateLogoInset - plateLogoWidth * 0.5;
   const plateLogoY = resolvedOriginMinY + plateLogoInset + plateLogoHeight * 0.5;
   const plateLogoZ = 0.12;
