@@ -2150,6 +2150,29 @@ export function useSceneCollectionManager(options?: {
     )));
   }, []);
 
+  const remapImportedMaterialReferences = useCallback((modelIds: string[], remap: Map<string, string>) => {
+    if (remap.size === 0 || modelIds.length === 0) return;
+    const ids = new Set(modelIds);
+    setModels((prev) => prev.map((model) => {
+      if (!ids.has(model.id)) return model;
+      const materialProfileId = model.materialProfileId
+        ? remap.get(model.materialProfileId) ?? model.materialProfileId
+        : model.materialProfileId;
+      const bodyMaterialProfileIds = model.bodyMaterialProfileIds?.map((id) => (
+        id ? remap.get(id) ?? id : id
+      ));
+      if (materialProfileId === model.materialProfileId
+        && bodyMaterialProfileIds === model.bodyMaterialProfileIds) {
+        return model;
+      }
+      return {
+        ...model,
+        materialProfileId,
+        ...(bodyMaterialProfileIds ? { bodyMaterialProfileIds } : {}),
+      };
+    }));
+  }, []);
+
   const resolvePrinterMismatch = useCallback((choice: 'switch' | 'keep') => {
     if (!printerMismatch) return;
 
@@ -2170,10 +2193,11 @@ export function useSceneCollectionManager(options?: {
     const resolvedId = installedId ?? importPrinterBundle(printerMismatch.bundle);
     setActivePrinterProfile(resolvedId);
     if (printerMismatch.materials && printerMismatch.materials.length > 0) {
-      importSceneMaterials(resolvedId, printerMismatch.materials);
+      const remap = importSceneMaterials(resolvedId, printerMismatch.materials);
+      remapImportedMaterialReferences(printerMismatch.importedModelIds, remap);
     }
     setPrinterMismatch(null);
-  }, [clearImportedMaterialAssignments, printerMismatch]);
+  }, [clearImportedMaterialAssignments, printerMismatch, remapImportedMaterialReferences]);
 
   /**
    * Show the report a model already carries, from its recorded repair.
@@ -7449,10 +7473,12 @@ export function useSceneCollectionManager(options?: {
           } else if (sceneMaterials.length > 0) {
             // The scene is already on its printer: adopt the materials it carries
             // so its material references resolve here.
-            importSceneMaterials(installed?.id ?? currentPrinter.id, sceneMaterials);
+            const remap = importSceneMaterials(installed?.id ?? currentPrinter.id, sceneMaterials);
+            remapImportedMaterialReferences(importedModels.map((model) => model.id), remap);
           }
         } else if (sceneMaterials.length > 0 && currentPrinter) {
-          importSceneMaterials(currentPrinter.id, sceneMaterials);
+          const remap = importSceneMaterials(currentPrinter.id, sceneMaterials);
+          remapImportedMaterialReferences(importedModels.map((model) => model.id), remap);
         }
       }
 
