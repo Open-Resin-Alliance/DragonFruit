@@ -10,6 +10,8 @@ import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { ModelSupportsModal } from '@/components/modals/ModelSupportsModal';
 import { ObsoleteVoxlVersionModal } from '@/components/modals/ObsoleteVoxlVersionModal';
 import { ScenePrinterMismatchModal } from '@/components/modals/ScenePrinterMismatchModal';
+import { ScenePluginMissingModal } from '@/components/modals/ScenePluginMissingModal';
+import { openSettingsModal } from '@/components/settings/settingsModalEvents';
 import { SceneAutosaveRecoveryModal } from '@/components/scene/SceneAutosaveRecoveryModal';
 import { ZipFilePickerModal } from '@/components/modals/ZipFilePickerModal';
 import { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
@@ -327,6 +329,15 @@ export function SceneFileModals({
         />
       )}
 
+      <ScenePluginMissingModal
+        prompt={scene.missingPrinterPluginPrompt}
+        onImportGeometry={() => scene.resolveMissingPrinterPluginChoice('geometry')}
+        onManagePlugins={() => {
+          scene.resolveMissingPrinterPluginChoice('manage');
+          openSettingsModal('plugins');
+        }}
+      />
+
       {scene.printerMismatch && (
         <ScenePrinterMismatchModal
           isOpen
@@ -338,6 +349,13 @@ export function SceneFileModals({
           currentIsSmaller={scene.printerMismatch.currentIsSmaller}
           sceneUsesMultiTankMaterials={scene.printerMismatch.sceneUsesMultiTankMaterials}
           currentMaterialMode={scene.printerMismatch.currentMaterialMode}
+          missingPluginName={scene.printerMismatch.missingPlugin?.name}
+          onManagePlugins={scene.printerMismatch.missingPlugin
+            ? () => {
+              scene.resolvePrinterMismatch('keep');
+              openSettingsModal('plugins');
+            }
+            : undefined}
           onSwitch={() => scene.resolvePrinterMismatch('switch')}
           onKeep={() => scene.resolvePrinterMismatch('keep')}
         />

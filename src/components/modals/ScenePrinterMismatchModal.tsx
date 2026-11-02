@@ -26,6 +26,10 @@ type ScenePrinterMismatchModalProps = {
   sceneUsesMultiTankMaterials?: boolean;
   /** The material mode of the selected profile. */
   currentMaterialMode?: string;
+  /** Set when the recorded printer's plugin is not installed. */
+  missingPluginName?: string;
+  /** Opens Settings on the Plugins tab; only used in the missing-plugin variant. */
+  onManagePlugins?: () => void;
   onSwitch: () => void;
   onKeep: () => void;
 };
@@ -48,11 +52,14 @@ export function ScenePrinterMismatchModal({
   currentIsSmaller,
   sceneUsesMultiTankMaterials = false,
   currentMaterialMode,
+  missingPluginName,
+  onManagePlugins,
   onSwitch,
   onKeep,
 }: ScenePrinterMismatchModalProps) {
   const { _ } = useLingui();
   const recordedLabel = recordedPrinterName?.trim() || _(msg`the printer this scene was built for`);
+  const pluginMissing = Boolean(missingPluginName?.trim());
   // The scene was authored with per-tank material assignments and the profile
   // selected now has one material: keeping it throws those assignments away.
   const losesMaterialAssignments = sceneUsesMultiTankMaterials && currentMaterialMode !== 'multiTank';
@@ -60,20 +67,45 @@ export function ScenePrinterMismatchModal({
   return (
     <StructuredDialogModal
       open={isOpen}
-      ariaLabel={losesMaterialAssignments ? _(msg`Scene built for a multi-material printer`) : _(msg`Scene built for another printer`)}
-      title={losesMaterialAssignments ? _(msg`Built for Multi-Material`) : _(msg`Built for another printer`)}
-      subtitle={losesMaterialAssignments
-        ? _(msg`This scene is made for a multi-material printer`)
-        : currentIsSmaller
-          ? _(msg`This scene may not fit the one selected`)
-          : _(msg`Its plates are spaced for that printer`)}
+      ariaLabel={pluginMissing
+        ? _(msg`Printer plugin not installed`)
+        : losesMaterialAssignments
+          ? _(msg`Scene built for a multi-material printer`)
+          : _(msg`Scene built for another printer`)}
+      title={pluginMissing
+        ? _(msg`Printer plugin not installed`)
+        : losesMaterialAssignments
+          ? _(msg`Built for Multi-Material`)
+          : _(msg`Built for another printer`)}
+      subtitle={pluginMissing
+        ? _(msg`Only the geometry can be imported`)
+        : losesMaterialAssignments
+          ? _(msg`This scene is made for a multi-material printer`)
+          : currentIsSmaller
+            ? _(msg`This scene may not fit the one selected`)
+            : _(msg`Its plates are spaced for that printer`)}
       icon={<AlertTriangle className="h-4 w-4" />}
       iconTone="warning"
       zIndexClassName="z-[130]"
       closeAriaLabel={_(msg`Close modal`)}
       onClose={onKeep}
       onBackdropClick={onKeep}
-      actions={
+      actions={pluginMissing ? (
+        <>
+          {onManagePlugins && (
+            <Button variant="secondary" onClick={onManagePlugins}>
+              <Trans>Manage Plugins</Trans>
+            </Button>
+          )}
+          <Button
+            variant="tinted-accent"
+            className="inline-flex items-center justify-center gap-1.5"
+            onClick={onKeep}
+          >
+            <Trans>Import Geometry</Trans>
+          </Button>
+        </>
+      ) : (
         <>
           <Button variant="secondary" onClick={onKeep}>
             <Trans>Keep {currentPrinterName}</Trans>
@@ -86,8 +118,24 @@ export function ScenePrinterMismatchModal({
             <Trans>Switch to {recordedLabel}</Trans>
           </Button>
         </>
-      }
+      )}
     >
+      {pluginMissing ? (
+        <>
+          <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+            <Trans>
+              This scene was saved for <strong className="text-sm font-medium" style={{ color: 'var(--text-strong)' }}>{recordedLabel}</strong>,
+              whose printer and material profiles come from the{' '}
+              <strong className="text-sm font-medium" style={{ color: 'var(--text-strong)' }}>{missingPluginName}</strong> plugin.
+              That plugin is not installed, so those profiles cannot be restored.
+            </Trans>
+          </p>
+          <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+            <Trans>Only the geometry will be imported. Install the plugin, then reopen the scene, to restore its printer and materials.</Trans>
+          </p>
+        </>
+      ) : (
+        <>
       {losesMaterialAssignments && (
         <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
           <Trans>
@@ -136,6 +184,8 @@ export function ScenePrinterMismatchModal({
           </Trans>
         )}
       </p>
+        </>
+      )}
     </StructuredDialogModal>
   );
 }

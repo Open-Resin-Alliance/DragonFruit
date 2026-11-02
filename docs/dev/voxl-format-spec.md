@@ -30,11 +30,12 @@ container generation.
 | 3.2      | Support `typeId`                                                                          | `2` or `3`        |
 | 3.3      | `MODL.classification`                                                                     | `2` or `3`        |
 | 3.4      | `SCNE.plates` (plate ids and names) and `META.printer`                                     | `2` or `3`        |
-| 3.5      | Multi-material scenes: `MODL` body assignments, the `BODY` and `MATP` chunks — current writer target | `2` or `3` |
+| 3.5      | Multi-material scenes: `MODL` body assignments, the `BODY` and `MATP` chunks | `2` or `3` |
+| 3.6      | Printer bundle keeps its multi-tank state (`materialMode`, `tankCount`, `tankMaterials`) and `allowMultiPlate`/`plateShape`; bundle materials keep their colour — current writer target | `2` or `3` |
 
 Dedup (3.0) is the only reader-breaking change since V1, so a current writer
 emits `version 2` for a scene with no shared MESH chunks and `version 3` when
-dedup fired. Readers must support both binary floors. Writers should emit 3.4
+dedup fired. Readers must support both binary floors. Writers should emit 3.6
 semantics.
 
 V1 was only ever written by pre-release builds — the first release already wrote
@@ -148,6 +149,16 @@ scene is imported onto a machine that lacks the printer, so without `MATP` every
 `materialProfileId` in the file would dangle. A reader adopts these profiles onto
 the printer the scene resolves to, leaving a local profile with the same id
 alone.
+
+### Printer bundle state (3.6)
+
+`META.printer` carries the printer profile the scene was authored against. 3.6
+adds the fields that make a Multi-Tank setup survive the trip: `materialMode`,
+`tankCount`, `tankMaterials`, plus `allowMultiPlate` and `plateShape`, and the
+bundle's `materials` keep their `color`. The fields are additive: an older reader
+ignores the ones it does not know, and a reader that ignores `tankMaterials`
+imports the printer without assignments rather than refusing the file. There is no
+new chunk and no container-floor change.
 
 The `SCNE` payload is `VoxlSceneState`: which model is active, which models are
 selected, the scene's `plates` (3.4), and `plateName` — the user's name for the
@@ -402,7 +413,7 @@ Unknown extension keys should be ignored.
 
 ## Implementation notes
 
-- The current writer (`src/features/scene/voxl/codec-v2.ts`) emits 3.4 semantics: raw mesh bytes into `MESH` chunks with per-chunk zlib and no base64, which makes files roughly 60-65% smaller than the old JSON container for typical scenes and faster to write and read. It stamps the container floor `2`, or `3` when dedup shared a MESH chunk.
+- The current writer (`src/features/scene/voxl/codec-v2.ts`) emits 3.6 semantics: raw mesh bytes into `MESH` chunks with per-chunk zlib and no base64, which makes files roughly 60-65% smaller than the old JSON container for typical scenes and faster to write and read. It stamps the container floor `2`, or `3` when dedup shared a MESH chunk.
 - The binary reader hands callers pre-decoded mesh bytes through `ParsedVoxlResult.meshBytes`.
 - A V1 file is refused by `VoxlObsoleteVersionError` (`src/features/scene/voxl/codec.ts`) rather than parsed; the app turns that into the "unsupported version" modal. Detection is `detectObsoleteVoxlVersion`.
 

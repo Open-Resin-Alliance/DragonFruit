@@ -395,7 +395,7 @@ import { calculateDiskThickness } from '@/supports/SupportPrimitives/ContactDisk
 import { getBezierPointAtT } from '@/supports/Curves/BezierUtils';
 import { getSupportsForModel, modelIdOfParentShaft } from '@/supports/PlacementLogic/SupportModelLinker';
 import { buildProjectedCrossSectionZRange } from '@/features/slicing/rasterLayerZipExport';
-import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
+import { resolveCompositeMaterialLabel, resolveMaterialFamilyNameLabel } from '@/utils/materialLabel';
 
 import type { ModelTransform, TransformMode } from '@/hooks/useModelTransform';
 import type { Segment, SupportMode } from '@/supports/types';
@@ -2740,7 +2740,7 @@ export default function Home() {
       startsGroup: true,
       children: multiTankMaterialChoices.map((material) => ({
         id: `assign-material:${material.id}` as const,
-        label: material.name,
+        label: resolveMaterialFamilyNameLabel(material) ?? material.name,
         icon: Palette,
         checked: targetModels.length > 0 && currentMaterialId === material.id,
         disabled: editorContextMenuTargetIds.length === 0,

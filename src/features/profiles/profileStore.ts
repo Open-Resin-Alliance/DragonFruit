@@ -1885,6 +1885,14 @@ export function matchPrinterVariantByBitDepth(variants: PrinterPreset[], detecte
     return variants.find((variant) => variant.bitDepth?.bits === detectedBitDepth) ?? null;
 }
 
+/** Add an official profile from a preset when this build still has that preset. */
+export function addPrinterProfileFromPresetIfAvailable(presetId: string | null | undefined): string | null {
+    const id = typeof presetId === 'string' ? presetId.trim() : '';
+    if (!id) return null;
+    if (!getAllPrinterPresets().some((preset) => preset.presetId === id)) return null;
+    return addPrinterProfileFromPreset(id);
+}
+
 export function addPrinterProfileFromPreset(presetId: string): string {
     ensureHydrated();
     const preset = getAllPrinterPresets().find((item) => item.presetId === presetId);
@@ -2562,6 +2570,10 @@ export function importPrinterBundle(payload: unknown): string {
         pixelSize: sanitizePixelSize(sourcePrinter.pixelSize),
         bitDepth: sanitizeBitDepth(sourcePrinter.bitDepth),
         buildDimensionMode: normalizeBuildDimensionMode(sourcePrinter.buildDimensionMode) ?? 'manual',
+        materialMode: normalizeMaterialMode(sourcePrinter.materialMode),
+        tankCount: sanitizeTankCount(sourcePrinter.tankCount),
+        allowMultiPlate: sourcePrinter.allowMultiPlate !== false,
+        plateShape: sourcePrinter.plateShape === 'circle' ? 'circle' : 'rectangle',
         officialPresetId: undefined,
         officialPresetVersion: undefined,
         isOfficial: false,
@@ -2594,10 +2606,16 @@ export function importPrinterBundle(payload: unknown): string {
     };
 
     const sourceMaterials = Array.isArray(bundle.materials) ? (bundle.materials as unknown[]) : [];
+    const materialIdMap = new Map<string, string>();
     const importedMaterials: MaterialProfile[] = sourceMaterials
         .filter((item): item is MaterialProfile => Boolean(item) && typeof item === 'object')
         .map((material, index) => ({
-            id: createId('material'),
+            id: (() => {
+                const id = createId('material');
+                const sourceId = typeof material.id === 'string' ? material.id.trim() : '';
+                if (sourceId) materialIdMap.set(sourceId, id);
+                return id;
+            })(),
             printerProfileId: importedPrinterId,
             officialTemplateId: typeof material.officialTemplateId === 'string' && material.officialTemplateId.trim().length > 0
                 ? material.officialTemplateId.trim()
@@ -2611,6 +2629,7 @@ export function importPrinterBundle(payload: unknown): string {
             brand: typeof material.brand === 'string' && material.brand.trim().length > 0
                 ? material.brand.trim()
                 : 'Default',
+            color: sanitizeMaterialColor(material.color),
             currencyCode: typeof material.currencyCode === 'string' && material.currencyCode.trim().length > 0
                 ? material.currencyCode.trim().toUpperCase()
                 : 'USD',
@@ -2633,6 +2652,15 @@ export function importPrinterBundle(payload: unknown): string {
             antiAliasingSettings: sanitizeMaterialAntiAliasingSettings(material.antiAliasingSettings),
             localSettingsByOutput: sanitizeLocalSettingsByOutput(material.localSettingsByOutput),
         }));
+
+    const sourceTankMaterials = Array.isArray(sourcePrinter.tankMaterials)
+        ? sourcePrinter.tankMaterials
+            .map((id) => (typeof id === 'string' ? materialIdMap.get(id) ?? id : ''))
+            .filter((id) => id.length > 0)
+        : [];
+    if (sourceTankMaterials.length > 0) {
+        importedPrinter.tankMaterials = sourceTankMaterials;
+    }
 
     if (importedMaterials.length === 0) {
         importedMaterials.push({
@@ -2923,23 +2951,58 @@ export function getActiveMaterialProfile(stateOverride?: ProfileStoreState): Mat
  * A profile already present under that id is left alone: it is either the same
  * material on its original machine, or the local edit the user made to it.
  */
-export function importSceneMaterials(printerProfileId: string, materials: unknown[]): void {
+export function importSceneMaterials(printerProfileId: string, materials: unknown[]): Map<string, string> {
     ensureHydrated();
-    if (!Array.isArray(materials) || materials.length === 0) return;
+    const remap = new Map<string, string>();
+    if (!Array.isArray(materials) || materials.length === 0) return remap;
 
     const byId = new Map(state.materialProfiles.map((profile) => [profile.id, profile]));
+    const identity = (profile: Pick<MaterialProfile, 'brand' | 'resinFamily' | 'name'>): string => (
+        `${profile.brand.trim().toLowerCase()}\u0000${profile.resinFamily}\u0000${profile.name.trim().toLowerCase()}`
+    );
+    const byTemplate = new Map<string, MaterialProfile>();
+    const bySignature = new Map<string, MaterialProfile>();
+    const index = (profile: MaterialProfile) => {
+        if (profile.printerProfileId !== printerProfileId) return;
+        const templateId = profile.officialTemplateId?.trim();
+        if (templateId) byTemplate.set(templateId, profile);
+        bySignature.set(identity(profile), profile);
+    };
+    for (const profile of byId.values()) index(profile);
+
     let changed = false;
 
     for (const raw of materials) {
         if (!raw || typeof raw !== 'object') continue;
         const source = raw as Partial<MaterialProfile>;
-        const id = typeof source.id === 'string' && source.id.trim().length > 0
+        const requestedId = typeof source.id === 'string' && source.id.trim().length > 0
             ? source.id.trim()
             : createId('material');
-        const existing = byId.get(id);
-        if (existing && existing.printerProfileId === printerProfileId) continue;
-        changed = true;
-        byId.set(id, {
+        const existingById = byId.get(requestedId);
+        const sourceTemplateId = typeof source.officialTemplateId === 'string'
+            ? source.officialTemplateId.trim()
+            : '';
+        const sourceSignature = identity({
+            brand: typeof source.brand === 'string' && source.brand.trim().length > 0 ? source.brand : 'Default',
+            resinFamily: source.resinFamily ?? 'standard',
+            name: typeof source.name === 'string' && source.name.trim().length > 0 ? source.name.trim() : 'Imported material',
+        });
+
+        // The same material can carry a different local id on another machine or in
+        // an older save. Match its template first, then its brand/type/name, before
+        // adding a second copy beside the one already in this printer.
+        const match = (existingById?.printerProfileId === printerProfileId ? existingById : undefined)
+            ?? (sourceTemplateId ? byTemplate.get(sourceTemplateId) : undefined)
+            ?? bySignature.get(sourceSignature);
+        if (match && match.printerProfileId === printerProfileId) {
+            remap.set(requestedId, match.id);
+            continue;
+        }
+
+        // An id already owned by another printer cannot be moved here; give this
+        // printer its own profile and leave the other profile alone.
+        const id = existingById ? createId('material') : requestedId;
+        const profile: MaterialProfile = {
             id,
             printerProfileId,
             officialTemplateId: typeof source.officialTemplateId === 'string' ? source.officialTemplateId : undefined,
@@ -2971,14 +3034,19 @@ export function importSceneMaterials(printerProfileId: string, materials: unknow
             antiAliasingSettings: sanitizeMaterialAntiAliasingSettings(source.antiAliasingSettings),
             localSettingsByOutput: sanitizeLocalSettingsByOutput(source.localSettingsByOutput),
             locked: source.locked === true,
-        });
+        };
+        changed = true;
+        byId.set(id, profile);
+        index(profile);
+        remap.set(requestedId, id);
     }
 
-    if (!changed) return;
+    if (!changed) return remap;
     setState(ensureActiveMaterialForActivePrinter({
         ...state,
         materialProfiles: [...byId.values()],
     }));
+    return remap;
 }
 
 export function getMaterialProfilesForPrinter(printerProfileId: string, stateOverride?: ProfileStoreState): MaterialProfile[] {
