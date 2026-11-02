@@ -2122,8 +2122,13 @@ export function useSceneCollectionManager(options?: {
 
     // A printer whose plugin is gone cannot be restored from a scene bundle: the
     // app has no definition for its format or material pane. Keep only geometry.
-    if (printerMismatch.missingPlugin || choice === 'keep') {
+    if (printerMismatch.missingPlugin) {
       clearImportedMaterialAssignments(printerMismatch.importedModelIds);
+      setPrinterMismatch(null);
+      return;
+    }
+
+    if (choice === 'keep') {
       setPrinterMismatch(null);
       return;
     }
