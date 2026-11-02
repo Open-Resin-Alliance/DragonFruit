@@ -13,10 +13,12 @@ import { useInteractionStatus } from '@/supports/interaction/useInteractionStatu
 import { useJointCreationHotkey } from '@/supports/SupportPrimitives/Joint/useJointCreationHotkey';
 import { useCurveHotkey } from '@/supports/Curves/useCurveHotkey';
 import { useJointCreationState } from '@/supports/SupportPrimitives/Joint/jointCreationState';
-import { cloneSupportState, getSelectedId, getSelectedCategory, findShaftOwnerOfJoint, findShaftOwnerOfSegment, getSupportEntities, getSupportTypeOf, getSupports, getSnapshot, removeJointById, setSelectedId, setHoveredState, subscribe } from '@/supports/state';
+import { cloneSupportState, getSelectedId, getSelectedCategory, findShaftOwnerOfJoint, findShaftOwnerOfSegment, getSupportEntities, getSupportTypeOf, getSupports, getSnapshot, setSelectedId, setHoveredState, subscribe } from '@/supports/state';
+import { removeJointWithPayload } from '@/supports/history/jointRemovalPayload';
+import { pushSupportEditHistory } from '@/supports/history/supportEditHistory';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { pushSupportHistory } from '@/supports/history/supportHistory';
-import { SUPPORT_AUTO_BRACE_REPLACE } from '@/supports/history/actionTypes';
+import { SUPPORT_MULTI_DELETE } from '@/supports/history/actionTypes';
 import { findKnotHost, getSupportTypeBySelectionCategory, getSupportTypeDescriptor, KNOT_HOST_PRECEDENCE, SUPPORT_TYPES } from '@/supports/supportTypeRegistry';
 import { removeSupportEntityWithPayload } from '@/supports/history/removalPayload';
 import { MODEL_SURFACE_GESTURE_TYPES } from '@/supports/supportTypeRegistry';
@@ -215,27 +217,31 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
 
     const deleteSelectionByCategoryAndId = (category: string, id: string, recordHistory = true): boolean => {
       if (category === 'joint') {
-        const result = removeJointById(id);
-        if (!result) {
+        const resolved = removeJointWithPayload(id);
+        if (!resolved) {
           const kickstandOwner = resolveSupportOwnerFromJointId(id);
           if (!kickstandOwner) return false;
           return deleteSelectionByCategoryAndId(kickstandOwner.category, kickstandOwner.id, recordHistory);
         }
-        // Whether a joint removal records an update is the type's declared
-        // `historyUpdate`; a type without one (kickstand today) rides the
-        // full-state snapshot. The action and payload are the type's own, so
-        // the push uses the declared action; the payload cast keeps the
-        // per-action payload map the single source of truth for what a handler
-        // understands.
-        const descriptor = getSupportTypeDescriptor(result.typeId);
-        if (recordHistory && descriptor.historyUpdate) {
-          pushSupportHistory({
-            type: descriptor.historyUpdate,
-            description: deleteJointLabel(descriptor.id),
-            payload: { before: result.before, after: result.after } as never,
-          });
+        // A type declaring `historyUpdate` records the edit its action owns;
+        // one without it records the full-state snapshot joint drags use.
+        const descriptor = getSupportTypeDescriptor(resolved.typeId);
+        if (recordHistory) {
+          if (resolved.edit && descriptor.historyUpdate) {
+            pushSupportHistory({
+              type: descriptor.historyUpdate,
+              description: deleteJointLabel(descriptor.id),
+              payload: resolved.edit as never,
+            });
+          } else if (resolved.snapshot) {
+            pushSupportEditHistory(
+              deleteJointLabel(descriptor.id),
+              { support: resolved.snapshot.before },
+              { support: resolved.snapshot.after },
+            );
+          }
         }
-        setSelectedId(result.id);
+        setSelectedId(resolved.id);
         return true;
       }
 
@@ -334,7 +340,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
           const afterSupportSnapshot = cloneSupportState(getSnapshot());
 
           pushSupportHistory({
-            type: SUPPORT_AUTO_BRACE_REPLACE,
+            type: SUPPORT_MULTI_DELETE,
             description: deleteSupportsLabel(multiSelectedIds.length),
             payload: {
               before: beforeSupportSnapshot,

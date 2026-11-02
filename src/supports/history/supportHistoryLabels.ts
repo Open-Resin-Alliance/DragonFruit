@@ -29,8 +29,8 @@ export const SUPPORT_HISTORY_LABELS: HistoryLabels<SupportHistoryPayloadMap> = {
   'support:remove-kickstand': msg({ message: 'Remove kickstand', context: 'Undo history entry' }),
   'support:update-trunk': msg({ message: 'Edit trunk', context: 'Undo history entry' }),
   'support:update-branch': msg({ message: 'Edit branch', context: 'Undo history entry' }),
-  'support:replace-trunk': msg({ message: 'Replace trunk', context: 'Undo history entry' }),
   'support:edit-replace': msg({ message: 'Edit supports', context: 'Undo history entry' }),
+  'support:multi-delete': msg({ message: 'Delete supports', context: 'Undo history entry' }),
   'support:auto-brace-replace': msg({ message: 'Auto bracing', context: 'Undo history entry' }),
   'support:auto-place': msg({ message: 'Auto supports', context: 'Undo history entry' }),
   'support:blocker-stroke': msg({ message: 'Paint support blocker', context: 'Undo history entry' }),
@@ -165,6 +165,7 @@ export const PASTE_SUPPORTS_LABEL = msg({ message: 'Paste supports', context: 'U
 export const ADJUST_CURVE_TENSION_LABEL = msg({ message: 'Adjust curve tension', context: 'Undo history entry' });
 export const ADJUST_CURVE_BIAS_LABEL = msg({ message: 'Adjust curve bias', context: 'Undo history entry' });
 export const REMOVE_CURVE_LABEL = msg({ message: 'Remove curve', context: 'Undo history entry' });
+export const REPLACE_SUPPORTS_LABEL = msg({ message: 'Replace supports', context: 'Undo history entry' });
 
 export function deleteSupportsLabel(count: number): MessageDescriptor {
   return msg({

@@ -1,6 +1,7 @@
 import type { MessageDescriptor } from '@lingui/core';
 import { pushSupportHistory } from '@/supports/history/supportHistory';
 import { SUPPORT_EDIT_REPLACE } from './actionTypes';
+import { SUPPORT_COLLECTION_KEYS } from '../supportTypeRegistry';
 import { getSnapshot, type SupportState } from '../state';
 import { clonePlainData } from '@/utils/plainDataClone';
 
@@ -14,39 +15,48 @@ export function captureSupportEditSnapshot(): SupportEditHistorySnapshot {
 
 type SupportEditHistoryJob = {
   description: MessageDescriptor;
-  before: SupportEditHistorySnapshot;
-  after: SupportEditHistorySnapshot;
+  before: SupportState;
+  after: SupportState;
 };
 
 const pendingJobs: SupportEditHistoryJob[] = [];
 let flushScheduled = false;
 
-function sanitizeSupportSnapshot(snapshot: SupportState): SupportState {
-  // A support state is plain records; `clonePlainData` is ~2.8x faster than
-  // `structuredClone` here (57 ms vs 20 ms on 9,000 entities) and keeps object
-  // identity for untouched subtrees.
-  const cloned = clonePlainData(snapshot);
-  cloned.selectedId = null;
-  cloned.selectedCategory = null;
-  cloned.hoveredId = null;
-  cloned.hoveredCategory = 'none';
-  return cloned;
+/**
+ * A snapshot without the interaction fields, so undo does not restore a stale
+ * selection. Shallow: the store replaces its state rather than mutating it.
+ */
+function withoutInteractionState(snapshot: SupportState): SupportState {
+  return {
+    ...snapshot,
+    selectedId: null,
+    selectedCategory: null,
+    hoveredId: null,
+    hoveredCategory: 'none',
+  };
 }
 
-function flushPendingJobs() {
+/** Pushes every queued entry, oldest first. */
+export function flushSupportEditHistory(): void {
   flushScheduled = false;
+  if (pendingJobs.length === 0) return;
 
   const jobs = pendingJobs.splice(0, pendingJobs.length);
   for (const job of jobs) {
     pushSupportHistory({
       type: SUPPORT_EDIT_REPLACE,
       description: job.description,
-      payload: {
-        before: sanitizeSupportSnapshot(job.before.support),
-        after: sanitizeSupportSnapshot(job.after.support),
-      },
+      // Copied once here and owned from then on, so the store does not clone
+      // two whole support states again on every push, undo and redo.
+      payload: { before: clonePlainData(job.before), after: clonePlainData(job.after) },
     }, { payloadOwned: true });
   }
+}
+
+/** Drops queued entries, for a caller clearing the stacks they would land on. */
+export function cancelPendingSupportEditHistory(): void {
+  pendingJobs.length = 0;
+  flushScheduled = false;
 }
 
 function scheduleFlush() {
@@ -54,17 +64,38 @@ function scheduleFlush() {
   flushScheduled = true;
 
   if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
-    window.requestIdleCallback(() => flushPendingJobs(), { timeout: 250 });
+    window.requestIdleCallback(() => flushSupportEditHistory(), { timeout: 250 });
   } else {
-    setTimeout(flushPendingJobs, 0);
+    setTimeout(flushSupportEditHistory, 0);
   }
 }
 
+/**
+ * Whether an edit changed anything worth an undo step. Collection identity
+ * first, which `normaliseSupportState` keeps across a hover-only write.
+ */
+function changedAnything(before: SupportState, after: SupportState): boolean {
+  const touched = SUPPORT_COLLECTION_KEYS.filter((key) => before[key] !== after[key]);
+  if (touched.length === 0) return false;
+  return touched.some((key) => JSON.stringify(before[key]) !== JSON.stringify(after[key]));
+}
+
+/**
+ * Records a whole-state support edit, pushed when the main thread next idles:
+ * each payload is cloned once at the flush, which is tens of milliseconds on a
+ * large scene. An edit that changed nothing is dropped.
+ */
 export function pushSupportEditHistory(
   description: MessageDescriptor,
   before: SupportEditHistorySnapshot,
   after: SupportEditHistorySnapshot,
 ) {
-  pendingJobs.push({ description, before, after });
+  if (!changedAnything(before.support, after.support)) return;
+
+  pendingJobs.push({
+    description,
+    before: withoutInteractionState(before.support),
+    after: withoutInteractionState(after.support),
+  });
   scheduleFlush();
 }

@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { clearHistory, undo } from '@/history/historyStore';
-import { addSupportEntityWithHistory, getSnapshot, resetStore } from '../state';
+import { clearHistory, redo, undo } from '@/history/historyStore';
+import { addRoot, addSupportEntityWithHistory, getSnapshot, resetStore } from '../state';
+import type { Roots } from '../types';
 import { SUPPORT_TYPES, SUPPORT_REMOVAL_SHAPES, getSupportTypeDescriptor } from '../supportTypeRegistry';
 import { registerSupportHistoryHandlers } from '../history/useSupportHistoryHandlers';
 
@@ -60,5 +61,39 @@ test('the payload key a type declares is the one its add action carries', () => 
             getSupportTypeDescriptor(descriptor.id).historyAdd,
             `${descriptor.id}: declares an add action`,
         );
+    }
+});
+
+test('every root-owning type records the root its undo would take', () => {
+    // Undo removes the entity by cascade, so the payload redo replays from has
+    // to carry what that cascade takes. A type that owns a root and records
+    // only itself restores a support with no root under it.
+    const unregister = registerSupportHistoryHandlers();
+    try {
+        for (const descriptor of SUPPORT_TYPES.filter((d) => d.ownsRoot)) {
+            resetStore();
+            clearHistory();
+
+            const rootId = `root-${descriptor.id}`;
+            addRoot({
+                id: rootId,
+                modelId: 'model-1',
+                transform: { pos: { x: 0, y: 0, z: 0 }, rot: { x: 0, y: 0, z: 0, w: 1 } },
+                diameter: 2,
+                diskHeight: 0.5,
+                coneHeight: 1,
+            } as Roots);
+            addSupportEntityWithHistory(descriptor.id, { id: `probe-${descriptor.id}`, rootId } as never);
+
+            assert.ok(getSnapshot().roots[rootId], `${descriptor.id}: the root is placed`);
+            undo();
+            assert.ok(!getSnapshot().roots[rootId], `${descriptor.id}: undo takes the root`);
+            redo();
+            assert.ok(getSnapshot().roots[rootId], `${descriptor.id}: redo puts the root back`);
+        }
+    } finally {
+        unregister();
+        resetStore();
+        clearHistory();
     }
 });

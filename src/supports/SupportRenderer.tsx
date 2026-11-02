@@ -4,7 +4,7 @@ import React, { useSyncExternalStore, forwardRef, useImperativeHandle, useCallba
 import * as THREE from 'three';
 import { useThree, type ThreeEvent } from '@react-three/fiber';
 import { LineMaterial, LineSegments2, LineSegmentsGeometry } from 'three-stdlib';
-import { removeRootById, subscribe, getSnapshot,
+import { subscribe, getSnapshot,
   getKickstandKnots,
   getKickstandRoots,
   type SupportState,
@@ -26,7 +26,6 @@ import { createCavityTester } from './interiorSupportGeometry';
 import './previewGeometry/registerBuiltinPreviewBuilders';
 import {
     anyContactMatches,
-    collectOwnedRootIds,
     contactEndpointsFor,
     parseKnotHostId,
     isConeKnotHost,
@@ -1335,17 +1334,6 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         hoveredCategoryForVisual,
         hoveredIdForVisual,
     ]);
-
-    // Cull roots no entity claims any more.
-    useEffect(() => {
-        if (!interactionHooksEnabled) return;
-        const ownedRootIds = collectOwnedRootIds(state);
-        for (const rootId of Object.keys(state.roots)) {
-            if (ownedRootIds.has(rootId)) continue;
-            removeRootById(rootId);
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- the collections it walks, not the snapshot: a hover ran this walk over every root for nothing.
-    }, supportCollectionRefs(state, interactionHooksEnabled));
 
     /**
      * The scene-owned values a joint drag needs, published for the gesture

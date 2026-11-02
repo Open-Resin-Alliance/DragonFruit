@@ -1,4 +1,4 @@
-import { SUPPORT_GRAPH_NODES, SUPPORT_TYPES, type SupportCollectionKey } from './supportTypeRegistry';
+import { SUPPORT_GRAPH_NODES, SUPPORT_TYPES, getSupportTypeDescriptor, parseKnotHostId, type SupportCollectionKey, type SupportTypeDescriptor, type SupportTypeId } from './supportTypeRegistry';
 import type { Segment, SupportState } from './types';
 
 /**
@@ -39,6 +39,20 @@ function buildSegmentOwners(state: CascadeState): Map<string, EntityRef> {
         }
     }
     return owners;
+}
+
+/** The entity a segment id names: a real segment, or a cone or span host. */
+function segmentOwnerKey(
+    owners: Map<string, EntityRef>,
+    segmentId: string,
+): string | null {
+    const real = owners.get(segmentId);
+    if (real) return refKey(real);
+
+    const host = parseKnotHostId(segmentId);
+    if (!host) return null;
+    const collection = getSupportTypeDescriptor(host.typeId).location.key;
+    return `${collection}:${host.entityId}`;
 }
 
 interface OutgoingLink {
@@ -140,10 +154,12 @@ export function collectCascade(state: CascadeState, seed: EntityRef[]): Set<stri
             const ref = { collection, id: (entity as { id: string }).id };
             for (const link of outgoingIds(state, ref)) {
                 // A knot names a segment; map it to the shaft that owns it.
-                const host = link.edgeTo === 'segment' ? segmentOwners.get(link.id) : { collection: link.edgeTo, id: link.id };
-                if (!host) continue;
-                addReferrer(refKey(host), ref);
-                if (link.ownership === 'hostedBy') addDependent(refKey(host), ref);
+                const hostKey = link.edgeTo === 'segment'
+                    ? segmentOwnerKey(segmentOwners, link.id)
+                    : refKey({ collection: link.edgeTo, id: link.id });
+                if (!hostKey) continue;
+                addReferrer(hostKey, ref);
+                if (link.ownership === 'hostedBy') addDependent(hostKey, ref);
             }
         }
     }
@@ -222,7 +238,90 @@ export function collectCascade(state: CascadeState, seed: EntityRef[]): Set<stri
     return doomed;
 }
 
+/**
+ * The collections a removal of `typeId` can drain, derived from the declared
+ * graph rather than listed per type.
+ */
+export function cascadeCollectionsFor(typeId: SupportTypeId): Set<SupportCollectionKey> {
+    const collections = new Set<SupportCollectionKey>();
+    const seed = getSupportTypeDescriptor(typeId);
+    const expanded = new Set<SupportTypeId>();
+
+    const hostedBy = (descriptor: SupportTypeDescriptor, target: 'segment' | 'knots') =>
+        descriptor.edges.some((edge) => edge.ownership === 'hostedBy' && edge.to === target);
+
+    /** Everything `descriptor` carries, recorded in `collections`, once per type. */
+    const expand = (descriptor: SupportTypeDescriptor) => {
+        if (expanded.has(descriptor.id)) return;
+        expanded.add(descriptor.id);
+
+        for (const edge of descriptor.edges) {
+            if (edge.ownership !== 'owns' || edge.to === 'segment') continue;
+            collections.add(edge.to);
+            const owner = SUPPORT_TYPES.find((candidate) => candidate.location.key === edge.to);
+            if (owner) reach(owner);
+        }
+
+        // A shaft carries knots, and so does a cone or span offered as a knot
+        // host; whatever rides one comes with it.
+        const offersKnots = descriptor.hasSegments || descriptor.knotHostPrefix !== undefined;
+        const offersSegment = descriptor.hasSegments || !!descriptor.segmentSelectionPrefix;
+        if (offersKnots) collections.add('knots');
+
+        for (const hosted of SUPPORT_TYPES) {
+            if ((offersSegment && hostedBy(hosted, 'segment'))
+                || (offersKnots && hostedBy(hosted, 'knots'))) {
+                reach(hosted);
+            }
+        }
+    };
+
+    /** A type the cascade takes: its collection is recorded, then it expands. */
+    const reach = (descriptor: SupportTypeDescriptor) => {
+        collections.add(descriptor.location.key);
+        expand(descriptor);
+    };
+
+    // A type reaches its own kind when it hosts what it is. `self` reports the
+    // seed, so its collection is listed only when reached that way.
+    const offersKnots = seed.hasSegments || seed.knotHostPrefix !== undefined;
+    const selfHosted = (offersKnots && hostedBy(seed, 'knots'))
+        || ((seed.hasSegments || !!seed.segmentSelectionPrefix) && hostedBy(seed, 'segment'));
+    expand(seed);
+    if (!selfHosted) collections.delete(seed.location.key);
+
+    return collections;
+}
+
 /** Split a cascade result back into per-collection id sets. */
+/**
+ * The primitives a new entity owns, grouped the way a cascade reports them.
+ *
+ * A just-placed entity hosts nothing, so its cascade is only what its own
+ * `owns` edges name. Read off the entity rather than through
+ * {@link collectCascade}, whose dependents index costs a pass over every
+ * support -- too much to spend on each placement.
+ */
+export function ownedPrimitives(
+    state: CascadeState,
+    typeId: SupportTypeId,
+    entity: { id: string },
+): Map<SupportCollectionKey, Set<string>> {
+    const owned = new Map<SupportCollectionKey, Set<string>>();
+    const node = SUPPORT_GRAPH_NODES.find((n) => n.key === getSupportTypeDescriptor(typeId).location.key);
+    if (!node) return owned;
+
+    for (const edge of node.edges) {
+        if (edge.ownership !== 'owns' || edge.to === 'segment') continue;
+        const id = (entity as unknown as Record<string, unknown>)[edge.field];
+        if (typeof id !== 'string' || !id || !state[edge.to][id]) continue;
+        const ids = owned.get(edge.to) ?? new Set<string>();
+        ids.add(id);
+        owned.set(edge.to, ids);
+    }
+    return owned;
+}
+
 export function groupByCollection(doomed: ReadonlySet<string>): Map<SupportCollectionKey, Set<string>> {
     const byCollection = new Map<SupportCollectionKey, Set<string>>();
     for (const key of doomed) {

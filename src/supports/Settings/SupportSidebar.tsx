@@ -109,30 +109,6 @@ const OVERFLOW_COMPACT_KIND_SET = new Set<SidebarPanel>(
  */
 const POPUP_PREVIEW_KIND_SET = new Set<SidebarPanel>([DEFAULT_SIDEBAR_PANEL]);
 
-function hasMeaningfulSupportEditChange(
-    before: SupportEditHistorySnapshot,
-    after: SupportEditHistorySnapshot,
-): boolean {
-    const beforeSupport = {
-        ...before.support,
-        selectedId: null,
-        selectedCategory: null,
-        hoveredId: null,
-        hoveredCategory: 'none' as const,
-    };
-    const afterSupport = {
-        ...after.support,
-        selectedId: null,
-        selectedCategory: null,
-        hoveredId: null,
-        hoveredCategory: 'none' as const,
-    };
-
-    // Kickstands, their roots and their knots all live on SupportState, so
-    // this comparison covers them.
-    return JSON.stringify(beforeSupport) !== JSON.stringify(afterSupport);
-}
-
 function Section({
     title,
     children,
@@ -394,14 +370,11 @@ export function SupportSidebar({ activeModelId = null }: { activeModelId?: strin
         }
 
         if (before) {
-            const after = captureSupportEditSnapshot();
-            if (hasMeaningfulSupportEditChange(before, after)) {
-                pushSupportEditHistory(
-                    adjustSupportSettingsLabel(target.kind),
-                    before,
-                    after,
-                );
-            }
+            pushSupportEditHistory(
+                adjustSupportSettingsLabel(target.kind),
+                before,
+                captureSupportEditSnapshot(),
+            );
         }
 
         editSessionBeforeSnapshotRef.current = null;

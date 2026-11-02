@@ -1,7 +1,6 @@
 import { useCallback, useState, useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import { addSupportEntity, addKnot, addRoot, addSupportEntityWithHistory, getSnapshot, updateKnot } from '../../state';
-import { pushSupportHistory } from '@/supports/history/supportHistory';
+import { addKnot, addRoot, addSupportEntityWithHistory, asOneSupportEdit, getSnapshot, updateKnot } from '../../state';
 import { addAction } from '../../history/actionTypes';
 import { useInteractionStatus } from '../../interaction/useInteractionStatus';
 import { getSupportNavigationActive } from '../../interaction/navigationActiveStore';
@@ -13,7 +12,7 @@ import type { LimitationCode, Segment, WarningCode } from '../../types';
 import { calculateSmoothedNormal } from '../../PlacementLogic/PlacementUtils';
 import { getSettings } from '../../Settings/state';
 import { decideGridPlacement } from '../../PlacementLogic/Grid';
-import { getSupportTypeDescriptor, bridgeMayLandSideways, buildContactBridge, buildContactOverride, resolveSupportTypeIdOf, selectTypeForPlacement, type SupportTypeId, updateSupportEntity } from '../../supportTypeRegistry';
+import { cascadeExtras, getSupportTypeDescriptor, bridgeMayLandSideways, buildContactBridge, buildContactOverride, resolveSupportTypeIdOf, selectTypeForPlacement, type SupportTypeId, updateSupportEntity } from '../../supportTypeRegistry';
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
 import { isContactDiskHudInteractionActive, shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { perfMark, perfMeasureWithSpike, perfEndFrame } from '../../PlacementLogic/Pathfinding/pathfindingPerf';
@@ -292,19 +291,16 @@ export function useTrunkPlacementV2() {
 
     const commitTrunkBuild = useCallback((trunkBuild: ReturnType<typeof buildTrunkData>, placementSurface?: PlacementSurface) => {
         const markedBuild = markTrunkBuildPlacementSurface(trunkBuild, placementSurface);
-        addRoot(markedBuild.root);
-        addSupportEntity(markedBuild.trunk);
-        // The action and the payload key are both declared by the type, so
-        // neither is written here.
+        // The action and the payload are both declared by the type, so neither
+        // is written here. Resolved before the write: an unstamped trunk used to
+        // land in the store with no history entry behind it.
         const trunkTypeId = resolveSupportTypeIdOf(markedBuild.trunk);
         if (!trunkTypeId) return;
-        pushSupportHistory({
-            type: getSupportTypeDescriptor(trunkTypeId).historyAdd,
-            payload: {
-                trunk: markedBuild.trunk,
-                roots: [markedBuild.root],
-            },
-        } as Parameters<typeof pushSupportHistory>[0]);
+        // One write: a root alone is a root no trunk claims, and the renderer culls those.
+        asOneSupportEdit(() => {
+            addRoot(markedBuild.root);
+            addSupportEntityWithHistory(trunkTypeId, markedBuild.trunk);
+        });
         clearSupportSelection();
         clearPreview();
     }, [clearPreview]);
@@ -719,24 +715,31 @@ export function useTrunkPlacementV2() {
             // collection, so this dispatches on a declared key rather than
             // guessing from the value's shape.
             const descriptor = getSupportTypeDescriptor(typeId);
-            for (const edge of descriptor.edges) {
-                const primitive = supplied[edge.field];
-                if (!primitive) continue;
-                if (edge.to === 'roots') addRoot(primitive as never);
-                else if (edge.to === 'knots') addKnot(primitive as never);
-            }
+            // One write: a primitive alone is one nothing claims, and the renderer culls those.
+            asOneSupportEdit(() => {
+                for (const edge of descriptor.edges) {
+                    const primitive = supplied[edge.field];
+                    if (!primitive) continue;
+                    if (edge.to === 'roots') addRoot(primitive as never);
+                    else if (edge.to === 'knots') addKnot(primitive as never);
+                }
 
-            // A hosted support loads its host, so a host that re-solves its
-            // diameter from what it carries has to be re-solved. Asked of the
-            // descriptions, never of a type name.
-            const host = hostedBy;
-            const repairsHost = host
-                && getSupportTypeDescriptor(host.typeId).recomputesDiameterFromAttachments
-                && descriptor.repairsHostDiameterOnAdd;
-            const hostRepair = repairsHost && host ? repairHostDiameter(host) : null;
-            addSupportEntityWithHistory(typeId, entity, {
-                ...(supplied.parentKnotId ? { knot: supplied.parentKnotId } : {}),
-                ...(hostRepair ?? {}),
+                // A hosted support loads its host, so a host that re-solves its
+                // diameter from what it carries has to be re-solved. Asked of the
+                // descriptions, never of a type name.
+                const host = hostedBy;
+                const repairsHost = host
+                    && getSupportTypeDescriptor(host.typeId).recomputesDiameterFromAttachments
+                    && descriptor.repairsHostDiameterOnAdd;
+                const hostRepair = repairsHost && host ? repairHostDiameter(host) : null;
+                // The knot's field name is the type's to declare -- a leaf calls it
+                // `knot`, a branch `knots` -- so it is asked for, not written here.
+                addSupportEntityWithHistory(typeId, entity, {
+                    ...(supplied.parentKnotId
+                        ? cascadeExtras(typeId, 'knots', [supplied.parentKnotId])
+                        : {}),
+                    ...(hostRepair ?? {}),
+                });
             });
             clearSupportSelection();
             clearPreview();

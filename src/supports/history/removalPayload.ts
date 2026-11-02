@@ -36,16 +36,19 @@ function payloadFields(
     const shape = removalShapeFor(typeId);
     const payload: RemovalPayload = { [shape.self]: snapshots[shape.self] };
 
-    for (const field of Object.values(shape.cascade)) {
-        if (typeof field !== 'string') {
-            // `Array.isArray` does not narrow `readonly string[]`, so the test
-            // is on the string case.
-            for (const name of field) {
-                payload[name] = snapshots[name] ?? null;
-            }
+    for (const [collection, field] of Object.entries(shape.cascade)) {
+        // `Array.isArray` does not narrow `readonly string[]`, so the test is
+        // on the string case.
+        if (typeof field === 'string' && field.endsWith('s')) {
+            payload[field] = snapshots[field];
             continue;
         }
-        payload[field] = snapshots[field];
+        for (const name of typeof field === 'string' ? [field] : field) {
+            payload[name] = snapshots[name] ?? null;
+        }
+        // Named slots hold the seed's own; whatever the cascade reached past
+        // them travels under the collection.
+        payload[collection] = snapshots[collection] ?? [];
     }
 
     return payload;

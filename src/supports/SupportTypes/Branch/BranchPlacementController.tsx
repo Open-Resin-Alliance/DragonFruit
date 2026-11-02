@@ -19,12 +19,10 @@ import * as THREE from 'three';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { useActionActive } from '@/hotkeys/hotkeyStore';
 import { matchesConfiguredHotkeyUp } from '@/hotkeys/hotkeyConfig';
-import { addSupportEntity, subscribe, getSnapshot, addKnot, addSupportEntityWithHistory } from '../../state';
-import { buildContactBridge, parsePrefixedSegmentId, selectTypeForPlacement } from '../../supportTypeRegistry';
+import { asOneSupportEdit, subscribe, getSnapshot, addKnot, addSupportEntityWithHistory } from '../../state';
+import { buildContactBridge, cascadeExtras, parsePrefixedSegmentId, selectTypeForPlacement } from '../../supportTypeRegistry';
 import type { SupportTypeId } from '../../supportTypeRegistry';
-import { pushSupportHistory } from '@/supports/history/supportHistory';
 import { getClipBounds } from '@/components/scene/SceneCanvas/clipBoundsStore';
-import { addAction } from '../../history/actionTypes';
 import { SnapTarget } from '../../interaction/SnappingManager';
 import { Vec3, Knot, type LimitationCode, type Segment } from '../../types';
 import { getSettings } from '../../Settings/state';
@@ -774,15 +772,12 @@ export function BranchPlacementController() {
             console.log('[BranchPlacement] Creating branch via snap click', branch);
             const markedBranch = markPlacementSurface('branch', branch, placementSurface);
 
-            addKnot(parentKnot);
-            addSupportEntity(markedBranch);
-
-            pushSupportHistory({
-                type: addAction('branch'),
-                payload: {
-                    branch: markedBranch,
-                    knot: parentKnot,
-                },
+            // One write, and one payload the registry shapes: a hand-written
+            // `knot` missed the `knots` field a branch's cascade declares, so a
+            // redone branch came back without the knot it hangs from.
+            asOneSupportEdit(() => {
+                addKnot(parentKnot);
+                addSupportEntityWithHistory('branch', markedBranch, cascadeExtras('branch', 'knots', [parentKnot]));
             });
 
             // finalize() resets to idle + sets justFinalized to block stale useFrame
