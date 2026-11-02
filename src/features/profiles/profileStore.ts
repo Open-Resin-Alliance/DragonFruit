@@ -1885,6 +1885,14 @@ export function matchPrinterVariantByBitDepth(variants: PrinterPreset[], detecte
     return variants.find((variant) => variant.bitDepth?.bits === detectedBitDepth) ?? null;
 }
 
+/** Add an official profile from a preset when this build still has that preset. */
+export function addPrinterProfileFromPresetIfAvailable(presetId: string | null | undefined): string | null {
+    const id = typeof presetId === 'string' ? presetId.trim() : '';
+    if (!id) return null;
+    if (!getAllPrinterPresets().some((preset) => preset.presetId === id)) return null;
+    return addPrinterProfileFromPreset(id);
+}
+
 export function addPrinterProfileFromPreset(presetId: string): string {
     ensureHydrated();
     const preset = getAllPrinterPresets().find((item) => item.presetId === presetId);
@@ -2611,6 +2619,7 @@ export function importPrinterBundle(payload: unknown): string {
             brand: typeof material.brand === 'string' && material.brand.trim().length > 0
                 ? material.brand.trim()
                 : 'Default',
+            color: sanitizeMaterialColor(material.color),
             currencyCode: typeof material.currencyCode === 'string' && material.currencyCode.trim().length > 0
                 ? material.currencyCode.trim().toUpperCase()
                 : 'USD',

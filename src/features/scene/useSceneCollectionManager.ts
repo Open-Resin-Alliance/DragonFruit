@@ -177,6 +177,7 @@ import {
   getMaterialProfilesForPrinter,
   getProfileStoreSnapshot,
   getProfileStoreServerSnapshot,
+  addPrinterProfileFromPresetIfAvailable,
   importPrinterBundle,
   importSceneMaterials,
   setActivePrinterProfile,
@@ -2190,7 +2191,12 @@ export function useSceneCollectionManager(options?: {
     }
 
     const installedId = printerMismatch.installedProfileId;
-    const resolvedId = installedId ?? importPrinterBundle(printerMismatch.bundle);
+    // A scene written on an official machine recreates that official profile from
+    // the installed preset, not as a custom copy with a blank thumbnail.
+    const officialPresetId = printerMismatch.bundle.printer.officialPresetId;
+    const resolvedId = installedId
+      ?? addPrinterProfileFromPresetIfAvailable(officialPresetId)
+      ?? importPrinterBundle(printerMismatch.bundle);
     setActivePrinterProfile(resolvedId);
     if (printerMismatch.materials && printerMismatch.materials.length > 0) {
       const remap = importSceneMaterials(resolvedId, printerMismatch.materials);
