@@ -102,6 +102,8 @@ export type PrinterPreset = {
      * multi-plate controls.
      */
     allowMultiPlate?: boolean;
+    /** The build plate's silhouette: a rectangle (default) or a circle. */
+    plateShape?: 'rectangle' | 'circle';
     /**
      * Concrete variant presetIds for a "family" preset (e.g. an Athena II 16K
      * entry that resolves to separate 3-bit / 8-bit variants). When set, the
@@ -166,6 +168,8 @@ export type PrinterProfile = {
     tankCount?: number;
     /** Whether the machine works with more than one build plate. Defaults to true. */
     allowMultiPlate?: boolean;
+    /** The build plate's silhouette: a rectangle (default) or a circle. */
+    plateShape?: 'rectangle' | 'circle';
     /**
      * Which material sits in each tank, by index. `''` is an unassigned tank; the
      * array is trimmed to `tankCount` and entries are dropped if their material is.
@@ -973,6 +977,7 @@ const DEFAULT_PRINTER_PROFILES: PrinterProfile[] = BUILTIN_PRINTER_PRESETS.map((
     materialMode: normalizeMaterialMode((preset as any).materialMode),
     tankCount: sanitizeTankCount((preset as any).tankCount),
     allowMultiPlate: (preset as any).allowMultiPlate !== false,
+    plateShape: (preset as any).plateShape === 'circle' ? 'circle' : 'rectangle',
     officialPresetId: preset.presetId,
     officialPresetVersion: normalizeProfileVersion((preset as any).profileVersion, 1),
     isOfficial: true,
@@ -1216,6 +1221,10 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
                     tankCount: resolvedTankCount,
                     allowMultiPlate: (profile as any).allowMultiPlate !== false
                         && (matchedPreset as any)?.allowMultiPlate !== false,
+                    plateShape: (profile as any).plateShape === 'circle'
+                        || ((profile as any).plateShape == null && (matchedPreset as any)?.plateShape === 'circle')
+                        ? 'circle'
+                        : 'rectangle',
                     tankMaterials: resolvedMaterialMode === 'multiTank'
                         ? sanitizeTankMaterials((profile as any).tankMaterials, resolvedTankCount, knownMaterialIds)
                         : undefined,

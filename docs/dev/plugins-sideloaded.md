@@ -175,7 +175,9 @@ place where a bad preset is rejected.
 
 `allowMultiPlate: false` marks a machine that works with one bed: its profiles hide
 the plate name and the plate-side button column in the scene. Absent means true, so
-existing presets keep the multi-plate controls. That is how a sideloaded package
+existing presets keep the multi-plate controls. `plateShape: "circle"` draws the
+mock build plate as a disc with a polar grid instead of the rectangular bed; absent
+means `"rectangle"`. That is how a sideloaded package
 appears in the printer library and the material picker. The package's own row in Settings stays the sideloaded record, which is
 the one that can be enabled or removed, and the profile-store entry it creates is
 filtered out of that list.

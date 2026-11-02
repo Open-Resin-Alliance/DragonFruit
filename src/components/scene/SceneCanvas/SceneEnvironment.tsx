@@ -343,6 +343,7 @@ type PlateLayerShared = {
   showGrid: boolean;
   showBuildPlate: boolean;
   buildPlateOpacity: number;
+  plateShape: 'rectangle' | 'circle';
   plate: {
     geometry: THREE.ExtrudeGeometry;
     color: string;
@@ -354,6 +355,8 @@ type PlateLayerShared = {
     divisions: number;
     scaleX: number;
     scaleZ: number;
+    /** Circle plates draw a polar grid of this radius instead of the square helper. */
+    radius: number;
     position: [number, number, number];
     majorColor: string;
     minorColor: string;
@@ -523,8 +526,29 @@ function PlateLayer({
         />
       </mesh>
 
-      {/* Grid on XY plane (horizontal) - rotate 90° around X */}
-      {shared.showGrid && shared.buildPlateOpacity > 0.001 && (
+      {/* Grid on XY plane (horizontal) - rotate 90° around X. A circle plate gets
+          rings and spokes clipped to its own radius instead of the square helper,
+          whose corners would hang past the bed. */}
+      {shared.showGrid && shared.buildPlateOpacity > 0.001 && shared.plateShape === 'circle' && (
+        <polarGridHelper
+          args={[
+            shared.grid.radius,
+            24,
+            Math.max(2, shared.grid.divisions),
+            64,
+            isActive ? shared.grid.majorColor : shared.grid.mutedMajorColor,
+            isActive ? shared.grid.minorColor : shared.grid.mutedMinorColor,
+          ]}
+          position={shared.grid.position}
+          rotation={[Math.PI / 2, 0, 0]}
+          raycast={nullRaycast}
+          frustumCulled={false}
+          userData={{ thumbnailHelperType: 'grid' }}
+          material-transparent={!isActive}
+          material-opacity={dimFactor}
+        />
+      )}
+      {shared.showGrid && shared.buildPlateOpacity > 0.001 && shared.plateShape !== 'circle' && (
         <gridHelper
           args={[
             shared.grid.baseSize,
@@ -686,6 +710,7 @@ export function Helpers({
   showPlateName = false,
   showPlateWidgets = true,
   allowMultiPlate = true,
+  plateShape = 'rectangle',
   plateNamePlaceholder,
   plateNameEditTitle,
   plateNameEmptyTitle,
@@ -731,6 +756,8 @@ export function Helpers({
   showPlateWidgets?: boolean;
   /** False for a printer that works with one bed: no plate name or side controls. */
   allowMultiPlate?: boolean;
+  /** The build plate's silhouette. */
+  plateShape?: 'rectangle' | 'circle';
   plateNamePlaceholder?: string;
   plateNameEditTitle?: string;
   plateNameEmptyTitle?: string;
@@ -1048,6 +1075,21 @@ export function Helpers({
   }, [plateLogoTexture]);
 
   const buildPlateGeometry = React.useMemo(() => {
+    if (plateShape === 'circle') {
+      const radius = Math.min(buildPlateWidth, buildPlateDepth) * 0.5;
+      const shape = new THREE.Shape();
+      shape.absarc(0, 0, radius, 0, Math.PI * 2, false);
+      const geom = new THREE.ExtrudeGeometry(shape, {
+        depth: buildPlateThicknessMm,
+        bevelEnabled: false,
+        curveSegments: 96,
+        steps: 1,
+      });
+      geom.translate(0, 0, -buildPlateThicknessMm * 0.5);
+      geom.computeVertexNormals();
+      return geom;
+    }
+
     const halfW = buildPlateWidth * 0.5;
     const halfD = buildPlateDepth * 0.5;
     const r = Math.max(0.2, Math.min(buildPlateCornerRadiusMm, halfW - 0.2, halfD - 0.2));
@@ -1089,6 +1131,7 @@ export function Helpers({
     frontTabBackWidth,
     frontTabDepth,
     frontTabFrontWidth,
+    plateShape,
   ]);
 
   React.useEffect(() => {
@@ -1241,6 +1284,7 @@ export function Helpers({
     showGrid: shouldShowGrid,
     showBuildPlate: shouldShowBuildPlate,
     buildPlateOpacity: clampedBuildPlateOpacity,
+    plateShape,
     plate: {
       geometry: buildPlateGeometry,
       color: buildPlateColor,
@@ -1251,6 +1295,7 @@ export function Helpers({
       divisions,
       scaleX,
       scaleZ,
+      radius: Math.min(width, depth) * 0.5,
       position: [buildVolumeCenterX, buildVolumeCenterY, -0.01],
       majorColor: gridMajorColor,
       minorColor: gridMinorColor,
@@ -1285,7 +1330,7 @@ export function Helpers({
     },
     margins: {
       groupPosition: [0, 0, plateLogoZ],
-      visible: hasSafetyMargins,
+      visible: hasSafetyMargins && plateShape === 'rectangle',
       front: marginFront > 0 ? {
         widthMm: width,
         heightMm: marginFront,

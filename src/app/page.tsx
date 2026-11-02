@@ -11176,6 +11176,7 @@ export default function Home() {
             showPlateName={scene.models.length > 0}
             showPlateWidgets={scene.models.length > 0}
             allowMultiPlate={activePrinterAllowsMultiPlate}
+            plateShape={activePrinterProfile?.plateShape === 'circle' ? 'circle' : 'rectangle'}
             onArrangePlate={() => {
               // The regular arrange, at the settings this button is for: 1mm apart with
               // Z-rotation allowed, and to this plate alone — it is the plate's own

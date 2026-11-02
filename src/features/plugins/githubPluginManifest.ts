@@ -143,6 +143,7 @@ function sanitizePrinterPreset(input: unknown, baseRawDir: string) {
         : undefined,
     },
     allowMultiPlate: typeof value.allowMultiPlate === 'boolean' ? value.allowMultiPlate : undefined,
+    plateShape: value.plateShape === 'circle' || value.plateShape === 'rectangle' ? value.plateShape : undefined,
     networkSupport: parseNetworkSupport(value.networkSupport),
     networkFilter: boundedString((value as any).networkFilter, 120) || undefined,
     modelVariants: Array.isArray((value as any).modelVariants)

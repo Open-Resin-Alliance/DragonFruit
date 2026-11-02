@@ -41,6 +41,7 @@ test('allowMultiPlate defaults true and a preset can turn it off', () => {
         manufacturer: 'Test',
         name: 'One Plate',
         allowMultiPlate: false,
+        plateShape: 'circle',
         buildVolumeMm: { width: 100, depth: 60, height: 120 },
         display: { resolutionX: 2048, resolutionY: 1152, outputFormat: '.png' },
       },
@@ -52,6 +53,8 @@ test('allowMultiPlate defaults true and a preset can turn it off', () => {
   try {
     assert.equal(profileByPreset(DEFAULT_PRESET_ID)?.allowMultiPlate, true, 'absent means true');
     assert.equal(profileByPreset(SINGLE_PRESET_ID)?.allowMultiPlate, false, 'the preset turns it off');
+    assert.equal(profileByPreset(DEFAULT_PRESET_ID)?.plateShape, 'rectangle', 'absent means a rectangle');
+    assert.equal(profileByPreset(SINGLE_PRESET_ID)?.plateShape, 'circle', 'the preset brings the silhouette');
     assert.equal(getProfileStoreSnapshot().printerProfiles.find((profile) => profile.id === defaultId)?.allowMultiPlate, true);
     assert.equal(getProfileStoreSnapshot().printerProfiles.find((profile) => profile.id === singleId)?.allowMultiPlate, false);
   } finally {

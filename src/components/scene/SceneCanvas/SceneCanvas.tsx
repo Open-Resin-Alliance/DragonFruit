@@ -531,6 +531,7 @@ export function SceneCanvas({
   showPlateName = true,
   showPlateWidgets = true,
   allowMultiPlate = true,
+  plateShape = 'rectangle',
   plateLocked,
   onTogglePlateLock,
   onClearPlate,
@@ -682,6 +683,8 @@ export function SceneCanvas({
   showPlateWidgets?: boolean;
   /** False for a printer that works with one bed: no plate name or side controls. */
   allowMultiPlate?: boolean;
+  /** The build plate's silhouette. */
+  plateShape?: 'rectangle' | 'circle';
   /** The plate lock, handed to the 3D helpers that draw it. */
   plateLocked?: boolean;
   onTogglePlateLock?: () => void;
@@ -6724,6 +6727,7 @@ export function SceneCanvas({
           showPlateName={showPlateName}
           showPlateWidgets={showPlateWidgets}
           allowMultiPlate={allowMultiPlate}
+          plateShape={plateShape}
           onPlateNameChange={onPlateNameChange}
           plateNamePlaceholder={plateNamePlaceholder}
           plateNameEditTitle={plateNameEditTitle}
