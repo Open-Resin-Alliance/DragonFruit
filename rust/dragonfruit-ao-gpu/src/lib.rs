@@ -26,10 +26,30 @@ const REACH_RATIO: f32 = 0.08;
 const FALLOFF_PLATEAU: f32 = 0.15;
 const ORIGIN_BIAS_RATIO: f32 = 1e-3;
 
+/// GPU time each submit aims for.
+///
+/// One dispatch over a whole model is a single GPU job, and drivers kill a job
+/// that runs too long: amdgpu's lockup timeout is 10 s, Windows' TDR 2 s. A
+/// 3M-triangle model at 32 rays measured over 10 s on a Radeon R7 350, and the
+/// killed job came back as a zeroed buffer with no error, or as a GPU reset that
+/// took the desktop's GL contexts with it. Submits this short stay far below
+/// either limit and cost a submit and a wait each, which is noise next to them.
+const BATCH_TARGET: std::time::Duration = std::time::Duration::from_millis(100);
+/// The fewest vertices a submit covers, so it still fills the GPU.
+///
+/// Shrinking the vertex batch alone cannot shorten a submit below one thread's
+/// time, and a thread traces all its rays in sequence: on the R7 350 at 32 rays
+/// that is ~150 ms, so a vertex-only split shrank to a single workgroup and ran
+/// at 555 vertices/s. Below this size a submit traces fewer rays instead.
+const FILL_BATCH: u32 = 8 * 1024;
+/// One-dimensional dispatches only: `65535` workgroups of 64.
+const MAX_BATCH: u32 = 65_535 * 64;
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Params {
-    vertex_count: u32,
+    vertex_end: u32,
+    vertex_start: u32,
     root: u32,
     leaf_flag: u32,
     rays: u32,
@@ -37,6 +57,9 @@ struct Params {
     plateau: f32,
     bias: f32,
     rotate: f32,
+    ray_start: u32,
+    ray_end: u32,
+    _pad: u32,
 }
 
 struct Gpu {
@@ -160,8 +183,10 @@ pub fn bake_raw(mesh: &IndexedMesh, rays: usize, rotate: bool) -> Result<Vec<f32
 
     let bbox = mesh.bbox();
     let reach = (bbox.diag() * REACH_RATIO).max(1e-3);
-    let params = Params {
-        vertex_count: mesh.positions.len() as u32,
+    let vertex_count = mesh.positions.len() as u32;
+    let mut params = Params {
+        vertex_end: 0,
+        vertex_start: 0,
         root: layout.root,
         leaf_flag: layout.leaf_flag,
         rays: rays.clamp(1, 256) as u32,
@@ -169,6 +194,9 @@ pub fn bake_raw(mesh: &IndexedMesh, rays: usize, rotate: bool) -> Result<Vec<f32
         plateau: reach * FALLOFF_PLATEAU,
         bias: reach * ORIGIN_BIAS_RATIO,
         rotate: if rotate { 1.0 } else { 0.0 },
+        ray_start: 0,
+        ray_end: 0,
+        _pad: 0,
     };
     if layout.nodes.len() * 32 > gpu.device.limits().max_storage_buffer_binding_size as usize {
         return Err("tree does not fit a storage binding".into());
@@ -188,7 +216,6 @@ pub fn bake_raw(mesh: &IndexedMesh, rays: usize, rotate: bool) -> Result<Vec<f32
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(&buffer, 0, bytemuck::bytes_of(&params));
         buffer
     };
     let out_size = (mesh.positions.len() * 4) as u64;
@@ -228,17 +255,47 @@ pub fn bake_raw(mesh: &IndexedMesh, rays: usize, rotate: bool) -> Result<Vec<f32
         ],
     });
 
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-    {
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: None,
-            timestamp_writes: None,
-        });
-        pass.set_pipeline(&pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
-        let groups = (mesh.positions.len() as u32).div_ceil(64);
-        pass.dispatch_workgroups(groups.min(65535), groups.div_ceil(65535), 1);
+    // One submit per slice of the work, each waited on, so no single GPU job
+    // outlives the driver's watchdog (see `BATCH_TARGET`). A slice is a batch of
+    // vertices and a run of their rays; `work` (vertex-rays per submit) follows the
+    // measured rate, so a fast GPU reaches a whole model in a few submits and a
+    // slow one traces a few rays of `FILL_BATCH` vertices at a time.
+    let rays = params.rays;
+    let mut work = (FILL_BATCH * rays.min(4)) as f64;
+    while params.vertex_start < vertex_count {
+        let batch = ((work / rays as f64) as u32).clamp(FILL_BATCH, MAX_BATCH);
+        params.vertex_end = vertex_count.min(params.vertex_start + batch);
+        let vertices = params.vertex_end - params.vertex_start;
+        params.ray_start = 0;
+        while params.ray_start < rays {
+            let chunk = ((work / vertices as f64) as u32).clamp(1, rays);
+            params.ray_end = rays.min(params.ray_start + chunk);
+            queue.write_buffer(&param_buf, 0, bytemuck::bytes_of(&params));
+            let mut encoder =
+                device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: None,
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(&pipeline);
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.dispatch_workgroups(vertices.div_ceil(64), 1, 1);
+            }
+            let started = std::time::Instant::now();
+            queue.submit(Some(encoder.finish()));
+            device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .map_err(|e| format!("poll: {e:?}"))?;
+            let took = started.elapsed().as_secs_f64().max(1e-4);
+            let done = (vertices * (params.ray_end - params.ray_start)) as f64;
+            work = done * (BATCH_TARGET.as_secs_f64() / took).clamp(0.25, 4.0);
+            params.ray_start = params.ray_end;
+        }
+        params.vertex_start = params.vertex_end;
     }
+
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     encoder.copy_buffer_to_buffer(&out_buf, 0, &readback, 0, out_size);
     queue.submit(Some(encoder.finish()));
     device
