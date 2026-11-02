@@ -47,6 +47,9 @@ finish-args:
   # when /.flatpak-info is present; no --filesystem=host needed)
   - --filesystem=xdg-documents
   - --filesystem=xdg-download
+  - --filesystem=/mnt:ro
+  - --filesystem=/media:ro
+  - --filesystem=/run/media:ro
 
   # Portal access for file chooser, notifications, open-uri
   - --talk-name=org.freedesktop.portal.Desktop
