@@ -818,7 +818,10 @@ export function Helpers({
   const scaleX = width / baseSize;
   const scaleZ = depth / baseSize;
   const buildPlateOversizeEachSideMm = 3;
-  const buildPlateThicknessMm = 3;
+  // A 3mm slab is right for a 100mm machine but reads as a puck on a 10mm one, so
+  // the thickness follows the bed. The floor is where the tiny plate still reads as
+  // a plate rather than a decal.
+  const buildPlateThicknessMm = Math.min(3, Math.max(1.5, width * 0.05));
   const buildPlateCornerRadiusMm = 3;
   const clampedBuildPlateOpacity = THREE.MathUtils.clamp(buildPlateOpacity ?? 1, 0, 1);
   const buildPlateColor = isLightTheme ? '#8a8e9e' : '#323841';
