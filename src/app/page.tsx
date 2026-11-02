@@ -11173,8 +11173,9 @@ export default function Home() {
             onPlateNameChange={scene.setPlateName}
             // An empty scene has nothing on its beds, so the bed's name and its buttons would be
             // pointing at nothing.
-            showPlateName={activePrinterAllowsMultiPlate && scene.models.length > 0}
-            showPlateWidgets={activePrinterAllowsMultiPlate && scene.models.length > 0}
+            showPlateName={scene.models.length > 0}
+            showPlateWidgets={scene.models.length > 0}
+            allowMultiPlate={activePrinterAllowsMultiPlate}
             onArrangePlate={() => {
               // The regular arrange, at the settings this button is for: 1mm apart with
               // Z-rotation allowed, and to this plate alone — it is the plate's own

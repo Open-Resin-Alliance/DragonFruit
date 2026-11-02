@@ -530,6 +530,7 @@ export function SceneCanvas({
   onPlateNameChange,
   showPlateName = true,
   showPlateWidgets = true,
+  allowMultiPlate = true,
   plateLocked,
   onTogglePlateLock,
   onClearPlate,
@@ -679,6 +680,8 @@ export function SceneCanvas({
   showPlateName?: boolean;
   /** The add/lock/arrange/bin column beside the plate, hidden in an empty scene. */
   showPlateWidgets?: boolean;
+  /** False for a printer that works with one bed: no plate name or side controls. */
+  allowMultiPlate?: boolean;
   /** The plate lock, handed to the 3D helpers that draw it. */
   plateLocked?: boolean;
   onTogglePlateLock?: () => void;
@@ -6720,6 +6723,7 @@ export function SceneCanvas({
           plateName={plateName}
           showPlateName={showPlateName}
           showPlateWidgets={showPlateWidgets}
+          allowMultiPlate={allowMultiPlate}
           onPlateNameChange={onPlateNameChange}
           plateNamePlaceholder={plateNamePlaceholder}
           plateNameEditTitle={plateNameEditTitle}

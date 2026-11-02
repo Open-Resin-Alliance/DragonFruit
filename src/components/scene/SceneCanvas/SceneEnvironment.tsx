@@ -685,6 +685,7 @@ export function Helpers({
   plateName,
   showPlateName = false,
   showPlateWidgets = true,
+  allowMultiPlate = true,
   plateNamePlaceholder,
   plateNameEditTitle,
   plateNameEmptyTitle,
@@ -728,6 +729,8 @@ export function Helpers({
   showPlateName?: boolean;
   /** The add/lock/arrange/bin column beside the plate. Off in a scene with nothing in it. */
   showPlateWidgets?: boolean;
+  /** False for a printer that works with one bed: no plate name or side controls. */
+  allowMultiPlate?: boolean;
   plateNamePlaceholder?: string;
   plateNameEditTitle?: string;
   plateNameEmptyTitle?: string;
@@ -1334,6 +1337,7 @@ export function Helpers({
    * hiding the name while the plate is empty.
    */
   const nameLabelFor = (plate: PlateLayerSpec | null): PlateLayerNameLabel | undefined => {
+    if (!allowMultiPlate) return undefined;
     if (!shouldShowBuildPlate || !plateNameEditTitle || !plateNameEmptyTitle) return undefined;
     if (plate) {
       if (!onRenamePlate) return undefined;
@@ -1362,6 +1366,7 @@ export function Helpers({
    * there is somewhere to add a plate to.
    */
   const sideButtonsFor = (plate: PlateLayerSpec | null, isActive: boolean): PlateSideButtonsProps | undefined => {
+    if (!allowMultiPlate) return undefined;
     if (!shouldShowBuildPlate) return undefined;
     if (!showPlateWidgets) return undefined;
     if (plate ? !isActive : (!showPlateName || !addPlateComingSoonTitle)) return undefined;
