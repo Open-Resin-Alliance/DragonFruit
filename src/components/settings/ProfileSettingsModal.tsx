@@ -7,7 +7,7 @@ import { useLingui } from '@lingui/react';
 import { createPortal } from 'react-dom';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { tankMaterialsDisagree } from '@/features/profiles/tankMaterialCompatibility';
-import { AlertTriangle, Box, Check, Square, ChevronDown, ChevronLeft, ChevronRight, Copy, Download, Edit3, FlaskConical, Frown, ImagePlus, Info, LayoutGrid, Link2, Lock, Plus, Printer, RefreshCw, Search, Trash2, Unlink2, Unlock, Upload, Wifi, WifiOff, X } from 'lucide-react';
+import { AlertTriangle, Box, Check, Square, ChevronDown, ChevronLeft, ChevronRight, Copy, Download, Edit3, FlaskConical, Frown, ImagePlus, Info, LayoutGrid, Link2, Lock, OctagonAlert, Plus, Printer, RefreshCw, Search, Trash2, Unlock, Upload, Wifi, WifiOff, X } from 'lucide-react';
 import { Button, IconButton, IconChip, Spinner, FadeText } from '@/components/atoms';
 import FleetManagement from '@/components/settings/FleetManagement';
 import { NumberInput } from '@/components/ui/NumberInput';
@@ -130,14 +130,7 @@ const tankMaterialsMismatchMessage = msg({
   message: 'Tank materials differ in layer height, bottom layer count or transition layers. These must match for a Multi-Tank print.',
   comment: 'Warning on the red broken link between two Multi-Tank tank labels whose materials would print different layer stacks.',
 });
-const tankMaterialsMatchedLabel = msg({
-  message: 'Matched',
-  comment: 'Label beside the green link between two Multi-Tank tank labels whose materials agree.',
-});
-const tankMaterialsMismatchedLabel = msg({
-  message: 'Mismatched',
-  comment: 'Label beside the red broken link between two Multi-Tank tank labels whose materials disagree.',
-});
+
 
 type ProfileSettingsModalProps = {
   isOpen: boolean;
@@ -4325,9 +4318,6 @@ export function ProfileSettingsModal({
                   const linkMessage = linkState === 'mismatch'
                     ? _(tankMaterialsMismatchMessage)
                     : _(tankMaterialsMatchMessage);
-                  const linkLabel = linkState === 'mismatch'
-                    ? _(tankMaterialsMismatchedLabel)
-                    : _(tankMaterialsMatchedLabel);
                   const linkColor = linkState === 'mismatch' ? 'var(--danger)' : 'var(--success)';
                   return (
                     <div key={`tank-${index}`} className="space-y-1 block">
@@ -4339,18 +4329,37 @@ export function ProfileSettingsModal({
                           >
                             <span
                               role="img"
-                              aria-label={`${linkLabel}. ${linkMessage}`}
-                              className="inline-flex items-center gap-1.5 whitespace-nowrap"
+                              aria-label={linkMessage}
+                              className="relative inline-flex items-center gap-1.5 whitespace-nowrap"
                               style={{ color: linkColor }}
                             >
-                              <span aria-hidden className="h-px w-6 shrink-0" style={{ background: linkColor }} />
+                              <svg
+                                aria-hidden
+                                className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 overflow-visible"
+                                width={200}
+                                height={64}
+                                viewBox="-100 -32 200 64"
+                              >
+                                <path
+                                  d="M -20 0 H -70 A 6 6 0 0 0 -76 6 V 9"
+                                  fill="none"
+                                  stroke={linkColor}
+                                  strokeWidth={2}
+                                  strokeLinecap="round"
+                                />
+                                <path
+                                  d="M 20 0 H 70 A 6 6 0 0 1 76 6 V 9"
+                                  fill="none"
+                                  stroke={linkColor}
+                                  strokeWidth={2}
+                                  strokeLinecap="round"
+                                />
+                              </svg>
                               {linkState === 'mismatch' ? (
-                                <Unlink2 className="h-6 w-6 shrink-0" />
+                                <OctagonAlert className="h-6 w-6 shrink-0" />
                               ) : (
                                 <Link2 className="h-6 w-6 shrink-0" />
                               )}
-                              <span className="text-xs font-medium">{linkLabel}</span>
-                              <span aria-hidden className="h-px w-6 shrink-0" style={{ background: linkColor }} />
                             </span>
                           </Tooltip>
                         )}

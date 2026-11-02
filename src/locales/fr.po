@@ -43,7 +43,7 @@ msgid "{0, plural, one {# printer preset} other {# printer presets}}"
 msgstr ""
 
 #. placeholder {0}: selectedLibraryPresetIds.size
-#: src/components/settings/ProfileSettingsModal.tsx:5134
+#: src/components/settings/ProfileSettingsModal.tsx:5143
 msgid "{0, plural, one {Add # printer} other {Add # printers}}"
 msgstr ""
 
@@ -745,8 +745,8 @@ msgstr ""
 #: src/components/printers/PrinterVariantPickerModal.tsx:707
 #: src/components/settings/FleetManagement.tsx:269
 #: src/components/settings/PluginStudioModal.tsx:2100
-#: src/components/settings/ProfileSettingsModal.tsx:3799
-#: src/components/settings/ProfileSettingsModal.tsx:3862
+#: src/components/settings/ProfileSettingsModal.tsx:3792
+#: src/components/settings/ProfileSettingsModal.tsx:3855
 msgid "Add printer"
 msgstr "Ajouter une imprimante"
 
@@ -754,7 +754,7 @@ msgstr "Ajouter une imprimante"
 msgid "Add printer variant"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:5135
+#: src/components/settings/ProfileSettingsModal.tsx:5144
 msgid "Add printers"
 msgstr ""
 
@@ -2952,7 +2952,7 @@ msgstr ""
 msgid "Delete presets"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:4085
+#: src/components/settings/ProfileSettingsModal.tsx:4078
 msgid "Delete printer"
 msgstr ""
 
@@ -5428,11 +5428,6 @@ msgstr ""
 msgid "Matcap Style"
 msgstr ""
 
-#. Label beside the green link between two Multi-Tank tank labels whose materials agree.
-#: src/components/settings/ProfileSettingsModal.tsx:133
-msgid "Matched"
-msgstr ""
-
 #: src/app/page.tsx:2738
 #: src/features/slicing/components/SlicingPanel.tsx:2389
 msgid "Material"
@@ -5664,11 +5659,6 @@ msgstr "Refléter selon X, Y ou Z"
 #: src/features/scene/sceneHistoryLabels.ts:45
 msgctxt "Undo history entry"
 msgid "Mirror in {axes}"
-msgstr ""
-
-#. Label beside the red broken link between two Multi-Tank tank labels whose materials disagree.
-#: src/components/settings/ProfileSettingsModal.tsx:137
-msgid "Mismatched"
 msgstr ""
 
 #: src/features/hollowing/HollowingPanel.tsx:145
@@ -9665,7 +9655,7 @@ msgstr ""
 msgid "Territory Voxels"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:302
+#: src/components/settings/ProfileSettingsModal.tsx:295
 msgid "The \"{pluginName}\" plugin is missing."
 msgstr ""
 

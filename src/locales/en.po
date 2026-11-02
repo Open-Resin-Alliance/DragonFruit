@@ -43,7 +43,7 @@ msgid "{0, plural, one {# printer preset} other {# printer presets}}"
 msgstr "{0, plural, one {# printer preset} other {# printer presets}}"
 
 #. placeholder {0}: selectedLibraryPresetIds.size
-#: src/components/settings/ProfileSettingsModal.tsx:5134
+#: src/components/settings/ProfileSettingsModal.tsx:5143
 msgid "{0, plural, one {Add # printer} other {Add # printers}}"
 msgstr "{0, plural, one {Add # printer} other {Add # printers}}"
 
@@ -745,8 +745,8 @@ msgstr "Add plate {plateNumber}"
 #: src/components/printers/PrinterVariantPickerModal.tsx:707
 #: src/components/settings/FleetManagement.tsx:269
 #: src/components/settings/PluginStudioModal.tsx:2100
-#: src/components/settings/ProfileSettingsModal.tsx:3799
-#: src/components/settings/ProfileSettingsModal.tsx:3862
+#: src/components/settings/ProfileSettingsModal.tsx:3792
+#: src/components/settings/ProfileSettingsModal.tsx:3855
 msgid "Add printer"
 msgstr "Add printer"
 
@@ -754,7 +754,7 @@ msgstr "Add printer"
 msgid "Add printer variant"
 msgstr "Add printer variant"
 
-#: src/components/settings/ProfileSettingsModal.tsx:5135
+#: src/components/settings/ProfileSettingsModal.tsx:5144
 msgid "Add printers"
 msgstr "Add printers"
 
@@ -2952,7 +2952,7 @@ msgstr "Delete preset"
 msgid "Delete presets"
 msgstr "Delete presets"
 
-#: src/components/settings/ProfileSettingsModal.tsx:4085
+#: src/components/settings/ProfileSettingsModal.tsx:4078
 msgid "Delete printer"
 msgstr "Delete printer"
 
@@ -5429,11 +5429,6 @@ msgstr "Master switch for the run-level size, load and height factors. Off pins 
 msgid "Matcap Style"
 msgstr "Matcap Style"
 
-#. Label beside the green link between two Multi-Tank tank labels whose materials agree.
-#: src/components/settings/ProfileSettingsModal.tsx:133
-msgid "Matched"
-msgstr "Matched"
-
 #: src/app/page.tsx:2738
 #: src/features/slicing/components/SlicingPanel.tsx:2389
 msgid "Material"
@@ -5666,11 +5661,6 @@ msgstr "Mirror across X, Y, or Z"
 msgctxt "Undo history entry"
 msgid "Mirror in {axes}"
 msgstr "Mirror in {axes}"
-
-#. Label beside the red broken link between two Multi-Tank tank labels whose materials disagree.
-#: src/components/settings/ProfileSettingsModal.tsx:137
-msgid "Mismatched"
-msgstr "Mismatched"
 
 #: src/features/hollowing/HollowingPanel.tsx:145
 #: src/features/slicing/components/SlicingPanel.tsx:2567
@@ -9667,7 +9657,7 @@ msgstr "Tension"
 msgid "Territory Voxels"
 msgstr "Territory Voxels"
 
-#: src/components/settings/ProfileSettingsModal.tsx:302
+#: src/components/settings/ProfileSettingsModal.tsx:295
 msgid "The \"{pluginName}\" plugin is missing."
 msgstr "The \"{pluginName}\" plugin is missing."
 
