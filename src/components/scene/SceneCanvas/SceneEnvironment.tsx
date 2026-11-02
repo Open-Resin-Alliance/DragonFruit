@@ -838,12 +838,16 @@ export function Helpers({
   }), [buildPlateColor, gridMajorColor, gridMinorColor]);
   const buildPlateWidth = width + buildPlateOversizeEachSideMm * 2;
   const buildPlateDepth = depth + buildPlateOversizeEachSideMm * 2;
+  const buildPlateRadiusMm = Math.min(buildPlateWidth, buildPlateDepth) * 0.5;
   const buildPlateCenterZ = -buildPlateThicknessMm * 0.5 - 0.08;
   // Axes, their letters and the printed plate decorations follow the build volume.
   // The reference is the plate's width, so the arrows keep the same share of the front
   // edge at any size — `min(width, depth)` under-scaled normal wide-and-shallow beds.
   // The upper clamp keeps a very large machine from growing walls of arrow.
-  const plateScale = Math.min(1.5, Math.max(0.4, width / 200));
+  // The floor is what a tiny machine reads: at 0.4 a 10mm printer drew an 8.8mm
+  // arrow whose head was larger than the part. 0.16 gives that plate a 3.5mm arrow,
+  // while a 50mm one and up stays on the proportional size.
+  const plateScale = Math.min(1.5, Math.max(0.16, width / 200));
   // The tab the FRONT marker is printed on. Its depth is what sizes that marker: the
   // label's texture is fitted to the plane, and the plane is aspect-locked to the tab
   // (256/72), so a deeper tab is a larger label: the tab's 3.2mm -> 4.2mm takes the
@@ -870,16 +874,33 @@ export function Helpers({
   const frontTabFrontWidth = Math.min(frontTabBackWidth - width * 0.018, 16 * plateFrontScale);
   const frontMarkerInsetMm = width * 0.0012;
   const frontMarkerAspect = 256 / 72;
-  const markerAvailableDepth = frontTabDepth - frontMarkerInsetMm * 2;
-  const markerAvailableWidth = frontTabBackWidth - frontMarkerInsetMm * 2;
-  const frontMarkerDepth = Math.min(markerAvailableDepth, markerAvailableWidth / frontMarkerAspect);
+  // The rectangle prints FRONT on a tab that grows with the bed. A circle has no
+  // tab: the free space is the cap between the rectangular build volume's front
+  // edge and the disc's edge, so the word is sized to that band and to the chord
+  // available inside the disc at the height it sits on.
+  const circleFrontFreeDepth = Math.max(0, buildPlateRadiusMm - depth * 0.5);
+  const circleFrontMarkerCenterY = depth * 0.5 + circleFrontFreeDepth * 0.5;
+  const circleFrontChord = 2 * Math.sqrt(Math.max(
+    0,
+    buildPlateRadiusMm * buildPlateRadiusMm - circleFrontMarkerCenterY * circleFrontMarkerCenterY,
+  )) * 0.8;
+  const rectangleMarkerDepth = Math.min(
+    frontTabDepth - frontMarkerInsetMm * 2,
+    (frontTabBackWidth - frontMarkerInsetMm * 2) / frontMarkerAspect,
+  );
+  const circleMarkerDepth = Math.min(
+    frontTabDepth,
+    circleFrontFreeDepth * 0.55,
+    circleFrontChord / frontMarkerAspect,
+  );
+  const frontMarkerDepth = plateShape === 'circle' ? circleMarkerDepth : rectangleMarkerDepth;
   const frontMarkerWidth = frontMarkerDepth * frontMarkerAspect;
   const axisBaseZ = 0.5;
   const axisLength = 22 * plateScale;
-  const axisShaftRadius = Math.max(0.22, 0.42 * plateScale);
-  const axisHeadRadius = Math.max(0.7, 1.3 * plateScale);
-  const axisHeadLength = Math.max(1.0, 1.9 * plateScale);
-  const axisLabelLift = Math.max(0.6, 1.0 * plateScale);
+  const axisShaftRadius = Math.max(0.05, 0.42 * plateScale);
+  const axisHeadRadius = Math.max(0.18, 1.3 * plateScale);
+  const axisHeadLength = Math.max(0.28, 1.9 * plateScale);
+  const axisLabelLift = Math.max(0.12, 1.0 * plateScale);
   // Keep decal geometry in lockstep with the logo SVG's intrinsic viewBox ratio
   // to avoid non-uniform stretching on the build plate.
   const plateLogoAspect = 1772 / 304;
@@ -894,7 +915,9 @@ export function Helpers({
   // Seat the marker a little above the tab's geometric centre: the tab tapers toward
   // its front edge, so dead centre plus the texture's optical nudge reads low. 0.35 is
   // the middle of the range that looked right between "too high" and "too low".
-  const frontMarkerY = -buildPlateDepth * 0.5 - frontTabDepth * 0.35;
+  const frontMarkerY = plateShape === 'circle'
+    ? -circleFrontMarkerCenterY
+    : -buildPlateDepth * 0.5 - frontTabDepth * 0.35;
 
   const frontTexture = React.useMemo(() => {
     const canvas = document.createElement('canvas');
@@ -1054,7 +1077,7 @@ export function Helpers({
 
   const buildPlateGeometry = React.useMemo(() => {
     if (plateShape === 'circle') {
-      const radius = Math.min(buildPlateWidth, buildPlateDepth) * 0.5;
+      const radius = buildPlateRadiusMm;
       const shape = new THREE.Shape();
       shape.absarc(0, 0, radius, 0, Math.PI * 2, false);
       const geom = new THREE.ExtrudeGeometry(shape, {
@@ -1109,6 +1132,7 @@ export function Helpers({
     frontTabBackWidth,
     frontTabDepth,
     frontTabFrontWidth,
+    buildPlateRadiusMm,
     plateShape,
   ]);
 
