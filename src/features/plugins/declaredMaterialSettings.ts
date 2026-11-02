@@ -14,6 +14,7 @@ const FIELD_KINDS: Record<LocalMaterialFieldKind, true> = {
   number: true,
   integer: true,
   text: true,
+  textfield: true,
   boolean: true,
   select: true,
   spacer: true,
@@ -80,6 +81,15 @@ function sanitizeField(input: unknown): LocalMaterialFieldSchema | null {
   if (metadataPath) field.metadataPath = metadataPath;
   const rowKey = text(value.rowKey, 64);
   if (rowKey) field.rowKey = rowKey;
+  const previewLabel = text(value.previewLabel, 120);
+  if (previewLabel) field.previewLabel = previewLabel;
+  if (Array.isArray(value.previewKeys)) {
+    const previewKeys = value.previewKeys
+      .slice(0, 64)
+      .map((entry) => text(entry, 64))
+      .filter((entry) => entry.length > 0);
+    if (previewKeys.length > 0) field.previewKeys = previewKeys;
+  }
 
   for (const bound of ['min', 'max', 'step'] as const) {
     const parsed = number(value[bound]);

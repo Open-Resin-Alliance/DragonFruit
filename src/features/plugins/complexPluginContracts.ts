@@ -203,7 +203,7 @@ export type PluginSlicingFormatDefinitionContract = {
     notes?: string;
 };
 
-export type LocalMaterialFieldKind = 'number' | 'integer' | 'text' | 'boolean' | 'select' | 'spacer';
+export type LocalMaterialFieldKind = 'number' | 'integer' | 'text' | 'textfield' | 'boolean' | 'select' | 'spacer';
 
 export type LocalMaterialFieldOption = {
     value: string;
@@ -254,6 +254,11 @@ export type LocalMaterialFieldPlacement = {
 export type LocalMaterialFieldSchema = {
     key: string;
     label: string;
+    /**
+     * What the form renders. `textfield` is the multi-line sibling of `text`:
+     * its value is one string, kept verbatim (newlines included), for a format's
+     * free-form vendor block. See `docs/dev/plugins-sdk/ui.md`.
+     */
     kind: LocalMaterialFieldKind;
     defaultValue: number | string | boolean;
     /** Optional short tag rendered by the UI as an inline chip (e.g. Fast/Slow). */
@@ -268,6 +273,17 @@ export type LocalMaterialFieldSchema = {
      * preset that carries one is honoured while the input itself cannot change it.
      */
     disabled?: boolean;
+    /**
+     * For `textfield`: sibling field keys whose current values are shown above the
+     * textarea as greyed `key = value` lines. The text is a preview only; it is not
+     * part of this field's value and is never submitted. Use it when the free-form
+     * block extends fields the pane already exposes, so the author can see what is
+     * already written before adding a line.
+     */
+    previewKeys?: string[];
+    /** Caption above the greyed preview, e.g. "Standard INI Fields". Plain string,
+     *  like every plugin-supplied label. */
+    previewLabel?: string;
     /**
      * Optional key that lays this field on one full-width row together with every
      * other field of the same card carrying it: three fields sharing a key read as a

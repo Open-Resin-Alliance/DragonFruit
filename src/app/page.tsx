@@ -988,6 +988,7 @@ export default function Home() {
     updatePrinterProfile(previousId, { materialMode: 'multiTank' });
   }, [activePrinterProfile?.id, printerSceneConflictPreviousId]);
   const hasActivePrinterProfile = Boolean(activePrinterProfile);
+  const activePrinterAllowsMultiPlate = activePrinterProfile?.allowMultiPlate !== false;
   const hasPrinterProfiles = React.useMemo(
     () => profileState.printerProfiles.length > 0,
     [profileState.printerProfiles],
@@ -11174,6 +11175,8 @@ export default function Home() {
             // pointing at nothing.
             showPlateName={scene.models.length > 0}
             showPlateWidgets={scene.models.length > 0}
+            allowMultiPlate={activePrinterAllowsMultiPlate}
+            plateShape={activePrinterProfile?.plateShape === 'circle' ? 'circle' : 'rectangle'}
             onArrangePlate={() => {
               // The regular arrange, at the settings this button is for: 1mm apart with
               // Z-rotation allowed, and to this plate alone — it is the plate's own

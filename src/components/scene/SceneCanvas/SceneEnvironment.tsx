@@ -343,6 +343,7 @@ type PlateLayerShared = {
   showGrid: boolean;
   showBuildPlate: boolean;
   buildPlateOpacity: number;
+  plateShape: 'rectangle' | 'circle';
   plate: {
     geometry: THREE.ExtrudeGeometry;
     color: string;
@@ -523,7 +524,8 @@ function PlateLayer({
         />
       </mesh>
 
-      {/* Grid on XY plane (horizontal) - rotate 90° around X */}
+      {/* Grid on XY plane (horizontal) - rotate 90° around X. The grid follows the
+          rectangular build volume even when the mock bed under it is circular. */}
       {shared.showGrid && shared.buildPlateOpacity > 0.001 && (
         <gridHelper
           args={[
@@ -685,6 +687,8 @@ export function Helpers({
   plateName,
   showPlateName = false,
   showPlateWidgets = true,
+  allowMultiPlate = true,
+  plateShape = 'rectangle',
   plateNamePlaceholder,
   plateNameEditTitle,
   plateNameEmptyTitle,
@@ -728,6 +732,10 @@ export function Helpers({
   showPlateName?: boolean;
   /** The add/lock/arrange/bin column beside the plate. Off in a scene with nothing in it. */
   showPlateWidgets?: boolean;
+  /** False for a printer that works with one bed: no plate name or side controls. */
+  allowMultiPlate?: boolean;
+  /** The build plate's silhouette. */
+  plateShape?: 'rectangle' | 'circle';
   plateNamePlaceholder?: string;
   plateNameEditTitle?: string;
   plateNameEmptyTitle?: string;
@@ -810,7 +818,10 @@ export function Helpers({
   const scaleX = width / baseSize;
   const scaleZ = depth / baseSize;
   const buildPlateOversizeEachSideMm = 3;
-  const buildPlateThicknessMm = 3;
+  // A 3mm slab is right for a 100mm machine but reads as a puck on a 10mm one, so
+  // the thickness follows the bed. The floor is where the tiny plate still reads as
+  // a plate rather than a decal.
+  const buildPlateThicknessMm = Math.min(3, Math.max(1.5, width * 0.05));
   const buildPlateCornerRadiusMm = 3;
   const clampedBuildPlateOpacity = THREE.MathUtils.clamp(buildPlateOpacity ?? 1, 0, 1);
   const buildPlateColor = isLightTheme ? '#8a8e9e' : '#323841';
@@ -830,12 +841,16 @@ export function Helpers({
   }), [buildPlateColor, gridMajorColor, gridMinorColor]);
   const buildPlateWidth = width + buildPlateOversizeEachSideMm * 2;
   const buildPlateDepth = depth + buildPlateOversizeEachSideMm * 2;
+  const buildPlateRadiusMm = Math.min(buildPlateWidth, buildPlateDepth) * 0.5;
   const buildPlateCenterZ = -buildPlateThicknessMm * 0.5 - 0.08;
   // Axes, their letters and the printed plate decorations follow the build volume.
   // The reference is the plate's width, so the arrows keep the same share of the front
   // edge at any size — `min(width, depth)` under-scaled normal wide-and-shallow beds.
   // The upper clamp keeps a very large machine from growing walls of arrow.
-  const plateScale = Math.min(1.5, Math.max(0.4, width / 200));
+  // The floor is what a tiny machine reads: at 0.4 a 10mm printer drew an 8.8mm
+  // arrow whose head was larger than the part. 0.16 gives that plate a 3.5mm arrow,
+  // while a 50mm one and up stays on the proportional size.
+  const plateScale = Math.min(1.5, Math.max(0.16, width / 200));
   // The tab the FRONT marker is printed on. Its depth is what sizes that marker: the
   // label's texture is fitted to the plane, and the plane is aspect-locked to the tab
   // (256/72), so a deeper tab is a larger label: the tab's 3.2mm -> 4.2mm takes the
@@ -862,31 +877,53 @@ export function Helpers({
   const frontTabFrontWidth = Math.min(frontTabBackWidth - width * 0.018, 16 * plateFrontScale);
   const frontMarkerInsetMm = width * 0.0012;
   const frontMarkerAspect = 256 / 72;
-  const markerAvailableDepth = frontTabDepth - frontMarkerInsetMm * 2;
-  const markerAvailableWidth = frontTabBackWidth - frontMarkerInsetMm * 2;
-  const frontMarkerDepth = Math.min(markerAvailableDepth, markerAvailableWidth / frontMarkerAspect);
+  // The rectangle prints FRONT on a tab that grows with the bed. A circle has no
+  // tab: the free space is the cap between the rectangular build volume's front
+  // edge and the disc's edge, so the word is sized to that band and to the chord
+  // available inside the disc at the height it sits on.
+  const circleFrontFreeDepth = Math.max(0, buildPlateRadiusMm - depth * 0.5);
+  const circleFrontMarkerCenterY = depth * 0.5 + circleFrontFreeDepth * 0.5;
+  const circleFrontChord = 2 * Math.sqrt(Math.max(
+    0,
+    buildPlateRadiusMm * buildPlateRadiusMm - circleFrontMarkerCenterY * circleFrontMarkerCenterY,
+  )) * 0.8;
+  const rectangleMarkerDepth = Math.min(
+    frontTabDepth - frontMarkerInsetMm * 2,
+    (frontTabBackWidth - frontMarkerInsetMm * 2) / frontMarkerAspect,
+  );
+  const circleMarkerDepth = Math.min(
+    frontTabDepth,
+    circleFrontFreeDepth * 0.55,
+    circleFrontChord / frontMarkerAspect,
+  );
+  const frontMarkerDepth = plateShape === 'circle' ? circleMarkerDepth : rectangleMarkerDepth;
   const frontMarkerWidth = frontMarkerDepth * frontMarkerAspect;
   const axisBaseZ = 0.5;
   const axisLength = 22 * plateScale;
-  const axisShaftRadius = Math.max(0.22, 0.42 * plateScale);
-  const axisHeadRadius = Math.max(0.7, 1.3 * plateScale);
-  const axisHeadLength = Math.max(1.0, 1.9 * plateScale);
-  const axisLabelLift = Math.max(0.6, 1.0 * plateScale);
+  const axisShaftRadius = Math.max(0.05, 0.42 * plateScale);
+  const axisHeadRadius = Math.max(0.18, 1.3 * plateScale);
+  const axisHeadLength = Math.max(0.28, 1.9 * plateScale);
+  const axisLabelLift = Math.max(0.12, 1.0 * plateScale);
   // Keep decal geometry in lockstep with the logo SVG's intrinsic viewBox ratio
   // to avoid non-uniform stretching on the build plate.
   const plateLogoAspect = 1772 / 304;
-  const plateLogoBaseWidth = Math.max(16, Math.min(42, width * 0.2));
+  // The 16mm floor was a 100mm-machine value; on a 10mm bed it made the wordmark
+  // wider than the part. Keep the width proportional, with only enough of a floor
+  // that a tiny plate still has a legible mark.
+  const plateLogoBaseWidth = Math.max(3, Math.min(42, width * 0.2));
   const plateLogoScale = 1.0;
   const plateLogoWidth = plateLogoBaseWidth * plateLogoScale;
   const plateLogoHeight = (plateLogoBaseWidth / plateLogoAspect) * plateLogoScale;
-  const plateLogoInset = 1.6;
+  const plateLogoInset = Math.min(1.6, width * 0.08);
   const plateLogoX = resolvedOriginMinX + width - plateLogoInset - plateLogoWidth * 0.5;
   const plateLogoY = resolvedOriginMinY + plateLogoInset + plateLogoHeight * 0.5;
   const plateLogoZ = 0.12;
   // Seat the marker a little above the tab's geometric centre: the tab tapers toward
   // its front edge, so dead centre plus the texture's optical nudge reads low. 0.35 is
   // the middle of the range that looked right between "too high" and "too low".
-  const frontMarkerY = -buildPlateDepth * 0.5 - frontTabDepth * 0.35;
+  const frontMarkerY = plateShape === 'circle'
+    ? -circleFrontMarkerCenterY
+    : -buildPlateDepth * 0.5 - frontTabDepth * 0.35;
 
   const frontTexture = React.useMemo(() => {
     const canvas = document.createElement('canvas');
@@ -1045,6 +1082,21 @@ export function Helpers({
   }, [plateLogoTexture]);
 
   const buildPlateGeometry = React.useMemo(() => {
+    if (plateShape === 'circle') {
+      const radius = buildPlateRadiusMm;
+      const shape = new THREE.Shape();
+      shape.absarc(0, 0, radius, 0, Math.PI * 2, false);
+      const geom = new THREE.ExtrudeGeometry(shape, {
+        depth: buildPlateThicknessMm,
+        bevelEnabled: false,
+        curveSegments: 96,
+        steps: 1,
+      });
+      geom.translate(0, 0, -buildPlateThicknessMm * 0.5);
+      geom.computeVertexNormals();
+      return geom;
+    }
+
     const halfW = buildPlateWidth * 0.5;
     const halfD = buildPlateDepth * 0.5;
     const r = Math.max(0.2, Math.min(buildPlateCornerRadiusMm, halfW - 0.2, halfD - 0.2));
@@ -1086,6 +1138,8 @@ export function Helpers({
     frontTabBackWidth,
     frontTabDepth,
     frontTabFrontWidth,
+    buildPlateRadiusMm,
+    plateShape,
   ]);
 
   React.useEffect(() => {
@@ -1238,6 +1292,7 @@ export function Helpers({
     showGrid: shouldShowGrid,
     showBuildPlate: shouldShowBuildPlate,
     buildPlateOpacity: clampedBuildPlateOpacity,
+    plateShape,
     plate: {
       geometry: buildPlateGeometry,
       color: buildPlateColor,
@@ -1334,6 +1389,7 @@ export function Helpers({
    * hiding the name while the plate is empty.
    */
   const nameLabelFor = (plate: PlateLayerSpec | null): PlateLayerNameLabel | undefined => {
+    if (!allowMultiPlate) return undefined;
     if (!shouldShowBuildPlate || !plateNameEditTitle || !plateNameEmptyTitle) return undefined;
     if (plate) {
       if (!onRenamePlate) return undefined;
@@ -1362,6 +1418,7 @@ export function Helpers({
    * there is somewhere to add a plate to.
    */
   const sideButtonsFor = (plate: PlateLayerSpec | null, isActive: boolean): PlateSideButtonsProps | undefined => {
+    if (!allowMultiPlate) return undefined;
     if (!shouldShowBuildPlate) return undefined;
     if (!showPlateWidgets) return undefined;
     if (plate ? !isActive : (!showPlateName || !addPlateComingSoonTitle)) return undefined;

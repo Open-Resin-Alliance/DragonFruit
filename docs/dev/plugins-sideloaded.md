@@ -173,8 +173,12 @@ renderer hands them to the profile store through `installPluginFromManifest`, th
 same entry point the simple-plugin tier uses, so there is one normaliser and one
 place where a bad preset is rejected.
 
-That is how a sideloaded package appears in the printer library and the material
-picker. The package's own row in Settings stays the sideloaded record, which is
+`allowMultiPlate: false` marks a machine that works with one bed: its profiles hide
+the plate name and the plate-side button column in the scene. Absent means true, so
+existing presets keep the multi-plate controls. `plateShape: "circle"` draws the
+mock build plate as a disc with a polar grid instead of the rectangular bed; absent
+means `"rectangle"`. That is how a sideloaded package
+appears in the printer library and the material picker. The package's own row in Settings stays the sideloaded record, which is
 the one that can be enabled or removed, and the profile-store entry it creates is
 filtered out of that list.
 
@@ -227,9 +231,13 @@ the compiled adapters fill, so one form renders both.
 Compiled plugins own their output format: a package fills a format nobody claims and
 may add modes inside it, never replace one. With
 `replacesDefaultMaterialSettings: true` the declared tabs become the material
-editor's own tabs instead of the pane being appended under the stock fields. Field kinds the renderer does not know,
-fields without a `key` or a scalar `defaultValue`, and contracts that end up with no
-fields are dropped rather than guessed at. Labels are plain strings, so they are
+editor's own tabs instead of the pane being appended under the stock fields. Field
+kinds are `number`, `integer`, `text`, `textfield`, `boolean`, `select` and
+`spacer`; `textfield` is a multi-line string delivered verbatim (newlines kept)
+at its `metadataPath`, for a vendor block the plugin parses itself. A textfield
+may name `previewKeys`, whose current values are shown greyed above the box. Kinds the
+renderer does not know, fields without a `key` or a scalar `defaultValue`, and
+contracts that end up with no fields are dropped rather than guessed at. Labels are plain strings, so they are
 English; the app does not translate plugin-supplied text. Limits: 8 formats, 8
 modes per format, 512 fields, 128 KiB per contract.
 

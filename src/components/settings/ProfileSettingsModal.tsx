@@ -593,14 +593,6 @@ export function ProfileSettingsModal({
     return Math.round(printerBitDepth);
   }, [selectedPrinter?.bitDepth?.bits]);
 
-  const supportsMultiTankFormat = React.useMemo(
-    () => outputFormatSupportsMultiTank(selectedPrinter?.display.outputFormat),
-    [selectedPrinter?.display.outputFormat],
-  );
-  // Multi-Tank assigns materials per tank; the Material Settings list is then a
-  // library, not a chooser, so rows carry no selection of their own.
-  const multiTankMaterialPicker = supportsMultiTankFormat && selectedPrinter?.materialMode === 'multiTank';
-
   // Reinstalling a package can add output versions to a format; the profile
   // editor has to re-read the snapshot when that happens.
   const sideloadedFormats = React.useSyncExternalStore(
@@ -608,6 +600,16 @@ export function ProfileSettingsModal({
     getSideloadedOutputFormatsSnapshot,
     getSideloadedOutputFormatsSnapshot,
   );
+  const supportsMultiTankFormat = React.useMemo(() => {
+    // The plugin format registry is loaded after the profile store on a cold start,
+    // so this has to recompute when that snapshot arrives instead of pinning the
+    // answer to the extension string alone.
+    void sideloadedFormats;
+    return outputFormatSupportsMultiTank(selectedPrinter?.display.outputFormat);
+  }, [selectedPrinter?.display.outputFormat, sideloadedFormats]);
+  // Multi-Tank assigns materials per tank; the Material Settings list is then a
+  // library, not a chooser, so rows carry no selection of their own.
+  const multiTankMaterialPicker = supportsMultiTankFormat && selectedPrinter?.materialMode === 'multiTank';
   const selectedFormatVersionOptions = React.useMemo(() => {
     if (!selectedPrinter) return [] as Array<{ value: string; label: string; isDefault?: boolean }>;
     void sideloadedFormats;
@@ -5109,7 +5111,7 @@ export function ProfileSettingsModal({
                 </IconButton>
               </div>
 
-              <div className="p-3 space-y-3 overflow-y-auto custom-scrollbar flex-1">
+              <div className="p-3 space-y-3 overflow-y-auto custom-scrollbar flex-1 flex flex-col">
                 {usePluginLocalSettingsAsReplacement ? (
                   <ReplacementMaterialEditorShell
                     tabs={replacementMaterialEditorTabs}
@@ -5207,7 +5209,7 @@ export function ProfileSettingsModal({
                 </IconButton>
               </div>
 
-              <div className="p-3 space-y-3 overflow-y-auto custom-scrollbar flex-1">
+              <div className="p-3 space-y-3 overflow-y-auto custom-scrollbar flex-1 flex flex-col">
                 {isSelectedPrinterOfficial && (
                   <div className="rounded-md border px-3 py-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5" style={{ borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 36%)', background: 'color-mix(in srgb, #d97706, var(--surface-1) 92%)' }}>
                     <div className="flex-1 min-w-[240px]">
@@ -6015,7 +6017,7 @@ export function ProfileSettingsModal({
                 </IconButton>
               </div>
 
-              <div className="p-3 space-y-3 overflow-y-auto custom-scrollbar flex-1">
+              <div className="p-3 space-y-3 overflow-y-auto custom-scrollbar flex-1 flex flex-col">
                 {usePluginLocalSettingsAsReplacement ? (
                   <ReplacementMaterialEditorShell
                     tabs={replacementMaterialEditorTabs}

@@ -212,6 +212,63 @@ export function LabeledInput({ label, helpText, disabled = false, value, onChang
     );
 }
 
+type LabeledTextFieldProps = {
+    label: string;
+    helpText?: string;
+    disabled?: boolean;
+    value: string;
+    /** Greyed, read-only `key = value` lines shown above the editable block. */
+    previewLines?: string[];
+    /** Caption above the greyed preview. */
+    previewLabel?: string;
+    onChange: (value: string) => void;
+};
+
+/** Multi-line text: the format's free-form block, newlines preserved. */
+export function LabeledTextField({ label, helpText, disabled = false, value, previewLines = [], previewLabel, onChange }: LabeledTextFieldProps) {
+    const [localValue, setLocalValue] = React.useState<string>(() => String(value));
+    const [isFocused, setIsFocused] = React.useState(false);
+
+    React.useEffect(() => {
+        if (isFocused) return;
+        setLocalValue(String(value));
+    }, [value, isFocused]);
+
+    return (
+        <label className="flex h-full min-h-0 flex-col gap-1">
+            {previewLines.length > 0 && (
+                <>
+                    {previewLabel && <span className="ui-label font-medium">{previewLabel}</span>}
+                    <div
+                        className="ui-input w-full whitespace-pre-wrap px-2.5 py-2 font-mono text-xs leading-relaxed"
+                        style={{ color: 'var(--text-muted)' }}
+                    >
+                        {previewLines.join('\n')}
+                    </div>
+                </>
+            )}
+            <span className="ui-label font-medium inline-flex items-center gap-1.5">
+                {label}
+                {helpText && <FieldHelpTooltip label={label} help={helpText} />}
+            </span>
+            <textarea
+                disabled={disabled}
+                value={localValue}
+                rows={4}
+                spellCheck={false}
+                onChange={(event) => {
+                    const next = event.target.value;
+                    setLocalValue(next);
+                    onChange(next);
+                }}
+                onFocus={() => setIsFocused(true)}
+                onBlur={() => setIsFocused(false)}
+                className={`ui-input w-full min-h-[140px] flex-1 px-2.5 py-2 leading-relaxed text-sm resize-y ${disabled ? 'opacity-55 cursor-not-allowed' : ''}`}
+            />
+        </label>
+    );
+}
+
 // ─── LabeledNumberInput ───────────────────────────────────────────────────────
 
 type LabeledNumberInputProps = {
@@ -2392,7 +2449,7 @@ export function PluginLocalMaterialSettingsSections({
 
     return (
         <div
-            className={replacementMode ? 'space-y-2' : 'rounded-xl border p-3 space-y-2'}
+            className={replacementMode ? 'flex min-h-0 flex-1 flex-col gap-2' : 'rounded-xl border p-3 space-y-2'}
             style={replacementMode
                 ? undefined
                 : { borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
@@ -2459,7 +2516,10 @@ export function PluginLocalMaterialSettingsSections({
                             .sort((a, b) => a.cardOrder - b.cardOrder || a.cardTitle.localeCompare(b.cardTitle));
 
                         return (
-                            <div key={section.sectionId} className="space-y-2.5">
+                            <div
+                                key={section.sectionId}
+                                className={replacementMode ? 'flex min-h-0 flex-1 flex-col gap-2.5' : 'space-y-2.5'}
+                            >
                                 {!replacementMode && (
                                     <div className="ui-meta font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
                                         {section.sectionTitle}
@@ -2536,6 +2596,31 @@ export function PluginLocalMaterialSettingsSections({
                                             );
                                         }
 
+                                        if (field.kind === 'textfield') {
+                                            const previewLines = (field.previewKeys ?? [])
+                                                .map((key) => {
+                                                    const source = adapter.fields.find((candidate) => candidate.key === key);
+                                                    if (!source) return null;
+                                                    const raw = Object.prototype.hasOwnProperty.call(valuesForOutput, key)
+                                                        ? valuesForOutput[key]
+                                                        : source.defaultValue;
+                                                    return `${key} = ${String(raw)}`;
+                                                })
+                                                .filter((line): line is string => line !== null);
+                                            return (
+                                                <LabeledTextField
+                                                    key={field.key}
+                                                    label={field.label}
+                                                    helpText={field.description}
+                                                    disabled={field.disabled}
+                                                    value={String(fieldValue)}
+                                                    previewLines={previewLines}
+                                                    previewLabel={field.previewLabel}
+                                                    onChange={(next) => setFieldValue(field.key, next)}
+                                                />
+                                            );
+                                        }
+
                                         if (field.kind === 'select' && Array.isArray(field.options) && field.options.length > 0) {
                                             return (
                                                 <SelectDropdown
@@ -2585,14 +2670,16 @@ export function PluginLocalMaterialSettingsSections({
                                         );
                                     };
 
+                                    const hasTextField = card.fields.some((entry) => entry.kind === 'textfield');
+                                    const growsForTextField = replacementMode && hasTextField;
                                     return (
                                         <div
                                             key={`${section.sectionId}-${card.cardId}`}
-                                            className="rounded-xl border p-3"
+                                            className={`rounded-xl border p-3${growsForTextField ? ' flex min-h-0 flex-1 flex-col' : ''}`}
                                             style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
                                         >
                                             <div className="ui-meta font-semibold uppercase tracking-wide mb-2" style={{ color: 'var(--text-muted)' }}>{card.cardTitle}</div>
-                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                            <div className={`grid grid-cols-1 md:grid-cols-2 gap-2${growsForTextField ? ' min-h-0 flex-1 auto-rows-[minmax(0,1fr)]' : ''}`}>
                                                 {card.fields.map((field) => {
                                                     if (renderedKeys.has(field.key)) return null;
 
@@ -2773,7 +2860,7 @@ export function ReplacementMaterialEditorShell({
     });
 
     return (
-        <div className="space-y-3">
+        <div className="flex min-h-0 flex-1 flex-col gap-3">
             <div className="flex items-center gap-1.5 border-b pb-2" style={{ borderColor: 'var(--border-subtle)' }}>
                 {tabs.map((tab) => {
                     const active = activeTabId === tab.id;
@@ -2795,8 +2882,8 @@ export function ReplacementMaterialEditorShell({
                 })}
             </div>
 
-            <div className="relative" style={minBodyHeight ? { minHeight: `${minBodyHeight}px` } : undefined}>
-                <div className="space-y-2.5" data-measure-tab-body>
+            <div className="relative flex min-h-0 flex-1 flex-col" style={minBodyHeight ? { minHeight: `${minBodyHeight}px` } : undefined}>
+                <div className="flex min-h-0 flex-1 flex-col gap-2.5" data-measure-tab-body>
                     {renderTabBody(activeTabId)}
                 </div>
 
