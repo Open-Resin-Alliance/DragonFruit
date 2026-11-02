@@ -6,7 +6,8 @@ import { msg } from '@lingui/core/macro';
 import { useLingui } from '@lingui/react';
 import { createPortal } from 'react-dom';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
-import { AlertTriangle, Box, Check, Square, ChevronDown, ChevronLeft, ChevronRight, Copy, Download, Edit3, FlaskConical, Frown, ImagePlus, Info, LayoutGrid, Lock, Plus, Printer, RefreshCw, Search, Trash2, Unlock, Upload, Wifi, WifiOff, X } from 'lucide-react';
+import { tankMaterialsDisagree } from '@/features/profiles/tankMaterialCompatibility';
+import { AlertTriangle, Box, Check, Square, ChevronDown, ChevronLeft, ChevronRight, Copy, Download, Edit3, FlaskConical, Frown, ImagePlus, Info, LayoutGrid, Link2, Lock, Plus, Printer, RefreshCw, Search, Trash2, Unlink2, Unlock, Upload, Wifi, WifiOff, X } from 'lucide-react';
 import { Button, IconButton, IconChip, Spinner, FadeText } from '@/components/atoms';
 import FleetManagement from '@/components/settings/FleetManagement';
 import { NumberInput } from '@/components/ui/NumberInput';
@@ -120,6 +121,23 @@ import {
   ReplacementMaterialEditorShell,
   clampNonNegativeNumber,
 } from './profileFormAtoms';
+
+const tankMaterialsMatchMessage = msg({
+  message: 'Tank materials have matching layer height, bottom layer count and transition layers.',
+  comment: 'Tooltip on the green link between two Multi-Tank tank labels when their materials agree.',
+});
+const tankMaterialsMismatchMessage = msg({
+  message: 'Tank materials differ in layer height, bottom layer count or transition layers. These must match for a Multi-Tank print.',
+  comment: 'Warning on the red broken link between two Multi-Tank tank labels whose materials would print different layer stacks.',
+});
+const tankMaterialsMatchedLabel = msg({
+  message: 'Matched',
+  comment: 'Label beside the green link between two Multi-Tank tank labels whose materials agree.',
+});
+const tankMaterialsMismatchedLabel = msg({
+  message: 'Mismatched',
+  comment: 'Label beside the red broken link between two Multi-Tank tank labels whose materials disagree.',
+});
 
 type ProfileSettingsModalProps = {
   isOpen: boolean;
@@ -901,6 +919,15 @@ export function ProfileSettingsModal({
     if (!selectedPrinter) return [];
     return getMaterialProfilesForPrinter(selectedPrinter.id, profileState);
   }, [profileState, selectedPrinter]);
+
+  /** The material in each tank, in tank order; null where the tank is unassigned. */
+  const tankAssignedMaterials = React.useMemo(() => {
+    const tankCount = selectedPrinter?.tankCount ?? 0;
+    const assignments = selectedPrinter?.tankMaterials ?? [];
+    return Array.from({ length: tankCount }, (_, index) => (
+      printerMaterials.find((material) => material.id === assignments[index]) ?? null
+    ));
+  }, [printerMaterials, selectedPrinter?.tankCount, selectedPrinter?.tankMaterials]);
 
   // The tank menus group by manufacturer, because a printer can carry resins from
   // several brands and a flat list stops being scannable past a handful.
@@ -4283,14 +4310,50 @@ export function ProfileSettingsModal({
 
             <div className="p-3">
               <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2.5">
-                {Array.from({ length: Math.max(4, selectedPrinter.tankCount ?? 2) }, (_, index) => {
+                {Array.from({ length: Math.max(4, selectedPrinter.tankCount ?? 2) }, (_unused, index) => {
                   const assignments = selectedPrinter.tankMaterials ?? [];
                   const tankCount = selectedPrinter.tankCount ?? 2;
                   const isTank = index < tankCount;
                   const assignedId = isTank ? assignments[index] ?? '' : '';
+                  const previousMaterial = index > 0 ? tankAssignedMaterials[index - 1] : null;
+                  const currentMaterial = tankAssignedMaterials[index] ?? null;
+                  const linkState = previousMaterial && currentMaterial
+                    ? (tankMaterialsDisagree(previousMaterial, currentMaterial, selectedPrinter.display.outputFormat)
+                      ? 'mismatch'
+                      : 'match')
+                    : null;
+                  const linkMessage = linkState === 'mismatch'
+                    ? _(tankMaterialsMismatchMessage)
+                    : _(tankMaterialsMatchMessage);
+                  const linkLabel = linkState === 'mismatch'
+                    ? _(tankMaterialsMismatchedLabel)
+                    : _(tankMaterialsMatchedLabel);
+                  const linkColor = linkState === 'mismatch' ? 'var(--danger)' : 'var(--success)';
                   return (
                     <div key={`tank-${index}`} className="space-y-1 block">
-                      <span className="ui-label font-medium inline-flex w-full justify-center text-center">
+                      <span className="ui-label font-medium inline-flex w-full justify-center text-center relative">
+                        {linkState && (
+                          <Tooltip
+                            content={linkMessage}
+                            wrapperClassName="absolute left-0 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10"
+                          >
+                            <span
+                              role="img"
+                              aria-label={`${linkLabel}. ${linkMessage}`}
+                              className="inline-flex items-center gap-1.5 whitespace-nowrap"
+                              style={{ color: linkColor }}
+                            >
+                              <span aria-hidden className="h-px w-6 shrink-0" style={{ background: linkColor }} />
+                              {linkState === 'mismatch' ? (
+                                <Unlink2 className="h-6 w-6 shrink-0" />
+                              ) : (
+                                <Link2 className="h-6 w-6 shrink-0" />
+                              )}
+                              <span className="text-xs font-medium">{linkLabel}</span>
+                              <span aria-hidden className="h-px w-6 shrink-0" style={{ background: linkColor }} />
+                            </span>
+                          </Tooltip>
+                        )}
                         {`Tank ${index + 1}`}
                       </span>
                       <SelectDropdown
