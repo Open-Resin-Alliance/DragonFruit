@@ -111,10 +111,11 @@ The Flatpak is granted:
 | `--socket=pulseaudio` | (benign; no audio currently used) |
 | `--device=dri` | GPU acceleration for Three.js preview |
 | `--filesystem=xdg-documents` `--filesystem=xdg-download` | Initial read/write for common save locations |
+| `--filesystem=/mnt:ro` `--filesystem=/media:ro` `--filesystem=/run/media:ro` | Drag and drop from network shares and removable drives |
 | `--talk-name=org.freedesktop.portal.*` | File picker + notifications + open-uri via `rfd` crate |
 
 **Not granted** (deliberate): `--filesystem=host`, `--share=home`, USB/serial
-devices. File I/O outside `~/Documents` and `~/Downloads` goes via the
+devices. Other file I/O outside `~/Documents` and `~/Downloads` goes via the
 xdg-desktop-portal file chooser; the `rfd` crate detects Flatpak automatically.
 
 ## Known limitations
