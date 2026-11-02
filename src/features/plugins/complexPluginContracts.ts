@@ -203,7 +203,7 @@ export type PluginSlicingFormatDefinitionContract = {
     notes?: string;
 };
 
-export type LocalMaterialFieldKind = 'number' | 'integer' | 'text' | 'boolean' | 'select' | 'spacer';
+export type LocalMaterialFieldKind = 'number' | 'integer' | 'text' | 'textfield' | 'boolean' | 'select' | 'spacer';
 
 export type LocalMaterialFieldOption = {
     value: string;
@@ -254,6 +254,11 @@ export type LocalMaterialFieldPlacement = {
 export type LocalMaterialFieldSchema = {
     key: string;
     label: string;
+    /**
+     * What the form renders. `textfield` is the multi-line sibling of `text`:
+     * its value is one string, kept verbatim (newlines included), for a format's
+     * free-form vendor block. See `docs/dev/plugins-sdk/ui.md`.
+     */
     kind: LocalMaterialFieldKind;
     defaultValue: number | string | boolean;
     /** Optional short tag rendered by the UI as an inline chip (e.g. Fast/Slow). */

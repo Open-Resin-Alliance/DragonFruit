@@ -212,6 +212,48 @@ export function LabeledInput({ label, helpText, disabled = false, value, onChang
     );
 }
 
+type LabeledTextFieldProps = {
+    label: string;
+    helpText?: string;
+    disabled?: boolean;
+    value: string;
+    onChange: (value: string) => void;
+};
+
+/** Multi-line text: the format's free-form block, newlines preserved. */
+export function LabeledTextField({ label, helpText, disabled = false, value, onChange }: LabeledTextFieldProps) {
+    const [localValue, setLocalValue] = React.useState<string>(() => String(value));
+    const [isFocused, setIsFocused] = React.useState(false);
+
+    React.useEffect(() => {
+        if (isFocused) return;
+        setLocalValue(String(value));
+    }, [value, isFocused]);
+
+    return (
+        <label className="space-y-1 block">
+            <span className="ui-label font-medium inline-flex items-center gap-1.5">
+                {label}
+                {helpText && <FieldHelpTooltip label={label} help={helpText} />}
+            </span>
+            <textarea
+                disabled={disabled}
+                value={localValue}
+                rows={4}
+                spellCheck={false}
+                onChange={(event) => {
+                    const next = event.target.value;
+                    setLocalValue(next);
+                    onChange(next);
+                }}
+                onFocus={() => setIsFocused(true)}
+                onBlur={() => setIsFocused(false)}
+                className={`ui-input w-full min-h-[88px] px-2.5 py-2 leading-relaxed text-sm resize-y ${disabled ? 'opacity-55 cursor-not-allowed' : ''}`}
+            />
+        </label>
+    );
+}
+
 // ─── LabeledNumberInput ───────────────────────────────────────────────────────
 
 type LabeledNumberInputProps = {
@@ -2531,6 +2573,19 @@ export function PluginLocalMaterialSettingsSections({
                                                     helpText={field.description}
                                                     checked={Boolean(fieldValue)}
                                                     disabled={field.disabled}
+                                                    onChange={(next) => setFieldValue(field.key, next)}
+                                                />
+                                            );
+                                        }
+
+                                        if (field.kind === 'textfield') {
+                                            return (
+                                                <LabeledTextField
+                                                    key={field.key}
+                                                    label={field.label}
+                                                    helpText={field.description}
+                                                    disabled={field.disabled}
+                                                    value={String(fieldValue)}
                                                     onChange={(next) => setFieldValue(field.key, next)}
                                                 />
                                             );

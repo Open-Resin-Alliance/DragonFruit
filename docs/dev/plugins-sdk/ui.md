@@ -40,7 +40,10 @@ a compiled adapter — the same form renders both.
           "min": 0.1, "max": 30, "step": 0.1,
           "placement": { "tabId": "basic", "cardId": "print", "order": 10 } },
         { "key": "antialias", "label": "Anti-aliasing", "kind": "select", "defaultValue": "2",
-          "options": [{ "value": "1", "label": "Off" }, { "value": "2", "label": "2x" }] }
+          "options": [{ "value": "1", "label": "Off" }, { "value": "2", "label": "2x" }] },
+        { "key": "extraIni", "label": "Extra INI lines", "kind": "textfield", "defaultValue": "",
+          "metadataPath": "vendor.extraIni",
+          "placement": { "tabId": "basic", "cardId": "print", "order": 20 } }
       ]
     }
   },
@@ -59,10 +62,15 @@ Rules:
   material editor of its own.
 - A compiled plugin owns its output format. A package fills a format nobody claims
   and may add settings modes inside it, never replace one.
-- Field kinds are the renderer's own: `number`, `integer`, `text`, `boolean`,
-  `select`, `spacer`. A field with an unknown kind, no `key`, or no scalar
-  `defaultValue` is dropped rather than guessed at; a contract with no usable
-  fields registers nothing.
+- Field kinds are the renderer's own: `number`, `integer`, `text`, `textfield`,
+  `boolean`, `select`, `spacer`. A field with an unknown kind, no `key`, or no
+  scalar `defaultValue` is dropped rather than guessed at; a contract with no
+  usable fields registers nothing.
+- `textfield` is the multi-line sibling of `text`. The form renders a resizable
+  textarea and passes the string through unchanged, newlines included, at the
+  field's `metadataPath`. Use it for a vendor block the host cannot model field by
+  field: the plugin parses or appends it itself. A "Custom" tab is just a tab whose
+  section holds one of these fields.
 - Labels and titles are plain strings in the manifest, so they are English. The
   app does not translate plugin-supplied text.
 - Limits: 8 output formats, 8 modes per format, 512 fields, 128 KiB per contract.

@@ -227,9 +227,12 @@ the compiled adapters fill, so one form renders both.
 Compiled plugins own their output format: a package fills a format nobody claims and
 may add modes inside it, never replace one. With
 `replacesDefaultMaterialSettings: true` the declared tabs become the material
-editor's own tabs instead of the pane being appended under the stock fields. Field kinds the renderer does not know,
-fields without a `key` or a scalar `defaultValue`, and contracts that end up with no
-fields are dropped rather than guessed at. Labels are plain strings, so they are
+editor's own tabs instead of the pane being appended under the stock fields. Field
+kinds are `number`, `integer`, `text`, `textfield`, `boolean`, `select` and
+`spacer`; `textfield` is a multi-line string delivered verbatim (newlines kept)
+at its `metadataPath`, for a vendor block the plugin parses itself. Kinds the
+renderer does not know, fields without a `key` or a scalar `defaultValue`, and
+contracts that end up with no fields are dropped rather than guessed at. Labels are plain strings, so they are
 English; the app does not translate plugin-supplied text. Limits: 8 formats, 8
 modes per format, 512 fields, 128 KiB per contract.
 

@@ -519,7 +519,7 @@ function resolveLocalMaterialOverrideTargetKey(
 
 function coerceLocalMaterialOverrideValue(
     rawValue: LocalMaterialSettingsValue,
-    kind: 'number' | 'integer' | 'text' | 'boolean' | 'select',
+    kind: 'number' | 'integer' | 'text' | 'textfield' | 'boolean' | 'select',
 ): LocalMaterialSettingsValue | null {
     if (kind === 'boolean') {
         if (typeof rawValue === 'boolean') return rawValue;

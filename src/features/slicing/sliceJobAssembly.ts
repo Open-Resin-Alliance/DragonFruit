@@ -201,7 +201,7 @@ function setMetadataPathValue(target: Record<string, unknown>, path: string, val
 
 function coerceLocalMaterialSettingValue(
   rawValue: string | number | boolean,
-  kind: 'number' | 'integer' | 'text' | 'boolean' | 'select',
+  kind: 'number' | 'integer' | 'text' | 'textfield' | 'boolean' | 'select',
 ): string | number | boolean {
   if (kind === 'boolean') {
     if (typeof rawValue === 'boolean') return rawValue;

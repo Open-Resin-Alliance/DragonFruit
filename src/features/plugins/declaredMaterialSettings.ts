@@ -14,6 +14,7 @@ const FIELD_KINDS: Record<LocalMaterialFieldKind, true> = {
   number: true,
   integer: true,
   text: true,
+  textfield: true,
   boolean: true,
   select: true,
   spacer: true,
