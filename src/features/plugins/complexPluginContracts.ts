@@ -281,6 +281,9 @@ export type LocalMaterialFieldSchema = {
      * already written before adding a line.
      */
     previewKeys?: string[];
+    /** Caption above the greyed preview, e.g. "Standard INI Fields". Plain string,
+     *  like every plugin-supplied label. */
+    previewLabel?: string;
     /**
      * Optional key that lays this field on one full-width row together with every
      * other field of the same card carrying it: three fields sharing a key read as a

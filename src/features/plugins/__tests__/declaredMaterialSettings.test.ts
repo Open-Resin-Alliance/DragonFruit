@@ -40,6 +40,7 @@ test('a textfield keeps its free-form default verbatim', () => {
       kind: 'textfield',
       defaultValue: 'customField = customValue\nsecondField = 2',
       previewKeys: ['hLayer', 'expoTime'],
+      previewLabel: 'Standard INI Fields',
     }],
   });
 
@@ -47,6 +48,7 @@ test('a textfield keeps its free-form default verbatim', () => {
   assert.equal(adapter.fields[0].kind, 'textfield');
   assert.equal(adapter.fields[0].defaultValue, 'customField = customValue\nsecondField = 2');
   assert.deepEqual(adapter.fields[0].previewKeys, ['hLayer', 'expoTime']);
+  assert.equal(adapter.fields[0].previewLabel, 'Standard INI Fields');
 });
 
 test('a field the renderer cannot interpret is dropped, not guessed at', () => {

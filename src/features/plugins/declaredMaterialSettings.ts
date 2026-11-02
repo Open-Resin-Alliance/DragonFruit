@@ -81,6 +81,8 @@ function sanitizeField(input: unknown): LocalMaterialFieldSchema | null {
   if (metadataPath) field.metadataPath = metadataPath;
   const rowKey = text(value.rowKey, 64);
   if (rowKey) field.rowKey = rowKey;
+  const previewLabel = text(value.previewLabel, 120);
+  if (previewLabel) field.previewLabel = previewLabel;
   if (Array.isArray(value.previewKeys)) {
     const previewKeys = value.previewKeys
       .slice(0, 64)

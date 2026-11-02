@@ -219,11 +219,13 @@ type LabeledTextFieldProps = {
     value: string;
     /** Greyed, read-only `key = value` lines shown above the editable block. */
     previewLines?: string[];
+    /** Caption above the greyed preview. */
+    previewLabel?: string;
     onChange: (value: string) => void;
 };
 
 /** Multi-line text: the format's free-form block, newlines preserved. */
-export function LabeledTextField({ label, helpText, disabled = false, value, previewLines = [], onChange }: LabeledTextFieldProps) {
+export function LabeledTextField({ label, helpText, disabled = false, value, previewLines = [], previewLabel, onChange }: LabeledTextFieldProps) {
     const [localValue, setLocalValue] = React.useState<string>(() => String(value));
     const [isFocused, setIsFocused] = React.useState(false);
 
@@ -234,18 +236,21 @@ export function LabeledTextField({ label, helpText, disabled = false, value, pre
 
     return (
         <label className="flex h-full min-h-0 flex-col gap-1">
+            {previewLines.length > 0 && (
+                <>
+                    {previewLabel && <span className="ui-label font-medium">{previewLabel}</span>}
+                    <div
+                        className="ui-input w-full whitespace-pre-wrap px-2.5 py-2 font-mono text-xs leading-relaxed"
+                        style={{ color: 'var(--text-muted)' }}
+                    >
+                        {previewLines.join('\n')}
+                    </div>
+                </>
+            )}
             <span className="ui-label font-medium inline-flex items-center gap-1.5">
                 {label}
                 {helpText && <FieldHelpTooltip label={label} help={helpText} />}
             </span>
-            {previewLines.length > 0 && (
-                <div
-                    className="ui-input w-full whitespace-pre-wrap px-2.5 py-2 font-mono text-xs leading-relaxed"
-                    style={{ color: 'var(--text-muted)' }}
-                >
-                    {previewLines.join('\n')}
-                </div>
-            )}
             <textarea
                 disabled={disabled}
                 value={localValue}
@@ -2610,6 +2615,7 @@ export function PluginLocalMaterialSettingsSections({
                                                     disabled={field.disabled}
                                                     value={String(fieldValue)}
                                                     previewLines={previewLines}
+                                                    previewLabel={field.previewLabel}
                                                     onChange={(next) => setFieldValue(field.key, next)}
                                                 />
                                             );

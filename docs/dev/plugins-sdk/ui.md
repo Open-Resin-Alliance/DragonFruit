@@ -72,9 +72,10 @@ Rules:
   field: the plugin parses or appends it itself. A "Custom" tab is just a tab whose
   section holds one of these fields.
 - A `textfield` may list `previewKeys`, the sibling field keys whose current values
-  are shown above its textarea as greyed, read-only `key = value` lines. The preview
-  is not part of the field's value and is never submitted; it exists so an author can
-  see the values the custom block will sit beside.
+  are shown above its textarea as greyed, read-only `key = value` lines, under an
+  optional `previewLabel`. The preview is not part of the field's value and is never
+  submitted; it exists so an author can see the values the custom block will sit
+  beside.
 - Labels and titles are plain strings in the manifest, so they are English. The
   app does not translate plugin-supplied text.
 - Limits: 8 output formats, 8 modes per format, 512 fields, 128 KiB per contract.
