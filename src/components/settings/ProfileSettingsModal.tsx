@@ -593,14 +593,6 @@ export function ProfileSettingsModal({
     return Math.round(printerBitDepth);
   }, [selectedPrinter?.bitDepth?.bits]);
 
-  const supportsMultiTankFormat = React.useMemo(
-    () => outputFormatSupportsMultiTank(selectedPrinter?.display.outputFormat),
-    [selectedPrinter?.display.outputFormat],
-  );
-  // Multi-Tank assigns materials per tank; the Material Settings list is then a
-  // library, not a chooser, so rows carry no selection of their own.
-  const multiTankMaterialPicker = supportsMultiTankFormat && selectedPrinter?.materialMode === 'multiTank';
-
   // Reinstalling a package can add output versions to a format; the profile
   // editor has to re-read the snapshot when that happens.
   const sideloadedFormats = React.useSyncExternalStore(
@@ -608,6 +600,16 @@ export function ProfileSettingsModal({
     getSideloadedOutputFormatsSnapshot,
     getSideloadedOutputFormatsSnapshot,
   );
+  const supportsMultiTankFormat = React.useMemo(() => {
+    // The plugin format registry is loaded after the profile store on a cold start,
+    // so this has to recompute when that snapshot arrives instead of pinning the
+    // answer to the extension string alone.
+    void sideloadedFormats;
+    return outputFormatSupportsMultiTank(selectedPrinter?.display.outputFormat);
+  }, [selectedPrinter?.display.outputFormat, sideloadedFormats]);
+  // Multi-Tank assigns materials per tank; the Material Settings list is then a
+  // library, not a chooser, so rows carry no selection of their own.
+  const multiTankMaterialPicker = supportsMultiTankFormat && selectedPrinter?.materialMode === 'multiTank';
   const selectedFormatVersionOptions = React.useMemo(() => {
     if (!selectedPrinter) return [] as Array<{ value: string; label: string; isDefault?: boolean }>;
     void sideloadedFormats;
