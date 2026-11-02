@@ -815,6 +815,7 @@ function sanitizePrinterPreset(input: unknown): PrinterPreset | null {
     tankCount: Number.isFinite(Number(value.tankCount))
       ? Math.min(16, Math.max(2, Math.round(Number(value.tankCount))))
       : undefined,
+    allowMultiPlate: typeof value.allowMultiPlate === 'boolean' ? value.allowMultiPlate : undefined,
     networkSupport: sanitizeNetworkSupport(value.networkSupport),
     networkFilter: boundedString((value as any).networkFilter, 120) || undefined,
     platformBadge: sanitizePlatformBadge((value as any).platformBadge),

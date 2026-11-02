@@ -173,8 +173,10 @@ renderer hands them to the profile store through `installPluginFromManifest`, th
 same entry point the simple-plugin tier uses, so there is one normaliser and one
 place where a bad preset is rejected.
 
-That is how a sideloaded package appears in the printer library and the material
-picker. The package's own row in Settings stays the sideloaded record, which is
+`allowMultiPlate: false` marks a machine that works with one bed: its profiles hide
+the plate name and the plate-side button column in the scene. Absent means true, so
+existing presets keep the multi-plate controls. That is how a sideloaded package
+appears in the printer library and the material picker. The package's own row in Settings stays the sideloaded record, which is
 the one that can be enabled or removed, and the profile-store entry it creates is
 filtered out of that list.
 

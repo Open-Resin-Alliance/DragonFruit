@@ -988,6 +988,7 @@ export default function Home() {
     updatePrinterProfile(previousId, { materialMode: 'multiTank' });
   }, [activePrinterProfile?.id, printerSceneConflictPreviousId]);
   const hasActivePrinterProfile = Boolean(activePrinterProfile);
+  const activePrinterAllowsMultiPlate = activePrinterProfile?.allowMultiPlate !== false;
   const hasPrinterProfiles = React.useMemo(
     () => profileState.printerProfiles.length > 0,
     [profileState.printerProfiles],
@@ -11172,8 +11173,8 @@ export default function Home() {
             onPlateNameChange={scene.setPlateName}
             // An empty scene has nothing on its beds, so the bed's name and its buttons would be
             // pointing at nothing.
-            showPlateName={scene.models.length > 0}
-            showPlateWidgets={scene.models.length > 0}
+            showPlateName={activePrinterAllowsMultiPlate && scene.models.length > 0}
+            showPlateWidgets={activePrinterAllowsMultiPlate && scene.models.length > 0}
             onArrangePlate={() => {
               // The regular arrange, at the settings this button is for: 1mm apart with
               // Z-rotation allowed, and to this plate alone — it is the plate's own
