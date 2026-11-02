@@ -338,6 +338,7 @@ export function SceneFileModals({
           currentIsSmaller={scene.printerMismatch.currentIsSmaller}
           sceneUsesMultiTankMaterials={scene.printerMismatch.sceneUsesMultiTankMaterials}
           currentMaterialMode={scene.printerMismatch.currentMaterialMode}
+          missingPluginName={scene.printerMismatch.missingPlugin?.name}
           onSwitch={() => scene.resolvePrinterMismatch('switch')}
           onKeep={() => scene.resolvePrinterMismatch('keep')}
         />

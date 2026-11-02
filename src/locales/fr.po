@@ -43,13 +43,13 @@ msgid "{0, plural, one {# printer preset} other {# printer presets}}"
 msgstr ""
 
 #. placeholder {0}: selectedLibraryPresetIds.size
-#: src/components/settings/ProfileSettingsModal.tsx:5225
+#: src/components/settings/ProfileSettingsModal.tsx:5252
 msgid "{0, plural, one {Add # printer} other {Add # printers}}"
 msgstr ""
 
 #. placeholder {0}: scene.sceneImportHollowingPrompt.hollowedModelCount
 #. placeholder {1}: scene.sceneImportHollowingPrompt.modelCount
-#: src/components/organisms/modals/SceneFileModals.tsx:405
+#: src/components/organisms/modals/SceneFileModals.tsx:406
 msgid "{0} of {1, plural, one {# model carries an interior cavity.} other {# models carry an interior cavity.}}"
 msgstr ""
 
@@ -536,7 +536,7 @@ msgstr ""
 #. placeholder {0}: recordedBuildVolumeMm.width
 #. placeholder {1}: recordedBuildVolumeMm.depth
 #. placeholder {2}: recordedBuildVolumeMm.height
-#: src/components/modals/ScenePrinterMismatchModal.tsx:101
+#: src/components/modals/ScenePrinterMismatchModal.tsx:139
 msgid "<0>{recordedLabel}</0> has a build volume of {0} × {1} × {2} mm."
 msgstr ""
 
@@ -544,11 +544,11 @@ msgstr ""
 msgid "<0>Disclaimer:</0> Repair is recommended. Loading this mesh as-is may cause slicing errors or print failures, and successful output cannot be guaranteed."
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:421
+#: src/components/organisms/modals/SceneFileModals.tsx:422
 msgid "<0>Import Solid</0> loads the outer shape only. The cavity is kept, so you can apply it later from the Hollowing panel."
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:417
+#: src/components/organisms/modals/SceneFileModals.tsx:418
 msgid "<0>Keep Hollow</0> builds the stored cavity into each model, so it prints hollow exactly as authored."
 msgstr ""
 
@@ -745,8 +745,8 @@ msgstr ""
 #: src/components/printers/PrinterVariantPickerModal.tsx:707
 #: src/components/settings/FleetManagement.tsx:269
 #: src/components/settings/PluginStudioModal.tsx:2100
-#: src/components/settings/ProfileSettingsModal.tsx:3863
-#: src/components/settings/ProfileSettingsModal.tsx:3926
+#: src/components/settings/ProfileSettingsModal.tsx:3890
+#: src/components/settings/ProfileSettingsModal.tsx:3953
 msgid "Add printer"
 msgstr "Ajouter une imprimante"
 
@@ -754,7 +754,7 @@ msgstr "Ajouter une imprimante"
 msgid "Add printer variant"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:5226
+#: src/components/settings/ProfileSettingsModal.tsx:5253
 msgid "Add printers"
 msgstr ""
 
@@ -1496,7 +1496,7 @@ msgstr ""
 msgid "Bottom"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:6563
+#: src/components/settings/ProfileSettingsModal.tsx:6590
 msgid "Bottom layer count"
 msgstr ""
 
@@ -1593,11 +1593,11 @@ msgstr ""
 msgid "Building the new surface"
 msgstr ""
 
-#: src/components/modals/ScenePrinterMismatchModal.tsx:64
+#: src/components/modals/ScenePrinterMismatchModal.tsx:76
 msgid "Built for another printer"
 msgstr ""
 
-#: src/components/modals/ScenePrinterMismatchModal.tsx:64
+#: src/components/modals/ScenePrinterMismatchModal.tsx:75
 msgid "Built for Multi-Material"
 msgstr ""
 
@@ -1660,7 +1660,7 @@ msgstr ""
 #: src/components/organisms/modals/PrintingModals.tsx:661
 #: src/components/organisms/modals/PrintingModals.tsx:903
 #: src/components/organisms/modals/PrintingModals.tsx:1997
-#: src/components/organisms/modals/SceneFileModals.tsx:497
+#: src/components/organisms/modals/SceneFileModals.tsx:498
 #: src/components/printers/PrinterVariantPickerModal.tsx:695
 #: src/components/settings/FleetManagement.tsx:442
 #: src/components/settings/LocalBackupsSettingsTab.tsx:984
@@ -1888,11 +1888,11 @@ msgstr ""
 msgid "Choose upload target printer"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:622
+#: src/components/organisms/modals/SceneFileModals.tsx:623
 msgid "Choose where Ctrl+S should save this imported `.voxl` scene."
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:383
+#: src/components/organisms/modals/SceneFileModals.tsx:384
 msgid "Choose whether to keep the hollow."
 msgstr ""
 
@@ -2072,7 +2072,7 @@ msgstr ""
 msgid "Close discard changes confirmation"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:552
+#: src/components/organisms/modals/SceneFileModals.tsx:553
 msgid "Close DragonFruit now?"
 msgstr ""
 
@@ -2083,7 +2083,7 @@ msgstr ""
 #: src/components/controls/ModelManagerPanel.tsx:884
 #: src/components/modals/ObsoleteVoxlVersionModal.tsx:40
 #: src/components/modals/PrintingResliceModal.tsx:32
-#: src/components/modals/ScenePrinterMismatchModal.tsx:73
+#: src/components/modals/ScenePrinterMismatchModal.tsx:87
 #: src/components/settings/PluginsSettingsTab.tsx:865
 #: src/components/settings/PluginsSettingsTab.tsx:918
 #: src/components/settings/PluginsSettingsTab.tsx:1029
@@ -2117,7 +2117,7 @@ msgstr ""
 msgid "Close Plate"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:471
+#: src/components/organisms/modals/SceneFileModals.tsx:472
 msgid "Close plugin import warning"
 msgstr ""
 
@@ -2142,11 +2142,11 @@ msgstr ""
 msgid "Close repair mesh dialog"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:630
+#: src/components/organisms/modals/SceneFileModals.tsx:631
 msgid "Close save scene options"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:391
+#: src/components/organisms/modals/SceneFileModals.tsx:392
 msgid "Close scene import hollowing prompt"
 msgstr ""
 
@@ -2171,7 +2171,7 @@ msgstr ""
 msgid "Close supports modal"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:6507
+#: src/components/settings/ProfileSettingsModal.tsx:6534
 msgid "Close tank material comparison"
 msgstr ""
 
@@ -2490,7 +2490,7 @@ msgstr ""
 #: src/app/page.tsx:12031
 #: src/components/layout/FirstRunOnboarding.tsx:287
 #: src/components/layout/TopBar.tsx:1181
-#: src/components/organisms/modals/SceneFileModals.tsx:509
+#: src/components/organisms/modals/SceneFileModals.tsx:510
 #: src/components/settings/PluginsSettingsTab.tsx:1201
 msgid "Continue"
 msgstr "Continuer"
@@ -2580,7 +2580,7 @@ msgstr ""
 msgid "Could not reopen this file from cache."
 msgstr "Impossible de rouvrir ce fichier depuis le cache."
 
-#: src/features/scene/useSceneCollectionManager.ts:7891
+#: src/features/scene/useSceneCollectionManager.ts:7921
 msgid "Could not restore the model."
 msgstr ""
 
@@ -2960,7 +2960,7 @@ msgstr ""
 msgid "Delete presets"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:4149
+#: src/components/settings/ProfileSettingsModal.tsx:4176
 msgid "Delete printer"
 msgstr ""
 
@@ -3169,7 +3169,7 @@ msgstr ""
 msgid "Distribution"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:489
+#: src/components/organisms/modals/SceneFileModals.tsx:490
 msgid "Do not remind again"
 msgstr ""
 
@@ -4475,6 +4475,10 @@ msgstr ""
 msgid "Import complete. Click Print Now when ready."
 msgstr ""
 
+#: src/components/modals/ScenePrinterMismatchModal.tsx:96
+msgid "Import geometry only"
+msgstr ""
+
 #: src/components/layout/TopBar.tsx:652
 msgid "Import mesh…"
 msgstr "Importer un maillage…"
@@ -4491,7 +4495,7 @@ msgstr ""
 msgid "Import scene…"
 msgstr "Importer une scène…"
 
-#: src/components/organisms/modals/SceneFileModals.tsx:433
+#: src/components/organisms/modals/SceneFileModals.tsx:434
 msgid "Import Solid"
 msgstr ""
 
@@ -4516,7 +4520,7 @@ msgid "Imported {imported}/{total} scene files ({failed} failed)."
 msgstr ""
 
 #: src/components/organisms/modals/SceneFileModals.tsx:284
-#: src/components/organisms/modals/SceneFileModals.tsx:400
+#: src/components/organisms/modals/SceneFileModals.tsx:401
 msgid "Imported scene"
 msgstr ""
 
@@ -4772,7 +4776,7 @@ msgid "Islands found by BOTH the slice and mesh scans are placed first (they are
 msgstr ""
 
 #. A printer name, shown in bold.
-#: src/components/modals/ScenePrinterMismatchModal.tsx:126
+#: src/components/modals/ScenePrinterMismatchModal.tsx:164
 msgid "It is not in your printer library, so switching adds <0>{recordedLabel}</0> from this scene."
 msgstr ""
 
@@ -4793,7 +4797,7 @@ msgstr ""
 msgid "Its materials are split across several tanks, which the printer selected now cannot print. The assignments stay with the scene and its models are shown in their normal colour while this printer is selected."
 msgstr ""
 
-#: src/components/modals/ScenePrinterMismatchModal.tsx:93
+#: src/components/modals/ScenePrinterMismatchModal.tsx:131
 msgid "Its materials are split across several tanks, which the printer selected now cannot print. The assignments stay with the scene, hidden while this printer is selected — switch to a multi-material printer to print them."
 msgstr ""
 
@@ -4801,7 +4805,7 @@ msgstr ""
 msgid "Its materials stay hidden until you switch back"
 msgstr ""
 
-#: src/components/modals/ScenePrinterMismatchModal.tsx:69
+#: src/components/modals/ScenePrinterMismatchModal.tsx:83
 msgid "Its plates are spaced for that printer"
 msgstr ""
 
@@ -4841,7 +4845,7 @@ msgstr ""
 msgid "Just Slice"
 msgstr ""
 
-#: src/components/modals/ScenePrinterMismatchModal.tsx:79
+#: src/components/modals/ScenePrinterMismatchModal.tsx:101
 msgid "Keep {currentPrinterName}"
 msgstr ""
 
@@ -4863,7 +4867,7 @@ msgstr ""
 msgid "Keep going without a printer. You can add one later."
 msgstr "Continuez sans imprimante. Vous pourrez en ajouter une plus tard."
 
-#: src/components/organisms/modals/SceneFileModals.tsx:440
+#: src/components/organisms/modals/SceneFileModals.tsx:441
 msgid "Keep Hollow"
 msgstr ""
 
@@ -5012,11 +5016,11 @@ msgstr "Couche 0 sur 0. On vit dangereusement."
 msgid "Layer Height"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:6558
+#: src/components/settings/ProfileSettingsModal.tsx:6585
 msgid "Layer height (mm)"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:6541
+#: src/components/settings/ProfileSettingsModal.tsx:6568
 msgid "Layer height, bottom layer count and transition layers must match across tanks. Choose which material supplies all three."
 msgstr ""
 
@@ -5186,7 +5190,7 @@ msgstr ""
 msgid "Load vendor profile plugins"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:646
+#: src/components/organisms/modals/SceneFileModals.tsx:647
 msgid "Loaded file"
 msgstr ""
 
@@ -5322,7 +5326,7 @@ msgstr ""
 msgid "Locked"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:6577
+#: src/components/settings/ProfileSettingsModal.tsx:6604
 msgid "Locked materials cannot be changed. Unlock or make a custom copy before applying settings."
 msgstr ""
 
@@ -6167,7 +6171,7 @@ msgstr ""
 msgid "No snapshots yet. Run \"Backup Now\" to create your first local snapshot."
 msgstr ""
 
-#: src/features/scene/useSceneCollectionManager.ts:7864
+#: src/features/scene/useSceneCollectionManager.ts:7894
 msgid "No source file to restore this model from."
 msgstr ""
 
@@ -6444,6 +6448,14 @@ msgstr "En ligne"
 msgid "Only printable models will be sliced"
 msgstr ""
 
+#: src/components/modals/ScenePrinterMismatchModal.tsx:78
+msgid "Only the geometry can be imported"
+msgstr ""
+
+#: src/components/modals/ScenePrinterMismatchModal.tsx:124
+msgid "Only the geometry will be imported. Install the plugin, then reopen the scene, to restore its printer and materials."
+msgstr ""
+
 #: src/components/controls/IslandOverlayControls.tsx:155
 #: src/components/controls/IslandVoxelControls.tsx:100
 #: src/components/controls/TerritoryVoxelControls.tsx:84
@@ -6653,7 +6665,7 @@ msgstr ""
 msgid "Overwrite Existing Files?"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:670
+#: src/components/organisms/modals/SceneFileModals.tsx:671
 msgid "Overwrite Loaded Scene"
 msgstr ""
 
@@ -6896,8 +6908,8 @@ msgstr ""
 msgid "Please be patient while we rebuild the model."
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:555
-#: src/components/organisms/modals/SceneFileModals.tsx:579
+#: src/components/organisms/modals/SceneFileModals.tsx:556
+#: src/components/organisms/modals/SceneFileModals.tsx:580
 msgid "Please ensure you have saved any important work."
 msgstr ""
 
@@ -6939,11 +6951,11 @@ msgstr ""
 msgid "Plugin details"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:462
+#: src/components/organisms/modals/SceneFileModals.tsx:463
 msgid "Plugin import experimental warning"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:466
+#: src/components/organisms/modals/SceneFileModals.tsx:467
 msgid "Plugin Import is Experimental"
 msgstr ""
 
@@ -7155,6 +7167,11 @@ msgstr ""
 
 #: src/components/settings/FleetManagement.tsx:178
 msgid "Printer online"
+msgstr ""
+
+#: src/components/modals/ScenePrinterMismatchModal.tsx:68
+#: src/components/modals/ScenePrinterMismatchModal.tsx:73
+msgid "Printer plugin not installed"
 msgstr ""
 
 #. placeholder {0}: activePrinterProfile.name
@@ -7537,11 +7554,11 @@ msgstr ""
 msgid "Remesh confirmation"
 msgstr ""
 
-#: src/features/scene/useSceneCollectionManager.ts:8055
+#: src/features/scene/useSceneCollectionManager.ts:8085
 msgid "Remesh failed: {message}"
 msgstr ""
 
-#: src/features/scene/useSceneCollectionManager.ts:8028
+#: src/features/scene/useSceneCollectionManager.ts:8058
 msgid "Remesh needs the desktop app."
 msgstr ""
 
@@ -8212,11 +8229,11 @@ msgstr ""
 msgid "Save"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:543
+#: src/components/organisms/modals/SceneFileModals.tsx:544
 msgid "Save & Close"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:567
+#: src/components/organisms/modals/SceneFileModals.tsx:568
 msgid "Save & New Scene"
 msgstr ""
 
@@ -8236,7 +8253,7 @@ msgstr ""
 msgid "Save failed"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:619
+#: src/components/organisms/modals/SceneFileModals.tsx:620
 msgid "Save Loaded Scene"
 msgstr ""
 
@@ -8261,7 +8278,7 @@ msgstr "Enregistrer la scène"
 msgid "Save scene as…"
 msgstr "Enregistrer la scène sous…"
 
-#: src/components/organisms/modals/SceneFileModals.tsx:603
+#: src/components/organisms/modals/SceneFileModals.tsx:604
 msgid "Save scene options"
 msgstr ""
 
@@ -8407,11 +8424,11 @@ msgstr "Scène"
 msgid "Scene Autosave"
 msgstr ""
 
-#: src/components/modals/ScenePrinterMismatchModal.tsx:63
+#: src/components/modals/ScenePrinterMismatchModal.tsx:70
 msgid "Scene built for a multi-material printer"
 msgstr ""
 
-#: src/components/modals/ScenePrinterMismatchModal.tsx:63
+#: src/components/modals/ScenePrinterMismatchModal.tsx:71
 msgid "Scene built for another printer"
 msgstr ""
 
@@ -8429,7 +8446,7 @@ msgstr ""
 msgid "Scene import failed: {message}"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:364
+#: src/components/organisms/modals/SceneFileModals.tsx:365
 msgid "Scene import hollowing decision"
 msgstr ""
 
@@ -8454,7 +8471,7 @@ msgstr ""
 msgid "Scene mood overlay in thumbnail"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:380
+#: src/components/organisms/modals/SceneFileModals.tsx:381
 msgid "Scene was hollowed before export"
 msgstr ""
 
@@ -8780,7 +8797,7 @@ msgstr ""
 msgid "Set up private backups"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:6547
+#: src/components/settings/ProfileSettingsModal.tsx:6574
 msgid "Setting"
 msgstr ""
 
@@ -8967,11 +8984,11 @@ msgstr ""
 msgid "Shrink-Wrap confirmation"
 msgstr ""
 
-#: src/features/scene/useSceneCollectionManager.ts:8109
+#: src/features/scene/useSceneCollectionManager.ts:8139
 msgid "Shrink-Wrap failed: {message}"
 msgstr ""
 
-#: src/features/scene/useSceneCollectionManager.ts:8082
+#: src/features/scene/useSceneCollectionManager.ts:8112
 msgid "Shrink-Wrap needs the desktop app."
 msgstr ""
 
@@ -9316,7 +9333,7 @@ msgstr ""
 msgid "Standing Autosave Error"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:576
+#: src/components/organisms/modals/SceneFileModals.tsx:577
 msgid "Start a new scene now?"
 msgstr ""
 
@@ -9557,12 +9574,12 @@ msgctxt "Undo history entry"
 msgid "Switch to {printerName}"
 msgstr ""
 
-#: src/components/modals/ScenePrinterMismatchModal.tsx:86
+#: src/components/modals/ScenePrinterMismatchModal.tsx:108
 msgid "Switch to {recordedLabel}"
 msgstr ""
 
 #. A printer name, shown in bold.
-#: src/components/modals/ScenePrinterMismatchModal.tsx:132
+#: src/components/modals/ScenePrinterMismatchModal.tsx:170
 msgid "Switch to <0>{recordedLabel}</0> before importing?"
 msgstr ""
 
@@ -9587,8 +9604,8 @@ msgstr ""
 msgid "Take me back!"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:6498
-#: src/components/settings/ProfileSettingsModal.tsx:6499
+#: src/components/settings/ProfileSettingsModal.tsx:6525
+#: src/components/settings/ProfileSettingsModal.tsx:6526
 msgid "Tank material settings do not match"
 msgstr ""
 
@@ -9795,7 +9812,7 @@ msgstr ""
 #. placeholder {0}: currentBuildVolumeMm.width
 #. placeholder {1}: currentBuildVolumeMm.depth
 #. placeholder {2}: currentBuildVolumeMm.height
-#: src/components/modals/ScenePrinterMismatchModal.tsx:116
+#: src/components/modals/ScenePrinterMismatchModal.tsx:154
 msgid "The printer selected now, <0>{currentPrinterName}</0>, has a build volume of {0} × {1} × {2} mm, and this scene was laid out for the other one."
 msgstr ""
 
@@ -9803,11 +9820,11 @@ msgstr ""
 #. placeholder {0}: currentBuildVolumeMm.width
 #. placeholder {1}: currentBuildVolumeMm.depth
 #. placeholder {2}: currentBuildVolumeMm.height
-#: src/components/modals/ScenePrinterMismatchModal.tsx:109
+#: src/components/modals/ScenePrinterMismatchModal.tsx:147
 msgid "The printer selected now, <0>{currentPrinterName}</0>, has a build volume of {0} × {1} × {2} mm. A plate packed for the larger machine will not fit."
 msgstr ""
 
-#: src/components/modals/ScenePrinterMismatchModal.tsx:55
+#: src/components/modals/ScenePrinterMismatchModal.tsx:58
 msgid "the printer this scene was built for"
 msgstr ""
 
@@ -9921,7 +9938,7 @@ msgstr ""
 msgid "This cannot be undone."
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:468
+#: src/components/organisms/modals/SceneFileModals.tsx:469
 msgid "This feature is still under development."
 msgstr ""
 
@@ -9949,8 +9966,8 @@ msgstr ""
 msgid "This machine is currently offline"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:6517
-#: src/components/settings/ProfileSettingsModal.tsx:6529
+#: src/components/settings/ProfileSettingsModal.tsx:6544
+#: src/components/settings/ProfileSettingsModal.tsx:6556
 msgid "This material is locked. Unlock it or make a custom copy before applying settings."
 msgstr ""
 
@@ -10002,18 +10019,22 @@ msgstr ""
 msgid "This scene is aggressively unoccupied."
 msgstr "Cette scène est agressivement inoccupée."
 
-#: src/components/organisms/modals/SceneFileModals.tsx:542
-#: src/components/organisms/modals/SceneFileModals.tsx:566
+#: src/components/organisms/modals/SceneFileModals.tsx:543
+#: src/components/organisms/modals/SceneFileModals.tsx:567
 msgid "This scene is already saved."
 msgstr ""
 
 #: src/app/page.tsx:12007
-#: src/components/modals/ScenePrinterMismatchModal.tsx:66
+#: src/components/modals/ScenePrinterMismatchModal.tsx:80
 msgid "This scene is made for a multi-material printer"
 msgstr ""
 
-#: src/components/modals/ScenePrinterMismatchModal.tsx:68
+#: src/components/modals/ScenePrinterMismatchModal.tsx:82
 msgid "This scene may not fit the one selected"
+msgstr ""
+
+#: src/components/modals/ScenePrinterMismatchModal.tsx:116
+msgid "This scene was saved for <0>{recordedLabel}</0>, whose printer and material profiles come from the <1>{missingPluginName}</1> plugin. That plugin is not installed, so those profiles cannot be restored."
 msgstr ""
 
 #: src/components/settings/BackupsSettingsTab.tsx:977
@@ -10159,7 +10180,7 @@ msgctxt "Undo history entry"
 msgid "Transform {modelName}"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:6568
+#: src/components/settings/ProfileSettingsModal.tsx:6595
 msgid "Transition layers"
 msgstr ""
 
@@ -10914,8 +10935,8 @@ msgstr ""
 msgid "You can replace all existing supports with auto-placed ones, or incorporate your existing supports and fill in the gaps."
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:541
-#: src/components/organisms/modals/SceneFileModals.tsx:565
+#: src/components/organisms/modals/SceneFileModals.tsx:542
+#: src/components/organisms/modals/SceneFileModals.tsx:566
 msgid "You have unsaved edits in this scene."
 msgstr ""
 
@@ -10928,11 +10949,11 @@ msgstr ""
 msgid "You shall not pass... until you load a model."
 msgstr "Vous ne passerez pas... tant que vous n'aurez pas chargé un modèle."
 
-#: src/components/organisms/modals/SceneFileModals.tsx:551
+#: src/components/organisms/modals/SceneFileModals.tsx:552
 msgid "You’re about to close DragonFruit with unsaved scene changes."
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:575
+#: src/components/organisms/modals/SceneFileModals.tsx:576
 msgid "You’re about to start a new scene with unsaved edits in this one."
 msgstr ""
 

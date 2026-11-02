@@ -1625,6 +1625,10 @@ export type PrinterMismatchPrompt = {
   installedProfileId: string | null;
   /** Whether the selected printer is smaller on some axis, so nothing fits as packed. */
   currentIsSmaller: boolean;
+  /** The plugin that contributes the recorded printer, when it is not installed. */
+  missingPlugin?: { id: string; name: string };
+  /** Models this import created, so a geometry-only answer can strip their material refs. */
+  importedModelIds: string[];
 };
 
 type MeshRepairConfirmChoice = 'repair' | 'repair_parts' | 'load_as_is' | 'cancel_import';
@@ -2097,17 +2101,41 @@ export function useSceneCollectionManager(options?: {
    */
 
 
+  const clearImportedMaterialAssignments = useCallback((modelIds: string[]) => {
+    const ids = new Set(modelIds);
+    if (ids.size === 0) return;
+    setModels((prev) => prev.map((model) => (
+      ids.has(model.id)
+        ? {
+          ...model,
+          materialProfileId: undefined,
+          materialBaseColor: undefined,
+          bodyMaterialProfileIds: undefined,
+          bodyColors: undefined,
+        }
+        : model
+    )));
+  }, []);
+
   const resolvePrinterMismatch = useCallback((choice: 'switch' | 'keep') => {
-    if (choice === 'switch' && printerMismatch) {
-      const installedId = printerMismatch.installedProfileId;
-      const resolvedId = installedId ?? importPrinterBundle(printerMismatch.bundle);
-      setActivePrinterProfile(resolvedId);
-      if (printerMismatch.materials && printerMismatch.materials.length > 0) {
-        importSceneMaterials(resolvedId, printerMismatch.materials);
-      }
+    if (!printerMismatch) return;
+
+    // A printer whose plugin is gone cannot be restored from a scene bundle: the
+    // app has no definition for its format or material pane. Keep only geometry.
+    if (printerMismatch.missingPlugin || choice === 'keep') {
+      clearImportedMaterialAssignments(printerMismatch.importedModelIds);
+      setPrinterMismatch(null);
+      return;
+    }
+
+    const installedId = printerMismatch.installedProfileId;
+    const resolvedId = installedId ?? importPrinterBundle(printerMismatch.bundle);
+    setActivePrinterProfile(resolvedId);
+    if (printerMismatch.materials && printerMismatch.materials.length > 0) {
+      importSceneMaterials(resolvedId, printerMismatch.materials);
     }
     setPrinterMismatch(null);
-  }, [printerMismatch]);
+  }, [clearImportedMaterialAssignments, printerMismatch]);
 
   /**
    * Show the report a model already carries, from its recorded repair.
@@ -7341,6 +7369,8 @@ export function useSceneCollectionManager(options?: {
               currentBuildVolumeMm: { ...currentPrinter.buildVolumeMm },
               installedProfileId: installed?.id ?? null,
               currentIsSmaller: buildVolumeIsSmaller(currentPrinter, recordedPrinter),
+              ...(installed?.missingPlugin ? { missingPlugin: installed.missingPlugin } : {}),
+              importedModelIds: importedModels.map((model) => model.id),
             });
           } else if (sceneMaterials.length > 0) {
             // The scene is already on its printer: adopt the materials it carries
