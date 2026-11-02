@@ -5109,7 +5109,7 @@ export function ProfileSettingsModal({
                 </IconButton>
               </div>
 
-              <div className="p-3 space-y-3 overflow-y-auto custom-scrollbar flex-1">
+              <div className="p-3 space-y-3 overflow-y-auto custom-scrollbar flex-1 flex flex-col">
                 {usePluginLocalSettingsAsReplacement ? (
                   <ReplacementMaterialEditorShell
                     tabs={replacementMaterialEditorTabs}
@@ -5207,7 +5207,7 @@ export function ProfileSettingsModal({
                 </IconButton>
               </div>
 
-              <div className="p-3 space-y-3 overflow-y-auto custom-scrollbar flex-1">
+              <div className="p-3 space-y-3 overflow-y-auto custom-scrollbar flex-1 flex flex-col">
                 {isSelectedPrinterOfficial && (
                   <div className="rounded-md border px-3 py-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5" style={{ borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 36%)', background: 'color-mix(in srgb, #d97706, var(--surface-1) 92%)' }}>
                     <div className="flex-1 min-w-[240px]">
@@ -6015,7 +6015,7 @@ export function ProfileSettingsModal({
                 </IconButton>
               </div>
 
-              <div className="p-3 space-y-3 overflow-y-auto custom-scrollbar flex-1">
+              <div className="p-3 space-y-3 overflow-y-auto custom-scrollbar flex-1 flex flex-col">
                 {usePluginLocalSettingsAsReplacement ? (
                   <ReplacementMaterialEditorShell
                     tabs={replacementMaterialEditorTabs}
