@@ -355,8 +355,6 @@ type PlateLayerShared = {
     divisions: number;
     scaleX: number;
     scaleZ: number;
-    /** Circle plates draw a polar grid of this radius instead of the square helper. */
-    radius: number;
     position: [number, number, number];
     majorColor: string;
     minorColor: string;
@@ -526,29 +524,9 @@ function PlateLayer({
         />
       </mesh>
 
-      {/* Grid on XY plane (horizontal) - rotate 90° around X. A circle plate gets
-          rings and spokes clipped to its own radius instead of the square helper,
-          whose corners would hang past the bed. */}
-      {shared.showGrid && shared.buildPlateOpacity > 0.001 && shared.plateShape === 'circle' && (
-        <polarGridHelper
-          args={[
-            shared.grid.radius,
-            24,
-            Math.max(2, shared.grid.divisions),
-            64,
-            isActive ? shared.grid.majorColor : shared.grid.mutedMajorColor,
-            isActive ? shared.grid.minorColor : shared.grid.mutedMinorColor,
-          ]}
-          position={shared.grid.position}
-          rotation={[Math.PI / 2, 0, 0]}
-          raycast={nullRaycast}
-          frustumCulled={false}
-          userData={{ thumbnailHelperType: 'grid' }}
-          material-transparent={!isActive}
-          material-opacity={dimFactor}
-        />
-      )}
-      {shared.showGrid && shared.buildPlateOpacity > 0.001 && shared.plateShape !== 'circle' && (
+      {/* Grid on XY plane (horizontal) - rotate 90° around X. The grid follows the
+          rectangular build volume even when the mock bed under it is circular. */}
+      {shared.showGrid && shared.buildPlateOpacity > 0.001 && (
         <gridHelper
           args={[
             shared.grid.baseSize,
@@ -1295,7 +1273,6 @@ export function Helpers({
       divisions,
       scaleX,
       scaleZ,
-      radius: Math.min(width, depth) * 0.5,
       position: [buildVolumeCenterX, buildVolumeCenterY, -0.01],
       majorColor: gridMajorColor,
       minorColor: gridMinorColor,
@@ -1330,7 +1307,7 @@ export function Helpers({
     },
     margins: {
       groupPosition: [0, 0, plateLogoZ],
-      visible: hasSafetyMargins && plateShape === 'rectangle',
+      visible: hasSafetyMargins,
       front: marginFront > 0 ? {
         widthMm: width,
         heightMm: marginFront,
