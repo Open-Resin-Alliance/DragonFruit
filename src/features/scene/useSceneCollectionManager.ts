@@ -1603,6 +1603,11 @@ export type ObsoleteVoxlScenePrompt = {
  * packed for another printer lands on the wrong ones, and if that printer is the
  * bigger the plates do not fit here at all.
  */
+export type MissingPrinterPluginPrompt = {
+  printerName?: string;
+  pluginName: string;
+};
+
 export type PrinterMismatchPrompt = {
   /** The printer the scene carries, whole, so switching can add it when it is missing here. */
   bundle: VoxlPrinterBundle;
@@ -2001,6 +2006,7 @@ export function useSceneCollectionManager(options?: {
   const [sceneImportPlacementPrompt, setSceneImportPlacementPrompt] = useState<SceneImportPlacementPrompt | null>(null);
   const [obsoleteVoxlScene, setObsoleteVoxlScene] = useState<ObsoleteVoxlScenePrompt | null>(null);
   const [printerMismatch, setPrinterMismatch] = useState<PrinterMismatchPrompt | null>(null);
+  const [missingPrinterPluginPrompt, setMissingPrinterPluginPrompt] = useState<MissingPrinterPluginPrompt | null>(null);
   const [sceneImportHollowingPrompt, setSceneImportHollowingPrompt] = useState<SceneImportHollowingPrompt | null>(null);
   const [meshRepairConfirmPrompt, setMeshRepairConfirmPrompt] = useState<MeshRepairConfirmPrompt | null>(null);
   const [meshRepairReports, setMeshRepairReports] = useState<MeshRepairReportEntry[]>([]);
@@ -2014,6 +2020,7 @@ export function useSceneCollectionManager(options?: {
   const sceneImportPlacementResolveRef = useRef<((choice: SceneImportPlacementChoice) => void) | null>(null);
   const sceneImportHollowingResolveRef = useRef<((choice: SceneImportHollowingChoice) => void) | null>(null);
   const meshRepairConfirmResolveRef = useRef<((choice: MeshRepairConfirmChoice) => void) | null>(null);
+  const missingPrinterPluginResolveRef = useRef<((choice: 'geometry' | 'manage') => void) | null>(null);
 
   const deferredAccelerationQueueRef = useRef<THREE.BufferGeometry[]>([]);
   const deferredAccelerationProcessingRef = useRef(false);
@@ -2101,6 +2108,26 @@ export function useSceneCollectionManager(options?: {
    */
 
 
+  const requestMissingPrinterPluginChoice = useCallback(async (
+    prompt: MissingPrinterPluginPrompt,
+  ): Promise<'geometry' | 'manage'> => {
+    if (typeof window === 'undefined') return 'geometry';
+    if (missingPrinterPluginResolveRef.current) {
+      missingPrinterPluginResolveRef.current('geometry');
+      missingPrinterPluginResolveRef.current = null;
+    }
+    setMissingPrinterPluginPrompt(prompt);
+    return await new Promise<'geometry' | 'manage'>((resolve) => {
+      missingPrinterPluginResolveRef.current = resolve;
+    });
+  }, []);
+
+  const resolveMissingPrinterPluginChoice = useCallback((choice: 'geometry' | 'manage') => {
+    missingPrinterPluginResolveRef.current?.(choice);
+    missingPrinterPluginResolveRef.current = null;
+    setMissingPrinterPluginPrompt(null);
+  }, []);
+
   const clearImportedMaterialAssignments = useCallback((modelIds: string[]) => {
     const ids = new Set(modelIds);
     if (ids.size === 0) return;
@@ -2108,6 +2135,12 @@ export function useSceneCollectionManager(options?: {
       ids.has(model.id)
         ? {
           ...model,
+          color: model.materialBaseColor
+            ?? (model.materialProfileId
+              || model.bodyMaterialProfileIds?.some(Boolean)
+              || model.bodyColors?.some(Boolean)
+              ? DEFAULT_MESH_COLOR
+              : model.color),
           materialProfileId: undefined,
           materialBaseColor: undefined,
           bodyMaterialProfileIds: undefined,
@@ -6854,7 +6887,7 @@ export function useSceneCollectionManager(options?: {
         });
       }
     }
-  }, [_, emitSceneImportReport, findFreeSpotCentersForModels, getSceneExtension, isModelFootprintInsidePlate, processGeometry, requestSceneImportHollowingChoice, requestSceneImportPlacementChoice, scenePluginImportHandlersByExtension, setActiveModelId, setModels, setSelectedModelIds, shouldAutoRepairSceneImports, trackRecentOpenedFiles, waitForUiYield]);
+  }, [_, emitSceneImportReport, findFreeSpotCentersForModels, getSceneExtension, isModelFootprintInsidePlate, processGeometry, requestMissingPrinterPluginChoice, requestSceneImportHollowingChoice, requestSceneImportPlacementChoice, scenePluginImportHandlersByExtension, setActiveModelId, setModels, setSelectedModelIds, shouldAutoRepairSceneImports, trackRecentOpenedFiles, waitForUiYield]);
 
   const handleImportVoxlFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     if (!options?.suppressRecentTracking) {
@@ -6907,6 +6940,27 @@ export function useSceneCollectionManager(options?: {
       const parsedAt = performance.now();
       const document: VoxlDocumentV1 = parsed.document;
       const sceneMaterials: unknown[] = Array.isArray(document.materials) ? document.materials : [];
+
+      // Check the printer's plugin before inflating a single mesh: a scene owned by
+      // an uninstalled plugin can only keep geometry, and the answer decides whether
+      // this load is worth starting at all.
+      let skipPrinterMetadata = false;
+      const recordedPrinterEarly = document.meta?.printer;
+      if (recordedPrinterEarly) {
+        const installedEarly = findPrinterProfileForBundle(recordedPrinterEarly, getProfileStoreSnapshot());
+        const missing = installedEarly?.missingPlugin;
+        if (missing) {
+          const recordedName = typeof recordedPrinterEarly.printer.name === 'string'
+            ? recordedPrinterEarly.printer.name
+            : undefined;
+          const choice = await requestMissingPrinterPluginChoice({
+            pluginName: missing.name,
+            ...(recordedName ? { printerName: recordedName } : {}),
+          });
+          if (choice === 'manage') return false;
+          skipPrinterMetadata = true;
+        }
+      }
       const bodyChunks = parsed.bodyChunks;
       const resolvedMeshBytes: Map<string, Uint8Array> = parsed.meshBytes;
       const resolvedOriginalMeshBytes = parsed.originalMeshBytes;
@@ -7318,6 +7372,21 @@ export function useSceneCollectionManager(options?: {
           if (size != null && size > 0) model.fileSizeBytes = size;
         }));
 
+        if (skipPrinterMetadata) {
+          for (const model of importedModels) {
+            const assigned = Boolean(
+              model.materialProfileId
+              || model.bodyMaterialProfileIds?.some(Boolean)
+              || model.bodyColors?.some(Boolean),
+            );
+            model.color = model.materialBaseColor ?? (assigned ? DEFAULT_MESH_COLOR : model.color);
+            model.materialProfileId = undefined;
+            model.materialBaseColor = undefined;
+            model.bodyMaterialProfileIds = undefined;
+            model.bodyColors = undefined;
+          }
+        }
+
         setModels((prev) => [...prev, ...importedModels]);
         committedAt = performance.now();
 
@@ -7353,7 +7422,7 @@ export function useSceneCollectionManager(options?: {
         const recordedPrinter = document.meta?.printer;
         const recordedVolume = recordedPrinter?.printer.buildVolumeMm;
         const currentPrinter = getActivePrinterProfile(getProfileStoreSnapshot());
-        if (recordedPrinter && recordedVolume && currentPrinter) {
+        if (recordedPrinter && recordedVolume && currentPrinter && !skipPrinterMetadata) {
           const installed = findPrinterProfileForBundle(recordedPrinter, getProfileStoreSnapshot());
           // Resolving to the profile selected now means the scene is already on its printer.
           if (installed?.id !== currentPrinter.id) {
@@ -8820,6 +8889,8 @@ export function useSceneCollectionManager(options?: {
     voxlPrinterBundle,
     printerMismatch,
     resolvePrinterMismatch,
+    missingPrinterPluginPrompt,
+    resolveMissingPrinterPluginChoice,
     plateLocked,
     setPlateLocked,
     isPlateLocked,

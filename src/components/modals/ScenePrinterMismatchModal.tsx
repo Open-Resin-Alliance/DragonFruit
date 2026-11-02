@@ -28,6 +28,8 @@ type ScenePrinterMismatchModalProps = {
   currentMaterialMode?: string;
   /** Set when the recorded printer's plugin is not installed. */
   missingPluginName?: string;
+  /** Opens Settings on the Plugins tab; only used in the missing-plugin variant. */
+  onManagePlugins?: () => void;
   onSwitch: () => void;
   onKeep: () => void;
 };
@@ -51,6 +53,7 @@ export function ScenePrinterMismatchModal({
   sceneUsesMultiTankMaterials = false,
   currentMaterialMode,
   missingPluginName,
+  onManagePlugins,
   onSwitch,
   onKeep,
 }: ScenePrinterMismatchModalProps) {
@@ -88,13 +91,20 @@ export function ScenePrinterMismatchModal({
       onClose={onKeep}
       onBackdropClick={onKeep}
       actions={pluginMissing ? (
-        <Button
-          variant="tinted-accent"
-          className="inline-flex items-center justify-center gap-1.5"
-          onClick={onKeep}
-        >
-          <Trans>Import geometry only</Trans>
-        </Button>
+        <>
+          {onManagePlugins && (
+            <Button variant="secondary" onClick={onManagePlugins}>
+              <Trans>Manage Plugins</Trans>
+            </Button>
+          )}
+          <Button
+            variant="tinted-accent"
+            className="inline-flex items-center justify-center gap-1.5"
+            onClick={onKeep}
+          >
+            <Trans>Import Geometry</Trans>
+          </Button>
+        </>
       ) : (
         <>
           <Button variant="secondary" onClick={onKeep}>
