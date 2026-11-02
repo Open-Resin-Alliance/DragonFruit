@@ -43,7 +43,8 @@ export function tankMaterialShape(
     };
 }
 
-function closeEnough(left: number, right: number): boolean {
+/** Whether two settings values are equal for layer-stack purposes. */
+export function tankMaterialValueMatches(left: number, right: number): boolean {
     return Number.isFinite(left) && Number.isFinite(right) && Math.abs(left - right) < 1e-6;
 }
 
@@ -55,7 +56,7 @@ export function tankMaterialsDisagree(
 ): boolean {
     const a = tankMaterialShape(left, outputFormat);
     const b = tankMaterialShape(right, outputFormat);
-    return !closeEnough(a.layerHeightMm, b.layerHeightMm)
-        || !closeEnough(a.initialLayers, b.initialLayers)
-        || !closeEnough(a.transitionLayers, b.transitionLayers);
+    return !tankMaterialValueMatches(a.layerHeightMm, b.layerHeightMm)
+        || !tankMaterialValueMatches(a.initialLayers, b.initialLayers)
+        || !tankMaterialValueMatches(a.transitionLayers, b.transitionLayers);
 }

@@ -48,7 +48,7 @@ msgid "{0, plural, one {# printer preset} other {# printer presets}}"
 msgstr ""
 
 #. placeholder {0}: selectedLibraryPresetIds.size
-#: src/components/settings/ProfileSettingsModal.tsx:5143
+#: src/components/settings/ProfileSettingsModal.tsx:5225
 msgid "{0, plural, one {Add # printer} other {Add # printers}}"
 msgstr ""
 
@@ -750,8 +750,8 @@ msgstr ""
 #: src/components/printers/PrinterVariantPickerModal.tsx:707
 #: src/components/settings/FleetManagement.tsx:269
 #: src/components/settings/PluginStudioModal.tsx:2100
-#: src/components/settings/ProfileSettingsModal.tsx:3792
-#: src/components/settings/ProfileSettingsModal.tsx:3855
+#: src/components/settings/ProfileSettingsModal.tsx:3863
+#: src/components/settings/ProfileSettingsModal.tsx:3926
 msgid "Add printer"
 msgstr "Pridať tlačiareň"
 
@@ -759,7 +759,7 @@ msgstr "Pridať tlačiareň"
 msgid "Add printer variant"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:5144
+#: src/components/settings/ProfileSettingsModal.tsx:5226
 msgid "Add printers"
 msgstr ""
 
@@ -1501,6 +1501,10 @@ msgstr ""
 msgid "Bottom"
 msgstr ""
 
+#: src/components/settings/ProfileSettingsModal.tsx:6563
+msgid "Bottom layer count"
+msgstr ""
+
 #: src/components/scene/MeshRepairReportModal.tsx:758
 #: src/components/scene/MeshRepairReportModal.tsx:799
 msgctxt "Mesh analysis row"
@@ -2170,6 +2174,10 @@ msgstr ""
 
 #: src/components/modals/ModelSupportsModal.tsx:151
 msgid "Close supports modal"
+msgstr ""
+
+#: src/components/settings/ProfileSettingsModal.tsx:6507
+msgid "Close tank material comparison"
 msgstr ""
 
 #: src/components/controls/AutoSupportPanel.tsx:635
@@ -2957,7 +2965,7 @@ msgstr ""
 msgid "Delete presets"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:4078
+#: src/components/settings/ProfileSettingsModal.tsx:4149
 msgid "Delete printer"
 msgstr ""
 
@@ -5010,6 +5018,14 @@ msgstr "Vrstva 0 z 0. Žiješ na hrane."
 msgid "Layer Height"
 msgstr ""
 
+#: src/components/settings/ProfileSettingsModal.tsx:6558
+msgid "Layer height (mm)"
+msgstr ""
+
+#: src/components/settings/ProfileSettingsModal.tsx:6541
+msgid "Layer height, bottom layer count and transition layers must match across tanks. Choose which material supplies all three."
+msgstr ""
+
 #: src/components/organisms/PrintingPreviewPane.tsx:126
 msgid "Layer Preview"
 msgstr ""
@@ -5310,6 +5326,10 @@ msgstr ""
 #: src/supports/Settings/SupportSidebar.tsx:914
 #: src/supports/Settings/SupportSidebar.tsx:1078
 msgid "Locked"
+msgstr ""
+
+#: src/components/settings/ProfileSettingsModal.tsx:6577
+msgid "Locked materials cannot be changed. Unlock or make a custom copy before applying settings."
 msgstr ""
 
 #: src/components/settings/SettingsModal.tsx:1296
@@ -8766,6 +8786,10 @@ msgstr ""
 msgid "Set up private backups"
 msgstr ""
 
+#: src/components/settings/ProfileSettingsModal.tsx:6547
+msgid "Setting"
+msgstr ""
+
 #: src/components/layout/TopBar.tsx:1080
 #: src/components/layout/TopBar.tsx:1081
 msgid "Settings"
@@ -9569,14 +9593,19 @@ msgstr ""
 msgid "Take me back!"
 msgstr ""
 
-#. Warning on the red broken link between two Multi-Tank tank labels whose materials would print different layer stacks.
-#: src/components/settings/ProfileSettingsModal.tsx:129
-msgid "Tank materials differ in layer height, bottom layer count or transition layers. These must match for a Multi-Tank print."
+#: src/components/settings/ProfileSettingsModal.tsx:6498
+#: src/components/settings/ProfileSettingsModal.tsx:6499
+msgid "Tank material settings do not match"
 msgstr ""
 
-#. Tooltip on the green link between two Multi-Tank tank labels when their materials agree.
+#. Tooltip on the green link between two Multi-Tank tank labels whose materials agree.
 #: src/components/settings/ProfileSettingsModal.tsx:125
-msgid "Tank materials have matching layer height, bottom layer count and transition layers."
+msgid "Tank materials have compatible settings."
+msgstr ""
+
+#. Tooltip on the warning between two Multi-Tank tank labels whose materials would print different layer stacks.
+#: src/components/settings/ProfileSettingsModal.tsx:129
+msgid "Tank materials have incompatible settings. Please click to resolve mismatches."
 msgstr ""
 
 #: src/components/controls/IslandOverlayControls.tsx:171
@@ -9661,7 +9690,7 @@ msgstr ""
 msgid "Territory Voxels"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:295
+#: src/components/settings/ProfileSettingsModal.tsx:309
 msgid "The \"{pluginName}\" plugin is missing."
 msgstr ""
 
@@ -9926,6 +9955,11 @@ msgstr ""
 msgid "This machine is currently offline"
 msgstr ""
 
+#: src/components/settings/ProfileSettingsModal.tsx:6517
+#: src/components/settings/ProfileSettingsModal.tsx:6529
+msgid "This material is locked. Unlock it or make a custom copy before applying settings."
+msgstr ""
+
 #: src/components/modals/ShrinkWrapConfirmModal.tsx:55
 msgid "This merges overlapping shells, closes gaps and drops loose pieces, leaving one solid."
 msgstr ""
@@ -10129,6 +10163,10 @@ msgstr ""
 #: src/features/scene/sceneHistoryLabels.ts:49
 msgctxt "Undo history entry"
 msgid "Transform {modelName}"
+msgstr ""
+
+#: src/components/settings/ProfileSettingsModal.tsx:6568
+msgid "Transition layers"
 msgstr ""
 
 #: src/components/scene/MeshRepairConfirmModal.tsx:106
@@ -10431,6 +10469,10 @@ msgstr ""
 
 #: src/app/page.tsx:4445
 msgid "Uploading to printer"
+msgstr ""
+
+#: src/components/settings/ProfileSettingsModal.tsx:134
+msgid "Use {materialName}"
 msgstr ""
 
 #: src/components/settings/ExperimentsSettingsTab.tsx:70

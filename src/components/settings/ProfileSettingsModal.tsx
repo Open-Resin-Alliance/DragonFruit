@@ -6,7 +6,7 @@ import { msg } from '@lingui/core/macro';
 import { useLingui } from '@lingui/react';
 import { createPortal } from 'react-dom';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
-import { tankMaterialsDisagree } from '@/features/profiles/tankMaterialCompatibility';
+import { tankMaterialShape, tankMaterialValueMatches, tankMaterialsDisagree } from '@/features/profiles/tankMaterialCompatibility';
 import { AlertTriangle, Box, Check, Square, ChevronDown, ChevronLeft, ChevronRight, Copy, Download, Edit3, FlaskConical, Frown, ImagePlus, Info, LayoutGrid, Link2, Lock, OctagonAlert, Plus, Printer, RefreshCw, Search, Trash2, Unlock, Upload, Wifi, WifiOff, X } from 'lucide-react';
 import { Button, IconButton, IconChip, Spinner, FadeText } from '@/components/atoms';
 import FleetManagement from '@/components/settings/FleetManagement';
@@ -123,13 +123,27 @@ import {
 } from './profileFormAtoms';
 
 const tankMaterialsMatchMessage = msg({
-  message: 'Tank materials have matching layer height, bottom layer count and transition layers.',
-  comment: 'Tooltip on the green link between two Multi-Tank tank labels when their materials agree.',
+  message: 'Tank materials have compatible settings.',
+  comment: 'Tooltip on the green link between two Multi-Tank tank labels whose materials agree.',
 });
 const tankMaterialsMismatchMessage = msg({
-  message: 'Tank materials differ in layer height, bottom layer count or transition layers. These must match for a Multi-Tank print.',
-  comment: 'Warning on the red broken link between two Multi-Tank tank labels whose materials would print different layer stacks.',
+  message: 'Tank materials have incompatible settings. Please click to resolve mismatches.',
+  comment: 'Tooltip on the warning between two Multi-Tank tank labels whose materials would print different layer stacks.',
 });
+/** Module scope so React Compiler does not rename the interpolated material name. */
+const tankMaterialSettingsMessage = (materialName: string) => msg`Use ${materialName}`;
+
+/** The material's full display name: brand, resin family and name, as the tank menu reads it. */
+function fullMaterialName(material: Pick<MaterialProfile, 'name' | 'brand' | 'resinFamily'>): string {
+  const name = material.name.trim();
+  const brand = material.brand.trim();
+  const family = RESIN_FAMILY_OPTIONS.find((option) => option.value === material.resinFamily)?.label;
+  const nameWithFamily = family && !name.toLowerCase().startsWith(family.toLowerCase())
+    ? `${family} ${name}`
+    : name;
+  if (!brand || nameWithFamily.toLowerCase().startsWith(brand.toLowerCase())) return nameWithFamily;
+  return `${brand} ${nameWithFamily}`;
+}
 
 
 type ProfileSettingsModalProps = {
@@ -393,6 +407,7 @@ export function ProfileSettingsModal({
   const [isSavingRemoteMaterialEdit, setIsSavingRemoteMaterialEdit] = React.useState(false);
   const [remoteMaterialEditDraft, setRemoteMaterialEditDraft] = React.useState<RemoteMaterialEditDraft>({});
   const [deleteConfirmTarget, setDeleteConfirmTarget] = React.useState<DeleteConfirmTarget | null>(null);
+  const [tankMismatchPair, setTankMismatchPair] = React.useState<{ leftId: string; rightId: string } | null>(null);
   const [editMaterialDraft, setEditMaterialDraft] = React.useState<MaterialDraft>({
     name: 'Standard 405nm',
     brand: 'Default',
@@ -921,6 +936,62 @@ export function ProfileSettingsModal({
       printerMaterials.find((material) => material.id === assignments[index]) ?? null
     ));
   }, [printerMaterials, selectedPrinter?.tankCount, selectedPrinter?.tankMaterials]);
+
+  const tankMismatchMaterials = React.useMemo(() => {
+    if (!tankMismatchPair) return null;
+    const left = printerMaterials.find((material) => material.id === tankMismatchPair.leftId);
+    const right = printerMaterials.find((material) => material.id === tankMismatchPair.rightId);
+    return left && right ? { left, right } : null;
+  }, [printerMaterials, tankMismatchPair]);
+
+  const tankMismatchShapes = React.useMemo(() => {
+    if (!tankMismatchMaterials) return null;
+    const outputFormat = selectedPrinter?.display.outputFormat;
+    return {
+      left: tankMaterialShape(tankMismatchMaterials.left, outputFormat),
+      right: tankMaterialShape(tankMismatchMaterials.right, outputFormat),
+    };
+  }, [selectedPrinter?.display.outputFormat, tankMismatchMaterials]);
+
+  const materialIsLocked = React.useCallback((material: MaterialProfile): boolean => (
+    material.locked === true || Boolean(material.officialTemplateId?.trim())
+  ), []);
+
+  const applyTankMaterialSettings = React.useCallback((source: MaterialProfile, target: MaterialProfile) => {
+    const outputFormat = (selectedPrinter?.display.outputFormat ?? '').trim();
+    const normalized = outputFormat.replace(/^\./, '');
+    const targetSettings = target.localSettingsByOutput ?? {};
+    const settingsKey = Object.keys(targetSettings).find((key) => (
+      key === outputFormat || key === normalized
+    )) ?? outputFormat;
+    const settings = targetSettings[settingsKey] ?? {};
+    const transitionKeys = ['traLayers', 'transitionLayers', 'transitionLayerCount'];
+    const transitionKey = transitionKeys.find((key) => Object.prototype.hasOwnProperty.call(settings, key))
+      ?? transitionKeys.find((key) => Object.prototype.hasOwnProperty.call(
+        source.localSettingsByOutput?.[settingsKey] ?? {},
+        key,
+      ))
+      ?? 'transitionLayerCount';
+    const sourceShape = tankMaterialShape(source, outputFormat);
+
+    updateMaterialProfile(target.id, {
+      layerHeightMm: source.layerHeightMm,
+      bottomLayerCount: source.bottomLayerCount,
+      localSettingsByOutput: {
+        ...targetSettings,
+        [settingsKey]: {
+          ...settings,
+          [transitionKey]: sourceShape.transitionLayers,
+        },
+      },
+    });
+    setTankMismatchPair(null);
+  }, [selectedPrinter?.display.outputFormat]);
+
+  const tankMismatchRowStyle = React.useCallback((left: number, right: number) => ({
+    borderColor: 'var(--border-subtle)',
+    color: tankMaterialValueMatches(left, right) ? 'var(--success)' : 'var(--danger)',
+  }), []);
 
   // The tank menus group by manufacturer, because a printer can carry resins from
   // several brands and a flat list stops being scannable past a handful.
@@ -4328,8 +4399,6 @@ export function ProfileSettingsModal({
                             wrapperClassName="absolute left-0 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10"
                           >
                             <span
-                              role="img"
-                              aria-label={linkMessage}
                               className="relative inline-flex items-center gap-1.5 whitespace-nowrap"
                               style={{ color: linkColor }}
                             >
@@ -4356,9 +4425,22 @@ export function ProfileSettingsModal({
                                 />
                               </svg>
                               {linkState === 'mismatch' ? (
-                                <OctagonAlert className="h-6 w-6 shrink-0" />
+                                <button
+                                  type="button"
+                                  aria-label={linkMessage}
+                                  onClick={() => {
+                                    if (!previousMaterial || !currentMaterial) return;
+                                    setTankMismatchPair({ leftId: previousMaterial.id, rightId: currentMaterial.id });
+                                  }}
+                                  className="inline-flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md hover:brightness-125 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+                                  style={{ outlineColor: 'var(--danger)' }}
+                                >
+                                  <OctagonAlert className="h-6 w-6" />
+                                </button>
                               ) : (
-                                <Link2 className="h-6 w-6 shrink-0" />
+                                <span role="img" aria-label={linkMessage} className="inline-flex h-6 w-6 shrink-0 items-center justify-center">
+                                  <Link2 className="h-6 w-6" />
+                                </span>
                               )}
                             </span>
                           </Tooltip>
@@ -6408,6 +6490,94 @@ export function ProfileSettingsModal({
               <br />
               Choose <strong>Unlock</strong> to edit it directly, or <strong>Make Custom Copy</strong> to duplicate it as a new editable profile.
             </p>
+          )}
+        </StructuredDialogModal>
+
+        <StructuredDialogModal
+          open={Boolean(tankMismatchMaterials && tankMismatchShapes)}
+          ariaLabel={_(msg`Tank material settings do not match`)}
+          title={<Trans>Tank material settings do not match</Trans>}
+          subtitle={tankMismatchMaterials
+            ? `${fullMaterialName(tankMismatchMaterials.left)} · ${fullMaterialName(tankMismatchMaterials.right)}`
+            : undefined}
+          icon={<OctagonAlert className="h-4 w-4" />}
+          iconTone="warning"
+          zIndexClassName="z-[100]"
+          maxWidthClassName="max-w-xl"
+          closeAriaLabel={_(msg`Close tank material comparison`)}
+          onClose={() => setTankMismatchPair(null)}
+          actions={tankMismatchMaterials ? (
+            <>
+              <Button
+                type="button"
+                variant="secondary"
+                size="md"
+                disabled={materialIsLocked(tankMismatchMaterials.right)}
+                title={materialIsLocked(tankMismatchMaterials.right)
+                  ? _(msg`This material is locked. Unlock it or make a custom copy before applying settings.`)
+                  : undefined}
+                onClick={() => applyTankMaterialSettings(tankMismatchMaterials.left, tankMismatchMaterials.right)}
+              >
+                {_(tankMaterialSettingsMessage(fullMaterialName(tankMismatchMaterials.left)))}
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                size="md"
+                disabled={materialIsLocked(tankMismatchMaterials.left)}
+                title={materialIsLocked(tankMismatchMaterials.left)
+                  ? _(msg`This material is locked. Unlock it or make a custom copy before applying settings.`)
+                  : undefined}
+                onClick={() => applyTankMaterialSettings(tankMismatchMaterials.right, tankMismatchMaterials.left)}
+              >
+                {_(tankMaterialSettingsMessage(fullMaterialName(tankMismatchMaterials.right)))}
+              </Button>
+            </>
+          ) : undefined}
+        >
+          {tankMismatchMaterials && tankMismatchShapes && (
+            <div className="space-y-3">
+              <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
+                <Trans>Layer height, bottom layer count and transition layers must match across tanks. Choose which material supplies all three.</Trans>
+              </p>
+              <div className="overflow-hidden rounded-md border" style={{ borderColor: 'var(--border-subtle)' }}>
+                <table className="w-full border-collapse text-left text-xs">
+                  <thead style={{ background: 'var(--surface-1)', color: 'var(--text-muted)' }}>
+                    <tr>
+                      <th scope="col" className="p-2 font-medium"><Trans>Setting</Trans></th>
+                      <th scope="col" className="p-2 font-medium" style={{ color: 'var(--text-strong)' }}>
+                        {fullMaterialName(tankMismatchMaterials.left)}
+                      </th>
+                      <th scope="col" className="p-2 font-medium" style={{ color: 'var(--text-strong)' }}>
+                        {fullMaterialName(tankMismatchMaterials.right)}
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="border-t" style={tankMismatchRowStyle(tankMismatchShapes.left.layerHeightMm, tankMismatchShapes.right.layerHeightMm)}>
+                      <th scope="row" className="p-2 font-normal" style={{ color: 'var(--text-muted)' }}><Trans>Layer height (mm)</Trans></th>
+                      <td className="p-2 tabular-nums">{tankMismatchShapes.left.layerHeightMm}</td>
+                      <td className="p-2 tabular-nums">{tankMismatchShapes.right.layerHeightMm}</td>
+                    </tr>
+                    <tr className="border-t" style={tankMismatchRowStyle(tankMismatchShapes.left.initialLayers, tankMismatchShapes.right.initialLayers)}>
+                      <th scope="row" className="p-2 font-normal" style={{ color: 'var(--text-muted)' }}><Trans>Bottom layer count</Trans></th>
+                      <td className="p-2 tabular-nums">{tankMismatchShapes.left.initialLayers}</td>
+                      <td className="p-2 tabular-nums">{tankMismatchShapes.right.initialLayers}</td>
+                    </tr>
+                    <tr className="border-t" style={tankMismatchRowStyle(tankMismatchShapes.left.transitionLayers, tankMismatchShapes.right.transitionLayers)}>
+                      <th scope="row" className="p-2 font-normal" style={{ color: 'var(--text-muted)' }}><Trans>Transition layers</Trans></th>
+                      <td className="p-2 tabular-nums">{tankMismatchShapes.left.transitionLayers}</td>
+                      <td className="p-2 tabular-nums">{tankMismatchShapes.right.transitionLayers}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              {(materialIsLocked(tankMismatchMaterials.left) || materialIsLocked(tankMismatchMaterials.right)) && (
+                <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
+                  <Trans>Locked materials cannot be changed. Unlock or make a custom copy before applying settings.</Trans>
+                </p>
+              )}
+            </div>
           )}
         </StructuredDialogModal>
 

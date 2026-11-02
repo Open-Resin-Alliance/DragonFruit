@@ -43,7 +43,7 @@ msgid "{0, plural, one {# printer preset} other {# printer presets}}"
 msgstr "{0, plural, one {# printer preset} other {# printer presets}}"
 
 #. placeholder {0}: selectedLibraryPresetIds.size
-#: src/components/settings/ProfileSettingsModal.tsx:5143
+#: src/components/settings/ProfileSettingsModal.tsx:5225
 msgid "{0, plural, one {Add # printer} other {Add # printers}}"
 msgstr "{0, plural, one {Add # printer} other {Add # printers}}"
 
@@ -745,8 +745,8 @@ msgstr "Add plate {plateNumber}"
 #: src/components/printers/PrinterVariantPickerModal.tsx:707
 #: src/components/settings/FleetManagement.tsx:269
 #: src/components/settings/PluginStudioModal.tsx:2100
-#: src/components/settings/ProfileSettingsModal.tsx:3792
-#: src/components/settings/ProfileSettingsModal.tsx:3855
+#: src/components/settings/ProfileSettingsModal.tsx:3863
+#: src/components/settings/ProfileSettingsModal.tsx:3926
 msgid "Add printer"
 msgstr "Add printer"
 
@@ -754,7 +754,7 @@ msgstr "Add printer"
 msgid "Add printer variant"
 msgstr "Add printer variant"
 
-#: src/components/settings/ProfileSettingsModal.tsx:5144
+#: src/components/settings/ProfileSettingsModal.tsx:5226
 msgid "Add printers"
 msgstr "Add printers"
 
@@ -1496,6 +1496,10 @@ msgstr "Boolean operation requires a manifold mesh"
 msgid "Bottom"
 msgstr "Bottom"
 
+#: src/components/settings/ProfileSettingsModal.tsx:6563
+msgid "Bottom layer count"
+msgstr "Bottom layer count"
+
 #: src/components/scene/MeshRepairReportModal.tsx:758
 #: src/components/scene/MeshRepairReportModal.tsx:799
 msgctxt "Mesh analysis row"
@@ -2166,6 +2170,10 @@ msgstr "Close snapshot details"
 #: src/components/modals/ModelSupportsModal.tsx:151
 msgid "Close supports modal"
 msgstr "Close supports modal"
+
+#: src/components/settings/ProfileSettingsModal.tsx:6507
+msgid "Close tank material comparison"
+msgstr "Close tank material comparison"
 
 #: src/components/controls/AutoSupportPanel.tsx:635
 msgid "Close the dialog and discard the edits"
@@ -2952,7 +2960,7 @@ msgstr "Delete preset"
 msgid "Delete presets"
 msgstr "Delete presets"
 
-#: src/components/settings/ProfileSettingsModal.tsx:4078
+#: src/components/settings/ProfileSettingsModal.tsx:4149
 msgid "Delete printer"
 msgstr "Delete printer"
 
@@ -5005,6 +5013,14 @@ msgstr "Layer 0 of 0. Living dangerously."
 msgid "Layer Height"
 msgstr "Layer Height"
 
+#: src/components/settings/ProfileSettingsModal.tsx:6558
+msgid "Layer height (mm)"
+msgstr "Layer height (mm)"
+
+#: src/components/settings/ProfileSettingsModal.tsx:6541
+msgid "Layer height, bottom layer count and transition layers must match across tanks. Choose which material supplies all three."
+msgstr "Layer height, bottom layer count and transition layers must match across tanks. Choose which material supplies all three."
+
 #: src/components/organisms/PrintingPreviewPane.tsx:126
 msgid "Layer Preview"
 msgstr "Layer Preview"
@@ -5306,6 +5322,10 @@ msgstr "Lock waypoint"
 #: src/supports/Settings/SupportSidebar.tsx:1078
 msgid "Locked"
 msgstr "Locked"
+
+#: src/components/settings/ProfileSettingsModal.tsx:6577
+msgid "Locked materials cannot be changed. Unlock or make a custom copy before applying settings."
+msgstr "Locked materials cannot be changed. Unlock or make a custom copy before applying settings."
 
 #: src/components/settings/SettingsModal.tsx:1296
 msgid "Log file location and verbosity"
@@ -8762,6 +8782,10 @@ msgstr "Set up OAuth"
 msgid "Set up private backups"
 msgstr "Set up private backups"
 
+#: src/components/settings/ProfileSettingsModal.tsx:6547
+msgid "Setting"
+msgstr "Setting"
+
 #: src/components/layout/TopBar.tsx:1080
 #: src/components/layout/TopBar.tsx:1081
 msgid "Settings"
@@ -9565,15 +9589,20 @@ msgstr "Sync interval"
 msgid "Take me back!"
 msgstr "Take me back!"
 
-#. Warning on the red broken link between two Multi-Tank tank labels whose materials would print different layer stacks.
-#: src/components/settings/ProfileSettingsModal.tsx:129
-msgid "Tank materials differ in layer height, bottom layer count or transition layers. These must match for a Multi-Tank print."
-msgstr "Tank materials differ in layer height, bottom layer count or transition layers. These must match for a Multi-Tank print."
+#: src/components/settings/ProfileSettingsModal.tsx:6498
+#: src/components/settings/ProfileSettingsModal.tsx:6499
+msgid "Tank material settings do not match"
+msgstr "Tank material settings do not match"
 
-#. Tooltip on the green link between two Multi-Tank tank labels when their materials agree.
+#. Tooltip on the green link between two Multi-Tank tank labels whose materials agree.
 #: src/components/settings/ProfileSettingsModal.tsx:125
-msgid "Tank materials have matching layer height, bottom layer count and transition layers."
-msgstr "Tank materials have matching layer height, bottom layer count and transition layers."
+msgid "Tank materials have compatible settings."
+msgstr "Tank materials have compatible settings."
+
+#. Tooltip on the warning between two Multi-Tank tank labels whose materials would print different layer stacks.
+#: src/components/settings/ProfileSettingsModal.tsx:129
+msgid "Tank materials have incompatible settings. Please click to resolve mismatches."
+msgstr "Tank materials have incompatible settings. Please click to resolve mismatches."
 
 #: src/components/controls/IslandOverlayControls.tsx:171
 msgid "Taper"
@@ -9657,7 +9686,7 @@ msgstr "Tension"
 msgid "Territory Voxels"
 msgstr "Territory Voxels"
 
-#: src/components/settings/ProfileSettingsModal.tsx:295
+#: src/components/settings/ProfileSettingsModal.tsx:309
 msgid "The \"{pluginName}\" plugin is missing."
 msgstr "The \"{pluginName}\" plugin is missing."
 
@@ -9922,6 +9951,11 @@ msgstr "This is a computationally expensive operation for dense packing."
 msgid "This machine is currently offline"
 msgstr "This machine is currently offline"
 
+#: src/components/settings/ProfileSettingsModal.tsx:6517
+#: src/components/settings/ProfileSettingsModal.tsx:6529
+msgid "This material is locked. Unlock it or make a custom copy before applying settings."
+msgstr "This material is locked. Unlock it or make a custom copy before applying settings."
+
 #: src/components/modals/ShrinkWrapConfirmModal.tsx:55
 msgid "This merges overlapping shells, closes gaps and drops loose pieces, leaving one solid."
 msgstr "This merges overlapping shells, closes gaps and drops loose pieces, leaving one solid."
@@ -10126,6 +10160,10 @@ msgstr "Transform"
 msgctxt "Undo history entry"
 msgid "Transform {modelName}"
 msgstr "Transform {modelName}"
+
+#: src/components/settings/ProfileSettingsModal.tsx:6568
+msgid "Transition layers"
+msgstr "Transition layers"
 
 #: src/components/scene/MeshRepairConfirmModal.tsx:106
 #: src/components/scene/MeshRepairReportModal.tsx:753
@@ -10428,6 +10466,10 @@ msgstr "Uploading Print Job…"
 #: src/app/page.tsx:4445
 msgid "Uploading to printer"
 msgstr "Uploading to printer"
+
+#: src/components/settings/ProfileSettingsModal.tsx:134
+msgid "Use {materialName}"
+msgstr "Use {materialName}"
 
 #: src/components/settings/ExperimentsSettingsTab.tsx:70
 msgid "Use at your own risk."

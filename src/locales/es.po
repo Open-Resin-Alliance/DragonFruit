@@ -43,7 +43,7 @@ msgid "{0, plural, one {# printer preset} other {# printer presets}}"
 msgstr ""
 
 #. placeholder {0}: selectedLibraryPresetIds.size
-#: src/components/settings/ProfileSettingsModal.tsx:5143
+#: src/components/settings/ProfileSettingsModal.tsx:5225
 msgid "{0, plural, one {Add # printer} other {Add # printers}}"
 msgstr "{0, plural, one {Añadir # impresora} other {Añadir # impresoras}}"
 
@@ -745,8 +745,8 @@ msgstr "Añadir la placa {plateNumber}"
 #: src/components/printers/PrinterVariantPickerModal.tsx:707
 #: src/components/settings/FleetManagement.tsx:269
 #: src/components/settings/PluginStudioModal.tsx:2100
-#: src/components/settings/ProfileSettingsModal.tsx:3792
-#: src/components/settings/ProfileSettingsModal.tsx:3855
+#: src/components/settings/ProfileSettingsModal.tsx:3863
+#: src/components/settings/ProfileSettingsModal.tsx:3926
 msgid "Add printer"
 msgstr "Añadir impresora"
 
@@ -754,7 +754,7 @@ msgstr "Añadir impresora"
 msgid "Add printer variant"
 msgstr "Añadir variante de impresora"
 
-#: src/components/settings/ProfileSettingsModal.tsx:5144
+#: src/components/settings/ProfileSettingsModal.tsx:5226
 msgid "Add printers"
 msgstr "Añadir impresoras"
 
@@ -1496,6 +1496,10 @@ msgstr "La operación booleana necesita una malla cerrada (manifold)"
 msgid "Bottom"
 msgstr "Abajo"
 
+#: src/components/settings/ProfileSettingsModal.tsx:6563
+msgid "Bottom layer count"
+msgstr ""
+
 #: src/components/scene/MeshRepairReportModal.tsx:758
 #: src/components/scene/MeshRepairReportModal.tsx:799
 msgctxt "Mesh analysis row"
@@ -2166,6 +2170,10 @@ msgstr "Cerrar el detalle de la instantánea"
 #: src/components/modals/ModelSupportsModal.tsx:151
 msgid "Close supports modal"
 msgstr "Cerrar la ventana de soportes"
+
+#: src/components/settings/ProfileSettingsModal.tsx:6507
+msgid "Close tank material comparison"
+msgstr ""
 
 #: src/components/controls/AutoSupportPanel.tsx:635
 msgid "Close the dialog and discard the edits"
@@ -2952,7 +2960,7 @@ msgstr "Eliminar el preajuste"
 msgid "Delete presets"
 msgstr "Eliminar preajustes"
 
-#: src/components/settings/ProfileSettingsModal.tsx:4078
+#: src/components/settings/ProfileSettingsModal.tsx:4149
 msgid "Delete printer"
 msgstr ""
 
@@ -5005,6 +5013,14 @@ msgstr "Capa 0 de 0. Viviendo al límite."
 msgid "Layer Height"
 msgstr "Altura de capa"
 
+#: src/components/settings/ProfileSettingsModal.tsx:6558
+msgid "Layer height (mm)"
+msgstr ""
+
+#: src/components/settings/ProfileSettingsModal.tsx:6541
+msgid "Layer height, bottom layer count and transition layers must match across tanks. Choose which material supplies all three."
+msgstr ""
+
 #: src/components/organisms/PrintingPreviewPane.tsx:126
 msgid "Layer Preview"
 msgstr "Vista previa de la capa"
@@ -5306,6 +5322,10 @@ msgstr "Fijar punto de paso"
 #: src/supports/Settings/SupportSidebar.tsx:1078
 msgid "Locked"
 msgstr "Fijo"
+
+#: src/components/settings/ProfileSettingsModal.tsx:6577
+msgid "Locked materials cannot be changed. Unlock or make a custom copy before applying settings."
+msgstr ""
 
 #: src/components/settings/SettingsModal.tsx:1296
 msgid "Log file location and verbosity"
@@ -8762,6 +8782,10 @@ msgstr "Configurar OAuth"
 msgid "Set up private backups"
 msgstr "Configura las copias privadas"
 
+#: src/components/settings/ProfileSettingsModal.tsx:6547
+msgid "Setting"
+msgstr ""
+
 #: src/components/layout/TopBar.tsx:1080
 #: src/components/layout/TopBar.tsx:1081
 msgid "Settings"
@@ -9565,14 +9589,19 @@ msgstr "Intervalo de sincronización"
 msgid "Take me back!"
 msgstr "¡Sácame de aquí!"
 
-#. Warning on the red broken link between two Multi-Tank tank labels whose materials would print different layer stacks.
-#: src/components/settings/ProfileSettingsModal.tsx:129
-msgid "Tank materials differ in layer height, bottom layer count or transition layers. These must match for a Multi-Tank print."
+#: src/components/settings/ProfileSettingsModal.tsx:6498
+#: src/components/settings/ProfileSettingsModal.tsx:6499
+msgid "Tank material settings do not match"
 msgstr ""
 
-#. Tooltip on the green link between two Multi-Tank tank labels when their materials agree.
+#. Tooltip on the green link between two Multi-Tank tank labels whose materials agree.
 #: src/components/settings/ProfileSettingsModal.tsx:125
-msgid "Tank materials have matching layer height, bottom layer count and transition layers."
+msgid "Tank materials have compatible settings."
+msgstr ""
+
+#. Tooltip on the warning between two Multi-Tank tank labels whose materials would print different layer stacks.
+#: src/components/settings/ProfileSettingsModal.tsx:129
+msgid "Tank materials have incompatible settings. Please click to resolve mismatches."
 msgstr ""
 
 #: src/components/controls/IslandOverlayControls.tsx:171
@@ -9657,7 +9686,7 @@ msgstr "Tensión"
 msgid "Territory Voxels"
 msgstr "Vóxeles de territorio"
 
-#: src/components/settings/ProfileSettingsModal.tsx:295
+#: src/components/settings/ProfileSettingsModal.tsx:309
 msgid "The \"{pluginName}\" plugin is missing."
 msgstr ""
 
@@ -9922,6 +9951,11 @@ msgstr "Es una operación costosa de calcular, pensada para empaquetar denso."
 msgid "This machine is currently offline"
 msgstr "Esta máquina está desconectada ahora mismo"
 
+#: src/components/settings/ProfileSettingsModal.tsx:6517
+#: src/components/settings/ProfileSettingsModal.tsx:6529
+msgid "This material is locked. Unlock it or make a custom copy before applying settings."
+msgstr ""
+
 #: src/components/modals/ShrinkWrapConfirmModal.tsx:55
 msgid "This merges overlapping shells, closes gaps and drops loose pieces, leaving one solid."
 msgstr "Fusiona los cascarones que se solapan, cierra huecos y descarta las piezas sueltas, dejando un único sólido."
@@ -10126,6 +10160,10 @@ msgstr "Transformar"
 msgctxt "Undo history entry"
 msgid "Transform {modelName}"
 msgstr "Transformar {modelName}"
+
+#: src/components/settings/ProfileSettingsModal.tsx:6568
+msgid "Transition layers"
+msgstr ""
 
 #: src/components/scene/MeshRepairConfirmModal.tsx:106
 #: src/components/scene/MeshRepairReportModal.tsx:753
@@ -10428,6 +10466,10 @@ msgstr "Subiendo el trabajo de impresión…"
 #: src/app/page.tsx:4445
 msgid "Uploading to printer"
 msgstr "Subiendo a la impresora"
+
+#: src/components/settings/ProfileSettingsModal.tsx:134
+msgid "Use {materialName}"
+msgstr ""
 
 #: src/components/settings/ExperimentsSettingsTab.tsx:70
 msgid "Use at your own risk."
