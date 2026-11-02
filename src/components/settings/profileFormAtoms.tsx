@@ -217,11 +217,13 @@ type LabeledTextFieldProps = {
     helpText?: string;
     disabled?: boolean;
     value: string;
+    /** Greyed, read-only `key = value` lines shown above the editable block. */
+    previewLines?: string[];
     onChange: (value: string) => void;
 };
 
 /** Multi-line text: the format's free-form block, newlines preserved. */
-export function LabeledTextField({ label, helpText, disabled = false, value, onChange }: LabeledTextFieldProps) {
+export function LabeledTextField({ label, helpText, disabled = false, value, previewLines = [], onChange }: LabeledTextFieldProps) {
     const [localValue, setLocalValue] = React.useState<string>(() => String(value));
     const [isFocused, setIsFocused] = React.useState(false);
 
@@ -236,6 +238,14 @@ export function LabeledTextField({ label, helpText, disabled = false, value, onC
                 {label}
                 {helpText && <FieldHelpTooltip label={label} help={helpText} />}
             </span>
+            {previewLines.length > 0 && (
+                <div
+                    className="ui-input w-full max-h-40 overflow-auto whitespace-pre-wrap px-2.5 py-2 font-mono text-xs leading-relaxed"
+                    style={{ color: 'var(--text-muted)' }}
+                >
+                    {previewLines.join('\n')}
+                </div>
+            )}
             <textarea
                 disabled={disabled}
                 value={localValue}
@@ -2579,6 +2589,16 @@ export function PluginLocalMaterialSettingsSections({
                                         }
 
                                         if (field.kind === 'textfield') {
+                                            const previewLines = (field.previewKeys ?? [])
+                                                .map((key) => {
+                                                    const source = adapter.fields.find((candidate) => candidate.key === key);
+                                                    if (!source) return null;
+                                                    const raw = Object.prototype.hasOwnProperty.call(valuesForOutput, key)
+                                                        ? valuesForOutput[key]
+                                                        : source.defaultValue;
+                                                    return `${key} = ${String(raw)}`;
+                                                })
+                                                .filter((line): line is string => line !== null);
                                             return (
                                                 <LabeledTextField
                                                     key={field.key}
@@ -2586,6 +2606,7 @@ export function PluginLocalMaterialSettingsSections({
                                                     helpText={field.description}
                                                     disabled={field.disabled}
                                                     value={String(fieldValue)}
+                                                    previewLines={previewLines}
                                                     onChange={(next) => setFieldValue(field.key, next)}
                                                 />
                                             );

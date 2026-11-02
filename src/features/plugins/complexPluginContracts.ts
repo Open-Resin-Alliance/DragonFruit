@@ -274,6 +274,14 @@ export type LocalMaterialFieldSchema = {
      */
     disabled?: boolean;
     /**
+     * For `textfield`: sibling field keys whose current values are shown above the
+     * textarea as greyed `key = value` lines. The text is a preview only; it is not
+     * part of this field's value and is never submitted. Use it when the free-form
+     * block extends fields the pane already exposes, so the author can see what is
+     * already written before adding a line.
+     */
+    previewKeys?: string[];
+    /**
      * Optional key that lays this field on one full-width row together with every
      * other field of the same card carrying it: three fields sharing a key read as a
      * 1:1:1 row, the shape the stock material form gives scale compensation.
