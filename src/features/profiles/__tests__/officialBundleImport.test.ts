@@ -49,16 +49,30 @@ test('a custom bundle import keeps the material colours it carries', () => {
     printer: {
       name: 'Bundle Printer',
       manufacturer: 'Test',
+      materialMode: 'multiTank',
+      tankCount: 2,
+      tankMaterials: ['bundle-blue', 'bundle-yellow'],
       buildVolumeMm: { width: 10, depth: 10, height: 10 },
       display: { resolutionX: 640, resolutionY: 480, outputFormat: '.zip' },
     },
-    materials: [{ name: 'V3 Blue', brand: 'ELEGOO', color: '#1e90ff' }],
+    materials: [
+      { id: 'bundle-blue', name: 'V3 Blue', brand: 'ELEGOO', color: '#1e90ff' },
+      { id: 'bundle-yellow', name: 'V3 Yellow', brand: 'ELEGOO', color: '#ffd700' },
+    ],
   });
   try {
     const material = getProfileStoreSnapshot().materialProfiles.find((entry) => (
       entry.printerProfileId === id && entry.name === 'V3 Blue'
     ));
     assert.equal(material?.color, '#1e90ff');
+    const profile = getProfileStoreSnapshot().printerProfiles.find((entry) => entry.id === id);
+    assert.equal(profile?.materialMode, 'multiTank');
+    assert.equal(profile?.tankCount, 2);
+    assert.equal(profile?.tankMaterials?.length, 2);
+    const importedIds = new Set(getProfileStoreSnapshot().materialProfiles
+      .filter((entry) => entry.printerProfileId === id)
+      .map((entry) => entry.id));
+    assert.ok(profile?.tankMaterials?.every((materialId) => importedIds.has(materialId)), 'tanks point at imported materials');
   } finally {
     removePrinterProfile(id);
   }

@@ -181,6 +181,7 @@ import {
   importPrinterBundle,
   importSceneMaterials,
   setActivePrinterProfile,
+  updatePrinterProfile,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
 import {
@@ -2174,6 +2175,27 @@ export function useSceneCollectionManager(options?: {
     }));
   }, []);
 
+  const applyBundleTankAssignments = useCallback((
+    printerId: string,
+    bundle: VoxlPrinterBundle,
+    remap: Map<string, string>,
+  ) => {
+    const sourceTankMaterials = bundle.printer.tankMaterials;
+    if (!Array.isArray(sourceTankMaterials) || sourceTankMaterials.length === 0) return;
+    const tankMaterials = sourceTankMaterials
+      .map((id) => (typeof id === 'string' ? remap.get(id) ?? id : ''))
+      .filter((id) => id.length > 0);
+    if (tankMaterials.length === 0) return;
+    const bundleTankCount = Number(bundle.printer.tankCount);
+    updatePrinterProfile(printerId, {
+      materialMode: 'multiTank',
+      tankCount: Number.isFinite(bundleTankCount)
+        ? Math.max(2, Math.round(bundleTankCount))
+        : Math.max(2, tankMaterials.length),
+      tankMaterials,
+    });
+  }, []);
+
   const resolvePrinterMismatch = useCallback((choice: 'switch' | 'keep') => {
     if (!printerMismatch) return;
 
@@ -2198,12 +2220,13 @@ export function useSceneCollectionManager(options?: {
       ?? addPrinterProfileFromPresetIfAvailable(officialPresetId)
       ?? importPrinterBundle(printerMismatch.bundle);
     setActivePrinterProfile(resolvedId);
-    if (printerMismatch.materials && printerMismatch.materials.length > 0) {
-      const remap = importSceneMaterials(resolvedId, printerMismatch.materials);
-      remapImportedMaterialReferences(printerMismatch.importedModelIds, remap);
-    }
+    const remap = printerMismatch.materials && printerMismatch.materials.length > 0
+      ? importSceneMaterials(resolvedId, printerMismatch.materials)
+      : new Map<string, string>();
+    remapImportedMaterialReferences(printerMismatch.importedModelIds, remap);
+    applyBundleTankAssignments(resolvedId, printerMismatch.bundle, remap);
     setPrinterMismatch(null);
-  }, [clearImportedMaterialAssignments, printerMismatch, remapImportedMaterialReferences]);
+  }, [applyBundleTankAssignments, clearImportedMaterialAssignments, printerMismatch, remapImportedMaterialReferences]);
 
   /**
    * Show the report a model already carries, from its recorded repair.
@@ -7476,15 +7499,22 @@ export function useSceneCollectionManager(options?: {
               ...(installed?.missingPlugin ? { missingPlugin: installed.missingPlugin } : {}),
               importedModelIds: importedModels.map((model) => model.id),
             });
-          } else if (sceneMaterials.length > 0) {
-            // The scene is already on its printer: adopt the materials it carries
-            // so its material references resolve here.
-            const remap = importSceneMaterials(installed?.id ?? currentPrinter.id, sceneMaterials);
+          } else {
+            // The scene is already on its printer: adopt the materials and tank
+            // assignments it carries so its references resolve here.
+            const resolvedId = installed?.id ?? currentPrinter.id;
+            const remap = sceneMaterials.length > 0
+              ? importSceneMaterials(resolvedId, sceneMaterials)
+              : new Map<string, string>();
             remapImportedMaterialReferences(importedModels.map((model) => model.id), remap);
+            applyBundleTankAssignments(resolvedId, recordedPrinter, remap);
           }
-        } else if (sceneMaterials.length > 0 && currentPrinter) {
-          const remap = importSceneMaterials(currentPrinter.id, sceneMaterials);
+        } else if (currentPrinter && (sceneMaterials.length > 0 || recordedPrinter?.printer.tankMaterials)) {
+          const remap = sceneMaterials.length > 0
+            ? importSceneMaterials(currentPrinter.id, sceneMaterials)
+            : new Map<string, string>();
           remapImportedMaterialReferences(importedModels.map((model) => model.id), remap);
+          if (recordedPrinter) applyBundleTankAssignments(currentPrinter.id, recordedPrinter, remap);
         }
       }
 

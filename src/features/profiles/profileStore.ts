@@ -2570,6 +2570,10 @@ export function importPrinterBundle(payload: unknown): string {
         pixelSize: sanitizePixelSize(sourcePrinter.pixelSize),
         bitDepth: sanitizeBitDepth(sourcePrinter.bitDepth),
         buildDimensionMode: normalizeBuildDimensionMode(sourcePrinter.buildDimensionMode) ?? 'manual',
+        materialMode: normalizeMaterialMode(sourcePrinter.materialMode),
+        tankCount: sanitizeTankCount(sourcePrinter.tankCount),
+        allowMultiPlate: sourcePrinter.allowMultiPlate !== false,
+        plateShape: sourcePrinter.plateShape === 'circle' ? 'circle' : 'rectangle',
         officialPresetId: undefined,
         officialPresetVersion: undefined,
         isOfficial: false,
@@ -2602,10 +2606,16 @@ export function importPrinterBundle(payload: unknown): string {
     };
 
     const sourceMaterials = Array.isArray(bundle.materials) ? (bundle.materials as unknown[]) : [];
+    const materialIdMap = new Map<string, string>();
     const importedMaterials: MaterialProfile[] = sourceMaterials
         .filter((item): item is MaterialProfile => Boolean(item) && typeof item === 'object')
         .map((material, index) => ({
-            id: createId('material'),
+            id: (() => {
+                const id = createId('material');
+                const sourceId = typeof material.id === 'string' ? material.id.trim() : '';
+                if (sourceId) materialIdMap.set(sourceId, id);
+                return id;
+            })(),
             printerProfileId: importedPrinterId,
             officialTemplateId: typeof material.officialTemplateId === 'string' && material.officialTemplateId.trim().length > 0
                 ? material.officialTemplateId.trim()
@@ -2642,6 +2652,15 @@ export function importPrinterBundle(payload: unknown): string {
             antiAliasingSettings: sanitizeMaterialAntiAliasingSettings(material.antiAliasingSettings),
             localSettingsByOutput: sanitizeLocalSettingsByOutput(material.localSettingsByOutput),
         }));
+
+    const sourceTankMaterials = Array.isArray(sourcePrinter.tankMaterials)
+        ? sourcePrinter.tankMaterials
+            .map((id) => (typeof id === 'string' ? materialIdMap.get(id) ?? id : ''))
+            .filter((id) => id.length > 0)
+        : [];
+    if (sourceTankMaterials.length > 0) {
+        importedPrinter.tankMaterials = sourceTankMaterials;
+    }
 
     if (importedMaterials.length === 0) {
         importedMaterials.push({
