@@ -944,6 +944,22 @@ export function ProfileSettingsModal({
     return left && right ? { left, right } : null;
   }, [printerMaterials, tankMismatchPair]);
 
+  /** The first adjacent assigned pair whose layer stacks disagree, in tank order. */
+  const unresolvedTankMismatch = React.useMemo(() => {
+    if (!multiTankMaterialPicker || !selectedPrinter) return null;
+    const assigned = tankAssignedMaterials.filter((material): material is MaterialProfile => material !== null);
+    for (let leftIndex = 0; leftIndex < assigned.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < assigned.length; rightIndex += 1) {
+        const left = assigned[leftIndex];
+        const right = assigned[rightIndex];
+        if (tankMaterialsDisagree(left, right, selectedPrinter.display.outputFormat)) {
+          return { leftId: left.id, rightId: right.id };
+        }
+      }
+    }
+    return null;
+  }, [multiTankMaterialPicker, selectedPrinter, tankAssignedMaterials]);
+
   const tankMismatchShapes = React.useMemo(() => {
     if (!tankMismatchMaterials) return null;
     const outputFormat = selectedPrinter?.display.outputFormat;
@@ -2037,17 +2053,28 @@ export function ProfileSettingsModal({
   // One assigned tank is enough to be useful — a profile is allowed to carry tanks
   // nobody uses yet. Only leaving with nothing assigned at all is worth interrupting.
   const requestClose = React.useCallback(() => {
+    // A mismatch has to be resolved before the profile editor can be left: the
+    // values decide the layer stack, so closing would hide a broken setup.
+    if (unresolvedTankMismatch) {
+      setTankMismatchPair(unresolvedTankMismatch);
+      return;
+    }
     if (multiTankMaterialPicker && assignedTankCount === 0) {
       setShowUnassignedTanksWarning(true);
       return;
     }
     onClose();
-  }, [assignedTankCount, multiTankMaterialPicker, onClose]);
+  }, [assignedTankCount, multiTankMaterialPicker, onClose, unresolvedTankMismatch]);
 
   // Escape unwinds this modal's own nested dialogs one at a time before it
   // closes the modal itself; nested dialogs of their own take precedence.
   useEscapeToClose(isOpen, () => {
     const closedNestedDialog = ((): boolean => {
+      if (tankMismatchPair) {
+        setTankMismatchPair(null);
+        return true;
+      }
+
       if (showUnassignedTanksWarning) {
         setShowUnassignedTanksWarning(false);
         return true;
