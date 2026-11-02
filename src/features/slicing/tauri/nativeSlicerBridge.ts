@@ -43,6 +43,10 @@ export type NativeSolidSliceJobEnvelope = {
   zaaPattern?: 'uniform' | 'halton' | 'base2';
   zaaDuplicateZ?: boolean;
   modelTriangleCount: number;
+  /** Resin tanks this job prints; `1` on a single-material printer. */
+  tankCount?: number;
+  /** Tank per triangle, aligned with `trianglesXYZ`. */
+  triangleTankIndex?: Uint32Array | number[];
   containerCompressionLevel?: number;
   buildWidthMm: number;
   buildDepthMm: number;
@@ -97,6 +101,9 @@ type NativeSolidSliceMetadataPayload = {
   zaa_pattern?: 'uniform' | 'halton' | 'base2';
   zaa_duplicate_z?: boolean;
   model_triangle_count: number;
+  /** Present only for a multi-tank job; absent keeps a single-material payload byte-identical. */
+  tank_count?: number;
+  triangle_tank_index?: number[];
   container_compression_level: number;
   build_width_mm: number;
   build_depth_mm: number;
@@ -199,6 +206,12 @@ export function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): Nativ
     zaa_pattern: job.zaaPattern,
     zaa_duplicate_z: job.zaaDuplicateZ,
     model_triangle_count: clampSliceJobNumber('modelTriangleCount', job.modelTriangleCount),
+    ...((job.tankCount ?? 1) > 1
+      ? {
+        tank_count: job.tankCount,
+        triangle_tank_index: job.triangleTankIndex ? Array.from(job.triangleTankIndex) : [],
+      }
+      : {}),
     container_compression_level: clampSliceJobNumber('containerCompressionLevel', job.containerCompressionLevel),
     build_width_mm: job.buildWidthMm,
     build_depth_mm: job.buildDepthMm,

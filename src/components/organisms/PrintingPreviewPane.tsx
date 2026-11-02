@@ -190,6 +190,7 @@ export function PrintingPreviewPane({
                       supportVersion={supportRenderRefreshNonce}
                       mirrorX={activePrinterProfile?.display?.mirrorX === true}
                       mirrorY={activePrinterProfile?.display?.mirrorY === true}
+                      multiMaterialMode={activePrinterProfile?.materialMode === 'multiTank'}
                       className="block w-full h-full rounded"
                       style={{
                         transform: printingPreviewScrubUpscaleTransform || 'none',

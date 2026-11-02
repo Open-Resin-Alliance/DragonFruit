@@ -10,7 +10,7 @@ import { detectIsIOS } from '@/hooks/usePlatform';
 import { useUiScale } from '@/hooks/useUiScale';
 import * as THREE from 'three';
 import type { ThreeEvent } from '@react-three/fiber';
-import { AlertTriangle, CheckCircle2, ChevronDown, ClipboardList, Download, Gamepad2, LayoutGrid, Loader2, Lock, Maximize2, Minimize2, Play, Plus, Printer, Pyramid, Redo2, RefreshCw, Trash2, Undo2, Wrench, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, ClipboardList, Download, Gamepad2, LayoutGrid, Loader2, Lock, Maximize2, Minimize2, Palette, Play, Plus, Printer, Pyramid, Redo2, RefreshCw, Trash2, Undo2, Wrench, X } from 'lucide-react';
 import { SceneCanvas } from '@/components/scene/SceneCanvas';
 import { SceneOverlays } from '@/components/organisms/scene/SceneOverlays';
 import { FloatingPanelStack } from '@/components/layout/FloatingPanelStack';
@@ -119,7 +119,7 @@ import type { MirrorAxis } from '@/features/mirror/types';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { RtspRelayCanvasPlayer } from '@/components/monitoring/RtspRelayCanvasPlayer';
 import { BlockingOverlay, Button, IconButton, Toast, ToastViewport } from '@/components/atoms';
-import { EditorContextMenu, MENU_ITEMS, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
+import { EditorContextMenu, MENU_ITEMS, type EditorMenuAction, type EditorMenuItemDef } from '@/components/ui/EditorContextMenu';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { eulerFromGlobalEuler, quaternionFromGlobalEuler } from '@/utils/rotation';
 import { DiagnosticsModal } from '@/components/modals/DiagnosticsModal';
@@ -325,7 +325,9 @@ import {
   getProfileStoreSnapshot,
   getProfileStoreServerSnapshot,
   selectPrinterNetworkDevice,
+  setActivePrinterProfile,
   subscribeToProfileStore,
+  updatePrinterProfile,
   type PrinterNetworkDevice,
   upsertPrinterNetworkDevice,
 } from '@/features/profiles/profileStore';
@@ -335,6 +337,7 @@ import {
   setPrinterReachabilityMap,
   subscribeToPrinterReachability,
 } from '@/features/network/printerReachabilityStore';
+import { resolveTankMaterialProfiles } from '@/features/profiles/tankMaterials';
 import type { SliceExportArtifact, SliceExportResult } from '@/features/slicing/sliceExportOrchestrator';
 import { sliceProfileFingerprint } from '@/features/printing/slicedPlates';
 import { useSlicedPlatePreviewLoading, useSlicedPlates } from '@/features/printing/useSlicedPlates';
@@ -922,6 +925,68 @@ export default function Home() {
   );
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
   const activeMaterialProfile = React.useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
+  /**
+   * A scene authored for a Multi-Tank printer cannot print on a single-material
+   * one: its bodies carry tank assignments that a single film has nowhere to put.
+   * Switching printers raises this instead of letting the mismatch reach slicing.
+   */
+  const sceneUsesMultiTankMaterials = React.useMemo(
+    () => scene.models.some((model) => (
+      !!model.materialProfileId || (model.bodyMaterialProfileIds?.some((id) => !!id) ?? false)
+    )),
+    [scene.models],
+  );
+  const previousPrinterRef = React.useRef<{ id: string; materialMode?: string } | null>(null);
+  const [printerSceneConflictPreviousId, setPrinterSceneConflictPreviousId] = React.useState<string | null>(null);
+  // A printer the user chose to keep despite the mismatch; the warning must not
+  // re-raise for the same choice on every render.
+  const [conflictAcknowledgedPrinterId, setConflictAcknowledgedPrinterId] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    const printer = activePrinterProfile;
+    const previous = previousPrinterRef.current;
+    previousPrinterRef.current = printer
+      ? { id: printer.id, materialMode: printer.materialMode }
+      : null;
+    if (!printer) return;
+
+    if (printer.materialMode === 'multiTank') {
+      // The compatible state again — nothing to warn about.
+      setPrinterSceneConflictPreviousId(null);
+      setConflictAcknowledgedPrinterId(null);
+      return;
+    }
+    if (!sceneUsesMultiTankMaterials) {
+      setPrinterSceneConflictPreviousId(null);
+      setConflictAcknowledgedPrinterId(null);
+      return;
+    }
+    if (conflictAcknowledgedPrinterId === printer.id) return;
+
+    // Only *leaving* Multi-Tank raises the warning — by switching printers or by
+    // editing this profile's material mode. Loading a saved scene under a
+    // single-material profile must not flash the dialog before the scene puts its
+    // own printer back.
+    const leftMultiTank = previous !== null && previous.materialMode === 'multiTank';
+    if (leftMultiTank) {
+      setPrinterSceneConflictPreviousId(previous.id);
+    }
+  }, [activePrinterProfile, conflictAcknowledgedPrinterId, sceneUsesMultiTankMaterials]);
+
+  /**
+   * Undo the incompatible choice: go back to the printer that was active, or —
+   * when the same profile's material mode was the change — switch that profile
+   * back to Multi-Tank.
+   */
+  const keepMultiTankPrinter = React.useCallback(() => {
+    const previousId = printerSceneConflictPreviousId;
+    setPrinterSceneConflictPreviousId(null);
+    if (!previousId) return;
+    if (previousId !== activePrinterProfile?.id) {
+      setActivePrinterProfile(previousId);
+      return;
+    }
+    updatePrinterProfile(previousId, { materialMode: 'multiTank' });
+  }, [activePrinterProfile?.id, printerSceneConflictPreviousId]);
   const hasActivePrinterProfile = Boolean(activePrinterProfile);
   const hasPrinterProfiles = React.useMemo(
     () => profileState.printerProfiles.length > 0,
@@ -2605,6 +2670,32 @@ export default function Home() {
   }, []);
 
   const editorContextMenuTitle = scene.mode === 'support' ? _(msg`Supports`) : _(msg`Editor`);
+  /**
+   * Selected 3MF bodies. UI selection rather than scene state: a body is not a
+   * model, and nothing outside the panel, the menu and the renderer reads it.
+   */
+  const [selectedBodies, setSelectedBodies] = React.useState<Array<{ modelId: string; bodyIndex: number }>>([]);
+  const selectedBodyKeys = React.useMemo(
+    () => selectedBodies.map((entry) => `${entry.modelId}#${entry.bodyIndex}`),
+    [selectedBodies],
+  );
+  const liveSelectedBodies = React.useMemo(
+    () => selectedBodies.filter((entry) => scene.models.some((model) => model.id === entry.modelId)),
+    [scene.models, selectedBodies],
+  );
+
+  // A multi-tank machine can print a model in any resin one of its tanks holds; the
+  // menu offers exactly those, in tank order.
+  const multiTankMaterialChoices = React.useMemo(
+    () => resolveTankMaterialProfiles(activePrinterProfile, profileState.materialProfiles),
+    [activePrinterProfile, profileState.materialProfiles],
+  );
+  const editorContextMenuTargetIds = React.useMemo(() => resolveModelActionTargetIds({
+    modelIds: scene.models.map((model) => model.id),
+    selectedModelIds: scene.selectedModelIds,
+    activeModelId: scene.activeModelId,
+  }), [scene.activeModelId, scene.models, scene.selectedModelIds]);
+
   // Only a repair run from this menu offers "Auto-Repair Again" and the report: the import pass
   // repairs every model at load, so the report it leaves behind cannot be the signal.
   const editorContextMenuItems = React.useMemo(() => {
@@ -2613,7 +2704,7 @@ export default function Home() {
     }
     const repaired = !!scene.activeModelId
       && scene.manuallyRepairedModelIds.includes(scene.activeModelId);
-    return MENU_ITEMS.map((item) =>
+    const items: EditorMenuItemDef[] = MENU_ITEMS.map((item) =>
       item.id === 'repair-menu' && 'children' in item
         ? {
             ...item,
@@ -2630,7 +2721,54 @@ export default function Home() {
           }
         : item,
     );
-  }, [scene.mode, scene.activeModelId, scene.manuallyRepairedModelIds, supportContextMenuItems]);
+
+    if (multiTankMaterialChoices.length === 0) return items;
+
+    const targetModels = scene.models.filter((model) => editorContextMenuTargetIds.includes(model.id));
+    const bodyTargets = liveSelectedBodies.filter((entry) => editorContextMenuTargetIds.includes(entry.modelId));
+    const assignedIds = new Set(bodyTargets.length > 0
+      ? bodyTargets.map((entry) => (
+        targetModels.find((model) => model.id === entry.modelId)?.bodyMaterialProfileIds?.[entry.bodyIndex] ?? null
+      ))
+      : targetModels.map((model) => model.materialProfileId ?? null));
+    const currentMaterialId = assignedIds.size === 1 ? [...assignedIds][0] : null;
+    const materialMenu: EditorMenuItemDef = {
+      id: 'material-menu',
+      label: msg`Material`,
+      icon: Palette,
+      startsGroup: true,
+      children: multiTankMaterialChoices.map((material) => ({
+        id: `assign-material:${material.id}` as const,
+        label: material.name,
+        icon: Palette,
+        checked: targetModels.length > 0 && currentMaterialId === material.id,
+        disabled: editorContextMenuTargetIds.length === 0,
+        iconBare: true,
+        iconNode: material.color ? (
+          <span
+            className="h-3.5 w-3.5 rounded-[4px]"
+            style={{
+              background: material.color,
+              boxShadow: 'inset 0 0 0 1px rgba(0, 0, 0, 0.35), 0 0 0 1px var(--border-subtle)',
+            }}
+          />
+        ) : undefined,
+      })),
+    };
+
+    const geometryIndex = items.findIndex((item) => item.id === 'geometry-menu');
+    if (geometryIndex < 0) return [...items, materialMenu];
+    return [...items.slice(0, geometryIndex + 1), materialMenu, ...items.slice(geometryIndex + 1)];
+  }, [
+    scene.mode,
+    scene.activeModelId,
+    scene.models,
+    scene.manuallyRepairedModelIds,
+    supportContextMenuItems,
+    multiTankMaterialChoices,
+    editorContextMenuTargetIds,
+    liveSelectedBodies,
+  ]);
   const editorContextMenuDisabledActions = React.useMemo(() => {
     if (scene.mode === 'support') {
       return [
@@ -2696,6 +2834,12 @@ export default function Home() {
     activePlateId: scene.activePlateId,
     displayedLayer: printingDisplayedLayer,
     isPrinting: scene.mode === 'printing',
+    // A multi-tank slice's preview is composed from its own per-tank images; the
+    // format decoder's single layer image would be read and thrown away.
+    nativePreviewEnabled: !(
+      activePrinterProfile?.materialMode === 'multiTank'
+      && Boolean(printingArtifact?.nativeTempPath)
+    ),
   });
 
   const hasPrintingWorkspaceData = printingPreviewTotalLayers > 0 && printingArtifact !== null;
@@ -3625,7 +3769,9 @@ export default function Home() {
   const canDownloadPrintArtifact = Boolean(printingArtifact);
   const activeNetworkUiAdapter = React.useMemo(
     () => getProfileNetworkUiAdapter(activePrinterProfile?.networkSupport),
-    [activePrinterProfile?.networkSupport],
+    // The registry, not just the mode string: a package installed this session
+    // registers its adapter after the profile was written.
+    [profileState, activePrinterProfile?.networkSupport],
   );
   const selectedSliceDeviceId = React.useMemo(() => {
     const directId = activePrinterProfile?.activeNetworkDeviceId?.trim();
@@ -4103,6 +4249,12 @@ export default function Home() {
     && shouldUseRemoteOfflineLayerHeight,
   );
   const printingResinName = React.useMemo(() => {
+    // A Multi-Tank print has no single resin: the sliced file carries one film per
+    // tank, so the plate is not "in" any one material.
+    if (activePrinterProfile?.materialMode === 'multiTank') {
+      return _(msg({ message: 'Multi-Tank', comment: 'Material value for a printer whose resin is split across tanks.' }));
+    }
+
     if (shouldShowOfflineRemoteMaterialName) {
       return 'N/A';
     }
@@ -4127,6 +4279,7 @@ export default function Home() {
     _,
     activeMaterialProfile,
     activeNetworkUiAdapter,
+    activePrinterProfile?.materialMode,
     activePrinterProfile?.networkConnection?.connected,
     activePrinterProfile?.networkConnection?.selectedMaterialName,
     printingTargetDevice?.selectedMaterialName,
@@ -5630,6 +5783,7 @@ export default function Home() {
   const handleModelListContextMenu = React.useCallback((modelId: string, position: { x: number; y: number }) => {
     // Right-clicking a model row should target that model first.
     if (!scene.selectedModelIds.includes(modelId)) {
+      setSelectedBodies([]);
       scene.selectModel(modelId, 'single');
     }
     setEditorContextMenuPos(position);
@@ -5650,11 +5804,40 @@ export default function Home() {
   }, []);
 
   const handleModelSelection = React.useCallback((modelId: string, mode: 'single' | 'toggle' | 'add' = 'single') => {
+    // Selecting the model itself means the whole 3MF; a body is only ever chosen
+    // explicitly, from its own row.
+    setSelectedBodies([]);
     scene.selectModel(modelId, mode);
   }, [scene]);
 
+  // A body row selects its model too, so the canvas and menu agree on what is
+  // being worked on.
+  // A body selection belongs to the Models panel's Prepare workflow; leaving that
+  // mode returns to selecting the whole model, which is what Export and Printing act on.
+  React.useEffect(() => {
+    if (scene.mode !== 'prepare') {
+      setSelectedBodies([]);
+    }
+  }, [scene.mode]);
+
+  const handleSelectBody = React.useCallback((modelId: string, bodyIndex: number, mode: 'single' | 'toggle') => {
+    setSelectedBodies((prev) => {
+      if (mode === 'single') return [{ modelId, bodyIndex }];
+      const exists = prev.some((entry) => entry.modelId === modelId && entry.bodyIndex === bodyIndex);
+      return exists
+        ? prev.filter((entry) => !(entry.modelId === modelId && entry.bodyIndex === bodyIndex))
+        : [...prev, { modelId, bodyIndex }];
+    });
+    scene.selectModel(modelId, 'single');
+  }, [scene]);
+
+  const handleCloseBodyDrawer = React.useCallback((modelId: string) => {
+    setSelectedBodies((prev) => prev.filter((entry) => entry.modelId !== modelId));
+  }, []);
+
   const handleModelRangeSelection = React.useCallback((ids: string[], activeId: string, mode: 'replace' | 'add' = 'replace') => {
     if (ids.length === 0) return;
+    setSelectedBodies([]);
 
     if (mode === 'add') {
       scene.setSelectedModelIds((prev) => Array.from(new Set([...prev, ...ids])));
@@ -5704,9 +5887,11 @@ export default function Home() {
         setHolePunchHoverPlacement(null);
         return;
       }
+      setSelectedBodies([]);
       scene.clearModelSelection();
       return;
     }
+    setSelectedBodies([]);
     scene.selectModel(modelId, options?.selectionMode ?? 'single');
   }, [scene, selectedHolePunchPlacementIds.length, transformMgr.transformMode]);
 
@@ -6234,6 +6419,29 @@ export default function Home() {
       };
     };
 
+    if (action.startsWith('assign-material:')) {
+      const materialProfileId = action.slice('assign-material:'.length) || null;
+      if (editorContextMenuTargetIds.length > 0) {
+        const material = multiTankMaterialChoices.find((entry) => entry.id === materialProfileId);
+        const bodyTargets = liveSelectedBodies.filter((entry) => editorContextMenuTargetIds.includes(entry.modelId));
+        if (bodyTargets.length > 0) {
+          const byModel = new Map<string, number[]>();
+          for (const entry of bodyTargets) {
+            const list = byModel.get(entry.modelId);
+            if (list) list.push(entry.bodyIndex);
+            else byModel.set(entry.modelId, [entry.bodyIndex]);
+          }
+          for (const [modelId, bodyIndices] of byModel) {
+            scene.setModelBodyMaterial(modelId, bodyIndices, materialProfileId, material?.color);
+          }
+        } else {
+          scene.setModelMaterialProfile(editorContextMenuTargetIds, materialProfileId, material?.color);
+        }
+      }
+      closeEditorContextMenu();
+      return;
+    }
+
     switch (action) {
       case 'supports-toggle-curve': {
         const state = getSupportSnapshot();
@@ -6422,7 +6630,14 @@ export default function Home() {
         break;
     }
     closeEditorContextMenu();
-  }, [arrangeSpacingMm, closeEditorContextMenu, scene]);
+  }, [
+    arrangeSpacingMm,
+    closeEditorContextMenu,
+    editorContextMenuTargetIds,
+    liveSelectedBodies,
+    multiTankMaterialChoices,
+    scene,
+  ]);
 
   React.useEffect(() => {
     const refreshHistoryDebug = () => {
@@ -10601,6 +10816,9 @@ export default function Home() {
               modelsPanelVisible: modelsPanelShown,
               modelsPanelCollapsible: toolLayout === 'horizontal',
               handleModelSelection: handleModelSelection,
+              selectedBodyKeys,
+              handleSelectBody,
+              handleCloseBodyDrawer,
               handleModelRangeSelection: handleModelRangeSelection,
               handleGroupSelection: handleGroupSelection,
               handleGroupSelectedModels: handleGroupSelectedModels,
@@ -10702,6 +10920,9 @@ export default function Home() {
               scene={scene}
               outsidePlateModelIds={outsidePlateModelIds}
               handleModelSelection={handleModelSelection}
+              selectedBodyKeys={selectedBodyKeys}
+              handleSelectBody={handleSelectBody}
+              handleCloseBodyDrawer={handleCloseBodyDrawer}
               handleModelRangeSelection={handleModelRangeSelection}
               handleGroupSelection={handleGroupSelection}
               handleGroupSelectedModels={handleGroupSelectedModels}
@@ -11072,6 +11293,8 @@ export default function Home() {
             higherContrastModelEdges={workspaceCameraSettings.higherContrastModelEdges}
             blockerEditMode={hollowingEditMode}
             selectionColor={themeMeshHighlightColors.selection}
+            multiMaterialMode={activePrinterProfile?.materialMode === 'multiTank'}
+            selectedBodies={liveSelectedBodies}
             hoverColor={themeMeshHighlightColors.hover}
             hoverTintStrength={effectiveHoverTintStrengthForScene}
             selectedTintStrength={effectiveSelectedTintStrengthForScene}
@@ -11774,6 +11997,54 @@ export default function Home() {
           zIndexClassName="z-[120]"
         />
       )}
+
+      <StructuredDialogModal
+        open={printerSceneConflictPreviousId !== null}
+        ariaLabel={_(msg`Multi-Material scene on a single-material printer`)}
+        title={_(msg`This scene is made for a multi-material printer`)}
+        subtitle={_(msg`Its materials stay hidden until you switch back`)}
+        icon={<AlertTriangle className="h-4 w-4" />}
+        iconTone="warning"
+        closeAriaLabel={_(msg`Keep the Multi-Tank printer`)}
+        onClose={keepMultiTankPrinter}
+        actions={(
+          <>
+            <Button
+              variant="secondary"
+              onClick={keepMultiTankPrinter}
+            >
+              <Trans>Cancel</Trans>
+            </Button>
+            <Button
+              variant="tinted-accent"
+              onClick={() => {
+                setPrinterSceneConflictPreviousId(null);
+                // Non-destructive: the assignments stay on the models and come back
+                // when a Multi-Tank printer is selected again. Only this choice is
+                // acknowledged, so picking the printer again does not re-ask.
+                setConflictAcknowledgedPrinterId(activePrinterProfile?.id ?? null);
+              }}
+            >
+              <Trans>Continue</Trans>
+            </Button>
+          </>
+        )}
+      >
+        <div className="space-y-2">
+          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+            <Trans>
+              Its materials are split across several tanks, which the printer selected
+              now cannot print. The assignments stay with the scene and its models are
+              shown in their normal colour while this printer is selected.
+            </Trans>
+          </p>
+          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+            <Trans>
+              Switch to a multi-material printer later and the assignments come back.
+            </Trans>
+          </p>
+        </div>
+      </StructuredDialogModal>
 
       <StructuredDialogModal
         open={plateTrashIntent !== null}

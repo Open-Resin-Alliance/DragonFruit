@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { CarFront, ChevronDown, ChevronUp, CircleHelp, Snail } from 'lucide-react';
-import { Button } from '@/components/atoms';
+import { Button, ColorSwatchInput } from '@/components/atoms';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { MouseTooltip } from '@/components/ui/MouseTooltip';
@@ -223,6 +223,10 @@ type LabeledNumberInputProps = {
     value: number;
     step?: number;
     precision?: number;
+    /** Lower bound, applied to typing, blur and the stepper carets. Defaults to 0. */
+    min?: number;
+    /** Upper bound, same treatment. Defaults to no cap. */
+    max?: number;
     /** Native tooltip on the input itself, for callers that show the same help
      *  text as a `title` as well as through the ⓘ affordance. */
     title?: string;
@@ -235,8 +239,11 @@ type LabeledNumberInputProps = {
     onChange: (value: number) => void;
 };
 
-export function LabeledNumberInput({ label, helpText, tag, color, disabled = false, value, step: propStep, precision, title, unit, onChange }: LabeledNumberInputProps) {
-    const safeValue = clampNonNegativeNumber(value);
+export function LabeledNumberInput({ label, helpText, tag, color, disabled = false, value, step: propStep, precision, min: propMin, max: propMax, title, unit, onChange }: LabeledNumberInputProps) {
+    const min = propMin ?? 0;
+    const max = propMax ?? Number.POSITIVE_INFINITY;
+    const clampToRange = (input: number) => Math.min(max, Math.max(min, input));
+    const safeValue = clampToRange(Number.isFinite(value) ? value : 0);
     const formatVal = React.useCallback((val: number) => {
         if (precision !== undefined) return val.toFixed(precision);
         return String(val);
@@ -272,7 +279,7 @@ export function LabeledNumberInput({ label, helpText, tag, color, disabled = fal
             return;
         }
 
-        const sanitized = clampNonNegativeNumber(next);
+        const sanitized = clampToRange(next);
         onChange(sanitized);
         setLocalValue(formatVal(sanitized));
     }, [formatVal, localValue, onChange, value]);
@@ -283,7 +290,7 @@ export function LabeledNumberInput({ label, helpText, tag, color, disabled = fal
         const current = Number.isFinite(parsed) ? parsed : fallback;
         const activeStep = propStep ?? (Math.abs(current) < 1 ? 0.01 : 1);
         const decimals = precision ?? (activeStep < 1 ? 3 : 0);
-        const next = clampNonNegativeNumber(Number((current + direction * activeStep).toFixed(decimals)));
+        const next = clampToRange(Number((current + direction * activeStep).toFixed(decimals)));
         onChange(next);
         setLocalValue(formatVal(next));
     }, [formatVal, localValue, onChange, precision, propStep, safeValue]);
@@ -471,22 +478,66 @@ export function LabeledTwoStageNumberInput({
 
 // ─── LabeledSelectInput ───────────────────────────────────────────────────────
 
+/**
+ * Amber wash for a field that no longer matches the official profile's default: the
+ * border alone was easy to miss beside a row of identical outlines.
+ */
+export const MODIFIED_FIELD_STYLE: React.CSSProperties = {
+    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 25%)',
+    background: 'color-mix(in srgb, #f59e0b, var(--surface-0) 92%)',
+};
+
+/** The chip that marks which option is the preset's default. */
+export function DefaultOptionChip() {
+    return (
+        <span
+            className="rounded-full border px-1.5 py-[1px] text-[10px] leading-none"
+            style={{
+                borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
+                color: 'color-mix(in srgb, #f59e0b, var(--text-strong) 22%)',
+            }}
+        >
+            Default
+        </span>
+    );
+}
+
 type LabeledSelectInputProps = {
     label: string;
     value: PrinterOutputFormat;
     options: Array<{ value: PrinterOutputFormat; label: string }>;
     onChange: (value: PrinterOutputFormat) => void;
     disabled?: boolean;
+    /** The option an official profile's preset declares; gets the Default chip. */
+    defaultValue?: string;
+    /** The value differs from that preset default. */
+    highlight?: boolean;
 };
 
-export function LabeledSelectInput({ label, value, options, onChange, disabled = false }: LabeledSelectInputProps) {
+export function LabeledSelectInput({
+    label,
+    value,
+    options,
+    onChange,
+    disabled = false,
+    defaultValue,
+    highlight = false,
+}: LabeledSelectInputProps) {
+    const decorated = defaultValue === undefined
+        ? options
+        : options.map((option) => (
+            option.value === defaultValue
+                ? { ...option, rightContent: <DefaultOptionChip /> }
+                : option
+        ));
+
     return (
         <SelectDropdown
             label={label}
             value={value}
             onChange={(nextValue) => onChange(nextValue as PrinterOutputFormat)}
             disabled={disabled}
-            options={options}
+            options={decorated}
             className="space-y-1 block"
             labelClassName="font-medium"
             selectClassName={`w-full h-[36px] px-2.5 pr-10 leading-tight text-sm ${disabled ? 'opacity-55 cursor-not-allowed' : ''}`}
@@ -496,7 +547,7 @@ export function LabeledSelectInput({ label, value, options, onChange, disabled =
                     background: 'color-mix(in srgb, var(--surface-2), black 8%)',
                     color: 'var(--text-muted)',
                 }
-                : undefined}
+                : highlight ? MODIFIED_FIELD_STYLE : undefined}
         />
     );
 }
@@ -509,11 +560,13 @@ type LabeledToggleInputProps = {
     checked: boolean;
     onChange: (value: boolean) => void;
     disabled?: boolean;
+    /** The value differs from the official profile's preset default. */
+    highlight?: boolean;
     /** Native tooltip on the switch itself, beside the ⓘ affordance. */
     title?: string;
 };
 
-export function LabeledToggleInput({ label, helpText, checked, onChange, disabled = false, title }: LabeledToggleInputProps) {
+export function LabeledToggleInput({ label, helpText, checked, onChange, disabled = false, title, highlight = false }: LabeledToggleInputProps) {
     return (
         <label className="space-y-1 block">
             <span className="ui-label font-medium inline-flex items-center gap-1.5">
@@ -538,9 +591,11 @@ export function LabeledToggleInput({ label, helpText, checked, onChange, disable
                         color: 'var(--text-muted)',
                     }
                     : {
-                        borderColor: checked
-                            ? 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 36%)'
-                            : 'var(--border-subtle)',
+                        borderColor: highlight
+                            ? 'color-mix(in srgb, #f59e0b, var(--border-subtle) 25%)'
+                            : checked
+                                ? 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 36%)'
+                                : 'var(--border-subtle)',
                         background: checked
                             ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 90%)'
                             : 'var(--surface-1)',
@@ -609,6 +664,99 @@ export function LabeledCurrencySelect({ label, value, options, onChange }: Label
     );
 }
 
+// ─── Material colour ─────────────────────────────────────────────────────────
+
+/** Named swatches for the common resins; anything else is a Custom colour. */
+export const MATERIAL_COLOR_PRESETS: Array<{ value: string; label: string }> = [
+    { value: '#9ca3af', label: 'Grey' },
+    { value: '#f8fafc', label: 'White' },
+    { value: '#111827', label: 'Black' },
+    { value: '#3b82f6', label: 'Blue' },
+    { value: '#22c55e', label: 'Green' },
+    { value: '#ef4444', label: 'Red' },
+    { value: '#f59e0b', label: 'Amber' },
+    { value: '#ec4899', label: 'Pink' },
+    { value: '#a855f7', label: 'Purple' },
+    { value: '#14b8a6', label: 'Teal' },
+];
+
+const CUSTOM_MATERIAL_COLOR = 'custom';
+
+export function LabeledMaterialColorSelect({ value, onChange }: { value?: string; onChange: (color: string) => void }) {
+    const preset = MATERIAL_COLOR_PRESETS.find((entry) => entry.value === value);
+    // "Custom" is a mode, not a colour: picking it while a named swatch is current must
+    // open the picker on that colour, which the hex alone cannot express.
+    const [customMode, setCustomMode] = React.useState(false);
+    React.useEffect(() => {
+        if (!value) setCustomMode(false);
+    }, [value]);
+    const isCustom = customMode || (Boolean(value) && !preset);
+    const selected = isCustom ? CUSTOM_MATERIAL_COLOR : preset?.value ?? '';
+    // The native picker fires on every pixel while it is dragged. Writing that through
+    // re-rendered this whole modal per event, which is the lag; the swatch previews
+    // locally and commits once, when the picker closes (blur).
+    const [previewColor, setPreviewColor] = React.useState(value ?? '#8a8f98');
+    React.useEffect(() => {
+        setPreviewColor(value ?? '#8a8f98');
+    }, [value]);
+
+    // Not a <label>: SelectDropdown renders its own, and nesting them is both invalid
+    // and what left this control a different height from its neighbours.
+    return (
+        <div className="space-y-1 block">
+            <span className="ui-label font-medium inline-flex items-center gap-1.5">Color</span>
+            <div className="flex items-center gap-2">
+                <SelectDropdown
+                    className="min-w-0 flex-1"
+                    selectedTextAlign="center"
+                    value={selected}
+                    options={[
+                        { value: '', label: 'None' },
+                        ...MATERIAL_COLOR_PRESETS.map((entry) => ({
+                            value: entry.value,
+                            label: entry.label,
+                            icon: (
+                                <span
+                                    className="h-3.5 w-3.5 rounded-[4px]"
+                                    style={{
+                                        background: entry.value,
+                                        boxShadow: 'inset 0 0 0 1px rgba(0, 0, 0, 0.35), 0 0 0 1px var(--border-subtle)',
+                                    }}
+                                />
+                            ),
+                        })),
+                        {
+                            value: CUSTOM_MATERIAL_COLOR,
+                            label: 'Custom Color',
+                            tone: 'accent',
+                        },
+                    ]}
+                    onChange={(next) => {
+                        if (next === CUSTOM_MATERIAL_COLOR) {
+                            setCustomMode(true);
+                            onChange(value ?? '#8a8f98');
+                            return;
+                        }
+                        setCustomMode(false);
+                        onChange(next);
+                    }}
+                />
+                {selected === CUSTOM_MATERIAL_COLOR && (
+                    <ColorSwatchInput
+                        value={previewColor}
+                        onChange={setPreviewColor}
+                        onBlur={() => onChange(previewColor)}
+                        // A touch shorter than the 36px field: a filled swatch reads as
+                        // larger than an outline at the same height.
+                        className="h-[30px] w-9 self-center"
+                        ariaLabel="Custom material color"
+                    />
+                )}
+            </div>
+        </div>
+    );
+}
+
 // ─── MaterialProfileIdentitySection ──────────────────────────────────────────
 
 type MaterialProfileIdentitySectionProps = {
@@ -620,7 +768,7 @@ export function MaterialProfileIdentitySection({ draft, onChange }: MaterialProf
     return (
         <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
             <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Material Profile</div>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
                 <LabeledInput
                     label="Manufacturer"
                     value={draft.brand}
@@ -631,6 +779,13 @@ export function MaterialProfileIdentitySection({ draft, onChange }: MaterialProf
                     value={draft.name}
                     onChange={(value) => onChange((prev) => ({ ...prev, name: value }))}
                 />
+                <LabeledMaterialColorSelect
+                    value={draft.color}
+                    onChange={(color) => onChange((prev) => ({ ...prev, color: color || undefined }))}
+                />
+            </div>
+
+            <div className="mt-2 grid grid-cols-2 gap-2">
                 <LabeledResinFamilySelect
                     label="Resin Family"
                     value={draft.resinFamily}

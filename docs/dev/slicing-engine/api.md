@@ -41,6 +41,23 @@ Important fields:
 - transforms: `mirror_x`, `mirror_y`
 - encode hints: `png_compression_strategy`, `container_compression_level`
 - metadata passthrough: `metadata_json`
+- tanks: `tank_count` (default `1`) and `triangle_tank_index` (default empty)
+
+### Multi-tank jobs
+
+A job with `tank_count > 1` draws one film per tank. `triangle_tank_index` is
+aligned with `triangles_xyz` and names the tank each model triangle prints from
+(`0` = Tank 1). An empty vector means every triangle is in Tank 1, which is what
+a single-material job sends, so the field is additive for existing callers.
+
+Support geometry — triangles at or after `model_triangle_count`, when that count
+is non-zero — always prints from Tank 1 (index `0`) whatever the assignment
+says. `tanks::partition_triangles_by_tank` applies that rule and returns one
+`TankTriangles` entry per tank, in tank order, keeping triangle order within a
+tank. `SliceJobV3::tank_for_triangle(index)` is the per-triangle check.
+
+The intended pipeline is one framebuffer/RLE stream per tank per layer; the
+partition is the first step there, and encoders gain the per-tank streams next.
 
 ### Physical-width rasterization rule
 

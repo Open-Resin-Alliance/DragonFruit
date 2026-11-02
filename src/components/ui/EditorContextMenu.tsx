@@ -44,6 +44,8 @@ export type EditorMenuAction =
   | 'link-models'
   | 'unlink-models'
   | 'scan-for-supports'
+  /** Assign a tank's material to the selected models: `assign-material:<materialId>`. */
+  | `assign-material:${string}`
   // Organic-cut tool actions.
   | 'organic-cut-add-waypoint'
   | 'organic-cut-delete-waypoint';
@@ -64,10 +66,17 @@ type EditorContextMenuProps = {
 
 type MenuLeafDef = {
   id: EditorMenuAction;
-  label: MessageDescriptor;
+  /** A descriptor for fixed rows; a plain string for rows built from data (a material name). */
+  label: MessageDescriptor | string;
   icon: LucideIcon;
   /** Rule above this row, breaking the flyout into groups. Ignored on the first row. */
   startsGroup?: boolean;
+  /** Tick this row — a material the selection already prints in. */
+  checked?: boolean;
+  /** Custom icon-slot content (e.g. a colour chip); wins over `icon`. */
+  iconNode?: React.ReactNode;
+  /** Draw `iconNode` outside the framed icon slot — see ContextMenuEntry.iconBare. */
+  iconBare?: boolean;
 };
 
 type MenuSubmenuDef = {
@@ -159,18 +168,24 @@ export function EditorContextMenu({ position, onAction, onClose, disabledActions
 
   const entries = React.useMemo<ContextMenuEntry[]>(() => items.map((item) => ({
     id: item.id,
-    label: _(item.label),
+    label: typeof item.label === 'string' ? item.label : _(item.label),
     icon: item.icon,
     startsGroup: item.startsGroup,
+    checked: 'children' in item ? undefined : item.checked,
+    iconNode: 'children' in item ? undefined : item.iconNode,
+    iconBare: 'children' in item ? undefined : item.iconBare,
     disabled: 'children' in item
       ? item.children.every((child) => disabledActions.includes(child.id))
       : disabledActions.includes(item.id),
     children: 'children' in item
       ? item.children.map((child) => ({
           id: child.id,
-          label: _(child.label),
+          label: typeof child.label === 'string' ? child.label : _(child.label),
           icon: child.icon,
           startsGroup: child.startsGroup,
+          checked: child.checked,
+          iconNode: child.iconNode,
+          iconBare: child.iconBare,
           disabled: disabledActions.includes(child.id),
         }))
       : undefined,

@@ -29,7 +29,8 @@ container generation.
 | 3.1      | Modifier snapshots moved to `HSRC`/`CAVT`/`PSRC` chunks                                   | `2` or `3`        |
 | 3.2      | Support `typeId`                                                                          | `2` or `3`        |
 | 3.3      | `MODL.classification`                                                                     | `2` or `3`        |
-| 3.4      | `SCNE.plates` (plate ids and names) and `META.printer` — current writer target            | `2` or `3`        |
+| 3.4      | `SCNE.plates` (plate ids and names) and `META.printer`                                     | `2` or `3`        |
+| 3.5      | Multi-material scenes: `MODL` body assignments, the `BODY` and `MATP` chunks — current writer target | `2` or `3` |
 
 Dedup (3.0) is the only reader-breaking change since V1, so a current writer
 emits `version 2` for a scene with no shared MESH chunks and `version 3` when
@@ -120,8 +121,33 @@ Chunk types:
 | `HSRC` | hollowing source-mesh positions — V3.1   |
 | `CAVT` | hollowing cavity-mesh positions — V3.1   |
 | `PSRC` | hole-punch source-mesh positions — V3.1  |
+| `BODY` | split 3MF body meshes, one chunk per model index — V3.5 |
+| `MATP` | material profiles the scene references, ids preserved — V3.5 |
 
 Unknown chunk types may be ignored.
+
+### Multi-material scenes (3.5)
+
+A multi-tank scene names the material each model and each of its bodies prints
+from. `MODL[i]` carries `materialProfileId` / `materialBaseColor` (model level,
+written since the field existed) and, for a 3MF with several bodies,
+`bodyCount`, `bodyMaterialProfileIds` and `bodyColors`, aligned with the bodies.
+
+The bodies themselves live in a `BODY` chunk whose directory index is the model
+index: `u32 count`, the merged mesh's `f32` centre (`x,y,z`) at capture time, then
+per body `u32 positionFloats`, the `f32` positions, `u32 indexCount`, then the
+`u32` indices. Positions are in the merged model's own space. The centre is what
+lets a reader put the bodies back into the space its *re-processed* merged mesh
+ends up in: loading centres and normalises that mesh, translating it, while the
+bodies carry no such pass. A reader that ignores the chunk simply has no body
+split.
+
+`MATP` is the JSON array of the material profiles the scene references, **with
+their ids unchanged**. The printer bundle's own `materials` are re-id'd when a
+scene is imported onto a machine that lacks the printer, so without `MATP` every
+`materialProfileId` in the file would dangle. A reader adopts these profiles onto
+the printer the scene resolves to, leaving a local profile with the same id
+alone.
 
 The `SCNE` payload is `VoxlSceneState`: which model is active, which models are
 selected, the scene's `plates` (3.4), and `plateName` — the user's name for the

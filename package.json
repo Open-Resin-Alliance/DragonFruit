@@ -92,12 +92,12 @@
     "@tauri-apps/plugin-updater": "^2.10.1",
     "clipper-lib": "^6.4.2",
     "fast-3mf-loader": "^0.0.7",
-    "fflate": "^0.8.2",
+    "fflate": "^0.8.3",
     "highlight.js": "^11.11.1",
     "jszip": "^3.10.1",
     "lucide-react": "^0.563.0",
     "manifold-3d": "^3.4.1",
-    "next": "^16.3.8",
+    "next": "^16.4.3",
     "react": "19.2.0",
     "react-colorful": "^5.6.1",
     "react-dom": "19.2.0",
@@ -110,10 +110,10 @@
   },
   "devDependencies": {
     "@babel/core": "^7.29.7",
-    "@happy-dom/global-registrator": "^20.14.6",
+    "@happy-dom/global-registrator": "^21.0.4",
     "@lingui/babel-plugin-lingui-macro": "^6.3.0",
     "@lingui/cli": "^6.3.0",
-    "@lingui/swc-plugin": "^6.4.0",
+    "@lingui/swc-plugin": "^6.7.1",
     "@tailwindcss/postcss": "^4.1.16",
     "@tailwindcss/typography": "^0.5.20",
     "@tauri-apps/cli": "^2.11.0",
@@ -131,8 +131,10 @@
     "typescript": "^5.9.3"
   },
   "overrides": {
-    "minimatch": "^10.2.2",
+    "minimatch": "^11.0.1",
     "postcss": "^8.5.26",
-    "sharp": "^0.35.3"
+    "sharp": "^0.35.5",
+    "postcss-selector-parser": "^6.1.5",
+    "eslint-plugin-react-hooks": "7.0.1"
   }
 }

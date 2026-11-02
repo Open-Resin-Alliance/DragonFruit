@@ -9,10 +9,78 @@ import { PlateNameLabel } from './PlateNameLabel';
 import { PlateSideButtons } from './PlateSideButtons';
 
 /**
- * Front-marker texture is 256px wide; leave 4px either side of the label. Wide
- * enough that the English "FRONT" still renders at its original 70px.
+ * Front-marker texture is 256px wide. The word is fitted to 200 of those pixels, not
+ * all 256: the tab is what the eye measures, so the label needs margin inside it or
+ * a small plate reads as one giant word. At 70px base the English "FRONT" still fits.
  */
-const FRONT_MARKER_MAX_TEXT_WIDTH = 248;
+const FRONT_MARKER_MAX_TEXT_WIDTH = 200;
+
+type FrontMarker = {
+  position: [number, number, number];
+  /** The plate's centre in Y: the side boundary the word turns at. */
+  centerY: number;
+  widthMm: number;
+  depthMm: number;
+  texture: THREE.Texture | null;
+};
+
+/**
+ * The FRONT wordmark lying on the plate's front tab. Readable from both sides: a
+ * decal seen from behind the plate reads on its head, so the marker turns half a
+ * revolution about the plate's normal once the camera crosses the front edge. The
+ * turn is eased so orbiting around the plate does not pop.
+ */
+function FrontMarkerDecal({ marker, dimFactor }: { marker: FrontMarker; dimFactor: number }) {
+  const groupRef = React.useRef<THREE.Group | null>(null);
+  const { camera } = useThree();
+  const sideRef = React.useRef<boolean | null>(null);
+
+  useFrame(() => {
+    const group = groupRef.current;
+    if (!group) return;
+    // The plate's centre, not the tab's edge: the tab sits at the front, so measuring
+    // from it turned the word while the camera was still in front of the plate. A
+    // depth-sized band around the centre keeps it from flickering at the crossing.
+    const band = Math.max(1, marker.depthMm);
+    const current = sideRef.current;
+    const fromBack = current === null
+      ? camera.position.y > marker.centerY
+      : current
+        ? camera.position.y > marker.centerY - band
+        : camera.position.y > marker.centerY + band;
+    if (fromBack === current) return;
+    sideRef.current = fromBack;
+    // A decal seen from behind the plate reads on its head; the half turn fixes that.
+    // Applied at the crossing, with no transition between the two states.
+    group.rotation.z = fromBack ? Math.PI : 0;
+  });
+
+  return (
+    <group
+      ref={groupRef}
+      position={marker.position}
+      frustumCulled={false}
+      userData={{ thumbnailHelperType: 'buildPlate' }}
+    >
+      {marker.texture && (
+        <mesh renderOrder={21} raycast={nullRaycast}>
+          <planeGeometry args={[marker.widthMm, marker.depthMm]} />
+          <meshBasicMaterial
+            map={marker.texture}
+            transparent
+            opacity={dimFactor}
+            depthWrite={false}
+            polygonOffset
+            polygonOffsetFactor={-1}
+            polygonOffsetUnits={-1}
+            side={THREE.FrontSide}
+            toneMapped={false}
+          />
+        </mesh>
+      )}
+    </group>
+  );
+}
 
 export function EnableLocalClipping({ enabled = true }: { enabled?: boolean }) {
   const { gl } = useThree();
@@ -303,6 +371,7 @@ type PlateLayerShared = {
   axes: {
     position: [number, number, number];
     length: number;
+    labelScale: number;
     shaftRadius: number;
     headRadius: number;
     headLength: number;
@@ -313,6 +382,8 @@ type PlateLayerShared = {
   };
   frontMarker: {
     position: [number, number, number];
+    /** The plate's centre in Y: the side boundary the word turns at. */
+    centerY: number;
     widthMm: number;
     depthMm: number;
     texture: THREE.Texture | null;
@@ -534,7 +605,7 @@ function PlateLayer({
         </mesh>
 
         <group position={[0, 0, shared.axes.labelLift]}>
-          <AxisLabels size={shared.axes.length + 6} />
+          <AxisLabels size={shared.axes.length + 6 * shared.axes.labelScale} scale={shared.axes.labelScale} />
         </group>
       </group>
       )}
@@ -571,24 +642,7 @@ function PlateLayer({
       {/* FRONT orientation marker locked to grid front edge and constrained within build plate bounds.
           A decal, so only the plate being worked on wears it. */}
       {shared.showBuildPlate && isActive && (
-      <group position={shared.frontMarker.position} frustumCulled={false} userData={{ thumbnailHelperType: 'buildPlate' }}>
-        {shared.frontMarker.texture && (
-          <mesh renderOrder={21} raycast={nullRaycast}>
-            <planeGeometry args={[shared.frontMarker.widthMm, shared.frontMarker.depthMm]} />
-            <meshBasicMaterial
-              map={shared.frontMarker.texture}
-              transparent
-              opacity={dimFactor}
-              depthWrite={false}
-              polygonOffset
-              polygonOffsetFactor={-1}
-              polygonOffsetUnits={-1}
-              side={THREE.FrontSide}
-              toneMapped={false}
-            />
-          </mesh>
-        )}
-      </group>
+        <FrontMarkerDecal marker={shared.frontMarker} dimFactor={dimFactor} />
       )}
 
       {/* Safety margin hazard stripes - semi-transparent red-white diagonal stripes.
@@ -777,11 +831,25 @@ export function Helpers({
   const buildPlateWidth = width + buildPlateOversizeEachSideMm * 2;
   const buildPlateDepth = depth + buildPlateOversizeEachSideMm * 2;
   const buildPlateCenterZ = -buildPlateThicknessMm * 0.5 - 0.08;
+  // Axes, their letters and the printed plate decorations follow the build volume.
+  // The reference is the plate's width, so the arrows keep the same share of the front
+  // edge at any size — `min(width, depth)` under-scaled normal wide-and-shallow beds.
+  // The upper clamp keeps a very large machine from growing walls of arrow.
+  const plateScale = Math.min(1.5, Math.max(0.4, width / 200));
   // The tab the FRONT marker is printed on. Its depth is what sizes that marker: the
   // label's texture is fitted to the plane, and the plane is aspect-locked to the tab
   // (256/72), so a deeper tab is a larger label: the tab's 3.2mm -> 4.2mm takes the
   // marker from 11.4 x 3.2mm to 13.5 x 3.8mm, the "a little larger" range.
-  const frontTabDepth = buildPlateOversizeEachSideMm + 1.2;
+  // The FRONT wordmark is printed on a tab on the front edge, and *every* length here
+  // is a constant fraction of the plate's width — the 200mm sizing divided down, no
+  // minimums. A clamp or an absolute inset made small plates carry a proportionally
+  // bigger tab, which is what read as "the font is huge" on a tiny machine. With pure
+  // fractions the tab, the marker and the word look identical at any printer size.
+  // 1.2 turns the old 200mm tab up a notch: uniform at every size, just a little
+  // larger than the sizes it was first drawn at. The floor is the case the fractions
+  // alone got wrong: below ~110mm the tab became a speck, so it stops shrinking there.
+  const plateFrontScale = Math.min(1.5, Math.max(0.55, width / 200)) * 1.2;
+  const frontTabDepth = 4.2 * plateFrontScale;
   // A hair more than the overhang the mock plate draws past the build volume, so the
   // buttons sit just outside the plate you can see. Their spacing is CSS inside the
   // component; only this clearance is a plate measurement.
@@ -790,20 +858,20 @@ export function Helpers({
   // physical size as a 300mm one's. 5 is what a 200mm plate has always used; the
   // clamp keeps a very small plate legible and a very large one from dominating.
   const plateWidgetScale = Math.min(14, Math.max(3, width / 40));
-  const frontTabBackWidth = Math.min(buildPlateWidth - 12, 24);
-  const frontTabFrontWidth = Math.min(frontTabBackWidth - 3, 16);
-  const frontMarkerInsetMm = 0.2;
+  const frontTabBackWidth = Math.min(buildPlateWidth - width * 0.072, 24 * plateFrontScale);
+  const frontTabFrontWidth = Math.min(frontTabBackWidth - width * 0.018, 16 * plateFrontScale);
+  const frontMarkerInsetMm = width * 0.0012;
   const frontMarkerAspect = 256 / 72;
-  const markerAvailableDepth = Math.max(2.8, frontTabDepth - frontMarkerInsetMm * 2);
-  const markerAvailableWidth = Math.max(12, frontTabBackWidth - frontMarkerInsetMm * 2);
+  const markerAvailableDepth = frontTabDepth - frontMarkerInsetMm * 2;
+  const markerAvailableWidth = frontTabBackWidth - frontMarkerInsetMm * 2;
   const frontMarkerDepth = Math.min(markerAvailableDepth, markerAvailableWidth / frontMarkerAspect);
   const frontMarkerWidth = frontMarkerDepth * frontMarkerAspect;
   const axisBaseZ = 0.5;
-  const axisLength = 22;
-  const axisShaftRadius = 0.42;
-  const axisHeadRadius = 1.3;
-  const axisHeadLength = 1.9;
-  const axisLabelLift = 1.0;
+  const axisLength = 22 * plateScale;
+  const axisShaftRadius = Math.max(0.22, 0.42 * plateScale);
+  const axisHeadRadius = Math.max(0.7, 1.3 * plateScale);
+  const axisHeadLength = Math.max(1.0, 1.9 * plateScale);
+  const axisLabelLift = Math.max(0.6, 1.0 * plateScale);
   // Keep decal geometry in lockstep with the logo SVG's intrinsic viewBox ratio
   // to avoid non-uniform stretching on the build plate.
   const plateLogoAspect = 1772 / 304;
@@ -815,8 +883,10 @@ export function Helpers({
   const plateLogoX = resolvedOriginMinX + width - plateLogoInset - plateLogoWidth * 0.5;
   const plateLogoY = resolvedOriginMinY + plateLogoInset + plateLogoHeight * 0.5;
   const plateLogoZ = 0.12;
-  // Seat marker over the front tab so it reads as part of the build plate geometry.
-  const frontMarkerY = -buildPlateDepth * 0.5 - frontTabDepth * 0.1;
+  // Seat the marker a little above the tab's geometric centre: the tab tapers toward
+  // its front edge, so dead centre plus the texture's optical nudge reads low. 0.35 is
+  // the middle of the range that looked right between "too high" and "too low".
+  const frontMarkerY = -buildPlateDepth * 0.5 - frontTabDepth * 0.35;
 
   const frontTexture = React.useMemo(() => {
     const canvas = document.createElement('canvas');
@@ -1194,6 +1264,7 @@ export function Helpers({
     axes: {
       position: [resolvedOriginMinX, resolvedOriginMinY, axisBaseZ],
       length: axisLength,
+      labelScale: plateScale,
       shaftRadius: axisShaftRadius,
       headRadius: axisHeadRadius,
       headLength: axisHeadLength,
@@ -1204,6 +1275,7 @@ export function Helpers({
     },
     frontMarker: {
       position: [buildVolumeCenterX, buildVolumeCenterY + frontMarkerY, 0.001],
+      centerY: buildVolumeCenterY,
       widthMm: frontMarkerWidth,
       depthMm: frontMarkerDepth,
       texture: frontTexture,

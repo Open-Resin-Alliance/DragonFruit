@@ -16,6 +16,7 @@
 
 import type { PluginJobMetadataPayloadDefinition } from '@/features/plugins/complexPluginContracts';
 import { getBuiltinComplexPluginDefinitions } from '@/features/plugins/builtinComplexPlugins';
+import { getInstalledProfilePlugins, type DeclaredJobMetadataPayload } from '@/features/plugins/pluginRegistry';
 import { bytesToBase64 } from '@/utils/base64';
 import { bakeVoxlScenePayload, type EmbedVoxlSceneModel } from './voxlScenePayload';
 
@@ -30,7 +31,7 @@ type PayloadBaker = (context: JobMetadataPayloadContext) => Promise<Uint8Array |
  * The payload kinds the app can bake. A kind absent here is a declaration this
  * build skips, which is how a plugin can name something newer than the app.
  */
-const PAYLOAD_BAKERS: Record<PluginJobMetadataPayloadDefinition['payload'], PayloadBaker> = {
+const PAYLOAD_BAKERS: Record<string, PayloadBaker> = {
   'voxl-scene': (context) => bakeVoxlScenePayload(context.models),
 };
 
@@ -68,7 +69,14 @@ function writeMetadataPath(root: Record<string, unknown>, path: string, value: u
  * driver below takes them as an argument so it can be exercised without one.
  */
 export function getJobMetadataPayloadDeclarations(): PluginJobMetadataPayloadDefinition[] {
-  return getBuiltinComplexPluginDefinitions().flatMap((definition) => definition.jobMetadataPayloads ?? []);
+  const builtin = getBuiltinComplexPluginDefinitions()
+    .flatMap((definition) => definition.jobMetadataPayloads ?? []);
+  // A sideloaded package declares the same pairs in its manifest; the baker knows
+  // only the kinds, so a package naming a kind this build lacks is skipped too.
+  const packaged: DeclaredJobMetadataPayload[] = getInstalledProfilePlugins()
+    .filter((plugin) => plugin.enabled)
+    .flatMap((plugin) => plugin.manifest.jobMetadataPayloads ?? []);
+  return [...builtin, ...packaged];
 }
 
 /**

@@ -25,7 +25,7 @@ import {
   withPlateMembership,
   type PlateFrame,
 } from '@/features/scene/plates/plateLayout';
-import { detectObsoleteVoxlVersion, isVoxlBinaryV2, meshChunkStore, parseVoxlBinaryV2, readScenePlates, readSidecarFileBytes, resolveOriginalRefSidecar, VoxlObsoleteVersionError, type VoxlDocumentV1, type VoxlMeshRef, type VoxlMeshRange } from '@/features/scene/voxl';
+import { decodeVoxlBodyChunk, detectObsoleteVoxlVersion, isVoxlBinaryV2, meshChunkStore, parseVoxlBinaryV2, readScenePlates, readSidecarFileBytes, resolveOriginalRefSidecar, VoxlObsoleteVersionError, type VoxlDocumentV1, type VoxlMeshRef, type VoxlMeshRange } from '@/features/scene/voxl';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
 import { countSupportEntities, getSnapshot, loadFromImportFormat, mergeFromImportFormat, reassignAllSupportModelIds, removeSupportEntitiesForModels, resetStore, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
@@ -41,10 +41,16 @@ import { getBuiltinComplexPluginDefinitions } from '@/features/plugins/builtinCo
 import { getBuiltinComplexPluginFileTypeHandlers } from '@/features/plugins/builtinComplexPluginFileTypeHandlers';
 import type { PluginFileTypeDefinition } from '@/features/plugins/complexPluginContracts';
 import type { PluginFileTypeHandler } from '@/features/plugins/pluginFileTypeBridge';
+import {
+  createSideloadedFileTypeHandler,
+  getSideloadedFileTypesSnapshot,
+  refreshSideloadedContributions,
+  subscribeSideloadedFileTypes,
+} from '@/features/plugins/sideloadedFileTypes';
 import { accelerateGeometry, disposeGeometryBVH } from '@/utils/bvh';
 import { runWithConcurrency } from '@/utils/runWithConcurrency';
 import { logToNativeFile } from '@/utils/nativeLog';
-import { BAKED_OCCLUSION_ATTRIBUTE, DEFAULT_BAKED_OCCLUSION_INTENSITY, bakeOcclusionForGeometry, bumpBakedOcclusionVersion, canBakeOcclusion, setBakedOcclusionIntensity } from '@/features/scene/bakedOcclusion';
+import { BAKED_OCCLUSION_ATTRIBUTE, DEFAULT_BAKED_OCCLUSION_INTENSITY, bakeAndAttachOcclusionForGeometry, bakeOcclusionForGeometry, bumpBakedOcclusionVersion, canBakeOcclusion, setBakedOcclusionIntensity } from '@/features/scene/bakedOcclusion';
 import { computeProjectedFootprintSize } from '@/utils/modelFootprint';
 import { shelfPack, type ShelfItem } from '@/features/scene/arrange/shelfPack';
 import { eulerFromGlobalEuler, quaternionFromGlobalEuler } from '@/utils/rotation';
@@ -122,6 +128,7 @@ import {
   hideModelLabel,
   linkModelsLabel,
   MARK_AS_MODEL_LABEL,
+  ASSIGN_MATERIAL_LABEL,
   MARK_AS_SUPPORT_LABEL,
   mergeSupportsLabel,
   pasteModelLabel,
@@ -171,6 +178,7 @@ import {
   getProfileStoreSnapshot,
   getProfileStoreServerSnapshot,
   importPrinterBundle,
+  importSceneMaterials,
   setActivePrinterProfile,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
@@ -496,6 +504,71 @@ function captureSceneSnapshot(
         }
       : {}),
   };
+}
+
+/**
+ * `BODY` chunk (VOXL V3.4) → one geometry per split 3MF body, in the merged
+ * model's own space. The binary layout lives in `decodeVoxlBodyChunk`; this adds
+ * what the scene needs from a geometry.
+ */
+async function decodeBodyChunk(bytes: Uint8Array, targetCenter: { x: number; y: number; z: number }): Promise<GeometryWithBounds[]> {
+  const decoded = decodeVoxlBodyChunk(bytes);
+  // The bodies were captured in the merged mesh's space at save time. Loading
+  // re-processes that mesh (centring, normalising Y), which translates it; the
+  // bodies carry no such pass, so they move by the same delta.
+  const dx = targetCenter.x - decoded.center.x;
+  const dy = targetCenter.y - decoded.center.y;
+  const dz = targetCenter.z - decoded.center.z;
+  const bodies: GeometryWithBounds[] = [];
+  for (const body of decoded.bodies) {
+    if (dx !== 0 || dy !== 0 || dz !== 0) {
+      for (let i = 0; i + 2 < body.positions.length; i += 3) {
+        body.positions[i] += dx;
+        body.positions[i + 1] += dy;
+        body.positions[i + 2] += dz;
+      }
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(body.positions, 3));
+    if (body.index) geometry.setIndex(new THREE.BufferAttribute(body.index, 1));
+    geometry.computeVertexNormals();
+    geometry.computeBoundingBox();
+    // The occlusion bake is geometry state, not container state. Without it the
+    // shader reads an empty attribute as 0 and every body renders darker than it
+    // did when it was imported; a plain web build cannot bake, so it gets a flat
+    // 1 (no occlusion) rather than black.
+    const baked = await bakeAndAttachOcclusionForGeometry(geometry);
+    if (!baked && !geometry.getAttribute(BAKED_OCCLUSION_ATTRIBUTE)) {
+      const flat = new Float32Array(geometry.getAttribute('position')?.count ?? 0).fill(1);
+      geometry.setAttribute(BAKED_OCCLUSION_ATTRIBUTE, new THREE.BufferAttribute(flat, 1));
+    }
+    const bbox = geometry.boundingBox ? geometry.boundingBox.clone() : new THREE.Box3();
+    bodies.push({
+      geometry,
+      bbox,
+      center: bbox.getCenter(new THREE.Vector3()),
+      size: bbox.getSize(new THREE.Vector3()),
+      flatteningPlanes: [],
+    });
+  }
+  return bodies;
+}
+
+/**
+ * The material an imported model starts with on a multi-tank printer: the resin in
+ * Tank 1. A model must always name a material there — an unassigned one would print
+ * in no tank at all.
+ */
+function resolveMultiTankImportDefault(): { materialProfileId: string; materialColor?: string } | null {
+  const printer = getActivePrinterProfile();
+  if (printer?.materialMode !== 'multiTank') return null;
+
+  const tankMaterialId = (printer.tankMaterials ?? []).find((id) => typeof id === 'string' && id.length > 0);
+  if (!tankMaterialId) return null;
+
+  const material = getMaterialProfilesForPrinter(printer.id).find((entry) => entry.id === tankMaterialId);
+  if (!material) return null;
+  return { materialProfileId: material.id, materialColor: material.color };
 }
 
 /** Repaints a model's vertex colours, when it has any, to a flat `color`. */
@@ -1326,6 +1399,24 @@ export interface LoadedModel {
   manualZMoveOverride?: boolean;
   isSupportGeometry?: boolean;
   linkGroupId?: string;
+  /**
+   * The material this model prints in, when the printer has more than one tank.
+   * Absent means the plate's own material (the single active profile).
+   */
+  materialProfileId?: string;
+  /**
+   * The mesh colour the model had before a material assignment recoloured it, so
+   * clearing the assignment can give that colour back.
+   */
+  materialBaseColor?: string;
+  /**
+   * Material assigned to each body of a multi-body 3MF, aligned with
+   * `splitBodies`. `undefined` at an index means the body prints in the model's
+   * own material. Bodies stay in the model — assigning does not split it.
+   */
+  bodyMaterialProfileIds?: Array<string | undefined>;
+  /** Resolved colour per body, aligned with `splitBodies`. */
+  bodyColors?: Array<string | undefined>;
 }
 
 import { getSupportsForModel, type ModelSupportIds } from '@/supports/PlacementLogic/SupportModelLinker';
@@ -1515,6 +1606,12 @@ export type ObsoleteVoxlScenePrompt = {
 export type PrinterMismatchPrompt = {
   /** The printer the scene carries, whole, so switching can add it when it is missing here. */
   bundle: VoxlPrinterBundle;
+  /** Material profiles the scene references, adopted once its printer is chosen. */
+  materials?: unknown[];
+  /** The scene names a tank material for models or bodies. */
+  sceneUsesMultiTankMaterials?: boolean;
+  /** Material mode of the profile selected now, so the dialog can warn about losing it. */
+  currentMaterialMode?: string;
   /** The printer's name as the bundle carries it; absent when it has none. */
   recordedName?: string;
   recordedBuildVolumeMm: { width: number; depth: number; height: number };
@@ -1544,6 +1641,10 @@ type ModelClipboardEntry = {
   supportClipboard: SupportClipboardPayload | null;
   isSupportGeometry?: boolean;
   linkGroupId?: string;
+  materialProfileId?: string;
+  materialBaseColor?: string;
+  bodyMaterialProfileIds?: Array<string | undefined>;
+  bodyColors?: Array<string | undefined>;
 };
 
 // ---------------------------------------------------------------------------
@@ -1625,6 +1726,7 @@ function scheduleChunkStoreSweep(getModels: () => LoadedModel[]): void {
   }, 1_500);
 }
 
+
 export function useSceneCollectionManager(options?: {
   /**
    * Called when the plate's lock refuses a gesture, so the caller can say so. The
@@ -1636,6 +1738,18 @@ export function useSceneCollectionManager(options?: {
 }) {
   const { _ } = useLingui();
   const fmt = useLocaleFormat();
+
+  // Extensions contributed by installed .dfplugin packages. Empty in the web
+  // build, and refreshed after an install or removal in Settings.
+  const sideloadedFileTypes = useSyncExternalStore(
+    subscribeSideloadedFileTypes,
+    getSideloadedFileTypesSnapshot,
+    getSideloadedFileTypesSnapshot,
+  );
+
+  useEffect(() => {
+    void refreshSideloadedContributions();
+  }, []);
 
   type ScenePluginImportEntry = {
     pluginId: string;
@@ -1661,8 +1775,13 @@ export function useSceneCollectionManager(options?: {
         }
       }
     }
+    for (const fileType of sideloadedFileTypes) {
+      if (fileType.isSceneFile && normalized.endsWith(fileType.extension)) {
+        return fileType.extension;
+      }
+    }
     return null;
-  }, []);
+  }, [sideloadedFileTypes]);
 
   const scenePluginImportHandlersByExtension = useMemo(() => {
     const handlersByPluginId = new Map(
@@ -1687,8 +1806,23 @@ export function useSceneCollectionManager(options?: {
       }
     }
 
+    // Sideloaded packages register at runtime, so they are appended after the
+    // generated entries and never shadow a compiled-in extension.
+    for (const fileType of sideloadedFileTypes) {
+      if (!fileType.isSceneFile || out.has(fileType.extension)) continue;
+      out.set(fileType.extension, {
+        pluginId: fileType.pluginId,
+        fileType: {
+          fileExtension: fileType.extension,
+          displayName: fileType.displayName,
+          isSceneFile: true,
+        },
+        handler: createSideloadedFileTypeHandler(fileType),
+      });
+    }
+
     return out;
-  }, []);
+  }, [sideloadedFileTypes]);
 
   const waitForUiYield = useCallback(
     () => new Promise<void>((resolve) => {
@@ -1961,11 +2095,16 @@ export function useSceneCollectionManager(options?: {
    * when this machine already has it, and otherwise adds it from the bundle the
    * scene carries, which is the point of shipping it whole.
    */
+
+
   const resolvePrinterMismatch = useCallback((choice: 'switch' | 'keep') => {
     if (choice === 'switch' && printerMismatch) {
       const installedId = printerMismatch.installedProfileId;
-      if (installedId) setActivePrinterProfile(installedId);
-      else setActivePrinterProfile(importPrinterBundle(printerMismatch.bundle));
+      const resolvedId = installedId ?? importPrinterBundle(printerMismatch.bundle);
+      setActivePrinterProfile(resolvedId);
+      if (printerMismatch.materials && printerMismatch.materials.length > 0) {
+        importSceneMaterials(resolvedId, printerMismatch.materials);
+      }
     }
     setPrinterMismatch(null);
   }, [printerMismatch]);
@@ -3088,6 +3227,7 @@ export function useSceneCollectionManager(options?: {
     try {
       // Process sequentially to avoid freezing UI too much
       for (let i = 0; i < files.length; i++) {
+        const multiTankImportDefault = resolveMultiTankImportDefault();
         const file = files[i];
         const url = URL.createObjectURL(file);
 
@@ -3218,7 +3358,20 @@ export function useSceneCollectionManager(options?: {
                 scale: new THREE.Vector3(1, 1, 1),
               },
               visible: true,
-              color,
+              color: multiTankImportDefault?.materialColor ?? color,
+              ...(multiTankImportDefault
+                ? {
+                  materialProfileId: multiTankImportDefault.materialProfileId,
+                  materialBaseColor: color,
+                  // Each body starts in Tank 1 too, so every body names a material.
+                  ...(splitBodies.length > 1
+                    ? {
+                      bodyMaterialProfileIds: splitBodies.map(() => multiTankImportDefault.materialProfileId),
+                      bodyColors: splitBodies.map(() => multiTankImportDefault.materialColor),
+                    }
+                    : {}),
+                }
+                : {}),
               polygonCount: merged.nativePreview?.originalTriangleCount
                 ?? countTriangles(merged.geometry),
             };
@@ -3261,7 +3414,13 @@ export function useSceneCollectionManager(options?: {
                 scale: new THREE.Vector3(1, 1, 1),
               },
               visible: true,
-              color,
+              color: multiTankImportDefault?.materialColor ?? color,
+              ...(multiTankImportDefault
+                ? {
+                  materialProfileId: multiTankImportDefault.materialProfileId,
+                  materialBaseColor: color,
+                }
+                : {}),
               polygonCount: geom.nativePreview?.originalTriangleCount
                 ?? countTriangles(geom.geometry),
             };
@@ -4608,7 +4767,11 @@ export function useSceneCollectionManager(options?: {
         scale: source.transform.scale.clone(),
       },
       visible: source.visible,
-      color: source.color,
+      // A body that already carries its own material keeps it when it becomes a model.
+      color: source.bodyColors?.[i] ?? source.color,
+      ...(source.bodyMaterialProfileIds?.[i]
+        ? { materialProfileId: source.bodyMaterialProfileIds[i] }
+        : {}),
       polygonCount: bodyGeom.nativePreview?.originalTriangleCount
         ?? countTriangles(bodyGeom.geometry),
     }));
@@ -5303,6 +5466,10 @@ export function useSceneCollectionManager(options?: {
         supportClipboard,
         isSupportGeometry: source.isSupportGeometry,
         linkGroupId: source.linkGroupId,
+        materialProfileId: source.materialProfileId,
+        materialBaseColor: source.materialBaseColor,
+        bodyMaterialProfileIds: source.bodyMaterialProfileIds,
+        bodyColors: source.bodyColors,
       },
     ]);
 
@@ -5334,6 +5501,10 @@ export function useSceneCollectionManager(options?: {
         supportClipboard,
         isSupportGeometry: source.isSupportGeometry,
         linkGroupId: source.linkGroupId,
+        materialProfileId: source.materialProfileId,
+        materialBaseColor: source.materialBaseColor,
+        bodyMaterialProfileIds: source.bodyMaterialProfileIds,
+        bodyColors: source.bodyColors,
       };
     }));
 
@@ -5377,6 +5548,10 @@ export function useSceneCollectionManager(options?: {
       meshModifiers: undefined,
       isSupportGeometry: first.isSupportGeometry,
       linkGroupId: first.linkGroupId,
+      materialProfileId: first.materialProfileId,
+      materialBaseColor: first.materialBaseColor,
+      bodyMaterialProfileIds: first.bodyMaterialProfileIds,
+      bodyColors: first.bodyColors,
     };
 
     const nextModels = [...models, pastedModel];
@@ -5870,6 +6045,10 @@ export function useSceneCollectionManager(options?: {
         meshModifiers: undefined,
         isSupportGeometry: entry.isSupportGeometry,
         linkGroupId: entry.linkGroupId,
+        materialProfileId: entry.materialProfileId,
+        materialBaseColor: entry.materialBaseColor,
+        bodyMaterialProfileIds: entry.bodyMaterialProfileIds,
+        bodyColors: entry.bodyColors,
         ...(assignedPlateIds[index] ? { plateId: assignedPlateIds[index] } : {}),
       };
     });
@@ -5987,6 +6166,10 @@ export function useSceneCollectionManager(options?: {
         meshModifiers: undefined,
         isSupportGeometry: source.isSupportGeometry,
         linkGroupId: source.linkGroupId,
+        materialProfileId: source.materialProfileId,
+        materialBaseColor: source.materialBaseColor,
+        bodyMaterialProfileIds: source.bodyMaterialProfileIds,
+        bodyColors: source.bodyColors,
       };
     });
 
@@ -6680,6 +6863,8 @@ export function useSceneCollectionManager(options?: {
       });
       const parsedAt = performance.now();
       const document: VoxlDocumentV1 = parsed.document;
+      const sceneMaterials: unknown[] = Array.isArray(document.materials) ? document.materials : [];
+      const bodyChunks = parsed.bodyChunks;
       const resolvedMeshBytes: Map<string, Uint8Array> = parsed.meshBytes;
       const resolvedOriginalMeshBytes = parsed.originalMeshBytes;
       const originalMeshChunks = parsed.originalMeshChunks;
@@ -6936,6 +7121,9 @@ export function useSceneCollectionManager(options?: {
             }
           }
 
+          const decodedSplitBodies = bodyChunks?.has(model.id)
+            ? await decodeBodyChunk(bodyChunks.get(model.id) as Uint8Array, geometry.center)
+            : undefined;
           const polygonCount = countTriangles(geometry.geometry);
           const color = clampHexColor(model.color, DEFAULT_MESH_COLOR);
           const importedPlateId = plateIdForImport(model.plateId);
@@ -6962,6 +7150,17 @@ export function useSceneCollectionManager(options?: {
             manualZMoveOverride: true,
             isSupportGeometry: model.isSupportGeometry,
             linkGroupId: model.linkGroupId,
+            // A project saved before models carried a material still has to name one
+            // on a multi-tank printer.
+            materialProfileId: model.materialProfileId ?? resolveMultiTankImportDefault()?.materialProfileId,
+            materialBaseColor: model.materialBaseColor,
+            ...(decodedSplitBodies ? { splitBodies: decodedSplitBodies } : {}),
+            ...(model.bodyMaterialProfileIds
+              ? { bodyMaterialProfileIds: model.bodyMaterialProfileIds.map((id) => id ?? undefined) }
+              : {}),
+            ...(model.bodyColors
+              ? { bodyColors: model.bodyColors.map((color) => color ?? undefined) }
+              : {}),
           });
 
           // Store meshModifiers externally so model objects stay lightweight
@@ -7118,8 +7317,14 @@ export function useSceneCollectionManager(options?: {
             const recordedName = typeof recordedPrinter.printer.name === 'string' && recordedPrinter.printer.name.trim().length > 0
               ? recordedPrinter.printer.name
               : undefined;
+            const sceneUsesMultiTankMaterials = document.models.some((entry) => (
+              !!entry.materialProfileId || (entry.bodyMaterialProfileIds?.some((id) => !!id) ?? false)
+            ));
             setPrinterMismatch({
               bundle: recordedPrinter,
+              ...(sceneMaterials.length > 0 ? { materials: sceneMaterials } : {}),
+              sceneUsesMultiTankMaterials,
+              currentMaterialMode: currentPrinter.materialMode,
               ...(recordedName ? { recordedName } : {}),
               recordedBuildVolumeMm: { ...recordedVolume },
               currentName: currentPrinter.name,
@@ -7127,7 +7332,13 @@ export function useSceneCollectionManager(options?: {
               installedProfileId: installed?.id ?? null,
               currentIsSmaller: buildVolumeIsSmaller(currentPrinter, recordedPrinter),
             });
+          } else if (sceneMaterials.length > 0) {
+            // The scene is already on its printer: adopt the materials it carries
+            // so its material references resolve here.
+            importSceneMaterials(installed?.id ?? currentPrinter.id, sceneMaterials);
           }
+        } else if (sceneMaterials.length > 0 && currentPrinter) {
+          importSceneMaterials(currentPrinter.id, sceneMaterials);
         }
       }
 
@@ -7477,6 +7688,92 @@ export function useSceneCollectionManager(options?: {
       after,
       isSupport ? MARK_AS_SUPPORT_LABEL : MARK_AS_MODEL_LABEL,
     );
+  }, [activeModelId, models, pushSceneSnapshotHistory, selectedModelIds]);
+
+  const setModelBodyMaterial = useCallback((
+    modelId: string,
+    bodyIndices: number[],
+    materialProfileId: string | null,
+    materialColor?: string,
+  ) => {
+    const target = models.find((model) => model.id === modelId);
+    const bodyCount = target?.splitBodies?.length ?? 0;
+    if (!target || bodyCount <= 1 || bodyIndices.length === 0) return;
+
+    const nextIds = Array.from({ length: bodyCount }, (_, index) => target.bodyMaterialProfileIds?.[index]);
+    const nextColors = Array.from({ length: bodyCount }, (_, index) => target.bodyColors?.[index]);
+    let changed = false;
+    for (const index of bodyIndices) {
+      if (index < 0 || index >= bodyCount) continue;
+      const nextId = materialProfileId || undefined;
+      const nextColor = nextId ? materialColor : undefined;
+      if (nextIds[index] !== nextId || nextColors[index] !== nextColor) {
+        nextIds[index] = nextId;
+        nextColors[index] = nextColor;
+        changed = true;
+      }
+    }
+    if (!changed) return;
+
+    const nextModels = models.map((model) => (
+      model.id === modelId
+        ? { ...model, bodyMaterialProfileIds: nextIds, bodyColors: nextColors }
+        : model
+    ));
+
+    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
+    setModels(nextModels);
+    const after = captureSceneSnapshot(nextModels, activeModelId, selectedModelIds);
+    pushSceneSnapshotHistory(before, after, ASSIGN_MATERIAL_LABEL);
+  }, [activeModelId, models, pushSceneSnapshotHistory, selectedModelIds]);
+
+  const setModelMaterialProfile = useCallback((
+    modelIds: string[],
+    materialProfileId: string | null,
+    materialColor?: string,
+  ) => {
+    if (modelIds.length === 0) return;
+    const targetIds = new Set(modelIds);
+    if (!models.some((m) => targetIds.has(m.id))) return;
+
+    const nextMaterialProfileId = materialProfileId || undefined;
+    // An assigned material paints its resin colour on the mesh, remembering the
+    // colour it replaced; clearing the assignment hands that colour back.
+    const nextModels = models.map((model) => {
+      if (!targetIds.has(model.id)) return model;
+      if (!nextMaterialProfileId) {
+        if (!model.materialProfileId && !model.materialBaseColor) return model;
+        return {
+          ...model,
+          materialProfileId: undefined,
+          materialBaseColor: undefined,
+          color: model.materialBaseColor ?? model.color,
+        };
+      }
+      if (!materialColor) {
+        return model.materialProfileId === nextMaterialProfileId
+          ? model
+          : { ...model, materialProfileId: nextMaterialProfileId };
+      }
+      return {
+        ...model,
+        materialProfileId: nextMaterialProfileId,
+        materialBaseColor: model.materialBaseColor ?? model.color,
+        color: materialColor,
+      };
+    });
+
+    if (nextModels.every((model, index) => model === models[index])) return;
+
+    nextModels.forEach((next, index) => {
+      const previous = models[index];
+      if (previous.color !== next.color) paintModelBaseColor(next, next.color);
+    });
+
+    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
+    setModels(nextModels);
+    const after = captureSceneSnapshot(nextModels, activeModelId, selectedModelIds);
+    pushSceneSnapshotHistory(before, after, ASSIGN_MATERIAL_LABEL);
   }, [activeModelId, models, pushSceneSnapshotHistory, selectedModelIds]);
 
   const linkModels = useCallback((idsInput: string[]) => {
@@ -8542,6 +8839,8 @@ export function useSceneCollectionManager(options?: {
     setModelManualZMoveOverride,
     setModelVisibility,
     toggleSupportDesignation,
+    setModelMaterialProfile,
+    setModelBodyMaterial,
     linkModels,
     unlinkModels,
     setModelMeshModifiers,

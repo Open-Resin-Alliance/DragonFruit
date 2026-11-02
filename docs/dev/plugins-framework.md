@@ -2,23 +2,26 @@
 
 This folder defines the plugin system for DragonFruit.
 
-DragonFruit supports two plugin classes with intentionally different trust and capability boundaries:
+DragonFruit supports three plugin classes with intentionally different trust and capability boundaries:
 
 - **Simple plugins** (runtime-installed, data-only, GitHub manifest based)
 - **Complex plugins** (repository-contributed, compile-time integrated, code-capable)
+- **Sideloaded complex plugins** (runtime-imported package, code-capable, opt-in — see
+  [Sideloaded Complex Plugins](plugins-sideloaded.md))
 
 Plugin submodules under this folder are licensed separately under **MIT** and each plugin root includes its own `LICENSE` file.
 
-If you remember one rule, remember this one: **runtime-installed plugins are data; executable plugin code is build-time only**.
+If you remember one rule, remember this one: **runtime-installed plugins are data unless the user turns on sideloaded complex plugins and imports a signed package** — executable plugin code is otherwise build-time only.
 
 ---
 
 ## Plugin classes at a glance
 
-| Class          | Install model                        | Contains code? | Primary use                                                | Trust model                        |
-| -------------- | ------------------------------------ | -------------- | ---------------------------------------------------------- | ---------------------------------- |
-| Simple plugin  | Runtime install from GitHub manifest | No             | Presets, templates, metadata, assets                       | Restricted + validated             |
-| Complex plugin | PR into this repository              | Yes            | Protocols, upload flows, network handlers, native encoders | Reviewed + allowlisted + generated |
+| Class                  | Install model                        | Contains code? | Primary use                                                | Trust model                        |
+| ---------------------- | ------------------------------------ | -------------- | ---------------------------------------------------------- | ---------------------------------- |
+| Simple plugin          | Runtime install from GitHub manifest | No             | Presets, templates, metadata, assets                       | Restricted + validated             |
+| Complex plugin         | PR into this repository              | Yes            | Protocols, upload flows, network handlers, native encoders | Reviewed + allowlisted + generated |
+| Sideloaded plugin      | `.dfplugin` import in Settings       | Yes (vendor)   | Closed-source encoders, protocols, importers               | Signed package + passphrase + opt-in, off by default |
 
 ---
 
@@ -39,6 +42,11 @@ Simple plugins are a safe extension mechanism for printer/material content.
 - Runtime code download/eval
 - External binaries
 
+These rules are about the *simple* tier. Executable plugins reach the app only
+through the compiled-in tier or the opt-in sideloaded tier
+([Sideloaded Complex Plugins](plugins-sideloaded.md)); neither is reachable from
+a GitHub manifest install.
+
 ### Manifest basics
 
 - Default filename: `dragonfruit-plugin.json`
@@ -48,7 +56,10 @@ Simple plugins are a safe extension mechanism for printer/material content.
 ### Install flow
 
 1. User installs from **Settings → Plugins**
-2. `POST /api/plugins/github-manifest` fetches + validates manifest
+2. `resolveGithubPluginManifest` (`src/features/plugins/githubPluginManifest.ts`) fetches and validates the manifest. The production desktop build has no Next.js server — Tauri embeds only `index.html` and `_next/static` — so the transport differs by build:
+   - Desktop: `requestPluginManifest` (`src/features/plugins/pluginManifestClient.ts`) runs the resolver in the webview and fetches every GitHub request through the `fetch_github_plugin_resource` Tauri command (`src-tauri/src/main.rs`), which allows `github.com`, `api.github.com` and `raw.githubusercontent.com` only. Preset images hosted elsewhere keep their remote URL instead of being inlined as data URLs.
+   - Web / `next dev` without Tauri: the same resolver runs inside `POST /api/plugins/github-manifest` with the server's `fetch`.
+   Both transports return the same `{ status, body }` payload, so the UI flow is identical.
 3. Metadata is persisted
 4. Presets/templates merge into runtime lists
 
@@ -65,13 +76,20 @@ Simple plugins are a safe extension mechanism for printer/material content.
 - Optional explicit liability acknowledgment for unallowlisted repos
 - Optional manifest SHA-256 verification (`expectedManifestSha256`)
 
-Route reference: `src/app/api/plugins/github-manifest/route.ts`
+Resolver: `src/features/plugins/githubPluginManifest.ts`
+Transport: `src/features/plugins/pluginManifestClient.ts` → `fetch_github_plugin_resource` (desktop) or `src/app/api/plugins/github-manifest/route.ts` (web)
 
 ---
 
 ## Complex plugins (compiled plugins)
 
 Complex plugins are for integrations that require executable logic.
+
+A vendor that cannot open-source its integration cannot use this tier: their
+code would be compiled into the AGPL binary. That case uses the sideloaded
+tier instead — a runtime-imported, signed, optionally sealed package run as a
+separate process over a versioned protocol. See
+[Sideloaded Complex Plugins](plugins-sideloaded.md) and ADR-0047.
 
 ### Typical capabilities
 

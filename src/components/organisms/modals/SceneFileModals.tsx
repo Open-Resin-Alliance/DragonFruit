@@ -336,6 +336,8 @@ export function SceneFileModals({
           currentBuildVolumeMm={scene.printerMismatch.currentBuildVolumeMm}
           willAddPrinter={scene.printerMismatch.installedProfileId === null}
           currentIsSmaller={scene.printerMismatch.currentIsSmaller}
+          sceneUsesMultiTankMaterials={scene.printerMismatch.sceneUsesMultiTankMaterials}
+          currentMaterialMode={scene.printerMismatch.currentMaterialMode}
           onSwitch={() => scene.resolvePrinterMismatch('switch')}
           onKeep={() => scene.resolvePrinterMismatch('keep')}
         />

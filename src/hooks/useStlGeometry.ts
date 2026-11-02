@@ -1649,18 +1649,46 @@ export async function load3mfGeometryMergedWithSplitData(
   fileUrl: string,
   options?: ProcessGeometryOptions,
 ): Promise<{ merged: GeometryWithBounds; splitBodies: GeometryWithBounds[] }> {
-  const nativeBodies = await loadNativeMeshBodies(options?.filePath);
-  if (nativeBodies) {
-    const merged = await processGeometry(mergeBodyGeometries(nativeBodies), options);
+  /**
+   * Processes each 3MF body so it lands in the *merged model's* local space, which
+   * is what lets the scene draw a body on its own (its own resin colour) without
+   * splitting the model. `processGeometry(..., { center: false })` keeps the raw
+   * coordinates; the merged model was normalised by its own prep, so the same
+   * translation is applied to every body.
+   *
+   * The bodies still work with "Split to Bodies": that math derives each part's
+   * transform from its own bbox, which this shift moves with it.
+   */
+  const processBodiesInModelSpace = async (
+    bodies: THREE.BufferGeometry[],
+    mergedGeometry: GeometryWithBounds,
+    rawMerged: THREE.BufferGeometry,
+  ): Promise<GeometryWithBounds[]> => {
     // With one body the merged geometry *is* that body, and the split result is
     // discarded by the caller. Re-processing it would run prep (and the AO bake)
     // a second time on the same geometry.
-    const splitBodies: GeometryWithBounds[] = [];
-    if (nativeBodies.length > 1) {
-      for (const body of nativeBodies) {
-        splitBodies.push(await processGeometry(body, options));
-      }
+    if (bodies.length <= 1) return [];
+
+    if (!rawMerged.boundingBox) rawMerged.computeBoundingBox();
+    const rawBox = rawMerged.boundingBox;
+    const offset = rawBox
+      ? mergedGeometry.bbox.min.clone().sub(rawBox.min)
+      : new THREE.Vector3();
+
+    const result: GeometryWithBounds[] = [];
+    for (const body of bodies) {
+      const local = body.clone();
+      local.translate(offset.x, offset.y, offset.z);
+      result.push(await processGeometry(local, { ...options, center: false }));
     }
+    return result;
+  };
+
+  const nativeBodies = await loadNativeMeshBodies(options?.filePath);
+  if (nativeBodies) {
+    const mergedRaw = mergeBodyGeometries(nativeBodies);
+    const merged = await processGeometry(mergedRaw, options);
+    const splitBodies = await processBodiesInModelSpace(nativeBodies, merged, mergedRaw);
     return { merged, splitBodies };
   }
 
@@ -1694,16 +1722,7 @@ export async function load3mfGeometryMergedWithSplitData(
         : mergeGeometries(rawGeoms, false);
       if (!mergedBuf) throw new Error('Failed to merge 3MF bodies.');
       const merged = await processGeometry(mergedBuf, options);
-
-      // Process each body independently (with centering) → split bodies
-      // One body means the merged geometry is that body, and the caller drops a
-      // one-entry split list, so processing it again only re-runs prep and the bake.
-      const splitBodies: GeometryWithBounds[] = [];
-      if (rawGeoms.length > 1) {
-        for (const raw of rawGeoms) {
-          splitBodies.push(await processGeometry(raw, options));
-        }
-      }
+      const splitBodies = await processBodiesInModelSpace(rawGeoms, merged, mergedBuf);
 
       return { merged, splitBodies };
     } catch (error) {
@@ -1735,13 +1754,7 @@ export async function load3mfGeometryMergedWithSplitData(
             return;
           }
           const merged = await processGeometry(mergedBuf, options);
-
-          const splitBodies: GeometryWithBounds[] = [];
-          if (rawGeoms.length > 1) {
-            for (const raw of rawGeoms) {
-              splitBodies.push(await processGeometry(raw, options));
-            }
-          }
+          const splitBodies = await processBodiesInModelSpace(rawGeoms, merged, mergedBuf);
 
           resolve({ merged, splitBodies });
         } catch (error) {

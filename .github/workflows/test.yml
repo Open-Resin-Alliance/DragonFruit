@@ -210,6 +210,26 @@ jobs:
       - name: Slice a scene with the TS CLI
         run: npm run check:scene-slice
 
+  plugin-crates:
+    name: Plugin SDK and package crates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install the pinned Rust toolchain
+        run: |
+          channel=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
+          rustup toolchain install "$channel" --profile minimal
+          echo "RUSTUP_TOOLCHAIN=$channel" >> "$GITHUB_ENV"
+
+      # The wire protocol (SDK) and the .dfplugin format (package) are the two
+      # contracts a partner builds against; their tests do not need the shell.
+      - name: Test
+        run: |
+          cargo test --locked --manifest-path rust/dragonfruit-plugin-sdk/Cargo.toml
+          cargo test --locked --manifest-path rust/dragonfruit-plugin-package/Cargo.toml
+
   cargo-locks:
     name: Cargo lockfiles
     runs-on: ubuntu-latest

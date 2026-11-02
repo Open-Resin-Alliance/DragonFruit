@@ -91,6 +91,20 @@ export type VoxlModelEntry = {
   isSupportGeometry?: boolean;
   linkGroupId?: string;
   /**
+   * The material this model prints in on a multi-tank printer (see
+   * `LoadedModel.materialProfileId`). Additive: a reader that ignores it prints the
+   * model in the plate's material.
+   */
+  materialProfileId?: string;
+  /** The mesh colour the material assignment replaced, restored when it is cleared. */
+  materialBaseColor?: string;
+  /** Per-body material assignment, aligned with the model's body meshes (V3.4). */
+  bodyMaterialProfileIds?: Array<string | null>;
+  /** Per-body resolved colour, aligned with the model's body meshes (V3.4). */
+  bodyColors?: Array<string | null>;
+  /** How many body meshes this model carries in its `BODY` chunk (V3.4). */
+  bodyCount?: number;
+  /**
    * Baked mesh classification (V3.3): the native classify-only report for the
    * exact triangle order stored in this model's `mesh` payload, so a reader can
    * restore the model/support split without re-running the classifier. Purely
@@ -183,6 +197,8 @@ export type VoxlDocumentV1 = {
   models: VoxlModelEntry[];
   supports: DragonfruitImportFormat;
   extensions?: Record<string, unknown>;
+  /** Material profiles the scene references (V3.4 `MATP` chunk), ids preserved. */
+  materials?: unknown[];
 };
 
 export type VoxlModelRuntimeLike = {
@@ -208,6 +224,22 @@ export type VoxlModelRuntimeLike = {
   plateId?: string;
   isSupportGeometry?: boolean;
   linkGroupId?: string;
+  /** See `VoxlModelEntry.materialProfileId`. */
+  materialProfileId?: string;
+  /** See `VoxlModelEntry.materialBaseColor`. */
+  materialBaseColor?: string;
+  /** Body meshes to write into this model's `BODY` chunk (V3.5). */
+  bodies?: Array<{ positions: Float32Array; index?: Uint32Array | null }>;
+  /**
+   * The merged geometry's centre when the bodies were captured. Stored in the
+   * `BODY` header so a reader can put the bodies back into the space its own
+   * (re-processed) merged mesh ended up in.
+   */
+  bodyCenter?: { x: number; y: number; z: number };
+  /** See `VoxlModelEntry.bodyMaterialProfileIds`. */
+  bodyMaterialProfileIds?: Array<string | null>;
+  /** See `VoxlModelEntry.bodyColors`. */
+  bodyColors?: Array<string | null>;
   /** See `VoxlModelEntry.classification` (V3.3). */
   classification?: MeshHealthReport;
 };
@@ -223,6 +255,8 @@ export type BuildVoxlDocumentInput = {
   supports: DragonfruitImportFormat;
   meta?: Partial<Pick<VoxlMeta, 'generator' | 'generatorVersion' | 'printer'>>;
   extensions?: Record<string, unknown>;
+  /** Material profiles the scene references (V3.4 `MATP` chunk). */
+  materials?: unknown[];
 };
 
 export interface PrecompressedChunk {
@@ -269,4 +303,6 @@ export type ParsedVoxlResult = {
   originalMeshChunks?: Map<string, PrecompressedChunk>;
   /** The detected layout revision of a binary file (2.1 inline, 3.1 chunked), or 1 for V1 JSON. */
   sourceVersion: number;
+  /** Raw `BODY` chunk payloads keyed by model ID (V3.4). */
+  bodyChunks?: Map<string, Uint8Array>;
 };

@@ -256,6 +256,19 @@ Two invariants that mimicry won't teach — get either wrong and undo breaks **s
 
 ## Rust crate version bumps
 
+**A branch that changes a crate under `rust/` must bump that crate's `version`
+before the branch is pushed.** Check every crate the diff touches before the
+first commit. A crate counts as changed when the branch touches any of:
+
+- its source, tests or `build.rs`;
+- its `Cargo.toml` dependencies — a dependency-only bump for a CVE included;
+- code it compiles in through `#[path]`: `dragonfruit-slicing-engine` builds
+  `plugins/athena` and the `plugins/anycubic` submodule, so editing those
+  changes the engine.
+
+A `Cargo.lock` that moved only because another crate's version changed does not
+count. `src-tauri` is the app: it follows the next section, not this one.
+
 The native crates under `rust/` (`dragonfruit-islands`, `dragonfruit-mesh-core`,
 `dragonfruit-slicing-engine`, …) are **standalone crates** — there is no workspace
 root — consumed by the Tauri shell via path dependencies in
@@ -278,14 +291,14 @@ git show origin/dev:rust/<crate>/Cargo.toml | sed -n '3p'
   stop; if a branch would genuinely need two steps, it is two branches.
 - If another crate or the shell pins it by version, update that requirement to
   match.
-- Run `cargo check` (or `cargo build`) in that crate afterwards, then
-  `npm run check:cargo-locks` if you are unsure — a version bump alone leaves
-  **every** lockfile that records the crate stale, including other crates'
-  (`cargo update --workspace --manifest-path <crate>/Cargo.toml` refreshes one).
+- Then run `npm run check:cargo-locks:fix`. A version bump alone leaves
+  **every** lockfile that records the crate stale, including other crates', and
+  this refreshes them all. `npm run check:cargo-locks` (what CI runs) should then
+  pass. Finish with `cargo check` in the crate.
 
 ## App version — do not bump unprompted
 
-NEVER bump the DragonFruit main app version unprompted — `package.json` `version`, `src-tauri/tauri.conf.json` `version`, and `src-tauri/Cargo.toml` `[package] version` must stay on the current release (currently `0.1.15`) unless the user explicitly asks for a release/version bump. The `rust/*` crate bumps above are allowed; the main app version is release-driven and user-controlled.
+NEVER bump the DragonFruit main app version unprompted — `package.json` `version`, `src-tauri/tauri.conf.json` `version`, and `src-tauri/Cargo.toml` `[package] version` must stay on the current release (currently `0.1.15`) unless the user explicitly asks for a release/version bump. The `rust/*` crate bumps above are required, not merely allowed; the main app version is release-driven and user-controlled.
 
 <!-- BEGIN:nextjs-agent-rules -->
 
