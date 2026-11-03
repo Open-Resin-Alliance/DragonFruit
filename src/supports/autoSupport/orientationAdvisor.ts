@@ -14,7 +14,7 @@
  * same result — no RNG. The
  * `objective` option picks what ranks first (`supports` contact area by
  * default, `height` for the fastest print, `scarring` for contact weighted by
- * surface detail). Under `supports`, primaries within
+ * surface detail, and the plate-planning goals below). Under `supports`, primaries within
  * the anchoring margin of the minimum tie so a wider base wins a few extra
  * mm² of contact instead of balancing on a point.
  *
@@ -63,12 +63,32 @@ export interface OrientationCost {
     adhesionRatio: number;
     /** What an unstable pose was charged, in area-equivalent (mm²). */
     stabilityPenaltyMm2: number;
+    /** Flat down-facing area resting on the plate (mm²): the `flatFace` measure. */
+    flatContactMm2: number;
+    /** Separate overhang regions above the plate contact; 0 unless the objective is `islands`. */
+    islandCount: number;
+    /** Volume between overhangs and the plate (mm³); 0 unless the objective is `unsupportedVolume`. */
+    unsupportedVolumeMm3: number;
     /** Weighted total the search minimizes: the objective's primary plus cup and blocked terms. */
     cost: number;
 }
 
-/** What the sweep ranks first. `supports` minimizes contact area (the resin default); `height` minimizes Z extent (fastest print) and breaks ties by contact area; `scarring` minimizes contact weighted by surface detail (least scarring) with the same cup guard. */
-export type OrientationObjective = 'supports' | 'height' | 'scarring';
+/**
+ * What the sweep ranks first. `supports` minimizes contact area (the resin default); `height` minimizes Z extent (fastest print) and breaks ties by contact area; `scarring` minimizes contact weighted by surface detail (least scarring) with the same cup guard.
+ *
+ * Plate planning: `footprint` takes the smallest XY bounding box (most parts per plate); `flatFace` stands the model on its largest flat surface; `islands` takes the fewest separate overhang regions (each one starts its own support cluster); `unsupportedVolume` takes the least volume between overhangs and the plate (support material, for inkjet and FDM). Each breaks ties by contact area.
+ *
+ * `leanBack` searches only poses that tip the model's top back by `leanBackMinDeg`–`leanBackMaxDeg` with its front (−Y) up, plus a little sideways tilt, and takes the one with the least contact there. It assumes the mesh comes in upright with its front toward −Y, as minis are exported, so the caller passes it the upright pose: the result is absolute, not a further lean.
+ */
+export type OrientationObjective =
+    | 'supports'
+    | 'height'
+    | 'scarring'
+    | 'footprint'
+    | 'flatFace'
+    | 'islands'
+    | 'unsupportedVolume'
+    | 'leanBack';
 
 export interface AdvisorOptions {
     /** Face is overhang when normal.z < -cos(angle). Default 45°. */
@@ -97,6 +117,10 @@ export interface AdvisorOptions {
     restingPoseCount?: number;
     /** Top-K coarse candidates refined by coordinate descent. Default 5. */
     refineTopK?: number;
+    /** Least lean for `leanBack` (degrees the top tips back). Default 10. */
+    leanBackMinDeg?: number;
+    /** Most lean for `leanBack`. Default 45. */
+    leanBackMaxDeg?: number;
 }
 
 export interface OrientationSuggestion {
@@ -129,6 +153,18 @@ const DEDUP_COS = 0.9962;
 const HULL_POINT_CAP = 6000;
 const DEG = Math.PI / 180;
 const REFINEMENT_STEPS_RAD = [8 * DEG, 4 * DEG, 2 * DEG, 1 * DEG];
+/** Weight of the contact-area tie-break under the plate-planning objectives:
+ *  small enough never to outvote the objective's own unit. */
+const TIE_WEIGHT = 1e-3;
+/** Overhang regions smaller than this do not count as an island (mm²): mesh noise. */
+const ISLAND_MIN_AREA_MM2 = 1;
+/** Overhang within this height of the plate is the plate contact, not an island (mm). */
+const ISLAND_PLATE_BAND_MM = 2;
+const DEFAULT_LEAN_MIN_DEG = 10;
+const DEFAULT_LEAN_MAX_DEG = 45;
+/** Sideways tilt `leanBack` may add to its lean, either way (degrees). */
+const LEAN_SIDE_MAX_DEG = 15;
+const LEAN_GRID_STEP_DEG = 2.5;
 
 function wrapAngle(a: number): number {
     while (a > Math.PI) a -= 2 * Math.PI;
@@ -141,7 +177,11 @@ interface PreparedTriangles {
     normals: Float64Array;
     areas: Float64Array;
     details: Float64Array;
+    /** Triangle centroids (model space), for the height of an overhang. */
+    centroids: Float64Array;
     triCount: number;
+    /** Edge neighbours in CSR form, built on first use by `islands`. */
+    adjacency?: { offsets: Int32Array; neighbors: Int32Array };
 }
 
 function prepareTriangles(mesh: AdvisorMesh): PreparedTriangles {
@@ -172,7 +212,16 @@ function prepareTriangles(mesh: AdvisorMesh): PreparedTriangles {
         normals[t * 3 + 2] = nz / (2 * area);
     }
     const details = computeTriangleDetail(positions, index, triCount, normals, areas);
-    return { normals, areas, details, triCount };
+    const centroids = new Float64Array(triCount * 3);
+    for (let t = 0; t < triCount; t++) {
+        for (let k = 0; k < 3; k++) {
+            const v = hasIndex ? (index as ArrayLike<number>)[t * 3 + k] : t * 3 + k;
+            centroids[t * 3] += positions[v * 3] / 3;
+            centroids[t * 3 + 1] += positions[v * 3 + 1] / 3;
+            centroids[t * 3 + 2] += positions[v * 3 + 2] / 3;
+        }
+    }
+    return { normals, areas, details, centroids, triCount };
 }
 
 /**
@@ -189,6 +238,34 @@ export function computeTriangleDetail(
     areas: Float64Array,
 ): Float64Array {
     const details = new Float64Array(triCount);
+    const ids = weldCornerIds(positions, index, triCount);
+    const edgeTris = trianglesByEdge(ids, triCount, areas);
+    for (const list of edgeTris.values()) {
+        if (list.length < 2) continue;
+        for (let i = 0; i < list.length; i++) {
+            for (let j = i + 1; j < list.length; j++) {
+                const s = list[i];
+                const q = list[j];
+                if (areas[s] <= 0 || areas[q] <= 0) continue;
+                const dot =
+                    normals[s * 3] * normals[q * 3] +
+                    normals[s * 3 + 1] * normals[q * 3 + 1] +
+                    normals[s * 3 + 2] * normals[q * 3 + 2];
+                const detail = Math.min(1, Math.acos(Math.min(1, Math.max(-1, dot))) / (Math.PI / 2));
+                if (detail > details[s]) details[s] = detail;
+                if (detail > details[q]) details[q] = detail;
+            }
+        }
+    }
+    return details;
+}
+
+/** Vertex id per triangle corner; soup is welded at 0.1 µm so shared edges are found. */
+function weldCornerIds(
+    positions: ArrayLike<number>,
+    index: ArrayLike<number> | null | undefined,
+    triCount: number,
+): Int32Array {
     const hasIndex = !!index && index.length > 0;
     const ids = new Int32Array(triCount * 3);
     if (hasIndex) {
@@ -215,6 +292,11 @@ export function computeTriangleDetail(
             }
         }
     }
+    return ids;
+}
+
+/** The non-degenerate triangles on each welded edge. */
+function trianglesByEdge(ids: Int32Array, triCount: number, areas: Float64Array): Map<string, number[]> {
     const edgeTris = new Map<string, number[]>();
     for (let t = 0; t < triCount; t++) {
         if (areas[t] <= 0) continue;
@@ -229,24 +311,82 @@ export function computeTriangleDetail(
             else edgeTris.set(key, [t]);
         }
     }
+    return edgeTris;
+}
+
+/** Edge neighbours of every triangle (CSR), built once per search and only for `islands`. */
+function triangleAdjacency(mesh: AdvisorMesh, prep: PreparedTriangles): { offsets: Int32Array; neighbors: Int32Array } {
+    if (prep.adjacency) return prep.adjacency;
+    const ids = weldCornerIds(mesh.positions, mesh.index, prep.triCount);
+    const edgeTris = trianglesByEdge(ids, prep.triCount, prep.areas);
+    const offsets = new Int32Array(prep.triCount + 1);
     for (const list of edgeTris.values()) {
-        if (list.length < 2) continue;
-        for (let i = 0; i < list.length; i++) {
-            for (let j = i + 1; j < list.length; j++) {
-                const s = list[i];
-                const q = list[j];
-                if (areas[s] <= 0 || areas[q] <= 0) continue;
-                const dot =
-                    normals[s * 3] * normals[q * 3] +
-                    normals[s * 3 + 1] * normals[q * 3 + 1] +
-                    normals[s * 3 + 2] * normals[q * 3 + 2];
-                const detail = Math.min(1, Math.acos(Math.min(1, Math.max(-1, dot))) / (Math.PI / 2));
-                if (detail > details[s]) details[s] = detail;
-                if (detail > details[q]) details[q] = detail;
-            }
+        for (const t of list) offsets[t + 1] += list.length - 1;
+    }
+    for (let t = 0; t < prep.triCount; t++) offsets[t + 1] += offsets[t];
+    const neighbors = new Int32Array(offsets[prep.triCount]);
+    const fill = offsets.slice(0, prep.triCount);
+    for (const list of edgeTris.values()) {
+        for (const t of list) {
+            for (const q of list) if (q !== t) neighbors[fill[t]++] = q;
         }
     }
-    return details;
+    prep.adjacency = { offsets, neighbors };
+    return prep.adjacency;
+}
+
+/**
+ * Overhang regions and the volume under them for one pose. An island is a
+ * connected patch of overhang triangles at least `ISLAND_MIN_AREA_MM2` big
+ * and above the plate band: each starts its own support cluster. The volume
+ * is each overhang's plate-projected area times its height above the plate,
+ * the material a support forest under it fills.
+ */
+function scoreOverhangExtent(
+    mesh: AdvisorMesh,
+    prep: PreparedTriangles,
+    threshold: number,
+    rot: { sa: number; ca: number; sb: number; cb: number },
+    plateZMm: number,
+    want: { islands: boolean; volume: boolean },
+): { islandCount: number; unsupportedVolumeMm3: number } {
+    const { normals, areas, centroids, triCount } = prep;
+    const { sa, ca, sb, cb } = rot;
+    const overhangTri = want.islands ? new Uint8Array(triCount) : null;
+    let unsupportedVolumeMm3 = 0;
+    for (let t = 0; t < triCount; t++) {
+        if (areas[t] <= 0) continue;
+        const nzr = rotatedNz(normals[t * 3], normals[t * 3 + 1], normals[t * 3 + 2], sa, ca, sb, cb);
+        if (nzr >= -threshold) continue;
+        // The same Rx-then-Ry as the normals, applied to the centroid.
+        const zc = rotatedNz(centroids[t * 3], centroids[t * 3 + 1], centroids[t * 3 + 2], sa, ca, sb, cb) - plateZMm;
+        if (want.volume) unsupportedVolumeMm3 += areas[t] * -nzr * Math.max(0, zc);
+        if (overhangTri && zc > ISLAND_PLATE_BAND_MM) overhangTri[t] = 1;
+    }
+    let islandCount = 0;
+    if (overhangTri) {
+        const { offsets, neighbors } = triangleAdjacency(mesh, prep);
+        const stack: number[] = [];
+        for (let t = 0; t < triCount; t++) {
+            if (overhangTri[t] !== 1) continue;
+            overhangTri[t] = 2;
+            stack.push(t);
+            let area = 0;
+            while (stack.length > 0) {
+                const u = stack.pop() as number;
+                area += areas[u];
+                for (let k = offsets[u]; k < offsets[u + 1]; k++) {
+                    const q = neighbors[k];
+                    if (overhangTri[q] === 1) {
+                        overhangTri[q] = 2;
+                        stack.push(q);
+                    }
+                }
+            }
+            if (area >= ISLAND_MIN_AREA_MM2) islandCount += 1;
+        }
+    }
+    return { islandCount, unsupportedVolumeMm3 };
 }
 
 /** Rotated normal z after Rx(a) then Ry(b) applied to unit (ux, uy, uz). */
@@ -367,21 +507,51 @@ export function evaluateOrientationCost(
     rotYRad: number,
     opts: AdvisorOptions = {},
 ): OrientationCost {
-    const threshold = Math.cos(((opts.selfSupportAngleDeg ?? DEFAULT_ANGLE_DEG) * Math.PI) / 180);
-    const cupWeight = opts.cupWeight ?? 2;
-    const scarWeight = opts.scarWeight ?? DEFAULT_SCAR_WEIGHT;
-    const blockedWeight = opts.blockedWeight ?? DEFAULT_BLOCKED_WEIGHT;
-    const stabilityWeight = opts.stabilityWeight ?? DEFAULT_STABILITY_WEIGHT;
-    const objective = opts.objective ?? 'supports';
-    const blocked = toBlockedSet(opts.blockedTriangleIndices);
-    const prep = prepareTriangles(mesh);
-    const sa = Math.sin(rotXRad);
-    const ca = Math.cos(rotXRad);
-    const sb = Math.sin(rotYRad);
-    const cb = Math.cos(rotYRad);
+    return toCost(scorePose(makeScoreContext(mesh, opts), { rotXRad, rotYRad }));
+}
+
+/** What every pose of one search is scored against: computed once. */
+interface ScoreContext {
+    mesh: AdvisorMesh;
+    prep: PreparedTriangles;
+    threshold: number;
+    cupWeight: number;
+    scarWeight: number;
+    blockedWeight: number;
+    stabilityWeight: number;
+    objective: OrientationObjective;
+    blocked: Set<number> | null;
+}
+
+function makeScoreContext(mesh: AdvisorMesh, opts: AdvisorOptions): ScoreContext {
+    return {
+        mesh,
+        prep: prepareTriangles(mesh),
+        threshold: Math.cos(((opts.selfSupportAngleDeg ?? DEFAULT_ANGLE_DEG) * Math.PI) / 180),
+        cupWeight: opts.cupWeight ?? 2,
+        scarWeight: opts.scarWeight ?? DEFAULT_SCAR_WEIGHT,
+        blockedWeight: opts.blockedWeight ?? DEFAULT_BLOCKED_WEIGHT,
+        stabilityWeight: opts.stabilityWeight ?? DEFAULT_STABILITY_WEIGHT,
+        objective: opts.objective ?? 'supports',
+        blocked: toBlockedSet(opts.blockedTriangleIndices),
+    };
+}
+
+/**
+ * Score one pose. The support term is the contact the generator will need:
+ * overhang (or scar-weighted contact under `scarring`) plus the cup proxy,
+ * the heavy blocked weight and the stability charge. It is the primary under
+ * the support objectives, and the tie-break under the plate-planning ones.
+ */
+function scorePose(ctx: ScoreContext, c: OrientationCandidate): ScoredOrientation {
+    const { mesh, prep, threshold, objective, blocked } = ctx;
+    const sa = Math.sin(c.rotXRad);
+    const ca = Math.cos(c.rotXRad);
+    const sb = Math.sin(c.rotYRad);
+    const cb = Math.cos(c.rotYRad);
     const { overhang, cup, scarArea, blockedArea } = scoreParts(prep, threshold, sa, ca, sb, cb, blocked);
     const { heightMm, footprintMm2 } = measureBoundingBox(mesh.positions, sa, ca, sb, cb);
-    const stability = measurePoseStability(mesh.positions, mesh.index, rotXRad, rotYRad, {
+    const stability = measurePoseStability(mesh.positions, mesh.index, c.rotXRad, c.rotYRad, {
         normals: prep.normals,
         areas: prep.areas,
         details: prep.details,
@@ -390,25 +560,60 @@ export function evaluateOrientationCost(
         cupCos: CUP_FLAT_COS,
     });
     const net = netSupportAreas({ overhang, cup, scarArea, blockedArea }, stability.restingContact);
-    const stabilityPenaltyMm2 = isStaticallyUnstable(stability) ? stabilityWeight * footprintMm2 : 0;
-    const scar = net.overhang + scarWeight * net.scarArea;
-    const base =
-        objective === 'scarring' ? scar + cupWeight * net.cup : net.overhang + cupWeight * net.cup;
-    const cost = base + blockedWeight * net.blockedArea + stabilityPenaltyMm2;
+    const stabilityPenalty = isStaticallyUnstable(stability) ? ctx.stabilityWeight * footprintMm2 : 0;
+    const scar = net.overhang + ctx.scarWeight * net.scarArea;
+    const support =
+        (objective === 'scarring' ? scar + ctx.cupWeight * net.cup : net.overhang + ctx.cupWeight * net.cup) +
+        ctx.blockedWeight * net.blockedArea +
+        stabilityPenalty;
+    const flatContact = stability.restingContact.cupAreaMm2;
+    const extent =
+        objective === 'islands' || objective === 'unsupportedVolume'
+            ? scoreOverhangExtent(mesh, prep, threshold, { sa, ca, sb, cb }, stability.plateZMm, {
+                islands: objective === 'islands',
+                volume: objective === 'unsupportedVolume',
+            })
+            : { islandCount: 0, unsupportedVolumeMm3: 0 };
+    let primary = support;
+    if (objective === 'footprint') primary = footprintMm2 + TIE_WEIGHT * support;
+    else if (objective === 'flatFace') primary = -flatContact + TIE_WEIGHT * support;
+    else if (objective === 'islands') primary = extent.islandCount + TIE_WEIGHT * TIE_WEIGHT * support;
+    else if (objective === 'unsupportedVolume') primary = extent.unsupportedVolumeMm3 + TIE_WEIGHT * support;
     return {
-        overhangAreaMm2: net.overhang,
-        cupAreaMm2: net.cup,
-        scarAreaMm2: scar,
-        blockedAreaMm2: net.blockedArea,
-        bearingAreaMm2: stability.bearingAreaMm2,
-        bearingEdges: stability.bearingEdges,
-        centroidDepthMm: stability.centroidDepthMm,
-        marginMm: stability.marginMm,
-        adhesionRatio: stability.adhesionRatio,
-        stabilityPenaltyMm2,
+        ...c,
+        primary,
+        overhang: net.overhang,
+        cup: net.cup,
+        scar,
+        blocked: net.blockedArea,
         heightMm,
         footprintMm2,
-        cost,
+        stability,
+        stabilityPenalty,
+        flatContact,
+        islandCount: extent.islandCount,
+        unsupportedVolume: extent.unsupportedVolumeMm3,
+    };
+}
+
+function toCost(s: ScoredOrientation): OrientationCost {
+    return {
+        overhangAreaMm2: s.overhang,
+        cupAreaMm2: s.cup,
+        scarAreaMm2: s.scar,
+        blockedAreaMm2: s.blocked,
+        bearingAreaMm2: s.stability.bearingAreaMm2,
+        bearingEdges: s.stability.bearingEdges,
+        centroidDepthMm: s.stability.centroidDepthMm,
+        marginMm: s.stability.marginMm,
+        adhesionRatio: s.stability.adhesionRatio,
+        stabilityPenaltyMm2: s.stabilityPenalty,
+        flatContactMm2: s.flatContact,
+        islandCount: s.islandCount,
+        unsupportedVolumeMm3: s.unsupportedVolume,
+        heightMm: s.heightMm,
+        footprintMm2: s.footprintMm2,
+        cost: s.primary,
     };
 }
 
@@ -551,6 +756,25 @@ export function generateM1Candidates(mesh: AdvisorMesh, opts: AdvisorOptions = {
     return out;
 }
 
+/** Lean range of a `leanBack` search in radians, as rotX: negative tips the front (−Y) up. */
+function leanBackRange(opts: AdvisorOptions): { minRotX: number; maxRotX: number; side: number } {
+    const lo = Math.max(0, Math.min(89, opts.leanBackMinDeg ?? DEFAULT_LEAN_MIN_DEG));
+    const hi = Math.max(lo, Math.min(89, opts.leanBackMaxDeg ?? DEFAULT_LEAN_MAX_DEG));
+    return { minRotX: -hi * DEG, maxRotX: -lo * DEG, side: LEAN_SIDE_MAX_DEG * DEG };
+}
+
+/** A grid over the lean range and the sideways tilt: the only poses `leanBack` considers. */
+function leanBackCandidates(opts: AdvisorOptions): OrientationCandidate[] {
+    const { minRotX, maxRotX, side } = leanBackRange(opts);
+    const step = LEAN_GRID_STEP_DEG * DEG;
+    const out: OrientationCandidate[] = [];
+    for (let rx = maxRotX; rx >= minRotX - 1e-9; rx -= step) {
+        for (let ry = -side; ry <= side + 1e-9; ry += 2 * step) out.push({ rotXRad: rx, rotYRad: ry });
+    }
+    if (out.length === 0) out.push({ rotXRad: maxRotX, rotYRad: 0 });
+    return out;
+}
+
 interface ScoredOrientation extends OrientationCandidate {
     primary: number;
     overhang: number;
@@ -561,6 +785,9 @@ interface ScoredOrientation extends OrientationCandidate {
     footprintMm2: number;
     stability: PoseStability;
     stabilityPenalty: number;
+    flatContact: number;
+    islandCount: number;
+    unsupportedVolume: number;
 }
 
 /** Epsilons for rank comparisons, scaled to the baseline so tiny meshes and huge ones behave alike. */
@@ -613,40 +840,20 @@ function compareScored(
  * the user's explicit choice.
  */
 export function suggestOrientation(mesh: AdvisorMesh, opts: AdvisorOptions = {}): OrientationSuggestion {
-    const threshold = Math.cos(((opts.selfSupportAngleDeg ?? DEFAULT_ANGLE_DEG) * Math.PI) / 180);
-    const cupWeight = opts.cupWeight ?? 2;
-    const scarWeight = opts.scarWeight ?? DEFAULT_SCAR_WEIGHT;
-    const blockedWeight = opts.blockedWeight ?? DEFAULT_BLOCKED_WEIGHT;
-    const stabilityWeight = opts.stabilityWeight ?? DEFAULT_STABILITY_WEIGHT;
-    const objective = opts.objective ?? 'supports';
-    const blocked = toBlockedSet(opts.blockedTriangleIndices);
-    const prep = prepareTriangles(mesh);
-    const candidates = generateM1Candidates(mesh, opts);
-
-    const scoreFull = (c: OrientationCandidate): ScoredOrientation => {
-        const sa = Math.sin(c.rotXRad);
-        const ca = Math.cos(c.rotXRad);
-        const sb = Math.sin(c.rotYRad);
-        const cb = Math.cos(c.rotYRad);
-        const { overhang, cup, scarArea, blockedArea } = scoreParts(prep, threshold, sa, ca, sb, cb, blocked);
-        const { heightMm, footprintMm2 } = measureBoundingBox(mesh.positions, sa, ca, sb, cb);
-        const stability = measurePoseStability(mesh.positions, mesh.index, c.rotXRad, c.rotYRad, {
-            normals: prep.normals,
-            areas: prep.areas,
-            details: prep.details,
-            blocked,
-            threshold,
-            cupCos: CUP_FLAT_COS,
-        });
-        const net = netSupportAreas({ overhang, cup, scarArea, blockedArea }, stability.restingContact);
-        const stabilityPenalty = isStaticallyUnstable(stability) ? stabilityWeight * footprintMm2 : 0;
-        const scar = net.overhang + scarWeight * net.scarArea;
-        const primary =
-            (objective === 'scarring' ? scar + cupWeight * net.cup : net.overhang + cupWeight * net.cup) +
-            blockedWeight * net.blockedArea +
-            stabilityPenalty;
-        return { ...c, primary, overhang: net.overhang, cup: net.cup, scar, blocked: net.blockedArea, heightMm, footprintMm2, stability, stabilityPenalty };
-    };
+    const ctx = makeScoreContext(mesh, opts);
+    const { objective } = ctx;
+    const leanBack = objective === 'leanBack';
+    const lean = leanBackRange(opts);
+    // `leanBack` keeps every pose, refinement included, inside its range.
+    const keepInRange = (c: OrientationCandidate): OrientationCandidate =>
+        leanBack
+            ? {
+                rotXRad: Math.min(lean.maxRotX, Math.max(lean.minRotX, c.rotXRad)),
+                rotYRad: Math.min(lean.side, Math.max(-lean.side, c.rotYRad)),
+            }
+            : c;
+    const candidates = leanBack ? leanBackCandidates(opts) : generateM1Candidates(mesh, opts);
+    const scoreFull = (c: OrientationCandidate): ScoredOrientation => scorePose(ctx, c);
     const descend = (start: ScoredOrientation, eps: RankEps, obj: OrientationObjective, preferFootprint: boolean): ScoredOrientation => {
         let cur = start;
         for (const step of REFINEMENT_STEPS_RAD) {
@@ -657,7 +864,7 @@ export function suggestOrientation(mesh: AdvisorMesh, opts: AdvisorOptions = {})
                 { rotXRad: cur.rotXRad, rotYRad: wrapAngle(cur.rotYRad - step) },
             ];
             for (const n of neighbors) {
-                const s = scoreFull(n);
+                const s = scoreFull(keepInRange(n));
                 if (compareScored(s, cur, eps, obj, preferFootprint) < 0) cur = s;
             }
         }
@@ -667,21 +874,22 @@ export function suggestOrientation(mesh: AdvisorMesh, opts: AdvisorOptions = {})
     // Coarse pass: full score per candidate, ranked by the objective, so a
     // height search seeds refinement from short poses even when their
     // support cost is poor. Stable sort keeps ties in candidate order:
-    // same mesh, same result.
-    const scores = candidates.map((c) => scoreFull(c));
-    const baseline = scores[0] ?? scoreFull({ rotXRad: 0, rotYRad: 0 });
+    // same mesh, same result. The current pose is the baseline; `leanBack`
+    // never keeps it, since an upright model is outside its range.
+    const baseline = scoreFull({ rotXRad: 0, rotYRad: 0 });
+    const scores = leanBack ? candidates.map((c) => scoreFull(c)) : [baseline, ...candidates.slice(1).map((c) => scoreFull(c))];
     let minPrimary = Infinity;
     for (const s of scores) {
         if (s.primary < minPrimary) minPrimary = s.primary;
     }
     if (!Number.isFinite(minPrimary)) minPrimary = 0;
     const preferFootprint = objective === 'supports' && minPrimary > ANCHOR_MIN_PRIMARY;
-    const gainEps = 1e-6 * Math.max(1, baseline.primary);
+    const gainEps = 1e-6 * Math.max(1, Math.abs(baseline.primary));
     const eps: RankEps = {
         primary: preferFootprint ? minPrimary * ANCHOR_TOL + ANCHOR_FLOOR_MM2 : gainEps,
         height: 1e-6 * Math.max(1, baseline.heightMm),
     };
-    let best = baseline;
+    let best = scores[0];
     for (let i = 1; i < scores.length; i++) {
         if (compareScored(scores[i], best, eps, objective, preferFootprint) < 0) best = scores[i];
     }
@@ -695,25 +903,11 @@ export function suggestOrientation(mesh: AdvisorMesh, opts: AdvisorOptions = {})
     }
 
     const toDeg = (a: number): number => Math.round(((a * 180) / Math.PI) * 10) / 10;
-    const toCost = (s: ScoredOrientation): OrientationCost => ({
-        overhangAreaMm2: s.overhang,
-        cupAreaMm2: s.cup,
-        scarAreaMm2: s.scar,
-        blockedAreaMm2: s.blocked,
-        bearingAreaMm2: s.stability.bearingAreaMm2,
-        bearingEdges: s.stability.bearingEdges,
-        centroidDepthMm: s.stability.centroidDepthMm,
-        marginMm: s.stability.marginMm,
-        adhesionRatio: s.stability.adhesionRatio,
-        stabilityPenaltyMm2: s.stabilityPenalty,
-        heightMm: s.heightMm,
-        footprintMm2: s.footprintMm2,
-        cost: s.primary,
-    });
     const improved =
-        objective === 'height'
+        leanBack ||
+        (objective === 'height'
             ? best.heightMm < baseline.heightMm - eps.height
-            : best.primary < baseline.primary - gainEps;
+            : best.primary < baseline.primary - gainEps);
     const suggested = improved ? best : baseline;
     const deltaPercent =
         baseline.overhang > 0 ? ((suggested.overhang - baseline.overhang) / baseline.overhang) * 100 : 0;
@@ -767,4 +961,27 @@ export function composeOrientationDelta(
     );
     const qNew = qDelta.multiply(quaternionFromGlobalEuler(currentRotation));
     return new THREE.Euler().setFromQuaternion(qNew, 'ZYX');
+}
+
+/**
+ * Compose a `leanBack` result, which is absolute: the lean is scored on the
+ * model as loaded (upright, front −Y), so only the stored turntable — the
+ * twist about plate Z — is kept, any earlier tilt is dropped, and the turntable
+ * is applied after the lean so the front still leans back from where it faces.
+ * Applying it twice therefore lands on the same pose.
+ */
+export function composeLeanBack(
+    currentRotation: { x: number; y: number; z: number } | null | undefined,
+    rotXDeg: number,
+    rotYDeg: number,
+): THREE.Euler {
+    const current = quaternionFromGlobalEuler(currentRotation);
+    // Swing-twist split: the twist about Z is the quaternion's Z part, renormalized.
+    const twist = new THREE.Quaternion(0, 0, current.z, current.w);
+    if (twist.lengthSq() < 1e-12) twist.identity();
+    else twist.normalize();
+    const lean = new THREE.Quaternion().setFromEuler(
+        new THREE.Euler((rotXDeg * Math.PI) / 180, (rotYDeg * Math.PI) / 180, 0, 'YXZ'),
+    );
+    return new THREE.Euler().setFromQuaternion(twist.multiply(lean), 'ZYX');
 }

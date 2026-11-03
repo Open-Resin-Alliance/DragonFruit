@@ -3,6 +3,7 @@ import test from 'node:test';
 import * as THREE from 'three';
 
 import {
+    composeLeanBack,
     composeOrientationDelta,
     computeTriangleDetail,
     evaluateOrientationCost,
@@ -383,4 +384,72 @@ test('blocked mask never regresses the suggestion', () => {
     const s = suggestOrientation(mesh, { blockedTriangleIndices: [0, 1] });
     assert.ok(s.suggested.cost <= s.baseline.cost, 'never worse than identity');
     assert.equal(s.suggested.blockedAreaMm2, 0, 'winner turns the blocked face away');
+});
+
+/** Box of the given size, its lowest face at `z0`, from the cube topology. */
+function box(sx: number, sy: number, sz: number, z0 = 0): { positions: number[]; index: number[] } {
+    const c = cube();
+    const positions = c.positions.map((v, i) => {
+        const axis = i % 3;
+        if (axis === 0) return (v * sx) / 2;
+        if (axis === 1) return (v * sy) / 2;
+        return z0 + ((v + 1) * sz) / 2;
+    });
+    return { positions, index: c.index };
+}
+
+/** Two meshes as one soup, the second's indices shifted past the first. */
+function merged(a: { positions: number[]; index: number[] }, b: { positions: number[]; index: number[] }) {
+    const offset = a.positions.length / 3;
+    return { positions: [...a.positions, ...b.positions], index: [...a.index, ...b.index.map((i) => i + offset)] };
+}
+
+test('footprint stands a lying bar on its end', () => {
+    const bar = box(40, 10, 10);
+    const s = suggestOrientation(bar, { objective: 'footprint' });
+    assert.ok(Math.abs(Math.abs(s.rotYDeg) - 90) < 2, `rotY ${s.rotYDeg}`);
+    assert.ok(s.suggested.footprintMm2 < 110, `footprint ${s.suggested.footprintMm2}`);
+});
+
+test('flatFace lays a slab on its largest face', () => {
+    // Standing on a 5×20 edge; the 20×10 sides are the largest flat faces.
+    const slab = box(5, 20, 10);
+    const s = suggestOrientation(slab, { objective: 'flatFace' });
+    assert.ok(Math.abs(Math.abs(s.rotYDeg) - 90) < 2, `rotY ${s.rotYDeg}`);
+    assert.ok(s.suggested.flatContactMm2 > 150, `flat contact ${s.suggested.flatContactMm2}`);
+});
+
+test('islands counts an overhang above the plate and not the plate contact', () => {
+    const floating = merged(box(10, 10, 5), box(10, 10, 5, 10));
+    const cost = evaluateOrientationCost(floating, 0, 0, { objective: 'islands' });
+    assert.equal(cost.islandCount, 1);
+});
+
+test('unsupportedVolume is the overhang area times its height above the plate', () => {
+    const floating = merged(box(10, 10, 5), box(10, 10, 5, 10));
+    const cost = evaluateOrientationCost(floating, 0, 0, { objective: 'unsupportedVolume' });
+    // The floating box's 100 mm² underside, 10 mm up; the base's underside sits on the plate.
+    assert.ok(Math.abs(cost.unsupportedVolumeMm3 - 1000) < 1, `volume ${cost.unsupportedVolumeMm3}`);
+});
+
+test('leanBack tips the front up inside the range, and only there', () => {
+    const tower = box(10, 10, 30);
+    const s = suggestOrientation(tower, { objective: 'leanBack' });
+    // Negative rotX lifts the −Y front; the default range is 10–45°.
+    assert.ok(s.rotXDeg <= -10 && s.rotXDeg >= -45, `rotX ${s.rotXDeg}`);
+    assert.ok(Math.abs(s.rotYDeg) <= 15, `rotY ${s.rotYDeg}`);
+    const narrow = suggestOrientation(tower, { objective: 'leanBack', leanBackMinDeg: 15, leanBackMaxDeg: 15 });
+    assert.equal(narrow.rotXDeg, -15);
+});
+
+test('composeLeanBack keeps the turntable, drops an old tilt, and lands on the same pose twice', () => {
+    const turned = { x: 0.3, y: 0, z: Math.PI / 2 };
+    const once = composeLeanBack(turned, -15, 0);
+    const twice = composeLeanBack(once, -15, 0);
+    const q1 = quaternionFromGlobalEuler(once);
+    const q2 = quaternionFromGlobalEuler(twice);
+    assert.ok(q1.angleTo(q2) < 1e-6, `drift ${q1.angleTo(q2)}`);
+    // Turned 90° the front (−Y) faces +X; leaning back lifts it there.
+    const front = new THREE.Vector3(0, -1, 0).applyQuaternion(q1);
+    assert.ok(front.x > 0.9 && front.z > 0.2, `front ${front.toArray()}`);
 });

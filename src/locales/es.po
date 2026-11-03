@@ -658,7 +658,7 @@ msgstr "ACTIVO"
 msgid "Active Model"
 msgstr "Modelo activo"
 
-#: src/components/controls/AutoRotationPanel.tsx:73
+#: src/components/controls/AutoRotationPanel.tsx:89
 msgid "Active model has no readable geometry."
 msgstr "El modelo activo no tiene geometría legible."
 
@@ -904,7 +904,7 @@ msgstr "Análisis"
 msgid "Analyzing Model Islands & Minima"
 msgstr "Analizando islas y mínimos del modelo"
 
-#: src/components/controls/AutoRotationPanel.tsx:242
+#: src/components/controls/AutoRotationPanel.tsx:294
 msgid "Analyzing…"
 msgstr "Analizando…"
 
@@ -1151,7 +1151,7 @@ msgstr "Detección automática"
 msgid "Auto Orientation"
 msgstr "Orientación automática"
 
-#: src/components/controls/AutoRotationPanel.tsx:67
+#: src/components/controls/AutoRotationPanel.tsx:69
 msgid "Auto Orientation (Beta)"
 msgstr "Orientación automática (beta)"
 
@@ -1488,11 +1488,11 @@ msgstr "Base binaria"
 msgid "Binary STL (recommended)"
 msgstr "STL binario (recomendado)"
 
-#: src/components/controls/AutoRotationPanel.tsx:79
+#: src/components/controls/AutoRotationPanel.tsx:95
 msgid "Blocker Painting Mode"
 msgstr "Modo de pintado de bloqueos"
 
-#: src/components/controls/AutoRotationPanel.tsx:74
+#: src/components/controls/AutoRotationPanel.tsx:90
 msgid "Blockers"
 msgstr "Bloqueos"
 
@@ -1564,7 +1564,7 @@ msgstr "Carga una malla o escena para empezar a preparar, analizar, añadir sopo
 msgid "Brush"
 msgstr "Pincel"
 
-#: src/components/controls/AutoRotationPanel.tsx:81
+#: src/components/controls/AutoRotationPanel.tsx:97
 #: src/components/controls/IslandOverlayControls.tsx:94
 msgid "Brush Size"
 msgstr "Tamaño del pincel"
@@ -1962,7 +1962,7 @@ msgstr "{cleanedNonManifoldEdges, plural, one {Se limpió # arista no manifold} 
 msgid "Cleaning up"
 msgstr "Limpiando"
 
-#: src/components/controls/AutoRotationPanel.tsx:75
+#: src/components/controls/AutoRotationPanel.tsx:91
 #: src/components/layout/EmptySceneState.tsx:631
 #: src/features/hollowing/HollowingPanel.tsx:301
 #: src/volumeAnalysis/IslandVolumes/components/IslandVolumesHierarchyCard.tsx:876
@@ -2707,6 +2707,10 @@ msgstr "Creando el repositorio nuevo: {repoName}"
 msgid "Crisp text and details."
 msgstr "Texto y detalles nítidos."
 
+#: src/components/controls/AutoRotationPanel.tsx:81
+msgid "Critical build angle"
+msgstr ""
+
 #: src/supports/autoBracing/AutoBracingSettingsCard.tsx:101
 msgid "Crosses"
 msgstr "Cruces"
@@ -3253,7 +3257,7 @@ msgstr "No añade espiga de registro: las mitades se separan sin forma de volver
 msgid "Don't show again"
 msgstr ""
 
-#: src/components/controls/AutoRotationPanel.tsx:76
+#: src/components/controls/AutoRotationPanel.tsx:92
 #: src/components/settings/profileFormAtoms.tsx:932
 #: src/features/hollowing/HollowingPanel.tsx:316
 msgid "Done"
@@ -3476,7 +3480,7 @@ msgstr "Transcurrido {slicingElapsedLabel}"
 
 #. Time a blocking task has been running, e.g. "Elapsed: 1 min 12 s".
 #: src/app/page.tsx:548
-#: src/components/controls/AutoRotationPanel.tsx:63
+#: src/components/controls/AutoRotationPanel.tsx:65
 #: src/components/organisms/modals/SceneFileModals.tsx:80
 msgid "Elapsed: {elapsed}"
 msgstr "Transcurrido: {elapsed}"
@@ -3868,9 +3872,9 @@ msgstr "Abriendo las hojas"
 msgid "Far faces, darker so the shape reads solid."
 msgstr "Caras lejanas, más oscuras para que la forma se lea como sólida."
 
-#: src/components/controls/AutoRotationPanel.tsx:69
-msgid "Fewest Supports"
-msgstr "Menos soportes"
+#: src/components/controls/AutoRotationPanel.tsx:76
+msgid "Fewest islands"
+msgstr ""
 
 #: src/components/modals/UvToolsLaunchingModal.tsx:84
 #: src/components/organisms/modals/PrintingModals.tsx:514
@@ -4990,6 +4994,10 @@ msgstr "Idioma"
 msgid "Larger percentages magnify the whole UI."
 msgstr "Los porcentajes mayores amplían toda la interfaz."
 
+#: src/components/controls/AutoRotationPanel.tsx:75
+msgid "Largest flat surface down"
+msgstr ""
+
 #: src/components/scene/SceneAutosaveRecoveryModal.tsx:128
 msgid "Last autosave"
 msgstr "Último guardado automático"
@@ -5132,13 +5140,29 @@ msgstr "Abanico de hojas activo: haz clic en el modelo para que brote una hoja"
 msgid "Leaf Fanning: Click a support shaft to lock anchor knot"
 msgstr "Abanico de hojas: haz clic en el fuste de un soporte para fijar el nudo de anclaje"
 
+#: src/components/controls/AutoRotationPanel.tsx:82
+msgid "Lean back"
+msgstr ""
+
+#: src/components/controls/AutoRotationPanel.tsx:79
+msgid "Lean back, front up (minis)"
+msgstr ""
+
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:175
 msgid "Least diameter a branch or leaf takes as a fraction of the trunk it grows from. The default, 0.7, keeps a hosted member a step below its host instead of a needle beside it."
 msgstr "Diámetro mínimo de una rama u hoja como fracción del tronco del que sale. El valor por defecto, 0,7, deja al elemento un escalón por debajo de su portador en vez de una aguja a su lado."
 
-#: src/components/controls/AutoRotationPanel.tsx:71
-msgid "Least Scarring"
-msgstr "Menos marcas"
+#: src/components/controls/AutoRotationPanel.tsx:78
+msgid "Least scarring"
+msgstr ""
+
+#: src/components/controls/AutoRotationPanel.tsx:72
+msgid "Least surface past the critical angle (fewest supports)"
+msgstr ""
+
+#: src/components/controls/AutoRotationPanel.tsx:77
+msgid "Least unsupported volume (inkjet/FDM)"
+msgstr ""
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:468
 msgid "Leave the collection as it is"
@@ -5242,7 +5266,7 @@ msgstr "Carga un modelo y escanea en busca de islas."
 msgid "Load a model in Prepare to unlock this stage"
 msgstr "Carga un modelo en Preparar para desbloquear esta etapa"
 
-#: src/components/controls/AutoRotationPanel.tsx:72
+#: src/components/controls/AutoRotationPanel.tsx:88
 msgid "Load a model to get an orientation suggestion."
 msgstr "Carga un modelo para recibir una sugerencia de orientación."
 
@@ -5879,6 +5903,10 @@ msgstr "Mortaja (caras cercanas)"
 #: src/features/organicCut/OrganicCutColorsSection.tsx:26
 msgid "Mortise edges"
 msgstr "Aristas de la mortaja"
+
+#: src/components/controls/AutoRotationPanel.tsx:74
+msgid "Most parts per plate (smallest footprint)"
+msgstr ""
 
 #: src/components/controls/TransformControls.tsx:221
 msgctxt "Transform panel section"
@@ -6668,6 +6696,10 @@ msgstr "Abriendo escena…"
 msgid "Operation"
 msgstr "Operación"
 
+#: src/components/controls/AutoRotationPanel.tsx:71
+msgid "Optimize orientation for"
+msgstr ""
+
 #: src/components/scene/MeshRepairReportModal.tsx:479
 msgid "Optional details if you want them."
 msgstr "Detalles opcionales, por si te interesan."
@@ -6681,9 +6713,13 @@ msgstr "Corte orgánico"
 msgid "Orient flat against plate"
 msgstr "Orientar plano sobre la placa"
 
-#: src/components/controls/AutoRotationPanel.tsx:68
+#: src/components/controls/AutoRotationPanel.tsx:70
 msgid "Orient Model"
 msgstr "Orientar modelo"
+
+#: src/components/controls/AutoRotationPanel.tsx:80
+msgid "Orientations tried"
+msgstr ""
 
 #: src/app/page.tsx:11871
 msgid "Orienting Model"
@@ -6798,11 +6834,11 @@ msgstr ""
 msgid "Packages you import run with your permissions and can read any file you can read, open network connections, and crash the app if they misbehave. Disabling this stops new imports; packages already installed stay on disk."
 msgstr ""
 
-#: src/components/controls/AutoRotationPanel.tsx:77
+#: src/components/controls/AutoRotationPanel.tsx:93
 msgid "Paint areas to keep support-free. Orientation avoids them."
 msgstr "Pinta las zonas que quieres dejar sin soportes. La orientación las evita."
 
-#: src/components/controls/AutoRotationPanel.tsx:78
+#: src/components/controls/AutoRotationPanel.tsx:94
 msgid "Paint nogo areas for supports. Blocked contact is refused when generating supports and avoided when orienting."
 msgstr "Pinta zonas vetadas para los soportes. Un contacto bloqueado se rechaza al generar soportes y se evita al orientar."
 
@@ -7171,7 +7207,7 @@ msgid "Presets"
 msgstr "Preajustes"
 
 #. Sits under the Blocker Painting Mode heading. {clearLabel} and {doneLabel} are the Clear and Done button labels; keep them as placeholders so the two always match the buttons.
-#: src/components/controls/AutoRotationPanel.tsx:222
+#: src/components/controls/AutoRotationPanel.tsx:274
 msgid "Press <0>{clearLabel}</0> to reset all, or <1>{doneLabel}</1> to apply."
 msgstr "Pulsa <0>{clearLabel}</0> para reiniciar todo, o <1>{doneLabel}</1> para aplicar."
 
@@ -8037,6 +8073,7 @@ msgstr ""
 msgid "Requires connected printer with supported upload capability and a generated print file"
 msgstr "Requiere una impresora conectada que admita subidas y un archivo de impresión generado"
 
+#: src/components/controls/AutoRotationPanel.tsx:83
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:628
 #: src/features/hole-punching/HolePunchPanel.tsx:242
 #: src/features/hollowing/HollowingPanel.tsx:332
@@ -9001,9 +9038,9 @@ msgstr "Grosor de la pared en milímetros"
 msgid "Shells:"
 msgstr "Cascarones:"
 
-#: src/components/controls/AutoRotationPanel.tsx:70
-msgid "Shortest Print Time"
-msgstr "Menor tiempo de impresión"
+#: src/components/controls/AutoRotationPanel.tsx:73
+msgid "Shortest print time (lowest Z height)"
+msgstr ""
 
 #: src/components/controls/ModelManagerPanel.tsx:739
 msgid "Show"
@@ -10278,6 +10315,11 @@ msgstr "Margen de ajuste de la punta"
 #: src/components/controls/autoSupport/AutoSupportRunDiagnostics.tsx:75
 msgid "Tip Ø range"
 msgstr "Rango de Ø de la punta"
+
+#. Tooltip on the Lean back option of Auto Orientation, meant for miniatures.
+#: src/components/controls/AutoRotationPanel.tsx:84
+msgid "Tips the top back so the front faces up and the supports go on the back, choosing the angle in this range that needs the fewest supports. Assumes the model was loaded upright with its front toward the viewer; turning it on the plate is kept."
+msgstr ""
 
 #: src/components/modals/ObsoleteVoxlVersionModal.tsx:67
 msgid "To recover it, open the scene in an older version of DragonFruit and save it again — the re-saved scene will open here."

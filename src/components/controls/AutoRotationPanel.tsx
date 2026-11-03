@@ -5,15 +5,17 @@ import * as THREE from 'three';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import { Trans } from '@lingui/react/macro';
-import { Button, Card, CardHeader, Select } from '@/components/atoms';
+import { Button, Card, CardHeader } from '@/components/atoms';
 import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 import { getModelMesh } from '@/supports/autoSupport/meshStore';
 import {
   suggestOrientationForGeometry,
+  composeLeanBack,
   composeOrientationDelta,
   type OrientationObjective,
 } from '@/supports/autoSupport/orientationAdvisor';
+import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import type { OrientationToastReport } from '@/features/notifications/useEditorToasts';
 import {
   getSupportBlockedCount,
@@ -66,9 +68,23 @@ export function OrientElapsed() {
 /** Module-level labels (React Compiler must not rename Lingui locals). */
 const TITLE = msg`Auto Orientation (Beta)`;
 const ORIENT = msg`Orient Model`;
-const OPT_SUPPORTS = msg`Fewest Supports`;
-const OPT_HEIGHT = msg`Shortest Print Time`;
-const OPT_SCARRING = msg`Least Scarring`;
+const OPTIMIZE_FOR = msg`Optimize orientation for`;
+const OPT_SUPPORTS = msg`Least surface past the critical angle (fewest supports)`;
+const OPT_HEIGHT = msg`Shortest print time (lowest Z height)`;
+const OPT_FOOTPRINT = msg`Most parts per plate (smallest footprint)`;
+const OPT_FLAT_FACE = msg`Largest flat surface down`;
+const OPT_ISLANDS = msg`Fewest islands`;
+const OPT_UNSUPPORTED_VOLUME = msg`Least unsupported volume (inkjet/FDM)`;
+const OPT_SCARRING = msg`Least scarring`;
+const OPT_LEAN_BACK = msg`Lean back, front up (minis)`;
+const ORIENTATIONS_TRIED = msg`Orientations tried`;
+const CRITICAL_ANGLE = msg`Critical build angle`;
+const LEAN_RANGE = msg`Lean back`;
+const RESET = msg`Reset`;
+const LEAN_BACK_HINT = msg({
+  message: 'Tips the top back so the front faces up and the supports go on the back, choosing the angle in this range that needs the fewest supports. Assumes the model was loaded upright with its front toward the viewer; turning it on the plate is kept.',
+  comment: 'Tooltip on the Lean back option of Auto Orientation, meant for miniatures.',
+});
 const NO_MODEL = msg`Load a model to get an orientation suggestion.`;
 const NO_GEOMETRY = msg`Active model has no readable geometry.`;
 const BLOCKERS = msg`Blockers`;
@@ -79,6 +95,28 @@ const BLOCKERS_HINT = msg`Paint nogo areas for supports. Blocked contact is refu
 const PAINT_TITLE = msg`Blocker Painting Mode`;
 const BLOCKER_ACTION_TEXT = { color: 'var(--accent-secondary-action-color)', fontWeight: 600 } as const;
 const BRUSH_SIZE = msg`Brush Size`;
+
+/** The goals in the order Formware lists them, then DragonFruit's own. */
+const OBJECTIVE_OPTIONS: Array<{ value: OrientationObjective; label: typeof OPT_SUPPORTS }> = [
+  { value: 'supports', label: OPT_SUPPORTS },
+  { value: 'height', label: OPT_HEIGHT },
+  { value: 'footprint', label: OPT_FOOTPRINT },
+  { value: 'flatFace', label: OPT_FLAT_FACE },
+  { value: 'islands', label: OPT_ISLANDS },
+  { value: 'unsupportedVolume', label: OPT_UNSUPPORTED_VOLUME },
+  { value: 'scarring', label: OPT_SCARRING },
+  { value: 'leanBack', label: OPT_LEAN_BACK },
+];
+
+/** Defaults the Reset button restores; the advisor uses the same ones when unset. */
+const DEFAULT_ORIENT_SETTINGS = {
+  candidateCount: 120,
+  criticalAngleDeg: 45,
+  leanMinDeg: 10,
+  leanMaxDeg: 45,
+};
+/** A lean-back result this close to the current pose is the current pose. */
+const SAME_POSE_RAD = (0.5 * Math.PI) / 180;
 
 export interface AutoRotationPanelProps {
   activeModelId?: string;
@@ -113,6 +151,7 @@ export function AutoRotationPanel({ activeModelId, activeModelName, currentRotat
   const [error, setError] = React.useState<string | null>(null);
   const brushSizeMm = getSupportBlockerBrushSizeMm();
   const [objective, setObjective] = React.useState<OrientationObjective>('supports');
+  const [settings, setSettings] = React.useState(DEFAULT_ORIENT_SETTINGS);
   // Support-blocker mask version for the active model (drives Clear).
   React.useSyncExternalStore(subscribeSupportBlockers, getSupportBlockersVersion, getSupportBlockersVersion);
   const blockedCount = activeModelId ? getSupportBlockedCount(activeModelId) : 0;
@@ -142,9 +181,11 @@ export function AutoRotationPanel({ activeModelId, activeModelName, currentRotat
             return;
           }
           // Orient in world frame: bake the model's live scene rotation into a
-          // throwaway copy (never mutate the live geometry).
+          // throwaway copy (never mutate the live geometry). Lean back scores the
+          // model as loaded instead: its result is absolute (see composeLeanBack).
+          const leanBack = objective === 'leanBack';
           const baked = new Float32Array(position.array as ArrayLike<number>);
-          if (currentRotation) {
+          if (currentRotation && !leanBack) {
             const v = new THREE.Vector3();
             for (let i = 0; i < baked.length; i += 3) {
               v.set(baked[i], baked[i + 1], baked[i + 2]).applyEuler(currentRotation);
@@ -157,7 +198,14 @@ export function AutoRotationPanel({ activeModelId, activeModelName, currentRotat
           const blocked = getSupportBlockedTriangles(activeModelId);
           const result = suggestOrientationForGeometry(
             { attributes: { position: { array: baked } }, index },
-            { objective, ...(blocked.size > 0 ? { blockedTriangleIndices: blocked } : {}) },
+            {
+              objective,
+              candidateCount: settings.candidateCount,
+              selfSupportAngleDeg: settings.criticalAngleDeg,
+              leanBackMinDeg: settings.leanMinDeg,
+              leanBackMaxDeg: settings.leanMaxDeg,
+              ...(blocked.size > 0 ? { blockedTriangleIndices: blocked } : {}),
+            },
           );
           if (!result) {
             setError(_(NO_GEOMETRY));
@@ -165,8 +213,12 @@ export function AutoRotationPanel({ activeModelId, activeModelName, currentRotat
           }
           // The scene apply path records history unconditionally, so only
           // apply a strict improvement — never a no-op rotation.
-          const improved =
-            objective === 'height'
+          const nextRotation = leanBack
+            ? composeLeanBack(currentRotation, result.rotXDeg, result.rotYDeg)
+            : composeOrientationDelta(currentRotation, result.rotXDeg, result.rotYDeg);
+          const improved = leanBack
+            ? quaternionFromGlobalEuler(nextRotation).angleTo(quaternionFromGlobalEuler(currentRotation)) > SAME_POSE_RAD
+            : objective === 'height'
               ? result.suggested.heightMm < result.baseline.heightMm
               : result.suggested.cost < result.baseline.cost;
           if (!improved) {
@@ -179,7 +231,7 @@ export function AutoRotationPanel({ activeModelId, activeModelName, currentRotat
           // Compose in the canonical frame (see composeOrientationDelta) so
           // the scene path moves supports along and records history.
           const doApply = () => {
-            onApplyRotation(activeModelId, composeOrientationDelta(currentRotation, result.rotXDeg, result.rotYDeg));
+            onApplyRotation(activeModelId, nextRotation);
             onOrientationReport?.({
               status: 'applied',
               modelName: activeModelName ?? activeModelId,
@@ -192,7 +244,7 @@ export function AutoRotationPanel({ activeModelId, activeModelName, currentRotat
         }
       }, 0);
     });
-  }, [activeModelId, activeModelName, currentRotation, objective, onApplyRotation, onOrientationReport, onBeforeOrientApply, _]);
+  }, [activeModelId, activeModelName, currentRotation, objective, settings, onApplyRotation, onOrientationReport, onBeforeOrientApply, _]);
 
   return (
     <Card>
@@ -272,17 +324,113 @@ export function AutoRotationPanel({ activeModelId, activeModelName, currentRotat
               />
             </div>
           ) : (
-            <div className="flex flex-col gap-1">
-              <Select
-                style={{ textAlign: 'center', background: 'var(--surface-1)' }}
-                value={objective}
-                onChange={(e) => setObjective(e.target.value as OrientationObjective)}
-                disabled={busy || !activeModelId}
+            <div className="flex flex-col gap-2">
+              <fieldset className="flex flex-col gap-1" disabled={busy || !activeModelId}>
+                <legend className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}>{_(OPTIMIZE_FOR)}</legend>
+                {OBJECTIVE_OPTIONS.map((option) => (
+                  <label
+                    key={option.value}
+                    className="flex items-start gap-1.5 text-[11px] leading-snug cursor-pointer"
+                    style={{ color: objective === option.value ? 'var(--text-strong)' : 'var(--text-muted)' }}
+                    title={option.value === 'leanBack' ? _(LEAN_BACK_HINT) : undefined}
+                  >
+                    <input
+                      type="radio"
+                      name="orientation-objective"
+                      className="mt-0.5"
+                      checked={objective === option.value}
+                      onChange={() => setObjective(option.value)}
+                    />
+                    <span>{_(option.label)}</span>
+                  </label>
+                ))}
+              </fieldset>
+
+              {objective === 'leanBack' ? (
+                <div className="flex flex-col gap-1">
+                  <label className="ui-meta flex justify-between">
+                    <span>{_(LEAN_RANGE)}</span>
+                    <span>{fmt.quantity(settings.leanMinDeg, 0, 'degree')} – {fmt.quantity(settings.leanMaxDeg, 0, 'degree')}</span>
+                  </label>
+                  <input
+                    type="range"
+                    min={0}
+                    max={60}
+                    step={1}
+                    value={settings.leanMinDeg}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value);
+                      setSettings((prev) => ({ ...prev, leanMinDeg: v, leanMaxDeg: Math.max(prev.leanMaxDeg, v) }));
+                    }}
+                    disabled={busy || !activeModelId}
+                    className="ui-range"
+                  />
+                  <input
+                    type="range"
+                    min={0}
+                    max={60}
+                    step={1}
+                    value={settings.leanMaxDeg}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value);
+                      setSettings((prev) => ({ ...prev, leanMaxDeg: v, leanMinDeg: Math.min(prev.leanMinDeg, v) }));
+                    }}
+                    disabled={busy || !activeModelId}
+                    className="ui-range"
+                  />
+                </div>
+              ) : (
+                <div className="flex flex-col gap-1">
+                  <label className="ui-meta flex justify-between">
+                    <span>{_(ORIENTATIONS_TRIED)}</span>
+                    <span>{settings.candidateCount}</span>
+                  </label>
+                  <input
+                    type="range"
+                    min={16}
+                    max={512}
+                    step={8}
+                    value={settings.candidateCount}
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value, 10);
+                      setSettings((prev) => ({ ...prev, candidateCount: v }));
+                    }}
+                    disabled={busy || !activeModelId}
+                    className="ui-range"
+                  />
+                </div>
+              )}
+
+              <div className="flex flex-col gap-1">
+                <label className="ui-meta flex justify-between">
+                  <span>{_(CRITICAL_ANGLE)}</span>
+                  <span>{fmt.quantity(settings.criticalAngleDeg, 0, 'degree')}</span>
+                </label>
+                <input
+                  type="range"
+                  min={20}
+                  max={70}
+                  step={1}
+                  value={settings.criticalAngleDeg}
+                  onChange={(e) => {
+                    const v = parseFloat(e.target.value);
+                    setSettings((prev) => ({ ...prev, criticalAngleDeg: v }));
+                  }}
+                  disabled={busy || !activeModelId}
+                  className="ui-range"
+                />
+              </div>
+
+              <Button
+                type="button"
+                variant="secondary"
+                size="auto"
+                className="!h-7 text-[11px] disabled:opacity-50"
+                onClick={() => setSettings(DEFAULT_ORIENT_SETTINGS)}
+                disabled={busy}
               >
-                <option value="supports">{_(OPT_SUPPORTS)}</option>
-                <option value="height">{_(OPT_HEIGHT)}</option>
-                <option value="scarring">{_(OPT_SCARRING)}</option>
-              </Select>
+                {_(RESET)}
+              </Button>
             </div>
           )}
           {blockersActive && (
