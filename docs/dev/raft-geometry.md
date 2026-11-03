@@ -70,7 +70,7 @@ the raft is trimmed where the model stands:
 viewport (`RaftRenderer`, `LineRaftRenderer`, `RaftProxyMeshLayer` via
 `ModelAttachedSupportLayer`), the exporter (`ExportManager.exportScene`), the
 slicer (`buildSupportAndRaftWorldTriangles` in `features/slicing/rasterLayerZipExport.ts`)
-and the resin estimate (`src/app/page.tsx`).
+and the resin estimate (`computeSupportAndRaftResinMl` in `src/features/printing/supportResinVolume.ts`).
 
 ## Constraints
 
