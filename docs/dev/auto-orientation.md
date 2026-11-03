@@ -111,6 +111,35 @@ carries the terms (`bearingAreaMm2`, `bearingEdges`, `centroidDepthMm`,
 `marginMm`, `adhesionRatio`, `stabilityPenaltyMm2`) so the suggestion surface
 can show why a pose lost.
 
+### Goals in the panel
+
+The panel lists its goals the way Formware's orientation dialog does, so
+users moving over find the same choices, and adds two of its own:
+
+| Goal | `objective` | Ranks by (ties: contact area) |
+| --- | --- | --- |
+| Least surface past the critical angle | `supports` | overhang plus cup contact |
+| Shortest print time | `height` | Z extent |
+| Most parts per plate | `footprint` | XY bounding box |
+| Largest flat surface down | `flatFace` | flat down-facing area in the plate band |
+| Fewest islands | `islands` | connected overhang patches ≥ 1 mm² above the plate band |
+| Least unsupported volume | `unsupportedVolume` | overhang area × height above the plate |
+| Least scarring | `scarring` | detail-weighted contact |
+| Lean back, front up | `leanBack` | contact, searched only inside the lean range |
+
+`leanBack` is for miniatures, which a print farm leans back by a fixed
+amount so the face stays support-free and the footprint stays close to the
+upright one. It searches a grid of leans (`leanBackMinDeg`–`leanBackMaxDeg`,
+default 10–45°, front −Y up) with up to 15° of sideways tilt, refines inside
+that range, and never keeps the upright pose. The model is scored as loaded,
+and `composeLeanBack` keeps only the stored turntable, so the result is
+absolute and a second click reports already optimal. Formware's "None" is
+left out: in a one-model panel it is the same as not clicking.
+
+Orientations tried (`candidateCount`) and the critical angle
+(`selfSupportAngleDeg`) are sliders with a Reset. Formware's "height above
+platform" is the Transform panel's lift.
+
 ### "No supports" painted faces (shipped as support blockers)
 
 Users paint surface regions that must never carry supports — a figurine's
