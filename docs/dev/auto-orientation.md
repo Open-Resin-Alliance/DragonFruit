@@ -130,7 +130,7 @@ users moving over find the same choices, and adds two of its own:
 `leanBack` is for miniatures, which a print farm leans back by a fixed
 amount so the face stays support-free and the footprint stays close to the
 upright one. It searches a grid of leans (`leanBackMinDeg`–`leanBackMaxDeg`,
-default 10–45°, front −Y up) with up to 15° of sideways tilt, refines inside
+default 10–30°, front −Y up) with up to 15° of sideways tilt, refines inside
 that range, and never keeps the upright pose. The model is scored as loaded,
 and `composeLeanBack` keeps only the stored turntable, so the result is
 absolute and a second click reports already optimal. Formware's "None" is

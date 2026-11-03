@@ -119,7 +119,7 @@ export interface AdvisorOptions {
     refineTopK?: number;
     /** Least lean for `leanBack` (degrees the top tips back). Default 10. */
     leanBackMinDeg?: number;
-    /** Most lean for `leanBack`. Default 45. */
+    /** Most lean for `leanBack`. Default 30. */
     leanBackMaxDeg?: number;
 }
 
@@ -161,7 +161,7 @@ const ISLAND_MIN_AREA_MM2 = 1;
 /** Overhang within this height of the plate is the plate contact, not an island (mm). */
 const ISLAND_PLATE_BAND_MM = 2;
 const DEFAULT_LEAN_MIN_DEG = 10;
-const DEFAULT_LEAN_MAX_DEG = 45;
+const DEFAULT_LEAN_MAX_DEG = 30;
 /** Sideways tilt `leanBack` may add to its lean, either way (degrees). */
 const LEAN_SIDE_MAX_DEG = 15;
 const LEAN_GRID_STEP_DEG = 2.5;

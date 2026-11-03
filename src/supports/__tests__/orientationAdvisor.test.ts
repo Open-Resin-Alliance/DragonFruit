@@ -435,8 +435,8 @@ test('unsupportedVolume is the overhang area times its height above the plate', 
 test('leanBack tips the front up inside the range, and only there', () => {
     const tower = box(10, 10, 30);
     const s = suggestOrientation(tower, { objective: 'leanBack' });
-    // Negative rotX lifts the −Y front; the default range is 10–45°.
-    assert.ok(s.rotXDeg <= -10 && s.rotXDeg >= -45, `rotX ${s.rotXDeg}`);
+    // Negative rotX lifts the −Y front; the default range is 10–30°.
+    assert.ok(s.rotXDeg <= -10 && s.rotXDeg >= -30, `rotX ${s.rotXDeg}`);
     assert.ok(Math.abs(s.rotYDeg) <= 15, `rotY ${s.rotYDeg}`);
     const narrow = suggestOrientation(tower, { objective: 'leanBack', leanBackMinDeg: 15, leanBackMaxDeg: 15 });
     assert.equal(narrow.rotXDeg, -15);

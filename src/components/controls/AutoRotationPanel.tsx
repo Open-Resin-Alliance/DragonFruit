@@ -113,7 +113,7 @@ const DEFAULT_ORIENT_SETTINGS = {
   candidateCount: 120,
   criticalAngleDeg: 45,
   leanMinDeg: 10,
-  leanMaxDeg: 45,
+  leanMaxDeg: 30,
 };
 /** A lean-back result this close to the current pose is the current pose. */
 const SAME_POSE_RAD = (0.5 * Math.PI) / 180;
