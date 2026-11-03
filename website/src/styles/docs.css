@@ -603,6 +603,7 @@
 }
 
 .admonition--note,
+.admonition--important,
 .admonition--info {
   --admonition-color: #2563eb;
 }
