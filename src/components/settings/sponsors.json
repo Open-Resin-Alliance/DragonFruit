@@ -15,7 +15,7 @@
     "website": null,
     "role": "BACKER",
     "tier": null,
-    "totalAmountDonated": 400
+    "totalAmountDonated": 600
   },
   {
     "name": "Atlas 3DSS",
@@ -24,7 +24,7 @@
     "website": null,
     "role": "BACKER",
     "tier": "Sponsor",
-    "totalAmountDonated": 200
+    "totalAmountDonated": 300
   },
   {
     "name": "ben",
@@ -33,7 +33,7 @@
     "website": null,
     "role": "BACKER",
     "tier": "Patron",
-    "totalAmountDonated": 160
+    "totalAmountDonated": 190
   },
   {
     "name": "Gobbledygook Games",
@@ -69,7 +69,7 @@
     "website": "https://concepts3d.ca",
     "role": "BACKER",
     "tier": "Contributor",
-    "totalAmountDonated": 30
+    "totalAmountDonated": 45
   },
   {
     "name": "Kryz Slaughter",
@@ -78,12 +78,21 @@
     "website": null,
     "role": "BACKER",
     "tier": "Contributor",
-    "totalAmountDonated": 30
+    "totalAmountDonated": 45
   },
   {
     "name": "Rob Skinner",
     "profile": "https://opencollective.com/rob-skinner",
     "image": "https://opencollective-production.s3.us-west-1.amazonaws.com/account-avatar/24d313ae-8019-42b5-bd80-6f4fe279d494/IMG20260829104728.jpg",
+    "website": null,
+    "role": "BACKER",
+    "tier": "Contributor",
+    "totalAmountDonated": 45
+  },
+  {
+    "name": "Runklestiltskin",
+    "profile": "https://opencollective.com/guest-4717e1d9",
+    "image": null,
     "website": null,
     "role": "BACKER",
     "tier": "Contributor",
@@ -108,12 +117,12 @@
     "totalAmountDonated": 20
   },
   {
-    "name": "Runklestiltskin",
-    "profile": "https://opencollective.com/guest-4717e1d9",
-    "image": null,
+    "name": "Cunabula",
+    "profile": "https://opencollective.com/cunabula",
+    "image": "https://opencollective-production.s3.us-west-1.amazonaws.com/account-avatar/17078813-f0be-4bda-9c18-ee637e971fd3/CP_Icon_250.png",
     "website": null,
     "role": "BACKER",
-    "tier": "Contributor",
+    "tier": "Backer",
     "totalAmountDonated": 15
   },
   {
@@ -124,15 +133,6 @@
     "role": "BACKER",
     "tier": "Contributor",
     "totalAmountDonated": 15
-  },
-  {
-    "name": "Cunabula",
-    "profile": "https://opencollective.com/cunabula",
-    "image": "https://opencollective-production.s3.us-west-1.amazonaws.com/account-avatar/17078813-f0be-4bda-9c18-ee637e971fd3/CP_Icon_250.png",
-    "website": null,
-    "role": "BACKER",
-    "tier": "Backer",
-    "totalAmountDonated": 10
   },
   {
     "name": "Tom",
