@@ -1524,7 +1524,6 @@ export default function Home() {
     setIsPrintingLayerScrubbing,
     printingPngLoadedUrl,
     setPrintingPngLoadedUrl,
-    isSceneLayerScrubbing,
     setIsSceneLayerScrubbing,
     isPrintingPreviewSettled,
     setIsPrintingPreviewSettled,
@@ -11158,7 +11157,6 @@ export default function Home() {
             supportRenderRefreshNonce={supportRenderRefreshNonce}
             gizmoResetNonce={gizmoResetNonce}
             historyTransformResyncToken={historyTransformResyncTick}
-            isLayerScrubbing={scene.mode === 'printing' ? isPrintingLayerScrubbing : isSceneLayerScrubbing}
             arrangeArrayPreviewItems={arrangeArrayPreviewItems}
             hideDuplicateSourceDuringApply={isDuplicating}
             view3dSettings={scene.view3dSettings}

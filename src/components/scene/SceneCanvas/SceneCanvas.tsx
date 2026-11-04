@@ -624,7 +624,6 @@ export function SceneCanvas({
   supportRenderRefreshNonce = 0,
   gizmoResetNonce = 0,
   historyTransformResyncToken = 0,
-  isLayerScrubbing = false,
   onRegisterExportThumbnailCapture,
   exportThumbnailRenderOptions,
   indicatorPlaneZ = null,
@@ -874,7 +873,6 @@ export function SceneCanvas({
   supportRenderRefreshNonce?: number;
   gizmoResetNonce?: number;
   historyTransformResyncToken?: number;
-  isLayerScrubbing?: boolean;
   /**
    * Registered with the canvas so a caller outside it can take the shot. The optional bounds
    * frame a bed other than the one being worked on — a batch slices one bed after another while
@@ -5040,7 +5038,10 @@ export function SceneCanvas({
   const hideRaftPrimitives = (mode === 'support' && plateContactCullActive) || ((mode === 'prepare' || mode === 'support') && transformMode === 'hollowing');
   const hideGridHelpers = false;
   const modifyToolActive = mode === 'prepare' && transformMode === 'transform';
-  const navigationLodActive = isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive || isGizmoDragging || isGizmoRetargeting || isLayerScrubbing;
+  // A layer scrub is not a camera gesture: it moves the cross-section, and
+  // switching the scene's level of detail for it rebuilt the model geometry on
+  // both ends of every drag. That rebuild cost far more than the scrub saved.
+  const navigationLodActive = isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive || isGizmoDragging || isGizmoRetargeting;
   /**
    * The active model's supports/raft always live in their own attached layer;
    * the world layer always excludes that model.
