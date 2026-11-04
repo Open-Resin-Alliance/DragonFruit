@@ -2585,7 +2585,7 @@ msgstr ""
 msgid "Could not reopen this file from cache."
 msgstr "Impossible de rouvrir ce fichier depuis le cache."
 
-#: src/features/scene/useSceneCollectionManager.ts:8125
+#: src/features/scene/useSceneCollectionManager.ts:8135
 msgid "Could not restore the model."
 msgstr ""
 
@@ -6195,7 +6195,7 @@ msgstr ""
 msgid "No snapshots yet. Run \"Backup Now\" to create your first local snapshot."
 msgstr ""
 
-#: src/features/scene/useSceneCollectionManager.ts:8098
+#: src/features/scene/useSceneCollectionManager.ts:8108
 msgid "No source file to restore this model from."
 msgstr ""
 
@@ -7590,11 +7590,11 @@ msgstr ""
 msgid "Remesh confirmation"
 msgstr ""
 
-#: src/features/scene/useSceneCollectionManager.ts:8289
+#: src/features/scene/useSceneCollectionManager.ts:8299
 msgid "Remesh failed: {message}"
 msgstr ""
 
-#: src/features/scene/useSceneCollectionManager.ts:8262
+#: src/features/scene/useSceneCollectionManager.ts:8272
 msgid "Remesh needs the desktop app."
 msgstr ""
 
@@ -9024,11 +9024,11 @@ msgstr ""
 msgid "Shrink-Wrap confirmation"
 msgstr ""
 
-#: src/features/scene/useSceneCollectionManager.ts:8343
+#: src/features/scene/useSceneCollectionManager.ts:8353
 msgid "Shrink-Wrap failed: {message}"
 msgstr ""
 
-#: src/features/scene/useSceneCollectionManager.ts:8316
+#: src/features/scene/useSceneCollectionManager.ts:8326
 msgid "Shrink-Wrap needs the desktop app."
 msgstr ""
 

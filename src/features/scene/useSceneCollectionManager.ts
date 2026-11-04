@@ -7970,23 +7970,33 @@ export function useSceneCollectionManager(options?: {
    * entries unassign, which is what a printer with no matching tank materials
    * offers. One history entry, because the whole scene moved together.
    */
-  const reassignSceneMaterials = useCallback((assignments: Map<string, { id: string; color?: string }>) => {
+  const reassignSceneMaterials = useCallback((
+    assignments: Map<string, { id: string; color?: string }>,
+    unassignMissing = false,
+  ) => {
     const nextModels = models.map((model) => {
       const nextModelMaterial = model.materialProfileId ? assignments.get(model.materialProfileId) : undefined;
-      const bodyMaterialProfileIds = model.bodyMaterialProfileIds?.map((id) => (
-        id ? assignments.get(id)?.id : undefined
-      ));
+      const clearModel = Boolean(model.materialProfileId) && !nextModelMaterial && unassignMissing;
+      const bodyMaterialProfileIds = model.bodyMaterialProfileIds?.map((id) => {
+        if (!id) return undefined;
+        const next = assignments.get(id);
+        if (next) return next.id;
+        return unassignMissing ? undefined : id;
+      });
       const bodyColors = model.bodyMaterialProfileIds
         ? model.bodyColors?.map((color, index) => {
           const id = model.bodyMaterialProfileIds?.[index];
-          return id ? assignments.get(id)?.color : color;
+          if (!id) return color;
+          const next = assignments.get(id);
+          if (next) return next.color;
+          return unassignMissing ? undefined : color;
         })
         : model.bodyColors;
 
-      const materialProfileId = nextModelMaterial?.id;
+      const materialProfileId = nextModelMaterial?.id ?? (clearModel ? undefined : model.materialProfileId);
       let materialBaseColor = model.materialBaseColor;
       let color = model.color;
-      if (model.materialProfileId && !nextModelMaterial) {
+      if (clearModel) {
         materialBaseColor = undefined;
         color = model.materialBaseColor ?? model.color;
       } else if (nextModelMaterial?.color) {

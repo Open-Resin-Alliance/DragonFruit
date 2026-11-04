@@ -1044,7 +1044,7 @@ export default function Home() {
   }, [scene.reassignSceneMaterials]);
 
   const unassignSceneMaterialsForPrinter = React.useCallback(() => {
-    scene.reassignSceneMaterials(new Map());
+    scene.reassignSceneMaterials(new Map(), true);
     setMaterialReassignPrompt(null);
   }, [scene.reassignSceneMaterials]);
 
