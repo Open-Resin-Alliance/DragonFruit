@@ -178,6 +178,7 @@ type RemoteMaterialsCacheEntry = {
 
 
 const REMOTE_MATERIAL_BY_PRINTER_STORAGE_KEY = 'dragonfruit.network.remoteMaterialByPrinter.v1';
+const MATERIAL_EDITOR_TAB_BY_PRINTER_STORAGE_KEY = 'dragonfruit.materialSettings.activeTabByPrinterProfile.v1';
 
 function readRemoteMaterialByPrinter(): Record<string, string> {
   try {
@@ -202,6 +203,35 @@ function writeRemoteMaterialByPrinter(printerId: string, materialId: string): vo
     const current = readRemoteMaterialByPrinter();
     const next = { ...current, [printerId]: materialId };
     localStorage.setItem(REMOTE_MATERIAL_BY_PRINTER_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function readMaterialEditorTabByPrinter(): Record<string, string> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(MATERIAL_EDITOR_TAB_BY_PRINTER_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {};
+    const result: Record<string, string> = {};
+    for (const [printerId, tabId] of Object.entries(parsed)) {
+      if (typeof printerId === 'string' && typeof tabId === 'string' && printerId.trim() && tabId.trim()) {
+        result[printerId.trim()] = tabId.trim();
+      }
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+function writeMaterialEditorTabByPrinter(printerId: string, tabId: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const next = { ...readMaterialEditorTabByPrinter(), [printerId]: tabId };
+    window.localStorage.setItem(MATERIAL_EDITOR_TAB_BY_PRINTER_STORAGE_KEY, JSON.stringify(next));
   } catch {
     // ignore storage errors
   }
@@ -3128,7 +3158,18 @@ export function ProfileSettingsModal({
 
   React.useEffect(() => {
     if (!isMaterialEditorOpen || !selectedMaterial) return;
-    setMaterialEditorTab(materialEditorInitialTabOverrideRef.current ?? replacementMaterialEditorDefaultTab);
+    const rememberedTab = selectedPrinter
+      ? readMaterialEditorTabByPrinter()[selectedPrinter.id]
+      : undefined;
+    const validRememberedTab = rememberedTab
+      && replacementMaterialEditorTabs.some((tab) => tab.id === rememberedTab)
+      ? rememberedTab
+      : null;
+    setMaterialEditorTab(
+      materialEditorInitialTabOverrideRef.current
+      ?? validRememberedTab
+      ?? replacementMaterialEditorDefaultTab,
+    );
     materialEditorInitialTabOverrideRef.current = null;
     setEditMaterialDraft({
       name: selectedMaterial.name,
@@ -3165,7 +3206,7 @@ export function ProfileSettingsModal({
         ),
       );
     }
-  }, [isMaterialEditorOpen, replacementMaterialEditorDefaultTab, selectedMaterial, selectedPrinter, selectedResolvedSettingsMode]);
+  }, [isMaterialEditorOpen, replacementMaterialEditorDefaultTab, replacementMaterialEditorTabs, selectedMaterial, selectedPrinter, selectedResolvedSettingsMode]);
 
   const handlePickPrinter = React.useCallback((printerId: string) => {
     materialSelectionInitializedRef.current = false;
@@ -3466,6 +3507,11 @@ export function ProfileSettingsModal({
 
     setIsMaterialEditorOpen(false);
   }, [editMaterialDraft, editMaterialLocalSettingsByOutput, selectedMaterial]);
+
+  const handleMaterialEditorTabChange = React.useCallback((tab: string) => {
+    setMaterialEditorTab(tab);
+    if (selectedPrinter) writeMaterialEditorTabByPrinter(selectedPrinter.id, tab);
+  }, [selectedPrinter]);
 
   const handleApplySelectedPrinterOfficialUpdate = React.useCallback(() => {
     if (!selectedPrinterUpdate) return;
@@ -5391,7 +5437,7 @@ export function ProfileSettingsModal({
                   <ReplacementMaterialEditorShell
                     tabs={replacementMaterialEditorTabs}
                     activeTabId={materialEditorTab}
-                    onActiveTabChange={setMaterialEditorTab}
+                    onActiveTabChange={handleMaterialEditorTabChange}
                     activeTabStyle={accentSecondaryActionStyle92}
                     draft={editMaterialDraft}
                     onDraftChange={setEditMaterialDraft}
@@ -6310,7 +6356,7 @@ export function ProfileSettingsModal({
                   <ReplacementMaterialEditorShell
                     tabs={replacementMaterialEditorTabs}
                     activeTabId={materialEditorTab}
-                    onActiveTabChange={setMaterialEditorTab}
+                    onActiveTabChange={handleMaterialEditorTabChange}
                     activeTabStyle={accentSecondaryActionStyle92}
                     draft={newMaterialDraft}
                     onDraftChange={setNewMaterialDraft}
