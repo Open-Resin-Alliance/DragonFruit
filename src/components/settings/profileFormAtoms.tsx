@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { CarFront, ChevronDown, ChevronUp, CircleHelp, Link2, Snail } from 'lucide-react';
+import { AlertTriangle, CarFront, ChevronDown, ChevronUp, CircleHelp, Crown, Link2, Snail } from 'lucide-react';
 import { Button, ColorSwatchInput } from '@/components/atoms';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
@@ -948,21 +948,25 @@ export function MaterialProfileIdentitySection({
                                         opacity: blocked ? 0.55 : 1,
                                     }}
                                 >
-                                    <input
-                                        type="checkbox"
-                                        checked={checked}
-                                        disabled={isOwner || blocked}
-                                        style={{ accentColor: 'var(--accent)' }}
-                                        onChange={() => {
-                                            if (isOwner || blocked) return;
-                                            onChange((prev) => {
-                                                const next = new Set(prev.compatiblePrinterProfileIds ?? []);
-                                                if (next.has(printer.id)) next.delete(printer.id);
-                                                else next.add(printer.id);
-                                                return { ...prev, compatiblePrinterProfileIds: [...next] };
-                                            });
-                                        }}
-                                    />
+                                    {isOwner ? (
+                                        <Crown className="h-4 w-4 shrink-0" style={{ color: '#fbbf24' }} />
+                                    ) : blocked ? (
+                                        <AlertTriangle className="h-4 w-4 shrink-0" style={{ color: 'var(--danger)' }} />
+                                    ) : (
+                                        <input
+                                            type="checkbox"
+                                            checked={checked}
+                                            style={{ accentColor: 'var(--accent)' }}
+                                            onChange={() => {
+                                                onChange((prev) => {
+                                                    const next = new Set(prev.compatiblePrinterProfileIds ?? []);
+                                                    if (next.has(printer.id)) next.delete(printer.id);
+                                                    else next.add(printer.id);
+                                                    return { ...prev, compatiblePrinterProfileIds: [...next] };
+                                                });
+                                            }}
+                                        />
+                                    )}
                                     <span className="flex-1">{printer.name}</span>
                                     {isOwner && <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Owner</span>}
                                     {blocked && <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}><Trans>Incompatible</Trans></span>}
