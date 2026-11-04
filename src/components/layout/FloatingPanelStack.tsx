@@ -913,18 +913,6 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
           return (
             <>
               <div
-                className="absolute pointer-events-none rounded-lg"
-                style={{
-                  left: dockLeft,
-                  top: 0,
-                  bottom: 0,
-                  width: dockWidthPx,
-                  border: '1px dashed color-mix(in srgb, var(--accent), transparent 55%)',
-                  background: 'color-mix(in srgb, var(--accent) 6%, transparent)',
-                  zIndex: 119,
-                }}
-              />
-              <div
                 className="absolute pointer-events-none rounded-full"
                 style={{
                   left: dockLeft + (dockWidthPx - markerWidth) / 2,
